@@ -86,14 +86,29 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
     for target in payload["targets"]:
         entity = target.get("entity_key")
         approaches = target["approaches"]
-        matched = match_vetted(vetted_by_entity.get(entity, {}), approaches) \
-            if entity else {}
+        # The target-named row IS Standard by name (below), so it never
+        # enters the ladder matcher, and the vetted "Standard" is RESERVED
+        # for it: round 33 (2026-09-05) measured five entities where the
+        # matcher paired some OTHER row with the vetted Standard (Big Boo's
+        # "Double jump -> Dive strat", BitFS's "Half/Three-quarter spin")
+        # while the star's own row took Standard by name -- two sheet rows in
+        # one slot, and the column round trip printed the faster row's time
+        # on both. Where a target has no such row, Standard matches freely.
+        standard_rows = {index for index, approach in enumerate(approaches)
+                         if strategy_name(target.get("label") or "",
+                                          approach.get("name") or "") == DEFAULT_STRATEGY
+                         and not shares_its_entity(target)}
+        candidates = vetted_by_entity.get(entity, {}) if entity else {}
+        if standard_rows:
+            candidates = {name: ladder for name, ladder in candidates.items()
+                          if name != DEFAULT_STRATEGY}
+        matched = match_vetted(candidates, [
+            approach if index not in standard_rows else {}
+            for index, approach in enumerate(approaches)]) if entity else {}
         for index, approach in enumerate(approaches):
             if index in matched:
                 approach["matched_strategy"] = matched[index]
-            elif (strategy_name(target.get("label") or "",
-                                approach.get("name") or "") == DEFAULT_STRATEGY
-                    and not shares_its_entity(target)):
+            elif index in standard_rows:
                 # A row named after its target IS that thing's Standard
                 # strategy (his ruling, 2026-09-02: "for the 'standard'
                 # strategy, we should make sure that this is also the name of

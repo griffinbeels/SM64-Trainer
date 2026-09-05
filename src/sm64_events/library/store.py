@@ -56,22 +56,39 @@ def _usable(snapshot) -> bool:
     return bool(snapshot) and snapshot.get("schema_version") == SCHEMA_VERSION
 
 
-def build_and_stamp(data: bytes, overrides: dict | None = None) -> dict:
-    """Raw workbook bytes -> a library payload with the vetted
-    `matched_strategy` pairing stamped on -- the two steps every reader of
+def build_and_stamp(data: bytes, overrides: dict | None = None, step=None) -> dict:
+    """Raw workbook bytes -> a library payload with ladders FITTED and the
+    vetted `matched_strategy` pairing stamped on -- the steps every reader of
     raw sheet bytes needs together: a payload with no stamp cannot show "=
     your …" on the Library tab, and cannot resolve
     `library/export_column.py::column_lines`'s matched-strategy path either.
-    `LibraryStore.refresh()` fits a ladder on top of this before persisting;
-    a live column-export read never touches `item["ladder"]` and stops here."""
+
+    Fit BEFORE stamp, in that order, because the matcher compares LADDERS
+    (`adopt.match_vetted`) and an unfitted row cannot match anything. Until
+    round 33 (2026-09-05) this stamped first and `refresh()` fitted after,
+    so every live refresh lost the vetted pairing -- measured on the live
+    workbook: 270 approaches unmatched and none carrying a vetted name,
+    against the bundled snapshot's Time Stop / Open / Log WK -- which is how
+    an import came to name strategies "Left side TJ" and "Singlestar strat"
+    beside the vetted "Leftside" and "SS". The fit is percentile arithmetic
+    over at most a few hundred numbers per row and costs milliseconds.
+
+    `step(fraction, sentence)` narrates the two boundaries when a job is
+    watching (`refresh` adds the download before them)."""
     from datetime import datetime, timezone
     from sm64_events.core.paths import bundled_rank_standards
+    from sm64_events.library import ladders as ladder_fit
     from sm64_events.library.adopt import stamp_matches
     from sm64_events.library.build import build
 
     fetched_at = (datetime.now(timezone.utc).replace(microsecond=0)
                   .isoformat().replace("+00:00", "Z"))
+    if step:
+        step(0.45, "Building the library from the sheet's rows…")
     payload = build(data, fetched_at=fetched_at, overrides=overrides)
+    if step:
+        step(0.7, "Fitting the rank ladders…")
+    ladder_fit.fit_payload(payload)
     seed_path = bundled_rank_standards()
     if seed_path:
         seed = json.loads(Path(seed_path).read_text(encoding="utf-8"))
@@ -243,17 +260,16 @@ class LibraryStore:
         the ladder fit -- never inside them (round 29: the sheet import
         narrates itself the way the column export does, and these are the only
         boundaries a refresh genuinely has)."""
-        from sm64_events.library.ladders import fit_payload
-
         if step:
             step(0.05, "Downloading the current sheet…")
         data = fetch_fn()
-        if step:
-            step(0.45, "Building the library from the sheet's rows…")
-        built = build_and_stamp(data, overrides)
-        if step:
-            step(0.7, "Fitting the rank ladders…")
-        fresh = fit_payload(built)
+        return self.absorb(build_and_stamp(data, overrides, step=step))
+
+    def absorb(self, fresh: dict) -> dict:
+        """Keep an already-built payload if it is NEWER than what we hold --
+        the tail of `refresh`, on its own so a caller that already has the
+        bytes (the column export, round 33) can refresh the library without
+        a second download."""
         current = self._payload
         if current is not None and newer(current, fresh) is current:
             return {"applied": False, "sheet_revision": self.revision,

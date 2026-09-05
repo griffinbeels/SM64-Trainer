@@ -258,10 +258,15 @@ def create_import_router(service, library=None, overrides=None,
             shares this process and a blocked loop is a dropped star grab,
             `server/library_api.py` says the same), then read the runner's
             column into candidates and held cells. `step` narrates the real
-            boundaries when a job is watching."""
+            boundaries when a job is watching. Returns `(candidates, held,
+            refreshed)` -- `refreshed` says the library changed, so the
+            caller re-derives the sheet-fitted rank standards ON THE LOOP
+            (round 33: "any time we pull in the spreadsheet, we should
+            probably do a quick rank standards update")."""
+            refreshed = False
             if body.refresh:
                 try:
-                    library.refresh(fetch, overrides, step=step)
+                    refreshed = bool(library.refresh(fetch, overrides, step=step).get("applied"))
                 except Exception as err:
                     # BROADER than OSError on purpose, and this was found by
                     # driving the real drawer: a download that SUCCEEDS and
@@ -278,16 +283,28 @@ def create_import_router(service, library=None, overrides=None,
                     raise SheetUnreadable(f"could not read the sheet: {err}") from err
             if step:
                 step(0.85, f"Matching {body.runner}'s rows to your trainer…")
-            return candidates_for(library.payload, body.runner,
-                                  place=sheet_row_placer(service, adoptions))
+            candidates, held = candidates_for(library.payload, body.runner,
+                                              place=sheet_row_placer(service, adoptions))
+            return candidates, held, refreshed
+
+        def _resync_standards():
+            """The sheet changed under the store: re-derive its sheet-fitted
+            ladders from the new payload (`Adoptions.load`), then absorb the
+            re-grade so no celebration fires for a rank he did not run for.
+            Called on the event loop, where the standards are read."""
+            if adoptions is not None:
+                adoptions.load()
+            absorb_after_regrade(service)
 
         @router.post("/sheet")
         async def import_sheet(body: SheetImportBody):
             """A whole runner's Ultimate Sheet column, in one request."""
             try:
-                candidates, held = await run_in_threadpool(_read_sheet, body)
+                candidates, held, refreshed = await run_in_threadpool(_read_sheet, body)
             except SheetUnreadable as err:
                 raise HTTPException(503, str(err)) from err
+            if refreshed:
+                _resync_standards()
             return await finish(f"sheet:{body.runner}", candidates, [],
                                 held=held, sheet_revision=library.revision)
 
@@ -305,12 +322,17 @@ def create_import_router(service, library=None, overrides=None,
             door's body."""
             loop = asyncio.get_running_loop()
 
+            async def land(candidates, held, refreshed):
+                if refreshed:
+                    _resync_standards()
+                return await finish(f"sheet:{body.runner}", candidates, [],
+                                    held=held, sheet_revision=library.revision)
+
             def work(step):
-                candidates, held = _read_sheet(body, step=step)
+                candidates, held, refreshed = _read_sheet(body, step=step)
                 step(0.92, f"Landing {len(candidates)} times…")
                 landing = asyncio.run_coroutine_threadsafe(
-                    finish(f"sheet:{body.runner}", candidates, [],
-                           held=held, sheet_revision=library.revision), loop)
+                    land(candidates, held, refreshed), loop)
                 try:
                     summary = landing.result()
                 except HTTPException as err:

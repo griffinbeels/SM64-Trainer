@@ -30,6 +30,7 @@ that door reads a runner's column IN as PBs, this one writes YOUR PBs OUT as
 a column (`library/export_column.py`), formatted the way the sheet itself
 wants a time typed, ready to paste back in next to everyone else's.
 """
+import asyncio
 import csv
 import io
 import logging
@@ -53,9 +54,11 @@ from sm64_events.ranks.scorecard import (
     FIGHTS_LABEL, build_card, card_keys, division_goal_cs, rows_for_course,
     rows_for_route, template_rows, without_keys)
 from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder
-from sm64_events.tracking.views import segment_courses
+from sm64_events.tracking.views import (fastest_current_pbs, latest_pbs_by_strategy,
+                                        segment_courses)
 from sm64_events.server.import_api import sheet_row_placer
 from sm64_events.server.jobs import JobBoard
+from sm64_events.server.ranks_api import absorb_after_regrade
 
 _log = logging.getLogger("sm64.scorecard")
 _GOAL_KEY = "scorecard_goal"
@@ -169,6 +172,12 @@ def _fetch_column_source(overrides, step=None):
     return rows, payload
 
 
+async def _call_soon(fn):
+    """Run a plain callable on the event loop -- the shape
+    `run_coroutine_threadsafe` needs to hand a thread's work to the loop."""
+    return fn()
+
+
 def _column_identity(entity_key):
     """`(course_id, star_id, segment_id)` for a star or segment key; None
     for anything else."""
@@ -209,14 +218,10 @@ def _column_resolve(service):
 
     def leftovers(identity, timer_mode, version, excluding):
         if not latest_rows:
-            # Latest row per (entity, clock, strategy) wins, exactly as
-            # `views.current_pbs_by_strat` reads the table; read once per
+            # Latest row per (entity, clock, strategy) wins -- the one
+            # reading `views.latest_pbs_by_strategy` is; read once per
             # column rather than once per worksheet row.
-            latest = {}
-            for pb in service.db.pbs():
-                latest[(pb["course_id"], pb["star_id"], pb["segment_id"],
-                        pb["timer_mode"], pb["strat_tag"])] = pb
-            latest_rows.append(latest)
+            latest_rows.append(latest_pbs_by_strategy(service.db.pbs()))
         course_id, star_id, segment_id = identity
         best = None
         for (course, star, segment, mode, strat), pb in latest_rows[0].items():
@@ -457,18 +462,27 @@ def create_scorecard_router(service, library=None, adoptions=None,
         raise HTTPException(404, f"unknown scope {scope_id!r}")
 
     def your_times(keys: list[str]) -> dict[str, int]:
-        """Your strategy-blind current PB per key, on the entity's own
-        clock -- igt for a star, rta for a movement -- as displayed
-        centiseconds. A key with no saved PB is simply absent, which is the
-        "no goal on this tile" case `_tile` already handles."""
+        """Your FASTEST current PB per key across every strategy, on the
+        entity's own clock -- igt for a star, rta for a movement -- as
+        displayed centiseconds. A key with no saved PB is simply absent,
+        which is the "no goal on this tile" case `_tile` already handles.
+
+        Fastest, not latest (round 33, 2026-09-05): the strategy-blind
+        `current_pb` answers the latest SAVE across strategies, and an
+        import lands a star's rows in sheet order, so RONC3NA's own column
+        imported onto an empty log showed 11"50 (Left side TJ, landed
+        second) against a goal of 11"26 (his Standard, landed first) --
+        "I literally am ronc3na in this case. Both should automatically be
+        matching." A runner goal offers the runner's fastest row, so YOU is
+        the same quantity for him."""
+        best = fastest_current_pbs(service.db.pbs())
         you = {}
         for key in keys:
             parts = key.split(":")
             if parts[0] == "star":
-                row = service.db.current_pb(int(parts[1]), int(parts[2]), "igt")
+                row = best.get((int(parts[1]), int(parts[2]), None, "igt"))
             else:
-                row = service.db.current_pb(None, None, "rta",
-                                            segment_id=int(parts[1]))
+                row = best.get((None, None, int(parts[1]), "rta"))
             if row is not None:
                 you[key] = display_cs(row["frames"])
         return you
@@ -855,7 +869,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 "mapped": sum(1 for cell in cells if cell["text"] and not cell.get("legend")),
                 "total_rows": len(lines)}
 
-    def _column_work(step):
+    def _column_work(step, resync=None):
         """The same work `get_column` does, on the job board's thread,
         reporting where it is. Steps are the function's REAL boundaries
         (fetch, parse, build, resolve) -- see `_fetch_column_source`. The
@@ -863,11 +877,25 @@ def create_scorecard_router(service, library=None, adoptions=None,
         many rows, which worksheet rows they cover, and how many carry a
         time -- the BUILD's sentence, not the copy's, since round 29 holds
         the column on the page and the clipboard write is the button's own
-        gesture (it may not have happened yet, if he was tabbed away)."""
+        gesture (it may not have happened yet, if he was tabbed away).
+
+        Round 33: the bytes this job downloads are the freshest sheet the
+        app has seen, so it also REFRESHES the library from them (kept only
+        if newer, like every refresh) and re-derives the sheet-fitted rank
+        standards -- his ask: "any time we pull in the spreadsheet, we
+        should probably do a quick rank standards update... whenever we
+        import a runner's times, or copy sheet column." `resync` runs on the
+        event loop, since the standards store is read there."""
         try:
             rows, payload = _fetch_column_source(overrides, step=step)
         except Exception as err:
             raise RuntimeError(f"could not read the sheet: {err}") from err
+        if library is not None and resync is not None:
+            try:
+                if library.absorb(payload).get("applied"):
+                    resync()
+            except Exception as err:                    # noqa: BLE001
+                _log.info("library not refreshed from the column export: %r", err)
         step(0.85, "Matching your times to the sheet's rows…")
         cells, payload = _resolve_column(rows, payload)
         body = _column_body(cells, payload)
@@ -890,7 +918,21 @@ def create_scorecard_router(service, library=None, adoptions=None,
         _require_db()
         if library is None:
             raise HTTPException(503, "sheet library unavailable")
-        return {"job_id": _column_jobs.start("scorecard-column", _column_work)}
+        loop = asyncio.get_running_loop()
+
+        def resync():
+            # `Adoptions.load()` re-derives the sheet-fitted ladders from
+            # the payload the absorb just installed, then the re-grade is
+            # absorbed so no celebration fires for a rank he did not run
+            # for (`import_api.py::finish` does the same after a landing).
+            def on_loop():
+                if adoptions is not None:
+                    adoptions.load()
+                absorb_after_regrade(service)
+            asyncio.run_coroutine_threadsafe(_call_soon(on_loop), loop).result(timeout=30)
+
+        return {"job_id": _column_jobs.start(
+            "scorecard-column", lambda step: _column_work(step, resync=resync))}
 
     @router.get("/column/{job_id}")
     async def column_status(job_id: str):

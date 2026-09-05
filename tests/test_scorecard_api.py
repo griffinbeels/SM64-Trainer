@@ -1340,3 +1340,28 @@ def test_a_held_cell_prints_back_with_the_platform_its_legend_named(tmp_path):
         assert held("row:b", "jp") == (1200, None)
         assert held("row:b", "us") is None
         assert held("row:c", None) is None
+
+
+def test_your_time_is_your_fastest_across_strategies_not_your_latest_save(tmp_path):
+    """Round 33, his case: RONC3NA imported onto an empty log, a goal that
+    includes RONC3NA, and A-Maze-Ing Emergency Exit read YOU 11"50 against
+    GOAL 11"26 -- "I literally am ronc3na in this case. Both should
+    automatically be matching." The strategy-blind `current_pb` answers the
+    LATEST save across strategies, and the import lands a star's rows in
+    sheet order, so the slower row landed second and won. YOU is the
+    fastest current row across every strategy now, which is exactly what a
+    runner goal offers for that runner."""
+    with make_client(tmp_path) as (client, db, _svc):
+        db.insert_pb(1, 0, "Standard", "igt", 266, None, "2026-09-05T00:00:01Z")
+        db.insert_pb(1, 0, "Left side TJ", "igt", 300, None, "2026-09-05T00:00:02Z")
+        card = client.get("/api/scorecard").json()
+        row = next(r for r in card["rows"] if r["course_id"] == 1)
+        tile = next(t for t in row["tiles"] if t["key"] == "star:1:0")
+        assert tile["you_cs"] == display_cs(266), tile
+        # An untagged save counts too, when it is the fastest.
+        db.insert_pb(1, 1, None, "igt", 250, None, "2026-09-05T00:00:03Z")
+        db.insert_pb(1, 1, "Standard", "igt", 280, None, "2026-09-05T00:00:04Z")
+        card = client.get("/api/scorecard").json()
+        row = next(r for r in card["rows"] if r["course_id"] == 1)
+        tile = next(t for t in row["tiles"] if t["key"] == "star:1:1")
+        assert tile["you_cs"] == display_cs(250), tile

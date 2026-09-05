@@ -247,11 +247,49 @@ def _quiet_connection_resets(loop, context) -> None:
     loop.default_exception_handler(context)
 
 
+async def _refresh_library_quietly(library, overrides, adoptions, service) -> None:
+    """Round 33's startup refresh: download the live sheet once, off the
+    loop; if it is newer, re-derive the sheet-fitted rank standards and
+    absorb the re-grade. Every failure -- no network, a captive portal, a
+    renamed tab -- is one log line and nothing else changes, per his rule:
+    "fail silently and just not update automatically (other than including
+    a mention in the logs)"."""
+    from fastapi.concurrency import run_in_threadpool
+    from sm64_events.library.source import fetch
+    from sm64_events.server.ranks_api import absorb_after_regrade
+    try:
+        result = await run_in_threadpool(library.refresh, fetch, overrides)
+    except Exception as err:                            # noqa: BLE001
+        log.info("library refresh at startup skipped: %r", err)
+        return
+    if not result.get("applied"):
+        log.info("library refresh at startup: %s", result.get("reason", "nothing newer"))
+        return
+    if adoptions is not None:
+        adoptions.load()
+    absorb_after_regrade(service)
+    log.info("library refreshed at startup to sheet revision %s",
+             result.get("sheet_revision"))
+
+
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
                adoptions_path=None, mode_path=None,
-               library_path=None) -> FastAPI:
+               library_path=None, refresh_library_on_start=False,
+               library_bundled_path=None) -> FastAPI:
+    # `library_bundled_path` overrides the BUNDLED snapshot the library falls
+    # back to (None = the shipped one). Since round 33 every fitted star row
+    # in the library becomes a sheet-fitted rank standard at load, so a test
+    # that models a standards store holding ONLY what it puts there passes a
+    # path with no file here and gets an empty library.
+    # `refresh_library_on_start` (round 33, his ask: "automatically refresh
+    # the rank standards upon app startup... If we don't have internet or the
+    # process fails, we should fail silently") schedules ONE background
+    # download of the live sheet after the service starts; a newer sheet
+    # re-derives the sheet-fitted rank standards and absorbs the re-grade.
+    # Off by default so no test, fixture or broadcast-only instance ever
+    # reaches for Google; main.py turns it on for the real app.
     # `library_path` overrides where the LOCAL sheet snapshot lives -- tests
     # pass a scratch path so the library resolves to the BUNDLED snapshot;
     # None (production) resolves to core.paths.sheet_library_path(). Same
@@ -340,7 +378,16 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         mon_task = asyncio.create_task(monitor.run())
+        refresh_task = None
+        if refresh_library_on_start and service is not None and service.db is not None:
+            refresh_task = asyncio.create_task(
+                _refresh_library_quietly(app.state.library, app.state.library_overrides,
+                                         app.state.adoptions, service))
         yield
+        if refresh_task is not None:
+            refresh_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await refresh_task
         if reattach_task is not None:
             reattach_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -394,9 +441,12 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     from sm64_events.library.store import LibraryStore
     from sm64_events.server.library_api import create_library_router
     library = LibraryStore(library_path or sheet_library_path(),
-                           bundled_sheet_library())
+                           library_bundled_path if library_bundled_path is not None
+                           else bundled_sheet_library())
     library.load()
     app.state.library = library
+    app.state.library_overrides = None
+    app.state.adoptions = None
     # The human's own audit corrections (tools/audit_library.py) -- a
     # server-side refresh must apply them exactly as tools/scrape_sheet.py
     # does at release time, or a re-fetched copy re-introduces every mistake
@@ -417,6 +467,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                               library, standards, qualified)
         adoptions.load()
         app.state.library_adoptions = adoptions
+    app.state.library_overrides = library_overrides
+    app.state.adoptions = adoptions
     # The live segment list the auto-match pairs entity-less targets against
     # (round 6). Read per request so a segment built mid-session pairs on the
     # next page load; empty when the db is degraded rather than an error.

@@ -135,6 +135,36 @@ def _current_pbs(pb_rows: list[dict]) -> dict:
     return out
 
 
+def latest_pbs_by_strategy(pb_rows: list[dict]) -> dict:
+    """The CURRENT row per (course_id, star_id, segment_id, timer_mode,
+    strat_tag), later rows winning -- the untagged bucket included under
+    `None`. The ONE reading behind "your best on this entity however you set
+    it": a caller takes the fastest of an identity's rows. Round 33
+    (2026-09-05): the Scorecard's YOU asked the strategy-blind `current_pb`,
+    which answers the LATEST save across strategies, so an import that landed
+    a slower row after a faster one showed the slower time as his -- he was
+    the runner the goal came from, and the gap read +0.24 where it had to be
+    0.00. `_column_resolve.leftovers` reads the same map."""
+    out = {}
+    for row in pb_rows:  # ordered by id: later rows win
+        out[(row["course_id"], row["star_id"], row["segment_id"],
+             row["timer_mode"], row["strat_tag"])] = row
+    return out
+
+
+def fastest_current_pbs(pb_rows: list[dict]) -> dict:
+    """{(course_id, star_id, segment_id, timer_mode): the fastest of that
+    identity's current rows across every strategy} -- what a tile calls YOUR
+    time, and what a runner's own column would print for them."""
+    best = {}
+    for (course_id, star_id, segment_id, mode, _strat), row in \
+            latest_pbs_by_strategy(pb_rows).items():
+        key = (course_id, star_id, segment_id, mode)
+        if key not in best or row["frames"] < best[key]["frames"]:
+            best[key] = row
+    return best
+
+
 def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     """Latest pb row keyed like _current_pbs but with the saving attempt's
     strat_tag appended. THE per-strategy ranking lookup: a strategy is ranked

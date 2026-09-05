@@ -217,6 +217,49 @@ def ladders(payload: dict, rows: dict) -> dict:
     return out
 
 
+def library_ladders(payload: dict, rows: dict, qualified=()) -> dict:
+    """{entity key: {"strategies": {name: ladder}, "jp_strategies": ...}}
+    for EVERYTHING the library can grade: every star approach with a fitted
+    ladder, under the slot the import files it in (`sheet_strategy` -- the
+    star's own row is its Standard, a matched row wears its vetted twin's
+    name), plus everything the user has assigned (`ladders`).
+
+    Round 33 (2026-09-05), his report: "for a lot of the 'Standard' times,
+    we are lacking rank standards." The bundled sheet layer was built by
+    `adopt.adoptable`, which skips every approach the matcher paired with a
+    vetted strategy -- and the star's own row is exactly such a pairing
+    (A-Maze-Ing Emergency Exit's row matched Rightside at 182 samples) while
+    round 28 files that row under Standard. So Standard held his PB and no
+    ladder, and 95 star rows' fitted ladders never reached the store. This
+    reads the CURRENT payload every time the library changes, so the layer
+    follows the sheet rather than a release.
+
+    Vetted ladders still win on read (`RankStandards.ladders` merges
+    fitted UNDER vetted), so nothing the community published moves.
+    `qualified` entities (a 100-coin star's variant-qualified names) are
+    skipped as `adoptable` skips them: a bare slot cannot identify a ladder
+    there. First fitted row per name wins, so a repeated name inside one
+    target (already qualified by `sheet_strategy`) cannot overwrite."""
+    out = {}
+    for target in payload.get("targets") or []:
+        entity = target.get("entity_key") or ""
+        if not entity.startswith("star:") or entity in qualified:
+            continue
+        for item in target.get("approaches") or []:
+            if not item.get("ladder"):
+                continue
+            name = sheet_strategy(target, item)
+            layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
+            layers["strategies"].setdefault(name, item["ladder"])
+            if item.get("ladder_jp"):
+                layers["jp_strategies"].setdefault(name, item["ladder_jp"])
+    for entity, layers in ladders(payload, rows).items():
+        merged = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
+        merged["strategies"].update(layers["strategies"])
+        merged["jp_strategies"].update(layers["jp_strategies"])
+    return out
+
+
 class AdoptionError(ValueError):
     """The assignment cannot be made, and the caller needs to hear why."""
 
@@ -244,7 +287,9 @@ class Adoptions:
         return dict(self._rows)
 
     def ladders(self) -> dict:
-        return ladders(self.store.payload, self._rows)
+        """Every sheet-fitted ladder the store should carry: the whole
+        library's (round 33) plus the user's assignments."""
+        return library_ladders(self.store.payload, self._rows, self.qualified)
 
     def _sync(self) -> None:
         if self.standards is not None:

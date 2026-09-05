@@ -338,3 +338,63 @@ def test_the_two_doors_read_the_same_naming_rule():
         assert "sheet_strategy(" in source, module.__name__
         assert "strategy_name(" not in source.replace("sheet_strategy(", ""), (
             f"{module.__name__} must not derive a row's slot on its own")
+
+
+def _star_payload():
+    """A star target with three approaches, as the bundled library shapes
+    them: the star's own row (matched by the ladder matcher to a vetted
+    twin, filed under Standard), a row wearing a vetted twin's name, a row
+    with no match and a fitted ladder, and one too thin to fit."""
+    def approach(name, ladder=True, matched=None):
+        item = {"ids": ["1"], "name": name, "best_cs": 1126, "best_runner": "W",
+                "times": {}, "ideal_cs": None, "fill_rate": 0.5,
+                "ladder": {"Mario": 11.36, "Bronze": 14.95} if ladder else None,
+                "ladder_samples": 40 if ladder else 3, "entries": []}
+        if matched:
+            item["matched_strategy"] = matched
+        return item
+    return {"schema_version": 2, "sheet_revision": "2026-09-05T00:00:00",
+            "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
+                {"entity_key": "star:6:4", "group": "6. Hazy Maze Cave",
+                 "section": "6. Hazy Maze Cave", "label": "A-Maze-ing Emergency Exit",
+                 "version": None, "miss_reason": None, "subsections": [],
+                 "approaches": [approach("A-Maze-ing Emergency Exit", matched="Rightside"),
+                                approach("Left side TJ", matched="Leftside"),
+                                approach("Chimney hop"),
+                                approach("Thin one", ladder=False)]},
+                {"entity_key": "star:3:6", "group": "3. Cool, Cool Mountain",
+                 "section": "3. Cool, Cool Mountain", "label": "Big Penguin Race + 100c",
+                 "version": None, "miss_reason": None, "subsections": [],
+                 "approaches": [approach("Big Penguin Race + 100c")]}]}
+
+
+def test_the_whole_library_reaches_the_sheet_layer_under_the_import_slots():
+    """Round 33: "for a lot of the 'Standard' times, we are lacking rank
+    standards." The star's own row -- matched to a vetted twin by ladder and
+    so SKIPPED by `adoptable` -- is the row round 28 files under Standard, so
+    Standard had his PB and no ladder. `library_ladders` maps every fitted
+    star approach under `sheet_strategy`'s slot: the star row is Standard, a
+    matched row wears its twin's name, an unmatched row its own; a thin row
+    contributes nothing; a variant-qualified entity is skipped."""
+    ladders = ad.library_ladders(_star_payload(), {}, qualified={"star:3:6"})
+    assert set(ladders) == {"star:6:4"}
+    assert set(ladders["star:6:4"]["strategies"]) == {"Standard", "Leftside", "Chimney hop"}
+    assert ladders["star:6:4"]["strategies"]["Standard"]["Mario"] == 11.36
+
+
+def test_a_loaded_store_grades_standard_from_the_star_row(tmp_path):
+    """`Adoptions.load()` applies the whole library's ladders, so a fresh
+    standards store grades Standard on a star whose vetted seed never
+    defined it -- and the vetted twin, where the seed has one, still wins."""
+    store = LibraryStore()
+    store._payload = _star_payload()
+    standards = RankStandards(tmp_path / "rank_standards.json")
+    standards.load()
+    standards.create_strategy("star:6:4", "Leftside")
+    standards.set_threshold("star:6:4", "Leftside", "Mario", 11.00)
+    adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
+    adoptions.load()
+    ladders = standards.ladders("star:6:4")
+    assert ladders["Standard"]["Mario"] == 11.36 and standards.is_fitted("star:6:4", "Standard")
+    assert ladders["Leftside"]["Mario"] == 11.00, "the vetted ladder must win over the fitted one"
+    assert not standards.is_fitted("star:6:4", "Leftside")

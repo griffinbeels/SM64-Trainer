@@ -486,7 +486,11 @@ bar means you have never tried this [[target]], never that you went slowly.
 The time one [[rank]] demands, for one [[target]] on one [[strategy]]. The
 community publishes these; the trainer ships them and reconciles your file
 against a newer edition without discarding [[strategy]] rows you wrote
-yourself.
+yourself. Where the community published none, the trainer fits one from the
+[[Ultimate Sheet]]'s own times for every [[strategy]] the sheet has enough
+rows for — the [[star]]'s own row as its Standard [[strategy]] — and re-fits
+them whenever it pulls the sheet: an import, a [[column export]], a refresh,
+or the app starting. A published standard always wins over a fitted one.
 
 - **Lives** — the standards file (`src/sm64_events/ranks/standards.py`)
   → the [[standards ladder]]
