@@ -237,7 +237,7 @@ function GoalCell({ tile, onGoalOverride }) {
     </span>`;
   }
   return html`<button type="button" class="score-detail-goal-btn" onclick=${startEdit}>
-    ${tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "set a time…"}
+    ${tile.goal_cs != null ? fmtSeconds(tile.goal_cs / 100) : "set…"}
   </button>`;
 }
 
