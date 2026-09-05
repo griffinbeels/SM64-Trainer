@@ -351,8 +351,11 @@ Contract changes land on main first, then dependent work fans out. Merge with
   `tools/check_glossary.py` keeps it closed and active-voice, and it cannot
   notice a word missing from the file entirely — that part is yours
 - **chain file current** — a change that adds, moves or renames a hop updates
-  `.claude/rules/chain-star-grab-time.md` in the SAME commit. `tests/test_chains.py`
-  catches a hop that stopped resolving; it cannot notice a hop nobody drew
+  the chain it belongs to in the SAME commit: `.claude/rules/chain-star-grab-time.md`
+  (Usamune's RAM → the practice-log row) or `.claude/rules/chain-imported-time.md`
+  (an Ultimate Sheet cell → the Scorecard tile and the pasted column, whose two
+  sinks check each other). `tests/test_chains.py` catches a hop that stopped
+  resolving; it cannot notice a hop nobody drew
 - **responsive sweep clean** (`uv run pytest tests/test_responsive.py -q`) — a
   new defect is fixed, or owed in `tools/uilab_project.py::known_defects` with a
   reason. Component layout gates on `@container`, never `@media`; the law and
