@@ -75,6 +75,19 @@ paused picture":
 
 ## Failure catalogue
 
+- **2026-09-05, THE THREE CERTIFIED CLIPS — the evidence the deletion rests
+  on, and the ones to re-run against.** He played Shoot into the Wild Blue
+  (attempt 7267), A-Maze-Ing Emergency Exit (7285) and Inside the Ancient
+  Pyramid (7307) with the HUD memory display on, through a freshly set-up
+  capture layer. `score_oracle`: 459/459, 499/499 and 758/758 oracle-known
+  slots EXACT, 0 contradicted, 0 bridged, `off_by {0}` on all three.
+  `score_picture_offset`: peak at 0 on both channels, button icons 91/91,
+  116/116 and 259/259. `pad_stamp_agreement`: 328/328, 436/436 and 718/718
+  pictures. `feed_match`: 476/477, 542/548 and 835/841. The pad READER on the
+  same clips: 82%, 83% and 94%, with 66/56/30 of its own misreads — which is
+  what retired it. Their clips and sidecars are cached under
+  `data/replay_buffer/clips/`; any change to hops 3-5 should be scored against
+  all three before it is believed.
 - **2026-09-05, THE DELETION — one map path, because four derived ones each
   failed on the next clip.** Before the capture layer nothing told us which
   frame a picture showed, so five modules recovered it: `replay/frameclock.py`
