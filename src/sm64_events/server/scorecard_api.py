@@ -88,8 +88,10 @@ _REGIONS_KEY = "scorecard_regions"
 # text on both, and Trebuchet MS (round 30, his call: "Default should be
 # Trebuchet MS").
 _SHEET_STYLE_KEY = "sheet_style"
-DEFAULT_SHEET_STYLE = {"emu_fill": "#4F7BE0", "n64_fill": "#E07A2F",
-                       "font_color": "#FFFFFF", "font_family": "Trebuchet MS"}
+# Round 31 darkened two of them on sight: "The orange should also be a
+# default darker orange, and the white text should be a darker offwhite."
+DEFAULT_SHEET_STYLE = {"emu_fill": "#4F7BE0", "n64_fill": "#C45E1C",
+                       "font_color": "#F2ECE4", "font_family": "Trebuchet MS"}
 _HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _VALID_REGIONS = ("us", "jp")
 _VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]

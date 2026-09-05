@@ -7369,12 +7369,15 @@
     flex-basis: 100%; margin: 0; display: flex; align-items: center;
     gap: .5rem; color: var(--muted);
   }
+  /* Round 31: the track's LEFT end is square, so its start is a hard edge
+     sitting exactly on the button's own left border above it -- a rounded
+     tip reads as starting a pixel or two later than its box does. */
   .job-status-track {
-    flex: none; width: 90px; height: 4px; border-radius: 3px;
+    flex: none; width: 90px; height: 4px; border-radius: 0 3px 3px 0;
     background: var(--border-soft); overflow: hidden;
   }
   .job-status-fill {
-    display: block; height: 100%; border-radius: 3px; background: var(--gold);
+    display: block; height: 100%; border-radius: 0 3px 3px 0; background: var(--gold);
     transition: width .25s ease-out;
   }
   .job-status[data-running="false"] .job-status-fill {
@@ -7388,7 +7391,17 @@
      row, after Rebuild -- the two legend cells the paste will write, three
      circle swatches, the font dropdown, Reset while anything differs. */
   .sheetstyle { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
-  .sheetstyle-preview { display: inline-flex; gap: 4px; }
+  /* Round 31: the preview comes AFTER the options it previews, in its own
+     box with a small "Preview" caption above the two cells. */
+  .sheetstyle-preview {
+    display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px;
+    padding: 4px 6px 5px; border: 1px solid var(--border-soft); border-radius: 6px;
+  }
+  .sheetstyle-preview-label {
+    font-size: .62rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); line-height: 1;
+  }
+  .sheetstyle-preview-cells { display: inline-flex; gap: 4px; }
   .sheetstyle-cell {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 46px; height: 24px; padding: 0 8px; box-sizing: border-box;
@@ -7592,9 +7605,16 @@
   /* Right-aligned so the row reads as hanging off the picker it explains
      ("it should show pills underneath the '4 picked'"), which sits at the
      head's right edge; it wraps right-to-left, so ten picks stay tidy. */
+  /* Round 31: the legend shares a row with the region switch -- switch on
+     the left, pills on the right ("aligned to the left edge, but in the
+     same row"), so the head's right corner carries the picker alone. */
+  .scorecard-subhead {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px 14px; margin: 0 0 6px;
+  }
   .goal-legend {
     display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
-    margin: 2px 0 8px;
+    margin-left: auto;
   }
   .goal-pill {
     display: inline-flex; align-items: center; gap: 5px;

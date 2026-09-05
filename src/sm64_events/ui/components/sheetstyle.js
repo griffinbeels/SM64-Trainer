@@ -118,8 +118,10 @@ export function SheetStyleControls() {
       style=${`background-color:${platform === N64 ? style.n64_fill : style.emu_fill};`
         + `color:${style.font_color};font-family:${fontStack(style.font_family)}`}
       >${platform.toUpperCase()}</span>`;
+  // Round 31: the options first, then the preview they produce -- boxed and
+  // captioned ("show the preview AFTER all of the options... clearly label
+  // it as 'Preview' above it, in small text, with a surrounding box").
   return html`<div class="sheetstyle" role="group" aria-label="Sheet column colours">
-    <span class="sheetstyle-preview">${legendCell(EMU)}${legendCell(N64)}</span>
     ${COLOURS.map(([key, caption]) => html`<input type="color" key=${key}
         class=${`sheetstyle-swatch sheetstyle-${key}`}
         title=${caption} aria-label=${caption} value=${style[key]}
@@ -130,6 +132,10 @@ export function SheetStyleControls() {
           valueStyle=${`font-family:${fontStack(style.font_family)}`}
           title="Font" groups=${FONT_GROUPS} align="right"
           onChange=${(font) => save({ ...style, font_family: font })} />
+    </span>
+    <span class="sheetstyle-preview">
+      <span class="sheetstyle-preview-label">Preview</span>
+      <span class="sheetstyle-preview-cells">${legendCell(EMU)}${legendCell(N64)}</span>
     </span>
     ${isDefault ? "" : html`<button type="button" class="quiet-button sheetstyle-reset"
         title="Back to the default colours and font"

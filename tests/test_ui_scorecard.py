@@ -243,6 +243,15 @@ def _put_runner_goal(base: str, runner: str) -> None:
     urllib.request.urlopen(request, timeout=10).read()
 
 
+def _put_multi_goal(base: str, sources: list) -> None:
+    body = json.dumps({"kind": "multi", "sources": sources}).encode()
+    request = urllib.request.Request(
+        f"{base}/api/scorecard/goal", data=body, method="PUT",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert response.status == 200
+
+
 def _any_sheet_runner() -> str:
     """A real runner off the bundled snapshot with SOME star times but not
     all of them -- derived rather than named, so a re-scrape can move the
@@ -2228,3 +2237,74 @@ def test_the_pasted_html_paints_each_timed_cell_by_the_machine_that_set_it(monke
         (' style="background-color:#AB3F14;color:#FFFFFF;font-family:Roboto Mono"', "11.00"),
     ], painted
     assert all(attrs == "" for attrs, text in cells if not text), cells
+
+
+def test_the_region_switch_shares_the_pills_row_left_of_them():
+    """Round 31, his words: "the JP/US buttons (and the accompanying text)
+    should go underneath the scorecard on the same row as the player pills,
+    aligned to the left edge, but in the same row... the top right feels
+    overwhelming right now, but if it was split up, it would feel balanced."
+    With a multi goal the pills exist: the switch sits left of them on one
+    row under the head, and the head holds the picker alone."""
+    with serve_ui() as base:
+        _put_multi_goal(base, [{"kind": "division", "tier": "Bronze", "division": "V"},
+                               {"kind": "runner", "runner": _any_sheet_runner()}])
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .goal-legend .goal-pill")
+            page.wait_ms(200)
+            layout = page.evaluate("""
+              (() => {
+                const card = document.querySelector('.rank-page .scorecard-card');
+                const head = card.querySelector('.scorecard-head').getBoundingClientRect();
+                const row = card.querySelector('.scorecard-subhead');
+                const rowBox = row.getBoundingClientRect();
+                const sw = row.querySelector('.version-switch').getBoundingClientRect();
+                const pills = row.querySelector('.goal-legend').getBoundingClientRect();
+                return {
+                  switchInHead: !!card.querySelector('.scorecard-head .version-switch'),
+                  belowHead: sw.top >= head.bottom,
+                  leftEdge: Math.abs(sw.left - rowBox.left) < 2,
+                  sameRow: Math.abs((sw.top + sw.bottom) / 2 - (pills.top + pills.bottom) / 2) < 12,
+                  leftOfPills: sw.right <= pills.left,
+                  noteText: (row.querySelector('.version-switch-note') || {}).textContent || '',
+                };
+              })()
+            """)
+    assert layout["switchInHead"] is False, "the region switch is still in the head"
+    assert layout["belowHead"] and layout["leftEdge"], layout
+    assert layout["sameRow"] and layout["leftOfPills"], layout
+    assert "regions" in layout["noteText"].lower() or "only" in layout["noteText"].lower(), layout
+
+
+def test_the_progress_track_starts_on_the_copy_buttons_left_edge(monkeypatch):
+    """Round 31: "the left side of this progress bar should be aligned with
+    the left side of the button above it." Measured as boxes -- the track's
+    left equals the button's left -- and drawn as a hard edge (no radius on
+    the track's left end) so the start reads where the box says it is."""
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _stub_workbook)
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(f"{base}/ui/index.html")
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-copy-column")
+            assert page.evaluate(_INSTALL_CLIPBOARD_SHIM) is True
+            page.evaluate("document.hasFocus = () => false")
+            page.evaluate("document.querySelector('.scorecard-copy-column').click()")
+            _wait_until(page, "document.querySelector('.scorecard-exports')"
+                              ".dataset.held === 'true'")
+            page.wait_ms(200)
+            edges = page.evaluate("""
+              (() => {
+                const button = document.querySelector('.scorecard-copy-column').getBoundingClientRect();
+                const track = document.querySelector('.scorecard-status .job-status-track');
+                const css = getComputedStyle(track);
+                return {button: button.left, track: track.getBoundingClientRect().left,
+                        leftRadius: [css.borderTopLeftRadius, css.borderBottomLeftRadius]};
+              })()
+            """)
+    assert abs(edges["button"] - edges["track"]) < 0.5, edges
+    assert edges["leftRadius"] == ["0px", "0px"], edges

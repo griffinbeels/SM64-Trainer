@@ -144,6 +144,22 @@ export function sourceColour(index) {
   return SOURCE_COLOURS[index % SOURCE_COLOURS.length];
 }
 
+// ROUND 31: the row under the head. The region switch and its note on the
+// LEFT, the goal legend's pills on the RIGHT -- his call, with the reason:
+// "the JP/US buttons (and the accompanying text) should go underneath the
+// scorecard on the same row as the player pills, aligned to the left edge...
+// the top right feels overwhelming right now, but if it was split up, it
+// would feel balanced." The row exists whenever the switch does (a single
+// goal draws no pills and the switch still sits here), so the head is never
+// the heavy corner again and the control has one home, not two.
+function ScorecardSubhead({ regions, detectedRegion, onRegionsChange, goal, onRemove }) {
+  return html`<div class="scorecard-subhead">
+    <${RegionSwitch} values=${regions} onChange=${onRegionsChange}
+        label="Goal regions" note=${regionNote(regions, detectedRegion)} />
+    <${GoalLegend} goal=${goal} onRemove=${onRemove} />
+  </div>`;
+}
+
 // The legend: every pick, in the order they were picked, each wearing the
 // colour its dots use. His ask -- "it should show pills underneath the '4
 // picked'... otherwise, it's very hard to understand which of the options
@@ -656,12 +672,9 @@ function regionNote(regions, detected) {
     : `${only.toUpperCase()} only · you are graded on ${detected.toUpperCase()}`;
 }
 
-function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId,
-                         regions, detectedRegion, onRegionsChange }) {
+function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }) {
   return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
-    <${RegionSwitch} values=${regions} onChange=${onRegionsChange}
-        label="Goal regions" note=${regionNote(regions, detectedRegion)} />
     <${SearchSelect} value=${goalToValues(goal)} valueLabel=${goalToLabel(goal)}
         title="Pick one or more goals" groups=${groups} onOpen=${onOpen}
         onChange=${onGoalChange} align="right" multi />
@@ -837,17 +850,17 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
         ? html`<${InlineState}>Loading your scorecard…<//>`
         : html`<${ScorecardHead} goal=${data.goal} groups=${groups}
               onOpen=${loadRunnersOnce} scopeId=${scopeId}
-              regions=${data.regions || ["us"]}
+              coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
+            <${ScorecardSubhead} regions=${data.regions || ["us"]}
               detectedRegion=${data.detected_region || "us"}
               onRegionsChange=${onRegionsChange}
-              coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
+              goal=${data.goal} onRemove=${removeSource} />
             ${pendingCount > 0
               ? html`<${ScorecardSaveBar} pendingCount=${pendingCount}
                     initialName=${data.goal && data.goal.kind === "custom" ? data.goal.name : ""}
                     busy=${saveBusy} error=${saveError}
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}
-            <${GoalLegend} goal=${data.goal} onRemove=${removeSource} />
             <div class="score-cards" ref=${setCardsElement}
                 data-cols=${String(columnCountFor(cardsWidth))}
                 style=${`--score-rows:${Math.max(1, ...cardColumns(

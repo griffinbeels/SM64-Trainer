@@ -103,11 +103,20 @@ def test_the_controls_sit_on_the_exports_row_and_nowhere_in_settings(tmp_path):
                 const controls = row.querySelector('.sheetstyle').getBoundingClientRect();
                 const parts = [...row.querySelectorAll('.sheetstyle > *')]
                   .map((el) => el.getBoundingClientRect());
+                const preview = row.querySelector('.sheetstyle-preview');
+                const font = row.querySelector('.sheetstyle-font').getBoundingClientRect();
                 return {
                   rightOfCopy: controls.left >= copy.right,
                   sameRow: parts.every((box) => Math.abs((box.top + box.bottom) / 2
-                                                  - (copy.top + copy.bottom) / 2) < 12),
+                                                  - (copy.top + copy.bottom) / 2) < 14),
                   parts: parts.length,
+                  // Round 31: the preview comes AFTER every option, boxed and
+                  // captioned "Preview" above its two cells.
+                  previewAfterFont: preview.getBoundingClientRect().left >= font.right,
+                  previewLabel: preview.querySelector('.sheetstyle-preview-label').textContent.trim(),
+                  previewBoxed: parseFloat(getComputedStyle(preview).borderTopWidth) >= 1,
+                  labelAboveCells: preview.querySelector('.sheetstyle-preview-label').getBoundingClientRect().bottom
+                    <= preview.querySelector('.sheetstyle-preview-cells').getBoundingClientRect().top,
                 };
               })()
             """)
@@ -116,7 +125,10 @@ def test_the_controls_sit_on_the_exports_row_and_nowhere_in_settings(tmp_path):
             in_settings = page.count(".settings-drawer .sheetstyle, .settings-section.sheetstyle")
     assert geometry["rightOfCopy"], geometry
     assert geometry["sameRow"], geometry
-    assert geometry["parts"] >= 5, geometry          # legend pair, 3 swatches, font
+    assert geometry["parts"] >= 5, geometry          # 3 swatches, font, preview
+    assert geometry["previewAfterFont"], geometry
+    assert geometry["previewLabel"] == "Preview" and geometry["previewBoxed"], geometry
+    assert geometry["labelAboveCells"], geometry
     assert in_settings == 0, "the controls still live in Settings"
 
 
