@@ -218,6 +218,25 @@ def _installed_and_alive(pj64_dir, dll_source, settings_path, header, image_path
     return layer, registry, processes
 
 
+def test_the_first_status_read_after_boot_sees_a_moving_heartbeat(pj64_dir, dll_source, settings_path):
+    """The first call has no earlier value to compare with; it takes a
+    second reading instead of reporting 'restart Project64' for a game
+    that is running (his first Set up after the restart, 2026-09-05)."""
+    class MovingHeader:
+        alive = 0
+        status = 32
+
+        def __call__(self):
+            self.alive += 3
+            return self
+    header = MovingHeader()
+    layer, _registry, processes = make_layer(
+        pj64_dir, dll_source, settings_path, stream_header=header)
+    processes.image_path = None
+    layer.install(consent=True)
+    assert layer.status().state == ACTIVE
+
+
 def test_pictures_via_says_which_capture_point_the_layer_used(pj64_dir, dll_source, settings_path):
     header = FakeHeader(status=2)
     layer, _registry, _processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)

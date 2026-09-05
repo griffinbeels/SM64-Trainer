@@ -274,6 +274,26 @@ def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
         size_bytes=size, dims=dims)
 
 
+def fill_plane(plane, frame: np.ndarray) -> None:
+    """Copy a (H, W, 4) BGRA picture into an AVFrame plane. FFmpeg pads each
+    row of a plane to a 32-byte line size, so a width that is not a
+    multiple of 8 has a plane larger than the picture (1190 px: 4760 bytes
+    of pixels, a 4768-byte line) and `update` refuses the raw bytes -- which
+    made the sink respawn ffmpeg on EVERY picture while Project64's window
+    was 1190 wide during its start-up (2026-09-05: "got 2360960 bytes; need
+    2364928 bytes"), i.e. record nothing at that size. Such a picture is
+    laid out row by row into a buffer of the plane's own shape first."""
+    height, width = frame.shape[:2]
+    row_bytes = width * 4
+    line = plane.line_size
+    if line == row_bytes:
+        plane.update(frame if frame.flags["C_CONTIGUOUS"] else np.ascontiguousarray(frame))
+        return
+    rows = np.zeros((height, line), dtype=np.uint8)
+    rows[:, :row_bytes] = frame.reshape(height, row_bytes)
+    plane.update(rows)
+
+
 class _WriteAll:
     """The child's stdin for the NUT muxer: a raw pipe's write() may take
     fewer bytes than offered under backpressure, and libavformat's custom
@@ -836,8 +856,7 @@ class FfmpegAvSink:
             if self._mux is None:
                 raise OSError("no NUT mux open")
             picture = self._mux_frame
-            picture.planes[0].update(frame.tobytes() if not frame.flags["C_CONTIGUOUS"]
-                                     else frame)
+            fill_plane(picture.planes[0], frame)
             picture.pts = int(round((stamp - self._run_epoch) * 1_000_000))
             for packet in self._mux_stream.encode(picture):
                 self._mux.mux(packet)

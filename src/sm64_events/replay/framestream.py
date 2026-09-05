@@ -349,13 +349,15 @@ class FrameStream:
 
     def set_plugin_fields(self, status: int, wrapped_name: str = "",
                           plugin_pid: int = 0, plugin_version: int = 1,
-                          dropped: int | None = None) -> None:
+                          dropped: int | None = None, alive: int | None = None) -> None:
         """The plugin's own header fields, for a Python stand-in."""
         self._put_u32(H_STATUS, status)
         self._put_u32(H_PLUGIN_PID, plugin_pid)
         self._put_u32(H_PLUGIN_VERSION, plugin_version)
         if dropped is not None:
             self._put_u32(H_DROPPED, dropped)
+        if alive is not None:
+            self._put_u32(H_ALIVE, alive)
         raw = wrapped_name.encode("utf-8")[:H_WRAPPED_NAME_BYTES - 1]
         self._map[H_WRAPPED_NAME:H_WRAPPED_NAME + H_WRAPPED_NAME_BYTES] = raw.ljust(
             H_WRAPPED_NAME_BYTES, b"\0")

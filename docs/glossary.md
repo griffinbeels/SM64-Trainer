@@ -764,9 +764,10 @@ when the game submits a picture it copies the game's own memory -- the
 presents that picture it reads the picture off the GPU (itself, or through
 your plugin's own ReadScreen when your plugin draws on a thread of its own,
 as GLideN64_LINK_4.2 does) and hands both to the [[recorder]] through the
-[[frame stream]]. The [[recorder]] takes this camera only once a first
-picture has arrived; a layer Project64 loaded that cannot read leaves the
-[[recorder]] on the desktop grab and says why on the [[setup screen]]. A clip made of these pictures
+[[frame stream]]. The [[recorder]] takes this camera as soon as a first
+picture arrives, in whichever order you opened the game and the trainer;
+a layer Project64 loaded that cannot read leaves the [[recorder]] on the
+desktop grab and says why on the [[setup screen]]. A clip made of these pictures
 carries no inference: each [[picture ledger]] row says `exact`, the
 [[frame map]] is the rows, and the [[timer reader]] and the [[pad reader]]
 only audit. The trainer installs it under your explicit consent on the

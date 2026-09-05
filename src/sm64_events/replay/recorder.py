@@ -697,7 +697,8 @@ class ReplayRecorder:
             # ...and WHY it is the desktop when the capture layer is installed
             # (the layer refused every picture, presented none) -- None
             # when nothing fell back.
-            "frame_source_note": self._frame_source_note,
+            "frame_source_note": getattr(self._video_source, "frame_source_note",
+                                         self._frame_source_note),
             "frame_source_health": (self._video_source.status()
                                     if hasattr(self._video_source, "status")
                                     else None),

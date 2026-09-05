@@ -360,31 +360,36 @@ def build():
                 "frame stream unavailable; desktop capture only")
 
         def video_factory(win):
+            if frame_stream is None:
+                return DwmSurfaceVideoSource(win, fps=replay_cfg.fps)
+            import time as _time
+            from sm64_events.replay.pluginsource import DesktopUntilLayerPresents, pictures_flow
             fallback_note = None
-            if frame_stream is not None:
-                import time as _time
-                from sm64_events.replay.pluginsource import pictures_flow
-                before = frame_stream.header()
-                _time.sleep(0.2)
-                after = frame_stream.header()
-                if after.initiated and after.alive != before.alive:
-                    # The heartbeat moving says the layer is loaded; only a
-                    # picture says it can READ. His first live session
-                    # (2026-09-05) had the first without the second and the
-                    # recorder held an empty ring for an hour.
-                    flowing, reason = pictures_flow(frame_stream)
-                    if flowing:
-                        logging.getLogger("sm64.replay").info(
-                            "capture layer live (wrapping %s): frames come stamped "
-                            "from inside Project64", after.wrapped_name or "?")
-                        return PluginVideoSource(frame_stream, stamp_table, layout,
-                                                 fps=replay_cfg.fps)
-                    fallback_note = f"the capture layer is loaded but {reason}"
-                    logging.getLogger("sm64.replay").warning(
-                        "%s; recording through desktop capture instead", fallback_note)
-            source = DwmSurfaceVideoSource(win, fps=replay_cfg.fps)
-            source.frame_source_note = fallback_note
-            return source
+            before = frame_stream.header()
+            _time.sleep(0.2)
+            after = frame_stream.header()
+            if after.initiated and after.alive != before.alive:
+                # The heartbeat moving says the layer is loaded; only a
+                # picture says it can READ. His first live session
+                # (2026-09-05) had the first without the second and the
+                # recorder held an empty ring for an hour.
+                flowing, reason = pictures_flow(frame_stream)
+                if flowing:
+                    logging.getLogger("sm64.replay").info(
+                        "capture layer live (wrapping %s): frames come stamped "
+                        "from inside Project64", after.wrapped_name or "?")
+                    return PluginVideoSource(frame_stream, stamp_table, layout,
+                                             fps=replay_cfg.fps)
+                fallback_note = f"the capture layer is loaded but {reason}"
+                logging.getLogger("sm64.replay").warning(
+                    "%s; recording through desktop capture instead", fallback_note)
+            # The desktop grab, watching for the layer: the attach usually
+            # lands before the ROM runs (his restart: two seconds before),
+            # and whichever order he opens things in, the layer takes over
+            # the moment it presents.
+            return DesktopUntilLayerPresents(
+                DwmSurfaceVideoSource(win, fps=replay_cfg.fps), frame_stream,
+                note=fallback_note)
 
         recorder = ReplayRecorder(
             cfg=replay_cfg,

@@ -45,6 +45,10 @@ WAIT_S = 0.25
 #: records through desktop capture instead (a game presents ~30 pictures/s,
 #: so a layer that can read at all answers inside a few of these)
 PICTURE_PROBE_S = 0.6
+#: how often the desktop camera looks for the layer's heartbeat
+LAYER_WATCH_S = 1.0
+#: after the layer refused pictures, how long before it is asked again
+LAYER_RETRY_S = 15.0
 
 
 def pictures_flow(stream: F.FrameStream, timeout_s: float = PICTURE_PROBE_S) -> tuple:
@@ -176,6 +180,88 @@ def to_bgra_top_down(pixels_bgr_bottom_up: np.ndarray) -> np.ndarray:
     out[:, :, :3] = pixels_bgr_bottom_up[::-1]
     out[:, :, 3] = 255
     return out
+
+
+class DesktopUntilLayerPresents:
+    """The camera the recorder gets while the capture layer is installed but
+    not presenting: the desktop grab, with a watch on the frame stream.
+
+    The moment the layer's heartbeat moves and a picture flows, this source
+    ENDS ITSELF the way a lost window does -- `on_stopped` -- so the
+    recorder's attach loop runs its factory again and gets the plugin
+    source. Whichever order he opened the game and the trainer in, and
+    whenever the ROM loads (his rule, 2026-09-05: "we need to be order
+    agnostic"). His first restart attached to Project64's window two seconds
+    before the ROM ran; the camera chosen then was never revisited, and the
+    layer sat presenting to nobody.
+
+    A layer that presents but refuses pictures is asked again every
+    LAYER_RETRY_S, the reason on `frame_source_note` meanwhile."""
+
+    frame_source = "desktop"
+
+    def __init__(self, desktop, stream: F.FrameStream, note: str | None = None):
+        self._desktop = desktop
+        self._stream = stream
+        self.frame_source_note = note
+        self.upgraded = False
+        self._on_stopped = None
+        self._stop = threading.Event()
+        self._thread = None
+
+    def set_idle_check(self, fn) -> None:
+        if hasattr(self._desktop, "set_idle_check"):
+            self._desktop.set_idle_check(fn)
+
+    def status(self) -> dict | None:
+        return self._desktop.status() if hasattr(self._desktop, "status") else None
+
+    def start(self, on_frame, on_stopped) -> None:
+        self._on_stopped = on_stopped
+        self._desktop.start(on_frame, on_stopped)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._watch, name="layer-watch", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        self._thread = None
+        try:
+            # whatever a probe left on; the plugin source sets it again
+            self._stream.set_want_frames(False)
+        except Exception:
+            log.debug("frame stream gone at stop", exc_info=True)
+        self._desktop.stop()
+
+    def _watch(self) -> None:
+        import time
+        next_probe = 0.0
+        last = self._stream.header().alive
+        while not self._stop.wait(LAYER_WATCH_S):
+            try:
+                header = self._stream.header()
+            except Exception:
+                log.debug("frame stream unreadable in the layer watch", exc_info=True)
+                continue
+            alive = header.alive
+            moving = header.initiated and alive != last
+            last = alive
+            if not moving or time.monotonic() < next_probe:
+                continue
+            flowing, reason = pictures_flow(self._stream)
+            if flowing:
+                self.upgraded = True
+                log.info("capture layer started presenting; handing the recorder over to it")
+                if self._on_stopped is not None:
+                    self._on_stopped()
+                return
+            self.frame_source_note = f"the capture layer is loaded but {reason}"
+            log.warning("%s; staying on desktop capture, asking again in %.0f s",
+                        self.frame_source_note, LAYER_RETRY_S)
+            next_probe = time.monotonic() + LAYER_RETRY_S
 
 
 class PluginVideoSource:

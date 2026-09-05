@@ -147,6 +147,91 @@ def test_pictures_flow_names_a_layer_that_presents_nothing(layout, stream):
     assert flowing is False and "no new picture" in reason
 
 
+class FakeDesktop:
+    """A desktop camera that only records what the recorder asked of it."""
+
+    def __init__(self):
+        self.started = self.stopped = False
+        self.idle_check = None
+
+    def set_idle_check(self, fn):
+        self.idle_check = fn
+
+    def start(self, on_frame, on_stopped):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def status(self):
+        return {"grabs": 0}
+
+
+def _heartbeat(stream, stop, status, dropped_per_beat=0):
+    """A stand-in plugin: the heartbeat moves 60/s; optionally it refuses."""
+    alive = dropped = 0
+    while not stop.is_set():
+        alive += 1
+        dropped += dropped_per_beat
+        stream.set_plugin_fields(status, alive=alive, dropped=dropped)
+        time.sleep(1 / 60)
+
+
+def test_the_desktop_camera_hands_over_when_the_layer_starts_presenting(layout, stream):
+    """Whichever order the game and the trainer were opened in: the desktop
+    source watches the heartbeat, and once a picture flows it ends itself
+    like a lost window, so the recorder's next attach gets the plugin."""
+    table = P.table_for(layout)
+    desktop = FakeDesktop()
+    source = P.DesktopUntilLayerPresents(desktop, stream)
+    stopped = threading.Event()
+    source.set_idle_check(lambda: False)
+    source.start(lambda *args: None, stopped.set)
+    assert desktop.started and desktop.idle_check is not None
+    assert not stopped.wait(0.3)                 # nothing presenting yet: no handover
+    stop_beat = threading.Event()
+    status = F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED
+
+    def present():
+        while not stop_beat.is_set():
+            if stream.header().want_frames:
+                stream.publish(np.zeros((2, 2, 3), dtype=np.uint8),
+                               raw_table(rdram_with(layout, 9), table))
+            time.sleep(0.02)
+
+    threading.Thread(target=_heartbeat, args=(stream, stop_beat, status), daemon=True).start()
+    threading.Thread(target=present, daemon=True).start()
+    try:
+        assert stopped.wait(4.0), "the desktop camera never handed over"
+        assert source.upgraded is True
+    finally:
+        stop_beat.set()
+        source.stop()
+    assert desktop.stopped and stream.header().want_frames == 0
+
+
+def test_the_desktop_camera_stays_when_the_layer_refuses_pictures(layout, stream):
+    desktop = FakeDesktop()
+    source = P.DesktopUntilLayerPresents(desktop, stream)
+    stopped = threading.Event()
+    source.start(lambda *args: None, stopped.set)
+    stop_beat = threading.Event()
+    status = F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED
+    threading.Thread(target=_heartbeat, args=(stream, stop_beat, status, 1), daemon=True).start()
+    try:
+        deadline = time.monotonic() + 4.0
+        while source.frame_source_note is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert source.frame_source_note is not None, "the refusal was never noted"
+        assert "refused" in source.frame_source_note
+        assert not stopped.is_set() and source.upgraded is False
+        assert source.status() == {"grabs": 0}
+    finally:
+        stop_beat.set()
+        source.stop()
+    assert desktop.stopped
+
+
 def test_idle_turns_the_frames_off(layout, stream):
     source = P.PluginVideoSource(stream, P.table_for(layout), layout)
     source.set_idle_check(lambda: True)

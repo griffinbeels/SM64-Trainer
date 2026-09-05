@@ -33,6 +33,7 @@ import hashlib
 import json
 import logging
 import shutil
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -250,7 +251,17 @@ class CaptureLayer:
         if header is not None:
             alive = getattr(header, "alive", None)
             if isinstance(alive, int):
-                layer_alive = self._last_alive is not None and alive != self._last_alive
+                if self._last_alive is None:
+                    # The first read after boot has nothing to compare
+                    # against; a second read a few heartbeats later (60/s)
+                    # answers it, instead of a "restart Project64" that a
+                    # running game did not earn.
+                    time.sleep(0.05)
+                    later = getattr(self._stream_header(), "alive", alive)
+                    layer_alive = isinstance(later, int) and later != alive
+                    alive = later if isinstance(later, int) else alive
+                else:
+                    layer_alive = alive != self._last_alive
                 self._last_alive = alive
             status_bits = getattr(header, "status", None)
             if isinstance(status_bits, int):
