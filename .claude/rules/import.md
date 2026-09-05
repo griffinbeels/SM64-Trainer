@@ -243,3 +243,17 @@ What is genuinely still open on the two:
     runners (2026-09-04) name a centisecond off the 30-per-second set
     (50.92); the import rounds UP by rule and the column prints 50.93.
     `tools/roundtrip_sheet.py` classes those `snapped`, beside the verdict.
+
+**The other direction has its own harness: `tools/scorecard_parity.py`.**
+The round trip asks whether a column comes back byte for byte; parity asks
+whether the SCORECARD agrees with the runner it was imported from — import
+one runner, set the goal to him, every tile +0.00; import the next, set the
+goal to both, again. His words (round 34, 2026-09-05): *"At each step
+(importing player 1 -> setting scorecard to player 1, additionally importing
+player 2 -> setting scorecard to player1 + player2, etc) it should be +0.00
+for all cards, by definition."* It runs off the library snapshot on disk (no
+fetch), computes its own runner set covering every importable worksheet row,
+and prints both sides of each mismatching tile. It found round 34's cause in
+one run: a merged (JP)/(US) row lands both of a runner's times under one
+strategy, so a PB slot keyed by strategy alone hid the faster ROM's row.
+`tests/test_scorecard_parity.py` is the same walk on the bundled seed.

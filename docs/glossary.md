@@ -1116,13 +1116,17 @@ once — JP, US, or both, and never neither. It draws each release as its
 country's flag rather than the two letters, and it means something different
 on each surface that wears it: on the [[library tab]] it decides which
 [[sheet entry]] rows appear (both by default, so no community time hides),
-and on the [[scorecard]] it decides which regions a [[runner]] [[goal]] may
-offer a time from (your [[effective version]] by default, and the faster of
-the two when both are on).
+and on the [[scorecard]] it decides which regions BOTH sides of a tile may
+draw a time from — which regions a [[runner]] [[goal]] may offer, and which
+of your own [[personal best]]s count as yours (your [[effective version]] by
+default, and the faster of the two when both are on). Both sides read the
+same choice so that a [[runner]] whose times you imported grades at exactly
+zero however you set it; a [[personal best]] naming no release counts under
+either choice, since nothing recorded which release produced it.
 
 - **Not** — the [[game version]]. The [[game version]] decides what the
   trainer grades YOUR [[attempt]]s on; a region switch only widens or narrows
-  what a surface shows you of other people's.
+  which releases a surface draws times from.
 
 - **Lives** — the control itself
   (`src/sm64_events/ui/components/versionswitch.js`) and the flags it draws

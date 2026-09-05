@@ -7391,6 +7391,20 @@
      row, after Rebuild -- the two legend cells the paste will write, three
      circle swatches, the font dropdown, Reset while anything differs. */
   .sheetstyle { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; }
+  /* Round 34: the three swatches and the font sit in ONE box, each under a
+     small caption along the top ("labels inside the rectangle aligned along
+     the top, above each color. plus a label for the font"), the same box and
+     caption the Preview beside it already wears, so the row reads as two
+     labelled groups: what you chose, and what it paints. */
+  .sheetstyle-options {
+    display: inline-flex; align-items: flex-end; gap: 10px;
+    padding: 4px 8px 5px; border: 1px solid var(--border-soft); border-radius: 6px;
+  }
+  .sheetstyle-option { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+  .sheetstyle-option-label {
+    font-size: .62rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); line-height: 1;
+  }
   /* Round 31: the preview comes AFTER the options it previews, in its own
      box with a small "Preview" caption above the two cells. */
   .sheetstyle-preview {

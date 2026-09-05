@@ -137,28 +137,45 @@ def _current_pbs(pb_rows: list[dict]) -> dict:
 
 def latest_pbs_by_strategy(pb_rows: list[dict]) -> dict:
     """The CURRENT row per (course_id, star_id, segment_id, timer_mode,
-    strat_tag), later rows winning -- the untagged bucket included under
-    `None`. The ONE reading behind "your best on this entity however you set
-    it": a caller takes the fastest of an identity's rows. Round 33
-    (2026-09-05): the Scorecard's YOU asked the strategy-blind `current_pb`,
-    which answers the LATEST save across strategies, so an import that landed
-    a slower row after a faster one showed the slower time as his -- he was
-    the runner the goal came from, and the gap read +0.24 where it had to be
-    0.00. `_column_resolve.leftovers` reads the same map."""
+    strat_tag, game_version), later rows winning -- the untagged bucket
+    included under `None`, and an unversioned row under `None` too. The ONE
+    reading behind "your best on this entity however you set it": a caller
+    takes the fastest of an identity's rows. Round 33 (2026-09-05): the
+    Scorecard's YOU asked the strategy-blind `current_pb`, which answers the
+    LATEST save across strategies, so an import that landed a slower row
+    after a faster one showed the slower time as his -- he was the runner
+    the goal came from, and the gap read +0.24 where it had to be 0.00.
+
+    A slot per ROM as well (round 34, same day): a merged (JP)/(US) sheet
+    row lands BOTH of a runner's times under one strategy, JP first, and
+    keyed by strategy alone the US row shadowed the faster JP one -- six of
+    Raisn's tiles and two of RONC3NA's read YOU slower than their own GOAL
+    ("I literally am ronc3na in this case"). `db.current_pb(game_version=)`
+    already reads a named row that way (a row set on the other ROM is not
+    an answer; an unversioned row always is); this map now agrees with it.
+    `_column_resolve.leftovers` reads the same map."""
     out = {}
     for row in pb_rows:  # ordered by id: later rows win
         out[(row["course_id"], row["star_id"], row["segment_id"],
-             row["timer_mode"], row["strat_tag"])] = row
+             row["timer_mode"], row["strat_tag"], row.get("game_version"))] = row
     return out
 
 
-def fastest_current_pbs(pb_rows: list[dict]) -> dict:
+def fastest_current_pbs(pb_rows: list[dict], regions=None) -> dict:
     """{(course_id, star_id, segment_id, timer_mode): the fastest of that
-    identity's current rows across every strategy} -- what a tile calls YOUR
-    time, and what a runner's own column would print for them."""
+    identity's current rows across every strategy and every ROM `regions`
+    admits} -- what a tile calls YOUR time, and what a runner's own column
+    would print for them. `regions` is the Scorecard's own region setting
+    (`None` = every row); a row with no ROM stamped is graded on whatever is
+    running and so always counts. The GOAL side takes the faster of a
+    runner's two regional times per entity (`runner_goal_map`), and this is
+    the same minimise-then-merge on your side, which is what makes a runner
+    grade himself at exactly 0.00 whichever regions are on."""
     best = {}
-    for (course_id, star_id, segment_id, mode, _strat), row in \
+    for (course_id, star_id, segment_id, mode, _strat, version), row in \
             latest_pbs_by_strategy(pb_rows).items():
+        if regions is not None and version is not None and version not in regions:
+            continue
         key = (course_id, star_id, segment_id, mode)
         if key not in best or row["frames"] < best[key]["frames"]:
             best[key] = row

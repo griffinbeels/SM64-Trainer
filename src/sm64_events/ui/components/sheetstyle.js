@@ -73,10 +73,19 @@ function loadGoogleFonts() {
   document.head.appendChild(link);
 }
 
+// [key, the swatch's own tooltip, the caption drawn ABOVE it]. Round 34:
+// "we need labels for each of the colors... a big rectangle wrapping the 3
+// dots + the font dropdown, labels inside the rectangle aligned along the
+// top, above each color. plus a label for the font." The caption is a SPAN,
+// never a <label>: a label click activates its input, and activating a
+// colour input opens the picker from the empty space beside it (round 30).
+// The caption is the platform VALUE upper-cased -- the same word the two
+// legend cells (and the paste's first two rows) print, so the dot and the
+// cell it colours are named alike.
 const COLOURS = [
-  ["emu_fill", `${PLATFORM_LABELS[EMU]} cell`],
-  ["n64_fill", `${PLATFORM_LABELS[N64]} cell`],
-  ["font_color", "Text"],
+  ["emu_fill", `${PLATFORM_LABELS[EMU]} cell`, EMU.toUpperCase()],
+  ["n64_fill", `${PLATFORM_LABELS[N64]} cell`, N64.toUpperCase()],
+  ["font_color", "Text", "Text"],
 ];
 
 const FONT_GROUPS = [{ label: null, options: SHEETS_FONTS.map((font) => (
@@ -121,17 +130,26 @@ export function SheetStyleControls() {
   // Round 31: the options first, then the preview they produce -- boxed and
   // captioned ("show the preview AFTER all of the options... clearly label
   // it as 'Preview' above it, in small text, with a surrounding box").
+  // Round 34: the options sit in ONE captioned box -- each swatch and the
+  // font under its own small label along the top -- so the box reads like
+  // the Preview box beside it and nothing on the row is a bare dot.
   return html`<div class="sheetstyle" role="group" aria-label="Sheet column colours">
-    ${COLOURS.map(([key, caption]) => html`<input type="color" key=${key}
-        class=${`sheetstyle-swatch sheetstyle-${key}`}
-        title=${caption} aria-label=${caption} value=${style[key]}
-        oninput=${(inputEvent) => setStyle({ ...style, [key]: inputEvent.target.value.toUpperCase() })}
-        onchange=${(changeEvent) => save({ ...style, [key]: changeEvent.target.value.toUpperCase() })} />`)}
-    <span class="sheetstyle-font">
-      <${SearchSelect} value=${style.font_family} valueLabel=${style.font_family}
-          valueStyle=${`font-family:${fontStack(style.font_family)}`}
-          title="Font" groups=${FONT_GROUPS} align="right"
-          onChange=${(font) => save({ ...style, font_family: font })} />
+    <span class="sheetstyle-options">
+      ${COLOURS.map(([key, caption, label]) => html`<span class="sheetstyle-option" key=${key}>
+          <span class="sheetstyle-option-label">${label}</span>
+          <input type="color"
+              class=${`sheetstyle-swatch sheetstyle-${key}`}
+              title=${caption} aria-label=${caption} value=${style[key]}
+              oninput=${(inputEvent) => setStyle({ ...style, [key]: inputEvent.target.value.toUpperCase() })}
+              onchange=${(changeEvent) => save({ ...style, [key]: changeEvent.target.value.toUpperCase() })} />
+        </span>`)}
+      <span class="sheetstyle-option sheetstyle-font">
+        <span class="sheetstyle-option-label">Font</span>
+        <${SearchSelect} value=${style.font_family} valueLabel=${style.font_family}
+            valueStyle=${`font-family:${fontStack(style.font_family)}`}
+            title="Font" groups=${FONT_GROUPS} align="right"
+            onChange=${(font) => save({ ...style, font_family: font })} />
+      </span>
     </span>
     <span class="sheetstyle-preview">
       <span class="sheetstyle-preview-label">Preview</span>

@@ -1365,3 +1365,40 @@ def test_your_time_is_your_fastest_across_strategies_not_your_latest_save(tmp_pa
         row = next(r for r in card["rows"] if r["course_id"] == 1)
         tile = next(t for t in row["tiles"] if t["key"] == "star:1:1")
         assert tile["you_cs"] == display_cs(250), tile
+
+
+def _you(client, key):
+    card = client.get("/api/scorecard").json()
+    return next(t for r in card["rows"] for t in r["tiles"] if t["key"] == key)["you_cs"]
+
+
+def test_your_time_is_your_fastest_across_the_regions_the_card_includes(tmp_path):
+    """Round 34, his case again: RONC3NA re-imported, and the two 100-coin
+    tiles whose sheet row is a MERGED (JP)/(US) approach read +0.73 and
+    +1.30 against his own column. The import lands both of a runner's times
+    under ONE strategy (JP first), and a slot keyed by strategy alone let the
+    US row shadow the faster JP one. A PB slot is per ROM as well now, and
+    YOU merges across the regions the card includes -- exactly what the goal
+    side does for the runner -- so with both regions on the JP time is his,
+    with US only the US time is, and an unversioned row counts either way."""
+    with make_client(tmp_path) as (client, db, _svc):
+        db.insert_pb(11, 6, "Secrets + 100c", "igt", 2227, None, "2026-09-05T00:00:01Z",
+                     imported_from="sheet:RONC3NA", game_version="jp")
+        db.insert_pb(11, 6, "Secrets + 100c", "igt", 2249, None, "2026-09-05T00:00:02Z",
+                     imported_from="sheet:RONC3NA", game_version="us")
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": ["us", "jp"]}).status_code == 200
+        assert _you(client, "star:11:6") == display_cs(2227), "the faster JP row is shadowed"
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": ["us"]}).status_code == 200
+        assert _you(client, "star:11:6") == display_cs(2249), "a JP row is not a US time"
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": ["jp"]}).status_code == 200
+        assert _you(client, "star:11:6") == display_cs(2227)
+        # A row with no ROM stamped grades on whatever is running: it counts
+        # under every region setting, and it is the fastest here.
+        db.insert_pb(11, 6, "Secrets + 100c", "igt", 2200, None, "2026-09-05T00:00:03Z")
+        assert _you(client, "star:11:6") == display_cs(2200)
+        assert client.put("/api/scorecard/regions",
+                          json={"regions": ["us"]}).status_code == 200
+        assert _you(client, "star:11:6") == display_cs(2200)

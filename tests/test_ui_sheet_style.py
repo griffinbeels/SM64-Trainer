@@ -101,11 +101,26 @@ def test_the_controls_sit_on_the_exports_row_and_nowhere_in_settings(tmp_path):
                 const row = document.querySelector('.rank-page .scorecard-exports');
                 const copy = row.querySelector('.scorecard-copy-column').getBoundingClientRect();
                 const controls = row.querySelector('.sheetstyle').getBoundingClientRect();
-                const parts = [...row.querySelectorAll('.sheetstyle > *')]
+                // Round 34: the options live in one captioned box, so the
+                // row's parts are the four labelled options and the preview.
+                const parts = [...row.querySelectorAll('.sheetstyle-option, .sheetstyle-preview')]
                   .map((el) => el.getBoundingClientRect());
                 const preview = row.querySelector('.sheetstyle-preview');
                 const font = row.querySelector('.sheetstyle-font').getBoundingClientRect();
+                const options = row.querySelector('.sheetstyle-options');
+                const captions = [...row.querySelectorAll('.sheetstyle-option')].map((option) => {
+                  const label = option.querySelector('.sheetstyle-option-label');
+                  const control = option.querySelector('input, .search-select-trigger, button');
+                  return {
+                    text: label ? label.textContent.trim().toUpperCase() : null,
+                    above: !!label && !!control
+                      && label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top,
+                    inside: !!label && options.contains(label),
+                  };
+                });
                 return {
+                  optionsBoxed: parseFloat(getComputedStyle(options).borderTopWidth) >= 1,
+                  captions,
                   rightOfCopy: controls.left >= copy.right,
                   sameRow: parts.every((box) => Math.abs((box.top + box.bottom) / 2
                                                   - (copy.top + copy.bottom) / 2) < 14),
@@ -126,6 +141,10 @@ def test_the_controls_sit_on_the_exports_row_and_nowhere_in_settings(tmp_path):
     assert geometry["rightOfCopy"], geometry
     assert geometry["sameRow"], geometry
     assert geometry["parts"] >= 5, geometry          # 3 swatches, font, preview
+    # Round 34: every option wears its caption, along the top, inside one box.
+    assert geometry["optionsBoxed"], geometry
+    assert [c["text"] for c in geometry["captions"]] == ["EMU", "N64", "TEXT", "FONT"], geometry
+    assert all(c["above"] and c["inside"] for c in geometry["captions"]), geometry
     assert geometry["previewAfterFont"], geometry
     assert geometry["previewLabel"] == "Preview" and geometry["previewBoxed"], geometry
     assert geometry["labelAboveCells"], geometry

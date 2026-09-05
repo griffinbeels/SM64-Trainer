@@ -59,6 +59,24 @@ def _visible_entries(item: dict, version: str) -> list[dict]:
             if not entry.get("version") or entry["version"] == version]
 
 
+def _entries_set_on(target: dict, item: dict, version: str) -> list[dict]:
+    """The STRICT reading a runner GOAL takes (round 34, 2026-09-05): an
+    entry counts for `version` only when it was SET on that ROM -- its own
+    tag, else its target's, else untagged (which grades on whatever runs).
+    This is the exact stamp `library/import_runner.py` lands the same entry
+    under (`entry.version or target.version`), so a runner's own goal and
+    his imported column can never disagree about which ROM a time belongs
+    to. `_visible_entries` deliberately shows a single-tag row in both modes
+    (52 rows, ~1,100 entries would otherwise vanish from the Library page and
+    from every rating); a goal is a different question -- "what did this
+    runner run on the ROM I have on" -- and with only US on, a JP-tagged
+    time offered as the goal read as a gap against the runner's own import
+    (the parity walk found it under `regions=["jp"]`: YOU had no row, the
+    goal a US-tagged time)."""
+    return [entry for entry in item.get("entries") or []
+            if (entry.get("version") or target.get("version") or version) == version]
+
+
 def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
                 ) -> str | None:
     """The entity ONE row (one approach or one subsection) grades against, or
@@ -92,9 +110,12 @@ def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
     return None
 
 
-def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us"
-                 ) -> dict[str, dict[str, dict]]:
+def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us",
+                 strict: bool = False) -> dict[str, dict[str, dict]]:
     """{runner: {entity_key: the sheet entry that set their best time}}.
+    `strict` reads each row by the ROM its entries were SET on
+    (`_entries_set_on`) rather than by what the Library shows in that mode
+    (`_visible_entries`); the Scorecard's runner goal is its one caller.
 
     A runner's time for an entity is the MINIMUM `time_cs` over every
     approach and subsection, on every target, that maps to it -- several
@@ -109,7 +130,9 @@ def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us"
                 entity_key = _row_entity(target, item, kind, adopted_rows)
                 if not entity_key:
                     continue
-                for entry in _visible_entries(item, version):
+                visible = (_entries_set_on(target, item, version) if strict
+                           else _visible_entries(item, version))
+                for entry in visible:
                     runner = entry.get("runner")
                     if not runner:
                         continue
@@ -120,12 +143,14 @@ def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us"
     return best
 
 
-def runner_times(payload: dict, adopted_rows: dict, *, version: str = "us"
-                 ) -> dict[str, dict[str, int]]:
+def runner_times(payload: dict, adopted_rows: dict, *, version: str = "us",
+                 strict: bool = False) -> dict[str, dict[str, int]]:
     """{runner: {entity_key: best time_cs}} -- `best_entries` reduced to the
-    number, the shape `rate_runners` grades and the tests pin."""
+    number, the shape `rate_runners` grades and the tests pin. `strict` as
+    in `best_entries`."""
     return {runner: {key: entry["time_cs"] for key, entry in by_entity.items()}
-            for runner, by_entity in best_entries(payload, adopted_rows, version=version).items()}
+            for runner, by_entity in best_entries(payload, adopted_rows, version=version,
+                                                  strict=strict).items()}
 
 
 @dataclass(frozen=True)

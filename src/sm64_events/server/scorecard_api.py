@@ -224,7 +224,7 @@ def _column_resolve(service):
             latest_rows.append(latest_pbs_by_strategy(service.db.pbs()))
         course_id, star_id, segment_id = identity
         best = None
-        for (course, star, segment, mode, strat), pb in latest_rows[0].items():
+        for (course, star, segment, mode, strat, _rom), pb in latest_rows[0].items():
             if (course, star, segment, mode) != (course_id, star_id,
                                                 segment_id, timer_mode):
                 continue
@@ -461,11 +461,13 @@ def create_scorecard_router(service, library=None, adoptions=None,
                     fight_segment_ids=_fight_ids())
         raise HTTPException(404, f"unknown scope {scope_id!r}")
 
-    def your_times(keys: list[str]) -> dict[str, int]:
-        """Your FASTEST current PB per key across every strategy, on the
-        entity's own clock -- igt for a star, rta for a movement -- as
-        displayed centiseconds. A key with no saved PB is simply absent,
-        which is the "no goal on this tile" case `_tile` already handles.
+    def your_times(keys: list[str], regions: list[str]) -> dict[str, int]:
+        """Your FASTEST current PB per key across every strategy and every
+        ROM in `regions` (the card's own region setting, the same list a
+        runner goal offers times from), on the entity's own clock -- igt for
+        a star, rta for a movement -- as displayed centiseconds. A key with
+        no saved PB is simply absent, which is the "no goal on this tile"
+        case `_tile` already handles.
 
         Fastest, not latest (round 33, 2026-09-05): the strategy-blind
         `current_pb` answers the latest SAVE across strategies, and an
@@ -474,8 +476,14 @@ def create_scorecard_router(service, library=None, adoptions=None,
         second) against a goal of 11"26 (his Standard, landed first) --
         "I literally am ronc3na in this case. Both should automatically be
         matching." A runner goal offers the runner's fastest row, so YOU is
-        the same quantity for him."""
-        best = fastest_current_pbs(service.db.pbs())
+        the same quantity for him.
+
+        And across ROMs (round 34, same day): a merged (JP)/(US) sheet row
+        lands both of a runner's times under ONE strategy, and keyed by
+        strategy alone the later (US) row shadowed the faster JP one -- WDW
+        and TTC's 100-coin tiles read +0.73 and +1.30 against his own
+        column. `regions` is the merge the goal side already runs."""
+        best = fastest_current_pbs(service.db.pbs(), regions=regions)
         you = {}
         for key in keys:
             parts = key.split(":")
@@ -517,9 +525,13 @@ def create_scorecard_router(service, library=None, adoptions=None,
         key = (id(payload), payload.get("sheet_revision"), payload.get("fetched_at"),
                version, tuple(sorted(adopted_rows.items())))
         if _runner_times_memo.get("key") != key:
+            # STRICT: a runner's time counts for a region only when it was
+            # set on that ROM (round 34) -- the same stamp his import lands
+            # it under, so a runner grades himself at zero whichever regions
+            # are on. The Library page and the ratings keep the looser rule.
             _runner_times_memo.update(
                 key=key, payload=payload,
-                value=runner_times(payload, adopted_rows, version=version))
+                value=runner_times(payload, adopted_rows, version=version, strict=True))
         return _runner_times_memo["value"]
 
     def scorecard_regions(ranks) -> list[str]:
@@ -658,7 +670,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         # than the number printed beside it.
         rows_spec = without_keys(scope_rows(scope_id), service.rank_excluded())
         keys = card_keys(rows_spec)
-        you = your_times(keys)
+        you = your_times(keys, scorecard_regions(service.ranks))
         goal_value = service.db.get_state(_GOAL_KEY, None)
         if not isinstance(goal_value, dict):
             goal_value = None                # a corrupt KV reads as no goal
