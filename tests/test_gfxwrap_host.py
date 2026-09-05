@@ -139,3 +139,38 @@ def test_no_frames_are_captured_while_the_tracker_does_not_want_them(built):
         assert header.write_seq == 0 and header.lists == 3 and header.alive == 6
     finally:
         stream.close()
+
+
+def test_an_ini_naming_the_wrapper_itself_leaves_it_unwrapped_instead_of_recursing(built):
+    """Fresh-context review finding: forwarding to ourselves would recurse
+    until the stack died. The wrapper notices its own module and reports
+    the wrapped plugin as missing."""
+    info = subprocess.run([str(built["host"]), "--info", str(built["wrapper"]),
+                           "--wrapped", "sm64_trainer_gfx.dll"],
+                          capture_output=True, text=True, creationflags=_NO_WINDOW,
+                          check=True, timeout=60).stdout
+    assert "wrapped plugin missing" in info
+
+
+def test_a_stamp_entry_past_the_committed_rdram_is_dropped_not_a_crash(built):
+    """The tracker claims 8 MB (the expansion pak); a 4 MB configuration has
+    nothing committed above it. The host reserves 8 MB and commits 4, the
+    table asks for a word at 6 MB: the plugin must survive every frame and
+    hand back an EMPTY entry there while the low entry still arrives."""
+    name = unique_name()
+    stream = F.FrameStream(name)
+    try:
+        stream.set_table([(0, 4), (6 << 20, 4)], rdram_bytes=8 << 20)
+        stream.set_want_frames(True)
+        result = subprocess.run([str(built["host"]), "--drive", str(built["wrapper"]), "3",
+                                 "--stream", name, "--rdram-mb", "4"],
+                                capture_output=True, text=True, timeout=60,
+                                creationflags=_NO_WINDOW, check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
+        slots, _ = stream.read_new(0)
+        assert [slot.seq for slot in slots] == [1, 2, 3]
+        for slot in slots:
+            assert slot.table[0] == (1000 + slot.seq - 1).to_bytes(4, "little")
+            assert slot.table[1] == b""
+    finally:
+        stream.close()

@@ -73,7 +73,8 @@ static int64_t qpc_now(void) {
 
 /* -- the ini beside this DLL: wrapped=<file>, stream=<name> -------------- */
 static void self_dir(char *out, size_t size) {
-    GetModuleFileNameA(g_self, out, (DWORD)size);
+    out[0] = '\0';
+    if (GetModuleFileNameA(g_self, out, (DWORD)size) == 0) return;
     char *slash = strrchr(out, '\\');
     if (slash) *(slash + 1) = '\0';
 }
@@ -113,7 +114,41 @@ static void ensure_wrapped(void) {
     }
     g_wrapped_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!g_wrapped_module) return;
+    if (g_wrapped_module == g_self) {
+        /* The ini names THIS DLL (a copy, or an install that wrote the
+         * wrapper's own name): forwarding would recurse until the stack
+         * died. Stay unwrapped and say so through GetDllInfo. */
+        FreeLibrary(g_wrapped_module);
+        g_wrapped_module = NULL;
+        return;
+    }
     RESOLVE_GFX_API(g_wrapped, g_wrapped_module);
+}
+
+/* How much of RDRAM is really there. GFX_INFO carries no size, and the
+ * tracker's claim (8 MB, the expansion pak) can exceed a 4 MB configuration;
+ * a copy past the allocation would take the emulator down mid-run. So the
+ * committed span from RDRAM's base is measured once, and every copy runs
+ * under a structured-exception guard as well -- a bad page becomes a
+ * dropped stamp, never a crash. */
+static size_t g_rdram_span;
+
+static void measure_rdram(void) {
+    MEMORY_BASIC_INFORMATION info;
+    g_rdram_span = 0;
+    if (!g_gfx.RDRAM) return;
+    if (VirtualQuery(g_gfx.RDRAM, &info, sizeof info) != sizeof info) return;
+    if (info.State != MEM_COMMIT) return;
+    g_rdram_span = (size_t)((char *)info.BaseAddress + info.RegionSize - (char *)g_gfx.RDRAM);
+}
+
+static BOOL copy_guarded(void *destination, const void *source, size_t length) {
+    __try {
+        memcpy(destination, source, length);
+        return TRUE;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return FALSE;
+    }
 }
 
 /* -- the frame stream --------------------------------------------------- */
@@ -162,18 +197,81 @@ static void stamp_pending(void) {
     if (count > TABLE_ENTRIES) count = TABLE_ENTRIES;
     g_pending.count = count;
     g_pending.list_qpc = qpc_now();
+    size_t limit = g_hdr->rdram_bytes;
+    if (g_rdram_span && g_rdram_span < limit) limit = g_rdram_span;
     for (unsigned index = 0; index < count; index++) {
         unsigned offset = g_hdr->table[index].rdram_offset;
         unsigned length = g_hdr->table[index].length;
         if (length == 0 || length > TABLE_ENTRY_BYTES
-                || offset + length > g_hdr->rdram_bytes || offset + length < offset) {
+                || (size_t)offset + length > limit || offset + length < offset
+                || !copy_guarded(g_pending.bytes[index], g_gfx.RDRAM + offset, length)) {
             g_pending.lengths[index] = 0;
             continue;
         }
-        memcpy(g_pending.bytes[index], g_gfx.RDRAM + offset, length);
         g_pending.lengths[index] = length;
     }
     g_pending.lists_since++;
+}
+
+/* The wrapped plugin may leave a framebuffer object, a pixel-pack buffer or
+ * its own pack parameters bound (GLideN64 is FBO- and PBO-heavy). With an
+ * FBO bound, glReadBuffer(GL_FRONT) fails silently and glReadPixels reads
+ * the plugin's internal render target; with a pack buffer bound, the pixel
+ * pointer becomes an offset into GPU memory. So the read binds the window's
+ * own framebuffer and no pack buffer, sets the pack parameters it relies
+ * on, and puts every one of them back -- the plugin never sees a change.
+ * The two binding calls are GL 1.5 / 3.0 entry points, fetched once. */
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#define GL_PIXEL_PACK_BUFFER_BINDING 0x88ED
+typedef void (WINAPI *fn_bind_framebuffer)(GLenum, GLuint);
+typedef void (WINAPI *fn_bind_buffer)(GLenum, GLuint);
+static fn_bind_framebuffer g_bind_framebuffer;
+static fn_bind_buffer g_bind_buffer;
+static BOOL g_gl_entry_points_looked_up;
+
+static void look_up_gl_entry_points(void) {
+    if (g_gl_entry_points_looked_up) return;
+    g_gl_entry_points_looked_up = TRUE;
+    g_bind_framebuffer = (fn_bind_framebuffer)wglGetProcAddress("glBindFramebuffer");
+    g_bind_buffer = (fn_bind_buffer)wglGetProcAddress("glBindBuffer");
+}
+
+static void read_front_buffer(void *pixels, unsigned width, unsigned height,
+                              unsigned bottom_offset) {
+    look_up_gl_entry_points();
+    GLint read_buffer = GL_BACK, read_framebuffer = 0, pack_buffer = 0;
+    GLint pack[4] = {4, 0, 0, 0};      /* alignment, row length, skip rows, skip pixels */
+    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack[0]);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack[1]);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack[2]);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack[3]);
+    if (g_bind_framebuffer) {
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
+        if (read_framebuffer) g_bind_framebuffer(GL_READ_FRAMEBUFFER, 0);
+    }
+    if (g_bind_buffer) {
+        glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+        if (pack_buffer) g_bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glReadBuffer(GL_FRONT);
+    glReadPixels(0, (GLint)bottom_offset, (GLsizei)width, (GLsizei)height,
+                 GL_BGR_EXT, GL_UNSIGNED_BYTE, pixels);
+    glReadBuffer((GLenum)read_buffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, pack[0]);
+    glPixelStorei(GL_PACK_ROW_LENGTH, pack[1]);
+    glPixelStorei(GL_PACK_SKIP_ROWS, pack[2]);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, pack[3]);
+    if (g_bind_buffer && pack_buffer) g_bind_buffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
+    if (g_bind_framebuffer && read_framebuffer)
+        g_bind_framebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
+    while (glGetError() != GL_NO_ERROR) { /* leave no error of ours for the plugin to find */ }
 }
 
 static void capture_if_presented(void) {
@@ -193,6 +291,17 @@ static void capture_if_presented(void) {
     if (!GetClientRect(g_gfx.hWnd, &client)) { g_hdr->dropped++; return; }
     unsigned width = (unsigned)(client.right - client.left);
     unsigned height = (unsigned)(client.bottom - client.top);
+    /* PJ64's status bar sits INSIDE the client area; the wrapped plugin
+     * draws above it (GLideN64 offsets its viewport by the bar's height),
+     * so the picture starts that many GL rows up from the bottom. */
+    unsigned bottom_offset = 0;
+    if (g_gfx.hStatusBar && IsWindowVisible(g_gfx.hStatusBar)) {
+        RECT bar;
+        if (GetWindowRect(g_gfx.hStatusBar, &bar)) {
+            bottom_offset = (unsigned)(bar.bottom - bar.top);
+            if (bottom_offset < height) height -= bottom_offset; else bottom_offset = 0;
+        }
+    }
     unsigned stride = (width * BYTES_PER_PIXEL + 3u) & ~3u;
     if (width == 0 || height == 0 || width > MAX_WIDTH || height > MAX_HEIGHT) {
         g_hdr->status |= STATUS_FRAME_TOO_LARGE;
@@ -219,12 +328,7 @@ static void capture_if_presented(void) {
         slot->lengths[index] = length;
         if (length) memcpy(slot->table + index * TABLE_ENTRY_BYTES, g_pending.bytes[index], length);
     }
-    GLint previous_read_buffer = GL_BACK;
-    glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glReadBuffer(GL_FRONT);
-    glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_BGR_EXT, GL_UNSIGNED_BYTE, slot->pixels);
-    glReadBuffer((GLenum)previous_read_buffer);
+    read_front_buffer(slot->pixels, width, height, bottom_offset);
     MemoryBarrier();
     slot->seq_end = seq;
     MemoryBarrier();
@@ -271,6 +375,8 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
     g_have_gfx = TRUE;
     g_last_origin = 0xFFFFFFFFu;
     memset(&g_pending, 0, sizeof g_pending);
+    measure_rdram();
+    g_gl_entry_points_looked_up = FALSE;      /* a new context: look them up again */
     open_stream();
     if (g_hdr) {
         g_hdr->status |= STATUS_INITIATED;

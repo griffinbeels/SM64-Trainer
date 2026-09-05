@@ -66,6 +66,9 @@ static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     return window;
 }
 
+static const char *g_wrapped_name = "fake_gfx.dll";   /* --wrapped overrides */
+static unsigned g_rdram_committed_mb = 8;             /* --rdram-mb overrides */
+
 static void write_ini(const char *wrapper_path, const char *stream_name) {
     char path[MAX_PATH];
     strncpy_s(path, sizeof path, wrapper_path, _TRUNCATE);
@@ -76,9 +79,21 @@ static void write_ini(const char *wrapper_path, const char *stream_name) {
     strncat_s(path, sizeof path, "sm64_trainer_gfx.ini", _TRUNCATE);
     FILE *ini = fopen(path, "w");
     if (!ini) { fprintf(stderr, "cannot write %s\n", path); exit(3); }
-    fprintf(ini, "wrapped=fake_gfx.dll\n");
+    fprintf(ini, "wrapped=%s\n", g_wrapped_name);
     if (stream_name) fprintf(ini, "stream=%s\n", stream_name);
     fclose(ini);
+}
+
+/* Fake RDRAM the way an emulator with a smaller configuration would hold
+ * it: 8 MB of address space RESERVED, only the first --rdram-mb committed,
+ * so a stamp entry above the commit faults like a real overrun would. */
+static unsigned char *allocate_rdram(void) {
+    unsigned char *base = VirtualAlloc(NULL, RDRAM_BYTES, MEM_RESERVE, PAGE_NOACCESS);
+    if (!base) return NULL;
+    size_t committed = (size_t)g_rdram_committed_mb << 20;
+    if (committed > RDRAM_BYTES) committed = RDRAM_BYTES;
+    if (!VirtualAlloc(base, committed, MEM_COMMIT, PAGE_READWRITE)) return NULL;
+    return base;
 }
 
 static int info(const char *wrapper_path) {
@@ -113,7 +128,8 @@ static int drive(const char *wrapper_path, int frames, const char *stream_name) 
             return 4;
         }
     }
-    unsigned char *rdram = calloc(RDRAM_BYTES, 1);
+    unsigned char *rdram = allocate_rdram();
+    if (!rdram) { fprintf(stderr, "no fake RDRAM\n"); return 2; }
     GFX_INFO gfx;
     memset(&gfx, 0, sizeof gfx);
     gfx.hWnd = window;
@@ -162,14 +178,17 @@ static int drive(const char *wrapper_path, int frames, const char *stream_name) 
 }
 
 int main(int argc, char **argv) {
+    const char *stream_name = NULL;
+    for (int index = 1; index + 1 < argc; index++) {
+        if (strcmp(argv[index], "--stream") == 0) stream_name = argv[index + 1];
+        if (strcmp(argv[index], "--wrapped") == 0) g_wrapped_name = argv[index + 1];
+        if (strcmp(argv[index], "--rdram-mb") == 0) g_rdram_committed_mb = (unsigned)atoi(argv[index + 1]);
+    }
     if (argc >= 2 && strcmp(argv[1], "--layout") == 0) return print_layout();
     if (argc >= 3 && strcmp(argv[1], "--info") == 0) return info(argv[2]);
-    if (argc >= 4 && strcmp(argv[1], "--drive") == 0) {
-        const char *stream_name = NULL;
-        for (int index = 4; index + 1 < argc; index++)
-            if (strcmp(argv[index], "--stream") == 0) stream_name = argv[index + 1];
+    if (argc >= 4 && strcmp(argv[1], "--drive") == 0)
         return drive(argv[2], atoi(argv[3]), stream_name);
-    }
-    fprintf(stderr, "usage: gfxwrap_host --layout | --info <dll> | --drive <dll> <frames> [--stream <name>]\n");
+    fprintf(stderr, "usage: gfxwrap_host --layout | --info <dll> | --drive <dll> <frames> "
+                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>]\n");
     return 1;
 }
