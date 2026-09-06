@@ -130,7 +130,7 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
   const [media, setMedia] = useState(null);
   const [playing, setPlaying] = useState(autoplay);
   const [localFailed, setLocalFailed] = useState(false);
-  const [retry, setRetry] = useState(0);
+  const [downloadAttempt, setDownloadAttempt] = useState(0);
   const safeUrl = publicRecordingUrl(url);
   const source = videoSource(safeUrl,
     typeof location !== "undefined" ? location.hostname : null);
@@ -143,7 +143,7 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
     function accept(result) {
       if (!alive) return;
       setMedia(result);
-      if (result.state === "running" && playing)
+      if (result.state === "running" && playing && downloadAttempt)
         timer = setTimeout(() => getJSON(endpoint).then(accept).catch(failed), 1000);
     }
     function failed(failure) {
@@ -151,23 +151,29 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
     }
     getJSON(endpoint).then(async (result) => {
       if (!alive) return;
-      // Browsing is read-only. The user's play gesture authorizes preparation.
-      // A cached clip still gets a timing probe on Play, without downloading it.
-      if (playing && (result.state === "ready" || result.state === "missing"
-          || (retry && result.state === "error")))
-        result = await send("POST", "/api/media", { url: safeUrl, retry: retry > 0 });
+      // Opening/playing the provider never downloads. Only Download opts into
+      // preparation, which also probes timing when a cached file already exists.
+      if (playing && downloadAttempt)
+        result = await send("POST", "/api/media", {
+          url: safeUrl, retry: downloadAttempt > 1 || result.state === "error",
+        });
       accept(result);
     }).catch(failed);
     return () => { alive = false; clearTimeout(timer); };
-  }, [safeUrl, playing, retry]);
+  }, [safeUrl, playing, downloadAttempt]);
 
   if (!source) return null;
-  // Ready downloads are always preferred, including during provider playback.
-  const useLocal = !localFailed && media?.state === "ready";
+  const useLocal = downloadAttempt > 0 && !localFailed && media?.state === "ready";
+  function download() {
+    setMedia({ state: "running", start_s: media?.start_s });
+    setLocalFailed(false);
+    setDownloadAttempt((attempt) => attempt + 1);
+  }
   function closePlayback() {
     setMedia(null);
     setLocalFailed(false);
     setPlaying(false);
+    setDownloadAttempt(0);
   }
   return html`<div class="library-example-media external-video">
     <${VideoBody} source=${source} playing=${playing} useLocal=${useLocal}
@@ -176,7 +182,8 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
       onPlay=${() => setPlaying(true)} onError=${() => setLocalFailed(true)} />
     <${VideoActions} url=${safeUrl} playing=${playing} media=${media}
       showOriginal=${!replayActions} localFailed=${localFailed}
-      onRetry=${() => setRetry(retry + 1)}>
+      downloadRequested=${downloadAttempt > 0} canDownload=${source.kind !== "image"}
+      onDownload=${download}>
       ${playing && closable && html`<button onclick=${closePlayback}>Close recording</button>`}
     <//>
   </div>`;
@@ -202,13 +209,18 @@ function VideoBody({ source, playing, useLocal, url, media, label, startS, onPla
           label=${label} startS=${startS ?? media.start_s} />`;
 }
 
-function VideoActions({ url, playing, media, showOriginal, localFailed, onRetry, children }) {
+function VideoActions({ url, playing, media, showOriginal, localFailed, downloadRequested,
+                        canDownload, onDownload, children }) {
   return html`<div class="external-video-actions">
       ${showOriginal && html`<a href=${url} target="_blank" rel="noopener noreferrer">Open original</a>`}
-      ${playing && media?.state === "running" && html`<span role="status">Preparing local video…</span>`}
-      ${playing && media?.state === "error" && html`<span role="status">
+      ${playing && canDownload && !downloadRequested && html`
+        <button onclick=${onDownload}>Download</button>
+        <span class="meta">Download to enable full replay features.</span>`}
+      ${playing && downloadRequested && media?.state === "running"
+        && html`<span role="status">Downloading…</span>`}
+      ${playing && downloadRequested && media?.state === "error" && html`<span role="status">
         Local video unavailable. <button title=${media.error || "Try preparing the video again"}
-          onclick=${onRetry}>Retry download</button></span>`}
+          onclick=${onDownload}>Retry download</button></span>`}
       ${localFailed && html`<span role="status">Local playback unavailable; showing original.</span>`}
       ${children}
     </div>`;

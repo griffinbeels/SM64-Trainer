@@ -232,15 +232,24 @@ def test_malformed_link_keeps_input_and_narrow_editor_fits(page):
     })()""")
 
 
-def test_library_browse_only_reads_cache_then_play_prepares_once(page):
-    mount(page, url='https://recording.example/library', library=True)
+@pytest.mark.parametrize("library", [False, True])
+def test_playing_only_embeds_until_explicit_download(page, library):
+    mount(page, url='https://recording.example/library', library=library)
     wait(page, "calls.some(call => call.path === '/api/media')")
     assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 0
-    page.evaluate("document.querySelector('#recording-test button').click()")
+    if library:
+        page.evaluate("document.querySelector('#recording-test button').click()")
+    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Download to enable full replay features.')")
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 0
+    click(page, "Download")
     wait(page, "calls.some(call => call.method === 'POST')")
     assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 1
-    assert page.evaluate("document.querySelector('#recording-test .external-video-actions a').href") == 'https://recording.example/library'
+    if library:
+        assert page.evaluate("document.querySelector('#recording-test .external-video-actions a').href") == 'https://recording.example/library'
     assert page.evaluate("document.querySelectorAll('#recording-test .external-video-frames').length") == 0
+    click(page, "Retry download")
+    wait(page, "calls.filter(call => call.method === 'POST').length === 2")
+    assert page.evaluate("calls.filter(call => call.method === 'POST')[1].body.retry")
 
 
 @pytest.mark.parametrize("library", [False, True])
@@ -249,7 +258,8 @@ def test_download_completion_automatically_replaces_provider(page, library):
     mount(page, url='https://recording.example/library', library=library)
     if library:
         page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
-    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Preparing local')")
+    click(page, "Download")
+    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Downloading')")
     # A cached file must be reusable after close/reopen. An empty MediaSource
     # is single-attachment and falsely triggers the player's error fallback.
     clip = base64.b64encode((REPO / 'tests/fixtures/recording-controls.mp4').read_bytes()).decode()
@@ -265,6 +275,7 @@ def test_download_completion_automatically_replaces_provider(page, library):
         click(page, "Close recording")
         wait(page, "document.querySelector('#recording-test .external-video > button')")
         page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+        click(page, "Download")
         page.wait_for("#recording-test .external-video-local video")
         wait(page, "document.querySelector('#recording-test video').readyState >= 1")
         assert page.evaluate("document.querySelector('#recording-test video').src === mediaReply.clip_url")
@@ -277,6 +288,7 @@ def test_failed_local_playback_returns_to_provider(page):
     page.evaluate("window.mediaReply = {state:'ready', start_s:0, "
                   "clip_url:URL.createObjectURL(new MediaSource())}")
     mount(page, url='https://recording.example/fallback')
+    click(page, "Download")
     page.wait_for("#recording-test .external-video-local video")
     page.evaluate("document.querySelector('#recording-test video').dispatchEvent(new Event('error'))")
     wait(page, "!document.querySelector('#recording-test .external-video-local')")
@@ -302,8 +314,9 @@ def test_native_capture_is_preferred_and_survives_link_edit(page):
     assert page.evaluate("calls.filter(call => call.path === '/api/media' && call.method === 'POST').length") == 0
 
 
-def test_replacing_external_link_waits_for_new_play_gesture(page):
+def test_replacing_external_link_requires_new_download_gesture(page):
     mount(page, url='https://recording.example/old')
+    click(page, "Download")
     wait(page, "calls.filter(call => call.method === 'POST').length === 1")
     click(page, "Change link")
     page.wait_for("#recording-test input")
@@ -314,12 +327,15 @@ def test_replacing_external_link_waits_for_new_play_gesture(page):
     page.wait_ms(150)
     assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 1
     page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Download to enable full replay features.')")
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 1
+    click(page, "Download")
     wait(page, "calls.filter(call => call.method === 'POST').length === 2")
     assert page.evaluate("calls.filter(call => call.method === 'POST')[1].body.url") == 'https://recording.example/new'
 
 
 @pytest.mark.parametrize("frame_step", [None, 1 / 60])
-def test_cached_playback_uses_api_timing_capability_and_probes_on_play(page, frame_step):
+def test_cached_playback_probes_timing_only_after_download_click(page, frame_step):
     # A MediaSource with no appended data keeps the video loading: this tests
     # capability/selection, without conflating it with codec/seek accuracy.
     page.evaluate(f"window.mediaReply = {{state:'ready', start_s:12, "
@@ -329,6 +345,10 @@ def test_cached_playback_uses_api_timing_capability_and_probes_on_play(page, fra
     wait(page, "calls.some(call => call.path === '/api/media')")
     assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 0
     page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Download to enable full replay features.')")
+    assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 0
+    assert page.evaluate("document.querySelector('#recording-test .external-video-local') === null")
+    click(page, "Download")
     page.wait_for("#recording-test .external-video-local video")
     wait(page, "calls.filter(call => call.method === 'POST').length === 1")
     assert page.evaluate("document.querySelector('#recording-test video').src.startsWith('blob:')")

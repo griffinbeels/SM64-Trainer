@@ -83,9 +83,10 @@ importing twice costs nothing. Each one becomes a real row in that star's
 practice log — clear it, undo it, move it to another strategy like any run —
 and every import can be undone in one click. Anything it could not use is
 listed back at you by name, under the reason, rather than quietly skipped.
-Recording links come with those times. Open a replay to watch one; the first
-play downloads a local copy that the Library and Compare also reuse. Add or
-change a recording link directly in the replay panel, with Undo after saving.
+Recording links come with those times. Open a replay to watch the embedded
+video, then choose Download to enable full replay features. The Library and
+Compare reuse that local copy. Add or change a recording link directly in the
+replay panel, with Undo after saving.
 
 **Score yourself against a goal.** The Rank tab's scorecard lines every star
 and castle movement up as a tile against a goal you pick — a rank division,
