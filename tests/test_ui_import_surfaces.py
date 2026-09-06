@@ -143,8 +143,9 @@ def test_a_time_typed_by_hand_becomes_the_cards_personal_best(tmp_path):
             assert snap and '10"03' in snap, (
                 f"the field must show what it will actually save; got {snap!r}")
 
+            assert wait(page, ".addtime-save:not([disabled])")
             page.evaluate("document.querySelector('.addtime-save').click()")
-            settle(page, 1500)
+            assert wait(page, ".addtime-status"), "manual save never reported an outcome"
             status = page.evaluate(
                 "(() => { const s = document.querySelector('.addtime-status');"
                 " return s ? {text: s.textContent.trim(),"

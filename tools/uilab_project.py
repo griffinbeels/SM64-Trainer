@@ -486,6 +486,12 @@ if (!document.querySelector('.library-grid')) {
 _RANK_LEADERBOARD_SETUP = _script("""
 const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
 if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
+// A preceding story may have opened a runner inside the already-active
+// Rank tab. Return through its actual back door before opening the board.
+await waitFor(() => !!document.querySelector('.leaderboard-card-head')
+  || !!document.querySelector('.runner-page .entity-back'));
+const runnerBack = document.querySelector('.runner-page .entity-back');
+if (runnerBack) runnerBack.click();
 // The board is its own card between the scope chips and the MARELO card,
 // CLOSED by default (fourth read, 2026-08-23) -- open it, then wait for
 // the rows its first open fetches.

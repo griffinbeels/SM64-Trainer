@@ -354,8 +354,14 @@ def test_a_name_matched_movement_shows_the_association_and_its_standing(library_
     _navigate_to_target(library_page, "Castle Movements (Lobby)", "Lakitu skip")
     library_page.wait_for(".library-target-titleline .library-link-state.is-linked",
                           timeout_ms=15000)
-    chip = library_page.evaluate(
-        "document.querySelector('.library-target-titleline .library-link-state.is-linked').textContent")
+    deadline = time.monotonic() + 10
+    chip = ""
+    while time.monotonic() < deadline:
+        chip = library_page.evaluate(
+            "document.querySelector('.library-target-titleline .library-link-state.is-linked').textContent")
+        if "Lakitu Skip" in chip:
+            break
+        library_page.wait_ms(50)
     assert "Lakitu Skip" in chip, chip
     library_page.wait_for(".library-section .library-your-standing",
                           timeout_ms=15000)
