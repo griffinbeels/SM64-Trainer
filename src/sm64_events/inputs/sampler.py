@@ -32,7 +32,7 @@ log = logging.getLogger("sm64.inputs")
 
 
 class InputSampler:
-    def __init__(self, memory, layout, sink):
+    def __init__(self, memory, layout, sink, *, session_id=None):
         self._memory = memory
         self._timer_at = layout.global_timer
         # The RAM side of the screen CLOCK is Usamune's running leg counter,
@@ -48,6 +48,8 @@ class InputSampler:
         self._mario_at = (layout.mario_struct + MARIO_BLOCK_OFF
                           if layout.mario_struct else None)
         self._sink = sink
+        self._session_id = session_id
+        self._owner = None
         self._frame: int | None = None
         self._latest: InputFrame | None = None
         self._previous_buttons = 0
@@ -97,9 +99,10 @@ class InputSampler:
             # on it -- but nothing is held from a straddled read.
             self._counts["straddles"] += 1
             return None
+        owner = self._session_id() if self._session_id is not None else None
         if self._frame is None:
             self._frame = before
-        elif before != self._frame:
+        elif before != self._frame or owner != self._owner:
             backward = before < self._frame
             if not backward and before - self._frame > 1:
                 missed = before - self._frame - 1
@@ -108,12 +111,13 @@ class InputSampler:
                 self._counts["worst_skip"] = max(self._counts["worst_skip"],
                                                  missed)
             self._emit()
-            if backward:
+            if backward or owner != self._owner:
                 # A console reset restarting the counter. Whatever was held
                 # before it is gone, so the next frame's buttons are not a
                 # down-edge against them.
                 self._previous_buttons = 0
             self._frame = before
+        self._owner = owner
         self._latest = decode(block, mario)
         return before
 
@@ -136,7 +140,12 @@ class InputSampler:
                 self._counts["edge_mismatches"] += 1
         self._previous_buttons = latest.buttons
         try:
-            self._sink(frame, latest)
+            if self._session_id is None:
+                self._sink(frame, latest)
+            else:
+                # Emission may happen after a pause or session change. The
+                # observation's owner remains the one that actually read it.
+                self._sink(frame, latest, session_id=self._owner)
         except Exception:
             # The sink writes to disk. A failed write is not a reason to stop
             # reading the pad, and must not take the poll loop down with it.

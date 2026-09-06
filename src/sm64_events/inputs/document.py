@@ -183,7 +183,8 @@ def with_name(text: str, name: str) -> str:
 
 def encode(frames: list[tuple[int, InputFrame]], *, target: str,
            strategy: str | None, version: str, origin: str,
-           author: str | None = None, name: str | None = None) -> str:
+           author: str | None = None, name: str | None = None,
+           first_frame: int | None = None, frame_count: int | None = None) -> str:
     lines = [MAGIC,
              f"target:   {target}",
              f"strategy: {strategy if strategy else '-'}",
@@ -196,7 +197,7 @@ def encode(frames: list[tuple[int, InputFrame]], *, target: str,
         lines.append(f"name: {valid_name(name)}")
     lines.append("--")
     next_expected = 0
-    for run in collapse(capture_axis(frames), same_state):
+    for run in collapse(capture_axis(frames, first_frame), same_state):
         if run.start > next_expected:                # the hole itself
             lines.append(
                 f"{_span_word(next_expected, run.start - 1)} - gap")
@@ -209,6 +210,8 @@ def encode(frames: list[tuple[int, InputFrame]], *, target: str,
                                _stick_word(frame), A.action_word(frame.action),
                                str(frame.yaw), _speed_word(frame.speed))))
         next_expected = run.end
+    if frame_count is not None and frame_count > next_expected:
+        lines.append(f"{_span_word(next_expected, frame_count - 1)} - gap")
     return "\n".join(lines) + "\n"
 
 

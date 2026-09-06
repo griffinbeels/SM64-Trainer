@@ -21,7 +21,8 @@ from sm64_events.tracking.eventlabel import is_step, label_event
 
 
 def markers_of(rows, frames: list[tuple[int, InputFrame]],
-               names: dict) -> list[dict]:
+               names: dict, origin: int | None = None,
+               frame_count: int | None = None) -> list[dict]:
     """`rows` are the journal rows in the attempt's window, oldest first;
     `frames` the track in capture order; `names` the landmark catalogue.
 
@@ -34,7 +35,7 @@ def markers_of(rows, frames: list[tuple[int, InputFrame]],
     Rows and stretches are both in time order, so a row that does not fit
     the current stretch is looked for in the later ones, never the earlier.
     """
-    seams = stretches(frames)
+    seams = stretches(frames, origin, frame_count)
     if not seams:
         return []
     markers: list[dict] = []

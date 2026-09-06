@@ -22,6 +22,7 @@ the clip ring.
 """
 import struct
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from sm64_events.inputs.frame import InputFrame
 from sm64_events.inputs.runs import collapse, same_state
@@ -37,6 +38,15 @@ _RUN_V2 = struct.Struct("<IHHbbIhf")
 _RUNS = {1: _RUN_V1, 2: _RUN_V2}
 FORMAT = 2                            # what new chunks are written as
 _MAX_RUN = 0xFFFF
+_CURRENT_SESSION = object()
+
+
+class InputChunk(NamedTuple):
+    id: int
+    session_id: int
+    started_utc: str
+    ended_utc: str
+    frames: list[tuple[int, InputFrame]]
 
 
 def encode_runs(frames: list[tuple[int, InputFrame]]) -> bytes:
@@ -109,16 +119,29 @@ class InputStore:
                        ended_utc: str) -> list[tuple[int, InputFrame]]:
         """Every captured frame in chunks OVERLAPPING that span, in capture
         order — by started_utc then id, never by frame number."""
+        return [frame for chunk in self.chunks_between(started_utc, ended_utc)
+                for frame in chunk.frames]
+
+    def chunks_between(self, started_utc: str, ended_utc: str,
+                       session_id: int | None = None) -> list[InputChunk]:
+        """Retain provenance while resolving repeated game counters.
+
+        These legacy bounds delimit emission/flush, not per-frame observation
+        times. They select whole chunks; no caller may interpolate within them.
+        """
+        owner = " AND session_id = ?" if session_id is not None else ""
+        params = (ended_utc, started_utc)
+        if session_id is not None:
+            params += (session_id,)
         with self._lock:
             rows = self._conn.execute(
-                "SELECT runs, format FROM input_chunks"
+                "SELECT id, session_id, started_utc, ended_utc, runs, format FROM input_chunks"
                 " WHERE started_utc <= ? AND ended_utc >= ?"
-                " ORDER BY started_utc, id", (ended_utc, started_utc)
+                + owner + " ORDER BY started_utc, id", params
             ).fetchall()
-        out: list[tuple[int, InputFrame]] = []
-        for row in rows:
-            out.extend(decode_runs(row["runs"], row["format"]))
-        return out
+        return [InputChunk(row["id"], row["session_id"], row["started_utc"],
+                           row["ended_utc"], decode_runs(row["runs"], row["format"]))
+                for row in rows]
 
 
 def _now() -> str:
@@ -150,16 +173,24 @@ class ChunkWriter:
         self._clock = clock
         self._buffer: list[tuple[int, InputFrame]] = []
         self._started: str | None = None
+        self._buffer_session: int | None = None
 
     def _session(self) -> int | None:
         return (self._session_id() if callable(self._session_id)
                 else self._session_id)
 
-    def add(self, number: int, frame: InputFrame) -> None:
-        if self._buffer and number < self._buffer[-1][0]:
+    def add(self, number: int, frame: InputFrame, *, session_id=_CURRENT_SESSION) -> None:
+        # The sampler supplies the owner observed with the pending frame.
+        # Direct callers capture ownership here, never later during close().
+        session = self._session() if session_id is _CURRENT_SESSION else session_id
+        if self._buffer and (session != self._buffer_session
+                             or number <= self._buffer[-1][0]):
             self.close()
+        if session is None:
+            return
         if not self._buffer:
             self._started = self._clock()
+            self._buffer_session = session
         self._buffer.append((number, frame))
         if len(self._buffer) >= self.FLUSH_FRAMES:
             self.close()
@@ -167,9 +198,10 @@ class ChunkWriter:
     def close(self) -> None:
         if not self._buffer:
             return
-        session = self._session()
+        session = self._buffer_session
         if session is not None:
             self._store.append(session, self._buffer,
                                self._started, self._clock())
         self._buffer = []
         self._started = None
+        self._buffer_session = None

@@ -19,7 +19,7 @@ from sm64_events.inputs.markers import markers_of
 from sm64_events.inputs.runs import Run, capture_axis, collapse, stretches
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.inputs.track import (document_for_attempt, target_of,
-                                      track_for_attempt, track_with_lead)
+                                      resolve_track, track_for_attempt)
 from sm64_events.memory import addresses as A
 
 # Development credit only. A future profile passes its name at composition.
@@ -70,13 +70,13 @@ def _action_payload(run: Run) -> dict:
             "group": A.action_group(run.frame.action)}
 
 
-def runs_of(frames: list[tuple[int, InputFrame]]) -> list[dict]:
+def runs_of(frames: list[tuple[int, InputFrame]], origin: int | None = None) -> list[dict]:
     """The pad (and facing, and speed) as runs on the capture axis."""
     return [_run_payload(run)
-            for run in collapse(capture_axis(frames), _same_pad)]
+            for run in collapse(capture_axis(frames, origin), _same_pad)]
 
 
-def actions_of(frames: list[tuple[int, InputFrame]]) -> list[dict]:
+def actions_of(frames: list[tuple[int, InputFrame]], origin: int | None = None) -> list[dict]:
     """What Mario was DOING, as spans on the same axis.
 
     Its own list rather than a field on every run: a run breaks whenever the
@@ -85,7 +85,7 @@ def actions_of(frames: list[tuple[int, InputFrame]]) -> list[dict]:
     the reader to stitch the spans back together.
     """
     return [_action_payload(run)
-            for run in collapse(capture_axis(frames), _same_action)]
+            for run in collapse(capture_axis(frames, origin), _same_action)]
 
 
 def _shifted_spans(spans: list[dict], shift: int, limit: int) -> list[dict]:
@@ -229,13 +229,16 @@ class InputsService:
 
     def timeline(self, attempt_id: int,
                  span: tuple[int, int] | None = None) -> dict:
-        """`span` is the range of game frames the attempt's CLIP shows, so
-        the timeline can match the video exactly (round 32 item 53). The
-        caller reads it off the clip's own frame map; with no clip there is
-        no buffer to match and the track is the attempt alone."""
+        """Widen the selected capture occurrence to include `span` buffers.
+
+        Raw min/max cannot describe multiple counter epochs in a clip. That
+        requires an ordered occurrence join; this legacy range is not one.
+        Without a span, the track is the attempt alone.
+        """
         attempt = self.attempt(attempt_id)
-        frames, lead = track_with_lead(self.store, attempt, span)
-        axis = capture_axis(frames)
+        track = resolve_track(self.store, attempt, span)
+        frames, lead = track.frames, track.lead_frames
+        total = track.frame_count
         kind, key = entity_key_of(attempt)
         return {
             "attempt_id": attempt.id,
@@ -245,7 +248,7 @@ class InputsService:
             "strategy": attempt.strat_tag,
             "local_author": self.author,
             "fps": GAME_FPS,
-            "frames": axis[-1][0] + 1 if axis else 0,
+            "frames": total,
             # The attempt's OWN length -- Usamune's number, the one the row
             # shows -- for the header. `frames` is what the track holds,
             # which with a clip's buffers is longer, and before the
@@ -254,14 +257,14 @@ class InputsService:
             # 21"30 after, against a 0'19"20 row).
             "attempt_frames": (getattr(attempt, "igt_frames", None)
                                or getattr(attempt, "rta_frames", None)
-                               or (axis[-1][0] + 1 if axis else 0)),
-            "runs": runs_of(frames),
-            "actions": actions_of(frames),
-            "markers": self._markers(attempt, frames),
+                               or total),
+            "runs": runs_of(frames, track.origin),
+            "actions": actions_of(frames, track.origin),
+            "markers": self._markers(attempt, frames, track.origin, total),
             # The axis's seams -- (axis_start, raw_start, length) per stretch
             # -- so the clip's frame_map (raw game frames) lands on the axis
             # in the browser without a second copy of the restart rule.
-            "stretches": [list(row) for row in stretches(frames)],
+            "stretches": [list(row) for row in stretches(frames, track.origin, total)],
             "angle_units": A.ANGLE_UNITS,
             "buttons": [[bit, name] for bit, name in A.BUTTON_BITS],
             "stick_max": A.STICK_MAX,
@@ -272,17 +275,17 @@ class InputsService:
             "lead_frames": lead,
             "template": self._template_payload(
                 self.templates.active_for(kind, key, attempt.strat_tag),
-                shift=lead, limit=axis[-1][0] + 1 if axis else 0),
+                shift=lead, limit=total),
         }
 
-    def _markers(self, attempt, frames) -> list[dict]:
+    def _markers(self, attempt, frames, origin=None, frame_count=None) -> list[dict]:
         """The journal's moments inside the attempt, on the track's axis --
         the recorder's own rows and sentences (`inputs/markers.py`)."""
         if self._events is None or not frames:
             return []
         rows = self._events(attempt.started_utc, attempt.ended_utc)
         names = self._landmark_names() if self._landmark_names else {}
-        return markers_of(rows, frames, names)
+        return markers_of(rows, frames, names, origin, frame_count)
 
     @staticmethod
     def _template_payload(template, shift: int = 0,

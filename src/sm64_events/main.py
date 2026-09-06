@@ -459,7 +459,8 @@ def build():
     input_sampler = None
     if db is not None and layout.player1_controller is not None:
         input_writer = ChunkWriter(db.inputs, lambda: service.session_id)
-        input_sampler = InputSampler(memory, layout, input_writer.add)
+        input_sampler = InputSampler(memory, layout, input_writer.add,
+                                     session_id=lambda: service.session_id)
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
                     reader=reader, input_sampler=input_sampler)
     updater = UpdateService(current_version=__version__)

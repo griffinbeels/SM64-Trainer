@@ -646,7 +646,10 @@ Every [[input frame]] of one [[attempt]], from its [[anchor]] to its
 track from its own start rather than from the [[session]]'s, so two tracks lie
 on one axis whatever hour of whatever day you played each of them; a [[reset]]
 in the middle of a track continues that axis rather than restarting it, and a
-[[frame]] the trainer did not capture stays a hole on it.
+[[frame]] the trainer did not capture stays a hole on it. Missing first or
+last samples preserve the attempt's full extent, so they cannot move frame zero
+or shift a saved template. Repeated raw counters alone cannot identify which
+capture an attempt belongs to.
 
 - **Lives** — the input store (`src/sm64_events/inputs/store.py`) resolves
   the frames; the run derivation (`src/sm64_events/inputs/runs.py`) lays them

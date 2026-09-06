@@ -7,8 +7,11 @@ numbers are not one either — the counter restarts on a console reset, so they
 repeat within a session — which is why the wall-clock span picks the chunks
 and the frame number only trims inside them.
 """
+from typing import NamedTuple
+
 from sm64_events.inputs.document import encode
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.runs import capture_axis
 from sm64_events.memory import addresses as A
 
 
@@ -31,16 +34,28 @@ GRAB_SEARCH_FRAMES = 120
 CHUNK_REACH_S = 20.0
 
 
-def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
-    """Captured frames near the attempt, widened past its own wall clock.
+def _epochs(chunks):
+    """Keep chunk membership while separating observed counter/session seams."""
+    epochs = []
+    previous = None
+    owner = None
+    for chunk in chunks:
+        for number, frame in chunk.frames:
+            if previous is None or chunk.session_id != owner or number <= previous:
+                epochs.append(([], set()))
+            frames, ids = epochs[-1]
+            frames.append((number, frame))
+            ids.add(chunk.id)
+            previous, owner = number, chunk.session_id
+    return epochs
 
-    The wall clock picks CHUNKS and the frame counter trims inside them --
-    but the counter RESTARTS on a console reset, so numbers repeat within a
-    session and a widened window could pull a pre-reset frame carrying a
-    number in the same range. So the widened set is cut at any backward
-    step to the run holding the attempt's own anchor, which is the same
-    epoch rule `capture_axis` follows; with no anchor to aim at, the
-    unwidened answer stands.
+
+def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
+    """Widen only the occurrence selected by the attempt's original chunks.
+
+    Chunk timestamps describe emission/flush, not a frame-time interpolation.
+    Preserve their IDs through widening rather than finding the first epoch
+    containing the same numbers. Multiple possible occurrences stay ambiguous.
     """
     from datetime import datetime, timedelta
 
@@ -48,25 +63,30 @@ def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
         moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
         return (moment + timedelta(seconds=seconds)).isoformat()
 
-    tight = store.frames_between(attempt.started_utc, attempt.ended_utc)
+    owner = getattr(attempt, "session_id", None)
+    tight = store.chunks_between(attempt.started_utc, attempt.ended_utc, owner)
     if attempt.anchor_frame is None or not tight:
-        return tight
-    wide = store.frames_between(shift(attempt.started_utc, -CHUNK_REACH_S),
-                                shift(attempt.ended_utc, CHUNK_REACH_S))
-    if len(wide) <= len(tight):
-        return tight
-    # Split at every backward step -- each is a console reset, and its two
-    # sides are different epochs whose numbers collide -- then keep the run
-    # that covers what the attempt's OWN window returned. Choosing by
-    # number alone cannot do this: a pre-reset frame can carry a number in
-    # the same range, which is the whole reason chunks are picked by clock.
-    cuts = [0] + [index for index in range(1, len(wide))
-                  if wide[index][0] < wide[index - 1][0]] + [len(wide)]
-    low, high = tight[0][0], tight[-1][0]
-    for first, last in zip(cuts, cuts[1:]):
-        if wide[first][0] <= low and high <= wide[last - 1][0]:
-            return wide[first:last]
-    return tight
+        return [frame for chunk in tight for frame in chunk.frames]
+    wide = store.chunks_between(shift(attempt.started_utc, -CHUNK_REACH_S),
+                               shift(attempt.ended_utc, CHUNK_REACH_S), owner)
+    tight_ids = {chunk.id for chunk in tight}
+    candidates = [frames for frames, ids in _epochs(wide) if ids & tight_ids]
+    if len(candidates) > 1:
+        # Disjoint counters can eliminate an unrelated epoch; repeated ranges
+        # cannot. An absent boundary sample may sit in a hole, so intersect
+        # the resolved IGT/dance interval rather than requiring an exact sample.
+        candidates = [frames for frames in candidates
+                      if _overlaps_attempt(frames, attempt)]
+    if len(candidates) > 1:
+        raise ValueError("input capture is ambiguous across repeated frame counters")
+    return candidates[0] if candidates else []
+
+
+class CaptureTrack(NamedTuple):
+    frames: list[tuple[int, InputFrame]]
+    origin: int | None
+    frame_count: int
+    lead_frames: int
 
 
 def _dance_start(frames: list[tuple[int, InputFrame]], close: int) -> int | None:
@@ -132,8 +152,26 @@ def track_for_attempt(store, attempt,
     return frames
 
 
-def track_with_lead(store, attempt, span: tuple[int, int] | None = None
-                    ) -> tuple[list[tuple[int, InputFrame]], int]:
+def _attempt_bounds(frames, attempt) -> tuple[int, int]:
+    """One interval for selecting an occurrence and trimming its samples."""
+    first = attempt.anchor_frame
+    close = (first + attempt.rta_frames if attempt.rta_frames is not None
+             else frames[-1][0])
+    # The dance's first frame is untimed; the preceding frame ends the run.
+    dance = _dance_start(frames, close)
+    last = dance - 1 if dance is not None else close
+    if getattr(attempt, "igt_frames", None):
+        first = last - (attempt.igt_frames - 1)
+    return first, last
+
+
+def _overlaps_attempt(frames, attempt) -> bool:
+    first, last = _attempt_bounds(frames, attempt)
+    return frames[-1][0] >= first and frames[0][0] <= last
+
+
+def resolve_track(store, attempt, span: tuple[int, int] | None = None
+                  ) -> CaptureTrack:
     """Every captured frame from the attempt's anchor THROUGH the grab.
 
     The wall-clock span picks CHUNKS, and a chunk is ten seconds of capture
@@ -167,21 +205,10 @@ def track_with_lead(store, attempt, span: tuple[int, int] | None = None
     move; where it reaches forward, it trims frames outside the graded time.
     """
     frames = _frames_around(store, attempt)
-    if attempt.anchor_frame is None:
-        return frames, 0
-    first = attempt.anchor_frame
-    if attempt.rta_frames is None:
-        return [(number, frame) for number, frame in frames
-                if number >= first], 0
-    close = first + attempt.rta_frames
-    # The dance's own first frame is the first UNTIMED frame: Usamune's
-    # clock stops as the dance begins, so the run's last frame is the one
-    # before it (2026-09-01, attempt 5534 -- the spawn frame plus 576
-    # lands exactly there, and his frame 0 is the reset's white frame).
-    dance = _dance_start(frames, close)
-    last = dance - 1 if dance is not None else close
-    if attempt.igt_frames:
-        first = last - (attempt.igt_frames - 1)
+    if not frames or attempt.anchor_frame is None:
+        axis = capture_axis(frames)
+        return CaptureTrack(frames, None, axis[-1][0] + 1 if axis else 0, 0)
+    first, last = _attempt_bounds(frames, attempt)
     # THE CLIP'S OWN WINDOW (round 32 item 53, 2026-08-31). `span` is the
     # range of game frames the CLIP shows -- its pre-pad, the attempt, its
     # post-pad -- so the timeline "visibly matches the actual contents of
@@ -192,13 +219,15 @@ def track_with_lead(store, attempt, span: tuple[int, int] | None = None
     # the grab is still the attempt itself, so frame numbering and the
     # PB-identical length are untouched -- the buffers draw as negative
     # frames before it and as frames past its end after it.
-    if span is not None:
-        low, high = min(span[0], first), max(span[1], last)
-        kept = [(number, frame) for number, frame in frames
-                if low <= number <= high]
-        return kept, sum(1 for number, _frame in kept if number < first)
-    return [(number, frame) for number, frame in frames
-            if first <= number <= last], 0
+    low, high = (min(span[0], first), max(span[1], last)) if span else (first, last)
+    kept = [(number, frame) for number, frame in frames if low <= number <= high]
+    return CaptureTrack(kept, low, max(0, high - low + 1), first - low)
+
+
+def track_with_lead(store, attempt, span: tuple[int, int] | None = None
+                    ) -> tuple[list[tuple[int, InputFrame]], int]:
+    track = resolve_track(store, attempt, span)
+    return track.frames, track.lead_frames
 
 
 def target_of(attempt) -> str:
@@ -212,6 +241,7 @@ def target_of(attempt) -> str:
 
 def document_for_attempt(store, attempt, version: str = "us",
                          author: str | None = None) -> str:
-    return encode(track_for_attempt(store, attempt),
+    track = resolve_track(store, attempt)
+    return encode(track.frames, first_frame=track.origin, frame_count=track.frame_count,
                   target=target_of(attempt), strategy=attempt.strat_tag,
                   version=version, origin=f"attempt {attempt.id}", author=author)

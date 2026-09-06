@@ -18,7 +18,7 @@ position in the CAPTURE, not the raw counter: the game's frame counter
 restarts on a console reset, so a track spanning one contains a descending
 number, and zero-basing on the first frame alone produces NEGATIVE offsets
 (the fixture render read "-937 frames" before this existed, 2026-08-21).
-Each backward step lays the next stretch of counter END TO END after the
+Each non-increasing step lays the next stretch of counter END TO END after the
 last; holes inside a stretch stay holes. A reset is a seam in the recording,
 not a jump backwards through it.
 """
@@ -71,22 +71,26 @@ def collapse(frames: list[tuple[int, InputFrame]], same: Same = operator.eq,
     return runs
 
 
-def stretches(frames: list[tuple[int, InputFrame]]
+def stretches(frames: list[tuple[int, InputFrame]], origin: int | None = None,
+              frame_count: int | None = None
               ) -> list[tuple[int, int, int]]:
     """The axis's seams: one (axis_start, raw_start, length) per stretch of
     ascending counter, split at every restart. THE raw<->axis conversion
     fact -- the moment markers join through it, and the timeline payload
     ships it so a clip's frame_map (raw game frames) can land on the axis
     in the browser without a second copy of this rule."""
-    axis = capture_axis(frames)
+    axis = capture_axis(frames, origin)
     out: list[list[int]] = []
     previous: int | None = None
     for (raw, _frame), (position, _same) in zip(frames, axis):
-        if previous is None or raw < previous:
-            out.append([position, raw, 0])
+        if previous is None or raw <= previous:
+            out.append([0, origin, 0] if previous is None and origin is not None
+                       else [position, raw, 0])
         current = out[-1]
         current[2] = raw - current[1] + 1
         previous = raw
+    if out and frame_count is not None:
+        out[-1][2] = max(out[-1][2], frame_count - out[-1][0])
     return [tuple(row) for row in out]
 
 
@@ -101,16 +105,16 @@ def axis_of(raw: int, seams: list[tuple[int, int, int]]) -> int | None:
     return None
 
 
-def capture_axis(frames: list[tuple[int, InputFrame]]
+def capture_axis(frames: list[tuple[int, InputFrame]], origin: int | None = None
                  ) -> list[tuple[int, InputFrame]]:
-    """The same frames renumbered from zero along the capture."""
+    """Renumber along the capture, retaining a known origin even if it is a hole."""
     if not frames:
         return []
     out: list[tuple[int, InputFrame]] = []
-    offset = -frames[0][0]
+    offset = -(frames[0][0] if origin is None else origin)
     previous: int | None = None
     for number, frame in frames:
-        if previous is not None and number < previous:
+        if previous is not None and number <= previous:
             offset = (out[-1][0] + 1) - number
         out.append((number + offset, frame))
         previous = number

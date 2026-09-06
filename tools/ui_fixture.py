@@ -261,7 +261,7 @@ def _place_time(payload: dict, igt_frames: int) -> dict:
             "igt": format_igt(igt_frames)}
 
 
-def seed_inputs(database, template: bool = True) -> None:
+def seed_inputs(database, session_id: int, template: bool = True) -> None:
     """Give the seeded attempts a real INPUT TRACK, and one a TEMPLATE.
 
     Without this the attempt drawer renders its "no inputs recorded" state --
@@ -273,14 +273,10 @@ def seed_inputs(database, template: bool = True) -> None:
     capture stopped, and a ground pound. Each track starts at its attempt's
     own `anchor_frame`, because that is what `track_for_attempt` trims on.
 
-    KNOWN FIXTURE ARTIFACT, stated rather than discovered later: every attempt
-    `seed_practice` creates carries the SAME wall-clock instant for its start
-    and its end, so a chunk cannot be scoped to one of them -- the store finds
-    chunks by UTC span, and a zero-length span overlaps every other. Tracks
-    therefore POOL, and the drawer draws a denser run than any single attempt
-    really had. That makes this a layout STRESS case rather than a faithful
-    one, which is the more useful thing for a sweep to measure; nothing about
-    the store or the trim is wrong.
+    Practice seeding uses identical wall-clock instants for many events. Its
+    stars and segments therefore share one ordered capture per session, with
+    one reading per raw counter. Independent overlapping chunks would invent
+    counter resets and make every timeline legitimately ambiguous.
     """
     from sm64_events.inputs.document import encode
     from sm64_events.inputs.frame import InputFrame
@@ -322,20 +318,20 @@ def seed_inputs(database, template: bool = True) -> None:
                  for n in range(4)]
         return rows
 
-    attempts = database.attempts()
+    attempts = [attempt for attempt in database.attempts()
+                if attempt.session_id == session_id and attempt.anchor_frame is not None]
     if not attempts:
         return
-    sessions = database.sessions()
-    session = sessions[-1]["id"] if sessions else 1
+    captures = {}
     from datetime import datetime, timedelta
 
     def moments_before(stamp: str, seconds: float) -> datetime:
         return datetime.fromisoformat(stamp) - timedelta(seconds=seconds)
 
-    for index, attempt in enumerate(attempts[:12]):
-        base = attempt.anchor_frame if attempt.anchor_frame else 1000
-        database.inputs.append(session, track(base, index % 3),
-                               attempt.started_utc, attempt.ended_utc)
+    def capture_for(attempt):
+        return captures.setdefault(attempt.session_id, {
+            "samples": {}, "start": attempt.started_utc, "end": attempt.ended_utc})
+
     # THE LEAD-IN (round 32 items 51-52): capture for the stretch between the
     # level entry `seed_practice` published and the attempt's own first
     # frame, so the drawer's timeline renders the lead band and the negative
@@ -352,24 +348,43 @@ def seed_inputs(database, template: bool = True) -> None:
                    database.events_between(
                        moments_before(attempt.started_utc, 60.0).isoformat(),
                        attempt.started_utc)
-                   if row.type == "level_changed" and row.frame is not None
+                   if row.session_id == session_id
+                   and row.type == "level_changed" and row.frame is not None
                    and row.frame < attempt.anchor_frame]
         if not entries:
             continue
         entry = max(entries)
         lead_seeded += 1
         span = max(2, attempt.anchor_frame - entry)
-        database.inputs.append(
-            session,
-            [(entry + n, InputFrame(0, 0, 0, min(30 + n, 80)))
-             for n in range(span)],
-            moments_before(attempt.started_utc, 30.0).isoformat(),
-            attempt.started_utc)
+        capture = capture_for(attempt)
+        capture["samples"].update(
+            (entry + n, InputFrame(0, 0, 0, min(30 + n, 80)))
+            for n in range(span))
+        capture["start"] = min(capture["start"],
+                               moments_before(attempt.started_utc, 30.0).isoformat())
+        capture["end"] = max(capture["end"], attempt.ended_utc)
     if not lead_seeded:
         raise AssertionError(
             "seed_inputs seeded no lead-in: seed_practice published no level "
             "entry before any attempt, so the timeline's lead layout is "
             "unreachable by every sweep")
+    # A star's authored track owns overlap with a subsection's local sample
+    # shape. Stable ordering keeps the shared physical stream independent of
+    # the projection query's presentation order.
+    ordered = sorted(attempts, key=lambda row: (
+        row.segment_id is None, row.anchor_frame, row.id))
+    for index, attempt in enumerate(ordered):
+        capture = capture_for(attempt)
+        base = attempt.anchor_frame
+        # Attempt-specific input replaces lead-in filler, including its holes.
+        for number in range(base, base + 63):
+            capture["samples"].pop(number, None)
+        capture["samples"].update(track(base, index % 3))
+        capture["start"] = min(capture["start"], attempt.started_utc)
+        capture["end"] = max(capture["end"], attempt.ended_utc)
+    for session, capture in captures.items():
+        database.inputs.append(session, sorted(capture["samples"].items()),
+                               capture["start"], capture["end"])
     if not template:
         return
     marked = attempts[-1]
@@ -1722,7 +1737,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                           moments=seed_subsections)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
-            seed_inputs(database)
+            seed_inputs(database, service.session_id)
             if target_segment is not None:
                 # AFTER _seed_target, not before: retiring the star target
                 # _seed_target just set is the whole point (see
