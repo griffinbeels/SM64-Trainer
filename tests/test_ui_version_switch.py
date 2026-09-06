@@ -306,23 +306,24 @@ def test_narrowing_to_one_region_says_so_and_refiles_the_overall_block(
     assert library_page.evaluate(read_note) == "Both regions shown"
 
 
-def test_a_matched_strategys_standing_is_the_served_one_at_the_graded_version(
+def test_a_matched_strategys_standing_round_trips_the_region_switch(
         library_page):
-    """Finding 4: at the graded version the section keeps the SERVED standing
-    (graded on the standards ladder, in the active rank mode) rather than
-    re-walking the PB against the sheet's own ladder -- the two ladders differ
-    for every matched approach in the shipped snapshot, so a re-walk here
-    would contradict the practice card's medal. Round-tripping the switch
-    must therefore land back on the identical badge."""
-    library_page.wait_for(".version-switch", timeout_ms=10000)
-    read = ("Array.from(document.querySelectorAll('.library-section .library-your-standing'))"
-            ".map((el) => el.textContent.trim())")
+    """The open row compares a historical alias PB with canonical standards.
+    Round-tripping the displayed region must restore both its PB label and
+    rank icon; textContent alone cannot see a wrong icon's tier/division."""
+    # A section and its region switch can mount before the independent
+    # personal-strategies fetch has returned any standing.
+    library_page.wait_for(".library-section.open .library-your-standing")
+    read = ("Array.from(document.querySelectorAll('.library-section.open .library-your-standing'))"
+            ".map((el) => ({text: el.textContent.trim(), "
+            "rank: el.querySelector('[title]')?.getAttribute('title')}))")
     before = library_page.evaluate(read)
     assert before, "no standing badges rendered on the target page"
+    assert all(badge["rank"] for badge in before), before
     library_page.evaluate(TOGGLE_US)          # JP only
-    library_page.wait_ms(400)
+    library_page.wait_for('.version-switch-seg[aria-label="US"][aria-pressed="false"]')
     library_page.evaluate(TOGGLE_US)          # both again
-    library_page.wait_ms(400)
+    library_page.wait_for('.version-switch-seg[aria-label="US"][aria-pressed="true"]')
     assert library_page.evaluate(read) == before
 
 

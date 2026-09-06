@@ -216,6 +216,9 @@ def test_matched_strategy_chip_and_your_standing_render(library_page):
         "const el = document.querySelector('.library-section.open .library-matched-chip');"
         "return el ? el.textContent : null")
     assert chip and "Standard" in chip, chip
+    # The section comes from the Library payload; personal standings arrive
+    # through a separate strategies request after the target has mounted.
+    library_page.wait_for(".library-section.open .library-your-standing")
     standing = library_page.evaluate(
         "const el = document.querySelector('.library-section.open .library-your-standing');"
         "return el ? el.textContent.trim() : null")
