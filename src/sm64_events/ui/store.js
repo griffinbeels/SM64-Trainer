@@ -147,6 +147,9 @@ export function useTracker() {
   // effect's dependency list, and every REFRESH_ON tick must be a distinct
   // dependency value even if two land back-to-back.
   const [mareloRev, setMareloRev] = useState(0);
+  // Ladders change less often than attempts. Their mounted readers refresh
+  // together on configuration changes, including after a disconnected edit.
+  const [standardsRev, setStandardsRev] = useState(0);
   const refreshMarelo = useCallback(async () => {
     try { setMarelo(await getJSON("/api/marelo")); } catch (e) { console.error(e); }
   }, []);
@@ -410,6 +413,7 @@ export function useTracker() {
       ws = new WebSocket(`ws://${location.host}/ws/events`);
       ws.onopen = () => {
         if (everConnected.current) {
+          setStandardsRev((revision) => revision + 1);
           setFeed((f) => [{ type: "ws_reconnected", seq: "", frame: "",
                             payload: {} }, ...f].slice(0, 200));
         }
@@ -427,6 +431,8 @@ export function useTracker() {
       ws.onmessage = (e) => {
         const ev = JSON.parse(e.data);
         setFeed((f) => [ev, ...f].slice(0, 200));
+        if (ev.type === "rank_standards_changed")
+          setStandardsRev((revision) => revision + 1);
         if (REFRESH_ON.has(ev.type)) {
           // BEFORE the request, so the mark is the moment the news arrived
           // rather than the moment we got round to acting on it — the
@@ -571,7 +577,7 @@ export function useTracker() {
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun, endRun,
-           marelo, mareloRev, clearMareloCelebration,
+           marelo, mareloRev, standardsRev, clearMareloCelebration,
            routes, activeRouteId, pickRoute,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,

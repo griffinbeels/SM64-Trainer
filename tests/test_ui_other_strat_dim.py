@@ -70,15 +70,22 @@ OPACITY_OF = f"""
 # the transition is painted on, so the reading no longer depends on how busy
 # the machine outside the browser is.
 RECORD_OPACITY = f"""
-  ((strat, windowMs) => {{
-    window.__dimTrace = [];
+  ((strat, other, expectedOpacity) => {{
+    const trace = [];
     const started = performance.now();
-    const step = () => {{
-      const tr = {FIND_ROW}(strat);
-      window.__dimTrace.push(tr ? Number(getComputedStyle(tr).opacity) : null);
-      if (performance.now() - started < windowMs) requestAnimationFrame(step);
-    }};
-    requestAnimationFrame(step);
+    window.__dimTraceDone = new Promise((resolve) => {{
+      const step = () => {{
+        const tr = {FIND_ROW}(strat);
+        const opacity = tr ? Number(getComputedStyle(tr).opacity) : null;
+        trace.push(opacity);
+        const settled = tr && tr.classList.contains('other-strat') === other
+          && opacity === expectedOpacity;
+        if (settled || performance.now() - started >= 10000) {{
+          resolve({{trace, settled: !!settled}});
+        }} else requestAnimationFrame(step);
+      }};
+      requestAnimationFrame(step);
+    }});
     return true;
   }})
 """
@@ -96,14 +103,18 @@ def _set_active(base, strat):
                                "strat_tag": strat})
 
 
-def _trace_through(page, base, watched, switch_to, window_ms=900):
+def _trace_through(page, base, watched, switch_to, expected_opacity):
     """Arm the in-page recorder, make the switch, then collect the frames it
     caught. The recorder is armed BEFORE the switch because the first frames
-    of the fade are the ones that prove it is a fade."""
-    page.evaluate(f"{RECORD_OPACITY}({watched!r}, {window_ms})")
+    of the fade are the ones that prove it is a fade. Finish only when the
+    new row state reaches its endpoint: a fixed window starting before the
+    POST can end before the socket/refetch has even started the transition."""
+    other = json.dumps(watched != switch_to)
+    page.evaluate(f"{RECORD_OPACITY}({watched!r}, {other}, {expected_opacity})")
     _set_active(base, switch_to)
-    page.wait_ms(window_ms + 300)
-    trace = page.evaluate("window.__dimTrace")
+    result = page.evaluate("window.__dimTraceDone")
+    assert result["settled"], ("the switched row never reached its opacity endpoint", result)
+    trace = result["trace"]
     assert trace, "the in-page recorder caught no frames at all"
     return trace
 
@@ -118,14 +129,33 @@ def samples():
         with get_driver().launch(headless=True, viewport=(1500, 1200)) as page:
             page.goto(base)
             page.wait_for(".log-card .attempt-actions")
-            page.wait_ms(400)
+            # The initial sample is a settled reference, not an arbitrary
+            # point in a mount transition. Keep the level owned by tuning.
+            ready = page.evaluate(f"""
+              new Promise((resolve) => {{
+                const started = performance.now();
+                const step = () => {{
+                  const own = {FIND_ROW}({FIXTURE_STRAT!r});
+                  const other = {FIND_ROW}({FIXTURE_FOREIGN_STRAT!r});
+                  const rows = [own, other];
+                  const settled = rows.every((tr) => tr && !tr.getAnimations()
+                    .some((a) => a.transitionProperty === 'opacity'));
+                  if (settled || performance.now() - started >= 10000)
+                    resolve(settled);
+                  else requestAnimationFrame(step);
+                }};
+                requestAnimationFrame(step);
+              }})
+            """)
+            assert ready, "the initial rows did not finish their opacity transitions"
             out["at_rest"] = {
                 "own": page.evaluate(f"{OPACITY_OF}({FIXTURE_STRAT!r})"),
                 "other": page.evaluate(f"{OPACITY_OF}({FIXTURE_FOREIGN_STRAT!r})"),
             }
             out["down"] = _trace_through(page, base, FIXTURE_STRAT,
-                                         FIXTURE_FOREIGN_STRAT)
-            out["up"] = _trace_through(page, base, FIXTURE_STRAT, FIXTURE_STRAT)
+                                         FIXTURE_FOREIGN_STRAT, out["at_rest"]["other"])
+            out["up"] = _trace_through(page, base, FIXTURE_STRAT, FIXTURE_STRAT,
+                                       out["at_rest"]["own"])
     return out
 
 

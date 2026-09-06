@@ -17,6 +17,7 @@
 // target the way "tray state lives here" asked for).
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
+import { useIdentityFetch } from "../refetch.js";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { entityIconSrc, genericStarSrc } from "./entityicons.js";
@@ -364,7 +365,9 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // (both doors stamp it identically), so the numeric door can refresh a
   // page whichever door originally opened it. A failed refresh keeps the
   // last good rows; the next navigation refetches anyway.
-  function reloadRows() {
+  const rowRequestRef = useRef(0);
+  function reloadRows(refreshSession = true) {
+    const request = ++rowRequestRef.current;
     const current = entry;
     const rowIndexes = current ? current.rows.map((row) => row.index) : [];
     const pageIdentity = rowIndexes.join(",");
@@ -372,7 +375,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
       ? Promise.all(rowIndexes.map((index) =>
           getJSON(`/api/library/target/${index}`)))
         .then((rows) => setEntry((latest) => {
-          if (!latest || latest.rows.map((row) => row.index).join(",") !== pageIdentity)
+          if (request !== rowRequestRef.current || !latest
+              || latest.rows.map((row) => row.index).join(",") !== pageIdentity)
             return latest;
           return { ...latest, rows };
         }))
@@ -382,9 +386,16 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
     // read their options from the shared session view. Refresh both views as
     // one relink operation so no tab switch or page reload is needed, and so
     // unlink removes the option through the exact same path.
-    const sessionRefresh = t && t.refresh ? t.refresh() : Promise.resolve();
+    const sessionRefresh = refreshSession && t && t.refresh ? t.refresh() : Promise.resolve();
     return Promise.all([rowsRefresh, sessionRefresh]);
   }
+
+  // The page stays mounted behind another tab. Replace stale rows in place:
+  // disclosure, the reading mode, and the scroll position belong to the reader.
+  const entryIdentity = entry ? entry.rows.map((row) => row.index).join(",") : null;
+  useIdentityFetch(entryIdentity, t && t.standardsRev, (cleared) => {
+    if (!cleared) reloadRows(false);
+  });
 
   // Runs on every activation, not gated on `!active` staying false — an
   // intent may arrive on a tab that is ALREADY open (a click from elsewhere
@@ -440,7 +451,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
     send("POST", "/api/library/refresh")
       .then((result) => {
         setRefreshState(result);
-        if (result.applied) { loadIndex(); loadStatus(); }
+        if (result.applied) { loadIndex(); loadStatus(); reloadRows(); }
       })
       .catch((err) => setRefreshState({ error: err.message }));
   }

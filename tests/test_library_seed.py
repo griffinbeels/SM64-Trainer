@@ -198,6 +198,10 @@ def test_a_row_with_enough_times_always_has_a_ladder(payload):
     """The only reason to lack one is being under the feasibility floor. An
     accuracy floor was explicitly declined (user, 2026-08-05)."""
     from sm64_events.library.ladders import MIN_ENTRIES
+    from sm64_events.library.store import LibraryStore
+    store = LibraryStore(bundled_path=SEED)
+    store.load()
+    payload = store.payload
     # Against the population the ladder is FITTED over, not the raw entry
     # count: a (JP)/(US) approach holds two populations and a ladder is never
     # fitted across both.

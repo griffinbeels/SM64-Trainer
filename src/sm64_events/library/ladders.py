@@ -24,6 +24,7 @@ the distribution's spread, and a canonical shape off the sheet best were all
 measured and none helped. Do not re-litigate it by trying a fourth form.
 """
 from sm64_events.core.timefmt import attainable_cs, prev_attainable_cs
+from sm64_events.library.ladder_estimates import estimate_times
 from sm64_events.ranks.classify import RANK_NAMES
 
 # Median position of each vetted cutoff inside its approach's own distribution,
@@ -33,12 +34,10 @@ LADDER_PERCENTILES = {
     "Platinum": 80.4, "Gold": 89.3, "Silver": 94.0, "Bronze": 98.2,
 }
 
-# A FEASIBILITY floor, not an accuracy one -- the user explicitly declined an
-# accuracy floor (error runs 4.19% at 20-49 entries against 1.46% at 150+, and
-# he wants the ladder anyway). This is only "can a distribution this small say
-# anything about eight separate tiers": below it, neighbouring percentiles land
-# on the same observation and the ladder is eight copies of three numbers.
-MIN_ENTRIES = 10
+# One observation is evidence. Coincident tiers already merge, so no sample or
+# fill-rate floor is needed (task 0126). Empty rows use explicit estimates.
+MIN_ENTRIES = 1
+LADDER_MODEL_VERSION = 2
 
 # An observation gap this wide, relative to the row's own median, is a real
 # discontinuity rather than sampling noise -- a missed cycle, a route fork.
@@ -129,14 +128,13 @@ def make_attainable(raw: dict, quantise=attainable_cs) -> dict:
 
 
 def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs) -> dict:
-    """{rank: seconds} for one row's community times, or {} when the row is
-    too thin to say anything.
+    """{rank: seconds} for any nonempty population, including one observation.
 
     Three steps, each replaceable on its own: place at percentiles, move out
     of observation valleys, make attainable. Pass `quantise=lambda cs: cs` to
     derive a ladder for a clock that is not Usamune's."""
     times = sorted(int(t) for t in times_cs)
-    if len(times) < MIN_ENTRIES:
+    if not times:
         return {}
     raw = place_at_percentiles(times, percentiles or LADDER_PERCENTILES)
     raw = avoid_valleys(times, raw)
@@ -152,60 +150,62 @@ def row_times(item):
     JRB's stone pillar those are 10.80 and 14.50: a ladder fitted across that
     pile spans a gap no single player can be on both sides of. US is preferred
     because that is the convention `tools/scrape_ranks.py` applies to the
-    vetted ladders ("US where a US time exists, else JP") and the two sources
-    have to describe the same thing -- but only when US clears the floor on its
-    own, because discarding 39 JP times for 6 US ones buys consistency by
-    throwing the answer away."""
+    vetted ladders ("US where a US time exists, else JP"). Every populated JP
+    companion fits separately, however small either population is. Unannotated
+    times provide the combined base when only a JP companion is annotated."""
     entries = item["entries"]
     by_version = {}
     for entry in entries:
         by_version.setdefault(entry.get("version"), []).append(entry["time_cs"])
-    if len(by_version) > 1 or (by_version and None not in by_version):
-        preferred = by_version.get("us", [])
-        if len(preferred) >= MIN_ENTRIES:
-            return sorted(preferred), "us"
-        version, times = max(by_version.items(), key=lambda kv: len(kv[1]))
-        return sorted(times), version
-    return sorted(entry["time_cs"] for entry in entries), None
+    for version in ("us", None, "jp"):
+        if by_version.get(version):
+            return sorted(by_version[version]), version
+    return [], None
 
 
 def fit_payload(payload: dict) -> dict:
-    """Stamp a fitted ladder onto every approach and subsection that can carry
-    one. Returns the same payload; the caller writes it out."""
-    fitted = thin = 0
-    for target in payload["targets"]:
-        for item in target["approaches"] + target["subsections"]:
-            times, version = row_times(item)
-            ladder = fit_ladder(times)
-            if ladder:
-                item["ladder"] = ladder
-                # Which population it describes, so a JP-fitted ladder never
-                # passes silently for a US one.
-                item["ladder_version"] = version
-                item["ladder_samples"] = len(times)
-                fitted += 1
-            else:
-                item.pop("ladder", None)
-                item.pop("ladder_version", None)
-                item["ladder_samples"] = len(times)
-                thin += 1
-            # The ANNOTATED-difference rule (user, 2026-08-07): a row whose JP
-            # population can carry its own ladder gets one BESIDE the US one;
-            # anything less is a combined ladder that applies to both modes.
-            # Only ever JP -- row_times prefers US, so a second fittable
-            # population is JP by construction.
-            jp_times = sorted(e["time_cs"] for e in item["entries"]
-                              if e.get("version") == "jp")
-            item.pop("ladder_jp", None)
-            if version == "us" and len(jp_times) >= MIN_ENTRIES:
-                jp_ladder = fit_ladder(jp_times)
-                if jp_ladder:
-                    item["ladder_jp"] = jp_ladder
+    """Fit every row from observations, its own anchor, or a named related row.
+
+    Estimates never count as submissions or become another estimate's source.
+    Refitting clears their provenance as soon as real observations arrive."""
+    populations = [(target, kind, item, *row_times(item))
+                   for target in payload["targets"]
+                   for kind in ("approaches", "subsections")
+                   for item in target[kind]]
+    fitted = estimated = missing = 0
+    for target, kind, item, times, version in populations:
+        item["ladder_samples"] = len(times)
+        item.pop("ladder_estimate", None)
+        if not times:
+            times, version, provenance = estimate_times(
+                target, kind, item, populations)
+            if provenance:
+                item["ladder_estimate"] = provenance
+        ladder = fit_ladder(times)
+        if ladder:
+            item["ladder"] = ladder
+            item["ladder_version"] = version
+            fitted += 1
+            estimated += bool(item.get("ladder_estimate"))
+        else:
+            item.pop("ladder", None)
+            item.pop("ladder_version", None)
+            missing += 1
+        jp_times = sorted(e["time_cs"] for e in item["entries"]
+                          if e.get("version") == "jp")
+        item.pop("ladder_jp", None)
+        item.pop("ladder_jp_samples", None)
+        if version != "jp" and jp_times:
+            item["ladder_jp"] = fit_ladder(jp_times)
+            item["ladder_jp_samples"] = len(jp_times)
     payload["ladder_model"] = {
+        "version": LADDER_MODEL_VERSION,
         "percentiles": dict(LADDER_PERCENTILES),
         "min_entries": MIN_ENTRIES,
         "source": "sheet",
         "fitted_rows": fitted,
-        "rows_too_thin": thin,
+        "estimated_rows": estimated,
+        "rows_without_evidence": missing,
+        "rows_too_thin": 0,
     }
     return payload

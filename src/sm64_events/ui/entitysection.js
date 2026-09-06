@@ -18,6 +18,12 @@ import { familyLabel } from "./redsfamily.js";
 
 export const isSegment = (sec) => sec.kind === "segment";
 
+// An empty detection pair supports imported and hand-entered times. Missing
+// definition data is not evidence that detection is deliberately unconfigured.
+export const isManualSegment = (definition) => !!definition
+  && Array.isArray(definition.start_triggers) && definition.start_triggers.length === 0
+  && Array.isArray(definition.end_triggers) && definition.end_triggers.length === 0;
+
 export function entityKey(sec) {
   return isSegment(sec)
     ? `segment:${sec.segment_id}`

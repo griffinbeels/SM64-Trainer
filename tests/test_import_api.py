@@ -34,15 +34,14 @@ def test_manual_import_carries_the_version_through(tmp_path):
         assert row["game_version"] == "jp"
 
 
-def test_a_segment_on_the_igt_clock_is_refused(tmp_path):
-    """Segments are RTA-only. The manual door sends IGT, so a segment typed
-    there is refused rather than quietly re-clocked."""
+def test_a_manual_segment_time_uses_its_rta_clock(tmp_path):
+    """The manual door chooses the entity's clock, like the Sheet door."""
     with make_client(tmp_path) as (client, _db, _svc):
         response = client.post("/api/import/manual", json={
             "entity_key": "segment:6", "strat_tag": "Standard",
             "time_cs": 886})
-        assert response.status_code == 422
-        assert "IGT" in response.json()["detail"]
+        assert response.status_code == 200, response.text
+        assert _db.current_pb(None, None, "rta", segment_id=6)["frames"] == 266
 
 
 def test_a_key_that_is_neither_a_star_nor_a_segment_is_refused(tmp_path):
@@ -73,18 +72,15 @@ def test_the_sheet_door_lands_a_runners_column_from_the_snapshot(tmp_path):
     with make_client(tmp_path) as (client, db, _svc):
         payload = client.post("/api/import/sheet", json={
             "runner": "DentoriousRed", "refresh": False}).json()
-        assert payload["found"] == 16
-        assert payload["imported"] == 16
+        assert payload["found"] == 17
+        assert payload["imported"] == 17
         # One row per HELD entry, named, in the same `{text, reason}`
         # shape every door answers with -- he reviews these by name (round
         # 3). Nothing is REJECTED by this door any more: a row it cannot
         # place is kept (round 28), and `held` names it.
         assert payload["rejected"] == []
-        assert [{"reason": row["reason"], "text": row["text"]}
-                for row in payload["held"]] == [
-            {"reason": "no_entity",
-             "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"}]
-        assert [cell["time_cs"] for cell in db.held_times()] == [923]
+        assert payload["held"] == []
+        assert db.held_times() == []
         assert payload["sheet_revision"]
         assert all(row["imported_from"] == "sheet:DentoriousRed"
                    for row in db.pbs())
@@ -124,6 +120,13 @@ VOLCANO_ENTRY_ROW = ("7. Lethal Lava Land||Hot-Foot-It into the Volcano"
                      "||Volcano entry||1|2|3|4|5")
 
 
+def _delete_automatic_volcano_piece(client, db):
+    """A deliberately deleted catalog entry is a real unplaceable row."""
+    entity = client.app.state.adoptions.rows()[VOLCANO_ENTRY_ROW]
+    db.delete_segment_def(int(entity.split(":")[1]))
+    client.app.state.adoptions.load()
+
+
 def test_a_subsection_linked_in_the_library_imports_onto_that_segment(tmp_path):
     """His question, 2026-08-23: "If an entry is a subsection AND we've
     successfully linked an actual subsection segment that we've recorded to
@@ -148,7 +151,16 @@ def test_a_subsection_linked_in_the_library_imports_onto_that_segment(tmp_path):
         assert landed and landed["frames"] == 242          # 8.06s, rounded up
         texts = [row["text"] for row in payload["held"]]
         assert not any("Volcano entry" in text for text in texts), texts
-        assert "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53" in texts
+        assert not any("Inside the volcano" in text for text in texts)
+        target = next(t for t in client.app.state.library.payload["targets"]
+                      if t["label"] == "Hot-Foot-It into the Volcano")
+        from sm64_events.library.audit import row_key
+        row = next(r for r in target["subsections"] if r["name"] == "Inside the volcano"
+                   and any(e["runner"] == "GTM" for e in r["entries"]))
+        entity = client.app.state.adoptions.rows()[row_key(target, row["name"], row["ids"])]
+        inside = next(d for d in db.segment_defs() if f"segment:{d['id']}" == entity)
+        assert target["entity_key"] in inside["parents"]
+        assert db.current_pb(None, None, "rta", segment_id=inside["id"])["frames"] == 256
 
 
 def test_a_movement_that_name_matches_one_of_your_segments_imports_onto_it(tmp_path):
@@ -274,6 +286,7 @@ def test_linking_a_held_row_lands_its_time_the_moment_the_link_is_made(tmp_path)
     there at once -- through the ordinary improvement rule -- and releases
     the hold, so the column prints the real PB from then on."""
     with make_client(tmp_path) as (client, db, _svc):
+        _delete_automatic_volcano_piece(client, db)
         payload = client.post("/api/import/sheet", json={
             "runner": "GTM", "refresh": False}).json()
         held_texts = [row["text"] for row in payload["held"]]
@@ -307,6 +320,7 @@ def test_linking_a_held_row_lands_its_time_the_moment_the_link_is_made(tmp_path)
 
 def test_removing_a_source_erases_its_held_cells_too(tmp_path):
     with make_client(tmp_path) as (client, db, _svc):
+        _delete_automatic_volcano_piece(client, db)
         client.post("/api/import/sheet", json={"runner": "GTM", "refresh": False})
         assert db.held_times(source="sheet:GTM")
         client.delete("/api/import/sheet:GTM")
@@ -366,16 +380,16 @@ def test_the_sheet_job_door_lands_the_same_column_and_narrates_the_steps(
         assert seen[-1]["progress"] == 1.0
         assert [message for _fraction, message in steps] == [
             "Matching DentoriousRed's rows to your trainer…",
-            "Landing 16 times…"], steps
+            "Landing 17 times…"], steps
         assert [fraction for fraction, _message in steps] == sorted(
             fraction for fraction, _message in steps)
         result = seen[-1]["result"]
-        assert result["imported"] == 16 and result["found"] == 16
+        assert result["imported"] == 17 and result["found"] == 17
         assert result["source"] == "sheet:DentoriousRed"
-        assert [row["reason"] for row in result["held"]] == ["no_entity"]
+        assert result["held"] == []
         assert result["sheet_revision"]
         assert all(row["imported_from"] == "sheet:DentoriousRed" for row in db.pbs())
-        assert len(db.pbs()) == 16
+        assert len(db.pbs()) == 17
 
 
 @pytest.mark.parametrize("failure", [

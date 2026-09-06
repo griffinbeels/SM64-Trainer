@@ -2359,11 +2359,12 @@ def validate_definition(d: dict) -> None:
     """Raises ValueError listing the first problem (API maps it to 409)."""
     if not str(d.get("name", "")).strip():
         raise ValueError("name is required")
+    manual = d.get("start_triggers") == [] and d.get("end_triggers") == []
     for side in ("start_triggers", "end_triggers"):
         clauses = d.get(side) or []
         if not isinstance(clauses, list):
             raise ValueError(f"{side} must be a list")
-        if not clauses:
+        if not clauses and not manual:
             raise ValueError(f"{side} needs at least one trigger")
         for c in clauses:
             _check_clause(c, TRIGGERS, side)

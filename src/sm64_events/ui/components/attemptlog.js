@@ -432,12 +432,13 @@ export function rankIdentity(entityKey, which, sec, t) {
 // this card's own footer — and sending a user off to practise when their
 // attempts are sitting right there behind a checkbox is the worse miss. One
 // component so the star and segment cards can't drift apart on either.
-export function AttemptLogEmpty({ hasAttempts }) {
+export function AttemptLogEmpty({ hasAttempts, manualTiming = false }) {
   return hasAttempts
     ? html`<${EmptyState} headline="Every attempt is filtered out"
         hint="Clear the filters below to bring them back." />`
     : html`<${EmptyState} headline="No attempts logged yet"
-        hint="Every run you finish lands here automatically." />`;
+        hint=${manualTiming ? "Add a time below or import your Ultimate Sheet times."
+          : "Every run you finish lands here automatically."} />`;
 }
 
 // The trigger + popover for the stat menu — ONE shared component (rule 11:

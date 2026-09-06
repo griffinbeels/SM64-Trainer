@@ -134,6 +134,13 @@ class LibraryStore:
         bundled = read_snapshot(self.bundled_path)
         local = read_snapshot(self.path)
         self._payload = newer(local, bundled)
+        if self._payload is not None:
+            from sm64_events.library.ladders import LADDER_MODEL_VERSION, fit_payload
+            if (self._payload.get("ladder_model") or {}).get("version") != LADDER_MODEL_VERSION:
+                # Refit the selected observations, even offline. Never replace
+                # a newer local Sheet with an older release just to update the
+                # fitting model, or rewrite the read-only bundled snapshot.
+                fit_payload(self._payload)
         self._source = ("local" if self._payload is local and local is not None
                         else "bundled" if self._payload is not None else None)
         if self._payload is None:

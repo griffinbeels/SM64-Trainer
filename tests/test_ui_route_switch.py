@@ -76,6 +76,10 @@ def chrome_session(url: str):
     """One connected client -- a browser tab, or the desktop GUI (rule 10)."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(url)
+        # The picker can mount before the initial /api/marelo response.
+        # Start the race with a loaded card in every client; its convergence
+        # window below still measures the switches, not cold-start fetching.
+        page.wait_for('.marelo-bar-body > .context-value:not(:text-is("…"))')
         yield page
 
 # Two confusingly-similar names, matching the live report, plus two more so

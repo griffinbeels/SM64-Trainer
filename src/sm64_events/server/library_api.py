@@ -17,7 +17,7 @@ from sm64_events.links import ukikipedia_url
 
 def create_library_router(store, overrides=None, adoptions=None,
                           segment_names=None, held_times=None,
-                          on_adopt=None) -> APIRouter:
+                          on_adopt=None, on_standards_changed=None) -> APIRouter:
     """`adoptions` is an `Adoptions` binding the user's assignments to the
     standards store; omit it and the adopt routes are simply not mounted, which
     is what a second broadcast-only instance wants.
@@ -66,25 +66,44 @@ def create_library_router(store, overrides=None, adoptions=None,
                 # times rather than failing to render at all.
                 held = {}
 
-        def rows(items):
-            return [{**item,
-                     "row_key": (key := row_key(target, item["name"],
-                                                item["ids"])),
-                     "adopted": assigned.get(key),
-                     "held": held.get(key, [])}
-                    for item in items]
+        def rows(items, kind):
+            from sm64_events.library.placements import row_identity
+            result = []
+            standards = adoptions.standards if adoptions is not None else None
+            for item in items:
+                key = row_key(target, item["name"], item["ids"])
+                row = {**item, "row_key": key, "adopted": assigned.get(key),
+                       "held": held.get(key, [])}
+                identity = row_identity(target, item, kind, assigned)
+                if identity:
+                    entity, strategy = identity
+                    row.update(entity_key=entity, strategy=strategy)
+                if identity and standards is not None:
+                    row.update(ladder=standards.ladders(entity, "us").get(strategy, {}),
+                               ladder_jp=standards.ladders(entity, "jp").get(strategy, {}))
+                    if row["ladder_jp"] == row["ladder"]:
+                        row.pop("ladder_jp", None)
+                    if not standards.is_fitted(entity, strategy):
+                        row.pop("ladder_estimate", None)
+                result.append(row)
+            return result
 
         matched = None
-        if segment_names is not None and not target.get("entity_key"):
+        if (segment_names is not None and not target.get("entity_key")
+                and not any(row_key(target, item["name"], item["ids"]) in assigned
+                            for item in target["approaches"])):
             try:
                 matched = adoptions_store.auto_match(target["label"],
                                                      segment_names())
             except Exception:          # a degraded db must not sink the page
                 matched = None
 
-        return {**target,
-                "approaches": rows(target["approaches"]),
-                "subsections": rows(target["subsections"]),
+        approaches = rows(target["approaches"], "approach")
+        parents = {item["entity_key"] for item in approaches if item.get("entity_key")}
+        local_entity = next(iter(parents)) if len(parents) == 1 else None
+        return {**target, "entity_key": local_entity,
+                "approaches": approaches,
+                "subsections": rows(target["subsections"], "subsection"),
                 "adoptable": adoptions is not None,
                 "matched_segment": matched,
                 # The wiki mark's href: the Ukikipedia RTA Guide page this
@@ -115,7 +134,8 @@ def create_library_router(store, overrides=None, adoptions=None,
         the link points at (subsection assignments only), so the page can
         open that piece rather than the target's first strategy; a
         whole-target link has no single row to focus."""
-        targets = [decorated(target) for target in store.for_entity(entity_key)]
+        targets = ([decorated(target) for target in store.for_entity(entity_key)]
+                   if entity_key.startswith("star:") or adoptions is None else [])
         focus = None
         if not targets and adoptions is not None:
             assigned = adoptions.rows()
@@ -172,6 +192,8 @@ def create_library_router(store, overrides=None, adoptions=None,
             # the user assigned keeps grading against the PRE-refresh ladder
             # until the next adopt/unadopt or a restart. Re-loading closes it.
             adoptions.load()
+        if result.get("applied") and on_standards_changed is not None:
+            await on_standards_changed()
         return result
 
     if adoptions is not None:
@@ -183,11 +205,14 @@ def create_library_router(store, overrides=None, adoptions=None,
             # can say "already matched by name" instead of a "Not linked"
             # that contradicts the Library page's own chip.
             matched = {}
+            assigned = adoptions.rows()
             if segment_names is not None:
                 try:
                     pairs = list(segment_names())
                     for position, target in enumerate(store.payload["targets"]):
-                        if target.get("entity_key"):
+                        if target.get("entity_key") or any(
+                                row_key(target, item["name"], item["ids"]) in assigned
+                                for item in target["approaches"]):
                             continue
                         hit = adoptions_store.auto_match(target["label"], pairs)
                         if hit:
@@ -196,7 +221,7 @@ def create_library_router(store, overrides=None, adoptions=None,
                                                 "label": target["label"]})
                 except Exception:
                     matched = {}
-            return {"rows": adoptions.rows(),
+            return {"rows": {key: entity for key, entity in assigned.items() if entity},
                     "ladders": adoptions.ladders(),
                     "by_entity": adoptions.linked_targets(),
                     "matched_by_name": matched}
@@ -207,6 +232,8 @@ def create_library_router(store, overrides=None, adoptions=None,
             happened rides the answer as `held`."""
             if on_adopt is not None:
                 result["held"] = await on_adopt(list(keys))
+            if on_standards_changed is not None:
+                await on_standards_changed()
             return result
 
         @router.post("/adopt")
@@ -228,11 +255,14 @@ def create_library_router(store, overrides=None, adoptions=None,
             return await landed(result, [key])
 
         @router.post("/unadopt")
-        def library_unadopt(body: dict = Body(...)):
+        async def library_unadopt(body: dict):
             key = body.get("row_key")
             if not key:
                 raise HTTPException(400, "row_key is required")
-            return adoptions.unadopt(key)
+            result = adoptions.unadopt(key)
+            if on_standards_changed is not None:
+                await on_standards_changed()
+            return result
 
         @router.post("/adopt_target")
         async def library_adopt_target(body: dict = Body(...)):
@@ -251,13 +281,16 @@ def create_library_router(store, overrides=None, adoptions=None,
                                          for row in result["adopted"]])
 
         @router.post("/unadopt_target")
-        def library_unadopt_target(body: dict = Body(...)):
+        async def library_unadopt_target(body: dict):
             index = body.get("target_index")
             if not isinstance(index, int):
                 raise HTTPException(400, "target_index is required")
             try:
-                return adoptions.unadopt_target(index)
+                result = adoptions.unadopt_target(index)
             except adoptions_store.AdoptionError as err:
                 raise HTTPException(409, str(err)) from err
+            if on_standards_changed is not None:
+                await on_standards_changed()
+            return result
 
     return router

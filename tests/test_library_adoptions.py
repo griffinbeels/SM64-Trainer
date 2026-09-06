@@ -162,7 +162,7 @@ def test_the_routes_report_a_refusal_rather_than_failing_silently(wiring):
     assert client.get("/api/library/adoptions").json()["rows"]
     client.post("/api/library/unadopt",
                 json={"row_key": keys["Lobby door (L) - BoB door"]})
-    assert client.get("/api/library/adoptions").json()["rows"] == {}
+    assert not any(client.get("/api/library/adoptions").json()["rows"].values())
 
 
 def test_a_refresh_re_syncs_adopted_ladders(wiring, monkeypatch):
@@ -230,12 +230,13 @@ def test_adopt_target_links_every_laddered_approach_and_reports_skips(wiring):
     assert result["entity_key"] == "segment:42"
     assert result["skipped"] and result["skipped"][0]["name"] == "Thin one"
     assert "recorded times" in result["skipped"][0]["reason"]
-    assert adoptions.rows() == {keys["Lobby door (L) - BoB door"]: "segment:42"}
+    assert adoptions.rows() == {keys[name]: "segment:42"
+                                for name in ("Lobby door (L) - BoB door", "Thin one")}
     assert standards.strategies("segment:42") == [ad.DEFAULT_STRATEGY]
 
     undone = adoptions.unadopt_target(0)
-    assert undone["removed"] == 1
-    assert adoptions.rows() == {}
+    assert undone["removed"] == 2  # explicit and inferred sibling assignments
+    assert not any(adoptions.rows().values())
     assert standards.strategies("segment:42") == []
 
 
@@ -377,7 +378,8 @@ def test_the_whole_library_reaches_the_sheet_layer_under_the_import_slots():
     matched row wears its twin's name, an unmatched row its own; a thin row
     contributes nothing; a variant-qualified entity is skipped."""
     ladders = ad.library_ladders(_star_payload(), {}, qualified={"star:3:6"})
-    assert set(ladders) == {"star:6:4"}
+    assert set(ladders) == {"star:6:4", "star:3:6"}
+    assert "Big Penguin Race + 100c" in ladders["star:3:6"]["strategies"]
     assert set(ladders["star:6:4"]["strategies"]) == {"Standard", "Leftside", "Chimney hop"}
     assert ladders["star:6:4"]["strategies"]["Standard"]["Mario"] == 11.36
 

@@ -7,12 +7,11 @@ def _spread(low, high, count):
     return [int(round(low + step * i)) for i in range(count)]
 
 
-def test_a_thin_row_gets_no_ladder():
-    # A feasibility floor, not an accuracy one: below it neighbouring
-    # percentiles land on the same observation and the "ladder" is three
-    # numbers wearing eight names.
-    assert ladders.fit_ladder(_spread(1000, 2000, ladders.MIN_ENTRIES - 1)) == {}
-    assert ladders.fit_ladder(_spread(1000, 2000, ladders.MIN_ENTRIES)) != {}
+def test_every_nonempty_population_gets_a_ladder_without_inventing_spacing():
+    assert ladders.fit_ladder([]) == {}
+    for count in range(1, 10):
+        assert ladders.fit_ladder([1000] * count) == {"Mario": 10.0}
+    assert ladders.fit_ladder([1000, 1003, 1006])
 
 
 def test_tiers_the_data_cannot_tell_apart_merge_instead_of_being_invented():
@@ -117,9 +116,10 @@ def test_fit_payload_stamps_rows_and_records_the_model():
     out = ladders.fit_payload(payload)
     target = out["targets"][0]
     assert "ladder" in target["approaches"][0]
-    assert "ladder" not in target["subsections"][0]      # too thin
-    assert out["ladder_model"]["fitted_rows"] == 1
-    assert out["ladder_model"]["rows_too_thin"] == 1
+    assert target["subsections"][0]["ladder"] == {"Mario": 5.0}
+    assert out["ladder_model"]["fitted_rows"] == 2
+    assert out["ladder_model"]["rows_too_thin"] == 0
+    assert out["ladder_model"]["version"] == ladders.LADDER_MODEL_VERSION
     assert out["ladder_model"]["source"] == "sheet"
     assert out["ladder_model"]["percentiles"] == dict(ladders.LADDER_PERCENTILES)
 
@@ -146,12 +146,34 @@ def test_a_ladder_is_never_fitted_across_two_rom_versions():
 
 
 def test_a_thin_us_population_does_not_discard_a_large_jp_one():
-    # US is preferred only when it clears the floor on its own; buying
-    # consistency by throwing 40 times away for 6 is not a trade worth making.
+    # Each annotated population fits independently, even a single observation.
     item = {"entries": [{"time_cs": 1080 + i, "version": "jp"} for i in range(40)]
-                       + [{"time_cs": 1450 + i, "version": "us"} for i in range(6)]}
+                       + [{"time_cs": 1450, "version": "us"}]}
     times, version = ladders.row_times(item)
-    assert version == "jp" and len(times) == 40
+    assert version == "us" and times == [1450]
+    ladders.fit_payload({"targets": [{"approaches": [item], "subsections": []}]})
+    assert item["ladder"] == {"Mario": 14.5}
+    assert item["ladder_samples"] == 1
+    assert item["ladder_jp"] == ladders.fit_ladder(range(1080, 1120))
+    assert item["ladder_jp_samples"] == 40
+
+
+def test_one_jp_observation_gets_its_own_companion_ladder():
+    item = {"entries": [{"time_cs": 1450 + i, "version": "us"} for i in range(30)]
+                       + [{"time_cs": 1080, "version": "jp"}]}
+    ladders.fit_payload({"targets": [{"approaches": [item], "subsections": []}]})
+    assert item["ladder_version"] == "us"
+    assert item["ladder_jp"] == {"Mario": 10.8}
+    assert item["ladder_jp_samples"] == 1
+
+
+def test_unannotated_times_keep_a_base_beside_a_jp_companion():
+    item = {"entries": [{"time_cs": 1500}]
+                       + [{"time_cs": 1080, "version": "jp"}] * 20}
+    ladders.fit_payload({"targets": [{"approaches": [item], "subsections": []}]})
+    assert item["ladder_version"] is None
+    assert item["ladder"] == {"Mario": 15.0}
+    assert item["ladder_jp"] == {"Mario": 10.8}
 
 
 def test_an_unversioned_row_uses_everything():
