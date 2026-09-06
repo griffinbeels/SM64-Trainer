@@ -146,6 +146,20 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
 
   if (!source) return null;
   const useLocal = local && !localFailed && media?.state === "ready";
+  // Browsing may already know about a running job when Play is clicked.
+  // The provider can therefore render before Play's fresh GET settles;
+  // protect that visible player now, not only in the request callback.
+  if (playing && media && !useLocal) providerStarted.current = true;
+  function closePlayback() {
+    // Keeping the provider is a promise for THIS watch session only. A new
+    // Play must choose the freshest cache result, including a download that
+    // finished while the user watched its embed.
+    providerStarted.current = false;
+    setMedia(null);
+    setLocal(false);
+    setLocalFailed(false);
+    setPlaying(false);
+  }
   return html`<div class="library-example-media external-video">
     <${VideoBody} source=${source} playing=${playing} useLocal=${useLocal}
       url=${safeUrl} media=${media} label=${label} startS=${startS}
@@ -153,7 +167,7 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
     <${VideoActions} url=${safeUrl} playing=${playing} media=${media}
       local=${local} localFailed=${localFailed} onLocal=${() => setLocal(true)}
       onRetry=${() => setRetry(retry + 1)}>
-      ${playing && closable && html`<button onclick=${() => setPlaying(false)}>Close recording</button>`}
+      ${playing && closable && html`<button onclick=${closePlayback}>Close recording</button>`}
     <//>
   </div>`;
 }
@@ -173,7 +187,7 @@ function VideoBody({ source, playing, useLocal, url, media, label, startS, onPla
       : !media ? html`<div class="library-example-thumb library-example-placeholder" role="status">
           Loading recording…</div>`
       : html`<${ProviderMedia} key=${url} url=${url} source=${source}
-          label=${label} startS=${startS} />`;
+          label=${label} startS=${startS ?? media.start_s} />`;
 }
 
 function VideoActions({ url, playing, media, local, localFailed, onLocal, onRetry, children }) {

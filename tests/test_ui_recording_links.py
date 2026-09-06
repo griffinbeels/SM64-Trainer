@@ -186,6 +186,36 @@ def test_revision_conflict_preserves_draft_until_deliberate_retry(page):
     assert page.evaluate("recording.url") == 'https://recording.example/mine'
 
 
+def test_undo_conflict_retries_the_original_restoration(page):
+    original = 'https://recording.example/original'
+    mount(page, url=original)
+    click(page, "Change link")
+    page.wait_for("#recording-test input")
+    draft(page, 'https://recording.example/new')
+    click(page, "Save link")
+    wait(page, "recording.revision === 1")
+    page.evaluate("window.conflict = true")
+    click(page, "Undo")
+    page.wait_for("#recording-test .recording-link-error")
+    assert page.evaluate("document.querySelector('#recording-test input').value") == original
+    click(page, "Retry")
+    wait(page, "recording.revision === 10")
+    assert page.evaluate("recording.url") == original
+    wait(page, "document.querySelector('#recording-test .recording-link-status').textContent.includes('Link restored')")
+
+
+def test_failed_removal_retries_null_instead_of_validating_empty_draft(page):
+    mount(page, url='https://recording.example/original')
+    click(page, "Change link")
+    page.wait_for("#recording-test input")
+    page.evaluate("window.failSave = true")
+    click(page, "Remove link")
+    page.wait_for("#recording-test .recording-link-error")
+    page.evaluate("window.failSave = false")
+    click(page, "Retry")
+    wait(page, "recording.url === null")
+
+
 def test_malformed_link_keeps_input_and_narrow_editor_fits(page):
     mount(page)
     draft(page, 'javascript:alert(1)')
@@ -210,6 +240,30 @@ def test_library_browse_only_reads_cache_then_play_prepares_once(page):
     assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 1
     assert page.evaluate("document.querySelector('#recording-test .external-video-actions a').href") == 'https://recording.example/library'
     assert page.evaluate("document.querySelectorAll('#recording-test .external-video-frames').length") == 0
+
+
+def test_library_reopen_prefers_download_that_finished_during_embed(page):
+    page.evaluate("window.mediaReply = {state:'running', start_s:0}")
+    mount(page, url='https://recording.example/library', library=True)
+    page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Preparing local')")
+    page.evaluate("window.mediaReply = {state:'ready', start_s:0, "
+                  "clip_url:URL.createObjectURL(new MediaSource())}")
+    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Play downloaded')")
+    # A background completion must not interrupt the current provider player.
+    assert page.evaluate("document.querySelector('#recording-test .external-video-local') === null")
+    click(page, "Close recording")
+    wait(page, "document.querySelector('#recording-test .external-video > button')")
+    page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    page.wait_for("#recording-test .external-video-local video")
+    assert page.evaluate("document.querySelector('#recording-test video').src.startsWith('blob:')")
+
+
+def test_provider_fallback_uses_the_resolved_start_timestamp(page):
+    page.evaluate("window.mediaReply = {state:'error', error:'offline', start_s:95}")
+    mount(page, url='https://youtu.be/abc123XYZ_-#t=1m35s')
+    page.wait_for("#recording-test iframe")
+    assert 'start=95' in page.evaluate("document.querySelector('#recording-test iframe').src")
 
 
 def test_native_capture_is_preferred_and_survives_link_edit(page):
@@ -273,11 +327,13 @@ def test_export_html_preserves_exact_safe_link_and_paint(page):
         def __init__(self):
             super().__init__()
             self.links = []
+            self.link_styles = []
             self.cells = []
 
         def handle_starttag(self, tag, attrs):
             if tag == 'a':
                 self.links.append(dict(attrs)['href'])
+                self.link_styles.append(dict(attrs).get('style'))
             if tag == 'td':
                 self.cells.append(dict(attrs))
 
@@ -286,4 +342,5 @@ def test_export_html_preserves_exact_safe_link_and_paint(page):
     assert reader.links == ['https://example.com/watch?t=4&name="clip"']
     assert len(reader.cells) == 3
     assert 'background-color:#123456' in reader.cells[0]['style']
+    assert reader.link_styles == [reader.cells[0]['style']]
     assert reader.cells[2] == {}

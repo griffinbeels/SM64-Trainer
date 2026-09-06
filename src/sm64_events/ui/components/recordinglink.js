@@ -48,6 +48,7 @@ export function RecordingLink({ attemptId, onLoaded, onChanged }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [undo, setUndo] = useState(null);
+  const [retryOperation, setRetryOperation] = useState(null);
   const [reload, setReload] = useState(0);
   const inputRef = useRef(null);
   const focusEdit = useRef(false);
@@ -72,15 +73,15 @@ export function RecordingLink({ attemptId, onLoaded, onChanged }) {
   }, [editing]);
 
   function change() {
-    setDraft(saved.url || ""); setError("");
+    setDraft(saved.url || ""); setError(""); setRetryOperation(null);
     focusEdit.current = true; setEditing(true);
   }
   function cancel() {
-    setDraft(saved.url || ""); setEditing(false); setError("");
+    setDraft(saved.url || ""); setEditing(false); setError(""); setRetryOperation(null);
   }
   async function persist(url, restoring = false) {
     if (busy || !saved) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setRetryOperation(null);
     try {
       const result = await send("PUT", endpoint,
         { url, expected_revision: saved.revision });
@@ -90,6 +91,9 @@ export function RecordingLink({ attemptId, onLoaded, onChanged }) {
       setSaved(result); setDraft(result.url || ""); setEditing(false);
       onChanged?.(result.url);
     } catch (failure) {
+      // Retry means the operation that failed, including Undo and removal.
+      // Its URL may be null, which the normal add-link validator must reject.
+      setRetryOperation({ url, restoring }); setDraft(url || ""); setEditing(true);
       // Preserve the draft and undo. Refresh only the revision on conflict so
       // the next explicit Retry is a deliberate replacement of the latest link.
       if (failure.status === 409) {
@@ -103,6 +107,7 @@ export function RecordingLink({ attemptId, onLoaded, onChanged }) {
   }
   function save(event) {
     event?.preventDefault();
+    if (retryOperation) { persist(retryOperation.url, retryOperation.restoring); return; }
     const url = publicRecordingUrl(draft);
     if (!url) { setError("Paste a complete http:// or https:// video link."); return; }
     persist(url);
@@ -120,7 +125,7 @@ export function RecordingLink({ attemptId, onLoaded, onChanged }) {
       : showField ? html`<${LinkForm} fieldId=${fieldId} inputRef=${inputRef}
           draft=${draft} saved=${saved} editing=${editing} busy=${busy} error=${error}
           save=${save} cancel=${cancel} persist=${persist}
-          onInput=${(value) => { setDraft(value); setError(""); }} />` : html`<${LinkPreview} key=${saved.url} url=${saved.url} />`}
+          onInput=${(value) => { setDraft(value); setError(""); setRetryOperation(null); }} />` : html`<${LinkPreview} key=${saved.url} url=${saved.url} />`}
     ${error && saved && html`<p class="recording-link-error" id=${`${fieldId}-error`}
       role="alert">${error}</p>`}
     <div class="recording-link-status" role="status" aria-live="polite">

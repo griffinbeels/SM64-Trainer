@@ -21,8 +21,8 @@ export function ReplayPlayer({ attemptId, imported = false, onCompare }) {
       ? html`<${NativeReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
           onUnavailable=${() => setNativeUnavailable(true)} />`
       : url ? html`<${ExternalVideo} key=${url} url=${url} autoplay=${initialLink} />`
-      : url === undefined ? html`<p class="meta">Loading recording…</p>`
-      : html`<p class="meta">${imported ? "Add a public recording to watch this attempt."
+      : url === undefined ? html`<p class="replay-state meta">Loading recording…</p>`
+      : html`<p class="replay-state meta">${imported ? "Add a public recording to watch this attempt."
           : "No captured replay available. Add a public recording below."}</p>`}
     <${RecordingLink} key=${attemptId} attemptId=${attemptId}
       onLoaded=${setUrl} onChanged=${(next) => { setInitialLink(false); setUrl(next); }} />
