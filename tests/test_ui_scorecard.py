@@ -1438,7 +1438,11 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
             page.evaluate(
                 "document.querySelectorAll('.rank-page .scorecard-card "
                 ".score-row-remove')[0].click()")
-            page.wait_ms(700)
+            # Cards live inside responsive column wrappers. Wait on their
+            # total count, independent of how those columns are arranged.
+            deadline = time.monotonic() + 8
+            while page.count(".rank-page .scorecard-card .score-card") != 1 and time.monotonic() < deadline:
+                page.wait_ms(25)
 
             rows_left = page.count(".rank-page .scorecard-card .score-card")
             labels_left = page.evaluate(

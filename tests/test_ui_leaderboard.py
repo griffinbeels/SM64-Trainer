@@ -12,6 +12,7 @@ already renders.
 """
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,17 @@ YOU_COVERAGE = """
 """
 
 
+def wait_for_coverage(page, denominator):
+    """Wait for the changed value, not the row that was already visible."""
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        value = page.evaluate(YOU_COVERAGE)
+        if value and value.split("/")[-1] == str(denominator):
+            return value
+        page.wait_ms(25)
+    raise AssertionError(f"coverage never reached denominator {denominator}; last value {value!r}")
+
+
 def test_excluding_an_entity_narrows_the_board_like_your_own_tab(page):
     """Round 1, third read (2026-08-23), reversing the design-session rule
     and fix wave M2's note: "if I have personally excluded certain segments
@@ -165,9 +177,7 @@ def test_excluding_an_entity_narrows_the_board_like_your_own_tab(page):
     """)
     assert clicked, "no practiced entity with an Ignore button on the Rank tab"
     try:
-        page.wait_for(".leaderboard-row.is-you", timeout_ms=8000)
-        page.wait_ms(400)
-        during = page.evaluate(YOU_COVERAGE)
+        during = wait_for_coverage(page, n_before - 1)
         assert int(during.split("/")[1]) == n_before - 1, (
             f"excluding an entity did not narrow the board: {before!r} -> {during!r}")
     finally:
@@ -184,9 +194,7 @@ def test_excluding_an_entity_narrows_the_board_like_your_own_tab(page):
           })()
         """)
         assert restored, "could not find the Include button to undo the exclusion"
-        page.wait_for(".leaderboard-row.is-you", timeout_ms=8000)
-        page.wait_ms(400)
-        after = page.evaluate(YOU_COVERAGE)
+        after = wait_for_coverage(page, n_before)
         assert int(after.split("/")[1]) == n_before, f"the exclusion survived undo: {after!r}"
 
 

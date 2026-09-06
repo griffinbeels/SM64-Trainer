@@ -19,10 +19,10 @@ FastAPI + uvicorn, pymem, pytest.
 
 ```
 uv sync
-uv run python tools/run_tests.py                     # MUST pass before any merge: the whole suite on 24 workers with 12 of the 32 logical processors left free for his desktop (~3½ min; 19½ serial), and it refreshes the coverage map. That pair is the measured optimum -- it is FASTER than 16 workers with every core AND idle-grade on lag; `--reserve 0` hands the run everything and makes the machine stutter
+uv run python tools/run_tests.py                     # full integration gate; one shared allocation across worktrees, automatically smaller with OBS open (docs/testing.md)
 uv run python tools/measure_run_load.py              # what a run COSTS his desktop, against what it saves in time: idle baseline then one full run per configuration, scored by how long a normal-priority thread waits for a core (p95 ms) as well as by wall clock
 uv run python tools/run_tests.py --changed           # the inner loop: only the tests whose Python your change touched -- or everything, when a JS/HTML/CSS/data/doc file changed, because nothing can see what those affect
-uv run pytest tests/test_<module>.py -q              # one file, serially, as always
+uv run python tools/run_tests.py tests/test_<module>.py # focused, serial, no coverage instrumentation; first choice while editing
 uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline
 uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM); --version jp reads the JP layout
 uv run python tools/sync_version.py --version us     # THE version-sync loop (runbook: docs/version-sync.md): walks every gate (address/behaviour/calibration/feature) against the loaded ROM, writes data/version_sync/<v>.json as it goes, posts to a running server so /ui/sync.html fills live. On US = the regression proof (every gate verified); on JP = how JP support is discovered (--only <gate|feature> reruns one; read-only, safe beside a live session)
@@ -304,38 +304,15 @@ Contract changes land on main first, then dependent work fans out. Merge with
   and the gate FAILS OPEN on every error, so a broken gate and a clean commit
   look identical — which is exactly how its JavaScript half stayed dead for an
   hour (2026-08-28).
-- **The suite runs on 16 workers, and every test says which worker group it
-  belongs to.** `tools/run_tests.py` is the one door: the merge gate (every
-  test, coverage map refreshed) and `--changed` (pytest-testmon reruns only
-  tests whose executed Python changed). `tests/conftest.py` gives each test
-  its file as an xdist group, so a module's one-server-one-browser fixture
-  is built once, and puts every file back in its OWN order after the
-  plugins have had their say -- testmon's `--testmon-noselect` reorders a
-  module's tests "most likely to fail first" once its map exists, which
-  scrambled shared-page files and read as load flake for a day
-  (2026-09-02, `tests/test_worker_groups.py` pins the order); a test marked
-  `spread` is its own group and leaves the
-  file, which is how the responsive sweep went from one 179 s test to 26
-  cases. **The door also fences the whole pytest tree off 12 of the 32
-  logical processors** (`--reserve`, default 12, alongside 24 workers),
-  which a 13-run sweep of the workers x reserve grid says is the optimum
-  rather than a trade: reserving costs no wall time at all (208-214 s flat
-  from 0 to 16 reserved at 16 workers) while p99 stall falls 16.9 -> 0.9 ms,
-  and more workers than 16 pays only once cores ARE reserved -- 24x12 is
-  204 s and idle-grade, where 32x0 is both the laggiest row and slower than
-  16. Fewer workers is NOT the smoothness lever any more (8x8 is idle-grade
-  and 94 s slower). Priority is not a lever either and is ruled out with
-  evidence. `tools/measure_run_load.py` holds the grid and re-derives it --
-  lag measured as how long a normal-priority thread waits for a core, never
-  as CPU percent, and every row stamped with the ambient load it was
-  measured against so a sibling session's suite cannot skew the comparison
-  invisibly. Two things to carry: testmon is BLIND to anything that is not
-  Python executed in-process (JS, HTML, CSS, seed data, docs, code that
-  only runs in a spawned subprocess), so the door refuses to select when a
-  non-Python file changed since the last full run, and `--changed` is never
-  the gate; and `-s` does not print under workers, so a measurement test
-  (`test_ui_recorder_latency.py`) is still run alone. The numbers behind
-  every choice are in the runner's docstring (2026-09-01).
+- **Testing is scoped and shares one machine budget.** Read `docs/testing.md`
+  before choosing a test scope or changing the runner. Explicit targets run
+  serially without testmon; `--changed` uses Python coverage conservatively;
+  the full runner is the integration gate. Controllers queue across worktrees,
+  OBS lowers the budget, and the runner owns cleanup of its entire child tree.
+  No blanket retries. Once the appropriate checks pass, stop; broaden/repeat
+  only for new edits, failures or unresolved risks. A full suite already
+  includes the responsive sweep, so do not run it twice. The collection-order
+  and worker-group contracts remain in `tests/conftest.py`.
 - **Exit-code honesty:** run verification through the Bash tool. Never pipe
   native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
   failures).
@@ -344,7 +321,9 @@ Contract changes land on main first, then dependent work fans out. Merge with
 
 ## Definition of done — every merge
 
-- `uv run python tools/run_tests.py` passes; new behavior has tests
+- `uv run python tools/run_tests.py` passes once for the integrated tree;
+  new behavior has relevant tests. An identical tree after merge reuses that
+  evidence; repeat only if inputs changed (scope policy: `docs/testing.md`)
 - **glossary current** — a change that adds, renames or redefines a domain noun
   updates its `docs/glossary.md` row in the SAME commit. The glossary is what we
   both call things by; a name that only exists in code is not shared language.
