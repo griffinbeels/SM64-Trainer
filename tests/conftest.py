@@ -1,5 +1,6 @@
 """Session-wide test guards."""
 import asyncio
+import os
 import re
 import sys
 from pathlib import Path
@@ -22,6 +23,35 @@ from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    """Direct pytest shares the runner's admission and CPU budget too.
+
+    Configure precedes xdist worker creation. Workers and runner-owned pytest
+    inherit the live ancestor's budget and must never acquire it a second time.
+    """
+    from tools.test_resources import TestResources, WORKERS_ENV, effective_workers, inherited_owner
+
+    if hasattr(config, "workerinput"):
+        return
+    try:
+        requested = effective_workers(getattr(config.option, "tx", []) or [])
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from error
+    if inherited_owner():
+        workers = min(requested, int(os.environ[WORKERS_ENV]))
+    else:
+        resources = TestResources(requested)
+        resources.__enter__()
+        config.add_cleanup(lambda: resources.__exit__(None, None, None))
+        workers = resources.workers
+    if requested:
+        config.option.numprocesses = workers
+        config.option.tx = ["popen"] * workers
+        if workers == 0:
+            config.option.dist = "no"
 
 
 # Where each item sat in the raw collection, stamped before any plugin
