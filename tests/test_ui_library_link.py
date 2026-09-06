@@ -116,6 +116,20 @@ def _navigate_to_target(page, group_name, target_label):
     page.wait_for(".library-target", timeout_ms=15000)
 
 
+def _linked_label(page, name):
+    """The link is known before its independent segment-label fetch settles."""
+    selector = ".library-target-titleline .library-link-state.is-linked"
+    page.wait_for(selector, timeout_ms=15000)
+    deadline = time.monotonic() + 10
+    text = ""
+    while time.monotonic() < deadline:
+        text = page.evaluate(f"document.querySelector({selector!r})?.textContent || ''")
+        if name in text:
+            return text
+        page.wait_ms(50)
+    return text
+
+
 def _fixture_segment_strategy_options(page):
     """Every strategy select on the fixture's BitFS Pipe Entry card.
 
@@ -352,16 +366,7 @@ def test_a_name_matched_movement_shows_the_association_and_its_standing(library_
     standing is Capless, verbatim his rule ("if there are no times, it's
     capless"). The offer strip is gone: a match already IS the association."""
     _navigate_to_target(library_page, "Castle Movements (Lobby)", "Lakitu skip")
-    library_page.wait_for(".library-target-titleline .library-link-state.is-linked",
-                          timeout_ms=15000)
-    deadline = time.monotonic() + 10
-    chip = ""
-    while time.monotonic() < deadline:
-        chip = library_page.evaluate(
-            "document.querySelector('.library-target-titleline .library-link-state.is-linked').textContent")
-        if "Lakitu Skip" in chip:
-            break
-        library_page.wait_ms(50)
+    chip = _linked_label(library_page, "Lakitu Skip")
     assert "Lakitu Skip" in chip, chip
     library_page.wait_for(".library-section .library-your-standing",
                           timeout_ms=15000)
@@ -478,10 +483,7 @@ def test_the_segment_editor_links_from_the_other_side(library_page, library_serv
     library_page.wait_for(".library-target", timeout_ms=15000)
     _navigate_to_target(library_page, "Castle Movements (Lobby)",
                         "Lobby door (L) - CCM wooden door")
-    library_page.wait_for(".library-target-titleline .library-link-state.is-linked",
-                          timeout_ms=15000)
-    linked_text = library_page.evaluate(
-        "document.querySelector('.library-target-titleline .library-link-state.is-linked').textContent")
+    linked_text = _linked_label(library_page, LINK_SEGMENT_NAME)
     assert LINK_SEGMENT_NAME in linked_text, linked_text
 
     # leave the fixture as found
