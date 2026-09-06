@@ -2371,10 +2371,15 @@ def test_entity_rank_flags_fitted_even_when_a_vetted_strategy_wins_mario(tmp_pat
     ranks = _ranks(tmp_path)      # vetted "fast": Mario 11.0, Diamond 12.0, Silver 13.0
     # Slower than "fast" at Mario (so "fast" uniquely wins that tier and
     # becomes fastest_strat) but FASTER at Silver (so it alone sets that
-    # tier of the pointwise-min ladder).
+    # tier of the pointwise-min ladder). Its own rungs run fast->slow like
+    # any real ladder: `best_ladder` clamps a merged cutoff that would sit
+    # faster than a harder tier's (2026-08-31), so a fixture ladder that
+    # inverted inside itself -- this one used to say Silver 10.0 against
+    # its own Mario 12.0 -- would be normalised away before the assertion
+    # below could see it.
     ranks.apply_sheet_ladders(
         {"star:2:2": {"strategies": {
-            "sheet strat": {"Mario": 12.0, "Silver": 10.0}}}})
+            "sheet strat": {"Mario": 12.0, "Silver": 12.5}}}})
 
     out = entity_rank(ranks, "star:2:2", 330)   # frames value is irrelevant here
     assert out["fastest_strat"] == "fast"       # the vetted strategy, correctly

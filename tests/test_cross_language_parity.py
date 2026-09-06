@@ -689,6 +689,129 @@ def test_the_boards_tie_numbering_agrees_with_leaderboard_modes():
         "false.")
 
 
+# --- 13. the scorecard's live goal-edit recompute ---------------------------
+
+SCORECARDGOAL_JS = UI / "scorecardgoal.js"
+
+
+def test_scorecard_goal_override_recompute_agrees():
+    """`ranks/scorecard.py::_tile`/`_sum_tiles` build a tile's delta and a
+    row's Sigma server-side; `ui/scorecardgoal.js::applyGoalOverrides` (via
+    its own `_recomputeTile`/`_recomputeSum`) is the DELIBERATE second copy
+    of that exact arithmetic -- it has to recompute LIVE, on every keystroke
+    while a goal is being edited (`ui/components/scorecard.js`'s own header
+    comment: "no server round trip per keystroke"), so it cannot be the one
+    door the server's builder already is. `scorecardgoal.js` is import-free
+    (only imports caps.js, itself import-free), so this drives it by DIRECT
+    IMPORT and calls its real, exported entry point -- the same one
+    scorecard.js calls on every edit -- never `_recomputeTile`/
+    `_recomputeSum` by an artificial calling convention of the test's own
+    invention.
+
+    Every tile is BUILT with the real Python `_tile()` (the exact shape the
+    server ships over the wire), covering the four cases: a NORMAL tile
+    ("A", overridden, both sides end up present), a tile with no `you_cs`
+    ("B", overridden, so the missing SIDE is what keeps it ungraded), a tile
+    with no `goal_cs` that receives NO override at all ("C" -- proving the
+    pass-through rule: a key the override map does not name must leave the
+    tile exactly as the server resolved it), and a fully-covered tile ("D",
+    overridden, both sides present -- round 6 deleted the folded flag, so
+    D's job now is proving a both-sided override ENTERS both Sigmas).
+    The expected tiles are built by calling `_tile()` AGAIN with the
+    overridden goal (or, for "C", by passing the original tile through
+    unchanged) -- never a hand-restated dict, which would be a third copy of
+    the same rule. Comparing tiles AND the row's/card's own Sigma: tile-level
+    agreement alone says nothing about whether the two sides sum the same
+    set."""
+    from sm64_events.ranks.scorecard import _sum_tiles, _tile
+
+    you = {"A": 1000, "C": 1500, "D": 2000}   # "B" has no PB at all
+    base_tiles = [
+        _tile(you, {}, "A", "Star A", "igt"),
+        _tile(you, {}, "B", "Star B", "igt"),
+        _tile(you, {}, "C", "Star C", "igt"),
+        _tile(you, {}, "D", "Star D", "igt"),
+    ]
+    overrides = {"A": 800, "B": 500, "D": 1800}   # "C" deliberately untouched
+
+    def expected_tile(tile):
+        key = tile["key"]
+        if key not in overrides:
+            return tile
+        new_you = {key: you[key]} if key in you else {}
+        return _tile(new_you, {key: overrides[key]}, key,
+                    tile["label"], tile["clock"])
+
+    expected_tiles = [expected_tile(tile) for tile in base_tiles]
+    expected_sum = _sum_tiles(expected_tiles)
+    # `GET /api/scorecard`'s own coverage formula (`scorecard_api.py::
+    # get_scorecard`), computed here over the SAME expected tiles -- the
+    # live-edit recompute must agree with the server on which tiles now
+    # carry a goal, not just on the tiles' own contents.
+    expected_coverage = {"covered": sum(1 for t in expected_tiles if t["goal_cs"] is not None),
+                         "tiles": len(expected_tiles)}
+
+    payload = {
+        "rows": [{"course_id": 1, "label": "Test Row", "tiles": base_tiles,
+                 "sum": _sum_tiles(base_tiles)}],
+        "total": _sum_tiles(base_tiles),
+        "goal_coverage": {"covered": 0, "tiles": len(base_tiles)},
+    }
+    js = run_node(
+        f"import {{ applyGoalOverrides }} from {SCORECARDGOAL_JS.as_uri()!r};\n"
+        f"const payload = {json.dumps(payload)};\n"
+        f"const overrides = {json.dumps(overrides)};\n"
+        "const result = applyGoalOverrides(payload, overrides);\n"
+        "console.log(JSON.stringify({tiles: result.rows[0].tiles, "
+        "sum: result.rows[0].sum, total: result.total, "
+        "goal_coverage: result.goal_coverage}));")
+
+    assert js["tiles"] == expected_tiles, (
+        "ranks/scorecard.py::_tile and scorecardgoal.js's live recompute "
+        f"disagree on the resulting tiles.\n  python: {expected_tiles}\n"
+        f"  js:     {js['tiles']}")
+    assert js["sum"] == expected_sum, (
+        "ranks/scorecard.py::_sum_tiles and scorecardgoal.js's live "
+        f"recompute disagree on the row Sigma.\n  python: {expected_sum}\n"
+        f"  js:     {js['sum']}")
+    assert js["total"] == expected_sum, (
+        "a single-row payload's card TOTAL must equal that row's own Sigma "
+        f"on both sides -- python: {expected_sum}, js: {js['total']}")
+    assert js["goal_coverage"] == expected_coverage, (
+        "scorecard_api.py::get_scorecard's coverage formula and "
+        "scorecardgoal.js's live recompute disagree on goal_coverage.\n"
+        f"  python: {expected_coverage}\n  js:     {js['goal_coverage']}")
+
+
+# --- 14. the attainable-centisecond rule -------------------------------------
+# Only 30 of every 100 centisecond values are displayable, and a HAND-TYPED
+# time has a 70% chance of naming one that is not. The server rounds up on
+# save; the field has to show the same answer before saving, or it hands back a
+# different number than the one entered. Two implementations, one rule.
+
+def test_attainable_centiseconds_agree():
+    from sm64_events.core.timefmt import attainable_cs
+
+    # Every centisecond value through the first two seconds (where the 30-of-100
+    # pattern repeats in full), plus real times across the range.
+    values = list(range(0, 200)) + [
+        886, 1000, 1501, 1503, 2613, 4450, 6300, 6600, 9996, 12345]
+    js = run_node(
+        f"import {{ attainableCs }} from {FORMAT_JS.as_uri()!r};\n"
+        f"const values = {json.dumps(values)};\n"
+        "console.log(JSON.stringify(values.map(attainableCs)));")
+    python = [attainable_cs(cs) for cs in values]
+    disagreements = [(cs, py, node)
+                     for cs, py, node in zip(values, python, js)
+                     if py != node]
+    assert not disagreements, (
+        "core/timefmt.py::attainable_cs and ui/format.js::attainableCs "
+        f"disagree at (cs, python, js): {disagreements}. A hand-entry field "
+        "that snaps differently from the server hands the user back a time "
+        "they did not type — and JS `/` is float division where Python `//` "
+        "is not, which is exactly the drift these two are one edit away from.")
+
+
 # --- the guards themselves --------------------------------------------------
 
 def test_the_guards_can_still_fail():
@@ -721,3 +844,35 @@ def test_the_guards_can_still_fail():
                           for (ladder, time), py, node in
                           zip(fake_cases, fake_python, fake_js) if py != node]
     assert fake_disagreements == [({"Bronze": 100}, 50, "Silver", "Bronze")]
+
+
+# --- 12. the platform stamp -------------------------------------------------
+
+PLATFORM_JS = UI / "platform.js"
+
+
+def test_platforms_and_the_absent_rule_agree():
+    """`core/modes.py` stamps WHICH MACHINE set a time and owns the one rule
+    that an absent stamp means the emulator; `ui/platform.js` is the browser's
+    copy, so a card can label a time without a round trip. Compared: the value
+    set, its order, the labels, the default, and the resolver on every input
+    that matters -- each known value, null/None, and a string that is not a
+    platform (the JS must not draw a stamp Python would refuse to store)."""
+    from sm64_events.core.modes import (DEFAULT_PLATFORM, PLATFORM_LABELS,
+                                        PLATFORMS, platform_of)
+
+    probes = [*PLATFORMS, None, "gamecube", ""]
+    js = run_node(
+        f"import {{ PLATFORMS, PLATFORM_LABELS, DEFAULT_PLATFORM, platformOf }}"
+        f" from {PLATFORM_JS.as_uri()!r};\n"
+        f"const probes = {json.dumps(probes)};\n"
+        "console.log(JSON.stringify({ PLATFORMS, PLATFORM_LABELS,"
+        " DEFAULT_PLATFORM, resolved: probes.map(platformOf) }));")
+    assert js["PLATFORMS"] == list(PLATFORMS), (
+        f"the platform set disagrees: modes.py {list(PLATFORMS)} vs "
+        f"platform.js {js['PLATFORMS']}")
+    assert js["PLATFORM_LABELS"] == PLATFORM_LABELS
+    assert js["DEFAULT_PLATFORM"] == DEFAULT_PLATFORM
+    assert js["resolved"] == [platform_of(value) for value in probes], (
+        "platformOf and platform_of resolve a stored stamp differently; the "
+        "browser would label a time by a rule the server does not hold")

@@ -48,14 +48,38 @@ def best_ladder(ladders: dict[str, dict[str, float]]) -> dict[str, int]:
 
     'The best time achievable at this tier by any known strategy' -- which is
     what an entity score must grade against, so that mastering a slow strategy
-    maxes the strat score without maxing the star. The min of monotone ladders
-    is monotone, so the result is always a valid ladder."""
+    maxes the strat score without maxing the star.
+
+    The min of monotone ladders over the SAME tiers is monotone; over
+    different tiers it is not, and this line used to claim otherwise. A
+    sheet-fitted strategy commonly defines only some tiers -- "Slide +
+    Backflip clip" on star:1:5 publishes Mario..Gold plus Bronze and skips
+    Silver -- so the minimum took Bronze 12.30 from the fast way and Silver
+    13.33 from a slow one, i.e. a Bronze cutoff FASTER than Silver's. No
+    score curve can invert that, so `division_goal_cs` returned nothing and
+    the scorecard printed "set a time…" on a star with a full set of
+    published standards (his report, 2026-08-31; measured: 3 of 117 graded
+    entities, two of them the ones he named).
+
+    So the minimum is repaired fastest-tier-first: a cutoff may never be
+    faster than a HARDER tier's. A time good enough for that fast way's
+    Bronze is good enough for the other way's Silver too, so raising it is
+    what the data already means -- and it keeps every consumer (the goal
+    resolver, `progress_for_time`, the standards table) reading a curve that
+    can actually be inverted."""
     out = {}
     for ladder in ladders.values():
         for rank, seconds in ladder.items():
             cs = int(round(seconds * 100))
             if rank not in out or cs < out[rank]:
                 out[rank] = cs
+    hardest_cs = None
+    for rank in RANK_NAMES:                    # fastest tier first
+        if rank not in out:
+            continue
+        if hardest_cs is not None and out[rank] < hardest_cs:
+            out[rank] = hardest_cs
+        hardest_cs = out[rank]
     return out
 
 

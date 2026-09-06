@@ -101,6 +101,23 @@ you can click to jump straight to an attempt — or open its replay.
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
 
+**Bring your times with you.** Practised for years before finding this? Two
+ways in: type a time straight onto any star's card, or pick your name in
+Settings if you have a column on the Ultimate Sheet — every star time lands,
+the Bowser course and fight rows land on their movements, and a subsection
+lands the moment you link its Library row to a segment you built. A time only
+lands when it beats the best you already hold for that star and strategy, so
+importing twice costs nothing. Each one becomes a real row in that star's
+practice log — clear it, undo it, move it to another strategy like any run —
+and every import can be undone in one click. Anything it could not use is
+listed back at you by name, under the reason, rather than quietly skipped.
+
+**Score yourself against a goal.** The Rank tab's scorecard lines every star
+and castle movement up as a tile against a goal you pick — a rank division,
+or any runner's own times — showing your gap tile by tile and a summed gap
+per course. Copy your own times back out as a sheet column ready to paste
+beside everyone else's, or as a full CSV.
+
 **Ranks.** Every attempt, banner and route step wears a rank badge, graded
 against community standards — **per strategy**, so a fast time on one strat
 never flatters another. A header picker switches what the badges grade: your
@@ -176,12 +193,21 @@ restart needed.
 
 ### Test
 
+Use Node 24.13+ on the 24.x line (or Node 26+) for browser-free component tests.
+Install their locked dev dependencies once per checkout:
+
 ```
-uv run python tools/run_tests.py
+npm ci --prefix tests/frontend --ignore-scripts
 ```
 
-~2,250 tests, about 90 seconds, no emulator required. This must pass before
-any merge. Two live-only gates need PJ64 running:
+```
+uv run python tools/run_tests.py tests/test_ui_components.py  # focused, no browser
+uv run python tools/run_tests.py                             # full integration gate
+```
+
+Use [the testing guide](docs/testing.md) to choose a focused check and share
+the machine budget across worktrees. The full suite must pass before integration;
+an identical tested tree reuses its evidence. Two live-only gates need PJ64 running:
 
 ```
 uv run python tools/verify_addresses.py     # every memory address, against the real game

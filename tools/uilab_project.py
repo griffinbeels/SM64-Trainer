@@ -308,6 +308,53 @@ if ({picks} >= 2) {{
 # how the two drifted into disagreeing about what "the Library is open" means.
 _LIBRARY_TARGET_SETUP = None   # assigned below, once _LIBRARY_NAV exists
 
+# The Rank tab's scorecard (spec 2026-08-23-scorecard-design, task 3). No
+# `skip_if`, same reasoning as the Segments-tab stories below: reaching this
+# card is entirely the setup's own job, not something the default fixture
+# state happens to produce. A division goal is set so the sheet and the
+# sweep both measure real good/bad tiles, not an all-uncoloured no-goal grid
+# -- the exact "reaches the state" trap this file's own history keeps
+# warning about (`.claude/rules/ui-core.md`'s responsiveness section).
+_SCORECARD_SETUP = _script("""
+const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
+if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') {
+  rankBtn.click();
+}
+await waitFor(() => !!document.querySelector('.rank-page .scorecard-card'));
+await waitFor(() => !!document.querySelector('.rank-page .score-line'));
+if (!document.querySelector('.rank-page .scorecard-card .score-gap.good, '
+    + '.rank-page .scorecard-card .score-gap.bad')) {
+  // Through the REAL picker, not a raw fetch() -- the card refetches only
+  // through its own onGoalChange handler (the spec's own rule: "the picker
+  // is the only writer and refetches itself"), so a PUT that bypasses it
+  // leaves the mounted card showing stale "No goal" forever. Measured: the
+  // first version of this story did exactly that and the sheet showed
+  // every tile dashed with 'No goal' still in the header.
+  const trigger = document.querySelector(
+    '.rank-page .scorecard-card .search-select-trigger');
+  if (trigger) {
+    trigger.click();
+    await waitFor(() => !!document.querySelector(
+      '.rank-page .scorecard-card .search-menu'));
+    const option = Array.from(document.querySelectorAll(
+      '.rank-page .scorecard-card .search-menu-option'))
+      .find((b) => b.dataset.value === 'division:Bronze:V');
+    if (option) {
+      option.click();
+      await waitFor(() => !!document.querySelector(
+        '.rank-page .scorecard-card .score-gap.good, '
+        + '.rank-page .scorecard-card .score-gap.bad'), 3000);
+    }
+  }
+}
+// Last practice-card on the Rank tab -- below the fold at the contact
+// sheet's fixed 1100px capture height, and `page.screenshot(clip=)` is
+// viewport-relative (`.claude/rules/ui-core.md`: it throws on anything
+// below the fold). Scroll it into view before uilab measures its rect.
+document.querySelector('.rank-page .scorecard-card').scrollIntoView({block: 'start'});
+await sleep(60);
+""")
+
 # The tray and the grid overlay (Task 5, spec 2026-08-07-library-page).
 # Shares its navigation with `_LIBRARY_TARGET_SETUP` above and its own
 # populate-the-tray step with tests/test_ui_library_tray.py's own
@@ -591,6 +638,11 @@ STORIES = [
     # this tab somewhere other than a target page, and `_LIBRARY_NAV` heals
     # that for whatever runs next.
     Story(name="library-search", at=".library-searching", setup=_LIBRARY_SEARCH_SETUP),
+    # Rank tab, scorecard card (spec 2026-08-23-scorecard-design, task 3).
+    # Same "sits between the groups" placement as the library stories above
+    # -- `_EXPAND_ALL` heals the tab back to Practice at the start of every
+    # viewport pass, so this story owes no cleanup of its own either.
+    Story(name="scorecard", at=".scorecard-card", setup=_SCORECARD_SETUP),
     # The densest row on the tab (position, rank icon, a long runner name,
     # three numbers, a coverage fraction) -- see leaderboard.js. Placed here,
     # between the library stories and the segments group, for the same
@@ -708,10 +760,21 @@ PROJECT = Project(
     # narrow in real container terms (~741-742px, comfortably inside the
     # Column band already) and happen to have surfaced an unrelated,
     # already-owed stagebanner defect instead (see known_defects, below).
+    # 1983/1984 are the SCORECARD's 4-up step and 1133/1134 its 2-up step
+    # (round 32, 2026-09-05: panes of 1700 and 850, the widths below which a
+    # star-row name would wrap -- "Every single name should be on a SINGLE
+    # row"). The decision lives in the component
+    # (`scorecardgoal.js::columnCountFor`, because the column-major chunk
+    # count and the drawn track count must be one number), so the CSS no
+    # longer declares the threshold and nothing would sweep it. Declared
+    # here instead: a step nobody measures is a step that can break quietly.
+    # They replaced 1320/1321 (round 11's 4-up floor) and 2403/2404 (round
+    # 21's five-track step, retired in round 32); a viewport is the pane
+    # plus 283px of sidebar and padding at these widths (measured).
     extra_viewports=((850, 1180), (851, 1000), (900, 1180), (912, 1000),
                      (913, 1000), (1019, 1000), (1020, 1000),
-                     (979, 1000), (980, 1000),
-                     (1500, 900), (1280, 720)),
+                     (979, 1000), (980, 1000), (1133, 1000), (1134, 1000),
+                     (1500, 900), (1280, 720), (1983, 1000), (1984, 1000)),
     # OWED, not exempted. These became VISIBLE on 2026-07-28 when the
     # fixture finally rendered a populated practice page -- a stage, an
     # active target, a strategy and a PB. Everything on the star row and
@@ -731,6 +794,19 @@ PROJECT = Project(
             'overlap 7x2px inside button.starcell',
         '1181x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        # Two more samples of the SAME owed defect at the scorecard's 2-up
+        # step (round 32 moved it to 1133/1134 from round 11's 1320/1321;
+        # the widths are declared in `extra_viewports` above).
+        '1133x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1134x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        # The same owed defect at the scorecard's 4-up step (round 32:
+        # 1983/1984, replacing round 21's five-track 2403/2404).
+        '1983x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1984x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1250x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1251x1000 [page] overlap :: span.starholder x span.starrank':
@@ -915,6 +991,23 @@ BOWSER_PROJECT = dataclasses.replace(
             'overlap 7x2px inside button.starcell',
         '1101x1000 [bowser-row] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
+        '1133x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1134x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1133x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1134x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        # Round 32's 4-up step, same defect (see the first list).
+        '1983x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1984x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1983x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1984x1000 [bowser-row] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
         '1180x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 7x2px inside button.starcell',
         '1180x1000 [bowser-row] overlap :: span.starholder x span.starrank':
@@ -1105,6 +1198,23 @@ SUBSECTION_PROJECT = dataclasses.replace(
         '1101x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1101x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1133x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1134x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1133x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1134x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        # Round 21's five-track step (2403/2404), same owed defect.
+        '1983x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1984x1000 [page] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1983x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
+            'overlap 26x2px inside button.starcell',
+        '1984x1000 [selector-pieces-on] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',
         '1180x1000 [page] overlap :: span.starholder x span.starrank':
             'overlap 26x2px inside button.starcell',

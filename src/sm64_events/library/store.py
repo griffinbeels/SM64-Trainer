@@ -56,6 +56,48 @@ def _usable(snapshot) -> bool:
     return bool(snapshot) and snapshot.get("schema_version") == SCHEMA_VERSION
 
 
+def build_and_stamp(data: bytes, overrides: dict | None = None, step=None) -> dict:
+    """Raw workbook bytes -> a library payload with ladders FITTED and the
+    vetted `matched_strategy` pairing stamped on -- the steps every reader of
+    raw sheet bytes needs together: a payload with no stamp cannot show "=
+    your …" on the Library tab, and cannot resolve
+    `library/export_column.py::column_lines`'s matched-strategy path either.
+
+    Fit BEFORE stamp, in that order, because the matcher compares LADDERS
+    (`adopt.match_vetted`) and an unfitted row cannot match anything. Until
+    round 33 (2026-09-05) this stamped first and `refresh()` fitted after,
+    so every live refresh lost the vetted pairing -- measured on the live
+    workbook: 270 approaches unmatched and none carrying a vetted name,
+    against the bundled snapshot's Time Stop / Open / Log WK -- which is how
+    an import came to name strategies "Left side TJ" and "Singlestar strat"
+    beside the vetted "Leftside" and "SS". The fit is percentile arithmetic
+    over at most a few hundred numbers per row and costs milliseconds.
+
+    `step(fraction, sentence)` narrates the two boundaries when a job is
+    watching (`refresh` adds the download before them)."""
+    from datetime import datetime, timezone
+    from sm64_events.core.paths import bundled_rank_standards
+    from sm64_events.library import ladders as ladder_fit
+    from sm64_events.library.adopt import stamp_matches
+    from sm64_events.library.build import build
+
+    fetched_at = (datetime.now(timezone.utc).replace(microsecond=0)
+                  .isoformat().replace("+00:00", "Z"))
+    if step:
+        step(0.45, "Building the library from the sheet's rows…")
+    payload = build(data, fetched_at=fetched_at, overrides=overrides)
+    if step:
+        step(0.7, "Fitting the rank ladders…")
+    ladder_fit.fit_payload(payload)
+    seed_path = bundled_rank_standards()
+    if seed_path:
+        seed = json.loads(Path(seed_path).read_text(encoding="utf-8"))
+        stamp_matches(payload,
+                      {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
+                       for ek, e in seed["entities"].items()})
+    return payload
+
+
 def newer(first, second):
     """Whichever snapshot carries the later SHEET revision, ignoring anything
     written by an older schema. Ties go to the first argument."""
@@ -71,6 +113,19 @@ class LibraryStore:
     def __init__(self, path=None, bundled_path=None):
         self.path = Path(path) if path else None
         self.bundled_path = Path(bundled_path) if bundled_path else None
+        # The store OWNS `path`: `refresh`/`absorb` rewrite it whole. So it may
+        # never BE the bundled snapshot, which is the read-only fallback every
+        # fresh install starts from. Measured 2026-09-05: a harness handed the
+        # bundled seed as the store's own path, one import rewrote it without
+        # its vetted `matched_strategy` stamps, and fourteen unrelated tests
+        # went red in the NEXT full run -- nothing failed at the time, and a
+        # tracked file sat quietly modified in the worktree. Hand it a copy.
+        if (self.path is not None and self.bundled_path is not None
+                and self.path.resolve() == self.bundled_path.resolve()):
+            raise ValueError(
+                f"the library store would overwrite its own bundled snapshot "
+                f"({self.path}); pass a copy as `path`, or omit `path` to read "
+                f"the bundled one without ever writing it")
         self._payload = None
         self._source = None   # "local" | "bundled" | None (nothing loaded)
 
@@ -206,32 +261,28 @@ class LibraryStore:
         return list(self.payload.get("runners") or [])
 
     # ---- refresh ----
-    def refresh(self, fetch_fn, overrides=None) -> dict:
+    def refresh(self, fetch_fn, overrides=None, step=None) -> dict:
         """Fetch the live sheet, rebuild, and keep it only if it is NEWER.
 
         A refresh that lands on an older revision than what we already have is
         not an error and is not applied: the sheet is the authority on its own
-        age, and re-fetching an unchanged sheet should not churn the file."""
-        from sm64_events.library.build import build
-        from sm64_events.library.ladders import fit_payload
-        from datetime import datetime, timezone
+        age, and re-fetching an unchanged sheet should not churn the file.
 
+        `step(fraction, sentence)` is optional and is called BETWEEN the three
+        pieces of real work -- the ~5.6 MB download, the build over its rows,
+        the ladder fit -- never inside them (round 29: the sheet import
+        narrates itself the way the column export does, and these are the only
+        boundaries a refresh genuinely has)."""
+        if step:
+            step(0.05, "Downloading the current sheet…")
         data = fetch_fn()
-        fetched_at = (datetime.now(timezone.utc).replace(microsecond=0)
-                      .isoformat().replace("+00:00", "Z"))
-        fresh = fit_payload(build(data, fetched_at=fetched_at,
-                                  overrides=overrides))
-        # Stamp each approach's vetted twin, exactly as the bundled snapshot
-        # does at scrape time -- a refresh must not produce a snapshot the
-        # Library page reads differently.
-        from sm64_events.core.paths import bundled_rank_standards
-        from sm64_events.library.adopt import stamp_matches
-        seed_path = bundled_rank_standards()
-        if seed_path:
-            seed = json.loads(Path(seed_path).read_text(encoding="utf-8"))
-            stamp_matches(fresh,
-                          {ek: {s: l for s, l in e.get("strategies", {}).items() if l}
-                           for ek, e in seed["entities"].items()})
+        return self.absorb(build_and_stamp(data, overrides, step=step))
+
+    def absorb(self, fresh: dict) -> dict:
+        """Keep an already-built payload if it is NEWER than what we hold --
+        the tail of `refresh`, on its own so a caller that already has the
+        bytes (the column export, round 33) can refresh the library without
+        a second download."""
         current = self._payload
         if current is not None and newer(current, fresh) is current:
             return {"applied": False, "sheet_revision": self.revision,

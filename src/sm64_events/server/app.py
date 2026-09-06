@@ -247,11 +247,56 @@ def _quiet_connection_resets(loop, context) -> None:
     loop.default_exception_handler(context)
 
 
+async def _refresh_library_quietly(library, overrides, adoptions, service) -> None:
+    """Round 33's startup refresh: download the live sheet once, off the
+    loop; if it is newer, re-derive the sheet-fitted rank standards and
+    absorb the re-grade. Every failure -- no network, a captive portal, a
+    renamed tab -- is one log line and nothing else changes, per his rule:
+    "fail silently and just not update automatically (other than including
+    a mention in the logs)"."""
+    from fastapi.concurrency import run_in_threadpool
+    from sm64_events.library.source import fetch
+    from sm64_events.server.ranks_api import absorb_after_regrade
+    try:
+        result = await run_in_threadpool(library.refresh, fetch, overrides)
+    except Exception as err:                            # noqa: BLE001
+        log.info("library refresh at startup skipped: %r", err)
+        return
+    if not result.get("applied"):
+        log.info("library refresh at startup: %s", result.get("reason", "nothing newer"))
+        return
+    if adoptions is not None:
+        adoptions.load()
+    absorb_after_regrade(service)
+    log.info("library refreshed at startup to sheet revision %s",
+             result.get("sheet_revision"))
+
+
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
-               adoptions_path=None, mode_path=None, inputs=None,
-               capture_layer=None) -> FastAPI:
+               adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
+               library_path=None, refresh_library_on_start=False,
+               library_bundled_path=None) -> FastAPI:
+    # `library_bundled_path` overrides the BUNDLED snapshot the library falls
+    # back to (None = the shipped one). Since round 33 every fitted star row
+    # in the library becomes a sheet-fitted rank standard at load, so a test
+    # that models a standards store holding ONLY what it puts there passes a
+    # path with no file here and gets an empty library.
+    # `refresh_library_on_start` (round 33, his ask: "automatically refresh
+    # the rank standards upon app startup... If we don't have internet or the
+    # process fails, we should fail silently") schedules ONE background
+    # download of the live sheet after the service starts; a newer sheet
+    # re-derives the sheet-fitted rank standards and absorbs the re-grade.
+    # Off by default so no test, fixture or broadcast-only instance ever
+    # reaches for Google; main.py turns it on for the real app.
+    # `library_path` overrides where the LOCAL sheet snapshot lives -- tests
+    # pass a scratch path so the library resolves to the BUNDLED snapshot;
+    # None (production) resolves to core.paths.sheet_library_path(). Same
+    # reason as `adoptions_path` one line up: the default is the REAL dev
+    # data dir, and a live "refresh" writes data/sheet_library.json.gz right
+    # where the import tests would read it -- his 2026-08-23 23:13 live
+    # import moved the sheet under two green tests exactly that way.
     # `mode_path` overrides where the game version setting persists
     # (server/mode_api.py) -- tests pass a scratch file; None (production)
     # resolves to core.paths.mode_settings_path().
@@ -333,7 +378,16 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         mon_task = asyncio.create_task(monitor.run())
+        refresh_task = None
+        if refresh_library_on_start and service is not None and service.db is not None:
+            refresh_task = asyncio.create_task(
+                _refresh_library_quietly(app.state.library, app.state.library_overrides,
+                                         app.state.adoptions, service))
         yield
+        if refresh_task is not None:
+            refresh_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await refresh_task
         if reattach_task is not None:
             reattach_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -393,9 +447,13 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     from sm64_events.library.audit import load_overrides
     from sm64_events.library.store import LibraryStore
     from sm64_events.server.library_api import create_library_router
-    library = LibraryStore(sheet_library_path(), bundled_sheet_library())
+    library = LibraryStore(library_path or sheet_library_path(),
+                           library_bundled_path if library_bundled_path is not None
+                           else bundled_sheet_library())
     library.load()
     app.state.library = library
+    app.state.library_overrides = None
+    app.state.adoptions = None
     # The human's own audit corrections (tools/audit_library.py) -- a
     # server-side refresh must apply them exactly as tools/scrape_sheet.py
     # does at release time, or a re-fetched copy re-introduces every mistake
@@ -416,6 +474,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                               library, standards, qualified)
         adoptions.load()
         app.state.library_adoptions = adoptions
+    app.state.library_overrides = library_overrides
+    app.state.adoptions = adoptions
     # The live segment list the auto-match pairs entity-less targets against
     # (round 6). Read per request so a segment built mid-session pairs on the
     # next page load; empty when the db is degraded rather than an error.
@@ -426,9 +486,22 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         return [(definition["id"], definition["name"])
                 for definition in db.segment_defs()]
 
+    # A HELD TIME (round 28) is a sheet cell an import kept aside for a
+    # row with no home; the Library row shows it, and the link door lands
+    # it -- both need the tracker service, so a broadcast-only instance
+    # simply shows none and lands none.
+    held_times, on_adopt = None, None
+    if service is not None and getattr(service, "db", None) is not None:
+        from sm64_events.server.import_api import held_row_lander
+        # Resolved per call, never bound here: `start()` may replace the db,
+        # and a test's stand-in db need not know the table at all -- the
+        # router treats a failing read as "nothing held" rather than a 500.
+        held_times = lambda: service.db.held_times()  # noqa: E731
+        on_adopt = held_row_lander(service, library, adoptions)
     app.include_router(create_library_router(
         library, overrides=library_overrides, adoptions=adoptions,
-        segment_names=live_segment_names if service is not None else None))
+        segment_names=live_segment_names if service is not None else None,
+        held_times=held_times, on_adopt=on_adopt))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.ranks_api import create_ranks_router
@@ -439,6 +512,22 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
             service, library=library, adoptions=adoptions))
         from sm64_events.server.mode_api import create_mode_router
         app.include_router(create_mode_router(service, mode_path=mode_path))
+        # Importing a time needs BOTH halves -- the service to land it and the
+        # sheet to read a runner's column -- which is why it is its own router
+        # beside the ranks one rather than another block in the general API.
+        from sm64_events.server.import_api import create_import_router
+        app.include_router(create_import_router(
+            service, library=library, overrides=library_overrides,
+            adoptions=adoptions))
+        # The goal-vs-you scorecard needs the tracker service for PBs and
+        # standards, plus the same library/adoptions pair import threads
+        # above -- adoptions for the column export's placer, overrides so a
+        # live fetch for that export applies the same audit corrections the
+        # bundled snapshot already carries.
+        from sm64_events.server.scorecard_api import create_scorecard_router
+        app.include_router(create_scorecard_router(
+            service, library=library, adoptions=adoptions,
+            overrides=library_overrides))
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))

@@ -137,6 +137,9 @@ def test_a_refresh_stamps_each_approachs_vetted_twin(tmp_path, monkeypatch):
     refreshed snapshot the Library page reads differently is a fork."""
     twin = {"Mario": 30.9, "Grandmaster": 31.8, "Master": 32.8, "Diamond": 33.8}
     fresh = _snapshot("2026-08-05T09:15:18")
+    # A row of its OWN name: the target-named row is Standard by name (round
+    # 33) and never enters the matcher.
+    fresh["targets"][0]["approaches"][0]["name"] = "Skyjump route"
     fresh["targets"][0]["approaches"][0]["ladder"] = dict(twin)
     seed = tmp_path / "vetted.json"
     seed.write_text(json.dumps(
@@ -220,3 +223,86 @@ def test_reads_answer_the_questions_the_ui_asks():
     assert runner["entries"][0]["time_cs"] == 4380
     assert runner["entries"][0]["video"] == "https://youtu.be/z"
     assert store.runner("nobody")["entries"] == []
+
+
+def test_a_refresh_reports_its_three_real_boundaries_in_order(tmp_path, monkeypatch):
+    """Round 29: the sheet import narrates itself through `refresh(step=)`.
+    The steps are the function's own boundaries -- before the download,
+    before the build, before the ladder fit -- with rising fractions, and a
+    refresh with no `step` is exactly the refresh there was before."""
+    store = LibraryStore(tmp_path / "local.json.gz", None)
+    monkeypatch.setattr("sm64_events.library.build.build",
+                        lambda data, fetched_at, overrides=None:
+                        _snapshot("2026-08-05T09:15:18", "fresh"))
+    monkeypatch.setattr("sm64_events.library.ladders.fit_payload", lambda p: p)
+    seen = []
+    result = store.refresh(_fetch_returning(None),
+                           step=lambda fraction, message: seen.append((fraction, message)))
+    assert result["applied"] is True
+    assert [fraction for fraction, _message in seen] == sorted(
+        fraction for fraction, _message in seen), seen
+    assert len(seen) == 3 and len({message for _f, message in seen}) == 3, seen
+    assert "Downloading" in seen[0][1] and "Building" in seen[1][1], seen
+    assert "ladders" in seen[2][1], seen
+
+
+def test_a_build_fits_before_it_stamps_so_a_live_refresh_keeps_the_vetted_pairing(tmp_path, monkeypatch):
+    """Round 33: `build_and_stamp` stamped the vetted pairing BEFORE the
+    ladder fit, and the matcher compares ladders -- so every LIVE refresh
+    lost every match (measured on the live workbook: 270 unmatched, no
+    vetted names), and an import named strategies by the sheet's row names.
+    The fit is a spy here that puts the twin ladder on the row; the stamp
+    can only find it if it runs afterwards."""
+    twin = {"Mario": 30.9, "Grandmaster": 31.8, "Master": 32.8, "Diamond": 33.8}
+    fresh = _snapshot("2026-08-05T09:15:18")
+    fresh["targets"][0]["approaches"][0]["name"] = "Skyjump route"
+    fresh["targets"][0]["approaches"][0].pop("ladder", None)
+    seed = tmp_path / "vetted.json"
+    seed.write_text(json.dumps(
+        {"entities": {"star:1:0": {"strategies": {"Skyjump": twin}}}}), encoding="utf-8")
+    monkeypatch.setattr("sm64_events.core.paths.bundled_rank_standards", lambda: seed)
+    monkeypatch.setattr("sm64_events.library.build.build",
+                        lambda data, fetched_at, overrides=None: fresh)
+
+    def fitting(payload):
+        payload["targets"][0]["approaches"][0]["ladder"] = dict(twin)
+        return payload
+    monkeypatch.setattr("sm64_events.library.ladders.fit_payload", fitting)
+    store = LibraryStore(tmp_path / "local.json.gz", None)
+    assert store.refresh(_fetch_returning(None))["applied"] is True
+    assert store.payload["targets"][0]["approaches"][0]["matched_strategy"] == "Skyjump"
+
+
+def test_absorb_is_refreshs_own_tail(tmp_path):
+    """The column export already holds the bytes it downloaded, so it
+    refreshes the library through `absorb` without a second fetch -- and it
+    keeps the same rule: an older sheet is not applied."""
+    store = LibraryStore(tmp_path / "local.json.gz", None)
+    store._payload = _snapshot("2026-08-05T09:15:18", "current")
+    assert store.absorb(_snapshot("2026-01-01T00:00:00", "older"))["applied"] is False
+    assert store.payload["targets"][0]["label"] == "current"
+    assert store.absorb(_snapshot("2026-09-05T00:00:00", "newer"))["applied"] is True
+    assert store.payload["targets"][0]["label"] == "newer"
+    assert (tmp_path / "local.json.gz").exists()
+
+
+def test_the_store_refuses_to_be_pointed_at_its_own_bundled_snapshot(tmp_path):
+    """The store OWNS the path it is given -- a refresh or an absorb rewrites
+    it whole -- so that path may never be the bundled snapshot every fresh
+    install falls back to.
+
+    2026-09-05: a harness handed the bundled seed in as the store's own path.
+    One import rewrote it without its vetted `matched_strategy` stamps, and
+    fourteen unrelated library and import tests went red in the NEXT full run.
+    Nothing failed at the time; a tracked file simply sat modified. The
+    constructor is the only place that can catch it before the write."""
+    seed = tmp_path / "bundled.json.gz"
+    write_snapshot(seed, {"schema_version": SCHEMA_VERSION, "sheet_revision": "1",
+                          "targets": [], "runners": [], "ladder_model": {}})
+    with pytest.raises(ValueError, match="bundled snapshot"):
+        LibraryStore(seed, seed)
+    # The two legitimate shapes still work: a copy beside it, and read-only.
+    own = tmp_path / "mine.json.gz"
+    own.write_bytes(seed.read_bytes())
+    assert LibraryStore(own, seed).bundled_path == seed
+    assert LibraryStore(None, seed).path is None

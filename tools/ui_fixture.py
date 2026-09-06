@@ -1367,8 +1367,14 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               seed_reds_run: bool = False,
               pad_journal: int = 0,
               capture_layer_status: dict | None = None,
-              capture_layer_refuse: str | None = None):
+              capture_layer_refuse: str | None = None,
+              bundled_library: bool = True):
     """Yield the base URL of an offline instance; stop it on the way out.
+
+    `bundled_library=False` gives the app an EMPTY library (round 33): every
+    fitted star row in the bundled library becomes a sheet-fitted rank
+    standard at load, so a test that reasons about exactly the ladders it
+    wrote through the panel turns the bundle off.
 
     DETERMINISTIC BY DEFAULT: an empty database plus `seed_practice`, so two
     runs a week apart measure the same page.
@@ -1583,7 +1589,17 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                      inputs=inputs, capture_layer=capture_layer,
                      adoptions_path=Path(compare_cache_scratch.name)
                      / "library_adoptions.json",
-                     mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json")
+                     mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json",
+                     # Scratch for the same reason as adoptions_path: the
+                     # default local sheet snapshot is the real dev data dir,
+                     # and a live refresh writes a newer snapshot there, so a
+                     # sweep would measure a page built from whatever the
+                     # sheet said last night rather than the bundled data.
+                     library_path=Path(compare_cache_scratch.name)
+                     / "sheet_library.json.gz",
+                     library_bundled_path=(None if bundled_library else
+                                           Path(compare_cache_scratch.name)
+                                           / "no-library.json.gz"))
 
     # A CLIP'S FRAME MAP, without a clip (round 32 item 53). The timeline's
     # buffers are the video's, so with no replay service the drawer draws

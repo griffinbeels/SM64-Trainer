@@ -4,12 +4,14 @@ import htm from "htm";
 import { send } from "../api.js";
 import { RANK_MODE_OPTIONS } from "./ranks.js";
 import { Icon } from "./icons.js";
+import { RegionFlag } from "./regionflag.js";
 import { ContextSelect } from "./contextselect.js";
 import { RouteRankCard } from "./marelo.js";
 import { Modal } from "./modal.js";
 import { RUN_ACTIVE } from "../store.js";
 import { ICON_STYLES } from "./rankicon.js";
 import { useMareloTurn } from "../mareloturn.js";
+import { ImportSection } from "./importsection.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 import { SetupModal } from "./setupmodal.js";
@@ -216,12 +218,16 @@ export function Header({ t, settingsOpen, closeSettings }) {
             `Session ${s.id}${s.id === active ? " ●" : ""} · ${s.attempts}`],
   )] : [];
 
-  // Built as plain JS, not inline htm interpolation: a text run meeting an
-  // interpolation across a line break fuses words together (ui-core.md), and
-  // this sentence has to wrap in the drawer's narrow column.
+  // Round 24 item 3: the region is a FLAG here, not the two letters, so this
+  // is markup rather than the plain string it used to be -- the surrounding
+  // prose is still built as plain JS for the reason it always was (a text run
+  // meeting an interpolation across a line break fuses words together,
+  // ui-core.md), and only the region itself interpolates. The flag's own
+  // `alt`/`title` still say "US"/"JP", so nothing here depends on seeing it.
+  const gameVersionTail = gameMode && gameMode.version === "auto"
+    ? " standards. Auto-detect is US on the emulator." : " standards.";
   const gameVersionNote = gameMode
-    ? `Graded on ${gameMode.effective.toUpperCase()} standards.`
-      + (gameMode.version === "auto" ? " Auto-detect is US on the emulator." : "")
+    ? html`Graded on ${" "}<${RegionFlag} version=${gameMode.effective} size=${17} />${gameVersionTail}`
     : null;
 
   return html`<header class="context-shell">
@@ -338,6 +344,14 @@ export function Header({ t, settingsOpen, closeSettings }) {
           ${gameVersionNote && html`<p class="settings-note">${gameVersionNote}</p>`}
           ${gameMode && gameMode.unsupported && html`<p class="settings-note">Emulator tracking has no verified JP addresses yet — detection stays US while grading uses JP standards.</p>`}
         </section>
+
+        ${/* Bringing in times you set before this tool watched you. It sits
+             in Settings rather than on the Practice tab because it is a
+             one-off setup gesture and needs no target, which every Practice
+             surface does -- and ABOVE Display, because a new arrival does
+             this once on their first day and should not have to scroll past
+             every tuning link to find it. */""}
+        <${ImportSection} onDone=${t.refresh} />
 
         <section class="settings-section">
           <h3>Display</h3>

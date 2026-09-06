@@ -14,12 +14,14 @@ ACT_QUICKSAND_DEATH = 0x00021312  # in DEATH_ACTIONS -> involuntary
 
 
 def snap(timer: int, igt: int = 0, action: int = ACT_IDLE,
-         level: int = 0, area: int = 0) -> GameSnapshot:
+         level: int = 0, area: int = 0, warp_op: int = 0,
+         warp_timer: int = 0) -> GameSnapshot:
     return GameSnapshot(
         wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
         global_timer=timer, mario_action=action, mario_action_timer=0,
         num_stars=5, last_completed_course=1, last_completed_star=3,
-        igt_overall=igt, curr_level=level, curr_area=area)
+        igt_overall=igt, curr_level=level, curr_area=area,
+        pending_warp_op=warp_op, delayed_warp_timer=warp_timer)
 
 
 def test_igt_drop_to_zero_emits_practice_reset():
@@ -971,3 +973,40 @@ def test_a_console_reset_holds_its_own_action_back_too():
     events = detector.process(snap(51, igt=6, action=ACT_WALKING),
                               snap(52, igt=7, action=ACT_JUMP))
     assert [e.type for e in events] == ["mario_acted"]
+
+
+# ---------------------------------------------------------------------------
+# Walking back OUT of a subarea (task 0117, 2026-09-04). The CCM slide's cabin
+# door lands in area 1 -- the destination rule's "retry" shape -- so his Slip
+# Slidin' Away run recorded a reset he never made at the door (journal id
+# 34447). The game's own warp separates it: a walked warp FIRES (its countdown
+# reaches zero with the op still pending) and a reset never does. The rule is
+# `counter_epoch.EpochTracker`, shared with the clock, so the same fix gives the
+# star its whole time; these pin the flag the projector reads.
+# ---------------------------------------------------------------------------
+
+def test_walking_out_of_a_subarea_through_its_door_is_an_area_load_too():
+    ride = [snap(1000 + tick, igt=1130 + tick, action=ACT_WALKING, level=5,
+                 area=2, warp_op=3, warp_timer=20 - tick) for tick in range(21)]
+    events = run(AnchorDetector(), [
+        snap(999, igt=1129, action=ACT_WALKING, level=5, area=2),
+        *ride,
+        snap(1023, igt=1141, action=ACT_WALKING, level=5, area=1, warp_op=3),
+        snap(1023, igt=0, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["area_load"] is True
+    assert anchor.payload["warp_op"] == 3
+    assert anchor.payload["igt_frames_before"] == 1141
+
+
+def test_a_ride_the_reset_cancelled_is_a_real_reset():
+    # Journal id 33490: the chimney touched, an L-reset eight frames in. Op,
+    # countdown and counter vanish together; the warp never fired.
+    touched = [snap(1000 + tick, igt=119, action=ACT_WALKING, level=5, area=1,
+                    warp_op=4, warp_timer=20 - tick) for tick in range(8)]
+    events = run(AnchorDetector(), [
+        snap(999, igt=119, action=ACT_WALKING, level=5, area=1),
+        *touched,
+        snap(1008, igt=0, level=5, area=1)])
+    [anchor] = [e for e in events if e.type == "practice_reset"]
+    assert anchor.payload["area_load"] is False

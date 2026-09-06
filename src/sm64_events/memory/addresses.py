@@ -334,6 +334,20 @@ DEATH_ACTIONS = {
 # live gate before excluding by level id.
 WARP_OP_WARP_FLOOR = 0x13  # void-out: resolves to the death node (or game
                            # over at 0 lives) unless the level has node 0xF3
+# The ops a WALKED warp pends -- Mario stepped through something the level
+# placed. Values from decomp level_update.h; each one read back off the
+# anchor payloads of every journal on this machine (2026-09-04, task 0117):
+#   0x03 at all 25 in-course door exits (the CCM slide's cabin door),
+#   0x04 at 175 of 176 subarea entries (chimney, pyramid, volcano, THI pipes),
+#   0x05 at all 45 in-level teleporter hops (CCM bridge, WDW corners).
+# A walked warp FIRES when sDelayedWarpTimer reaches 0 with the op still
+# pending; a Usamune reset zeroes op and countdown together and so never
+# fires one -- that is what lets detectors/counter_epoch.py tell a door
+# back out of a subarea from a retry's reload, which the destination area
+# alone cannot.
+WARP_OP_WARP_DOOR = 0x03
+WARP_OP_WARP_OBJECT = 0x04
+WARP_OP_TELEPORT = 0x05
 
 # The COUNTDOWN beside that op (`sDelayedWarpTimer`, same FORCE_BSS walk), and
 # the reason it is read at all is that PENDING_WARP_OP alone is ambiguous: the

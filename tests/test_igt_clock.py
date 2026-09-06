@@ -7,16 +7,20 @@ from datetime import datetime, timezone
 
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.detectors.igt_clock import IgtClock
+from sm64_events.memory import addresses as A
 
 
 def snap(global_timer, igt_overall=0, igt_result=0,
-         curr_level=24, curr_area=1) -> GameSnapshot:
+         curr_level=24, curr_area=1, pending_warp_op=0,
+         delayed_warp_timer=0) -> GameSnapshot:
     return GameSnapshot(
         wall_time_utc=datetime(2026, 6, 12, tzinfo=timezone.utc),
         global_timer=global_timer, mario_action=0, mario_action_timer=0,
         num_stars=0, last_completed_course=0, last_completed_star=0,
         igt_overall=igt_overall, igt_result=igt_result,
-        curr_level=curr_level, curr_area=curr_area)
+        curr_level=curr_level, curr_area=curr_area,
+        pending_warp_op=pending_warp_op,
+        delayed_warp_timer=delayed_warp_timer)
 
 
 def walk(clock, frames, **kw):
@@ -127,9 +131,10 @@ def test_every_leg_is_banked_not_just_the_last_one():
 def test_nothing_is_carried_across_a_restart_into_the_main_area():
     # A retry's own reload lands back in area 1, and carrying a previous run's
     # time across it is the one failure here that would record a wrong number
-    # silently. The KNOWN residual, stated rather than hidden: walking OUT of a
-    # subarea on foot lands in area 1 too and is indistinguishable -- it occurs
-    # 0 times in 875 measured grabs, and the correction watch still covers it.
+    # silently. Walking OUT of a subarea on foot lands in area 1 too and used
+    # to be indistinguishable; since 2026-09-04 the game's own warp countdown
+    # separates them (the `ride` tests below) -- a reload fires no warp, which
+    # is exactly the shape here.
     c = IgtClock()
     enter_a_course(c)
     walk(c, range(1500, 1503), curr_level=8, curr_area=2, igt_overall=480)
@@ -197,3 +202,90 @@ def test_a_spawn_ACTION_in_the_middle_of_a_run_states_the_real_counter():
     mid_run = snap(1031, igt_overall=901, curr_level=8)
     c.observe(mid_run)
     assert c.igt_at_spawn(1031, mid_run) == (902, "counter")
+
+
+# -- a walked warp the LEVEL executed banks the leg, whichever way it goes -----
+# His report, 2026-09-04 (task 0117): Slip Slidin' Away is spawn -> chimney ->
+# slide -> the cabin door -> the star OUTSIDE. The door lands back in area 1,
+# which the destination rule reads as a retry's reload, so the bank was thrown
+# away at the door and the row published the 7 s since it; Usamune's own 49"10
+# arrived as a correction 1.5 s later (journal ids 34449/34450). The game's own
+# warp countdown separates the two: a walked warp FIRES -- `sDelayedWarpTimer`
+# reaches zero with the op still pending -- and a reset never does, because
+# Usamune zeroes the op and the countdown together (probe_warp_block,
+# 2026-08-11). Measured over every journal on this machine: the op was still
+# pending at 175 of 176 subarea entries and all 25 door exits, and never at a
+# cancelled ride.
+
+def ride(clock, frame, op, from_area, to_area, counter, level=8):
+    """Mario steps through a walked warp: the op pends with its 20-frame
+    countdown, fires at zero, the area byte moves two frames later and
+    Usamune's counter zeroes on that load. Returns the frame after the zero."""
+    for tick in range(21):
+        walk(clock, [frame + tick], curr_level=level, curr_area=from_area,
+             igt_overall=counter, pending_warp_op=op,
+             delayed_warp_timer=20 - tick)
+    walk(clock, [frame + 23], curr_level=level, curr_area=to_area,
+         igt_overall=counter, pending_warp_op=op)
+    walk(clock, [frame + 24], curr_level=level, curr_area=to_area,
+         igt_overall=0)
+    return frame + 25
+
+
+def test_walking_out_of_a_subarea_through_its_door_banks_that_leg_too():
+    # The reported run, in his own numbers: 119 to the chimney, 1141 down the
+    # slide, 212 from the cabin door to the star -- 1473 = 0'49"10.
+    c = IgtClock()
+    enter_a_course(c)
+    after = ride(c, 1500, A.WARP_OP_WARP_OBJECT, 1, 2, counter=119)
+    assert c.banked_frames() == 119
+    after = ride(c, after + 1100, A.WARP_OP_WARP_DOOR, 2, 1, counter=1141)
+    assert c.banked_frames() == 119 + 1141
+    assert c.counter_may_be_subarea_local() is True
+    grabbed = snap(after + 212, igt_overall=212, curr_level=8, curr_area=1)
+    c.observe(grabbed)
+    assert c.whole_star_igt_at_xcam(after + 212, grabbed) == (1473, "counter")
+
+
+def test_a_ride_the_reset_cancelled_carries_nothing():
+    # Journal id 33490: the chimney touched, then an L-reset eight frames in.
+    # Op, countdown and counter vanish on the same frame and Mario is back at
+    # the spawn in area 1 -- nothing fired, so nothing is banked. Recency of the
+    # op alone would have banked 119 here; the countdown reaching zero is the
+    # signal, not the op having been seen.
+    c = IgtClock()
+    enter_a_course(c)
+    for tick in range(8):
+        walk(c, [1500 + tick], curr_level=8, curr_area=1, igt_overall=119,
+             pending_warp_op=A.WARP_OP_WARP_OBJECT, delayed_warp_timer=20 - tick)
+    walk(c, [1508], curr_level=8, curr_area=1, igt_overall=0)
+    assert c.banked_frames() == 0
+    assert c.counter_may_be_subarea_local() is False
+
+
+def test_a_fired_warp_explains_exactly_one_restart():
+    # The load's own zero takes the fired warp. A retry right after it -- his
+    # "enter, reset immediately" probe, whose reload walks back to area 1 --
+    # has nothing left to claim and starts the star over.
+    c = IgtClock()
+    enter_a_course(c)
+    after = ride(c, 1500, A.WARP_OP_WARP_OBJECT, 1, 2, counter=119)
+    assert c.banked_frames() == 119
+    walk(c, range(after, after + 3), curr_level=8, curr_area=2, igt_overall=5)
+    walk(c, [after + 3], curr_level=8, curr_area=1, igt_overall=5)
+    walk(c, [after + 4], curr_level=8, curr_area=1, igt_overall=0)
+    assert c.banked_frames() == 0
+
+
+def test_a_walked_warp_into_another_level_starts_a_fresh_star():
+    # The BitDW pipe is a walked warp too (op 4), but the LEVEL byte moves: the
+    # arena is its own star, and the 400 frames before the pipe stay behind.
+    c = IgtClock()
+    enter_a_course(c)
+    for tick in range(21):
+        walk(c, [1500 + tick], curr_level=8, curr_area=1, igt_overall=400,
+             pending_warp_op=A.WARP_OP_WARP_OBJECT, delayed_warp_timer=20 - tick)
+    walk(c, [1522], curr_level=30, curr_area=1, igt_overall=400,
+         pending_warp_op=A.WARP_OP_WARP_OBJECT)
+    walk(c, [1523], curr_level=30, curr_area=1, igt_overall=0)
+    assert c.banked_frames() == 0

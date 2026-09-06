@@ -117,6 +117,14 @@ def _pb_scores(ladders: dict[str, dict[str, int]], ranks_store,
         ladder = ladders.get(key)
         if ladder is None or row["timer_mode"] != ranks_store.clock_for(key):
             continue
+        # An IMPORTED time remembers the ROM that set it, and a JP time on a US
+        # ladder reads as superhuman -- here that error would inflate the whole
+        # rating rather than one banner. Only such a row pays for the second
+        # lookup; every played row has no version and uses the precomputed
+        # ladder, which is the running version exactly as before.
+        if row.get("game_version"):
+            ladder = scoring.best_ladder(
+                ranks_store.ladders(key, row["game_version"])) or ladder
         score = scoring.progress_for_time(ladder, display_cs(row["frames"]))["score"]
         if score is not None and (key not in out or score > out[key]):
             out[key] = score

@@ -268,6 +268,28 @@ def test_stars_inside_a_special_stage_wear_the_stage_art():
     assert src == "/ui/assets/star_icons/vanish.png"
 
 
+def test_the_two_slide_stars_wear_their_own_art():
+    """PSS is the one special stage whose STARS have their own art
+    (`slide1.png`/`slide2.png`, added 2026-08-31): the box star at the back
+    and the under-21 dash are different runs, and drawing one portrait for
+    both would throw away a distinction the art itself makes. Keyed the way
+    a main course's stars are, `${prefix}${slot + 1}`."""
+    for star_id, expected in ((0, "slide1"), (1, "slide2")):
+        src = run_node("optionIcon", CONTEXT
+                       + 'console.log(JSON.stringify(optionIcon("star", '
+                       + f'"19:{star_id}", context)));')
+        assert src == f"/ui/assets/star_icons/{expected}.png", star_id
+
+
+def test_the_slide_course_still_wears_its_portrait():
+    """A course icon names the stage, a star icon names the star — giving
+    the stars their own art must not take the painting off the course."""
+    src = run_node("optionIcon", "const context = { courseIcons: "
+                   '{ princess_secret: "princess_secret.webp" } };\n'
+                   'console.log(JSON.stringify(optionIcon("course", "19", context)));')
+    assert src == "/ui/assets/course_icons/princess_secret.webp"
+
+
 CATALOG_UNION = """
 const catalog = { courses: [
   { id: 1, name: "Bob-omb Battlefield", stars: ["Big Bob-omb", "Footrace"] },

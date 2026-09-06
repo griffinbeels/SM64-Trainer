@@ -264,9 +264,13 @@ def test_jp_toggle_switches_the_ladder_and_the_band_cutoffs(library_page):
 
     before = mario_cutoff()
     assert before, "no Mario TOC row found on the JP-carrying section"
+    # Round 24: the switch holds a SET and both regions start on, so the
+    # gesture that puts the JP LADDER under the bands is turning US OFF --
+    # clicking JP would only hide JP's entries and leave the US ladder in
+    # place, which is a different (and unchanging) assertion.
     library_page.evaluate("""
       Array.from(document.querySelectorAll('.version-switch-seg'))
-        .find((seg) => seg.textContent.trim() === 'JP').click()
+        .find((seg) => seg.getAttribute('aria-label') === 'US').click()
     """)
     after = mario_cutoff()
     assert after and after != before, (
@@ -1099,7 +1103,7 @@ def test_leaderboard_mode_filters_by_the_pages_own_version_switch(library_page):
     library_page.wait_for(".version-switch", timeout_ms=10000)
     library_page.evaluate("""
       Array.from(document.querySelectorAll('.version-switch-seg'))
-        .find((seg) => seg.textContent.trim() === 'JP').click()
+        .find((seg) => seg.getAttribute('aria-label') === 'JP').click()
     """)
     library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
     after = row_count()

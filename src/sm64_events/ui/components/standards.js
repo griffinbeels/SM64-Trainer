@@ -29,6 +29,7 @@ import { StratModal } from "./stratmodal.js";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
 import { VersionSwitch } from "./versionswitch.js";
+import { regionLabel } from "./regionflag.js";
 const html = htm.bind(h);
 const enc = encodeURIComponent;
 
@@ -579,7 +580,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         <${VersionSwitch} value=${version}
             onChange=${setShownVersion}
             note=${data.version !== data.grading_version
-              ? `Viewing ${data.version.toUpperCase()} standards · you are graded on ${data.grading_version.toUpperCase()}`
+              ? `Viewing ${regionLabel(data.version)} standards · you are graded on ${regionLabel(data.grading_version)}`
               : null} />
         ${data.xcams_url ? html`<a class="meta" href=${data.xcams_url} target="_blank" rel="noopener"
             title="browse every example run for this star on the xcams Daily Star page">Examples on xcams ↗</a>` : null}
@@ -614,7 +615,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
           </label>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
               title=${data.version !== data.grading_version
-                ? `your current time, placed on the ${data.version.toUpperCase()} ladder shown here · the score is your graded (${data.grading_version.toUpperCase()}) one`
+                ? `your current time, placed on the ${regionLabel(data.version)} ladder shown here · the score is your graded (${regionLabel(data.grading_version)}) one`
                 : "your current time and score on this ladder"}>◀ you · ${fmtIgtShort(basisFrames)}${entityScore != null ? ` · ${fmtScore(entityScore)}` : ""}</span>` : ""}</th>`)}</tr></thead>
         <tbody>
         ${ROW_ORDER.map((rank) => html`<tr key=${rank}>

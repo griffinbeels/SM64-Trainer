@@ -426,12 +426,18 @@
     appearance: none; border: 1px solid var(--border-soft);
     background: var(--surface-2); color: var(--muted);
     font: inherit; font-weight: 700; letter-spacing: .02em;
-    padding: .32rem .85rem; line-height: 1.1; cursor: pointer;
+    padding: .3rem .8rem; line-height: 1.1; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: .35rem;
   }
-  .version-switch-seg:first-child {
+  /* `-of-type`, not `-child`: the optional `.version-switch-note` span is
+     also a child, so `:last-child` silently stopped rounding the right-hand
+     segment the moment a note appeared. Both segments are buttons and the
+     note is a span, so the type selector picks the right pair either way. */
+  .version-switch-seg:first-of-type {
     border-radius: 999px 0 0 999px; border-right: none;
   }
-  .version-switch-seg:last-child { border-radius: 0 999px 999px 0; }
+  .version-switch-seg:last-of-type { border-radius: 0 999px 999px 0; }
   .version-switch-seg:hover { color: var(--text); }
   .version-switch-seg[aria-pressed="true"] {
     background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
@@ -439,7 +445,46 @@
   .version-switch-seg:focus-visible {
     outline: 2px solid var(--gold); outline-offset: 2px;
   }
+  /* Round 24: a segment that is the ONLY region left on is disabled, so the
+     reason lands where the click does rather than in a message afterwards
+     (his "or do not disable it" ruling cuts the other way here -- the control
+     genuinely applies, it just cannot go below one). It keeps the pressed
+     look; only the cursor says it will not move. */
+  .version-switch-seg:disabled { cursor: default; opacity: 1; }  /* opacity: 1 undoes the app-wide `button:disabled { opacity: .48 }` on purpose.
+     The sole-on segment is the region that IS showing; dimming it would draw
+     the ON half as off, which is the inverse of what the state means. */
   .version-switch-note { color: var(--muted); font-size: .78rem; }
+
+  /* A game region drawn as its flag (regionflag.js, round 24: "everywhere we
+     say 'JP' or 'US', just use the flag ... that's kinda more swag"). NO
+     plate, NO ring, NO corner radius: it shipped for an hour with a white
+     backing plate meant to keep a mostly-white flag legible on navy, and
+     what that actually drew was a border around every flag -- "US flag
+     having this weird white border is aesthetically displeasing. Both flags
+     should be rectangular, since that's what flag shaped means. No white
+     borders like that." The assets are the 4x3 rectangles now, so the image
+     IS the flag, edge to edge. */
+  .region-flag {
+    display: inline-block; vertical-align: -.15em;
+    flex: none; user-select: none;
+  }
+  /* An UNPRESSED segment's flag holds its colour and only steps back. The
+     gold fill already carries on/off unmistakably, and a grayscaled JP flag
+     is an unreadable gray square -- the de-emphasised half has a floor of
+     its own (his ladder ruling, 2026-07-27: "they all basically look black.
+     I think we should at least show a little bit of color for each of
+     them!!"), and you must still be able to see WHICH region you are about
+     to switch on. */
+  .version-switch-seg[aria-pressed="false"] .region-flag { opacity: .6; }
+  /* The per-entry region tag in the Library. Small on purpose: it annotates
+     a name, it is not a control, and the runner is still the thing being
+     read (`title` carries "JP time" / "US time"). */
+  .library-runner-wrap { display: inline-flex; align-items: baseline; gap: .3rem; }
+  .library-entry-flag { margin-left: .3rem; }
+  .library-runner-wrap .library-entry-flag { margin-left: 0; }
+  .library-ladder-version-chip {
+    display: inline-flex; align-items: center; gap: .3rem;
+  }
 
   /* Round 5 -- the link door: assigning a movement / subsection row to a
      segment the user built. One strip per linkable row; the menu replaces
@@ -457,10 +502,26 @@
   .search-menu {
     position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
     display: grid; gap: .45rem; padding: .55rem .65rem; min-width: 240px;
+    max-width: min(320px, 90vw);
     border: 1px solid var(--border-soft); border-radius: 8px;
     background: rgba(7,18,30,.97);
     box-shadow: 0 10px 28px rgba(0,0,0,.5);
   }
+  /* `align="right"` (searchselect.js): the trigger's own right edge anchors
+     the menu instead of its left, so it opens LEFTWARD -- for a trigger a
+     caller pinned to the right of a wide container (the scorecard's goal
+     picker, pushed there by `.scorecard-head`'s own `margin-right: auto`).
+     Left-anchoring a right-pinned trigger ran the panel off the page's own
+     right edge and widened the document's scrollable width; this and the
+     `max-width` above (never wider than 320px, or 90% of a narrow
+     viewport) are what keep it inside the card at every width. */
+  /* Compound selector, not source order: `.search-menu` and
+     `.search-menu-right` are equal-specificity (0,1,0) classes applied
+     TOGETHER on the same element, so this only overrode `left` because it
+     happened to be declared later in the file -- any later same-specificity
+     rule touching `left` would have silently won instead. Bumping to
+     `.search-menu.search-menu-right` (0,2,0) makes it win structurally. */
+  .search-menu.search-menu-right { left: auto; right: 0; }
   .search-menu-head {
     display: flex; align-items: center; justify-content: space-between;
     gap: .6rem; font-weight: 700; font-size: .82rem;
@@ -485,6 +546,18 @@
   }
   .search-menu-option:hover {
     border-color: var(--border-soft); background: rgba(20,36,54,.7);
+  }
+  /* MULTI mode (round 14): the panel stays open and each row is a toggle,
+     so a row has to say whether it is on. The tick column is always
+     present in that mode -- reserving it means ticking a row cannot shift
+     its own label sideways. */
+  .search-menu-check {
+    display: inline-block; width: .9rem; flex: 0 0 auto;
+    margin-right: .35rem; color: var(--gold-soft);
+  }
+  .search-menu-option.is-picked {
+    border-color: var(--gold-soft);
+    background: color-mix(in srgb, var(--gold-soft) 12%, rgba(20,36,54,.7));
   }
   .search-menu-error { color: var(--coral); font-size: .8rem; margin: 0; }
   .search-select { position: relative; display: inline-flex; }
@@ -1077,6 +1150,58 @@
   .timefield::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
   .timefield{-moz-appearance:textfield;appearance:textfield}
   .timefield-sep{color:var(--text-dim,#8b98a6);padding:0 1px}
+  /* Recording a time you already earned. It sits UNDER the attempt list
+     rather than in the card head, whose grid comment already names adding a
+     fifth named area as the bug it exists to avoid.
+     Wraps rather than scrolls: the row carries five things at 850px and a
+     control the user has to hunt through is redesigned, never scrolled. */
+  .addtime{display:block;margin-top:6px}
+  /* justify-content is stated, never left to Chromium's silent centering —
+     both these rows anchor LEFT under the attempt list. */
+  .addtime-open{display:inline-flex;align-items:center;justify-content:flex-start;gap:5px}
+  .addtime-body{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+    padding:8px 2px 2px}
+  .addtime-strat{color:var(--text-dim,#8b98a6);font-size:12px}
+  .addtime-needs-strat{color:var(--warn,#e0a33e)}
+  .addtime-save{padding:3px 12px}
+  /* The snap line and the outcome line are explanations, not decorations:
+     the timer counts frames, so most typed hundredths cannot be shown, and a
+     number that changed itself with no reason given reads as a bug. */
+  .addtime-snap,.addtime-status{flex-basis:100%;font-size:12px;line-height:1.35}
+  .addtime-snap{color:var(--text-dim,#8b98a6)}
+  .addtime-status.is-ok{color:var(--good,#5bc97a)}
+  .addtime-status.is-held{color:var(--text-dim,#8b98a6)}
+  .addtime-status.is-bad{color:var(--bad,#e2686b)}
+  /* Taking your Ultimate Sheet column with you. The picker and its button
+     share one row and WRAP at a narrow drawer -- the name search is 448 rows
+     long, so it must never be the thing that gets squeezed. */
+  .importsheet-row .search-select{flex:1 1 200px;min-width:0}
+  /* Everything after a door's input is ONE component (importflow.js), so
+     these are importdoor-* classes rather than one door's name. */
+  .importdoor-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px}
+  .importdoor-undo{display:inline-flex;align-items:center;justify-content:flex-start;gap:5px;margin-top:2px}
+  /* The rows it could not use, every one of them, grouped under the sentence
+     for its reason. He has to be able to REVIEW them (a sheet column drops
+     30-odd), so each keeps its own text rather than being counted away; the
+     whole list scrolls past its own height rather than the drawer growing. */
+  .importdoor-rejects{max-height:320px;overflow-y:auto}
+  .importdoor-reject-group{margin-top:6px}
+  .importdoor-reject-reason{margin:0}
+  .importdoor-rejects ul{list-style:none;margin:2px 0 0;padding:0 0 0 10px}
+  .importdoor-rejects li{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
+    padding:2px 0;font-size:12px}
+  .importdoor-rejects code{color:#e6e9ee;white-space:pre-wrap;word-break:break-word}
+  /* The doors, ONE section. Stacked as separate sections they pushed Display and
+     Sessions most of a drawer away, and a control you have to scroll to hunt
+     for gets redesigned rather than scrolled to. Nothing is open by default,
+     so the resting state is a heading and a row of chips. */
+  .importsection-doors{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .importsection-door{margin-top:10px;padding-top:10px;
+    border-top:1px solid var(--hairline,#243044)}
+  .importdoor .settings-section-head{margin-bottom:2px}
+  .importdoor h3{font-size:13px}
+  .settings-note.is-ok{color:var(--good,#5bc97a)}
+  .settings-note.is-bad{color:var(--bad,#e2686b)}
   .stdcell{display:inline-flex;align-items:center;gap:4px}
   /* A JP-flagged strategy's edit cell (task 0056): the US and JP fields
      stack, each with its two-letter label, and the video button rides the
@@ -1339,7 +1464,14 @@
     --radius: 9px;
   }
   * { box-sizing: border-box; }
-  html, body, #app { min-height: 100%; max-width: 100%; overflow-x: hidden; }
+  /* `clip`, NOT `hidden` (round 12): overflow-x:hidden makes an element a
+     scroll container, and position:sticky sticks to its nearest SCROLLING
+     ancestor — body and #app never scroll themselves (the viewport does),
+     so the sidebar's sticky silently never fired and it scrolled away with
+     the page (measured: top=-8133px after an 8133px scroll, exactly
+     unstuck). `clip` clips the same pixels without creating a scroll
+     container, on all three so no layer re-arms the trap. */
+  html, body, #app { min-height: 100%; max-width: 100%; overflow-x: clip; }
   /* Reserve the scrollbar's width whether or not one is showing, so a pane
      that grows past the fold can never shove the whole layout sideways (live
      audit 2026-07-25: opening a library group shifted the entire page). This
@@ -1583,8 +1715,14 @@
      rules measure against (the sidebar's 1180px step means this column's
      width is not monotonic in window width). */
   .marelo-slot { min-width: 0; display: grid; container-type: inline-size; }
+  /* 2600px, raised from 1500 on 2026-08-29 (round 12, his 4K fullscreen:
+     "the overall width needs to be way bigger when the screen is full...
+     I can't fit everything into a single screenshot") — wide enough for
+     the scorecard's six-column shape with margin auto still centering on
+     anything wider. Every component gates its own layout on its container,
+     so more pane is more room, not a new breakpoint regime. */
   .workspace {
-    width: 100%; max-width: 1500px; min-width: 0; margin: 0 auto;
+    width: 100%; max-width: 2600px; min-width: 0; margin: 0 auto;
     padding: 4px 14px 28px; overflow-x: hidden;
   }
   .view-pane, .practice-page { min-width: 0; max-width: 100%; }
@@ -3475,6 +3613,8 @@
      their centres on one line whatever each one contains. */
   .attempt-actions button { min-height: 30px; padding: .25rem .45rem; font-size: .76rem; vertical-align: middle; }
   .attempt-actions .icon-button { width: 31px; padding-inline: 0; }
+  /* An imported row has no replay; the blank keeps its buttons in column. */
+  .attempt-actions .attempt-no-replay { display: inline-block; visibility: hidden; }
   .save-pb-narrow { display: none; }
   /* THE DISCLOSURE PRIMITIVE (components/collapsible.js::Disclose). Two
      rules and no more, deliberately: everything about HOW it opens is a
@@ -7628,6 +7768,452 @@
       .log-list-card.log-nextstep-wide-two-hover, .log-list-card.log-nextstep-wide-one-hover
     ) .rank-next-popup { font-size: 11px; }
 
+  /* ===================================================================
+     Scorecard card (spec 2026-08-23-scorecard-design, task 3)
+     ===================================================================
+     One tile per star (+ the two BitDW/BitFS castle movements), one row per
+     course plus the Secret row, a Sigma per row and one Upstairs RTA total
+     -- the community's template spreadsheet as a live, screenshot-able
+     card. `.rank-page` (above) declares no `container-type` of its own --
+     every other card on that page gates on the PAGE's own width, never a
+     card-local pane -- so this card opens its own inline-size container
+     rather than widen that rule for every sibling on the tab. Appended
+     here, at the end of the stylesheet's converted-blocks section,
+     wide-narrow, per the standing rule: a converted block placed where an
+     old @media block used to sit can land ABOVE a same-specificity base
+     rule and lose the cascade silently (.claude/rules/ui-core.md). */
+  /* `width: 100%` is LOAD-BEARING, not decoration -- measured, not assumed
+     (`.claude/rules/ui-core.md`'s "assert the painted value" warning applies
+     here too: the class and the property are both exactly where you'd put
+     them, and the card still renders at 34px). `.rank-page` is a flex
+     COLUMN and stretches every card to its own width with no explicit
+     `width` needed anywhere else on the page -- but `container-type:
+     inline-size` implies content containment, and Chromium resolves a
+     stretch-sized flex item's own width AFTER a containering element would
+     need it to answer `@container` queries from its children, so a
+     `width: auto` grid box under it collapses to its content's zero-size
+     containment fallback instead of the stretched width (measured: 34px
+     tall-and-narrow instead of the pane's 1251px, tiles wrapping into a
+     single vertical column). A plain `width: 100%` gives the box a
+     DEFINITE size with nothing left to resolve circularly. */
+  .scorecard-card { container-type: inline-size; width: 100%; display: grid; gap: 10px; }
+  .scorecard-head {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px;
+  }
+  .scorecard-head h3 { margin: 0; margin-right: auto; }
+  .scorecard-note { margin: 0; flex-basis: 100%; }
+  /* Round 25: this sits UNDER the cards now, as a direct child of the card
+     grid rather than inside `.scorecard-head` -- "The button should go at
+     the bottom, underneath all the cards." So no `flex-basis` (inert on a
+     grid child, and it was only ever there to claim a full row inside the
+     head), and its own top rule separates it from the last card. */
+  .scorecard-exports { display: flex; align-items: center; flex-wrap: wrap;
+    gap: 8px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+  .scorecard-exports .inline-state { flex-basis: 100%; }
+  /* Round 26: a long job's own status line, under the button it explains
+     (`states.js::ProgressLine` -- the column export's, shared with the sheet
+     import since round 29). Full-width so a long sentence never squeezes the
+     button, and it carries a thin progress track rather than a spinner --
+     his ask was "how close we are to being done", which a spinner cannot
+     answer. The track keeps its lane once the job lands (the fill simply
+     sits at 100%), so the line does not change height at the moment he
+     reads it. */
+  .job-status {
+    flex-basis: 100%; margin: 0; display: flex; align-items: center;
+    gap: .5rem; color: var(--muted);
+  }
+  /* Round 31: the track's LEFT end is square, so its start is a hard edge
+     sitting exactly on the button's own left border above it -- a rounded
+     tip reads as starting a pixel or two later than its box does. */
+  .job-status-track {
+    flex: none; width: 90px; height: 4px; border-radius: 0 3px 3px 0;
+    background: var(--border-soft); overflow: hidden;
+  }
+  .job-status-fill {
+    display: block; height: 100%; border-radius: 0 3px 3px 0; background: var(--gold);
+    transition: width .25s ease-out;
+  }
+  .job-status[data-running="false"] .job-status-fill {
+    background: var(--green);
+  }
+  .importsheet-progress { margin-top: 6px; }
+  /* Round 29 item 2: the sheet-colour inspector's two preview cells -- drawn
+     the size and shape of a Sheets cell, so what he tunes is what he will
+     paste. */
+  /* Round 30 item 8: the controls are one horizontal group on the exports
+     row, after Rebuild -- the two legend cells the paste will write, three
+     circle swatches, the font dropdown, Reset while anything differs. */
+  /* Round 35: the two boxes are the same height ("the preview box size
+     should be just as tall as the formatting box size"), so the row stretches
+     them and everything else on it centres itself. */
+  .sheetstyle { display: inline-flex; align-items: stretch; gap: 8px; margin-left: 6px; }
+  .sheetstyle-reset, .sheetstyle-error { align-self: center; }
+  /* Round 35: an arrow between them, "so that way it's obvious that the stuff
+     on the left results in the stuff on the right". */
+  .sheetstyle-arrow {
+    display: inline-flex; align-items: center; align-self: center;
+    color: var(--muted); font-size: 1rem; line-height: 1; padding: 0 1px;
+  }
+  /* Round 34: the three swatches and the font sit in ONE box, each under a
+     small caption along the top ("labels inside the rectangle aligned along
+     the top, above each color. plus a label for the font"), the same box and
+     caption the Preview beside it already wears, so the row reads as two
+     labelled groups: what you chose, and what it paints. */
+  .sheetstyle-options {
+    display: inline-flex; align-items: stretch; gap: 10px;
+    padding: 4px 8px 5px; border: 1px solid var(--border-soft); border-radius: 6px;
+  }
+  /* Round 35: a caption is centred over its own circle ("the text should be
+     centered above each circle"), and the font -- captionless -- centres
+     itself vertically in the box instead. */
+  .sheetstyle-option {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .sheetstyle-font { display: inline-flex; align-items: center; }
+  .sheetstyle-option-label {
+    font-size: .62rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); line-height: 1;
+  }
+  /* Round 31: the preview comes AFTER the options it previews, in its own
+     box with a small "Preview" caption above the two cells. */
+  .sheetstyle-preview {
+    display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px;
+    padding: 4px 6px 5px; border: 1px solid var(--border-soft); border-radius: 6px;
+  }
+  /* The cells take the height the taller box gives this one, so the two
+     boxes read as one row rather than as a box beside a smaller box. */
+  .sheetstyle-preview-cells { flex: 1; align-items: center; }
+  .sheetstyle-preview-label {
+    font-size: .62rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); line-height: 1;
+  }
+  .sheetstyle-preview-cells { display: inline-flex; gap: 4px; }
+  .sheetstyle-cell {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 46px; height: 24px; padding: 0 8px; box-sizing: border-box;
+    border: 1px solid rgba(255,255,255,.18); font-size: 12px; letter-spacing: .02em;
+  }
+  .sheetstyle-error { flex-basis: 100%; }
+  /* Round 30: a swatch is a CIRCLE filled edge to edge with the chosen
+     colour, inside a thin outline ("circles where the whole circle color is
+     the color we've selected, with an outline"). Chromium's default draws a
+     padded square; the two pseudo-elements are where that padding and the
+     inner border live. */
+  .sheetstyle-swatch {
+    -webkit-appearance: none; appearance: none;
+    width: 28px; height: 28px; min-height: 0; padding: 0; margin: 0;
+    border: 2px solid var(--border-soft); border-radius: 50%;
+    background: none; cursor: pointer; overflow: hidden;
+    transition: border-color .12s ease;
+  }
+  .sheetstyle-swatch:hover, .sheetstyle-swatch:focus-visible { border-color: var(--gold-soft); }
+  .sheetstyle-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+  .sheetstyle-swatch::-webkit-color-swatch { border: none; border-radius: 50%; }
+  /* The font trigger is a dropdown lined up with the row's right edge; its
+     menu opens beneath it (searchselect.js's own overlay), rightward-anchored
+     so it stays inside the drawer. */
+  .sheetstyle-font .search-select-trigger { min-width: 9.5rem; justify-content: space-between; }
+  .sheetstyle-font .search-select-value { font-size: .9rem; }
+  /* Round 29: once a column is HELD the primary button becomes the copy
+     affordance (glyph + "Ready to copy") and two quiet controls join it --
+     Open (inspect every line) and Rebuild (fetch the sheet again). The
+     glyph sits inline with the label, so the button's height never moves
+     between its three labels. */
+  .scorecard-copy-column {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .scorecard-column-open, .scorecard-column-rebuild {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  /* The inspect box: the column exactly as it will paste, one worksheet row
+     per line, in a monospace textarea he can select from by hand -- the
+     fallback that works when no clipboard write is allowed at all. */
+  .scorecard-column-view {
+    display: block; width: 100%; min-height: 50vh; resize: vertical;
+    font-family: ui-monospace, Consolas, monospace; font-size: .82rem;
+    line-height: 1.35; white-space: pre; box-sizing: border-box;
+  }
+  /* The "unsaved custom edits" bar (round 8): a name field + Save/Discard,
+     shown only while `pendingOverrides` is non-empty. A gold-tinted border
+     rather than a plain card, so an edit in progress reads as a distinct
+     state from the rest of the card -- the same visual weight a "you have
+     something to confirm" banner gets everywhere else in this app. */
+  .scorecard-savebar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 8px 10px; border: 1px solid var(--gold-soft); border-radius: 8px;
+    background: rgba(240,189,50,.08);
+  }
+  .scorecard-savebar-input {
+    flex: 1 1 160px; min-width: 120px;
+    background: rgba(3,10,18,.8); border: 1px solid var(--border-soft);
+    border-radius: 6px; color: inherit; padding: 4px 8px; font: inherit;
+  }
+  .scorecard-savebar .inline-state { flex-basis: 100%; }
+  /* ---- The scorecard's card grid (rounds 9-10, 2026-08-28) -------------
+     Round 10 replaced CSS multi-column with DETERMINISTIC columns: the
+     balancer staggered card edges ("this weird spacing that feels
+     unsettling"). Column stacks of course cards, the component buckets
+     them. Round 10 also stretched every column to one height and split
+     it into EQUAL rows to keep card edges in register; round 21 (2026-
+     09-02) removed that: with the merged specials card twice a course
+     card's height, every card took its column's AVERAGE — six lines of
+     content in a card three times as tall, "impossible to take a
+     screenshot of everything in a single page". Cards are CONTENT
+     height now; edges align because every course card has six lines,
+     not because anything stretches -- except across a ROW: the outer grid
+     declares its row tracks (`--score-rows`, the tallest stack's length,
+     from the component) and each column stack is a SUBGRID on them, so
+     the four cards sharing a row share its height. A wrapped star name
+     or the seven-line Secret card lengthens its own row by one line and
+     nothing else, and card edges stay in register across columns.
+     Five tracks (round 21) is the wide shape: his four course columns
+     untouched plus the two specials cards in a column of their own, so
+     the page is four rows tall and fits his window in one screenshot
+     (five rows did not, by 19px, measured). */
+  /* The track count is the COMPONENT's call, not a container query's
+     (`scorecardgoal.js::columnCountFor`), and `data-cols` is how it says so.
+     Round 12 established the reason and round 20 made it load-bearing: the
+     cards are chunked COLUMN-MAJOR, so reading down a column is only course
+     order if the number of stacks chunked equals the number of tracks drawn.
+     A container query could change the tracks without telling the chunker.
+     The floors themselves are round 11's: 4-up only where each card gets
+     ~320px+ (below that the NAME column wrapped every long star name —
+     "the cards need to be a bit bigger"), one column below 560. */
+  .score-cards {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(var(--score-rows, 1), auto);
+    gap: 10px; align-items: stretch;
+  }
+  .score-cards[data-cols="2"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .score-cards[data-cols="1"] { grid-template-columns: minmax(0, 1fr); }
+  .score-col {
+    display: grid; min-width: 0; grid-row: 1 / -1;
+    grid-template-rows: subgrid;
+  }
+  /* Round 32: the odd card (Bowser) beneath the stacks, centred on the
+     grid's midline and exactly one column wide -- `--score-cols` is the
+     count the component chunked, so the card matches the cards above it
+     at every width. */
+  /* No margin of its own: the row is a child of `.scorecard-card`'s grid,
+     whose 10px gap already separates it from the stacks -- a margin on top
+     of that doubled the space (his report: "The other cards have a much
+     smaller gap between them. Make sure the gap is the same."). */
+  .score-centred { display: flex; justify-content: center; }
+  .score-centred > .score-card {
+    flex: none;
+    width: calc((100% - (var(--score-cols, 4) - 1) * 10px) / var(--score-cols, 4));
+  }
+  /* Each card wears its course's own tint (round 10: "a unique background
+     color... so each pops better") via --card-tint from the component; the
+     fallback keeps an untinted card legible rather than transparent (the
+     ui-core custom-property rule).
+     The card IS the grid (round 11): one column system — icon / name /
+     You / Goal / Δ — that the labels row, every line and the foot join as
+     SUBGRIDS, so a wide time widens the column for the whole card and
+     nothing can drift ("even if the times are XX'XX"XX long, they're all
+     still aligned correctly"). Each line computing its own max-content was
+     round 10's misalignment. The time columns carry minimum widths sized
+     for XX'XX"XX (his named floor) so short times get the same room; the
+     `minmax(0,1fr)` lines row is what pins the foot to a stretched card's
+     bottom (replacing the flex margin-top:auto). */
+  .score-card {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) minmax(56px, max-content)
+                           minmax(56px, max-content) minmax(40px, max-content);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    column-gap: 5px;
+    border: 1px solid color-mix(in srgb, var(--card-tint, #4a6a8a) 38%, rgba(148,180,212,.14));
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: color-mix(in srgb, var(--card-tint, #4a6a8a) 15%, rgba(8,17,28,.92));
+    box-shadow: 0 8px 18px rgba(0, 0, 0, .45);
+  }
+  .score-card-head {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; gap: 6px;
+    padding-bottom: 4px; margin-bottom: 2px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  /* Round 11 restored round 7's ruling ("there should be column labels,
+     because otherwise it's not obvious what each number means") — one
+     muted row per card, sitting exactly over the columns it names because
+     it shares them. */
+  .score-labels {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    padding: 1px 0; font-size: .62rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .score-label-you { grid-column: 3; justify-self: end; }
+  .score-label-goal { grid-column: 4; justify-self: end; }
+  .score-label-gap { grid-column: 5; justify-self: end; }
+  .score-lines {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    align-content: start;
+  }
+  .score-card-art {
+    width: 20px; height: 20px; border-radius: 4px; object-fit: cover;
+    flex: 0 0 auto;
+  }
+  .score-card-name {
+    flex: 1 1 auto; min-width: 0; font-weight: 700; font-size: .82rem;
+  }
+  /* One line per star: icon | wrapping name | you | goal | gap, on the
+     CARD's columns (subgrid, which also inherits its column gap). The
+     NAME takes what is left and WRAPS -- round 9's "no word is cut off"
+     holds by construction, there is no ellipsis rule here at all. */
+  .score-line {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    align-items: center;
+    padding: 1px 0; font-size: .74rem; line-height: 1.25;
+  }
+  .score-line-icon {
+    width: 16px; height: 16px; border-radius: 3px; object-fit: cover;
+    opacity: .9;
+  }
+  .score-line-name { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+  /* The icon+name DOOR to the Library (round 11). A full text reset, so it
+     declares its own min-height/display/justify-content (the button-flex
+     guards). Hover is his spec: the name turns blue and the hidden library
+     glyph appears appended; the glyph always occupies its slot
+     (visibility, never display) so a wrapped name cannot reflow on hover. */
+  .score-line-link {
+    grid-column: 1 / 3;
+    display: flex; align-items: center; justify-content: flex-start;
+    gap: 5px; min-height: 0; min-width: 0; padding: 0; margin: 0;
+    background: none; border: none; font: inherit; color: inherit;
+    text-align: left; cursor: pointer;
+  }
+  .score-line-link:hover .score-line-name,
+  .score-line-link:focus-visible .score-line-name { color: var(--blue); }
+  /* The last word and the glyph travel together (round 13): the glyph
+     reserves inline space, and on a name that fills its column that space
+     landed the glyph alone on a second line — one line of visible text
+     inside a two-line box, so the icon centred BELOW the text. Bound to
+     the last word, the glyph can only wrap alongside something visible. */
+  /* The multi goal's legend (round 15): every pick, in pick order, each
+     wearing the colour its own attribution dots use. Sits under the
+     picker so "4 picked" is followed by WHICH four. */
+  /* Right-aligned so the row reads as hanging off the picker it explains
+     ("it should show pills underneath the '4 picked'"), which sits at the
+     head's right edge; it wraps right-to-left, so ten picks stay tidy. */
+  /* Round 31: the legend shares a row with the region switch -- switch on
+     the left, pills on the right ("aligned to the left edge, but in the
+     same row"), so the head's right corner carries the picker alone. */
+  .scorecard-subhead {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px 14px; margin: 0 0 6px;
+  }
+  .goal-legend {
+    display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
+    margin-left: auto;
+  }
+  .goal-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: .72rem; color: var(--text);
+    border: 1px solid color-mix(in srgb, var(--pill-colour, #5bb8ff) 55%, transparent);
+    background: color-mix(in srgb, var(--pill-colour, #5bb8ff) 14%, rgba(8,17,28,.9));
+  }
+  .goal-pill-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--pill-colour, #5bb8ff);
+  }
+  /* The pill's × (round 23). First shipped hover-revealed; his next look:
+     "Pills look weird if the X is hidden by default. Let's just show it at
+     all times. Red X." So it is always drawn, in the app's red. */
+  .goal-pill-remove {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; margin-left: 2px; padding: 0;
+    border: 0; border-radius: 50%; background: transparent;
+    color: var(--coral); font: inherit; font-size: .9rem; font-weight: 700;
+    line-height: 1; cursor: pointer;
+  }
+  .goal-pill-remove:hover { background: rgba(255,255,255,.14); }
+  /* The dot after a star's name: the colour of the PICK that set that
+     star's goal, so a number can be traced to whoever is behind it. Rides
+     inside the nowrap tail with the library glyph (round 13's rule: a mark
+     that can wrap alone leaves a blank line and drops the icon below the
+     text). */
+  .score-line-source {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-left: 4px; vertical-align: middle; flex: 0 0 auto;
+    background: var(--source-colour, transparent);
+  }
+  .score-line-tail { white-space: nowrap; }
+  .score-line-lib {
+    display: inline-block; visibility: hidden; margin-left: 4px;
+    vertical-align: -2px; color: var(--blue);
+  }
+  .score-line-link:hover .score-line-lib,
+  .score-line-link:focus-visible .score-line-lib { visibility: visible; }
+  .score-line-you, .score-line-goal {
+    display: inline-flex; align-items: center; gap: 3px; justify-self: end;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .score-line-time { color: var(--text); }
+  .score-gap {
+    justify-self: end; font-variant-numeric: tabular-nums;
+    font-size: .72rem; white-space: nowrap; color: var(--muted);
+  }
+  .score-gap.good { color: var(--green); }
+  .score-gap.bad { color: var(--coral); }
+  /* The foot joins the same column system (its label spans icon+name), so
+     the Σ times sit exactly under the lines they sum. */
+  .score-card-foot {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: subgrid;
+    align-items: center; padding-top: 3px;
+    border-top: 1px solid var(--border-soft);
+    font-size: .74rem; font-weight: 700;
+  }
+  .score-card-foot-label { grid-column: 1 / 3; }
+  .score-sum-coverage { grid-column: 1 / 3; }
+  .score-card-foot .score-line-goal { font-weight: 400; color: var(--muted); }
+  .score-sum-coverage { color: var(--muted); font-size: .66rem; font-weight: 400; }
+  /* Round 8's per-row remove, now in the card head. A full text reset, so
+     it declares its own min-height/display/justify-content -- the global
+     `button` rule sets min-height:34px and inline-flex, which a bare reset
+     does not undo (tests/test_ui_button_flex.py guards both halves). RED at
+     rest, his own word ("add a red X next to each of the rows"), held at .6
+     opacity so it reads as red without competing with the numbers; full
+     strength on hover and focus. */
+  .score-row-remove {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 0; width: 18px; height: 18px; padding: 0; margin: 0;
+    flex: 0 0 auto;
+    background: none; border: none; border-radius: 5px;
+    font: inherit; font-size: .9rem; line-height: 1;
+    color: var(--coral); opacity: .6; cursor: pointer;
+    transition: opacity .12s ease, background .12s ease;
+  }
+  .score-row-remove:hover, .score-row-remove:focus-visible {
+    opacity: 1; background: rgba(255,111,97,.14);
+  }
+  .score-row-remove:disabled { cursor: default; opacity: .25; }
+  /* The goal editor, unchanged from rounds 5-6 apart from its new home on
+     the line (the classes name the EDITOR and the render tests key on
+     them). */
+  .score-detail-goal-btn {
+    background: none; border: 1px dashed var(--border-soft); border-radius: 5px;
+    color: inherit; font: inherit; font-size: .72rem; padding: 0 4px;
+    cursor: pointer; min-height: 0; display: inline-flex; align-items: center;
+    justify-content: center;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .score-detail-goal-btn:hover { border-color: var(--gold-soft); color: var(--gold-soft); }
+  .score-detail-editing { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .score-detail-input {
+    width: 64px; background: rgba(3,10,18,.8);
+    border: 1px solid var(--border-soft); border-radius: 5px;
+    color: inherit; font: inherit; font-size: .72rem; padding: 0 4px;
+  }
+  .score-detail-input.is-invalid { border-color: var(--coral); }
+  .score-detail-hint { font-size: .66rem; color: var(--coral); }
 </style></head>
 <body>
 <div id="app"></div>

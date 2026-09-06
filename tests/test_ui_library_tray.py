@@ -379,27 +379,32 @@ def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(lib
     assert opened_section == "clicked", opened_section
     _expand_divisions(library_page)
 
-    # ROUND 1 UPDATE (2026-08-07): Benji's two recordings of this run are one
-    # US and one JP, and the section's mode now FILTERS entries -- so the two
-    # cards can never be on screen together any more. The collision this test
-    # guards (approach+runner+time identical, different videos) is now
-    # crossed via the mode toggle: add the US recording, switch to JP mode,
-    # and the JP recording's OWN card must not read as already-in-tray.
-    def benji_card_script(extra):
+    # ROUND 24 UPDATE (2026-09-02): Benji's two recordings of this run are one
+    # US and one JP, and the Library now shows BOTH regions by default -- so
+    # the two cards are on screen TOGETHER again, which is the collision this
+    # test guards in its plainest form. (Round 1 had made them mutually
+    # exclusive and this test crossed them via the mode toggle; that detour is
+    # gone.) Each card is identified by its own VIDEO id, never by position:
+    # the two are one runner at one time and the video is the only thing that
+    # tells them apart, which is exactly the fact the tray key encodes.
+    def benji_card_script(index, extra):
         return f"""
           (() => {{
             const cards = Array.from(document.querySelectorAll(
               '.library-section.open .library-example'))
               .filter((c) => c.querySelector('.library-example-runner')
                 ?.textContent === 'Benji');
-            if (cards.length !== 1) return `expected 1 Benji card, found ${{cards.length}}`;
+            if (cards.length !== 2) return `expected 2 Benji cards, found ${{cards.length}}`;
+            const videos = cards.map((c) => c.getAttribute('data-video'));
+            if (new Set(videos).size !== 2) return `both cards cite ${{videos[0]}}`;
+            const card = cards[{index}];
             {extra}
           }})()
         """
 
-    add_first = library_page.evaluate(benji_card_script("""
-            const btn = cards[0].querySelector('.library-example-plus');
-            if (!btn || btn.disabled) return 'the US Benji card has no enabled + button';
+    add_first = library_page.evaluate(benji_card_script(0, """
+            const btn = card.querySelector('.library-example-plus');
+            if (!btn || btn.disabled) return 'the first Benji card has no enabled + button';
             btn.click();
             return 'clicked';
     """))
@@ -408,23 +413,13 @@ def test_two_different_recordings_of_the_same_run_do_not_collide_in_the_tray(lib
     assert library_page.evaluate(
         "document.querySelectorAll('.library-tray-chip').length") == 1
 
-    # Switch the PAGE-level version switch to JP and re-expand (a rebuilt
-    # band list mounts its subdivisions collapsed again). His 2026-08-15
-    # ruling retired the old per-section `.library-jp-toggle` chip in favour
-    # of one switch every section reads (versionswitch.js).
-    library_page.evaluate("""
-      Array.from(document.querySelectorAll('.version-switch-seg'))
-        .find((seg) => seg.textContent.trim() === 'JP').click()
-    """)
-    _expand_divisions(library_page)
-
     # The causal check: adding the first recording must not disable the
     # second -- a fresh evaluate() call, after Preact has had a tick to
     # commit (ui-core.md: reading in the same tick as the dispatch sees the
     # PRE-render value).
-    add_second = library_page.evaluate(benji_card_script("""
-            const btn = cards[0].querySelector('.library-example-plus');
-            if (!btn) return 'no plus button on the JP Benji card';
+    add_second = library_page.evaluate(benji_card_script(1, """
+            const btn = card.querySelector('.library-example-plus');
+            if (!btn) return 'no plus button on the second Benji card';
             if (btn.disabled) return 'disabled -- the collision is back';
             btn.click();
             return 'clicked';

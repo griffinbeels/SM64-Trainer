@@ -32,6 +32,7 @@ not in this map.
 | Read back live play and the rendered UI | `uv run python tools/what_happened.py`; `--list` names all journals |
 | New memory address live gate | `uv run python tools/verify_addresses.py` with PJ64 + ROM |
 | Per-ROM verification | `uv run python tools/sync_version.py --version us`; [runbook](docs/version-sync.md) |
+| Import correctness | `uv run python tools/scorecard_parity.py`; successive runners must produce `+0.00` on every corresponding Scorecard tile |
 | Inspect one UI surface at supported widths | `uv run python tools/contact_sheet.py <selector>`; read UI rules for state-specific fixtures |
 | Maintainability gate | `uv run python tools/lint_changed.py`; [gate rationale](docs/agent-maintainability.md) |
 | API consumer | [docs/api.md](docs/api.md): `GET /state`, `GET /health`, `/ws/events` |

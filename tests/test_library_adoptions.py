@@ -26,7 +26,7 @@ def _payload():
                 "ladder": dict(LADDER) if ladder else None,
                 "ladder_samples": entries,
                 "entries": [{"runner": f"r{i}", "time_cs": 276 + i,
-                             "video": None, "version": None}
+                             "video": None, "version": None, "platform": None}
                             for i in range(entries)]}
     return {"schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
             "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
@@ -267,3 +267,134 @@ def test_linked_targets_is_the_reverse_view_the_segment_editor_reads():
     adoptions._rows = {key: "segment:42"}
     assert adoptions.linked_targets() == {
         "segment:42": [{"index": 0, "label": "Lobby door (L) - BoB door"}]}
+
+
+def _hundred_coin_target(label, rows):
+    return {"entity_key": "star:4:6", "label": label, "section": "4. Cool, Cool Mountain",
+            "version": "jp", "subsections": [],
+            "approaches": [{"name": name, "ids": list(ids)} for name, ids in rows]}
+
+
+def test_every_worksheet_row_of_one_entity_files_under_a_slot_of_its_own():
+    """Round 28, his ruling on the round-27 measurement: "fix all bugs and
+    maximize compatibility with the sheet". Three shapes shared one slot:
+    a 100-coin course's four routes each carry a "100 coin star Xcam" row;
+    a target-named row on such a route cannot be Standard when four routes
+    claim it; and BitDW reds carries FIVE "Red coin star Xcam" rows, one per
+    pipe route. `sheet_strategy` is the one rule both doors read."""
+    slide = _hundred_coin_target("Slip Slidin' Away + 100c", [
+        ("Slip Slidin' Away + 100c", ["1", "2"]),
+        ("100 coin star Xcam", ["1", "2"])])
+    no_tp = _hundred_coin_target("Slide + 100c No teleporter route", [
+        ("Slide + 100c No teleporter route", ["1", "2"]),
+        ("100 coin star Xcam", ["1", "2"])])
+    # The route's own row is the route, not "Standard" (four routes, one entity).
+    assert ad.sheet_strategy(slide, slide["approaches"][0]) == "Slip Slidin' Away + 100c"
+    # A sub-row is qualified by its route, so two courses' xcam rows differ.
+    assert ad.sheet_strategy(slide, slide["approaches"][1]) == (
+        "Slip Slidin' Away + 100c › 100 coin star Xcam")
+    assert ad.sheet_strategy(no_tp, no_tp["approaches"][1]) == (
+        "Slide + 100c No teleporter route › 100 coin star Xcam")
+
+    bitdw = {"entity_key": "star:16:0", "label": "Bowser in the Dark World Red Coins",
+             "section": "Bowser Courses", "version": "jp", "subsections": [],
+             "approaches": [
+                 {"name": "Bowser in the Dark World Red Coins", "ids": ["1", "2"]},
+                 {"name": "Red coin star Xcam", "ids": ["1", "2"]},
+                 {"name": "Shigeru w/ island red first pipe entry", "ids": ["3", "4"]},
+                 {"name": "Red coin star Xcam", "ids": ["3", "4"]},
+                 {"name": "Xiah cycle pipe entry", "ids": ["5", "6"]},
+                 # The sheet's own bracket typo: [4|6] under Xiah's [5|6].
+                 {"name": "Red coin star Xcam", "ids": ["4", "6"]}]}
+    names = [ad.sheet_strategy(bitdw, item) for item in bitdw["approaches"]]
+    assert names == [
+        "Standard", "Standard › Red coin star Xcam",
+        "Shigeru w/ island red first pipe entry",
+        "Shigeru w/ island red first pipe entry › Red coin star Xcam",
+        "Xiah cycle pipe entry",
+        "Xiah cycle pipe entry › Red coin star Xcam"]
+    assert len(set(names)) == len(names), "every row must be its own slot"
+    # A vetted match still names an ordinary strategy row, and a piece is
+    # always its segment's Standard.
+    matched = {"name": "Log firsty", "ids": ["3"], "matched_strategy": "Log Firsty"}
+    plain = {"entity_key": "star:12:1", "label": "Mystery of the Monkey Cage",
+             "approaches": [{"name": "Mystery of the Monkey Cage", "ids": ["1"]}, matched]}
+    assert ad.sheet_strategy(plain, matched) == "Log Firsty"
+    assert ad.sheet_strategy(plain, plain["approaches"][0]) == "Standard"
+    assert ad.sheet_strategy(plain, {"name": "Post pipe", "ids": ["1"]},
+                             kind="subsection") == "Standard"
+
+
+def test_the_two_doors_read_the_same_naming_rule():
+    """A second copy of the slot rule in either door is the divergence this
+    round fixed (the export had an older two-argument rule and fell back
+    blind on a 100-coin route's own row). Both modules must call the shared
+    function and neither may re-derive it."""
+    import inspect
+
+    from sm64_events.library import export_column, import_runner
+    for module in (export_column, import_runner):
+        source = inspect.getsource(module)
+        assert "sheet_strategy(" in source, module.__name__
+        assert "strategy_name(" not in source.replace("sheet_strategy(", ""), (
+            f"{module.__name__} must not derive a row's slot on its own")
+
+
+def _star_payload():
+    """A star target with three approaches, as the bundled library shapes
+    them: the star's own row (matched by the ladder matcher to a vetted
+    twin, filed under Standard), a row wearing a vetted twin's name, a row
+    with no match and a fitted ladder, and one too thin to fit."""
+    def approach(name, ladder=True, matched=None):
+        item = {"ids": ["1"], "name": name, "best_cs": 1126, "best_runner": "W",
+                "times": {}, "ideal_cs": None, "fill_rate": 0.5,
+                "ladder": {"Mario": 11.36, "Bronze": 14.95} if ladder else None,
+                "ladder_samples": 40 if ladder else 3, "entries": []}
+        if matched:
+            item["matched_strategy"] = matched
+        return item
+    return {"schema_version": 2, "sheet_revision": "2026-09-05T00:00:00",
+            "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
+                {"entity_key": "star:6:4", "group": "6. Hazy Maze Cave",
+                 "section": "6. Hazy Maze Cave", "label": "A-Maze-ing Emergency Exit",
+                 "version": None, "miss_reason": None, "subsections": [],
+                 "approaches": [approach("A-Maze-ing Emergency Exit", matched="Rightside"),
+                                approach("Left side TJ", matched="Leftside"),
+                                approach("Chimney hop"),
+                                approach("Thin one", ladder=False)]},
+                {"entity_key": "star:3:6", "group": "3. Cool, Cool Mountain",
+                 "section": "3. Cool, Cool Mountain", "label": "Big Penguin Race + 100c",
+                 "version": None, "miss_reason": None, "subsections": [],
+                 "approaches": [approach("Big Penguin Race + 100c")]}]}
+
+
+def test_the_whole_library_reaches_the_sheet_layer_under_the_import_slots():
+    """Round 33: "for a lot of the 'Standard' times, we are lacking rank
+    standards." The star's own row -- matched to a vetted twin by ladder and
+    so SKIPPED by `adoptable` -- is the row round 28 files under Standard, so
+    Standard had his PB and no ladder. `library_ladders` maps every fitted
+    star approach under `sheet_strategy`'s slot: the star row is Standard, a
+    matched row wears its twin's name, an unmatched row its own; a thin row
+    contributes nothing; a variant-qualified entity is skipped."""
+    ladders = ad.library_ladders(_star_payload(), {}, qualified={"star:3:6"})
+    assert set(ladders) == {"star:6:4"}
+    assert set(ladders["star:6:4"]["strategies"]) == {"Standard", "Leftside", "Chimney hop"}
+    assert ladders["star:6:4"]["strategies"]["Standard"]["Mario"] == 11.36
+
+
+def test_a_loaded_store_grades_standard_from_the_star_row(tmp_path):
+    """`Adoptions.load()` applies the whole library's ladders, so a fresh
+    standards store grades Standard on a star whose vetted seed never
+    defined it -- and the vetted twin, where the seed has one, still wins."""
+    store = LibraryStore()
+    store._payload = _star_payload()
+    standards = RankStandards(tmp_path / "rank_standards.json")
+    standards.load()
+    standards.create_strategy("star:6:4", "Leftside")
+    standards.set_threshold("star:6:4", "Leftside", "Mario", 11.00)
+    adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
+    adoptions.load()
+    ladders = standards.ladders("star:6:4")
+    assert ladders["Standard"]["Mario"] == 11.36 and standards.is_fitted("star:6:4", "Standard")
+    assert ladders["Leftside"]["Mario"] == 11.00, "the vetted ladder must win over the fitted one"
+    assert not standards.is_fitted("star:6:4", "Leftside")

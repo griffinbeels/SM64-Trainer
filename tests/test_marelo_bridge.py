@@ -18,7 +18,10 @@ class FakeRanks:
     def __init__(self, data):
         self._data = data
 
-    def ladders(self, key):
+    def ladders(self, key, version=None):
+        # `version` mirrors the real store (the ROM a time was set on, None =
+        # the running one). No fixture here carries a JP overlay, so both
+        # answers are the same ladder.
         return self._data.get(key, {})
 
     def clock_for(self, key):

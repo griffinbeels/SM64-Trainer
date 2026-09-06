@@ -524,7 +524,8 @@ def build():
     return create_app(poller, broadcaster, service=service, replay=replay,
                       inputs=inputs,
                       updater=updater, compare=compare, compilation=compilation,
-                      db_retry=db_retry, capture_layer=capture_layer)
+                      db_retry=db_retry, capture_layer=capture_layer,
+                      refresh_library_on_start=True)
 
 
 _app = None

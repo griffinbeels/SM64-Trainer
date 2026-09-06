@@ -1,0 +1,496 @@
+"""ranks/scorecard.py -- the pure card builder.
+
+Round 6 (2026-08-24) made composition scope-driven and cell-exact: the
+Overall card is `template_rows()` (his canonical 100c pairing applied -- the
+100-coin cell combined with its companion star, usually the reds star, five
+named exceptions), the Secret row is all stars (the Bowser goals moved onto
+the reds stars, "not the BITS entry for now"), and a route scope composes
+one row per route step-group through the same cell rule."""
+import json
+from pathlib import Path
+
+import pytest
+
+from sm64_events.memory.addresses import STAR_NAMES
+from sm64_events.ranks import scorecard, scoring
+
+SEED = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "data" / \
+    "rank_standards.seed.json"
+
+# His pairing list, verbatim from round 6 -- course -> the star the 100c cell
+# is combined with. The builder derives the ten defaults by the "Red Coins"
+# name rule and the five exceptions from stored names; THIS table is the
+# independent copy his message is the source of, so a drift in either
+# direction goes red here.
+HIS_PAIRINGS = {
+    1: "Find the 8 Red Coins",            # BOB
+    2: "Red Coins on the Floating Isle",  # WF
+    3: "Red Coins on the Ship Afloat",    # JRB
+    4: "Big Penguin Race",                # CCM (exception)
+    5: "Seek the 8 Red Coins",            # BBH
+    6: "Elevate for 8 Red Coins",         # HMC
+    7: "Hot-Foot-It into the Volcano",    # LLL (exception)
+    8: "Pyramid Puzzle",                  # SSL (exception)
+    9: "Pole-Jumping for Red Coins",      # DDD
+    10: "Shell Shreddin' for Red Coins",  # SL
+    11: "Go to Town for Red Coins",       # WDW
+    12: "Scary 'Shrooms, Red Coins",      # TTM
+    13: "Wiggler's Red Coins",            # THI
+    14: "Stomp on the Thwomp",            # TTC (exception)
+    15: "The Big House in the Sky",       # RR (exception)
+}
+
+
+def test_every_companion_matches_his_list_verbatim():
+    for course_id, star_label in HIS_PAIRINGS.items():
+        star_id = scorecard.hundred_coin_companion(course_id)
+        assert STAR_NAMES[course_id][star_id] == star_label, course_id
+
+
+def test_template_rows_have_six_cells_with_the_combined_100c_cell_in_place():
+    rows = scorecard.template_rows()
+    assert len(rows) == 17          # 15 courses + Secret + Bowser (round 21)
+    for row in rows[:15]:
+        assert len(row["entries"]) == 6, row["label"]
+        course_id = row["course_id"]
+        companion = scorecard.hundred_coin_companion(course_id)
+        keys = [key for key, _label, _clock in row["entries"]]
+        # the combined cell sits at the companion's own template position,
+        # carries the 100c ENTITY, and the companion has no cell of its own
+        assert keys[min(companion, 5)] == f"star:{course_id}:6"
+        assert f"star:{course_id}:{companion}" not in keys
+    combined = dict(
+        (key, label) for key, label, _clock in rows[0]["entries"])
+    assert combined["star:1:6"] == "Find the 8 Red Coins + 100c"
+    ccm = dict((key, label) for key, label, _clock in rows[3]["entries"])
+    assert ccm["star:4:6"] == "Big Penguin Race + 100c"
+
+
+def test_card_keys_shape():
+    """105 star keys: 90 course lines (a 100c cell covers two stars) + 15
+    Secret lines -- the 120 stars of his round-9 count. The fights card
+    joins only when the caller resolves fight segments."""
+    keys = scorecard.card_keys(scorecard.template_rows())
+    assert len(keys) == 15 * 6 + 15
+    assert keys[:6] == ["star:1:0", "star:1:1", "star:1:2", "star:1:6",
+                        "star:1:4", "star:1:5"]
+    # Round 21 split the specials into Secret (seven secret-stage stars, then
+    # the castle stars) and Bowser (the three reds), Secret first.
+    assert keys[-15:] == ["star:19:0", "star:19:1", "star:24:0",
+                           "star:21:0", "star:22:0", "star:20:0", "star:23:0",
+                           "star:0:0", "star:0:1", "star:0:2",
+                           "star:0:3", "star:0:4",
+                           "star:16:0", "star:17:0", "star:18:0"]
+
+    # A fight joins the Bowser card; with no seed key it follows the reds,
+    # and the key count grows by exactly one.
+    with_fights = scorecard.template_rows([("segment:9", "Bowser Battle 1")])
+    assert [row["label"] for row in with_fights[-2:]] == [
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
+    assert scorecard.card_keys(with_fights)[-1] == "segment:9"
+    assert len(scorecard.card_keys(with_fights)) == 15 * 6 + 15 + 1
+
+
+def test_the_secret_card_holds_the_seven_secrets_then_the_castle_stars():
+    """Round 21, his list: "The Princess' Secret Slide, The Princess' Secret
+    Slide (Under 21 Seconds), The Secret Aquarium, Tower of the Wing Cap,
+    Vanish Cap Under The Moat, Cavern of the Metal Cap, Wing Mario Over the
+    Rainbow" -- in that order; the three Bowser reds moved to the Bowser
+    card. Round 9's five castle secrets ("all 120 stars") still close the
+    card, and the whole card is igt."""
+    secret = scorecard.template_rows()[-2]
+    assert secret["course_id"] is None
+    assert secret["label"] == scorecard.SECRET_LABEL
+    assert secret["kind"] == "secret"
+    keys = [key for key, _label, _clock in secret["entries"]]
+    assert keys == ["star:19:0", "star:19:1", "star:24:0",
+                    "star:21:0", "star:22:0", "star:20:0", "star:23:0",
+                    "star:0:0", "star:0:1", "star:0:2",
+                    "star:0:3", "star:0:4"]
+    assert all(clock == "igt" for _key, _label, clock in secret["entries"])
+    labels = {key: label for key, label, _clock in secret["entries"]}
+    assert labels["star:20:0"] == "Cavern of the Metal Cap"
+    assert labels["star:21:0"] == "Tower of the Wing Cap"
+    assert labels["star:22:0"] == "Vanish Cap Under the Moat"
+    assert labels["star:23:0"] == "Wing Mario Over the Rainbow"
+    assert labels["star:24:0"] == "The Secret Aquarium"
+    assert "star:16:0" not in labels
+
+
+def test_each_side_sums_its_own_lines_and_the_delta_only_the_shared_ones():
+    """Round 29: a column's sum is a fact about that column. His two lines
+    add to 9000 even though the goal names only one of them; the goal's one
+    line is its sum; the DELTA compares only the line both have (1 of 6),
+    so it is -500 and not the 4500 a naive 9000 - 4500 would print."""
+    you = {"star:1:0": 4000, "star:1:1": 5000}
+    goal = {"star:1:0": 4500}            # star:1:1 has no goal
+    card = scorecard.build_card(scorecard.template_rows(), you=you, goal=goal)
+    row = card["rows"][0]
+    assert row["sum"] == {"you_cs": 9000, "goal_cs": 4500, "delta_cs": -500,
+                           "counted": 1, "total": 6}
+    tile1 = next(t for t in row["tiles"] if t["key"] == "star:1:1")
+    assert tile1["you_cs"] == 5000 and tile1["goal_cs"] is None and tile1["delta_cs"] is None
+
+
+def test_nothing_of_his_still_sums_the_goal():
+    """The reported case (round 29, after Settings -> wipe all practice
+    data): every card's foot read "--" in all three columns. The goal's
+    Stage Sum does not depend on him -- "It should be summed still. Not a
+    ---" -- while his side and the delta are absent, and absent is None
+    rather than a 0 that would print as 0'00"00."""
+    goal = {"star:1:0": 4500, "star:1:1": 4600, "star:1:2": 4700}
+    card = scorecard.build_card(scorecard.template_rows(), you={}, goal=goal)
+    row = card["rows"][0]
+    assert row["sum"] == {"you_cs": None, "goal_cs": 13800, "delta_cs": None,
+                           "counted": 0, "total": 6}
+    assert card["total"]["goal_cs"] == 13800
+    assert card["total"]["you_cs"] is None and card["total"]["delta_cs"] is None
+
+
+def test_no_goal_line_leaves_the_goal_sum_absent_not_zero():
+    you = {"star:1:0": 4000}
+    card = scorecard.build_card(scorecard.template_rows(), you=you, goal={})
+    row = card["rows"][0]
+    assert row["sum"] == {"you_cs": 4000, "goal_cs": None, "delta_cs": None,
+                           "counted": 0, "total": 6}
+
+
+def test_card_total_runs_the_same_sum_over_every_row():
+    keys = [key for key, _l, _c in scorecard.template_rows()[0]["entries"]]
+    you = {key: 1000 for key in keys}
+    goal = {key: 900 for key in keys}
+    card = scorecard.build_card(scorecard.template_rows(), you=you, goal=goal)
+    assert card["total"]["counted"] == 6
+    assert card["total"]["you_cs"] == 6000 and card["total"]["goal_cs"] == 5400
+    assert card["total"]["total"] == 15 * 6 + 15
+
+
+def _route(steps):
+    return {"steps": steps}
+
+
+def test_a_route_card_runs_in_course_order_however_the_route_runs():
+    """Round 20, 2026-09-01, on a live route card: "the order of the cards is
+    wrong... the order should be displayed in COURSE order. That is Bob -> WF
+    -> JRB -> CCM -> BBH -> HMC -> LLL -> SSL -> DDD -> SL -> WDW -> TTM ->
+    THI -> TTC -> RR -> Secret -> Bowser".
+
+    This reverses round 9's first-touch order deliberately, so the route walks
+    its courses BACKWARDS here -- the card must not follow it.
+    """
+    backwards = [15, 13, 9, 5, 1]
+    route = _route([{"need": 1, "candidates": [
+        {"type": "star", "course": course_id, "star": 0}]}
+        for course_id in backwards])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert [row["course_id"] for row in rows] == sorted(backwards)
+
+
+def test_the_bowser_card_pairs_each_reds_star_with_its_fight():
+    """Round 21, his list: "Bowser in the Dark World Red Coins, Bowser 1,
+    Bowser in the Fire Sea Red Coins, Bowser 2, Bowser in the Sky Red Coins,
+    Bowser 3". A fight finds its Bowser by SEED KEY, so the caller's order
+    and the fights' names do not matter; a fight with no seed key (his
+    own) follows the three pairs."""
+    rows = scorecard.template_rows([
+        ("segment:12", "Bowser 3", "seg:bowser-3"),
+        ("segment:10", "Bowser 1", "seg:bowser-1"),
+        ("segment:11", "Bowser 2", "seg:bowser-2"),
+        ("segment:40", "Bowser 1 (no BLJ)", None)])
+    assert sum(1 for row in rows if row["course_id"] is None) == 2
+    bowser = rows[-1]
+    assert bowser["label"] == scorecard.BOWSER_LABEL
+    assert bowser["kind"] == "bowser"
+    assert [key for key, _label, _clock in bowser["entries"]] == [
+        "star:16:0", "segment:10", "star:17:0", "segment:11",
+        "star:18:0", "segment:12", "segment:40"]
+    labels = {key: label for key, label, _clock in bowser["entries"]}
+    assert labels["star:16:0"] == "Bowser in the Dark World Red Coins"
+    assert labels["star:17:0"] == "Bowser in the Fire Sea Red Coins"
+    assert labels["star:18:0"] == "Bowser in the Sky Red Coins"
+    clocks = {key: clock for key, _label, clock in bowser["entries"]}
+    assert clocks["star:16:0"] == "igt" and clocks["segment:10"] == "rta"
+
+
+def test_the_two_specials_cards_are_built_here_not_in_the_browser():
+    """Round 21 split round 20's merged card; like the merge, the split
+    lives in the BUILDER so the Sigma, the CSV and the ignore button read
+    two rows through one path. Secret closes before Bowser."""
+    rows = scorecard.template_rows([("segment:9", "Bowser 1", "seg:bowser-1")])
+    assert [row["label"] for row in rows[-2:]] == [
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
+    assert [row.get("kind") for row in rows[-2:]] == ["secret", "bowser"]
+    assert all("kind" not in row for row in rows[:-2])
+
+
+def test_route_rows_apply_the_cell_rule_and_wear_the_course_name():
+    """A 120-star-style course visit holding both the 100c and its companion
+    merges them into ONE combined cell; the row wears the course's name."""
+    route = _route([{"need": 7, "candidates": [
+        {"type": "star", "course": 1, "star": star_id} for star_id in range(7)]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert len(rows) == 1
+    assert rows[0]["label"] == "Bob-omb Battlefield"
+    keys = [key for key, _l, _c in rows[0]["entries"]]
+    assert len(keys) == 6 and "star:1:3" not in keys and "star:1:6" in keys
+
+
+def test_route_rows_keep_a_companion_without_its_100c():
+    """16-star style: the reds star alone stays its own cell -- the merge
+    only fires when BOTH halves are in the row."""
+    route = _route([{"need": 1, "candidates": [
+        {"type": "star", "course": 1, "star": 3}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert [key for key, _l, _c in rows[0]["entries"]] == ["star:1:3"]
+    assert rows[0]["entries"][0][1] == "Find the 8 Red Coins"
+
+
+def test_route_segments_bucket_by_kind():
+    """Round 9's grouping: a FIGHT (named by the caller, by category) gets
+    the fights card; a segment with a course joins that course's card; a
+    courseless non-fight (an included-back castle movement) lands in the
+    Secret card -- the misc bucket, like the reference sheet's own Secret
+    column. Fights then Secret close the set, after the course cards."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 41}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 9}]},
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 77}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]}])
+    rows = scorecard.rows_for_route(
+        route,
+        segment_labels={41: "LBLJ", 9: "Bowser Battle 1", 77: "DDD Entry"},
+        segment_courses={77: 9},
+        fight_segment_ids={9})
+    # COURSE order since round 20 (WF is course 2, DDD is 9); the courseless
+    # movement lands on the Secret card and the fight on the Bowser card
+    # (round 21), Secret first.
+    assert [row["label"] for row in rows] == [
+        "Whomp's Fortress", "Dire, Dire Docks",
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
+    by_label = {row["label"]: row for row in rows}
+    assert by_label[scorecard.SECRET_LABEL]["entries"] == [
+        ("segment:41", "LBLJ", "rta")]
+    assert by_label[scorecard.BOWSER_LABEL]["entries"] == [
+        ("segment:9", "Bowser Battle 1", "rta")]
+    assert by_label["Dire, Dire Docks"]["entries"] == [
+        ("segment:77", "DDD Entry", "rta")]
+
+
+def test_a_route_card_runs_in_star_select_order():
+    """Round 17: "each row in each section is organized by the appearance
+    in the star select menu in game... the scorecard should always be
+    ordered by star order." A route reaches a course's stars in whatever
+    order it plays them; the CARD lists them by slot, the order the game's
+    own star select uses and his reference sheet follows. THI's real slots,
+    fed in deliberately jumbled."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 5}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 3}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 1}]},
+    ])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    keys = [key for key, _label, _clock in rows[0]["entries"]]
+    assert keys == ["star:13:0", "star:13:1", "star:13:3", "star:13:5"]
+
+
+def test_a_route_cards_100c_cell_keeps_its_companions_slot():
+    """Ordering runs BEFORE the 100c merge, so the combined cell lands on
+    the companion's own line -- "Wiggler's Red Coins + 100c" sits where the
+    reds star sits, exactly as the sheet has it, not at slot 6."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 6}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 5}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 4}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 13, "star": 0}]},
+    ])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    entries = rows[0]["entries"]
+    assert scorecard.hundred_coin_companion(13) == 4
+    keys = [key for key, _label, _clock in entries]
+    # the merged cell carries the 100c ENTITY at the companion's position
+    assert keys == ["star:13:0", "star:13:6", "star:13:5"]
+    assert entries[1][1].endswith("+ 100c")
+
+
+def test_a_route_secret_card_runs_in_template_order():
+    """The same rule on the Secret card: SECRET_ROW's own order, not the
+    order the route happened to reach them in."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 23, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 19, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 24, "star": 0}]},
+    ])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    keys = [key for key, _label, _clock in rows[0]["entries"]]
+    template = [key for key, _label in scorecard.SECRET_ROW]
+    assert keys == [key for key in template if key in set(keys)]
+    assert keys == ["star:19:0", "star:24:0", "star:23:0"]
+
+
+def test_route_revisits_merge_into_one_course_card():
+    """Round 9: "BOB is all of the bobomb battlefield stars" -- a course
+    visited twice is ONE card, duplicate entities kept once. Round 20 moved
+    that card from its first-touch position to its COURSE position."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 6, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 2, "star": 0}]},
+        {"need": 2, "candidates": [
+            {"type": "star", "course": 6, "star": 0},
+            {"type": "star", "course": 6, "star": 1}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert [row["label"] for row in rows] == [
+        "Whomp's Fortress", "Hazy Maze Cave"]
+    assert [key for key, _l, _c in rows[1]["entries"]] == [
+        "star:6:0", "star:6:1"]
+
+
+def test_route_castle_secrets_go_to_secret_and_bowser_reds_to_bowser():
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 16, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 0, "star": 3}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert [row["label"] for row in rows] == [
+        scorecard.SECRET_LABEL, scorecard.BOWSER_LABEL]
+    secret = {key: label for key, label, _c in rows[0]["entries"]}
+    bowser = {key: label for key, label, _c in rows[1]["entries"]}
+    assert secret == {"star:0:3": "MIPS 1st Star"}
+    assert bowser == {"star:16:0": "Bowser in the Dark World Red Coins"}
+
+
+def test_route_fights_pair_with_their_reds_by_seed_key():
+    route = _route([
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 11}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 17, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 16, "star": 0}]}])
+    rows = scorecard.rows_for_route(
+        route, segment_labels={11: "Bowser 2"},
+        fight_segment_ids={11: "seg:bowser-2"})
+    assert [row["label"] for row in rows] == [scorecard.BOWSER_LABEL]
+    assert [key for key, _l, _c in rows[0]["entries"]] == [
+        "star:16:0", "star:17:0", "segment:11"]
+
+
+def test_route_rows_drop_a_deleted_segments_cell_and_an_empty_step():
+    route = _route([{"need": 1, "candidates": [
+        {"type": "segment", "segment_id": 999}]}])
+    assert scorecard.rows_for_route(route, segment_labels={}) == []
+
+
+def test_a_course_visit_drops_the_steps_own_star_count_label():
+    """Round 8: "We also don't need the 'DDD -- 3 stars' or 'WDW -- 7 stars'
+    the '-- X stars' count. Just the name of the course." The corpus really
+    does author that label (`corpus_vocab._merge_label`) and the Run tab
+    still shows it -- the scorecard prefers the course's own name."""
+    route = _route([{"label": "WF — 7 stars", "need": 2, "candidates": [
+        {"type": "star", "course": 2, "star": 0},
+        {"type": "star", "course": 2, "star": 1}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert rows[0]["label"] == "Whomp's Fortress"
+
+
+def test_card_keys_deduplicates_a_route_that_revisits_an_entity():
+    route = _route([
+        {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]},
+        {"need": 1, "candidates": [{"type": "star", "course": 1, "star": 0}]}])
+    rows = scorecard.rows_for_route(route, segment_labels={})
+    assert scorecard.card_keys(rows) == ["star:1:0"]
+
+
+def test_without_keys_drops_excluded_cells_and_the_rows_they_empty():
+    """Round 7 item 3: the card reads the same exclusion set the scope's own
+    rating drops, so a movement the route ranking ignores draws no cell --
+    and a step that was ONLY that movement draws no row at all."""
+    route = _route([
+        {"need": 1, "candidates": [{"type": "segment", "segment_id": 41}]},
+        {"need": 2, "candidates": [
+            {"type": "star", "course": 1, "star": 0},
+            {"type": "segment", "segment_id": 42}]}])
+    rows = scorecard.rows_for_route(
+        route, segment_labels={41: "Lakitu Skip", 42: "LBLJ"})
+    assert len(rows) == 2
+
+    kept = scorecard.without_keys(rows, {"segment:41", "segment:42"})
+    assert len(kept) == 1, "a row emptied by the filter must not draw"
+    assert [key for key, _l, _c in kept[0]["entries"]] == ["star:1:0"]
+
+
+def test_without_keys_leaves_an_unexcluded_card_untouched():
+    rows = scorecard.template_rows()
+    assert scorecard.without_keys(rows, set()) == rows
+    assert scorecard.without_keys(rows, {"segment:999"}) == rows
+
+
+def test_rows_for_course_serves_main_secret_and_refuses_the_castle():
+    assert len(scorecard.rows_for_course(4)) == 1
+    assert len(scorecard.rows_for_course(4)[0]["entries"]) == 6
+    bitdw = scorecard.rows_for_course(16)[0]
+    assert [key for key, _l, _c in bitdw["entries"]] == ["star:16:0"]
+    assert bitdw["label"] == "Bowser in the Dark World"
+    # Course 0 = the five castle secrets, real cells since round 9.
+    castle = scorecard.rows_for_course(0)[0]
+    assert len(castle["entries"]) == 5
+    with pytest.raises(LookupError):
+        scorecard.rows_for_course(25)
+
+
+def test_division_goal_round_trips():
+    # Same seed-loading idiom as tests/test_ranks_scoring_seed.py -- no
+    # RankStandards constructor is named "load_default" anywhere in the repo,
+    # so read the bundled seed JSON directly, exactly like that file does.
+    entities = json.loads(SEED.read_text())["entities"]
+    ladders = entities["star:1:0"]["strategies"]
+    ladder = scoring.best_ladder(ladders)
+    assert len(scoring.defined_tiers(ladder)) >= 3, "fixture needs a ragged ladder"
+
+    cs = scorecard.division_goal_cs(ladder, "Gold", "I")
+    graded = scoring.progress_for_time(ladder, cs)
+    assert (graded["tier"], graded["division"]) == ("Gold", "I")
+    worse = scoring.progress_for_time(ladder, cs + 1)
+    assert (worse["tier"], worse["division"]) != ("Gold", "I")
+
+
+def test_division_goal_refuses_an_undefined_tier():
+    assert scorecard.division_goal_cs({"Bronze": 5000}, "Master", "III") is None
+
+
+def test_division_goal_snaps_to_at_least_when_no_centisecond_lands_exactly():
+    """A real seeded ladder (star:8:1) whose Mario band spans only 5.0 score
+    points across 3 real centiseconds (674-676cs): no integer centisecond
+    grades EXACTLY Mario III on this entity. Until round 12 that was "no
+    goal for this tile" -- and four of his live tiles showed "set a
+    time..." under a Metal goal for exactly this reason (his ladders put
+    3cs across Get a Hand's whole Metal tier). His ruling: "We should never
+    be missing a tier like this in our system." The resolver now returns
+    the slowest centisecond grading AT LEAST the asked division -- reaching
+    it honours the goal -- and still resolves identically wherever the
+    exact division is reachable (the sweep companion below)."""
+    entities = json.loads(SEED.read_text())["entities"]
+    ladder = scoring.best_ladder(entities["star:8:1"]["strategies"])
+    assert ladder["Mario"] == 676          # pin the fixture so a seed update is visible here
+    goal = scorecard.division_goal_cs(ladder, "Mario", "III")
+    assert goal is not None
+    graded = scoring.progress_for_time(ladder, goal)
+    assert graded["tier"] == "Mario"
+    assert graded["division"] in ("I", "II", "III"), (
+        "the snapped goal must grade AT LEAST Mario III")
+    # ...and one centisecond slower must NOT meet Mario III any more, or the
+    # goal is not the SLOWEST honouring time.
+    slower = scoring.progress_for_time(ladder, goal + 1)
+    assert (slower["tier"], slower["division"]) not in (
+        ("Mario", "I"), ("Mario", "II"), ("Mario", "III"))
+
+
+def test_division_goal_covers_every_defined_tier_and_division_in_the_seed():
+    """Round 12's whole point, as a sweep: for every seeded entity, every
+    tier its best ladder defines resolves a goal for all five divisions --
+    zero holes (was 32 before the at-least snap)."""
+    entities = json.loads(SEED.read_text())["entities"]
+    holes = []
+    for key, spec in entities.items():
+        ladder = scoring.best_ladder(spec["strategies"])
+        for tier in ladder:
+            for division in ("I", "II", "III", "IV", "V"):
+                if scorecard.division_goal_cs(ladder, tier, division) is None:
+                    holes.append((key, tier, division))
+    assert not holes, holes[:10]

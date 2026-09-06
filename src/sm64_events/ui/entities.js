@@ -231,6 +231,16 @@ export const SPECIAL_COURSE_ICONS = {
   20: "metal", 21: "wing", 22: "vanish", 23: "sky", 24: "aqua",
 };
 
+// A special stage whose STARS have their own art, keyed the way the main
+// courses are (`${prefix}${slot + 1}`). PSS is the only one: its two stars
+// are different runs of the same slide -- the box star at the back and the
+// under-21 dash -- and 2026-08-31 gave them `slide1.png` / `slide2.png`,
+// so drawing one portrait for both would now be throwing away a
+// distinction the art itself makes. The COURSE keeps its portrait
+// (`SPECIAL_COURSE_ICONS` above): a course icon names the stage, a star
+// icon names the star.
+export const SPECIAL_STAR_PREFIXES = { 19: "slide" };
+
 const GENERIC_STAR_SLOTS = 6;   // ui/assets/star_1.png … star_6.png
 export const genericStarSrc = (slot = 0) =>
   `/ui/assets/star_${Math.min(slot + 1, GENERIC_STAR_SLOTS)}.png`;
@@ -340,7 +350,7 @@ export function entityIcon(entityKey, context = {}) {
   if (kind === "star") {
     const { course, star } = parseStarId(id);
     if (starIconsMode !== "course") return genericStar(star);
-    const prefix = prefixFor(course);
+    const prefix = prefixFor(course) || SPECIAL_STAR_PREFIXES[Number(course)];
     if (prefix) return starIconSrc(`${prefix}${star + 1}`);
     // Special stages have ONE icon rather than one per slot, so every star in
     // them wears the stage's own art instead of a generic gold star.

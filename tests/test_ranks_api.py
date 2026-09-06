@@ -23,7 +23,7 @@ def _seed(tmp_path):
             "Nuts Pless": {"Mario": 12.93, "Master": 13.16, "Diamond": 13.36}}}}}))
     return p
 
-def make_client(tmp_path):
+def make_client(tmp_path, bundled_library=False):
     db = Database(tmp_path / "t.db")
     b = Broadcaster()
     ranks = RankStandards(tmp_path / "rs.json", seed_path=_seed(tmp_path)); ranks.load()
@@ -36,8 +36,18 @@ def make_client(tmp_path):
     # 2026-08-23 by the wrap's clean-worktree run: a leaderboard test that
     # passed here for weeks failed there, because "here" had a leaked
     # adoption and the clean tree did not).
+    # `library_bundled_path` to a file that does not exist: these tests model
+    # a standards store holding ONLY what they put in it, and since round 33
+    # the bundled library's fitted rows would otherwise join every star's
+    # ladders at load (that is the feature, not a leak -- see
+    # tests/test_library_refresh.py for the tests that want it on).
     app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc,
-                     adoptions_path=tmp_path / "library_adoptions.json")
+                     adoptions_path=tmp_path / "library_adoptions.json",
+                     # ...and the LOCAL snapshot too, or the checkout's own
+                     # refreshed data/sheet_library.json.gz answers instead.
+                     library_path=tmp_path / "sheet_library.json.gz",
+                     library_bundled_path=(None if bundled_library
+                                           else tmp_path / "no-library.json.gz"))
     return TestClient(app), svc
 
 def test_make_client_never_touches_the_checkouts_own_adoption_file(tmp_path):

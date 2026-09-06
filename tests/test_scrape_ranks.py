@@ -98,7 +98,7 @@ def test_bundled_seed_has_no_dropped_minute_cells():
 def test_build_seed_maps_and_adds_segment_defaults():
     parsed = {"7_3": {"Nuts Pless": {"Mario": 12.93}}, "0_100c4": {"x": {"Mario": 1.0}}}
     seed = scrape.build_seed(parsed)
-    assert seed["version"] == 5
+    assert seed["version"] == 6
     assert seed["entities"]["star:8:2"]["clock"] == "igt"
     assert seed["entities"]["star:8:2"]["strategies"]["Nuts Pless"]["Mario"] == 12.93
     # No catalog here, so the variant label falls back to OUR star registry
@@ -231,3 +231,44 @@ def test_build_seed_attaches_jp_strategies():
     assert seed["entities"]["star:1:0"]["strategies"]["Standard"]["Mario"] == 45.46
     assert seed["entities"]["star:1:0"]["jp_strategies"]["Standard"]["Mario"] == 44.23
     assert "jp_strategies" not in seed["entities"]["star:8:2"]
+
+
+def test_the_under_21_ladder_lands_on_its_own_star():
+    """xcams publishes both slide stars under ONE key, `15_pss`, as the
+    strategies "Box Star" and "Under 21"; our registry has two stars. Both
+    landed on 19:0, so 19:1 had no standard at all (his report,
+    2026-08-31). `_STRATEGY_ENTITY` moves that one ladder -- and its video,
+    clips and JP deltas travel with it, since they describe the ladder
+    rather than the key."""
+    parsed = {"15_pss": {
+        "Box Star": {"Mario": 24.86, "Bronze": 26.43},
+        "Under 21": {"Mario": 20.73, "Bronze": 22.26},
+    }}
+    jp = {"15_pss": {"Under 21": {"Mario": 20.50}}}
+    catalog = [{} for _ in range(15)] + [{"starList": [{
+        "id": "pss", "name": "The Princess's Secret Slide",
+        "strats": [{"name": "Box Star", "cams": [
+                        {"url": "https://youtu.be/box", "time": 2456}]},
+                   {"name": "Under 21", "cams": [
+                        {"url": "https://youtu.be/u21", "time": 2050}]}]}]}]
+    seed = scrape.build_seed(parsed, catalog=catalog, cams=catalog,
+                             jp_deltas=jp)["entities"]
+
+    assert list(seed["star:19:0"]["strategies"]) == ["Box Star"]
+    assert list(seed["star:19:1"]["strategies"]) == ["Under 21"]
+    assert seed["star:19:1"]["strategies"]["Under 21"]["Mario"] == 20.73
+    assert seed["star:19:1"]["jp_strategies"]["Under 21"]["Mario"] == 20.50
+    assert "Under 21" not in seed["star:19:0"].get("jp_strategies", {})
+    assert seed["star:19:1"]["clock"] == "igt"
+
+
+def test_the_bundled_seed_gives_the_under_21_star_its_own_ladder():
+    """The OUTPUT, not just the mapper: a routing hole is invisible in a
+    unit test and only the shipped seed shows it (the same reason this file
+    already pins Bowser coverage)."""
+    seed = json.loads(BUNDLED_SEED.read_text(encoding="utf-8"))["entities"]
+    assert "Under 21" in seed["star:19:1"]["strategies"]
+    assert "Under 21" not in seed["star:19:0"]["strategies"]
+    assert "Box Star" in seed["star:19:0"]["strategies"]
+    # the example video follows the ladder it belongs to
+    assert "Under 21" in seed["star:19:1"].get("videos", {})

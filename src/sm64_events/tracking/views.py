@@ -135,6 +135,53 @@ def _current_pbs(pb_rows: list[dict]) -> dict:
     return out
 
 
+def latest_pbs_by_strategy(pb_rows: list[dict]) -> dict:
+    """The CURRENT row per (course_id, star_id, segment_id, timer_mode,
+    strat_tag, game_version), later rows winning -- the untagged bucket
+    included under `None`, and an unversioned row under `None` too. The ONE
+    reading behind "your best on this entity however you set it": a caller
+    takes the fastest of an identity's rows. Round 33 (2026-09-05): the
+    Scorecard's YOU asked the strategy-blind `current_pb`, which answers the
+    LATEST save across strategies, so an import that landed a slower row
+    after a faster one showed the slower time as his -- he was the runner
+    the goal came from, and the gap read +0.24 where it had to be 0.00.
+
+    A slot per ROM as well (round 34, same day): a merged (JP)/(US) sheet
+    row lands BOTH of a runner's times under one strategy, JP first, and
+    keyed by strategy alone the US row shadowed the faster JP one -- six of
+    Raisn's tiles and two of RONC3NA's read YOU slower than their own GOAL
+    ("I literally am ronc3na in this case"). `db.current_pb(game_version=)`
+    already reads a named row that way (a row set on the other ROM is not
+    an answer; an unversioned row always is); this map now agrees with it.
+    `_column_resolve.leftovers` reads the same map."""
+    out = {}
+    for row in pb_rows:  # ordered by id: later rows win
+        out[(row["course_id"], row["star_id"], row["segment_id"],
+             row["timer_mode"], row["strat_tag"], row.get("game_version"))] = row
+    return out
+
+
+def fastest_current_pbs(pb_rows: list[dict], regions=None) -> dict:
+    """{(course_id, star_id, segment_id, timer_mode): the fastest of that
+    identity's current rows across every strategy and every ROM `regions`
+    admits} -- what a tile calls YOUR time, and what a runner's own column
+    would print for them. `regions` is the Scorecard's own region setting
+    (`None` = every row); a row with no ROM stamped is graded on whatever is
+    running and so always counts. The GOAL side takes the faster of a
+    runner's two regional times per entity (`runner_goal_map`), and this is
+    the same minimise-then-merge on your side, which is what makes a runner
+    grade himself at exactly 0.00 whichever regions are on."""
+    best = {}
+    for (course_id, star_id, segment_id, mode, _strat, version), row in \
+            latest_pbs_by_strategy(pb_rows).items():
+        if regions is not None and version is not None and version not in regions:
+            continue
+        key = (course_id, star_id, segment_id, mode)
+        if key not in best or row["frames"] < best[key]["frames"]:
+            best[key] = row
+    return best
+
+
 def current_pbs_by_strat(pb_rows: list[dict]) -> dict:
     """Latest pb row keyed like _current_pbs but with the saving attempt's
     strat_tag appended. THE per-strategy ranking lookup: a strategy is ranked
@@ -270,6 +317,12 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             # but every one of them still carries a time that measures the
             # wrong moment.
             "caveat": attempt_caveat(a),
+            # A time he brought rather than played: a real row with every
+            # row affordance, and provably no replay -- the one control the
+            # log hides for it, rather than drawing a player for a run the
+            # recorder never saw ("We just obviously can't see any video for
+            # it", 2026-08-22). Provenance is never DRAWN beyond that.
+            "imported": a.timed_by == "imported",
             "cleared_reason": a.cleared_reason,
             "started_utc": a.started_utc, "ended_utc": a.ended_utc,
             "rollouts_total": a.rollouts_total,
@@ -406,16 +459,24 @@ def valid_frames(history, strat, clock) -> list[int]:
 
 def grading_basis(mode, pb, history, strat, clock) -> dict | None:
     """THE one 'which time does this rank grade?' resolver. Returns
-    {"frames", "count", "window"} or None when nothing is gradeable.
+    {"frames", "count", "window", "version"} or None when nothing is gradeable.
     'pb' mode wraps the saved per-strategy PB row (count 1) — byte-for-byte
     today's grading; avg modes grade attempt history via classify.average_frames,
     so a run never saved as PB still counts.
+
+    `version` is the ROM the graded time was SET on, and it travels with the
+    basis so every surface reading one time reaches the same ladder. In pb mode
+    it is the row's own `game_version`; an IMPORTED time carries it and a
+    played one is NULL, which resolves to the running version exactly as
+    everything did before imports existed. Avg modes are always None: an
+    average is over ATTEMPTS, and an attempt stores no version.
 
     Public because MARELO grades the same basis (tracking/marelo.py): there is
     exactly ONE answer to "which of my times counts", and it lives here."""
     mode_def = classify.RANK_MODES.get(mode) or classify.RANK_MODES["pb"]
     if mode_def["order"] is None:
-        return ({"frames": pb["frames"], "count": 1, "window": None}
+        return ({"frames": pb["frames"], "count": 1, "window": None,
+                 "version": pb.get("game_version")}
                 if pb else None)
     averaged = classify.average_frames(valid_frames(history, strat, clock),
                                        mode_def["window"], mode_def["order"])
@@ -423,7 +484,7 @@ def grading_basis(mode, pb, history, strat, clock) -> dict | None:
         return None
     mean_frames, count = averaged
     return {"frames": mean_frames, "count": count,
-            "window": mode_def["window"]}
+            "window": mode_def["window"], "version": None}
 
 
 def _strat_rank(ranks, ek, strat, basis) -> dict | None:
@@ -448,7 +509,9 @@ def _strat_rank(ranks, ek, strat, basis) -> dict | None:
     so this is not a behavior change to the tier itself."""
     if ranks is None or not strat or basis is None:
         return None
-    ladder = ranks.ladder_cs(ek, strat)
+    # The basis carries the ROM its time was set on; None means the running
+    # version, which is what every basis said before imports existed.
+    ladder = ranks.ladder_cs(ek, strat, basis.get("version"))
     if not ladder:
         return None
     progress = _graded_progress(ladder, classify.display_cs(basis["frames"]))
@@ -534,7 +597,7 @@ def _ladder_is_fitted(ranks, ek, best_ladder_cs: dict) -> bool:
     return False
 
 
-def entity_rank(ranks, ek, frames) -> dict | None:
+def entity_rank(ranks, ek, frames, version=None) -> dict | None:
     """The star/segment's OWN rank: the time graded against the entity's
     best-possible ladder (pointwise best across every strategy) rather than
     the active strategy's. THE number MARELO aggregates.
@@ -573,7 +636,11 @@ def entity_rank(ranks, ek, frames) -> dict | None:
     fastest_strat's own is_fitted silently missed."""
     if ranks is None or frames is None:
         return None
-    ladder = scoring.best_ladder(ranks.ladders(ek))
+    # `version` is the ROM that set THIS time (None = the running one). It
+    # matters most here of anywhere: this is the number MARELO aggregates, so
+    # a JP time landing on a US best-possible ladder would inflate the rating
+    # for the whole corpus rather than one banner.
+    ladder = scoring.best_ladder(ranks.ladders(ek, version))
     if not ladder:
         return None
     progress = _graded_progress(ladder, classify.display_cs(frames))
@@ -628,13 +695,16 @@ def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
     for strat in (strategies if strategies is not None else ranks.strategies(ek)):
         if strat in deleted:
             continue
-        ladder = ranks.ladder_cs(ek, strat)
-        if not ladder:
-            continue
         basis = grading_basis(
             rank_mode, pbs_by_strat.get((*pb_key_prefix, clock, strat)),
             history, strat, clock)
         if basis is None:
+            continue
+        # Basis BEFORE ladder, deliberately: the ladder depends on the version
+        # the basis carries. Both branches still end in `continue`, so which
+        # skip fires first cannot change the result set.
+        ladder = ranks.ladder_cs(ek, strat, basis.get("version"))
+        if not ladder:
             continue
         graded = _graded_progress(ladder, classify.display_cs(basis["frames"]))
         if best is None or graded["score"] > best[1]["score"] \
@@ -909,7 +979,11 @@ def _section_banner(ranks, ek, strat, basis, mode, pb_untagged=False) -> dict | 
     # "rank" on all of them, not only the fully-graded case (a consistent
     # shape means the UI never destructures a missing key on a sentinel).
     fitted = ranks.is_fitted(ek, strat)
-    ladder = ranks.ladder_cs(ek, strat)
+    # Same version the rank uses, from the same basis -- two surfaces reading
+    # one time must not disagree about which ladder it is on. A None basis has
+    # no version to speak of and falls back to the running one.
+    ladder = ranks.ladder_cs(ek, strat,
+                             basis.get("version") if basis else None)
     if not ladder:
         return {"rank": None, "reason": "no_ladder", "mode": mode, "fitted": fitted}
     if basis is None:
@@ -1531,7 +1605,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, ek, star_strat, star_basis, rank_mode,
                 pb_untagged=star_pb_untagged),
             "entity_rank": entity_rank(
-                service.ranks, ek, star_basis and star_basis["frames"]),
+                service.ranks, ek, star_basis and star_basis["frames"],
+                version=star_basis and star_basis.get("version")),
             "one_ladder": ranks_share_ladder(service.ranks, ek, star_strat),
             # armed_detail is a documented rule-11 ASYMMETRY, not its
             # absence: every star but the 100-coin one carries no such key
@@ -1785,7 +1860,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, grading_ek, seg_strat, seg_basis, rank_mode,
                 pb_untagged=seg_pb_untagged),
             "entity_rank": entity_rank(
-                service.ranks, grading_ek, seg_basis and seg_basis["frames"]),
+                service.ranks, grading_ek, seg_basis and seg_basis["frames"],
+                version=seg_basis and seg_basis.get("version")),
             "one_ladder": ranks_share_ladder(service.ranks, grading_ek, seg_strat),
         })
     seg_sections.sort(

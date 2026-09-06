@@ -11,8 +11,9 @@ Several sheet targets legitimately share one entity key (every "+ 100c" row is
 the course's 100-coin star). They stay separate targets here: they are
 genuinely different runs, and collapsing them would merge four CCM routes into
 one unreadable list."""
-from sm64_events.library.mapping import map_target, miss_reason
-from sm64_events.library.sheet import base_name as _base_name, read_rows
+from sm64_events.library.mapping import map_target, miss_reason, split_for
+from sm64_events.library.sheet import base_name as _base_name
+from sm64_events.library.sheet import read_rows
 from sm64_events.library.workbook import log_revision
 
 # 2: approaches carry `matched_strategy` (2026-08-07). The Library page
@@ -26,9 +27,13 @@ def _entries(row) -> list:
     # row and its (US) sibling merge into one approach but hold two genuinely
     # different populations -- JRB's stone pillar is 10.80 JP against 14.50 US
     # -- so anything fitting a ladder over the merged pile describes neither.
+    # `platform` is the machine the runner's own legend says set this time
+    # ("emu" / "n64"), None for the 471 columns with no legend -- see
+    # `sheet.py::runner_legends`. The import stamps it onto the attempt it
+    # lands, so an export can colour the cell back the way the runner had it.
     return [{"runner": runner, "time_cs": centiseconds, "video": link,
-             "version": row.version}
-            for runner, (centiseconds, link) in sorted(row.entries.items())]
+             "version": row.version, "platform": platform}
+            for runner, (centiseconds, link, platform) in sorted(row.entries.items())]
 
 
 def _new_approach(row, name) -> dict:
@@ -71,6 +76,52 @@ def _pack_approaches(rows) -> list:
     return out
 
 
+def _apply_splits(targets: list) -> list:
+    """Split any sheet target that holds two of OUR entities into two
+    targets (`mapping.TARGET_SPLITS`; today the Princess's Secret Slide
+    block, whose [2]/[4] approaches are the Under-21 star's).
+
+    The split target keeps its place in the list, immediately followed by
+    the one carved out of it, so the Library's own order still follows the
+    sheet. A subsection moves only when its ids lie ENTIRELY inside the
+    carved-out approaches -- the slide's two "Slide time" rows are shared
+    ([1|2] and [3|4]), and a piece that times both stars belongs to the
+    heading it was written under rather than being duplicated into both.
+
+    The carved-out target carries `split_from`, the label of the block it
+    came out of, and it is the only target in the payload with NO opening
+    row of its own -- every other one begins where a `SheetRow.opens_target`
+    row does. Anything walking rows and targets together has to know that
+    (`library/export_column.py::column_lines` pairs one opening row with one
+    BLOCK for exactly this reason); without the mark an extra target shifts
+    every later row against the wrong target, silently, for the rest of the
+    sheet."""
+    out = []
+    for target in targets:
+        rule = split_for(target.get("section", ""), target.get("label", ""))
+        matched = ([one for one in target["approaches"] if rule["matches"](one["name"])]
+                   if rule else [])
+        if not rule or not matched or len(matched) == len(target["approaches"]):
+            out.append(target)            # nothing to split, or nothing left behind
+            continue
+        moved_ids = {one for approach in matched for one in approach["ids"]}
+        target["approaches"] = [one for one in target["approaches"]
+                                if one not in matched]
+        kept_subsections, moved_subsections = [], []
+        for subsection in target["subsections"]:
+            (moved_subsections if set(subsection["ids"]) <= moved_ids
+             else kept_subsections).append(subsection)
+        target["subsections"] = kept_subsections
+        out.append(target)
+        out.append({**{key: value for key, value in target.items()
+                       if key not in ("approaches", "subsections",
+                                      "entity_key", "label", "miss_reason")},
+                    "entity_key": rule["entity_key"], "label": rule["label"],
+                    "miss_reason": None, "split_from": target["label"],
+                    "approaches": matched, "subsections": moved_subsections})
+    return out
+
+
 def build(data: bytes, fetched_at: str, overrides: dict | None = None) -> dict:
     rows = read_rows(data)
     runners = sorted({runner for row in rows for runner in row.entries})
@@ -100,6 +151,7 @@ def build(data: bytes, fetched_at: str, overrides: dict | None = None) -> dict:
                  "entries": _entries(row)})
     for target in targets:
         target["approaches"] = _pack_approaches(target.pop("_approach_rows"))
+    targets = _apply_splits(targets)
     payload = {"schema_version": SCHEMA_VERSION,
                "sheet_revision": log_revision(data),
                "fetched_at": fetched_at,

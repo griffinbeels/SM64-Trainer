@@ -12,7 +12,7 @@ cannot quietly change the comparison. Export adds the current library name
 to the header; the originally imported source remains unchanged in storage.
 
 One template is ACTIVE per (kind, entity, strategy). The partial unique index
-in migration v28 makes that a fact rather than a convention; marking a new one
+in migration v32 makes that a fact rather than a convention; marking a new one
 stands the old one down in the same transaction.
 """
 from dataclasses import dataclass

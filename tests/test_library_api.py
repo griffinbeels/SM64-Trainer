@@ -116,7 +116,7 @@ def test_target_rows_carry_their_adoption_state(tmp_path):
                 "times": {}, "ideal_cs": None, "fill_rate": 0.2,
                 "ladder": dict(ladder), "ladder_samples": 40,
                 "entries": [{"runner": "r", "time_cs": 276,
-                             "video": None, "version": None}]}
+                             "video": None, "version": None, "platform": None}]}
 
     store = LibraryStore()
     store._payload = {
@@ -325,3 +325,58 @@ def test_adopt_target_route_links_the_batch_and_names_refusals(tmp_path):
                     json={"target_index": 99,
                           "entity_key": "segment:9"}).status_code == 409
     assert api.post("/api/library/adopt_target", json={}).status_code == 400
+
+
+def test_rows_carry_their_held_cells_and_a_link_hands_the_row_to_on_adopt(tmp_path):
+    """Round 28: every decorated row says what an import HELD for it (one
+    cell per ROM), and the adopt doors await `on_adopt` with the rows just
+    linked -- which is how a held cell lands (`import_api.held_row_lander`).
+    Neither is wired here; the router only has to ask."""
+    import sm64_events.library.adoptions as ad
+    from sm64_events.ranks.standards import RankStandards
+
+    def item(name):
+        return {"name": name, "ids": ["1"], "entries": [], "ladder": {"Bronze": 900}}
+
+    store = LibraryStore()
+    store._payload = {
+        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+        "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
+            {"entity_key": None, "group": "Castle Movements (Lobby)",
+             "section": "★ BoB", "label": "Lobby door (L) - BoB door",
+             "version": None, "miss_reason": "castle_movement",
+             "approaches": [item("Lobby door (L) - BoB door")],
+             "subsections": [item("First stretch")]}]}
+    standards = RankStandards(tmp_path / "rank_standards.json")
+    standards.load()
+    adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
+    adoptions.load()
+    from sm64_events.library.audit import row_key
+    target = store._payload["targets"][0]
+    piece_key = row_key(target, "First stretch", ["1"])
+    cells = [{"row_key": piece_key, "game_version": "jp", "time_cs": 1613},
+             {"row_key": piece_key, "game_version": "us", "time_cs": 1700}]
+    handed = []
+
+    async def on_adopt(keys):
+        handed.append(list(keys))
+        return {"landed": 1, "released": 2}
+
+    app = FastAPI()
+    app.include_router(create_library_router(
+        store, adoptions=adoptions, held_times=lambda: cells, on_adopt=on_adopt))
+    client = TestClient(app)
+    body = client.get("/api/library/target/0").json()
+    assert body["subsections"][0]["held"] == [
+        {"game_version": "jp", "time_cs": 1613},
+        {"game_version": "us", "time_cs": 1700}]
+    assert body["approaches"][0]["held"] == []
+    reply = client.post("/api/library/adopt",
+                        json={"row_key": piece_key, "entity_key": "segment:42"})
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["held"] == {"landed": 1, "released": 2}
+    assert handed == [[piece_key]]
+    whole = client.post("/api/library/adopt_target",
+                        json={"target_index": 0, "entity_key": "segment:43"})
+    assert whole.status_code == 200, whole.text
+    assert handed[-1] == [row_key(target, "Lobby door (L) - BoB door", ["1"])]

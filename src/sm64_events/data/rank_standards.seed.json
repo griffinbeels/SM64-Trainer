@@ -1,5 +1,5 @@
 {
- "version": 5,
+ "version": 6,
  "entities": {
   "star:1:0": {
    "clock": "igt",
@@ -494,7 +494,7 @@
      ],
      [
       2880,
-      "https://youtu.be/tGtFfyH_ZGA?si=dSIqEN354rNsFvKU"
+      "https://www.youtube.com/watch?v=Dxk8T_wvq4g"
      ],
      [
       2890,
@@ -574,8 +574,8 @@
       "https://www.youtube.com/watch?v=cKQNLfK5VgQ"
      ],
      [
-      1350,
-      "https://youtu.be/HjJTgGYDSis"
+      1343,
+      "https://www.youtube.com/watch?v=H4nx6QceuGc"
      ]
     ]
    }
@@ -606,7 +606,7 @@
    },
    "videos": {
     "Standard": "https://www.youtube.com/watch?v=Zb4jmWHN1y8",
-    "Single Jump": "https://www.youtube.com/watch?v=CkgdVrnJK6o"
+    "Single Jump": "https://youtu.be/bHejSVkHH6s"
    },
    "clips": {
     "Standard": [
@@ -617,12 +617,12 @@
     ],
     "Single Jump": [
      [
-      926,
-      "https://www.youtube.com/watch?v=CkgdVrnJK6o"
+      923,
+      "https://youtu.be/bHejSVkHH6s"
      ],
      [
-      940,
-      "https://youtu.be/FsSXikYCyv0"
+      930,
+      "https://youtu.be/896gk4RDYww"
      ]
     ]
    }
@@ -709,7 +709,7 @@
    "videos": {
     "100c + Reds \u00b7 Pro Cycle": "https://youtu.be/kpESEK4dfp0?si=TDKg25j92KM28cDO",
     "100c + Reds \u00b7 Half Cycle Skip": "https://www.youtube.com/watch?v=2eMVYR6Xgc4",
-    "100c + Reds \u00b7 Kanno Cycle": "https://www.youtube.com/watch?v=TSve8yZWbiM"
+    "100c + Reds \u00b7 Kanno Cycle": "https://www.youtube.com/watch?v=aaFIWZ4MqaY"
    },
    "clips": {
     "100c + Reds \u00b7 Pro Cycle": [
@@ -738,12 +738,12 @@
     ],
     "100c + Reds \u00b7 Kanno Cycle": [
      [
-      5596,
-      "https://www.youtube.com/watch?v=TSve8yZWbiM"
+      5553,
+      "https://www.youtube.com/watch?v=aaFIWZ4MqaY"
      ],
      [
-      5643,
-      "https://www.youtube.com/watch?v=wGpolh4eweU"
+      5596,
+      "https://www.youtube.com/watch?v=TSve8yZWbiM"
      ]
     ]
    }
@@ -828,7 +828,7 @@
     "TJ Owlless": "https://youtu.be/qJzuA8abLC0?si=YPLYft5m8iegWV8C",
     "DJ Owlless": "https://www.youtube.com/watch?v=GFKqXM5g_xo",
     "Owl": "https://youtu.be/9jXrhVQiy2Q",
-    "Sideflip": "https://www.youtube.com/watch?v=59qpjEEbzBo",
+    "Sideflip": "https://x.com/x14h7s/status/2079518013267775573",
     "Mad Owl": "https://www.youtube.com/watch?v=KB2o1UHKA7c"
    },
    "clips": {
@@ -845,6 +845,10 @@
      ],
      [
       1066,
+      "https://www.youtube.com/watch?v=YqYHq6yVnfI"
+     ],
+     [
+      1066,
       "https://x.com/TheRealThomkar/status/1698717531492565263"
      ],
      [
@@ -854,6 +858,10 @@
      [
       1090,
       "https://twitter.com/Benjiii_64/status/1559165109540364288"
+     ],
+     [
+      1090,
+      "https://x.com/oy_4mario6667s/status/2088464819682963890"
      ],
      [
       1093,
@@ -879,6 +887,10 @@
      ]
     ],
     "Sideflip": [
+     [
+      1060,
+      "https://x.com/x14h7s/status/2079518013267775573"
+     ],
      [
       1086,
       "https://www.youtube.com/watch?v=59qpjEEbzBo"
@@ -1027,13 +1039,13 @@
     }
    },
    "videos": {
-    "Ship Clip": "https://youtu.be/53Yu6gy-t7k"
+    "Ship Clip": "https://youtu.be/G4SeRcSjsmA"
    },
    "clips": {
     "Ship Clip": [
      [
       4126,
-      "https://youtu.be/53Yu6gy-t7k"
+      "https://youtu.be/G4SeRcSjsmA"
      ],
      [
       4156,
@@ -1551,7 +1563,7 @@
       "https://www.youtube.com/watch?v=lCFbo6tQJ3Y"
      ],
      [
-      6890,
+      6886,
       "https://youtu.be/evmsr22Nz_k"
      ]
     ],
@@ -2108,8 +2120,8 @@
       "https://youtu.be/POYw4yTau8g?si=Pf7Dt0iJow64WDX3"
      ],
      [
-      10186,
-      "https://youtu.be/VJdeuwufcXQ"
+      10173,
+      "https://www.youtube.com/watch?v=s_rwAslXu1U"
      ]
     ]
    }
@@ -2139,14 +2151,14 @@
     }
    },
    "videos": {
-    "Pro Kill": "https://www.youtube.com/watch?v=ou9o0TFZxIM",
+    "Pro Kill": "https://youtu.be/SiLfhrtBxa0",
     "Other Kill": "https://youtu.be/k6nSTFC2dPE"
    },
    "clips": {
     "Pro Kill": [
      [
       2580,
-      "https://www.youtube.com/watch?v=ou9o0TFZxIM"
+      "https://youtu.be/SiLfhrtBxa0"
      ]
     ],
     "Other Kill": [
@@ -2479,14 +2491,14 @@
     }
    },
    "videos": {
-    "BLJ": "https://x.com/Parsee02/status/1804885098992652547",
+    "BLJ": "https://youtu.be/l2KRg7LMy6Y",
     "Wall Clip": "https://youtu.be/_h3P94eyGV0"
    },
    "clips": {
     "BLJ": [
      [
       2320,
-      "https://x.com/Parsee02/status/1804885098992652547"
+      "https://youtu.be/l2KRg7LMy6Y"
      ],
      [
       2433,
@@ -2535,8 +2547,8 @@
    },
    "videos": {
     "Rightside": "https://clips.twitch.tv/FancyEagerHamburgerBIRB-ngxl83IuA9MoaVCx",
-    "Leftside": "https://www.twitch.tv/beastassassin67/clip/FurtiveDignifiedLaptopTinyFace-ktbe1hiSgUIHngA0",
-    "SS": "https://x.com/SuperWeegeeX/status/1782823076545065467"
+    "Leftside": "https://youtu.be/jLI1DibEaas",
+    "SS": "https://youtu.be/lYM-0Es6nZk"
    },
    "clips": {
     "Rightside": [
@@ -2547,14 +2559,14 @@
     ],
     "Leftside": [
      [
-      1136,
-      "https://www.twitch.tv/beastassassin67/clip/FurtiveDignifiedLaptopTinyFace-ktbe1hiSgUIHngA0"
+      1133,
+      "https://youtu.be/jLI1DibEaas"
      ]
     ],
     "SS": [
      [
-      1083,
-      "https://x.com/SuperWeegeeX/status/1782823076545065467"
+      1080,
+      "https://youtu.be/lYM-0Es6nZk"
      ]
     ]
    }
@@ -2600,8 +2612,8 @@
       "https://youtu.be/a2b3oHIOSbQ"
      ],
      [
-      1466,
-      "https://twitter.com/gamiru04/status/1702768794442359095"
+      1456,
+      "https://www.twitch.tv/kusabi133/clip/ResoluteResoluteDogeKappa-h23Y_r0hlyPlsLjP"
      ]
     ]
    }
@@ -2653,7 +2665,7 @@
    "videos": {
     "No Ledgegrab": "https://www.youtube.com/watch?v=pHz-7GrIjY8",
     "Right GP Kill": "https://youtu.be/AePNMfRCh6Y",
-    "Double Burn": "https://youtu.be/6YRVza1RQ1I"
+    "Double Burn": "https://www.youtube.com/watch?v=Z4rZu_cjgbo"
    },
    "clips": {
     "No Ledgegrab": [
@@ -2670,8 +2682,8 @@
     ],
     "Double Burn": [
      [
-      1790,
-      "https://youtu.be/6YRVza1RQ1I"
+      1786,
+      "https://www.youtube.com/watch?v=Z4rZu_cjgbo"
      ],
      [
       1793,
@@ -2866,7 +2878,7 @@
     "Standard": "https://www.youtube.com/watch?v=WEiYeRXrWgY",
     "TJ Strat": "https://www.youtube.com/watch?v=fB3uwQxGQvA",
     "2x LJ Sidehop": "https://youtu.be/XKOu9E6wCFE",
-    "LJ JD Sidehop": "https://www.youtube.com/watch?v=hCSymf8KCQw",
+    "LJ JD Sidehop": "https://www.youtube.com/watch?v=OXrxjLvngno",
     "DJ Sidehop": "https://www.youtube.com/watch?v=awxJfWO6E5k"
    },
    "clips": {
@@ -2889,6 +2901,10 @@
      ]
     ],
     "LJ JD Sidehop": [
+     [
+      1200,
+      "https://www.youtube.com/watch?v=OXrxjLvngno"
+     ],
      [
       1213,
       "https://www.youtube.com/watch?v=hCSymf8KCQw"
@@ -3041,7 +3057,7 @@
    },
    "videos": {
     "100c + Volcano \u00b7 Standard": "https://youtu.be/S0R8Z9C64jE",
-    "100c + Volcano \u00b7 Lavaboost": "https://youtu.be/z8Iye1LTdg8"
+    "100c + Volcano \u00b7 Lavaboost": "https://youtu.be/0aHXrzntRGI"
    },
    "clips": {
     "100c + Volcano \u00b7 Standard": [
@@ -3056,12 +3072,12 @@
     ],
     "100c + Volcano \u00b7 Lavaboost": [
      [
-      6713,
-      "https://youtu.be/z8Iye1LTdg8"
+      6636,
+      "https://youtu.be/0aHXrzntRGI"
      ],
      [
-      6720,
-      "https://www.youtube.com/watch?v=gu0Vy6aJaVc"
+      6713,
+      "https://youtu.be/z8Iye1LTdg8"
      ]
     ]
    }
@@ -3139,7 +3155,7 @@
    "videos": {
     "Standard": "https://youtu.be/f8cLGqXq4u4",
     "Speed Pres": "https://twitter.com/djparacusia/status/1550447224491888646",
-    "Flyguyless": "https://twitter.com/SuperWeegeeX/status/1671413057317134336"
+    "Flyguyless": "https://x.com/cjrokokomero/status/2093610467734229265"
    },
    "clips": {
     "Standard": [
@@ -3168,8 +3184,8 @@
     ],
     "Flyguyless": [
      [
-      1386,
-      "https://twitter.com/SuperWeegeeX/status/1671413057317134336"
+      1383,
+      "https://x.com/cjrokokomero/status/2093610467734229265"
      ]
     ]
    }
@@ -3499,14 +3515,14 @@
     }
    },
    "videos": {
-    "Solo Secrets": "https://www.youtube.com/watch?v=Y0g67ozHIqE",
-    "Nuts Pless": "https://www.youtube.com/watch?v=QDyg_BwDovA"
+    "Solo Secrets": "https://youtu.be/ciCHTHUc6RE",
+    "Nuts Pless": "https://x.com/banova82840/status/2092773129122656444"
    },
    "clips": {
     "Solo Secrets": [
      [
-      2520,
-      "https://www.youtube.com/watch?v=Y0g67ozHIqE"
+      2496,
+      "https://youtu.be/ciCHTHUc6RE"
      ],
      [
       2643,
@@ -3523,8 +3539,8 @@
     ],
     "Nuts Pless": [
      [
-      2516,
-      "https://www.youtube.com/watch?v=QDyg_BwDovA"
+      2463,
+      "https://x.com/banova82840/status/2092773129122656444"
      ]
     ]
    }
@@ -3705,7 +3721,7 @@
    },
    "videos": {
     "Standard": "https://youtu.be/qAbvZ10hWFQ",
-    "Downwarp": "https://www.youtube.com/watch?v=f2hNxPZQ5-A"
+    "Downwarp": "https://www.bilibili.com/video/BV11w8c6RELh/?share_source=copy_web&vd_source=3a6ef75ef1331d03c2fad8fc778321d6"
    },
    "clips": {
     "Standard": [
@@ -3715,6 +3731,10 @@
      ]
     ],
     "Downwarp": [
+     [
+      2910,
+      "https://www.bilibili.com/video/BV11w8c6RELh/?share_source=copy_web&vd_source=3a6ef75ef1331d03c2fad8fc778321d6"
+     ],
      [
       2916,
       "https://www.youtube.com/watch?v=f2hNxPZQ5-A"
@@ -3849,10 +3869,14 @@
     }
    },
    "videos": {
-    "Standard": "https://youtu.be/CsCMsbNwbBA"
+    "Standard": "https://www.youtube.com/watch?v=ki4KRXXpt4w"
    },
    "clips": {
     "Standard": [
+     [
+      1393,
+      "https://www.youtube.com/watch?v=ki4KRXXpt4w"
+     ],
      [
       1413,
       "https://youtu.be/CsCMsbNwbBA"
@@ -3886,7 +3910,7 @@
    },
    "videos": {
     "Standard": "https://discord.com/channels/82900589767299072/1300635512268259348/1347957845118681170",
-    "Chip Clip": "https://www.dailymotion.com/video/xa5phta"
+    "Chip Clip": "https://www.dailymotion.com/video/xa6a0cw"
    },
    "clips": {
     "Standard": [
@@ -3897,8 +3921,8 @@
     ],
     "Chip Clip": [
      [
-      4043,
-      "https://www.dailymotion.com/video/xa5phta"
+      4040,
+      "https://www.dailymotion.com/video/xa6a0cw"
      ],
      [
       4245,
@@ -3942,14 +3966,14 @@
     }
    },
    "videos": {
-    "Standard": "https://twitter.com/GreenSuigi/status/1773942581015011704",
+    "Standard": "https://youtu.be/v6NqzCwZvuk",
     "Pingu Flip": "https://www.youtube.com/watch?v=kU8NaxPbMoU"
    },
    "clips": {
     "Standard": [
      [
-      933,
-      "https://twitter.com/GreenSuigi/status/1773942581015011704"
+      930,
+      "https://youtu.be/v6NqzCwZvuk"
      ],
      [
       980,
@@ -4040,20 +4064,20 @@
     }
    },
    "videos": {
-    "Standard": "https://www.youtube.com/watch?v=wMXBa7NL1-M",
-    "TJ Strat": "https://youtu.be/vvM2KqDCVSk"
+    "Standard": "https://www.youtube.com/watch?v=08wODu4MD7U",
+    "TJ Strat": "https://www.twitch.tv/banova8_/clip/EnthusiasticOriginalClipzGrammarKing-zXXoo2GoY8GGjsiP"
    },
    "clips": {
     "Standard": [
      [
-      540,
-      "https://www.youtube.com/watch?v=wMXBa7NL1-M"
+      536,
+      "https://www.youtube.com/watch?v=08wODu4MD7U"
      ]
     ],
     "TJ Strat": [
      [
       553,
-      "https://youtu.be/vvM2KqDCVSk"
+      "https://www.twitch.tv/banova8_/clip/EnthusiasticOriginalClipzGrammarKing-zXXoo2GoY8GGjsiP"
      ]
     ]
    }
@@ -4485,14 +4509,14 @@
     }
    },
    "videos": {
-    "100c + Secrets \u00b7 Standard": "https://youtu.be/fLKeZm0vAD0?si=-V8PYr-PdPA4QCpm",
-    "100c + Reds \u00b7 Standard": "https://youtu.be/j24549-K6nA"
+    "100c + Secrets \u00b7 Standard": "https://www.twitch.tv/videos/2776680750",
+    "100c + Reds \u00b7 Standard": "https://youtu.be/6Ps8KNwPAIY"
    },
    "clips": {
     "100c + Secrets \u00b7 Standard": [
      [
-      7003,
-      "https://youtu.be/fLKeZm0vAD0?si=-V8PYr-PdPA4QCpm"
+      6956,
+      "https://www.twitch.tv/videos/2776680750"
      ],
      [
       7040,
@@ -4501,8 +4525,8 @@
     ],
     "100c + Reds \u00b7 Standard": [
      [
-      8820,
-      "https://youtu.be/j24549-K6nA"
+      8790,
+      "https://youtu.be/6Ps8KNwPAIY"
      ],
      [
       8893,
@@ -4780,7 +4804,7 @@
    },
    "videos": {
     "Log WK": "https://youtu.be/k5MGlR4k19w",
-    "Log Firsty": "https://x.com/LFoxyIsBlue/status/1777020480509141169"
+    "Log Firsty": "https://x.com/Parsee03/status/2088266410246201771/video/2"
    },
    "clips": {
     "Log WK": [
@@ -4789,8 +4813,12 @@
       "https://youtu.be/k5MGlR4k19w"
      ],
      [
-      3383,
-      "https://www.youtube.com/watch?v=y1ulSJ6IZz8"
+      3340,
+      "https://x.com/Parsee03/status/2088266410246201771/video/1"
+     ],
+     [
+      3386,
+      "https://x.com/Parsee03/status/2088667759442059582"
      ],
      [
       3396,
@@ -4802,6 +4830,10 @@
      ]
     ],
     "Log Firsty": [
+     [
+      3276,
+      "https://x.com/Parsee03/status/2088266410246201771/video/2"
+     ],
      [
       3330,
       "https://x.com/LFoxyIsBlue/status/1777020480509141169"
@@ -4893,14 +4925,26 @@
     }
    },
    "videos": {
-    "100c + Reds \u00b7 Standard": "https://www.twitch.tv/videos/1983240356",
+    "100c + Reds \u00b7 Standard": "https://x.com/Parsee02/status/2087763639831007669",
     "100c + Reds \u00b7 Late Red": "https://youtu.be/1fOTcMKfnPY"
    },
    "clips": {
     "100c + Reds \u00b7 Standard": [
      [
+      9216,
+      "https://x.com/Parsee02/status/2087763639831007669"
+     ],
+     [
+      9360,
+      "https://x.com/Parsee02/status/2087222197316464856"
+     ],
+     [
       9403,
       "https://www.twitch.tv/videos/1983240356"
+     ],
+     [
+      9496,
+      "https://www.youtube.com/watch?v=tCvj3-uxIZo&t=160"
      ],
      [
       9550,
@@ -5044,8 +5088,8 @@
       "https://twitter.com/SuperWeegeeX/status/1693505747034747200?s=20"
      ],
      [
-      1450,
-      "https://x.com/Parsee03/status/1922283226141237705"
+      1446,
+      "https://www.youtube.com/watch?v=X9T8ykYPHC4"
      ]
     ],
     "Log Firsty": [
@@ -5091,20 +5135,20 @@
     }
    },
    "videos": {
-    "Standard": "https://youtu.be/8vNzMxB5rzw",
-    "No Setup": "https://www.youtube.com/watch?v=qKcCoJjLFag"
+    "Standard": "https://youtu.be/kSxC244KPQs",
+    "No Setup": "https://youtu.be/e1a-_N6VfCc"
    },
    "clips": {
     "Standard": [
      [
-      1046,
-      "https://youtu.be/8vNzMxB5rzw"
+      1043,
+      "https://youtu.be/kSxC244KPQs"
      ]
     ],
     "No Setup": [
      [
-      1020,
-      "https://www.youtube.com/watch?v=qKcCoJjLFag"
+      1016,
+      "https://youtu.be/e1a-_N6VfCc"
      ]
     ]
    }
@@ -5294,18 +5338,18 @@
     }
    },
    "videos": {
-    "Standard": "https://youtu.be/Wc5aYYXGL_I",
+    "Standard": "https://youtu.be/r_2eiaJLbRo",
     "TJ Dive Start": "https://youtu.be/r6V19lejjR8"
    },
    "clips": {
     "Standard": [
      [
-      4650,
-      "https://youtu.be/Wc5aYYXGL_I"
+      4610,
+      "https://youtu.be/r_2eiaJLbRo"
      ],
      [
-      4656,
-      "https://youtu.be/8z2mfnn_gUU"
+      4650,
+      "https://youtu.be/Wc5aYYXGL_I"
      ],
      [
       4713,
@@ -5542,8 +5586,8 @@
       "https://www.youtube.com/watch?v=uSIgTFK83RM"
      ],
      [
-      1856,
-      "https://www.youtube.com/watch?v=8mA2rf73w_E"
+      1850,
+      "https://youtu.be/ir6-GRCan6c"
      ]
     ]
    }
@@ -5929,8 +5973,8 @@
       "https://youtu.be/g5o3C0-382E?si=1S7U1ApBy503R_fa"
      ],
      [
-      5816,
-      "https://www.youtube.com/watch?v=YDiMNW-xwes"
+      5730,
+      "https://www.youtube.com/watch?v=rLGlMb0fB0k"
      ]
     ],
     "100c + Thwomp \u00b7 Safety Red": [
@@ -5981,7 +6025,7 @@
    },
    "videos": {
     "Time Stop": "https://www.youtube.com/watch?v=u6ouNS7cR4E",
-    "Moving Moving": "https://www.youtube.com/watch?v=rYAthJKJTVA&t=27",
+    "Moving Moving": "https://youtu.be/MEAgjxY7C-s?si=tix27gH8QljUMGVH",
     "Open": "https://youtu.be/n-xF-bSMZ9k"
    },
    "clips": {
@@ -5993,8 +6037,8 @@
     ],
     "Moving Moving": [
      [
-      1610,
-      "https://www.youtube.com/watch?v=rYAthJKJTVA&t=27"
+      1596,
+      "https://youtu.be/MEAgjxY7C-s?si=tix27gH8QljUMGVH"
      ],
      [
       1653,
@@ -6414,12 +6458,12 @@
       "https://x.com/greensuigi/status/2043580676960637391"
      ],
      [
-      9496,
-      "https://youtu.be/fi7hUJTp_bo"
+      9476,
+      "https://www.twitch.tv/videos/2052972403"
      ],
      [
-      9650,
-      "https://www.youtube.com/watch?v=cGRW3VFHD4c"
+      9496,
+      "https://youtu.be/fi7hUJTp_bo"
      ]
     ],
     "100c + Cannon \u00b7 No Cutscene": [
@@ -6535,7 +6579,7 @@
      ],
      [
       1326,
-      "https://www.twitch.tv/weegee/clip/OriginalStormySnakeLitFam-qulDrUAjcSvh0Lt6"
+      "https://www.twitch.tv/weegee/clip/ShortArbitrarySeahorseWutFace-q35Ra2pcPpF-vBXn"
      ]
     ],
     "Pro Strat": [
@@ -6544,8 +6588,8 @@
       "https://youtu.be/pXdZswbFuNc"
      ],
      [
-      1273,
-      "https://www.youtube.com/watch?v=UmmyqslLXfY"
+      1270,
+      "https://youtu.be/EDj7Wm8TC90"
      ]
     ]
    }
@@ -6983,7 +7027,7 @@
     }
    },
    "videos": {
-    "Standard": "https://youtu.be/UJsoHuieD4I",
+    "Standard": "https://www.youtube.com/watch?v=rQcR35VR35E",
     "Pole Red Early": "https://www.youtube.com/watch?v=mz4DX9IX1Aw",
     "Stored Angle": "https://youtu.be/D7190DWQIBk",
     "No Cutscene": "https://www.youtube.com/watch?v=3jPBNpkhbXI",
@@ -6996,7 +7040,7 @@
     "Standard": [
      [
       5930,
-      "https://youtu.be/UJsoHuieD4I"
+      "https://www.youtube.com/watch?v=rQcR35VR35E"
      ]
     ],
     "Pole Red Early": [
@@ -7055,7 +7099,27 @@
      "Gold": 25.53,
      "Silver": 25.73,
      "Bronze": 26.43
-    },
+    }
+   },
+   "videos": {
+    "Box Star": "https://youtu.be/o2h0X-wbGl8"
+   },
+   "clips": {
+    "Box Star": [
+     [
+      2456,
+      "https://youtu.be/o2h0X-wbGl8"
+     ],
+     [
+      2466,
+      "https://youtu.be/UWajrT48Vuk"
+     ]
+    ]
+   }
+  },
+  "star:19:1": {
+   "clock": "igt",
+   "strategies": {
     "Under 21": {
      "Mario": 20.73,
      "Grandmaster": 20.8,
@@ -7068,20 +7132,9 @@
     }
    },
    "videos": {
-    "Box Star": "https://youtu.be/o2h0X-wbGl8",
     "Under 21": "https://youtu.be/HkcgtJSZddw"
    },
    "clips": {
-    "Box Star": [
-     [
-      2456,
-      "https://youtu.be/o2h0X-wbGl8"
-     ],
-     [
-      2466,
-      "https://youtu.be/UWajrT48Vuk"
-     ]
-    ],
     "Under 21": [
      [
       2050,
@@ -7119,14 +7172,14 @@
     }
    },
    "videos": {
-    "Standard": "https://www.dailymotion.com/video/x9elfs6",
+    "Standard": "https://youtu.be/pU12-Ap39v0",
     "Framewalk": "https://x.com/Poke711_/status/2022123136314118158"
    },
    "clips": {
     "Standard": [
      [
-      2613,
-      "https://www.dailymotion.com/video/x9elfs6"
+      2610,
+      "https://youtu.be/pU12-Ap39v0"
      ]
     ],
     "Framewalk": [
@@ -7250,13 +7303,13 @@
    },
    "videos": {
     "Shig (Pipe)": "https://www.youtube.com/watch?v=Ox9ygwmcJE0",
-    "Shig (Star)": "https://youtu.be/tAjTa_Pllo0",
+    "Shig (Star)": "https://youtu.be/6bi1kGCkwuQ",
     "Xiah (Pipe)": "https://youtu.be/fk0mmpnKl6s",
     "Xiah (Star)": "https://youtu.be/ac2B2tuL_pE",
     "Tsuki (Pipe)": "https://youtu.be/P1P66ll6l7s?si=wuqP6zAF_8QSnTBn",
     "Tsuki (Star)": "https://youtu.be/P1P66ll6l7s?si=wuqP6zAF_8QSnTBn",
-    "Salt Flip (Pipe)": "https://youtu.be/2RVq6D0JgKA?si=1kgitWrZ4zAseRea",
-    "Salt Flip (Star)": "https://youtu.be/DercZg1GFYk?si=b00zzjvFTOv21Mz9"
+    "Salt Flip (Pipe)": "https://youtu.be/63y6K_fWyzk",
+    "Salt Flip (Star)": "https://youtu.be/63y6K_fWyzk"
    },
    "clips": {
     "Shig (Pipe)": [
@@ -7267,16 +7320,20 @@
      [
       5173,
       "https://youtu.be/-CANMKKqCVA"
+     ],
+     [
+      5226,
+      "https://youtu.be/aoKShvRwfAY?si=-kkuXBvVRp6dTlqO"
      ]
     ],
     "Shig (Star)": [
      [
-      4650,
-      "https://youtu.be/tAjTa_Pllo0"
+      4636,
+      "https://youtu.be/6bi1kGCkwuQ"
      ],
      [
-      4786,
-      "https://youtu.be/Z5kM_BLtDg0"
+      4710,
+      "https://youtu.be/aoKShvRwfAY?si=-kkuXBvVRp6dTlqO"
      ]
     ],
     "Xiah (Pipe)": [
@@ -7313,18 +7370,18 @@
     ],
     "Salt Flip (Pipe)": [
      [
-      4733,
-      "https://youtu.be/2RVq6D0JgKA?si=1kgitWrZ4zAseRea"
+      4726,
+      "https://youtu.be/63y6K_fWyzk"
      ],
      [
-      4740,
-      "https://www.youtube.com/watch?v=WgB7rWWNOiA"
+      4733,
+      "https://youtu.be/2RVq6D0JgKA?si=1kgitWrZ4zAseRea"
      ]
     ],
     "Salt Flip (Star)": [
      [
-      4233,
-      "https://youtu.be/DercZg1GFYk?si=b00zzjvFTOv21Mz9"
+      4230,
+      "https://youtu.be/63y6K_fWyzk"
      ]
     ]
    }
@@ -7365,8 +7422,8 @@
       "https://www.youtube.com/watch?v=-gHYjQ4JK6Y"
      ],
      [
-      2500,
-      "https://youtu.be/9iMrPxZDOpk"
+      2513,
+      "https://www.youtube.com/watch?v=47BW5uL5UUI"
      ],
      [
       2520,
@@ -7381,12 +7438,12 @@
       "https://youtu.be/EfkSMqqmnGU"
      ],
      [
-      2590,
-      "https://youtu.be/1vva-SCWDdQ"
+      2603,
+      "https://www.youtube.com/watch?v=gIx3EngRluw"
      ],
      [
       2613,
-      "https://www.youtube.com/watch?v=lnqfBeSoC9A"
+      "https://youtu.be/qSZMctTcfBU"
      ],
      [
       2643,
@@ -7438,22 +7495,22 @@
     }
    },
    "videos": {
-    "Pole Glitch": "https://www.youtube.com/watch?v=tHL_u2QsQak",
-    "Zero Cycle": "https://youtu.be/xnmqw1LYXOI",
+    "Pole Glitch": "https://youtu.be/DlGK_aAIZI0",
+    "Zero Cycle": "https://youtu.be/m8Y1xHWjXkE",
     "Ultimate": "https://x.com/Tilessssss/status/2023107479169606122",
     "BLJ": "https://www.youtube.com/watch?v=1jEy857ZLsI"
    },
    "clips": {
     "Pole Glitch": [
      [
-      3486,
-      "https://www.youtube.com/watch?v=tHL_u2QsQak"
+      3476,
+      "https://youtu.be/DlGK_aAIZI0"
      ]
     ],
     "Zero Cycle": [
      [
-      3640,
-      "https://youtu.be/xnmqw1LYXOI"
+      3586,
+      "https://youtu.be/m8Y1xHWjXkE"
      ]
     ],
     "Ultimate": [
@@ -7462,8 +7519,8 @@
       "https://x.com/Tilessssss/status/2023107479169606122"
      ],
      [
-      3306,
-      "https://x.com/Tilessssss/status/2023615416896286995"
+      3303,
+      "https://youtu.be/gDbFJon_-IA"
      ]
     ],
     "BLJ": [
@@ -7472,12 +7529,20 @@
       "https://www.youtube.com/watch?v=1jEy857ZLsI"
      ],
      [
-      3066,
-      "https://www.youtube.com/watch?v=zMvt1JJyh1I"
+      3053,
+      "https://x.com/cjrokokomero/status/2064828424208716014"
      ],
      [
-      3070,
+      3060,
       "https://www.youtube.com/watch?v=2MqZVRfyRPE"
+     ],
+     [
+      3080,
+      "https://x.com/xandrey64/status/2090340690576158895"
+     ],
+     [
+      3090,
+      "https://x.com/ultimatemozc/status/2080703191176671735/video/1"
      ]
     ]
    }
@@ -7666,15 +7731,15 @@
     }
    },
    "videos": {
-    "Right TJWK": "https://www.youtube.com/watch?v=nNKLol8EZIg",
+    "Right TJWK": "https://youtu.be/H1Yz15RSi6g?si=kNSjCrPxPRtnkReo",
     "Left TJWK": "https://youtu.be/7uJe1TAtA6Q",
-    "TAS LJ + Ult": "https://twitter.com/cjrokokomero/status/1724152663757971598"
+    "TAS LJ + Ult": "https://youtu.be/0gqLvSq0IO0"
    },
    "clips": {
     "Right TJWK": [
      [
-      3846,
-      "https://www.youtube.com/watch?v=nNKLol8EZIg"
+      3843,
+      "https://youtu.be/H1Yz15RSi6g?si=kNSjCrPxPRtnkReo"
      ],
      [
       3986,
@@ -7693,8 +7758,8 @@
     ],
     "TAS LJ + Ult": [
      [
-      3566,
-      "https://twitter.com/cjrokokomero/status/1724152663757971598"
+      3563,
+      "https://youtu.be/0gqLvSq0IO0"
      ],
      [
       3710,

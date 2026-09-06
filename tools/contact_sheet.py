@@ -77,6 +77,13 @@ def main(argv: list[str]) -> int:
             story = next(s for s in STORIES if s.name == name)
             selector = selector or ".modal"
 
+    # The Rank tab's scorecard (spec 2026-08-23-scorecard-design, task 3):
+    # not reachable from a plain page load either -- it lives behind the
+    # Rank nav click the "scorecard" Story's own setup drives.
+    if "--scorecard" in argv:
+        story = next(s for s in STORIES if s.name == "scorecard")
+        selector = selector or ".scorecard-card"
+
     # A star wearing its pieces needs a fixture with a `parent` in it -- no
     # shipped definition has one, so the default project literally cannot
     # draw this surface. `--folded` (a badge switched OFF) is RETIRED with

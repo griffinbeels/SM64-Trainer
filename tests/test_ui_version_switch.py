@@ -1,12 +1,20 @@
-"""The shared JP/US page-level version switch (`versionswitch.js`) and its
+"""The shared JP/US page-level region switch (`versionswitch.js`) and its
 wiring into the Library page (`library.js`, `librarytarget.js`).
 
 His 2026-08-15 ruling: retire the Library's old PER-SECTION
 `.library-jp-toggle` chip in favour of ONE switch, JP left / US right, in the
 page's hero -- every section reads it, "for fun exploration of the
-differences," and it grades nothing. A render test, per this project's own
-rule: unit tests plus `node --check` once shipped an invisible feature, and
-every claim below is a fact about the real DOM a browser builds.
+differences," and it grades nothing. ROUND 24 kept the switch and changed what
+it holds: a SET, defaulting to BOTH regions on the Library ("By default, in
+the Library, we should show BOTH rank standards combined... Right now,
+information about runners / approaches feels hidden, which is not the
+intent"), with at least one region always on and each segment drawn as its
+country's flag rather than the two letters. So the gesture these tests make is
+"turn a region OFF", never "pick a region", and the segment is found by its
+`aria-label` -- the word is still there, it is just no longer the visible
+carrier. A render test, per this project's own rule: unit tests plus
+`node --check` once shipped an invisible feature, and every claim below is a
+fact about the real DOM a browser builds.
 
 Fixture: the same one `test_ui_library_target.py` uses --
 `arm_segment=FIXTURE_SEGMENT, seed_editor_fixtures=True` lands auto-open
@@ -59,10 +67,17 @@ OPEN_OWL_STRAT = """
   return true;
 })()
 """
-CLICK_JP = ("Array.from(document.querySelectorAll('.version-switch-seg'))"
-            ".find((seg) => seg.textContent.trim() === 'JP').click()")
-CLICK_US = ("Array.from(document.querySelectorAll('.version-switch-seg'))"
-            ".find((seg) => seg.textContent.trim() === 'US').click()")
+def _toggle(region):
+    """Click one region segment. `aria-label` rather than the text, because
+    round 24 replaced the two letters with the country's flag."""
+    return ("Array.from(document.querySelectorAll('.version-switch-seg'))"
+            f".find((seg) => seg.getAttribute('aria-label') === '{region}').click()")
+
+
+TOGGLE_JP = _toggle("JP")
+TOGGLE_US = _toggle("US")
+PRESSED = ("Array.from(document.querySelectorAll('.version-switch-seg'))"
+           ".map((seg) => seg.getAttribute('aria-pressed'))")
 MARIO_CUTOFF = """
 (() => {
   const rows = Array.from(document.querySelectorAll(
@@ -121,27 +136,65 @@ def library_page(library_server):
         yield page
 
 
-def test_exactly_one_switch_jp_left_us_right_us_pressed_by_default(library_page):
+def test_exactly_one_switch_jp_left_us_right_both_on_by_default(library_page):
     result = library_page.evaluate("""
       (() => {
         const segs = document.querySelectorAll('.version-switch-seg');
         return {
           switchCount: document.querySelectorAll('.version-switch').length,
-          texts: Array.from(segs).map((seg) => seg.textContent.trim()),
+          labels: Array.from(segs).map((seg) => seg.getAttribute('aria-label')),
+          flags: Array.from(segs).map((seg) => {
+            const img = seg.querySelector('img.region-flag');
+            return img ? img.getAttribute('src') : null;
+          }),
+          alts: Array.from(segs).map((seg) => {
+            const img = seg.querySelector('img.region-flag');
+            return img ? img.getAttribute('alt') : null;
+          }),
           pressed: Array.from(segs).map((seg) => seg.getAttribute('aria-pressed')),
           oldChipCount: document.querySelectorAll('.library-jp-toggle').length,
         };
       })()
     """)
     assert result["switchCount"] == 1, result
-    assert result["texts"] == ["JP", "US"], result
-    assert result["pressed"] == ["false", "true"], (
-        f"US should be pressed by default: {result}")
+    assert result["labels"] == ["JP", "US"], result
+    assert result["flags"] == ["/ui/assets/flag_jp.svg", "/ui/assets/flag_us.svg"], (
+        f"the segments are not drawing the fetched flag assets: {result}")
+    # The word is never the flag's only carrier -- a failed asset load, a
+    # screen reader and a hover all still say which region this is.
+    assert result["alts"] == ["JP", "US"], result
+    assert result["pressed"] == ["true", "true"], (
+        f"the Library defaults to BOTH regions: {result}")
     assert result["oldChipCount"] == 0, (
         "the retired per-section .library-jp-toggle chip is still rendering")
 
 
-def test_clicking_jp_reladders_the_section_and_filters_out_a_us_entry(
+def test_the_last_region_left_on_cannot_be_turned_off(library_page):
+    """His rule, verbatim: "There must be at least one region enabled at all
+    times." Enforced in the control itself rather than in each of the two
+    pages that mount it -- and enforced by DISABLING the sole segment, so the
+    reason lands where the click does instead of arriving as a message after
+    the mistake."""
+    library_page.evaluate(TOGGLE_JP)
+    library_page.wait_ms(200)
+    state = library_page.evaluate("""
+      (() => {
+        const segs = Array.from(document.querySelectorAll('.version-switch-seg'));
+        const us = segs.find((seg) => seg.getAttribute('aria-label') === 'US');
+        return { pressed: segs.map((seg) => seg.getAttribute('aria-pressed')),
+                 usDisabled: us.disabled, usTitle: us.getAttribute('title') };
+      })()
+    """)
+    assert state["pressed"] == ["false", "true"], state
+    assert state["usDisabled"] is True, (
+        f"US is the only region left on and must refuse to switch off: {state}")
+    assert "at least one region" in (state["usTitle"] or ""), state
+    library_page.evaluate(TOGGLE_US)          # a no-op, and must stay one
+    library_page.wait_ms(200)
+    assert library_page.evaluate(PRESSED) == ["false", "true"]
+
+
+def test_turning_us_off_reladders_the_section_and_filters_out_a_us_entry(
         library_page, library_server):
     us_entry = _find_us_only_plain_entry(library_server)
     assert us_entry, (
@@ -161,72 +214,84 @@ def test_clicking_jp_reladders_the_section_and_filters_out_a_us_entry(
         """)
 
     assert runner_visible(), (
-        f"{us_entry['runner']!r} (US-tagged) is not visible while the page "
-        "still defaults to US")
+        f"{us_entry['runner']!r} (US-tagged) is not visible with both regions on")
     before = library_page.evaluate(MARIO_CUTOFF)
     assert before, "no Mario TOC row found on the JP-carrying section"
 
-    library_page.evaluate(CLICK_JP)
+    library_page.evaluate(TOGGLE_US)          # JP only
     library_page.evaluate(EXPAND_DIVISIONS)  # a fresh band list mounts collapsed again
     after = library_page.evaluate(MARIO_CUTOFF)
     assert after and after != before, (
-        f"the version switch did not change the Mario cutoff: {before!r} -> {after!r}")
+        f"turning US off did not change the Mario cutoff: {before!r} -> {after!r}")
     assert not runner_visible(), (
-        f"{us_entry['runner']!r} (US-tagged) is still visible after switching to JP")
-    pressed = library_page.evaluate(
-        "Array.from(document.querySelectorAll('.version-switch-seg'))"
-        ".map((seg) => seg.getAttribute('aria-pressed'))")
-    assert pressed == ["true", "false"], pressed
+        f"{us_entry['runner']!r} (US-tagged) is still visible with US turned off")
+    assert library_page.evaluate(PRESSED) == ["true", "false"]
 
-    library_page.evaluate(CLICK_US)
+    library_page.evaluate(TOGGLE_US)          # both again
     library_page.evaluate(EXPAND_DIVISIONS)
     restored = library_page.evaluate(MARIO_CUTOFF)
     assert restored == before, (
-        f"switching back to US did not restore the Mario cutoff: {before!r} -> {restored!r}")
+        f"turning US back on did not restore the Mario cutoff: {before!r} -> {restored!r}")
     assert runner_visible(), (
-        f"{us_entry['runner']!r} did not come back after switching back to US")
+        f"{us_entry['runner']!r} did not come back after turning US back on")
 
 
-def test_default_follows_the_effective_version_setting(library_server):
-    """PUT /api/mode {"version": "jp"} flips the fixture's effective version
-    -- persisted into scratch (aa9608da), so it is safe -- and a FRESH page
-    must default its switch to JP with no click at all. Restores "us" in a
-    `finally`, whatever happens, so this test leaves the shared module-scoped
-    fixture exactly as every sibling test in this file found it."""
-    try:
-        flipped = _put(library_server, "/api/mode", {"version": "jp"})
-        assert flipped["effective"] == "jp", flipped
+def test_the_effective_version_still_picks_which_ladder_the_bands_come_from(
+        library_server):
+    """Round 24 split one question into two. WHICH ENTRIES are listed is the
+    region SET, and the Library's default for that is BOTH regardless of the
+    setting. WHICH LADDER the bands are cut from is still ONE region, and that
+    still follows the session's effective version -- so flipping the setting
+    to JP must move the Mario cutoff on a fresh page with nobody clicking
+    anything, while both segments stay on.
 
+    PUT /api/mode {"version": "jp"} persists into scratch (aa9608da), so it is
+    safe; "us" is restored in a `finally` whatever happens, leaving the shared
+    module-scoped fixture exactly as every sibling test found it."""
+    def cutoff_on_a_fresh_page():
         with driver.get_driver().launch(headless=True) as page:
             page.goto(f"{library_server}/ui/index.html")
             page.wait_for(".log-list-card", timeout_ms=20000)
             page.evaluate(CLICK_LIBRARY_TAB)
-            page.wait_for(".version-switch", timeout_ms=15000)
-            pressed = page.evaluate(
-                "Array.from(document.querySelectorAll('.version-switch-seg'))"
-                ".map((seg) => seg.getAttribute('aria-pressed'))")
-            assert pressed == ["true", "false"], (
-                f"a fresh page did not default to JP once the setting flipped: {pressed}")
+            page.wait_for(".library-target .library-section", timeout_ms=15000)
+            assert page.evaluate(OPEN_OWL_STRAT), "no Owl strat section"
+            page.wait_for(".version-switch", timeout_ms=10000)
+            page.evaluate(EXPAND_DIVISIONS)
+            return page.evaluate(PRESSED), page.evaluate(MARIO_CUTOFF)
+
+    us_pressed, us_cutoff = cutoff_on_a_fresh_page()
+    assert us_pressed == ["true", "true"], us_pressed
+    assert us_cutoff, "no Mario TOC row on the JP-carrying section"
+    try:
+        flipped = _put(library_server, "/api/mode", {"version": "jp"})
+        assert flipped["effective"] == "jp", flipped
+        jp_pressed, jp_cutoff = cutoff_on_a_fresh_page()
+        assert jp_pressed == ["true", "true"], (
+            f"the Library shows both regions whatever the setting says: {jp_pressed}")
+        assert jp_cutoff and jp_cutoff != us_cutoff, (
+            "the bands did not move to the JP ladder when the setting flipped: "
+            f"{us_cutoff!r} -> {jp_cutoff!r}")
     finally:
         restored = _put(library_server, "/api/mode", {"version": "us"})
         assert restored["effective"] == "us", restored
 
 
-def test_showing_the_other_version_says_so_and_refiles_the_overall_block(
+def test_narrowing_to_one_region_says_so_and_refiles_the_overall_block(
         library_page, library_server):
-    """Whole-branch review 2026-08-15, findings 5 + 6: the hero switch carries
-    the same "Viewing JP standards · you are graded on US" note the standards
-    panel does (explain, never dim), and the Overall Rank Standards block above
-    the sections re-fetches on the page's version rather than sitting on the
-    grading ladder while every section below it re-files under JP."""
+    """Whole-branch review 2026-08-15, findings 5 + 6, carried into round 24's
+    shape: the hero switch always says what it is doing (explain, never dim),
+    and the Overall Rank Standards block above the sections re-fetches on the
+    page's LADDER region rather than sitting on the grading ladder while every
+    section below it re-files under JP. The default note names the state the
+    round was opened about -- both regions, nothing hidden."""
     library_page.wait_for(".version-switch", timeout_ms=10000)
-    assert library_page.evaluate(
-        "document.querySelector('.workshop-hero .version-switch-note')") is None
-    library_page.evaluate(CLICK_JP)
+    read_note = ("(document.querySelector('.workshop-hero .version-switch-note')"
+                 " || {}).textContent")
+    assert library_page.evaluate(read_note) == "Both regions shown"
+    library_page.evaluate(TOGGLE_US)          # JP only
     library_page.wait_ms(400)
-    note = library_page.evaluate(
-        "(document.querySelector('.workshop-hero .version-switch-note') || {}).textContent")
-    assert note == "Viewing JP standards · you are graded on US", note
+    note = library_page.evaluate(read_note)
+    assert note == "JP only · you are graded on US", note
     # The overall block's OWN request named the version -- read it off the
     # page's resource timeline rather than inferring it from a rendered value
     # (the fixture star's overall ladder need not differ between versions).
@@ -236,10 +301,9 @@ def test_showing_the_other_version_says_so_and_refiles_the_overall_block(
         .filter((name) => name.includes('/api/ranks/standards?'))
     """)
     assert any("version=jp" in name for name in requests), requests
-    library_page.evaluate(CLICK_US)
+    library_page.evaluate(TOGGLE_US)          # both again
     library_page.wait_ms(400)
-    assert library_page.evaluate(
-        "document.querySelector('.workshop-hero .version-switch-note')") is None
+    assert library_page.evaluate(read_note) == "Both regions shown"
 
 
 def test_a_matched_strategys_standing_is_the_served_one_at_the_graded_version(
@@ -255,9 +319,9 @@ def test_a_matched_strategys_standing_is_the_served_one_at_the_graded_version(
             ".map((el) => el.textContent.trim())")
     before = library_page.evaluate(read)
     assert before, "no standing badges rendered on the target page"
-    library_page.evaluate(CLICK_JP)
+    library_page.evaluate(TOGGLE_US)          # JP only
     library_page.wait_ms(400)
-    library_page.evaluate(CLICK_US)
+    library_page.evaluate(TOGGLE_US)          # both again
     library_page.wait_ms(400)
     assert library_page.evaluate(read) == before
 

@@ -18,6 +18,7 @@
 import { h, render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
+import { RegionFlag } from "./components/regionflag.js";
 
 const html = htm.bind(h);
 
@@ -87,7 +88,7 @@ function coverage(gates, reports, version) {
 function CoverageBar({ version, verified, total }) {
   const pct = total > 0 ? Math.round((verified / total) * 100) : 0;
   return html`<div class="sync-bar-wrap">
-    <span class="sync-bar-label">${version.toUpperCase()}</span>
+    <span class="sync-bar-label"><${RegionFlag} version=${version} size=${20} /></span>
     <span class="sync-bar-track"><span class="sync-bar" style=${`width:${pct}%`} /></span>
     <span class="sync-bar-count">${verified}/${total}</span>
   </div>`;

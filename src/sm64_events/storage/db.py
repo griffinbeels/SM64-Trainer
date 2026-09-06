@@ -575,7 +575,83 @@ MIGRATIONS = [
      WHERE parent IS NOT NULL;
     ALTER TABLE segment_defs DROP COLUMN parent;
     """,
-    # v27 -- captured controller input, in run-length chunks.
+    # v27 — the PLATFORM STAMP (pb-import round 29, item 2; built 2026-09-04):
+    # WHICH MACHINE set a time -- "emu" (Project64's memory) or "n64" (a real
+    # console's picture through the capture feed). `Attempt.platform` is read
+    # off the closing event's own payload by projection._build, so it
+    # re-derives on every reproject and needs no repair UPDATE (the v19/v20/
+    # timed_at shape). NULL default: every row written before this column
+    # existed came from the emulator, and core/modes.py::platform_of is the
+    # ONE place that says so -- storing 'emu' here would bake that rule into
+    # every row and into every branch's poller.
+    #
+    # A personal best carries no column of its own: it remembers its platform
+    # THROUGH its attempt (pbs()/current_pb LEFT JOIN attempts), one door.
+    # Two unmerged branches each carry their own v27+ (console-support:
+    # identity_source/confidence; pb-import: imported times); whichever
+    # merges main next re-tails its own block after this one, as v27's own
+    # comment on console-support already describes.
+    """
+    ALTER TABLE attempts ADD COLUMN platform TEXT;
+    """,
+
+    # v28 -- an IMPORTED TIME: a personal best the trainer recorded without an
+    # attempt behind it. `imported_from` is NULL for a played best and names
+    # the source otherwise ("manual", "sheet:<runner>"), so one control can
+    # remove a whole import and a later view can separate what he played from
+    # what he brought. Provenance is STORED, never drawn -- his ruling,
+    # 2026-08-20: "The user DID beat it. We shouldn't assume they're lying."
+    #
+    # `game_version` is the ROM the time was SET on, which nothing has ever
+    # stored: every existing row is implicitly "whatever was running", and
+    # `StandardsStore.ladders` already resolves a ladder on a version passed
+    # per call. NULL keeps today's behaviour exactly. Existing rows are
+    # deliberately NOT backfilled -- we do not know what set them, and a guess
+    # would put an unmeasured fact in his store.
+    """
+    ALTER TABLE pbs ADD COLUMN imported_from TEXT;
+    ALTER TABLE pbs ADD COLUMN game_version TEXT;
+    """,
+
+    # v29 -- an imported time is an ATTEMPT now (journaled `time_imported`,
+    # projected like any other row), and its pb row links to it. For the few
+    # days v28 shipped on its own branch an import wrote a pb row with NO
+    # attempt: a number in the card's head and no row in its log, which is
+    # the shape he reported (2026-08-22). Those rows cannot be upgraded --
+    # nothing journaled them -- so they go, and a re-import lands them
+    # properly. Touches nothing a played attempt ever wrote: a played pb
+    # always carries its attempt_id.
+    """
+    DELETE FROM pbs WHERE imported_from IS NOT NULL AND attempt_id IS NULL;
+    """,
+
+    # v30 -- a HELD TIME: a sheet cell an import kept aside because the
+    # trainer has nowhere to put it yet -- a piece no segment is linked to,
+    # a castle movement with no entity, a stage RTA, a star row timed on a
+    # real-time clock. His ruling, 2026-09-04: "maximize compatibility with
+    # the sheet" -- a row the import cannot land is KEPT rather than
+    # dropped, so the column export prints it back, its Library row shows
+    # it, and linking the row lands it. Keyed by the row's stable key and
+    # the ROM the cell was set on (NULL = the sheet did not say); `source`
+    # is the import that brought it, so undoing that import erases it.
+    # Later rows win, exactly as pbs do. `platform` (round 29 item 2) is the
+    # machine the runner's own legend says set the cell, NULL when it did
+    # not say -- a held cell is not an attempt, so the platform stamp has
+    # to ride the hold itself for the column export to paint it back.
+    """
+    CREATE TABLE IF NOT EXISTS held_times (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      row_key TEXT NOT NULL,
+      game_version TEXT,
+      platform TEXT,
+      time_cs INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      saved_utc TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS held_times_row ON held_times(row_key);
+    """,
+    # v31 -- captured controller input, in run-length chunks.
     #
     # Keyed by the game's frame counter AND wall clock, never by attempt id:
     # attempts are re-derived from the journal on every reprojection, so a row
@@ -598,7 +674,7 @@ MIGRATIONS = [
     );
     CREATE INDEX idx_input_chunks_utc ON input_chunks (started_utc, ended_utc);
     """,
-    # v28 -- template tracks: the input a run is compared against.
+    # v32 -- template tracks: the input a run is compared against.
     #
     # A template is a DOCUMENT, not a flag on an attempt (his ruling
     # 2026-08-20). That is what lets one come from an attempt he marked, a
@@ -626,7 +702,7 @@ MIGRATIONS = [
       ON input_templates (kind, entity_key, IFNULL(strat_tag, ''))
       WHERE active = 1;
     """,
-    # v29 -- the run format a chunk was written in.
+    # v33 -- the run format a chunk was written in.
     #
     # v2 adds what MARIO was doing on each frame (his action, his face-angle
     # yaw), which round 32 asked for: "adding extra diagnostic info about
@@ -638,7 +714,7 @@ MIGRATIONS = [
     """
     ALTER TABLE input_chunks ADD COLUMN format INTEGER NOT NULL DEFAULT 1;
     """,
-    # v30 -- the journal by wall clock, for the input timeline's moment
+    # v34 -- the journal by wall clock, for the input timeline's moment
     # markers: an attempt's rows are the ones inside its started/ended span
     # (`events_between`), and the journal was only ever indexed by id.
     """
@@ -652,7 +728,8 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "cleared", "cleared_reason",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
-                 "segment_id", "timed_by", "closed_by", "timed_at")
+                 "segment_id", "timed_by", "closed_by", "timed_at",
+                 "platform")
 
 
 class EventRow:
@@ -760,7 +837,20 @@ class Database:
     def _migrate(self) -> None:
         with self._lock:
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
-            for i, script in enumerate(MIGRATIONS[version:], start=version + 1):
+            steps = []
+            # Before the main sync, input-timeline used v27-v30 for the input
+            # tables, format and event index. Main used those numbers for
+            # imports. Preserve recorded bytes: apply main's missing block
+            # atomically, then recognize the already-applied input prefix at
+            # its new v31-v34 positions. Version alone cannot identify a branch.
+            has_inputs = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='input_chunks'"
+            ).fetchone()
+            if 27 <= version <= 30 and has_inputs:
+                version += 4
+                steps.append((version, ";\n".join(MIGRATIONS[26:30])))
+            steps.extend(enumerate(MIGRATIONS[version:], start=version + 1))
+            for i, script in steps:
                 # One transaction per entry: a mid-migration crash rolls back
                 # BOTH the partial schema changes and the version write
                 # (PRAGMA user_version is a header field — transactional).
@@ -954,7 +1044,8 @@ class Database:
                 int(a.cleared), a.cleared_reason,
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
-                a.segment_id, a.timed_by, a.closed_by, a.timed_at)
+                a.segment_id, a.timed_by, a.closed_by, a.timed_at,
+                a.platform)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:
@@ -1298,14 +1389,21 @@ class Database:
     def insert_pb(self, course_id: int | None, star_id: int | None,
                   strat_tag: str | None, timer_mode: str, frames: int,
                   attempt_id: int | None, saved_utc: str,
-                  segment_id: int | None = None) -> int:
+                  segment_id: int | None = None,
+                  imported_from: str | None = None,
+                  game_version: str | None = None) -> int:
+        """`attempt_id=None` with an `imported_from` is an IMPORTED TIME — a
+        personal best he brought rather than set here (see migration v28).
+        `game_version` is the ROM that set it; None means "grade on the running
+        version", which is what every row written before v28 does."""
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO pbs (course_id, star_id, segment_id, strat_tag,"
-                " timer_mode, frames, attempt_id, saved_utc)"
-                " VALUES (?,?,?,?,?,?,?,?)",
+                " timer_mode, frames, attempt_id, saved_utc, imported_from,"
+                " game_version)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (course_id, star_id, segment_id, strat_tag, timer_mode,
-                 frames, attempt_id, saved_utc))
+                 frames, attempt_id, saved_utc, imported_from, game_version))
             self._conn.commit()
             return cur.lastrowid
 
@@ -1318,13 +1416,23 @@ class Database:
         directly and see every row."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM pbs WHERE" + self._VISIBLE_PB
-                + " ORDER BY id").fetchall()
+                self._PB_SELECT + self._VISIBLE_PB
+                + " ORDER BY pbs.id").fetchall()
             return [dict(r) for r in rows]
+
+    # A PB's `platform` is its attempt's (v27): exposed on the row here so no
+    # reader joins for it, and never stored twice. A row with no attempt (a
+    # legacy manual save) reads NULL, which core/modes.py::platform_of
+    # resolves. Every pbs column that attempts also has (course_id, star_id,
+    # segment_id, strat_tag) must be qualified `pbs.` in the WHERE.
+    _PB_SELECT = ("SELECT pbs.*, attempt_of_pb.platform AS platform FROM pbs"
+                  " LEFT JOIN attempts AS attempt_of_pb"
+                  " ON attempt_of_pb.id = pbs.attempt_id WHERE")
 
     def current_pb(self, course_id: int | None, star_id: int | None,
                    timer_mode: str, segment_id: int | None = None,
-                   strat_tag: str | None = None) -> dict | None:
+                   strat_tag: str | None = None,
+                   game_version: str | None = None) -> dict | None:
         """Latest saved row for one star/segment + mode — the same row
         views._current_pbs picks (later saves win). Kind-aware like
         insert_pb: segment rows match by segment_id, star rows by
@@ -1339,16 +1447,24 @@ class Database:
         by hand does."""
         strat_clause = " AND strat_tag=?" if strat_tag is not None else ""
         strat_param = (strat_tag,) if strat_tag is not None else ()
+        strat_clause = strat_clause.replace("strat_tag", "pbs.strat_tag")
+        # When a ROM is named, a row set on the OTHER one is not an answer --
+        # but an unversioned row still is, since NULL means "grade on whatever
+        # is running" (migration v28). Only the sheet column export asks; every
+        # other caller omits it and sees exactly what it always did.
+        if game_version is not None:
+            strat_clause += " AND (pbs.game_version=? OR pbs.game_version IS NULL)"
+            strat_param += (game_version,)
         if segment_id is not None:
-            q = ("SELECT * FROM pbs WHERE segment_id=? AND timer_mode=?"
+            q = (self._PB_SELECT + " pbs.segment_id=? AND timer_mode=?"
                  + strat_clause + " AND" + self._VISIBLE_PB
-                 + " ORDER BY id DESC LIMIT 1")
+                 + " ORDER BY pbs.id DESC LIMIT 1")
             params = (segment_id, timer_mode) + strat_param
         else:
-            q = ("SELECT * FROM pbs WHERE course_id=? AND star_id=?"
-                 " AND segment_id IS NULL AND timer_mode=?"
+            q = (self._PB_SELECT + " pbs.course_id=? AND pbs.star_id=?"
+                 " AND pbs.segment_id IS NULL AND timer_mode=?"
                  + strat_clause + " AND" + self._VISIBLE_PB
-                 + " ORDER BY id DESC LIMIT 1")
+                 + " ORDER BY pbs.id DESC LIMIT 1")
             params = (course_id, star_id, timer_mode) + strat_param
         with self._lock:
             row = self._conn.execute(q, params).fetchone()
@@ -1358,6 +1474,63 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
+
+    # -- held times (sheet cells an import kept aside) ---------------------
+    def hold_times(self, source: str, cells, saved_utc: str) -> int:
+        """Keep `cells` -- `[{row_key, game_version, time_cs, reason,
+        platform?}]` --
+        for `source`, replacing that source's earlier hold of the same row
+        and ROM. Another source's hold of the row survives underneath, so
+        undoing the later import uncovers it (latest-row-wins, as pbs)."""
+        with self._lock:
+            for cell in cells:
+                self._conn.execute(
+                    "DELETE FROM held_times WHERE source=? AND row_key=?"
+                    " AND game_version IS ?",
+                    (source, cell["row_key"], cell.get("game_version")))
+                self._conn.execute(
+                    "INSERT INTO held_times (source, row_key, game_version,"
+                    " platform, time_cs, reason, saved_utc)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (source, cell["row_key"], cell.get("game_version"),
+                     cell.get("platform"), int(cell["time_cs"]),
+                     cell.get("reason") or "", saved_utc))
+            self._conn.commit()
+            return len(cells)
+
+    def held_times(self, source: str | None = None,
+                   row_key: str | None = None) -> list[dict]:
+        """Every held cell, id-ordered (later holds win), optionally one
+        source's or one row's."""
+        clauses, params = [], []
+        if source is not None:
+            clauses.append("source=?")
+            params.append(source)
+        if row_key is not None:
+            clauses.append("row_key=?")
+            params.append(row_key)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM held_times" + where + " ORDER BY id",
+                params).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_held_times(self, source: str | None = None,
+                          row_keys=None) -> int:
+        """Erase held cells -- one source's (an undo), or every source's
+        hold of the given rows (a link that just landed them). Returns
+        how many went."""
+        with self._lock:
+            gone = 0
+            if source is not None:
+                gone += self._conn.execute(
+                    "DELETE FROM held_times WHERE source=?", (source,)).rowcount
+            for key in (row_keys or ()):
+                gone += self._conn.execute(
+                    "DELETE FROM held_times WHERE row_key=?", (key,)).rowcount
+            self._conn.commit()
+            return gone
 
     def purge_event_types(self, types) -> int:
         """Delete every journal row of the given types and RECLAIM the file
@@ -1497,6 +1670,9 @@ class Database:
             self._conn.execute("DELETE FROM events")
             self._conn.execute("DELETE FROM pbs")
             self._conn.execute("DELETE FROM input_chunks")
+            # A held time is imported history too: it came in with a
+            # column and goes out with everything else.
+            self._conn.execute("DELETE FROM held_times")
             self._conn.execute("DELETE FROM sessions WHERE id<>?",
                                (keep_session_id,))
             self._conn.commit()

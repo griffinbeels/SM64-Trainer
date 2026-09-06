@@ -12,7 +12,14 @@ import pytest
 
 from sm64_events.core.events import Event
 from sm64_events.ranks import classify, scoring
-from test_ranks_api import make_client
+from test_ranks_api import make_client as _make_client
+
+
+def make_client(tmp_path, bundled_library=True):
+    """The bundled library ON by default here: the leaderboard tests adopt
+    rows off it and rate the sheet's runners. A test that reasons about
+    exactly the ladders it writes passes `bundled_library=False`."""
+    return _make_client(tmp_path, bundled_library=bundled_library)
 
 
 @pytest.fixture
@@ -283,7 +290,9 @@ def test_entity_tier_matches_rank_for_on_a_ragged_ladder(tmp_path):
     `classify.rank_for` (and `defined_tiers`-aware `division_for`) both say
     Gold I. Same star, same time must not disagree between the score and the
     medal beside it."""
-    client, svc = make_client(tmp_path)
+    # No bundled library: the sheet-fitted ladders on star:8:2 would join
+    # the best ladder and move the 92.5 this test pins.
+    client, svc = make_client(tmp_path, bundled_library=False)
     with client:
         asyncio.run(svc.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
         asyncio.run(svc.publish(_ev("star_collected", 1315,
@@ -580,14 +589,18 @@ def test_leaderboard_omitted_counts_a_runner_scored_elsewhere_but_not_here(clien
     # course 8 and must NOT join it. Assert that directly: if a second
     # course-9 entity ever gains a ladder, `expected_omitted` below silently
     # starts measuring a different scope than `body["omitted"]` does.
+    # Round 33: every course-9 star with a fitted sheet ladder grades now, so
+    # the narrow scope is the WHOLE course rather than the one adopted star;
+    # `expected_omitted` counts against exactly the entities the scope holds.
     course_scope = client.get("/api/marelo?scope=course:9").json()
-    assert [entity["key"] for entity in course_scope["entities"]] == ["star:9:2"]
+    course_keys = {entity["key"] for entity in course_scope["entities"]}
+    assert "star:9:2" in course_keys, course_keys
     library = client.app.state.library
     adoptions = client.app.state.library_adoptions
     scores = ratings.rate_runners(library.payload, adoptions.standards,
                                   adoptions.rows(), version="us").scores
     expected_omitted = sum(1 for by_entity in scores.values()
-                           if "star:9:2" not in by_entity)
+                           if not (course_keys & set(by_entity)))
     assert expected_omitted >= 1, "scenario didn't produce anyone to omit"
     body = client.get("/api/leaderboard?scope=course:9").json()
     runners = [row["runner"] for row in body["rows"]]
@@ -687,7 +700,9 @@ def test_leaderboard_runner_summary_shape(client):
     assert set(body["chips"][0]) >= {"scope_id", "label", "tier", "division",
                                      "marelo", "n", "practiced"}
     chip = next(c for c in body["chips"] if c["scope_id"] == "overall")
-    assert chip["practiced"] == 1
+    # >= 1, not == 1: since round 33 the sheet's own fitted ladders grade a
+    # real runner on every star they have a time for, not the adopted row alone.
+    assert chip["practiced"] >= 1
 
 
 def test_leaderboard_runner_summary_unknown_is_404(client):

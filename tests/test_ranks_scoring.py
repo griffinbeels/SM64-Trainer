@@ -1,4 +1,4 @@
-from sm64_events.ranks.classify import rank_for
+from sm64_events.ranks.classify import RANK_NAMES, rank_for
 from sm64_events.ranks.scoring import (
     SCORE_ANCHORS, best_ladder, best_ladder_owners, defined_tiers,
     sole_overall_owner,
@@ -279,3 +279,35 @@ def test_sole_overall_owner_is_the_strategy_fastest_at_every_rank():
     assert sole_overall_owner({"Only": {"Mario": 10.0}}) is None
     assert sole_overall_owner({"Only": {"Mario": 10.0}, "Empty": {}}) is None
     assert sole_overall_owner({}) is None
+
+
+def test_best_ladder_stays_monotone_when_a_strategy_skips_a_tier():
+    """The shape that broke the scorecard (2026-08-31, measured on his own
+    store): a sheet-fitted strategy publishes Mario..Gold and Bronze but
+    SKIPS Silver, so the pointwise minimum took Bronze from the fast way
+    and Silver from a slow one -- a Bronze cutoff faster than Silver's,
+    which no score curve can inverta and which made `division_goal_cs`
+    return nothing on a star with a full set of published standards.
+
+    A cutoff may never be faster than a harder tier's, so the minimum is
+    repaired fastest-first. Real numbers, from star:1:5."""
+    ladders = {
+        "Slide + Backflip clip": {"Mario": 11.76, "Grandmaster": 11.86,
+                                  "Master": 11.93, "Diamond": 11.96,
+                                  "Platinum": 12.06, "Gold": 12.23,
+                                  "Bronze": 12.30},          # no Silver
+        "Backflip Clip": {"Mario": 12.10, "Grandmaster": 12.20,
+                          "Master": 12.33, "Diamond": 12.56,
+                          "Platinum": 12.73, "Gold": 13.03,
+                          "Silver": 13.33, "Bronze": 14.33},
+    }
+    best = best_ladder(ladders)
+    ordered = [best[tier] for tier in RANK_NAMES if tier in best]
+    assert ordered == sorted(ordered), (
+        f"a harder tier must never be slower than an easier one: {best}")
+    # Silver is still the fast way's own 13.33; Bronze can only be raised TO
+    # it, never past it -- the repair is a floor, not a rewrite.
+    assert best["Silver"] == 1333
+    assert best["Bronze"] == 1333
+    # ...and the tiers the fast way genuinely owns are untouched.
+    assert best["Mario"] == 1176 and best["Gold"] == 1223

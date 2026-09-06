@@ -18,9 +18,63 @@ from sm64_events.memory.addresses import course_name, star_count, star_name
 
 MAIN_COURSES = range(1, 16)
 SECRET_COURSES = (19, 20, 21, 22, 23, 24)
+
+# One sheet target that is really TWO of ours (2026-08-31, his report). The
+# Princess's Secret Slide block holds both slide stars under one heading,
+# because the sheet models them as variants of one row: [1] the box star,
+# [2] "Under 21", [3] a strat for the box star, [4] the same strat for U21.
+# The game does not -- 19:0 and 19:1 are separate stars with separate
+# published standards -- so every U21 approach was filing under the box
+# star, and 151 runners' U21 times (best 20"60, measured live) reached
+# nothing. The ids INTERLEAVE, so no "this row opens a target" rule can
+# split them; and name matching cannot either, since `_normalize` strips a
+# trailing parenthetical and "Slide Star (Under 21 Seconds)" collapses onto
+# "Slide Star". So the split is stated: which approaches of which target
+# belong to which OTHER entity, matched on the marker the sheet itself
+# uses for them.
+_U21_MARKER = re.compile(r"\bunder\s*21\b|\(\s*u21\s*\)", re.IGNORECASE)
+
+TARGET_SPLITS = {
+    ("Castle Secret Stars", "The Princess's Secret Slide"): {
+        "entity_key": "star:19:1",
+        "label": "Slide Star (Under 21 Seconds)",
+        "matches": _U21_MARKER.search,
+    },
+}
+
+
+def split_for(section: str, label: str) -> dict | None:
+    """The split rule for a sheet target, or None. Keyed on the target's
+    own (section, label) so a rule cannot fire on a row that merely reads
+    like one."""
+    return TARGET_SPLITS.get((section or "", label or ""))
 # (course, "Course" segment, "Battle" segment) -- the pipe-entry and fight
-# segments, matching tools/scrape_ranks.py's own Bowser mapping.
+# segments, matching tools/scrape_ranks.py's own Bowser mapping. Those ids are
+# the ones migration v1 seeds in every database, in that order, and the rank
+# standards seed keys its Bowser ladders on exactly them.
 BOWSER_COURSES = ((16, 5, 8), (17, 6, 9), (18, 7, 10))
+
+# What each of those segment ids MEANS, as the seed_key every database carries
+# for the same movement (`storage/db.py`'s seed_key migration): the pipe entry
+# is the stage's "No Reds" card, the battle is Bowser 1/2/3. This is what lets
+# an import land a sheet's Bowser row on THIS database's row for the movement
+# rather than trusting a number from the machine that scraped it -- his
+# ruling, 2026-08-23: "'Bowser in the Fire Sea Course' ... are just the No
+# Reds options for each bowser course. Bowser in the Dark World Battle ==
+# Bowser 1 ... These should also be allowed to be imported."
+BOWSER_SEGMENT_SEED_KEYS = {
+    5: "seg:bitdw-pipe", 8: "seg:bowser-1",
+    6: "seg:bitfs-pipe", 9: "seg:bowser-2",
+    7: "seg:bits-pipe", 10: "seg:bowser-3",
+}
+
+
+def segment_seed_key(entity_key: str) -> str | None:
+    """The seed_key behind a sheet `segment:N` key, or None for anything else."""
+    kind, _, rest = (entity_key or "").partition(":")
+    if kind != "segment" or not rest.isdigit():
+        return None
+    return BOWSER_SEGMENT_SEED_KEYS.get(int(rest))
 
 # The 100-coin star is star 6 on every main course (addresses.star_count).
 HUNDRED_COIN_STAR = 6

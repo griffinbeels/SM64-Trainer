@@ -78,7 +78,10 @@ def note_states():
         out[key]["served"] = standards_payload(base, entity)["sole_overall_owner"]
 
     with tempfile.TemporaryDirectory() as scratch:
-        with serve_ui(Path(scratch) / "ownernote.db") as base:
+        # No bundled library (round 33): the sheet-fitted ladders it would
+        # add to every star cannot be cleared through the panel's ×, and this
+        # test reasons about exactly the ladders it writes.
+        with serve_ui(Path(scratch) / "ownernote.db", bundled_library=False) as base:
             with driver.get_driver().launch(headless=True,
                                             viewport=(1500, 1200)) as page:
                 page.goto(base)

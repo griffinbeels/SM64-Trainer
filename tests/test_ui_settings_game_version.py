@@ -59,9 +59,18 @@ READ_GAME_SECTION = """
       options: select
         ? Array.from(select.options).map((option) => option.textContent)
         : [],
+      // Round 24 draws the region as a FLAG inside this sentence, so the
+      // word lives in the image's `alt` (what a screen reader reads)
+      // rather than in a text node. Substitute it back before reading,
+      // so these assertions still describe the sentence a person hears.
       notes: section
         ? Array.from(section.querySelectorAll('.settings-note'))
-            .map((p) => p.textContent.replace(/\\s+/g, ' ').trim())
+            .map((p) => {
+              const clone = p.cloneNode(true);
+              clone.querySelectorAll('img.region-flag').forEach((img) =>
+                img.replaceWith(document.createTextNode(img.alt)));
+              return clone.textContent.replace(/\\s+/g, ' ').trim();
+            })
         : [],
       drawerText: document.querySelector('.settings-drawer').textContent,
     };
