@@ -628,7 +628,8 @@ class FeedExactLedger(ExactLedger):
                 for i in range(self.count)]
         return rows
     def feeds_between(self, t0, t1):
-        return [{"at": t0 + 1.0 + i / 30 + 0.004, "ts": t0 + 1.0 + i / 30}
+        return [{"at": t0 + 1.0 + i / 30 + 0.004, "ts": t0 + 1.0 + i / 30,
+                 "run_id": "fixture", "pts": i * 3000 + 360}
                 for i in range(self.count)]
 
 
@@ -639,9 +640,12 @@ class FeedExtractor(FakeExtractor):
         self.count = count
     def extract(self, ring, start, end, out_path):
         import dataclasses
+        from sm64_events.replay.media import MediaRun
         frame_times = [i / 30 + 0.004 for i in range(self.count)]
         return dataclasses.replace(super().extract(ring, start, end, out_path),
-                                   frame_times=frame_times, video_start_s=frame_times[0])
+                                   frame_times=frame_times, video_start_s=frame_times[0],
+                                   media_run=MediaRun("fixture", start.timestamp()),
+                                   source_pts=[i * 3000 + 360 for i in range(self.count)])
 
 
 def test_a_plugin_clips_map_is_its_stamps_less_the_layers_own_lag_and_carries_the_igt(tmp_path):
@@ -679,6 +683,31 @@ def test_a_clip_whose_rows_are_not_all_stamped_gets_no_map(tmp_path):
     svc.extractor = FeedExtractor(count=40)
     res = svc.view(42)
     assert res["frame_map"] is None and res["frame_map_source"] is None
+
+
+def test_picture_clock_lookup_keeps_the_matched_occurrence_across_a_reset(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    rows = [{"frame": frame, "igt_overall": igt, "exact": True}
+            for frame, igt in zip([100, 101, 99, 100, 101], [50, 51, 2, 3, 4], strict=True)]
+    meta = {"picture_ledger": rows, "picture_rows": [1, 4, 2],
+            "frame_map": [100, 100, 98]}
+    svc._take_the_stamps(meta, attempt())
+    assert meta["picture_igt"] == [50, 3, None]
+    assert meta["state_rows"] == [0, 3, None]
+
+
+def test_a_picture_feed_without_a_retained_source_clock_does_not_get_a_map(tmp_path):
+    import dataclasses
+
+    class UnknownClock(FeedExtractor):
+        def extract(self, *args):
+            return dataclasses.replace(super().extract(*args), media_run=None, source_pts=None)
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.recorder.ledger = FeedExactLedger(count=40)
+    svc.extractor = UnknownClock(count=40)
+    result = svc.view(42)
+    assert result["frame_map"] is None
 
 
 def test_a_few_inexact_rows_keep_the_plugin_map_but_say_so(tmp_path):

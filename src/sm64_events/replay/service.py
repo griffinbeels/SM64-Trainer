@@ -453,28 +453,46 @@ class ReplayService:
             return
         start = res.start_utc.timestamp()
         end = start + res.duration_s
+        media_run = getattr(res, "media_run", None)
+        source_pts = getattr(res, "source_pts", None)
+        if media_run is None or source_pts is None:
+            meta["feed_match"] = {"method": "source_pts",
+                                  "reason": "missing_source_clock"}
+            return
         try:
-            rows = ledger.rows_between(start - 1.5, end + 1.0)
             feeds = ledger.feeds_between(start - 1.0, end + 1.0)
+            # A cut may begin during a long hold. Its heartbeat names a row
+            # captured well before the usual lead-in, so request that identity.
+            row_start = min([start] + [entry["ts"] for entry in feeds
+                            if entry.get("run_id") == media_run.id
+                            and entry.get("ts") is not None]) - 1.5
+            rows = ledger.rows_between(row_start, end + 1.0)
             if not rows or not feeds:
                 return
             # The picture shows the pad of the stamp BEFORE its own
             # (PLUGIN_PICTURE_LAG, measured); an inexact row (two display
             # lists between presents) claims nothing.
-            built, repeats, stats = feed_map(
-                res.frame_times, start, rows, feeds,
-                lambda row: (row["frame"] - PLUGIN_PICTURE_LAG
-                             if row.get("exact") else None))
+            row_index = {id(row): index for index, row in enumerate(rows)}
+            matched_rows, repeats, stats = feed_map(
+                source_pts, media_run.id, rows, feeds,
+                lambda row: (row_index[id(row)]
+                             if row.get("exact") and row.get("frame") is not None
+                             else None))
         except Exception:
             log.exception("feed-log mapping failed; the clip carries no map")
             return
         meta["picture_ledger"] = [
-            {**row, "ts": round(row["ts"] - start, 4)} for row in rows]
+            {**row, "ts": round(row["ts"] - start, 6)} for row in rows]
+        meta["media_clock"] = {"version": 1, "run_id": media_run.id,
+                               "origin_ts": media_run.origin_ts,
+                               "source_pts": source_pts, "time_base": 90000}
         meta["feed_match"] = stats
-        if built is None:
+        if matched_rows is None:
             log.warning("feed log covers too little of the clip: %s", stats)
             return
-        meta["frame_map"] = built
+        meta["picture_rows"] = matched_rows
+        meta["frame_map"] = [rows[index]["frame"] - PLUGIN_PICTURE_LAG
+                             if index is not None else None for index in matched_rows]
         meta["repeats"] = repeats
         meta["frame_map_source"] = "feed_log"
         log.info("frame map read off the feed log: %s", stats)
@@ -511,10 +529,25 @@ class ReplayService:
         # track's first frame (the two clocks start a frame or two apart).
         # ...read off the row whose frame the map names for the slot, so
         # the clock and the pad the panel shows are the same picture's.
-        igt_by_frame = {row["frame"]: row["igt_overall"] for row in rows
-                        if row.get("frame") is not None and row.get("igt_overall") is not None}
         frame_map = meta.get("frame_map") or []
-        igts = [igt_by_frame.get(frame) if frame is not None else None for frame in frame_map]
+        # A raw game counter repeats after a save-state load. Resolve only
+        # backward from the particular capture the encoded slot contains;
+        # stop at a reset or a missing state instead of finding an old epoch.
+        state_rows = []
+        for slot, capture in enumerate(meta.get("picture_rows") or []):
+            state = capture
+            wanted = frame_map[slot]
+            while state is not None and rows[state]["frame"] != wanted:
+                if (state == 0 or rows[state - 1].get("frame") is None
+                        or rows[state - 1]["frame"] >= rows[state]["frame"]
+                        or rows[state - 1]["frame"] < wanted):
+                    state = None
+                else:
+                    state -= 1
+            state_rows.append(state)
+        meta["state_rows"] = state_rows
+        igts = [rows[index].get("igt_overall") if index is not None else None
+                for index in state_rows]
         meta["picture_igt"] = igts if any(igt is not None for igt in igts) else None
         self._audit_pad_stamps(meta, attempt)
 

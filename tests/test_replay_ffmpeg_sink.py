@@ -147,6 +147,32 @@ def test_spawn_args_follow_the_picked_codec(tmp_path, monkeypatch):
     assert "-forced-idr" not in a           # NVENC-only knob
 
 
+def test_mux_initialization_failure_closes_its_child_and_leaves_no_feed(tmp_path, monkeypatch):
+    from sm64_events.replay import ffmpeg_sink
+
+    events = []
+    class Child:
+        stdin = io.BytesIO()
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+        def wait(self, timeout):
+            events.append("waited")
+            return 0
+
+    child = Child()
+    def broken_mux(*args):
+        raise OSError("mux unavailable")
+
+    monkeypatch.setattr(ffmpeg_sink.subprocess, "Popen", lambda *args, **kw: child)
+    sink = FfmpegAvSink(ReplayConfig(scratch_dir=tmp_path), lambda seg: None,
+                        on_fed=lambda *args, **kw: events.append("fed"))
+    monkeypatch.setattr(sink, "_open_mux", broken_mux)
+    monkeypatch.setattr(sink, "_respawn_delay", lambda: 0)
+    assert sink._write_frame(np.zeros((96, 320, 4), np.uint8), (1, T0.timestamp())) is None
+    assert sink._proc is None and child.stdin.closed
+    assert events == ["waited"]
+
+
 def test_respawn_backoff_scales_with_young_deaths_and_resets(tmp_path):
     """A child that dies young (encoder init failure, full disk) must not be
     respawned per write attempt — that ran 331 restarts in one sitting
@@ -176,6 +202,24 @@ def test_parse_segment_csv_relative_to_origin(tmp_path):
     assert seg.utc_end == T0 + timedelta(seconds=4)
     assert parse_segment_csv("garbage\n", T0, 0.0, tmp_path) is None
     assert parse_segment_csv("missing.ts,0,2\n", T0, 0.0, tmp_path) is None
+
+
+def test_an_old_childs_final_segment_retains_its_own_media_clock(tmp_path):
+    from sm64_events.replay.media import MediaRun
+
+    path = tmp_path / "old.ts"
+    path.write_bytes(b"old segment")
+    old = MediaRun("old", T0.timestamp())
+    received = []
+    sink = FfmpegAvSink(ReplayConfig(scratch_dir=tmp_path), received.append)
+    sink._anchor_utc = T0 + timedelta(seconds=50)
+    sink._media_run = MediaRun("new", sink._anchor_utc.timestamp())
+    proc = type("Child", (), {"stdout": io.BytesIO(b"old.ts,2,4\n")})()
+    sink._segment_list_loop(proc, (320, 240), old)
+    assert len(received) == 1
+    assert received[0].media_run == old
+    assert received[0].utc_start == T0 + timedelta(seconds=2)
+    assert received[0].utc_end == T0 + timedelta(seconds=4)
 
 
 @pytest.mark.skipif(bundled_ffmpeg() is None and shutil.which("ffmpeg") is None,

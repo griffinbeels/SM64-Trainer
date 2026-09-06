@@ -1,62 +1,27 @@
-r"""ffmpeg-subprocess A+V sink — ONE ffmpeg owns both streams and ONE clock.
+r"""One encoder process owns the replay's video, audio and media clock.
 
-WHY this shape (the whole point — read the drift memory): video and audio used
-to be two streams on two independent clocks (count-based audio vs
-fed-frame-count video), reconciled by hand only at extraction. Their rates
-diverged ~150 ppm and the clip A/V offset grew to seconds over a long session.
-The cure is structural: feed BOTH raw streams into one ffmpeg that stamps each
-by SYSTEM WALL-CLOCK at read time (`-use_wallclock_as_timestamps`), CFR-locks
-the video to that clock (`-fps_mode cfr -r fps`), and continuously resamples
-the audio onto the same timeline (`-af aresample=async=1`). The segment muxer
-then slices an already-continuous, already-synced encode, so each MPEG-TS
-segment carries A+V locked together — and the per-segment AAC priming gap that
-forced the old PCM-sidecar design does NOT return (priming is applied once at
-stream start, not per segment).
+The picture feed muxes rawvideo and PCM into one NUT input. A MediaRun retains
+its first-picture UTC origin and unique encoder identity; video is assigned
+monotonic 90 kHz PTS before encoding, audio retains its capture timing on a
+microsecond clock. Audio samples before the run origin are trimmed so NUT
+cannot shift both streams. FFmpeg preserves those timestamps through the TS
+segment muxer (copyts, mpegts_copyts, disabled negative-timestamp adjustment).
+Each segment carries its own run, including a late final segment after restart.
 
-THE PICTURE FEED (config.picture_feed, round 32 item 38, 2026-09-02) keeps
-the one-ffmpeg, one-clock shape and moves the CLOCK into this process:
-stdin carries a NUT stream muxed here (PyAV, rawvideo + pcm_s16le) in
-which every picture and every audio chunk already bears its timestamp --
-a picture's own composition time, an audio chunk's capture time, both in
-seconds since the run's spawn -- and ffmpeg encodes video passthrough
-(`-fps_mode passthrough -enc_time_base demux`) so the ring holds ONE
-frame per distinct captured picture at exactly its time. No named pipe,
-no read-time stamping, no CFR grid. Three measurements forced each part
-(scratch probes, 2026-09-02): ffmpeg's read-time stamps bunched whole
-segments one 90 kHz tick apart because its scheduler reads a pipe in
-bursts; a wall-clock-stamped audio pipe beside a stamped video stream
-throttled the video to 26 of 30 pictures/s whatever offset they carried;
-and `-fflags +nobuffer` discarded the packets stream analysis read (23 of
-the first 83 pictures). Per-segment `-reset_timestamps` is off for it so
-a cut across segments has one timeline; the segment list's times are
-seconds since the anchor, which IS the epoch. The feeder files every
-write in the picture ledger's feed log (`on_fed`), which is how a clip's
-frame k names its row (replay/feedmap.py). The CFR feed below is what
-picture_feed=False and the in-process fallback still run.
+Every accepted video write records the actual assigned source PTS and captured
+row in the feed log. The extractor cuts on that same clock and the frame map
+looks up (run, PTS), without fitting an offset. Extremely close or delayed
+pictures get successive transport ticks when their composition timestamps
+cannot remain monotonic; their picture identity is retained explicitly. A
+heartbeat repeats the last picture, with the same captured identity.
 
-Transport (CFR feed):
-- VIDEO over stdin (`pipe:0`): the feeder thread re-sends the latest submitted
-  frame at fps. Exact pacing is no longer load-bearing — ffmpeg's wallclock
-  stamping owns the timeline, so feeder jitter cannot accumulate drift (this is
-  precisely the bug the old fed-frame-count timeline had: a stall's resync
-  dropped owed frames and the video clock fell permanently behind).
-- AUDIO over a Windows named pipe (`\\.\pipe\...`): the producer (recorder
-  _on_pcm) calls submit_audio(); a writer thread connects the pipe and drains a
-  queue into it. Inherited-fd `pipe:N` does NOT work on Windows — a named pipe
-  is the only second-input mechanism. Pitfall: ffmpeg opens inputs in order and
-  a pipe open BLOCKS until a writer connects, so the writer thread must connect
-  promptly and independently of the video feeder.
+The legacy CFR mode sends rawvideo and a Windows named audio pipe to one
+wall-clock-stamping ffmpeg. Async audio resampling prevents independent-clock
+drift. It has no retained source-PTS contract and cannot claim an exact map.
 
-Timeline -> UTC: anchor once at the first fed frame (wall time); each segment's
-UTC offset is its CSV start MINUS the first segment's CSV start (relative), so
-the mapping is correct whether ffmpeg reports zero-based or wall-clock-epoch
-pts. `-reset_timestamps 1` applies ONE shared offset to both streams per
-segment (verified in libavformat/segment.c), so files open at pts~0 and A/V
-sync is preserved across segment boundaries (the extractor contract).
-
-Backstop: every spawned child is assigned to a kill-on-close Job Object, so a
-hung/hard-killed parent can never orphan an ffmpeg recording into a dead
-terminal (live incident 2026-06-12).
+Children use quiet spawn flags and a kill-on-close Windows job. See the input
+frame chain rule for measured failures and tests/test_replay_picture_identity.py
+for independent pixel identities through the actual sink, segments and cut.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -77,12 +42,13 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.replay.config import RING_MAXRATE, video_quality_args
 from sm64_events.replay.ring import SegmentInfo
+from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, MediaRun
 
 log = logging.getLogger("sm64.replay")
 
 # THE PICTURE FEED (config.picture_feed, item 38): one video frame per
-# DISTINCT captured picture, written the moment it arrives and stamped by
-# ffmpeg's wall clock at that read (`-fps_mode passthrough`, VFR). A
+# DISTINCT captured picture, carrying its assigned source timestamp through
+# ffmpeg unchanged (`-fps_mode passthrough`, VFR). A
 # picture that stays on screen feeds nothing, so after this much silence
 # the last picture is written again -- untagged, a repeat -- to keep the
 # segment muxer and the ring's coverage rolling (a segment closes on the
@@ -103,8 +69,8 @@ PICTURE_HEARTBEAT_S = 1.0
 # loaded machine captures fewer pictures and encodes every one of them.
 PICTURE_QUEUE_BYTES = 512 * 1024 * 1024
 # The picture feed's video reaches ffmpeg as a NUT stream, muxed in this
-# process with EVERY FRAME CARRYING ITS OWN TIMESTAMP (microseconds on the
-# wall clock). `-use_wallclock_as_timestamps` stamps a frame when ffmpeg's
+# process with EVERY FRAME CARRYING ITS OWN TIMESTAMP (90 kHz video ticks;
+# microseconds for audio). `-use_wallclock_as_timestamps` stamps a frame when ffmpeg's
 # demuxer happens to read it, and ffmpeg's scheduler holds a demuxer back
 # whenever the OTHER input is behind: measured 2026-09-02, a 30 pictures/s
 # feed came out with 108 frames in one segment mostly ONE 90 kHz TICK
@@ -249,7 +215,8 @@ class AudioPacer:
 
 def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
                       scratch: Path,
-                      dims: tuple[int, int] | None = None) -> SegmentInfo | None:
+                      dims: tuple[int, int] | None = None,
+                      media_run: MediaRun | None = None) -> SegmentInfo | None:
     """One line of ffmpeg's -segment_list_type csv: 'file,start,end' (seconds).
     UTC is anchored once (anchor_utc = wall time of the first fed frame) and the
     segment offset is RELATIVE to the first segment's start (origin_s) — correct
@@ -271,7 +238,7 @@ def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
         path=path, kind="video",
         utc_start=anchor_utc + timedelta(seconds=start - origin_s),
         utc_end=anchor_utc + timedelta(seconds=end - origin_s),
-        size_bytes=size, dims=dims)
+        size_bytes=size, dims=dims, media_run=media_run)
 
 
 def fill_plane(plane, frame: np.ndarray) -> None:
@@ -344,11 +311,13 @@ class FfmpegAvSink:
         self._mux_frame = None      # one reusable AVFrame; planes updated in place
         self._mux_lock = threading.Lock()   # the feeder and the audio thread share it
         # The picture feed's stamps are seconds since THIS run's epoch (the
-        # spawn): small numbers that never wrap MPEG-TS's 33-bit clock, on
+        # first picture): small numbers that never wrap MPEG-TS's 33-bit clock, on
         # one timeline for every segment of the run (-reset_timestamps 0),
         # so a cut across segments carries no per-segment rounding. The
         # anchor IS the epoch, and the segment list's times add to it.
         self._run_epoch: float | None = None
+        self._media_run: MediaRun | None = None
+        self._last_video_pts: int | None = None
         self._arrived = threading.Event()
         self._picture_drops = 0
         # Called after every write that reached ffmpeg: (tag, wall time
@@ -384,7 +353,8 @@ class FfmpegAvSink:
         self._audio_thread: threading.Thread | None = None
 
     # -- capture-thread surface (lock-free) -----------------------------------
-    def submit(self, bgra: np.ndarray, tag: int | None = None) -> None:
+    def submit(self, bgra: np.ndarray,
+               tag: tuple[int | None, float | None] | None = None) -> None:
         """`tag` is the RAM game frame current when this picture was
         CAPTURED (recorder._on_frame reads it off the frame clock). It rides
         the reference swap so the feeder can record, per fed frame, which
@@ -452,7 +422,7 @@ class FfmpegAvSink:
         self._readers.clear()
 
     # -- process management ----------------------------------------------------
-    def _spawn(self, w: int, h: int) -> None:
+    def _spawn(self, w: int, h: int, first_stamp: float | None = None) -> None:
         global _pipe_seq
         self._readers = [t for t in self._readers if t.is_alive()]
         fps = self._cfg.fps
@@ -465,6 +435,7 @@ class FfmpegAvSink:
         pattern = str(self._cfg.scratch_dir / f"av_{self._seg_n_base:02d}_%06d.ts")
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "warning",
+            *(["-copyts"] if self._picture else []),
             # nobuffer DISCARDS the packets stream analysis reads: 23 of the
             # first 83 pictures of a picture-feed run never reached the
             # encoder with it (measured 2026-09-02, scratch loss_probe). The
@@ -522,6 +493,12 @@ class FfmpegAvSink:
             # combined A+V MPEG-TS segments
             "-f", "segment", "-segment_time", str(seg_s),
             "-segment_format", "mpegts",
+            # Both the outer muxer and the TS child must preserve PTS. TS's
+            # default transport offset and AAC priming otherwise move video
+            # away from the composition clock while retaining its cadence.
+            *(["-avoid_negative_ts", "disabled", "-segment_format_options",
+               "mpegts_copyts=1:avoid_negative_ts=disabled"]
+              if self._picture else []),
             # One timeline across the run's segments for the picture feed
             # (its stamps are small already); a per-segment reset for CFR.
             "-reset_timestamps", "0" if self._picture else "1",
@@ -534,7 +511,10 @@ class FfmpegAvSink:
             stderr=subprocess.PIPE, bufsize=0, **quiet_spawn_kwargs())
         self._spawned_at_mono = time.monotonic()
         if self._picture:
-            self._run_epoch = time.time()
+            self._media_run = MediaRun.starting_at(
+                time.time() if first_stamp is None else first_stamp)
+            self._run_epoch = self._media_run.origin_ts
+            self._last_video_pts = None
             self._anchor_utc = datetime.fromtimestamp(self._run_epoch, timezone.utc)
             self._open_mux(w, h)
         job = _assign_kill_on_close(self._proc)
@@ -553,7 +533,8 @@ class FfmpegAvSink:
         # size onto its segments — a later resize respawns ffmpeg and its
         # reader with the new size, and the extractor can tell the two apart.
         for target, name, extra in (
-                (self._segment_list_loop, "ffmpeg-segments", ((w, h),)),
+                (self._segment_list_loop, "ffmpeg-segments",
+                 ((w, h), self._media_run)),
                 (self._stderr_loop, "ffmpeg-stderr", ())):
             t = threading.Thread(target=target, args=(self._proc, *extra),
                                  name=name, daemon=True)
@@ -753,16 +734,11 @@ class FfmpegAvSink:
         that REACHED ffmpeg lives here, once, for both feeders."""
         import time as _time
 
+        stamped = (tag[1] if tag is not None and len(tag) > 1
+                   and tag[1] is not None else None)
+        wrote_at = stamped if stamped is not None else _time.time()
         h, w = frame.shape[:2]
-        if self._proc is None or (w, h) != self._dims:
-            if self._proc is not None:
-                log.info("ffmpeg AV sink: dims %s -> %s, restarting",
-                         self._dims, (w, h))
-                self._restarts += 1
-                self._teardown_audio_pipe()
-                self._stop_proc()
-            self._anchor_utc = None
-            self._spawn(w, h)
+        pts = None
         t0 = _time.perf_counter()
         # The picture feed stamps a picture with its COMPOSITION time (the
         # tag's second field, WGC's own clock through the run's capture
@@ -770,12 +746,19 @@ class FfmpegAvSink:
         # and its row carry one number. A heartbeat repeat, untagged, is
         # stamped now. Pictures queued through a spawn keep their true
         # times this way instead of the burst's.
-        stamped = (tag[1] if tag is not None and len(tag) > 1
-                   and tag[1] is not None else None)
-        wrote_at = stamped if stamped is not None else _time.time()
         try:
+            if self._proc is None or (w, h) != self._dims:
+                if self._proc is not None:
+                    log.info("ffmpeg AV sink: dims %s -> %s, restarting",
+                             self._dims, (w, h))
+                    self._restarts += 1
+                    self._teardown_audio_pipe()
+                    self._stop_proc()
+                self._anchor_utc = None
+                self._spawn(w, h, first_stamp=wrote_at)
             if self._picture:
-                self._mux_picture(frame, wrote_at)
+                pts = self._mux_picture(frame, wrote_at)
+                wrote_at = self._media_run.origin_ts + pts / MEDIA_HZ
             else:
                 self._proc.stdin.write(frame)  # raw pipe: GIL released
         except Exception:
@@ -804,7 +787,7 @@ class FfmpegAvSink:
         wms = (_time.perf_counter() - t0) * 1000
         if self.on_fed is not None:
             try:
-                self.on_fed(tag, wrote_at)
+                self.on_fed(tag, wrote_at, media_run=self._media_run, pts=pts)
             except Exception:
                 log.exception("on_fed failed; the feed log misses a frame")
         self._fed += 1
@@ -812,15 +795,15 @@ class FfmpegAvSink:
 
     def _open_mux(self, w: int, h: int) -> None:
         """A NUT container over the child's stdin carrying one rawvideo
-        stream whose frames are stamped by US (PICTURE_TIME_BASE)."""
+        stream whose frames carry the assigned 90 kHz transport timestamps."""
         import av
 
         self._mux = av.open(_WriteAll(self._proc.stdin), mode="w", format="nut")
         stream = self._mux.add_stream("rawvideo", rate=1000)
         stream.width, stream.height = w, h
         stream.pix_fmt = "bgra"
-        stream.time_base = PICTURE_TIME_BASE
-        stream.codec_context.time_base = PICTURE_TIME_BASE
+        stream.time_base = MEDIA_TIME_BASE
+        stream.codec_context.time_base = MEDIA_TIME_BASE
         self._mux_stream = stream
         audio = self._mux.add_stream("pcm_s16le", rate=self._cfg.audio_rate)
         audio.layout = "stereo"
@@ -828,7 +811,7 @@ class FfmpegAvSink:
         audio.codec_context.time_base = PICTURE_TIME_BASE
         self._mux_audio = audio
         self._mux_frame = av.VideoFrame(w, h, "bgra")
-        self._mux_frame.time_base = PICTURE_TIME_BASE
+        self._mux_frame.time_base = MEDIA_TIME_BASE
 
     def _close_mux(self) -> None:
         with self._mux_lock:
@@ -841,7 +824,7 @@ class FfmpegAvSink:
             except Exception:
                 log.debug("NUT mux close failed (child gone?)", exc_info=True)
 
-    def _mux_picture(self, frame: np.ndarray, stamp: float) -> None:
+    def _mux_picture(self, frame: np.ndarray, stamp: float) -> int:
         """One picture into the NUT stream at wall time `stamp`. The
         reusable AVFrame's plane is updated in place (one copy) and the
         rawvideo 'encode' is the second; the mux write blocks on the
@@ -851,9 +834,18 @@ class FfmpegAvSink:
                 raise OSError("no NUT mux open")
             picture = self._mux_frame
             fill_plane(picture.planes[0], frame)
-            picture.pts = int(round((stamp - self._run_epoch) * 1_000_000))
+            # Allocate the actual transport tick here, before encoding. Two
+            # catch-up pictures can quantize to the same tick; a delayed grab
+            # can even predate a heartbeat already written. FFmpeg must not
+            # resolve those collisions invisibly. Keep every picture in feed
+            # order and file its assigned PTS alongside its capture identity.
+            pts = max(self._media_run.ticks_at(stamp),
+                      self._last_video_pts + 1 if self._last_video_pts is not None else 0)
+            picture.pts = pts
             for packet in self._mux_stream.encode(picture):
                 self._mux.mux(packet)
+            self._last_video_pts = pts
+            return pts
 
     def _mux_audio_chunk(self, pcm: bytes, pts_us: int) -> None:
         """One chunk of interleaved s16le stereo into the NUT stream at
@@ -864,11 +856,21 @@ class FfmpegAvSink:
         samples = len(pcm) // 4
         if samples <= 0:
             return
+        relative = int(pts_us) - int(round(self._run_epoch * 1_000_000))
+        if relative < 0:
+            # The tap may have queued audio before the first picture. NUT
+            # shifts *both* streams when it sees a negative packet. Trim only
+            # samples outside this run so video PTS zero remains picture zero.
+            skip = min(samples, (-relative * self._cfg.audio_rate + 999_999) // 1_000_000)
+            pcm = pcm[skip * 4:]
+            if not pcm:
+                return
+            relative += round(skip * 1_000_000 / self._cfg.audio_rate)
         block = np.frombuffer(pcm, dtype=np.int16).reshape(1, -1)
         chunk = av.AudioFrame.from_ndarray(block, format="s16", layout="stereo")
         chunk.sample_rate = self._cfg.audio_rate
         chunk.time_base = PICTURE_TIME_BASE
-        chunk.pts = int(pts_us) - int(round(self._run_epoch * 1_000_000))
+        chunk.pts = relative
         with self._mux_lock:
             if self._mux is None:
                 raise OSError("no NUT mux open")
@@ -979,12 +981,15 @@ class FfmpegAvSink:
         except Exception:
             log.exception("ffmpeg picture feeder died")
 
-    def _segment_list_loop(self, proc, dims=None) -> None:
+    def _segment_list_loop(self, proc, dims=None, media_run=None) -> None:
         # This run's first segment start (pts origin to subtract). The picture
         # feed's timeline already counts from the anchor, so nothing is.
         origin = 0.0 if self._picture else None
         for raw in iter(proc.stdout.readline, b""):
-            anchor = self._anchor_utc
+            # This reader belongs to its child even after a resize/restart.
+            # Never let an old child's final CSV line use the new origin.
+            anchor = (datetime.fromtimestamp(media_run.origin_ts, timezone.utc)
+                      if media_run else self._anchor_utc)
             if anchor is None:
                 continue
             line = raw.decode("utf-8", "replace")
@@ -996,7 +1001,7 @@ class FfmpegAvSink:
                 except ValueError:
                     pass
             seg = parse_segment_csv(line, anchor, origin or 0.0,
-                                    self._cfg.scratch_dir, dims)
+                                    self._cfg.scratch_dir, dims, media_run)
             if seg is not None:
                 self._on_segment(seg)
 

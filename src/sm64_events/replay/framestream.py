@@ -288,7 +288,8 @@ class FrameStream:
             return None
         width, height = self._u32(base + S_WIDTH), self._u32(base + S_HEIGHT)
         stride = self._u32(base + S_STRIDE)
-        if width == 0 or height == 0 or stride * height > SLOT_BYTES - SLOT_META_BYTES:
+        if (width == 0 or height == 0 or stride < width * BYTES_PER_PIXEL
+                or stride * height > SLOT_BYTES - SLOT_META_BYTES):
             return None
         lengths = [self._u32(base + S_LENGTHS + index * 4) for index in range(TABLE_ENTRIES)]
         table = tuple(
@@ -296,16 +297,22 @@ class FrameStream:
                             base + S_TABLE + index * TABLE_ENTRY_BYTES
                             + min(lengths[index], TABLE_ENTRY_BYTES)])
             for index in range(TABLE_ENTRIES))
+        # Copy every field before the final sequence check. Reading timing or
+        # exactness afterwards could pair old pixels/table bytes with metadata
+        # from a slot the producer had just overwritten.
+        list_qpc = self._i64(base + S_LIST_QPC)
+        present_qpc = self._i64(base + S_PRESENT_QPC)
+        vi_origin = self._u32(base + S_VI_ORIGIN)
+        lists_since = self._u32(base + S_LISTS_SINCE)
         pixels = self._view[base + S_PIXELS:base + S_PIXELS + stride * height]
         pixels = pixels.reshape(height, stride)[:, :width * BYTES_PER_PIXEL]
         pixels = pixels.reshape(height, width, BYTES_PER_PIXEL).copy()
         if self._u32(base + S_SEQ) != seq or self._u32(base + S_SEQ_END) != seq:
             return None                                  # torn under the copy
-        return Slot(seq=seq, list_qpc=self._i64(base + S_LIST_QPC),
-                    present_qpc=self._i64(base + S_PRESENT_QPC),
-                    vi_origin=self._u32(base + S_VI_ORIGIN), width=width,
+        return Slot(seq=seq, list_qpc=list_qpc, present_qpc=present_qpc,
+                    vi_origin=vi_origin, width=width,
                     height=height, stride=stride,
-                    lists_since=self._u32(base + S_LISTS_SINCE),
+                    lists_since=lists_since,
                     table=table, pixels=pixels)
 
     # -- the writer's side, in Python: the test double for the plugin ------

@@ -631,10 +631,11 @@ class ReplayRecorder:
         self._last_frame = bgra
         self._last_index = target
 
-    def _on_fed(self, tag, wrote_at: float) -> None:
+    def _on_fed(self, tag, wrote_at: float, *, media_run=None, pts=None) -> None:
         """The sink completed one write (feeder thread): file it under the
         row the tag names, or as a heartbeat repeat when there is none."""
-        self.ledger.mark_fed(tag[1] if tag is not None else None, wrote_at)
+        self.ledger.mark_fed(tag[1] if tag is not None else None, wrote_at,
+                             media_run=media_run, pts=pts)
 
     # -- audio callback (library thread) -------------------------------------
 

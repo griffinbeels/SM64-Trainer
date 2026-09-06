@@ -493,7 +493,8 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     # The sink's feed callback is the ledger's feed log.
     sink.on_fed(sink.tags[0], rows[0]["ts"] + 0.004)
     assert rec.ledger.feeds_between(0.0, 1e12) == [
-        {"at": rows[0]["ts"] + 0.004, "ts": rows[0]["ts"]}]
+        {"at": rows[0]["ts"] + 0.004, "ts": rows[0]["ts"],
+         "run_id": None, "pts": None, "repeat": False}]
     rec.stop()
 
 

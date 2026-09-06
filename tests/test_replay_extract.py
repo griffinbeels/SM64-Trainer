@@ -111,6 +111,15 @@ def test_ffprobe_is_found_beside_an_ffmpeg_that_lives_in_a_folder_named_ffmpeg(t
     assert ffprobe_beside(None) is None
 
 
+def test_failed_probe_cannot_supply_a_partial_frame_clock(tmp_path, monkeypatch):
+    from sm64_events.replay import extract
+
+    monkeypatch.setattr(extract, "ffprobe_beside", lambda ff: "probe")
+    monkeypatch.setattr(extract.subprocess, "run", lambda *args, **kw:
+                        subprocess.CompletedProcess([], 1, "0.000000\n0.033333\n", "truncated"))
+    assert extract.frame_times_of("ffmpeg", tmp_path / "partial.mp4") is None
+
+
 def test_extract_av_stay_in_sync(tmp_path):
     """The whole point: audio and video durations match within a frame —
     they were muxed on ONE clock at capture, so a cut can't shear them."""
@@ -194,6 +203,22 @@ def test_window_resize_breaks_the_run_like_a_hole():
     # unknown dims (audio chunks, the in-process fallback writer) never split
     unknown = [seg(0, None), seg(1, None)]
     assert len(contiguous_run(unknown, T0)[0]) == 2
+
+
+def test_same_size_encoder_restart_breaks_the_run_and_preserves_each_clock():
+    from sm64_events.replay.media import MediaRun
+
+    before = MediaRun("before", T0.timestamp())
+    after = MediaRun("after", T0.timestamp() + 4)
+    segs = [SegmentInfo(Path(f"{i}.ts"), "video",
+                        T0 + timedelta(seconds=i * 2),
+                        T0 + timedelta(seconds=(i + 1) * 2), 1,
+                        (320, 240), before if i < 2 else after)
+            for i in range(4)]
+    run, hole_before, hole_after = contiguous_run(segs, T0 + timedelta(seconds=1))
+    assert run == segs[:2] and not hole_before and hole_after
+    run, hole_before, hole_after = contiguous_run(segs, T0 + timedelta(seconds=5))
+    assert run == segs[2:] and hole_before and not hole_after
 
 
 def test_extract_across_a_resize_keeps_one_frame_size(tmp_path):

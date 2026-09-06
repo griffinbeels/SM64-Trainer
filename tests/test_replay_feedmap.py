@@ -1,156 +1,115 @@
-"""The frame map read off the picture feed's log (replay/feedmap.py).
+"""Source identity must survive gaps, clock collisions, holds and resets."""
+import pytest
 
-Item 38: the ring holds one video frame per distinct captured picture and
-the ledger's feed log says which row each write carried, so a clip's map
-is bookkeeping -- frame k at start + frame_times[k] matches one feed entry
-by wall time, and the entry's row names the game frame. Nothing here reads
-pixels.
-"""
-from sm64_events.replay.feedmap import FEED_MATCH_TOLERANCE_S, feed_map
-from sm64_events.replay.service import PLUGIN_PICTURE_LAG
+from sm64_events.replay.feedmap import feed_map
+from sm64_events.replay.ledger import PictureLedger
+from sm64_events.replay.media import MediaRun
 
 
-def shown(row):
-    """The projector `ReplayService._map_from_feeds` passes: the picture
-    shows the pad of the stamp BEFORE its own, and an inexact row (two
-    display lists between presents) claims nothing."""
-    return (row["frame"] - PLUGIN_PICTURE_LAG
-            if row.get("exact") else None)
-
-START = 1_000_000.0          # the clip's media origin, on the wall clock
-PERIOD = 1 / 30
-
-
-def rows_and_feeds(count: int, first_frame: int = 500, latency: float = 0.004,
-                   bias: float = 0.0):
-    """`count` pictures a game frame apart: each row composed at ts, fed
-    `latency` later (the write completing), stamped with the RAM frame."""
-    rows, feeds = [], []
-    for index in range(count):
-        ts = START + index * PERIOD
-        rows.append({"ts": ts, "frame": first_frame + index, "exact": True})
-        feeds.append({"at": ts + latency + bias, "ts": ts})
+def records():
+    # Deliberately repeat raw game counters across a save-state load.
+    rows = [{"ts": 100 + i / 30, "frame": frame, "igt": 40 + i}
+            for i, frame in enumerate([100, 101, 99, 100, 101])]
+    feeds = [{"ts": row["ts"], "run_id": "a", "pts": i * 3000}
+             for i, row in enumerate(rows)]
     return rows, feeds
 
 
-def clip_times(count: int, latency: float = 0.004, first: int = 0):
-    """The clip's own frame times: ffmpeg stamped each frame at the read
-    the write satisfied, so frame k sits `latency` after row k's ts."""
-    return [(first + k) * PERIOD + latency for k in range(count)]
+def project(row):
+    return row["frame"], row["igt"]
 
 
-def test_every_frame_names_its_row_and_the_map_is_the_rows_stamps():
-    rows, feeds = rows_and_feeds(12)
-    built, repeats, stats = feed_map(clip_times(12), START, rows, feeds, shown)
-    # The map IS the stamps, one behind: consecutive rows are consecutive
-    # frames because the plugin stamped them that way.
-    assert built == [499 + k for k in range(12)]
-    assert repeats == [False] * 12
-    assert stats["matched"] == 12 and stats["unmatched"] == 0
-    assert stats["repeats"] == 0
+def test_the_same_counter_in_a_later_epoch_cannot_overwrite_a_picture():
+    rows, feeds = records()
+    values, repeats, stats = feed_map([0, 3000, 6000, 9000, 12000], "a", rows, feeds, project)
+    assert values == [(100, 40), (101, 41), (99, 42), (100, 43), (101, 44)]
+    assert repeats == [False] * 5
+    assert stats["matched"] == 5 and stats["unmatched"] == 0
+    assert stats["method"] == "source_pts"
 
 
-def test_a_cut_starting_mid_ring_matches_the_right_rows_not_the_first():
-    rows, feeds = rows_and_feeds(40)
-    # The clip starts at row 25: its media origin is 25 periods in.
-    origin = START + 25 * PERIOD
-    times = clip_times(10)
-    built, _repeats, stats = feed_map(times, origin, rows, feeds, shown)
-    assert built == [499 + 25 + k for k in range(10)]
-    assert stats["unmatched"] == 0
+def test_a_cut_uses_source_pts_instead_of_counting_from_the_first_feed():
+    rows, feeds = records()
+    values, _, _ = feed_map([6000, 9000], "a", rows, feeds, project)
+    assert values == [(99, 42), (100, 43)]
 
 
-def test_a_constant_clock_bias_is_measured_and_removed_not_assumed():
-    """The sink's segment anchor can hold a small constant offset against
-    ffmpeg's stamps; the median delta absorbs it, like ledger_map's."""
-    rows, feeds = rows_and_feeds(20, bias=0.009)
-    built, _repeats, stats = feed_map(clip_times(20), START, rows, feeds, shown)
-    assert built == [499 + k for k in range(20)]
-    assert abs(stats["bias_ms"] - 9.0) < 0.5
-    assert stats["residual_ms"]["max"] < 0.5
+@pytest.mark.parametrize("shift", [1, 90, 810, 2999])
+def test_an_unpreserved_origin_is_refused_instead_of_fitted(shift):
+    rows, feeds = records()
+    values, _, stats = feed_map([shift + i * 3000 for i in range(5)], "a", rows, feeds, project)
+    assert values is None and stats["matched"] == 0
 
 
-def test_a_heartbeat_repeat_is_the_same_game_frame_and_is_flagged():
-    rows, feeds = rows_and_feeds(6)
-    # A 1 s hold after picture 5: the sink re-fed it, untagged.
-    hold_at = feeds[-1]["at"] + 1.0
-    feeds.append({"at": hold_at, "ts": None})
-    times = clip_times(6) + [hold_at - START]
-    built, repeats, stats = feed_map(times, START, rows, feeds, shown)
-    assert built[-1] == built[-2]
-    assert repeats == [False] * 6 + [True]
-    assert stats["repeats"] == 1
+def test_wall_time_and_feed_spacing_do_not_decide_identity():
+    rows, feeds = records()
+    for feed in feeds:
+        feed["at"] = -999.0  # encoder write completion may be arbitrarily late
+    feeds[2]["pts"] = 3001  # emulator catch-up: distinct pictures one tick apart
+    values, _, _ = feed_map([0, 3000, 3001, 9000, 12000], "a", rows, feeds, project)
+    assert values == [project(row) for row in rows]
 
 
-def test_the_same_feed_join_can_return_a_rows_coherent_clock_pair():
-    rows, feeds = rows_and_feeds(6)
-    for index, row in enumerate(rows):
-        row["igt_overall"] = 40 + index
-    pairs, repeats, stats = feed_map(
-        clip_times(6), START, rows, feeds,
-        lambda row: ((row["frame"], row["igt_overall"])
-                     if row.get("igt_overall") is not None else None))
-    assert pairs == [(500 + k, 40 + k) for k in range(6)]
-    assert repeats == [False] * 6
-    assert stats["matched"] == 6
+def test_unknown_feed_or_state_stays_unknown_without_filling_the_gap():
+    rows, feeds = records()
+    del feeds[1]
+    del rows[3]
+    values, _, stats = feed_map([0, 3000, 6000, 9000, 12000], "a", rows, feeds, project)
+    assert values == [(100, 40), None, (99, 42), None, (101, 44)]
+    assert stats["unmatched"] == 2
 
 
-def test_a_clip_from_before_the_igt_stamp_has_no_clock_pair_map():
-    rows, feeds = rows_and_feeds(6)
-    pairs, _repeats, stats = feed_map(
-        clip_times(6), START, rows, feeds, lambda row: None)
-    assert pairs is None
-    assert stats["matched"] == 0
+def test_source_misses_do_not_add_pictures_to_the_map():
+    rows, feeds = records()
+    values, _, _ = feed_map([0, 6000, 12000], "a", rows, feeds, project)
+    assert values == [(100, 40), (99, 42), (101, 44)]
 
 
-def test_a_frame_with_no_feed_entry_is_unknown_not_guessed():
-    rows, feeds = rows_and_feeds(10)
-    times = clip_times(10)
-    # Frame 4's feed entry is missing (a dropped write): its slot is None,
-    # every other frame still answers, and the count says so.
-    del feeds[4]
-    built, _repeats, stats = feed_map(times, START, rows, feeds, shown)
-    assert built[4] is None
-    assert [v for k, v in enumerate(built) if k != 4] == [499 + k for k in range(10) if k != 4]
-    assert stats["unmatched"] == 1
+def test_different_encoder_runs_cannot_answer_each_others_pts():
+    rows, feeds = records()
+    feeds.extend({"ts": rows[-1]["ts"], "pts": i * 3000, "run_id": "b"}
+                 for i in range(5))
+    assert feed_map([0], "a", rows, feeds, project)[0] == [(100, 40)]
+    assert feed_map([0], "b", rows, feeds, project)[0] == [(101, 44)]
+    assert feed_map([0], "missing", rows, feeds, project)[0] is None
 
 
-def test_one_feed_entry_answers_at_most_one_frame():
-    rows, feeds = rows_and_feeds(5)
-    # Two clip frames a millisecond apart cannot both be row 2.
-    times = clip_times(5)
-    times.insert(3, times[2] + 0.001)
-    built, _repeats, stats = feed_map(times, START, rows, feeds, shown)
-    assert built[2] == 501 and built[3] is None
-    assert stats["unmatched"] == 1
+@pytest.mark.parametrize("collision", ["feed", "row", "slot"])
+def test_ambiguous_identity_rejects_every_occurrence(collision):
+    rows, feeds = records()
+    points = [0, 3000, 6000, 9000, 12000]
+    if collision == "feed":
+        feeds.append({**feeds[2], "ts": rows[0]["ts"]})
+    elif collision == "row":
+        rows.append({**rows[2], "igt": 999})
+    else:
+        points.append(6000)
+    values, _, _ = feed_map(points, "a", rows, feeds, project)
+    assert values[2] is None
+    if collision == "slot":
+        assert values[-1] is None
+    assert values[0] == (100, 40) and values[4] == (101, 44)
 
 
-def test_jitter_beyond_the_tolerance_does_not_match_a_neighbour():
-    rows, feeds = rows_and_feeds(8)
-    times = clip_times(8)
-    times[5] += FEED_MATCH_TOLERANCE_S * 1.5     # still nearer row 5 than row 6
-    built, _repeats, _stats = feed_map(times, START, rows, feeds, shown)
-    assert built[5] is None
+def test_a_cut_beginning_with_a_heartbeat_retains_its_actual_picture():
+    ledger = PictureLedger()
+    run = MediaRun("a", 100.0)
+    ledger.mark_fed(100.0, 100.0, media_run=run, pts=0)
+    ledger.mark_fed(None, 103.0, media_run=run, pts=270000)
+    rows = [{"ts": 100.0, "frame": 50, "igt": 12}]
+    values, repeats, _ = feed_map([270000], "a", rows,
+                                  ledger.feeds_between(102, 104), project)
+    assert values == [(50, 12)] and repeats == [True]
+    ledger.mark_fed(None, 104.0, media_run=MediaRun("b", 104.0), pts=0)
+    assert feed_map([0], "b", rows, ledger.feeds_between(104, 105), project)[0] is None
 
 
-def test_too_few_matches_means_no_map():
-    rows, feeds = rows_and_feeds(3)
-    times = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0]        # nowhere near the feeds
-    built, repeats, stats = feed_map(times, START, rows, feeds, shown)
-    # The measured bias can drag ONE frame onto a feed entry; the map is
-    # still refused, which is the property that matters.
-    assert built is None and stats["matched"] < 3
-    assert repeats == [False] * 6
+def test_a_source_without_its_clock_cannot_claim_an_exact_map():
+    rows, feeds = records()
+    assert feed_map(None, "a", rows, feeds, project)[2]["reason"] == "missing_source_clock"
+    assert feed_map([0], None, rows, feeds, project)[0] is None
 
 
-def test_a_capture_miss_shows_as_a_two_frame_step_never_a_filled_hole():
-    """A picture the capture never grabbed has no row and no frame: the
-    map steps by two there, and no frame is invented to hide it."""
-    rows, feeds = rows_and_feeds(10)
-    del rows[4]
-    del feeds[4]
-    times = clip_times(10)
-    del times[4]
-    built, _repeats, stats = feed_map(times, START, rows, feeds, shown)
-    assert built == [499, 500, 501, 502, 504, 505, 506, 507, 508]
-    assert stats["unmatched"] == 0
+def test_a_projector_may_refuse_an_inexact_capture():
+    rows, feeds = records()
+    assert feed_map([0], "a", rows, feeds, lambda row: None)[0] is None

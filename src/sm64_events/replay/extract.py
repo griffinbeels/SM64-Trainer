@@ -29,10 +29,11 @@ way, for the same reason: ffmpeg would rescale the whole clip to the first
 segment's size and squash it if the aspect changed.
 """
 import os
+import math
 import shutil
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
@@ -40,6 +41,7 @@ from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
                                        video_quality_args)
 from sm64_events.replay.ring import SegmentRing
+from sm64_events.replay.media import MEDIA_HZ, MediaRun
 
 _EDGE_TOLERANCE_S = 0.5   # clamping beyond this marks the clip truncated
 _GAP_TOLERANCE_S = 0.25   # segment join wider than this is a coverage hole
@@ -50,8 +52,9 @@ class ClipResult:
     path: Path
     duration_s: float
     truncated: bool
-    # The wall time of the clip's FIRST frame -- the requested start unless
-    # the ring's coverage moved it. What lets anything cut on the frame
+    # The wall time of media time zero, not necessarily its first picture.
+    # The requested start may move by less than one MPEG tick to make the cut
+    # offset exactly representable. What lets anything cut on the frame
     # counter (the input track) line up with the clip: the attempt's anchor
     # sits at `started_utc - start_utc` seconds into the video.
     start_utc: datetime | None = None
@@ -67,6 +70,10 @@ class ClipResult:
     # feed, config.picture_feed): the clip is then VFR and NOTHING may
     # count slots as k / fps. None for a CFR clip.
     frame_times: list[float] | None = None
+    media_run: MediaRun | None = None
+    # Source MPEG-TS timestamps, in MEDIA_HZ ticks, for these exact slots.
+    # Unknown for older/CFR sources whose media origin was not retained.
+    source_pts: list[int] | None = None
 
 
 def frame_times_of(ffmpeg: str | None, clip: Path) -> list[float] | None:
@@ -81,6 +88,8 @@ def frame_times_of(ffmpeg: str | None, clip: Path) -> list[float] | None:
              "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(clip)],
             capture_output=True, text=True, timeout=120, check=False,
             **quiet_spawn_kwargs())
+        if out.returncode:
+            return None
         times = [float(line.split(",")[0]) for line in out.stdout.split()
                  if line.strip()]
         return times or None
@@ -117,6 +126,8 @@ def video_start_of(ffmpeg: str | None, clip: Path) -> float:
              "-show_entries", "stream=start_time", "-of", "csv=p=0", str(clip)],
             capture_output=True, text=True, timeout=30, check=False,
             **quiet_spawn_kwargs())
+        if out.returncode:
+            return 0.0
         first = out.stdout.strip().splitlines()[0]
         value = float(first.split(",")[0])
         return value if value >= 0 else 0.0
@@ -138,6 +149,8 @@ def _joinable(prev, seg) -> bool:
     picture outright if the aspect changed. Unknown dims (audio chunks, the
     in-process fallback writer) never force a break."""
     if (seg.utc_start - prev.utc_end).total_seconds() > _GAP_TOLERANCE_S:
+        return False
+    if prev.media_run != seg.media_run:
         return False
     return not (prev.dims and seg.dims and prev.dims != seg.dims)
 
@@ -218,7 +231,16 @@ class ClipExtractor:
                      or (end - e).total_seconds() > _EDGE_TOLERANCE_S
                      or hole_before or hole_after)
 
-        ss = max(0.0, (s - rs).total_seconds())
+        media_run = run[0].media_run
+        ss = (s.timestamp() - media_run.origin_ts if media_run
+              else max(0.0, (s - rs).total_seconds()))
+        # Select one representable source tick and use it for both ffmpeg's
+        # cut and the reverse map. Adding an unrounded float seek to ffprobe's
+        # rounded seconds can otherwise recover a neighboring timestamp.
+        seek_pts = math.ceil(ss * MEDIA_HZ) if media_run else None
+        if seek_pts is not None:
+            ss = seek_pts / MEDIA_HZ
+            s = datetime.fromtimestamp(media_run.origin_ts + ss, timezone.utc)
         dur = (e - s).total_seconds()
         if dur * self._cfg.fps < 1:
             raise ValueError("span too short to extract")
@@ -239,6 +261,7 @@ class ClipExtractor:
             f"{out_path.stem}.cut{os.getpid()}{out_path.suffix}")
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "error",
+            *(["-copyts"] if media_run else []),
             "-i", concat, "-ss", f"{ss:.6f}", "-t", f"{dur:.6f}",
             "-map", "0:v:0", "-map", "0:a:0",
             "-c:v", self._codec,
@@ -253,7 +276,11 @@ class ClipExtractor:
             # otherwise round every stamp onto 1/r_frame_rate (see the sink).
             *(["-fps_mode", "passthrough", "-enc_time_base", "demux"]
               if self._picture_feed else []),
-            "-fflags", "+genpts", "-avoid_negative_ts", "make_zero",
+            "-fflags", "+genpts", "-avoid_negative_ts",
+            "disabled" if media_run else "make_zero",
+            # MP4's default 1 kHz edit-list clock discards sub-millisecond
+            # origin precision even when the video track remains 90 kHz.
+            *(["-movie_timescale", str(MEDIA_HZ)] if media_run else []),
             "-movflags", "+faststart", "-y", str(cut_path),
         ]
         try:
@@ -275,7 +302,9 @@ class ClipExtractor:
         os.replace(cut_path, out_path)
         return ClipResult(path=out_path, duration_s=dur, truncated=truncated,
                           start_utc=s, video_start_s=start_s,
-                          frame_times=times)
+                          frame_times=times, media_run=media_run,
+                          source_pts=([round(t * MEDIA_HZ) + seek_pts for t in times]
+                                      if times and media_run else None))
 
     def _codec_opts(self) -> list[str]:
         """Quality settings for the cut, from the ONE registry in config.py.
@@ -286,6 +315,5 @@ class ClipExtractor:
         be transparent w.r.t. its source: the segment holds all the detail a
         clip can ever contain."""
         opts = video_quality_args(self._codec, "offline", CLIP_MAXRATE)
-        if self._codec == "h264_nvenc":
-            opts += ["-bf", "0"]  # keep the cut's pts contract frame-0 aligned
+        opts += ["-bf", "0"]  # preserve PTS with every supported encoder
         return opts

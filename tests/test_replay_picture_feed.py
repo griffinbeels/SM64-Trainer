@@ -48,8 +48,10 @@ def test_the_feed_log_files_every_write_under_its_row_or_as_a_repeat():
     ledger.mark_fed(None, 101.004)            # a heartbeat repeat
     ledger.mark_fed(100.033, 100.037)
     assert ledger.feeds_between(100.0, 100.1) == [
-        {"at": 100.004, "ts": 100.0}, {"at": 100.037, "ts": 100.033}]
-    assert ledger.feeds_between(101.0, 102.0) == [{"at": 101.004, "ts": None}]
+        {"at": 100.004, "ts": 100.0, "run_id": None, "pts": None, "repeat": False},
+        {"at": 100.037, "ts": 100.033, "run_id": None, "pts": None, "repeat": False}]
+    assert ledger.feeds_between(101.0, 102.0) == [
+        {"at": 101.004, "ts": 100.0, "run_id": None, "pts": None, "repeat": True}]
     assert ledger.feeds_between(0.0, 1.0) == []
 
 
@@ -169,7 +171,7 @@ def test_a_grab_the_sink_cannot_encode_never_enters_the_ledger(tmp_path):
 # -- the real thing: sink -> ring -> cut -> feed map --------------------------
 
 def _feed_pictures(sink, ledger, seconds: float, first_frame: int = 1000,
-                   period: float = 1 / 30) -> int:
+                   period: float = 1 / 30, pause_s: float = 0.0) -> int:
     """Play `seconds` of distinct pictures into the sink the way the
     recorder does -- observe, then submit the ones the ledger calls new --
     with real-time audio so ffmpeg's scheduler never waits on it."""
@@ -181,6 +183,9 @@ def _feed_pictures(sink, ledger, seconds: float, first_frame: int = 1000,
     index = 0
     next_at = t0
     while time.perf_counter() - t0 < seconds:
+        if pause_s and index == 60:
+            time.sleep(pause_s)
+            next_at += pause_s
         frame = frame.copy()
         frame[:, :, 0] = index % 256
         frame[:, :, 1] = (index // 256) % 256
@@ -214,14 +219,14 @@ def test_the_ring_holds_one_frame_per_picture_and_the_log_names_each(tmp_path):
     ledger = PictureLedger()
     ring = SegmentRing(retention_s=None, max_bytes=10**9)
     sink = FfmpegAvSink(cfg, ring.add, ffmpeg=ff, codec="libx264",
-                        on_fed=lambda tag, at: ledger.mark_fed(
-                            tag[1] if tag is not None else None, at))
+                        on_fed=lambda tag, at, **clock: ledger.mark_fed(
+                            tag[1] if tag is not None else None, at, **clock))
     sink.start()
     fed_pictures = _feed_pictures(sink, ledger, 4.5)
     sink.stop()
 
     feeds = ledger.feeds_between(0.0, 1e12)
-    repeats = [entry for entry in feeds if entry["ts"] is None]
+    repeats = [entry for entry in feeds if entry["repeat"]]
     assert len(feeds) - len(repeats) == fed_pictures, "one log entry per picture"
     assert len(repeats) <= 1, "pictures every 33 ms leave no room for heartbeats"
     segments = ring.covering("video", *ring.coverage("video"))
@@ -245,8 +250,8 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
     ledger = PictureLedger()
     ring = SegmentRing(retention_s=None, max_bytes=10**9)
     sink = FfmpegAvSink(cfg, ring.add, ffmpeg=ff, codec="libx264",
-                        on_fed=lambda tag, at: ledger.mark_fed(
-                            tag[1] if tag is not None else None, at))
+                        on_fed=lambda tag, at, **clock: ledger.mark_fed(
+                            tag[1] if tag is not None else None, at, **clock))
     sink.start()
     _feed_pictures(sink, ledger, 5.0, first_frame=7000)
     sink.stop()
@@ -268,7 +273,7 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
     rows = ledger.rows_between(origin - 1.5, origin + result.duration_s + 1.0)
     feeds = ledger.feeds_between(origin - 1.0, origin + result.duration_s + 1.0)
     built, repeats, stats = feed_map(
-        result.frame_times, origin, rows, feeds,
+        result.source_pts, result.media_run.id, rows, feeds,
         lambda row: (row["frame"] - PLUGIN_PICTURE_LAG
                      if row.get("exact") else None))
     assert built is not None, stats
@@ -278,8 +283,8 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
     # small fraction rather than demanding 0 -- the MEDIAN residual stays sub-ms
     # (a late frame moves the max, never the median).
     assert stats["unmatched"] <= max(3, len(built) // 20), stats
-    assert stats["residual_ms"]["median"] < 2.0, stats
-    assert abs(stats["bias_ms"]) < 40.0, stats
+    assert stats["method"] == "source_pts", stats
+    assert stats["unmatched"] == 0, stats
     advances = [b - a for a, b, rep in zip(built, built[1:], repeats[1:], strict=False) if not rep]
     # Consecutive pictures are consecutive frames; an unmatched frame can leave
     # a +2 step around it, which is honest bookkeeping, not a shear.
@@ -356,8 +361,8 @@ def test_a_flash_and_a_click_at_one_instant_land_together_in_the_cut(tmp_path):
     ledger = PictureLedger()
     ring = SegmentRing(retention_s=None, max_bytes=10**9)
     sink = FfmpegAvSink(cfg, ring.add, ffmpeg=ff, codec="libx264",
-                        on_fed=lambda tag, at: ledger.mark_fed(
-                            tag[1] if tag is not None else None, at))
+                        on_fed=lambda tag, at, **clock: ledger.mark_fed(
+                            tag[1] if tag is not None else None, at, **clock))
     sink.start()
     _record_a_flash_and_a_click(sink, ledger)
     sink.stop()
@@ -448,16 +453,16 @@ def _click_onset_at(path, rate: int = 48000) -> float | None:
 # shifted -- a uniform ~2-frame lag between the panel and the screen. These
 # guard the decode axis with real ffmpeg, no emulator, no digits needed.
 
-def _picture_feed_clip(tmp_path, ff, seconds=4.0):
+def _picture_feed_clip(tmp_path, ff, seconds=4.0, pause_s=0.0):
     from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
     cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
     ledger = PictureLedger()
     ring = SegmentRing(retention_s=None, max_bytes=10**9)
     sink = FfmpegAvSink(cfg, ring.add, ffmpeg=ff, codec="libx264",
-                        on_fed=lambda tag, at: ledger.mark_fed(
-                            tag[1] if tag is not None else None, at))
+                        on_fed=lambda tag, at, **clock: ledger.mark_fed(
+                            tag[1] if tag is not None else None, at, **clock))
     sink.start()
-    _feed_pictures(sink, ledger, seconds, first_frame=7000)
+    _feed_pictures(sink, ledger, seconds, first_frame=7000, pause_s=pause_s)
     sink.stop()
     coverage = ring.coverage("video")
     start = coverage[0] + timedelta(seconds=1.0)
@@ -501,7 +506,9 @@ def test_passthrough_is_load_bearing_on_a_vfr_clip(tmp_path):
 
     from sm64_events.replay import padread
     ff = _ffmpeg()
-    result = _picture_feed_clip(tmp_path, ff)
+    # A held picture makes VFR observable. Scheduler jitter alone can still
+    # produce the same count on a 30 Hz conform, so it cannot prove this flag.
+    result = _picture_feed_clip(tmp_path, ff, pause_s=0.2)
     stored = len(_video_frames(result.path))
     crop = (f"crop=iw*{padread.REGION[2] - padread.REGION[0]}:"
             f"ih*{padread.REGION[3] - padread.REGION[1]}:"

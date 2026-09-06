@@ -122,3 +122,22 @@ def test_the_event_handle_is_pointer_sized_and_checked(stream):
     assert stream.plugin_process_alive() is False       # no plugin wrote a pid
     stream.set_plugin_fields(F.STATUS_INITIATED, plugin_pid=os.getpid())
     assert stream.plugin_process_alive() is True         # this process
+
+
+def test_overwrite_while_reading_timestamps_cannot_pair_new_time_with_old_pixels(stream, monkeypatch):
+    old_pixels = picture(2, 2, 11)
+    seq = stream.publish(old_pixels, [b"old"], list_qpc=101, present_qpc=111)
+    read_i64 = stream._i64
+    overwritten = False
+
+    def overwrite_before_time(offset):
+        nonlocal overwritten
+        if not overwritten and offset == stream.slot_offset(seq) + F.S_LIST_QPC:
+            overwritten = True
+            for _ in range(F.SLOT_COUNT):
+                stream.publish(picture(2, 2, 99), [b"new"], list_qpc=909, present_qpc=999)
+        return read_i64(offset)
+
+    monkeypatch.setattr(stream, "_i64", overwrite_before_time)
+    assert stream._read_slot(seq) is None
+    assert overwritten

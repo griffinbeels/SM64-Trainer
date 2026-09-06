@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from sm64_events.replay.media import MediaRun
+
 # Free disk we refuse to consume: a near-full system volume thrashes the whole
 # machine (Windows squeezes the pagefile), which reads as the same "everything
 # is laggy / out of memory" symptom as a RAM leak. The buffer never grows so
@@ -45,6 +47,9 @@ class SegmentInfo:
     # treats a dims change like a coverage hole. None = unknown (audio chunks,
     # the in-process fallback writer): never forces a break.
     dims: tuple[int, int] | None = None
+    # Only the picture feed promises source PTS relative to this exact run.
+    # None means the source clock is unknown, including legacy/CFR segments.
+    media_run: MediaRun | None = None
 
 
 class SegmentRing:
@@ -85,12 +90,14 @@ class SegmentRing:
                 self._evict(now=self._segments[-1].utc_end)
 
     def add(self, seg: SegmentInfo) -> None:
-        """Assumes utc_end is monotonically non-decreasing across add() calls
-        (one writer thread, segments emitted in stream order)."""
+        """Keep source order even when an old child's final CSV arrives late."""
         with self._lock:
+            late = bool(self._segments and seg.utc_start < self._segments[-1].utc_start)
             self._segments.append(seg)
+            if late:
+                self._segments = deque(sorted(self._segments, key=lambda item: item.utc_start))
             self._total_bytes += seg.size_bytes
-            self._evict(now=seg.utc_end)
+            self._evict(now=self._segments[-1].utc_end)
 
     def _evict(self, now: datetime) -> None:
         # caller holds self._lock

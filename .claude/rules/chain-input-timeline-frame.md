@@ -11,6 +11,8 @@ paths:
   - "src/sm64_events/replay/oracleread.py"
   - "src/sm64_events/replay/ledger.py"
   - "src/sm64_events/replay/ffmpeg_sink.py"
+  - "src/sm64_events/replay/media.py"
+  - "src/sm64_events/replay/ring.py"
   - "src/sm64_events/replay/extract.py"
   - "src/sm64_events/replay/feedmap.py"
   - "src/sm64_events/replay/padread.py"
@@ -34,7 +36,7 @@ the one to fix.
 - **Captured identity:** the frame counter THE CAPTURE LAYER (`plugin/gfxwrap`) copied out of RDRAM inside Project64 at ProcessDList. `exact` means one display list since present; it does not independently prove which pixels were returned. The feed-to-clip timestamp join and picture-lag convention still require the independent witness.
 - **The independent witness:** THE ORACLE (`replay/oracleread.py`, `tools/score_oracle.py --attempt N`) — the frame number Usamune's HUD memory display of `0x8032D5D4` prints into the picture, read map-free through the +1 rule. It never ships to a user; it is how any claim about the map is settled.
 - **Sink:** the panel under the timeline (FRAME n / N, the stick box, the button chips) on the picture the `<video>` is presenting.
-- **Clock path:** the picture feed timestamps composition relative to the run epoch. The extracted clip carries its own `frame_times`; `feed_map` joins `start_utc + frame_times` to the feed. Preserving the origin through encoding and extraction is a separate requirement, not proved by a high matched share.
+- **Clock path:** `MediaRun` retains an encoder's first-picture origin and unique run ID. The sink assigns monotonic 90 kHz video PTS, preserves them through NUT/TS, and records each actual PTS with its captured row. The cut subtracts an explicit integer source tick; its `source_pts` restores that tick to each decoded slot. `feed_map` looks up `(run_id, source_pts)` exactly, without fitting a bias. `picture_rows` retains the matched occurrence, and `state_rows` resolves its state without crossing a counter reset. This proves media association only; the plugin's picture/state interpretation is a separate witness.
 
 **There is exactly one map path, and it is a read.** A clip whose rows are not
 stamped carries `frame_map: None`, and the panel says "Frame-exact capture is
@@ -74,6 +76,25 @@ paused picture":
    hold.
 
 ## Failure catalogue
+
+- **2026-09-06: the media clock can shift while the cadence stays perfect.**
+  `tests/test_replay_picture_identity.py` paints independent binary picture
+  identities and reads them after the actual sink -> TS ring -> MP4 cut.
+  Old NVENC cuts named picture+1 at some cut phases, while x264 named +2/+3;
+  all could have sub-ms fitted residuals. Preserve the first-picture origin,
+  `copyts`, TS `mpegts_copyts`, disabled negative-timestamp shifting and a
+  90 kHz MP4 edit-list clock. Cut on an explicit integer source tick and add
+  that same integer to decoded output ticks; rounded floating seconds can
+  otherwise recover the wrong tick. Audio queued before picture zero shifted
+  video by 125 ms even with those flags: trim pre-origin audio samples before
+  NUT. Assign colliding video timestamps before muxing and log the assigned
+  PTS, so FFmpeg cannot rewrite an identity invisibly. Six real-encoder cases
+  cover software/NVENC, queued audio/catch-up, timestamp collisions and ten
+  cut positions. Source identity is separate from game-counter identity.
+  Encoder-run changes break concatenation even at the same frame size; old
+  reader threads retain their own origin. Legacy cached maps, live plugin
+  pairing and ordered input/browser identity still require the goal's remaining
+  verification; this boundary fix does not certify the complete chain.
 
 - **2026-09-06: green stamp audit with wrong pictures.** Wild Blue attempts
   7545/7556 have one-frame-early maps at six directly decoded witness slots;
