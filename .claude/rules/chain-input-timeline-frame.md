@@ -80,6 +80,17 @@ paused picture":
 
 ## Failure catalogue
 
+- **2026-09-06: held pictures looked like missing footage.** The real-encoder
+  regression `tests/test_replay_held_picture.py` found a picture at 2.0135s
+  filed as ending at 2.0974s although the next picture began at 3.0168s.
+  Correcting coverage alone still cut an audio-only MP4: output `-ss` dropped
+  the picture already on screen. `media.py::picture_duration_filter` preserves
+  PTS and sets packet duration from the next PTS before segmentation. Extraction
+  starts on the measured source picture and holds its last picture through the
+  cut end. The test decodes independent barcodes through software/NVENC, a long
+  hold and a delayed capture after heartbeat. `tests/test_ui_replay_held_picture.py`
+  seeks the actual cut in the drawer. This does not prove plugin pixel/state lag.
+
 - **2026-09-06: cached and saved sidecars bypassed the fresh-cut checks.**
   `replay/association.py` validates the retained encoder clock against clip
   start and picture times, plus capture references and traversed state types.

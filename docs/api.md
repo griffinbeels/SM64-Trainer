@@ -342,6 +342,10 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
   `fps` describes the encoded rate and `game_fps` is the 30 Hz game clock.
   `frame_times` gives each encoded picture's actual start in VFR clips
   (`encode: "picture_feed"`). Older CFR clips use `video_start_s` plus `k/fps`.
+  A new picture-feed cut starts on the source picture already displayed at
+  the requested start, so a held image can add run-up. Its `start_utc` and
+  `anchor_offset_s` reflect that actual origin. The last picture remains visible
+  through the cut's end; a hold is not a coverage hole or an empty video.
   `picture_ids[k]` identifies the captured picture occurrence within this clip:
   heartbeat copies share an ID, separate visits to the same raw counter do not.
   Null IDs remain individually selectable unknown pictures. Controls walk slots

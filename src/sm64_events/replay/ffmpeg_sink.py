@@ -42,7 +42,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.replay.config import RING_MAXRATE, video_quality_args
 from sm64_events.replay.ring import SegmentInfo
-from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, MediaRun
+from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, MediaRun, picture_duration_filter
 
 log = logging.getLogger("sm64.replay")
 
@@ -487,6 +487,7 @@ class FfmpegAvSink:
             # the writes, `-1` is its deprecated spelling).
             *(["-fps_mode", "passthrough", "-enc_time_base", "demux"] if self._picture
               else ["-fps_mode", "cfr", "-r", str(fps)]),
+            *(["-bsf:v", picture_duration_filter()] if self._picture else []),
             # audio: AAC, async-resampled to LOCK to the master (kills drift)
             "-c:a", "aac", "-b:a", "160k", "-ar", str(rate),
             "-af", "aresample=async=1:first_pts=0:min_hard_comp=0.1",

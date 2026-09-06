@@ -41,7 +41,7 @@ from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
                                        video_quality_args)
 from sm64_events.replay.ring import SegmentRing
-from sm64_events.replay.media import MEDIA_HZ, MediaRun
+from sm64_events.replay.media import MEDIA_HZ, MediaRun, picture_duration_filter
 
 _EDGE_TOLERANCE_S = 0.5   # clamping beyond this marks the clip truncated
 _GAP_TOLERANCE_S = 0.25   # segment join wider than this is a coverage hole
@@ -53,8 +53,8 @@ class ClipResult:
     duration_s: float
     truncated: bool
     # The wall time of media time zero, not necessarily its first picture.
-    # The requested start may move by less than one MPEG tick to make the cut
-    # offset exactly representable. What lets anything cut on the frame
+    # The requested start moves back to the picture already displayed then,
+    # including a long VFR hold. What lets anything cut on the frame
     # counter (the input track) line up with the clip: the attempt's anchor
     # sits at `started_utc - start_utc` seconds into the video.
     start_utc: datetime | None = None
@@ -239,6 +239,17 @@ class ClipExtractor:
         # rounded seconds can otherwise recover a neighboring timestamp.
         seek_pts = math.ceil(ss * MEDIA_HZ) if media_run else None
         if seek_pts is not None:
+            # An output -ss drops every picture preceding the seek, including
+            # the one still displayed during a VFR hold. Start on that actual
+            # source picture and report its UTC origin, keeping the source
+            # identity and A/V offset unchanged. Never fabricate a new PTS for
+            # a duplicate leading picture.
+            source_times = frame_times_of(self._ffmpeg, run[0].path)
+            if not source_times:
+                raise ValueError("no readable pictures at the requested start")
+            source_ticks = [round(t * MEDIA_HZ) for t in source_times]
+            seek_pts = max((t for t in source_ticks if t <= seek_pts),
+                           default=source_ticks[0])
             ss = seek_pts / MEDIA_HZ
             s = datetime.fromtimestamp(media_run.origin_ts + ss, timezone.utc)
         dur = (e - s).total_seconds()
@@ -276,6 +287,8 @@ class ClipExtractor:
             # otherwise round every stamp onto 1/r_frame_rate (see the sink).
             *(["-fps_mode", "passthrough", "-enc_time_base", "demux"]
               if self._picture_feed else []),
+            *(["-bsf:v", picture_duration_filter(round(dur * MEDIA_HZ))]
+              if media_run else []),
             "-fflags", "+genpts", "-avoid_negative_ts",
             "disabled" if media_run else "make_zero",
             # MP4's default 1 kHz edit-list clock discards sub-millisecond

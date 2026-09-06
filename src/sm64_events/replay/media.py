@@ -12,6 +12,18 @@ MEDIA_HZ = 90_000
 MEDIA_TIME_BASE = Fraction(1, MEDIA_HZ)
 
 
+def picture_duration_filter(end_pts: int | None = None) -> str:
+    """Hold each encoded picture until the next PTS, without moving either.
+
+    The encoders' nominal packet durations do not describe a VFR hold. The
+    segment muxer otherwise files those holds as coverage holes. A finished
+    cut also knows when its final picture ends; a live run does not.
+    Requires ordered packets (our encoders disable B-frames).
+    """
+    tail = "DURATION" if end_pts is None else f"max(1,{end_pts}-PTS)"
+    return f"setts=pts=PTS:dts=DTS:duration='if(gt(NEXT_PTS,PTS),NEXT_PTS-PTS,{tail})'"
+
+
 @dataclass(frozen=True)
 class MediaRun:
     id: str
