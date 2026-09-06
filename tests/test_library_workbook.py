@@ -60,6 +60,61 @@ def test_formula_recording_quotes_and_xml_entities_roundtrip_with_styling():
     assert cell.font_rgb == GREY
 
 
+def _workbook_with_formula_xml(sheets):
+    """Actual shared <f> XML, including self-closing dependent cells."""
+    import io
+    import re
+    import zipfile
+
+    source = build_workbook({name: {
+        (405 + index, 2): {"text": "14.83", "link": "https://example.com/placeholder",
+                          "link_kind": "formula"}
+        for index in range(len(formulas))} for name, formulas in sheets.items()})
+    output = io.BytesIO()
+    by_part = {f"xl/worksheets/sheet{index}.xml": formulas
+               for index, formulas in enumerate(sheets.values(), start=1)}
+    with zipfile.ZipFile(io.BytesIO(source)) as original, zipfile.ZipFile(output, "w") as edited:
+        for part in original.namelist():
+            data = original.read(part)
+            if part in by_part:
+                formulas = iter(by_part[part])
+                data = re.sub(r"<f>.*?</f>", lambda _match, values=formulas: next(values),
+                              data.decode("utf-8")).encode("utf-8")
+            edited.writestr(part, data)
+    return output.getvalue()
+
+
+def test_shared_hyperlink_formula_resolves_dependents_before_and_after_base():
+    url = "https://youtu.be/2JLv8hYUzQw"
+    base = f'<f t="shared" ref="B405:B406" si="1">HYPERLINK("{url}",14.83)</f>'
+    dependent = '<f t="shared" si="1"/>'
+    for formulas in ([base, dependent], [dependent, base]):
+        data = _workbook_with_formula_xml({wb.SHEET_MAIN: formulas})
+        cells = wb.read_sheet(data, wb.SHEET_MAIN)
+        assert [cells[(row, 2)].link for row in (405, 406)] == [url, url]
+        assert [cells[(row, 2)].value for row in (405, 406)] == ["14.83", "14.83"]
+
+
+def test_shared_formula_indices_are_local_to_each_worksheet():
+    dependent = '<f si="1" t="shared"/>'
+    data = _workbook_with_formula_xml({
+        "First": ['<f si="1" t="shared">HYPERLINK("https://example.com/one",1)</f>', dependent],
+        "Second": ['<f si="1" t="shared">HYPERLINK("https://example.com/two",2)</f>', dependent],
+    })
+    assert wb.read_sheet(data, "First")[(406, 2)].link == "https://example.com/one"
+    assert wb.read_sheet(data, "Second")[(406, 2)].link == "https://example.com/two"
+
+
+def test_shared_unrelated_or_computed_formula_does_not_invent_a_recording():
+    for expression in ('SUM(A1:A5)', 'HYPERLINK(A1,14.83)',
+                       'HYPERLINK("https://example.com/"&A1,14.83)'):
+        data = _workbook_with_formula_xml({wb.SHEET_MAIN: [
+            f'<f t="shared" si="1">{expression.replace("&", "&amp;")}</f>',
+            '<f t="shared" si="1"/>', '<f t="shared" si="99"/>']})
+        cells = wb.read_sheet(data, wb.SHEET_MAIN)
+        assert all(cell.link is None for cell in cells.values())
+
+
 def test_log_revision_is_the_newest_entry():
     assert wb.log_revision(_sample()) == "2026-08-04T20:14:25"
 
