@@ -1215,15 +1215,16 @@ def test_the_drawer_draws_the_TEMPLATE_S_MARIO_behind_yours(page):
     template's action row, its speed line and its facing dial all render, or
     the sweep measures a drawer that compares the pad alone."""
     reach(page, "input-timeline")
-    assert count(page, ".input-lane.is-actions.is-template") == 1, (
-        "no template action row -- the fixture's template document carries "
-        "no Mario rows, or the row is not drawn")
+    assert count(page, ".input-lane.is-actions") == 1, (
+        "both action tracks must share the same Mario lane")
+    assert count(page, ".input-lane.is-actions .action-span.is-template") >= 3
     assert count(page, ".action-span.is-template") >= 3
     assert count(page, ".speed-line.is-template") == 1
     labels = page.evaluate(
         "Array.from(document.querySelectorAll('.controller-panel-label'))"
         ".map((el) => el.textContent.trim())")
-    assert "Template faces" in labels, labels
+    assert "Mario faces" in labels, labels
+    assert count(page, ".facing-dial") == 1
 
 
 def test_the_drawer_reaches_a_MOMENT_on_the_track(page):

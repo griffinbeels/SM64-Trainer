@@ -515,6 +515,28 @@ drawer draws it; these are the routes it uses.
 | `POST /api/inputs/templates/{id}/activate` | Make an older template the active one again |
 | `DELETE /api/inputs/templates/{id}` | Erase it |
 
+Local template management (round 35):
+
+| Endpoint | Contract |
+|---|---|
+| `POST /api/attempts/{id}/inputs/template/preview` | `{document}` → `{document:{target,strategy,version,author,frames},destination:{kind,entity_key,target,strategy}}`. Read-only validation before confirming a local target. |
+| `POST /api/attempts/{id}/inputs/template/import` | `{document,name}` → 201 and full template summary. Bind to this attempt's target and strategy; preserve the original document bytes. |
+| `POST /api/attempts/{id}/inputs/template/select` | `{template_id}` → full summary. Select for this attempt's strategy. Reuse/create a local binding if the source belongs to another strategy; retain its source document and credit. Reject a different target. |
+
+Document GETs return attachment filenames `attempt-N.inputs.txt` and
+`template-N.inputs.txt`. Summary responses include `author` and full `frames`;
+the timeline's template adds the same metadata even when its drawn runs are
+clipped to the visible attempt. `local_author` supplies the development credit
+(`griffman1212`) for locally recorded exports. The optional `author:` header
+is attribution, not authenticated identity; legacy files remain uncredited.
+Import never replaces missing author credit with the local player's name.
+
+Documents are limited to 4 MiB UTF-8 and 54,000 frames (30 minutes). Rows must
+be ordered and nonoverlapping; gap rows count toward the full axis. Stick
+values must fit signed bytes and speeds must be finite float32 values. Invalid
+documents are refused before changing an active template. Unknown headers
+survive imported-template re-export because the original text is stored.
+
 **A track's frames are positions in the CAPTURE, not raw counter values.** The
 game's frame counter restarts on a console reset, so a track spanning one lays
 the next stretch end to end after the last; holes INSIDE a stretch stay holes,

@@ -36,6 +36,34 @@ paths:
 | The transparent overlay export | `inputs/overlay.py` (the plan, the concat script, the ffmpeg argv — all pure) + `ui/overlay.html` (the render target) + `tools/export_overlay.py` (drives the browser, recovers alpha, encodes) |
 | Re-checking the measurements, or hunting the address on a new ROM | `uv run python tools/probe_inputs.py` (`--at scan` re-hunts). Its docstring carries every answer it has given |
 
+## Local template comparison (round 35, 2026-09-06)
+
+`inputtemplates.js` owns named save, file/paste preview and import, filtered
+local selection, download and removal inside the attempt drawer. The service's
+attempt-bound preview/import/select methods are the reusable import boundary;
+source document metadata and local target/strategy binding are separate. A
+foreign segment number is never silently treated as this database's identity.
+`inputpreferences.js` shares overlay-row preferences and template invalidation
+between mounted timelines and same-origin tabs. Failed refreshes keep the old
+comparison and provide Retry.
+
+Griffin's correction: **"we shouldn't have a new row just for the template"**;
+**"a second stick for each of the displays matching the color of the template."**
+All buttons and Mario actions share their original lanes. The controller and
+facing SVGs each carry a second amber dashed indicator with a hollow head;
+there are only two inspector displays, not four. Optional template props on
+`ControllerPanel`/`FacingDial` leave overlay-export rendering unchanged.
+`curvePath` breaks SVG subpaths at capture gaps; stick reach and speed peak
+are shared across both tracks and every subpath. Calculating reach after
+splitting moved identical raw 84 values to different heights across a gap.
+
+The portable v2 document accepts optional `author:` credit and retains unknown
+headers on import/re-export. Local credit is injected by `InputsService`,
+currently `griffman1212`; it is not an account. Community transport and media
+remain future tasks 0130/0131. Native exports require pywebview's
+`ALLOW_DOWNLOADS=True` before startup; its default WebView2 handler cancels
+downloads otherwise (`test_window.py` pins the setting).
+
 ## Why 250 Hz
 
 Measured with `tools/probe_inputs.py` over four live sessions, 2026-08-20.

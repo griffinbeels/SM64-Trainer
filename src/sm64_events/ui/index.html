@@ -5096,6 +5096,75 @@
   .action-span.is-template { opacity: .55; }
   .input-inspector-action.is-template { opacity: .7; }
 
+  /* Attempt and template keep their identity in every overlaid row. The
+     taller outlined ghost remains visible even for exactly matching holds. */
+  .input-timeline { --input-you: #78b7ed; --input-template: #e7b85c; }
+  .input-timeline .input-bar:not(.is-template) { background: var(--input-you); }
+  .input-timeline .input-bar.is-template {
+    background: #e7b85c35; border: 1px dashed var(--input-template);
+    box-sizing: border-box;
+  }
+  .input-timeline .stick-line.is-x { stroke: var(--input-you); }
+  .input-timeline .stick-line.is-y { stroke: #beddfa; }
+  .input-timeline .stick-line.is-x.is-template { stroke: var(--input-template); }
+  .input-timeline .stick-line.is-y.is-template { stroke: #f5d9a1; }
+  .input-timeline .stick-line.is-template,
+  .input-timeline .speed-line.is-template { opacity: 1; stroke-width: 1.6; }
+  .input-timeline .speed-line { stroke: var(--input-you); }
+  .input-timeline .speed-line.is-template { stroke: var(--input-template); }
+  .input-timeline .action-span { background: var(--input-you); }
+  .input-timeline .action-span.is-template {
+    background: #e7b85c35; color: #f5d9a1; opacity: 1;
+    border: 1px dashed var(--input-template);
+  }
+  .input-lane.is-actions.has-template .input-lane-track { height: 28px; }
+  .input-lane.is-actions.has-template .action-span:not(.is-template) {
+    top: 6px; bottom: 6px; z-index: 1;
+  }
+  .input-timeline .stick-box-stem:not(.is-template),
+  .input-timeline .facing-needle:not(.is-template) { stroke: var(--input-you); }
+  .input-timeline .stick-box-dot:not(.is-template),
+  .input-timeline .facing-head:not(.is-template) { fill: #d5eafd; stroke: var(--input-you); }
+  .input-timeline .stick-box-stem.is-template,
+  .input-timeline .facing-needle.is-template { stroke: var(--input-template); stroke-dasharray: 4 2; }
+  .input-timeline .stick-box-dot.is-template,
+  .input-timeline .facing-head.is-template { fill: none; stroke: var(--input-template); stroke-width: 2; }
+  .input-timeline .stick-values .is-template,
+  .input-timeline .controller-buttons.is-template { color: var(--input-template); }
+  .controller-reading { display: flex; flex-direction: column; gap: .15rem; }
+  .controller-reading + .controller-reading { margin-top: .45rem; }
+  .controller-reading-label { font-size: .6rem; color: #9db1c5; }
+  .input-timeline .controller-reading:not(.is-template) .stick-value:not(.is-centred) { color: var(--input-you); }
+  .input-timeline .controller-reading.is-template .stick-value:not(.is-centred) { color: var(--input-template); }
+  .input-overlay-controls { margin: .4rem 0 .65rem; font-size: .72rem; }
+  .input-overlay-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; margin-bottom: .3rem; }
+  .input-overlay-legend .is-attempt { color: var(--input-you); }
+  .input-overlay-legend .is-template { color: var(--input-template); }
+  .input-overlay-controls summary { cursor: pointer; color: #c5d7e6; width: fit-content; }
+  .input-overlay-switches { display: flex; flex-wrap: wrap; gap: .4rem .8rem; padding-top: .5rem; }
+  .input-overlay-switches label { display: flex; align-items: center; gap: .3rem; cursor: pointer; }
+  .input-overlay-switches input { accent-color: var(--input-template); }
+  .input-template-tools { flex-wrap: wrap; }
+  .input-template-tools [role="status"] { flex-basis: 100%; color: #a4d8b4; }
+  .input-template-manager { min-width: 0; }
+  .input-template-manager form, .input-template-manager label {
+    display: flex; flex-direction: column; gap: .45rem; align-items: stretch;
+  }
+  .input-template-manager form { gap: .85rem; }
+  .input-template-manager label { font-size: .8rem; color: #d2dfeb; }
+  .input-template-manager input, .input-template-manager textarea {
+    width: 100%; min-width: 0; box-sizing: border-box;
+  }
+  .input-template-manager textarea { resize: vertical; font-family: monospace; font-size: .72rem; }
+  .input-template-manager .is-error { color: #efaa91; overflow-wrap: anywhere; }
+  .input-template-manager strong, .input-template-manager p { overflow-wrap: anywhere; }
+  .input-import-preview { border-left: 3px solid #e7b85c; padding: .3rem .75rem; background: #e7b85c0a; }
+  .input-template-list { padding: 0; list-style: none; max-height: 42vh; overflow-y: auto; }
+  .input-template-list li { padding: .75rem 0; border-bottom: 1px solid #283d50; }
+  .input-template-list p { margin: .3rem 0 .5rem; }
+  .input-template-actions, .input-template-remove { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .input-template-remove { align-items: center; margin-top: .6rem; }
+
   .facing-panel .facing-ring {
     fill: #081420; stroke: #33506c; stroke-width: 2;
   }

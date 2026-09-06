@@ -96,3 +96,20 @@ def test_listing_names_every_template_for_an_entity(templates):
     save(templates, entity_key="9-3", name="elsewhere")
     names = [row.name for row in templates.list_for("star", "24-1")]
     assert sorted(names) == ["first", "second"]
+
+
+@pytest.mark.parametrize("fields", [
+    {"kind": "other"}, {"entity_key": ""}, {"entity_key": "24"},
+    {"kind": "segment", "entity_key": "abc"}, {"name": "  "},
+    {"name": "x" * 201}, {"document": a_document(spec=())},
+])
+def test_invalid_templates_do_not_replace_the_active_one(templates, fields):
+    original = save(templates)
+    with pytest.raises(ValueError):
+        save(templates, **fields)
+    assert templates.active_for("star", "24-1", "10 coin").id == original.id
+
+
+def test_unknown_headers_and_author_survive_storage_exactly(templates):
+    text = a_document().replace("--", "author: another player\nvideo: https://example.test/watch\n--")
+    assert save(templates, document=text).document == text

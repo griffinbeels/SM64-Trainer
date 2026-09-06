@@ -210,7 +210,8 @@ def target_of(attempt) -> str:
     return "unknown"
 
 
-def document_for_attempt(store, attempt, version: str = "us") -> str:
+def document_for_attempt(store, attempt, version: str = "us",
+                         author: str | None = None) -> str:
     return encode(track_for_attempt(store, attempt),
                   target=target_of(attempt), strategy=attempt.strat_tag,
-                  version=version, origin=f"attempt {attempt.id}")
+                  version=version, origin=f"attempt {attempt.id}", author=author)

@@ -229,3 +229,40 @@ def test_a_row_with_the_wrong_number_of_words_is_refused():
     text = a_v2_document([]) + "0  A  neutral  dive  0\n"
     with pytest.raises(DocumentError, match="cannot read the row"):
         decode(text)
+
+
+def test_author_credit_is_optional_and_round_trips():
+    assert decode(a_document([])).author is None
+    assert decode(a_document([], author="griffman1212")).author == "griffman1212"
+
+
+@pytest.mark.parametrize("body", [
+    "4-2 A neutral", "0-4 A neutral\n4-6 B neutral",
+    "5 A neutral\n0 B neutral", "0-4 - gap\n4 A neutral",
+    "0 A neutral\n0-4 - gap", "54000 A neutral",
+    "0-999999999999 A neutral", "0 A +128,0", "0 A 0,-129",
+    "0 A neutral dive 0 nan", "0 A neutral dive 0 inf",
+    "0 A neutral dive 0 1e100",
+])
+def test_invalid_frame_axes_and_states_are_refused_before_expanding(body):
+    with pytest.raises(DocumentError):
+        decode(a_v2_document([]) + body + "\n")
+
+
+def test_declared_gaps_keep_the_documents_full_frame_axis():
+    got = decode(a_v2_document([]) + "0-4 - gap\n5 A neutral\n6-9 - gap\n")
+    assert [number for number, _ in got.frames] == [5]
+    assert got.frame_count == 10
+
+
+def test_document_size_is_bounded_in_utf8_bytes():
+    from sm64_events.inputs.document import MAX_DOCUMENT_BYTES
+    with pytest.raises(DocumentError, match="large"):
+        decode(a_v2_document([]) + "#" + "é" * (MAX_DOCUMENT_BYTES // 2))
+
+
+def test_last_allowed_frame_and_raw_stick_edges_remain_exact():
+    got = decode(a_v2_document([]) + "53999 A -128,+127 dive -32768 -12.5\n")
+    assert got.frame_count == 54000
+    number, frame = got.frames[0]
+    assert (number, frame.stick_x, frame.stick_y, frame.speed) == (53999, -128, 127, -12.5)

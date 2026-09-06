@@ -73,6 +73,14 @@ off"), and **Remove** on the same row puts your original plugin name back.
 The screen reappears on its own only while an emulator is detected and the
 layer is not consented; open it any time from the header's **Setup**.
 
+In an attempt's replay drawer, **Save as template** keeps a named example for
+future attempts. **Import inputs** accepts a text file or pasted document;
+**Templates** lets you filter, select, export or remove saved examples. The
+amber template overlays your blue inputs on the same rows and direction dials,
+aligned at frame zero. **Template overlay rows** remembers which rows you want
+to compare. Input files and player credit stay local; community browsing and
+hosted video sharing are future features.
+
 > **No sound on a saved replay?** Windows has routed the app's audio — and the
 > embedded browser's (`msedgewebview2.exe`) — to a different output device.
 > Open **Settings → System → Sound → Volume mixer** and point both at your

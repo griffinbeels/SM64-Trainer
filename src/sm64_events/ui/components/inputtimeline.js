@@ -17,6 +17,7 @@
 // which CROPS whatever the container's aspect does not cover.
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useOverlayRows, useTemplateRevision } from "../inputpreferences.js";
 import { clampToFrames, slotAtTime, timeOfSlot } from "../frame.js";
 import htm from "htm";
 import { Icon } from "./icons.js";
@@ -100,6 +101,24 @@ function stepPath(runs, valueOf, scale) {
   return points.join(" ");
 }
 
+// Each capture hole breaks the drawing. A polyline joining either side of a
+// hole invents a stick movement or speed where neither was recorded.
+export function contiguousRuns(runs) {
+  const groups = [];
+  for (const run of runs) {
+    const group = groups[groups.length - 1];
+    const previous = group && group[group.length - 1];
+    if (previous && previous.start + previous.length === run.start) group.push(run);
+    else groups.push([run]);
+  }
+  return groups;
+}
+
+function curvePath(runs, pointsOf) {
+  return contiguousRuns(runs).map((group) =>
+    `M ${pointsOf(group).split(" ").join(" L ")}`).join(" ");
+}
+
 // Speed is drawn against the fastest value in THIS track, not a fixed cap:
 // what he asked for is "where there are opportunities to go faster", which is
 // a comparison within one run. A fixed ceiling would flatten a whole slow
@@ -124,10 +143,16 @@ function speedPath(runs, peak) {
 // The stick's reach is the pad's own, not the game's cap: his pad reaches 84
 // where the game clamps at 64, so scaling to the cap would pin every full
 // deflection to the lane's edge (the same call controllerpanel.js makes).
-function stickPath(runs, axis, stickMax) {
-  const valueOf = (run) => (axis === "x" ? run.stick_x : run.stick_y);
+function stickReach(stickMax, ...tracks) {
   let reach = stickMax;
-  for (const run of runs) reach = Math.max(reach, Math.abs(valueOf(run)));
+  for (const runs of tracks) {
+    for (const run of runs) reach = Math.max(reach, Math.abs(run.stick_x), Math.abs(run.stick_y));
+  }
+  return reach;
+}
+
+function stickPath(runs, axis, reach) {
+  const valueOf = (run) => (axis === "x" ? run.stick_x : run.stick_y);
   return stepPath(runs, valueOf,
     (value) => STICK_HEIGHT / 2 - (value / reach) * (STICK_HEIGHT / 2 - 2));
 }
@@ -144,33 +169,26 @@ function spanLabel(start, length) {
     : `${timeLabel(start)}–${timeLabel(start + length - 1)}`;
 }
 
-// One row of Mario's actions. The template's is the same row, dimmed and
-// beneath yours rather than behind it: two labelled spans stacked in one
-// lane would read as one unreadable label, where two lanes read as "he was
-// diving here and you were still running".
-// `total` is the track's own length: a span that REACHES the end is placed
-// from the RIGHT edge, so it grows inward. `.action-span` carries padding
-// that no width can compress below (~6.4px), so a short final span rendered
-// that wide whatever its share -- and placing it by `left` hung it 3px past
-// the lane, since an over-constrained box drops its `right` rather than its
-// `left` (66 layout defects the moment the lead-in made the timeline denser,
-// measured 2026-08-31).
-function ActionRow({ name, spans, percent, seek, ghost = false, total = 0 }) {
-  return html`<div class=${`input-lane is-actions ${ghost ? "is-template" : ""}`}>
+// Both action tracks occupy the SAME lane. The template's outlined band is
+// taller, so identical timing still leaves an amber edge around your action.
+function ActionRow({ name, spans, templateSpans = [], percent, seek, total = 0 }) {
+  const draw = (span, ghost) => html`
+    <button class=${`action-span group-${span.group} ${ghost ? "is-template" : ""}`}
+        key=${`${ghost ? "t" : "a"}${span.start}`}
+        style=${total && span.start + span.length >= total
+          ? `right:0;width:${percent(span.length)}`
+          : `left:${percent(span.start)};width:${percent(span.length)};`
+            + `max-width:calc(100% - ${percent(span.start)})`}
+        onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
+        title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length)} (${span.length}f)`}
+        aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length)}`}>
+      <span class="action-span-name">${span.label}</span>
+    </button>`;
+  return html`<div class=${`input-lane is-actions ${templateSpans.length ? "has-template" : ""}`}>
     <span class="input-lane-name">${name}</span>
     <div class="input-lane-track">
-      ${spans.map((span) => html`
-        <button class=${`action-span group-${span.group} ${ghost ? "is-template" : ""}`}
-                key=${span.start}
-                style=${total && span.start + span.length >= total
-                  ? `right:0;width:${percent(span.length)}`
-                  : `left:${percent(span.start)};width:${percent(span.length)};`
-                    + `max-width:calc(100% - ${percent(span.start)})`}
-                onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
-                title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length)} (${span.length}f)`}
-                aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length)}`}>
-          <span class="action-span-name">${span.label}</span>
-        </button>`)}
+      ${templateSpans.map((span) => draw(span, true))}
+      ${spans.map((span) => draw(span, false))}
     </div>
   </div>`;
 }
@@ -377,6 +395,9 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 tools = null }) {
   const [state, setState] = useState({ phase: "loading" });
   const [frame, setFrame] = useState(0);
+  const [overlayVisible, toggleOverlay] = useOverlayRows();
+  const templateRevision = useTemplateRevision();
+  const [retry, setRetry] = useState(0);
   const [checkOpen, setCheckOpen] = useState(false);   // the screen-check list
   const [setupOpen, setSetupOpen] = useState(false);
   // The pointer and the playhead both work in the TRACK column's own box,
@@ -405,7 +426,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
 
   useEffect(() => {
     let alive = true;
-    setState({ phase: "loading" });
+    setState((old) => old.phase === "ready" && old.data.attempt_id === attemptId
+      ? old : { phase: "loading" });
     const range = clipSpan
       ? `?from_frame=${clipSpan.split(",")[0]}&to_frame=${clipSpan.split(",")[1]}`
       : "";
@@ -414,9 +436,11 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         ? response.json()
         : response.text().then((text) => Promise.reject(new Error(text)))))
       .then((data) => { if (alive) setState({ phase: "ready", data }); })
-      .catch((error) => { if (alive) setState({ phase: "error", error: String(error) }); });
+      .catch((error) => { if (alive) setState((old) => old.phase === "ready"
+        ? { ...old, refreshError: String(error) }
+        : { phase: "error", error: String(error) }); });
     return () => { alive = false; };
-  }, [attemptId, clipSpan]);
+  }, [attemptId, clipSpan, templateRevision, retry]);
 
   // ONE CLOCK, ALWAYS. The video is the clock whenever there is one: the
   // timeline reads it every frame and never keeps a position of its own, so
@@ -492,7 +516,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   }
   if (state.phase === "error") {
     return html`<div class="input-timeline is-error">
-      Could not read this attempt's inputs: ${state.error}</div>`;
+      Could not read this attempt's inputs: ${state.error}
+      <button onclick=${() => setRetry((value) => value + 1)}>Retry</button></div>`;
   }
   if (!data.runs.length) {
     return html`<div class="input-timeline is-empty">
@@ -547,6 +572,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   const there = template ? frameAt(template.runs, frame) : null;
   const thereDoing = template ? actionAt(template.actions, frame) : null;
   const peak = speedPeak(data.runs, template ? template.runs : []);
+  const reach = stickReach(data.stick_max, data.runs, template ? template.runs : []);
   const percent = (value) => `${(value / total) * 100}%`;
 
   // ONE lane per button, with the template's bars drawn BEHIND yours inside
@@ -557,8 +583,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   const bits = [...new Set([...byBit.keys(), ...ghostByBit.keys()])];
   const laneRow = (bit) => {
     const mine = byBit.get(bit);
-    const ghost = ghostByBit.get(bit);
-    const name = (mine || ghost).name;
+    const ghost = overlayVisible(`button:${bit}`) ? ghostByBit.get(bit) : null;
+    const name = (mine || ghostByBit.get(bit)).name;
     return html`<div class="input-lane" key=${bit}>
       <span class="input-lane-name">${name}</span>
       <div class="input-lane-track">
@@ -591,6 +617,10 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         ${frameMapNote(frameMapSource, () => setSetupOpen(true))}
       </div>
     </header>
+    ${state.refreshError && html`<p class="is-error" role="alert">
+      Could not refresh the template. Showing the previous comparison.
+      <button onclick=${() => setRetry((value) => value + 1)}>Retry</button>
+    </p>`}
     ${checkOpen && html`<${DisagreementList} agreement=${padAgreement}
         stretches=${data.stretches} seek=${seek} lead=${lead} />`}
 
@@ -600,7 +630,25 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         data.template.error
           ? html` — <span class="is-error">that template no longer loads:${" "}
               ${data.template.error}</span>`
-          : ", drawn behind your own. Both start at frame 0."}</span>
+          : html` — ${data.template.author || "Uncredited"}. Both start at frame 0.
+              ${data.template.frames > total - lead
+                ? "The template continues beyond this attempt’s visible timeline."
+                : data.template.frames < attemptFrames ? "The template ends before your attempt." : ""}`}</span>
+    </div>`}
+
+    ${template && html`<div class="input-overlay-controls">
+      <div class="input-overlay-legend"><span class="is-attempt">Your attempt — solid</span>
+        <span class="is-template">Template — dashed / outlined</span></div>
+      <details><summary>Template overlay rows</summary>
+        <div class="input-overlay-switches">
+          ${[["stick", "Stick"], ["actions", "Mario actions"], ["speed", "Speed"],
+            ...data.buttons.map(([bit, name]) => [`button:${bit}`, name])]
+            .map(([key, label]) => html`<label key=${key}><input type="checkbox"
+                checked=${overlayVisible(key)} onchange=${(event) => toggleOverlay(key, event.target.checked)} />
+              ${label}</label>`)}
+        </div>
+        <p class="meta">Applies to all open and future timelines in this browser.</p>
+      </details>
     </div>`}
 
     <div class="input-lanes"
@@ -619,24 +667,22 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                preserveAspectRatio="none" aria-hidden="true">
             <line x1="0" y1=${STICK_HEIGHT / 2} x2=${total} y2=${STICK_HEIGHT / 2}
                   class="stick-axis" vector-effect="non-scaling-stroke" />
-            ${data.template && html`
-              <polyline class="stick-line is-x is-template" vector-effect="non-scaling-stroke"
-                        points=${stickPath(data.template.runs, "x", data.stick_max)} />
-              <polyline class="stick-line is-y is-template" vector-effect="non-scaling-stroke"
-                        points=${stickPath(data.template.runs, "y", data.stick_max)} />`}
-            <polyline class="stick-line is-x" vector-effect="non-scaling-stroke"
-                      points=${stickPath(data.runs, "x", data.stick_max)} />
-            <polyline class="stick-line is-y" vector-effect="non-scaling-stroke"
-                      points=${stickPath(data.runs, "y", data.stick_max)} />
+            ${template && overlayVisible("stick") && html`
+              <path class="stick-line is-x is-template" vector-effect="non-scaling-stroke"
+                    d=${curvePath(template.runs, (runs) => stickPath(runs, "x", reach))} />
+              <path class="stick-line is-y is-template" vector-effect="non-scaling-stroke"
+                    d=${curvePath(template.runs, (runs) => stickPath(runs, "y", reach))} />`}
+            <path class="stick-line is-x" vector-effect="non-scaling-stroke"
+                  d=${curvePath(data.runs, (runs) => stickPath(runs, "x", reach))} />
+            <path class="stick-line is-y" vector-effect="non-scaling-stroke"
+                  d=${curvePath(data.runs, (runs) => stickPath(runs, "y", reach))} />
           </svg>
         </div>
       </div>
-      ${(data.actions || []).length > 0 && html`
-        <${ActionRow} name="Mario" spans=${data.actions} percent=${percent}
+      ${((data.actions || []).length > 0 || (template && template.actions?.length > 0)) && html`
+        <${ActionRow} name="Mario" spans=${data.actions || []} percent=${percent}
+            templateSpans=${template && overlayVisible("actions") ? template.actions || [] : []}
             seek=${seek} total=${total} />`}
-      ${template && (template.actions || []).length > 0 && html`
-        <${ActionRow} name="Template" spans=${template.actions} percent=${percent}
-            seek=${seek} ghost=${true} total=${total} />`}
       ${markers.length > 0 && html`
         <${MomentRow} markers=${markers} total=${total} percent=${percent}
             seek=${seek} lead=${lead} />`}
@@ -645,11 +691,11 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         <div class="input-lane-track">
           <svg viewBox=${`0 0 ${total} ${SPEED_HEIGHT}`} height=${SPEED_HEIGHT}
                preserveAspectRatio="none" aria-hidden="true">
-            ${template && html`
-              <polyline class="speed-line is-template" vector-effect="non-scaling-stroke"
-                        points=${speedPath(template.runs, peak)} />`}
-            <polyline class="speed-line" vector-effect="non-scaling-stroke"
-                      points=${speedPath(data.runs, peak)} />
+            ${template && overlayVisible("speed") && html`
+              <path class="speed-line is-template" vector-effect="non-scaling-stroke"
+                    d=${curvePath(template.runs, (runs) => speedPath(runs, peak))} />`}
+            <path class="speed-line" vector-effect="non-scaling-stroke"
+                  d=${curvePath(data.runs, (runs) => speedPath(runs, peak))} />
           </svg>
         </div>
       </div>
@@ -684,17 +730,13 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       </div>
       <${ControllerPanel} frame=${here} buttons=${data.buttons}
           stickMax=${data.stick_max} deadZone=${data.dead_zone}
-          label=${data.template ? "You pressed" : "Pressing"} />
+          label=${template ? "Stick" : "Pressing"}
+          templateFrame=${template ? there : undefined} />
       <${FacingDial} yaw=${here ? here.yaw : null}
           angleUnits=${data.angle_units} speed=${here ? here.speed : 0}
+          templateYaw=${template ? (there ? there.yaw : null) : undefined}
+          templateSpeed=${there ? there.speed : null}
           label="Mario faces" />
-      ${template && html`
-        <${ControllerPanel} frame=${there} buttons=${data.buttons}
-            stickMax=${data.stick_max} deadZone=${data.dead_zone}
-            label=${template.name} />
-        <${FacingDial} yaw=${there ? there.yaw : null}
-            angleUnits=${data.angle_units} speed=${there ? there.speed : 0}
-            label="Template faces" />`}
       <div class="input-inspector-read">
         ${here
           ? html`<span>Stick ${stickPhrase(here.stick_x, here.stick_y,
@@ -710,7 +752,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
           ${lastMoment.label}${" "}<span class="meta">at ${timeLabel(lastMoment.frame)}</span></span>`}
       </div>
     </footer>
-    ${tools}
+    ${typeof tools === "function" ? tools(data) : tools}
     ${setupOpen && html`<${SetupModal} onClose=${() => setSetupOpen(false)}
         initialPane="emu" />`}
   </div>`;

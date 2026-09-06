@@ -10,12 +10,21 @@ silent acceptance that would store something the timeline cannot draw.
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
-MAX_DOCUMENT_BYTES = 4 * 1024 * 1024      # ~30 minutes of dense play
+from sm64_events.inputs.document import MAX_DOCUMENT_BYTES
+
+# JSON may spell each character as a six-byte escape. The document itself
+# has a separate UTF-8 byte cap, enforced for every caller by its decoder.
+MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES * 6 + 4096
 
 
 class MarkBody(BaseModel):
     name: str | None = None
+
+
+class SelectBody(BaseModel):
+    template_id: int
 
 
 class ImportBody(BaseModel):
@@ -24,6 +33,14 @@ class ImportBody(BaseModel):
     strat_tag: str | None = None
     name: str
     document: str
+
+
+class PreviewBody(BaseModel):
+    document: str
+
+
+class AttemptImportBody(PreviewBody):
+    name: str
 
 
 def _http(error: Exception) -> HTTPException:
@@ -35,10 +52,28 @@ def _http(error: Exception) -> HTTPException:
 
 
 def _template_summary(template) -> dict:
-    return {"id": template.id, "kind": template.kind,
-            "entity_key": template.entity_key, "strat_tag": template.strat_tag,
-            "name": template.name, "origin": template.origin,
-            "active": template.active, "created_utc": template.created_utc}
+    return template.summary()
+
+
+async def _document_body(request: Request, model):
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > MAX_REQUEST_BYTES:
+            raise HTTPException(413, "document too large")
+        raw.extend(chunk)
+    try:
+        body = model.model_validate_json(raw)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    if len(body.document.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(413, "document too large (maximum 4 MiB)")
+    return body
+
+
+def _download(text: str, filename: str) -> PlainTextResponse:
+    return PlainTextResponse(text, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    })
 
 
 def create_inputs_router(inputs) -> APIRouter:
@@ -62,7 +97,7 @@ def create_inputs_router(inputs) -> APIRouter:
                 response_class=PlainTextResponse)
     def document(attempt_id: int):
         try:
-            return inputs.document(attempt_id)
+            return _download(inputs.document(attempt_id), f"attempt-{attempt_id}.inputs.txt")
         except Exception as error:
             raise _http(error) from error
 
@@ -73,8 +108,33 @@ def create_inputs_router(inputs) -> APIRouter:
             template = inputs.mark_template(attempt_id, body.name)
         except Exception as error:
             raise _http(error) from error
-        return {"id": template.id, "name": template.name,
-                "origin": template.origin}
+        return _template_summary(template)
+
+    @router.post("/attempts/{attempt_id}/inputs/template/preview")
+    async def preview(attempt_id: int, request: Request):
+        body = await _document_body(request, PreviewBody)
+        try:
+            return await run_in_threadpool(inputs.preview_template, attempt_id, body.document)
+        except Exception as error:
+            raise _http(error) from error
+
+    @router.post("/attempts/{attempt_id}/inputs/template/select")
+    def select(attempt_id: int, body: SelectBody):
+        try:
+            template = inputs.select_template(attempt_id, body.template_id)
+        except Exception as error:
+            raise _http(error) from error
+        return _template_summary(template)
+
+    @router.post("/attempts/{attempt_id}/inputs/template/import", status_code=201)
+    async def import_for_attempt(attempt_id: int, request: Request):
+        body = await _document_body(request, AttemptImportBody)
+        try:
+            template = await run_in_threadpool(
+                inputs.import_template, attempt_id, body.document, body.name)
+        except Exception as error:
+            raise _http(error) from error
+        return _template_summary(template)
 
     @router.get("/inputs/templates")
     def list_templates(kind: str | None = None, entity_key: str | None = None):
@@ -86,7 +146,8 @@ def create_inputs_router(inputs) -> APIRouter:
                 response_class=PlainTextResponse)
     def template_document(template_id: int):
         try:
-            return templates.get(template_id).document
+            return _download(templates.get(template_id).document,
+                             f"template-{template_id}.inputs.txt")
         except Exception as error:
             raise _http(error) from error
 
@@ -98,22 +159,15 @@ def create_inputs_router(inputs) -> APIRouter:
         an unloadable one is a 409 naming the reason rather than a row that
         breaks a drawer weeks later.
         """
-        raw = await request.body()
-        if len(raw) > MAX_DOCUMENT_BYTES:
-            raise HTTPException(413, "document too large")
+        body = await _document_body(request, ImportBody)
         try:
-            body = ImportBody.model_validate_json(raw)
-        except Exception as error:
-            raise HTTPException(422, str(error)) from error
-        try:
-            template = templates.save(
+            template = await run_in_threadpool(templates.save,
                 kind=body.kind, entity_key=body.entity_key,
                 strat_tag=body.strat_tag, name=body.name,
                 origin=f"import:{body.name}", document=body.document)
         except Exception as error:
             raise _http(error) from error
-        return {"id": template.id, "name": template.name,
-                "origin": template.origin}
+        return _template_summary(template)
 
     @router.post("/inputs/templates/{template_id}/activate")
     def activate(template_id: int):
@@ -125,7 +179,10 @@ def create_inputs_router(inputs) -> APIRouter:
 
     @router.delete("/inputs/templates/{template_id}")
     def delete(template_id: int):
-        templates.delete(template_id)
+        try:
+            templates.delete(template_id)
+        except Exception as error:
+            raise _http(error) from error
         return {"deleted": template_id}
 
     return router

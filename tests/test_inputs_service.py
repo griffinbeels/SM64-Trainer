@@ -346,3 +346,75 @@ def test_a_shifted_template_is_clipped_to_the_track(rig):
     moved = _shifted_spans(spans, 5, 18)
     assert moved == [{"start": 5, "length": 10}, {"start": 15, "length": 3}]
     assert _shifted_spans(spans, 20, 18) == []
+
+
+def test_unshifted_template_clips_without_losing_its_full_length(rig):
+    service, templates, _attempt = rig
+    template = templates.save(kind="star", entity_key="24-1", strat_tag="10 coin",
+                              name="longer", origin="authored",
+                              document=encode(frames([(n, 0x8000, 0, 0) for n in range(40)]),
+                                              target="star 24 1", strategy=None,
+                                              version="us", origin="authored", author="friend"))
+    payload = service.timeline(7)["template"]
+    assert payload["frames"] == 40
+    assert payload["author"] == "friend"
+    assert payload["runs"] == [run(0, 28, 0x8000, 0, 0)]
+    assert payload["actions"][0]["length"] == 28
+    assert service._template_payload(template, limit=0)["runs"] == []
+
+
+def test_document_frame_numbers_are_already_an_axis(rig):
+    service, templates, _attempt = rig
+    text = encode([], target="star 24 1", strategy=None, version="us", origin="authored")
+    template = templates.save(kind="star", entity_key="24-1", strat_tag="10 coin",
+                              name="gaps", origin="authored",
+                              document=text + "0-4 - gap\n5-8 A neutral\n9-11 - gap\n")
+    payload = service._template_payload(template, shift=3, limit=28)
+    assert payload["frames"] == 12
+    assert payload["runs"] == [run(8, 4, 0x8000, 0, 0)]
+    assert payload["actions"][0]["start"] == 8
+
+
+def test_preview_and_import_bind_to_current_local_segment(rig):
+    service, _templates, attempt = rig
+    attempt.segment_id = 12
+    text = encode(frames([(0, 0x8000, 0, 0)]), target="segment 999",
+                  strategy="their strategy", version="jp", origin="authored", author="friend")
+    preview = service.preview_template(7, text)
+    assert preview["document"]["target"] == "segment 999"
+    assert preview["destination"] == {"kind": "segment", "entity_key": "12",
+                                       "target": "segment 12", "strategy": "10 coin"}
+    imported = service.import_template(7, text, "Their example")
+    assert (imported.kind, imported.entity_key, imported.strat_tag) == ("segment", "12", "10 coin")
+    assert imported.document == text
+
+
+@pytest.mark.parametrize("source_strategy", ["other strategy", None])
+def test_selecting_another_strategy_reuses_a_local_binding(rig, source_strategy):
+    service, templates, _attempt = rig
+    service.mark_template(7, "current")
+    text = encode(frames([(0, 0x8000, 1, 2)]), target="star 24 1",
+                  strategy=source_strategy, version="jp", origin="attempt 999", author="friend")
+    source = templates.save(kind="star", entity_key="24-1", strat_tag=source_strategy,
+                            name="their example", origin="import:friend", document=text)
+    selected = service.select_template(7, source.id)
+    assert selected.id != source.id
+    assert selected.strat_tag == "10 coin"
+    assert (selected.document, selected.name, selected.origin) == (text, source.name, source.origin)
+    assert service.timeline(7)["template"]["id"] == selected.id
+    assert templates.active_for("star", "24-1", source_strategy).id == source.id
+    service.mark_template(7, "new current")
+    assert service.select_template(7, source.id).id == selected.id
+    assert service.select_template(7, selected.id).id == selected.id
+    assert len(templates.all()) == 4
+
+
+@pytest.mark.parametrize("kind,key", [("star", "9-3"), ("segment", "12")])
+def test_selecting_another_target_is_refused(rig, kind, key):
+    service, templates, _attempt = rig
+    current = service.mark_template(7)
+    other = templates.save(kind=kind, entity_key=key, strat_tag=None, name="elsewhere",
+                           origin=current.origin, document=current.document)
+    with pytest.raises(ValueError, match="target"):
+        service.select_template(7, other.id)
+    assert service.timeline(7)["template"]["id"] == current.id

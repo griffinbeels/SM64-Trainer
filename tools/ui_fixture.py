@@ -1593,6 +1593,14 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # `frame_map` carries three seconds of run-up and two of tail around
     # the attempt, which is exactly what the real thing carries; the video
     # URL 404s and the player shows its own empty state, which is honest.
+    # These optional services are deliberately absent in the offline fixture.
+    # Return their inactive state so a browser smoke check can treat every
+    # unexpected HTTP error as a failure, instead of filtering known 404s.
+    @app.get("/api/replay/status")
+    @app.get("/api/update/status")
+    def _fixture_inactive_status():
+        return None
+
     @app.post("/api/attempts/{attempt_id}/replay")
     def _fixture_replay_view(attempt_id: int):
         rows = [a for a in database.attempts() if a.id == attempt_id]

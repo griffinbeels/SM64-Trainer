@@ -12,14 +12,14 @@
 import { h } from "preact";
 import { useState } from "preact/hooks";
 import htm from "htm";
-import { Icon } from "./icons.js";
+import { InputTemplates } from "./inputtemplates.js";
 import { ReplayPlayer } from "./replay.js";
 import { InputTimeline } from "./inputtimeline.js";
 import { clipClock as buildClipClock } from "../frame.js";
 
 const html = htm.bind(h);
 
-export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
+export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked, targetLabel }) {
   const [video, setVideo] = useState(null);
   // Where the attempt's anchor sits inside the clip (the replay pre-pad,
   // measured from the clip's own first frame by the server). The timeline
@@ -38,23 +38,6 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
   // and its header changed under him once the clip arrived. A clip that
   // cannot be cut is an answer too: the timeline then shows unchecked.
   const [replaySettled, setReplaySettled] = useState(false);
-  const [marking, setMarking] = useState(null);   // null | "busy" | a message
-
-  async function markTemplate() {
-    setMarking("busy");
-    try {
-      const response = await fetch(
-        `/api/attempts/${attemptId}/inputs/template`,
-        { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}) });
-      const text = await response.text();
-      if (!response.ok) { setMarking(text || "could not mark this attempt"); return; }
-      setMarking("marked");
-      if (onTemplateMarked) onTemplateMarked();
-    } catch (error) {
-      setMarking(String(error));
-    }
-  }
 
   return html`<div class="attempt-drawer">
     <${ReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
@@ -78,21 +61,8 @@ export function AttemptDrawer({ attemptId, onCompare, onTemplateMarked }) {
               pictureIgt=${clipClock.pictureIgt}
               padAgreement=${clipClock.padAgreement}
               frameMapSource=${clipClock.frameMapSource}
-              tools=${html`<div class="attempt-drawer-tools">
-                <button onclick=${markTemplate} disabled=${marking === "busy"}
-                    title="Compare every future run against THIS one">
-                  <${Icon} name="bookmark" size=${14} />
-                  ${marking === "marked" ? "This is your template" : "Make this my template"}
-                </button>
-                <a class="button-link"
-                   href=${`/api/attempts/${attemptId}/inputs/document`}
-                   target="_blank" rel="noopener"
-                   title="The inputs as a text file you can keep, edit, or send someone">
-                  <${Icon} name="save" size=${14} /> Export inputs
-                </a>
-                ${marking && marking !== "busy" && marking !== "marked"
-                  && html`<span class="is-error">${marking}</span>`}
-              </div>`} />`
+              tools=${(data) => html`<${InputTemplates} attemptId=${attemptId}
+                  data=${data} targetLabel=${targetLabel} onTemplateMarked=${onTemplateMarked} />`} />`
         : html`<div class="input-timeline-waiting">The input timeline appears
             once the replay is cut and checked against its footage.</div>`}
     </div>

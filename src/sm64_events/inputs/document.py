@@ -51,6 +51,8 @@ from sm64_events.inputs.runs import capture_axis, collapse, same_state
 from sm64_events.memory import addresses as A
 
 FORMAT = 2
+MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
+MAX_DOCUMENT_FRAMES = 30 * 60 * FPS
 MAGIC = f"# sm64-inputs v{FORMAT}"
 _MAGICS = {"# sm64-inputs v1": 1, MAGIC: 2}
 _FLOAT32 = struct.Struct("<f")
@@ -73,6 +75,8 @@ class Document(NamedTuple):
     fps: int
     origin: str
     frames: list[tuple[int, InputFrame]]
+    author: str | None = None
+    frame_count: int = 0
 
 
 def _stick_word(frame: InputFrame) -> str:
@@ -90,9 +94,12 @@ def _parse_stick(word: str) -> tuple[int, int]:
     if "," in word:
         x_text, y_text = word.split(",", 1)
         try:
-            return int(x_text), int(y_text)
+            x, y = int(x_text), int(y_text)
         except ValueError:
             raise DocumentError(f"cannot read the stick value {word!r}") from None
+        if not (-128 <= x <= 127 and -128 <= y <= 127):
+            raise DocumentError(f"stick value {word!r} is outside the game's s8")
+        return x, y
     if "/" not in word:
         raise DocumentError(f"cannot read the stick value {word!r}")
     octant, band = word.split("/", 1)
@@ -144,9 +151,11 @@ def _parse_mario(words: list[str], line: str) -> tuple[int, int, float]:
         # RAM, so a decoded document compares equal to the capture it came
         # from rather than differing in digits no frame ever held.
         speed = _FLOAT32.unpack(_FLOAT32.pack(float(words[2])))[0]
-    except (ValueError, OverflowError):
+    except (ValueError, OverflowError, struct.error):
         raise DocumentError(f"cannot read Mario's yaw or speed in the row "
                             f"{line!r}") from None
+    if not math.isfinite(speed):
+        raise DocumentError(f"Mario's speed must be finite in the row {line!r}")
     if not -0x8000 <= yaw <= 0x7FFF:
         raise DocumentError(f"yaw {yaw} is outside the game's s16 in the row "
                             f"{line!r}")
@@ -154,14 +163,17 @@ def _parse_mario(words: list[str], line: str) -> tuple[int, int, float]:
 
 
 def encode(frames: list[tuple[int, InputFrame]], *, target: str,
-           strategy: str | None, version: str, origin: str) -> str:
+           strategy: str | None, version: str, origin: str,
+           author: str | None = None) -> str:
     lines = [MAGIC,
              f"target:   {target}",
              f"strategy: {strategy if strategy else '-'}",
              f"version:  {version}",
              f"fps:      {FPS}",
-             f"origin:   {origin}",
-             "--"]
+             f"origin:   {origin}"]
+    if author:
+        lines.append(f"author:   {author}")
+    lines.append("--")
     next_expected = 0
     for run in collapse(capture_axis(frames), same_state):
         if run.start > next_expected:                # the hole itself
@@ -179,6 +191,8 @@ def encode(frames: list[tuple[int, InputFrame]], *, target: str,
 
 
 def decode(text: str) -> Document:
+    if len(text.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+        raise DocumentError("document too large (maximum 4 MiB)")
     lines = [line.rstrip() for line in text.splitlines()]
     if not lines or lines[0].strip() not in _MAGICS:
         raise DocumentError(f"missing the {MAGIC!r} header line")
@@ -202,6 +216,7 @@ def decode(text: str) -> Document:
             f"{FPS} per second — rescaling would move every input, so this "
             f"document is refused rather than reinterpreted")
     frames: list[tuple[int, InputFrame]] = []
+    next_frame = 0
     for line in lines[split + 1:]:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
@@ -214,7 +229,14 @@ def decode(text: str) -> Document:
             raise DocumentError(f"cannot read the frame span {span!r}")
         start = int(matched.group(1))
         end = int(matched.group(2)) if matched.group(2) else start
+        if end < start or start < next_frame:
+            raise DocumentError(f"frame spans must be ordered and non-overlapping: {span!r}")
+        if end >= MAX_DOCUMENT_FRAMES:
+            raise DocumentError("document exceeds the 30 minute frame limit")
+        next_frame = end + 1
         if stick_word == "gap":
+            if buttons_word != "-" or len(parts) != 3:
+                raise DocumentError(f"a gap cannot contain input in the row {line!r}")
             continue
         buttons = _parse_buttons(buttons_word)
         stick_x, stick_y = _parse_stick(stick_word)
@@ -227,4 +249,5 @@ def decode(text: str) -> Document:
     return Document(target=meta["target"],
                     strategy=None if strategy in (None, "-") else strategy,
                     version=meta["version"], fps=FPS, origin=meta["origin"],
-                    frames=frames)
+                    frames=frames, author=meta.get("author") or None,
+                    frame_count=next_frame)

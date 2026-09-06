@@ -13,6 +13,7 @@ second copy of the table to drift from `memory/addresses.py`. A duplicate that
 cannot be written needs no parity test to keep it honest.
 """
 from sm64_events.core.timefmt import GAME_FPS
+from sm64_events.inputs.document import DocumentError, decode
 from sm64_events.inputs.frame import InputFrame
 from sm64_events.inputs.markers import markers_of
 from sm64_events.inputs.runs import Run, capture_axis, collapse, stretches
@@ -20,6 +21,9 @@ from sm64_events.inputs.templates import TemplateStore
 from sm64_events.inputs.track import (document_for_attempt, target_of,
                                       track_for_attempt, track_with_lead)
 from sm64_events.memory import addresses as A
+
+# Development credit only. A future profile passes its name at composition.
+DEVELOPMENT_AUTHOR = "griffman1212"
 
 
 def entity_key_of(attempt) -> tuple[str, str]:
@@ -107,13 +111,15 @@ class InputsService:
     carries none."""
 
     def __init__(self, store, templates: TemplateStore, attempts,
-                 version: str = "us", events=None, landmark_names=None):
+                 version: str = "us", events=None, landmark_names=None,
+                 author: str = DEVELOPMENT_AUTHOR):
         self.store = store
         self.templates = templates
         self._attempts = attempts
         self._version = version
         self._events = events
         self._landmark_names = landmark_names
+        self.author = author
 
     def attempt(self, attempt_id: int):
         for attempt in self._attempts():
@@ -131,7 +137,7 @@ class InputsService:
         attempt = self.attempt(attempt_id)
         if not track_for_attempt(self.store, attempt):
             raise LookupError("this attempt has no captured input")
-        return document_for_attempt(self.store, attempt, self._version)
+        return document_for_attempt(self.store, attempt, self._version, self.author)
 
     def mark_template(self, attempt_id: int, name: str | None = None):
         """Make this attempt the template for its target and strategy.
@@ -149,7 +155,60 @@ class InputsService:
             kind=kind, entity_key=key, strat_tag=attempt.strat_tag,
             name=name or f"attempt #{attempt.id}",
             origin=f"attempt:{attempt.id}",
-            document=document_for_attempt(self.store, attempt, self._version))
+            document=document_for_attempt(self.store, attempt, self._version, self.author))
+
+    def preview_template(self, attempt_id: int, text: str) -> dict:
+        """Describe the file and its explicit local destination before import.
+
+        A segment number belongs to the sender's database. The file's target
+        stays intact for provenance; selecting this attempt chooses where the
+        imported example will be compared in this database.
+        """
+        attempt = self.attempt(attempt_id)
+        document = decode(text)
+        if not document.frames:
+            raise DocumentError("this document has no captured input")
+        kind, key = entity_key_of(attempt)
+        return {
+            "document": {"target": document.target, "strategy": document.strategy,
+                         "version": document.version, "author": document.author,
+                         "frames": document.frame_count},
+            "destination": {"kind": kind, "entity_key": key,
+                            "target": target_of(attempt), "strategy": attempt.strat_tag},
+        }
+
+    def import_template(self, attempt_id: int, text: str, name: str):
+        """Import into the chosen attempt's target without rewriting provenance."""
+        attempt = self.attempt(attempt_id)
+        kind, key = entity_key_of(attempt)
+        return self.templates.save(kind=kind, entity_key=key,
+                                   strat_tag=attempt.strat_tag, name=name,
+                                   origin=f"import:{name}", document=text)
+
+    def select_template(self, attempt_id: int, template_id: int):
+        """Use a library example for this attempt's strategy.
+
+        A template's original strategy remains useful to other attempts.
+        Reuse a local binding, or create one with the portable source intact,
+        so the selected example actually replaces this timeline's comparison.
+        """
+        attempt = self.attempt(attempt_id)
+        kind, key = entity_key_of(attempt)
+        source = self.templates.get(template_id)
+        if (source.kind, source.entity_key) != (kind, key):
+            raise ValueError("choose a template for this attempt's target")
+        if not decode(source.document).frames:
+            raise DocumentError("this document has no captured input")
+        if (source.strat_tag or "") == (attempt.strat_tag or ""):
+            return self.templates.activate(source.id)
+        for existing in self.templates.list_for(kind, key):
+            if ((existing.strat_tag or "") == (attempt.strat_tag or "")
+                    and (existing.document, existing.name, existing.origin)
+                    == (source.document, source.name, source.origin)):
+                return self.templates.activate(existing.id)
+        return self.templates.save(kind=kind, entity_key=key, strat_tag=attempt.strat_tag,
+                                   name=source.name, origin=source.origin,
+                                   document=source.document)
 
     def pad_lookup(self, start_utc: str,
                    duration_s: float) -> dict[int, tuple[int, int, int]]:
@@ -183,6 +242,7 @@ class InputsService:
             "entity_key": key,
             "target": target_of(attempt),
             "strategy": attempt.strat_tag,
+            "local_author": self.author,
             "fps": GAME_FPS,
             "frames": axis[-1][0] + 1 if axis else 0,
             # The attempt's OWN length -- Usamune's number, the one the row
@@ -225,13 +285,15 @@ class InputsService:
 
     @staticmethod
     def _template_payload(template, shift: int = 0,
-                          limit: int = 0) -> dict | None:
+                          limit: int | None = None) -> dict | None:
         if template is None:
             return None
         payload = {"id": template.id, "name": template.name,
                    "origin": template.origin}
         try:
-            frames = template.frames()
+            document = decode(template.document)
+            frames = document.frames
+            payload.update(author=document.author, frames=document.frame_count)
         except Exception as error:
             # A hand-edited document that stopped loading. Say so on the
             # surface rather than drawing nothing and letting him wonder
@@ -241,18 +303,11 @@ class InputsService:
         # The SAME shape as the attempt's own track, Mario included: the
         # comparison he asked for is "against the exact example, including
         # all mario data", so the template carries everything the run does.
-        payload["runs"] = runs_of(frames)
-        payload["actions"] = actions_of(frames)
-        if shift:
-            # The attempt's own frame 0 sits `shift` slots into its axis
-            # (the lead-in); the template's sits at 0. Move the template so
-            # frame 0 aligns with frame 0, which is the whole comparison --
-            # then CLIP to the track's own length. Shifting alone lets a
-            # template as long as the attempt run off the right edge, and
-            # the lanes then overflow their own box (66 layout defects,
-            # measured 2026-08-31): a template is drawn to be compared
-            # against what is there, so the part with nothing to compare
-            # against is not drawn.
-            for name in ("runs", "actions"):
-                payload[name] = _shifted_spans(payload[name], shift, limit)
+        # Document numbers already name the frame-zero axis. capture_axis
+        # would move a first captured frame after a leading gap back to zero.
+        payload["runs"] = [_run_payload(run) for run in collapse(frames, _same_pad)]
+        payload["actions"] = [_action_payload(run) for run in collapse(frames, _same_action)]
+        for name in ("runs", "actions"):
+            payload[name] = ([] if limit == 0 else
+                             _shifted_spans(payload[name], shift, limit or 0))
         return payload

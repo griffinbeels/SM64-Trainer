@@ -16,6 +16,7 @@ stands the old one down in the same transaction.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 
 from sm64_events.inputs.document import DocumentError, decode
 
@@ -37,6 +38,19 @@ class Template:
         being loadable — which is possible, because a person may have edited
         it by hand since it was stored."""
         return decode(self.document).frames
+
+    def summary(self) -> dict:
+        """Library metadata comes from the same portable document we export."""
+        result = {"id": self.id, "kind": self.kind, "entity_key": self.entity_key,
+                  "strat_tag": self.strat_tag, "name": self.name, "origin": self.origin,
+                  "active": self.active, "created_utc": self.created_utc,
+                  "author": None, "frames": 0}
+        try:
+            document = decode(self.document)
+            result.update(author=document.author, frames=document.frame_count)
+        except DocumentError as error:
+            result["error"] = str(error)
+        return result
 
 
 def _row(row) -> Template:
@@ -61,7 +75,15 @@ class TemplateStore:
         template that cannot be decoded is useless, and finding that out when
         he opens a drawer is finding out at the worst possible moment.
         """
-        decode(document)          # raises DocumentError; the caller maps it
+        if kind not in ("star", "segment"):
+            raise ValueError("template kind must be star or segment")
+        pattern = r"[0-9]+-[0-9]+" if kind == "star" else r"[0-9]+"
+        if not re.fullmatch(pattern, entity_key):
+            raise ValueError(f"invalid {kind} template entity key")
+        if not name.strip() or len(name) > 200:
+            raise ValueError("template name must contain 1 to 200 characters")
+        if not decode(document).frames:
+            raise DocumentError("this document has no captured input")
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             if active:
@@ -140,6 +162,7 @@ class TemplateStore:
     def delete(self, template_id: int) -> None:
         """Erase it. His standing ruling on deletion (2026-08-02): marking a
         row removed is worthless — "just completely erase them"."""
+        self.get(template_id)
         with self._lock:
             self._conn.execute("DELETE FROM input_templates WHERE id=?",
                                (template_id,))

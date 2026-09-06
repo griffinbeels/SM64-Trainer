@@ -811,15 +811,16 @@ which is what lets a template come from an [[attempt]] you marked, a file
 another player sent you, or one you typed out yourself. Each row carries the
 pad and what Mario was doing while you held it — his action, which way he
 faced, how fast he went — so the document is the whole example and not the
-controller alone; a row you type by hand may stop after the pad.
+controller alone; a row you type by hand may stop after the pad. Optional
+author credit travels with the document and does not establish an account.
 
 - **Lives** — the document format (`src/sm64_events/inputs/document.py`)
 
 ### Template track
 
 The [[input track]] the trainer draws behind your own, so you can see where the
-two differ — its stick and buttons behind yours, its Mario row beneath yours,
-its speed on the same scale as yours, its facing beside yours. You mark the
+two differ — its stick, buttons and actions on the same rows as yours,
+its speed on the same scale, and a second indicator in each direction dial. You mark the
 [[attempt]] that felt right and it becomes the template for that [[target]] on
 that [[strategy]]. The trainer shows both and names neither as the reason — it
 reports what each was doing on a [[frame]], and you read the gap.

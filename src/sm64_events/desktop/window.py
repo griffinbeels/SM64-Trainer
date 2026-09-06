@@ -107,6 +107,9 @@ def create(on_closed) -> "webview.Window":
 
 def run() -> None:
     """Blocks on the main thread until the last window closes."""
+    # Input exports use the browser's download path. pywebview otherwise
+    # cancels them; enabling it lets WebView2 ask where to save the file.
+    webview.settings["ALLOW_DOWNLOADS"] = True
     # icon= sets the window/taskbar icon (pywebview 6.2.1 webview.start param).
     icon_path = str(_asset_path("ukiki.ico"))
     webview.start(icon=icon_path)

@@ -64,18 +64,43 @@ export function stickPhrase(stickX, stickY, deadZone = 8, stickMax = 64) {
 // `yaw: null` is a frame with NO capture -- the dial draws its ring and no
 // needle, and reads "--", because 0 degrees is a real bearing and a frame
 // nobody recorded must not claim it.
-export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
-                             speed = null, label = null }) {
-  const known = yaw !== null && yaw !== undefined;
-  const degrees = known
-    ? ((yaw % angleUnits) + angleUnits) % angleUnits * 360 / angleUnits : 0;
+function facingTip(yaw, angleUnits) {
+  if (yaw === null || yaw === undefined) return null;
+  const degrees = ((yaw % angleUnits) + angleUnits) % angleUnits * 360 / angleUnits;
   // Screen space: 0 units is +x (east) and the angle grows anticlockwise in
   // the game's own convention, which is what the stick box already draws.
   const radians = degrees * Math.PI / 180;
   const radius = BOX / 2 - 10;
-  const tipX = BOX / 2 + Math.cos(radians) * radius;
-  const tipY = BOX / 2 - Math.sin(radians) * radius;
-  const compass = Math.round(degrees);
+  return { x: BOX / 2 + Math.cos(radians) * radius,
+    y: BOX / 2 - Math.sin(radians) * radius, compass: Math.round(degrees) };
+}
+
+function facingValues(tip, speed) {
+  return html`<span class=${`stick-value ${tip ? "" : "is-centred"}`}>
+    ${tip ? `${tip.compass}°` : "--"}</span>
+    ${speed !== null && html`<span class=${`stick-value is-speed ${tip ? "" : "is-centred"}`}
+        title="Mario's forward speed on this frame">
+      ${tip ? `${Math.round(speed * 10) / 10} spd` : "--"}</span>`}`;
+}
+
+function reading(values, label, isTemplate = false) {
+  return html`<div class=${`controller-reading ${isTemplate ? "is-template" : ""}`}>
+    <span class="controller-reading-label">${label}</span>${values}</div>`;
+}
+
+function facingDescription(tip, comparing, templateTip, templateLabel) {
+  const own = tip ? `Facing ${tip.compass} degrees` : "Facing unknown";
+  if (!comparing) return own;
+  const template = templateTip ? `${templateTip.compass} degrees` : "not captured";
+  return `${own}; ${templateLabel}: ${template}`;
+}
+
+export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
+                             speed = null, label = null, templateYaw = undefined,
+                             templateSpeed = null, templateLabel = "Template" }) {
+  const tip = facingTip(yaw, angleUnits);
+  const templateTip = facingTip(templateYaw, angleUnits);
+  const comparing = templateYaw !== undefined;
 
   return html`<div class="controller-panel facing-panel"
                    style=${`--panel-size:${size}px`}>
@@ -83,7 +108,7 @@ export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
     <div class="controller-panel-body">
       <svg class="stick-box facing-dial" viewBox=${`0 0 ${BOX} ${BOX}`}
            width=${size} height=${size}
-           aria-label=${known ? `Facing ${compass} degrees` : "Facing unknown"}>
+           aria-label=${facingDescription(tip, comparing, templateTip, templateLabel)}>
         <circle cx=${BOX / 2} cy=${BOX / 2} r=${BOX / 2 - 3}
                 class="facing-ring" />
         ${[0, 90, 180, 270].map((tick) => {
@@ -95,18 +120,23 @@ export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
             y2=${BOX / 2 - Math.sin(at) * (BOX / 2 - 3)}
             class="facing-tick" />`;
         })}
-        ${known && html`
-          <line x1=${BOX / 2} y1=${BOX / 2} x2=${tipX} y2=${tipY}
+        ${tip && html`
+          <line x1=${BOX / 2} y1=${BOX / 2} x2=${tip.x} y2=${tip.y}
                 class="facing-needle" />
-          <circle cx=${tipX} cy=${tipY} r=${DOT / 2} class="facing-head" />`}
+          <circle cx=${tip.x} cy=${tip.y} r=${DOT / 2} class="facing-head" />`}
+        ${templateTip && html`
+          <line x1=${BOX / 2} y1=${BOX / 2} x2=${templateTip.x} y2=${templateTip.y}
+                class="facing-needle is-template" stroke-dasharray="4 3" />
+          <circle cx=${templateTip.x} cy=${templateTip.y} r=${DOT / 2 + 2}
+                  class="facing-head is-template" fill="none" />`}
         <circle cx=${BOX / 2} cy=${BOX / 2} r="2.5" class="facing-hub" />
       </svg>
       <div class="stick-values">
-        <span class=${`stick-value ${known ? "" : "is-centred"}`}>
-          ${known ? `${compass}°` : "--"}</span>
-        ${speed !== null && html`<span class=${`stick-value is-speed ${known ? "" : "is-centred"}`}
-            title="Mario's forward speed on this frame">
-          ${known ? `${Math.round(speed * 10) / 10} spd` : "--"}</span>`}
+        ${comparing ? html`
+          ${reading(facingValues(tip, speed), "You")}
+          ${reading(templateTip ? facingValues(templateTip, templateSpeed)
+            : html`<span class="stick-value is-centred">not captured</span>`, templateLabel, true)}`
+          : facingValues(tip, speed)}
       </div>
     </div>
   </div>`;
@@ -115,6 +145,7 @@ export function FacingDial({ yaw, angleUnits = 0x10000, size = 108,
 export function ControllerPanel({
   frame, buttons: table, stickMax = 64, deadZone = 8, size = 108,
   showNumbers = true, showButtons = true, label = null,
+  templateFrame = undefined, templateLabel = "Template",
 }) {
   // `frame` is a timeline run (`{buttons, stick_x, stick_y, ...}`) or null
   // for a frame with no capture, which draws as a centred, empty pad.
@@ -122,12 +153,25 @@ export function ControllerPanel({
   const stickY = frame ? frame.stick_y : 0;
   const held = frame ? heldNames(frame.buttons, table) : [];
   const { vertical, horizontal } = stickWords(stickX, stickY);
+  const comparing = templateFrame !== undefined;
+  const templateX = templateFrame ? templateFrame.stick_x : 0;
+  const templateY = templateFrame ? templateFrame.stick_y : 0;
+  const templateWords = stickWords(templateX, templateY);
+  const templateHeld = templateFrame ? heldNames(templateFrame.buttons, table) : [];
   // The box shows the stick's reach, and the pad reaches past the game's own
   // cap of 64 -- his own maximum is 84 -- so clamping to the cap here would
   // park the dot on the edge for every full deflection and lose the
   // difference between "at the cap" and "pushed past it".
-  const reach = Math.max(stickMax, Math.abs(stickX), Math.abs(stickY), 1);
-  const toBox = (value) => BOX / 2 + (value / reach) * (BOX / 2 - DOT / 2);
+  const reach = Math.max(stickMax, Math.abs(stickX), Math.abs(stickY),
+    Math.abs(templateX), Math.abs(templateY), 1);
+  // Leave room for the hollow template ring even at the box's furthest edge.
+  const radius = BOX / 2 - DOT / 2 - (templateFrame ? 2 : 0);
+  const toBox = (value) => BOX / 2 + (value / reach) * radius;
+  const numbers = (words) => html`
+    <span class=${`stick-value ${words.vertical ? "" : "is-centred"}`}>
+      ${words.vertical || "--"}</span>
+    <span class=${`stick-value ${words.horizontal ? "" : "is-centred"}`}>
+      ${words.horizontal || "--"}</span>`;
 
   return html`<div class="controller-panel" style=${`--panel-size:${size}px`}>
     ${label && html`<span class="controller-panel-label">${label}</span>`}
@@ -140,28 +184,46 @@ export function ControllerPanel({
               class="stick-box-cross" />
         <line x1="8" y1=${BOX / 2} x2=${BOX - 8} y2=${BOX / 2}
               class="stick-box-cross" />
-        <circle cx=${BOX / 2} cy=${BOX / 2} r=${(BOX / 2 - DOT / 2) * (stickMax / reach)}
+        <circle cx=${BOX / 2} cy=${BOX / 2} r=${radius * (stickMax / reach)}
                 class="stick-box-cap" />
         <line x1=${BOX / 2} y1=${BOX / 2} x2=${toBox(stickX)}
               y2=${BOX - toBox(stickY)} class="stick-box-stem" />
         <circle cx=${toBox(stickX)} cy=${BOX - toBox(stickY)} r=${DOT / 2}
                 class="stick-box-dot" />
+        ${templateFrame && html`
+          <line x1=${BOX / 2} y1=${BOX / 2} x2=${toBox(templateX)}
+                y2=${BOX - toBox(templateY)} class="stick-box-stem is-template"
+                stroke-dasharray="4 3" />
+          <circle cx=${toBox(templateX)} cy=${BOX - toBox(templateY)} r=${DOT / 2 + 2}
+                  class="stick-box-dot is-template" fill="none" />`}
       </svg>
       ${showNumbers && html`<div class="stick-values"
           aria-label=${`Stick ${stickPhrase(stickX, stickY, deadZone, stickMax)}`}>
-        <span class=${`stick-value ${vertical ? "" : "is-centred"}`}>
-          ${vertical || "--"}</span>
-        <span class=${`stick-value ${horizontal ? "" : "is-centred"}`}>
-          ${horizontal || "--"}</span>
+        ${comparing ? html`
+          ${reading(numbers({ vertical, horizontal }), "You")}
+          ${reading(templateFrame ? numbers(templateWords)
+            : html`<span class="stick-value is-centred">not captured</span>`, templateLabel, true)}`
+          : numbers({ vertical, horizontal })}
       </div>`}
     </div>
     ${showButtons && html`<div class="controller-buttons"
         aria-label=${held.length ? `Holding ${held.join(", ")}` : "No buttons held"}>
+      ${comparing && html`<span class="controller-reading-label">You</span>`}
       ${held.length === 0
         ? html`<span class="controller-button is-empty">no buttons</span>`
         : held.map((name) => html`
           <span class=${`controller-button btn-${name.toLowerCase()}`}
                 key=${name}>${name}</span>`)}
+    </div>`}
+    ${showButtons && comparing && html`<div class="controller-buttons is-template"
+        aria-label=${`${templateLabel}: ${templateFrame
+          ? (templateHeld.length ? `holding ${templateHeld.join(", ")}` : "no buttons held")
+          : "not captured"}`}>
+      <span class="controller-reading-label">${templateLabel}</span>
+      ${templateHeld.length === 0
+        ? html`<span class="controller-button is-empty">${templateFrame ? "no buttons" : "not captured"}</span>`
+        : templateHeld.map((name) => html`
+          <span class=${`controller-button btn-${name.toLowerCase()}`} key=${name}>${name}</span>`)}
     </div>`}
   </div>`;
 }
