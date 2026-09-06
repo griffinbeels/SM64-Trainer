@@ -376,6 +376,7 @@ def create_ranks_router(service, library=None, adoptions=None,
                        in _from_library(example_clips, entity).items()}
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": ladders,
+                "estimated_strategies": service.ranks.estimated_strategies(entity),
                 # Which version the ladders above are resolved on, and which
                 # one grading is on right now -- when they differ the panel
                 # says so ("Viewing JP standards · you are graded on US")

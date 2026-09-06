@@ -32,7 +32,6 @@ Pure: no db, no file I/O, no network, same discipline `ranks/scopes.py`
 already holds to, so pytest drives this module directly."""
 from dataclasses import dataclass
 
-from sm64_events.library.audit import row_key
 from sm64_events.library.sheet import entry_version
 from sm64_events.ranks import scoring
 
@@ -102,12 +101,10 @@ def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
     can go up for grading a piece of a star as if it were the whole thing.
     Until the user has built and adopted a segment for that exact stretch, a
     subsection contributes nothing here."""
-    adopted = adopted_rows.get(row_key(target, item["name"], item["ids"]))
-    if adopted:
-        return adopted
-    if kind == "approaches":
-        return target.get("entity_key")
-    return None
+    from sm64_events.library.placements import row_identity
+    identity = row_identity(target, item, "approach" if kind == "approaches"
+                            else "subsection", adopted_rows)
+    return identity[0] if identity else None
 
 
 def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us",

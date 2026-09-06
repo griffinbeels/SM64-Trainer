@@ -330,3 +330,21 @@ def test_every_seed_move_is_true_of_the_bundled_seed():
         assert strat in seed[new_ek]["strategies"], (old_ek, strat, new_ek)
         assert strat not in seed[old_ek].get("strategies", {}), (old_ek, strat)
         assert set(pinned) <= set(RANK_NAMES_FOR_GUARD), (old_ek, strat)
+
+
+def test_editing_one_sheet_cutoff_preserves_the_rest_and_their_refreshes(tmp_path):
+    path = tmp_path / "standards.json"
+    store = RankStandards(path)
+    store.load()
+    original = {"Mario": 5.50, "Diamond": 5.56, "Bronze": 5.76}
+    store.apply_sheet_ladders({"segment:42": {"strategies": {"JD": original}}})
+    store.set_threshold("segment:42", "JD", "Mario", 5.43)
+    assert store.ladders("segment:42")["JD"] == {**original, "Mario": 5.43}
+    saved = json.loads(path.read_text())["entities"]["segment:42"]
+    assert saved["strategies"] == {}, "a cutoff edit must not copy the fitted ladder"
+    refreshed = {**original, "Diamond": 5.60}
+    store.load()
+    store.apply_sheet_ladders({"segment:42": {"strategies": {"JD": refreshed}}})
+    assert store.ladders("segment:42")["JD"] == {**refreshed, "Mario": 5.43}
+    store.reset_entity("segment:42")
+    assert store.ladders("segment:42")["JD"] == refreshed

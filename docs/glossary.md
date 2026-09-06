@@ -792,13 +792,24 @@ sheet's own [[subsection]] rows, a third kind of row beside whole
 [[approach]]es. On the [[Library tab]]'s [[target]] page a piece draws the
 same full card an [[approach]] does — [[rank]] bands, [[division]]s, example
 videos — under its own Pieces heading; its one difference is the link/record
-strip. A piece grades nobody until you link it (see [[adoption]]): the sheet
-is finer than your [[segment]]s, so you either build the [[segment]] first
-and point the piece at it, or record one from the strip itself and the save
-links alone.
+strip. Each piece automatically receives a local [[segment]] under its
+parent star or movement, reusing an existing matching piece where possible.
+A newly created piece supports manual and Sheet-imported times; its start
+and end detection remain unconfigured until you define them in Segments.
+Its Library and Practice cards use the same effective [[ladder]].
 
 - **Lives** — the library builder (`src/sm64_events/library/build.py`)
   → the Pieces cards on the [[Library tab]]'s target page
+
+### Estimated ladder
+
+A provisional [[ladder]] for a Sheet row with no submitted times,
+derived from its published best or ideal, or an explicitly named
+related row. Its label explains the evidence; its sample count stays
+zero until runners submit times. Even one submitted time receives
+a ladder, with coincident tiers merged.
+
+- **Lives** — `src/sm64_events/library/ladder_estimates.py`
 
 ### Adoption
 
@@ -809,7 +820,7 @@ Yours, not the community's: it lives beside your data and survives a
 refresh. The door sits beside the [[target]]'s own name on the
 [[Library tab]] and links the WHOLE [[target]] — one click adopts every
 laddered [[approach]] as its own [[strategy]] on the [[segment]]; a
-[[sheet piece]] keeps its own row-level door; unlink reverses the whole batch.
+[[sheet piece]] keeps its own row-level door; unlink removes the explicit batch and returns to automatic placement.
 The [[segment]] builder carries the same door from the other side — pick a
 sheet [[target]] while making or editing a [[segment]], and the link lands
 when you save. A row with no [[segment]] to link also offers recording one on

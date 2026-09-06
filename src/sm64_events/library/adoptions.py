@@ -1,18 +1,10 @@
-"""Assigning a library row to a segment the user built.
+"""Sheet rows, local practice entries, and their shared rank standards.
 
-A star approach adopts itself: the sheet row already names the star, so
-`library/adopt.py` mints those at scrape time and they ship. A movement cannot.
-The sheet's Castle Movements are micro-optimisations at a granularity we do not
-model — 113 rows against our 63 segments — and its subsections are stretches
-inside a star that no segment exists for at all. So the user builds the segment
-first and then assigns the row to it, rather than us inventing 113 segments
-nobody asked for (user's ruling, 2026-08-05).
-
-That makes an assignment a USER's fact, not a community one: it lives in their
-data directory beside their own settings, keyed by the row's stable name so a
-sheet refresh keeps it. `library/library_overrides.json` is the other thing and
-must not be confused with this — those are corrections to our READING of the
-sheet, they are committed, and they are the same for everybody."""
+Explicit row assignments live in the user's data directory and outrank
+automatic placement. placements.py resolves current local identities;
+practice_catalog.py provisions missing movements and parented pieces.
+All consumers use sheet_strategy for the row's canonical strategy slot.
+"""
 import json
 import logging
 import re
@@ -209,11 +201,13 @@ def ladders(payload: dict, rows: dict) -> dict:
         entity = rows.get(key)
         if not entity or not item.get("ladder"):
             continue
-        name = strategy_name(target["label"], item["name"], kind=kind)
+        name = sheet_strategy(target, item, kind)
         layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
         layers["strategies"].setdefault(name, item["ladder"])
         if item.get("ladder_jp"):
             layers["jp_strategies"].setdefault(name, item["ladder_jp"])
+        if item.get("ladder_estimate"):
+            layers.setdefault("estimates", {})[name] = item["ladder_estimate"]
     return out
 
 
@@ -236,27 +230,23 @@ def library_ladders(payload: dict, rows: dict, qualified=()) -> dict:
 
     Vetted ladders still win on read (`RankStandards.ladders` merges
     fitted UNDER vetted), so nothing the community published moves.
-    `qualified` entities (a 100-coin star's variant-qualified names) are
-    skipped as `adoptable` skips them: a bare slot cannot identify a ladder
-    there. First fitted row per name wins, so a repeated name inside one
+    Shared 100-coin entities use route-qualified Sheet names, preserving
+    distinct rows without inventing an exit-star variant. First fitted
+    row per name wins, so a repeated name inside one
     target (already qualified by `sheet_strategy`) cannot overwrite."""
+    from sm64_events.library.placements import row_identity
     out = {}
-    for target in payload.get("targets") or []:
-        entity = target.get("entity_key") or ""
-        if not entity.startswith("star:") or entity in qualified:
+    for target, item, _key, kind in _rows(payload):
+        identity = row_identity(target, item, kind, rows)
+        if identity is None or not item.get("ladder"):
             continue
-        for item in target.get("approaches") or []:
-            if not item.get("ladder"):
-                continue
-            name = sheet_strategy(target, item)
-            layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
-            layers["strategies"].setdefault(name, item["ladder"])
-            if item.get("ladder_jp"):
-                layers["jp_strategies"].setdefault(name, item["ladder_jp"])
-    for entity, layers in ladders(payload, rows).items():
-        merged = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
-        merged["strategies"].update(layers["strategies"])
-        merged["jp_strategies"].update(layers["jp_strategies"])
+        entity, name = identity
+        layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
+        layers["strategies"].setdefault(name, item["ladder"])
+        if item.get("ladder_jp"):
+            layers["jp_strategies"].setdefault(name, item["ladder_jp"])
+        if item.get("ladder_estimate"):
+            layers.setdefault("estimates", {})[name] = item["ladder_estimate"]
     return out
 
 
@@ -272,26 +262,38 @@ class Adoptions:
     store on every change. Re-merging rather than appending is what makes an
     unadopt actually remove a strategy."""
 
-    def __init__(self, path, store, standards, qualified=()):
+    def __init__(self, path, store, standards, qualified=(), segment_defs=None,
+                 provision=None):
         self.path = Path(path)
         self.store = store               # LibraryStore
         self.standards = standards       # RankStandards
         self.qualified = set(qualified)
         self._rows = {}
+        self.segment_defs = segment_defs
+        self.provision = provision
+        self._automatic = {}
 
     def load(self) -> None:
         self._rows = load(self.path)
         self._sync()
 
     def rows(self) -> dict:
-        return dict(self._rows)
+        from sm64_events.library.placements import automatic_rows
+        definitions = list(self.segment_defs()) if self.segment_defs else []
+        existing = {f"segment:{d['id']}" for d in definitions}
+        generated = {key: entity for key, entity in self._automatic.items()
+                     if entity in existing}
+        return automatic_rows(self.store.payload,
+                              {**generated, **self._rows}, definitions)
 
     def ladders(self) -> dict:
         """Every sheet-fitted ladder the store should carry: the whole
         library's (round 33) plus the user's assignments."""
-        return library_ladders(self.store.payload, self._rows, self.qualified)
+        return library_ladders(self.store.payload, self.rows(), self.qualified)
 
     def _sync(self) -> None:
+        if self.provision is not None:
+            self._automatic = self.provision(self.store.payload, self._rows)
         if self.standards is not None:
             self.standards.apply_sheet_ladders(self.ladders())
 
@@ -356,8 +358,7 @@ class Adoptions:
             key = make_key(target, item["name"], item["ids"])
             self._rows[key] = entity
             adopted.append({"row_key": key,
-                            "strategy": strategy_name(target["label"],
-                                                      item["name"])})
+                            "strategy": sheet_strategy(target, item)})
         if not adopted:
             raise AdoptionError(
                 f"{target['label']!r} has no approach with rank standards -- "
@@ -404,7 +405,7 @@ def validate(payload: dict, key: str, entity: str, qualified=()):
         raise AdoptionError(
             f"{entity} names its strategies by exit-star variant, and the sheet "
             f"row does not say which exit star it ran")
-    name = strategy_name(target["label"], item["name"], kind=kind)
+    name = sheet_strategy(target, item, kind)
     # A vetted strategy of the same name is NOT a refusal (round 6, reversing
     # round 5's arm): the standards read-merge keeps the vetted ladder
     # structurally, so the assignment cannot touch grading -- and it now

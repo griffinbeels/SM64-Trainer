@@ -135,11 +135,13 @@ Runs with video play in place — YouTube, Twitch, X, Bluesky, Streamable,
 Drive, or a raw clip file — and runs without one still count as times. Dock
 clips to the tray to watch several side by side, or send the tray to Compare
 — pulled from YouTube, a local file, or a browser upload — for one
-frame-accurate transport driving them all in lockstep. The pieces of a run
-(the sheet's own subsections) get the same full rank-and-video cards, and any
-row you have no segment for yet offers **Record a segment** right there — the
-recorder opens pre-named, you pick the moments you just played, and the save
-links itself to the row so it grades immediately. Every star, Bowser course
+frame-accurate transport driving them all in lockstep. Every Sheet strategy
+and subsection receives standards, even with one submitted time; rows without
+submissions show estimates with their source explained. Library and Practice
+share the same standards and update together when you edit or refresh them.
+Missing movements and subsections become manual practice entries under their
+parent. You can import times immediately and configure detection in Segments.
+Every star, Bowser course
 and named movement (LBLJ, Lakitu Skip, MIPS…) wears a small Ukiki face beside
 its name — Ukikipedia's own icon — that opens its RTA Guide page; it appears
 only where the wiki actually has a page, so it never leads to a 404.
