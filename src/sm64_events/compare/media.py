@@ -121,7 +121,8 @@ class RecordingMedia:
             if current["state"] == "ready":
                 # A cache loaded by Compare can acquire stepping on first play.
                 name = self.importer.cached_name(url)
-                if name not in self._frames:
+                if (name not in self._frames
+                        and sum(job["state"] == "running" for job in self._jobs.values()) < 8):
                     self._launch(key, url, existing=name)
                     return self.status(url)
                 return current

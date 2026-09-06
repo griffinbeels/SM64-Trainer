@@ -2,6 +2,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from sm64_events.core.recording_url import validate_recording_url
+
 
 class RecordingBody(BaseModel):
     url: str | None = Field(max_length=4096)
@@ -27,8 +29,12 @@ def create_recording_router(tracker):
     @router.put("/{attempt_id}/recording")
     async def put_link(attempt_id: int, body: RecordingBody):
         try:
+            url = validate_recording_url(body.url)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        try:
             return await tracker.set_recording_link(
-                attempt_id, body.url, expected_revision=body.expected_revision)
+                attempt_id, url, expected_revision=body.expected_revision)
         except (LookupError, ValueError, RuntimeError) as error:
             raise _error(error) from error
 

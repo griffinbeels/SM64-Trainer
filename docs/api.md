@@ -465,6 +465,28 @@ invalidated by a newer sheet revision, a changed adoption, a different
 grading version, or any standards edit (a threshold, a JP overlay, a new or
 deleted strategy).
 
+## Attempt recording links and shared media
+
+These routes exist without replay capture or an encoder. Recording links belong
+to exact attempts, including imported ones. A durable edit overrides the imported
+original; `null` explicitly removes it. Export uses the selected PB attempt's
+link and never borrows a previous attempt's video. Held sheet times retain their
+original links until adoption. Column export cells include optional `video`.
+
+| Method | Path | Body / Query | Effect |
+|---|---|---|---|
+| `GET` | `/api/attempts/{attempt_id}/recording` | — | `{url, revision}`; 404 if the attempt does not exist. |
+| `PUT` | `/api/attempts/{attempt_id}/recording` | `{url, expected_revision?}` | Save/remove a public HTTP(S) recording URL. Returns `{url, revision}`; 422 for an invalid URL, 409 for a stale revision, 503 while storage is unavailable. Undo submits the prior URL with the returned revision. |
+| `GET` | `/api/media/preview` | `?url=` | Best-effort `{url, title, thumbnail, site}` metadata; never downloads the recording. |
+| `GET` | `/api/media` | `?url=` | Read `{state, url, start_s, clip_url?, frame_step_s?, progress?, message?, error?}`; state is `missing`, `running`, `ready`, or `error`. Never starts work. |
+| `POST` | `/api/media` | `{url, retry?: false}` | Prepare on first playback and poll GET. Reuses Compare's cache and concurrent import lock. A failed job retries only when requested. Missing encoder returns an error with original-link fallback. |
+| `GET` | `/api/media/cache/{name}` | — | Prepared MP4, with Range/206 support; 404 when absent. |
+
+YouTube URL variants share one cached source while links retain their original
+timestamps for export and playback. `frame_step_s` appears only after encoded
+presentation timestamps establish a constant frame interval; an unverified or
+variable-rate recording remains playable without frame controls.
+
 ## Compare (side-by-side video)
 
 **Compare** puts your run side-by-side with a reference video: the left

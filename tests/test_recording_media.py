@@ -124,6 +124,30 @@ def test_cache_eviction_prepares_again_without_losing_link(tmp_path):
     assert media.status(VIDEO)["state"] == "ready"
 
 
+def test_cached_timing_probes_share_the_bounded_work_queue(tmp_path):
+    release = threading.Event()
+    def download(url, destination):
+        path = destination / "raw.mp4"
+        path.write_bytes(b"raw")
+        return path
+    def probe(path):
+        assert release.wait(3)
+        return 1 / 60
+    shared = importer(tmp_path, download)
+    urls = [f"https://recordings.example/{index}" for index in range(9)]
+    for url in urls:
+        shared.import_video("youtube", url)
+    media = RecordingMedia(shared, frame_probe=probe)
+    try:
+        for url in urls[:8]:
+            assert media.start(url)["state"] == "running"
+        # Saturated timing work must not stop an already cached file playing.
+        assert media.start(urls[8])["state"] == "ready"
+    finally:
+        release.set()
+        media.wait_for_idle(3)
+
+
 @pytest.mark.parametrize("stamps,expected", [([0, 1, 2, 3, 4, 5], 1 / 60),
                                              ([0, 1, 2, 4, 5, 6], None)])
 def test_stepping_reads_actual_encoded_timestamps(tmp_path, stamps, expected):

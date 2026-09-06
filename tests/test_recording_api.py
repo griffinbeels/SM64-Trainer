@@ -34,6 +34,9 @@ def test_recording_edit_and_conditional_undo_without_capture():
     assert client.put(route, json={"url": None, "expected_revision": 0}).status_code == 409
     assert client.put(route, json={"url": None, "expected_revision": 1}).json()["url"] is None
     assert client.get("/api/attempts/2/recording").status_code == 404
+    invalid = client.put(route, json={"url": "http://localhost/video", "expected_revision": 2})
+    assert invalid.status_code == 422
+    assert "public" in invalid.json()["detail"].lower()
 
 
 def test_media_routes_keep_embed_fallback_without_ffmpeg():
