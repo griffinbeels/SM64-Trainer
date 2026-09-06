@@ -1395,12 +1395,13 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-06 after PB recording links: **45,889 lines, 1,061
-public names, 43.3 lines per public name, 53 pass-through (5.0%)**. Compared
-with the previous PB-import reading, the tree adds 26 public names and one
-forwarder. Recording-link policy and media preparation have separate owners;
-native and downloaded players share the replay transport. No additional
-restructure was indicated by this pass.
+Latest reading, 2026-09-06 during Sheet/Practice synchronization: **46,218
+lines, 1,067 public names, 43.3 lines per public name, 53 pass-through (5.0%)**.
+The change adds six public names and no forwarding-only surface. Sheet row
+identity is owned by `library/placements.py`; durable manual entry creation
+and parent ownership are in `library/practice_catalog.py`. The effective
+standards resolver serves both Library and Practice; the value flow and
+regressions are documented in [the Sheet standards chain](../.claude/rules/chain-sheet-standards.md).
 
 Ousterhout's deep module — a small, stable interface hiding substantial policy
 — became a standing practice across every repo on this machine on 2026-08-04,

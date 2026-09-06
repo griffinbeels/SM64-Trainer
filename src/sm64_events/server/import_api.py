@@ -251,9 +251,9 @@ def create_import_router(service, library=None, overrides=None,
             shares this process and a blocked loop is a dropped star grab,
             `server/library_api.py` says the same), then read the runner's
             column into candidates and held cells. `step` narrates the real
-            boundaries when a job is watching. Returns `(candidates, held,
-            refreshed)` -- `refreshed` says the library changed, so the
-            caller re-derives the sheet-fitted rank standards ON THE LOOP
+            boundaries when a job is watching. Returns `(candidates, held)`.
+            After an applied refresh, local entries and standards are
+            synchronized ON THE LOOP before reading the runner's column
             (round 33: "any time we pull in the spreadsheet, we should
             probably do a quick rank standards update")."""
             refreshed = False

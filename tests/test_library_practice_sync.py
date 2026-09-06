@@ -71,3 +71,27 @@ def test_ratings_never_reuse_a_deleted_movements_sheet_id(tmp_path):
         adoptions.load()
         times = runner_times(client.app.state.library.payload, adoptions.rows())
         assert f"segment:{definition['id']}" not in times["DentoriousRed"]
+
+
+def test_a_piece_added_by_refresh_lands_on_the_same_import(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from sm64_events.library.ladders import fit_payload
+    with make_client(tmp_path) as (client, db, service):
+        library = client.app.state.library
+        fresh = deepcopy(library.payload)
+        target = next(t for t in fresh["targets"] if t.get("entity_key") == "star:1:0")
+        piece = {"name": "New climb", "ids": ["99"], "best_cs": 1000,
+                 "entries": [{"runner": "new-sheet-runner", "time_cs": 1000,
+                              "version": None, "video": None}]}
+        target["subsections"].append(piece)
+        fit_payload(fresh)
+        fresh["sheet_revision"] = "2064-01-01T00:00:00"
+        monkeypatch.setattr(library, "refresh", lambda *a, **kw: library.absorb(fresh))
+        result = client.post("/api/import/sheet", json={
+            "runner": "new-sheet-runner", "refresh": True})
+        assert result.status_code == 200, result.text
+        assert result.json()["imported"] == 1 and result.json()["held"] == []
+        entity = client.app.state.adoptions.rows()[row_key(target, piece["name"], piece["ids"])]
+        sid = int(entity.split(":")[1])
+        assert db.current_pb(None, None, "rta", segment_id=sid)["frames"] == 300
+        assert service.ranks.ladders(entity)["Standard"] == piece["ladder"]

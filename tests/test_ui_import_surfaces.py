@@ -271,7 +271,14 @@ def test_the_sheet_door_lists_every_held_row_by_name_under_its_reason(
     monkeypatch.setattr(LibraryStore, "refresh",
                         lambda self, fetch_fn, overrides=None, step=None: {})
 
-    with serve_ui(tmp_path / "sheetdoor.db") as base:
+    from ui_fixture import serve_ui_live, _run_coro
+    with serve_ui_live(tmp_path / "sheetdoor.db") as (base, service):
+        # Deliberate deletions keep the held-row workflow reachable now that
+        # missing Sheet entries are provisioned automatically on startup.
+        for definition in service.db.segment_defs():
+            if definition.get("category") == "Ultimate Sheet":
+                service.db.delete_segment_def(definition["id"])
+        _run_coro(service._segments_changed())
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
             assert wait(page, ".practice-page")
@@ -503,5 +510,5 @@ def test_the_sheet_import_narrates_its_steps_on_a_progress_line(tmp_path, monkey
     widths = [int(fill.rstrip("%")) for fill in fills if fill]
     assert len(widths) >= 2 and widths == sorted(widths), (
         f"the fill did not move forward: {fills}")
-    assert "16 times added" in summary, summary
+    assert "17 times added" in summary, summary
     assert line_after == 0, "the line must give way to the outcome once the import lands"

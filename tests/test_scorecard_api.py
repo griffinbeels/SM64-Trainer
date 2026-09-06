@@ -727,7 +727,7 @@ def test_the_endpoints_placer_lands_a_bowser_row_on_the_seeded_movement(tmp_path
                         "entity_key": "segment:6"},
                        {"name": "Bowser in the Fire Sea Course", "ids": ["1"]},
                        "approach")
-        assert placed == (f"segment:{bitfs_id}", "rta", None)
+        assert placed == (f"segment:{bitfs_id}", "rta", "Standard")
 
 
 def _bob_omb_rows(strategy_row=False):

@@ -684,7 +684,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
             focus=${selected ? focus : null} clearFocus=${clearFocus}
             freshIds=${freshIds} openCompare=${openCompare} sec=${sec} />`
-        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
+        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0}
+            manualTiming=${manualTiming} />`}
       <div class="attempt-footer">
         ${/* Real pagination (amendment A8), replacing "Show 10 more": "we
              should replace the show more with the number of pages we have

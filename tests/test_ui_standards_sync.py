@@ -123,3 +123,42 @@ def test_a_hidden_library_refetches_in_place_after_a_rank_edit():
             page.wait_ms(600)
             assert page.evaluate("window.__libraryRowFetches") == reads
             assert page.problems() == []
+
+
+@pytest.mark.parametrize("width", [850, 1280, 1920])
+def test_a_provisioned_manual_piece_shows_its_estimate_in_both_pages(width):
+    with serve_ui_live(stage=(4, 5), target=(4, 6)) as (base, service):
+        piece = next(d for d in service.db.segment_defs()
+                     if "star:4:6" in d["parents"] and not d["start_triggers"] and not d["end_triggers"]
+                     and service.ranks.estimated_strategies(f"segment:{d['id']}"))
+        with get_driver().launch(headless=True, viewport=(width, 1100)) as page:
+            page.goto(base)
+            page.wait_for(".log-card")
+            page.evaluate("document.querySelector('.log-card-fold').click()")
+            _until(page, f"[...document.querySelectorAll('.log-card-select')].some(b => b.textContent.includes({json.dumps(piece['name'])}))")
+            page.evaluate(f"""(() => {{
+              const select = [...document.querySelectorAll('.log-card-select')]
+                .find(b => b.textContent.includes({json.dumps(piece['name'])}));
+              window.__manualCard = select.closest('.log-card');
+              select.click();
+            }})()""")
+            page.wait_ms(100)
+            page.evaluate("window.__manualCard.querySelector('.log-card-fold').click()")
+            page.wait_for(".manual-timing-note")
+            page.evaluate("""(() => {
+              window.__manualCard.querySelector('.standards-toggle').click();
+              window.__manualCard.scrollIntoView({block: 'start'});
+            })()""")
+            page.wait_for(".std-estimate")
+            assert page.evaluate("!!window.__manualCard.querySelector('.addtime-open')")
+            assert page.evaluate("window.__manualCard.querySelector('.std-estimate').title")
+            assert page.evaluate("window.__manualCard.textContent.includes('Add a time below')")
+            _clear_fixture_startup_errors(page, base)
+            out = REPO / ".planning" / "sheet-practice-log" / "visuals"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"practice-manual-{width}.png").write_bytes(page.screenshot())
+            page.evaluate("window.__manualCard.querySelector('.log-card-library-link').click()")
+            page.wait_for(".library-section.open .library-ladder-estimate")
+            assert page.evaluate("document.querySelector('.library-section.open .library-ladder-estimate').textContent.includes('Estimated')")
+            (out / f"library-estimate-{width}.png").write_bytes(page.screenshot())
+            assert page.problems() == []

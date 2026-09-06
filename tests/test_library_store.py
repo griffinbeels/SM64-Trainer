@@ -50,6 +50,25 @@ def test_a_local_copy_survives_an_app_update_carrying_an_older_snapshot(tmp_path
     assert store.payload["targets"][0]["label"] == "fresh"
 
 
+def test_an_old_fitting_model_refits_offline_without_rewriting_either_snapshot(tmp_path):
+    from sm64_events.library.ladders import LADDER_MODEL_VERSION
+    local, bundled = tmp_path / "local.gz", tmp_path / "bundled.gz"
+    payload = _snapshot("2026-09-06T12:00:00")
+    row = payload["targets"][0]["approaches"][0]
+    row.pop("ladder")  # One time was below the old fitter's admission floor.
+    row["matched_strategy"] = "Preserved vetted name"
+    write_snapshot(local, payload)
+    write_snapshot(bundled, _snapshot("2020-01-01T00:00:00"))
+    before = local.read_bytes(), bundled.read_bytes()
+    store = LibraryStore(local, bundled)
+    store.load()
+    fitted = store.payload["targets"][0]["approaches"][0]
+    assert fitted["ladder"] and fitted["ladder_samples"] == 1
+    assert fitted["matched_strategy"] == "Preserved vetted name"
+    assert store.payload["ladder_model"]["version"] == LADDER_MODEL_VERSION
+    assert (local.read_bytes(), bundled.read_bytes()) == before
+
+
 def test_a_newer_release_replaces_a_stale_local_copy(tmp_path):
     local, bundled = tmp_path / "local.json.gz", tmp_path / "bundled.json.gz"
     write_snapshot(local, _snapshot("2026-01-01T00:00:00", "stale"))
