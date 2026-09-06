@@ -89,7 +89,9 @@ def create_library_router(store, overrides=None, adoptions=None,
             return result
 
         matched = None
-        if segment_names is not None and not target.get("entity_key"):
+        if (segment_names is not None and not target.get("entity_key")
+                and not any(row_key(target, item["name"], item["ids"]) in assigned
+                            for item in target["approaches"])):
             try:
                 matched = adoptions_store.auto_match(target["label"],
                                                      segment_names())
@@ -203,11 +205,14 @@ def create_library_router(store, overrides=None, adoptions=None,
             # can say "already matched by name" instead of a "Not linked"
             # that contradicts the Library page's own chip.
             matched = {}
+            assigned = adoptions.rows()
             if segment_names is not None:
                 try:
                     pairs = list(segment_names())
                     for position, target in enumerate(store.payload["targets"]):
-                        if target.get("entity_key"):
+                        if target.get("entity_key") or any(
+                                row_key(target, item["name"], item["ids"]) in assigned
+                                for item in target["approaches"]):
                             continue
                         hit = adoptions_store.auto_match(target["label"], pairs)
                         if hit:
@@ -216,7 +221,7 @@ def create_library_router(store, overrides=None, adoptions=None,
                                                 "label": target["label"]})
                 except Exception:
                     matched = {}
-            return {"rows": adoptions.rows(),
+            return {"rows": {key: entity for key, entity in assigned.items() if entity},
                     "ladders": adoptions.ladders(),
                     "by_entity": adoptions.linked_targets(),
                     "matched_by_name": matched}

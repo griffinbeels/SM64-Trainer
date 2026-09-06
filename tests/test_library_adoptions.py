@@ -162,7 +162,7 @@ def test_the_routes_report_a_refusal_rather_than_failing_silently(wiring):
     assert client.get("/api/library/adoptions").json()["rows"]
     client.post("/api/library/unadopt",
                 json={"row_key": keys["Lobby door (L) - BoB door"]})
-    assert client.get("/api/library/adoptions").json()["rows"] == {}
+    assert not any(client.get("/api/library/adoptions").json()["rows"].values())
 
 
 def test_a_refresh_re_syncs_adopted_ladders(wiring, monkeypatch):
@@ -235,8 +235,8 @@ def test_adopt_target_links_every_laddered_approach_and_reports_skips(wiring):
     assert standards.strategies("segment:42") == [ad.DEFAULT_STRATEGY]
 
     undone = adoptions.unadopt_target(0)
-    assert undone["removed"] == 1
-    assert adoptions.rows() == {}
+    assert undone["removed"] == 2  # explicit and inferred sibling assignments
+    assert not any(adoptions.rows().values())
     assert standards.strategies("segment:42") == []
 
 

@@ -18,23 +18,28 @@ _log = logging.getLogger("sm64.library")
 DEFAULT_STRATEGY = "Standard"
 
 
-def load(path) -> dict:
-    """{row key: entity key} — empty when absent or unreadable."""
+def _read(path) -> dict:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, ValueError):
         return {}
-    rows = data.get("rows") if isinstance(data, dict) else None
+    return data if isinstance(data, dict) else {}
+
+
+def load(path) -> dict:
+    """{row key: entity key} — empty when absent or unreadable."""
+    rows = _read(path).get("rows")
     if not isinstance(rows, dict):
         return {}
     return {key: value for key, value in rows.items()
             if isinstance(key, str) and isinstance(value, str) and value}
 
 
-def save(path, rows: dict) -> None:
+def save(path, rows: dict, *, unlinked=()) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 1, "rows": dict(sorted(rows.items()))},
+    path.write_text(json.dumps({"version": 2, "rows": dict(sorted(rows.items())),
+                               "unlinked": sorted(unlinked)},
                                indent=1, ensure_ascii=False),
                     encoding="utf-8", newline="")
 
@@ -269,22 +274,34 @@ class Adoptions:
         self.standards = standards       # RankStandards
         self.qualified = set(qualified)
         self._rows = {}
+        self._unlinked = set()
         self.segment_defs = segment_defs
         self.provision = provision
         self._automatic = {}
 
     def load(self) -> None:
         self._rows = load(self.path)
+        self._unlinked = {key for key in _read(self.path).get("unlinked", [])
+                          if isinstance(key, str)} - self._rows.keys()
         self._sync()
 
     def rows(self) -> dict:
+        """Resolved assignments; empty values reserve explicitly unlinked rows.
+
+        The reservation prevents downstream automatic placement from putting
+        a deliberately unlinked row back. Consumers resolve through row_identity.
+        """
         from sm64_events.library.placements import automatic_rows
         definitions = list(self.segment_defs()) if self.segment_defs else []
         existing = {f"segment:{d['id']}" for d in definitions}
         generated = {key: entity for key, entity in self._automatic.items()
                      if entity in existing}
         return automatic_rows(self.store.payload,
-                              {**generated, **self._rows}, definitions)
+                              {**generated, **dict.fromkeys(self._unlinked, ""),
+                               **self._rows}, definitions)
+
+    def _save(self):
+        save(self.path, self._rows, unlinked=self._unlinked)
 
     def ladders(self) -> dict:
         """Every sheet-fitted ladder the store should carry: the whole
@@ -301,30 +318,34 @@ class Adoptions:
         target, item, name = validate(self.store.payload, key, entity,
                                       self.qualified)
         self._rows[key] = entity
-        save(self.path, self._rows)
+        self._unlinked.discard(key)
+        self._save()
         self._sync()
         return {"adopted": True, "row_key": key, "entity_key": entity,
                 "strategy": name, "ladder": item["ladder"],
                 "target": target["label"]}
 
     def unadopt(self, key: str) -> dict:
-        removed = self._rows.pop(key, None)
-        save(self.path, self._rows)
+        removed = self.rows().get(key)
+        self._rows.pop(key, None)
+        self._unlinked.add(key)
+        self._save()
         self._sync()
         return {"adopted": False, "row_key": key, "entity_key": removed}
 
     def linked_targets(self) -> dict:
-        """{entity key: [{index, label}]} — the REVERSE of the stored rows,
+        """{entity key: [{index, label}]} — the REVERSE of resolved rows,
         for the segment editor's "which library target points at me" view
         (round 8). Computed from APPROACH assignments only: a piece link is
         a partial fact and must not present a whole target as linked."""
         from sm64_events.library.audit import row_key as make_key
         out = {}
+        assigned = self.rows()
         for position, target in enumerate(self.store.payload["targets"]):
-            entities = {self._rows[key]
+            entities = {assigned[key]
                         for item in target["approaches"]
                         if (key := make_key(target, item["name"],
-                                            item["ids"])) in self._rows}
+                                            item["ids"])) in assigned and assigned[key]}
             for entity in entities:
                 out.setdefault(entity, []).append(
                     {"index": position, "label": target["label"]})
@@ -357,13 +378,14 @@ class Adoptions:
                 continue
             key = make_key(target, item["name"], item["ids"])
             self._rows[key] = entity
+            self._unlinked.discard(key)
             adopted.append({"row_key": key,
                             "strategy": sheet_strategy(target, item)})
         if not adopted:
             raise AdoptionError(
                 f"{target['label']!r} has no approach with rank standards -- "
                 f"linking it would grade nothing")
-        save(self.path, self._rows)
+        self._save()
         self._sync()
         return {"adopted": adopted, "skipped": skipped,
                 "entity_key": entity, "target": target["label"]}
@@ -378,11 +400,14 @@ class Adoptions:
             raise AdoptionError(f"no library target at index {index}")
         from sm64_events.library.audit import row_key as make_key
         removed = 0
+        assigned = self.rows()
         for item in target["approaches"]:
             key = make_key(target, item["name"], item["ids"])
-            if self._rows.pop(key, None) is not None:
+            if assigned.get(key):
                 removed += 1
-        save(self.path, self._rows)
+            self._rows.pop(key, None)
+            self._unlinked.add(key)
+        self._save()
         self._sync()
         return {"removed": removed, "target": target["label"]}
 

@@ -95,3 +95,25 @@ def test_a_piece_added_by_refresh_lands_on_the_same_import(tmp_path, monkeypatch
         sid = int(entity.split(":")[1])
         assert db.current_pb(None, None, "rta", segment_id=sid)["frames"] == 300
         assert service.ranks.ladders(entity)["Standard"] == piece["ladder"]
+
+
+def test_unlinking_an_automatic_piece_survives_reload_and_reassignment(tmp_path):
+    from sm64_events.server.import_api import sheet_row_placer
+    with make_client(tmp_path) as (client, db, service):
+        target = client.get("/api/library/entity/star:1:0").json()["targets"][0]
+        piece = target["subsections"][0]
+        original = piece["entity_key"]
+        adoptions = client.app.state.adoptions
+        assert client.post("/api/library/unadopt", json={
+            "row_key": piece["row_key"]}).status_code == 200
+        adoptions.load()
+        assert not adoptions.rows().get(piece["row_key"])
+        assert not service.ranks.ladders(original)
+        assert sheet_row_placer(service, adoptions)(target, piece, "subsection") is None
+        unlinked = client.get("/api/library/entity/star:1:0").json()["targets"][0]["subsections"][0]
+        assert not unlinked["adopted"]
+        assert client.post("/api/library/adopt", json={
+            "row_key": piece["row_key"], "entity_key": original}).status_code == 200
+        adoptions.load()
+        assert adoptions.rows()[piece["row_key"]] == original
+        assert service.ranks.ladders(original)["Standard"] == piece["ladder"]
