@@ -1395,7 +1395,7 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-06 during Sheet/Practice synchronization: **46,218
+Latest reading, 2026-09-06 during Sheet/Practice synchronization: **46,247
 lines, 1,067 public names, 43.3 lines per public name, 53 pass-through (5.0%)**.
 The change adds six public names and no forwarding-only surface. Sheet row
 identity is owned by `library/placements.py`; durable manual entry creation

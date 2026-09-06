@@ -791,15 +791,14 @@ function hasRunnerMatch(item, versions, query) {
 // self-contained sentence, so they move out instead of accumulating.
 function LadderRegionChip({ approach, version, versions }) {
   if (!approach.ladder_jp) {
-    // A linked row uses the current Practice thresholds. Without a distinct
-    // JP ladder those thresholds apply in both modes; the original fitting
-    // population no longer describes which regions this ladder can grade.
-    if (approach.entity_key && approach.strategy) return null;
     if (!approach.ladder_version) return null;
+    const shared = !!(approach.entity_key && approach.strategy);
     return html`<span class="chip library-ladder-version-chip"
-        title=${`Fitted from ${regionLabel(approach.ladder_version)}-only community times -- not enough of the other version's runs to fit a second ladder.`}>
+        title=${`Source fit uses ${regionLabel(approach.ladder_version)} community times.${shared
+          ? " These effective standards currently apply in both regions."
+          : " No separate population is available for the other region."}`}>
       <${RegionFlag} version=${approach.ladder_version} size=${17} title="" />
-      <span>ladder only</span>
+      <span>${shared ? "ladder" : "ladder only"}</span>
     </span>`;
   }
   if (versions.length < 2) return null;

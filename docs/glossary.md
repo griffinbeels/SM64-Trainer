@@ -793,9 +793,9 @@ sheet's own [[subsection]] rows, a third kind of row beside whole
 same full card an [[approach]] does — [[rank]] bands, [[division]]s, example
 videos — under its own Pieces heading; its one difference is the link/record
 strip. Each piece automatically receives a local [[segment]] under its
-parent star or movement, reusing an existing matching piece where possible.
-A newly created piece supports manual and Sheet-imported times; its start
-and end detection remain unconfigured until you define them in Segments.
+parent [[star]] or movement, reusing an existing matching piece where possible.
+A newly created piece supports manual and Sheet-[[imported time]]s; its start
+and end detection remain unconfigured until you define them in [[Segment]]s.
 Its Library and Practice cards use the same effective [[ladder]].
 
 - **Lives** — the library builder (`src/sm64_events/library/build.py`)
@@ -806,8 +806,8 @@ Its Library and Practice cards use the same effective [[ladder]].
 A provisional [[ladder]] for a Sheet row with no submitted times,
 derived from its published best or ideal, or an explicitly named
 related row. Its label explains the evidence; its sample count stays
-zero until runners submit times. Even one submitted time receives
-a ladder, with coincident tiers merged.
+zero until [[runner]]s submit times. Even one submitted time receives
+a [[ladder]], with coincident [[tier]]s merged.
 
 - **Lives** — `src/sm64_events/library/ladder_estimates.py`
 

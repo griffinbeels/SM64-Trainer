@@ -39,6 +39,15 @@ CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').clic
 @pytest.fixture(scope="module")
 def library_server():
     with serve_ui(arm_segment=FIXTURE_SEGMENT, seed_editor_fixtures=True) as base:
+        # Replacing an automatic manual piece with recorded detection remains
+        # available after the user explicitly unlinks it.
+        target = json.loads(urllib.request.urlopen(
+            base + "/api/library/entity/star:1:0").read())["targets"][0]
+        for piece in target["subsections"]:
+            request = urllib.request.Request(base + "/api/library/unadopt", method="POST",
+                data=json.dumps({"row_key": piece["row_key"]}).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(request).read()
         yield base
 
 
@@ -194,8 +203,12 @@ def test_the_record_door_records_names_parents_and_links_in_one_save(library_pag
     base = library_page.evaluate("location.origin")
     segments = json.loads(urllib.request.urlopen(
         f"{base}/api/segments", timeout=10).read())
-    mine = [row for row in segments if row.get("name") == piece_name]
-    assert mine, f"no segment named {piece_name!r} after the save"
-    parents = mine[0].get("parents") or []
+    target = json.loads(urllib.request.urlopen(
+        f"{base}/api/library/entity/star:1:0", timeout=10).read())["targets"][0]
+    linked = next(piece for piece in target["subsections"]
+                  if piece["name"] == piece_name and piece.get("adopted"))
+    mine = next(row for row in segments if f"segment:{row['id']}" == linked["adopted"])
+    assert mine["name"] == piece_name
+    parents = mine.get("parents") or []
     assert any(str(parent).startswith("star:1:") for parent in parents), (
         f"the saved segment must be parented to the BoB star; parents={parents}")

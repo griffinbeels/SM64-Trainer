@@ -30,8 +30,6 @@ companion. Since round 1 the chip renders INDEPENDENTLY of the mode toggle
 (an approach can mix entry versions while its one ladder is still
 single-version-fitted; both facts stay on screen).
 """
-import gzip
-import json
 import shutil
 import sys
 import time
@@ -69,8 +67,10 @@ COUNT_VISIBLE = (
 
 
 def _load_payload():
-    with gzip.open(SNAPSHOT, "rt", encoding="utf-8") as handle:
-        return json.load(handle)
+    from sm64_events.library.store import LibraryStore
+    library = LibraryStore(bundled_path=SNAPSHOT)
+    library.load()
+    return library.payload
 
 
 def _mode_count(entries, mode):
@@ -343,13 +343,23 @@ def test_a_jp_only_ladder_wears_its_chip_beside_the_version_switch(payload, fres
     _navigate_to_section(fresh_page, candidate["group"], candidate["target_label"],
                          candidate["approach_name"])
 
+    index = next(i for i, target in enumerate(payload["targets"])
+                 if target["group"] == candidate["group"]
+                 and target["label"] == candidate["target_label"])
+    served = fresh_page.evaluate(f"fetch('/api/library/target/{index}').then(r => r.json())")
+    effective = next(row for row in served["approaches"]
+                     if row["name"] == candidate["approach_name"])
+
     chip = fresh_page.evaluate(
         "(() => { const el = document.querySelector("
         "'.library-section.open .library-ladder-version-chip'); "
         "return el ? el.textContent.trim() : null; })()")
     # Round 24: the region is the flag inside the chip, so the chip's own
     # text is just the noun; the region is read off the flag's `alt`.
-    assert chip == "ladder only", chip
+    # A vetted/edited JP companion may add a second effective ladder while
+    # the original source population keeps its own provenance flag.
+    shared = effective.get("entity_key") and effective.get("strategy")
+    assert chip == ("ladder" if effective.get("ladder_jp") or shared else "ladder only"), chip
     flag_alt = fresh_page.evaluate(
         "(() => { const img = document.querySelector("
         "'.library-section.open .library-ladder-version-chip img.region-flag'); "

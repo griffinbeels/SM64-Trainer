@@ -57,6 +57,25 @@ def library_server():
             }).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(request, timeout=10).read()
+        # Exercise the relinking doors after an explicit Unlink. Task 0126
+        # provisions these rows automatically on first use.
+        def post(path, body):
+            request = urllib.request.Request(base + path, method="POST",
+                data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            return json.loads(urllib.request.urlopen(request, timeout=10).read())
+
+        groups = json.loads(urllib.request.urlopen(base + "/api/library").read())["groups"]
+        targets = [target for group in groups for target in group["targets"]]
+        for target in targets:
+            if target["label"] == "Lobby door (L) - CCM wooden door":
+                post("/api/library/unadopt_target", {"target_index": target["index"]})
+        for entity, collection in (("star:1:0", "subsections"),
+                                   (f"segment:{FIXTURE_SEGMENT}", "approaches")):
+            target = json.loads(urllib.request.urlopen(
+                base + "/api/library/entity/" + entity).read())["targets"][0]
+            for row in target[collection]:
+                if collection == "subsections" or row["strategy"] == "Standard":
+                    post("/api/library/unadopt", {"row_key": row["row_key"]})
         yield base
 
 
@@ -187,12 +206,13 @@ def test_link_unlink_round_trip_links_every_strategy_at_once(library_page):
     assert standings >= 2, (
         f"one link must grade EVERY laddered strategy; {standings} standings")
 
+    library_page.wait_for('.library-target-titleline .library-unlink:not([disabled])')
     library_page.evaluate(
-        "document.querySelector('.library-unlink').click()")
+        "document.querySelector('.library-target-titleline .library-unlink').click()")
     library_page.wait_for(".library-target-titleline .library-link-button",
                           timeout_ms=15000)
     assert library_page.evaluate(
-        "document.querySelectorAll('.library-link-state.is-linked').length") == 0
+        "document.querySelectorAll('.library-target-titleline .library-link-state.is-linked').length") == 0
 
 
 def test_a_stars_subsections_render_as_pieces_with_the_link_door(library_page):
@@ -311,6 +331,7 @@ def test_linking_a_piece_updates_every_practice_picker_without_reload(
     library_page.evaluate(CLICK_LIBRARY_TAB)
     library_page.wait_for(
         ".library-pieces .library-link-state.is-linked", timeout_ms=15000)
+    library_page.wait_for('.library-pieces .library-unlink:not([disabled])')
     library_page.evaluate(
         "document.querySelector('.library-pieces .library-unlink').click()")
     library_page.wait_for(".library-pieces .library-link-button", timeout_ms=15000)
@@ -331,10 +352,10 @@ def test_a_name_matched_movement_shows_the_association_and_its_standing(library_
     standing is Capless, verbatim his rule ("if there are no times, it's
     capless"). The offer strip is gone: a match already IS the association."""
     _navigate_to_target(library_page, "Castle Movements (Lobby)", "Lakitu skip")
-    library_page.wait_for(".library-target-titleline .library-matched-chip",
+    library_page.wait_for(".library-target-titleline .library-link-state.is-linked",
                           timeout_ms=15000)
     chip = library_page.evaluate(
-        "document.querySelector('.library-target-titleline .library-matched-chip').textContent")
+        "document.querySelector('.library-target-titleline .library-link-state.is-linked').textContent")
     assert "Lakitu Skip" in chip, chip
     library_page.wait_for(".library-section .library-your-standing",
                           timeout_ms=15000)
@@ -376,7 +397,8 @@ def test_linking_shows_a_standing_immediately(library_page):
         "document.querySelector('.library-section.open .library-your-standing').textContent")
     assert "no times yet" in standing, standing
     # leave the fixture as found for the other tests
-    library_page.evaluate("document.querySelector('.library-unlink').click()")
+    library_page.wait_for('.library-target-titleline .library-unlink:not([disabled])')
+    library_page.evaluate("document.querySelector('.library-target-titleline .library-unlink').click()")
     library_page.wait_for(".library-target-titleline .library-link-button",
                           timeout_ms=15000)
 
@@ -457,8 +479,9 @@ def test_the_segment_editor_links_from_the_other_side(library_page, library_serv
     assert LINK_SEGMENT_NAME in linked_text, linked_text
 
     # leave the fixture as found
+    library_page.wait_for('.library-target-titleline .library-unlink:not([disabled])')
     library_page.evaluate(
-        "document.querySelector('.library-unlink').click()")
+        "document.querySelector('.library-target-titleline .library-unlink').click()")
     library_page.wait_for(".library-target-titleline .library-link-button",
                           timeout_ms=15000)
 
@@ -660,6 +683,13 @@ def test_a_held_time_shows_on_its_library_row_and_lands_when_the_row_is_linked(
                         lambda self, fetch_fn, overrides=None, step=None: {})
     with serve_ui(tmp_path / "held.db", arm_segment=FIXTURE_SEGMENT,
                   seed_editor_fixtures=True) as base:
+        target = json.loads(urllib.request.urlopen(
+            base + "/api/library/entity/star:7:4").read())["targets"][0]
+        for piece in target["subsections"]:
+            request = urllib.request.Request(base + "/api/library/unadopt", method="POST",
+                data=json.dumps({"row_key": piece["row_key"]}).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(request).read()
         request = urllib.request.Request(
             f"{base}/api/import/sheet", method="POST",
             data=json.dumps({"runner": "GTM", "refresh": False}).encode(),

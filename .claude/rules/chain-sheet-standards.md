@@ -51,3 +51,11 @@ outcome without requiring adoption, then changes a cutoff and compares both.
   Library read raw cutoffs, and mounted views retained stale responses.
   Per-cutoff overlays, effective API decoration and standards invalidation
   fix these separate boundaries.
+- 2026-09-06 hop 2 — automatic links returned immediately after Unlink.
+  Explicit unlink reservations survive reload and block subsequent import
+  placement; reassigning clears the reservation. The persistence and
+  reassignment case is pinned in `tests/test_library_practice_sync.py`.
+- 2026-09-06 hops 4–5 — cached title rows paired a canonical Standard slot
+  with a historical vetted name. Navigation falls back to that alias only
+  when no canonical row matches. Its PB is a labeled comparison, graded on
+  the displayed ladder; the 11.93-second browser case checks both ROMs.
