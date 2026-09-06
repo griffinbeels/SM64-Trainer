@@ -1395,6 +1395,13 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
+Latest reading, 2026-09-06 after PB recording links: **45,889 lines, 1,061
+public names, 43.3 lines per public name, 53 pass-through (5.0%)**. Compared
+with the previous PB-import reading, the tree adds 26 public names and one
+forwarder. Recording-link policy and media preparation have separate owners;
+native and downloaded players share the replay transport. No additional
+restructure was indicated by this pass.
+
 Ousterhout's deep module — a small, stable interface hiding substantial policy
 — became a standing practice across every repo on this machine on 2026-08-04,
 along with minimizing levels of indirection. The measurement is
