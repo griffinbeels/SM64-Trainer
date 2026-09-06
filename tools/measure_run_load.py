@@ -1,18 +1,17 @@
 """What a full test run costs the DESKTOP, and what buying that back costs in time.
 
-    uv run python tools/measure_run_load.py                       # idle baseline, then 16 workers, then the candidates
+    uv run python tools/measure_run_load.py                       # idle baseline, then ONE automatic-budget run
     uv run python tools/measure_run_load.py --config 16:0 16:8    # only these (workers:reserved cores)
     uv run python tools/measure_run_load.py --idle-seconds 45     # longer baseline
 
 He reported the machine "HORRIBLY laggy" while the gate runs (2026-09-02).
-Lag is not CPU percent -- a run can sit at 100% and stay usable, or sit at
-80% and stutter. What a person feels is **how long a normal-priority thread
-waits for a core after it is ready to run**, so that is what this measures
-directly: a probe thread in THIS process sleeps 50 ms in a loop and records
+CPU percent and scheduler delay are only parts of responsiveness; neither
+certifies smooth OBS video or a usable desktop. This measures one component:
+a normal-priority thread in THIS process sleeps 50 ms in a loop and records
 how much longer than 50 ms each wake actually took. The excess is scheduler
 wait, in milliseconds, on the same footing as the compositor, the browser
 and the editor he is typing in. p95 of that excess is the number to compare
-configurations by; median says nothing, because a stutter is a tail event.
+configurations by alongside human feedback and OBS counters. Median hides tails.
 
 Alongside it: system CPU percent, the share of samples pinned at 95%+, peak
 RAM, and the run's own wall time and pass/fail -- so a configuration that
@@ -53,6 +52,7 @@ import time
 from pathlib import Path
 
 import psutil
+from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parent.parent
 PROBE_INTERVAL = 0.05
@@ -126,15 +126,19 @@ def measure_idle(seconds: float, label: str = "idle (no run)") -> dict:
             "ambient_lag_p95_ms": report["lag_p95_ms"], **report}
 
 
-def measure_run(workers: int, reserve: int, extra: list[str],
+def measure_run(workers: int | None, reserve: int | None, extra: list[str],
                 settle_seconds: float = 15.0, log_dir: Path | None = None) -> dict:
     ambient = measure_idle(settle_seconds) if settle_seconds > 0 else {}
-    command = [sys.executable, str(ROOT / "tools" / "run_tests.py"),
-               "--workers", str(workers), "--reserve", str(reserve), *extra]
+    command = [sys.executable, str(ROOT / "tools" / "run_tests.py")]
+    if workers is not None:
+        command.extend(["--workers", str(workers)])
+    if reserve is not None:
+        command.extend(["--reserve", str(reserve)])
+    command.extend(extra)
     started = time.perf_counter()
     with Probe() as probe:
         child = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, text=True)
+                                 stderr=subprocess.STDOUT, text=True, **quiet_spawn_kwargs())
         chunks: list[str] = []
         reader = threading.Thread(target=lambda: chunks.append(child.stdout.read()), daemon=True)
         reader.start()
@@ -142,6 +146,11 @@ def measure_run(workers: int, reserve: int, extra: list[str],
             time.sleep(POLL_INTERVAL)
         reader.join(timeout=10)
     output = "".join(chunks)
+    admitted = re.search(r"(OBS open|normal) budget: (\d+|serial) workers, (\d+)/(\d+) CPUs", output)
+    actual = (f"{admitted[1]}: {admitted[2]} workers, {admitted[3]} CPUs"
+              if admitted else "allocation unavailable (see log)")
+    contaminated = "PERFORMANCE COMPARISON CONTAMINATED" in output
+    queued = "tests: queued" in output or "waiting for uncoordinated test" in output
     counts = dict((kind, int(number)) for number, kind in SUMMARY.findall(output))
     # A RED row that cannot say WHICH test failed is half a finding -- and the
     # question a sweep exists to answer is whether a faster configuration
@@ -155,7 +164,10 @@ def measure_run(workers: int, reserve: int, extra: list[str],
     return {
         "failed_tests": failed,
         "log": str(log_path) if log_path else None,
-        "label": f"{workers} workers, {reserve or 'no'} core(s) reserved",
+        "label": actual,
+        "valid_comparison": admitted is not None and not contaminated and not queued,
+        "contaminated": contaminated,
+        "queued": queued,
         "workers": workers, "reserve": reserve,
         "ambient_cpu_pct": ambient.get("cpu_mean_pct", 0.0),
         "ambient_lag_p95_ms": ambient.get("lag_p95_ms", 0.0),
@@ -167,7 +179,9 @@ def measure_run(workers: int, reserve: int, extra: list[str],
     }
 
 
-def parse_config(text: str) -> tuple[int, int]:
+def parse_config(text: str) -> tuple[int | None, int | None]:
+    if text == "auto":
+        return None, None
     workers, _, reserve = text.partition(":")
     return int(workers), int(reserve or 0)
 
@@ -184,13 +198,15 @@ def render(rows: list[dict]) -> str:
             f"{row.get('ambient_cpu_pct', 0):>8.0f}%  {row['outcome']}")
         for name in row.get("failed_tests") or []:
             lines.append(f"{'':<34}  {name}")
+        if row.get("valid_comparison") is False:
+            lines.append("  NOT a tuning comparison: competing run, queue wait, or missing allocation evidence")
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--config", nargs="*", default=["16:0", "16:8", "8:0"],
-                        help="workers:reserved-cores, e.g. 16:0 16:8 8:0")
+    parser.add_argument("--config", nargs="+", default=["auto"],
+                        help="default: one automatic-budget run; opt into a workers:reserve comparison explicitly")
     parser.add_argument("--idle-seconds", type=float, default=30.0)
     parser.add_argument("--settle-seconds", type=float, default=15.0,
                         help="quiet seconds probed before each run, to record the "

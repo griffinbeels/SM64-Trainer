@@ -175,7 +175,7 @@ restart needed.
 ### Test
 
 ```
-uv run pytest -q
+uv run python tools/run_tests.py
 ```
 
 ~2,250 tests, about 90 seconds, no emulator required. This must pass before
