@@ -28,7 +28,9 @@ LOG_TABS = (SHEET_LOG, "Log (Main)")
 _EPOCH = datetime(1899, 12, 30)
 
 _CELL = re.compile(r'<c r="([A-Z]+)(\d+)"([^>]*?)(?:/>|>(.*?)</c>)', re.S)
-_HYPERLINK_FORMULA = re.compile(r"HYPERLINK\(&quot;(.*?)&quot;", re.I)
+# Match the decoded formula's first string literal. Excel doubles a quote
+# inside that literal; a lazy quote-to-quote match truncates recording URLs.
+_HYPERLINK_FORMULA = re.compile(r'\bHYPERLINK\s*\(\s*"((?:[^"]|"")*)"\s*[,;)]', re.I)
 
 
 @dataclass(frozen=True)
@@ -215,9 +217,12 @@ def read_sheet(data: bytes, sheet_name: str) -> dict:
         link = links.get(f"{letters}{row}")
         formula = re.search(r"<f>(.*?)</f>", body, re.S)
         if link is None and formula:
-            hit = _HYPERLINK_FORMULA.search(formula.group(1))
+            # XML decoding precedes formula-string decoding, exactly once.
+            # Decoding the captured URL again would turn a literal &quot;
+            # (serialized &amp;quot;) into a character the source never had.
+            hit = _HYPERLINK_FORMULA.search(_unescape(formula.group(1)))
             if hit:
-                link = _unescape(hit.group(1))
+                link = hit.group(1).replace('""', '"')
 
         inline = re.search(r"<is>.*?<t[^>]*>(.*?)</t>", body, re.S)
         cached = re.search(r"<v>(.*?)</v>", body, re.S)

@@ -36,6 +36,30 @@ def test_recovers_both_hyperlink_forms():
     assert cells[(2, 7)].value == "15.90"
 
 
+def test_formula_recording_quotes_and_xml_entities_roundtrip_with_styling():
+    """A Sheets HYPERLINK formula escapes quotes before XML escapes entities.
+
+    Literal entity-looking URL text must decode only once: `&quot;` inside
+    the URL is not a formula delimiter, and `&amp;` stays literal text.
+    """
+    import io
+    import zipfile
+
+    url = 'https://example.com/"a""b"?x=1&literal=&quot;&other=&amp;'
+    data = build_workbook({wb.SHEET_MAIN: {
+        (3, 7): {"text": "15.90", "link": url, "link_kind": "formula",
+                 "fill": "FFA5A9F1", "rgb": GREY}}})
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        xml = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert '&quot;&quot;a&quot;&quot;&quot;&quot;b&quot;&quot;' in xml
+    assert '&amp;literal=&amp;quot;' in xml
+    cell = wb.read_sheet(data, wb.SHEET_MAIN)[(3, 7)]
+    assert cell.link == url
+    assert cell.value == "15.90"
+    assert cell.fill_rgb == "A5A9F1"
+    assert cell.font_rgb == GREY
+
+
 def test_log_revision_is_the_newest_entry():
     assert wb.log_revision(_sample()) == "2026-08-04T20:14:25"
 
