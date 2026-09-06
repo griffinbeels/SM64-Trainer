@@ -26,11 +26,12 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
   // shifts by it so clip time and track frame are one axis.
   const [anchorOffsetS, setAnchorOffsetS] = useState(0);
   // The clip's own frame map (which game frame each video frame shows) and
-  // its encode rate -- the timeline's exact clock; the offset is its fallback.
+  // its encode rate -- the timeline follows only the retained association.
   const [clipClock, setClipClock] = useState({ frameMap: null,
                                               clock: null,
                                               padAgreement: null,
-                                              frameMapSource: null });
+                                              frameMapSource: null,
+                                              inputAlignment: null });
   // The timeline appears only once the replay has ANSWERED (his ruling
   // 2026-09-01: "it should be hidden until we extract the replay, after
   // which it's shown") -- extraction is where the map is read off the
@@ -49,7 +50,8 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
                            pictureIgt: view.picture_igt || null,
                            clock: buildClipClock(view),
                            padAgreement: view.pad_stamp_agreement || null,
-                           frameMapSource: view.frame_map_source || null });
+                           frameMapSource: view.frame_map_source || null,
+                           inputAlignment: view.input_alignment || null });
           }
           setReplaySettled(true);
         }} />
@@ -61,6 +63,7 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
               pictureIgt=${clipClock.pictureIgt}
               padAgreement=${clipClock.padAgreement}
               frameMapSource=${clipClock.frameMapSource}
+              inputAlignment=${clipClock.inputAlignment}
               tools=${(data) => html`<${InputTemplates} attemptId=${attemptId}
                   data=${data} targetLabel=${targetLabel} onTemplateMarked=${onTemplateMarked} />`} />`
         : html`<div class="input-timeline-waiting">The input timeline appears

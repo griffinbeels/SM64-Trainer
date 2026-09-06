@@ -13,6 +13,8 @@ import av
 import pytest
 
 from test_replay_picture_identity import picture, read_pictures
+from test_replay_cached_identity import cached_clip, legacy_metadata
+from test_replay_service import attempt, make_service
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from find_uilab import find_uilab
@@ -125,3 +127,53 @@ def test_drawer_steps_decoded_pictures_and_reads_the_presented_timer(tmp_path):
         assert page.problems() == []
         (tmp_path / "browser-pictures.json").write_text(json.dumps(recorded), encoding="utf-8")
     print(f"Rendered replay evidence: {tmp_path}")
+
+
+def test_legacy_replay_stays_playable_without_an_invented_input_association(tmp_path):
+    service = make_service(tmp_path, [attempt()])
+    path = cached_clip(service)
+    times, _ = tiny_video(path)
+    meta = legacy_metadata()
+    meta.update(frame_times=times, duration_s=times[-1] + 1/30)
+    path.with_suffix(".json").write_text(json.dumps(meta))
+    replay = service.view(42)
+    assert replay["input_alignment"]["status"] == "unverified"
+    replay["clip_url"] = "data:video/mp4;base64," + base64.b64encode(path.read_bytes()).decode()
+    with PROJECT.open() as url, get_driver().launch(viewport=(1500,1100)) as page:
+        page.goto(url)
+        page.wait_for(PROJECT.ready_selector)
+        page.evaluate(r"""(() => {
+          const original = window.fetch;
+          window.fetch = (url, options) => /\/api\/attempts\/\d+\/replay$/.test(String(url))
+            ? Promise.resolve(new Response(JSON.stringify(REPLAY), {status:200,
+                headers:{'Content-Type':'application/json'}})) : original(url, options);
+        })()""".replace("REPLAY", json.dumps(replay)))
+        page.evaluate(STORY.setup)
+        page.wait_for(".attempt-drawer video")
+        page.wait_for(".input-inspector")
+        page.wait_for(".input-frame-map-note")
+        assert page.evaluate("document.querySelector('.input-frame-map-note').textContent.trim()") == (
+            "Input alignment could not be verified for this replay.")
+        assert page.evaluate("document.querySelector('.input-frame-map-note button') === null")
+        page.evaluate("""(async () => {
+          const video = document.querySelector('.attempt-drawer video');
+          if (video.readyState < 2) await new Promise(resolve =>
+            video.addEventListener('loadeddata', resolve, {once:true}));
+          video.pause();
+          await new Promise(resolve => {
+            video.addEventListener('seeked', resolve, {once:true});
+            video.currentTime=.15;
+          });
+        })()""")
+        assert page.evaluate("document.querySelector('.attempt-drawer video').videoWidth") == 320
+        page.click('.attempt-drawer button.input-bar[aria-label^="A held"]')
+        assert page.evaluate("document.querySelector('.attempt-drawer video').currentTime") == .15
+        page.wait_for('.input-inspector-frame .meta:text-is("Time unavailable")')
+        assert page.evaluate("document.querySelector('.input-playhead') === null")
+        for width in [1500,850]:
+            page.set_viewport(width,1100)
+            page.evaluate("document.querySelector('.input-timeline').scrollIntoView({block:'center'})")
+            (tmp_path / f"unverified-{width}.png").write_bytes(page.screenshot())
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert page.problems() == []
+    print(f"Unverified replay browser evidence: {tmp_path}")

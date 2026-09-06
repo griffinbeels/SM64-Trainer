@@ -80,6 +80,20 @@ paused picture":
 
 ## Failure catalogue
 
+- **2026-09-06: cached and saved sidecars bypassed the fresh-cut checks.**
+  `replay/association.py` validates the retained encoder clock against clip
+  start and picture times, plus capture references and traversed state types.
+  `ReplayService._validated_meta` then rebuilds derived maps/timers on every
+  fresh, cached and saved read. A stale derived map can recover when that
+  source evidence survives; a legacy fitted map cannot acquire provenance by
+  being copied or saved. Existing sidecar bytes stay unchanged, and fresh
+  sidecars keep source evidence even when a map is withheld. Regression:
+  `tests/test_replay_cached_identity.py` covers the valid saved twin, stale
+  recovery and refusal paths. The timeline also cannot seek an unmapped video
+  by an arithmetic anchor offset (`tests/frontend/inputtimeline.test.js`).
+  These checks validate retained metadata, not the plugin's pixel/state
+  convention or a sidecar's association with independently replaced video bytes.
+
 - **2026-09-06: the media clock can shift while the cadence stays perfect.**
   `tests/test_replay_picture_identity.py` paints independent binary picture
   identities and reads them after the actual sink -> TS ring -> MP4 cut.

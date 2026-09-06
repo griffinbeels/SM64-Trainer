@@ -18,7 +18,7 @@
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { useOverlayRows, useTemplateRevision } from "../inputpreferences.js";
-import { clampToFrames, slotAtTime, timeOfSlot } from "../frame.js";
+import { slotAtTime, timeOfSlot } from "../frame.js";
 import { watchVideoPicture } from "../videopicture.js";
 import htm from "htm";
 import { Icon } from "./icons.js";
@@ -336,9 +336,14 @@ function screenCheck(agreement, open, toggle) {
 
 // Whether this clip's frame map came off the frame-exact capture layer (the
 // wrapper plugin, core/capturelayer.py) rather than a reconstruction after
-// the fact -- a nudge, not a verdict: every other source is a real, working
-// map, just one built from less direct evidence than the plugin's own.
-function frameMapNote(frameMapSource, openSetup) {
+// the fact. A stored association that cannot be verified is a replay-specific
+// problem; enabling capture now cannot repair its missing source evidence.
+function frameMapNote(frameMapSource, inputAlignment, openSetup) {
+  if (inputAlignment?.status === "unverified") {
+    return html`<div class="input-frame-map-note">
+      <span>Input alignment could not be verified for this replay.</span>
+    </div>`;
+  }
   if (frameMapSource === "plugin") return null;
   return html`<div class="input-frame-map-note">
     <span>Frame-exact capture is off.</span>
@@ -394,6 +399,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 pictureIgt = null,
                                 padAgreement = null,
                                 frameMapSource = null,
+                                inputAlignment = null,
                                 compact = false,
                                 tools = null }) {
   const [state, setState] = useState({ phase: "loading" });
@@ -516,13 +522,9 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         video.currentTime = mapped;
         return;
       }
-      if (frameMap && frameMap.length) return;
-      // Inside the clip, always: a seek to the very edge leaves the element
-      // reporting itself ended, and the panel then reads whatever it
-      // presents (his 2026-08-31 jump from frame 770 to 591).
-      video.currentTime = clampToFrames(
-        timeAtFrame(clamped - lead, anchorOffsetS, data.fps),
-        video.duration || 0, data.fps);
+      // An absent association cannot locate this input in the footage.
+      // Playback still works; guessing an anchor offset would reintroduce
+      // the desync that the presented-picture reader refuses to display.
     } else {
       setFrame(clamped);
     }
@@ -585,7 +587,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         <h4 data-total=${total} data-lead=${lead}>${timeLabel(attemptFrames)}${" "}·${" "}${attemptFrames} frames${" "}·${" "}${data.fps} fps</h4>
         ${screenCheck(padAgreement, checkOpen,
                       () => setCheckOpen((open) => !open))}
-        ${frameMapNote(frameMapSource, () => setSetupOpen(true))}
+        ${frameMapNote(frameMapSource, inputAlignment, () => setSetupOpen(true))}
       </div>
     </header>
     ${state.refreshError && html`<p class="is-error" role="alert">

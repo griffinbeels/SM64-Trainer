@@ -18,8 +18,9 @@ from pathlib import Path
 
 from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
+from sm64_events.replay.association import association_problem, valid_picture_times
 from sm64_events.replay.feedmap import feed_map
-from sm64_events.replay.extract import video_start_of
+from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
 
@@ -306,16 +307,10 @@ class ReplayService:
         clip = self.clips_dir / name
         meta = clip.with_suffix(".json")
         saved = self.find_saved(attempt_id)
+        extracted = False
         if clip.exists() and meta.exists():
             m = json.loads(meta.read_text())
             url, source = f"/api/replay/clips/{name}", "buffer"
-            if "video_start_s" not in m:
-                # A clip cut before 2026-09-01 carries no first pts in its
-                # sidecar; measured once here rather than assumed 0, which is
-                # the assumption that put every seek one picture early.
-                m["video_start_s"] = video_start_of(
-                    getattr(self.extractor, "ffmpeg", None), clip)
-                meta.write_text(json.dumps(m))
         elif saved is not None:
             m = self._saved_meta(saved)
             url, source = f"/api/replay/saved/{attempt_id}", "saved"
@@ -357,16 +352,27 @@ class ReplayService:
                     # away, and the layer keeps it. Deleted 2026-09-05.
                     if res.frame_times is not None:
                         self._map_from_feeds(m, res)
-                    if m.get("frame_map") is not None:
-                        if self._rows_are_exact(m):
-                            self._take_the_stamps(m, a)
-                        else:
-                            log.warning("clip %s has a map but unstamped "
-                                        "rows; dropping it", name)
-                            m["frame_map"] = None
-                            m["frame_map_source"] = None
-            meta.write_text(json.dumps(m))
+            extracted = True
             url, source = f"/api/replay/clips/{name}", "buffer"
+        media_path = saved if source == "saved" else clip
+        if "video_start_s" not in m:
+            # Measure old scratch and saved clips alike, without rewriting
+            # their archival sidecars. Assuming zero can seek one picture early.
+            m["video_start_s"] = video_start_of(
+                getattr(self.extractor, "ffmpeg", None), media_path)
+        if m.get("frame_times") is not None and not valid_picture_times(m["frame_times"]):
+            # A malformed stored clock cannot reach JSON/the browser. Recover
+            # the picture times from the video when readable; retain the sidecar.
+            measured = frame_times_of(getattr(self.extractor, "ffmpeg", None), media_path)
+            m["frame_times"] = measured if valid_picture_times(measured) else None
+        retained = m
+        m = self._validated_meta(retained, a)
+        if extracted:
+            # Keep raw source evidence even when this interpretation cannot
+            # expose a map. Future reads revalidate it, never trust saved claims.
+            evidence = {key: retained[key] for key in ("picture_rows", "feed_match")
+                        if key in retained}
+            meta.write_text(json.dumps({**m, **evidence}))
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
         # frame-step UI steps in GAME frames: each spans two encoded
         # frames, so stepping 1/fps changed the image only every 2nd press
@@ -381,6 +387,7 @@ class ReplayService:
                 "anchor_offset_s": self._anchor_offset(a, m),
                 "frame_map": m.get("frame_map"),
                 "frame_map_source": m.get("frame_map_source"),
+                "input_alignment": m.get("input_alignment"),
                 # Capture occurrence per slot, scoped to this clip. Heartbeats
                 # keep the same ID; revisiting a raw counter gets another ID.
                 "picture_ids": m.get("picture_rows"),
@@ -404,6 +411,34 @@ class ReplayService:
                 "feed_match": m.get("feed_match"),
                 "plugin_inexact_rows": m.get("plugin_inexact_rows"),
                 "saved_path": str(saved) if saved is not None else None}
+
+    def _validated_meta(self, original: dict, attempt) -> dict:
+        """Read cached evidence without changing its archival bytes.
+
+        Every load interprets the retained source link again; stale derived
+        maps/timers cannot become authoritative merely by being saved.
+        """
+        meta = dict(original)
+        proposed = any(meta.get(key) is not None for key in (
+            "frame_map", "picture_rows", "picture_igt", "media_clock"))
+        problem = association_problem(meta) if proposed else "not_recorded"
+        if problem is None and not self._rows_are_exact(meta):
+            problem = "inexact_capture"
+        for key in ("frame_map", "frame_map_source", "picture_igt", "state_rows",
+                    "pad_stamp_agreement", "plugin_inexact_rows"):
+            meta[key] = None
+        if problem is not None:
+            meta["picture_rows"] = None
+            meta["feed_match"] = None
+            meta["input_alignment"] = {
+                "status": "unverified" if proposed else "unavailable", "reason": problem}
+            return meta
+        rows = meta["picture_ledger"]
+        meta["frame_map"] = [rows[index]["frame"] - PLUGIN_PICTURE_LAG
+                             if index is not None else None for index in meta["picture_rows"]]
+        self._take_the_stamps(meta, attempt)
+        meta["input_alignment"] = {"status": "source_linked"}
+        return meta
 
     # A frame and a half of slack: the clip's own first-frame stamp and the
     # attempt's anchor are read off two clocks, so a hair of disagreement is

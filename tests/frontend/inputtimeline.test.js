@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/preact";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { h } from "preact";
 import { InputTimeline } from "../../src/sm64_events/ui/components/inputtimeline.js";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-async function timeline({ map, times, igts = null, stretches = [[0,100,3]] }) {
+async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alignment = null }) {
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({
     attempt_id: 42, fps: 30, frames: 3, attempt_frames: 3, stretches,
     buttons: [[32768,"A"], [16384,"B"]], stick_max: 84, dead_zone: 8,
@@ -25,11 +25,12 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]] }) {
     cancelVideoFrameCallback() {},
   };
   const props = {attemptId:42, video,
-    frameMap: map, pictureIgt: igts, frameMapSource:"plugin", clock:{times}};
+    frameMap: map, pictureIgt: igts, inputAlignment: alignment,
+    frameMapSource: map ? "plugin" : null, clock:{times}};
   const view = render(h(InputTimeline, props));
   await waitFor(() => expect(view.container.querySelector(".input-inspector")).not.toBeNull());
   await waitFor(() => expect(typeof callback).toBe("function"));
-  return { ...view, refreshClock: async () => {
+  return { ...view, video, refreshClock: async () => {
     await act(async () => view.rerender(h(InputTimeline, {...props, clock:{times}})));
   }, present: async (slot) => {
     // The presented picture and requested seek may disagree. Consumers must
@@ -74,4 +75,27 @@ test("known input with no stamped timer leaves the video's time unavailable", as
   await view.present(1);
   expect(view.container.querySelector('.controller-buttons[aria-label="Holding B"]')).not.toBeNull();
   expect(view.container.querySelector(".input-inspector-frame .meta").textContent).toBe("Time unavailable");
+});
+
+test("an unverified replay explains the missing association without offering setup as a repair", async () => {
+  const view = await timeline({map:null, times:[0,.1,.2],
+    alignment:{status:"unverified", reason:"missing_source_clock"}});
+  const note = view.container.querySelector(".input-frame-map-note");
+  expect(note.textContent).toContain("Input alignment could not be verified for this replay.");
+  expect(note.querySelector("button")).toBeNull();
+});
+
+test("clicking input without a map cannot seek video by an assumed offset", async () => {
+  const view = await timeline({map:null, times:[0,.1,.2]});
+  view.video.currentTime = .15;
+  fireEvent.click(view.container.querySelector("button.input-bar"));
+  expect(view.video.currentTime).toBe(.15);
+});
+
+test("clicking mapped input still seeks its encoded picture", async () => {
+  const view = await timeline({map:[100,101,102], times:[0,.1,.2]});
+  view.video.currentTime = .15;
+  fireEvent.click(view.container.querySelector("button.input-bar"));
+  expect(view.video.currentTime).toBeGreaterThanOrEqual(0);
+  expect(view.video.currentTime).toBeLessThan(.1);
 });

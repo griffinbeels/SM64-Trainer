@@ -336,7 +336,7 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
 - `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
 - `POST /api/attempts/{id}/replay` — cut or reuse the attempt's clip. Returns
   `{clip_url, duration_s, truncated, fps, game_fps, source, anchor_offset_s,
-  frame_map, frame_map_source, picture_ids, picture_igt, pad_stamp_agreement,
+  frame_map, frame_map_source, input_alignment, picture_ids, picture_igt, pad_stamp_agreement,
   video_start_s, frame_times, encode, feed_match, plugin_inexact_rows, saved_path}`.
   `source` is `buffer` or `saved`; `saved_path` names an existing saved copy.
   `fps` describes the encoded rate and `game_fps` is the 30 Hz game clock.
@@ -359,8 +359,16 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
   pixels or certify the plugin's picture/state association.
   `feed_match` is `{frames, matched, repeats, unmatched, method: "source_pts",
   run_id}` for new cuts. `plugin_inexact_rows` counts unstamped/inexact ledger
-  rows. Legacy cached/saved sidecars can still carry their old map and fitted
-  statistics; their migration and independent pixel reconciliation remain open.
+  rows. Every read, including cached and saved clips, validates the retained
+  source clock and capture references, then rebuilds maps and timers with the
+  current interpreter. `input_alignment.status` is `source_linked` when that
+  evidence is usable, `unverified` when a proposed association cannot be used,
+  or `unavailable` when none was recorded; the latter two include a `reason`.
+  Unverified maps, timers, picture IDs and old agreement statistics are omitted
+  from the response (null), while the video remains available. Existing video
+  and sidecar bytes are preserved. New sidecars retain source evidence even
+  when their interpreted map is withheld. This does not independently certify
+  the plugin's picture/state convention or recover missing legacy identities.
   A saved clip without a sidecar has unknown duration and no truncation flag.
 - `GET  /api/replay/available` — `{available: [attempt_id, …]}`: every attempt whose clip is still cuttable (in the ring buffer) or already saved; the Compare tab reads it to badge which runs can load a video
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
