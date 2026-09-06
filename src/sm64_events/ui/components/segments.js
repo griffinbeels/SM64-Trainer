@@ -9,6 +9,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtIgt } from "../format.js";
 import { requestTarget } from "../target.js";
+import { isManualSegment } from "../entitysection.js";
 import { Icon } from "./icons.js";
 import { IconPicker } from "./iconpicker.js";
 import { PageState } from "./states.js";
@@ -880,6 +881,9 @@ function Builder({ vocab, initial, onSaved, onCancel, apiRef, t, load, allDefs,
       </select>
       <span class="meta">${clockStartInfo ? clockStartInfo.description : ""}</span>
     </label>
+    ${isManualSegment(d) ? html`<p class="meta manual-timing-note">
+      Manual timing · Imported and added times count. Configure Start and Finish below to detect attempts.
+    </p>` : ""}
     <div class="segment-definition-grid">
       ${section("Start", "Arm when any one of these happens.", "play",
         "start_triggers", vocab.triggers, "seg-start")}

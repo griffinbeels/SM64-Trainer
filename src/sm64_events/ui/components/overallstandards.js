@@ -41,7 +41,8 @@
 // band, which is exactly why the Capless floor has a row here and is filtered
 // out of the entry tables.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
+import { useIdentityFetch } from "../refetch.js";
 import htm from "htm";
 import { Disclose } from "./collapsible.js";
 import { Icon } from "./icons.js";
@@ -60,17 +61,7 @@ const enc = encodeURIComponent;
 // Capless V -- the ladder floor a player with no saved time stands on.
 const FLOOR_NUMERAL = DIVISION_NUMERALS[0];
 
-/**
- * entity   entity key this page grades on ("star:c:s" / "segment:id"), or null
- *          when nothing grades this target yet (an unlinked castle movement).
- * label    what to call it in the explainer — the segment/star's own name.
- * pbCs     the viewer's best saved time on that entity across every strategy,
- *          or null. Graded through librarymodel's `standingOn`, the SAME walk
- *          every other ◀ you pin on this page uses, rather than a second
- *          grader that could put this table and those in different tiers.
- */
-export function OverallStandards({ entity, label, pbCs = null, version = null }) {
-  const [open, setOpen] = useState(false);
+function useOverallStandards(entity, version, standardsRevision) {
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);
 
@@ -79,9 +70,10 @@ export function OverallStandards({ entity, label, pbCs = null, version = null })
   // same reason: opening animates a box whose height is measured while its
   // contents are still in flight, so the first open of every panel looks
   // broken and every later one looks right.
-  useEffect(() => {
+  useIdentityFetch(`${entity}:${version}`, standardsRevision, (cleared) => {
     if (!entity) { setData(null); setFailed(false); return undefined; }
     let cancelled = false;
+    if (cleared) setData(null);
     setFailed(false);
     // `version` is the Library page's own JP/US switch (2026-08-15): the
     // one ladder for the whole star must re-file with the sections below it,
@@ -91,13 +83,11 @@ export function OverallStandards({ entity, label, pbCs = null, version = null })
       .then((result) => { if (!cancelled) setData(result); })
       .catch(() => { if (!cancelled) { setData(null); setFailed(true); } });
     return () => { cancelled = true; };
-  }, [entity, version]);
+  });
+  return { data, failed };
+}
 
-  const overall = (data && data.overall) || {};
-  const owners = (data && data.overall_owners) || {};
-  const bands = ladderBands(overall);
-  const you = entity ? standingOn(overall, pbCs) : null;
-  const noun = nounOfKey(entity);
+function progression(bands, you) {
   // "Next" is the very next SUBDIVISION he can reach, which is the finest
   // honest answer to "what does it take to rank up" — and with the bands
   // running easiest-first it is simply the step after his own.
@@ -119,6 +109,85 @@ export function OverallStandards({ entity, label, pbCs = null, version = null })
   const yourStep = you ? steps.indexOf(you.rank + "/" + yourNumeral) : -1;
   const nextStep = yourStep >= 0 && yourStep + 1 < steps.length
     ? steps[yourStep + 1] : null;
+  return { yourNumeral, nextStep };
+}
+
+function OverallDivision({ band, division, you, yourNumeral, nextStep }) {
+  const key = band.tier + "/" + division.numeral;
+  const isYou = you && you.rank === band.tier && yourNumeral === division.numeral;
+  const isNext = key === nextStep;
+  return html`<div class=${`library-overall-division${isYou ? " is-you" : ""}${
+      isNext ? " is-next" : ""}`}>
+    <span class="library-overall-division-label">
+      <span class="rank-icon-slot" style="--icon-size: 16px">
+        <${RankIcon} tier=${band.tier} division=${division.numeral} size=${16} /></span>
+      ${" "}${capName(band.tier)}${" "}${divisionDigit(division.numeral)}
+    </span>
+    <span class="meta">${divisionRangeLabel(division)}</span>
+    ${isNext ? html`<span class="chip library-overall-next">next</span>` : ""}
+    ${isYou ? html`<span class="chip library-overall-you">◀ you</span>` : ""}
+  </div>`;
+}
+
+function OverallBand({ band, owners, noun, you, yourNumeral, nextStep }) {
+  const names = owners[band.tier] || [];
+  return html`<div class="library-overall-band" data-tier=${band.tier}>
+    <div class=${`library-overall-band-head${
+        you && you.rank === band.tier ? " is-you" : ""}`}>
+      <span class="rank-icon-slot" style="--icon-size: 18px">
+        <${RankIcon} tier=${band.tier} division=${"I"} size=${18} /></span>
+      ${" "}<b>${capName(band.tier)}</b>
+      <span class="meta library-overall-range">${bandRangeLabel(band)}</span>
+      ${names.length ? html`<span class="meta library-overall-by"
+          title=${`the strategy that sets this cutoff on the ${noun}'s own ladder`}>
+          set by ${names.join(" · ")}</span>` : ""}
+    </div>
+    <div class="library-overall-divisions">
+      ${(band.divisions || []).map((division) => html`<${OverallDivision}
+        key=${division.numeral} band=${band} division=${division} you=${you}
+        yourNumeral=${yourNumeral} nextStep=${nextStep} />`)}
+    </div>
+  </div>`;
+}
+
+function OverallState({ entity, label, failed, data, bands }) {
+  if (!entity) return html`<p class="library-overall-note">
+    Nothing grades this target yet — it is a castle movement with no
+    segment of its own. Link one above and the standards it ranks
+    against appear here.
+  </p>`;
+  if (failed) return html`<p class="library-overall-note">
+    Could not load the standards for ${label || entity}.
+  </p>`;
+  if (!data) return html`<div class="inline-state loading">
+    <${Icon} name="updates" size=${16} />${" "}Loading standards…
+  </div>`;
+  if (!bands.length) return html`<p class="library-overall-note">
+    ${label || entity}${" "}has no published rank standards, so it carries
+    no overall rank yet.
+  </p>`;
+  return null;
+}
+
+/**
+ * entity   entity key this page grades on ("star:c:s" / "segment:id"), or null
+ *          when nothing grades this target yet (an unlinked castle movement).
+ * label    what to call it in the explainer — the segment/star's own name.
+ * pbCs     the viewer's best saved time on that entity across every strategy,
+ *          or null. Graded through librarymodel's `standingOn`, the SAME walk
+ *          every other ◀ you pin on this page uses, rather than a second
+ *          grader that could put this table and those in different tiers.
+ */
+export function OverallStandards({ entity, label, pbCs = null, version = null,
+    standardsRevision = 0 }) {
+  const [open, setOpen] = useState(false);
+  const { data, failed } = useOverallStandards(entity, version, standardsRevision);
+  const overall = (data && data.overall) || {};
+  const owners = (data && data.overall_owners) || {};
+  const bands = ladderBands(overall);
+  const you = entity ? standingOn(overall, pbCs) : null;
+  const noun = nounOfKey(entity);
+  const { yourNumeral, nextStep } = progression(bands, you);
 
   return html`<div class="library-overall">
     <button type="button" class="disc library-overall-toggle"
@@ -132,21 +201,8 @@ export function OverallStandards({ entity, label, pbCs = null, version = null })
     </button>
     <${Disclose} open=${open} className="library-overall-disclose">
       <div class="library-overall-body">
-        ${!entity ? html`<p class="library-overall-note">
-          Nothing grades this target yet — it is a castle movement with no
-          segment of its own. Link one above and the standards it ranks
-          against appear here.
-        </p>` : null}
-        ${entity && failed ? html`<p class="library-overall-note">
-          Could not load the standards for ${label || entity}.
-        </p>` : null}
-        ${entity && !failed && !data ? html`<div class="inline-state loading">
-          <${Icon} name="updates" size=${16} />${" "}Loading standards…
-        </div>` : null}
-        ${entity && data && !bands.length ? html`<p class="library-overall-note">
-          ${label || entity}${" "}has no published rank standards, so it carries
-          no overall rank yet.
-        </p>` : null}
+        <${OverallState} entity=${entity} label=${label} failed=${failed}
+          data=${data} bands=${bands} />
         ${bands.length ? html`
           <p class="library-overall-note">
             One ladder for the whole ${noun}, built from the best time any
@@ -154,43 +210,9 @@ export function OverallStandards({ entity, label, pbCs = null, version = null })
             is not the same as ranking up here.
           </p>
           <div class="library-overall-ladder">
-            ${bands.map((band) => {
-              const names = owners[band.tier] || [];
-              return html`<div class="library-overall-band"
-                  key=${"overall-" + band.tier} data-tier=${band.tier}>
-                <div class=${`library-overall-band-head${
-                    you && you.rank === band.tier ? " is-you" : ""}`}>
-                  <span class="rank-icon-slot" style="--icon-size: 18px">
-                    <${RankIcon} tier=${band.tier} division=${"I"} size=${18} /></span>
-                  ${" "}<b>${capName(band.tier)}</b>
-                  <span class="meta library-overall-range">${bandRangeLabel(band)}</span>
-                  ${names.length ? html`<span class="meta library-overall-by"
-                      title=${`the strategy that sets this cutoff on the ${noun}'s own ladder`}>
-                      set by ${names.join(" · ")}</span>` : ""}
-                </div>
-                <div class="library-overall-divisions">
-                  ${(band.divisions || []).map((division) => {
-                    const key = band.tier + "/" + division.numeral;
-                    return html`<div key=${division.numeral}
-                        class=${`library-overall-division${
-                          you && you.rank === band.tier && yourNumeral === division.numeral
-                            ? " is-you" : ""}${key === nextStep ? " is-next" : ""}`}>
-                      <span class="library-overall-division-label">
-                        <span class="rank-icon-slot" style="--icon-size: 16px">
-                          <${RankIcon} tier=${band.tier} division=${division.numeral}
-                              size=${16} /></span>
-                        ${" "}${capName(band.tier)}${" "}${divisionDigit(division.numeral)}
-                      </span>
-                      <span class="meta">${divisionRangeLabel(division)}</span>
-                      ${key === nextStep
-                        ? html`<span class="chip library-overall-next">next</span>` : ""}
-                      ${you && you.rank === band.tier && yourNumeral === division.numeral
-                        ? html`<span class="chip library-overall-you">◀ you</span>` : ""}
-                    </div>`;
-                  })}
-                </div>
-              </div>`;
-            })}
+            ${bands.map((band) => html`<${OverallBand} key=${"overall-" + band.tier}
+              band=${band} owners=${owners} noun=${noun} you=${you}
+              yourNumeral=${yourNumeral} nextStep=${nextStep} />`)}
           </div>
           ${pbCs == null ? html`<p class="library-overall-note meta">
             No saved time here yet, so you sit at the capless floor — the top

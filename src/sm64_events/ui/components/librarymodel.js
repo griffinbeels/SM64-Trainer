@@ -33,6 +33,19 @@ export const RANKS = ["Bronze", "Silver", "Gold", "Platinum", "Diamond",
 // default).
 export const GAME_FPS = 30;
 
+// The API resolves the local practice slot. Older snapshots only carry the
+// historical vetted match; keep that fallback for unlinked browsing rows.
+export function strategyOf(row) {
+  return row.strategy || row.matched_strategy || row.name;
+}
+
+export function estimateNote(estimate) {
+  if (!estimate) return null;
+  return estimate.note || (estimate.method === "ideal"
+    ? "Estimated from the sheet's ideal time."
+    : "Estimated from a related sheet row.");
+}
+
 // SECOND-DOOR RULING (2026-08-07): `ladderorder.js`
 // already sorts strategies by the same Mario-cutoff idea (`slowestFirst`,
 // used by standards.js's rank table), and its no-ladder rule is the OPPOSITE
@@ -60,7 +73,7 @@ export function sectionOrder(approaches) {
 export function autoExpandName(ordered, selectedStrat) {
   if (!ordered.length) return null;
   if (selectedStrat) {
-    const hit = ordered.find((a) => a.matched_strategy === selectedStrat
+    const hit = ordered.find((a) => strategyOf(a) === selectedStrat
                                  || a.name === selectedStrat);
     if (hit) return hit.name;
   }
@@ -398,10 +411,8 @@ export function standingOn(ladder, pbCs) {
 // `served` is the endpoint's own graded answer for that strategy -- graded on
 // the STANDARDS ladder (vetted merged over fitted), in the active rank mode,
 // on the grading version. While the page SHOWS that same version it is kept
-// verbatim: this section's `ladder` is the sheet's fitted one and differs
-// from the grading ladder for every matched approach in the shipped snapshot
-// (206/206, whole-branch review), so re-walking here would contradict the
-// practice card's medal for the same PB. Only when the page shows the OTHER
+// verbatim, including the practice mode's sample-size state. Linked rows
+// now carry the same effective standards as Practice. Only when showing the OTHER
 // version is there no served answer to keep -- then the saved PB (`pb_cs`,
 // the walkable ingredient views.py::build_entity_strategies carries for
 // exactly this) is re-walked against the displayed ladder, the same walk an
@@ -412,16 +423,15 @@ export function matchedStanding(served, ladder, version, gradingVersion) {
 }
 
 // Which rows offer the link-to-segment button (round 5). A star's approaches
-// auto-adopt at scrape time, so only approaches on an ENTITY-LESS target
-// (castle movements, stage routes) are linkable; subsections never auto-adopt
-// -- the user builds the segment first (his 2026-08-05 ruling) -- so every
-// one is, on star and movement targets alike. A row without `row_key` (an
+// already belong to their star. Movement targets can carry a resolved local
+// segment key and remain relinkable; every subsection can be relinked too.
+// A row without `row_key` (an
 // old snapshot) gets no button: a click that cannot name its row cannot be
 // honest about failing.
 export function linkable(target, item, kind) {
   if (!item || !item.row_key) return false;
   if (kind === "subsection") return true;
-  return !target.entity_key;
+  return !target.entity_key || target.entity_key.startsWith("segment:");
 }
 
 export function gridShape(n) {

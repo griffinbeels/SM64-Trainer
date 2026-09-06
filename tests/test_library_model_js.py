@@ -52,6 +52,19 @@ def test_auto_expand_prefers_the_selected_strategy_else_first():
     assert run_js(f"m.autoExpandName({json.dumps(ordered)}, null)") == "A"
 
 
+def test_the_local_practice_slot_outranks_a_historical_vetted_match():
+    rows = [{"name": "First"}, {"name": "Target's own row",
+            "matched_strategy": "Rightside", "strategy": "Standard"}]
+    assert run_js(f"m.autoExpandName({json.dumps(rows)}, 'Standard')") == "Target's own row"
+    assert run_js(f"m.autoExpandName({json.dumps(rows)}, 'Rightside')") == "First"
+
+
+def test_estimated_ladders_name_the_evidence_instead_of_claiming_too_few_times():
+    assert run_js("m.estimateNote({method:'ideal'})") == "Estimated from the sheet's ideal time."
+    assert run_js("m.estimateNote({method:'related_row', note:'Based on the sibling route.'})") == "Based on the sibling route."
+    assert run_js("m.estimateNote(null)") is None
+
+
 def test_auto_expand_also_matches_a_variant_qualified_name():
     # Task 1's stamp (commit eb9a92e): the SAME (entity, strategy) pair can be
     # stamped on two sibling targets sharing an entity, and the stamped name
@@ -313,6 +326,7 @@ def test_linkable_rows_are_entityless_approaches_and_every_subsection():
     keyed = json.dumps({"row_key": "s||t||n||1"})
     unkeyed = json.dumps({})
     assert run_js(f"m.linkable({movement}, {keyed}, 'approach')") is True
+    assert run_js(f"m.linkable({{entity_key:'segment:42'}}, {keyed}, 'approach')") is True
     assert run_js(f"m.linkable({star}, {keyed}, 'approach')") is False
     assert run_js(f"m.linkable({star}, {keyed}, 'subsection')") is True
     assert run_js(f"m.linkable({movement}, {keyed}, 'subsection')") is True

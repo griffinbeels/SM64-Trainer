@@ -12,6 +12,7 @@ import { ExternalVideo } from "./externalvideo.js";
 // docstring, where the next person choosing between them will look first.
 import { h, Fragment } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useIdentityFetch } from "../refetch.js";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtSeconds } from "../format.js";
@@ -28,7 +29,7 @@ import { SegmentTimeline } from "./segmenttimeline.js";
 import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
   matchesRunner, linkable, standingOn, matchedStanding, bandFor, divisionWithin,
-  ladderCsOf, leaderboardOf,
+  ladderCsOf, leaderboardOf, strategyOf, estimateNote,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -130,16 +131,17 @@ function activeStratFor(view, entityKey) {
 // different question). One fetch per entity, not per approach — several
 // approaches can share one matched_strategy name across sibling 100-coin
 // targets (caveat 4) and must read the identical standing.
-function useEntityStrategies(entityKey) {
+function useEntityStrategies(entityKey, revision) {
   const [data, setData] = useState(null);
-  useEffect(() => {
+  useIdentityFetch(entityKey, revision, (cleared) => {
     if (!entityKey) { setData(null); return undefined; }
     let cancelled = false;
+    if (cleared) setData(null);
     getJSON(`/api/target/strategies?entity=${enc(entityKey)}`)
       .then((result) => { if (!cancelled) setData(result); })
       .catch(() => { if (!cancelled) setData(null); });
     return () => { cancelled = true; };
-  }, [entityKey]);
+  });
   return data;
 }
 
@@ -148,14 +150,12 @@ function useEntityStrategies(entityKey) {
 // segment, reduced to the entity's best saved PB across its strategies.
 // Name-agnostic on purpose: "it reads whatever the data was for that
 // segment", and his practice may sit under any strategy name.
-function useAssocStandings(entityKeys) {
+function useAssocStandings(entityKeys, revision) {
   const [standings, setStandings] = useState({});
-  const requested = useRef(new Set());
-  useEffect(() => {
+  useIdentityFetch(entityKeys.join(","), revision, (cleared) => {
     let cancelled = false;
+    if (cleared) setStandings({});
     entityKeys.forEach((key) => {
-      if (requested.current.has(key)) return;
-      requested.current.add(key);
       getJSON(`/api/target/strategies?entity=${enc(key)}`)
         .then((result) => {
           if (cancelled) return;
@@ -176,7 +176,7 @@ function useAssocStandings(entityKeys) {
         });
     });
     return () => { cancelled = true; };
-  }, [entityKeys.join(",")]);
+  });
   return standings;
 }
 
@@ -631,8 +631,9 @@ function LinkControl({ row, kind, entityKey, adoptable, segments, segmentsError,
 function TargetLinkControl({ rows, approaches, linkCtx }) {
   if (!linkCtx) return null;
   const target = rows.length === 1 ? rows[0] : null;
-  // Entity pages (stars) never link -- their approaches auto-adopt.
-  if (!target || target.entity_key || !target.adoptable) return null;
+  // Stars already own their approaches. Resolved segment keys still offer
+  // relinking: assigning a movement must not make its link control disappear.
+  if (!target || target.entity_key?.startsWith("star:") || !target.adoptable) return null;
   const linkedEntity = (approaches.find((approach) => approach.adopted) || {}).adopted
     || null;
   if (!linkedEntity && target.matched_segment) {
@@ -789,6 +790,10 @@ function hasRunnerMatch(item, versions, query) {
 // self-contained sentence, so they move out instead of accumulating.
 function LadderRegionChip({ approach, version, versions }) {
   if (!approach.ladder_jp) {
+    // A linked row uses the current Practice thresholds. Without a distinct
+    // JP ladder those thresholds apply in both modes; the original fitting
+    // population no longer describes which regions this ladder can grade.
+    if (approach.entity_key && approach.strategy) return null;
     if (!approach.ladder_version) return null;
     return html`<span class="chip library-ladder-version-chip"
         title=${`Fitted from ${regionLabel(approach.ladder_version)}-only community times -- not enough of the other version's runs to fit a second ladder.`}>
@@ -928,8 +933,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                (`approachIdentity`), only the VISIBLE header was ambiguous. */""}
           ${approach._target && approach._target !== approach.name
             ? html`<span class="meta library-section-target">${approach._target}</span>` : ""}
-          ${approach.matched_strategy
-            ? html`<span class="chip library-matched-chip">= your "${approach.matched_strategy}"</span>` : ""}
+          ${(approach.strategy && approach.strategy !== approach.name)
+              || (!approach.strategy && approach.matched_strategy)
+            ? html`<span class="chip library-matched-chip">= your "${strategyOf(approach)}"</span>` : ""}
           ${/* Round 7: the "= your segment" chip lives beside the page's
                own name now (TargetLinkControl) -- the association is
                target-level and repeating it per section was noise. The
@@ -975,6 +981,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
              single version's times -- both facts stay on screen. */""}
         <${LadderRegionChip} approach=${approach} version=${version}
             versions=${versions} />
+        ${approach.ladder_estimate ? html`<p class="meta library-ladder-estimate">
+          Estimated standards · ${estimateNote(approach.ladder_estimate)}
+        </p>` : ""}
         ${/* LEADERBOARD MODE (task 1): a second reading of the same entries
              -- his ruling, add a reading, never touch the one that already
              works. Per-SECTION state (not page state, never persisted);
@@ -1166,7 +1175,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
     pieces.forEach((piece) => { if (piece.adopted) keys.add(piece.adopted); });
     return [...keys].sort();
   }, [approaches, pieces]);
-  const assocStandings = useAssocStandings(assocEntities);
+  const assocStandings = useAssocStandings(assocEntities, t && t.mareloRev);
 
   // Task 0096: the record door's intent — `{key, name, parents, link}`.
   // Held here (not in the door) because the recorder is ONE page-level
@@ -1178,7 +1187,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
                     assocStandings, openRecorder: setRecording };
 
   const activeStrat = activeStratFor(t && t.view, entityKey);
-  const stratsData = useEntityStrategies(entityKey);
+  const stratsData = useEntityStrategies(entityKey, t && t.mareloRev);
   const stratByName = useMemo(() => {
     const map = {};
     ((stratsData && stratsData.strategies) || []).forEach((entry) => { map[entry.name] = entry; });
@@ -1367,7 +1376,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
     let goalEntry = null;
     if (focusGoalCs != null && !focusRunner) {
       const stratPool = focusStrat ? approaches.filter((approach) =>
-        approach.matched_strategy === focusStrat
+        strategyOf(approach) === focusStrat
           || approach.name === focusStrat) : [];
       const pools = stratPool.length ? [stratPool, approaches] : [approaches];
       for (const pool of pools) {
@@ -1393,18 +1402,14 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
     const hit = runnerEntry ? runnerEntry.approach
       : goalEntry ? goalEntry.approach
       : approaches.find((approach) =>
-          approach.matched_strategy === focusStrat || approach.name === focusStrat);
+          strategyOf(approach) === focusStrat || approach.name === focusStrat);
     if (!hit) return undefined;  // approaches not loaded yet -- stay
                                   // unconsumed, try again next render
     consumedFocusRef.current = focusId;
     setExpanded(approachIdentity(hit));
-    // WHERE the entry sits is resolved HERE, against the approach's own
-    // displayed ladder — never trusted from the intent. The standards table
-    // banded the clip against the VETTED ladder; this page files entries by
-    // the row's own (usually sheet-fitted) ladder, and the two legitimately
-    // disagree about a tier/division (round 6's ruling: "where the sheet's
-    // span differs, this page's answer is where your time sits among THESE
-    // times"). Landing must open the division the card is actually IN. The
+    // Resolve the entry against the current displayed ladder: its version or
+    // thresholds may have changed since the incoming link was created.
+    // Landing must open the division the card is actually IN. The
     // intent's tier/division survive only as the fallback when the URL
     // matches no entry (a vetted-only example, a JP-filtered one).
     let mark = null;
@@ -1508,7 +1513,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
          duration alongside every strategy section that has no match, and
          comes straight back when the box clears. */""}
     ${query ? "" : html`<${OverallStandards} entity=${gradingEntity} label=${gradingLabel}
-        pbCs=${gradingPbCs} version=${version} />`}
+        pbCs=${gradingPbCs} version=${version} standardsRevision=${t && t.standardsRev} />`}
     ${/* 2026-08-31: a query that matches nobody hides every section, and a page
          that empties itself reads as broken rather than as an honest "no
          results". It is said ONCE for the page rather than once per section,
@@ -1535,7 +1540,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
           query=${query}
           focusMark=${focusMark && focusMark.approachId === approachIdentity(approach)
             ? focusMark : null}
-          stratInfo=${approach.matched_strategy ? stratByName[approach.matched_strategy] : null}
+          stratInfo=${stratByName[strategyOf(approach)] || null}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
           linkCtx=${linkCtx} version=${version} versions=${versions} gradingVersion=${gradingVersion}
           onOpenRunner=${onOpenRunner} focusYou=${focusYou} />`)}
