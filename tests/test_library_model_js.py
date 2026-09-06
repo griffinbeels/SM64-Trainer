@@ -56,7 +56,28 @@ def test_the_local_practice_slot_outranks_a_historical_vetted_match():
     rows = [{"name": "First"}, {"name": "Target's own row",
             "matched_strategy": "Rightside", "strategy": "Standard"}]
     assert run_js(f"m.autoExpandName({json.dumps(rows)}, 'Standard')") == "Target's own row"
-    assert run_js(f"m.autoExpandName({json.dumps(rows)}, 'Rightside')") == "First"
+    assert run_js(f"m.autoExpandName({json.dumps(rows)}, 'Rightside')") == "Target's own row"
+    rows.append({"name": "Canonical right route", "strategy": "Rightside"})
+    assert run_js(f"m.autoExpandName({json.dumps(rows)}, 'Rightside')") == "Canonical right route"
+    assert run_js(f"m.strategyOf({json.dumps(rows[1])})") == "Standard"
+
+
+def test_an_alias_pb_is_a_labeled_comparison_regraded_on_each_displayed_ladder():
+    row = {"name": "Fall onto the Caged Island", "strategy": "Standard",
+           "matched_strategy": "TJ Owlless"}
+    own = {"Standard": {"pb_cs": None}, "TJ Owlless": {
+        "rank": "Master", "division": "I", "pb_cs": 1193, "pb_display": '11"93'}}
+    reference = run_js(f"m.strategyReference({json.dumps(row)}, {json.dumps(own)})")
+    assert reference["comparison_strategy"] == "TJ Owlless"
+    us = {"Mario": 11.70, "Grandmaster": 11.96, "Master": 12.26}
+    jp = {**us, "Grandmaster": 11.90}
+    for version, ladder, expected in (("us", us, "Grandmaster"), ("jp", jp, "Master")):
+        answer = run_js(f"m.matchedStanding({json.dumps(reference)}, {json.dumps(ladder)}, '{version}', 'us')")
+        assert answer["rank"] == expected
+        assert answer["comparison_strategy"] == "TJ Owlless"
+    # The row's own PB wins even when the historical alias went faster.
+    own["Standard"] = {"pb_cs": 1230, "pb_display": '12"30'}
+    assert run_js(f"m.strategyReference({json.dumps(row)}, {json.dumps(own)})") == own["Standard"]
 
 
 def test_estimated_ladders_name_the_evidence_instead_of_claiming_too_few_times():

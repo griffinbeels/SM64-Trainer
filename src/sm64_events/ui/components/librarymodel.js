@@ -39,6 +39,30 @@ export function strategyOf(row) {
   return row.strategy || row.matched_strategy || row.name;
 }
 
+// Names can lead to a row without becoming its grading identity. Canonical
+// slots win across the whole page; old vetted matches are a navigation
+// fallback for cached snapshots, never an override of the row's standards.
+export function approachesForStrategy(rows, strategy) {
+  if (!strategy) return [];
+  const canonical = rows.filter((row) => strategyOf(row) === strategy);
+  if (canonical.length) return canonical;
+  const named = rows.filter((row) => row.name === strategy);
+  return named.length ? named
+    : rows.filter((row) => row.matched_strategy === strategy);
+}
+
+// Keep existing PB doors useful when an older snapshot paired this row with
+// a differently named strategy. Only the time crosses that association:
+// matchedStanding regrades it on the displayed ladder and the UI names the
+// comparison. A canonical PB always wins, even over a faster alias PB.
+export function strategyReference(row, byName) {
+  const canonical = byName[strategyOf(row)] || null;
+  if (canonical && canonical.pb_cs != null) return canonical;
+  const alias = byName[row.matched_strategy];
+  return alias && alias.pb_cs != null && row.matched_strategy !== strategyOf(row)
+    ? { ...alias, comparison_strategy: row.matched_strategy } : canonical;
+}
+
 export function estimateNote(estimate) {
   if (!estimate) return null;
   return estimate.note || (estimate.method === "ideal"
@@ -73,8 +97,7 @@ export function sectionOrder(approaches) {
 export function autoExpandName(ordered, selectedStrat) {
   if (!ordered.length) return null;
   if (selectedStrat) {
-    const hit = ordered.find((a) => strategyOf(a) === selectedStrat
-                                 || a.name === selectedStrat);
+    const hit = approachesForStrategy(ordered, selectedStrat)[0];
     if (hit) return hit.name;
   }
   return ordered[0].name;
@@ -417,9 +440,13 @@ export function standingOn(ladder, pbCs) {
 // the walkable ingredient views.py::build_entity_strategies carries for
 // exactly this) is re-walked against the displayed ladder, the same walk an
 // associated row uses. No walkable PB -> the served answer either way.
+// An explicitly labeled alias comparison always re-walks: its source
+// strategy's grade is never the answer to this canonical row's ladder.
 export function matchedStanding(served, ladder, version, gradingVersion) {
-  if (!served || served.pb_cs == null || version === gradingVersion) return served;
-  return { ...standingOn(ladder, served.pb_cs), pb_display: served.pb_display, noTimes: false };
+  if (!served || served.pb_cs == null) return served;
+  if (version === gradingVersion && !served.comparison_strategy) return served;
+  return { ...standingOn(ladder, served.pb_cs), pb_display: served.pb_display,
+    noTimes: false, comparison_strategy: served.comparison_strategy };
 }
 
 // Which rows offer the link-to-segment button (round 5). A star's approaches

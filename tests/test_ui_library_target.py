@@ -33,6 +33,7 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from ui_fixture import FIXTURE_SEGMENT, serve_ui  # noqa: E402
+from standards_panel import api  # noqa: E402
 from uilab import driver  # noqa: E402
 
 CLICK_LIBRARY_TAB = 'document.querySelector(\'.nav-item[title="Library"]\').click()'
@@ -214,11 +215,37 @@ def test_matched_strategy_chip_and_your_standing_render(library_page):
     chip = library_page.evaluate(
         "const el = document.querySelector('.library-section.open .library-matched-chip');"
         "return el ? el.textContent : null")
-    assert chip and "TJ Owlless" in chip, chip
+    assert chip and "Standard" in chip, chip
     standing = library_page.evaluate(
         "const el = document.querySelector('.library-section.open .library-your-standing');"
         "return el ? el.textContent.trim() : null")
     assert standing, "no your-rank/PB line on the section matching the active strategy"
+    assert "TJ Owlless PB compared with Standard standards" in standing
+
+
+def test_an_alias_pb_is_compared_on_the_canonical_ladder_in_both_versions():
+    with serve_ui(target=(2, 4)) as base:
+        saved = api(base, "/api/import/manual", {
+            "entity_key": "star:2:4", "strat_tag": "TJ Owlless", "time_cs": 1193}, method="POST")
+        assert saved["imported"] == 1
+        api(base, "/api/strat", {"course_id": 2, "star_id": 4,
+                                "strat_tag": "TJ Owlless"}, method="POST")
+        api(base, "/api/ranks/standards/star:2:4/Standard/Grandmaster?version=jp",
+            {"seconds": 11.90}, method="PUT")
+        with driver.get_driver().launch(headless=True) as page:
+            page.goto(base)
+            page.wait_for(".log-card")
+            page.evaluate(CLICK_LIBRARY_TAB)
+            page.wait_for(".library-pb-comparison")
+            assert page.evaluate("document.querySelector('.library-pb-comparison').textContent.trim()") == (
+                "· TJ Owlless PB compared with Standard standards")
+            tier = "document.querySelector('.library-section.open .library-division.is-you')?.closest('.library-band').dataset.tier"
+            page.wait_for(".library-section.open .library-division.is-you")
+            assert page.evaluate(tier) == "Grandmaster"
+            page.evaluate("[...document.querySelectorAll('.version-switch-seg')].find(b => b.getAttribute('aria-label') === 'US').click()")
+            page.wait_ms(250)
+            assert page.evaluate(tier) == "Master"
+            assert page.evaluate("document.querySelector('.library-section.open .library-matched-chip').textContent") == '= your "Standard"'
 
 
 def test_jp_toggle_switches_the_ladder_and_the_band_cutoffs(library_page):
@@ -700,13 +727,18 @@ def test_the_overall_section_marks_where_you_are_and_what_is_next(library_page):
     assert steps["next"] == steps["you"] + 1, steps
 
 
-def test_an_ungraded_movement_says_so_rather_than_rendering_nothing(library_server):
+def test_an_ungraded_movement_says_so_rather_than_rendering_nothing():
     """A castle movement with no segment of its own is graded by nothing, so
     there is no ladder to draw. The section still renders and says why, with
     the remedy naming the link door directly above it -- a page that looks
     identical after this change reads as the change not working, and a control
     whose explanation never arrives is this project's oldest UI complaint."""
-    with driver.get_driver().launch(headless=True) as page:
+    with serve_ui() as library_server, driver.get_driver().launch(headless=True) as page:
+        target = next(target for group in api(library_server, "/api/library")["groups"]
+                      for target in group["targets"] if "MIPS Clip" in target["label"])
+        api(library_server, "/api/library/unadopt_target",
+            {"target_index": target["index"]}, method="POST")
+        assert api(library_server, f"/api/library/target/{target['index']}")["entity_key"] is None
         page.goto(f"{library_server}/ui/index.html")
         page.wait_for(".log-list-card", timeout_ms=20000)
         page.evaluate(CLICK_LIBRARY_TAB)

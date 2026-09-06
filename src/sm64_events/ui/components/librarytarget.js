@@ -30,6 +30,7 @@ import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
   matchesRunner, linkable, standingOn, matchedStanding, bandFor, divisionWithin,
   ladderCsOf, leaderboardOf, strategyOf, estimateNote,
+  approachesForStrategy, strategyReference,
 } from "./librarymodel.js";
 
 const html = htm.bind(h);
@@ -863,7 +864,11 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
   // version and re-walked against THIS section's displayed ladder only when
   // the page shows the other one -- the rule lives in librarymodel.js
   // (`matchedStanding`) where node can prove it, with the why.
-  const standing = matchedStanding(stratInfo, ladder, version, gradingVersion) || assocInfo;
+  // An empty canonical strategy has no graded answer to preserve. Let the
+  // linked segment's no-times floor show; a real PB still preserves the
+  // served sample-size state for average modes, even when its rank is null.
+  const standing = stratInfo && stratInfo.pb_cs == null && assocInfo
+    ? assocInfo : matchedStanding(stratInfo, ladder, version, gradingVersion) || assocInfo;
 
   // LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): a second
   // reading of the SAME entries, per-SECTION state that forgets itself the
@@ -955,6 +960,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
                 ${standing.rank ? html`<${RankIcon} tier=${standing.rank} division=${standing.division} size=${16} />` : "Not yet ranked"}
                 ${standing.pb_display ? html` · ${standing.pb_display}`
                   : standing.noTimes ? " · no times yet" : ""}
+                ${standing.comparison_strategy ? html`<span class="library-pb-comparison">
+                  ${" "}· ${standing.comparison_strategy}${" "}PB compared with${" "}${strategyOf(approach)}${" "}standards
+                </span>` : ""}
               </span>` : ""}
         </div>
       </div>
@@ -1375,9 +1383,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
     // none (or no strategy rode the intent).
     let goalEntry = null;
     if (focusGoalCs != null && !focusRunner) {
-      const stratPool = focusStrat ? approaches.filter((approach) =>
-        strategyOf(approach) === focusStrat
-          || approach.name === focusStrat) : [];
+      const stratPool = approachesForStrategy(approaches, focusStrat);
       const pools = stratPool.length ? [stratPool, approaches] : [approaches];
       for (const pool of pools) {
         for (const approach of pool) {
@@ -1401,8 +1407,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
     // to disambiguate WHICH sibling with, and landing on either is correct.
     const hit = runnerEntry ? runnerEntry.approach
       : goalEntry ? goalEntry.approach
-      : approaches.find((approach) =>
-          strategyOf(approach) === focusStrat || approach.name === focusStrat);
+      : approachesForStrategy(approaches, focusStrat)[0];
     if (!hit) return undefined;  // approaches not loaded yet -- stay
                                   // unconsumed, try again next render
     consumedFocusRef.current = focusId;
@@ -1540,7 +1545,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
           query=${query}
           focusMark=${focusMark && focusMark.approachId === approachIdentity(approach)
             ? focusMark : null}
-          stratInfo=${stratByName[strategyOf(approach)] || null}
+          stratInfo=${strategyReference(approach, stratByName)}
           trayKeys=${trayKeys} entityKey=${entityKey} onAdd=${onAdd}
           linkCtx=${linkCtx} version=${version} versions=${versions} gradingVersion=${gradingVersion}
           onOpenRunner=${onOpenRunner} focusYou=${focusYou} />`)}
