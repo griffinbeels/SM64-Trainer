@@ -27,6 +27,35 @@ Do not rerun responsive checks separately after a full run already executed
 them against the same inputs. Do not run five full suites to test queueing:
 the admission regression uses five tiny real processes instead.
 
+## Browser-free component checks
+
+Install Node 24.13+ on the 24.x line (or Node 26+) and run
+`npm ci --prefix tests/frontend --ignore-scripts` once per checkout. These are
+development dependencies only. Missing dependencies fail the component gate
+with the setup command; they never silently remove its coverage.
+
+Run `uv run python tools/run_tests.py tests/test_ui_components.py -s` for the
+TimeFields pilot. The pytest bridge is included in a normal full run, so there
+is no separate suite to remember. It invokes Vitest once in run mode, with one
+worker, no retries and no browser. It inherits the shared budget; on Windows,
+a nested job also closes its worker on completion, failure or timeout. Do not
+start standalone Vitest/watch processes outside the resource-owning runner.
+
+Vitest resolves the application's import map to its actual vendored Preact,
+hooks and htm modules, including inside the testing helpers. The real component
+runs in jsdom; props and DOM events are exercised without an app server.
+Use this for field edits, state changes and callback contracts. Layout, hit
+testing, paint, browser permissions and full application wiring remain real
+browser checks. Passing this lane does not prove desktop smoothness.
+
+Pure logic can be cheaper still: `tests/test_ui_time_format.py` retains its
+eight Python assertions and batches their real JavaScript outputs through one
+short-lived Node process. It needs no npm packages. Do not move already-cheap
+logic into a DOM environment merely to use one framework everywhere.
+
+See [the pilot findings](testing-pilot.md) for measured costs, inventory limits
+and the next candidates. No browser workflow coverage was removed by this pilot.
+
 ## One budget across worktrees
 
 All updated runners and direct pytest controllers share an OS lock in the user
