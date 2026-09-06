@@ -603,7 +603,9 @@ def test_the_column_job_reports_its_real_steps_and_ends_on_the_same_body(
         released.set()
 
         deadline = _time.monotonic() + 10
-        seen, final = [], None
+        # The blocked read already observed the in-progress boundary. The
+        # small workbook may finish before the next poll after release.
+        seen, final = [first["message"]], None
         while _time.monotonic() < deadline:
             status = client.get(f"/api/scorecard/column/{job_id}").json()
             if not seen or seen[-1] != status["message"]:
