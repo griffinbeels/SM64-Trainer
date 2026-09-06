@@ -3,6 +3,8 @@ tests/frontend/node_modules/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Browser automation traces and exported inspection snapshots stay local.
+.playwright-mcp/
 # pytest-testmon's per-checkout coverage map and tools/run_tests.py's
 # record of the last full run; a full run rebuilds both, nothing shares them.
 .testmondata*

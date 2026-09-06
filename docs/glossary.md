@@ -324,7 +324,9 @@ An [[attempt]] the trainer never watched you make, because you set the time
 before this tool existed. It is a real row in the [[practice log]] — stamped
 with the time you pressed Save, holding the [[personal best]] it brought — so you
 can clear it, undo it, or move it to another [[strategy]] exactly as you would
-a played one. The one thing it cannot offer is a replay.
+a played one. Its public recording link opens the provider's player; clicking
+Download prepares a reusable local copy. Changing or removing
+the link affects only this [[attempt]] and survives rebuilding the [[journal]].
 
 It remembers the source that brought it — you typed it, or you named your
 column in the [[Ultimate Sheet]] — and the

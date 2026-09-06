@@ -55,6 +55,10 @@ class ImportCandidate:
     # column whose legend colours by platform); None otherwise, which the
     # platform stamp reads as the emulator (`core/modes.py::platform_of`).
     platform: str | None = None
+    # Original public URL, including its timestamp. row_key identifies the
+    # source sheet row independently of the strategy it currently maps onto.
+    video: str | None = None
+    row_key: str | None = None
 
 
 @dataclass

@@ -4,6 +4,12 @@ paths:
   - "src/sm64_events/compare/**"
   - "src/sm64_events/core/recorder_lock.py"
   - "src/sm64_events/ui/components/replay.js"
+  - "src/sm64_events/ui/components/replaytransport.js"
+  - "src/sm64_events/ui/components/recordinglink.js"
+  - "src/sm64_events/ui/components/externalvideo.js"
+  - "src/sm64_events/core/recording_url.py"
+  - "src/sm64_events/server/recording_api.py"
+  - "src/sm64_events/server/media_api.py"
   - "src/sm64_events/ui/components/compare.js"
   - "src/sm64_events/ui/components/videosync.js"
   - "src/sm64_events/ui/components/failcomp.js"
@@ -54,5 +60,7 @@ changing a component.
 | To change... | Edit |
 |---|---|
 | Replay player + recording dot | `ui/components/replay.js` (incl. BufferSettings panel) |
+| Native and downloaded playback controls | `ui/components/replaytransport.js` owns Start / Back 1 / Play-Pause / Forward 1. Players supply their source timing. After an explicit Download click, a ready recording automatically replaces its provider player; local playback errors fall back. Replay's recording editor owns the original-site link. Cached recordings can save a copy and carry their clip URL/start through the Library Compare intent into My Run. |
+| Public recording editor / imported replay | `ui/components/recordinglink.js` owns conditional save/remove/Undo; `externalvideo.js` owns shared playback and fallback. `server/recording_api.py` speaks to the tracker overlay. `compare/media.py` prepares only after Download through the SAME `VideoImporter` instance as Compare; `server/media_api.py` serves status, preview and cached media. `core/recording_url.py` owns public URL validation, cache identity and start time. Never prepare on opening or playing the provider, or on link edit; never assume the recording's frame rate equals the game clock. |
 | Compare tab UI | `ui/components/compare.js` (my-run vs comparison, one centered transport; the × on a saved comparison forks on WHO added it — a user-added video is DELETED via `DELETE /api/compare/videos/{id}`, the system-provided rank-standard example is only hidden with the opt-out persisted, and the button's title says which — his call 2026-08-14, pinned by `tests/test_ui_compare_close.py`) + `ui/components/videosync.js` (`useSyncController` drives N `<video>` in lockstep; `VideoStage` forwards its element via `onEl`; `WorkArea` in/out handles + click/drag-to-scrub playhead) + `ui/frame.js` (shared game-frame step/jump, also used by replay.js) |
 | Failure compilation UI | `ui/components/failcomp.js` — shared `FailureCompilation({identity})` (X/Y inputs in localStorage, Generate → poll → summary + Reveal); mounted in BOTH practice cards' detail drawer (`practice.js`), pinned by test_ui_section_parity.py |

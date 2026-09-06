@@ -95,18 +95,19 @@ function StageFeed({ view, available, attemptId, onPick }) {
 }
 
 // ---- left: my run (video + work-area) --------------------------------------
-function MyRun({ attemptId, controller, inFrame, outFrame, onSync }) {
+function MyRun({ attemptId, recording, controller, inFrame, outFrame, onSync }) {
   const [st, setSt] = useState({ phase: "idle" });
   const [videoEl, setVideoEl] = useState(null);
   useEffect(() => {
     if (attemptId == null) { setSt({ phase: "idle" }); return; }
+    if (recording) { setSt({ phase: "ready", ...recording }); return; }
     let alive = true;
     setSt({ phase: "loading" });
     send("POST", `/api/attempts/${attemptId}/replay`)
       .then((r) => alive && setSt({ phase: "ready", ...r }))
       .catch((e) => alive && setSt({ phase: "error", message: String(e) }));
     return () => { alive = false; };
-  }, [attemptId]);
+  }, [attemptId, recording]);
   if (st.phase === "idle")
     return html`<div class="compare-empty meta">Pick one of your runs from the list below to load it here.</div>`;
   if (st.phase === "loading")
@@ -300,6 +301,7 @@ export function Compare({ t, intent, clearIntent, active }) {
   const [entity, setEntity] = useState(null);
   const [strat, setStrat] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
+  const [recording, setRecording] = useState(null);
   const [cmp, setCmp] = useState({ saved: [], suggestion: null, library: [] });
   const [cmpError, setCmpError] = useState(null);  // comparison fetch/auto-load failures — never silent
   const [openSet, setOpenSet] = useState(() => new Set());   // comparison ids shown now
@@ -360,6 +362,7 @@ export function Compare({ t, intent, clearIntent, active }) {
   useEffect(() => {
     if (!intent) return;
     setEntity(intent.entity); setStrat(intent.strat); setAttemptId(intent.attemptId);
+    setRecording(intent.recording || null);
     pendingOpenRef.current = (intent.openIds && intent.openIds.length)
       ? { entity: intent.entity, strat: intent.strat || null, ids: intent.openIds }
       : null;
@@ -370,13 +373,13 @@ export function Compare({ t, intent, clearIntent, active }) {
   // and it's restored (the playhead opens at the saved start) on every reload.
   useEffect(() => {
     if (attemptId == null) { setMyIn(0); setMyOut(null); return; }
-    let sync = { in: 0, out: null };
+    let sync = { in: Math.round((recording?.start_s || 0) * 30), out: null };
     try {
       const raw = localStorage.getItem(`sm64.compareRunSync.${attemptId}`);
       if (raw) { const p = JSON.parse(raw); sync = { in: p.in || 0, out: p.out == null ? null : p.out }; }
     } catch {}
     setMyIn(sync.in); setMyOut(sync.out);
-  }, [attemptId]);
+  }, [attemptId, recording]);
   function saveMyRunSync(i, o) {
     setMyIn(i); setMyOut(o);
     if (attemptId != null) {
@@ -509,6 +512,7 @@ export function Compare({ t, intent, clearIntent, active }) {
   // already loaded → setEntity/setStrat are no-ops (unchanged values), so the
   // comparison's reload/openSet effects don't fire — the right side is untouched.
   function pickRun(ent, s, aid) {
+    setRecording(null);
     setEntity(ent);
     if (s !== undefined) setStrat(s || null);
     setAttemptId(aid == null ? null : aid);
@@ -551,7 +555,7 @@ export function Compare({ t, intent, clearIntent, active }) {
           <div><span class="eyebrow">Left video</span><h3>My run</h3></div>
           ${attemptId != null ? html`<span class="count-badge">#${attemptId}</span>` : null}
         </div>
-        <${MyRun} attemptId=${attemptId} controller=${controller}
+        <${MyRun} attemptId=${attemptId} recording=${recording} controller=${controller}
           inFrame=${myIn} outFrame=${myOut} onSync=${saveMyRunSync} />
       </section>
       <section class="practice-card compare-col compare-stage-card">

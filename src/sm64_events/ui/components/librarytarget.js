@@ -1,3 +1,4 @@
+import { ExternalVideo } from "./externalvideo.js";
 // src/sm64_events/ui/components/librarytarget.js — the progression-first
 // target page: one section per strategy, beginner -> expert, each a
 // rank-standards TOC over community examples banded slowest -> fastest.
@@ -26,7 +27,7 @@ import { OverallStandards } from "./overallstandards.js";
 import { SegmentTimeline } from "./segmenttimeline.js";
 import {
   sectionOrder, autoExpandName, bandsOf, bandRangeLabel, divisionRangeLabel,
-  matchesRunner, videoSource, linkable, standingOn, matchedStanding, bandFor, divisionWithin,
+  matchesRunner, linkable, standingOn, matchedStanding, bandFor, divisionWithin,
   ladderCsOf, leaderboardOf,
 } from "./librarymodel.js";
 
@@ -217,86 +218,8 @@ function assocFor(row, standings, resolveLabel) {
 // second player that drifts. `autoplay` starts in the playing state -- the
 // caller's own press (the practice-log-style ▶) was the gesture.
 export function ExampleMedia({ entry, autoplay = false }) {
-  const [playing, setPlaying] = useState(autoplay);
-  // Bluesky's embed host takes a DID, and most sheet links carry a handle --
-  // resolved with ONE public-API fetch on the first click (videoSource's own
-  // bsky comment has the measurement). Failure degrades to the link-out door.
-  const [bskyEmbed, setBskyEmbed] = useState(null);
-  const [bskyFailed, setBskyFailed] = useState(false);
-  const src = videoSource(entry.video,
-    typeof location !== "undefined" ? location.hostname : null);
-  const embedSrc = src && (src.embed
-    || (src.kind === "bsky" && !bskyFailed ? bskyEmbed : null));
-  const canEmbed = !!(src && src.kind !== "file" && src.kind !== "image"
-    && src.kind !== "link"
-    && (embedSrc || (src.kind === "bsky" && !bskyFailed)));
-  const label = `${entry.runner} — ${fmtSeconds(entry.time_cs / 100)}`;
-
-  function resolveBsky() {
-    if (src.kind === "bsky" && !src.embed && !bskyEmbed && !bskyFailed) {
-      fetch("https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle"
-            + `?handle=${enc(src.actor)}`)
-        .then((resp) => resp.json())
-        .then((body) => {
-          if (!body || !body.did) throw new Error("no did");
-          setBskyEmbed(`https://embed.bsky.app/embed/${body.did}/app.bsky.feed.post/${src.rkey}`);
-        })
-        .catch(() => setBskyFailed(true));
-    }
-  }
-  useEffect(() => { if (autoplay) resolveBsky(); }, []);
-
-  function startPlaying() {
-    resolveBsky();
-    setPlaying(true);
-  }
-
-  function media() {
-    if (src.kind === "file") {
-      return html`<video class="library-example-thumb" src=${src.embed}
-          controls muted preload="metadata" title=${label}></video>`;
-    }
-    if (src.kind === "image") {
-      return html`<img class="library-example-thumb" src=${src.thumb} alt=${label}
-          loading="lazy" />`;
-    }
-    if (src.kind === "link" || bskyFailed) {
-      return html`<a class="library-example-thumb library-example-placeholder"
-          href=${entry.video} target="_blank" rel="noopener"
-          title="opens in a new tab">
-        <${Icon} name="play" size=${22} />
-        <span class="library-example-site">watch on ${src.site}</span>
-      </a>`;
-    }
-    if (playing && embedSrc) {
-      return html`<iframe class="library-embed" src=${embedSrc} title=${label}
-          allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
-    }
-    // The labelled placeholder always renders; a thumbnail (YouTube only)
-    // stacks OVER it and removes itself if the host never answers -- a dead
-    // or still-loading thumb must degrade to the branded tile, never to a
-    // black box that reads as a broken player.
-    return html`<div class="library-example-thumb library-example-placeholder is-clickable"
-        onclick=${startPlaying}>
-      <${Icon} name="play" size=${30} />
-      <span class="library-example-site">Play on ${src.site}</span>
-      ${src.thumb
-        ? html`<img class="library-example-thumb library-example-thumb-img"
-            src=${src.thumb} alt="" loading="lazy"
-            onerror=${(errorEvent) => errorEvent.target.remove()} />`
-        : ""}
-    </div>`;
-  }
-
-  return html`<div class="library-example-media ${canEmbed ? "is-clickable" : ""}"
-      onclick=${canEmbed && playing ? () => setPlaying(false) : null}
-      title=${canEmbed ? (playing ? "Close" : "Play inline") : ""}>
-    ${media()}
-    ${src.kind !== "youtube" && src.kind !== "file" && src.kind !== "image"
-      ? html`<a class="library-example-external" href=${entry.video}
-          target="_blank" rel="noopener" title=${`open on ${src.site}`}>
-          <${Icon} name="upload" size=${13} /></a>` : null}
-  </div>`;
+  return html`<${ExternalVideo} key=${entry.video} url=${entry.video}
+    label=${`${entry.runner} - ${fmtSeconds(entry.time_cs / 100)}`} autoplay=${autoplay} closable=${true} />`;
 }
 
 function ExampleCard({ entry, tier, division, trayKey, entityKey, inTray, onAdd, onOpenRunner }) {

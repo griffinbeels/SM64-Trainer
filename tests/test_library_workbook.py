@@ -29,11 +29,102 @@ def test_reads_grey_font_colour():
     assert cells[(1, 1)].font_rgb == "FF000000"
 
 
+def test_empty_font_and_fill_entries_preserve_style_indices():
+    # The real formatted Sheets export has empty font entries before the
+    # appended clipboard font. Skipping them makes correct colors look lost.
+    xml = ('<styleSheet><fonts><font/><font><color rgb="FFF2ECE4"/></font></fonts>'
+           '<fills><fill/><fill><patternFill><fgColor rgb="FF4F7BE0"/>'
+           '</patternFill></fill></fills>'
+           '<cellXfs><xf fontId="0" fillId="0"/>'
+           '<xf fontId="1" fillId="1"/></cellXfs></styleSheet>')
+    assert wb._style_by_xf(xml) == {
+        0: (False, None, None), 1: (False, 'FFF2ECE4', '4F7BE0')}
+
+
 def test_recovers_both_hyperlink_forms():
     cells = wb.read_sheet(_sample(), wb.SHEET_MAIN)
     assert cells[(1, 7)].link == "https://youtu.be/aaa"        # relationship
     assert cells[(2, 7)].link == "https://x.com/i/status/1"    # formula
     assert cells[(2, 7)].value == "15.90"
+
+
+def test_formula_recording_quotes_and_xml_entities_roundtrip_with_styling():
+    """A Sheets HYPERLINK formula escapes quotes before XML escapes entities.
+
+    Literal entity-looking URL text must decode only once: `&quot;` inside
+    the URL is not a formula delimiter, and `&amp;` stays literal text.
+    """
+    import io
+    import zipfile
+
+    url = 'https://example.com/"a""b"?x=1&literal=&quot;&other=&amp;'
+    data = build_workbook({wb.SHEET_MAIN: {
+        (3, 7): {"text": "15.90", "link": url, "link_kind": "formula",
+                 "fill": "FFA5A9F1", "rgb": GREY}}})
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        xml = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert '&quot;&quot;a&quot;&quot;&quot;&quot;b&quot;&quot;' in xml
+    assert '&amp;literal=&amp;quot;' in xml
+    cell = wb.read_sheet(data, wb.SHEET_MAIN)[(3, 7)]
+    assert cell.link == url
+    assert cell.value == "15.90"
+    assert cell.fill_rgb == "A5A9F1"
+    assert cell.font_rgb == GREY
+
+
+def _workbook_with_formula_xml(sheets):
+    """Actual shared <f> XML, including self-closing dependent cells."""
+    import io
+    import re
+    import zipfile
+
+    source = build_workbook({name: {
+        (405 + index, 2): {"text": "14.83", "link": "https://example.com/placeholder",
+                          "link_kind": "formula"}
+        for index in range(len(formulas))} for name, formulas in sheets.items()})
+    output = io.BytesIO()
+    by_part = {f"xl/worksheets/sheet{index}.xml": formulas
+               for index, formulas in enumerate(sheets.values(), start=1)}
+    with zipfile.ZipFile(io.BytesIO(source)) as original, zipfile.ZipFile(output, "w") as edited:
+        for part in original.namelist():
+            data = original.read(part)
+            if part in by_part:
+                formulas = iter(by_part[part])
+                data = re.sub(r"<f>.*?</f>", lambda _match, values=formulas: next(values),
+                              data.decode("utf-8")).encode("utf-8")
+            edited.writestr(part, data)
+    return output.getvalue()
+
+
+def test_shared_hyperlink_formula_resolves_dependents_before_and_after_base():
+    url = "https://youtu.be/2JLv8hYUzQw"
+    base = f'<f t="shared" ref="B405:B406" si="1">HYPERLINK("{url}",14.83)</f>'
+    dependent = '<f t="shared" si="1"/>'
+    for formulas in ([base, dependent], [dependent, base]):
+        data = _workbook_with_formula_xml({wb.SHEET_MAIN: formulas})
+        cells = wb.read_sheet(data, wb.SHEET_MAIN)
+        assert [cells[(row, 2)].link for row in (405, 406)] == [url, url]
+        assert [cells[(row, 2)].value for row in (405, 406)] == ["14.83", "14.83"]
+
+
+def test_shared_formula_indices_are_local_to_each_worksheet():
+    dependent = '<f si="1" t="shared"/>'
+    data = _workbook_with_formula_xml({
+        "First": ['<f si="1" t="shared">HYPERLINK("https://example.com/one",1)</f>', dependent],
+        "Second": ['<f si="1" t="shared">HYPERLINK("https://example.com/two",2)</f>', dependent],
+    })
+    assert wb.read_sheet(data, "First")[(406, 2)].link == "https://example.com/one"
+    assert wb.read_sheet(data, "Second")[(406, 2)].link == "https://example.com/two"
+
+
+def test_shared_unrelated_or_computed_formula_does_not_invent_a_recording():
+    for expression in ('SUM(A1:A5)', 'HYPERLINK(A1,14.83)',
+                       'HYPERLINK("https://example.com/"&A1,14.83)'):
+        data = _workbook_with_formula_xml({wb.SHEET_MAIN: [
+            f'<f t="shared" si="1">{expression.replace("&", "&amp;")}</f>',
+            '<f t="shared" si="1"/>', '<f t="shared" si="99"/>']})
+        cells = wb.read_sheet(data, wb.SHEET_MAIN)
+        assert all(cell.link is None for cell in cells.values())
 
 
 def test_log_revision_is_the_newest_entry():

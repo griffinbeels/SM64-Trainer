@@ -6,6 +6,7 @@ the parser refuse it -- and that is trivial against a builder and painful
 against a binary fixture."""
 import zipfile
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 BLACK, GREY = "FF000000", "FF434343"
 
@@ -124,9 +125,10 @@ def _write_sheet(z, idx, cells, style_of):
         text = cell["text"].replace("&", "&amp;").replace("<", "&lt;")
         url = cell.get("link")
         if url and cell.get("link_kind", "rel") == "formula":
-            esc = url.replace("&", "&amp;")
-            body = (f'<f>HYPERLINK(&quot;{esc}&quot;,&quot;{text}&quot;)</f>'
-                    f'<v>{text}</v>')
+            target = url.replace('"', '""')
+            label = cell["text"].replace('"', '""')
+            formula = escape(f'HYPERLINK("{target}","{label}")', {'"': "&quot;"})
+            body = f'<f>{formula}</f><v>{text}</v>'
             xml = f'<c r="{ref}" s="{style}" t="str">{body}</c>'
         else:
             xml = (f'<c r="{ref}" s="{style}" t="inlineStr">'

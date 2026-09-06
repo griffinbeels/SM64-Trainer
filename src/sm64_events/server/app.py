@@ -504,6 +504,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         held_times=held_times, on_adopt=on_adopt))
     if service is not None:
         app.include_router(create_api_router(service))
+        from sm64_events.server.recording_api import create_recording_router
+        app.include_router(create_recording_router(service))
         from sm64_events.server.ranks_api import create_ranks_router
         # library + adoptions widen the standards payload's example clips with
         # library entries (task 0098) — the same instances the library router
@@ -544,6 +546,13 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     if compare is not None:
         from sm64_events.server.compare_api import create_compare_router
         app.include_router(create_compare_router(compare))
+
+    # Reuse Compare's importer, so all recording surfaces share its cache and
+    # per-source lock. Metadata and embed fallback remain available without it.
+    from sm64_events.compare.media import RecordingMedia
+    from sm64_events.server.media_api import create_media_router
+    app.state.recording_media = RecordingMedia(getattr(compare, "importer", None))
+    app.include_router(create_media_router(app.state.recording_media))
 
     if compilation is not None:
         from sm64_events.server.compilation_api import create_compilation_router

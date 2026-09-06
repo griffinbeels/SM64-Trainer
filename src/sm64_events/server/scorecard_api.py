@@ -234,6 +234,17 @@ def _column_resolve(service):
                 best = pb
         return best
 
+    def answer(pb):
+        if pb is None:
+            return None
+        time = (display_cs(pb["frames"]), pb.get("platform"))
+        # The chosen PB's exact attempt supplies the public URL. A faster
+        # unlinked attempt must never inherit the previous PB's recording.
+        attempt_id = pb.get("attempt_id")
+        video = (service.recording_link(attempt_id)["url"]
+                 if attempt_id is not None else None)
+        return (*time, video) if video else time
+
     def resolve(entity_key, strat_tag, timer_mode, version, *, excluding=()):
         identity = _column_identity(entity_key)
         if identity is None:
@@ -244,14 +255,14 @@ def _column_resolve(service):
         # in `_column_body`, so no second reader grows its own emulator default.
         if strat_tag is None:
             pb = leftovers(identity, timer_mode, version, frozenset(excluding))
-            return (display_cs(pb["frames"]), pb.get("platform")) if pb else None
+            return answer(pb)
         course_id, star_id, segment_id = identity
         pb = service.db.current_pb(course_id, star_id, timer_mode,
                                    segment_id=segment_id, strat_tag=strat_tag,
                                    game_version=version)
         if pb is None or not set_on(pb, version):
             return None
-        return (display_cs(pb["frames"]), pb.get("platform"))
+        return answer(pb)
     return resolve
 
 
@@ -265,8 +276,9 @@ def _held_lookup(service):
     holds win, as pbs do."""
     by_row = {}
     for cell in service.db.held_times():
+        time = (int(cell["time_cs"]), cell.get("platform"))
         by_row.setdefault(cell["row_key"], {})[cell.get("game_version")] = (
-            int(cell["time_cs"]), cell.get("platform"))
+            (*time, cell["video"]) if cell.get("video") else time)
 
     def held(key, version):
         cells = by_row.get(key)
@@ -875,6 +887,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return {"lines": lines, "sheet_revision": payload.get("sheet_revision"),
                 "cells": [{"text": cell["text"],
                            "platform": platform_of(cell["platform"]) if cell["text"] else None,
+                           **({"video": cell["video"]} if cell.get("video") else {}),
                            **({"legend": True} if cell.get("legend") else {})}
                           for cell in cells],
                 # The two legend cells are not times.

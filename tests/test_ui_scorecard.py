@@ -2276,7 +2276,8 @@ def test_the_pasted_html_paints_each_timed_cell_by_the_machine_that_set_it(monke
     import re
     cells = re.findall(r"<td([^>]*)>([^<]*)</td>", html_copied)
     assert len(cells) == column["total_rows"]
-    painted = [(attrs, text) for attrs, text in cells if text]
+    painted = [(re.search(r' style="[^"]*"', attrs).group(), text)
+               for attrs, text in cells if text]
     # Round 30 item 7: the pasted column opens with the legend in its own
     # fills -- here only the EMU cell, because this stub's row 3 holds a
     # data row the N64 cell must never print over -- then the one timed

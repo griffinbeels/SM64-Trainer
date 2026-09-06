@@ -146,15 +146,14 @@ def _claimed_names(block) -> dict:
 
 
 def _as_time(answer):
-    """`resolve`'s answer as `(cs, platform)`: a bare centisecond count (every
-    test double, and any caller that has no platform to offer) is a time with
-    no stamp; a `(cs, platform)` pair is taken as is. None stays None."""
+    """Normalize legacy bare/pair answers and linked triples to one triple."""
     if answer is None:
         return None
     if isinstance(answer, tuple):
-        cs, platform = answer
-        return None if cs is None else (cs, platform)
-    return (answer, None)
+        cs, platform = answer[:2]
+        video = answer[2] if len(answer) == 3 else None
+        return None if cs is None else (cs, platform, video)
+    return (answer, None, None)
 
 
 def _cell_for(row, block, resolve, place, claimed=None, held=None) -> dict:
@@ -210,8 +209,9 @@ def _cell_for(row, block, resolve, place, claimed=None, held=None) -> dict:
                                      item.get("ids") or ()), row.version))
     if time is None:
         return {"text": "", "platform": None}
-    cs, platform = time
-    return {"text": sheet_time(cs), "platform": platform}
+    cs, platform, video = time
+    return {"text": sheet_time(cs), "platform": platform,
+            **({"video": video} if video else {})}
 
 
 def _line_for(row, block, resolve, place, claimed=None, held=None) -> str:
@@ -296,7 +296,9 @@ def column_cells(rows, payload, resolve, place=None, held=None,
     `resolve`/`place` refuses.
 
     `resolve` may answer a bare centisecond count OR a `(cs, platform)`
-    pair (`_as_time`); the bare form is a time with no stamp.
+    pair or `(cs, platform, video)` triple (`_as_time`); the bare form is
+    a time with no stamp. A linked cell adds `video`, the original public
+    URL belonging to the attempt that supplied its time.
 
     One string per worksheet row, row 2 through the last data row --
     `""` wherever nothing maps: a header or spacer (no `SheetRow` at that

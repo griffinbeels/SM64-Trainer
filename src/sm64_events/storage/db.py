@@ -651,7 +651,20 @@ MIGRATIONS = [
     );
     CREATE INDEX IF NOT EXISTS held_times_row ON held_times(row_key);
     """,
-    # v31 -- captured controller input, in run-length chunks.
+    # v31 -- public recording links belong to exact attempts, independently
+    # of the rebuildable attempt cache. NULL is an explicit removal when a
+    # row exists; missing rows inherit the imported journal URL. No cascade
+    # foreign key: replace_attempts rebuilds that entire table on replay.
+    """
+    CREATE TABLE attempt_recordings (
+      attempt_id INTEGER PRIMARY KEY,
+      url TEXT,
+      revision INTEGER NOT NULL,
+      user_edited INTEGER NOT NULL DEFAULT 0
+    );
+    ALTER TABLE held_times ADD COLUMN video TEXT;
+    """,
+    # v32 -- captured controller input, in run-length chunks.
     #
     # Keyed by the game's frame counter AND wall clock, never by attempt id:
     # attempts are re-derived from the journal on every reprojection, so a row
@@ -674,7 +687,7 @@ MIGRATIONS = [
     );
     CREATE INDEX idx_input_chunks_utc ON input_chunks (started_utc, ended_utc);
     """,
-    # v32 -- template tracks: the input a run is compared against.
+    # v33 -- template tracks: the input a run is compared against.
     #
     # A template is a DOCUMENT, not a flag on an attempt (his ruling
     # 2026-08-20). That is what lets one come from an attempt he marked, a
@@ -702,7 +715,7 @@ MIGRATIONS = [
       ON input_templates (kind, entity_key, IFNULL(strat_tag, ''))
       WHERE active = 1;
     """,
-    # v33 -- the run format a chunk was written in.
+    # v34 -- the run format a chunk was written in.
     #
     # v2 adds what MARIO was doing on each frame (his action, his face-angle
     # yaw), which round 32 asked for: "adding extra diagnostic info about
@@ -714,7 +727,7 @@ MIGRATIONS = [
     """
     ALTER TABLE input_chunks ADD COLUMN format INTEGER NOT NULL DEFAULT 1;
     """,
-    # v34 -- the journal by wall clock, for the input timeline's moment
+    # v35 -- the journal by wall clock, for the input timeline's moment
     # markers: an attempt's rows are the ones inside its started/ended span
     # (`events_between`), and the journal was only ever indexed by id.
     """
@@ -838,17 +851,24 @@ class Database:
         with self._lock:
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
             steps = []
-            # Before the main sync, input-timeline used v27-v30 for the input
-            # tables, format and event index. Main used those numbers for
-            # imports. Preserve recorded bytes: apply main's missing block
-            # atomically, then recognize the already-applied input prefix at
-            # its new v31-v34 positions. Version alone cannot identify a branch.
+            # Input-timeline used v27-v30 before the import sync and v31-v34
+            # before the recording-link sync. Main now owns v27-v31; inputs
+            # follow at v32-v35. Apply only each history's missing main block
+            # atomically, preserving the already-applied input prefix and bytes.
+            # Version alone cannot identify these unreleased branch databases.
             has_inputs = self._conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='input_chunks'"
             ).fetchone()
             if 27 <= version <= 30 and has_inputs:
-                version += 4
-                steps.append((version, ";\n".join(MIGRATIONS[26:30])))
+                version += 5
+                steps.append((version, ";\n".join(MIGRATIONS[26:31])))
+            elif 31 <= version <= 34 and has_inputs:
+                has_recordings = self._conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='attempt_recordings'"
+                ).fetchone()
+                if not has_recordings:
+                    version += 1
+                    steps.append((version, MIGRATIONS[30]))
             steps.extend(enumerate(MIGRATIONS[version:], start=version + 1))
             for i, script in steps:
                 # One transaction per entry: a mid-migration crash rolls back
@@ -1475,6 +1495,81 @@ class Database:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
 
+    # -- public recording links (durable attempt metadata) -----------------
+    def _recording_link_unlocked(self, attempt_id: int) -> dict:
+        if self._conn.execute("SELECT 1 FROM attempts WHERE id=?",
+                              (attempt_id,)).fetchone() is None:
+            raise LookupError(f"no attempt {attempt_id}")
+        row = self._conn.execute(
+            "SELECT url, revision FROM attempt_recordings WHERE attempt_id=?",
+            (attempt_id,)).fetchone()
+        if row is not None:
+            return dict(row)
+        event = self._conn.execute(
+            "SELECT payload FROM events WHERE id=? AND type='time_imported'",
+            (attempt_id,)).fetchone()
+        return {"url": json.loads(event["payload"]).get("video") if event else None,
+                "revision": 0}
+
+    def recording_link(self, attempt_id: int) -> dict:
+        """Current public URL and revision, or LookupError for no attempt."""
+        with self._lock:
+            return self._recording_link_unlocked(attempt_id)
+
+    def set_recording_link(self, attempt_id: int, url: str | None,
+                           expected_revision: int | None = None) -> dict:
+        """Atomically edit an association; NULL records an explicit removal.
+
+        The service validates the URL. Revision comparison and write share
+        the database lock so concurrent editors cannot both win a stale undo.
+        """
+        with self._lock:
+            current = self._recording_link_unlocked(attempt_id)
+            if expected_revision is not None and expected_revision != current["revision"]:
+                raise ValueError("The recording link changed. Reload it before saving.")
+            revision = current["revision"] + 1
+            self._conn.execute(
+                "INSERT OR REPLACE INTO attempt_recordings"
+                " (attempt_id, url, revision, user_edited) VALUES (?,?,?,1)",
+                (attempt_id, url, revision))
+            self._conn.commit()
+            return {"url": url, "revision": revision}
+
+    def backfill_recording_link(self, attempt_id: int, url: str) -> bool:
+        """Fill an untouched import once; automatic work never undoes edits."""
+        with self._lock:
+            try:
+                current = self._recording_link_unlocked(attempt_id)
+            except LookupError:
+                return False
+            if current["url"] or current["revision"]:
+                return False
+            self._conn.execute(
+                "INSERT INTO attempt_recordings"
+                " (attempt_id, url, revision, user_edited) VALUES (?,?,1,0)",
+                (attempt_id, url))
+            self._conn.commit()
+            return True
+
+    def delete_orphaned_recordings(self) -> int:
+        """Erase overlays only after their owning journal event was erased.
+
+        Called after replay completes. A cleared attempt or one temporarily
+        absent from projection can still be restored, so absence from the
+        attempts cache alone is insufficient. journal_id handles segment IDs.
+        """
+        with self._lock:
+            ids = [row[0] for row in self._conn.execute(
+                "SELECT attempt_id FROM attempt_recordings").fetchall()]
+            gone = [aid for aid in ids if self._conn.execute(
+                "SELECT 1 FROM events WHERE id=?", (journal_id(aid),)
+            ).fetchone() is None]
+            self._conn.executemany(
+                "DELETE FROM attempt_recordings WHERE attempt_id=?",
+                [(aid,) for aid in gone])
+            self._conn.commit()
+            return len(gone)
+
     # -- held times (sheet cells an import kept aside) ---------------------
     def hold_times(self, source: str, cells, saved_utc: str) -> int:
         """Keep `cells` -- `[{row_key, game_version, time_cs, reason,
@@ -1490,11 +1585,11 @@ class Database:
                     (source, cell["row_key"], cell.get("game_version")))
                 self._conn.execute(
                     "INSERT INTO held_times (source, row_key, game_version,"
-                    " platform, time_cs, reason, saved_utc)"
-                    " VALUES (?,?,?,?,?,?,?)",
+                    " platform, time_cs, reason, saved_utc, video)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
                     (source, cell["row_key"], cell.get("game_version"),
                      cell.get("platform"), int(cell["time_cs"]),
-                     cell.get("reason") or "", saved_utc))
+                     cell.get("reason") or "", saved_utc, cell.get("video")))
             self._conn.commit()
             return len(cells)
 
@@ -1673,6 +1768,7 @@ class Database:
             # A held time is imported history too: it came in with a
             # column and goes out with everything else.
             self._conn.execute("DELETE FROM held_times")
+            self._conn.execute("DELETE FROM attempt_recordings")
             self._conn.execute("DELETE FROM sessions WHERE id<>?",
                                (keep_session_id,))
             self._conn.commit()

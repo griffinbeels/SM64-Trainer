@@ -1,4 +1,4 @@
-"""Preserve databases recorded before input-timeline merged main's v27-v30."""
+"""Preserve both input branch histories alongside main's imports and recordings."""
 import sqlite3
 
 import pytest
@@ -23,18 +23,19 @@ INPUT_SCHEMA = [
 
 def legacy_database(path, version):
     with sqlite3.connect(path) as conn:
-        for sql in [*MIGRATIONS[:26], *INPUT_SCHEMA[:version - 26]]:
+        base = 26 if version <= 30 else 30
+        for sql in [*MIGRATIONS[:base], *INPUT_SCHEMA[:version - base]]:
             conn.executescript(sql)
         conn.execute(f"PRAGMA user_version = {version}")
         conn.execute("INSERT INTO input_chunks "
                      "(id,session_id,start_frame,end_frame,started_utc,ended_utc,runs) "
                      "VALUES (1,1,100,101,'start','end',x'010203')")
-        if version >= 28:
+        if version - base >= 2:
             conn.execute("INSERT INTO input_templates VALUES "
                          "(7,'star','8-2','Pillarless','My run','attempt','original text',1,'today')")
 
 
-@pytest.mark.parametrize("version", [27, 28, 29, 30])
+@pytest.mark.parametrize("version", [27, 28, 29, 30, 31, 32, 33, 34])
 def test_input_branch_upgrade_preserves_captures_and_templates(tmp_path, version):
     path = tmp_path / "old.db"
     legacy_database(path, version)
@@ -44,43 +45,56 @@ def test_input_branch_upgrade_preserves_captures_and_templates(tmp_path, version
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
         row = conn.execute("SELECT runs, format FROM input_chunks WHERE id=1").fetchone()
         assert tuple(row) == (bytes([1, 2, 3]), 1)
-        if version >= 28:
+        if version not in (27, 31):
             row = conn.execute("SELECT name, document, active FROM input_templates WHERE id=7").fetchone()
             assert tuple(row) == ("My run", "original text", 1)
         assert "platform" in {r[1] for r in conn.execute("PRAGMA table_info(attempts)")}
         assert {"imported_from", "game_version"} <= {r[1] for r in conn.execute("PRAGMA table_info(pbs)")}
         assert conn.execute("SELECT count(*) FROM held_times").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM attempt_recordings").fetchone()[0] == 0
+        assert "video" in {r[1] for r in conn.execute("PRAGMA table_info(held_times)")}
         db.close()
 
 
-def test_main_v30_upgrade_preserves_held_imports(tmp_path):
+@pytest.mark.parametrize("version", [30, 31])
+def test_main_upgrade_preserves_held_imports_and_recordings(tmp_path, version):
     path = tmp_path / "main.db"
     with sqlite3.connect(path) as conn:
-        for sql in MIGRATIONS[:30]:
+        for sql in MIGRATIONS[:version]:
             conn.executescript(sql)
-        conn.execute("PRAGMA user_version=30")
+        conn.execute(f"PRAGMA user_version={version}")
         conn.execute("INSERT INTO held_times (source,row_key,time_cs,reason,saved_utc) "
                      "VALUES ('sheet:friend','castle',1234,'unmapped','today')")
+        if version == 31:
+            conn.execute("UPDATE held_times SET video='https://example.org/held'")
+            conn.execute("INSERT INTO attempt_recordings VALUES (42,'https://example.org/run',7,1)")
     db = Database(path)
     assert db._conn.execute("SELECT time_cs FROM held_times").fetchone()[0] == 1234
     assert db._conn.execute("SELECT count(*) FROM input_chunks").fetchone()[0] == 0
+    if version == 31:
+        assert db._conn.execute("SELECT video FROM held_times").fetchone()[0] == "https://example.org/held"
+        assert tuple(db._conn.execute("SELECT * FROM attempt_recordings").fetchone()) == (
+            42, "https://example.org/run", 7, 1)
     db.close()
 
 
-def test_input_upgrade_failure_rolls_back_main_block_and_can_retry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("version", [30, 34])
+def test_input_upgrade_failure_rolls_back_main_block_and_can_retry(tmp_path, monkeypatch, version):
     import sm64_events.storage.db as storage
 
     path = tmp_path / "old.db"
-    legacy_database(path, 30)
+    legacy_database(path, version)
     broken = [*MIGRATIONS]
-    broken[29] += "CREATE TABLE invalid ("
+    broken[30] += "CREATE TABLE invalid ("
     with monkeypatch.context() as patch:
         patch.setattr(storage, "MIGRATIONS", broken)
         with pytest.raises(sqlite3.OperationalError):
             Database(path)
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 30
-        assert "platform" not in {r[1] for r in conn.execute("PRAGMA table_info(attempts)")}
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == version
+        assert ("platform" in {r[1] for r in conn.execute("PRAGMA table_info(attempts)")}) == (version == 34)
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempt_recordings'").fetchone() is None
+        assert "video" not in {r[1] for r in conn.execute("PRAGMA table_info(held_times)")}
         assert conn.execute("SELECT document FROM input_templates").fetchone()[0] == "original text"
     db = Database(path)
     assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
