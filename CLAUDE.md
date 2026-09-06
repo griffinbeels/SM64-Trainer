@@ -1,384 +1,133 @@
-# SM64 Trainer — Claude Development Guide
+# SM64 Trainer — development guide
 
-This project is developed **exclusively by Claude**; the human runs the
-emulator and verifies live behavior. Future sessions have no memory of past
-ones — this file, `.claude/rules/*.md`, and `docs/architecture.md` ARE the
-memory. Keep them lean and current: stale documentation is a broken build.
+Codex and Claude Code share this project map. The human runs the emulator and
+verifies live behavior. Read the relevant tests before editing: they are the
+executable spec. Use [the glossary](docs/glossary.md) for project names.
 
 ## What this is
 
-A Python server that reads Super Mario 64 (**Usamune v1.93u** practice ROM)
-memory out of **Project64 1.6** (Windows) via `ReadProcessMemory`, detects
-game events — star grabs with exact Usamune timing, game resets — and
-broadcasts JSON over WebSocket. PJ64 1.6 has no scripting API; external
-memory polling is the only path, and every address was located and
-live-verified empirically. Stack: Python 3.12+ via **uv** (never pip),
-FastAPI + uvicorn, pymem, pytest.
+A Python server reads Super Mario 64 Usamune practice-ROM memory from Project64
+1.6 on Windows through `ReadProcessMemory`, detects events, records attempts,
+and broadcasts JSON over WebSocket. Stack: Python 3.12+ via uv, FastAPI,
+uvicorn, pymem, pytest. Never write to emulator memory. Layout support and its
+live evidence belong to the version-sync rules, not assumptions about a ROM.
 
-## Commands
+## Start here
 
-```
-uv sync
-uv run python tools/run_tests.py                     # full integration gate; one shared allocation across worktrees, automatically smaller with OBS open (docs/testing.md)
-uv run python tools/measure_run_load.py              # what a run COSTS his desktop, against what it saves in time: idle baseline then one full run per configuration, scored by how long a normal-priority thread waits for a core (p95 ms) as well as by wall clock
-uv run python tools/run_tests.py --changed           # the inner loop: only the tests whose Python your change touched -- or everything, when a JS/HTML/CSS/data/doc file changed, because nothing can see what those affect
-uv run python tools/run_tests.py tests/test_<module>.py # focused, serial, no coverage instrumentation; first choice while editing
-uv run python -m sm64_events.main                    # run from repo root (data/ is cwd-relative); canonical — binds the CTRL+C shutdown deadline
-uv run python tools/verify_addresses.py              # live gate (needs PJ64 + ROM); --version jp reads the JP layout
-uv run python tools/sync_version.py --version us     # THE version-sync loop (runbook: docs/version-sync.md): walks every gate (address/behaviour/calibration/feature) against the loaded ROM, writes data/version_sync/<v>.json as it goes, posts to a running server so /ui/sync.html fills live. On US = the regression proof (every gate verified); on JP = how JP support is discovered (--only <gate|feature> reruns one; read-only, safe beside a live session)
-uv run python tools/import_stroop_maps.py <MappingUS.map> <MappingJP.map>   # regenerate src/sm64_events/data/{behaviours,symbols}_{us,jp}.tsv from STROOP's linker maps (held verbatim)
-uv run python tools/verify_death_clock.py            # live gate, ANSWERED 2026-08-01 (raw counter); re-run only to re-check
-uv run python tools/probe_warp_block.py              # live gate, ANSWERED 2026-08-05 + re-run 2026-08-11: a painting writes sWarpDest AT the touch, a pipe 20 frames later and that 20 is the FLOOR (sSourceWarpNodeId REFUTED as a destination key -- one value for every entrance, so no warp-node lookup can key on it); a reset zeroes the op AND the countdown together while a completion reaches 0 first, which is how warp.py tells a cancel from a ride (read-only, safe beside a live session)
-uv run python tools/probe_warp_block.py --entries    # live gate, ANSWERED 2026-08-07: the BBH cage's own ACT_BBH_ENTER_JUMP is the commit moment (+74 to the level byte) and ships in WARP_ENTRY_ACTIONS; re-run only for a future entrance that fires no touch
-uv run python tools/probe_objects.py                 # live gate, ANSWERED 2026-08-05: WHICH door/pole/enemy is its SPAWN POINT, not its pool slot; --report lists the distinct things touched (read-only, safe beside a live session)
-uv run python tools/probe_objects.py --pool          # live gate, ANSWERED 2026-08-07 (1,386 changes): oAction is THE signal, oHealth is proximity noise -- detectors/caused.py ships on it; re-run to earn a NEW behaviour its CAUSED_BEHAVIOURS row (read-only, safe beside a live session)
-uv run python tools/probe_textbox.py                 # live gate, OPEN 2026-08-10 (round 2): round 1's ACT_WAITING_FOR_DIALOG hypothesis was REFUTED live (King Whomp skips straight to READING_NPC_DIALOG); his own read -- "there must be a triggered-the-npc vs box-actually-appeared" -- pointed at MARIO_ACTION_STATE (new, VERIFY), which turns to face the NPC for 8 frames then holds at 8 while the box is open. Probe now reports the frame the box ACTUALLY opens, not just the action edge. Walk into any textbox; needs his King Whomp run to confirm the 8 (read-only, safe beside a live session)
-uv run python tools/verify_star_stop.py              # live gate, ANSWERED 2026-08-01: the screen is Usamune's RESULT store once it SETTLES (10/10)
-uv run python tools/derive_xcam.py                   # live gate, ANSWERED + now the REGRESSION gate: scores what we journal against Usamune (just play; MIDAIR grabs are the ones that measure)
-uv run python tools/score_moment_clock.py            # a door writes no Usamune result, so ONE screenshot of the emulator is the ground truth: --usamune 1'06"83 names the row and the offset from the RAW COUNTER (comparable across any flip of the constant)
-uv run python tools/dev_cleanup.py                   # kill orphaned dev/harness servers (auto-runs at session start)
-uv run python tools/dedupe_journal.py data/tracker.db  # scan double-journaled events; --fix repairs (server stopped)
-uv run python tools/what_happened.py                 # READ BACK what the human just played -- journal events AND what the UI DREW, one timeline (--no-ui for events only)
-uv run python tools/what_happened.py --list          # which journal is live: repo / each worktree / installed exe
-uv run pytest tests/test_responsive.py -q            # render every breakpoint; report layout defects (no PJ64 needed)
-uv run python tools/check_glossary.py                # docs/glossary.md's own gate: closure, active voice, live Lives paths
-uv run python tools/check_jp_coverage.py             # every annotated JP difference (vetted seed + sheet layer) resolves to a JP ladder in the standards store; a JP time that resolves to US is a lost distinction
-uv run python tools/scrape_sheet.py                  # rebuild the Ultimate Sheet library snapshot -- READ the "unknown:" list, it IS the deliverable
-uv run python tools/scorecard_parity.py              # THE import gate: import a runner, point the scorecard at him, every tile must read +0.00 -- then the next runner with the goal set to both, and so on (his definition of done). Picks its own runner set covering every importable worksheet row; prints both sides of a mismatching tile. Reads the snapshot on disk, no fetch, no sheet touched. `--runner <name>` for one he reports, `--regions us` for one region
-uv run python tools/audit_library.py                 # AUDIT that snapshot by eye: every target, its verdict, the ratio behind each row; corrections save into the repo
-uv run python tools/scrape_ukikipedia.py             # snapshot Ukikipedia's RTA Guide page list -> src/sm64_events/ukikipedia_titles.py, and READ the "no page:" list: the wiki mark links only to a page that exists (a STAR in that list = the wiki renamed a page)
-uv run python tools/check_videos.py                  # sweep every example-video URL for liveness -> data/video_checks.seed.json.gz (a dead video must never be THE example a standard links to); incremental via the committed verdicts, also runs after scrape_sheet
-uv run python tools/corpus_from_db.py --landmarks    # every landmark name HE typed, as corpus_landmarks.py rows to paste (read-only)
-uv run python tools/contact_sheet.py .objective-card # one surface at 1500/1200/900/850, in one image -- LOOK at it
-uv run python tools/contact_sheet.py --subsections    # a star row with a [[subsection]] in the corpus (no badge, no toggle -- round 31 retired both; every piece just shows); --nested = the practice-log card with its pieces inside it. No shipped definition has a parent, so this is the only fixture that can draw either
-uv run python tools/contact_sheet.py --recorder       # the RECORDER on arrival (--recording = two moments picked, --waypoints = three); it is a modal, so no plain page load reaches it
-uv run pytest tests/test_ui_recorder_latency.py -q -s  # MEASURE the recorder's live half: publish -> painted row, in ms, printed every run
-uv run pytest tests/test_responsive_subsections.py -q # that state's own sweep + the reach assertions: the selector row draws unchanged, a piece nests in and closes with its parent, the reds star's not-armed and disabled-parent cases
-uv run python tools/contact_sheet.py .log-card       # one surface at 1500/1200/900/850, in one image -- LOOK at it
-uv run python tools/mark_sheet.py                    # the caveat badge on both surfaces, side by side (the PICK is made: corner badge, 2026-08-01)
-uv run python tools/topology_map.py                  # DRAW the world graph the segment matcher judges moves against -- LOOK at it, a wrong edge is invisible to every test
-uv run python tools/why_cancelled.py             # WHY did that movement stop being ACTIVE -- replays the session and names the rule + hop counts per cancel (stamps the frame the MOVE happened on, not the one it was judged on)
-uv run python tools/measure_topology_cancels.py       # score those topological rules against the real journal: how many completed runs would they have destroyed?
-uv run python tools/measure_entrance_sweep.py         # replay both journals under the old corpus and the new one: did the topological rules move? (they must not) and which recorded rows did
+**Read [the canonical rule index](docs/rule-index.md) before editing.** Open
+every rule matching the touched paths, including overlapping zones and chain
+rules. Both readers use this index; Claude Code also loads scoped rules
+automatically. Regenerate it with `python tools/build_rule_index.py` after
+changing rule metadata. Keep feature status in the feature's current handoff,
+not in this map.
 
-uv run python tools/measure_reset_stubs.py            # how often a reset's own interrupted action was re-read onto the NEXT attempt (exact), and how fast the reload's spawn ends the hold
-uv run python tools/measure_target_queue.py           # replay the journals under the pre-queue rule and the target queue: diff every target reading and every recorded row (round 19's own gate)
-uv run python tools/lint_changed.py                  # the AGENT-MAINTAINABILITY GATE by hand -- what a commit would be blocked on (--all = the standing backlog, read it during a re-evaluation pass; --warm = prime the npx eslint cache, once per machine or the JS half silently skips)
-node .design-sync/facade/build.mjs                   # rebuild the Claude Design bundle from .design-sync/components.mjs (the registry: one row per published component)
-uv run pytest tests/test_design_sync_registry.py -q  # that registry's own gate: does every declared prop still exist on the component
-```
+| Need | Command / reference |
+| --- | --- |
+| Dependencies | `uv sync` |
+| Focused check while editing | `uv run python tools/run_tests.py tests/test_<module>.py` |
+| Python coverage selection | `uv run python tools/run_tests.py --changed` |
+| Full integration gate | `uv run python tools/run_tests.py` |
+| Test scope, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
+| Run the app when authorized | `uv run python -m sm64_events.main` from repo root; data is cwd-relative |
+| Read back live play and the rendered UI | `uv run python tools/what_happened.py`; `--list` names all journals |
+| New memory address live gate | `uv run python tools/verify_addresses.py` with PJ64 + ROM |
+| Per-ROM verification | `uv run python tools/sync_version.py --version us`; [runbook](docs/version-sync.md) |
+| Import correctness | `uv run python tools/scorecard_parity.py`; successive runners must produce `+0.00` on every corresponding Scorecard tile |
+| Inspect one UI surface at supported widths | `uv run python tools/contact_sheet.py <selector>`; read UI rules for state-specific fixtures |
+| Maintainability gate | `uv run python tools/lint_changed.py`; [gate rationale](docs/agent-maintainability.md) |
+| API consumer | [docs/api.md](docs/api.md): `GET /state`, `GET /health`, `/ws/events` |
+| Cross-cutting domain evidence | [docs/architecture.md](docs/architecture.md) |
+| Older probe commands, incidents and rejected approaches | [archived guide](docs/history/agent-guide-2026-09-05.md), historical evidence only |
+| Claude Design component publishing | `.design-sync/components.mjs` is the registry; [workflow](.design-sync/NOTES.md) |
 
-**Publishing a component to Claude Design is one row** in
-`.design-sync/components.mjs` — the bundle entry, the TypeScript contract the
-design agent codes against, and the per-component doc are all generated from
-it. The loop, the machine setup, and the traps that fail SILENTLY (Preact
-renders as React through a shim; the design system CSS is lifted out of
-`index.html`; `/ui/assets` art must be inlined) are in `.design-sync/NOTES.md`.
+## Protect live play
 
-**Supported window size: 850px wide minimum, any height** (2026-07-29). One
-number in two places, compared by `tests/test_min_supported_width.py`:
-`desktop/window.py::MIN_WINDOW_WIDTH` enforces it in the shipped app (min_size,
-the default geometry, AND a clamp on restored geometry — the first constrains
-dragging only, and the other two are how an existing install would keep
-reopening at 480px), and `tools/uilab_project.py::min_viewport_width` is where
-the sweep stops measuring. Narrower is not a bug worth filing.
+- Do not start `python -m sm64_events.main` for UI checks while the user may
+  be playing. One recorder operates machine-wide (`core/recorder_lock.py`);
+  one server owns each database (`storage/instance_lock.py`), with second
+  instances broadcast-only. Use the UI fixture for checks.
+- Discover the active listener and confirm `GET /health`; do not infer it
+  from a guessed port. `core/paths.py::server_port()` owns `SM64_PORT`, with
+  8064 frozen and 8065 source defaults; `run-test-server.bat` uses 8066.
+- Start live diagnosis with `tools/what_happened.py`. The freshest journal
+  identifies current recording; a reported older row may belong to a different
+  checkout or installed app. Search that row by value across the listed journals.
+- Journal events describe the game; `data/ui_log.jsonl` describes the rendered
+  screen. Inspect both for visual reports. Investigate missing UI telemetry,
+  including stale client code; never write derived UI state back as game events.
+- Clean up only processes this task owns. End every server or harness started
+  for this task in the same session, and verify its listener/children exited.
 
-**Server port:** `core/paths.py::server_port()` is the single source — `SM64_PORT`
-env override, else **8064 frozen (the exe), 8065 from source (dev)** so a dev
-server and a built exe never collide. **The instance the human is PLAYING on is
-usually neither: `run-test-server.bat` sets `SM64_PORT=8066`.** Probing 8064 and
-8065 and finding both dead reads as "no server is running" when his is right
-there (2026-08-02, and a session before it). Find it, don't guess:
-`netstat -ano | grep LISTEN`, then `GET /health`.
+## Domain contracts
 
-## Module map — detailed knowledge is path-scoped
+1. A new absolute address gets one row in `memory/layout.py` with US evidence,
+   JP `None` until verified, and its `address.<field>` gate in
+   `sync/address_gates.py`. Version-independent offsets belong in
+   `memory/addresses.py`. Mark new reads `VERIFY` until the human live gate passes;
+   retain the poller's implausible-read refusal.
+2. Star grabs fire on re-collection through action edges, never save-flag diffs.
+   IGT comes through `detectors/igt_clock.py` from Usamune expansion RAM
+   (result, counter, reconstruction), never the HUD timer, object-pool address,
+   or a `global_timer` delta. Preserve measured calibration constants and evidence.
+3. Detectors receive consecutive `(prev, curr)` pairs, keep bounded state, and
+   self-heal when `global_timer` jumps backward. Store UTC timestamps; game
+   frames at 30 fps are the primary clock.
+4. Browser and desktop share all user-facing behavior through `ui/` and server;
+   `desktop/` adds native chrome. Stars and segments share practice workflows;
+   ship both or document the reason for an asymmetry. The shared log, analysis,
+   drawer and kind-dispatched endpoints are pinned by UI section-parity tests.
+5. Seeded route steps stay in completion-event order or runs silently stall.
+   Read the tracking-storage rule before changing them.
+6. One module owns a shared derivation. Callers pass identity rather than
+   independently assembling ingredients; single-source tests forbid competing
+   paths. When Python and JS must both compute a value, compare the real
+   implementations with cross-language parity tests, not a third restatement.
+7. Tests store the reference configuration they probe. Do not pin the contents
+   of a shipped tuning default or preference; check its coherence and valid range.
 
-The per-module "where to change what" tables live in `.claude/rules/` and load
-automatically when you touch matching files. Zones:
+## Work ownership and verification
 
-| Zone | Dirs | Rule file |
-|---|---|---|
-| Memory reads + detectors + recipes (new event, dust trick, memory hunting) | `memory/`, `detectors/`, `core/snapshot.py`, `core/events.py` | `.claude/rules/memory-detectors.md` |
-| **Version sync** — the per-ROM layout, behaviour symbols, gates, the sync runner + report, the dashboard | `memory/layout.py`, `memory/behaviours.py`, `memory/version_probe.py`, `sync/`, `server/sync_api.py`, `ui/sync.*`, `tools/sync_version.py`, `data/version_sync/` | `.claude/rules/sync.md` |
-| Tracking, storage, stats, routes/runs/segments, defaults corpus | `tracking/`, `storage/`, `stats/`, `data/`, `tools/corpus_*` | `.claude/rules/tracking-storage.md` |
-| **Imported times** — an attempt he brought rather than played: two doors (by hand, an Ultimate Sheet column) onto one back room; a paste, a LiveSplit and a link-to-your-own-sheet door are backlog task 0103 (`d70721b9` last carries the first two) | `tracking/importing.py`, `library/import_runner.py`, `server/import_api.py`, `ui/components/import*.js` | `.claude/rules/import.md` |
-| The world-graph rules a movement is judged against (topological cancels, the resurrection memory) | `tracking/topology.py`, `tracking/segments.py`, `tools/measure_topology_cancels.py`, `tools/why_cancelled.py`, `tools/topology_map.py` | `.claude/rules/segment-topology.md` |
-| When a segment's clock STARTS, and what number it records when it stops | `tracking/segments.py`, `detectors/igt_clock.py`, `detectors/counter_epoch.py` | `.claude/rules/segment-clock.md` |
-| The segment recorder — the journal read back as pointable sentences | `tracking/eventlabel.py`, `tracking/synthesize.py`, `ui/components/segmenttimeline.js` | `.claude/rules/recorder.md` |
-| Server, REST/WS APIs, wiring, paths, perf probes | `server/`, `main.py`, `core/paths.py`, `core/procmem.py`, `core/perfmon.py` | `.claude/rules/server.md` |
-| UI shell, shared primitives, **verification norms** (loads for all of `ui/`) | `ui/` | `.claude/rules/ui-core.md` |
-| The SELECTOR — quick-select row, cells and art | `ui/components/stagebanner.js`, `practicecell.js`, `entityicons.js`, `cellrow.js`, `ui/entities.js`, `ui/subsections.js` | `.claude/rules/ui-selector.md` |
-| Practice cards + the practice log, pickers, segments, routes, runs, strategies, graphs | `ui/components/practice*`, `ui/components/attemptlog.js`, `ui/entitysection.js`, `ui/focustarget.js`, `entitymodal.js`, `segments.js`, `routes.js`, `runview.js`, `strat*`, `links.py` | `.claude/rules/ui-practice.md` |
-| Rank icons + caps, banners, Rank tab, MARELO pill | `ui/components/caps.js`, `rankicon.js`, `hat.js`, `ranks.js`, `rankpage.js`, `marelo.js`, `standards.js` | `.claude/rules/ui-ranks.md` |
-| The Scorecard card + its goal picker + its region choice (the Rank tab mounts it) | `ui/components/scorecard.js`, `ui/scorecardgoal.js`, `server/scorecard_api.py` | `.claude/rules/ui-scorecard.md` |
-| Celebrations, the level-up climb, the tuning inspector | `ui/celebrations.js`, `rankclimb.js`, `climb*.js`, `tune*`, `components/celebrate.js`, `server/tuning_api.py` | `.claude/rules/ui-climb.md` |
-| Replay capture/encode/extract, compare, compilation + **their UI** | `replay/`, `compare/`, `core/recorder_lock.py`, `ui/components/replay.js`, `compare.js`, `videosync.js`, `failcomp.js` | `.claude/rules/replay-compare.md` |
-| Desktop shell, self-update, build, release | `desktop/`, `bootstrap/`, `core/update*`, `tools/build_exe.py`, `tools/release.py` | `.claude/rules/desktop-update-release.md` |
-| Ranks (classify, standards, scraper) | `ranks/`, `tools/scrape_ranks.py` | `.claude/rules/ranks.md` |
-| The Ultimate Sheet library (read, classify, map, snapshot) + the Library tab | `library/`, `tools/scrape_sheet.py`, `ui/components/library*.js` | `.claude/rules/library.md` |
-| The 100-coin star (its exit-star variants, and why one reset is one row) | `tracking/hundred_coin.py`, `ranks/standards.py` | `.claude/rules/hundred-coin.md` |
-| What a saved time MEANS, what a row may DO about a PB, which strategy is ACTIVE | `tracking/caveats.py`, `tracking/pbaction.py`, `tracking/activestrat.py` | `.claude/rules/pb-strategy.md` |
-
-(All paths under `src/sm64_events/` unless noted.) Tests mirror modules:
-`tests/test_<module>.py` — read the test file first; it's the executable spec.
-
-## Parallel work zones
-
-Safe to work concurrently (one branch/worktree each): **detectors/**,
-**server/**, **ui/**, **memory/ + tools/**, **storage/ + stats/ + tracking/**,
-**replay/**, **docs/** — each with its tests. The `storage/+stats/+tracking/`
-zone shares the `Attempt` contract internally; keep it in one branch.
-**Shared contracts — never edit in two branches at once:** `core/events.py`,
+Use one isolated worktree per writing task; keep the primary checkout on main.
+Coordinate these shared contracts before parallel edits: `core/events.py`,
 `core/snapshot.py`, `memory/addresses.py`, `memory/layout.py`,
-`tracking/projection.py`, `main.py`.
-Contract changes land on main first, then dependent work fans out. Merge with
-`--no-ff`; run the full suite on the merged result; delete the branch.
+`tracking/projection.py`, `main.py`. Keep `storage/`, `stats/`, and `tracking/`
+together when changing their shared Attempt contract. Land prerequisite contract
+changes before dependent work. Integrate with `--no-ff`.
 
-## Domain rules
+Choose the smallest meaningful check while editing. The full runner is the
+integration gate and owns the shared resource budget and child cleanup.
+After appropriate checks pass, repeat or broaden only for changed inputs,
+failures, or unresolved concerns; the full suite already includes responsive
+checks. Preserve actual native exit codes; in PowerShell never pipe test output
+into `Select-Object` or use `2>&1` on native commands.
 
-1. New memory address → ONE row in `memory/layout.py` (US value + its
-   evidence; JP `None` until the sync loop verifies it) **and** its
-   `address.<field>` gate in `sync/address_gates.py` — `tests/test_gates_cover.py`
-   is red until both exist. Struct offsets and every version-independent fact
-   stay in `addresses.py`. No absolute address literal outside `layout.py`
-   (`tests/test_single_source.py`). Marked `VERIFY` until it passes the live
-   gate with the human.
-2. Star grabs MUST fire on re-collection: action-EDGE detection, never
-   save-flag diffing.
-3. IGT comes from the Usamune expansion-RAM globals via `detectors/igt_clock.py`
-   (result → counter → reconstructed). Never the vanilla HUD timer, never
-   object-pool addresses (slot-dependent), never a global_timer frame delta.
-4. Detectors get consecutive (prev, curr) pairs, may keep bounded internal
-   state, must self-heal when global_timer jumps backward.
-5. Calibration constants (DISPLAY_TICK etc.) encode live-measured behavior —
-   don't "simplify" them; their evidence is in the docstrings.
-6. Read-only: never write to emulator memory.
-7. Timestamps UTC; the primary clock is game frames (30 fps).
-8. Keep the poller's implausible-read refusal — it has caught bugs in our
-   own registry.
-9. One server instance per db (`storage/instance_lock.py`); second instances
-   run broadcast-only. One RECORDER machine-wide (`core/recorder_lock.py`).
-10. **Browser ↔ GUI parity.** Every user-facing feature lands in `ui/` +
-    server, so it appears in BOTH the browser tab and the desktop window.
-    `desktop/` adds ONLY native chrome and never forks the UI.
-11. **Star ↔ segment parity.** Stars and segments are two kinds of the SAME
-    practiced thing — attempts, PBs, strats, ranks, markers, replays, routes.
-    A feature built for one ships for both in the same change, or the
-    asymmetry is written down with its reason. Enforced structurally: the
-    practice log renders ONE `LogCard` per entity of either kind
-    (`ui/components/practicelog.js`), and the analysis card + detail drawer
-    are ONE page-level `EntityAnalysis`/`EntityDrawer` pair
-    (`ui/components/entitydetail.js`) rather than a copy per kind — plus the
-    shared `stratpicker.js`/`PbTag`/`TimeFilterChip`/`StandardsPanel` inside
-    them, and kind-dispatched endpoints `/api/target`, `/api/strat`,
-    `/api/wipe`. Pinned by `tests/test_ui_section_parity.py`.
-12. **Route step order is a hard contract** — seeded route steps must be in
-    completion-event order or a run stalls permanently and silently (detail in
-    `.claude/rules/tracking-storage.md`).
+For UI changes, render and inspect the named surface with representative data
+at its supported widths (850px minimum, any height). Confirm the fixture reaches
+the changed state, count repeated elements, and use realistically long values.
+Read UI rules for `@container` layout gates, fixture-reach and surface contracts.
+Behavior judged by feel gets a tuning inspector and human verification.
+Prove new source-scan or layout guards by restoring the violation, seeing the
+failure, then reverting it. Tests alone do not establish visual correctness.
 
-## Dev-process rules
+## Definition of done for integration
 
-- **No orphaned processes.** Any server you start (dev server, `http.server`
-  harness) dies in the same session. `tools/dev_cleanup.py` runs at session
-  start and kills provably-dead leftovers; don't rely on it as a maid service.
-  Don't start `python -m sm64_events.main` for UI checks while the user may be
-  playing — the recorder lock is the only thing protecting their recording.
-- **UI changes are verified by rendering** (headless Chrome or chrome-devtools
-  MCP), never by unit tests + `node --check` alone — that combination once
-  shipped an invisible feature.
-- **Anything judged by FEEL gets an inspector, never a guess.** Timings,
-  easing, juice, transitions, layout weights: build the tuning page first, let
-  the human tune it live, and codify what he saves — "like how I would work
-  with an Inspector in Godot" (2026-07-27). The rig is the deliverable; the
-  numbers are its output. Recipe, the four properties that make a surface
-  extractable, and the traps: the **`tuning-demo`** skill. Worked example at
-  `/ui/tune.html` (`ui/climbtuning.js` + `ui/tune.js` + `server/tuning_api.py`).
-  Corollary that bites everywhere else: **no test may assert the CONTENTS of a
-  shipped default.** Once SAVE writes the tuning defaults, a test reading
-  `DEFAULTS` turns every tuning round red — pin the law against a reference
-  config and check only that the live values are in range. The same shape
-  arrives with no inspector anywhere near it: four tests in `test_views.py`
-  named the default stat chips, so changing a *preference* (2026-07-27, avg
-  10/25/50 + success rate replacing best/worst) was a red build for reasons
-  unrelated to the change. A test that needs a config should STORE the one it
-  probes; the default's own coherence — no two entries sharing an identity,
-  every entry addressable by both implementations that read it — belongs in
-  ONE place (`tests/test_stats.py` for the stat menu).
-- **A value two surfaces show gets ONE DOOR, and the door is enforced.** "Don't
-  repeat yourself" cannot fail a build, and the divergence that matters is never
-  copy-paste: three surfaces each grew their own honest way to turn a star into
-  an icon and quietly disagreed (2026-07-26). Three checkable properties, all
-  three or none:
-  1. one module owns the derivation, import-free where it can be, so node/pytest
-     can drive it directly;
-  2. its public call takes **identity only, never ingredients** — every argument
-     a caller assembles is a chance to assemble it differently, and this bug
-     produced both halves (three hand-built contexts, then one call site passing
-     the context BUILDER where the context belonged, silently defaulting every
-     field);
-  3. a row in `tests/test_single_source.py` naming the INGREDIENTS — the asset
-     path, the lookup table, the literal — so no other file may name them. Not
-     "is the shared function called", which passes while a second path exists
-     beside it: the question is whether a second path can be written at all.
-  Prove a new row has teeth by mutation (add the violation, watch it fail,
-  revert) — a scan that matches nothing is green forever.
-  This finds a second DOOR, never a wrong value through the right one: that same
-  context-builder bug satisfied every scan and still repainted a whole grid.
-  Rendering is the other half, not an alternative to it.
-- **When one door is impossible, the duplicate gets a test that COMPARES the
-  two.** Four values are computed in Python for the server and again in JS for
-  the browser — the rank ladder (`classify.RANK_NAMES` ↔ `caps.js::CAP`), the
-  rank-mode registry, the IGT display format, stat-chip identity. That second
-  copy is a real decision (the browser cannot round-trip for it), not an
-  oversight, and until 2026-07-28 each site was held together by a comment
-  saying "keep the two in lockstep". `tests/test_cross_language_parity.py`
-  compares the REAL implementations: import-free JS modules are imported by
-  node; the ones that pull in Preact have their declaration extracted from
-  comment-stripped source and evaluated. Never restate the rule in the test —
-  a restatement is a third copy. Same mutation proof as above.
-- **A pointer must resolve in a FRESH CLONE.** `docs/superpowers/`, `.tasks/`,
-  `internal_notes/`, `.planning/` and `.superpowers/` are local working
-  directories in a PUBLIC repo. Citing one is a dead link for everyone but this
-  machine — and ignoring a directory does not touch the files already citing
-  it, so it fails silently for the only person who cannot see it. State the
-  FACT and name a tracked thing that carries it.
-  `tests/test_docs_links_resolve.py` enforces this, with a by-path exemption
-  list carrying a reason per row.
-- **A rule file is a MAP, and it has a budget.** `.claude/rules/*.md` load
-  automatically on a matching file read, so their cost is paid on every edit in
-  the zone. `.claude/rules/ui.md` reached ~26k tokens with an 18,301-character
-  table cell before it was split four ways (2026-07-28). When one grows, split
-  it by path into a narrower sub-zone rule and lift long narratives into
-  `## sections` below the table — never summarize, the evidence is the point.
-  `tests/test_rule_files.py` holds the ceilings and, more usefully, fails when
-  a `paths:` glob matches nothing: a rule that never loads reaches nobody while
-  looking perfectly healthy.
-- **The journal says what the GAME did; `data/ui_log.jsonl` says what the
-  SCREEN showed.** Two live reports on 2026-08-02 were about a cell appearing
-  and disappearing ("it briefly lingered… and then was removed"; "after opening
-  the usamune menu / pausing, it accidentally got rid of the Bowser 1 → WF
-  segment") and neither was answerable from the journal, because nothing
-  recorded what was drawn. `ui/uilog.js` reads the RENDERED page back
-  — the selector's cells, every objective card, the practice log, and (since
-  2026-08-06) the segment recorder's own row list — and posts a record whenever
-  the painted snapshot changes; `core/uilog.py` stores it beside the journal and
-  `tools/what_happened.py` interleaves the two on one clock. It reads the DOM
-  rather than the store on purpose: a model-based recorder logs what we BELIEVE
-  is on screen, which is the belief under suspicion whenever such a report
-  arrives. **An EMPTY UI log is itself the finding** — the page posts these
-  itself, so silence means the open tab is running JS from before this change,
-  which is exactly how a fix verified on the server gets reported as not
-  working. Never journal these as events: the projector re-derives armed state
-  from the journal on replay, so a derived row written back makes replay
-  non-idempotent (`tracking/service.py` says the same about arm/disarm notices).
-- **Debugging live play starts with `tools/what_happened.py`, never with a
-  hand-written query.** Three journals exist and all three are valid — the repo
-  checkout, every worktree, and the installed exe under `%LOCALAPPDATA%` — and
-  which one a session writes to depends only on which binary was launched and
-  from where. On 2026-07-31 they held events newest at *today*, *Jul 30* and
-  *Jul 28*. Reading the wrong one does not error; it returns days-old events
-  that look entirely plausible, and everything downstream is confident and
-  wrong. The tool picks the freshest, names it, and refuses when the newest
-  event is over 10 minutes old. **"Freshest" answers where play is being
-  recorded NOW, which is a different question from where the row he is
-  REPORTING lives** — the port changes hands between servers, so the run behind
-  a screenshot can sit in a journal that has since gone quiet (2026-08-02: the
-  freshest was a worktree's, 67s old; his reported attempt was the repo's).
-  Hunt a specific reported row by VALUE across all three instead: the displayed
-  time converts at 30fps, so `0'26"13` is `igt_frames` 784, and one read-only
-  query over the three files names the owner in one shot.
-- **A `git commit` runs the AGENT-MAINTAINABILITY GATE, and it is curated for
-  one question: does this change make the NEXT agent fail?** Not style. The
-  rule sets live in `pyproject.toml` (`[tool.ruff.lint]`) and
-  `eslint.config.mjs`; `.claude/hooks/lint-gate.py` fires them on the lines a
-  commit ADDS, so the ~400-finding backlog blocks nothing and new work cannot
-  add to it. Test STYLE is deliberately unpoliced; the silent-failure family
-  still applies there, because a test that swallows an error passes while
-  proving nothing. **The intention, the evidence behind each family, what was
-  deliberately excluded, and the procedure for re-evaluating it all live in
-  `docs/agent-maintainability.md` — read that before adding or removing a
-  rule, and run a pass whenever a round loses time to something the gate did
-  not catch.** Two facts worth carrying without opening it: cyclomatic
-  complexity adds +0.16 over file size as a predictor of where fixes land here
-  (size alone: +0.93), so it is a ceiling on new monsters and not the point;
-  and the gate FAILS OPEN on every error, so a broken gate and a clean commit
-  look identical — which is exactly how its JavaScript half stayed dead for an
-  hour (2026-08-28).
-- **Testing is scoped and shares one machine budget.** Read `docs/testing.md`
-  before choosing a test scope or changing the runner. Explicit targets run
-  serially without testmon; `--changed` uses Python coverage conservatively;
-  the full runner is the integration gate. Controllers queue across worktrees,
-  OBS lowers the budget, and the runner owns cleanup of its entire child tree.
-  No blanket retries. Once the appropriate checks pass, stop; broaden/repeat
-  only for new edits, failures or unresolved risks. A full suite already
-  includes the responsive sweep, so do not run it twice. The collection-order
-  and worker-group contracts remain in `tests/conftest.py`.
-- **Exit-code honesty:** run verification through the Bash tool. Never pipe
-  native exes into `Select-Object` or use `2>&1` on them in PS 5.1 (false
-  failures).
-- Before ending a turn, re-scan recent user messages for unanswered asks
-  (stacked messages historically dropped bug reports).
+- Full `tools/run_tests.py` gate passes for the integrated tree. An identical
+  tree reuses that evidence; record revision, command, result and skips.
+- Relevant behavior tests and, for visible changes, rendered evidence cover
+  the change. New memory reads have human live verification.
+- Update the glossary for changed domain nouns, chain rules for moved value
+  hops, the rule index for changed routes, architecture for cross-cutting facts,
+  API docs for endpoints, and README for consumer-facing changes.
+- Keep one authoritative home for each fact and link it elsewhere. Tracked
+  references must resolve in a fresh clone; private working notes are not public
+  evidence. Preserve incident detail on demand rather than appending it here.
+- Use the shared harness `create-artifacts` skill for learning capture; this
+  project has no separate harvesting workflow. Project-specific facts belong
+  in the applicable rule, test, module docstring, or architecture document.
+- Review the full diff, commit with the reason for the change, and check recent
+  user messages for outstanding requests before reporting completion.
 
-## Definition of done — every merge
-
-- `uv run python tools/run_tests.py` passes once for the integrated tree;
-  new behavior has relevant tests. An identical tree after merge reuses that
-  evidence; repeat only if inputs changed (scope policy: `docs/testing.md`)
-- **glossary current** — a change that adds, renames or redefines a domain noun
-  updates its `docs/glossary.md` row in the SAME commit. The glossary is what we
-  both call things by; a name that only exists in code is not shared language.
-  `tools/check_glossary.py` keeps it closed and active-voice, and it cannot
-  notice a word missing from the file entirely — that part is yours
-- **chain file current** — a change that adds, moves or renames a hop updates
-  the chain it belongs to in the SAME commit: `.claude/rules/chain-star-grab-time.md`
-  (Usamune's RAM → the practice-log row) or `.claude/rules/chain-imported-time.md`
-  (an Ultimate Sheet cell → the Scorecard tile and the pasted column, whose two
-  sinks check each other). `tests/test_chains.py` catches a hop that stopped
-  resolving; it cannot notice a hop nobody drew
-- **responsive sweep clean** (`uv run pytest tests/test_responsive.py -q`) — a
-  new defect is fixed, or owed in `tools/uilab_project.py::known_defects` with a
-  reason. Component layout gates on `@container`, never `@media`; the law and
-  why are in `.claude/rules/ui-core.md`. The rig itself is **uilab**, a shared
-  machine-level module (`Desktop/code/uilab`) installed editable — improve the
-  instrumentation THERE, not here, and run its `tools/check_consumers.py`
-  afterwards
-- **responsiveness is part of the feature, not a pass afterwards.** A UI change
-  is not done at one width. The three habits, in the order they pay:
-  1. **Look at it, and name the card you are looking AT.**
-     `tools/contact_sheet.py <selector>` — one surface at 1500/1200/900/850 in
-     one image. Every expensive failure in this area was obvious on sight and
-     invisible to every assertion; the cheapest moment to see it is while
-     still writing the code, not in review. The one that got past a sheet
-     (2026-08-06) got past it because the fixture's card had ONE repeated
-     element and a SHORT name where the reported card had two and a shrinking
-     one — the picture was honest, the reading of it was not. Count the
-     repeats and measure the longest string before believing a render;
-     `.claude/rules/ui-core.md` has the specific floors this fixture sits at.
-  2. **Ask what state the fixture is in.** The gates are only as good as the
-     page `tools/ui_fixture.py` reaches, and a wrong state does not go red — it
-     reports a clean page nobody is looking at. That has been the root cause
-     three times. If your feature needs data the fixture does not seed, seed it
-     and add a line to `tests/test_fixture_reaches_the_real_page.py`.
-  3. **Give a new surface its own contract test if a probe cannot express it.**
-     A defect probe answers "is something broken"; it cannot answer "does this
-     component draw itself the same way in both layouts"
-     (`test_rank_banner_continuity.py`) or "does the widest value in the corpus
-     fit" (`test_log_card_name_fits.py`). Both of those were user-reported
-     bugs that no probe could have caught, in either direction.
-  Prove any new guard by mutation — put the bug back, watch it go red, revert.
-  A guard nobody has seen fail is green forever
-- new memory reads live-verified with the human via the harness
-- rule files / this file updated if modules were added or moved; README
-  updated if the consumer-facing surface changed; docs/architecture.md updated
-  if domain knowledge was gained (record hard-won facts WITH their evidence)
-- one fact, one authoritative place: code docstrings for module-local
-  knowledge, addresses.py for memory facts, **docs/api.md for the API
-  surface**, `.claude/rules/` for per-zone change maps, architecture.md only
-  for cross-cutting knowledge — link, don't duplicate. The README is for a
-  HUMAN deciding whether to use or build this; endpoint tables belong in
-  docs/api.md (`tests/test_docs_cover_api.py` accepts either file, so this is
-  a convention the test cannot enforce for you)
-- commit messages explain WHY (follow the style in `git log`)
-
-**Build a UI / consumer:** speak only to the API — `ws://…/ws/events` (schema
-in `docs/api.md`), `GET /state` for initial state, `GET /health` for liveness.
+Project hooks live in `.claude/hooks/`. Edit `.claude/settings.json`, then run
+`python ~/.claude/harness/install.py --repo .` to regenerate `.codex/hooks.json`;
+never maintain reader-specific script copies. Parity tests check the configured
+scripts and generated file; live hook execution is a separate harness check.

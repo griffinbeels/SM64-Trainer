@@ -71,6 +71,9 @@ EXEMPT = {
     "tests/test_docs_links_resolve.py": "this file",
     "AGENTS.md": "may need to tell Codex where the local backlog lives",
     "CLAUDE.md": "may need to tell a session where the local backlog lives",
+    "docs/history/agent-guide-2026-09-05.md":
+        "verbatim historical guide snapshot, explicitly marked non-operative; "
+        "preserves the old explanation of private working directories",
     ".claude/skills/release/SKILL.md":
         "names internal_notes/ as a place to WRITE a scratch notes file, and "
         "says why (gitignored, so it cannot dirty the release preflight's "
