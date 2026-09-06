@@ -1429,7 +1429,11 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
                 f"  select.value = 'route:{route_id}';"
                 "  select.dispatchEvent(new Event('change', {bubbles: true}));"
                 "})()")
-            page.wait_ms(400)
+            # Changing scope clears the old cards while its payload loads.
+            # This gesture is ready when the new route's two cards arrive.
+            deadline = time.monotonic() + 8
+            while page.count(".rank-page .scorecard-card .score-card") != 2 and time.monotonic() < deadline:
+                page.wait_ms(25)
             assert page.count(".rank-page .scorecard-card .score-card") == 2
 
             removed_label = page.evaluate(
