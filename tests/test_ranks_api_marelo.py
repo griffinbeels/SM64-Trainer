@@ -483,13 +483,10 @@ def test_leaderboard_shape(client):
     assert set(body) >= {"scope_id", "label", "n", "basis", "rank_mode",
                          "sheet_revision", "omitted", "rows"}
     assert isinstance(body["omitted"], int)
-    # `overall` is structurally the one scope where `omitted` can never move:
-    # every rankable entity is its own single-candidate group there, so
-    # anyone `ratings.rate_runners` holds a score for AT ALL is scored on
-    # overall too. A nonzero value here would mean the wrong POPULATION is
-    # feeding the count (e.g. counting the sheet's roster instead of the
-    # already-rated corpus) -- `>= 0` alone would pass under that bug.
-    assert body["omitted"] == 0
+    # Overall respects exclusions too. The Sheet catalog now reaches runners
+    # whose only scores belong to default-excluded movements or subsections;
+    # the controlled population test below pins exactly who is omitted.
+    assert body["omitted"] >= 0
     you_rows = [row for row in body["rows"] if row["you"]]
     assert len(you_rows) == 1 and you_rows[0]["runner"] is None
     for row in body["rows"]:
@@ -499,6 +496,56 @@ def test_leaderboard_shape(client):
         # is never also part of that count.
         if row["runner"] is not None:
             assert row["practiced"] >= 1
+
+
+def _omission_population():
+    """An included runner, an excluded-only runner, and two unrated cases."""
+    def target(label, entity, reason, runner):
+        return {"group": "Example", "section": "Example", "label": label,
+                "version": None, "entity_key": entity, "miss_reason": reason,
+                "approaches": [{"name": label, "ids": ["1"],
+                    "ladder": {"Mario": 10.0, "Gold": 20.0},
+                    "entries": [{"runner": runner, "time_cs": 1500,
+                                 "version": None, "video": None}]}],
+                "subsections": []}
+    return {"sheet_revision": "controlled-omission-population",
+            "runners": ["Included", "Excluded only", "Unrated", "Roster only"],
+            "targets": [target("Star", "star:9:2", None, "Included"),
+                        target("Excluded movement", None, "castle_movement", "Excluded only"),
+                        target("Unplaced route", None, "route", "Unrated")]}
+
+
+def test_overall_counts_excluded_only_runners_and_include_restores_them(tmp_path, monkeypatch):
+    """The board counts rated runners outside scope, never the whole roster.
+
+    The same cached ratings must respond when the exclusion control changes
+    scope membership; unplaced entries and roster-only names stay uncounted.
+    """
+    from sm64_events.library.audit import row_key
+    test_client, service = make_client(tmp_path, bundled_library=False)
+    with test_client:
+        library = test_client.app.state.library
+        monkeypatch.setattr(library, "_payload", _omission_population())
+        adoptions = test_client.app.state.library_adoptions
+        adoptions.load()
+        target = library.payload["targets"][1]
+        entity = adoptions.rows()[row_key(target, "Excluded movement", ["1"])]
+        assert entity in service.rank_excluded()
+
+        before = test_client.get("/api/leaderboard?scope=overall").json()
+        assert {r["runner"] for r in before["rows"]} == {"Included", None}
+        assert before["omitted"] == 1
+        assert test_client.post("/api/marelo/exclude", json={
+            "entity": entity, "excluded": False}).status_code == 200
+        included = test_client.get("/api/leaderboard?scope=overall").json()
+        assert {r["runner"] for r in included["rows"]} == {"Included", "Excluded only", None}
+        assert included["omitted"] == 0 and included["n"] == before["n"] + 1
+
+        assert test_client.post("/api/marelo/exclude", json={
+            "entity": entity, "excluded": True}).status_code == 200
+        restored = test_client.get("/api/leaderboard?scope=overall").json()
+        assert restored["rows"] == before["rows"]
+        assert restored["omitted"] == 1 and restored["n"] == before["n"]
 
 
 def test_leaderboard_defaults_to_the_active_scope(client):

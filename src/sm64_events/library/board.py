@@ -98,8 +98,9 @@ class RatedSheet:
         Mario Over the Rainbow), but the drop is never silent: a board that
         hides most of the sheet without a count reads as "this is everyone".
         A runner with no time ANYWHERE is not in `scores` at all and so is
-        counted in neither. On `overall` the count is always 0, since every
-        rankable entity is its own group there.
+        counted in neither. This also applies to `overall`: a runner whose
+        only scored entities are excluded from ranking has no row there.
+        Including one of those entities brings that runner onto the board.
 
         Memoized on the scope id AND the resolved groups: the same scope id
         covers different entities after the user excludes one (his
