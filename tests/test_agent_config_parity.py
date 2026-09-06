@@ -39,9 +39,8 @@ CODEX_HOOKS = REPO / ".codex" / "hooks.json"
 # any real skill.
 MAX_POINTER_CHARS = 2_500
 
-# AGENTS.md is a router: read CLAUDE.md, plus the zone table Codex has to walk
-# by hand because it cannot auto-load a `paths:`-scoped rule. Not a rulebook.
-MAX_AGENTS_MD_CHARS = 6_000
+# Both readers route to one generated index; AGENTS.md contains no zone table.
+MAX_AGENTS_MD_CHARS = 1_500
 
 _ABSOLUTE_USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]+|/)(?:Users|home)[\\/]+", re.I)
 
@@ -67,17 +66,47 @@ def agent_skill_pointers() -> list[Path]:
     return sorted((REPO / ".agents" / "skills").glob("*/SKILL.md"))
 
 
+def skill_identity(path: Path) -> str:
+    """Discovery uses the declared name, even when the folder was renamed."""
+    text = path.read_text(encoding="utf-8")
+    frontmatter = re.match(r"---\n(.*?)\n---", text, re.S)
+    assert frontmatter, f"{path}: missing skill frontmatter"
+    name = re.search(r"^name:\s*(.+)$", frontmatter.group(1), re.M)
+    assert name, f"{path}: missing skill name"
+    return name.group(1).strip().strip("\"'")
+
+
+def shared_skill_names() -> set[str]:
+    """Keep the known regression covered even in a clone without the harness."""
+    names = {"create-artifacts"}
+    shared = Path.home() / ".claude" / "harness" / "skills"
+    names.update(skill_identity(path) for path in shared.glob("*/SKILL.md"))
+    return names
+
+
+def test_project_skills_do_not_shadow_shared_identities():
+    shared = shared_skill_names()
+    local = [*agent_skill_pointers(),
+             *(REPO / ".claude" / "skills").glob("*/SKILL.md")]
+    duplicates = [str(path.relative_to(REPO)) for path in local
+                  if skill_identity(path) in shared]
+    assert not duplicates, (
+        f"Project skills shadow the shared harness: {duplicates}. Remove the "
+        "local workflow; project facts belong in the project guide or zone rules.")
+
+
 def test_both_harnesses_run_the_same_hook_scripts():
     claude = hook_scripts(json.loads(CLAUDE_SETTINGS.read_text(encoding="utf-8")))
     codex = hook_scripts(json.loads(CODEX_HOOKS.read_text(encoding="utf-8")))
-    # SessionStart cleanup is a Claude-Code-only lifecycle event; the GUARDS
-    # (PreToolUse/PostToolUse) are what must match, and dev_cleanup is the one
-    # entry that is not one.
-    guards_claude = {p for p in claude if "dev_cleanup" not in p}
-    assert guards_claude == codex, (
-        "the two harnesses run different guard hooks.\n"
-        f"  only Claude Code runs: {sorted(guards_claude - codex)}\n"
-        f"  only Codex runs:       {sorted(codex - guards_claude)}\n"
+    # Every row, including the SessionStart cleanup: Codex has the same
+    # lifecycle events (its hooks doc, fetched 2026-09-04), and the harness
+    # generator carries every Claude row across, translating matchers only.
+    # Until 2026-09-04 this test exempted dev_cleanup on the belief that
+    # SessionStart was Claude-only; it is not.
+    assert claude == codex, (
+        "the two harnesses run different hook scripts.\n"
+        f"  only Claude Code runs: {sorted(claude - codex)}\n"
+        f"  only Codex runs:       {sorted(codex - claude)}\n"
         "Every guard here exists because prose already failed to stop the "
         "thing once. A guard that binds one harness and not the other is a "
         "guard that binds nobody — no-app-server.py was in exactly that state "
@@ -88,11 +117,12 @@ def test_both_harnesses_run_the_same_hook_scripts():
 def test_codex_runs_the_shared_hook_scripts_not_its_own_copies():
     codex = hook_scripts(json.loads(CODEX_HOOKS.read_text(encoding="utf-8")))
     assert codex, "Codex runs no hooks at all"
-    own = [p for p in codex if not p.startswith(".claude/hooks/")]
+    own = [p for p in codex if p.startswith(".codex/")]
     assert not own, (
         f"Codex points at its own hook copies: {own}. Point at "
-        "`.claude/hooks/*.py` instead — two copies of a guard means one of "
-        "them is the stale one and nothing says which.")
+        "`.claude/hooks/*.py` (or a shared tool such as tools/dev_cleanup.py) "
+        "instead — two copies of a guard means one of them is the stale one "
+        "and nothing says which.")
     assert not (REPO / ".codex" / "hooks").exists(), (
         ".codex/hooks/ is back. It was deleted 2026-07-28 because its copies "
         "had already drifted from .claude/hooks/.")
@@ -117,9 +147,10 @@ def test_no_agent_config_hardcodes_a_users_home_directory(path):
 def test_agent_skills_are_pointers_not_copies(path):
     text = path.read_text(encoding="utf-8")
     canonical = REPO / ".claude" / "skills" / path.parent.name / "SKILL.md"
-    if not canonical.exists():
-        pytest.skip(f"{path.parent.name} has no .claude counterpart — it is "
-                    "genuinely Codex-only (Codex has no user-level skills dir)")
+    assert canonical.exists(), (
+        f"{path.parent.name} has no shared project body under .claude/skills. "
+        "Codex also discovers user-level skills; missing counterparts do not "
+        "exempt a local copy from parity.")
     assert len(text) <= MAX_POINTER_CHARS, (
         f"{path.relative_to(REPO).as_posix()} is {len(text):,} chars — it has "
         "grown back into a copy of "
@@ -144,15 +175,26 @@ def test_agents_md_routes_to_claude_md_and_holds_no_rules_of_its_own():
         "in CLAUDE.md or a .claude/rules/ file and link it.")
 
 
-def test_agents_md_names_every_rule_file_codex_must_open_by_hand():
-    """Codex cannot auto-load a `paths:`-scoped rule; the table is the manual
-    version of that mechanism, so a rule missing from it reaches Codex never."""
-    text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
-    missing = [p.name for p in sorted((REPO / ".claude" / "rules").glob("*.md"))
-               if p.name not in text]
-    assert not missing, (
-        f"AGENTS.md's zone table does not name {missing}. Claude Code injects "
-        "these on a file read; Codex has to be told to open them.")
+@pytest.mark.parametrize("entry", ["AGENTS.md", "CLAUDE.md"])
+def test_both_readers_use_the_canonical_rule_index(entry):
+    text = (REPO / entry).read_text(encoding="utf-8")
+    assert "[" in text and "](docs/rule-index.md)" in text
+    assert (REPO / "docs/rule-index.md").is_file()
+    assert not re.search(r"^\|.*\.claude/rules/.*\|$", text, re.M), (
+        f"{entry} has grown its own rule table; route through docs/rule-index.md")
+
+
+def test_skill_identity_detects_a_renamed_duplicate(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "REPO", tmp_path)
+    skill = tmp_path / ".agents/skills/renamed/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text('---\nname: "create-artifacts"\n---\nbody', encoding="utf-8")
+    assert skill_identity(skill) in shared_skill_names()
+    with pytest.raises(AssertionError, match="shadow"):
+        test_project_skills_do_not_shadow_shared_identities()
+    skill.write_text('---\nname: project-specific\n---\nbody', encoding="utf-8")
+    assert skill_identity(skill) not in shared_skill_names()
+    test_project_skills_do_not_shadow_shared_identities()
 
 
 def test_the_guards_can_still_fail(tmp_path):
@@ -171,3 +213,37 @@ def test_the_guards_can_still_fail(tmp_path):
     assert _ABSOLUTE_USER_PATH.search(r"python 'C:\Users\someone\repo\x.py'")
     assert _ABSOLUTE_USER_PATH.search("python /Users/someone/repo/x.py")
     assert not _ABSOLUTE_USER_PATH.search("python .claude/hooks/x.py")
+
+
+HARNESS_INSTALLER = Path.home() / ".claude" / "harness" / "install.py"
+
+
+def test_codex_hooks_file_is_generated():
+    """`.codex/hooks.json` is GENERATED from `.claude/settings.json` by the
+    harness repo's installer (2026-09-04), never hand-written -- the hand-written
+    file it replaced could not be parsed by Codex for 38 days (a `_comment` key
+    Codex rejects) while the name-diffing tests above stayed green, because a
+    diff of two files cannot see that one reader refuses to load one of them.
+
+    History the generated file's own description keeps, so it is not lost here
+    either: `.codex/hooks/*.py` were deleted 2026-07-28 after `no-app-server.py`
+    -- the guard that stops an agent seizing the recorder lock out from under a
+    live practice session -- shipped to `.claude/settings.json` on 2026-07-26 and
+    never reached the Codex mirror.
+
+    The installer lives at `~/.claude/harness/install.py` on a machine that has
+    the harness installed; without it this test skips, so its teeth were proved
+    by mutation (edit the committed file by hand -> FAIL naming the hunk ->
+    regenerate -> PASS) rather than by a red phase it cannot have.
+    Regenerate with `python ~/.claude/harness/install.py --repo .`"""
+    if not HARNESS_INSTALLER.exists():
+        pytest.skip(f"no harness installed at {HARNESS_INSTALLER}")
+    import subprocess
+    import sys
+    result = subprocess.run(
+        [sys.executable, str(HARNESS_INSTALLER), "--repo", str(REPO), "--check"],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert result.returncode == 0, (
+        ".codex/hooks.json differs from what .claude/settings.json generates -- "
+        "run `python ~/.claude/harness/install.py --repo .`:\n" + result.stdout + result.stderr)
