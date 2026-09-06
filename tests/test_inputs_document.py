@@ -266,3 +266,20 @@ def test_last_allowed_frame_and_raw_stick_edges_remain_exact():
     assert got.frame_count == 54000
     number, frame = got.frames[0]
     assert (number, frame.stick_x, frame.stick_y, frame.speed) == (53999, -128, 127, -12.5)
+
+
+def test_every_button_combination_survives_export_with_extreme_stick_values():
+    # Pyramid's Cdown+Cleft filled the padded column and swallowed the stick.
+    bits = [bit for bit, _ in A.BUTTON_BITS]
+    rows = [(mask, InputFrame(sum(bit for i, bit in enumerate(bits) if mask & (1 << i)),
+                              0, 0, 84, A.ACT_SPAWN_NO_SPIN_AIRBORNE, -32768, 0.0))
+            for mask in range(1 << len(bits))]
+    assert decode(a_v2_document(rows)).frames == rows
+
+
+def test_named_document_preserves_unicode_name_and_legacy_is_unnamed():
+    name = "Pyramid · Pillarless — clean setup"
+    text = encode(frames([(0, 0, 0, 0)]), target="star 8 2", strategy=None,
+                  version="us", origin="test", name=name)
+    assert decode(text).name == name
+    assert decode(a_document([(0, 0, 0, 0)])).name is None

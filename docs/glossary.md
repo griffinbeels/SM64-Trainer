@@ -813,6 +813,8 @@ pad and what Mario was doing while you held it — his action, which way he
 faced, how fast he went — so the document is the whole example and not the
 controller alone; a row you type by hand may stop after the pad. Optional
 author credit travels with the document and does not establish an account.
+The optional template name travels with exports and autofills imports; a name
+the player types takes precedence.
 
 - **Lives** — the document format (`src/sm64_events/inputs/document.py`)
 

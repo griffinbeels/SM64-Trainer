@@ -83,7 +83,8 @@ def test_save_import_switch_export_remove_and_persist_overlay(page, tmp_path):
     assert original == ["My clean run"]
     # Hand-authored example deliberately differs in target/author/strategy.
     text = "\n".join(["# sm64-inputs v2", "target: star 24 1", "strategy: visitor strategy",
-        "version: us", "fps: 30", "origin: authored", "author: visiting player", "--",
+        "version: us", "fps: 30", "origin: authored", "author: visiting player",
+        "name: Visiting player setup", "--",
         "0-3 A +84,+0 0x04000440 0 12", "4 A +127,+0 0x04000440 0 12",
         "5-6 - gap", "7-9 B +84,+0 0x03000880 0 20", ""])
     path = tmp_path / "visitor.inputs.txt"
@@ -91,14 +92,13 @@ def test_save_import_switch_export_remove_and_persist_overlay(page, tmp_path):
     button(page, "Import inputs")
     page.set_input_files('.input-template-manager input[type=file]', str(path))
     page.wait_ms(150)
-    button(page, "Preview import", ".input-template-manager")
     page.wait_for('.input-import-preview')
     assert page.count('.input-import-preview'), page.evaluate("document.querySelector('.input-template-manager').textContent")
     assert "visiting player" in page.evaluate("document.querySelector('.input-import-preview').textContent")
     assert "10 frames" in page.evaluate("document.querySelector('.input-import-preview').textContent")
     button(page, "Import and use template", ".input-template-manager")
-    page.wait_for('.input-template-note strong:text-is("visitor")')
-    assert page.evaluate("document.querySelector('.input-template-note strong').textContent") == "visitor"
+    page.wait_for('.input-template-note strong:text-is("Visiting player setup")')
+    assert page.evaluate("document.querySelector('.input-template-note strong').textContent") == "Visiting player setup"
     assert page.count('.stick-line.is-template') == 0
     assert page.evaluate("document.querySelector('.speed-line.is-template').getAttribute('d').match(/M /g).length") == 2
     page.click('.input-overlay-controls summary')
@@ -183,3 +183,37 @@ def test_comparison_uses_shared_rows_and_two_indicators_per_dial(page):
     assert page.count('.facing-dial') == 1
     assert page.count('.facing-needle:not(.is-template)') == 1
     assert page.count('.facing-needle.is-template') == 1
+
+
+def test_exported_name_autofills_paste_and_copy_keeps_the_document(page):
+    page.evaluate("""Object.defineProperty(navigator, 'clipboard', {configurable:true,
+      value: {writeText: async text => { window.copiedInputs = text; }}})""")
+    button(page, "Templates")
+    page.wait_for('.input-template-list li')
+    expected = page.evaluate("document.querySelector('.input-template-list li strong').textContent")
+    button(page, "Copy inputs", ".input-template-list li:first-child")
+    page.wait_for('.input-template-manager [role=status]')
+    copied = page.evaluate("window.copiedInputs")
+    assert f"name: {expected}" in copied
+    button(page, "Import inputs", ".input-template-manager")
+    fill(page, '.input-template-manager textarea', copied)
+    button(page, "Preview import", ".input-template-manager")
+    page.wait_for('.input-import-preview')
+    assert page.evaluate("document.querySelector('.input-template-manager input[maxlength]').value") == expected
+    fill(page, '.input-template-manager input[maxlength]', "My edited name")
+    fill(page, '.input-template-manager textarea', copied + "\n# a note")
+    button(page, "Preview import", ".input-template-manager")
+    page.wait_for('.input-import-preview')
+    assert page.evaluate("document.querySelector('.input-template-manager input[maxlength]').value") == "My edited name"
+
+
+def test_choosing_a_file_keeps_a_name_the_player_already_typed(page, tmp_path):
+    text = "\n".join(["# sm64-inputs v2", "target: star 2 2", "version: us",
+                       "fps: 30", "origin: authored", "name: File's name", "--", "0 A neutral"])
+    path = tmp_path / "filename.inputs.txt"
+    path.write_text(text, encoding="utf-8")
+    button(page, "Import inputs")
+    fill(page, '.input-template-manager input[maxlength]', "My chosen name")
+    page.set_input_files('.input-template-manager input[type=file]', str(path))
+    page.wait_for('.input-import-preview')
+    assert page.evaluate("document.querySelector('.input-template-manager input[maxlength]').value") == "My chosen name"

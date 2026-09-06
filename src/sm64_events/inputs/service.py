@@ -172,6 +172,7 @@ class InputsService:
         return {
             "document": {"target": document.target, "strategy": document.strategy,
                          "version": document.version, "author": document.author,
+                         "name": document.name,
                          "frames": document.frame_count},
             "destination": {"kind": kind, "entity_key": key,
                             "target": target_of(attempt), "strategy": attempt.strat_tag},

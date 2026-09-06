@@ -62,7 +62,7 @@ def test_an_unknown_attempt_is_a_404_on_every_attempt_route(client):
 def test_the_document_records_the_version_the_server_is_reading(client):
     text = client.get("/api/attempts/7/inputs/document").text
     assert "version:  jp" in text
-    assert "0-4       A        +40,+0" in text
+    assert "0-4 A +40,+0" in text
 
 
 def test_an_attempt_with_no_capture_has_no_document_and_cannot_be_marked(client):
@@ -94,7 +94,7 @@ def test_local_export_download_and_import_lifecycle(client):
     assert preview.status_code == 200
     assert preview.json()["document"] == {
         "target": "star 24 1", "strategy": "10 coin", "version": "jp",
-        "author": "another player", "frames": 5,
+        "author": "another player", "frames": 5, "name": None,
     }
     assert len(client.get("/api/inputs/templates").json()["templates"]) == 1
     response = client.post("/api/attempts/7/inputs/template/import",
@@ -104,7 +104,10 @@ def test_local_export_download_and_import_lifecycle(client):
     assert imported["author"] == "another player" and imported["frames"] == 5
     assert imported["active"] is True and imported["entity_key"] == "24-1"
     downloaded = client.get(f"/api/inputs/templates/{imported['id']}/document")
-    assert downloaded.text == text
+    assert downloaded.text == text.replace("--\n", "name: friend's example\n--\n", 1)
+    copied_preview = client.post("/api/attempts/7/inputs/template/preview",
+                                 json={"document": downloaded.text}).json()
+    assert copied_preview["document"]["name"] == "friend's example"
     assert downloaded.headers["content-disposition"] == f'attachment; filename="template-{imported["id"]}.inputs.txt"'
     assert client.get("/api/attempts/7/inputs").json()["template"]["id"] == imported["id"]
     assert client.post(f"/api/inputs/templates/{original['id']}/activate").status_code == 200

@@ -146,7 +146,7 @@ def create_inputs_router(inputs) -> APIRouter:
                 response_class=PlainTextResponse)
     def template_document(template_id: int):
         try:
-            return _download(templates.get(template_id).document,
+            return _download(templates.get(template_id).export_document(),
                              f"template-{template_id}.inputs.txt")
         except Exception as error:
             raise _http(error) from error

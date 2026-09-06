@@ -75,7 +75,9 @@ layer is not consented; open it any time from the header's **Setup**.
 
 In an attempt's replay drawer, **Save as template** keeps a named example for
 future attempts. **Import inputs** accepts a text file or pasted document;
-**Templates** lets you filter, select, export or remove saved examples. The
+**Templates** lets you filter, select, copy, export or remove saved examples.
+**Copy inputs** copies a compact document you can paste into a message; its name
+autofills when imported. Files use the same text format. The
 amber template overlays your blue inputs on the same rows and direction dials,
 aligned at frame zero. **Template overlay rows** remembers which rows you want
 to compare. Input files and player credit stay local; community browsing and

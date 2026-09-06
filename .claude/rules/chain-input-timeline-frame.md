@@ -31,10 +31,10 @@ symptom vanishes) — the earliest hop whose correction prevents the failure is
 the one to fix.
 
 - **Value:** the game frame a video picture shows, and therefore the pad the input timeline's panel draws beside that picture.
-- **Source truth:** the frame counter THE CAPTURE LAYER (`plugin/gfxwrap`) copied out of RDRAM inside Project64 at the ProcessDList that drew the picture. The ledger row says `exact` and nothing downstream infers.
+- **Captured identity:** the frame counter THE CAPTURE LAYER (`plugin/gfxwrap`) copied out of RDRAM inside Project64 at ProcessDList. `exact` means one display list since present; it does not independently prove which pixels were returned. The feed-to-clip timestamp join and picture-lag convention still require the independent witness.
 - **The independent witness:** THE ORACLE (`replay/oracleread.py`, `tools/score_oracle.py --attempt N`) — the frame number Usamune's HUD memory display of `0x8032D5D4` prints into the picture, read map-free through the +1 rule. It never ships to a user; it is how any claim about the map is settled.
 - **Sink:** the panel under the timeline (FRAME n / N, the stick box, the button chips) on the picture the `<video>` is presenting.
-- **One clock:** the picture feed puts hops 3-6 on the pictures' own composition times — seconds since the run's spawn, carried in the clip as `frame_times` — so a frame's time in the browser IS the time the ledger stamped it.
+- **Clock path:** the picture feed timestamps composition relative to the run epoch. The extracted clip carries its own `frame_times`; `feed_map` joins `start_utc + frame_times` to the feed. Preserving the origin through encoding and extraction is a separate requirement, not proved by a high matched share.
 
 **There is exactly one map path, and it is a read.** A clip whose rows are not
 stamped carries `frame_map: None`, and the panel says "Frame-exact capture is
@@ -74,6 +74,15 @@ paused picture":
    hold.
 
 ## Failure catalogue
+
+- **2026-09-06: green stamp audit with wrong pictures.** Wild Blue attempts
+  7545/7556 have one-frame-early maps at six directly decoded witness slots;
+  Pyramid 7571 matches at three. Both timer and stick confirm the discrepancy.
+  Their pad-stamp audits pass 336/336, 328/328 and 551/551: that audit compares
+  RAM/store values under the map's frame number, not pixels. Pyramid's nearest
+  feed join chooses a different row phase, so adding one globally breaks the
+  twin. Actual capture pairing versus cut-origin/feed association remains
+  unresolved; retain historical oracle cases before changing the lag convention.
 
 - **2026-09-05, THE ORACLE DIED IN THE CLEANUP AND ITS TESTS STAYED GREEN.**
   `oracleread.register` reached `BOX_H`, `BOX_W` and `_box_score` through

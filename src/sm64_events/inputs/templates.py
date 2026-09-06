@@ -7,8 +7,9 @@ another player sent him, or one he typed out by hand; `origin` records which,
 and nothing downstream cares.
 
 Storing the document TEXT rather than a row per frame is the same decision.
-What he exports and what the timeline draws are then the same bytes, so a
-round trip cannot quietly change what he is comparing against.
+The input body exported is the same text the timeline draws, so a round trip
+cannot quietly change the comparison. Export adds the current library name
+to the header; the originally imported source remains unchanged in storage.
 
 One template is ACTIVE per (kind, entity, strategy). The partial unique index
 in migration v28 makes that a fact rather than a convention; marking a new one
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
 
-from sm64_events.inputs.document import DocumentError, decode
+from sm64_events.inputs.document import DocumentError, decode, valid_name, with_name
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,10 @@ class Template:
         being loadable — which is possible, because a person may have edited
         it by hand since it was stored."""
         return decode(self.document).frames
+
+    def export_document(self) -> str:
+        """Carry the library name even when the imported source predates names."""
+        return with_name(self.document, self.name)
 
     def summary(self) -> dict:
         """Library metadata comes from the same portable document we export."""
@@ -80,8 +85,7 @@ class TemplateStore:
         pattern = r"[0-9]+-[0-9]+" if kind == "star" else r"[0-9]+"
         if not re.fullmatch(pattern, entity_key):
             raise ValueError(f"invalid {kind} template entity key")
-        if not name.strip() or len(name) > 200:
-            raise ValueError("template name must contain 1 to 200 characters")
+        name = valid_name(name)
         if not decode(document).frames:
             raise DocumentError("this document has no captured input")
         now = datetime.now(timezone.utc).isoformat()

@@ -57,8 +57,14 @@ there are only two inspector displays, not four. Optional template props on
 are shared across both tracks and every subpath. Calculating reach after
 splitting moved identical raw 84 values to different heights across a gap.
 
-The portable v2 document accepts optional `author:` credit and retains unknown
-headers on import/re-export. Local credit is injected by `InputsService`,
+The portable v2 document accepts optional `author:` credit and `name:`. Export
+adds the library name without rewriting imported source/body bytes or unknown
+headers; Copy inputs uses that same export. Import autofills the embedded name,
+except when the player has typed one. Legacy files remain loadable. New rows
+use explicit single-space separators: width padding concatenated Cdown+Cleft
+with +0,+84 and made Pyramid attempt 7571 impossible to save. The regression
+round-trips every button mask, and padded/CRLF legacy separators remain valid.
+Local credit is injected by `InputsService`,
 currently `griffman1212`; it is not an account. Community transport and media
 remain future tasks 0130/0131. Native exports require pywebview's
 `ALLOW_DOWNLOADS=True` before startup; its default WebView2 handler cancels

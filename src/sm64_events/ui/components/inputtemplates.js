@@ -1,7 +1,7 @@
 // Local template library. A later sharing browser can hand the same document
 // to the preview/import endpoints; it need not participate in replay clocks.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Modal } from "./modal.js";
 import { templatesChanged, useTemplateRevision } from "../inputpreferences.js";
@@ -37,6 +37,7 @@ async function download(url, name) {
 function useTemplateManager({ attemptId, data, onTemplateMarked, targetLabel }) {
   const [mode, setMode] = useState(null);
   const [name, setName] = useState("");
+  const nameEdited = useRef(false);
   const [documentText, setDocumentText] = useState("");
   const [preview, setPreview] = useState(null);
   const [rows, setRows] = useState(null);
@@ -60,7 +61,10 @@ function useTemplateManager({ attemptId, data, onTemplateMarked, targetLabel }) 
     return () => { alive = false; };
   }, [mode, revision, data.kind, data.entity_key]);
 
+  function editName(value) { nameEdited.current = true; setName(value); }
+
   function open(next) {
+    nameEdited.current = false;
     setError(""); setNotice(""); setPreview(null); setRemoveId(null);
     setName(next === "save" ? `${target}${data.strategy ? ` · ${data.strategy}` : ""}` : "");
     setDocumentText(""); setFilter(""); setMode(next);
@@ -94,19 +98,24 @@ function useTemplateManager({ attemptId, data, onTemplateMarked, targetLabel }) 
       if (file.size > MAX_FILE_BYTES) throw new Error("Choose an input file smaller than 4 MB.");
       const text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
       setDocumentText(text); setPreview(null);
-      setName(file.name.replace(/(?:\.inputs)?\.txt$/i, ""));
+      if (!nameEdited.current) setName(file.name.replace(/(?:\.inputs)?\.txt$/i, ""));
+      await loadPreview(text);
     });
+  }
+
+  async function loadPreview(text) {
+    const response = await request(`${base}/template/preview`, { document: text });
+    const metadata = (await response.json()).document;
+    setPreview(metadata);
+    if (metadata.name && !nameEdited.current) setName(metadata.name);
   }
 
   const importPreview = (event) => {
     event.preventDefault();
-    run(async () => {
-      const response = await request(`${base}/template/preview`, { document: documentText });
-      setPreview((await response.json()).document);
-    });
+    run(() => loadPreview(documentText));
   };
 
-  return { attemptId, data, mode, setMode, name, setName, documentText, setDocumentText,
+  return { attemptId, data, mode, setMode, name, setName: editName, documentText, setDocumentText,
     preview, setPreview, rows, filter, setFilter, removeId, setRemoveId,
     busy, error, notice, setNotice, base, target, open, run, changed, save, readFile, importPreview };
 }
@@ -130,6 +139,7 @@ export function InputTemplates(props) {
         ${mode === "save" && html`<${SaveTemplate} model=${model} />`}
         ${mode === "import" && html`<${ImportTemplate} model=${model} />`}
         ${mode === "library" && html`<${TemplateLibrary} model=${model} />`}
+        ${notice && html`<p role="status">${notice}</p>`}
         ${error && html`<p role="alert" class="is-error">${error}</p>`}
       </div>
     <//>`}
@@ -154,9 +164,9 @@ function ImportTemplate({ model }) {
         disabled=${busy} onchange=${readFile} /></label>
     <label>Or paste an input document<textarea rows="6" value=${documentText}
         disabled=${busy} oninput=${(e) => { setDocumentText(e.target.value); setPreview(null); }} /></label>
-    <label>Template name<input required maxlength="160" value=${name}
+    <label>Template name<input maxlength="160" value=${name}
         disabled=${busy} oninput=${(e) => setName(e.target.value)} /></label>
-    ${!preview && html`<button type="submit" disabled=${busy || !documentText.trim() || !name.trim()}>Preview import</button>`}
+    ${!preview && html`<button type="submit" disabled=${busy || !documentText.trim()}>Preview import</button>`}
     ${preview && html`<div class="input-import-preview">
       <strong>${preview.target}</strong>
       <p>${preview.author || "Uncredited"} · ${preview.frames} frames · ${preview.version}
@@ -164,7 +174,7 @@ function ImportTemplate({ model }) {
       <p>Use this for <strong>${target}</strong>${data.strategy ? ` · ${data.strategy}` : ""}.
         Both timelines start at frame 0.</p>
       ${data.kind === "segment" && html`<p>Check that this is the same segment: segment numbers can differ between players.</p>`}
-      <button type="button" disabled=${busy} onclick=${() => run(async () => {
+      <button type="button" disabled=${busy || !name.trim()} onclick=${() => run(async () => {
         await request(`${base}/template/import`, { document: documentText, name: name.trim() });
         changed(`Imported “${name.trim()}” and selected it as your template.`);
       })}>Import and use template</button>
@@ -192,7 +202,12 @@ function TemplateLibrary({ model }) {
               await request(`${base}/template/select`, { template_id: row.id });
               templatesChanged(); setNotice(`Selected “${row.name}”.`);
             })}>${data.template?.id === row.id ? "Comparing now" : "Use for this strategy"}</button>
-            <button disabled=${busy} onclick=${() => run(() => download(
+            <button disabled=${busy} onclick=${() => run(async () => {
+            const response = await request(`/api/inputs/templates/${row.id}/document`);
+            await navigator.clipboard.writeText(await response.text());
+            setNotice(`Copied “${row.name}”. Paste it into a message to share.`);
+          })}>Copy inputs</button>
+          <button disabled=${busy} onclick=${() => run(() => download(
                 `/api/inputs/templates/${row.id}/document`, `template-${row.id}.inputs.txt`))}>Export</button>
             <button disabled=${busy} onclick=${() => setRemoveId(row.id)}>Remove</button>
           </div>

@@ -519,7 +519,7 @@ Local template management (round 35):
 
 | Endpoint | Contract |
 |---|---|
-| `POST /api/attempts/{id}/inputs/template/preview` | `{document}` → `{document:{target,strategy,version,author,frames},destination:{kind,entity_key,target,strategy}}`. Read-only validation before confirming a local target. |
+| `POST /api/attempts/{id}/inputs/template/preview` | `{document}` → `{document:{target,strategy,version,author,name,frames},destination:{kind,entity_key,target,strategy}}`. Read-only validation before confirming a local target. |
 | `POST /api/attempts/{id}/inputs/template/import` | `{document,name}` → 201 and full template summary. Bind to this attempt's target and strategy; preserve the original document bytes. |
 | `POST /api/attempts/{id}/inputs/template/select` | `{template_id}` → full summary. Select for this attempt's strategy. Reuse/create a local binding if the source belongs to another strategy; retain its source document and credit. Reject a different target. |
 
@@ -536,6 +536,12 @@ be ordered and nonoverlapping; gap rows count toward the full axis. Stick
 values must fit signed bytes and speeds must be finite float32 values. Invalid
 documents are refused before changing an active template. Unknown headers
 survive imported-template re-export because the original text is stored.
+Template exports add or replace the optional `name:` header with the current
+library name (one line, at most 200 characters), keeping the source body intact.
+The import preview returns that name for file/paste autofill; a name the player
+has typed takes precedence. Legacy unnamed documents still import. New rows
+use explicit single spaces between fields; fixed-width padding is not a separator
+and used to concatenate long button combinations with their stick values.
 
 **A track's frames are positions in the CAPTURE, not raw counter values.** The
 game's frame counter restarts on a console reset, so a track spanning one lays

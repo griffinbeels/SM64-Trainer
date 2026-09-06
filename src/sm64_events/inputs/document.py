@@ -77,6 +77,7 @@ class Document(NamedTuple):
     frames: list[tuple[int, InputFrame]]
     author: str | None = None
     frame_count: int = 0
+    name: str | None = None
 
 
 def _stick_word(frame: InputFrame) -> str:
@@ -162,9 +163,27 @@ def _parse_mario(words: list[str], line: str) -> tuple[int, int, float]:
     return action, yaw, speed
 
 
+def valid_name(name: str) -> str:
+    name = name.strip()
+    if not name or len(name) > 200 or len(name.splitlines()) != 1:
+        raise DocumentError("template name must be one line of 1 to 200 characters")
+    return name
+
+
+def with_name(text: str, name: str) -> str:
+    """Add the shared name while preserving unknown headers and exact body bytes."""
+    name = valid_name(name)
+    lines = text.splitlines(keepends=True)
+    split = next((i for i, line in enumerate(lines) if line.rstrip() == "--"), None)
+    if split is None:
+        raise DocumentError("missing the '--' header separator")
+    header = [line for line in lines[:split] if line.split(":", 1)[0].strip() != "name"]
+    return "".join([*header, f"name: {name}\n", *lines[split:]])
+
+
 def encode(frames: list[tuple[int, InputFrame]], *, target: str,
            strategy: str | None, version: str, origin: str,
-           author: str | None = None) -> str:
+           author: str | None = None, name: str | None = None) -> str:
     lines = [MAGIC,
              f"target:   {target}",
              f"strategy: {strategy if strategy else '-'}",
@@ -173,19 +192,22 @@ def encode(frames: list[tuple[int, InputFrame]], *, target: str,
              f"origin:   {origin}"]
     if author:
         lines.append(f"author:   {author}")
+    if name is not None:
+        lines.append(f"name: {valid_name(name)}")
     lines.append("--")
     next_expected = 0
     for run in collapse(capture_axis(frames), same_state):
         if run.start > next_expected:                # the hole itself
             lines.append(
-                f"{_span_word(next_expected, run.start - 1):<10}{'-':<9}gap")
+                f"{_span_word(next_expected, run.start - 1)} - gap")
         frame = run.frame
         names = "+".join(
             name for bit, name in A.BUTTON_BITS if frame.buttons & bit)
-        lines.append(f"{_span_word(run.start, run.end - 1):<10}"
-                     f"{names or '-':<9}{_stick_word(frame):<10}"
-                     f"{A.action_word(frame.action):<14} {frame.yaw:>6}   "
-                     f"{_speed_word(frame.speed)}")
+        # Width padding is not a delimiter: Cdown+Cleft overflowed its column
+        # and swallowed the stick. One space is unambiguous for every mask.
+        lines.append(" ".join((_span_word(run.start, run.end - 1), names or "-",
+                               _stick_word(frame), A.action_word(frame.action),
+                               str(frame.yaw), _speed_word(frame.speed))))
         next_expected = run.end
     return "\n".join(lines) + "\n"
 
@@ -250,4 +272,5 @@ def decode(text: str) -> Document:
                     strategy=None if strategy in (None, "-") else strategy,
                     version=meta["version"], fps=FPS, origin=meta["origin"],
                     frames=frames, author=meta.get("author") or None,
-                    frame_count=next_frame)
+                    frame_count=next_frame,
+                    name=valid_name(meta["name"]) if meta.get("name") else None)

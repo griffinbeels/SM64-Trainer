@@ -113,3 +113,23 @@ def test_invalid_templates_do_not_replace_the_active_one(templates, fields):
 def test_unknown_headers_and_author_survive_storage_exactly(templates):
     text = a_document().replace("--", "author: another player\nvideo: https://example.test/watch\n--")
     assert save(templates, document=text).document == text
+
+
+def test_export_adds_library_name_without_rewriting_source_or_body(templates):
+    from sm64_events.inputs.document import decode
+    original = a_document().replace("--", "future: retained\n--", 1)
+    template = save(templates, name="My clean setup", document=original)
+    exported = template.export_document()
+    assert decode(exported).name == "My clean setup"
+    assert exported.split("--\n", 1)[1] == original.split("--\n", 1)[1]
+    assert "future: retained" in exported
+    assert templates.get(template.id).document == original
+
+
+def test_export_preserves_valid_padded_separator_and_crlf_body(templates):
+    from sm64_events.inputs.document import decode
+    original = a_document().replace("\n", "\r\n").replace("--\r\n", "--   \r\n")
+    template = save(templates, document=original)
+    exported = template.export_document()
+    assert exported.endswith(original[original.index("--   \r\n"):])
+    assert decode(exported).frames == decode(original).frames
