@@ -169,12 +169,21 @@ restart needed.
 
 ### Test
 
+Use Node 24.13+ on the 24.x line (or Node 26+) for browser-free component tests.
+Install their locked dev dependencies once per checkout:
+
 ```
-uv run python tools/run_tests.py
+npm ci --prefix tests/frontend --ignore-scripts
 ```
 
-~2,250 tests, about 90 seconds, no emulator required. This must pass before
-any merge. Two live-only gates need PJ64 running:
+```
+uv run python tools/run_tests.py tests/test_ui_components.py  # focused, no browser
+uv run python tools/run_tests.py                             # full integration gate
+```
+
+Use [the testing guide](docs/testing.md) to choose a focused check and share
+the machine budget across worktrees. The full suite must pass before integration;
+an identical tested tree reuses its evidence. Two live-only gates need PJ64 running:
 
 ```
 uv run python tools/verify_addresses.py     # every memory address, against the real game
