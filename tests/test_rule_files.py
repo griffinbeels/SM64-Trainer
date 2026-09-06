@@ -35,6 +35,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.build_rule_index import frontmatter_paths, render_index
+
 REPO = Path(__file__).resolve().parents[1]
 RULES = REPO / ".claude" / "rules"
 TOOLS = REPO / "tools"
@@ -56,26 +58,6 @@ ALLOWED_EMPTY: dict[str, str] = {}
 
 def rule_files() -> list[Path]:
     return sorted(RULES.glob("*.md"))
-
-
-def frontmatter_paths(path: Path) -> list[str]:
-    """The `paths:` globs, parsed without a YAML dependency.
-
-    The frontmatter shape is fixed and machine-written (`  - "glob"`); a rule
-    that deviates fails the shape assertion below rather than being silently
-    read as having no globs, which would make this whole guard vacuous.
-    """
-    text = path.read_text(encoding="utf-8")
-    match = re.match(r"---\n(.*?)\n---\n", text, re.S)
-    assert match, f"{path.name}: no YAML frontmatter — it can never be scoped"
-    body = match.group(1)
-    assert body.lstrip().startswith("paths:"), (
-        f"{path.name}: frontmatter does not start with `paths:`. `globs:` is "
-        "NOT a recognised key — a rule using it loads unconditionally in every "
-        "session while reading as scoped.")
-    globs = re.findall(r'^\s*-\s*"([^"]+)"\s*$', body, re.M)
-    assert globs, f"{path.name}: `paths:` list is empty"
-    return globs
 
 
 def test_rules_directory_is_not_empty():
@@ -124,14 +106,29 @@ def test_no_single_table_row_is_unskimmable(path):
         "lifted rows already use. Do not summarize to fit.")
 
 
-def test_claude_md_names_every_rule_file():
-    """A rule nobody can find from the map is a rule that gets rewritten."""
-    guide = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
-    missing = [p.name for p in rule_files() if p.name not in guide]
-    assert not missing, (
-        f"CLAUDE.md's zone table does not name {missing}. The table IS the "
-        "index — a session that cannot see a rule file writes the knowledge "
-        "somewhere else, which is how the second source of truth starts.")
+def test_rule_index_matches_scoped_metadata():
+    """Changing a rule or its paths cannot leave either reader on an old map."""
+    guide = (REPO / "docs/rule-index.md").read_text(encoding="utf-8")
+    assert guide == render_index(REPO), "Run python tools/build_rule_index.py"
+    links = re.findall(r"\]\(\.\./\.claude/rules/([^()]+)\)", guide)
+    assert sorted(links) == [path.name for path in rule_files()]
+
+
+def test_rule_index_exposes_changed_paths_and_new_rules(tmp_path):
+    rules = tmp_path / ".claude/rules"
+    rules.mkdir(parents=True)
+    rule = rules / "example.md"
+    rule.write_text('---\npaths:\n  - "src/one.py"\n---\n# Example\n', encoding="utf-8")
+    original = render_index(tmp_path)
+    assert "`src/one.py`" in original
+    assert "[Example](../.claude/rules/example.md)" in original
+    rule.write_text('---\npaths:\n  - "src/two.py"\n---\n# Example\n', encoding="utf-8")
+    changed = render_index(tmp_path)
+    assert changed != original
+    assert "src/one.py" not in changed and "`src/two.py`" in changed
+    (rules / "next.md").write_text(
+        '---\npaths:\n  - "tests/test_next.py"\n---\n# Next\n', encoding="utf-8")
+    assert "[Next](../.claude/rules/next.md)" in render_index(tmp_path)
 
 
 # --- corpus cardinalities stated in prose, anywhere in the repo ------------
@@ -314,10 +311,10 @@ def test_the_guards_can_still_fail(tmp_path):
 
     globs_key = tmp_path / "bad.md"
     globs_key.write_text('---\nglobs:\n  - "*.js"\n---\n', encoding="utf-8")
-    with pytest.raises(AssertionError, match="globs"):
+    with pytest.raises(ValueError, match="globs"):
         frontmatter_paths(globs_key)
 
     no_front = tmp_path / "plain.md"
     no_front.write_text("# just a doc\n", encoding="utf-8")
-    with pytest.raises(AssertionError, match="frontmatter"):
+    with pytest.raises(ValueError, match="frontmatter"):
         frontmatter_paths(no_front)
