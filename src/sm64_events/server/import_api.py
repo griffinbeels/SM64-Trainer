@@ -34,7 +34,6 @@ from pydantic import BaseModel
 from sm64_events.library import adoptions as adoptions_store
 from sm64_events.library.audit import row_key
 from sm64_events.library.import_runner import TIMER_MODE, candidates_for
-from sm64_events.library.mapping import segment_seed_key
 from sm64_events.library.source import fetch
 from sm64_events.server.jobs import JobBoard
 from sm64_events.server.ranks_api import absorb_after_regrade
@@ -116,33 +115,25 @@ def sheet_row_placer(service, adoptions):
     if database is None:
         return None
     definitions = database.segment_defs()
-    local_ids = {definition["seed_key"]: definition["id"]
-                 for definition in definitions if definition.get("seed_key")}
-    names = [(definition["id"], definition["name"])
-             for definition in definitions]
+    from sm64_events.library.placements import automatic_rows, row_identity
     linked = adoptions.rows() if adoptions is not None else {}
 
     def place(target, item, kind):
-        entity = linked.get(row_key(target, item["name"], item["ids"]))
-        if entity:
-            return (entity, _timer_mode_for(service, entity),
-                    adoptions_store.strategy_name(
-                        target["label"], item["name"], kind=kind))
-        if kind != "approach":
+        # Standalone callers can pass a row with only its target header.
+        target = {**target,
+                  "approaches": target.get("approaches", [item] if kind == "approach" else []),
+                  "subsections": target.get("subsections", [item] if kind == "subsection" else [])}
+        rows = automatic_rows({"targets": [target]}, linked, definitions)
+        identity = row_identity(target, item, kind, rows)
+        if identity is None:
             return None
-        target_key = target.get("entity_key") or ""
-        if not target_key:
-            hit = adoptions_store.auto_match(target["label"], names)
-            if hit:
-                return (hit["entity"], _timer_mode_for(service, hit["entity"]),
-                        adoptions_store.strategy_name(
-                            target["label"], item["name"]))
+        entity, strategy = identity
+        # The star reader owns whole-star clock eligibility (including the
+        # explicit real-time exception). This door resolves linked rows.
+        if entity.startswith("star:") and row_key(
+                target, item["name"], item["ids"]) not in rows:
             return None
-        local = local_ids.get(segment_seed_key(target_key))
-        if local is None:
-            return None
-        local_key = f"segment:{local}"
-        return local_key, _timer_mode_for(service, local_key), None
+        return entity, _timer_mode_for(service, entity), strategy
     return place
 
 
@@ -236,7 +227,8 @@ def create_import_router(service, library=None, overrides=None,
         """One time he typed on a star's card."""
         candidate = ImportCandidate(
             entity_key=body.entity_key.strip(), strat_tag=body.strat_tag.strip(),
-            time_cs=body.time_cs, game_version=body.game_version)
+            time_cs=body.time_cs, game_version=body.game_version,
+            timer_mode=_timer_mode_for(service, body.entity_key.strip()))
         return await finish(MANUAL_SOURCE, [candidate], [])
 
     @router.delete("/{source:path}")
@@ -253,15 +245,15 @@ def create_import_router(service, library=None, overrides=None,
     if library is not None:
         _sheet_jobs = JobBoard()
 
-        def _read_sheet(body: SheetImportBody, step=None):
+        def _read_sheet(body: SheetImportBody, loop, step=None):
             """Steps 1 of the sheet door, off the event loop: refresh the
             library if asked (~5.6 MB and a full re-derive -- the poller
             shares this process and a blocked loop is a dropped star grab,
             `server/library_api.py` says the same), then read the runner's
             column into candidates and held cells. `step` narrates the real
-            boundaries when a job is watching. Returns `(candidates, held,
-            refreshed)` -- `refreshed` says the library changed, so the
-            caller re-derives the sheet-fitted rank standards ON THE LOOP
+            boundaries when a job is watching. Returns `(candidates, held)`.
+            After an applied refresh, local entries and standards are
+            synchronized ON THE LOOP before reading the runner's column
             (round 33: "any time we pull in the spreadsheet, we should
             probably do a quick rank standards update")."""
             refreshed = False
@@ -282,13 +274,18 @@ def create_import_router(service, library=None, overrides=None,
                     # runner has no times" look identical from the outside.
                     _log.warning("sheet refresh failed: %r", err)
                     raise SheetUnreadable(f"could not read the sheet: {err}") from err
+            if refreshed:
+                # Provision new rows on the service loop BEFORE matching the
+                # column, so a freshly added piece lands on this very import.
+                asyncio.run_coroutine_threadsafe(
+                    _resync_standards(), loop).result(timeout=30)
             if step:
                 step(0.85, f"Matching {body.runner}'s rows to your trainer…")
             candidates, held = candidates_for(library.payload, body.runner,
                                               place=sheet_row_placer(service, adoptions))
-            return candidates, held, refreshed
+            return candidates, held
 
-        def _resync_standards():
+        async def _resync_standards():
             """The sheet changed under the store: re-derive its sheet-fitted
             ladders from the new payload (`Adoptions.load`), then absorb the
             re-grade so no celebration fires for a rank he did not run for.
@@ -296,16 +293,16 @@ def create_import_router(service, library=None, overrides=None,
             if adoptions is not None:
                 adoptions.load()
             absorb_after_regrade(service)
+            await service._rank_standards_changed()
 
         @router.post("/sheet")
         async def import_sheet(body: SheetImportBody):
             """A whole runner's Ultimate Sheet column, in one request."""
             try:
-                candidates, held, refreshed = await run_in_threadpool(_read_sheet, body)
+                candidates, held = await run_in_threadpool(
+                    _read_sheet, body, asyncio.get_running_loop())
             except SheetUnreadable as err:
                 raise HTTPException(503, str(err)) from err
-            if refreshed:
-                _resync_standards()
             return await finish(f"sheet:{body.runner}", candidates, [],
                                 held=held, sheet_revision=library.revision)
 
@@ -323,17 +320,15 @@ def create_import_router(service, library=None, overrides=None,
             door's body."""
             loop = asyncio.get_running_loop()
 
-            async def land(candidates, held, refreshed):
-                if refreshed:
-                    _resync_standards()
+            async def land(candidates, held):
                 return await finish(f"sheet:{body.runner}", candidates, [],
                                     held=held, sheet_revision=library.revision)
 
             def work(step):
-                candidates, held, refreshed = _read_sheet(body, step=step)
+                candidates, held = _read_sheet(body, loop, step=step)
                 step(0.92, f"Landing {len(candidates)} times…")
                 landing = asyncio.run_coroutine_threadsafe(
-                    land(candidates, held, refreshed), loop)
+                    land(candidates, held), loop)
                 try:
                     summary = landing.result()
                 except HTTPException as err:

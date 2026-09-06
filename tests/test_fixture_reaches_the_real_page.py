@@ -1576,6 +1576,10 @@ def test_the_rank_tab_story_reaches_a_real_leaderboard(page):
     unconditionally, so the default "overall" scope already carries hundreds
     of real community rows plus the user's own. Confirmed directly before
     writing this file (443 rows, one `you` row, never omitted from it)."""
+    # Story setup is order-independent, including return from a runner that
+    # already occupies the Rank tab. Merely reselecting Rank leaves it open.
+    reach(page, "runner-page")
+    assert page.count(".runner-page") == 1
     reach(page, "rank-leaderboard")
     rows = page.evaluate(
         "document.querySelectorAll('.leaderboard-row').length")

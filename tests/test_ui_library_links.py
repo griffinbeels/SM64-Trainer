@@ -143,9 +143,13 @@ def test_the_book_mark_opens_the_library_on_that_cards_entity_and_strategy(pract
         "(() => { const el = document.querySelector("
         "'.library-section.open .library-matched-chip'); "
         "return el ? el.textContent : null; })()")
-    assert chip and "Pole Glitch" in chip, (
+    assert chip and "Standard" in chip, (
         f"expected the section matching the card's active strategy "
-        f"(Pole Glitch) to be open; matched chip was {chip!r}")
+        f"(Pole Glitch) to open its canonical Standard row; chip was {chip!r}")
+    practice_page.wait_for(".library-section.open .library-pb-comparison")
+    assert "Pole Glitch PB compared with Standard standards" in practice_page.evaluate(
+        "document.querySelector('.library-section.open .library-pb-comparison').textContent"
+    )
 
 
 def test_a_card_with_no_library_caller_renders_no_book_mark(practice_page):

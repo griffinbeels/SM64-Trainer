@@ -60,6 +60,11 @@ def check_overlay_preference_survives_reload(page):
     assert page.count('.stick-line:not(.is-template)') == 2
     assert page.count('.input-bar.is-template') > 0
 
+    # Saving refreshes the parent log and rank in parallel. The template can
+    # paint before the rank response; reload only after that real response,
+    # otherwise this test itself aborts it and records ERR_ABORTED as a fault.
+    assert page.evaluate("!!window.__templateRankRefresh")
+    page.evaluate("window.__templateRankRefresh")
     # A new mount must retain the preference; fresh drawers still carry data.
     page.evaluate("location.reload()")
     page.wait_for(PROJECT.ready_selector)
@@ -70,6 +75,17 @@ def check_overlay_preference_survives_reload(page):
 
 
 def test_save_import_switch_export_remove_and_persist_overlay(page, tmp_path):
+    page.evaluate("""(() => {
+      const original = window.fetch;
+      window.__templateRankRefresh = null;
+      window.fetch = (url, options) => {
+        const response = original(url, options);
+        if (url === '/api/marelo') {
+          window.__templateRankRefresh = response.then(r => r.clone().json());
+        }
+        return response;
+      };
+    })()""")
     button(page, "Save as template")
     fill(page, '.input-template-manager input', 'My clean run')
     button(page, "Save template", ".input-template-manager")

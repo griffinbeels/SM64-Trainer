@@ -18,7 +18,7 @@
 import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import htm from "htm";
-import { displayName, entityIdentity, entityKey, isSegment,
+import { displayName, entityIdentity, entityKey, isSegment, isManualSegment,
          sectionClock, sectionPb, sectionPbByStrat,
          standardsIdentity } from "../entitysection.js";
 import { entityIconSrc, fallbackToGenericStar, fallbackSlotForEntityKey }
@@ -395,6 +395,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
     if (forceOpen && focus) onSetOpen(true);
   }, [forceOpen, focus && focus.nonce]);
   const standards = standardsIdentity(sec);
+  const manualTiming = isSegment(sec) && isManualSegment(
+    (t.segments || []).find((definition) => definition.id === sec.segment_id));
   const clock = sectionClock(sec, t.clock);
   const pb = sectionPb(sec, t.clock);
   const stratPb = sectionPbByStrat(sec, t.clock);
@@ -682,7 +684,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
             focus=${selected ? focus : null} clearFocus=${clearFocus}
             freshIds=${freshIds} openCompare=${openCompare} sec=${sec} />`
-        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0} />`}
+        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0}
+            manualTiming=${manualTiming} />`}
       <div class="attempt-footer">
         ${/* Real pagination (amendment A8), replacing "Show 10 more": "we
              should replace the show more with the number of pages we have
@@ -725,11 +728,15 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            one: the marker positions from it in pb mode, and positioning a
            3x LJ time against the Standard column is what planted a "you are
            here" badge on a ladder he had never run (2026-08-15). */""}
+      ${manualTiming ? html`<p class="meta manual-timing-note">
+        Manual timing · Configure detection in Segments
+      </p>` : ""}
       <${StandardsPanel} entity=${standards.entity}
         activeStrat=${sec.last_strat} strategies=${sec.strategies}
         sectionRank=${sec.rank} sectionPb=${sec.pb_by_strat}
         family=${standards.family} openLibrary=${openLibrary}
         gradingVersion=${t.view && t.view.game_version ? t.view.game_version.effective : null}
+        standardsRevision=${t.standardsRev}
         onChanged=${t.refresh} defaultOpen=${false} />
       ${/* Recording a time you already earned, for the card you are looking
            at. It files under the strategy the card is already showing ("whatever
@@ -737,18 +744,13 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            picker, and sends no game version: a typed time grades on whichever
            ROM is running, like every time stored before imports existed.
 
-           STARS only, and the kind test is `isSegment`, NOT `course_id != null`:
-           a segment originating in a course carries a course_id too (views.py
-           stamps `origin_course`), so that guard drew this control on ~30
-           course movements where every save came back 422 -- a dead control
-           whose reason lives nowhere near the click. The source scan in
-           tests/test_ui_import_surfaces.py pins the guard, because no render
-           fixture can tell the two apart.
+           Stars and manual segments accept existing times. A manual segment
+           has no detection pair yet; its time lands on the segment's RTA clock.
 
            BELOW the standards panel: above it, it pushed the attempt list
            47px from its ladder for one round, and it is a rare setup gesture
            while that relationship is what the card is FOR. */""}
-      ${!isSegment(sec) && html`<${AddTime}
+      ${(!isSegment(sec) || manualTiming) && html`<${AddTime}
           entityKey=${ek} strategy=${sec.last_strat} onDone=${t.refresh} />`}
       ${/* THE PIECES OF THIS ENTITY, inside its own card and indented one
            level (round 22). They sit INSIDE the `Disclose` body deliberately,

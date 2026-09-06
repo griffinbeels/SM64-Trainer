@@ -81,6 +81,8 @@ def _reconcile(stored: dict, seed: dict) -> dict:
             oent[ek].setdefault("exit_variants", {}).setdefault(label, star)
         if se.get("user_videos"):                      # hand-attached per-cutoff
             oent[ek]["user_videos"] = json.loads(json.dumps(se["user_videos"]))
+        if se.get("sheet_overrides"):
+            oent[ek]["sheet_overrides"] = json.loads(json.dumps(se["sheet_overrides"]))
     return out
 
 
@@ -147,6 +149,7 @@ class RankStandards:
         self._data = {"version": 1, "entities": {}}
         self._sheet = {}
         self._sheet_jp = {}
+        self._sheet_estimates = {}
         # The GRADING VERSION: what every ladder read that names no version
         # resolves on. "us" or "jp". main.py sets it from the game version
         # setting at boot and tracking/service.py::set_game_version on every
@@ -238,6 +241,8 @@ class RankStandards:
         vetted = self._stored_ladders(ek)
         fitted = self._sheet.get(ek)
         base = dict(vetted) if not fitted else {**fitted, **vetted}
+        for strat, overrides in self._entity(ek).get("sheet_overrides", {}).items():
+            base[strat] = {**base.get(strat, {}), **overrides}
         if self._resolve(version) != "jp":
             return base
         return {strat: {**ladder, **self.jp_deltas(ek, strat)}
@@ -268,12 +273,21 @@ class RankStandards:
         user's standards file. Called again whenever an assignment changes, so
         it REPLACES what it added last time rather than accumulating."""
         self._load_sheet()
+        self._sheet_estimates = {}
         for entity, layers in (mapping or {}).items():
             if "strategies" not in layers:           # tolerate the flat shape
                 layers = {"strategies": layers}
             self._sheet.setdefault(entity, {}).update(layers.get("strategies", {}))
             if layers.get("jp_strategies"):
                 self._sheet_jp.setdefault(entity, {}).update(layers["jp_strategies"])
+            if layers.get("estimates"):
+                self._sheet_estimates[entity] = layers["estimates"]
+
+    def estimated_strategies(self, ek) -> dict:
+        """Provisional Sheet cutoffs, with the evidence that supplied them."""
+        return {name: estimate for name, estimate
+                in self._sheet_estimates.get(ek, {}).items()
+                if self.is_fitted(ek, name)}
 
     def is_fitted(self, ek, strat) -> bool:
         """Whether this ladder came from the sheet rather than the community's
@@ -481,6 +495,11 @@ class RankStandards:
         if rank not in RANK_NAMES or rank == "Iron":
             raise ValueError(f"unknown rank {rank!r}")
         layer = "jp_strategies" if self._resolve(version) == "jp" else "strategies"
+        # A hand edit of one derived cutoff overrides that cutoff only. The
+        # unedited thresholds keep following Sheet refreshes; fitted values
+        # are never copied into the user's standards file.
+        if layer == "strategies" and self.is_fitted(ek, strat):
+            layer = "sheet_overrides"
         self._ensure(ek).setdefault(layer, {}).setdefault(strat, {})[rank] = float(seconds)
         self.save()
 
@@ -529,6 +548,7 @@ class RankStandards:
         # The STORED dict, not the merged read -- popping from a merge would
         # silently no-op and the strategy would still be there next load.
         self._stored_ladders(ek).pop(strat, None)
+        self._entity(ek).get("sheet_overrides", {}).pop(strat, None)
         self.user_videos(ek).pop(strat, None)
         # Its JP overlay goes with it -- found 2026-08-15 by the modal's own
         # test cleanup: without this a deleted JP-carrying strategy left an

@@ -268,6 +268,9 @@ async def _refresh_library_quietly(library, overrides, adoptions, service) -> No
     if adoptions is not None:
         adoptions.load()
     absorb_after_regrade(service)
+    notify = getattr(service, "_rank_standards_changed", None)
+    if notify is not None:
+        await notify()
     log.info("library refreshed at startup to sheet revision %s",
              result.get("sheet_revision"))
 
@@ -465,14 +468,28 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # instance) the read routes still mount and the adopt routes do not.
     adoptions = None
     standards = getattr(service, "ranks", None)
+    def live_segment_defs():
+        database = getattr(service, "db", None)
+        return database.segment_defs() if database is not None else []
+
+    def provision_sheet_entries(payload, explicit):
+        from sm64_events.library.practice_catalog import ensure_catalog
+        rows = ensure_catalog(payload, explicit, getattr(service, "db", None))
+        if hasattr(service, "_load_segment_defs"):
+            service._segment_defs = service._load_segment_defs()
+        return rows
+
     if standards is not None and hasattr(standards, "apply_sheet_ladders"):
         from sm64_events.core.paths import library_adoptions_path
         from sm64_events.library.adoptions import Adoptions
         qualified = {ek for ek in standards.graded_entities()
                      if standards.exit_variants(ek)}
         adoptions = Adoptions(adoptions_path or library_adoptions_path(),
-                              library, standards, qualified)
+                              library, standards, qualified,
+                              segment_defs=live_segment_defs,
+                              provision=provision_sheet_entries)
         adoptions.load()
+        service.on_segment_definitions_changed = adoptions._sync
         app.state.library_adoptions = adoptions
     app.state.library_overrides = library_overrides
     app.state.adoptions = adoptions
@@ -498,10 +515,18 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         # router treats a failing read as "nothing held" rather than a 500.
         held_times = lambda: service.db.held_times()  # noqa: E731
         on_adopt = held_row_lander(service, library, adoptions)
+    async def library_standards_changed():
+        from sm64_events.server.ranks_api import absorb_after_regrade
+        absorb_after_regrade(service)
+        notify = getattr(service, "_rank_standards_changed", None)
+        if notify is not None:
+            await notify()
+
     app.include_router(create_library_router(
         library, overrides=library_overrides, adoptions=adoptions,
         segment_names=live_segment_names if service is not None else None,
-        held_times=held_times, on_adopt=on_adopt))
+        held_times=held_times, on_adopt=on_adopt,
+        on_standards_changed=library_standards_changed))
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.recording_api import create_recording_router

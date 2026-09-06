@@ -15,6 +15,7 @@ are indistinguishable, which is the bug, not the fix.
 import contextlib
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -138,7 +139,7 @@ def test_the_selected_value_is_the_full_qualified_name(hundred_coin_page):
     """The heading is presentation; the VALUE stays the stored identity, or
     the write would post a name no ladder is filed under."""
     values = hundred_coin_page.evaluate("""
-      Array.from(document.querySelectorAll(".log-card-strat-picker optgroup option"))
+      Array.from(document.querySelectorAll('.log-card-strat-picker optgroup:not([label="Other"]) option'))
         .map((o) => o.value)
     """)
     assert values and all(" · " in value for value in values), values
@@ -316,6 +317,11 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
       document.querySelectorAll(".stdtable .timefields")[0]
         .closest("tr").querySelector(".std-tier-name").textContent.trim()
     """)
+    # Sparse Sheet columns need not define this tier. The first editor can
+    # be several cells in; read back that same cell rather than column one.
+    edited_column = hundred_coin_page.evaluate("""
+      document.querySelector('.stdtable .timefields').closest('td').cellIndex
+    """)
 
     # The boxes open holding the cell's own value, split the same way the
     # display splits it — no re-derivation, and nothing to re-type.
@@ -352,14 +358,21 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
                if (b) b.click(); })()
     """)
     hundred_coin_page.wait_for(".stdtable tbody td", timeout_ms=10000)
-    printed = hundred_coin_page.evaluate(f"""
+    read_saved = f"""
       (() => {{
         const row = Array.from(document.querySelectorAll(".stdtable tbody tr"))
           .find((r) => (r.querySelector(".std-tier-name") || {{}})
             .textContent?.trim() === {edited_tier!r});
-        return row.querySelectorAll("td")[1].textContent.trim();
+        return row.querySelectorAll("td")[{edited_column}].textContent.trim();
       }})()
-    """)
+    """
+    deadline = time.monotonic() + 10
+    printed = None
+    while time.monotonic() < deadline:
+        printed = hundred_coin_page.evaluate(read_saved)
+        if printed == "1'21\"32":
+            break
+        hundred_coin_page.wait_ms(50)
     assert printed == "1'21\"32", printed
 
     # Put it back through the same editor, so the next run (and the next

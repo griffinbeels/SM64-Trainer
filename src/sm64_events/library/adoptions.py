@@ -1,18 +1,10 @@
-"""Assigning a library row to a segment the user built.
+"""Sheet rows, local practice entries, and their shared rank standards.
 
-A star approach adopts itself: the sheet row already names the star, so
-`library/adopt.py` mints those at scrape time and they ship. A movement cannot.
-The sheet's Castle Movements are micro-optimisations at a granularity we do not
-model — 113 rows against our 63 segments — and its subsections are stretches
-inside a star that no segment exists for at all. So the user builds the segment
-first and then assigns the row to it, rather than us inventing 113 segments
-nobody asked for (user's ruling, 2026-08-05).
-
-That makes an assignment a USER's fact, not a community one: it lives in their
-data directory beside their own settings, keyed by the row's stable name so a
-sheet refresh keeps it. `library/library_overrides.json` is the other thing and
-must not be confused with this — those are corrections to our READING of the
-sheet, they are committed, and they are the same for everybody."""
+Explicit row assignments live in the user's data directory and outrank
+automatic placement. placements.py resolves current local identities;
+practice_catalog.py provisions missing movements and parented pieces.
+All consumers use sheet_strategy for the row's canonical strategy slot.
+"""
 import json
 import logging
 import re
@@ -26,23 +18,28 @@ _log = logging.getLogger("sm64.library")
 DEFAULT_STRATEGY = "Standard"
 
 
-def load(path) -> dict:
-    """{row key: entity key} — empty when absent or unreadable."""
+def _read(path) -> dict:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, ValueError):
         return {}
-    rows = data.get("rows") if isinstance(data, dict) else None
+    return data if isinstance(data, dict) else {}
+
+
+def load(path) -> dict:
+    """{row key: entity key} — empty when absent or unreadable."""
+    rows = _read(path).get("rows")
     if not isinstance(rows, dict):
         return {}
     return {key: value for key, value in rows.items()
             if isinstance(key, str) and isinstance(value, str) and value}
 
 
-def save(path, rows: dict) -> None:
+def save(path, rows: dict, *, unlinked=()) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 1, "rows": dict(sorted(rows.items()))},
+    path.write_text(json.dumps({"version": 2, "rows": dict(sorted(rows.items())),
+                               "unlinked": sorted(unlinked)},
                                indent=1, ensure_ascii=False),
                     encoding="utf-8", newline="")
 
@@ -209,11 +206,13 @@ def ladders(payload: dict, rows: dict) -> dict:
         entity = rows.get(key)
         if not entity or not item.get("ladder"):
             continue
-        name = strategy_name(target["label"], item["name"], kind=kind)
+        name = sheet_strategy(target, item, kind)
         layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
         layers["strategies"].setdefault(name, item["ladder"])
         if item.get("ladder_jp"):
             layers["jp_strategies"].setdefault(name, item["ladder_jp"])
+        if item.get("ladder_estimate"):
+            layers.setdefault("estimates", {})[name] = item["ladder_estimate"]
     return out
 
 
@@ -236,27 +235,23 @@ def library_ladders(payload: dict, rows: dict, qualified=()) -> dict:
 
     Vetted ladders still win on read (`RankStandards.ladders` merges
     fitted UNDER vetted), so nothing the community published moves.
-    `qualified` entities (a 100-coin star's variant-qualified names) are
-    skipped as `adoptable` skips them: a bare slot cannot identify a ladder
-    there. First fitted row per name wins, so a repeated name inside one
+    Shared 100-coin entities use route-qualified Sheet names, preserving
+    distinct rows without inventing an exit-star variant. First fitted
+    row per name wins, so a repeated name inside one
     target (already qualified by `sheet_strategy`) cannot overwrite."""
+    from sm64_events.library.placements import row_identity
     out = {}
-    for target in payload.get("targets") or []:
-        entity = target.get("entity_key") or ""
-        if not entity.startswith("star:") or entity in qualified:
+    for target, item, _key, kind in _rows(payload):
+        identity = row_identity(target, item, kind, rows)
+        if identity is None or not item.get("ladder"):
             continue
-        for item in target.get("approaches") or []:
-            if not item.get("ladder"):
-                continue
-            name = sheet_strategy(target, item)
-            layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
-            layers["strategies"].setdefault(name, item["ladder"])
-            if item.get("ladder_jp"):
-                layers["jp_strategies"].setdefault(name, item["ladder_jp"])
-    for entity, layers in ladders(payload, rows).items():
-        merged = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
-        merged["strategies"].update(layers["strategies"])
-        merged["jp_strategies"].update(layers["jp_strategies"])
+        entity, name = identity
+        layers = out.setdefault(entity, {"strategies": {}, "jp_strategies": {}})
+        layers["strategies"].setdefault(name, item["ladder"])
+        if item.get("ladder_jp"):
+            layers["jp_strategies"].setdefault(name, item["ladder_jp"])
+        if item.get("ladder_estimate"):
+            layers.setdefault("estimates", {})[name] = item["ladder_estimate"]
     return out
 
 
@@ -272,26 +267,50 @@ class Adoptions:
     store on every change. Re-merging rather than appending is what makes an
     unadopt actually remove a strategy."""
 
-    def __init__(self, path, store, standards, qualified=()):
+    def __init__(self, path, store, standards, qualified=(), segment_defs=None,
+                 provision=None):
         self.path = Path(path)
         self.store = store               # LibraryStore
         self.standards = standards       # RankStandards
         self.qualified = set(qualified)
         self._rows = {}
+        self._unlinked = set()
+        self.segment_defs = segment_defs
+        self.provision = provision
+        self._automatic = {}
 
     def load(self) -> None:
         self._rows = load(self.path)
+        self._unlinked = {key for key in _read(self.path).get("unlinked", [])
+                          if isinstance(key, str)} - self._rows.keys()
         self._sync()
 
     def rows(self) -> dict:
-        return dict(self._rows)
+        """Resolved assignments; empty values reserve explicitly unlinked rows.
+
+        The reservation prevents downstream automatic placement from putting
+        a deliberately unlinked row back. Consumers resolve through row_identity.
+        """
+        from sm64_events.library.placements import automatic_rows
+        definitions = list(self.segment_defs()) if self.segment_defs else []
+        existing = {f"segment:{d['id']}" for d in definitions}
+        generated = {key: entity for key, entity in self._automatic.items()
+                     if entity in existing}
+        return automatic_rows(self.store.payload,
+                              {**generated, **dict.fromkeys(self._unlinked, ""),
+                               **self._rows}, definitions)
+
+    def _save(self):
+        save(self.path, self._rows, unlinked=self._unlinked)
 
     def ladders(self) -> dict:
         """Every sheet-fitted ladder the store should carry: the whole
         library's (round 33) plus the user's assignments."""
-        return library_ladders(self.store.payload, self._rows, self.qualified)
+        return library_ladders(self.store.payload, self.rows(), self.qualified)
 
     def _sync(self) -> None:
+        if self.provision is not None:
+            self._automatic = self.provision(self.store.payload, self._rows)
         if self.standards is not None:
             self.standards.apply_sheet_ladders(self.ladders())
 
@@ -299,30 +318,34 @@ class Adoptions:
         target, item, name = validate(self.store.payload, key, entity,
                                       self.qualified)
         self._rows[key] = entity
-        save(self.path, self._rows)
+        self._unlinked.discard(key)
+        self._save()
         self._sync()
         return {"adopted": True, "row_key": key, "entity_key": entity,
                 "strategy": name, "ladder": item["ladder"],
                 "target": target["label"]}
 
     def unadopt(self, key: str) -> dict:
-        removed = self._rows.pop(key, None)
-        save(self.path, self._rows)
+        removed = self.rows().get(key)
+        self._rows.pop(key, None)
+        self._unlinked.add(key)
+        self._save()
         self._sync()
         return {"adopted": False, "row_key": key, "entity_key": removed}
 
     def linked_targets(self) -> dict:
-        """{entity key: [{index, label}]} — the REVERSE of the stored rows,
+        """{entity key: [{index, label}]} — the REVERSE of resolved rows,
         for the segment editor's "which library target points at me" view
         (round 8). Computed from APPROACH assignments only: a piece link is
         a partial fact and must not present a whole target as linked."""
         from sm64_events.library.audit import row_key as make_key
         out = {}
+        assigned = self.rows()
         for position, target in enumerate(self.store.payload["targets"]):
-            entities = {self._rows[key]
+            entities = {assigned[key]
                         for item in target["approaches"]
                         if (key := make_key(target, item["name"],
-                                            item["ids"])) in self._rows}
+                                            item["ids"])) in assigned and assigned[key]}
             for entity in entities:
                 out.setdefault(entity, []).append(
                     {"index": position, "label": target["label"]})
@@ -355,14 +378,14 @@ class Adoptions:
                 continue
             key = make_key(target, item["name"], item["ids"])
             self._rows[key] = entity
+            self._unlinked.discard(key)
             adopted.append({"row_key": key,
-                            "strategy": strategy_name(target["label"],
-                                                      item["name"])})
+                            "strategy": sheet_strategy(target, item)})
         if not adopted:
             raise AdoptionError(
                 f"{target['label']!r} has no approach with rank standards -- "
                 f"linking it would grade nothing")
-        save(self.path, self._rows)
+        self._save()
         self._sync()
         return {"adopted": adopted, "skipped": skipped,
                 "entity_key": entity, "target": target["label"]}
@@ -377,11 +400,14 @@ class Adoptions:
             raise AdoptionError(f"no library target at index {index}")
         from sm64_events.library.audit import row_key as make_key
         removed = 0
+        assigned = self.rows()
         for item in target["approaches"]:
             key = make_key(target, item["name"], item["ids"])
-            if self._rows.pop(key, None) is not None:
+            if assigned.get(key):
                 removed += 1
-        save(self.path, self._rows)
+            self._rows.pop(key, None)
+            self._unlinked.add(key)
+        self._save()
         self._sync()
         return {"removed": removed, "target": target["label"]}
 
@@ -404,7 +430,7 @@ def validate(payload: dict, key: str, entity: str, qualified=()):
         raise AdoptionError(
             f"{entity} names its strategies by exit-star variant, and the sheet "
             f"row does not say which exit star it ran")
-    name = strategy_name(target["label"], item["name"], kind=kind)
+    name = sheet_strategy(target, item, kind)
     # A vetted strategy of the same name is NOT a refusal (round 6, reversing
     # round 5's arm): the standards read-merge keeps the vetted ladder
     # structurally, so the assignment cannot touch grading -- and it now

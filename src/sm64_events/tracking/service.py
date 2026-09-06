@@ -134,6 +134,7 @@ class TrackerService:
         self.db = db
         self.broadcaster = broadcaster
         self.ranks = ranks            # RankStandards | None
+        self.on_segment_definitions_changed = None
         # The game version SETTING (core/modes.py) as last applied through
         # `set_game_version` -- main.py applies the persisted one at boot.
         # What it RESOLVES to lives on the standards store as
@@ -223,6 +224,8 @@ class TrackerService:
         if self.db is None:
             log.error("tracker running WITHOUT a database (broadcast-only)")
             return
+        if self.on_segment_definitions_changed is not None:
+            self.on_segment_definitions_changed()
         # Before the replay, so it runs over the smaller journal: clear the
         # derived-bookkeeping rows written before BROADCAST_ONLY existed. A
         # one-off in practice — nothing writes these any more, so every later
@@ -1185,7 +1188,11 @@ class TrackerService:
         """Definitions changed retroactively: reload, then re-derive every
         attempt from the journal (mirrors clear/restore)."""
         self._segment_defs = self._load_segment_defs()
+        if self.on_segment_definitions_changed is not None:
+            self.on_segment_definitions_changed()
         await self._reproject()
+        if self.on_segment_definitions_changed is not None:
+            await self._rank_standards_changed()
 
     # -- routes ----------------------------------------------------------------
     def _check_segment_refs(self, db: Database, steps: list) -> None:

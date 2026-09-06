@@ -198,6 +198,10 @@ def _stubbed_main(monkeypatch):
         def get_state(self, key, default):
             return default
 
+        def set_state(self, key, value):
+            # Sheet catalog provisioning persists ownership of generated IDs.
+            pass
+
         def routes(self):
             return []
 
@@ -257,6 +261,9 @@ def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
 
         def get_state(self, key, default):
             return default
+
+        def set_state(self, key, value):
+            pass
 
         def routes(self):
             return []

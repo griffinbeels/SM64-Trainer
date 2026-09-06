@@ -950,11 +950,12 @@ def create_scorecard_router(service, library=None, adoptions=None,
             # the payload the absorb just installed, then the re-grade is
             # absorbed so no celebration fires for a rank he did not run
             # for (`import_api.py::finish` does the same after a landing).
-            def on_loop():
+            async def on_loop():
                 if adoptions is not None:
                     adoptions.load()
                 absorb_after_regrade(service)
-            asyncio.run_coroutine_threadsafe(_call_soon(on_loop), loop).result(timeout=30)
+                await service._rank_standards_changed()
+            asyncio.run_coroutine_threadsafe(on_loop(), loop).result(timeout=30)
 
         return {"job_id": _column_jobs.start(
             "scorecard-column", lambda step: _column_work(step, resync=resync))}

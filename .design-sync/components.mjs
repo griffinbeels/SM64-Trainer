@@ -201,6 +201,7 @@ export const COMPONENTS = [
       ["strategies", "unknown[]", "Every strategy this entity has."],
       ["onChanged?", "() => void", "Called after the panel edits a standard."],
       ["defaultOpen?", "boolean", "Start expanded."],
+      ["standardsRevision?", "number", "Refetch when shared rank standards change."],
       ["sectionRank?", "RankBadge | null", "Rank shown in the collapsed header."],
       ["sectionPb?", "unknown", "PB shown in the collapsed header."],
       ["family?", "unknown", "Related entities the panel offers to switch between."],

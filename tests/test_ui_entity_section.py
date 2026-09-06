@@ -46,6 +46,14 @@ def test_a_star_section_is_not_a_segment_even_though_it_names_no_kind():
     assert call("isSegment", SEGMENT) is True
 
 
+def test_manual_timing_requires_both_detection_lists_to_be_explicitly_empty():
+    assert call("isManualSegment", {"start_triggers": [], "end_triggers": []}) is True
+    assert call("isManualSegment", None) is False
+    assert call("isManualSegment", {}) is False
+    assert call("isManualSegment", {"start_triggers": [],
+                                    "end_triggers": [{"type": "star_grab"}]}) is False
+
+
 def test_entity_keys_match_what_every_other_surface_builds():
     assert call("entityKey", STAR) == "star:8:5"
     assert call("entityKey", SEGMENT) == "segment:12"

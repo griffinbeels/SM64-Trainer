@@ -32,7 +32,6 @@ Pure: no db, no file I/O, no network, same discipline `ranks/scopes.py`
 already holds to, so pytest drives this module directly."""
 from dataclasses import dataclass
 
-from sm64_events.library.audit import row_key
 from sm64_events.library.sheet import entry_version
 from sm64_events.ranks import scoring
 
@@ -82,11 +81,10 @@ def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
     """The entity ONE row (one approach or one subsection) grades against, or
     None if it grades against nothing.
 
-    An adoption always wins when one exists. Failing that: an APPROACH
-    adopts itself when its target already carries an `entity_key` -- the
-    sheet's own star mapping (`library/mapping.py`) already names it, which
-    is what `library/adoptions.py`'s docstring calls a row that "adopts
-    itself". A SUBSECTION never inherits its target's `entity_key` this way,
+    `placements.row_identity` supplies the same local entity used by imports
+    and standards. Only a star approach can inherit its source entity key;
+    a Sheet segment key requires a current local link. A SUBSECTION never
+    inherits its target's `entity_key` this way,
     even when one exists, and this is NOT a defensible-either-way choice --
     it is required, and letting a subsection inherit is a scoring bug with a
     measured direction. A subsection times a STRETCH inside its target, not
@@ -100,14 +98,11 @@ def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
     shipped snapshot: letting subsections inherit moves the runner corpus
     from 442 to 446 and its top MARELO from 85.2 to 88.8 -- a runner's rating
     can go up for grading a piece of a star as if it were the whole thing.
-    Until the user has built and adopted a segment for that exact stretch, a
-    subsection contributes nothing here."""
-    adopted = adopted_rows.get(row_key(target, item["name"], item["ids"]))
-    if adopted:
-        return adopted
-    if kind == "approaches":
-        return target.get("entity_key")
-    return None
+    A subsection contributes only through its own local practice entry."""
+    from sm64_events.library.placements import row_identity
+    identity = row_identity(target, item, "approach" if kind == "approaches"
+                            else "subsection", adopted_rows)
+    return identity[0] if identity else None
 
 
 def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us",

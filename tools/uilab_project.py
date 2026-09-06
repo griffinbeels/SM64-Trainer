@@ -507,10 +507,18 @@ await waitFor(() => !!document.querySelector('.input-lanes'));
 _RANK_LEADERBOARD_SETUP = _script("""
 const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
 if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
+// A preceding story may have opened a runner inside the already-active
+// Rank tab. Return through its actual back door before opening the board.
+if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head')
+  || !!document.querySelector('.runner-page .entity-back'), 15000))
+  throw new Error('Rank page did not finish loading before leaderboard setup');
+const runnerBack = document.querySelector('.runner-page .entity-back');
+if (runnerBack) runnerBack.click();
 // The board is its own card between the scope chips and the MARELO card,
 // CLOSED by default (fourth read, 2026-08-23) -- open it, then wait for
 // the rows its first open fetches.
-await waitFor(() => !!document.querySelector('.leaderboard-card-head'));
+if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head'), 15000))
+  throw new Error('Returning from the runner did not render the Rank page');
 const head = document.querySelector('.leaderboard-card-head');
 if (head.getAttribute('aria-expanded') !== 'true') head.click();
 await waitFor(() => !!document.querySelector('.leaderboard-row'));
@@ -527,8 +535,11 @@ await sleep(400);   // the fold's open run must land before anything measures
 _RUNNER_PAGE_SETUP = _script("""
 const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
 if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
-await waitFor(() => !!document.querySelector('.leaderboard-card-head')
-  || !!document.querySelector('.runner-page'));
+// Rank waits for scopes, summary, history and ratings before mounting its
+// cards. A timed-out wait must fail here, not dereference a nonexistent card.
+if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head')
+  || !!document.querySelector('.runner-page'), 15000))
+  throw new Error('Rank page did not finish loading before runner setup');
 if (!document.querySelector('.runner-page')) {
   const head = document.querySelector('.leaderboard-card-head');
   if (head.getAttribute('aria-expanded') !== 'true') head.click();   // closed by default

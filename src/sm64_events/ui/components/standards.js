@@ -21,7 +21,8 @@ import { TimeFields } from "./timefields.js";
 import { ceilingOf, slowestFirst } from "../ladderorder.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { capName, capGradient, divisionDigit, DIVISION_NUMERALS } from "./caps.js";
-import { bandsOf, divisionRangeLabel, ladderBands } from "./librarymodel.js";
+import { bandsOf, divisionRangeLabel, ladderBands, estimateNote } from "./librarymodel.js";
+import { useIdentityFetch } from "../refetch.js";
 import { RankIcon } from "./rankicon.js";
 import { disclosurePlan } from "../disclosure.js";
 import { feedTuning } from "../feedtuning.js";
@@ -236,7 +237,7 @@ function inFamily(name, family) {
 
 export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
     defaultOpen = false, sectionRank = null, sectionPb = null, family = null,
-    openLibrary = null, gradingVersion = null }) {
+    openLibrary = null, gradingVersion = null, standardsRevision = 0 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -255,9 +256,12 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // server yet — local only, never sent anywhere by itself. The write
   // happens the moment a JP TimeFields actually commits.
   const [jpOpen, setJpOpen] = useState(() => new Set());
+  const requestRef = useRef(0);
   async function load() {
+    const request = ++requestRef.current;
     const qs = shownVersion ? `&version=${enc(shownVersion)}` : "";
-    setData(await getJSON(`/api/ranks/standards?entity=${enc(entity)}${qs}`));
+    const next = await getJSON(`/api/ranks/standards?entity=${enc(entity)}${qs}`);
+    if (request === requestRef.current) setData(next);
   }
   // When opened by default (or when the card remounts for a new entity while
   // open), fetch on mount — toggle() only loads on a user click, so an
@@ -292,14 +296,16 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // panel whose switch is untouched (shownVersion null) would otherwise keep
   // showing the old version's ladder under a rank that has moved.
   const prevEntityRef = useRef(entity);
-  useEffect(() => {
+  useIdentityFetch(`${entity}:${shownVersion}:${gradingVersion}`, standardsRevision, (cleared) => {
     if (prevEntityRef.current !== entity) {
       prevEntityRef.current = entity;
       setExpandedTier(null);
       setJpOpen(new Set());
     }
+    if (cleared) setData(null);
     load();
-  }, [entity, shownVersion, gradingVersion]);
+    return () => { requestRef.current += 1; };
+  });
   // Reload on EVERY open, not just the first: a strat created from the
   // practice dropdown or header picker while this panel sat cached would
   // otherwise show empty cells forever (its data is fetched out-of-band,
@@ -613,6 +619,9 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
                 disabled=${lockedJp(strat)}
                 onchange=${(e) => toggleJp(strat, e.target.checked)} /> JP differs
           </label>` : ""}
+          ${data.estimated_strategies && data.estimated_strategies[strat]
+            ? html`<span class="meta std-estimate"
+                title=${estimateNote(data.estimated_strategies[strat])}> · Estimated</span>` : ""}
           ${marker && strat === activeStrat ? html`<span class="std-you-badge"
               title=${data.version !== data.grading_version
                 ? `your current time, placed on the ${regionLabel(data.version)} ladder shown here · the score is your graded (${regionLabel(data.grading_version)}) one`

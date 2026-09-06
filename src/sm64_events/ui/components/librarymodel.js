@@ -33,6 +33,43 @@ export const RANKS = ["Bronze", "Silver", "Gold", "Platinum", "Diamond",
 // default).
 export const GAME_FPS = 30;
 
+// The API resolves the local practice slot. Older snapshots only carry the
+// historical vetted match; keep that fallback for unlinked browsing rows.
+export function strategyOf(row) {
+  return row.strategy || row.matched_strategy || row.name;
+}
+
+// Names can lead to a row without becoming its grading identity. Canonical
+// slots win across the whole page; old vetted matches are a navigation
+// fallback for cached snapshots, never an override of the row's standards.
+export function approachesForStrategy(rows, strategy) {
+  if (!strategy) return [];
+  const canonical = rows.filter((row) => strategyOf(row) === strategy);
+  if (canonical.length) return canonical;
+  const named = rows.filter((row) => row.name === strategy);
+  return named.length ? named
+    : rows.filter((row) => row.matched_strategy === strategy);
+}
+
+// Keep existing PB doors useful when an older snapshot paired this row with
+// a differently named strategy. Only the time crosses that association:
+// matchedStanding regrades it on the displayed ladder and the UI names the
+// comparison. A canonical PB always wins, even over a faster alias PB.
+export function strategyReference(row, byName) {
+  const canonical = byName[strategyOf(row)] || null;
+  if (canonical && canonical.pb_cs != null) return canonical;
+  const alias = byName[row.matched_strategy];
+  return alias && alias.pb_cs != null && row.matched_strategy !== strategyOf(row)
+    ? { ...alias, comparison_strategy: row.matched_strategy } : canonical;
+}
+
+export function estimateNote(estimate) {
+  if (!estimate) return null;
+  return estimate.note || (estimate.method === "ideal"
+    ? "Estimated from the sheet's ideal time."
+    : "Estimated from a related sheet row.");
+}
+
 // SECOND-DOOR RULING (2026-08-07): `ladderorder.js`
 // already sorts strategies by the same Mario-cutoff idea (`slowestFirst`,
 // used by standards.js's rank table), and its no-ladder rule is the OPPOSITE
@@ -60,8 +97,7 @@ export function sectionOrder(approaches) {
 export function autoExpandName(ordered, selectedStrat) {
   if (!ordered.length) return null;
   if (selectedStrat) {
-    const hit = ordered.find((a) => a.matched_strategy === selectedStrat
-                                 || a.name === selectedStrat);
+    const hit = approachesForStrategy(ordered, selectedStrat)[0];
     if (hit) return hit.name;
   }
   return ordered[0].name;
@@ -398,30 +434,31 @@ export function standingOn(ladder, pbCs) {
 // `served` is the endpoint's own graded answer for that strategy -- graded on
 // the STANDARDS ladder (vetted merged over fitted), in the active rank mode,
 // on the grading version. While the page SHOWS that same version it is kept
-// verbatim: this section's `ladder` is the sheet's fitted one and differs
-// from the grading ladder for every matched approach in the shipped snapshot
-// (206/206, whole-branch review), so re-walking here would contradict the
-// practice card's medal for the same PB. Only when the page shows the OTHER
+// verbatim, including the practice mode's sample-size state. Linked rows
+// now carry the same effective standards as Practice. Only when showing the OTHER
 // version is there no served answer to keep -- then the saved PB (`pb_cs`,
 // the walkable ingredient views.py::build_entity_strategies carries for
 // exactly this) is re-walked against the displayed ladder, the same walk an
 // associated row uses. No walkable PB -> the served answer either way.
+// An explicitly labeled alias comparison always re-walks: its source
+// strategy's grade is never the answer to this canonical row's ladder.
 export function matchedStanding(served, ladder, version, gradingVersion) {
-  if (!served || served.pb_cs == null || version === gradingVersion) return served;
-  return { ...standingOn(ladder, served.pb_cs), pb_display: served.pb_display, noTimes: false };
+  if (!served || served.pb_cs == null) return served;
+  if (version === gradingVersion && !served.comparison_strategy) return served;
+  return { ...standingOn(ladder, served.pb_cs), pb_display: served.pb_display,
+    noTimes: false, comparison_strategy: served.comparison_strategy };
 }
 
 // Which rows offer the link-to-segment button (round 5). A star's approaches
-// auto-adopt at scrape time, so only approaches on an ENTITY-LESS target
-// (castle movements, stage routes) are linkable; subsections never auto-adopt
-// -- the user builds the segment first (his 2026-08-05 ruling) -- so every
-// one is, on star and movement targets alike. A row without `row_key` (an
+// already belong to their star. Movement targets can carry a resolved local
+// segment key and remain relinkable; every subsection can be relinked too.
+// A row without `row_key` (an
 // old snapshot) gets no button: a click that cannot name its row cannot be
 // honest about failing.
 export function linkable(target, item, kind) {
   if (!item || !item.row_key) return false;
   if (kind === "subsection") return true;
-  return !target.entity_key;
+  return !target.entity_key || target.entity_key.startsWith("segment:");
 }
 
 export function gridShape(n) {
