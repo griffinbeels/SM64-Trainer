@@ -730,20 +730,32 @@ a clip's picture rate follows the game's pictures instead of a fixed 60.
   second onto a wall-clock grid and stamped it at the encoder's read;
   that shape still serves clips cut before it and the in-process fallback.
 
+### Media run
+
+One encoder child's identity and clock origin. The first submitted picture
+starts the clock; video timestamps are integer ticks at 90,000 ticks per
+second. A restart creates a new identity even when the frame size is unchanged.
+Segments retain that identity so extraction cannot join unrelated clocks.
+The cut preserves its integer source offset and can recover each encoded
+picture's original timestamp without fitting a cadence.
+
+- **Lives** -- `src/sm64_events/replay/media.py`, shared by the sink,
+  segment ring, extractor and feed-log lookup.
+
 ### Feed log
 
-The [[picture ledger]]'s record of what the [[picture feed]] actually
-wrote: one entry per encoded picture -- the time the feed stamped it
-with and the ledger row it carried, or none for a repeat of the last
-picture. Extraction matches a clip's pictures to it by time, entry by
-entry, and reads the [[frame map]] off it; the match's own numbers ride
-the clip's metadata so a verdict is answerable from the file.
+The [[picture ledger]]'s record of each picture accepted by the encoder:
+its [[media run]], assigned integer timestamp and original captured-row time.
+A same-run heartbeat retains the held picture's row identity. The assigned
+media time stays separate from capture time, including when a delayed picture
+arrives after a heartbeat. Extraction joins exact run/timestamp keys; collisions
+and missing keys remain unknown rather than selecting a nearby picture.
 
 - **Lives** -- `src/sm64_events/replay/ledger.py` (the log),
-  `src/sm64_events/replay/feedmap.py` (the reading),
-  `src/sm64_events/replay/service.py` (at extraction)
-- **Not** -- the [[picture ledger]]'s rows. A row is a picture the capture
-  saw; a log entry is a picture the feed gave the encoder.
+  `src/sm64_events/replay/feedmap.py` (the lookup),
+  `src/sm64_events/replay/service.py` (clip metadata and state occurrences).
+- **Not** -- the [[picture ledger]]'s rows. A row is a picture capture saw;
+  a log entry is an accepted encoder write, including heartbeat copies.
 
 ### Picture ledger
 
@@ -752,8 +764,8 @@ the emulator's window: when the picture appeared, the [[frame]] the game
 was computing, and every extra fact a wiring line registers. His spec:
 capture holds all the information, so each picture of the video carries it
 for any future analysis. At extraction the trainer matches the clip's
-pictures to these rows by time and the rows become the [[frame map]]
-directly -- one answer per picture by construction (the [[picture feed]]
+pictures to these rows through exact [[feed log]] keys. The matched row
+occurrence survives into the [[frame map]] and per-picture timer (the [[picture feed]]
 goes further: it writes one encoded picture per row and files each write
 in the ledger's [[feed log]]) -- and the clip's own
 metadata keeps its slice of the rows after the recording buffer forgets

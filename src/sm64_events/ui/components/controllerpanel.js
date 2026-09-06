@@ -148,7 +148,7 @@ export function ControllerPanel({
   templateFrame = undefined, templateLabel = "Template",
 }) {
   // `frame` is a timeline run (`{buttons, stick_x, stick_y, ...}`) or null
-  // for a frame with no capture, which draws as a centred, empty pad.
+  // for a frame with no capture. Unknown is distinct from a centred pad.
   const stickX = frame ? frame.stick_x : 0;
   const stickY = frame ? frame.stick_y : 0;
   const held = frame ? heldNames(frame.buttons, table) : [];
@@ -186,10 +186,10 @@ export function ControllerPanel({
               class="stick-box-cross" />
         <circle cx=${BOX / 2} cy=${BOX / 2} r=${radius * (stickMax / reach)}
                 class="stick-box-cap" />
-        <line x1=${BOX / 2} y1=${BOX / 2} x2=${toBox(stickX)}
+        ${frame && html`<line x1=${BOX / 2} y1=${BOX / 2} x2=${toBox(stickX)}
               y2=${BOX - toBox(stickY)} class="stick-box-stem" />
         <circle cx=${toBox(stickX)} cy=${BOX - toBox(stickY)} r=${DOT / 2}
-                class="stick-box-dot" />
+                class="stick-box-dot" />`}
         ${templateFrame && html`
           <line x1=${BOX / 2} y1=${BOX / 2} x2=${toBox(templateX)}
                 y2=${BOX - toBox(templateY)} class="stick-box-stem is-template"
@@ -198,19 +198,19 @@ export function ControllerPanel({
                   class="stick-box-dot is-template" fill="none" />`}
       </svg>
       ${showNumbers && html`<div class="stick-values"
-          aria-label=${`Stick ${stickPhrase(stickX, stickY, deadZone, stickMax)}`}>
+          aria-label=${frame ? `Stick ${stickPhrase(stickX, stickY, deadZone, stickMax)}` : "Stick not recorded"}>
         ${comparing ? html`
-          ${reading(numbers({ vertical, horizontal }), "You")}
+          ${reading(frame ? numbers({ vertical, horizontal }) : "not captured", "You")}
           ${reading(templateFrame ? numbers(templateWords)
             : html`<span class="stick-value is-centred">not captured</span>`, templateLabel, true)}`
-          : numbers({ vertical, horizontal })}
+          : frame ? numbers({ vertical, horizontal }) : "not captured"}
       </div>`}
     </div>
     ${showButtons && html`<div class="controller-buttons"
-        aria-label=${held.length ? `Holding ${held.join(", ")}` : "No buttons held"}>
+        aria-label=${frame ? (held.length ? `Holding ${held.join(", ")}` : "No buttons held") : "Input not recorded"}>
       ${comparing && html`<span class="controller-reading-label">You</span>`}
       ${held.length === 0
-        ? html`<span class="controller-button is-empty">no buttons</span>`
+        ? html`<span class="controller-button is-empty">${frame ? "no buttons" : "not captured"}</span>`
         : held.map((name) => html`
           <span class=${`controller-button btn-${name.toLowerCase()}`}
                 key=${name}>${name}</span>`)}

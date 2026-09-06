@@ -381,6 +381,9 @@ class ReplayService:
                 "anchor_offset_s": self._anchor_offset(a, m),
                 "frame_map": m.get("frame_map"),
                 "frame_map_source": m.get("frame_map_source"),
+                # Capture occurrence per slot, scoped to this clip. Heartbeats
+                # keep the same ID; revisiting a raw counter gets another ID.
+                "picture_ids": m.get("picture_rows"),
                 # A capture-layer clip: the game's own timer per video
                 # slot, from the stamps (None where a slot has none).
                 "picture_igt": m.get("picture_igt"),

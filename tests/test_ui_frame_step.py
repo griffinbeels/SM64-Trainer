@@ -13,26 +13,17 @@ to move forward (if at the end) or backward (if at the beginning)."
 Node evaluates the real declarations out of `ui/frame.js`.
 """
 import json
-import re
 import subprocess
 from pathlib import Path
-
-from source_scan import strip_comments
 
 FRAME_JS = (Path(__file__).resolve().parents[1]
             / "src/sm64_events/ui/frame.js")
 
 
 def run(expression: str):
-    code = strip_comments(FRAME_JS.read_text(encoding="utf-8"))
-    parts = []
-    for name in ("gameFrameOf", "clipClock", "slotAtTime", "timeOfSlot",
-                 "nextMappedTime", "stepGameFrame", "clampToFrames"):
-        match = re.search(rf"^export function {name}\(.*?^\}}\s*$",
-                          code, re.MULTILINE | re.DOTALL)
-        assert match, f"no top-level `export function {name}` in frame.js"
-        parts.append(match.group(0).replace("export ", "", 1))
-    script = ("\n".join(parts)
+    script = ("import {gameFrameOf,clipClock,slotAtTime,timeOfSlot,"
+              "nextMappedTime,stepGameFrame,clampToFrames} from "
+              + json.dumps(FRAME_JS.as_uri()) + ";"
               + f"\nconsole.log(JSON.stringify({expression}));")
     result = subprocess.run(["node", "--input-type=module", "-"],
                             input=script, capture_output=True, text=True,
@@ -119,7 +110,7 @@ def test_the_ends_answer_null_so_the_caller_can_clamp():
 def test_no_map_answers_null_and_the_time_step_stands():
     assert mapped_step(1.0, None, 1) is None
     assert mapped_step(1.0, [], 1) is None
-    assert mapped_step(1.0, [None, None], 1) is None
+    assert mapped_step(1.0, [None, None], 1) is None  # at the last unknown slot
 
 
 def test_a_clip_whose_first_frame_is_not_at_zero_steps_onto_its_own_slots():
@@ -155,10 +146,13 @@ VFR = f"{{fps: 60, start: 0.011, times: {json.dumps(VFR_TIMES)}}}"
 
 def test_the_clip_clock_is_built_from_the_view_and_prefers_frame_times():
     built = run(f"clipClock({{fps: 60, video_start_s: 0.011, frame_times: {json.dumps(VFR_TIMES)}}})")
-    assert built == {"fps": 60, "start": 0.011, "times": VFR_TIMES}
+    assert built == {"fps": 60, "start": 0.011, "times": VFR_TIMES,
+                     "duration": None, "identities": None}
     cfr = run("clipClock({fps: 60, video_start_s: 0.011, frame_times: null})")
-    assert cfr == {"fps": 60, "start": 0.011, "times": None}
-    assert run("clipClock(null)") == {"fps": 60, "start": 0, "times": None}
+    assert cfr == {"fps": 60, "start": 0.011, "times": None,
+                   "duration": None, "identities": None}
+    assert run("clipClock(null)") == {"fps": 60, "start": 0, "times": None,
+                                      "duration": None, "identities": None}
 
 
 def test_a_vfr_slot_is_the_last_frame_begun_at_or_before_the_time():
@@ -187,3 +181,74 @@ def test_a_vfr_step_moves_one_frame_whatever_the_gap_was():
     assert run(f"slotAtTime({landed}, {VFR})") == 4
     back = run(f"nextMappedTime({landed}, {json.dumps(frame_map)}, {VFR}, -1)")
     assert run(f"slotAtTime({back}, {VFR})") == 3
+
+
+def test_steps_follow_capture_order_across_overlapping_counter_epochs():
+    # Raw 100 is visited twice. Going back from the second 101 must reach
+    # that visit, not the first occurrence at the beginning of the clip.
+    got = run("""(() => {
+      const map = [100,100,101,101,99,100,100,101];
+      const clock = {times: map.map((_, k) => k / 10)};
+      return [[3,1], [4,-1], [7,-1], [6,-1]].map(([slot, dir]) => {
+        const t = nextMappedTime(timeOfSlot(slot, clock), map, clock, dir);
+        return t === null ? null : slotAtTime(t, clock);
+      });
+    })()""")
+    assert got == [4, 2, 5, 4]
+
+
+def test_every_ninety_khz_picture_can_be_selected_without_rounding_to_its_neighbor():
+    got = run("""(() => {
+      const clock = {times: [0, 1/90000, 2/90000, 1/30]};
+      return clock.times.map((_, k) => slotAtTime(timeOfSlot(k, clock), clock));
+    })()""")
+    assert got == [0, 1, 2, 3]
+
+
+def test_source_picture_identity_distinguishes_equal_counters_and_skips_heartbeats():
+    got = run("""(() => {
+      const map = [100,100,100,100,101];
+      const clock = clipClock({frame_times: [0,.1,.2,.3,.4],
+        picture_ids: [8,8,9,9,10]});
+      return [[0,1], [4,-1], [2,-1]].map(([slot, dir]) =>
+        slotAtTime(nextMappedTime(timeOfSlot(slot, clock), map, clock, dir), clock));
+    })()""")
+    assert got == [2, 2, 0]
+
+
+def test_unknown_picture_slots_are_stepped_without_borrowing_a_known_identity():
+    got = run("""(() => {
+      const map = [100,null,null,101];
+      const clock = {times: [0,.1,.2,.3]};
+      return [[0,1], [1,1], [2,1], [3,-1]].map(([slot, dir]) =>
+        slotAtTime(nextMappedTime(timeOfSlot(slot, clock), map, clock, dir), clock));
+    })()""")
+    assert got == [1, 2, 3, 2]
+
+
+def test_real_step_keeps_vfr_intervals_and_stays_put_at_both_ends():
+    got = run("""(() => {
+      const map = [10,11,12,13];
+      const clock = {times: [0,1/90000,2/90000,.05]};
+      const v = {currentTime: timeOfSlot(0, clock), duration: .0501,
+        paused: true, pause() {}};
+      const out = [];
+      for (const dir of [-1,1,1,1,1,-1,-1,-1,-1]) {
+        stepGameFrame(v, dir, 30, map, clock);
+        out.push([slotAtTime(v.currentTime, clock), v.currentTime < v.duration]);
+      }
+      return out;
+    })()""")
+    assert got == [[slot, True] for slot in [0,1,2,3,3,2,1,0,0]]
+
+
+def test_unstamped_vfr_video_steps_its_recorded_pictures():
+    got = run("""(() => {
+      const clock = {times: [.01,.02,.2]};
+      const v = {currentTime: .015, duration: .3, paused: true, pause() {}};
+      return [1,1,-1].map((dir) => {
+        stepGameFrame(v, dir, 30, null, clock);
+        return slotAtTime(v.currentTime, clock);
+      });
+    })()""")
+    assert got == [1, 2, 1]

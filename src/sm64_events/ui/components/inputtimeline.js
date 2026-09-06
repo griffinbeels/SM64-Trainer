@@ -19,6 +19,7 @@ import { h } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { useOverlayRows, useTemplateRevision } from "../inputpreferences.js";
 import { clampToFrames, slotAtTime, timeOfSlot } from "../frame.js";
+import { watchVideoPicture } from "../videopicture.js";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
@@ -35,6 +36,7 @@ const SPEED_HEIGHT = 30;
 // stopped. The field names are the payload's own, so a field added on the
 // server is readable here the moment it arrives.
 export function frameAt(runs, frame) {
+  if (frame == null) return null;
   // A frame inside a hole has no reading and answers null -- never the
   // neighbouring run's, which would interpolate across exactly the gap the
   // format exists to preserve.
@@ -51,6 +53,7 @@ export function frameAt(runs, frame) {
 }
 
 export function actionAt(spans, frame) {
+  if (frame == null) return null;
   for (const span of spans || []) {
     if (frame >= span.start && frame < span.start + span.length) return span;
   }
@@ -60,6 +63,7 @@ export function actionAt(spans, frame) {
 // The last moment at or before `frame`: what he had most recently done to
 // the world when the playhead sits here. Markers are sorted by frame.
 export function momentAt(markers, frame) {
+  if (frame == null) return null;
   let found = null;
   for (const marker of markers || []) {
     if (marker.frame > frame) break;
@@ -251,12 +255,16 @@ export const timeAtFrame = (frame, anchorOffsetS, fps) =>
 // `stretches` ([axis_start, raw_start, length] per ascending stretch of the
 // counter -- the server's own restart rule, shipped rather than re-derived).
 export function trackFrameOf(raw, stretches) {
+  let found = null;
   for (const [axisStart, rawStart, length] of stretches || []) {
     if (raw >= rawStart && raw < rawStart + length) {
-      return axisStart + (raw - rawStart);
+      // A raw counter is not an identity across save-state resets. Until
+      // a capture occurrence resolves the choice, neither visit is known.
+      if (found !== null) return null;
+      found = axisStart + (raw - rawStart);
     }
   }
-  return null;
+  return found;
 }
 export function gameFrameOf(axis, stretches) {
   for (const [axisStart, rawStart, length] of stretches || []) {
@@ -271,26 +279,21 @@ export function gameFrameOf(axis, stretches) {
 // (null before the clock's coverage); `clock` is the clip clock
 // (frame.js::clipClock -- the encode rate and first timestamp of a CFR
 // clip, or every frame's own time for a picture-feed clip). Answers null
-// when the map cannot say, and the caller falls back to the offset
-// arithmetic -- never a silent guess.
+// when the map cannot identify an input. The panel must preserve that
+// absence rather than borrow a nearby input from a time estimate.
 export function mappedFrameAtTime(seconds, frameMap, clock, stretches, frames) {
   if (!frameMap || !frameMap.length) return null;
-  const slot = Math.max(0, Math.min(frameMap.length - 1,
-    slotAtTime(seconds, clock)));
+  const slot = slotAtTime(seconds, clock);
+  if (slot < 0 || slot >= frameMap.length) return null;
   const raw = frameMap[slot];
   if (raw == null) return null;
   const axis = trackFrameOf(raw, stretches);
-  if (axis === null) {
-    // The clip's lead-in (before the anchor) or its tail (after the grab).
-    const first = (stretches || [])[0];
-    return first && raw < first[1] ? 0 : Math.max(frames - 1, 0);
-  }
-  return Math.max(0, Math.min(Math.max(frames - 1, 0), axis));
+  return axis !== null && axis >= 0 && axis < frames ? axis : null;
 }
 export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
-  if (!frameMap || !frameMap.length) return null;
+  if (frame == null || !frameMap || !frameMap.length) return null;
   const raw = gameFrameOf(frame, stretches);
-  if (raw === null) return null;
+  if (raw === null || trackFrameOf(raw, stretches) !== frame) return null;
   // The FIRST video frame showing this game frame -- or, when the capture
   // skipped it entirely, the first one past it (his 26, 27, 27, 29 shape:
   // frame 28's picture never existed, so its inputs show over 29's slot).
@@ -382,7 +385,7 @@ export function inspectorClock(frame, lead, pictureIgt, slot) {
     const igt = pictureIgt[slot];
     if (igt != null) return { frames: igt, stamped: true };
   }
-  if (frame < lead) return null;
+  if (frame == null || frame < lead) return null;
   return { frames: frame - lead, stamped: false };
 }
 
@@ -394,7 +397,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 compact = false,
                                 tools = null }) {
   const [state, setState] = useState({ phase: "loading" });
-  const [frame, setFrame] = useState(0);
+  const [frame, setFrame] = useState(video ? null : 0);
+  const [presentedSlot, setPresentedSlot] = useState(null);
   const [overlayVisible, toggleOverlay] = useOverlayRows();
   const templateRevision = useTemplateRevision();
   const [retry, setRetry] = useState(0);
@@ -452,56 +456,17 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // sync").
   useEffect(() => {
     if (!video || state.phase !== "ready") return undefined;
-    const { fps, frames, stretches } = state.data;
-    const lead = state.data.lead_frames || 0;
+    const { frames, stretches } = state.data;
     const readAt = (seconds) => {
-      const mapped = mappedFrameAtTime(seconds, frameMap, clock,
-        stretches, frames);
-      // The fallback arithmetic counts from the ANCHOR (the attempt's own
-      // frame 0), which sits `lead` slots into the axis when a buffer is
-      // drawn; the mapped path lands on the axis directly.
-      const at = mapped !== null
-        ? mapped
-        : Math.min(frames - 1,
-                   frameAtTime(seconds, anchorOffsetS, fps, frames) + lead);
+      const at = seconds == null ? null : mappedFrameAtTime(seconds,
+        frameMap, clock, stretches, frames);
       setFrame((current) => (current === at ? current : at));
+      setPresentedSlot(seconds == null ? null : slotAtTime(seconds, clock));
     };
-    // THE FRAME THE BROWSER IS ACTUALLY SHOWING, not the time we asked for.
-    // `requestVideoFrameCallback` hands back that frame's own `mediaTime`,
-    // so the panel reads the picture on screen rather than a slot computed
-    // from `currentTime` -- and `currentTime` is the time of the SEEK, which
-    // does not have to be inside the interval of the frame the decoder then
-    // presents. That off-by-one is what he stepped into on this clip's
-    // frames 87-89: the map named slot 363 (which really does draw L4, read
-    // off the pixels) while the element was still showing 362's L3, so the
-    // panel and the video disagreed by exactly one frame in places.
-    if (typeof video.requestVideoFrameCallback === "function") {
-      let handle = 0;
-      let live = true;
-      const onFrame = (_now, meta) => {
-        if (!live) return;
-        readAt(meta.mediaTime);
-        handle = video.requestVideoFrameCallback(onFrame);
-      };
-      handle = video.requestVideoFrameCallback(onFrame);
-      // A seek that lands on the frame already displayed presents nothing,
-      // so read once up front rather than waiting for a callback that has
-      // no reason to come.
-      readAt(video.currentTime || 0);
-      return () => {
-        live = false;
-        if (video.cancelVideoFrameCallback) {
-          video.cancelVideoFrameCallback(handle);
-        }
-      };
-    }
-    let raf = 0;
-    const tick = () => {
-      readAt(video.currentTime || 0);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    // ReplayPlayer starts observing before autoplay. A late mount or template
+    // refresh therefore reuses the last delivered mediaTime even while paused.
+    // No delivered picture means unknown, never the requested seek's time.
+    return watchVideoPicture(video, readAt);
   }, [video, state, anchorOffsetS, frameMap, clock]);
 
   const data = state.phase === "ready" ? state.data : null;
@@ -539,21 +504,27 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   const attemptFrames = data.attempt_frames || (total - lead);
   const seek = (next) => {
     const clamped = Math.max(0, Math.min(total - 1, next));
-    setFrame(clamped);
     if (video) {
       // Seeking the video is how the timeline moves: the clock loop above
       // reads the new time back on the next frame, so the two cannot
       // disagree even for a frame.
       if (!video.paused) video.pause();
-      const mapped = mappedTimeAtFrame(clamped, frameMap, clock,
+      const mapped = mappedTimeAtFrame(clamped, frameMap,
+        { ...clock, duration: Number.isFinite(video.duration) ? video.duration : clock?.duration },
         data.stretches);
+      if (mapped !== null) {
+        video.currentTime = mapped;
+        return;
+      }
+      if (frameMap && frameMap.length) return;
       // Inside the clip, always: a seek to the very edge leaves the element
       // reporting itself ended, and the panel then reads whatever it
       // presents (his 2026-08-31 jump from frame 770 to 591).
       video.currentTime = clampToFrames(
-        mapped !== null ? mapped
-                        : timeAtFrame(clamped - lead, anchorOffsetS, data.fps),
+        timeAtFrame(clamped - lead, anchorOffsetS, data.fps),
         video.duration || 0, data.fps);
+    } else {
+      setFrame(clamped);
     }
   };
   const seekFromPointer = (event) => {
@@ -658,7 +629,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       <div class="input-track-column" ref=${trackColumn}>
         ${lead > 0 && html`<div class="input-lead-shade"
             style=${`width:${percent(lead)}`}></div>`}
-        <div class="input-playhead" style=${`left:${percent(frame)}`}></div>
+        ${frame != null && html`<div class="input-playhead" style=${`left:${percent(frame)}`}></div>`}
       </div>
       <div class="input-lane is-stick">
         <span class="input-lane-name">Stick</span>
@@ -713,15 +684,12 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
               2026-09-05: "we always stop before the last frame of the
               video... from a user perspective this looks like an error, not
               intentional." The last frame now names itself: 498 / 498. */""}
-        <strong>${frame - lead} / ${Math.max(0, total - lead - 1)}</strong>
+        <strong>${frame == null ? "—" : frame - lead} / ${Math.max(0, total - lead - 1)}</strong>
         ${(() => {
-          // The slot the axis frame is shown on -- through the map, not the
-          // video element, so the stamped clock reads the same with or
-          // without a player (the fixture has none).
-          const seconds = mappedTimeAtFrame(frame, frameMap, clock, data.stretches);
-          const slot = seconds == null ? null : slotAtTime(seconds, clock);
-          const shown = inspectorClock(frame, lead, pictureIgt, slot);
-          if (!shown) return html`<span class="meta">lead-in</span>`;
+          // Keep the presented slot. Reversing through the raw counter can
+          // select a previous visit and show that visit's IGT after a reset.
+          const shown = inspectorClock(video ? null : frame, lead, pictureIgt, presentedSlot);
+          if (!shown) return html`<span class="meta">${frame != null && frame < lead ? "lead-in" : "Time unavailable"}</span>`;
           return html`<span class="meta ${shown.stamped ? "is-stamped" : ""}"
               title=${shown.stamped ? "the game's own timer in this picture"
                                     : "counted from the attempt's first frame"}>
@@ -741,7 +709,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         ${here
           ? html`<span>Stick ${stickPhrase(here.stick_x, here.stick_y,
               data.dead_zone, data.stick_max)}</span>`
-          : html`<span class="is-error">No capture on this frame</span>`}
+          : html`<span class="is-error">${frame == null ? "Input unavailable for this picture" : "No capture on this frame"}</span>`}
         ${nowDoing && html`<span class="input-inspector-action">
           ${nowDoing.label}</span>`}
         ${thereDoing && html`<span class="input-inspector-action is-template"

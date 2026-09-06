@@ -1,9 +1,10 @@
 // src/sm64_events/ui/components/replay.js — inline clip player + recording dot
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { clipClock, stepGameFrame, jumpToStart } from "../frame.js";
+import { watchVideoPicture } from "../videopicture.js";
 import { holdIsRunning, holdRepeat, startHold,
          stopHold } from "../holdrepeat.js";
 import { Icon } from "./icons.js";
@@ -58,6 +59,20 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
   // moment the user started playing in game. Playback may start ONLY here
   // (once) or from the player's own controls.
   const autoPlayed = useRef(false);
+  const stopObserving = useRef(null);
+  const attachVideoEl = useCallback((el) => {
+    if (videoEl.current === el) return;
+    if (stopObserving.current) stopObserving.current();
+    videoEl.current = el;
+    stopObserving.current = el ? watchVideoPicture(el, () => {}) : null;
+    if (onVideoEl) onVideoEl(el);
+    if (!el) return;
+    attachSharedVolume(el);
+    if (!autoPlayed.current) {
+      autoPlayed.current = true;
+      el.play().catch(() => {});
+    }
+  }, [onVideoEl]);
 
   useEffect(() => {
     let alive = true;
@@ -85,17 +100,9 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
     setSavedPath(r.path);
   }
 
-  // Frame stepping: pause first (stepping implies pause), then seek to the
-  // MIDDLE of the adjacent frame — (n±1 + 0.5)/fps — so floating-point
-  // rounding can never straddle a frame boundary. Steps move in GAME
-  // frames (30 fps SM64 logic), not encoded frames (60 fps presents):
-  // each game frame spans two near-identical encoded frames, so stepping
-  // 1/60 visibly changed the image only every SECOND press (live-reported
-  // 2026-06-12 — "have to press twice").
-  // Known caveat (expected, not a bug): capture isn't phase-locked to the
-  // game and presents jitter (~59.90-60.05/s, user-measured) — a game
-  // frame occasionally spans 1 or 3 encoded frames, so once in a while a
-  // single press lands on a duplicate; the next press recovers.
+  // The shared clock walks captured pictures in order, skipping known
+  // heartbeat copies and preserving the clip's actual timestamp intervals.
+  // Only legacy clips without a picture clock use 30 Hz time stepping.
   function step(dir) {
     stepGameFrame(videoEl.current, dir, state.game_fps || 30,
                   state.frame_map || null, clipClock(state));
@@ -169,6 +176,9 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
   if (state.phase === "error")
     return html`<div class="replay-state"><${InlineState} kind="error">
       Replay unavailable · ${state.message}<//></div>`;
+  // A timeline can exist without footage. An empty video element would
+  // falsely become its clock and prevent standalone input inspection.
+  if (!state.clip_url) return null;
   function revealSaved(e) {
     e.preventDefault();
     send("POST", "/api/replay/reveal", { path: savedPath });
@@ -189,20 +199,7 @@ export function ReplayPlayer({ attemptId, onCompare, onVideoEl, onView }) {
     <video controls preload="auto" src=${state.clip_url}
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}
-           ref=${(el) => {
-             const changed = videoEl.current !== el;
-             videoEl.current = el; // null on unmount — step()/toggle guard
-             if (changed && onVideoEl) onVideoEl(el);
-             if (!el) return;
-             if (!el.dataset.sharedVolume) { // ref re-fires on every render
-               el.dataset.sharedVolume = "1";
-               attachSharedVolume(el);
-             }
-             if (!autoPlayed.current) { // see autoPlayed above: once per mount
-               autoPlayed.current = true;
-               el.play().catch(() => {});
-             }
-           }}></video>
+           ref=${attachVideoEl}></video>
     <div class="replay-transport">
       <button onclick=${toStart} title="Jump to the beginning">
         <${Icon} name="restart" size=${15} /> Start

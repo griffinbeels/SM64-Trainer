@@ -184,11 +184,18 @@ def test_a_counter_restart_converts_through_its_own_stretch():
     assert run_function(BOTH, f"trackFrameOf(500, {stretches})") is None
 
 
-def test_the_lead_in_and_the_tail_clamp_to_the_tracks_ends():
+def test_pictures_outside_the_track_do_not_borrow_its_first_or_last_input():
     lead = "[80], 60, [[0, 90, 20]], 20"
-    assert run_function(BOTH, f"mappedFrameAtTime(0.001, {lead})") == 0
+    assert run_function(BOTH, f"mappedFrameAtTime(0.001, {lead})") is None
     tail = "[200], 60, [[0, 90, 20]], 20"
-    assert run_function(BOTH, f"mappedFrameAtTime(0.001, {tail})") == 19
+    assert run_function(BOTH, f"mappedFrameAtTime(0.001, {tail})") is None
+
+
+def test_overlapping_track_epochs_need_a_capture_occurrence_to_choose_an_input():
+    stretches = "[[0,100,2],[2,99,3]]"
+    assert run_function(BOTH, f"trackFrameOf(100, {stretches})") is None
+    assert run_function(BOTH, f"trackFrameOf(99, {stretches})") == 2
+    assert run_function(BOTH, f"mappedTimeAtFrame(3, [100,101,99,100,101], {CFR}, {stretches})") is None
 
 
 def test_six_seconds_into_a_three_second_lead_in_is_frame_ninety():

@@ -18,6 +18,8 @@ paths:
   - "src/sm64_events/replay/padread.py"
   - "src/sm64_events/replay/service.py"
   - "src/sm64_events/ui/frame.js"
+  - "src/sm64_events/ui/videopicture.js"
+  - "src/sm64_events/ui/components/replay.js"
   - "src/sm64_events/ui/components/inputtimeline.js"
   - "src/sm64_events/ui/components/attemptdrawer.js"
   - "src/sm64_events/ui/components/controllerpanel.js"
@@ -37,6 +39,7 @@ the one to fix.
 - **The independent witness:** THE ORACLE (`replay/oracleread.py`, `tools/score_oracle.py --attempt N`) — the frame number Usamune's HUD memory display of `0x8032D5D4` prints into the picture, read map-free through the +1 rule. It never ships to a user; it is how any claim about the map is settled.
 - **Sink:** the panel under the timeline (FRAME n / N, the stick box, the button chips) on the picture the `<video>` is presenting.
 - **Clock path:** `MediaRun` retains an encoder's first-picture origin and unique run ID. The sink assigns monotonic 90 kHz video PTS, preserves them through NUT/TS, and records each actual PTS with its captured row. The cut subtracts an explicit integer source tick; its `source_pts` restores that tick to each decoded slot. `feed_map` looks up `(run_id, source_pts)` exactly, without fitting a bias. `picture_rows` retains the matched occurrence, and `state_rows` resolves its state without crossing a counter reset. This proves media association only; the plugin's picture/state interpretation is a separate witness.
+- **Browser picture:** `ui/videopicture.js` retains the last delivered `requestVideoFrameCallback.mediaTime` for each video, starting before autoplay. Both stepping and the input inspector read it; a paused template refresh cannot replace it with the requested seek's `currentTime`. `picture_ids` preserves capture occurrences for ordered stepping and heartbeat skips. Unknown input slots clear the readout; raw counters alone cannot resolve overlapping input epochs.
 
 **There is exactly one map path, and it is a read.** A clip whose rows are not
 stamped carries `frame_map: None`, and the panel says "Frame-exact capture is
@@ -51,7 +54,7 @@ can't be relied on as a tool"* (2026-08-23).
 | 3 | the timeline payload | `runs` on the capture axis (zero-based at the clip span's first captured frame), `lead_frames`, `attempt_frames`, `stretches` | `src/sm64_events/inputs/service.py` | `InputsService(...).timeline(id, span=(lo, hi))` offline, then `run_at(axis)` | none — pure over hop 2, so hop 2's injection reaches it unchanged | a run whose `stick_x` differs from hop 2's at the same raw frame | a payload built without the clip's span (the attempt alone; a different axis) |
 | 4 | the pictures, each STAMPED with the frame that drew it | the wrapper plugin copies the tracker's address table out of RDRAM at the ProcessDList that draws frame N, reads the picture at the VI whose VI_ORIGIN changed (GL_FRONT directly, else the wrapped plugin's own ReadScreen — GLideN64_LINK_4.2 renders on a thread of its own, so for him it is always the latter), and publishes (picture, stamp) into the frame stream. `PluginVideoSource` decodes the stamp with the sampler's own decoder; the recorder files the row `exact: true` with `frame`, `pad`, `mario`, `igt_overall`. A grab with NO stamp is recorded by time only and names no frame. The sink then writes each picture ONCE into a NUT stream at its composition time, files the write in the feed log, and ffmpeg encodes passthrough — one video frame per picture at its own time (VFR), audio in the same stream on the same clock | `plugin/gfxwrap/gfxwrap.c`, `src/sm64_events/replay/framestream.py`, `src/sm64_events/replay/pluginsource.py`, `src/sm64_events/replay/recorder.py`, `src/sm64_events/replay/ledger.py`, `src/sm64_events/replay/ffmpeg_sink.py` | `/api/replay/status` `frame_source` + `frame_source_health`; the sidecar's `picture_ledger` rows; `uv run python tools/score_oracle.py --attempt N`; `tests/test_gfxwrap_host.py` drives the plugin with no emulator | the host's `--drive` writes a known counter into fake RDRAM and a known colour into the picture: the stamp and the pixels must come back equal | rows without `exact`, or `plugin_inexact_rows` climbing (a present that saw zero or two display lists) | a probe reading the ring segment instead of the extracted clip (segments start at pts 1.4) |
 | 5 | the frame map: video slot -> game frame | `feed_map` matches frame k (at `start + frame_times[k]`) to the feed entry written at that moment, and the entry's row names the game frame; the map is `stamp - PLUGIN_PICTURE_LAG` (1: the picture the layer grabs at the VI whose origin changed IS the list before the one it just stamped — SM64 presents the buffer it rendered the iteration before), and `None` on an inexact row. `_take_the_stamps` then sets `frame_map_source: plugin`, fills `picture_igt` from the row whose frame the map names, and runs the pad-stamp audit | `src/sm64_events/replay/feedmap.py`, `src/sm64_events/replay/service.py` | sidecar `feed_match` (frames / matched / bias / residual) and `pad_stamp_agreement`; `uv run python tools/score_picture_offset.py --attempt N` sweeps the picture-to-stamp offset on two channels | hand `feed_map` a projector returning a known wrong value; the map must carry it verbatim, since nothing downstream corrects it | a peak off 0 in the offset sweep on TWO clips (the bar for touching `PLUGIN_PICTURE_LAG`), or `feed_match.matched` far below `frames` | the oracle scoring a clip whose HUD memory display was off, which reads as unreadable rather than as wrong |
-| 6 | the clip's timestamps as the browser sees them, and the panel's lookup | frame k presents at `mediaTime = frame_times[k]`, every frame's own pts read off the cut (ffprobe) and carried in the view; then `slot = slotAtTime(mediaTime, clock)` — `frame.js::clipClock` builds the clock from the view — `raw = frame_map[slot]`, axis via `stretches`, pad = the run containing it | `src/sm64_events/replay/extract.py`, `src/sm64_events/ui/frame.js`, `src/sm64_events/ui/components/inputtimeline.js`, `src/sm64_events/ui/components/controllerpanel.js` | `uv run python tools/probe_clip_seek.py --attempt N --slots a-b` (serves the clip to headless Chromium, seeks with the shipped clip clock, reads `mediaTime` back); then drive the real page (uilab) and read `.input-inspector-frame` on a paused picture | that probe's `fixed` column IS the injection: the seek through the clip clock | a seek for slot k presenting k-1 (5782: the clip's first pts was 0.011 s), or the readout one frame behind the picture on screen | a server without Range support: every seek snaps to 0 and reads as "the clip cannot seek" |
+| 6 | browser presentation, step and input inspector | the delivered video slot and its own timer; an input only when its map resolves uniquely | `src/sm64_events/ui/frame.js`, `src/sm64_events/ui/videopicture.js`, `src/sm64_events/ui/components/inputtimeline.js` | `tests/test_ui_replay_picture_steps.py` decodes picture IDs from canvas after real drawer clicks; component tests cover missing slots and paused refresh | scratch replay response with known encoded pictures and slot identities | backward steps revisit an earlier epoch, tiny slots skip, or the timer changes on a paused refresh | only checking requested currentTime, or never asserting a known input before and after a missing slot |
 
 ## Counterfactual recipe
 
@@ -234,3 +237,24 @@ paused picture":
   by replacing "ffmpeg" in the WHOLE path, which renamed the install folder too
   — a fallback that returns the old assumption is indistinguishable from the fix
   working on a clip that never needed it.
+
+## Browser boundary regression — 2026-09-06
+
+`tests/test_ui_frame_step.py` reproduced five defects in the shipped helpers:
+reset sequence `[100,100,101,101,99,100,100,101]` stepped to `[null,null,0,4]`
+instead of slots `[4,2,5,4]`; the 0.1 ms search epsilon read 90 kHz slots
+0 and 1 as slot 2; same-number picture identities were collapsed; unknown
+slots were skipped; the 30 Hz end clamp moved VFR seeks into another picture.
+Controls now traverse recorded slot order and actual intervals.
+
+The mounted `InputTimeline` reproduced an unknown slot displaying frame 2's
+A button, and the second raw-100 visit showing the first visit's `01"66`
+instead of its own `00"10`. It now retains the presented slot, clears unknown
+input/state, and does not substitute the attempt-axis count for missing video
+IGT. The shared observer also keeps that slot across paused template refreshes.
+`tests/frontend/inputtimeline.test.js` and `videopicture.test.js` pin these
+behaviors; the real-browser barcode test checks pixels AND IGT on every step.
+
+This boundary does not resolve the input store's overlapping epochs, missing
+lead-axis samples, cached historical maps, or the plugin's picture/state lag.
+Those are distinct upstream identity requirements, not reasons to guess here.

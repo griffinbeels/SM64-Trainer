@@ -661,6 +661,9 @@ def test_a_plugin_clips_map_is_its_stamps_less_the_layers_own_lag_and_carries_th
     res = svc.view(42)
     assert res["frame_map_source"] == "plugin"
     assert res["frame_map"][:7] == [99, 100, 101, 102, 103, 104, 105]
+    assert res["picture_ids"][:9] == [0, 1, 2, 3, 4, 5, 6, None, 8]
+    # Opening the cached clip preserves the very same capture occurrences.
+    assert svc.view(42)["picture_ids"] == res["picture_ids"]
     assert res["frame_map"][7] is None                    # two lists: nothing claimed
     assert res["frame_map"][8:12] == [107, 108, 109, 110]
     # slot 0 names frame 99, which no row stamped: no clock there

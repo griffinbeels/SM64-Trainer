@@ -3,6 +3,7 @@
 // Seek to the MIDDLE of the target frame so float rounding never straddles a
 // boundary (the fix from replay.js: stepping 1/encode-fps only changed the
 // image every 2nd press). Used by the replay player and the compare sync layer.
+import { presentedVideoTime } from "./videopicture.js";
 
 export function gameFrameOf(video, gameFps = 30) {
   return Math.floor((video.currentTime || 0) * gameFps + 1e-4);
@@ -30,7 +31,9 @@ export function clipClock(view) {
     ? view.frame_times : null;
   return { fps: (view && view.fps) || 60,
            start: (view && view.video_start_s) || 0,
-           times };
+           times,
+           duration: (view && view.duration_s) || null,
+           identities: (view && view.picture_ids) || null };
 }
 
 export function slotAtTime(seconds, clock) {
@@ -38,10 +41,10 @@ export function slotAtTime(seconds, clock) {
     const times = clock.times;
     // The last frame whose start is at or before `seconds` (binary search).
     let lo = 0, hi = times.length - 1;
-    if (seconds + 1e-4 < times[0]) return -1;
+    if (seconds < times[0]) return -1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
-      if (times[mid] <= seconds + 1e-4) lo = mid; else hi = mid - 1;
+      if (times[mid] <= seconds) lo = mid; else hi = mid - 1;
     }
     return lo;
   }
@@ -54,8 +57,12 @@ export function timeOfSlot(slot, clock) {
   if (clock && clock.times) {
     const times = clock.times;
     const at = Math.max(0, Math.min(times.length - 1, slot));
-    // Mid-span; the last frame has no successor, so half a game frame in.
-    const next = at + 1 < times.length ? times[at + 1] : times[at] + 1 / 30;
+    // The final picture may last less than 1/30 s. Its interval ends at
+    // the media duration, never at a reconstructed constant-rate boundary.
+    const nextStart = at + 1 < times.length ? times[at + 1] : times[at] + 1 / 30;
+    const next = clock.duration > times[at]
+      ? (at + 1 < times.length ? Math.min(nextStart, clock.duration) : clock.duration)
+      : nextStart;
     return (times[at] + next) / 2;
   }
   const fps = (clock && clock.fps) || 60;
@@ -76,54 +83,46 @@ export function stepGameFrame(video, dir, gameFps = 30,
                               frameMap = null, clock = null) {
   if (!video) return;
   if (!video.paused) video.pause();
-  const mapped = nextMappedTime(video.currentTime || 0, frameMap, clock, dir);
+  const presented = presentedVideoTime(video);
+  if (presented === null) return; // the decoder has not displayed a picture yet
+  const boundedClock = { ...clock, duration: Number.isFinite(video.duration)
+    ? video.duration : clock && clock.duration };
+  const mapped = nextMappedTime(presented ?? (video.currentTime || 0), frameMap, boundedClock, dir);
   if (mapped !== null) {
-    video.currentTime = clampToFrames(mapped, video.duration || 0, gameFps);
+    video.currentTime = mapped;
     return;
   }
-  // No map (an older clip), or already on the clip's first or last game
-  // frame: the time arithmetic stands, and the clamp keeps it in the clip.
+  // A known picture sequence at its boundary stays put. A time-based
+  // fallback here could jump to a different picture or into a capture gap.
+  if ((frameMap && frameMap.length) || (clock && clock.times && clock.times.length)) return;
+  // Legacy video without a picture clock retains the 30 Hz controls.
   const n = gameFrameOf(video, gameFps);
   video.currentTime = clampToFrames(
     (n + dir + 0.5) / gameFps, video.duration || 0, gameFps);
 }
 
-// STEP THROUGH THE MAP, not through time. The three clocks in this
-// pipeline do NOT run at one rate, measured on his pyramid clip
-// (2026-08-31): the video encodes at 59.987 fps while the GAME advanced at
-// 29.800 -- 2.013 video slots per game frame, not 2.000 -- and the game's
-// rate is not even a constant, it sags when the machine is loaded. So a
-// step of 1/30 s is a step of slightly LESS than one game frame, which
-// lands on the same picture now and then (his "press forward 1, it does
-// nothing") and drifts over a long clip. The map already says which game
-// frame each video frame shows, so stepping through IT is exact whatever
-// the emulator was doing: find this slot's frame, take the first slot of
-// the next distinct one. Returns null when the map cannot answer and the
-// caller falls back to time.
+// Walk encoded slots in capture order. Raw game counters can go backward
+// or be visited again after a save-state load. New clips carry picture IDs
+// scoped to this clip, so only adjacent copies of that picture are skipped.
+// Older maps can identify adjacent equal counters; unknown slots each remain
+// a selectable picture. Null means no sequence or no neighbor in that direction.
 export function nextMappedTime(seconds, frameMap, clock, dir) {
-  if (!frameMap || !frameMap.length) return null;
-  const at = Math.max(0, Math.min(frameMap.length - 1,
-    slotAtTime(seconds, clock)));
-  const here = frameMap[at];
-  if (here == null) return null;
-  if (dir > 0) {
-    for (let slot = at + 1; slot < frameMap.length; slot += 1) {
-      const value = frameMap[slot];
-      if (value != null && value > here) return timeOfSlot(slot, clock);
-    }
-    return null;                       // already on the last game frame
+  const times = clock && clock.times;
+  const count = times && times.length || frameMap && frameMap.length || 0;
+  if (!count || !dir) return null;
+  const ids = clock && clock.identities || frameMap || [];
+  const at = Math.max(0, Math.min(count - 1, slotAtTime(seconds, clock)));
+  const samePicture = (a, b) => ids[a] != null && ids[a] === ids[b];
+  const step = dir > 0 ? 1 : -1;
+  let slot = at + step;
+  while (slot >= 0 && slot < count && samePicture(at, slot)) slot += step;
+  if (slot < 0 || slot >= count) return null;
+  // Backward stepping lands on the start of this neighboring hold, not an
+  // earlier visit with the same raw counter somewhere else in the clip.
+  if (step < 0) {
+    while (slot > 0 && samePicture(slot, slot - 1)) slot -= 1;
   }
-  let target = null;
-  for (let slot = at - 1; slot >= 0; slot -= 1) {
-    const value = frameMap[slot];
-    if (value == null) continue;
-    if (value < here) { target = value; break; }
-  }
-  if (target === null) return null;    // already on the first game frame
-  for (let slot = 0; slot < frameMap.length; slot += 1) {
-    if (frameMap[slot] === target) return timeOfSlot(slot, clock);
-  }
-  return null;
+  return timeOfSlot(slot, clock);
 }
 
 export function clampToFrames(seconds, duration, gameFps = 30) {
