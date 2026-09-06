@@ -247,6 +247,7 @@ class TrackerService:
         # wipe would otherwise keep showing a rank for a star with no history
         # until something happened to trigger a re-projection.
         orphaned = self.db.delete_orphaned_pbs()
+        self.db.delete_orphaned_recordings()
         if orphaned:
             log.info("dropped %d PB row(s) whose attempts no longer exist", orphaned)
         self.db.replace_runs([r.as_row() for r in self._projector.finished_runs()])
@@ -1892,6 +1893,7 @@ class TrackerService:
         # callers cleaning up — which is what kept a cleared star reading
         # MARIO 1 (live report 2026-07-27).
         db.delete_orphaned_pbs()
+        db.delete_orphaned_recordings()
         db.replace_runs([r.as_row() for r in projector.finished_runs()])
         self._persisted_runs = [r.id for r in projector.finished_runs()]
         # replay re-derives armed state silently; the UI badge must not lie
@@ -2067,12 +2069,9 @@ class TrackerService:
         here because scoring a scope is server-side and `tracking/` must not
         import `server/`.
         """
-        # Validate the whole batch before landing anything. Saving a link
-        # never performs metadata lookup or starts a video download.
-        candidates = [dataclasses.replace(c, video=validate_recording_url(c.video))
-                      for c in candidates]
-        held = [{**cell, "video": validate_recording_url(cell.get("video"))}
-                for cell in held]
+        # Optional source metadata cannot reject a valid time. Explicit link
+        # edits stay strict; the import reports any unusable recordings.
+        candidates, held, skipped = recordings.prepare_import(candidates, held)
         plan = self._plan_import(candidates)
         db = self._require_db()
         if any(candidate.video and candidate.row_key for candidate in candidates):
@@ -2112,7 +2111,8 @@ class TrackerService:
                 {landed.entity_key for landed, _ in plan.landing})
         if held:
             db.hold_times(source, list(held), _iso(_now()))
-        return {"source": source, **plan.summary}
+        return {"source": source, **plan.summary,
+                **({"recordings_skipped": skipped} if skipped else {})}
 
     async def _select_freshly_earned_strats(self, entity_keys) -> None:
         """An import fills an EMPTY hand: every entity the batch landed on

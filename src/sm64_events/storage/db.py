@@ -1444,6 +1444,25 @@ class Database:
             self._conn.commit()
             return True
 
+    def delete_orphaned_recordings(self) -> int:
+        """Erase overlays only after their owning journal event was erased.
+
+        Called after replay completes. A cleared attempt or one temporarily
+        absent from projection can still be restored, so absence from the
+        attempts cache alone is insufficient. journal_id handles segment IDs.
+        """
+        with self._lock:
+            ids = [row[0] for row in self._conn.execute(
+                "SELECT attempt_id FROM attempt_recordings").fetchall()]
+            gone = [aid for aid in ids if self._conn.execute(
+                "SELECT 1 FROM events WHERE id=?", (journal_id(aid),)
+            ).fetchone() is None]
+            self._conn.executemany(
+                "DELETE FROM attempt_recordings WHERE attempt_id=?",
+                [(aid,) for aid in gone])
+            self._conn.commit()
+            return len(gone)
+
     # -- held times (sheet cells an import kept aside) ---------------------
     def hold_times(self, source: str, cells, saved_utc: str) -> int:
         """Keep `cells` -- `[{row_key, game_version, time_cs, reason,
@@ -1641,6 +1660,7 @@ class Database:
             # A held time is imported history too: it came in with a
             # column and goes out with everything else.
             self._conn.execute("DELETE FROM held_times")
+            self._conn.execute("DELETE FROM attempt_recordings")
             self._conn.execute("DELETE FROM sessions WHERE id<>?",
                                (keep_session_id,))
             self._conn.commit()
