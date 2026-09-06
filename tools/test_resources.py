@@ -1,0 +1,199 @@
+"""One shared test budget across checkouts, including direct pytest invocations.
+
+An OS lock queues controllers BEFORE worker/browser creation; a crashed owner
+releases it automatically. CPU affinity is set on the owner before spawning and
+inherited by children. OBS opening during a run tightens the whole tree within
+two seconds and stays latched until that run ends (no oscillating budgets).
+
+The old 24-worker benchmark measured one suite, not five suites and an encoder.
+Normal uses 16 workers (within the measured speed tie); OBS uses at most eight
+workers on a quarter of the eligible CPUs. These are bounded defaults, not a
+claim about OBS dropped frames. See docs/testing.md for measurements and limits.
+"""
+from __future__ import annotations
+
+import os
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+import psutil
+
+from sm64_events.storage.instance_lock import acquire_instance_lock
+if __package__:
+    from .test_activity import competing_runs
+else:
+    from test_activity import competing_runs
+
+LOCK_PATH = Path(tempfile.gettempdir()) / "SM64Trainer_tests.lock"
+OWNER_ENV = "SM64_TEST_OWNER"
+WORKERS_ENV = "SM64_TEST_WORKERS"
+POLL_SECONDS = 2.0
+
+
+def obs_is_open() -> bool:
+    return any((proc.info["name"] or "").lower() in {"obs64.exe", "obs32.exe", "obs.exe", "obs"}
+               for proc in psutil.process_iter(["name"]))
+
+
+def budget(eligible: list[int], obs: bool, workers: int | None = None,
+           reserve: int | None = None) -> tuple[int, list[int]]:
+    """Return a worker ceiling and a subset of CPUs the caller already owns.
+
+    Explicit workers/reserve may tighten the policy, never remove the OBS cap.
+    Zero workers means serial pytest; an affinity mask is never empty.
+    """
+    available = len(eligible)
+    count = max(1, available // 4 if obs else available - min(12, available // 2))
+    if reserve is not None:
+        count = min(count, max(1, available - reserve))
+    ceiling = min(8 if obs else 16, count)
+    return min(ceiling, workers) if workers is not None else ceiling, eligible[:count]
+
+
+def inherited_owner() -> bool:
+    """Only a live ancestor with the matching birth time can lend its budget.
+
+    Stale environment variables and recycled PIDs cannot bypass admission.
+    Nested test harnesses inherit the same allocation instead of deadlocking.
+    """
+    token = os.environ.get(OWNER_ENV, "")
+    return any(token == f"{parent.pid}:{parent.create_time()}"
+               for parent in psutil.Process().parents())
+
+
+def effective_workers(transports: list[str]) -> int:
+    """Count xdist's already-limited local transports, including N*popen.
+
+    xdist applies --maxprocesses before configure; re-reading numprocesses
+    would discard that tighter request. Remote/custom transports cannot be
+    accounted for by this local resource controller.
+    """
+    count = 0
+    for transport in transports:
+        amount, separator, spec = transport.partition("*")
+        if not separator:
+            amount, spec = "1", amount
+        if not amount.isdecimal() or spec != "popen":
+            raise ValueError("test budget supports local popen workers only; use --workers through tools/run_tests.py")
+        count += int(amount)
+    return count
+
+
+class TestResources:
+    """Hold admission and the affinity monitor until all owned work is finished."""
+
+    __test__ = False
+
+    def __init__(self, workers: int | None = None, reserve: int | None = None,
+                 *, path: Path = LOCK_PATH):
+        self.requested_workers = workers
+        self.reserve = reserve
+        self.path = path
+        self.workers = 0
+        self.handle = None
+        self.process = psutil.Process()
+        self.eligible = self.process.cpu_affinity()
+        self.cpus = self.eligible
+        self.obs = False
+        self._stop = threading.Event()
+        self._thread = None
+        self._previous_owner = os.environ.get(OWNER_ENV)
+        self._previous_workers = os.environ.get(WORKERS_ENV)
+        self.registry = self.path.with_name(self.path.name + ".runners")
+        self.ticket = self.registry / f"{self.process.pid}-{self.process.create_time()}.runner"
+        self.competitors: dict[int, dict] = {}
+
+    def __enter__(self):
+        started = time.monotonic()
+        announced = False
+        self.registry.mkdir(parents=True, exist_ok=True)
+        self.ticket.touch()
+        try:
+            while self.handle is None:
+                self.handle = acquire_instance_lock(self.path)
+                if self.handle is None:
+                    if not announced:
+                        print("tests: queued behind another test run; no workers or browsers started", flush=True)
+                        announced = True
+                    time.sleep(0.25)
+            self._wait_for_older_runners()
+            self.obs = obs_is_open()
+            self.workers, self.cpus = budget(self.eligible, self.obs,
+                                            self.requested_workers, self.reserve)
+            # Before Popen/xdist, not a sweep two seconds after the spawn storm.
+            self.process.cpu_affinity(self.cpus)
+            os.environ[OWNER_ENV] = f"{self.process.pid}:{self.process.create_time()}"
+            os.environ[WORKERS_ENV] = str(self.workers)
+            print(f"tests: admitted after {time.monotonic() - started:.1f}s; "
+                  f"{'OBS open' if self.obs else 'normal'} budget: "
+                  f"{self.workers or 'serial'} workers, {len(self.cpus)}/{len(self.eligible)} CPUs", flush=True)
+            self._thread = threading.Thread(target=self._watch, daemon=True)
+            self._thread.start()
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def _wait_for_older_runners(self):
+        reported = set()
+        while other := competing_runs(self.registry):
+            for run in other:
+                if run["pid"] not in reported:
+                    print(f"tests: waiting for uncoordinated test PID {run['pid']} "
+                          f"in {run['checkout']}; no workers started", flush=True)
+                    reported.add(run["pid"])
+            time.sleep(POLL_SECONDS)
+
+    def _watch(self):
+        while not self._stop.wait(POLL_SECONDS):
+            self.refresh()
+
+    def refresh(self):
+        """OBS can appear after admission; re-pin existing descendants as well."""
+        for run in competing_runs(self.registry):
+            if run["pid"] not in self.competitors:
+                self.competitors[run["pid"]] = run
+                print(f"tests: PERFORMANCE COMPARISON CONTAMINATED by outside test "
+                      f"PID {run['pid']} in {run['checkout']}; do not tune from this run", flush=True)
+        if not self.obs and obs_is_open():
+            self.obs = True
+            _, self.cpus = budget(self.eligible, True, self.requested_workers, self.reserve)
+            print(f"tests: OBS opened; limiting this run to {len(self.cpus)} CPUs "
+                  "(worker count stays fixed until the next run)", flush=True)
+        try:
+            family = [self.process, *self.process.children(recursive=True)]
+        except psutil.NoSuchProcess:
+            return
+        for proc in family:
+            try:
+                current = proc.cpu_affinity()
+                if not set(current) <= set(self.cpus):
+                    # A nested probe may voluntarily use fewer CPUs. The
+                    # outer monitor must never widen that child's allocation.
+                    proc.cpu_affinity(sorted(set(current) & set(self.cpus)) or self.cpus)
+            except psutil.NoSuchProcess:
+                continue  # Normal race with a finished test child.
+            except (psutil.AccessDenied, OSError) as error:
+                print(f"tests: could not limit owned PID {proc.pid}: {error}", flush=True)
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        try:
+            self.process.cpu_affinity(self.eligible)
+        finally:
+            if self._previous_owner is None:
+                os.environ.pop(OWNER_ENV, None)
+            else:
+                os.environ[OWNER_ENV] = self._previous_owner
+            if self._previous_workers is None:
+                os.environ.pop(WORKERS_ENV, None)
+            else:
+                os.environ[WORKERS_ENV] = self._previous_workers
+            if self.handle is not None:
+                self.handle.close()
+                self.handle = None
+            self.ticket.unlink(missing_ok=True)
