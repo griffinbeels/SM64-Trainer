@@ -51,7 +51,7 @@ def frame_step(path) -> float | None:
         return None
     # Containers sometimes quantize fractional-rate frames to adjacent ticks.
     if any(abs((after - before) - period) > period / 100
-           for before, after in zip(stamps, stamps[1:])):
+           for before, after in zip(stamps, stamps[1:], strict=False)):
         return None
     return float(period)
 
@@ -169,7 +169,7 @@ class RecordingMedia:
                         self._frames.popitem(last=False)
                     self._jobs[key].update(state="ready", progress=1,
                                             message="Recording ready")
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 — worker boundary exposes failure through polled job status.
                 log.warning("recording preparation failed: %s", error)
                 with self._lock:
                     self._jobs[key].update(state="error",

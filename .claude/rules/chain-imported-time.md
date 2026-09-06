@@ -59,8 +59,9 @@ journal payload. Held times retain `video` under their source row key.
 when source, performance identity and row evidence agree unambiguously.
 `TrackerService.recording_link` reads the imported original or the durable
 `attempt_recordings` edit (including an explicit removal). At hop 9 the export
-asks for the SELECTED PB's attempt link; `scorecard.js::columnHtml` places it
-on that time's clipboard cell. Probe with `tests/test_recording_links.py` and
+asks for the SELECTED PB's attempt link; `scorecard.js::columnHtml` places a
+quoted `HYPERLINK` formula in that time's styled clipboard cell (numeric time
+labels stay numeric). Probe with `tests/test_recording_links.py` and
 `tests/test_ui_recording_links.py`; inject two attempts with different links,
 select the faster unlinked attempt, and require no hyperlink. The independent
 sink check reads hyperlinks from the pasted workbook, not the export JSON.

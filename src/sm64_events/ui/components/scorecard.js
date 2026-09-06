@@ -469,10 +469,15 @@ export function columnHtml(cells, style) {
     try { url = new URL(cell.video); } catch { return text; }
     if (!cell.text || !["https:", "http:"].includes(url.protocol)
         || url.username || url.password) return text;
-    // Sheets imports an anchor's own style rather than its table cell's
-    // inherited text/background colours. Paint both so linked times retain
-    // the platform fill and chosen font through a normal rich paste.
-    return `<a href="${escape(cell.video)}"${paint(cell)}>${text}</a>`;
+    // Measured in Sheets: an HTML anchor discards the cell's fill and font
+    // color, even when both td and anchor paint explicitly. HYPERLINK keeps
+    // both the recording and the platform colors. Quote as formula strings
+    // first, then HTML; pasted URLs cannot become executable formula syntax.
+    const literal = (value) => `"${String(value).replace(/"/g, '""')}"`;
+    // Numeric labels must remain numbers: quoted labels disappear from SUM
+    // and other sheet calculations. Minute-formatted labels stay text.
+    const label = /^\d+(?:\.\d+)?$/.test(cell.text) ? cell.text : literal(cell.text);
+    return escape(`=HYPERLINK(${literal(cell.video)},${label})`);
   };
   return "<table>" + cells
     .map((cell) => `<tr><td${paint(cell)}>${content(cell)}</td></tr>`)

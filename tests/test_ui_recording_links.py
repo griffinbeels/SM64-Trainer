@@ -327,20 +327,22 @@ def test_export_html_preserves_exact_safe_link_and_paint(page):
         def __init__(self):
             super().__init__()
             self.links = []
-            self.link_styles = []
             self.cells = []
+            self.values = []
 
         def handle_starttag(self, tag, attrs):
             if tag == 'a':
                 self.links.append(dict(attrs)['href'])
-                self.link_styles.append(dict(attrs).get('style'))
             if tag == 'td':
                 self.cells.append(dict(attrs))
 
+        def handle_data(self, value):
+            self.values.append(value)
+
     reader = ReadCells()
     reader.feed(copied)
-    assert reader.links == ['https://example.com/watch?t=4&name="clip"']
+    assert reader.links == []
+    assert reader.values == ['=HYPERLINK("https://example.com/watch?t=4&name=""clip""",11.33)', '12.00']
     assert len(reader.cells) == 3
     assert 'background-color:#123456' in reader.cells[0]['style']
-    assert reader.link_styles == [reader.cells[0]['style']]
     assert reader.cells[2] == {}

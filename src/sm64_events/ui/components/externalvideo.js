@@ -113,8 +113,8 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
   const [retry, setRetry] = useState(0);
   const providerStarted = useRef(false);
   const safeUrl = publicRecordingUrl(url);
-  const source = safeUrl ? videoSource(safeUrl,
-    typeof location !== "undefined" ? location.hostname : null) : null;
+  const source = videoSource(safeUrl,
+    typeof location !== "undefined" ? location.hostname : null);
 
   useEffect(() => {
     if (!safeUrl || source?.kind === "image") return undefined;

@@ -472,6 +472,13 @@ to exact attempts, including imported ones. A durable edit overrides the importe
 original; `null` explicitly removes it. Export uses the selected PB attempt's
 link and never borrows a previous attempt's video. Held sheet times retain their
 original links until adoption. Column export cells include optional `video`.
+The rich clipboard uses escaped `HYPERLINK` formulas to retain the link, cell
+colors and numeric time values when pasted into Sheets. Plain text stays times.
+Malformed optional source links never reject valid times: imports report their
+omission through `recordings_skipped`; recognizable scheme-less YouTube links
+gain HTTPS. Explicit user edits still require a valid public URL. Physically
+erasing journal history also removes its recording edits; clearing a restorable
+attempt keeps them.
 
 | Method | Path | Body / Query | Effect |
 |---|---|---|---|
