@@ -6,6 +6,8 @@ import { getJSON, send } from "../api.js";
 import { videoSource, youtubeEmbed } from "./librarymodel.js";
 import { Icon } from "./icons.js";
 import { publicRecordingUrl } from "./recordinglink.js";
+import { ReplayTransport } from "./replaytransport.js";
+import { jumpToStart } from "../frame.js";
 
 const html = htm.bind(h);
 
@@ -68,9 +70,10 @@ function ProviderMedia({ url, label, source, startS }) {
   </div>`;
 }
 
-function CachedVideo({ media, label, startS, onError }) {
+function CachedVideo({ media, label, startS, onError, replayActions, onCompare }) {
   const videoRef = useRef(null);
   const initialSeek = useRef(false);
+  const [playing, setPlaying] = useState(false);
   const stepS = Number(media.frame_step_s);
   const canStep = Number.isFinite(stepS) && stepS > 0;
   function step(direction) {
@@ -80,6 +83,21 @@ function CachedVideo({ media, label, startS, onError }) {
     video.currentTime = Math.max(0, Math.min(video.duration || Infinity,
       (Math.floor(video.currentTime / stepS) + direction + 0.5) * stepS));
   }
+  function toStart() {
+    const video = videoRef.current;
+    jumpToStart(video, Math.min(startS ?? media.start_s ?? 0, video?.duration || Infinity));
+  }
+  function togglePlay() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+  }
+  function saveReplay() {
+    const link = document.createElement("a");
+    link.href = media.clip_url; link.download = "recording.mp4";
+    link.click();
+  }
   return html`<div class="replay-player external-video-local">
     <video class="library-example-thumb" src=${media.clip_url} title=${label}
       controls preload="metadata" ref=${(element) => {
@@ -87,7 +105,7 @@ function CachedVideo({ media, label, startS, onError }) {
         if (element && !element.dataset.sharedVolume) {
           element.dataset.sharedVolume = "1"; attachSharedVolume(element);
         }
-      }} onerror=${onError}
+      }} onerror=${onError} onplay=${() => setPlaying(true)} onpause=${() => setPlaying(false)}
       onloadedmetadata=${() => {
         if (initialSeek.current) return;
         initialSeek.current = true;
@@ -95,23 +113,24 @@ function CachedVideo({ media, label, startS, onError }) {
         video.currentTime = Math.min(startS ?? media.start_s ?? 0, video.duration || Infinity);
         video.play().catch(() => {});
       }} />
-    ${canStep && html`<div class="replay-transport external-video-frames">
-      <button onclick=${() => step(-1)} title="Previous encoded video frame">
-        <${Icon} name="stepBack" size=${15} /> Back 1</button>
-      <button onclick=${() => step(1)} title="Next encoded video frame">
-        <${Icon} name="stepForward" size=${15} /> Forward 1</button>
-      <span class="replay-frame-note">Video frames</span>
+    <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
+      onToggle=${togglePlay} canStep=${canStep} frameKind="encoded video" />
+    ${replayActions && html`<div class="replay-actions">
+      <button onclick=${saveReplay} title="Save a copy of this recording">
+        <${Icon} name="save" size=${15} /> Save replay</button>
+      ${onCompare && html`<button onclick=${() => onCompare({ clip_url: media.clip_url,
+          start_s: startS ?? media.start_s ?? 0 })} title="Open this run in the Compare tab">
+        <${Icon} name="compare" size=${15} /> Compare</button>`}
     </div>`}
   </div>`;
 }
 
-export function ExternalVideo({ url, label = "Public recording", autoplay = false, startS = null, closable = false }) {
+export function ExternalVideo({ url, label = "Public recording", autoplay = false, startS = null,
+                                closable = false, replayActions = false, onCompare }) {
   const [media, setMedia] = useState(null);
   const [playing, setPlaying] = useState(autoplay);
-  const [local, setLocal] = useState(false);
   const [localFailed, setLocalFailed] = useState(false);
   const [retry, setRetry] = useState(0);
-  const providerStarted = useRef(false);
   const safeUrl = publicRecordingUrl(url);
   const source = videoSource(safeUrl,
     typeof location !== "undefined" ? location.hostname : null);
@@ -124,7 +143,6 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
     function accept(result) {
       if (!alive) return;
       setMedia(result);
-      if (result.state === "ready" && !providerStarted.current) setLocal(true);
       if (result.state === "running" && playing)
         timer = setTimeout(() => getJSON(endpoint).then(accept).catch(failed), 1000);
     }
@@ -139,40 +157,33 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
           || (retry && result.state === "error")))
         result = await send("POST", "/api/media", { url: safeUrl, retry: retry > 0 });
       accept(result);
-      if (alive && playing && result.state !== "ready") providerStarted.current = true;
     }).catch(failed);
     return () => { alive = false; clearTimeout(timer); };
   }, [safeUrl, playing, retry]);
 
   if (!source) return null;
-  const useLocal = local && !localFailed && media?.state === "ready";
-  // Browsing may already know about a running job when Play is clicked.
-  // The provider can therefore render before Play's fresh GET settles;
-  // protect that visible player now, not only in the request callback.
-  if (playing && media && !useLocal) providerStarted.current = true;
+  // Ready downloads are always preferred, including during provider playback.
+  const useLocal = !localFailed && media?.state === "ready";
   function closePlayback() {
-    // Keeping the provider is a promise for THIS watch session only. A new
-    // Play must choose the freshest cache result, including a download that
-    // finished while the user watched its embed.
-    providerStarted.current = false;
     setMedia(null);
-    setLocal(false);
     setLocalFailed(false);
     setPlaying(false);
   }
   return html`<div class="library-example-media external-video">
     <${VideoBody} source=${source} playing=${playing} useLocal=${useLocal}
       url=${safeUrl} media=${media} label=${label} startS=${startS}
+      replayActions=${replayActions} onCompare=${onCompare}
       onPlay=${() => setPlaying(true)} onError=${() => setLocalFailed(true)} />
     <${VideoActions} url=${safeUrl} playing=${playing} media=${media}
-      local=${local} localFailed=${localFailed} onLocal=${() => setLocal(true)}
+      showOriginal=${!replayActions} localFailed=${localFailed}
       onRetry=${() => setRetry(retry + 1)}>
       ${playing && closable && html`<button onclick=${closePlayback}>Close recording</button>`}
     <//>
   </div>`;
 }
 
-function VideoBody({ source, playing, useLocal, url, media, label, startS, onPlay, onError }) {
+function VideoBody({ source, playing, useLocal, url, media, label, startS, onPlay, onError,
+                     replayActions, onCompare }) {
   const image = source.kind === "image";
   return image ? html`<img class="library-example-thumb" src=${source.thumb} alt=${label} loading="lazy" />`
       : !playing ? html`<button class="library-example-thumb library-example-placeholder is-clickable"
@@ -183,19 +194,18 @@ function VideoBody({ source, playing, useLocal, url, media, label, startS, onPla
           src=${source.thumb} alt="" loading="lazy"
           onerror=${(event) => event.target.remove()} />`}
       </button>` : useLocal ? html`<${CachedVideo} key=${media.clip_url} media=${media}
-        label=${label} startS=${startS} onError=${onError} />`
+        label=${label} startS=${startS} onError=${onError}
+        replayActions=${replayActions} onCompare=${onCompare} />`
       : !media ? html`<div class="library-example-thumb library-example-placeholder" role="status">
           Loading recording…</div>`
       : html`<${ProviderMedia} key=${url} url=${url} source=${source}
           label=${label} startS=${startS ?? media.start_s} />`;
 }
 
-function VideoActions({ url, playing, media, local, localFailed, onLocal, onRetry, children }) {
+function VideoActions({ url, playing, media, showOriginal, localFailed, onRetry, children }) {
   return html`<div class="external-video-actions">
-      <a href=${url} target="_blank" rel="noopener noreferrer">Open original</a>
+      ${showOriginal && html`<a href=${url} target="_blank" rel="noopener noreferrer">Open original</a>`}
       ${playing && media?.state === "running" && html`<span role="status">Preparing local video…</span>`}
-      ${playing && media?.state === "ready" && !local && !localFailed
-        && html`<button onclick=${onLocal}>Play downloaded video</button>`}
       ${playing && media?.state === "error" && html`<span role="status">
         Local video unavailable. <button title=${media.error || "Try preparing the video again"}
           onclick=${onRetry}>Retry download</button></span>`}

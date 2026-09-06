@@ -8,6 +8,7 @@ import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
 import { ExternalVideo, attachSharedVolume } from "./externalvideo.js";
+import { ReplayTransport } from "./replaytransport.js";
 
 const html = htm.bind(h);
 
@@ -20,7 +21,8 @@ export function ReplayPlayer({ attemptId, imported = false, onCompare }) {
     ${!nativeUnavailable
       ? html`<${NativeReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
           onUnavailable=${() => setNativeUnavailable(true)} />`
-      : url ? html`<${ExternalVideo} key=${url} url=${url} autoplay=${initialLink} />`
+      : url ? html`<${ExternalVideo} key=${url} url=${url} autoplay=${initialLink}
+          replayActions onCompare=${onCompare} />`
       : url === undefined ? html`<p class="replay-state meta">Loading recording…</p>`
       : html`<p class="replay-state meta">${imported ? "Add a public recording to watch this attempt."
           : "No captured replay available. Add a public recording below."}</p>`}
@@ -124,22 +126,8 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
                el.play().catch(() => {});
              }
            }}></video>
-    <div class="replay-transport">
-      <button onclick=${toStart} title="Jump to the beginning">
-        <${Icon} name="restart" size=${15} /> Start
-      </button>
-      <button onclick=${() => step(-1)} title="Pause and move back one game frame">
-        <${Icon} name="stepBack" size=${15} /> Back 1
-      </button>
-      <button class="primary-transport" onclick=${togglePlay} title="Play or pause">
-        <${Icon} name=${playing ? "pause" : "play"} size=${16} />
-        ${playing ? "Pause" : "Play"}
-      </button>
-      <button onclick=${() => step(1)} title="Pause and move forward one game frame">
-        <${Icon} name="stepForward" size=${15} /> Forward 1
-      </button>
-      <span class="replay-frame-note">1 frame = 1/${state.game_fps || 30} s</span>
-    </div>
+    <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
+      onToggle=${togglePlay} note=${`1 frame = 1/${state.game_fps || 30} s`} />
     <div class="replay-actions">
       <button onclick=${saveReplay} disabled=${savedPath !== null}>
         <${Icon} name=${savedPath ? "check" : "save"} size=${15} />

@@ -495,7 +495,11 @@ attempt keeps them.
 YouTube URL variants share one cached source while links retain their original
 timestamps for export and playback. `frame_step_s` appears only after encoded
 presentation timestamps establish a constant frame interval; an unverified or
-variable-rate recording remains playable without frame controls.
+variable-rate recording remains playable with frame stepping disabled. Ready
+downloads automatically replace provider playback. Downloaded recordings use
+the shared replay transport, can save a local copy, and open as My Run in Compare
+with their resolved start time. The public recording editor keeps the original
+link available below the replay.
 
 ## Compare (side-by-side video)
 

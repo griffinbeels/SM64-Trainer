@@ -239,7 +239,8 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
     </td>
   </tr>`;
   const onCompare = (openCompare && entity)
-    ? () => openCompare({ attemptId: a.id, entity, strat })
+    ? (recording) => openCompare({ attemptId: a.id, entity, strat,
+        recording: recording?.clip_url ? recording : null })
     : null;
   const expandedRow = showReplay
     ? html`<tr class="replay-row"><td colspan="6"><${ReplayPlayer} attemptId=${a.id} imported=${a.imported} onCompare=${onCompare} /></td></tr>`

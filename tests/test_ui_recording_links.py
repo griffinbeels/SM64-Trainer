@@ -3,6 +3,7 @@
 Only HTTP boundaries are replaced: these tests drive the real editor, replay
 selection, and Library player without downloading public videos in the suite.
 """
+import base64
 import json
 import sys
 from pathlib import Path
@@ -242,21 +243,44 @@ def test_library_browse_only_reads_cache_then_play_prepares_once(page):
     assert page.evaluate("document.querySelectorAll('#recording-test .external-video-frames').length") == 0
 
 
-def test_library_reopen_prefers_download_that_finished_during_embed(page):
+@pytest.mark.parametrize("library", [False, True])
+def test_download_completion_automatically_replaces_provider(page, library):
     page.evaluate("window.mediaReply = {state:'running', start_s:0}")
-    mount(page, url='https://recording.example/library', library=True)
-    page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    mount(page, url='https://recording.example/library', library=library)
+    if library:
+        page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
     wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Preparing local')")
+    # A cached file must be reusable after close/reopen. An empty MediaSource
+    # is single-attachment and falsely triggers the player's error fallback.
+    clip = base64.b64encode((REPO / 'tests/fixtures/recording-controls.mp4').read_bytes()).decode()
+    page.evaluate(f"""window.mediaReply = {{state:'ready', start_s:0,
+      clip_url:URL.createObjectURL(new Blob([
+        Uint8Array.from(atob({json.dumps(clip)}), c => c.charCodeAt(0))
+      ], {{type:'video/mp4'}}))}}""")
+    page.wait_for("#recording-test .external-video-local video")
+    wait(page, "document.querySelector('#recording-test video').readyState >= 1")
+    assert page.evaluate("document.querySelector('#recording-test video').src.startsWith('blob:')")
+    assert not page.evaluate("document.querySelector('#recording-test').textContent.includes('Play downloaded')")
+    if library:
+        click(page, "Close recording")
+        wait(page, "document.querySelector('#recording-test .external-video > button')")
+        page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+        page.wait_for("#recording-test .external-video-local video")
+        wait(page, "document.querySelector('#recording-test video').readyState >= 1")
+        assert page.evaluate("document.querySelector('#recording-test video').src === mediaReply.clip_url")
+    else:
+        assert page.evaluate("document.querySelectorAll('#recording-test a').length") == 1
+        assert page.evaluate("document.querySelector('#recording-test .recording-link a').href") == 'https://recording.example/library'
+
+
+def test_failed_local_playback_returns_to_provider(page):
     page.evaluate("window.mediaReply = {state:'ready', start_s:0, "
                   "clip_url:URL.createObjectURL(new MediaSource())}")
-    wait(page, "document.querySelector('#recording-test .external-video-actions').textContent.includes('Play downloaded')")
-    # A background completion must not interrupt the current provider player.
-    assert page.evaluate("document.querySelector('#recording-test .external-video-local') === null")
-    click(page, "Close recording")
-    wait(page, "document.querySelector('#recording-test .external-video > button')")
-    page.evaluate("document.querySelector('#recording-test .external-video > button').click()")
+    mount(page, url='https://recording.example/fallback')
     page.wait_for("#recording-test .external-video-local video")
-    assert page.evaluate("document.querySelector('#recording-test video').src.startsWith('blob:')")
+    page.evaluate("document.querySelector('#recording-test video').dispatchEvent(new Event('error'))")
+    wait(page, "!document.querySelector('#recording-test .external-video-local')")
+    assert page.evaluate("document.querySelector('#recording-test .recording-link a').href") == 'https://recording.example/fallback'
 
 
 def test_provider_fallback_uses_the_resolved_start_timestamp(page):
@@ -308,8 +332,30 @@ def test_cached_playback_uses_api_timing_capability_and_probes_on_play(page, fra
     page.wait_for("#recording-test .external-video-local video")
     wait(page, "calls.filter(call => call.method === 'POST').length === 1")
     assert page.evaluate("document.querySelector('#recording-test video').src.startsWith('blob:')")
-    assert page.evaluate("!!document.querySelector('#recording-test .external-video-frames')") == (frame_step is not None)
+    assert page.evaluate("[...document.querySelectorAll('#recording-test .replay-transport button')].map(b => b.textContent.trim())") == ['Start', 'Back 1', 'Play', 'Forward 1']
+    assert page.evaluate("document.querySelector('#recording-test .replay-transport button:nth-child(2)').disabled") == (frame_step is None)
+    assert page.evaluate("document.querySelector('#recording-test .replay-frame-note') === null")
     assert page.evaluate("document.querySelectorAll('#recording-test iframe').length") == 0
+
+
+def test_empty_link_status_reserves_no_blank_space(page):
+    mount(page)
+    assert page.evaluate("document.querySelector('#recording-test .recording-link-status').getBoundingClientRect().height") == 0
+
+
+def test_compare_intent_loads_cached_recording_without_native_extraction(page):
+    page.evaluate("""(async () => {
+      const {h, render} = await import('preact');
+      const {Compare} = await import('/ui/components/compare.js');
+      window.cachedClip = URL.createObjectURL(new MediaSource());
+      render(h(Compare, {t:{view:{}}, active:true, clearIntent:() => {},
+        intent:{attemptId:4242, entity:'star:2:4', strat:null,
+          recording:{clip_url:cachedClip, start_s:12}}}),
+        document.querySelector('#recording-test'));
+    })()""")
+    page.wait_for('#recording-test .compare-col video')
+    assert page.evaluate("document.querySelector('#recording-test .compare-col video').src === cachedClip")
+    assert page.evaluate("calls.filter(call => call.path.endsWith('/replay')).length") == 0
 
 
 def test_export_html_preserves_exact_safe_link_and_paint(page):
