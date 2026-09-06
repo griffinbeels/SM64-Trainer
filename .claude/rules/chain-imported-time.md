@@ -12,6 +12,7 @@ paths:
   - "src/sm64_events/server/import_api.py"
   - "src/sm64_events/server/scorecard_api.py"
   - "src/sm64_events/tracking/importing.py"
+  - "src/sm64_events/tracking/recordings.py"
   - "src/sm64_events/tracking/views.py"
   - "src/sm64_events/storage/db.py"
   - "src/sm64_events/ranks/scorecard.py"
@@ -50,6 +51,23 @@ match). A cause that moves only one of the two names its own hop.
 | 9 | what he reads | the card's YOU / GOAL / Δ cells, and the column cell the export writes back | `src/sm64_events/ui/components/scorecard.js`, `src/sm64_events/library/export_column.py` | `uv run python tools/contact_sheet.py .score-card` — the card at four widths, and you LOOK at it | `serve_ui_live(db_path=...)` in `tools/ui_fixture.py` — the real app offline on a seeded snapshot | a cell reading `set…` where a goal exists, or a blank column cell where a PB was landed | a fixture card holding no imported rows — nobody is looking at the card he reported |
 
 ## Counterfactual recipe
+
+Recording links follow the same time through hops 1–6: `Cell.link` →
+`SheetRow.video` → entry `video` → candidate `video`/`row_key` → imported
+journal payload. Held times retain `video` under their source row key.
+`tracking/recordings.py::backfill_matches` repairs historical imports only
+when source, performance identity and row evidence agree unambiguously.
+`TrackerService.recording_link` reads the imported original or the durable
+`attempt_recordings` edit (including an explicit removal). At hop 9 the export
+asks for the SELECTED PB's attempt link; `scorecard.js::columnHtml` supplies
+typed `data-sheets-value` and escaped `data-sheets-formula` attributes inside
+`google-sheets-html-origin`, with a standard anchor fallback. Numeric times
+stay numbers; minute-formatted times stay text. Visible HYPERLINK strings get
+apostrophe-escaped in the Ultimate Sheet's plain-text-formatted destination;
+bare anchors lose cell colors. Probe with `tests/test_recording_links.py` and
+`tests/test_ui_recording_links.py`; inject two attempts with different links,
+select the faster unlinked attempt, and require no hyperlink. The independent
+sink check reads hyperlinks from the pasted workbook, not the export JSON.
 
 Take one tile he reported. `uv run python tools/scorecard_parity.py --runner
 <name> --verbose` prints, for every mismatching tile, the sheet's own entries

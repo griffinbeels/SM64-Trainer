@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/sm64_events/tracking/importing.py"
+  - "src/sm64_events/tracking/recordings.py"
   - "src/sm64_events/library/import_runner.py"
   - "src/sm64_events/server/import_api.py"
   - "src/sm64_events/ui/components/importsection.js"

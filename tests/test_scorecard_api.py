@@ -1298,6 +1298,25 @@ def test_the_column_body_pairs_every_line_with_its_platform(tmp_path, monkeypatc
         assert all(cell["platform"] is None for cell in body["cells"] if not cell["text"])
 
 
+def test_column_http_response_keeps_selected_attempts_public_recording(tmp_path, monkeypatch):
+    import asyncio
+    from sm64_events.tracking.importing import ImportCandidate
+
+    url = "https://youtu.be/abcdefghijk?t=12&feature=shared"
+    monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _bob_workbook)
+    with make_client(tmp_path) as (client, _db, svc):
+        asyncio.run(svc.import_times("manual", [ImportCandidate(
+            "star:1:0", "Standard", 886, video=url)]))
+        response = client.get("/api/scorecard/column")
+        assert response.status_code == 200
+        linked = [cell for cell in response.json()["cells"] if cell.get("video")]
+        assert linked == [{"text": "8.86", "platform": "emu", "video": url}]
+        asyncio.run(svc.import_times("manual", [ImportCandidate(
+            "star:1:0", "Standard", 800)]))
+        response = client.get("/api/scorecard/column")
+        assert not any(cell.get("video") for cell in response.json()["cells"])
+
+
 def test_the_sheet_style_is_one_stored_preference_over_its_defaults(tmp_path):
     """Round 29 item 2: three colours and a font, read as defaults until he
     sets them, validated as #RRGGBB and a plain font name (it is written

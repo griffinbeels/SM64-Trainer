@@ -28,7 +28,10 @@ LOG_TABS = (SHEET_LOG, "Log (Main)")
 _EPOCH = datetime(1899, 12, 30)
 
 _CELL = re.compile(r'<c r="([A-Z]+)(\d+)"([^>]*?)(?:/>|>(.*?)</c>)', re.S)
-_HYPERLINK_FORMULA = re.compile(r"HYPERLINK\(&quot;(.*?)&quot;", re.I)
+_FORMULA = re.compile(r'<f\b([^>]*?)(?:/>|>(.*?)</f>)', re.S)
+# Match the decoded formula's first string literal. Excel doubles a quote
+# inside that literal; a lazy quote-to-quote match truncates recording URLs.
+_HYPERLINK_FORMULA = re.compile(r'\bHYPERLINK\s*\(\s*"((?:[^"]|"")*)"\s*[,;)]', re.I)
 
 
 @dataclass(frozen=True)
@@ -103,8 +106,10 @@ def _fill_rgb(fill_xml: str, palette: list) -> str | None:
 
 def _style_by_xf(styles_xml: str, palette: list = ()) -> dict:
     """cellXfs index -> (bold, font rgb, fill rgb)."""
-    fonts = re.findall(r"<font>(.*?)</font>", styles_xml, re.S)
-    fills = re.findall(r"<fill>(.*?)</fill>", styles_xml, re.S)
+    # Empty entries still occupy indices (real Sheets exports use <font/>).
+    # Include them or every later font/fill points at the wrong definition.
+    fonts = re.findall(r"<font\s*/>|<font>.*?</font>", styles_xml, re.S)
+    fills = re.findall(r"<fill\s*/>|<fill>.*?</fill>", styles_xml, re.S)
     block = re.search(r"<cellXfs[^>]*>(.*?)</cellXfs>", styles_xml, re.S)
     xfs = re.findall(r"<xf [^>]*/>|<xf [^>]*>.*?</xf>",
                      block.group(1) if block else "", re.S)
@@ -187,6 +192,37 @@ def _relationship_links(sheet_xml: str, rels: dict) -> dict:
     return out
 
 
+def _formula_recording(text: str) -> str | None:
+    """Read only a literal first URL, never evaluate a spreadsheet formula."""
+    # XML decoding precedes formula-string decoding, exactly once.
+    # A literal &quot; in the URL was serialized &amp;quot; and must stay text.
+    hit = _HYPERLINK_FORMULA.search(_unescape(text))
+    return hit.group(1).replace('""', '"') if hit else None
+
+
+def _shared_formula_id(attrs: str) -> str | None:
+    if not re.search(r'\bt="shared"', attrs):
+        return None
+    shared = re.search(r'\bsi="([^"]+)"', attrs)
+    return shared.group(1) if shared else None
+
+
+def _shared_recordings(sheet_xml: str) -> dict:
+    """Worksheet-local constant URLs, collected before resolving dependents.
+
+    Google coalesces adjacent identical HYPERLINK formulas into one shared
+    base and self-closing dependent <f> tags. A literal URL cannot change
+    when the shared formula translates relative cell references; computed
+    URL expressions remain unsupported. Bases may follow their dependents.
+    """
+    shared = {}
+    for formula in _FORMULA.finditer(sheet_xml):
+        key = _shared_formula_id(formula.group(1))
+        if key is not None and formula.group(2):
+            shared[key] = _formula_recording(formula.group(2))
+    return shared
+
+
 def read_sheet(data: bytes, sheet_name: str) -> dict:
     """{(row, col): Cell} for one worksheet, 1-based on both axes."""
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -204,6 +240,7 @@ def read_sheet(data: bytes, sheet_name: str) -> dict:
               if shared_xml else [])
     rels = dict(re.findall(r'Id="([^"]+)"[^>]*Target="([^"]+)"', rels_xml)) if rels_xml else {}
     links = _relationship_links(sheet_xml, rels)
+    shared_recordings = _shared_recordings(sheet_xml)
 
     out = {}
     for match in _CELL.finditer(sheet_xml):
@@ -213,11 +250,10 @@ def read_sheet(data: bytes, sheet_name: str) -> dict:
                            if style else (False, None, None))
 
         link = links.get(f"{letters}{row}")
-        formula = re.search(r"<f>(.*?)</f>", body, re.S)
+        formula = _FORMULA.search(body)
         if link is None and formula:
-            hit = _HYPERLINK_FORMULA.search(formula.group(1))
-            if hit:
-                link = _unescape(hit.group(1))
+            link = (_formula_recording(formula.group(2)) if formula.group(2)
+                    else shared_recordings.get(_shared_formula_id(formula.group(1))))
 
         inline = re.search(r"<is>.*?<t[^>]*>(.*?)</t>", body, re.S)
         cached = re.search(r"<v>(.*?)</v>", body, re.S)

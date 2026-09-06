@@ -417,7 +417,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
       // once (its own guard already prevents it running twice), which is a
       // real fetch for a target the user will not see this instant, exactly
       // as wasteful as intended -- and no more.
-      enterCompare({ attemptId: intent.attemptId, entity: intent.entity, strat: intent.strat });
+      enterCompare({ attemptId: intent.attemptId, entity: intent.entity, strat: intent.strat,
+        recording: intent.recording || null });
     }
     clearIntent();
   }, [active, intent]);

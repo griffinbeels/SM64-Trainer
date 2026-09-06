@@ -112,7 +112,7 @@ def _held(target: dict, item: dict, entry: dict, reason: str,
             "row_key": row_key(target, item.get("name") or "",
                                item.get("ids") or ()),
             "time_cs": int(entry["time_cs"]), "game_version": version,
-            "platform": entry.get("platform")}
+            "platform": entry.get("platform"), "video": entry.get("video")}
 
 
 def _hold_reason(target: dict, item: dict, kind: str) -> str:
@@ -185,5 +185,7 @@ def candidates_for(payload: dict, runner: str, place=None):
                     time_cs=int(entry["time_cs"]),
                     game_version=entry_version(entry),
                     timer_mode=timer_mode,
-                    platform=entry.get("platform")) for entry in entries)
+                    platform=entry.get("platform"), video=entry.get("video"),
+                    row_key=row_key(target, item.get("name") or "",
+                                    item.get("ids") or ())) for entry in entries)
     return candidates, held
