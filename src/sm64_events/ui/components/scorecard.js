@@ -469,7 +469,10 @@ export function columnHtml(cells, style) {
     try { url = new URL(cell.video); } catch { return text; }
     if (!cell.text || !["https:", "http:"].includes(url.protocol)
         || url.username || url.password) return text;
-    return `<a href="${escape(cell.video)}" style="color:inherit">${text}</a>`;
+    // Sheets imports an anchor's own style rather than its table cell's
+    // inherited text/background colours. Paint both so linked times retain
+    // the platform fill and chosen font through a normal rich paste.
+    return `<a href="${escape(cell.video)}"${paint(cell)}>${text}</a>`;
   };
   return "<table>" + cells
     .map((cell) => `<tr><td${paint(cell)}>${content(cell)}</td></tr>`)
