@@ -33,14 +33,14 @@ Pure: no db, no I/O -- imports only `ranks.scoring`, `ranks.scopes`
 from sm64_events.memory.addresses import COURSE_NAMES, STAR_NAMES, star_name
 from sm64_events.ranks.scopes import candidate_key
 from sm64_events.ranks.scoring import (
-    DIVISION_NUMERALS, DIVISIONS_PER_TIER, defined_tiers, progress_for_time,
-    tier_band, time_for_score)
+    DIVISION_NUMERALS, DIVISIONS_PER_TIER, RANK_NAMES, defined_tiers,
+    progress_for_time, progression_key, tier_band, time_for_score)
 
 __all__ = ["SECRET_ROW", "BOWSER_REDS", "SPECIAL_STAR_LABELS", "FIGHTS_LABEL",
            "SECRET_LABEL", "BOWSER_LABEL", "bowser_number",
            "hundred_coin_companion", "template_rows",
            "rows_for_course", "rows_for_route", "without_keys", "card_keys",
-           "division_goal_cs", "build_card"]
+           "automatic_goal", "division_goal_cs", "build_card"]
 
 _HUNDRED_COIN_SLOT = 6
 
@@ -453,10 +453,26 @@ def _sum_tiles(tiles: list[dict]) -> dict:
             "counted": len(shared), "total": len(tiles)}
 
 
+def automatic_goal(tier: str | None, division: str | None) -> dict:
+    """One subdivision above the scope's MARELO rank, capped at the top.
+
+    This is a derived goal, never a stored manual selection. The same
+    registry orders MARELO's divisions and its celebration watermarks.
+    """
+    if tier is None or division is None:
+        return {"kind": "automatic", "tier": None, "division": None}
+    step = min(progression_key(tier, division) + 1,
+               len(RANK_NAMES) * DIVISIONS_PER_TIER - 1)
+    tier_index, division_index = divmod(step, DIVISIONS_PER_TIER)
+    return {"kind": "automatic", "tier": RANK_NAMES[-1 - tier_index],
+            "division": DIVISION_NUMERALS[division_index]}
+
+
 def division_goal_cs(ladder_cs: dict[str, int], tier: str, division: str) -> int | None:
     """The slowest displayed centisecond that grades AT LEAST
     `(tier, division)` on this ladder -- the goal time a tile shows for that
-    rank. None only when `tier` is not one this ladder defines at all.
+    rank. None for an absent tier/ladder or the unbounded Capless V floor.
+    Capless IV through I use the existing score curve's finite tail.
 
     "At least", not "exactly" (round 12, 2026-08-29): near the fastest tiers
     a whole division can span ZERO integer centiseconds -- his own ladders
@@ -479,7 +495,7 @@ def division_goal_cs(ladder_cs: dict[str, int], tier: str, division: str) -> int
     meets the entry. Bounded at 10 steps -- ample for rounding slop (the
     pre-round-12 bound was measured over all 4,580 seed combos)."""
     defined = defined_tiers(ladder_cs)
-    if tier not in defined:
+    if not defined or (tier != "Iron" and tier not in defined):
         return None
     low, high = tier_band(tier, defined)
     entry_score = low + (high - low) * DIVISION_NUMERALS.index(division) / DIVISIONS_PER_TIER

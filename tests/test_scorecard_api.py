@@ -30,11 +30,11 @@ def test_goal_round_trip(tmp_path):
         assert "goal_pending" not in card
 
 
-def test_iron_division_is_refused(tmp_path):
+def test_capless_floor_is_refused(tmp_path):
     with make_client(tmp_path) as (client, _db, _svc):
         response = client.put("/api/scorecard/goal",
                               json={"kind": "division", "tier": "Iron",
-                                    "division": "I"})
+                                    "division": "V"})
         assert response.status_code == 422
 
 
@@ -52,30 +52,29 @@ def test_an_unknown_goal_kind_is_refused(tmp_path):
         assert response.status_code == 422
 
 
-def test_null_clears_the_goal(tmp_path):
+def test_null_restores_the_automatic_goal(tmp_path):
     with make_client(tmp_path) as (client, _db, _svc):
         client.put("/api/scorecard/goal",
                    json={"kind": "division", "tier": "Gold", "division": "I"})
         response = client.put("/api/scorecard/goal", json=None)
         assert response.status_code == 200
-        assert client.get("/api/scorecard").json()["goal"] is None
+        assert client.get("/api/scorecard").json()["goal"]["kind"] == "automatic"
 
 
-def test_no_goal_serves_your_times_uncolored(tmp_path):
-    """A saved PB appears as you_cs with goal_cs None everywhere -- no goal
-    is set, so nothing on the card has anything to grade against."""
+def test_unset_goal_compares_your_times_with_the_automatic_goal(tmp_path):
+    """A saved PB is compared immediately, even before choosing a goal."""
     with make_client(tmp_path) as (client, db, _svc):
         client.post("/api/import/manual", json={
             "entity_key": "star:1:0", "strat_tag": "Standard", "time_cs": 886})
 
         card = client.get("/api/scorecard").json()
-        assert card["goal"] is None
+        assert card["goal"]["kind"] == "automatic"
         row = next(r for r in card["rows"] if r["course_id"] == 1)
         tile = next(t for t in row["tiles"] if t["key"] == "star:1:0")
         pb_row = db.current_pb(1, 0, "igt")
         assert tile["you_cs"] == display_cs(pb_row["frames"])
-        assert tile["goal_cs"] is None
-        assert tile["delta_cs"] is None
+        assert tile["goal_cs"] is not None
+        assert tile["delta_cs"] == tile["you_cs"] - tile["goal_cs"]
 
 
 def test_a_runner_goal_with_no_sheet_times_grades_nothing(tmp_path):
@@ -519,22 +518,22 @@ def test_all_three_db_touching_routes_answer_503_not_500_with_no_database(tmp_pa
         assert csv_response.json()["detail"]
 
 
-def test_a_non_dict_goal_kv_serves_the_no_goal_card(tmp_path):
+def test_a_non_dict_goal_kv_serves_the_automatic_card(tmp_path):
     """A KV that is not the shape this store ever writes (corrupt, or from a
     schema this code has never seen) must read as absent rather than 500
     every route that touches it."""
     with make_client(tmp_path) as (client, db, _svc):
         db.set_state("scorecard_goal", "not a dict")
         card = client.get("/api/scorecard").json()
-        assert card["goal"] is None
-        assert card["goal_coverage"]["covered"] == 0
+        assert card["goal"]["kind"] == "automatic"
+        assert card["goal_coverage"]["covered"] > 0
 
 
-def test_a_non_dict_custom_goal_store_serves_the_no_goal_card(tmp_path):
+def test_a_non_dict_custom_goal_store_serves_the_automatic_card(tmp_path):
     with make_client(tmp_path) as (client, db, _svc):
         db.set_state("scorecard_custom_goals", ["not", "a", "dict"])
         card = client.get("/api/scorecard").json()
-        assert card["goal"] is None
+        assert card["goal"]["kind"] == "automatic"
         assert card["custom_goals"] == []
 
 
@@ -1102,10 +1101,8 @@ def test_a_single_goal_attributes_nothing(tmp_path):
 def test_a_multi_goal_validates_every_source_like_a_single_one(tmp_path):
     with make_client(tmp_path) as (client, _db, _svc):
         assert client.put("/api/scorecard/goal", json={
-            "kind": "multi", "sources": []}).status_code == 422
-        assert client.put("/api/scorecard/goal", json={
             "kind": "multi",
-            "sources": [{"kind": "division", "tier": "Iron", "division": "I"}],
+            "sources": [{"kind": "division", "tier": "Iron", "division": "V"}],
         }).status_code == 422
         assert client.put("/api/scorecard/goal", json={
             "kind": "multi",

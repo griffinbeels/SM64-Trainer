@@ -66,15 +66,15 @@ def call(fn: str, *args: object) -> object:
     return json.loads(result.stdout)
 
 
-def test_division_options_has_forty_entries_hardest_first_no_capless():
+def test_division_options_has_every_finite_goal_hardest_first():
     options = call("divisionOptions")
-    assert len(options) == 40
+    assert len(options) == 44
     assert options[0] == {"value": "division:Mario:I", "label": "Mario 1"}
-    assert not any("Capless" in o["label"] for o in options)
-    assert not any(o["value"].startswith("division:Iron:") for o in options)
+    assert options[-1] == {"value": "division:Iron:IV", "label": "Capless 4"}
+    assert not any(o["value"] == "division:Iron:V" for o in options)
 
 
-def test_division_options_covers_every_non_iron_tier_five_divisions_each():
+def test_division_options_covers_all_tiers_and_omits_only_the_unbounded_floor():
     options = call("divisionOptions")
     by_tier = {}
     for option in options:
@@ -82,9 +82,10 @@ def test_division_options_covers_every_non_iron_tier_five_divisions_each():
         by_tier.setdefault(tier, []).append(division)
     assert set(by_tier.keys()) == {
         "Mario", "Grandmaster", "Master", "Diamond",
-        "Platinum", "Gold", "Silver", "Bronze"}
+        "Platinum", "Gold", "Silver", "Bronze", "Iron"}
     for tier, divisions in by_tier.items():
-        assert sorted(divisions) == sorted(["I", "II", "III", "IV", "V"]), tier
+        expected = ["I", "II", "III", "IV"] + ([] if tier == "Iron" else ["V"])
+        assert sorted(divisions) == sorted(expected), tier
 
 
 def test_fmt_gap_cs_prints_a_signed_two_decimal_second_value():
@@ -96,13 +97,13 @@ def test_fmt_gap_cs_signs_a_positive_gap_too():
     assert call("fmtGapCs", 100) == "+1.00"
 
 
-def test_goal_groups_is_no_goal_then_divisions_then_runners_with_no_runners_fetched_yet():
+def test_goal_groups_is_automatic_then_divisions_then_runners_before_fetch():
     """Before the picker's first open, `runners` is null -- the Runners
     group renders (so SearchMenu can find it) but carries no options."""
     groups = call("goalGroups", None)
     assert [group["label"] for group in groups] == ["", "Divisions", "Runners"]
-    assert groups[0]["options"] == [{"value": "", "label": "No goal"}]
-    assert len(groups[1]["options"]) == 40                    # divisionOptions()
+    assert groups[0]["options"] == [{"value": "", "label": "Automatic goal"}]
+    assert len(groups[1]["options"]) == 44                    # divisionOptions()
     assert groups[2]["options"] == []
 
 
@@ -121,7 +122,7 @@ def test_goal_groups_omits_the_custom_group_entirely_with_no_saved_names():
     assert [group["label"] for group in groups] == ["", "Divisions", "Runners"]
 
 
-def test_goal_groups_puts_custom_names_at_the_top_after_no_goal():
+def test_goal_groups_puts_custom_names_at_the_top_after_automatic():
     groups = call("goalGroups", None, ["Sub 90 Attempt", "PSS Skip Route"])
     assert [group["label"] for group in groups] == ["", "Custom", "Divisions", "Runners"]
     assert groups[1]["options"] == [
@@ -684,10 +685,9 @@ def test_blurring_an_empty_goal_draft_cancels_edit_mode():
             page.evaluate(_OPEN_RANK_TAB)
             page.wait_for(".rank-page .scorecard-card .score-card")
 
-            # No goal is picked in this test, so the tile has no goal_cs and
-            # the editor opens with an already-empty draft -- exactly the
-            # case under test.
+            # Automatic mode supplies a time; clear the draft explicitly.
             _open_goal_editor(page, row_label, tile_label)
+            _type_into_goal_editor(page, "")
             _blur_goal_editor(page)
             page.wait_ms(150)
 
@@ -761,7 +761,7 @@ def test_editing_a_goal_time_recomputes_the_tile_and_row_sum_before_saving():
 
         assert "1" in savebar_text
         assert colored >= 1, "editing a goal must recolor its tile immediately, unsaved"
-        assert unsaved_goal is None, "an unsaved edit must not have reached the server"
+        assert unsaved_goal["kind"] == "automatic", "an unsaved edit must not save a manual goal"
 
 
 def test_saving_a_custom_goal_persists_it_and_lists_it_first_in_the_picker():
@@ -1922,7 +1922,7 @@ def test_a_single_goal_draws_no_legend_and_no_dots():
         assert counts == {"pills": 0, "dots": 0}, counts
 
 
-def test_unpicking_the_last_goal_clears_it_and_one_pick_stays_single():
+def test_unpicking_the_last_goal_restores_automatic_and_one_pick_stays_single():
     """A list of one is not a new shape: it stores the goal in its own kind,
     so everything that reads a division goal keeps reading a division."""
     with serve_ui() as base:
@@ -1955,7 +1955,7 @@ def test_unpicking_the_last_goal_clears_it_and_one_pick_stays_single():
             page.evaluate(_option_click("division:Bronze:V"))   # toggle it off
             page.wait_ms(300)
 
-        assert _get_scorecard(base)["goal"] is None
+        assert _get_scorecard(base)["goal"]["kind"] == "automatic"
 
 
 def test_every_name_sits_on_one_line_at_every_column_count():
