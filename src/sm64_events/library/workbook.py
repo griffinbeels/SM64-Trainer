@@ -106,8 +106,10 @@ def _fill_rgb(fill_xml: str, palette: list) -> str | None:
 
 def _style_by_xf(styles_xml: str, palette: list = ()) -> dict:
     """cellXfs index -> (bold, font rgb, fill rgb)."""
-    fonts = re.findall(r"<font>(.*?)</font>", styles_xml, re.S)
-    fills = re.findall(r"<fill>(.*?)</fill>", styles_xml, re.S)
+    # Empty entries still occupy indices (real Sheets exports use <font/>).
+    # Include them or every later font/fill points at the wrong definition.
+    fonts = re.findall(r"<font\s*/>|<font>.*?</font>", styles_xml, re.S)
+    fills = re.findall(r"<fill\s*/>|<fill>.*?</fill>", styles_xml, re.S)
     block = re.search(r"<cellXfs[^>]*>(.*?)</cellXfs>", styles_xml, re.S)
     xfs = re.findall(r"<xf [^>]*/>|<xf [^>]*>.*?</xf>",
                      block.group(1) if block else "", re.S)

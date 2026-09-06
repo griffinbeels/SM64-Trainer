@@ -29,6 +29,18 @@ def test_reads_grey_font_colour():
     assert cells[(1, 1)].font_rgb == "FF000000"
 
 
+def test_empty_font_and_fill_entries_preserve_style_indices():
+    # The real formatted Sheets export has empty font entries before the
+    # appended clipboard font. Skipping them makes correct colors look lost.
+    xml = ('<styleSheet><fonts><font/><font><color rgb="FFF2ECE4"/></font></fonts>'
+           '<fills><fill/><fill><patternFill><fgColor rgb="FF4F7BE0"/>'
+           '</patternFill></fill></fills>'
+           '<cellXfs><xf fontId="0" fillId="0"/>'
+           '<xf fontId="1" fillId="1"/></cellXfs></styleSheet>')
+    assert wb._style_by_xf(xml) == {
+        0: (False, None, None), 1: (False, 'FFF2ECE4', '4F7BE0')}
+
+
 def test_recovers_both_hyperlink_forms():
     cells = wb.read_sheet(_sample(), wb.SHEET_MAIN)
     assert cells[(1, 7)].link == "https://youtu.be/aaa"        # relationship

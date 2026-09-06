@@ -450,8 +450,8 @@ const COPIED_FLASH_MS = 1500;
 // carries no style at all, as his empty cells do. Google Sheets keeps inline
 // `background-color` / `color` / `font-family` from a pasted HTML table,
 // which is what makes the HTML half the mechanism and the plain-text half
-// the fallback. Exported for the tests, which read the markup rather than
-// drive Google Sheets.
+// the fallback. Tests pin the markup; live acceptance also pastes into the
+// Ultimate Sheet's existing formatted column and reads the saved XLSX back.
 export function columnHtml(cells, style) {
   const escape = (line) => String(line).replace(/&/g, "&amp;")
     .replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -461,27 +461,34 @@ export function columnHtml(cells, style) {
     return ` style="background-color:${fill};color:${style.font_color};`
       + `font-family:${escape(style.font_family)}"`;
   };
-  const content = (cell) => {
-    const text = escape(cell.text);
+  const link = (cell) => {
     // A clipboard anchor is an outbound action too. Do not mint active HTML
     // from a malformed/unsafe legacy URL, even if it reached the cell payload.
     let url;
-    try { url = new URL(cell.video); } catch { return text; }
+    try { url = new URL(cell.video); } catch { return null; }
     if (!cell.text || !["https:", "http:"].includes(url.protocol)
-        || url.username || url.password) return text;
-    // Measured in Sheets: an HTML anchor discards the cell's fill and font
-    // color, even when both td and anchor paint explicitly. HYPERLINK keeps
-    // both the recording and the platform colors. Quote as formula strings
-    // first, then HTML; pasted URLs cannot become executable formula syntax.
-    const literal = (value) => `"${String(value).replace(/"/g, '""')}"`;
-    // Numeric labels must remain numbers: quoted labels disappear from SUM
-    // and other sheet calculations. Minute-formatted labels stay text.
-    const label = /^\d+(?:\.\d+)?$/.test(cell.text) ? cell.text : literal(cell.text);
-    return escape(`=HYPERLINK(${literal(cell.video)},${label})`);
+        || url.username || url.password) return null;
+    return cell.video;
   };
-  return "<table>" + cells
-    .map((cell) => `<tr><td${paint(cell)}>${content(cell)}</td></tr>`)
-    .join("") + "</table>";
+  const literal = (value) => `"${String(value).replace(/"/g, '""')}"`;
+  // Explicit Sheets values/formulas bypass the destination's plain-text
+  // format. Visible formula strings get apostrophe-escaped there; bare anchors
+  // lose cell colors. The origin wrapper plus typed metadata preserves both.
+  // The standard HTML anchor remains useful to other clipboard consumers.
+  return '<google-sheets-html-origin><table>' + cells.map((cell) => {
+    const numeric = /^\d+(?:\.\d+)?$/.test(cell.text);
+    const value = numeric ? {1: 3, 3: Number(cell.text)} : {1: 2, 2: cell.text};
+    let metadata = cell.text ? ` data-sheets-value="${escape(JSON.stringify(value))}"` : "";
+    const video = link(cell);
+    let content = escape(cell.text);
+    if (video) {
+      const label = numeric ? cell.text : literal(cell.text);
+      const formula = `=HYPERLINK(${literal(video)},${label})`;
+      metadata += ` data-sheets-formula="${escape(formula)}"`;
+      content = `<a href="${escape(video)}">${content}</a>`;
+    }
+    return `<tr><td${paint(cell)}${metadata}>${content}</td></tr>`;
+  }).join("") + "</table></google-sheets-html-origin>";
 }
 
 async function writeColumn(column) {

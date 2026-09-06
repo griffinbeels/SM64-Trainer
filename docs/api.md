@@ -472,8 +472,11 @@ to exact attempts, including imported ones. A durable edit overrides the importe
 original; `null` explicitly removes it. Export uses the selected PB attempt's
 link and never borrows a previous attempt's video. Held sheet times retain their
 original links until adoption. Column export cells include optional `video`.
-The rich clipboard uses escaped `HYPERLINK` formulas to retain the link, cell
-colors and numeric time values when pasted into Sheets. Plain text stays times.
+The rich clipboard supplies typed `data-sheets-value` and escaped
+`data-sheets-formula` attributes inside `google-sheets-html-origin`, retaining
+links, colors and numeric time values even in plain-text-formatted Sheets cells.
+Visible formula strings get apostrophe-escaped in that destination. Standard
+HTML anchors serve other rich clipboard consumers; plain text stays times.
 Malformed optional source links never reject valid times: imports report their
 omission through `recordings_skipped`; recognizable scheme-less YouTube links
 gain HTTPS. Explicit user edits still require a valid public URL. Physically

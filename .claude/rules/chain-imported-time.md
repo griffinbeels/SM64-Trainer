@@ -59,9 +59,12 @@ journal payload. Held times retain `video` under their source row key.
 when source, performance identity and row evidence agree unambiguously.
 `TrackerService.recording_link` reads the imported original or the durable
 `attempt_recordings` edit (including an explicit removal). At hop 9 the export
-asks for the SELECTED PB's attempt link; `scorecard.js::columnHtml` places a
-quoted `HYPERLINK` formula in that time's styled clipboard cell (numeric time
-labels stay numeric). Probe with `tests/test_recording_links.py` and
+asks for the SELECTED PB's attempt link; `scorecard.js::columnHtml` supplies
+typed `data-sheets-value` and escaped `data-sheets-formula` attributes inside
+`google-sheets-html-origin`, with a standard anchor fallback. Numeric times
+stay numbers; minute-formatted times stay text. Visible HYPERLINK strings get
+apostrophe-escaped in the Ultimate Sheet's plain-text-formatted destination;
+bare anchors lose cell colors. Probe with `tests/test_recording_links.py` and
 `tests/test_ui_recording_links.py`; inject two attempts with different links,
 select the faster unlinked attempt, and require no hyperlink. The independent
 sink check reads hyperlinks from the pasted workbook, not the export JSON.

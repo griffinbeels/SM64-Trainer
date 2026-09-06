@@ -318,7 +318,8 @@ def test_export_html_preserves_exact_safe_link_and_paint(page):
       return columnHtml([
         {text:'11.33',platform:'n64',video:'https://example.com/watch?t=4&name="clip"'},
         {text:'12.00',platform:'emu',video:'javascript:alert(1)'},
-        {text:'',platform:null}],
+        {text:'',platform:null},
+        {text:'1:21.93',platform:'emu',video:'https://example.com/long'}],
         {n64_fill:'#123456',emu_fill:'#654321',font_color:'#FFFFFF',font_family:'Roboto Mono'});
     })()""")
     from html.parser import HTMLParser
@@ -341,8 +342,16 @@ def test_export_html_preserves_exact_safe_link_and_paint(page):
 
     reader = ReadCells()
     reader.feed(copied)
-    assert reader.links == []
-    assert reader.values == ['=HYPERLINK("https://example.com/watch?t=4&name=""clip""",11.33)', '12.00']
-    assert len(reader.cells) == 3
+    # Measured in an @-formatted Ultimate Sheet column: explicit metadata
+    # survives; visible formula text gets apostrophe-escaped at paste time.
+    assert copied.startswith('<google-sheets-html-origin>')
+    assert reader.links == ['https://example.com/watch?t=4&name="clip"', 'https://example.com/long']
+    assert reader.values == ['11.33', '12.00', '1:21.93']
+    assert len(reader.cells) == 4
+    assert json.loads(reader.cells[0]['data-sheets-value']) == {'1': 3, '3': 11.33}
+    assert reader.cells[0]['data-sheets-formula'] == '=HYPERLINK("https://example.com/watch?t=4&name=""clip""",11.33)'
+    assert 'data-sheets-formula' not in reader.cells[1]
+    assert json.loads(reader.cells[3]['data-sheets-value']) == {'1': 2, '2': '1:21.93'}
+    assert reader.cells[3]['data-sheets-formula'] == '=HYPERLINK("https://example.com/long","1:21.93")'
     assert 'background-color:#123456' in reader.cells[0]['style']
     assert reader.cells[2] == {}
