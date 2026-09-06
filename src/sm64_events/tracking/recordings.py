@@ -6,9 +6,48 @@ that overlay. A source refresh fills a missing link only when both sides name
 one imported performance. A played attempt is never a repair candidate.
 """
 from collections import defaultdict
+from dataclasses import replace
+from urllib.parse import urlsplit
 
+from sm64_events.core.recording_url import validate_recording_url
 from sm64_events.core.timefmt import frame_at_or_after
 from sm64_events.tracking.importing import IMPORT_EVENT
+
+
+def import_recording_url(value) -> str | None:
+    """A source recording is optional: an unusable URL cannot reject a time.
+
+    The bundled sheet includes bare YouTube hosts and `http://books/`.
+    Supply HTTPS when a scheme is missing, then apply the same public-URL
+    rules as an explicit edit. Invalid metadata becomes absent; the batch
+    reports how many links it skipped. Explicit user edits remain strict.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    try:
+        if not urlsplit(value).scheme:
+            value = "https:" + value if value.startswith("//") else "https://" + value
+        return validate_recording_url(value)
+    except ValueError:
+        return None
+
+
+def prepare_import(candidates, held):
+    """Normalize optional recording metadata and count rejected source links."""
+    skipped = 0
+
+    def recording(value):
+        nonlocal skipped
+        url = import_recording_url(value)
+        if value and url is None:
+            skipped += 1
+        return url
+
+    candidates = [replace(candidate, video=recording(candidate.video))
+                  for candidate in candidates]
+    held = [{**cell, "video": recording(cell.get("video"))} for cell in held]
+    return candidates, held, skipped
 
 
 def _candidate_key(candidate):

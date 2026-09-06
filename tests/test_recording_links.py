@@ -222,3 +222,99 @@ def test_ronc3na_links_reach_saved_attempts_holds_and_export(tmp_path):
         time = held_resolve(cell["row_key"], cell["game_version"])
         expected = originals[cell["row_key"], cell["game_version"]]
         assert (time[2] if len(time) == 3 else None) == expected
+
+
+@pytest.mark.parametrize("runner, source_url, accepted_url", [
+    ("Twig64", "http://books/", None),
+    ("Shans", "www.youtube.com/watch?v=u_SFBWwS4g8",
+     "https://www.youtube.com/watch?v=u_SFBWwS4g8"),
+    ("Falcon", "youtube.com/watch?v=-DuUClItqkw",
+     "https://youtube.com/watch?v=-DuUClItqkw"),
+])
+def test_real_runner_bad_optional_recording_does_not_reject_times(
+        tmp_path, runner, source_url, accepted_url):
+    from sm64_events.library.import_runner import candidates_for
+    from sm64_events.server.import_api import sheet_row_placer
+    from test_import_runner import payload
+
+    db, svc = make(tmp_path)
+    candidates, held = candidates_for(payload(), runner, sheet_row_placer(svc, None))
+    original_links = [candidate.video for candidate in candidates]
+    original_links.extend(cell.get("video") for cell in held)
+    assert source_url in original_links, "the regression must still exist in the source fixture"
+    expected = svc._plan_import(candidates).summary["imported"]
+    result = asyncio.run(svc.import_times(f"sheet:{runner}", candidates, held=held))
+    assert result["imported"] == expected > 0
+    assert len(db.held_times()) == len(held)
+    stored = [svc.recording_link(attempt.id)["url"] for attempt in db.attempts()]
+    stored.extend(cell["video"] for cell in db.held_times())
+    assert source_url not in stored
+    if accepted_url:
+        assert accepted_url in stored
+    else:
+        assert result["recordings_skipped"] >= 1
+
+
+def test_invalid_optional_source_links_skip_only_recordings(tmp_path):
+    db, svc = make(tmp_path)
+    result = asyncio.run(svc.import_times("sheet:Runner", [
+        brought(), replace(brought(), entity_key="star:2:0", video="javascript:alert(1)")],
+        held=[{"row_key": "bad-held", "time_cs": 806, "video": "http://localhost/video"}]))
+    assert result["imported"] == 2
+    assert result["recordings_skipped"] == 2
+    assert [svc.recording_link(attempt.id)["url"] for attempt in db.attempts()] == [URL, None]
+    assert db.held_times()[0]["video"] is None
+
+
+@pytest.mark.parametrize("erase", ["import", "session", "all"])
+def test_erasing_history_erases_its_stored_recording_overlays(tmp_path, erase):
+    db, svc = make(tmp_path)
+    land(svc, brought())
+    aid = db.attempts()[0].id
+    asyncio.run(svc.set_recording_link(aid, OTHER))
+    assert db._conn.execute("SELECT url FROM attempt_recordings").fetchall()
+    if erase == "import":
+        asyncio.run(svc.remove_imported("sheet:Runner"))
+    elif erase == "session":
+        session = svc.session_id
+        asyncio.run(svc.new_session())
+        asyncio.run(svc.delete_session(session))
+    else:
+        asyncio.run(svc.wipe_data("all", scope="lifetime"))
+    assert db._conn.execute("SELECT url FROM attempt_recordings").fetchall() == []
+
+
+def test_clearing_then_restoring_attempt_keeps_its_recording_edit(tmp_path):
+    db, svc = make(tmp_path)
+    land(svc, brought())
+    aid = db.attempts()[0].id
+    asyncio.run(svc.set_recording_link(aid, OTHER))
+    asyncio.run(svc.clear_attempt(aid, reason="accidental"))
+    assert svc.recording_link(aid) == {"url": OTHER, "revision": 1}
+    asyncio.run(svc.restore_attempt(aid))
+    assert svc.recording_link(aid) == {"url": OTHER, "revision": 1}
+
+
+def test_recording_cleanup_uses_journal_ownership_not_temporary_cache_absence(tmp_path):
+    db, svc = make(tmp_path)
+    land(svc, brought())
+    aid = db.attempts()[0].id
+    asyncio.run(svc.set_recording_link(aid, OTHER))
+    db.replace_attempts([])
+    assert db.delete_orphaned_recordings() == 0
+    asyncio.run(svc._reproject())
+    assert svc.recording_link(aid) == {"url": OTHER, "revision": 1}
+
+
+def test_startup_repairs_recording_left_by_older_history_deletion(tmp_path):
+    from sm64_events.server.broadcaster import Broadcaster
+    from sm64_events.tracking.service import TrackerService
+
+    db, svc = make(tmp_path)
+    land(svc, brought())
+    aid = db.attempts()[0].id
+    asyncio.run(svc.set_recording_link(aid, OTHER))
+    db.delete_events([aid])
+    restarted = TrackerService(db, Broadcaster())
+    asyncio.run(restarted.start())
+    assert db._conn.execute("SELECT url FROM attempt_recordings").fetchall() == []
