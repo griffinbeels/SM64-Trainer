@@ -107,7 +107,11 @@ function valuesToGoal(values) {
   // The empty value selects automatic mode exclusively. Adding a manual
   // pick from automatic mode replaces it instead of freezing that rank.
   if (values && values[values.length - 1] === "") return null;
-  const goals = (values || []).map(valueToGoal).filter(Boolean);
+  const picked = (values || []).map(valueToGoal).filter(Boolean);
+  // SearchSelect appends each new pick. Divisions replace one another;
+  // keep the newest, even when it is easier, and retain every other source.
+  const division = picked.filter((goal) => goal.kind === "division").pop();
+  const goals = picked.filter((goal) => goal.kind !== "division" || goal === division);
   if (!goals.length) return null;
   if (goals.length === 1) return goals[0];
   return { kind: "multi", sources: goals };
@@ -709,7 +713,7 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
       title="Automatic goals aim one subdivision above this scope's MARELO rank, up to Mario 1.">
     <h3>Scorecard</h3>
     <${SearchSelect} value=${goalToValues(goal)} valueLabel=${goalToLabel(goal)}
-        title="Pick one or more goals" groups=${groups} onOpen=${onOpen}
+        title="One division + any players" groups=${groups} onOpen=${onOpen}
         onChange=${onGoalChange} align="right" multi />
     ${goal && coverage.covered < coverage.tiles
       ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`

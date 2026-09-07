@@ -1777,19 +1777,20 @@ _PICKED_GOALS = ("[...document.querySelectorAll('.rank-page .scorecard-card "
 
 
 @pytest.mark.parametrize("fail_first", [False, True])
-def test_the_picker_takes_several_goals_and_keeps_the_panel_open(fail_first):
+@pytest.mark.parametrize("width", [1500, 850])
+def test_the_picker_keeps_players_and_replaces_the_division(fail_first, width, tmp_path):
     """Round 14, his design: "what if we could select multiple options
     (e.g., I could select 10 players plus a rank standard like Toad 1)."
-    Two picks through the REAL panel: it must stay open between them (ten
-    picks cannot cost ten trips through the trigger), mark what is on, and
-    store a `multi` goal whose sources are both. The first PUT stays held
-    until both clicks land, so local input cannot depend on a server reply;
+    The division is exclusive; players remain multi-select. Replace the
+    division with both a harder and an easier target while keeping two
+    players. The first PUT stays held until all clicks land, so local input
+    cannot depend on a server reply;
     a pre-pick background GET is released last to test stale-read rejection.
     A rejected first write must not discard the newer selection either."""
     from test_ui_scorecard_auto_goal import _check_browser_errors
 
     with serve_ui() as base:
-        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+        with get_driver().launch(headless=True, viewport=(width, 1000)) as page:
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
@@ -1799,17 +1800,21 @@ def test_the_picker_takes_several_goals_and_keeps_the_panel_open(fail_first):
                 ".search-select-trigger').click()")
             page.wait_for(".rank-page .scorecard-card "
                           '.search-menu-option[data-value="division:Bronze:V"]')
+            page.wait_for('.search-menu-option[data-value="runner:Raisn"]')
             page.evaluate(_HOLD_GOAL_RESPONSES.replace("FAIL_FIRST", json.dumps(fail_first)))
             # The real WS staleness path starts a background card read. Its
-            # automatic-goal response predates both picks and arrives last.
+            # automatic-goal response predates all picks and arrives last.
             urllib.request.urlopen(urllib.request.Request(
                 f"{base}/api/ranks/mode", data=b'{"mode":"pb"}', method="PUT",
                 headers={"Content-Type": "application/json"}), timeout=10).read()
             _wait_until(page, "!!window.releaseOldCard")
 
-            for value in ("division:Bronze:V", "division:Silver:III"):
+            for value in ("division:Bronze:V", "runner:RONC3NA", "runner:Raisn",
+                          "division:Silver:III", "division:Iron:IV",
+                          "division:Iron:IV", "division:Iron:IV"):
                 page.evaluate(_option_click(value))
                 page.wait_ms(250)
+                assert sum(v.startswith("division:") for v in page.evaluate(_PICKED_GOALS)) <= 1
 
             still_open = page.count(".rank-page .scorecard-card .search-menu")
             picked = page.evaluate(_PICKED_GOALS)
@@ -1818,24 +1823,27 @@ def test_the_picker_takes_several_goals_and_keeps_the_panel_open(fail_first):
                 ".search-select-value').textContent.trim()")
 
             assert still_open == 1, "the panel must stay open while picking several"
-            assert sorted(picked) == ["division:Bronze:V", "division:Silver:III"], picked
-            assert label == "2 picked", label
+            assert sorted(picked) == ["division:Iron:IV", "runner:RONC3NA", "runner:Raisn"], picked
+            assert label == "3 picked", label
             assert len(page.evaluate("window.goalWrites")) == 1, "writes must be ordered"
             _wait_until(page, "!!window.releaseGoal")
             page.evaluate("window.releaseGoal()")
-            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(2)")
+            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(3)")
             page.evaluate("window.releaseOldCard()")
             _wait_until(page, "window.oldCardReleased")
             page.wait_ms(250)
             assert sorted(page.evaluate(_PICKED_GOALS)) == sorted(picked)
-            assert page.count(".rank-page .scorecard-card .goal-pill") == 2
+            assert page.count(".rank-page .scorecard-card .goal-pill") == 3
             assert page.count(".rank-page .scorecard-card .inline-state.error") == 0
             _check_browser_errors(page, base)
+            page.evaluate("document.querySelector('.scorecard-card').scrollIntoView()")
+            (tmp_path / f"one-division-{width}.png").write_bytes(page.screenshot())
 
         card = _get_scorecard(base)
         assert card["goal"] == {"kind": "multi", "sources": [
-            {"kind": "division", "tier": "Bronze", "division": "V"},
-            {"kind": "division", "tier": "Silver", "division": "III"}]}
+            {"kind": "runner", "runner": "RONC3NA"},
+            {"kind": "runner", "runner": "Raisn"},
+            {"kind": "division", "tier": "Iron", "division": "IV"}]}
 
 
 def test_a_failed_goal_pick_reconciles_and_leaves_the_picker_ready_to_retry():

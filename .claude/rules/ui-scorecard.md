@@ -26,6 +26,13 @@ the API are `.claude/rules/ranks.md`'s scorecard row; the column export is
 
 ## The Scorecard card
 
+The dropdown allows one manual division plus any number of players/custom
+goals. `scorecard.js::valuesToGoal` keeps the last division in the pick order,
+replacing the earlier division even when the new one is easier. Non-division
+sources stay selected; unticking the division removes only that source.
+The shared SearchSelect remains a generic multi-picker. Regression:
+`test_ui_scorecard.py::test_the_picker_keeps_players_and_replaces_the_division`.
+
 Automatic goals (2026-09-06): an unset or cleared goal follows the current
 scope's MARELO rank plus one subdivision. The owning derivation is
 `ranks/scorecard.py::automatic_goal`, called with `ranks_api._score_scope`

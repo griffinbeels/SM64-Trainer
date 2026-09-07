@@ -571,8 +571,10 @@ What the [[Scorecard]] grades every tile against. In automatic mode it aims
 one [[division]] above the current [[scope]]'s [[MARELO]] [[rank]], capped at
 Mario 1, and follows [[scope]] and [[rank]] changes. A manual choice replaces it: a
 [[tier]] and [[division]] inside it, one [[runner]]'s own times, a set of
-times you typed yourself and saved under a name, or SEVERAL of those at
-once. The trainer turns it into one time per tile and the [[Scorecard]]
+times you typed yourself and saved under a name, or a combination of these.
+The picker keeps one [[division]] at a time and any number of [[runner]]s or
+saved custom goals; choosing another [[division]] replaces the previous one.
+The trainer turns it into one time per tile and the [[Scorecard]]
 compares that time against your [[personal best]]. Picking several keeps
 the FASTEST time any of them offers on each tile — a [[runner]]'s own
 offer being their best across every [[strategy]] they have recorded that
