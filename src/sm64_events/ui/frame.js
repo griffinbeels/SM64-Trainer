@@ -136,3 +136,12 @@ export function jumpToStart(video, startSeconds = 0) {
   if (!video.paused) video.pause();
   video.currentTime = Math.max(0, startSeconds);
 }
+
+// Navigation only: without a verified start picture the wall-clock anchor
+// remains usable for playback, but never supplies an input association.
+export function attemptStartTime(view) {
+  if (Number.isInteger(view.attempt_start_slot) && view.attempt_start_slot >= 0) {
+    return timeOfSlot(view.attempt_start_slot, clipClock(view));
+  }
+  return clampToFrames(view.anchor_offset_s || 0, view.duration_s, view.game_fps || 30);
+}

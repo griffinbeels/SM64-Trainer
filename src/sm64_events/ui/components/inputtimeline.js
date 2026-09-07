@@ -395,7 +395,7 @@ export function inspectorClock(frame, lead, pictureIgt, slot) {
 }
 
 export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
-                                frameMap = null, clock = null,
+                                frameMap = null, clock = null, inputSpan = undefined,
                                 pictureIgt = null,
                                 padAgreement = null,
                                 frameMapSource = null,
@@ -416,13 +416,12 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // and "Mario" (his report, 2026-08-22).
   const trackColumn = useRef(null);
 
-  // THE CLIP'S OWN RANGE (round 32 item 53): the map says which game frame
-  // each video frame shows, so its own extremes ARE what the video shows --
-  // ask for exactly that and the timeline matches the footage, buffers
-  // included, with no part of it pointing at video that does not exist.
-  // Null until the clip's view lands (or forever, with no clip), and the
-  // track is then the attempt alone.
+  // The server excludes heartbeat copies from these bounds: an old held
+  // picture remains in the video without stretching the input axis through
+  // minutes of unrecorded pre-attempt time. Keep the raw-map fallback for
+  // older servers that do not publish the captured span.
   const clipSpan = useMemo(() => {
+    if (inputSpan !== undefined) return inputSpan ? inputSpan.join(",") : null;
     if (!frameMap || !frameMap.length) return null;
     let low = null;
     let high = null;
@@ -432,7 +431,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       if (high === null || raw > high) high = raw;
     }
     return low === null ? null : `${low},${high}`;
-  }, [frameMap]);
+  }, [frameMap, inputSpan]);
 
   useEffect(() => {
     let alive = true;

@@ -68,8 +68,7 @@ def association_problem(meta: dict) -> str | None:
             or not all(isinstance(row, dict) for row in rows)
             or not isinstance(captures, list) or len(captures) != len(clock["source_pts"])):
         return "invalid_capture_references"
-    # A preceding row can supply a picture's state without appearing in this
-    # cut. Validate it too before the interpreter walks backward through it.
+    # Validate retained rows before projecting state from capture references.
     for row in rows:
         if (any(row.get(key) is not None and type(row[key]) is not int
                 for key in ("frame", "igt_overall"))

@@ -433,6 +433,45 @@ def test_recorder_injects_idle_check_tracking_idle_state(tmp_path):
     rec.stop()
 
 
+def test_failed_source_demand_does_not_leave_idle_half_changed(tmp_path, caplog):
+    video = FakeVideoSource()
+    def unavailable():
+        raise OSError("frame mapping closed")
+    video.refresh_demand = unavailable
+    rec = make_recorder(tmp_path, video, FakeAudioSource())
+    rec._video_source = video
+    rec._set_idle(True)
+    rec._idle_dropped = 5
+    rec.set_player_active()
+    assert not rec.is_idle()
+    assert rec._idle_since is None
+    assert rec._idle_dropped == 0
+    assert "replay frame demand notification failed" in caplog.text
+
+
+def test_startup_reconciles_unpause_before_source_publication(tmp_path):
+    class StartingPaused(FakeVideoSource):
+        def start(self, on_frame, on_stopped):
+            super().start(on_frame, on_stopped)
+            self.demand = not self.idle_check()
+            assert not self.demand
+            rec.set_session_paused(False)  # not published yet: notification has no target
+        def refresh_demand(self):
+            self.demand = not self.idle_check()
+
+    video = StartingPaused()
+    sink = FakeAvSink()
+    rec = make_recorder(tmp_path, video, FakeAudioSource(),
+                        video_sink_factory=lambda *args, **kwargs: sink)
+    rec.set_session_paused(True)
+    try:
+        rec._begin_capture(WIN)
+        assert not rec.is_idle()
+        assert video.demand
+    finally:
+        rec._teardown_capture()
+
+
 def test_session_pause_forces_idle_and_outranks_input(tmp_path):
     """Manual pause (POST /api/pause): forces the idle-discard state, and
     stray input pings must NOT resume it; unpausing resumes immediately

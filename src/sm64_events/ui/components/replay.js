@@ -3,7 +3,7 @@ import { h } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { clipClock, stepGameFrame, jumpToStart } from "../frame.js";
+import { clipClock, stepGameFrame, jumpToStart, attemptStartTime } from "../frame.js";
 import { watchVideoPicture } from "../videopicture.js";
 import { holdIsRunning, holdRepeat, startHold,
          stopHold } from "../holdrepeat.js";
@@ -62,7 +62,7 @@ function useReplayStepping(videoEl, state) {
     });
   }
   function toStart() {
-    jumpToStart(videoEl.current, 0);
+    jumpToStart(videoEl.current, attemptStartTime(state));
   }
   // ARROW KEYS step frames (round 32 item 54, his words: "Same exact
   // functionality as the buttons, just with left / right arrow presses").
@@ -80,10 +80,15 @@ function useReplayStepping(videoEl, state) {
       (key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0);
     const down = (event) => {
       const dir = dirOf(event.key);
-      if (!dir || event.repeat || typing(event.target)) return;
+      if ((!dir && event.key !== "ArrowDown") || event.repeat || typing(event.target)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (!videoEl.current) return;
       event.preventDefault();                 // the page must not scroll
+      if (event.key === "ArrowDown") {
+        stopHold(globalThis);
+        toStart();
+        return;
+      }
       startHold(globalThis, () => step(dir), {
         onPress: () => {
           const video = videoEl.current;
@@ -98,13 +103,15 @@ function useReplayStepping(videoEl, state) {
     };
     globalThis.addEventListener("keydown", down);
     globalThis.addEventListener("keyup", up);
-    globalThis.addEventListener("blur", () => stopHold(globalThis));
+    const blur = () => stopHold(globalThis);
+    globalThis.addEventListener("blur", blur);
     return () => {
       stopHold(globalThis);
       globalThis.removeEventListener("keydown", down);
       globalThis.removeEventListener("keyup", up);
+      globalThis.removeEventListener("blur", blur);
     };
-  }, [state.game_fps, state.frame_map, state.fps]);
+  }, [state]);
 
   return { step, stepHold, toStart };
 }
@@ -130,11 +137,23 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
     if (onVideoEl) onVideoEl(el);
     if (!el) return;
     attachSharedVolume(el);
-    if (!autoPlayed.current) {
-      autoPlayed.current = true;
-      el.play().catch(() => {});
-    }
   }, [onVideoEl]);
+
+  // Seek after metadata arrives, before the one initial play(). Both the
+  // initial position and Start use the same real-picture destination.
+  useEffect(() => {
+    const video = videoEl.current;
+    if (!video || state.phase !== "ready") return undefined;
+    const begin = () => {
+      if (autoPlayed.current) return;
+      autoPlayed.current = true;
+      jumpToStart(video, attemptStartTime(state));
+      video.play().catch(() => {});
+    };
+    if (video.readyState >= 1) begin();
+    else video.addEventListener("loadedmetadata", begin, { once: true });
+    return () => video.removeEventListener("loadedmetadata", begin);
+  }, [state]);
 
   useEffect(() => {
     let alive = true;
@@ -203,6 +222,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
            onpause=${() => setPlaying(false)}
            ref=${attachVideoEl}></video>
     <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
+      startTitle="Jump to the attempt start (↓)"
       stepHandlers=${stepHold}
       onToggle=${togglePlay} note=${`1 frame = 1/${state.game_fps || 30} s`} />
     <div class="replay-actions">

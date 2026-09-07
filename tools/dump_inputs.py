@@ -1,9 +1,9 @@
 # tools/dump_inputs.py
 """READ BACK what you just played, as an input document.
 
-The end-to-end proof for input capture: memory -> sampler -> store ->
-document, in one command. Play one attempt, run this, and the last thing you
-did comes back as text.
+Reads stored observations through the same attempt resolver as the timeline.
+This inspects persistence and selection; it cannot prove controller freshness
+or that a video picture depicts the input state recorded beside it.
 
     uv run python tools/dump_inputs.py            # the newest attempt
     uv run python tools/dump_inputs.py --list     # the last few, to pick from
@@ -21,14 +21,19 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+from threading import RLock
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from what_happened import (candidate_journals, describe_age,  # noqa: E402
                            label_for, newest_event, open_readonly)
 
-from sm64_events.inputs.store import decode_runs  # noqa: E402
-from sm64_events.inputs.document import encode  # noqa: E402
+from sm64_events.inputs.store import InputStore  # noqa: E402
+from sm64_events.inputs.track import document_for_attempt, track_for_attempt  # noqa: E402
+
+_ATTEMPT_COLUMNS = ("id, session_id, started_utc, ended_utc, outcome, igt_frames,"
+                    " rta_frames, strat_tag, course_id, star_id, segment_id, anchor_frame")
 
 
 def freshest_journal() -> Path | None:
@@ -45,25 +50,13 @@ def freshest_journal() -> Path | None:
 
 def attempts(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT id, started_utc, ended_utc, outcome, igt_frames, strat_tag,"
-        " course_id, star_id, segment_id, anchor_frame"
+        "SELECT " + _ATTEMPT_COLUMNS +
         " FROM attempts ORDER BY started_utc DESC LIMIT ?", (limit,)
     ).fetchall()
 
 
 def frames_for(conn: sqlite3.Connection, row: sqlite3.Row) -> list:
-    chunks = conn.execute(
-        "SELECT runs FROM input_chunks"
-        " WHERE started_utc <= ? AND ended_utc >= ?"
-        " ORDER BY started_utc, id", (row["ended_utc"], row["started_utc"])
-    ).fetchall()
-    out = []
-    for chunk in chunks:
-        out.extend(decode_runs(chunk["runs"]))
-    if row["anchor_frame"] is None:
-        return out
-    return [(number, frame) for number, frame in out
-            if number >= row["anchor_frame"]]
+    return track_for_attempt(InputStore(conn, RLock()), SimpleNamespace(**dict(row)))
 
 
 def target_of(row: sqlite3.Row) -> str:
@@ -118,8 +111,7 @@ def main() -> int:
     row = rows[0]
     if args.attempt is not None:
         found = conn.execute(
-            "SELECT id, started_utc, ended_utc, outcome, igt_frames, strat_tag,"
-            " course_id, star_id, segment_id, anchor_frame"
+            "SELECT " + _ATTEMPT_COLUMNS +
             " FROM attempts WHERE id=?", (args.attempt,)).fetchone()
         if found is None:
             print(f"no attempt {args.attempt} in this journal")
@@ -132,8 +124,7 @@ def main() -> int:
               "That is a finding, not an error: either it was played before "
               "capture existed, or the sampler was not running.")
         return 3
-    text = encode(frames, target=target_of(row), strategy=row["strat_tag"],
-                  version="us", origin=f"attempt {row['id']}")
+    text = document_for_attempt(InputStore(conn, RLock()), SimpleNamespace(**dict(row)))
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {args.out} — {len(frames)} frames")

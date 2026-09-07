@@ -17,6 +17,7 @@ paths:
   - "src/sm64_events/replay/feedmap.py"
   - "src/sm64_events/replay/padread.py"
   - "src/sm64_events/replay/service.py"
+  - "src/sm64_events/replay/navigation.py"
   - "src/sm64_events/ui/frame.js"
   - "src/sm64_events/ui/videopicture.js"
   - "src/sm64_events/ui/components/replay.js"
@@ -53,7 +54,7 @@ can't be relied on as a tool"* (2026-08-23).
 | 2 | the chunk store, then the track | the same capture occurrence (chunk IDs/session retained), trimmed to the attempt: the run ends the frame BEFORE the first dance action, `first = last - (igt - 1)` | `src/sm64_events/inputs/store.py`, `src/sm64_events/inputs/track.py` | `uv run python tools/inspect_timeline.py --attempt N --frames a-b` | append edited frames with `db.inputs.append` (the shape `tests/test_inputs_track.py` uses) | frame 0 landing before the reset was pressed (5534: the fall counted as the dance) | a track read from a sibling worktree's journal |
 | 3 | the timeline payload | `runs` on the capture axis (zero-based at the resolved span origin, retaining missing boundary samples as gaps), `lead_frames`, `attempt_frames`, `stretches` | `src/sm64_events/inputs/service.py` | `InputsService(...).timeline(id, span=(lo, hi))` offline, then `run_at(axis)` | none — pure over hop 2, so hop 2's injection reaches it unchanged | a run whose `stick_x` differs from hop 2's at the same raw frame | a payload built without the clip's span (the attempt alone; a different axis) |
 | 4 | the pictures, each STAMPED with the frame that drew it | the wrapper plugin copies the tracker's address table out of RDRAM at the ProcessDList that draws frame N, reads the picture at the VI whose VI_ORIGIN changed (GL_FRONT directly, else the wrapped plugin's own ReadScreen — GLideN64_LINK_4.2 renders on a thread of its own, so for him it is always the latter), and publishes (picture, stamp) into the frame stream. `PluginVideoSource` decodes the stamp with the sampler's own decoder; the recorder files the row `exact: true` with `frame`, `pad`, `mario`, `igt_overall`. A grab with NO stamp is recorded by time only and names no frame. The sink then writes each picture ONCE into a NUT stream at its composition time, files the write in the feed log, and ffmpeg encodes passthrough — one video frame per picture at its own time (VFR), audio in the same stream on the same clock | `plugin/gfxwrap/gfxwrap.c`, `src/sm64_events/replay/framestream.py`, `src/sm64_events/replay/pluginsource.py`, `src/sm64_events/replay/recorder.py`, `src/sm64_events/replay/ledger.py`, `src/sm64_events/replay/ffmpeg_sink.py` | `/api/replay/status` `frame_source` + `frame_source_health`; the sidecar's `picture_ledger` rows; `uv run python tools/score_oracle.py --attempt N`; `tests/test_gfxwrap_host.py` drives the plugin with no emulator | the host's `--drive` writes a known counter into fake RDRAM and a known colour into the picture: the stamp and the pixels must come back equal | rows without `exact`, or `plugin_inexact_rows` climbing (a present that saw zero or two display lists) | a probe reading the ring segment instead of the extracted clip (segments start at pts 1.4) |
-| 5 | the frame map: video slot -> game frame | `feed_map` matches frame k (at `start + frame_times[k]`) to the feed entry written at that moment, and the entry's row names the game frame; the map is `stamp - PLUGIN_PICTURE_LAG` (1: the picture the layer grabs at the VI whose origin changed IS the list before the one it just stamped — SM64 presents the buffer it rendered the iteration before), and `None` on an inexact row. `_take_the_stamps` then sets `frame_map_source: plugin`, fills `picture_igt` from the row whose frame the map names, and runs the pad-stamp audit | `src/sm64_events/replay/feedmap.py`, `src/sm64_events/replay/service.py` | sidecar `feed_match` (frames / matched / bias / residual) and `pad_stamp_agreement`; `uv run python tools/score_picture_offset.py --attempt N` sweeps the picture-to-stamp offset on two channels | hand `feed_map` a projector returning a known wrong value; the map must carry it verbatim, since nothing downstream corrects it | a peak off 0 in the offset sweep on TWO clips (the bar for touching `PLUGIN_PICTURE_LAG`), or `feed_match.matched` far below `frames` | the oracle scoring a clip whose HUD memory display was off, which reads as unreadable rather than as wrong |
+| 5 | the frame map: video slot -> captured state | `feed_map` retains the exact source-PTS capture occurrence in `picture_rows`; `_take_the_stamps` projects that SAME row into `frame_map`, `picture_igt`, and `state_rows`. No predecessor subtraction or raw-counter search. An inexact or missing capture stays unknown; legacy fitted maps remain unverified | `src/sm64_events/replay/feedmap.py`, `src/sm64_events/replay/service.py` | Independently decode a known video slot, compare its visible timer/pad with its matched capture row, then its served state; `tests/test_replay_captured_state.py` retains three live witnesses | Replace the state projection on a saved COPY and replay the same picture in the real drawer | matched capture row agrees with pixels but projected state differs | a green RAM-to-store audit without looking at pixels, or a fitted timestamp phase mistaken for capture identity |
 | 6 | browser presentation, step and input inspector | the delivered video slot and its own timer; an input only when its map resolves uniquely | `src/sm64_events/ui/frame.js`, `src/sm64_events/ui/videopicture.js`, `src/sm64_events/ui/components/inputtimeline.js` | `tests/test_ui_replay_picture_steps.py` decodes picture IDs from canvas after real drawer clicks; component tests cover missing slots and paused refresh | scratch replay response with known encoded pictures and slot identities | backward steps revisit an earlier epoch, tiny slots skip, or the timer changes on a paused refresh | only checking requested currentTime, or never asserting a known input before and after a missing slot |
 
 ## Counterfactual recipe
@@ -69,7 +70,7 @@ paused picture":
 2. **Hop 5's convention.** `tools/score_picture_offset.py --attempt N` sweeps
    which frame's pad each picture shows, on the stick digits and the button
    icons independently. A peak at 0 on both channels means
-   `PLUGIN_PICTURE_LAG` is right for this clip.
+   the complete picture-to-state association agrees for the scored channels; it does not isolate the capture boundary by itself.
 3. **Hop 3.** Build the payload offline with the clip's span and read the run
    at the panel's axis. If it holds Y where hop 2 holds X, the fault is the run
    collapse or the axis; stop there.
@@ -79,6 +80,30 @@ paused picture":
    hold.
 
 ## Failure catalogue
+
+- **2026-09-06: direct source identity still inherited the fitted map's
+  predecessor subtraction.** Fresh Wild Blue7718 slot138, Pyramid7685 slot342
+  and Books7739 slot76 were decoded independently. Their pixels match each
+  matched capture row's own timer and visible pad; selecting the prior row
+  causes all three reports. State projection now uses the same `picture_rows`
+  occurrence for counter, timer and state. `tests/test_replay_captured_state.py`
+  pins these witnesses; cached/saved tests retain legacy refusal. The historical
+  oracle measurements below tested the OLD derived map including its fitted
+  media join, not raw capture pairing under the current exact source-PTS path.
+  They do not establish a universal one-frame plugin lag. No historical raw
+  capture pairing has been reconstructed by this correction. Fresh live
+  confirmation remains required; sampled pixel matches do not prove all render
+  configurations or input-sampler freshness on every frame.
+
+- **2026-09-06: replay wake left the previous picture on screen.** Wild
+  Blue7639 held an old capture until259ms after the attempt anchor, despite
+  a controller A press1.21s before fresh video resumed. Passive Mario action
+  suppressed the activity tap, and plugin demand waited for a1s liveness poll.
+  Already-sampled pad changes now notify recorder activity, and idle transitions
+  immediately refresh source demand. Scope tests check the actual source flag,
+  first returned frame, manual pause, stopped source, callback failure and
+  pause/unpause during startup. Re-recording is necessary to verify the visible
+  result; missing pictures cannot be restored from an old clip.
 
 - **2026-09-06: held pictures looked like missing footage.** The real-encoder
   regression `tests/test_replay_held_picture.py` found a picture at 2.0135s
@@ -180,7 +205,7 @@ paused picture":
   lines of their tests and eleven probe/score tools. **Do not rebuild any of
   them.** A clip with no stamps gets no map; that is the correct answer, not a
   gap to fill.
-- **2026-09-05 hop 5, WHY `PLUGIN_PICTURE_LAG` IS 1.** MEASURED twice, and the
+- **Historical 2026-09-05 hop 5 — retired lag interpretation (see correction above).** MEASURED twice, and the
   second measurement is the one that explains it. First, an offset sweep on
   clip 7015 over two channels with the map as handed: the stick digits scored
   -1 at 85.8% against 66.8% at 0, and the A-button icon (templates learned
@@ -264,6 +289,22 @@ paused picture":
   working on a clip that never needed it.
 
 ## Browser boundary regression — 2026-09-06
+
+Replay navigation and input extent are separate from picture identity.
+`replay/navigation.py` excludes heartbeat copies when deriving `input_span`:
+Pyramid #32 began with two copies of raw 140152 before fresh capture at
+141550; raw min/max invented a 1,458-frame lead instead of 60 frames.
+The original picture map and pre-buffer remain intact, and genuine holes
+inside the captured extent remain holes. `tests/test_replay_navigation.py`
+and the mounted timeline test pin that boundary.
+
+Initial playback, Start and ArrowDown share `frame.js::attemptStartTime`.
+The service supplies the first associated slot at/after the attempt anchor;
+absent reset pictures are not fabricated. The retained Pyramid clip's first
+verified post-reset picture is IGT 3 (`00"10`), not frame 0. Counter-reset
+ambiguity declines raw-counter navigation; its wall-clock fallback never
+creates an input association. `tests/test_ui_replay_start.py` checks actual
+decoded pictures, pre-buffer access and typing/modifier guards.
 
 `tests/test_ui_frame_step.py` reproduced five defects in the shipped helpers:
 reset sequence `[100,100,101,101,99,100,100,101]` stepped to `[null,null,0,4]`

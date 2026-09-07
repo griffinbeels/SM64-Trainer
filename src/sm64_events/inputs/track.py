@@ -39,23 +39,37 @@ def _epochs(chunks):
     epochs = []
     previous = None
     owner = None
+    source = None
     for chunk in chunks:
+        observed = getattr(chunk, "observations", None)
+        chunk_source = observed[0].source_id if observed else None
         for number, frame in chunk.frames:
-            if previous is None or chunk.session_id != owner or number <= previous:
+            if (previous is None or chunk.session_id != owner or number <= previous
+                    or chunk_source != source):
                 epochs.append(([], set()))
             frames, ids = epochs[-1]
             frames.append((number, frame))
             ids.add(chunk.id)
             previous, owner = number, chunk.session_id
+            source = chunk_source
     return epochs
+
+
+def _observed_frames(chunk, started_utc, ended_utc):
+    observations = getattr(chunk, "observations", None)
+    if observations is None:
+        return chunk.frames  # legacy chunks have no per-frame timestamp
+    # Read instants are membership evidence, never a continuous time span.
+    return [frame for frame, observation in zip(chunk.frames, observations, strict=True)
+            if observation.within(started_utc, ended_utc)]
 
 
 def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
     """Widen only the occurrence selected by the attempt's original chunks.
 
-    Chunk timestamps describe emission/flush, not a frame-time interpolation.
-    Preserve their IDs through widening rather than finding the first epoch
-    containing the same numbers. Multiple possible occurrences stay ambiguous.
+    New capture selects by actual observation time; legacy chunks retain their
+    emission bounds. Preserve chunk/source IDs through widening rather than
+    finding the first epoch with the same counters. Never interpolate times.
     """
     from datetime import datetime, timedelta
 
@@ -65,11 +79,13 @@ def _frames_around(store, attempt) -> list[tuple[int, InputFrame]]:
 
     owner = getattr(attempt, "session_id", None)
     tight = store.chunks_between(attempt.started_utc, attempt.ended_utc, owner)
+    selected = {chunk.id: _observed_frames(chunk, attempt.started_utc, attempt.ended_utc)
+                for chunk in tight}
     if attempt.anchor_frame is None or not tight:
-        return [frame for chunk in tight for frame in chunk.frames]
+        return [frame for frames in selected.values() for frame in frames]
     wide = store.chunks_between(shift(attempt.started_utc, -CHUNK_REACH_S),
                                shift(attempt.ended_utc, CHUNK_REACH_S), owner)
-    tight_ids = {chunk.id for chunk in tight}
+    tight_ids = {chunk_id for chunk_id, frames in selected.items() if frames}
     candidates = [frames for frames, ids in _epochs(wide) if ids & tight_ids]
     if len(candidates) > 1:
         # Disjoint counters can eliminate an unrelated epoch; repeated ranges

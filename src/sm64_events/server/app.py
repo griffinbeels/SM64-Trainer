@@ -603,7 +603,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         return pause_state(poller, replay)
 
     @app.post("/api/pause")
-    def set_pause(body: PauseBody):
+    async def set_pause(body: PauseBody):
         """MANUAL pause switch (reason precedence in pause_state): the
         poller stops reading and dispatching (no events, no journal rows)
         and the replay recorder discards footage (rides the idle
@@ -612,6 +612,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         idle gate re-trigger naturally (~idle_after_s later). Lives HERE,
         not api.py — it spans poller + replay, which only this composition
         surface holds."""
+        # Keep sampler flush and polling on the same event loop. A sync route
+        # runs in a worker thread and could replace a pending input mid-read.
         poller.set_paused(body.paused)
         if replay is not None:
             replay.recorder.set_session_paused(body.paused)

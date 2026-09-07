@@ -22,17 +22,26 @@ This class does no sleeping and owns no thread. `server/poller.py` drives it,
 so pacing, Windows timer resolution and shutdown all live in one place.
 """
 import logging
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from sm64_events.inputs.frame import (MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE,
                                       InputFrame, decode)
+from sm64_events.inputs.observation import InputObservation
+from sm64_events.inputs.readtimes import ReadTimes
 from sm64_events.memory import addresses as A
 from sm64_events.memory.base import MemoryReadError
 
 log = logging.getLogger("sm64.inputs")
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class InputSampler:
-    def __init__(self, memory, layout, sink, *, session_id=None):
+    def __init__(self, memory, layout, sink, *, session_id=None, clock=_now,
+                 on_activity=None):
         self._memory = memory
         self._timer_at = layout.global_timer
         # The RAM side of the screen CLOCK is Usamune's running leg counter,
@@ -49,6 +58,13 @@ class InputSampler:
                           if layout.mario_struct else None)
         self._sink = sink
         self._session_id = session_id
+        self._clock = clock
+        self._on_activity = on_activity
+        self._source_id = f"poll:{uuid4().hex}"
+        self._sequence = 0
+        self._observed_utc = None
+        self._first_observed_utc = None
+        self._read_times = None
         self._owner = None
         self._frame: int | None = None
         self._latest: InputFrame | None = None
@@ -60,11 +76,10 @@ class InputSampler:
     def health(self) -> dict:
         """Counters for the perf monitor.
 
-        `edge_mismatches` is the one that matters. The game's own
-        `buttonPressed` says which frame a button was NEWLY down on, so a
-        non-zero count means we filed an input under the wrong frame number.
-        It makes the sampling rate a thing we measure rather than a thing we
-        assume is sufficient.
+        `edge_mismatches` checks button-edge consistency, not freshness of
+        every sampled state. A late poll can still precede the controller
+        rewrite; stick-only changes can leave this audit green. Source-state
+        identity requires an immutable game snapshot, not this counter check.
 
         `skips`/`skipped_frames`/`worst_skip` count the OTHER failure, the
         one he can see: the counter advancing by more than one between two
@@ -89,6 +104,7 @@ class InputSampler:
                      if self._mario_at is not None else None)
             after = self._memory.read_u32(self._timer_at)
         except MemoryReadError:
+            self.flush()
             return None
         self._counts["samples"] += 1
         if before != after:
@@ -98,8 +114,33 @@ class InputSampler:
             # the read LANDED in is still worth knowing -- the caller paces
             # on it -- but nothing is held from a straddled read.
             self._counts["straddles"] += 1
+            if after < before:
+                # Although its state is unusable, this pair actually witnessed
+                # the counter restart. Preserve that seam before filtering UTC.
+                self.flush()
             return None
+        # Latch the read before emitting the previous frame: its sink may
+        # block on disk, but that cannot move this observation into the future.
+        observed_utc = self._clock()
+        latest = decode(block, mario)
+        # Menu/reset input can leave Mario's action passive. Wake capture
+        # from this already-read pad, before waiting to seal/store its frame.
+        # A held input in a frozen game must not keep the recorder awake.
+        active_pad_changed = (self._latest is None
+            or (latest.buttons, latest.stick_x, latest.stick_y) !=
+               (self._latest.buttons, self._latest.stick_x, self._latest.stick_y))
+        if (self._on_activity is not None
+                and (before != self._frame or active_pad_changed)
+                and (latest.buttons or latest.stick_x or latest.stick_y)):
+            try:
+                self._on_activity()
+            except Exception:
+                # Replay availability cannot stop memory polling or lose
+                # this coherent input sample.
+                log.exception("input activity notification failed")
         owner = self._session_id() if self._session_id is not None else None
+        unchanged = (before == self._frame and owner == self._owner
+                     and latest == self._latest)
         if self._frame is None:
             self._frame = before
         elif before != self._frame or owner != self._owner:
@@ -112,25 +153,47 @@ class InputSampler:
                                                  missed)
             self._emit()
             if backward or owner != self._owner:
-                # A console reset restarting the counter. Whatever was held
-                # before it is gone, so the next frame's buttons are not a
-                # down-edge against them.
-                self._previous_buttons = 0
+                self._new_source()
             self._frame = before
         self._owner = owner
-        self._latest = decode(block, mario)
+        self._latest = latest
+        if not unchanged:
+            self._first_observed_utc = observed_utc
+            if self._read_times is not None:
+                self._read_times.close()
+            self._read_times = ReadTimes()
+        self._read_times.add(observed_utc)
+        self._observed_utc = observed_utc
         return before
 
     def flush(self) -> None:
-        """Emit the frame in hand — for shutdown, and for a lost emulator."""
+        """End this observed stretch, preserving its pending frame.
+
+        A pause/lost source is a capture break, not proof of a game reset.
+        The resumed stretch gets a new local ID even if its counter repeats.
+        """
+        if self._frame is None:
+            return
         self._emit()
         self._frame = None
+        self._new_source()
+
+    def _new_source(self) -> None:
+        # Persist the observed seam; a UTC query may omit the reset's chunk.
         self._previous_buttons = 0
+        self._source_id = f"poll:{uuid4().hex}"
+        self._sequence = 0
 
     def _emit(self) -> None:
         if self._frame is None or self._latest is None:
             return
         frame, latest = self._frame, self._latest
+        history, lower, upper = self._read_times.finish()
+        self._read_times = None
+        observation = InputObservation(self._source_id, self._sequence,
+                                       self._observed_utc, self._first_observed_utc,
+                                       lower, upper, history)
+        self._sequence += 1
         self._latest = None
         self._counts["frames"] += 1
         newly = latest.buttons & ~self._previous_buttons
@@ -141,11 +204,12 @@ class InputSampler:
         self._previous_buttons = latest.buttons
         try:
             if self._session_id is None:
-                self._sink(frame, latest)
+                self._sink(frame, latest, observation=observation)
             else:
                 # Emission may happen after a pause or session change. The
                 # observation's owner remains the one that actually read it.
-                self._sink(frame, latest, session_id=self._owner)
+                self._sink(frame, latest, session_id=self._owner,
+                           observation=observation)
         except Exception:
             # The sink writes to disk. A failed write is not a reason to stop
             # reading the pad, and must not take the poll loop down with it.

@@ -66,7 +66,7 @@ class ScriptedMemory:
 def run(script, straddle_at=()):
     got = []
     sampler = InputSampler(ScriptedMemory(script, straddle_at), US,
-                           lambda number, frame: got.append((number, frame)))
+                           lambda number, frame, **_metadata: got.append((number, frame)))
     for _ in script:
         sampler.sample()
     return got, sampler
@@ -95,6 +95,51 @@ def test_a_straddled_read_is_discarded_rather_than_mis_filed():
                        straddle_at={1})
     assert sampler.health()["straddles"] == 1
     assert got == [(100, InputFrame(0x8000, 0x8000, 0, 0))]
+
+
+def test_passive_menu_pad_wakes_capture_before_frame_storage():
+    # Wild Blue7639: A was read while Mario stayed in a passive menu action.
+    # Waiting for a Mario action/reset edge lost the fade-in footage.
+    pings, stored = [], []
+    script = [(8750, 0, 0, 0, 0), (8751, 0x8000, 0x8000, 0, 0),
+              (8751, 0x8000, 0, 0, 0), (8752, 0, 0, 0, 84),
+              (8753, 0, 0, 0, 0)]
+    sampler = InputSampler(ScriptedMemory(script), US,
+        lambda *args, **kwargs: stored.append(args[0]),
+        on_activity=lambda: pings.append(list(stored)))
+    for _ in script:
+        sampler.sample()
+    sampler.flush()
+    assert pings == [[], [8750]]  # button and stick; frozen repeat stays silent
+
+
+def test_failed_activity_observer_does_not_drop_input(caplog):
+    def unavailable():
+        raise OSError("capture mapping closed")
+
+    stored = []
+    sampler = InputSampler(ScriptedMemory([(10, 0x8000, 0, 0, 0),
+                                           (11, 0, 0, 0, 0)]), US,
+        lambda number, frame, **kwargs: stored.append((number, frame.buttons)),
+        on_activity=unavailable)
+    sampler.sample()
+    sampler.sample()
+    sampler.flush()
+    assert stored == [(10, 0x8000), (11, 0)]
+    assert "input activity notification failed" in caplog.text
+
+
+def test_pad_rewrite_wakes_within_the_same_game_frame():
+    pings, stored = [], []
+    script = [(20, 0, 0, 0, 0), (20, 0x8000, 0x8000, 0, 0),
+              (20, 0x8000, 0x8000, 0, 0), (21, 0, 0, 0, 0)]
+    sampler = InputSampler(ScriptedMemory(script), US,
+        lambda *args, **kwargs: stored.append(args[0]),
+        on_activity=lambda: pings.append(list(stored)))
+    for _ in script:
+        sampler.sample()
+    sampler.flush()
+    assert pings == [[]]
 
 
 def test_the_frame_counter_going_backwards_starts_a_new_run():
@@ -141,7 +186,7 @@ def test_a_memory_error_is_survived_and_emits_nothing():
 
     got = []
     sampler = InputSampler(Broken([(100, 0, 0, 0, 0)]), US,
-                           lambda number, frame: got.append(number))
+                           lambda number, frame, **_metadata: got.append(number))
     assert sampler.sample() is None
     assert got == []
 
@@ -149,7 +194,7 @@ def test_a_memory_error_is_survived_and_emits_nothing():
 def test_a_failing_sink_does_not_stop_the_sampler():
     """The sink writes to disk. A write failing is not a reason to stop
     reading the pad, and it must not take the poll loop down with it."""
-    def explode(number, frame):
+    def explode(number, frame, **_metadata):
         raise RuntimeError("disk full")
 
     sampler = InputSampler(ScriptedMemory([(1, 0, 0, 0, 0), (2, 0, 0, 0, 0)]),
@@ -162,7 +207,7 @@ def test_a_failing_sink_does_not_stop_the_sampler():
 def test_flush_emits_the_frame_still_in_hand():
     got = []
     sampler = InputSampler(ScriptedMemory([(77, 0x1000, 0, 0, 0)]), US,
-                           lambda number, frame: got.append((number, frame)))
+                           lambda number, frame, **_metadata: got.append((number, frame)))
     sampler.sample()
     assert got == []          # frame 77 is not finished yet
     sampler.flush()

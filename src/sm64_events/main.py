@@ -460,13 +460,18 @@ def build():
     if db is not None and layout.player1_controller is not None:
         input_writer = ChunkWriter(db.inputs, lambda: service.session_id)
         input_sampler = InputSampler(memory, layout, input_writer.add,
-                                     session_id=lambda: service.session_id)
+                                     session_id=lambda: service.session_id,
+                                     on_activity=(replay.recorder.set_player_active
+                                                  if replay is not None else None))
     poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
                     reader=reader, input_sampler=input_sampler)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     if input_writer is not None:
-        poller.on_stop = input_writer.close
+        def close_inputs():
+            input_sampler.flush()
+            input_writer.close()
+        poller.on_stop = close_inputs
         # A finished attempt's track must be READABLE the moment it
         # finishes, not up to ten seconds later when the buffer fills.
         service.on_attempt_settled = input_writer.close

@@ -8,8 +8,9 @@ or when the writer flushes on its own count.
 **Nothing here is keyed by attempt id.** Attempts are re-derived from the
 journal on every reprojection, so a row keyed to one orphans itself. A chunk
 is found by the wall-clock span it covers and read by frame number within it —
-and wall clock is also the only TOTAL order, because the frame counter repeats
-within a session every time the console is reset.
+and its insertion order survives counter resets and wall-clock corrections.
+New sampled chunks retain each observation's UTC time and local source ordinal;
+legacy chunks only have their emission/flush bounds.
 
 Each run carries the frame it STARTS on rather than only its length. That is
 what makes a capture hole survive the round trip as a hole: a decoder given
@@ -25,6 +26,8 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.observation import (InputObservation, decode_observations,
+                                           encode_observations, utc_time)
 from sm64_events.inputs.runs import collapse, same_state
 
 _HEADER = struct.Struct("<II")        # first frame number | run count
@@ -36,7 +39,8 @@ _RUN_V1 = struct.Struct("<IHHbb")
 # inside the same window.
 _RUN_V2 = struct.Struct("<IHHbbIhf")
 _RUNS = {1: _RUN_V1, 2: _RUN_V2}
-FORMAT = 2                            # what new chunks are written as
+FORMAT = 2                            # legacy / unattributed run format
+OBSERVED_FORMAT = 3                   # v2 runs followed by compressed provenance
 _MAX_RUN = 0xFFFF
 _CURRENT_SESSION = object()
 
@@ -47,6 +51,7 @@ class InputChunk(NamedTuple):
     started_utc: str
     ended_utc: str
     frames: list[tuple[int, InputFrame]]
+    observations: list[InputObservation] | None = None
 
 
 def encode_runs(frames: list[tuple[int, InputFrame]]) -> bytes:
@@ -75,7 +80,7 @@ def decode_runs(blob: bytes, chunk_format: int = FORMAT
     a discriminator, and treating it as one decodes one as the other and
     returns plausible nonsense.
     """
-    layout = _RUNS.get(chunk_format)
+    layout = _RUNS.get(2 if chunk_format == OBSERVED_FORMAT else chunk_format)
     if layout is None:
         raise ValueError(f"unknown input-chunk format {chunk_format}")
     _first, count = _HEADER.unpack_from(blob, 0)
@@ -102,23 +107,31 @@ class InputStore:
         self._lock = lock
 
     def append(self, session_id: int, frames: list[tuple[int, InputFrame]],
-               started_utc: str, ended_utc: str) -> None:
+               started_utc: str, ended_utc: str, *,
+               observations: list[InputObservation] | None = None) -> None:
         if not frames:
             return
         blob = encode_runs(frames)
+        chunk_format = FORMAT
+        if observations is not None:
+            blob += encode_observations(observations, len(frames))
+            chunk_format = OBSERVED_FORMAT
+            moments = [stamp for o in observations
+                       for stamp in (o.lower_utc, o.upper_utc)]
+            started_utc, ended_utc = min(moments), max(moments)
         with self._lock:
             self._conn.execute(
                 "INSERT INTO input_chunks (session_id, start_frame, end_frame,"
                 " started_utc, ended_utc, runs, format)"
                 " VALUES (?,?,?,?,?,?,?)",
                 (session_id, frames[0][0], frames[-1][0], started_utc,
-                 ended_utc, blob, FORMAT))
+                 ended_utc, blob, chunk_format))
             self._conn.commit()
 
     def frames_between(self, started_utc: str,
                        ended_utc: str) -> list[tuple[int, InputFrame]]:
         """Every captured frame in chunks OVERLAPPING that span, in capture
-        order — by started_utc then id, never by frame number."""
+        order — by chunk id, never by wall clock or game frame number."""
         return [frame for chunk in self.chunks_between(started_utc, ended_utc)
                 for frame in chunk.frames]
 
@@ -126,22 +139,38 @@ class InputStore:
                        session_id: int | None = None) -> list[InputChunk]:
         """Retain provenance while resolving repeated game counters.
 
-        These legacy bounds delimit emission/flush, not per-frame observation
-        times. They select whole chunks; no caller may interpolate within them.
+        Observed chunks bound actual sample times and carry per-frame records.
+        Legacy bounds delimit emission/flush. Neither permits interpolation.
         """
         owner = " AND session_id = ?" if session_id is not None else ""
+        start, end = utc_time(started_utc), utc_time(ended_utc)
         params = (ended_utc, started_utc)
         if session_id is not None:
             params += (session_id,)
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, session_id, started_utc, ended_utc, runs, format FROM input_chunks"
-                " WHERE started_utc <= ? AND ended_utc >= ?"
-                + owner + " ORDER BY started_utc, id", params
+                " WHERE julianday(started_utc) <= julianday(?)"
+                " AND julianday(ended_utc) >= julianday(?)"
+                + owner + " ORDER BY id", params
             ).fetchall()
-        return [InputChunk(row["id"], row["session_id"], row["started_utc"],
-                           row["ended_utc"], decode_runs(row["runs"], row["format"]))
-                for row in rows]
+        # SQLite's date functions round to milliseconds. Use them only to
+        # select candidates, then apply exact microsecond overlap in Python.
+        return [_chunk(row) for row in rows
+                if utc_time(row["started_utc"]) <= end
+                and utc_time(row["ended_utc"]) >= start]
+
+
+def _chunk(row) -> InputChunk:
+    blob, chunk_format = row["runs"], row["format"]
+    frames = decode_runs(blob, chunk_format)
+    observations = None
+    if chunk_format == OBSERVED_FORMAT:
+        _, runs = _HEADER.unpack_from(blob)
+        at = _HEADER.size + runs * _RUN_V2.size
+        observations = decode_observations(blob[at:], len(frames))
+    return InputChunk(row["id"], row["session_id"], row["started_utc"],
+                      row["ended_utc"], frames, observations)
 
 
 def _now() -> str:
@@ -174,24 +203,32 @@ class ChunkWriter:
         self._buffer: list[tuple[int, InputFrame]] = []
         self._started: str | None = None
         self._buffer_session: int | None = None
+        self._observations: list[InputObservation] = []
 
     def _session(self) -> int | None:
         return (self._session_id() if callable(self._session_id)
                 else self._session_id)
 
-    def add(self, number: int, frame: InputFrame, *, session_id=_CURRENT_SESSION) -> None:
+    def add(self, number: int, frame: InputFrame, *, session_id=_CURRENT_SESSION,
+            observation: InputObservation | None = None) -> None:
         # The sampler supplies the owner observed with the pending frame.
         # Direct callers capture ownership here, never later during close().
         session = self._session() if session_id is _CURRENT_SESSION else session_id
+        changed_source = (bool(self._observations) != (observation is not None)
+                          or (observation is not None and self._observations
+                              and (observation.source_id != self._observations[-1].source_id
+                                   or observation.sequence <= self._observations[-1].sequence)))
         if self._buffer and (session != self._buffer_session
-                             or number <= self._buffer[-1][0]):
+                             or number <= self._buffer[-1][0] or changed_source):
             self.close()
         if session is None:
             return
         if not self._buffer:
-            self._started = self._clock()
+            self._started = observation.observed_utc if observation else self._clock()
             self._buffer_session = session
         self._buffer.append((number, frame))
+        if observation is not None:
+            self._observations.append(observation)
         if len(self._buffer) >= self.FLUSH_FRAMES:
             self.close()
 
@@ -200,8 +237,14 @@ class ChunkWriter:
             return
         session = self._buffer_session
         if session is not None:
-            self._store.append(session, self._buffer,
-                               self._started, self._clock())
+            if self._observations:
+                self._store.append(session, self._buffer, self._started,
+                                   self._observations[-1].observed_utc,
+                                   observations=self._observations)
+            else:
+                self._store.append(session, self._buffer,
+                                   self._started, self._clock())
         self._buffer = []
         self._started = None
         self._buffer_session = None
+        self._observations = []

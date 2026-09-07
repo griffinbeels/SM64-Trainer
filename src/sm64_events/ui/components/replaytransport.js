@@ -6,7 +6,7 @@ import { Icon } from "./icons.js";
 const html = htm.bind(h);
 
 export function ReplayTransport({ playing, onStart, onStep, onToggle,
-                                  stepHandlers = null,
+                                  stepHandlers = null, startTitle = "Jump to the beginning",
                                   canStep = true, frameKind = "game", note = null }) {
   const handlers = (direction) => stepHandlers ? stepHandlers(direction)
     : { onclick: () => onStep(direction) };
@@ -14,7 +14,7 @@ export function ReplayTransport({ playing, onStart, onStep, onToggle,
     ? `Pause and move ${direction} one ${frameKind} frame${stepHandlers ? "; hold to keep going" : ""}`
     : "Frame stepping unavailable for this recording";
   return html`<div class="replay-transport">
-    <button onclick=${onStart} title="Jump to the beginning">
+    <button onclick=${onStart} title=${startTitle}>
       <${Icon} name="restart" size=${15} /> Start
     </button>
     <button ...${handlers(-1)} disabled=${!canStep} title=${stepTitle("back")}>

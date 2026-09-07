@@ -130,9 +130,17 @@ class Poller:
         if self.paused == paused:
             return
         self.paused = paused
+        if paused:
+            self._break_input_capture()
         if not paused:
             self._prev = None  # resume = fresh attach for detector streams
         log.info("session %s", "paused" if paused else "resumed")
+
+    def _break_input_capture(self) -> None:
+        if self.input_sampler is not None:
+            self.input_sampler.flush()
+        self._frame_now = self._snapshot_frame = None
+        self._ticks_in_frame = self._unreadable_ticks = 0
 
     def _due_for_a_snapshot(self) -> bool:
         """Sample the pad, and say whether this tick should read the game.
@@ -182,6 +190,7 @@ class Poller:
             self._snapshot_frame = curr.global_timer
         except MemoryReadError:
             log.warning("lost emulator; detaching")
+            self._break_input_capture()
             self.memory.detach()
             self._prev = None
             self.latest = None
@@ -190,6 +199,7 @@ class Poller:
         if not _plausible(curr):
             log.error("memory layout mismatch (impossible values read) — "
                       "refusing to emit events; check the address registry")
+            self._break_input_capture()
             self.memory.detach()
             self._prev = None
             self.latest = None

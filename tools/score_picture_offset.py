@@ -20,8 +20,8 @@ of frame `map[k] + o`?
                  slot off the map (926 of 1076 by exactly -1 on 7015)
 
 On a clip cut with the right convention every channel peaks at 0. A peak
-elsewhere on TWO clips is the bar for touching `PLUGIN_PICTURE_LAG` or
-`DISPLAY_LAG_FRAMES` (replay/service.py); one clip never is. What no pad
+elsewhere on TWO clips calls for tracing the source association, not adding a
+global capture offset; a sweep alone cannot localize the error. What no pad
 channel can say is whether the picture ITSELF is one list old or only the
 ROM's input display draws the previous pad -- that is the oracle clip's
 (tools/score_oracle.py). Offline, read-only; needs no emulator and no server.

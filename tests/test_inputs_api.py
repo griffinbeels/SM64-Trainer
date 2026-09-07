@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.observation import InputObservation
 from sm64_events.inputs.service import InputsService
 from sm64_events.server.inputs_api import create_inputs_router
 from sm64_events.storage.db import Database
@@ -28,12 +29,14 @@ class FakeAttempt:
     strat_tag: str | None = "10 coin"
 
 
-@pytest.fixture
-def client(tmp_path):
+@pytest.fixture(params=[False, True], ids=["legacy", "observed"])
+def client(tmp_path, request):
     db = Database(tmp_path / "t.db")
     session = db.insert_session(AT)
     db.inputs.append(session, [(100 + step, InputFrame(0x8000, 0, 40, 0))
-                               for step in range(5)], AT, LATER)
+                               for step in range(5)], AT, LATER,
+                     observations=([InputObservation("poll:api", n, AT) for n in range(5)]
+                                   if request.param else None))
     captured = FakeAttempt(id=7)
     silent = FakeAttempt(id=8, started_utc="2026-08-21T09:00:00+00:00",
                          ended_utc="2026-08-21T09:00:30+00:00")

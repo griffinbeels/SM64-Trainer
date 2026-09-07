@@ -346,10 +346,9 @@ class ReplayRecorder:
             self._audio_mode = audio_mode
 
         self._last_player_active = time.monotonic()  # fresh grace period
-        self._idle = False
-        self._idle_since = None
-        if self._session_paused:  # window (re)appeared mid-pause: stay idle
-            self._set_idle(True)
+        # Startup can overlap a pause/unpause before the source is published.
+        # Reconcile its actual demand after publication, including resume.
+        self._set_idle(self._session_paused)
         self._recording = True
         log.info("capture started — window=%r audio=%s codec=%s",
                  win.title, audio_mode, self._codec)
@@ -464,6 +463,15 @@ class ReplayRecorder:
             log.info("replay idle: input detected — buffer resumes "
                      "(%d idle segments discarded)", self._idle_dropped)
             self._idle_dropped = 0
+
+        source = self._video_source
+        if source is not None and hasattr(source, "refresh_demand"):
+            try:
+                source.refresh_demand()
+            except Exception:
+                # A source closing during resume cannot interrupt game event
+                # polling or leave the recorder halfway through its state change.
+                log.exception("replay frame demand notification failed")
 
     def _on_segment(self, seg) -> None:
         """Ring gate — BOTH video segments and audio chunks arrive here.

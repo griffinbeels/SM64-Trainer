@@ -6,7 +6,7 @@ import { InputTimeline } from "../../src/sm64_events/ui/components/inputtimeline
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alignment = null }) {
+async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alignment = null, inputSpan = undefined }) {
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({
     attempt_id: 42, fps: 30, frames: 3, attempt_frames: 3, stretches,
     buttons: [[32768,"A"], [16384,"B"]], stick_max: 84, dead_zone: 8,
@@ -25,7 +25,7 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alig
     cancelVideoFrameCallback() {},
   };
   const props = {attemptId:42, video,
-    frameMap: map, pictureIgt: igts, inputAlignment: alignment,
+    frameMap: map, pictureIgt: igts, inputAlignment: alignment, inputSpan,
     frameMapSource: map ? "plugin" : null, clock:{times}};
   const view = render(h(InputTimeline, props));
   await waitFor(() => expect(view.container.querySelector(".input-inspector")).not.toBeNull());
@@ -38,6 +38,16 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alig
     await act(async () => callback(0, {mediaTime:times[slot]}));
   }};
 }
+
+test("the captured span prevents an old held picture from stretching the track", async () => {
+  await timeline({map:[10,10,100,101,102], times:[0,2,2.1,2.2,2.3], inputSpan:[100,102]});
+  expect(fetch).toHaveBeenCalledWith("/api/attempts/42/inputs?from_frame=100&to_frame=102");
+});
+
+test("a held-only clip requests the attempt alone", async () => {
+  await timeline({map:[10,10], times:[0,2], inputSpan:null});
+  expect(fetch).toHaveBeenCalledWith("/api/attempts/42/inputs");
+});
 
 test("a missing map slot clears the readings instead of inventing a timed input", async () => {
   const view = await timeline({map:[100,null,102], times:[0,.1,.2], igts:[1,null,3]});

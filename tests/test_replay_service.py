@@ -81,6 +81,8 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     assert res["duration_s"] == 17.0          # 12 s attempt + 3 pre + 2 post
     assert res["fps"] == 60                   # encoded rate
     assert res["game_fps"] == 30              # step unit: SM64 logic frames
+    assert res["attempt_start_slot"] is None  # no stamped picture association
+    assert res["input_span"] is None
     start, end, _ = svc.extractor.calls[0]
     assert start == T0 - timedelta(seconds=3)            # pre_pad
     assert end == T0 + timedelta(seconds=12 + 2)         # post_pad
@@ -648,30 +650,26 @@ class FeedExtractor(FakeExtractor):
                                    source_pts=[i * 3000 + 360 for i in range(self.count)])
 
 
-def test_a_plugin_clips_map_is_its_stamps_less_the_layers_own_lag_and_carries_the_igt(tmp_path):
-    """A capture-layer picture shows the pad of the stamp before its own
-    (PLUGIN_PICTURE_LAG, measured on 7015: 352 of 352 A icons at -1). The
-    desktop grab's lag never applies; a present that saw two lists claims
-    nothing; the game's own timer rides the view for the frame the map
-    names, so the clock and the pad are one picture's."""
+def test_source_linked_picture_keeps_its_own_state_and_timer(tmp_path):
+    """Direct source identity does not inherit the old fitted map's offset.
+    An inexact capture stays unknown; its neighbor keeps its own state."""
     svc = make_service(tmp_path, [attempt()])
     svc.extractor = FeedExtractor(count=120)
     svc.recorder.ledger = FeedExactLedger(count=120, inexact_at=7)
     svc.track_pads = lambda attempt: {}
     res = svc.view(42)
     assert res["frame_map_source"] == "plugin"
-    assert res["frame_map"][:7] == [99, 100, 101, 102, 103, 104, 105]
+    assert res["frame_map"][:7] == [100, 101, 102, 103, 104, 105, 106]
     assert res["picture_ids"][:9] == [0, 1, 2, 3, 4, 5, 6, None, 8]
     # Opening the cached clip preserves the very same capture occurrences.
     assert svc.view(42)["picture_ids"] == res["picture_ids"]
     assert res["frame_map"][7] is None                    # two lists: nothing claimed
-    assert res["frame_map"][8:12] == [107, 108, 109, 110]
-    # slot 0 names frame 99, which no row stamped: no clock there
-    assert res["picture_igt"][:3] == [None, 40, 41] and res["picture_igt"][7] is None
+    assert res["frame_map"][8:12] == [108, 109, 110, 111]
+    assert res["picture_igt"][:3] == [40, 41, 42] and res["picture_igt"][7] is None
     import json as _json
     sidecar = _json.loads(
         (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
-    assert sidecar["plugin_inexact_rows"] == 1 and sidecar["picture_igt"][8] == 47
+    assert sidecar["plugin_inexact_rows"] == 1 and sidecar["picture_igt"][8] == 48
 
 
 def test_a_clip_whose_rows_are_not_all_stamped_gets_no_map(tmp_path):
@@ -692,11 +690,12 @@ def test_picture_clock_lookup_keeps_the_matched_occurrence_across_a_reset(tmp_pa
     svc = make_service(tmp_path, [attempt()])
     rows = [{"frame": frame, "igt_overall": igt, "exact": True}
             for frame, igt in zip([100, 101, 99, 100, 101], [50, 51, 2, 3, 4], strict=True)]
-    meta = {"picture_ledger": rows, "picture_rows": [1, 4, 2],
-            "frame_map": [100, 100, 98]}
+    meta = {"picture_ledger": rows, "picture_rows": [1, 4, 2, None, 4],
+            "frame_map": [100, 100, 98, 99, 100]}
     svc._take_the_stamps(meta, attempt())
-    assert meta["picture_igt"] == [50, 3, None]
-    assert meta["state_rows"] == [0, 3, None]
+    assert meta["picture_igt"] == [51, 4, 2, None, 4]
+    assert meta["state_rows"] == [1, 4, 2, None, 4]
+    assert meta["frame_map"] == [101, 101, 99, None, 101]
 
 
 def test_a_picture_feed_without_a_retained_source_clock_does_not_get_a_map(tmp_path):

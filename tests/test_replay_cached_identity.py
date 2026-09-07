@@ -79,9 +79,9 @@ def test_source_linked_association_survives_cached_and_saved_reads(tmp_path):
     service.extractor = FeedExtractor(count=3)
     service.recorder.ledger = FeedExactLedger(count=3)
     first = service.view(42)
-    assert first["frame_map"] == [99, 100, 101]
+    assert first["frame_map"] == [100, 101, 102]
     assert first["picture_ids"] == [0, 1, 2]
-    assert first["picture_igt"] == [None, 40, 41]
+    assert first["picture_igt"] == [40, 41, 42]
     keys = ["frame_map", "picture_ids", "picture_igt"]
     expected = {key: first[key] for key in keys}
     assert {key: service.view(42)[key] for key in keys} == expected
@@ -108,8 +108,8 @@ def test_stale_derived_map_and_timer_are_recovered_from_retained_source_identity
     before = json.dumps(meta, indent=2).encode()
     sidecar.write_bytes(before)
     view = service.view(42)
-    assert view["frame_map"] == [99, 100, 101]
-    assert view["picture_igt"] == [None, 40, 41]
+    assert view["frame_map"] == [100, 101, 102]
+    assert view["picture_igt"] == [40, 41, 42]
     assert view["picture_ids"] == [0, 1, 2]
     assert view["pad_stamp_agreement"] is None
     assert sidecar.read_bytes() == before
@@ -132,8 +132,8 @@ def test_invalid_cached_picture_clock_can_recover_from_the_actual_video(tmp_path
     view = service.view(42)
     assert measured_paths == [sidecar.with_suffix(".mp4")]
     assert view["frame_times"] == actual_times
-    assert view["frame_map"] == [99, 100, 101]
-    assert view["picture_igt"] == [None, 40, 41]
+    assert view["frame_map"] == [100, 101, 102]
+    assert view["picture_igt"] == [40, 41, 42]
     assert sidecar.read_bytes() == before
 
 

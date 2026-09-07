@@ -341,7 +341,8 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
 - `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
 - `POST /api/attempts/{id}/replay` — cut or reuse the attempt's clip. Returns
   `{clip_url, duration_s, truncated, fps, game_fps, source, anchor_offset_s,
-  frame_map, frame_map_source, input_alignment, picture_ids, picture_igt, pad_stamp_agreement,
+  attempt_start_slot, input_span, frame_map, frame_map_source, input_alignment,
+  picture_ids, picture_igt, pad_stamp_agreement,
   video_start_s, frame_times, encode, feed_match, plugin_inexact_rows, saved_path}`.
   `source` is `buffer` or `saved`; `saved_path` names an existing saved copy.
   `fps` describes the encoded rate and `game_fps` is the 30 Hz game clock.
@@ -351,6 +352,13 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
   the requested start, so a held image can add run-up. Its `start_utc` and
   `anchor_offset_s` reflect that actual origin. The last picture remains visible
   through the cut's end; a hold is not a coverage hole or an empty video.
+  `input_span` bounds newly captured pictures; old heartbeat copies in the
+  buffer do not extend the input axis through frames absent from the clip.
+  `attempt_start_slot` locates the first available associated picture at or
+  after the attempt anchor. Initial playback, Start and ArrowDown seek inside
+  that picture; the pre-buffer remains accessible. Missing reset pictures
+  stay missing. Without a verified start slot, navigation uses the clip's
+  wall-clock anchor without claiming an input association.
   `picture_ids[k]` identifies the captured picture occurrence within this clip:
   heartbeat copies share an ID, separate visits to the same raw counter do not.
   Null IDs remain individually selectable unknown pictures. Controls walk slots
@@ -358,7 +366,7 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
   counters or clamp a VFR seek to a 30 Hz grid.
   `frame_map[k]` names the raw game counter associated with picture k; null
   means unknown. Fresh cuts resolve exact `(encoder run, source PTS)` keys to
-  capture rows and apply the existing `PLUGIN_PICTURE_LAG` interpretation.
+  capture rows and use that same occurrence's captured state directly.
   `picture_igt[k]` comes from the particular matched state occurrence, and the
   inspector retains the browser's presented slot when reading it. A missing
   mapped input displays as unavailable, never an input inferred from time.

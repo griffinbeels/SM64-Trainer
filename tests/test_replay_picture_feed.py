@@ -18,7 +18,6 @@ from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.extract import ClipExtractor, ClipResult
 from sm64_events.replay.feedmap import feed_map
-from sm64_events.replay.service import PLUGIN_PICTURE_LAG
 from sm64_events.replay.ffmpeg_sink import PICTURE_HEARTBEAT_S, FfmpegAvSink
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.ring import SegmentRing
@@ -274,7 +273,7 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
     feeds = ledger.feeds_between(origin - 1.0, origin + result.duration_s + 1.0)
     built, repeats, stats = feed_map(
         result.source_pts, result.media_run.id, rows, feeds,
-        lambda row: (row["frame"] - PLUGIN_PICTURE_LAG
+        lambda row: (row["frame"]
                      if row.get("exact") else None))
     assert built is not None, stats
     # Nearly every frame matches its feed entry. A CPU-starved worker under the
@@ -290,7 +289,7 @@ def test_a_cut_keeps_every_picture_at_its_own_time_and_the_map_reads_off_the_log
     # a +2 step around it, which is honest bookkeeping, not a shear.
     assert set(advances) <= {1, 2}, advances
     assert advances.count(1) >= len(advances) * 0.9, advances
-    assert built[0] >= 7000 - PLUGIN_PICTURE_LAG
+    assert built[0] >= 7000
 
 
 def test_a_cfr_ring_cut_with_the_switch_on_still_reports_its_frame_times(tmp_path):

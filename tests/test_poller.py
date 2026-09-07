@@ -243,6 +243,8 @@ class UnreadableSampler:
     def sample(self):
         self.calls += 1
         return None
+    def flush(self):
+        pass
     def clock_pair(self):
         return None
 

@@ -240,6 +240,37 @@ def test_idle_turns_the_frames_off(layout, stream):
     source.stop()
 
 
+def test_recorder_resume_changes_plugin_demand_before_liveness_poll(tmp_path, layout, stream):
+    from test_replay_recorder import make_recorder, FakeAudioSource
+
+    source = P.PluginVideoSource(stream, P.table_for(layout), layout)
+    rec = make_recorder(tmp_path, source, FakeAudioSource())
+    source.set_idle_check(rec.is_idle)
+    rec._video_source = source
+    got = threading.Event()
+    source.start(lambda *args: got.set(), lambda: None)
+    try:
+        rec._set_idle(True)
+        assert stream.header().want_frames == 0
+        rec.set_player_active()
+        # This must be true synchronously, before any wait/next heartbeat.
+        assert stream.header().want_frames == 1
+        table = P.table_for(layout)
+        stream.publish(np.zeros((2, 2, 3), dtype=np.uint8),
+                       raw_table(rdram_with(layout, 8770), table))
+        assert got.wait(0.5), "first resumed picture was not delivered"
+        rec.set_session_paused(True)
+        rec.set_player_active()
+        assert stream.header().want_frames == 0
+        rec.set_session_paused(False)
+        assert stream.header().want_frames == 1
+    finally:
+        source.stop()
+    rec._set_idle(True)
+    rec.set_player_active()
+    assert stream.header().want_frames == 0  # late resume cannot revive a stopped source
+
+
 def test_a_present_with_two_lists_or_none_is_not_called_exact(layout):
     table = P.table_for(layout)
     memory = rdram_with(layout, frame=77)

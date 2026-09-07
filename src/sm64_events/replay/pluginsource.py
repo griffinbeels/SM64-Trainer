@@ -284,6 +284,8 @@ class PluginVideoSource:
         self._stop = threading.Event()
         self._idle_check = lambda: False
         self._last_seq = stream.header().write_seq
+        self._demand_lock = threading.Lock()
+        self._accept_demand = False
         self._skipped = 0
         self._undecodable = 0
         self._delivered = 0
@@ -291,11 +293,23 @@ class PluginVideoSource:
     def set_idle_check(self, fn) -> None:
         self._idle_check = fn
 
+    def refresh_demand(self) -> None:
+        """Apply the recorder's current idle state without waiting for a VI.
+
+        The stopped source never enables capture again, including a resume
+        notification racing its teardown.
+        """
+        with self._demand_lock:
+            if self._accept_demand:
+                self._stream.set_want_frames(not self._idle_check())
+
     def start(self, on_frame, on_stopped) -> None:
         if self._thread is not None:
             return
         self._stop.clear()
-        self._stream.set_want_frames(not self._idle_check())
+        with self._demand_lock:
+            self._accept_demand = True
+            self._stream.set_want_frames(not self._idle_check())
         self._thread = threading.Thread(target=self._loop, args=(on_frame, on_stopped),
                                         name="plugin-frames", daemon=True)
         self._thread.start()
@@ -303,7 +317,9 @@ class PluginVideoSource:
     def stop(self) -> None:
         self._stop.set()
         try:
-            self._stream.set_want_frames(False)
+            with self._demand_lock:
+                self._accept_demand = False
+                self._stream.set_want_frames(False)
         except Exception:
             log.debug("frame stream gone at stop", exc_info=True)
         if self._thread is not None:
@@ -340,7 +356,6 @@ class PluginVideoSource:
             if now - last_alive_check >= IDLE_POLL_S:
                 last_alive_check = now
                 self._stream.touch()
-                self._stream.set_want_frames(not self._idle_check())
                 alive = self._stream.header().alive
                 if alive == last_alive and (self._stream.header().initiated is False
                                             or not self._stream.plugin_process_alive()):

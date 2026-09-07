@@ -20,6 +20,7 @@ from sm64_events.core.timefmt import GAME_FPS, format_igt
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.association import association_problem, valid_picture_times
 from sm64_events.replay.feedmap import feed_map
+from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -62,26 +63,11 @@ def saved_attempt_ids(root: Path) -> set[int]:
 # way (his counter read 26, 27, 27, 29, 30, 31, 32, 33, 33) and does not
 # drift; that part is in the footage and cannot be corrected from the clip.
 DISPLAY_LAG_FRAMES = 1
-#: THE CAPTURE LAYER'S OWN LAG: the picture the layer grabs at the VI whose
-#: VI_ORIGIN changed shows the pad of the stamp BEFORE its own. MEASURED
-#: 2026-09-05 on clip 7015 by a fresh-context review, two channels, the map
-#: as handed and never the aligner's own answer: an offset sweep of the
-#: stick digits (screen = pad of map[k] + o) scored -2: 66.4%, -1: 85.8%,
-#: 0: 66.8%, +1: 60.1% of 1076 slots; the A-button icon, templates learned
-#: under offset-0 labels so the test leaned AGAINST the answer, scored
-#: -1: 352 of 352 lit slots, 0: 311, +1: 272. Clip 6918 agreed (41 vs 129
-#: reader disagreements at -1 vs 0). THE ORACLE THEN SETTLED WHY (his three
-#: clips with the HUD memory display of gGlobalTimer on, 7049/7090/7116):
-#: the frame number the game printed into each picture equals stamp - 1 on
-#: 780 of 781, 668 of 668 and 415 of 415 readable slots, 0 contradicted --
-#: the picture the layer grabs at the VI whose origin changed IS the list
-#: before the one it just stamped, because SM64 presents the buffer it
-#: rendered the iteration before (display_and_vsync swaps
-#: gFrameBuffers[sRenderedFramebuffer], then gGlobalTimer++). Not padding:
-#: the game's own one-frame display latency, and the sweep peaks at 0 on
-#: both channels under this constant (7116: 177 of 177 icons; 7049: 227 of
-#: 227). A picture's pad, IGT and Mario are therefore the PREVIOUS row's.
-PLUGIN_PICTURE_LAG = 1
+# A source-linked picture keeps its captured state. The former one-frame
+# subtraction was inferred through the retired fitted timestamp join. Fresh
+# source-PTS clips 7718/7685/7739 visibly match their own capture row (timer,
+# stick and A edge); selecting the preceding row reintroduced the desync.
+# Legacy maps without that source link remain unverified, not reinterpreted.
 
 
 def _parse_utc(s: str) -> datetime:
@@ -385,6 +371,8 @@ class ReplayService:
                 "source": source,
                 **self._coverage_notices(a, m),
                 "anchor_offset_s": self._anchor_offset(a, m),
+                "attempt_start_slot": attempt_start_slot(m, a.anchor_frame),
+                "input_span": captured_input_span(m),
                 "frame_map": m.get("frame_map"),
                 "frame_map_source": m.get("frame_map_source"),
                 "input_alignment": m.get("input_alignment"),
@@ -433,9 +421,6 @@ class ReplayService:
             meta["input_alignment"] = {
                 "status": "unverified" if proposed else "unavailable", "reason": problem}
             return meta
-        rows = meta["picture_ledger"]
-        meta["frame_map"] = [rows[index]["frame"] - PLUGIN_PICTURE_LAG
-                             if index is not None else None for index in meta["picture_rows"]]
         self._take_the_stamps(meta, attempt)
         meta["input_alignment"] = {"status": "source_linked"}
         return meta
@@ -507,9 +492,8 @@ class ReplayService:
             rows = ledger.rows_between(row_start, end + 1.0)
             if not rows or not feeds:
                 return
-            # The picture shows the pad of the stamp BEFORE its own
-            # (PLUGIN_PICTURE_LAG, measured); an inexact row (two display
-            # lists between presents) claims nothing.
+            # An inexact row (two display lists between presents) claims
+            # nothing. State interpretation uses this exact occurrence.
             row_index = {id(row): index for index, row in enumerate(rows)}
             matched_rows, repeats, stats = feed_map(
                 source_pts, media_run.id, rows, feeds,
@@ -529,8 +513,6 @@ class ReplayService:
             log.warning("feed log covers too little of the clip: %s", stats)
             return
         meta["picture_rows"] = matched_rows
-        meta["frame_map"] = [rows[index]["frame"] - PLUGIN_PICTURE_LAG
-                             if index is not None else None for index in matched_rows]
         meta["repeats"] = repeats
         meta["frame_map_source"] = "feed_log"
         log.info("frame map read off the feed log: %s", stats)
@@ -567,22 +549,11 @@ class ReplayService:
         # track's first frame (the two clocks start a frame or two apart).
         # ...read off the row whose frame the map names for the slot, so
         # the clock and the pad the panel shows are the same picture's.
-        frame_map = meta.get("frame_map") or []
-        # A raw game counter repeats after a save-state load. Resolve only
-        # backward from the particular capture the encoded slot contains;
-        # stop at a reset or a missing state instead of finding an old epoch.
-        state_rows = []
-        for slot, capture in enumerate(meta.get("picture_rows") or []):
-            state = capture
-            wanted = frame_map[slot]
-            while state is not None and rows[state]["frame"] != wanted:
-                if (state == 0 or rows[state - 1].get("frame") is None
-                        or rows[state - 1]["frame"] >= rows[state]["frame"]
-                        or rows[state - 1]["frame"] < wanted):
-                    state = None
-                else:
-                    state -= 1
-            state_rows.append(state)
+        # Resolve by capture occurrence, never by another visit to a raw
+        # counter or a neighboring capture. Unknown slots stay unknown.
+        state_rows = list(meta.get("picture_rows") or [])
+        meta["frame_map"] = [rows[index]["frame"] if index is not None else None
+                             for index in state_rows]
         meta["state_rows"] = state_rows
         igts = [rows[index].get("igt_overall") if index is not None else None
                 for index in state_rows]
