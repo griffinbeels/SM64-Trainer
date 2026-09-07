@@ -199,8 +199,9 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
            ref=${attachVideoEl}></video>
     <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
       video=${mediaVideo} clock=${clipClock(state)}
-      loop=${reviewState?.loop ?? null} reviewReady=${!!reviewState}
-      onLoopChange=${loop => onReviewState?.({ loop })}
+      loop=${reviewState === undefined ? undefined : reviewState?.loop ?? null}
+      reviewReady=${reviewState !== null}
+      onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
       startTitle="Jump to the attempt start (↓)"
       stepHandlers=${stepHold}
       onToggle=${togglePlay} note="Captured pictures · ← → to step" />

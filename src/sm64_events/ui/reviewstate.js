@@ -8,9 +8,10 @@ function entryFor(id) {
   if (entries.has(id)) return entries.get(id);
   const entry = { state: null, error: null, listeners: new Set(), dirty: false, writing: null };
   const notify = () => entry.listeners.forEach(listener => listener({ ...entry }));
-  entry.loading = getJSON(endpoint(id)).then(state => {
-    entry.state = state; notify();
+  entry.load = () => getJSON(endpoint(id)).then(state => {
+    entry.state = state; entry.error = null; notify();
   }).catch(error => { entry.error = String(error); notify(); });
+  entry.loading = entry.load();
   entry.flush = async () => {
     if (entry.writing) await entry.writing;
     if (!entry.dirty) return;
@@ -56,5 +57,9 @@ export function useReviewState(attemptId) {
   }, [attemptId]);
   return { state: snapshot.state, error: snapshot.error,
     change: patch => entryFor(attemptId).change(patch),
-    flush: () => entryFor(attemptId).flush() };
+    flush: () => entryFor(attemptId).flush(),
+    retry: () => {
+      const entry = entryFor(attemptId);
+      return entry.state ? entry.flush() : entry.load();
+    } };
 }

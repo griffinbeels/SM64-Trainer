@@ -76,6 +76,6 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
             once the replay is cut and checked against its footage.</div>`}
     </div>`}
     ${review.error && html`<p class="replay-control-error" role="status">${review.error}
-      <button onclick=${() => review.flush().catch(() => {})}>Retry retaining changes</button></p>`}
+      <button onclick=${() => review.retry().catch(() => {})}>Retry retaining changes</button></p>`}
   </div>`;
 }

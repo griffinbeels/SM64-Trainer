@@ -1,6 +1,6 @@
 // Media review uses displayed picture intervals; it never supplies game timing.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { slotAtTime, timeOfSlot } from "./frame.js";
+import { slotAtTime } from "./frame.js";
 import { presentedVideoTime, watchVideoPicture } from "./videopicture.js";
 
 export function pictureInterval(time, clock, step, duration) {
@@ -18,10 +18,10 @@ export function pictureInterval(time, clock, step, duration) {
   return null;
 }
 
-export function loopSeekTime(loop, clock, step, duration) {
-  if (clock?.times?.length) return timeOfSlot(slotAtTime(loop.start, clock),
-    { ...clock, duration });
-  return Math.min(loop.end, loop.start + (step || 0) / 2);
+export function loopSeekTime(loop) {
+  // Playback begins at A itself. A midpoint is useful for paused stepping,
+  // but would discard half a long hold (and its audio) on every loop.
+  return loop.start;
 }
 
 export function useReviewMedia(video, { clock, step, loop } = {}) {
@@ -47,10 +47,13 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
       }
       timer = setTimeout(() => {
         if (video.paused || !latest.current.loop?.enabled) return;
+        // Media time can stop while the element still reports !paused.
+        // A wall-clock timeout alone must never truncate a buffering loop.
+        if (video.currentTime < latest.current.loop.end) { arm(); return; }
         video.currentTime = loopSeekTime(latest.current.loop, latest.current.clock,
           latest.current.step, video.duration);
         video.play().catch(() => {});
-      }, Math.max(0, (range.end - video.currentTime) * 1000 / video.playbackRate));
+      }, Math.max(4, (range.end - video.currentTime) * 1000 / video.playbackRate));
     };
     const changed = () => { update(); arm(); };
     const seeking = () => { clearTimeout(timer); update(); };
@@ -61,9 +64,10 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
       video.play().catch(() => {});
     };
     const events = ["loadedmetadata", "durationchange", "timeupdate", "play", "pause",
-      "ratechange", "volumechange", "seeked"];
+      "ratechange", "volumechange", "seeked", "playing"];
     events.forEach(name => video.addEventListener(name, changed));
     video.addEventListener("seeking", seeking);
+    video.addEventListener("waiting", seeking);
     video.addEventListener("ended", ended);
     const stop = watchVideoPicture(video, changed);
     changed();
@@ -71,6 +75,7 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
       clearTimeout(timer); stop();
       events.forEach(name => video.removeEventListener(name, changed));
       video.removeEventListener("seeking", seeking);
+      video.removeEventListener("waiting", seeking);
       video.removeEventListener("ended", ended);
     };
   }, [video, loop?.start, loop?.end, loop?.enabled]);
