@@ -25,6 +25,7 @@ import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
 import { ControllerPanel, FacingDial, heldNames, stickPhrase, stickWords } from "./controllerpanel.js";
 import { SetupModal } from "./setupmodal.js";
+import { EMU } from "../platform.js";
 
 const html = htm.bind(h);
 
@@ -751,6 +752,6 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     </footer>
     ${typeof tools === "function" ? tools(data) : tools}
     ${setupOpen && html`<${SetupModal} onClose=${() => setSetupOpen(false)}
-        initialPane="emu" />`}
+        initialPane=${EMU} />`}
   </div>`;
 }

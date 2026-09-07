@@ -1909,12 +1909,11 @@ def test_a_pills_cross_removes_that_pick_and_regrades_the_card():
     should be an X on the right side that appears. I should be able to
     click this to remove that specific player / rank standard from my
     scorecard immediately. Everything should update accordingly." Two
-    divisions picked; the × is visible at rest (his follow-up: "Pills look
+    sources picked; the × is visible at rest (his follow-up: "Pills look
     weird if the X is hidden by default. Let's just show it at all times.
     Red X.") and still visible under the pointer;
-    clicking the SECOND pill's × (Gold I -- the faster offer, which a multi
-    goal takes per tile) leaves Bronze V as a SINGLE goal (no legend), and
-    every goal time on the card moves to Bronze V's slower cutoff."""
+    clicking the custom set's × leaves Bronze V as a SINGLE goal (no legend),
+    and its tile moves to Bronze V's slower cutoff once the response arrives."""
     with serve_ui() as base:
         _put_custom_goal(base, "Fast set", {"star:1:0": 1000})
         body = json.dumps({"kind": "multi", "sources": [
@@ -1941,7 +1940,7 @@ def test_a_pills_cross_removes_that_pick_and_regrades_the_card():
                 ".scorecard-card .goal-pill:nth-child(2) .goal-pill-remove')).visibility")
             page.click(".rank-page .scorecard-card .goal-legend "
                        ".goal-pill:nth-child(2) .goal-pill-remove")
-            page.wait_ms(600)
+            _wait_until(page, first_goal + " !== " + json.dumps(before))
             pills_after = page.count(".rank-page .scorecard-card .goal-pill")
             after = page.evaluate(first_goal)
         goal = json.loads(urllib.request.urlopen(

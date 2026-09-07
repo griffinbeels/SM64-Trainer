@@ -158,7 +158,7 @@ def test_pending_sampler_frame_keeps_its_owner_across_session_change(db, initial
     [call] = calls
     sampler = eval(compile(ast.Expression(call), str(source), "eval"),
                    {"InputSampler": InputSampler, "memory": memory, "layout": US,
-                    "input_writer": writer, "service": service})
+                    "input_writer": writer, "service": service, "replay": None})
     sampler.sample()
     service.session_id = second
     sampler.sample()

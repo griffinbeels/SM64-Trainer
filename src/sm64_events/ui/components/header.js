@@ -15,6 +15,7 @@ import { ImportSection } from "./importsection.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 import { SetupModal } from "./setupmodal.js";
+import { EMU, N64 } from "../platform.js";
 
 const html = htm.bind(h);
 
@@ -43,7 +44,7 @@ function rememberSetupPrompt() {
 // seen yet: the Project64 row is itself the door for that. Only a build with
 // no layer to install, or the N64 platform, stays quiet.
 function shouldOfferSetup(setup) {
-  if (!setup || setup.platform === "n64") return false;
+  if (!setup || setup.platform === N64) return false;
   const emu = setup.emu;
   if (!emu) return false;
   // ...and for a layer this build has outgrown: the steps to update it are
@@ -494,6 +495,6 @@ export function Header({ t, settingsOpen, closeSettings }) {
          the card it is about is what stops a second surface growing its own
          copy of this question. */""}
     <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
-    ${setupOpen && html`<${SetupModal} onClose=${closeSetup} initialPane="emu" />`}
+    ${setupOpen && html`<${SetupModal} onClose=${closeSetup} initialPane=${EMU} />`}
   </header>`;
 }

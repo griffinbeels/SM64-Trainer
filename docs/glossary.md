@@ -658,9 +658,9 @@ track from its own start rather than from the [[session]]'s, so two tracks lie
 on one axis whatever hour of whatever day you played each of them; a [[reset]]
 in the middle of a track continues that axis rather than restarting it, and a
 [[frame]] the trainer did not capture stays a hole on it. Missing first or
-last samples preserve the attempt's full extent, so they cannot move frame zero
+last samples preserve the [[attempt]]'s full extent, so they cannot move [[frame]] zero
 or shift a saved template. Repeated raw counters alone cannot identify which
-capture an attempt belongs to.
+capture an [[attempt]] belongs to.
 
 - **Lives** — the input store (`src/sm64_events/inputs/store.py`) resolves
   the frames; the run derivation (`src/sm64_events/inputs/runs.py`) lays them
@@ -750,21 +750,21 @@ a clip's picture rate follows the game's pictures instead of a fixed 60.
 
 One encoder child's identity and clock origin. The first submitted picture
 starts the clock; video timestamps are integer ticks at 90,000 ticks per
-second. A restart creates a new identity even when the frame size is unchanged.
-Segments retain that identity so extraction cannot join unrelated clocks.
+second. A restart creates a new identity even when it keeps the same [[frame]] size.
+[[Segment]]s retain that identity so extraction cannot join unrelated clocks.
 The cut preserves its integer source offset and can recover each encoded
 picture's original timestamp without fitting a cadence.
 
 - **Lives** -- `src/sm64_events/replay/media.py`, shared by the sink,
-  segment ring, extractor and feed-log lookup.
+  [[segment]] ring, extractor and feed-log lookup.
 
 ### Feed log
 
 The [[picture ledger]]'s record of each picture accepted by the encoder:
 its [[media run]], assigned integer timestamp and original captured-row time.
-A same-run heartbeat retains the held picture's row identity. The assigned
+A heartbeat within that [[media run]] retains the held picture's row identity. The assigned
 media time stays separate from capture time, including when a delayed picture
-arrives after a heartbeat. Extraction joins exact run/timestamp keys; collisions
+arrives after a heartbeat. Extraction joins exact [[media run]]/timestamp keys; collisions
 and missing keys remain unknown rather than selecting a nearby picture.
 
 - **Lives** -- `src/sm64_events/replay/ledger.py` (the log),

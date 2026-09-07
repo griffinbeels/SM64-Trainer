@@ -1407,7 +1407,7 @@ def test_a_disagreeing_picture_reaches_the_timeline_header(page):
     row_text, frame_text = page.evaluate(
         "(() => { const row = document.querySelector('.input-screen-check-row');"
         " return [row.textContent, row.querySelector('.frame').textContent]; })()")
-    assert frame_text.startswith("frame ") and "71,0" in row_text and "70,0" in row_text, row_text
+    assert frame_text.startswith("frame ") and "timeline R71" in row_text and "game R70" in row_text, row_text
     page.click(".input-screen-check-row")
     page.wait_ms(200)
     readout = page.evaluate(
