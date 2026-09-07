@@ -19,6 +19,13 @@ def test_the_same_strategy_under_two_names_is_recognised():
     assert adopt.match_vetted(vetted, approaches) == {0: "Skyjump"}
 
 
+def test_revising_rank_targets_does_not_reassign_the_strategy_identity():
+    row = _approach("Mario Wings to the Sky", 30.95)
+    row["matching_profile"] = dict(row["ladder"])
+    row["ladder"] = _ladder(99)
+    assert adopt.match_vetted({"Skyjump": _ladder(30.90)}, [row]) == {0: "Skyjump"}
+
+
 def test_a_genuinely_different_strategy_is_not_matched():
     vetted = {"Skyjump": _ladder(30.90)}
     approaches = [_approach("Slope slide strat", 24.00)]

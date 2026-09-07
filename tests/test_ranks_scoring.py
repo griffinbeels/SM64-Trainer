@@ -16,9 +16,9 @@ def test_score_at_each_cutoff_is_that_tiers_anchor():
         assert score_for(NUTS, cs) == SCORE_ANCHORS[tier]
 
 
-def test_score_interpolates_linearly_between_cutoffs():
-    # midway between Platinum (1416 -> 60) and Gold (1566 -> 45)
-    assert score_for(NUTS, 1491) == 52.5
+def test_score_interpolates_linearly_in_game_frames_between_cutoffs():
+    # Frame 440 is one third of the way from Platinum (425) to Gold (470).
+    assert score_for(NUTS, 1466) == 55.0
 
 
 def test_faster_than_the_hardest_tier_extrapolates_and_caps_at_100():
@@ -188,18 +188,18 @@ def test_time_for_score_is_none_for_an_empty_ladder_or_a_zero_score():
 def test_a_time_on_a_division_edge_ranks_up_instead_of_owing_zero():
     """The reported bug, reproduced on this ladder.
 
-    Master III begins at score 84, which this ladder puts at 1310.6cs. A run
-    displaying 1311 is a rounding hair SLOWER than that edge, so the score
-    curve alone leaves it in Master IV -- owing `1311 - round(1310.6)` = 0.00s
+    Master IV begins at score 82, at 1313.6cs on the frame curve. A run
+    displaying 1314 is a rounding hair SLOWER than that edge, so the score
+    curve alone leaves it in Master V -- owing `1314 - round(1313.6)` = 0.00s
     to a division it has, in displayed time, already reached."""
-    edge_cs = time_for_score(NUTS, 84.0)
-    assert edge_cs == 1311, "the fixture moved; re-derive the edge before reading on"
-    assert division_progress(score_for(NUTS, edge_cs), defined_tiers(NUTS))["division"] == "IV"
+    edge_cs = time_for_score(NUTS, 82.0)
+    assert edge_cs == 1314, "the fixture moved; re-derive the edge before reading on"
+    assert division_progress(score_for(NUTS, edge_cs), defined_tiers(NUTS))["division"] == "V"
 
     progress = progress_for_time(NUTS, edge_cs)
-    assert (progress["tier"], progress["division"]) == ("Master", "III")
+    assert (progress["tier"], progress["division"]) == ("Master", "IV")
     assert progress["fill"] == 0.0                 # freshly into the division
-    assert progress["score"] == 84.0               # snapped WITH the division
+    assert progress["score"] == 82.0               # snapped WITH the division
     assert progress["next_gap_cs"] >= 1
 
 

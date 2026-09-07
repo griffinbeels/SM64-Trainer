@@ -991,6 +991,9 @@ function Section({ approach, open, onOpen, query, stratInfo, trayKeys, entityKey
         ${approach.ladder_estimate ? html`<p class="meta library-ladder-estimate">
           Estimated standards · ${estimateNote(approach.ladder_estimate)}
         </p>` : ""}
+        ${(version === "jp" && approach.ladder_jp
+            ? approach.ladder_jp_extended : approach.ladder_extended)
+          ? html`<p class="meta library-ladder-extension">Sheet-based standards · Slower targets extend beyond submitted times so every subdivision is reachable.</p>` : ""}
         ${/* LEADERBOARD MODE (task 1): a second reading of the same entries
              -- his ruling, add a reading, never touch the one that already
              works. Per-SECTION state (not page state, never persisted);

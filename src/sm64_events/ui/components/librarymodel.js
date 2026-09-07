@@ -12,6 +12,7 @@
 
 import { fmtSeconds } from "../format.js";
 import { DIVISION_NUMERALS, DIVISIONS_PER_TIER } from "./caps.js";
+import { framePosition, displayPosition, scoreAt, positionAt } from "../timecurve.js";
 
 // Slowest -> fastest, Library-only vocabulary: the Library bands times
 // against a fitted or vetted LADDER (library/ladders.py::fit_payload,
@@ -145,17 +146,6 @@ export const SCORE_ANCHORS = { Mario: 95, Grandmaster: 90, Master: 80,
 const TOP_SCORE = 100;
 const TIERS_HARDEST_FIRST = [...RANKS].reverse();
 
-// Python's round() is half-to-even; Math.round is half-up. The parity test
-// feeds both sides real fitted ladders, where interpolated edges can land on
-// exact halves, so the twin has to round the way the original does.
-function pyRound(value) {
-  const floor = Math.floor(value);
-  const diff = value - floor;
-  if (diff > 0.5) return floor + 1;
-  if (diff < 0.5) return floor;
-  return floor % 2 === 0 ? floor : floor + 1;
-}
-
 export function ladderCsOf(ladder) {
   const out = {};
   for (const tier of RANKS) {
@@ -172,54 +162,15 @@ function definedTiers(ladderCs) {
 // the anchors; faster than the hardest tier extrapolates (capped at 100),
 // slower than the easiest decays asymptotically (the Iron tail).
 export function scoreFor(ladderCs, timeCs) {
-  const points = definedTiers(ladderCs).map((tier) => [ladderCs[tier], SCORE_ANCHORS[tier]]);
-  if (!points.length) return null;
-  const [hardestCs, hardestScore] = points[0];
-  if (timeCs <= hardestCs) {
-    if (points.length === 1) return hardestScore;
-    const [nextCs, nextScore] = points[1];
-    const slope = (nextScore - hardestScore) / (nextCs - hardestCs);
-    return Math.min(TOP_SCORE, hardestScore + slope * (timeCs - hardestCs));
-  }
-  for (let seg = 0; seg + 1 < points.length; seg += 1) {
-    const [fasterCs, fasterScore] = points[seg];
-    const [slowerCs, slowerScore] = points[seg + 1];
-    if (timeCs <= slowerCs) {
-      const span = slowerCs - fasterCs;
-      if (span <= 0) return slowerScore;
-      return fasterScore + (slowerScore - fasterScore) * (timeCs - fasterCs) / span;
-    }
-  }
-  const [easiestCs, easiestScore] = points[points.length - 1];
-  return easiestScore * easiestCs / timeCs;
+  const points = definedTiers(ladderCs).map((tier) => [framePosition(ladderCs[tier]), SCORE_ANCHORS[tier]]);
+  return points.length ? scoreAt(points, framePosition(timeCs)) : null;
 }
 
-// Mirror of ranks/scoring.py::time_for_score -- the algebraic inverse, used
-// here to print each subdivision's own time bracket.
 export function timeForScore(ladderCs, targetScore) {
-  const points = definedTiers(ladderCs).map((tier) => [ladderCs[tier], SCORE_ANCHORS[tier]]);
+  const points = definedTiers(ladderCs).map((tier) => [framePosition(ladderCs[tier]), SCORE_ANCHORS[tier]]);
   if (!points.length) return null;
-  const [hardestCs, hardestScore] = points[0];
-  if (targetScore >= hardestScore) {
-    if (points.length === 1) return hardestCs;
-    const [nextCs, nextScore] = points[1];
-    const slope = (nextScore - hardestScore) / (nextCs - hardestCs);
-    if (slope === 0) return hardestCs;
-    return pyRound(hardestCs + (targetScore - hardestScore) / slope);
-  }
-  for (let seg = 0; seg + 1 < points.length; seg += 1) {
-    const [fasterCs, fasterScore] = points[seg];
-    const [slowerCs, slowerScore] = points[seg + 1];
-    if (targetScore >= slowerScore) {
-      const span = slowerCs - fasterCs;
-      if (span <= 0) return slowerCs;
-      const frac = (targetScore - fasterScore) / (slowerScore - fasterScore);
-      return pyRound(fasterCs + frac * span);
-    }
-  }
-  const [easiestCs, easiestScore] = points[points.length - 1];
-  if (targetScore <= 0) return null;
-  return pyRound(easiestScore * easiestCs / targetScore);
+  const position = positionAt(points, targetScore);
+  return position == null ? null : displayPosition(position);
 }
 
 // Mirror of ranks/scoring.py::tier_band, `defined` hardest-first as there.
@@ -333,7 +284,9 @@ export function ladderBands(ladder) {
 export function bandRangeLabel(band) {
   if (!band.tier) return "no ladder for this approach";
   const fast = band.fastCs != null ? fmtSeconds(band.fastCs / 100) : "—";
-  if (band.cutoffCs != null) return `${fmtSeconds(band.cutoffCs / 100)} – ${fast}`;
+  if (band.cutoffCs != null) return band.fastCs > band.cutoffCs
+    ? `${fmtSeconds(band.cutoffCs / 100)} · shared cutoff`
+    : `${fmtSeconds(band.cutoffCs / 100)} – ${fast}`;
   const slowest = (band.entries || []).length ? band.entries[0].time_cs : null;
   return slowest != null
     ? `${fmtSeconds(slowest / 100)}+ – ${fast}`
@@ -373,7 +326,7 @@ export function bandsOf(ladder, entries) {
       division.entries.sort((a, b) => b.time_cs - a.time_cs);
     }
   }
-  return bands.filter((band) => band.entries.length || band.cutoffCs != null);
+  return bands;
 }
 
 // LEADERBOARD MODE (task 1, spec 2026-08-20-ranked-leaderboard): a SECOND

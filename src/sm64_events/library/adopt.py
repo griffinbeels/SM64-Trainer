@@ -56,7 +56,7 @@ def match_vetted(vetted: dict, approaches: list) -> dict:
     scored = []
     for strategy, ladder in vetted.items():
         for index, approach in enumerate(approaches):
-            fitted = approach.get("ladder")
+            fitted = approach.get("matching_profile", approach.get("ladder"))
             if not fitted:
                 continue
             distance = _distance(ladder, fitted)

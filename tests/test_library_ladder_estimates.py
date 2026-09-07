@@ -37,18 +37,18 @@ def test_every_bundled_approach_and_subsection_gets_standards(payload):
             assert item["ladder_estimate"]["note"]
 
 
-def test_an_own_anchor_makes_one_attainable_cutoff_and_no_fake_submissions():
+def test_an_own_anchor_makes_a_complete_ladder_and_no_fake_submissions():
     row = {"name": "A", "ids": ["1"], "entries": [], "ideal_cs": 501}
     target = {"section": "Course", "label": "Target", "approaches": [row],
               "subsections": []}
     fit_payload({"targets": [target]})
-    assert row["ladder"] == {"Mario": attainable_cs(501) / 100}
+    assert row["ladder"] == fit_ladder([501])
     assert row["ladder_estimate"]["method"] == "ideal"
     assert row["ladder_estimate"]["source_rows"] == [row_key(target, "A", ["1"])]
     assert row["ladder_samples"] == 0 and row["entries"] == []
     row["best_cs"] = 530
     fit_payload({"targets": [target]})
-    assert row["ladder"] == {"Mario": 5.3}
+    assert row["ladder"] == fit_ladder([530])
     assert row["ladder_estimate"]["method"] == "best"
 
 
@@ -58,7 +58,7 @@ def test_a_best_anchor_respects_the_published_region_instead_of_the_faster_best(
     target = {"section": "Course", "label": "Target", "approaches": [row],
               "subsections": []}
     fit_payload({"targets": [target]})
-    assert row["ladder"] == {"Mario": 15.0}
+    assert row["ladder"] == fit_ladder([1500])
     assert row["ladder_version"] == "us"
     assert row["ladder_estimate"]["source_version"] == "us"
 
@@ -95,7 +95,7 @@ def test_an_estimate_refreshes_from_its_source_and_yields_to_the_first_submissio
     assert item["ladder_estimate"]["source_samples"] == 2
     item["entries"] = [{"time_cs": 2950}]
     fit_payload(payload)
-    assert item["ladder"] == {"Mario": 29.5}
+    assert item["ladder"] == fit_ladder([2950])
     assert item["ladder_samples"] == 1 and "ladder_estimate" not in item
 
 

@@ -376,7 +376,7 @@ def test_standing_on_grades_the_readers_pb_by_the_displayed_walk():
 
 # ---- the band math the Overall Rank Standards section shares (2026-08-10) --
 
-def test_ladder_bands_keep_the_capless_floor_that_bandsof_filters_away():
+def test_ladder_bands_and_entry_bands_keep_empty_capless_standards():
     """The one structural difference between the two callers, and the reason
     `ladderBands` exists. `bandsOf` drops a band with no cutoff and no entries
     -- correct for a table OF entries -- but a rank standard holds whether or
@@ -389,7 +389,7 @@ def test_ladder_bands_keep_the_capless_floor_that_bandsof_filters_away():
     assert all(len(band["divisions"]) == 5 for band in shells), shells
     # ...and the same ladder through bandsOf with NO entries loses exactly it.
     filtered = run_js(f"m.bandsOf({json.dumps(ladder)}, [])")
-    assert [band["tier"] for band in filtered] == ["Bronze", "Mario"]
+    assert [band["tier"] for band in filtered] == ["Iron", "Bronze", "Mario"]
 
 
 def test_ladder_bands_is_empty_for_a_ladder_with_no_tiers():

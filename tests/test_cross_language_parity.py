@@ -73,6 +73,33 @@ def run_node(script: str):
     return json.loads(result.stdout)
 
 
+def test_frame_curve_matches_on_complete_narrow_and_manual_tied_ladders():
+    from sm64_events.core.timefmt import cs_of_frame
+    from sm64_events.library.ladders import fit_ladder
+    from sm64_events.ranks.scoring import score_for, time_for_score, progress_for_time
+    ladders = [{r: round(t * 100) for r, t in fit_ladder([cs_of_frame(f)]).items()}
+               for f in range(60, 90)]
+    ladders += [{"Mario": 885, "Grandmaster": 910, "Bronze": 940},
+                {"Mario": 246, "Grandmaster": 246, "Master": 300},
+                {"Mario": 246, "Grandmaster": 300, "Master": 300},
+                {"Mario": 246, "Grandmaster": 246, "Bronze": 246}]
+    cases = [(ladder, cs_of_frame(f)) for ladder in ladders
+             for f in range(1, 350)]
+    js = run_node(f"import * as m from {LIBRARYMODEL_JS.as_uri()!r};\n"
+                  f"const cases = {json.dumps(cases)};\n"
+                  "console.log(JSON.stringify(cases.map(([l,t]) => "
+                  "[m.scoreFor(l,t),m.divisionWithin(l,m.bandFor(Object.fromEntries("
+                  "Object.entries(l).map(([r,v])=>[r,v/100])),t),t)])));" )
+    for (ladder, time), (score, division) in zip(cases, js, strict=True):
+        assert score == pytest.approx(score_for(ladder, time), abs=1e-9)
+        assert division == progress_for_time(ladder, time)["division"]
+    inverse = run_node(f"import * as m from {LIBRARYMODEL_JS.as_uri()!r};\n"
+                       f"const ladders = {json.dumps(ladders)};\n"
+                       "console.log(JSON.stringify(ladders.map(l => Array.from("
+                       "{length:101},(_,s)=>m.timeForScore(l,s)))));" )
+    assert inverse == [[time_for_score(ladder, s) for s in range(101)] for ladder in ladders]
+
+
 def declaration(path: Path, name: str) -> str:
     """The source text of one top-level `const NAME = ...;` declaration.
 

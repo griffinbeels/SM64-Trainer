@@ -9,6 +9,8 @@ from import_fixture import make_client
 from sm64_events.library.ladders import fit_ladder, fit_payload
 from sm64_events.ranks.classify import RANK_NAMES, rank_for
 from sm64_events.ranks.scoring import progress_for_time, score_for, time_for_score
+from sm64_events.ranks.scoring import progression_key
+from sm64_events.core.timefmt import cs_of_frame, frame_at_or_after
 from sm64_events.ranks.standards import RankStandards
 
 TIERS = set(RANK_NAMES) - {"Iron"}
@@ -20,15 +22,14 @@ TIERS = set(RANK_NAMES) - {"Iron"}
 def test_every_tier_survives_sparse_tied_and_clustered_observations(times):
     ladder = fit_ladder(times)
     assert set(ladder) == TIERS
-    assert ladder["Mario"] == pytest.approx(min(times) / 100)
-    assert ladder["Bronze"] == pytest.approx(max(times) / 100)
-    assert list(ladder.values()) == sorted(ladder.values())
+    assert ladder["Mario"] > min(times) / 100
+    assert ladder["Bronze"] >= max(times) / 100
+    assert list(ladder.values()) == sorted(set(ladder.values()))
 
 
-def test_more_observations_refine_interior_cutoffs_without_changing_endpoints():
+def test_more_observations_refine_the_empirical_spread():
     before = fit_ladder([1000, 2000], quantise=lambda cs: cs)
     after = fit_ladder([1000] + [1100] * 30 + [2000], quantise=lambda cs: cs)
-    assert before["Mario"] == after["Mario"] == 10
     assert before["Bronze"] == after["Bronze"] == 20
     assert before["Gold"] != after["Gold"]
 
@@ -61,7 +62,7 @@ def test_seeded_lakitu_defaults_cannot_replace_complete_sheet_ladders(tmp_path):
             assert row["ladder"] == service.ranks.ladders(entity, "us")[strategy]
         standard = next(row for row in shown["approaches"] if row["strategy"] == "Standard")
         assert standard["ladder"]["Mario"] >= 5.60
-        assert standard["ladder"]["Bronze"] < 7
+        assert standard["ladder"]["Bronze"] >= 6.66
 
 
 def test_seed_defaults_yield_but_explicit_edits_survive_sheet_refresh(tmp_path):
@@ -80,14 +81,14 @@ def test_seed_defaults_yield_but_explicit_edits_survive_sheet_refresh(tmp_path):
     store.set_threshold("segment:1", "Standard", "Mario", 5)
     store.set_threshold("segment:1", "Standard", "Mario", 4, version="jp")
     updated = fit_ladder([550, 700])
-    store.apply_sheet_ladders({"segment:1": {"strategies": {"Standard": updated}}})
     store.load()
+    store.apply_sheet_ladders({"segment:1": {"strategies": {"Standard": updated}}})
     assert store.ladders("segment:1", "us")["Standard"] == {**updated, "Mario": 5}
     assert store.ladders("segment:1", "jp")["Standard"] == {**updated, "Mario": 4}
 
 
 @pytest.mark.parametrize("times", [[246], [246, 250], [1000, 1000, 1003]])
-def test_shared_cutoffs_have_finite_scores_and_derived_capless_targets(times):
+def test_narrow_ladders_have_finite_scores_and_derived_capless_targets(times):
     ladder = {rank: round(seconds * 100) for rank, seconds in fit_ladder(times).items()}
     assert set(ladder) == TIERS
     for time in (min(times) - 3, min(times), max(times), max(times) * 2):
@@ -98,3 +99,41 @@ def test_shared_cutoffs_have_finite_scores_and_derived_capless_targets(times):
     capless_one = time_for_score(ladder, 8)
     assert capless_one > max(times)
     assert rank_for(ladder, capless_one) == "Iron"
+
+
+@pytest.mark.parametrize("best_frame", range(60, 90))
+def test_every_saved_frame_is_one_subdivision_on_narrow_rows(best_frame):
+    # Independent expected progression: all 45 positions, in order. Vary the
+    # timer phase to catch 3/3/4cs rounding, not only a conveniently round time.
+    best = cs_of_frame(best_frame)
+    ladder = {rank: round(seconds * 100) for rank, seconds in fit_ladder(
+        [best] * 57 + [cs_of_frame(best_frame + 1)]).items()}
+    assert time_for_score(ladder, 99) == cs_of_frame(best_frame + 1)
+    positions = []
+    for offset in range(45):
+        progress = progress_for_time(ladder, cs_of_frame(best_frame + 1 + offset))
+        positions.append(progression_key(progress["tier"], progress["division"]))
+    assert positions == list(range(44, -1, -1))
+
+
+def test_every_current_fitted_ladder_has_45_reachable_divisions():
+    path = Path(__file__).resolve().parents[1] / "src/sm64_events/data/sheet_library.seed.json.gz"
+    with gzip.open(path, "rt", encoding="utf-8") as stream:
+        payload = fit_payload(json.load(stream))
+    for target in payload["targets"]:
+        for kind in ("approaches", "subsections"):
+            for item in target[kind]:
+                for name in ("ladder", "ladder_jp"):
+                    if name not in item:
+                        continue
+                    ladder = {r: round(t * 100) for r, t in item[name].items()}
+                    reached = set()
+                    # Probe each division edge and adjacent frames. This checks
+                    # the real grader without traversing minutes of empty time.
+                    for target_score in range(1, 101):
+                        edge = time_for_score(ladder, target_score)
+                        frame = frame_at_or_after(edge)
+                        for candidate in (frame - 1, frame, frame + 1):
+                            p = progress_for_time(ladder, cs_of_frame(candidate))
+                            reached.add(progression_key(p["tier"], p["division"]))
+                    assert reached == set(range(45)), (item["name"], name, reached)

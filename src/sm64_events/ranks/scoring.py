@@ -16,6 +16,7 @@ table by omitting it.
 
 Pure: no I/O, no db, no standards store."""
 from sm64_events.ranks.classify import RANK_NAMES
+from sm64_events.ranks.timecurve import frame_position, display_position, score_at, position_at
 
 __all__ = ["RANK_NAMES", "SCORE_ANCHORS", "TOP_SCORE", "DIVISIONS_PER_TIER",
            "DIVISION_NUMERALS", "defined_tiers", "best_ladder",
@@ -135,29 +136,13 @@ def sole_overall_owner(ladders: dict[str, dict[str, float]]) -> str | None:
 def score_for(ladder_cs: dict[str, int], time_cs: int) -> float | None:
     """0..100 for a displayed time against one ladder; None if empty.
 
-    Piecewise linear in TIME through the anchors, so equal time savings inside
-    a tier are equal score. Faster than the hardest tier extrapolates that
-    tier's slope (capped at 100); slower than the easiest decays asymptotically
-    so a bad run trends toward 0 without ever being a zero -- score 0 is
-    reserved for 'no time at all', which is the coverage penalty."""
-    points = [(ladder_cs[tier], SCORE_ANCHORS[tier]) for tier in defined_tiers(ladder_cs)]
-    if not points:
-        return None
-    hardest_cs, hardest_score = points[0]
-    if time_cs <= hardest_cs:
-        if len(points) == 1:
-            return hardest_score
-        next_cs, next_score = points[1]
-        slope = (next_score - hardest_score) / (next_cs - hardest_cs)
-        return min(TOP_SCORE, hardest_score + slope * (time_cs - hardest_cs))
-    for (faster_cs, faster_score), (slower_cs, slower_score) in zip(points, points[1:]):
-        if time_cs <= slower_cs:
-            span = slower_cs - faster_cs
-            if span <= 0:
-                return slower_score
-            return faster_score + (slower_score - faster_score) * (time_cs - faster_cs) / span
-    easiest_cs, easiest_score = points[-1]
-    return easiest_score * easiest_cs / time_cs
+    Piecewise linear in game frames through the exact displayed anchors.
+    Faster than the hardest tier extrapolates its slope (capped at 100).
+    Capless continues the easiest tier's subdivision pace, then decays below
+    IV; score zero remains reserved for no attempt. See timecurve.py."""
+    points = [(frame_position(ladder_cs[tier]), SCORE_ANCHORS[tier])
+              for tier in defined_tiers(ladder_cs)]
+    return score_at(points, frame_position(time_cs)) if points else None
 
 
 def tier_from_score(score: float, defined: list[str] | None = None) -> str:
@@ -317,26 +302,9 @@ def time_for_score(ladder_cs: dict[str, int], target_score: float) -> int | None
     Needed because `division_progress` only ever deals in SCORE (it has no
     ladder to convert with) -- this is what turns its `next_at` into an
     actual "-1.60s" a runner can chase, without a JS copy of the curve."""
-    points = [(ladder_cs[tier], SCORE_ANCHORS[tier]) for tier in defined_tiers(ladder_cs)]
+    points = [(frame_position(ladder_cs[tier]), SCORE_ANCHORS[tier])
+              for tier in defined_tiers(ladder_cs)]
     if not points:
         return None
-    hardest_cs, hardest_score = points[0]
-    if target_score >= hardest_score:
-        if len(points) == 1:
-            return hardest_cs
-        next_cs, next_score = points[1]
-        slope = (next_score - hardest_score) / (next_cs - hardest_cs)
-        if slope == 0:
-            return hardest_cs
-        return round(hardest_cs + (target_score - hardest_score) / slope)
-    for (faster_cs, faster_score), (slower_cs, slower_score) in zip(points, points[1:]):
-        if target_score >= slower_score:
-            span = slower_cs - faster_cs
-            if span <= 0:
-                return slower_cs
-            frac = (target_score - faster_score) / (slower_score - faster_score)
-            return round(faster_cs + frac * span)
-    easiest_cs, easiest_score = points[-1]
-    if target_score <= 0:
-        return None
-    return round(easiest_score * easiest_cs / target_score)
+    position = position_at(points, target_score)
+    return display_position(position) if position is not None else None
