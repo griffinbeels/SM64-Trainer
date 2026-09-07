@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define GFXWRAP_VERSION 1
+#define GFXWRAP_VERSION 2
 
 #define STREAM_NAME "sm64_trainer_gfx_v1"
 #define STREAM_EVENT_SUFFIX "_frame"

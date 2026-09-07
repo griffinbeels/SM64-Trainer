@@ -55,7 +55,8 @@ class SegmentInfo:
 class SegmentRing:
     def __init__(self, retention_s: float | None, max_bytes: int,
                  free_bytes_fn=None,
-                 disk_margin_bytes: int = _DISK_MARGIN_BYTES):
+                 disk_margin_bytes: int = _DISK_MARGIN_BYTES,
+                 on_evict=None):
         self._retention_s = retention_s
         self._max_bytes = max_bytes
         # free_bytes_fn() -> bytes free on the scratch volume (None = no disk
@@ -66,10 +67,17 @@ class SegmentRing:
         self._segments: deque[SegmentInfo] = deque()
         self._total_bytes = 0
         self._lock = threading.Lock()  # 1 encoder writer, N API reader threads
+        self._on_evict = on_evict
 
     @property
     def total_bytes(self) -> int:
         return self._total_bytes
+
+    def reset(self) -> None:
+        """Forget metadata after the recorder owner resets its scratch files."""
+        with self._lock:
+            self._segments.clear()
+            self._total_bytes = 0
 
     @property
     def retention_s(self) -> float | None:
@@ -105,6 +113,8 @@ class SegmentRing:
             old = self._segments.popleft()
             self._total_bytes -= old.size_bytes
             old.path.unlink(missing_ok=True)
+            if self._on_evict is not None:
+                self._on_evict(old)
 
         if self._retention_s is not None:
             horizon = now - timedelta(seconds=self._retention_s)

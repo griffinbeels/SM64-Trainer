@@ -32,6 +32,9 @@ field, never the row, never the capture thread.
 import logging
 from collections import deque
 from collections.abc import Callable
+from pathlib import Path
+
+from sm64_events.replay.picturearchive import PictureArchive
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +43,9 @@ log = logging.getLogger(__name__)
 # Cost, measured at his 1600x1224 window: 93 us per grab, ~1.1% of a core
 # at the full 120 grabs/s (2026-08-28) -- the strided copy dominates.
 SAMPLE_STRIDE = 8
-# How long a row is answerable. The ring's own retention decides how far
-# back a clip can be cut; this only has to outlast it.
+# The standalone in-memory mode used by small tools/tests. The recorder
+# opens a disk archive under its ownership lock; its rows follow footage
+# retention and this value never caps a production session.
 RETENTION_S = 1800.0
 _ROWS_CEILING = 35                     # eviction sizing only, above real 30/s
 # A grab can catch the surface MID-update: the torn picture differs from
@@ -74,6 +78,52 @@ class PictureLedger:
         self._feeds: deque[dict] = deque(
             maxlen=int(retention_s * _ROWS_CEILING))
         self._last_fed_row: tuple[str | None, float | None] = (None, None)
+        self._archive: PictureArchive | None = None
+
+    def open_archive(self, path: Path) -> None:
+        """Called by the recorder owner before capture, never at app build.
+
+        The deque remains a small dedup cache; the archive answers all
+        retained footage, including a whole session or a 24-hour buffer.
+        """
+        if self._archive is not None:
+            if path.exists():
+                self._archive.resume()
+                return
+            # Another recorder owner reset the shared scratch while this
+            # instance was detached. None of that footage survives either.
+            self.reset()
+        archive = PictureArchive(path)
+        for ts, frame, extras in self._rows:
+            archive.add_row({"ts": ts, "frame": frame, **(extras or {})})
+        for feed in self._feeds:
+            archive.add_feed(feed)
+        self._archive = archive
+        self._rows = deque(self._rows, maxlen=350)
+        self._feeds = deque(self._feeds, maxlen=350)
+
+    def reset(self) -> None:
+        """The recorder's scratch reset invalidates footage and identities together."""
+        if self._archive is not None:
+            self._archive.close()
+            self._archive = None
+        self._rows.clear()
+        self._feeds.clear()
+        self._prev_sample = self._prev_shape = None
+        self._last_fed_row = (None, None)
+
+    def discard_segment(self, seg) -> None:
+        if self._archive is not None:
+            self._archive.discard_segment(seg)
+
+    def flush(self) -> None:
+        if self._archive is not None:
+            self._archive.flush()
+
+    def detach(self) -> None:
+        """Release writable handles while kept footage remains queryable."""
+        if self._archive is not None:
+            self._archive.close()
 
     def observe(self, bgra, capture_ts: float | None,
                 frame: int | None, extras: dict | None = None) -> bool:
@@ -108,6 +158,8 @@ class PictureLedger:
                         self._warned = True
                         log.exception("picture-ledger stamp %r failed; "
                                       "its field is dropped", name)
+            if self._archive is not None:
+                self._archive.add_row({"ts": float(capture_ts), "frame": frame, **extras})
             self._rows.append((float(capture_ts), frame, extras or None))
             return True
         except Exception:
@@ -131,17 +183,24 @@ class PictureLedger:
         if repeated and self._last_fed_row[0] == run_id:
             row_ts = self._last_fed_row[1]
         self._last_fed_row = (run_id, row_ts)
-        self._feeds.append({"at": float(wrote_at), "ts": row_ts,
-                            "run_id": run_id, "pts": pts, "repeat": repeated})
+        feed = {"at": float(wrote_at), "ts": row_ts,
+                "run_id": run_id, "pts": pts, "repeat": repeated}
+        if self._archive is not None:
+            self._archive.add_feed(feed)
+        self._feeds.append(feed)
 
     def feeds_between(self, t0: float, t1: float) -> list[dict]:
         """Frames in a media-time span, with run/PTS and captured-row identity."""
+        if self._archive is not None:
+            return self._archive.feeds_between(t0, t1)
         return [dict(entry) for entry in list(self._feeds)
                 if t0 <= entry["at"] <= t1]
 
     def rows_between(self, t0: float, t1: float) -> list[dict]:
         """The distinct pictures composed in [t0, t1], oldest first, as
         JSON-able dicts: ts, frame, plus any registered stamp fields."""
+        if self._archive is not None:
+            return self._archive.rows_between(t0, t1)
         return [{"ts": ts, "frame": frame, **(extras or {})}
                 for ts, frame, extras in list(self._rows)
                 if t0 <= ts <= t1]

@@ -48,6 +48,7 @@
 #include <string.h>
 #include "zilmar.h"
 #include "stream.h"
+#include "capture_lease.h"
 
 #ifndef GL_BGR_EXT
 #define GL_BGR_EXT 0x80E0
@@ -69,6 +70,7 @@ static HANDLE g_map, g_event;
 static stream_header_t *g_hdr;
 static uint8_t *g_slots;
 static unsigned g_last_origin = 0xFFFFFFFFu;
+static capture_lease_t g_capture_lease;
 
 typedef struct {
     int64_t list_qpc;
@@ -267,6 +269,7 @@ static BOOL copy_guarded(void *destination, const void *source, size_t length) {
 /* -- the frame stream --------------------------------------------------- */
 static void open_stream(void) {
     if (g_hdr) return;
+    memset(&g_capture_lease, 0, sizeof g_capture_lease);
     g_map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
                                0, (DWORD)TOTAL_BYTES, g_stream_name);
     if (!g_map) {
@@ -381,7 +384,6 @@ static void read_front_buffer(void *pixels, unsigned width, unsigned height,
     look_up_gl_entry_points();
     GLint read_buffer = GL_BACK, read_framebuffer = 0, pack_buffer = 0;
     GLint pack[4] = {4, 0, 0, 0};      /* alignment, row length, skip rows, skip pixels */
-    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
     glGetIntegerv(GL_PACK_ALIGNMENT, &pack[0]);
     glGetIntegerv(GL_PACK_ROW_LENGTH, &pack[1]);
     glGetIntegerv(GL_PACK_SKIP_ROWS, &pack[2]);
@@ -390,6 +392,10 @@ static void read_front_buffer(void *pixels, unsigned width, unsigned height,
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
         if (read_framebuffer) g_bind_framebuffer(GL_READ_FRAMEBUFFER, 0);
     }
+    /* GL_READ_BUFFER belongs to the bound framebuffer. Save the window's
+     * selector AFTER binding it; an FBO's COLOR_ATTACHMENT0 is not a valid
+     * selector to restore on the default framebuffer. */
+    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
     if (g_bind_buffer) {
         glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
         if (pack_buffer) g_bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
@@ -466,10 +472,15 @@ static void copy_packed_rows(uint8_t *destination, unsigned stride, const uint8_
 static void capture_if_presented(void) {
     if (!g_hdr || !g_have_gfx) return;
     g_hdr->alive++;
+    /* No GPU/context/ReadScreen work after an abandoned reader's lease.
+     * want_frames alone survives a killed server while PJ64 owns the map. */
+    int capture_wanted = capture_lease_active(&g_capture_lease,
+        *(volatile uint32_t *)&g_hdr->tracker_alive,
+        *(volatile uint32_t *)&g_hdr->want_frames, GetTickCount());
     unsigned origin = *g_gfx.VI_ORIGIN_REG;
     if (origin == g_last_origin) return;
     g_last_origin = origin;
-    if (!g_hdr->want_frames) return;
+    if (!capture_wanted) return;
     BOOL have_context = wglGetCurrentContext() != NULL;
     note_capture_context(have_context);
     unsigned width = 0, height = 0, bottom_offset = 0;
