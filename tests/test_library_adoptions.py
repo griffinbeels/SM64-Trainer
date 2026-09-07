@@ -117,23 +117,19 @@ def test_a_variant_qualified_entity_is_refused(wiring):
     assert "exit-star variant" in str(err.value)
 
 
-def test_a_vetted_strategy_of_the_same_name_wins(wiring):
-    """ROUND 6 (2026-08-07), reversing round 5's refusal arm: assigning a row
-    to a segment that already carries a vetted strategy of the same name is
-    ALLOWED -- the assignment is what the Library page's display association
-    rides on -- and the vetted ladder still wins on the merged read, because
-    the standards store's read-merge keeps vetted structurally. "We should
-    autoassign any segments that exist already, and otherwise let them be
-    associated by hand." """
+def test_an_existing_manual_cutoff_survives_assignment_of_a_sheet_foundation(wiring):
+    """A named strategy can acquire a Sheet foundation while keeping an
+    explicitly edited cutoff. Untouched tiers come from the assignment."""
     adoptions, standards, keys, _ = wiring
     standards.create_strategy("segment:42", ad.DEFAULT_STRATEGY)
     standards.set_threshold("segment:42", ad.DEFAULT_STRATEGY, "Mario", 2.00)
     result = adoptions.adopt(keys["Lobby door (L) - BoB door"], "segment:42")
     assert result["adopted"] is True
     assert adoptions.rows()[keys["Lobby door (L) - BoB door"]] == "segment:42"
-    # the vetted cutoff, not the fitted row's 276
+    # The explicit edit survives the new fitted foundation.
     assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 200
-    assert not standards.is_fitted("segment:42", ad.DEFAULT_STRATEGY)
+    assert standards.is_fitted("segment:42", ad.DEFAULT_STRATEGY)
+    assert len(standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)) > 1
 
 
 def test_a_corrupt_assignments_file_is_simply_empty(tmp_path):
@@ -387,7 +383,7 @@ def test_the_whole_library_reaches_the_sheet_layer_under_the_import_slots():
 def test_a_loaded_store_grades_standard_from_the_star_row(tmp_path):
     """`Adoptions.load()` applies the whole library's ladders, so a fresh
     standards store grades Standard on a star whose vetted seed never
-    defined it -- and the vetted twin, where the seed has one, still wins."""
+    defined it. A manually edited twin keeps its edit over the same fit."""
     store = LibraryStore()
     store._payload = _star_payload()
     standards = RankStandards(tmp_path / "rank_standards.json")
@@ -398,5 +394,5 @@ def test_a_loaded_store_grades_standard_from_the_star_row(tmp_path):
     adoptions.load()
     ladders = standards.ladders("star:6:4")
     assert ladders["Standard"]["Mario"] == 11.36 and standards.is_fitted("star:6:4", "Standard")
-    assert ladders["Leftside"]["Mario"] == 11.00, "the vetted ladder must win over the fitted one"
-    assert not standards.is_fitted("star:6:4", "Leftside")
+    assert ladders["Leftside"] == {"Mario": 11.00, "Bronze": 14.95}
+    assert standards.is_fitted("star:6:4", "Leftside")

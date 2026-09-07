@@ -1,9 +1,8 @@
-"""The sheet-derived ladders, and the invariant that keeps them out of the way.
+"""The bundled Sheet fallback stays separate from the user's stored data.
 
-A fitted ladder must never overwrite a vetted one. That is structural here
-rather than a rule a test has to remember: the sheet ladders live in their own
-file, are merged only on READ, and nothing can write them into the user's
-standards file -- so `save()` cannot spill them even by accident."""
+Current Sheet fits are foundations under manual edits. Saving must never
+materialize those derived cutoffs into the editable standards file.
+"""
 import json
 from pathlib import Path
 
@@ -53,11 +52,11 @@ def test_a_fitted_ladder_is_served_and_marked(store, sheet):
     assert store.ladder_cs(entity, name)
 
 
-def test_a_vetted_ladder_always_wins(store, sheet):
+def test_a_stored_ladder_without_a_sheet_foundation_keeps_its_values(store, sheet):
     for entity in sheet["entities"]:
         for name in store.ladders(entity):
             stored = store._stored_ladders(entity)
-            if name in stored:
+            if name in stored and name not in sheet["entities"][entity]["strategies"]:
                 assert store.ladders(entity)[name] == stored[name]
                 assert not store.is_fitted(entity, name)
 
