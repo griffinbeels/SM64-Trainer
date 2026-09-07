@@ -18,7 +18,10 @@ server-side so the browser and the desktop GUI read the same goal
 (`.claude/rules/import.md`'s reasoning for why an imported time lands
 server-side applies here too: two clients, one KV). `GET /api/scorecard`
 re-derives the whole card from it on every request; nothing about the card
-itself is stored. A **custom** goal is the one kind that carries its own
+itself is stored. None means automatic: one subdivision above the requested
+scope's current MARELO rank, capped at Mario I. Reads resolve that goal
+without saving it, so a manual choice remains global and clearing it
+restores automatic mode. A **custom** goal is the one kind that carries its own
 data: hand-typed per-entity times a player saved under a name, in a second
 KV (`"scorecard_custom_goals"`, `{name: {entity_key: goal_cs}}`) that
 `_GOAL_KEY` only ever points at by name -- so picking a saved custom goal is
@@ -51,14 +54,14 @@ from sm64_events.core.modes import platform_of
 from sm64_events.core.timefmt import attainable_cs
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
 from sm64_events.ranks.scorecard import (
-    FIGHTS_LABEL, build_card, card_keys, division_goal_cs, rows_for_course,
+    automatic_goal, build_card, card_keys, division_goal_cs, rows_for_course,
     rows_for_route, template_rows, without_keys)
 from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder
 from sm64_events.tracking.views import (fastest_current_pbs, latest_pbs_by_strategy,
                                         segment_courses)
 from sm64_events.server.import_api import sheet_row_placer
 from sm64_events.server.jobs import JobBoard
-from sm64_events.server.ranks_api import absorb_after_regrade
+from sm64_events.server.ranks_api import _score_scope, absorb_after_regrade
 
 _log = logging.getLogger("sm64.scorecard")
 _GOAL_KEY = "scorecard_goal"
@@ -97,7 +100,12 @@ DEFAULT_SHEET_STYLE = {"emu_fill": "#4F7BE0", "n64_fill": "#C45E1C",
                        "font_color": "#F2ECE4", "font_family": "Trebuchet MS"}
 _HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _VALID_REGIONS = ("us", "jp")
-_VALID_TIERS = [tier for tier in RANK_NAMES if tier != "Iron"]
+
+
+def _valid_division(tier, division) -> bool:
+    """Every finite goal on the curve; Capless V has no slowest time."""
+    return (tier in RANK_NAMES and division in DIVISION_NUMERALS
+            and (tier, division) != ("Iron", "V"))
 
 
 class GoalBody(BaseModel):
@@ -536,15 +544,18 @@ def create_scorecard_router(service, library=None, adoptions=None,
         adopted_rows = adoptions.rows() if adoptions is not None else {}
         key = (id(payload), payload.get("sheet_revision"), payload.get("fetched_at"),
                version, tuple(sorted(adopted_rows.items())))
-        if _runner_times_memo.get("key") != key:
+        cached = _runner_times_memo.get("entry")
+        if cached is None or cached[0] != key:
             # STRICT: a runner's time counts for a region only when it was
             # set on that ROM (round 34) -- the same stamp his import lands
             # it under, so a runner grades himself at zero whichever regions
             # are on. The Library page and the ratings keep the looser rule.
-            _runner_times_memo.update(
-                key=key, payload=payload,
-                value=runner_times(payload, adopted_rows, version=version, strict=True))
-        return _runner_times_memo["value"]
+            value = runner_times(payload, adopted_rows, version=version, strict=True)
+            # Keep key and value together across concurrent card reads.
+            # Holding payload prevents its identity from being recycled.
+            _runner_times_memo["entry"] = (key, payload, value)
+            return value
+        return cached[2]
 
     def scorecard_regions(ranks) -> list[str]:
         """The regions a runner goal may offer times from, in `_VALID_REGIONS`
@@ -637,7 +648,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
             return merged
         if ranks is None:
             return {}
-        if kind == "division":
+        if kind in ("division", "automatic"):
             return division_goal_map(keys, goal_value["tier"],
                                      goal_value["division"])
         if kind == "runner":
@@ -684,9 +695,17 @@ def create_scorecard_router(service, library=None, adoptions=None,
         keys = card_keys(rows_spec)
         you = your_times(keys, scorecard_regions(service.ranks))
         goal_value = service.db.get_state(_GOAL_KEY, None)
-        if not isinstance(goal_value, dict):
-            goal_value = None                # a corrupt KV reads as no goal
         ranks = service.ranks
+        if (not isinstance(goal_value, dict)
+                or goal_value.get("kind") not in ("division", "runner", "custom", "multi")
+                or (goal_value.get("kind") == "multi" and not goal_value.get("sources"))):
+            # A read follows the SAME MARELO calculation as the scope card,
+            # without seeding/acknowledging any celebration or saving a pick.
+            if ranks is None:
+                goal_value = automatic_goal(None, None)
+            else:
+                rank = _score_scope(service, scope_id)
+                goal_value = automatic_goal(rank["tier"], rank["division"])
 
         # A MULTI goal also answers WHO: the source index that set each
         # tile, so the card can attribute every number to the pick behind
@@ -704,7 +723,9 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return card, goal_value
 
     @router.get("")
-    async def get_scorecard(scope: str = "overall"):
+    def get_scorecard(scope: str = "overall"):
+        # Scope scoring reads the full attempt history. Threadpool this read
+        # like /marelo so automatic goals never occupy the recorder's loop.
         card, goal_value = current_card(scope)
         tiles = [tile for row in card["rows"] for tile in row["tiles"]]
         coverage = {"covered": sum(1 for t in tiles if t["goal_cs"] is not None),
@@ -737,11 +758,11 @@ def create_scorecard_router(service, library=None, adoptions=None,
         naming just the goal (`{"kind":"custom","name":...}`) -- the actual
         times live in `_CUSTOM_KEY`, not duplicated into `_GOAL_KEY`."""
         _require_db()
-        if body is None:
+        if body is None or (body.kind == "multi" and not body.sources):
             service.db.set_state(_GOAL_KEY, None)
             return {"goal": None}
         if body.kind == "division":
-            if body.tier not in _VALID_TIERS or body.division not in DIVISION_NUMERALS:
+            if not _valid_division(body.tier, body.division):
                 raise HTTPException(
                     422, f"unknown tier/division {body.tier!r}/{body.division!r}")
             value = {"kind": "division", "tier": body.tier, "division": body.division}
@@ -776,15 +797,12 @@ def create_scorecard_router(service, library=None, adoptions=None,
             # custom source must already be saved -- a multi pick names
             # existing goals, it never creates one.
             sources = body.sources or []
-            if not sources:
-                raise HTTPException(422, "a multi goal needs at least one source")
             store = custom_goal_store()
             cleaned = []
             for source in sources:
                 kind = (source or {}).get("kind")
                 if kind == "division":
-                    if (source.get("tier") not in _VALID_TIERS
-                            or source.get("division") not in DIVISION_NUMERALS):
+                    if not _valid_division(source.get("tier"), source.get("division")):
                         raise HTTPException(
                             422, f"unknown tier/division in {source!r}")
                     cleaned.append({"kind": "division", "tier": source["tier"],
@@ -974,7 +992,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         URL (`docs/api.md`), never a download the desktop shell's WebView2
         has to support; the card's own Copy buttons fetch this and copy the
         text instead of navigating here."""
-        card, _goal_value = current_card(scope)
+        card, _goal_value = await run_in_threadpool(current_card, scope)
         body = await run_in_threadpool(_csv_body, card, library, adoptions, service)
         return Response(content=body, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition":

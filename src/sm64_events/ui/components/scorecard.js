@@ -73,6 +73,7 @@ function goalToValue(goal) {
 // "one goal" and nothing to migrate.
 function goalToValues(goal) {
   if (!goal) return [];
+  if (goal.kind === "automatic") return [""];
   if (goal.kind === "multi") {
     return (goal.sources || []).map(goalToValue).filter(Boolean);
   }
@@ -81,7 +82,10 @@ function goalToValues(goal) {
 }
 
 function goalToLabel(goal) {
-  if (!goal) return "No goal";
+  if (!goal) return "Automatic goal";
+  if (goal.kind === "automatic") return goal.tier
+    ? `Automatic · ${capName(goal.tier)} ${divisionDigit(goal.division)}`
+    : "Automatic · waiting for rank";
   if (goal.kind === "division") return `${capName(goal.tier)} ${divisionDigit(goal.division)}`;
   if (goal.kind === "runner") return goal.runner;
   if (goal.kind === "custom") return goal.name;
@@ -92,7 +96,7 @@ function goalToLabel(goal) {
     if (sources.length === 1) return goalToLabel(sources[0]);
     return `${sources.length} picked`;
   }
-  return "No goal";
+  return "Automatic goal";
 }
 
 // The list of picks -> the goal to store. Nothing picked clears the goal;
@@ -100,6 +104,9 @@ function goalToLabel(goal) {
 // division everywhere it is read); several store a `multi`, whose per-tile
 // answer is the FASTEST offer among them (round 16).
 function valuesToGoal(values) {
+  // The empty value selects automatic mode exclusively. Adding a manual
+  // pick from automatic mode replaces it instead of freezing that rank.
+  if (values && values[values.length - 1] === "") return null;
   const goals = (values || []).map(valueToGoal).filter(Boolean);
   if (!goals.length) return null;
   if (goals.length === 1) return goals[0];
@@ -697,8 +704,9 @@ function regionNote(regions, detected) {
     : `${only.toUpperCase()} only · you are graded on ${detected.toUpperCase()}`;
 }
 
-function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }) {
-  return html`<div class="scorecard-head">
+function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
+  return html`<div class="scorecard-head"
+      title="Automatic goals aim one subdivision above this scope's MARELO rank, up to Mario 1.">
     <h3>Scorecard</h3>
     <${SearchSelect} value=${goalToValues(goal)} valueLabel=${goalToLabel(goal)}
         title="Pick one or more goals" groups=${groups} onOpen=${onOpen}
@@ -709,9 +717,89 @@ function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }
   </div>`;
 }
 
+// A pick is local immediately; the server still owns every computed time.
+// One queue includes named-goal saves as well as picker writes. A newer
+// intent or scope invalidates every older read, including background refreshes.
+function useScorecardData(scopeId, staleKey) {
+  const [snapshot, setSnapshot] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [pendingGoal, setPendingGoal] = useState(undefined);
+  const [goalError, setGoalError] = useState(null);
+  const control = useRef({ scopeId, read: 0, pending: null,
+    queue: Promise.resolve(), mounted: true }).current;
+  control.scopeId = scopeId;
+  useEffect(() => () => { control.mounted = false; control.read++; }, []);
+
+  async function refresh(intent = null) {
+    const read = ++control.read;
+    const scope = control.scopeId;
+    if (control.pending !== intent) return null;
+    const current = () => control.mounted && read === control.read
+      && scope === control.scopeId && control.pending === intent;
+    try {
+      const fresh = await getJSON(`/api/scorecard?scope=${encodeURIComponent(scope)}`);
+      if (!current()) return null;
+      setSnapshot(fresh);
+      setLoadError(null);
+      return fresh;
+    } catch (err) {
+      if (current()) throw err;
+      return null;
+    }
+  }
+
+  useIdentityFetch(scopeId, staleKey, (cleared) => {
+    if (cleared) { setSnapshot(null); setLoadError(null); }
+    refresh().catch(setLoadError);
+  });
+
+  function finishIntent(intent) {
+    if (!control.mounted || control.pending !== intent) return false;
+    control.pending = null;
+    setPendingGoal(undefined);
+    return true;
+  }
+
+  function writeGoal(goal) {
+    const intent = { goal };
+    control.pending = intent;
+    control.read++;
+    setPendingGoal(goal || { kind: "automatic" });
+    setGoalError(null);
+    const write = async () => {
+      try {
+        await send("PUT", "/api/scorecard/goal", goal);
+        // A scope switch or another mutation can invalidate this read while
+        // it is in flight. Fetch the current scope again, unless a newer pick
+        // now owns the final read. Writes remain ordered even after unmount.
+        while (control.mounted && control.pending === intent) {
+          if (!await refresh(intent)) continue;
+          return finishIntent(intent);
+        }
+      } catch (err) {
+        if (finishIntent(intent)) {
+          setGoalError(err.message || String(err));
+          // A rejected write may follow an earlier successful pick; a failed
+          // read may follow a persisted write. Reconcile either without
+          // removing the controls needed to retry, or overwriting a new pick.
+          await refresh().catch(() => {});
+        }
+      }
+      return false;
+    };
+    const result = control.queue.then(write);
+    control.queue = result;
+    return result;
+  }
+
+  return { data: snapshot, error: loadError, setError: setLoadError,
+    goalError, pendingGoal, refresh, writeGoal };
+}
+
 export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
+  const { data, error, setError, goalError, pendingGoal, refresh, writeGoal }
+    = useScorecardData(scopeId, t.mareloRev);
+  const pickerGoal = pendingGoal === undefined ? data && data.goal : pendingGoal;
   // null = not fetched yet (the Runners group is lazy, see the header
   // comment); [] once fetched even if the sheet somehow named nobody.
   const [runners, setRunners] = useState(null);
@@ -727,22 +815,6 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const [saveBusy, setSaveBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [saveError, setSaveError] = useState(null);
-
-  // Fetches on mount, on a scope switch, and on t.mareloRev -- the Rank
-  // tab's own staleness key (an attempt or a PB save must not leave this
-  // card showing a stale gap while open during play). Only the SCOPE switch
-  // clears the card first: blanking it on a staleness bump is what he saw as
-  // the page "randomly refreshing" (round 20; ui/refetch.js carries the
-  // measurement).
-  useIdentityFetch(scopeId, t.mareloRev, (cleared) => {
-    let alive = true;
-    setError(null);
-    if (cleared) setData(null);
-    getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`)
-      .then((response) => alive && setData(response))
-      .catch((err) => alive && setError(err));
-    return () => { alive = false; };
-  });
 
   function loadRunnersOnce() {
     if (runners != null) return;
@@ -762,11 +834,6 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const displayData = useMemo(
     () => (data ? applyGoalOverrides(data, pendingOverrides) : null),
     [data, pendingOverrides]);
-  // Editing even ONE star without a base goal set still means "I am
-  // comparing against something now" -- coloring should not wait for a
-  // saved goal to exist.
-  const hasGoal = !!(data && data.goal) || Object.keys(pendingOverrides).length > 0;
-
   function handleGoalOverride(entityKey, goalCs) {
     setPendingOverrides((current) => ({ ...current, [entityKey]: goalCs }));
   }
@@ -784,8 +851,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
         await send("POST", "/api/marelo/exclude",
                    { entity: tile.key, excluded: true });
       }
-      setData(await getJSON(
-        `/api/scorecard?scope=${encodeURIComponent(scopeId)}`));
+      await refresh();
     } catch (err) {
       setError(err);
     } finally {
@@ -798,16 +864,13 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     setSaveError(null);
   }
 
-  async function onGoalChange(values) {
+  function onGoalChange(values) {
     // Picking a different base goal makes any unsaved edit ambiguous (it
     // was relative to whatever was active a moment ago) -- discard rather
     // than silently carry it onto a goal it was never made against.
     setPendingOverrides({});
     setSaveError(null);
-    try {
-      await send("PUT", "/api/scorecard/goal", valuesToGoal(values));
-      setData(await getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`));
-    } catch (err) { setError(err); }
+    writeGoal(valuesToGoal(values));
   }
 
   // The region pick is the server's, not this component's: it decides which
@@ -820,7 +883,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     setSaveError(null);
     try {
       await send("PUT", "/api/scorecard/regions", { regions: next });
-      setData(await getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`));
+      await refresh();
     } catch (err) {
       setSaveError(err.message || String(err));
     }
@@ -830,10 +893,9 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   // one pick left stores as that single goal, none left clears it, and the
   // refetch re-grades every tile ("Everything should update accordingly").
   function removeSource(index) {
-    const values = goalToValues(data && data.goal);
-    if (index < 0 || index >= values.length) return;
-    values.splice(index, 1);
-    onGoalChange(values);
+    const removed = goalToValues(data && data.goal)[index];
+    if (!removed) return;
+    onGoalChange(goalToValues(pickerGoal).filter((value) => value !== removed));
   }
 
   async function saveCustomGoal(name) {
@@ -850,15 +912,9 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
           if (tile.goal_cs != null) times[tile.key] = tile.goal_cs;
         }
       }
-      await send("PUT", "/api/scorecard/goal", { kind: "custom", name, times });
-      // Fetch FIRST, then clear the edits and swap the payload in the same
-      // render: clearing before the fetch returned dropped the save bar one
-      // round trip before the picker could name the new goal, so for that
-      // beat the card read "No goal" with nothing pending -- a wrong state
-      // on screen, and the race a render test lost (round 29).
-      const fresh = await getJSON("/api/scorecard");
-      setPendingOverrides({});
-      setData(fresh);
+      // Keep the edits until the saved goal's computed card arrives. A
+      // failed or superseded save must not discard a newer set of edits.
+      if (await writeGoal({ kind: "custom", name, times })) setPendingOverrides({});
     } catch (err) {
       setSaveError(err.message || String(err));
     } finally {
@@ -868,14 +924,15 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
 
   const pendingCount = Object.keys(pendingOverrides).length;
 
-  return html`<div class="practice-card scorecard-card">
+  return html`<div class="practice-card scorecard-card" data-scope=${data && data.scope}>
     ${error
       ? html`<${InlineState} kind="error">${error.message}<//>`
       : !data
         ? html`<${InlineState}>Loading your scorecard…<//>`
-        : html`<${ScorecardHead} goal=${data.goal} groups=${groups}
+        : html`<${ScorecardHead} goal=${pickerGoal} groups=${groups}
               onOpen=${loadRunnersOnce} scopeId=${scopeId}
               coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
+            ${goalError ? html`<${InlineState} kind="error">${goalError}<//>` : ""}
             <${ScorecardSubhead} regions=${data.regions || ["us"]}
               detectedRegion=${data.detected_region || "us"}
               onRegionsChange=${onRegionsChange}

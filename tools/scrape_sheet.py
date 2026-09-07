@@ -35,9 +35,8 @@ OVERRIDES = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
 # has no readable line diff either way.
 OUT = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
        / "data" / "sheet_library.seed.json.gz")
-# Its OWN file, never merged into rank_standards.seed.json: that is what makes
-# "a fitted ladder cannot overwrite a vetted one" structural instead of a rule
-# somebody has to remember.
+# Keep fallback Sheet standards separate from the historical identity seed.
+# Runtime fits supersede inherited defaults; RankStore preserves explicit edits.
 LADDERS_OUT = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"
                / "data" / "sheet_ladders.seed.json")
 VETTED = (Path(__file__).resolve().parent.parent / "src" / "sm64_events"

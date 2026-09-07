@@ -110,7 +110,8 @@ def click_a_runner_row(page):
 
 def assert_reads_as_the_runner_page(page, expected_name):
     page.wait_for(".runner-page", timeout_ms=8000)
-    page.wait_ms(200)
+    # The page shell mounts before its independently fetched scope summary.
+    page.wait_for(".runner-page .scope-chip", timeout_ms=8000)
     heading = page.evaluate("document.querySelector('.runner-page h2').textContent")
     assert heading == expected_name, (
         f"the runner page opened for {heading!r}, expected {expected_name!r}")
@@ -714,4 +715,3 @@ def test_his_own_breakdown_names_open_the_library_on_his_pb_subdivision(closed_r
           blink: !!(group && group.classList.contains('library-arrival'))};
       })())"""))
     assert landed == {"found": True, "open": True, "blink": True}, landed
-

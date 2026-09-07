@@ -19,6 +19,13 @@ def test_the_same_strategy_under_two_names_is_recognised():
     assert adopt.match_vetted(vetted, approaches) == {0: "Skyjump"}
 
 
+def test_revising_rank_targets_does_not_reassign_the_strategy_identity():
+    row = _approach("Mario Wings to the Sky", 30.95)
+    row["matching_profile"] = dict(row["ladder"])
+    row["ladder"] = _ladder(99)
+    assert adopt.match_vetted({"Skyjump": _ladder(30.90)}, [row]) == {0: "Skyjump"}
+
+
 def test_a_genuinely_different_strategy_is_not_matched():
     vetted = {"Skyjump": _ladder(30.90)}
     approaches = [_approach("Slope slide strat", 24.00)]
@@ -88,6 +95,32 @@ def test_stamp_matches_names_the_vetted_strategy_on_the_approach():
     first, second = payload["targets"][0]["approaches"]
     assert first["matched_strategy"] == "Skyjump"
     assert "matched_strategy" not in second
+
+
+def test_title_row_keeps_its_pb_alias_while_reserving_the_standard_slot():
+    from sm64_events.library.adoptions import sheet_strategy
+
+    target = {"entity_key": "star:2:4", "label": "Fall onto the Caged Island",
+              "approaches": [_approach("Fall onto the Caged Island", 11.70),
+                             _approach("Another way", 20.00)], "subsections": []}
+    adopt.stamp_matches({"targets": [target]}, {
+        "star:2:4": {"TJ Owlless": _ladder(11.70), "Standard": _ladder(20.00)}})
+    title, other = target["approaches"]
+    assert title["matched_strategy"] == "TJ Owlless"
+    assert sheet_strategy(target, title, "approach") == "Standard"
+    assert "matched_strategy" not in other
+    assert sheet_strategy(target, other, "approach") != "Standard"
+
+
+def test_recovering_title_aliases_does_not_reassign_an_ordinary_row():
+    target = {"entity_key": "star:1:4", "label": "Target",
+              "approaches": [_approach("Target", 30.90),
+                             _approach("Different way", 30.91)], "subsections": []}
+    adopt.stamp_matches({"targets": [target]}, {
+        "star:1:4": {"Skyjump": _ladder(30.90)}})
+    title, other = target["approaches"]
+    assert other["matched_strategy"] == "Skyjump"
+    assert title["matched_strategy"] == "Standard"
 
 
 def test_an_approach_whose_name_already_exists_is_not_re_added():

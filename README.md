@@ -117,9 +117,11 @@ Compare reuse that local copy. Add or change a recording link directly in the
 replay panel, with Undo after saving.
 
 **Score yourself against a goal.** The Rank tab's scorecard lines every star
-and castle movement up as a tile against a goal you pick — a rank division,
-or any runner's own times — showing your gap tile by tile and a summed gap
-per course. Copy your own times back out as a sheet column ready to paste
+and castle movement up as a tile against a goal, showing your gap tile by tile
+and a summed gap per course. By default the goal follows your scope's MARELO
+rank plus one subdivision (up to Mario 1). Pick rank divisions, runners or
+saved custom times to set a manual goal that stays across routes; clear the
+last pick to return to automatic mode. Copy your own times as a sheet column ready to paste
 beside everyone else's, including each time's public recording hyperlink,
 or as a full CSV.
 
@@ -164,8 +166,10 @@ Drive, or a raw clip file — and runs without one still count as times. Dock
 clips to the tray to watch several side by side, or send the tray to Compare
 — pulled from YouTube, a local file, or a browser upload — for one
 frame-accurate transport driving them all in lockstep. Every Sheet strategy
-and subsection receives standards, even with one submitted time; rows without
-submissions show estimates with their source explained. Library and Practice
+and subsection receives all 45 rank subdivisions, even with one submitted
+time. Narrow ranges extend slower one frame per subdivision; rows without
+submissions show estimates with their source explained. See
+[how Sheet standards are derived](docs/sheet-rank-standards.md). Library and Practice
 share the same standards and update together when you edit or refresh them.
 Missing movements and subsections become manual practice entries under their
 parent. You can import times immediately and configure detection in Segments.

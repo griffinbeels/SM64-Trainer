@@ -2301,6 +2301,26 @@ def test_entity_strategies_flags_a_sheet_derived_ladder_as_fitted(tmp_path):
     assert fitted["fitted"] is True
 
 
+def test_entity_strategies_flags_a_seeded_name_with_a_sheet_foundation(tmp_path):
+    import json
+    from sm64_events.ranks.standards import RankStandards
+    from sm64_events.tracking.views import build_entity_strategies
+
+    db, svc = make(tmp_path)
+    seed_path = tmp_path / "standards-seed.json"
+    seed_path.write_text(json.dumps({"version": 1, "entities": {
+        "star:2:2": {"clock": "igt", "strategies": {"fast": {"Mario": 11.0}}}}}))
+    svc.ranks = RankStandards(tmp_path / "rs.json", seed_path=seed_path)
+    svc.ranks.load()
+    ladder = {"Mario": 12.0, "Grandmaster": 13.0, "Master": 14.0, "Diamond": 15.0,
+              "Platinum": 16.0, "Gold": 17.0, "Silver": 18.0, "Bronze": 19.0}
+    svc.ranks.apply_sheet_ladders({"star:2:2": {"strategies": {"fast": ladder}}})
+    result = build_entity_strategies(db, svc, "star:2:2")
+    row = next(item for item in result["strategies"] if item["name"] == "fast")
+    assert row["fitted"] is True
+    assert svc.ranks.ladders("star:2:2")["fast"] == ladder
+
+
 def test_fitted_reaches_every_rank_surface_the_session_view_builds(tmp_path):
     """The picker's step-3 list is not the only place a fitted (sheet-
     derived) ladder can present itself as a vetted Daily Star one -- the

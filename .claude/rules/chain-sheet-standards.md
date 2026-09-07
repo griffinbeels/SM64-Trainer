@@ -1,13 +1,18 @@
 ---
 paths:
   - "src/sm64_events/library/ladders.py"
+  - "src/sm64_events/library/strategy_signature.py"
   - "src/sm64_events/library/ladder_estimates.py"
   - "src/sm64_events/library/placements.py"
   - "src/sm64_events/library/practice_catalog.py"
   - "src/sm64_events/library/adoptions.py"
   - "src/sm64_events/ranks/standards.py"
+  - "src/sm64_events/ranks/timecurve.py"
+  - "src/sm64_events/ranks/scoring.py"
   - "src/sm64_events/server/library_api.py"
   - "src/sm64_events/ui/components/librarytarget.js"
+  - "src/sm64_events/ui/components/librarymodel.js"
+  - "src/sm64_events/ui/timecurve.js"
   - "src/sm64_events/ui/components/standards.js"
   - "src/sm64_events/ui/store.js"
 ---
@@ -17,16 +22,20 @@ paths:
 - **Source truth:** current workbook observations; `library.store.build_and_stamp`
   fits the same bytes used by the import/export readers.
 - **Sink:** Library standings and Practice Rank standards.
+- **Coverage:** all eight cutoffs and all 45 reachable subdivisions, including
+  Capless. A nonempty ladder is insufficient. The current fitting, identity,
+  edit and curve contract is in `docs/sheet-rank-standards.md`.
 - **One clock:** displayed centiseconds on the entity's clock; the Sheet's
   segment numbers are seed references, never local database IDs.
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
 |---|-----|-----------------------|--------|------------------|--------------------|------------------------------------------|--------------------------------------------|
-| 1 | fit | row ladder plus actual sample count and optional estimate provenance | `src/sm64_events/library/ladders.py` | `tests/test_library_ladder_estimates.py` | replace one row's entries with one observed time | nonempty evidence has no ladder | an empty fixture claims population coverage |
+| 1 | fit | eight cutoffs, 45 reachable divisions, actual sample count and estimate provenance | `src/sm64_events/library/ladders.py` | `tests/test_complete_sheet_ladders.py` | replace a row's entries with one observed time | a tier or division disappears | checking only truthiness accepts a one-tier ladder |
 | 2 | place | `(local entity, sheet_strategy)` | `src/sm64_events/library/placements.py` | `tests/test_library_practice_sync.py` | explicitly adopt the missing row in a temporary database | Library has a ladder but Practice has no strategy | raw seeded number appears valid only in a freshly seeded database |
-| 3 | resolve | fitted layer under vetted/custom ladders, with per-cutoff user overrides | `src/sm64_events/ranks/standards.py` | `tests/test_ranks_standards.py` | edit one fitted cutoff, then replace the fitted layer | one edit erases untouched tiers or prevents future refresh | checking only the edited cutoff stays green |
+| 3 | resolve | current fit under genuine per-cutoff user edits; inherited seed defaults yield | `src/sm64_events/ranks/standards.py` | `tests/test_sheet_seed_precedence.py` | edit one fitted cutoff, then replace the fitted layer and reload | sparse seed wins or an edit erases untouched tiers | checking only the edited cutoff stays green |
 | 4 | decorate | local row identity and effective US/JP ladders | `src/sm64_events/server/library_api.py` | `tests/test_library_practice_sync.py` | change the effective cutoff and fetch both APIs | raw Library fit differs from Practice's effective value | comparing two copies of the raw payload falsely agrees |
 | 5 | invalidate | mounted views reload after standards events or reconnect | `src/sm64_events/ui/store.js` | `tests/test_ui_standards_sync.py` | change standards through a second API client | hidden Library or open Practice keeps the previous cutoff | switching tabs remounts Practice and conceals the missing live invalidation |
+| 6 | render | nine visible bands and five subdivision targets per band | `src/sm64_events/ui/components/librarymodel.js` | `tests/test_ui_complete_sheet_ladders.py` | remove all entries below Bronze | Capless disappears | populated-only fixtures conceal empty-band filtering |
 
 ## Counterfactual recipe
 
@@ -38,6 +47,20 @@ tiers without changing the fitted row: placement was the first failing hop.
 outcome without requiring adoption, then changes a cutoff and compares both.
 
 ## Failure catalogue
+
+- 2026-09-06 round 2, hops 1/3/6 — 178/634 base ladders dropped tied tiers;
+  Lakitu Standard's three inherited cutoffs replaced its fit; Library hid
+  empty Capless. A 30-phase consecutive-frame test also exposed centisecond
+  interpolation skipping subdivisions. Complete frame spacing, seed/edit
+  provenance, and retaining empty bands fix these independent boundaries.
+- 2026-09-06 round 2, identity — changing the grading formula reassigned 38
+  strategy matches on identical workbook bytes. Matching now uses its own
+  calibrated signature; same-workbook comparison returns zero reassignments.
+- 2026-09-06 round 2, snapshot rebuild — reserving Standard excluded title
+  rows from alias matching and erased names such as TJ Owlless. A constrained
+  second pass recovers unclaimed aliases without reassigning ordinary slots;
+  `test_library_adopt.py` pins both boundaries. Rebuilding with two formulas
+  that share the same stamp policy cannot expose that policy's alias loss.
 
 - 2026-09-06 hop 2 — task 0126, “in the library ... I can see a ladder” but
   Practice lacked it. Name matching was decorative only; automatic row links

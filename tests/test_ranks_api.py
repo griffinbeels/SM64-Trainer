@@ -76,8 +76,8 @@ def test_get_empty_then_put_then_read_back(tmp_path):
         assert r.json()["strategies"]["Nuts Pless"]["Mario"] == 12.93
 
 def test_get_standards_names_which_strategies_are_sheet_derived(tmp_path):
-    """fitted_strategies must list a sheet-adopted strategy and never a
-    community-vetted one -- ranks.is_fitted's own contract, exposed as a
+    """fitted_strategies must list strategies with a Sheet foundation --
+    ranks.is_fitted's own contract, exposed as a
     sibling list because "strategies" is a {name: ladder} dict a per-entry
     "fitted" key would collide inside (a tier could be named "fitted")."""
     client, svc = make_client(tmp_path)
@@ -88,6 +88,35 @@ def test_get_standards_names_which_strategies_are_sheet_derived(tmp_path):
         assert r.json()["fitted_strategies"] == ["Sheet Strat"]
         r = client.get("/api/ranks/standards", params={"entity": "star:9:2"})
         assert r.json()["fitted_strategies"] == []   # vetted-only, none fitted
+
+
+def test_seeded_standards_api_serves_the_complete_fit_and_preserves_explicit_edits(tmp_path):
+    client, svc = make_client(tmp_path)
+    us = {"Mario": 12.0, "Grandmaster": 13.0, "Master": 14.0, "Diamond": 15.0,
+          "Platinum": 16.0, "Gold": 17.0, "Silver": 18.0, "Bronze": 19.0}
+    jp = {rank: value - 1.0 for rank, value in us.items()}
+    mapping = {"star:9:2": {"strategies": {"Nuts Pless": us},
+                            "jp_strategies": {"Nuts Pless": jp}}}
+    with client:
+        svc.ranks.apply_sheet_ladders(mapping)
+        params = {"entity": "star:9:2"}
+        result = client.get("/api/ranks/standards", params=params).json()
+        assert result["strategies_us"]["Nuts Pless"] == us
+        assert result["strategies_jp"]["Nuts Pless"] == jp
+        assert result["fitted_strategies"] == ["Nuts Pless"]
+        assert result["clearable_jp_strategies"] == []
+        response = client.put("/api/ranks/standards/star:9:2/Nuts%20Pless/Master",
+                              json={"seconds": 13.16})  # the old seed's exact number
+        assert response.status_code == 200
+        svc.ranks.load()
+        svc.ranks.apply_sheet_ladders(mapping)
+        result = client.get("/api/ranks/standards", params=params).json()
+        assert result["strategies_us"]["Nuts Pless"] == {**us, "Master": 13.16}
+        assert result["strategies_jp"]["Nuts Pless"] == jp
+        assert result["fitted_strategies"] == ["Nuts Pless"]
+        assert client.post("/api/ranks/standards/star:9:2/reset").status_code == 200
+        result = client.get("/api/ranks/standards", params=params).json()
+        assert result["strategies_us"]["Nuts Pless"] == us
 
 
 def test_delete_strategy_and_bad_rank(tmp_path):

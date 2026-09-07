@@ -1,6 +1,6 @@
 """Provisional inputs for sheet rows without a submitted community time.
 
-An own best/ideal anchors one cutoff; it does not invent a distribution. The
+An own best/ideal anchors a complete provisional ladder; it is not a submission. The
 three unanchored rows in the 2026-08-10 snapshot use audited related rows. These
 are estimates of a different variant, not claims that their timings coincide.
 Keep that uncertainty and the source identity beside the resulting ladder.
