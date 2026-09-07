@@ -567,32 +567,34 @@ top of a [[tier]] from its bottom at a glance.
 
 ### Goal
 
-What the [[Scorecard]] grades every tile against. In automatic mode it aims
-one [[division]] above the current [[scope]]'s [[MARELO]] [[rank]], capped at
-Mario 1, and follows [[scope]] and [[rank]] changes. A manual choice replaces it: a
-[[tier]] and [[division]] inside it, one [[runner]]'s own times, a set of
-times you typed yourself and saved under a name, or a combination of these.
-The picker keeps one [[division]] at a time and any number of [[runner]]s or
-saved custom goals; choosing another [[division]] replaces the previous one.
-The trainer turns it into one time per tile and the [[Scorecard]]
-compares that time against your [[personal best]]. Picking several keeps
-the FASTEST time any of them offers on each tile — a [[runner]]'s own
-offer being their best across every [[strategy]] they have recorded that
-[[star]] with — so the goal is the best anybody you picked has managed,
-and the picks cover between them the [[star]]s none of them covers alone.
-That coverage matters because a single pick falls short: a [[runner]] has
-nothing wherever they never recorded a time, and a hand-typed goal
-reaches only the tiles you typed.
+What the [[Scorecard]] compares with your [[personal best]], separately for
+each entry. **Rank Goal** is always active: either one selected [[division]],
+or Automatic, which follows the current [[scope]]'s [[MARELO]] [[rank]] plus
+one subdivision, capped at Mario 1. Its time comes from that entry's canonical
+[[Library tab]] strategy standards, including the appropriate 100-coin route.
+A historical strategy alias can identify a Library row but cannot replace its
+standards with another strategy's faster ladder.
 
-Manual choices persist across [[scope]] changes. Removing the last selection
-returns to automatic mode; the derived automatic [[rank]] is never saved as a
-manual choice. Capless 4 through 1 have finite goal times; Capless 5 is the
-unbounded floor and is not a selectable goal.
+**Player Goal** independently selects any number of [[runner]]s, none by
+default. **Custom Goals** selects named sets of times explicitly added for
+stars or segments. Edit goal times, name the set, then select or remove that
+whole set together. Saving more entries under the same name extends the set
+across scopes; changing an existing entry replaces that entry's time.
 
-- **Lives** — the goal resolvers (`src/sm64_events/server/scorecard_api.py`)
-  → the goal picker (`src/sm64_events/ui/scorecardgoal.js`), and, for typing
-  one tile's own time in place, the [[Scorecard]] card itself
-  (`src/sm64_events/ui/components/scorecard.js`)
+Each tile uses the fastest offer among its rank, selected players and custom
+sets. A runner's offer is their best across strategies and the selected regions.
+Manual choices and saved sets persist across scopes. Automatic continues to
+adapt alongside those choices, and selecting it only changes Rank Goal.
+Rank alone needs no legend. With players or custom sets selected, pills and
+colored dots identify the winning source; the rank pill has no remove button.
+
+Capless 4 through 1 have finite goal times; Capless 5 is the unbounded floor
+and is not a selectable goal.
+
+- **Lives** — `server/scorecard_standards.py` resolves the entry identity;
+  `server/scorecard_goals.py` owns saved selection/set semantics;
+  `server/scorecard_api.py` builds targets; `ui/components/scorecard.js`
+  presents the controls and inline editor.
 
 ### Scope
 

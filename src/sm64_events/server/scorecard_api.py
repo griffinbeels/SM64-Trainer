@@ -11,22 +11,11 @@ back a runner goal -- `library.ratings.runner_times`, the SAME reader
 CACHED snapshot like the column export's record row below, never a live
 fetch).
 
-One persisted choice drives the whole card -- the ui_state KV
-`"scorecard_goal"`, `{"kind":"division","tier":...,"division":...}` |
-`{"kind":"runner","runner":...}` | `{"kind":"custom","name":...}` | `None` --
-server-side so the browser and the desktop GUI read the same goal
-(`.claude/rules/import.md`'s reasoning for why an imported time lands
-server-side applies here too: two clients, one KV). `GET /api/scorecard`
-re-derives the whole card from it on every request; nothing about the card
-itself is stored. None means automatic: one subdivision above the requested
-scope's current MARELO rank, capped at Mario I. Reads resolve that goal
-without saving it, so a manual choice remains global and clearing it
-restores automatic mode. A **custom** goal is the one kind that carries its own
-data: hand-typed per-entity times a player saved under a name, in a second
-KV (`"scorecard_custom_goals"`, `{name: {entity_key: goal_cs}}`) that
-`_GOAL_KEY` only ever points at by name -- so picking a saved custom goal is
-the same one-line write as picking a division, and every OTHER saved custom
-goal survives switching away from it.
+The `scorecard_goal` KV stores one rank plus any players/custom sets, using
+single/multi shapes. Automatic stores no calculated tier; each read resolves
+it from the current scope's MARELO. Named custom sets live in the separate
+`scorecard_custom_goals` KV. `scorecard_goals.py` owns normalization and writes;
+`scorecard_standards.py` chooses each rank target's canonical Library row.
 
 `GET /api/scorecard/column` is the reverse of `POST /api/import/sheet` --
 that door reads a runner's column IN as PBs, this one writes YOUR PBs OUT as
@@ -51,16 +40,16 @@ from sm64_events.library.sheet import read_rows
 from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
 from sm64_events.core.modes import platform_of
-from sm64_events.core.timefmt import attainable_cs
-from sm64_events.ranks.classify import RANK_NAMES, display_cs
+from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.scorecard import (
     automatic_goal, build_card, card_keys, division_goal_cs, rows_for_course,
     rows_for_route, template_rows, without_keys)
-from sm64_events.ranks.scoring import DIVISION_NUMERALS, best_ladder
 from sm64_events.tracking.views import (fastest_current_pbs, latest_pbs_by_strategy,
                                         segment_courses)
 from sm64_events.server.import_api import sheet_row_placer
 from sm64_events.server.jobs import JobBoard
+from sm64_events.server.scorecard_goals import combined, prepare_goal, sources_of
+from sm64_events.server.scorecard_standards import tile_strategies
 from sm64_events.server.ranks_api import _score_scope, absorb_after_regrade
 
 _log = logging.getLogger("sm64.scorecard")
@@ -100,12 +89,6 @@ DEFAULT_SHEET_STYLE = {"emu_fill": "#4F7BE0", "n64_fill": "#C45E1C",
                        "font_color": "#F2ECE4", "font_family": "Trebuchet MS"}
 _HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _VALID_REGIONS = ("us", "jp")
-
-
-def _valid_division(tier, division) -> bool:
-    """Every finite goal on the curve; Capless V has no slowest time."""
-    return (tier in RANK_NAMES and division in DIVISION_NUMERALS
-            and (tier, division) != ("Iron", "V"))
 
 
 class GoalBody(BaseModel):
@@ -437,24 +420,6 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return {row["id"]: row.get("seed_key") for row in service.db.segment_defs()
                 if row.get("category") == "Bowser Fights"}
 
-    def _stamp_strats(card: dict) -> None:
-        """Each tile's ACTIVE strategy name (or None) -- the card's library
-        links land on the approach the player actually practises: "We
-        should try to match the user's strategy (if they have one
-        selected)" (round 11). Resolved through the same `ActiveStrats`
-        every other surface asks, never a second reading of the KV."""
-        active = ActiveStrats.from_db(service.db, service.strat_by_star,
-                                      service.strat_by_segment)
-        for row in card["rows"]:
-            for tile in row["tiles"]:
-                parts = tile["key"].split(":")
-                if parts[0] == "star":
-                    tile["strat"] = active.for_star(int(parts[1]), int(parts[2]))
-                elif parts[0] == "segment":
-                    tile["strat"] = active.for_segment(int(parts[1]))
-                else:
-                    tile["strat"] = None
-
     def scope_rows(scope_id: str) -> list[dict]:
         """The scope's row spec, or a 404 for a scope that does not exist --
         the same deliberate 404 `/api/marelo` gives a stale route id, so a
@@ -515,10 +480,10 @@ def create_scorecard_router(service, library=None, adoptions=None,
                 you[key] = display_cs(row["frames"])
         return you
 
-    def division_goal_map(keys: list[str], tier: str, division: str) -> dict[str, int]:
+    def division_goal_map(strategies: dict, tier: str, division: str) -> dict[str, int]:
         goal = {}
-        for key in keys:
-            ladder_cs = best_ladder(service.ranks.ladders(key))
+        for key, strategy in strategies.items():
+            ladder_cs = service.ranks.ladder_cs(key, strategy)
             cs = division_goal_cs(ladder_cs, tier, division)
             if cs is not None:
                 goal[key] = cs
@@ -615,7 +580,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         saved = custom_goal_store().get(name, {})
         return {key: cs for key, cs in saved.items() if key in keys}
 
-    def resolve_goal(goal_value, keys: list[str], ranks) -> dict[str, int]:
+    def resolve_goal(goal_value, strategies: dict, ranks) -> dict[str, int]:
         """One goal value -> {entity key: goal centiseconds}.
 
         A custom goal is typed data with no ladder lookup at all, so it
@@ -642,21 +607,21 @@ def create_scorecard_router(service, library=None, adoptions=None,
             return {}
         kind = goal_value.get("kind")
         if kind == "custom":
-            return custom_goal_map(keys, goal_value["name"])
+            return custom_goal_map(strategies, goal_value["name"])
         if kind == "multi":
-            merged, _ = resolve_multi(goal_value, keys, ranks)
+            merged, _, _ = resolve_multi(goal_value, strategies, ranks)
             return merged
         if ranks is None:
             return {}
         if kind in ("division", "automatic"):
-            return division_goal_map(keys, goal_value["tier"],
-                                     goal_value["division"])
+            return division_goal_map(strategies, goal_value.get("tier"),
+                                     goal_value.get("division"))
         if kind == "runner":
             return runner_goal_map(goal_value["runner"], scorecard_regions(ranks))
         return {}
 
-    def resolve_multi(goal_value, keys: list[str], ranks):
-        """A multi goal -> `({key: cs}, {key: source index})`.
+    def resolve_multi(goal_value, strategies: dict, ranks):
+        """A multi goal -> final times, source indices, and player-only times.
 
         WHICH source won is recorded where the comparison happens, not
         re-derived later: the card's attribution -- his round-15 ask, a
@@ -669,14 +634,17 @@ def create_scorecard_router(service, library=None, adoptions=None,
         iteration order."""
         merged: dict[str, int] = {}
         owner: dict[str, int] = {}
+        players: dict[str, int] = {}
         for index, source in enumerate(goal_value.get("sources") or []):
             if not isinstance(source, dict) or source.get("kind") == "multi":
                 continue                     # never nest; a corrupt KV is empty
-            for key, cs in resolve_goal(source, keys, ranks).items():
+            for key, cs in resolve_goal(source, strategies, ranks).items():
+                if source.get("kind") == "runner":
+                    players[key] = min(players.get(key, cs), cs)
                 if key not in merged or cs < merged[key]:
                     merged[key] = cs
                     owner[key] = index
-        return merged, owner
+        return merged, owner, players
 
     def current_card(scope_id: str = "overall"):
         """`(card, goal_value)` -- the one door both `GET /api/scorecard`
@@ -694,32 +662,29 @@ def create_scorecard_router(service, library=None, adoptions=None,
         rows_spec = without_keys(scope_rows(scope_id), service.rank_excluded())
         keys = card_keys(rows_spec)
         you = your_times(keys, scorecard_regions(service.ranks))
-        goal_value = service.db.get_state(_GOAL_KEY, None)
         ranks = service.ranks
-        if (not isinstance(goal_value, dict)
-                or goal_value.get("kind") not in ("division", "runner", "custom", "multi")
-                or (goal_value.get("kind") == "multi" and not goal_value.get("sources"))):
-            # A read follows the SAME MARELO calculation as the scope card,
-            # without seeding/acknowledging any celebration or saving a pick.
-            if ranks is None:
-                goal_value = automatic_goal(None, None)
-            else:
-                rank = _score_scope(service, scope_id)
-                goal_value = automatic_goal(rank["tier"], rank["division"])
-
-        # A MULTI goal also answers WHO: the source index that set each
-        # tile, so the card can attribute every number to the pick behind
-        # it (round 15). Any other kind has one source and needs no legend.
-        if goal_value and goal_value.get("kind") == "multi":
-            goal_map, goal_owner = resolve_multi(goal_value, keys, ranks)
+        active = ActiveStrats.from_db(service.db, service.strat_by_star,
+                                      service.strat_by_segment)
+        strategies = tile_strategies(rows_spec, ranks, active,
+            library.payload if library is not None else {},
+            adoptions.rows() if adoptions is not None else {})
+        sources = sources_of(service.db.get_state(_GOAL_KEY, None))
+        if sources[0]["kind"] == "automatic":
+            rank = _score_scope(service, scope_id) if ranks is not None else {}
+            sources[0] = automatic_goal(rank.get("tier"), rank.get("division"))
+        goal_value = combined(sources)
+        if len(sources) > 1:
+            goal_map, goal_owner, player_goals = resolve_multi(goal_value, strategies, ranks)
         else:
-            goal_map, goal_owner = resolve_goal(goal_value, keys, ranks), {}
+            goal_map, goal_owner = resolve_goal(goal_value, strategies, ranks), {}
+            player_goals = {}
 
         card = build_card(rows_spec, you=you, goal=goal_map)
-        _stamp_strats(card)
         for row in card["rows"]:
             for tile in row["tiles"]:
+                tile["strat"] = strategies.get(tile["key"])
                 tile["goal_source"] = goal_owner.get(tile["key"])
+                tile["player_goal_cs"] = player_goals.get(tile["key"])
         return card, goal_value
 
     @router.get("")
@@ -730,8 +695,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
         tiles = [tile for row in card["rows"] for tile in row["tiles"]]
         coverage = {"covered": sum(1 for t in tiles if t["goal_cs"] is not None),
                     "tiles": len(tiles)}
-        # Every saved custom goal's NAME, so the picker can list them all
-        # (grouped ahead of Divisions) without a second round trip -- the
+        # Every saved set's name, so Custom Goals needs no second request. The
         # active one, if any, is already carried in `goal` above.
         custom_names = sorted(custom_goal_store().keys())
         ranks = service.ranks
@@ -743,85 +707,15 @@ def create_scorecard_router(service, library=None, adoptions=None,
 
     @router.put("/goal")
     async def set_goal(body: GoalBody | None = Body(default=None)):
-        """No broadcast: the goal picker is the only writer, and the card
-        refetches on `t.mareloRev` like the rest of the Rank tab -- there is
-        no second client watching this KV live the way the recorder's row
-        list needs a push.
+        """Save one normalized selection and any explicit custom-set patches.
 
-        `kind: "custom"` is two operations behind one shape, same distinction
-        `PUT /api/ranks/standards` already draws between writing a value and
-        selecting an existing one: `times` present SAVES (creating a new name
-        or overwriting one already used -- the store is a plain dict keyed by
-        name, so "overwrite" needs no separate branch, just a second write to
-        the same key), `times` absent SELECTS a goal the picker already knows
-        about, 404 if that name was never saved. Either way the KV ends up
-        naming just the goal (`{"kind":"custom","name":...}`) -- the actual
-        times live in `_CUSTOM_KEY`, not duplicated into `_GOAL_KEY`."""
+        No broadcast: this client refetches its current scope through the
+        ordered write queue. Computed automatic tiers never enter the KV.
+        """
         _require_db()
-        if body is None or (body.kind == "multi" and not body.sources):
-            service.db.set_state(_GOAL_KEY, None)
-            return {"goal": None}
-        if body.kind == "division":
-            if not _valid_division(body.tier, body.division):
-                raise HTTPException(
-                    422, f"unknown tier/division {body.tier!r}/{body.division!r}")
-            value = {"kind": "division", "tier": body.tier, "division": body.division}
-        elif body.kind == "runner":
-            if not body.runner:
-                raise HTTPException(422, "runner goal needs a runner name")
-            value = {"kind": "runner", "runner": body.runner}
-        elif body.kind == "custom":
-            name = (body.name or "").strip()
-            if not name:
-                raise HTTPException(422, "a custom goal needs a name")
-            store = custom_goal_store()
-            if body.times is not None:
-                # Snap every typed time onto the displayable set through THE
-                # existing door (core/timefmt.attainable_cs, the same rule the
-                # import's hand-entry field applies) -- only 30 of every 100
-                # centisecond values can appear on the timer, and the field
-                # already shows the snapped value, so storing the raw one
-                # would make a hand-posted payload disagree with every cell
-                # the UI draws (round 5, 2026-08-24: "leverage the existing
-                # time entry validation system").
-                store[name] = {key: attainable_cs(int(cs))
-                               for key, cs in body.times.items()}
-                service.db.set_state(_CUSTOM_KEY, store)
-            elif name not in store:
-                raise HTTPException(404, f"no saved custom goal named {name!r}")
-            value = {"kind": "custom", "name": name}
-        elif body.kind == "multi":
-            # Every source is validated by the SAME rules a single goal of
-            # that kind is, so "several goals at once" can never smuggle in
-            # a tier or a runner that a single pick would have refused. A
-            # custom source must already be saved -- a multi pick names
-            # existing goals, it never creates one.
-            sources = body.sources or []
-            store = custom_goal_store()
-            cleaned = []
-            for source in sources:
-                kind = (source or {}).get("kind")
-                if kind == "division":
-                    if not _valid_division(source.get("tier"), source.get("division")):
-                        raise HTTPException(
-                            422, f"unknown tier/division in {source!r}")
-                    cleaned.append({"kind": "division", "tier": source["tier"],
-                                    "division": source["division"]})
-                elif kind == "runner":
-                    if not source.get("runner"):
-                        raise HTTPException(422, "a runner source needs a name")
-                    cleaned.append({"kind": "runner", "runner": source["runner"]})
-                elif kind == "custom":
-                    name = (source.get("name") or "").strip()
-                    if name not in store:
-                        raise HTTPException(
-                            404, f"no saved custom goal named {name!r}")
-                    cleaned.append({"kind": "custom", "name": name})
-                else:
-                    raise HTTPException(422, f"unknown source kind {kind!r}")
-            value = {"kind": "multi", "sources": cleaned}
-        else:
-            raise HTTPException(422, f"unknown goal kind {body.kind!r}")
+        value, store = prepare_goal(body.model_dump(exclude_none=True)
+                                    if body is not None else None, custom_goal_store())
+        service.db.set_state(_CUSTOM_KEY, store)
         service.db.set_state(_GOAL_KEY, value)
         return {"goal": value}
 

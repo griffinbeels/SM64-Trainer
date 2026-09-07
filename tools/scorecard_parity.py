@@ -1,4 +1,4 @@
-"""IMPORT runners one at a time, point the Scorecard at all of them, and diff every tile.
+"""Import runners one at a time and compare their Scorecard player offers.
 
 His definition of done, verbatim (round 34, 2026-09-05): "if I import a
 player, and then set the scorecard to track that player, our definition of
@@ -17,7 +17,11 @@ spreadsheet is touched. Each step imports one more runner through the REAL
 endpoint into a fresh database, sets the REAL goal (a runner goal, then a
 multi goal of every runner so far, both regions on) and reads the REAL card.
 
-A tile is reported when YOU and GOAL are both present and differ, or when
+Since Rank Goal is always active, this probe reads `player_goal_cs`: the
+actual selected-player offer recorded before rank/custom comparison. It does
+not infer that offer from the final winning source or skip rank-owned tiles.
+
+A tile is reported when YOU and the player offer are both present and differ, or when
 GOAL has a time and YOU has none (the import left a sheet time out). A tile
 where YOU has a time and GOAL none is reported too, apart: an imported time
 the goal cannot see. Every reported tile is EXPLAINED from both sides -- the
@@ -118,7 +122,10 @@ def card_tiles(client, scope: str) -> list[dict]:
     tiles = []
     for row in card.json()["rows"]:
         for tile in row["tiles"]:
-            tiles.append(dict(tile, row=row["label"]))
+            # Rank Goal is always present now and can beat an imported
+            # player's time. Compare the actual player offer recorded by
+            # the resolver, before its minimum with rank/custom goals.
+            tiles.append(dict(tile, row=row["label"], goal_cs=tile["player_goal_cs"]))
     return tiles
 
 

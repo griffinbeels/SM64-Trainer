@@ -91,10 +91,12 @@ replay panel, with Undo after saving.
 **Score yourself against a goal.** The Rank tab's scorecard lines every star
 and castle movement up as a tile against a goal, showing your gap tile by tile
 and a summed gap per course. By default the goal follows your scope's MARELO
-rank plus one subdivision (up to Mario 1). Pick one rank division and any number
-of runners or saved custom goals. Picking another division replaces the old one.
-Manual goals stay across routes; clear the
-last pick to return to automatic mode. Copy your own times as a sheet column ready to paste
+rank plus one subdivision (up to Mario 1), using each entry's Library standards.
+Rank Goal chooses one division or Automatic. Player Goal adds any number of
+runners, and Custom Goals saves named sets of the stars and segments you edit.
+Enable or remove a whole set together. Manual choices stay across routes;
+Automatic follows the route even with players or custom sets selected.
+Copy your own times as a sheet column ready to paste
 beside everyone else's, including each time's public recording hyperlink,
 or as a full CSV.
 

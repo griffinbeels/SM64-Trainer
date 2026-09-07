@@ -97,37 +97,18 @@ def test_fmt_gap_cs_signs_a_positive_gap_too():
     assert call("fmtGapCs", 100) == "+1.00"
 
 
-def test_goal_groups_is_automatic_then_divisions_then_runners_before_fetch():
-    """Before the picker's first open, `runners` is null -- the Runners
-    group renders (so SearchMenu can find it) but carries no options."""
-    groups = call("goalGroups", None)
-    assert [group["label"] for group in groups] == ["", "Divisions", "Runners"]
-    assert groups[0]["options"] == [{"value": "", "label": "Automatic goal"}]
-    assert len(groups[1]["options"]) == 44                    # divisionOptions()
-    assert groups[2]["options"] == []
-
-
-def test_goal_groups_encodes_a_fetched_runner_as_runner_colon_name():
-    groups = call("goalGroups", ["808sAndBailey", "Suigi"])
-    runners = groups[2]["options"]
-    assert runners == [{"value": "runner:808sAndBailey", "label": "808sAndBailey"},
-                       {"value": "runner:Suigi", "label": "Suigi"}]
-
-
-def test_goal_groups_omits_the_custom_group_entirely_with_no_saved_names():
-    """No empty 'Custom' heading ever shown -- unlike Runners (which stays
-    present so SearchMenu has a drop target for the lazy fetch), a saved
-    custom goal either exists or the group has nothing to add."""
-    groups = call("goalGroups", None, [])
-    assert [group["label"] for group in groups] == ["", "Divisions", "Runners"]
-
-
-def test_goal_groups_puts_custom_names_at_the_top_after_automatic():
-    groups = call("goalGroups", None, ["Sub 90 Attempt", "PSS Skip Route"])
-    assert [group["label"] for group in groups] == ["", "Custom", "Divisions", "Runners"]
-    assert groups[1]["options"] == [
-        {"value": "custom:Sub 90 Attempt", "label": "Sub 90 Attempt"},
-        {"value": "custom:PSS Skip Route", "label": "PSS Skip Route"}]
+def test_goal_groups_separates_rank_players_and_custom_sets():
+    groups = call("goalGroups", ["808sAndBailey", "Suigi"], ["Practice set"])
+    rank = groups["rank"][0]["options"]
+    assert rank[0] == {"value": "", "label": "Automatic"}
+    assert len(rank) == 45
+    assert all(option["value"].startswith("division:") for option in rank[1:])
+    assert groups["players"][0]["options"] == [
+        {"value": "runner:808sAndBailey", "label": "808sAndBailey"},
+        {"value": "runner:Suigi", "label": "Suigi"}]
+    assert groups["custom"][0]["options"] == [{"value": "custom:Practice set", "label": "Practice set"}]
+    empty = call("goalGroups", None, [])
+    assert empty["players"][0]["options"] == empty["custom"][0]["options"] == []
 
 
 def test_parse_gap_time_reads_the_displayed_notation_back():
@@ -450,13 +431,11 @@ def test_a_partly_shared_card_prints_each_sides_own_sum_and_the_shared_gap():
 
 def test_the_card_reaches_a_real_goal_covers_line_when_partial():
     with serve_ui() as base:
-        # A RUNNER goal, not a division: a division now covers every tile on
-        # the card, because every star the community publishes standards for
-        # carries a ladder (2026-08-31 gave the last exception, Slide Star
-        # (Under 21 Seconds), its own entity). A runner is partial BY NATURE
-        # -- they have no time wherever they never recorded one, which is
-        # `runner_times`' own absent-never-zero rule -- so the note has real
-        # content to report against the payload's own numbers.
+        # Include an untimed castle star so the note measures a genuinely
+        # missing standard; Automatic now covers ordinary runner gaps.
+        urllib.request.urlopen(urllib.request.Request(
+            f"{base}/api/marelo/exclude", data=b'{"entity":"star:0:0","excluded":false}',
+            method="POST", headers={"Content-Type": "application/json"}), timeout=10).read()
         _put_runner_goal(base, _any_sheet_runner())
         payload = _get_scorecard(base)
         coverage = payload["goal_coverage"]
@@ -513,7 +492,7 @@ def test_the_picker_gains_a_runners_group_and_picking_one_colors_tiles():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+            page.wait_for(".rank-page .scorecard-card [data-goal-control=\"Player Goal\"] .search-select-trigger")
 
             # Before the open: no Runners options have landed. (Divisions
             # are present immediately -- they cost no fetch.)
@@ -524,7 +503,7 @@ def test_the_picker_gains_a_runners_group_and_picking_one_colors_tiles():
 
             page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
-                ".search-select-trigger').click()")
+                "[data-goal-control=\"Player Goal\"] .search-select-trigger').click()")
             # Lazy fetch: wait for THIS runner's option to actually land
             # rather than assuming a fixed delay covers the round trip.
             page.wait_for(
@@ -535,7 +514,7 @@ def test_the_picker_gains_a_runners_group_and_picking_one_colors_tiles():
                 "Array.from(document.querySelectorAll('.rank-page "
                 ".scorecard-card .search-menu-group-head'))"
                 ".map((el) => el.textContent)")
-            assert "Runners" in group_heads
+            assert group_heads == []
 
             page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
@@ -545,9 +524,9 @@ def test_the_picker_gains_a_runners_group_and_picking_one_colors_tiles():
                 ".rank-page .scorecard-card .score-gap.bad")
 
         card = _get_scorecard(base)
-        assert card["goal"] == {"kind": "runner", "runner": runner}
+        assert card["goal"]["sources"][1] == {"kind": "runner", "runner": runner}
         coverage = card["goal_coverage"]
-        assert 0 < coverage["covered"] < coverage["tiles"]
+        assert coverage["covered"] == coverage["tiles"]
 
 
 # --- the goal picker stays inside the card (feedback round 8) -----------
@@ -803,22 +782,22 @@ def test_saving_a_custom_goal_persists_it_and_lists_it_first_in_the_picker():
 
             trigger_label = page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
-                ".search-select-value').textContent")
+                "[data-goal-control=\"Custom Goals\"] .search-select-value').textContent")
 
             page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
-                ".search-select-trigger').click()")
-            page.wait_for(".rank-page .scorecard-card .search-menu-group-head")
+                "[data-goal-control=\"Custom Goals\"] .search-select-trigger').click()")
+            page.wait_for(".rank-page .scorecard-card .search-menu-option")
             group_heads = page.evaluate(
                 "Array.from(document.querySelectorAll('.rank-page .scorecard-card "
                 ".search-menu-group-head')).map((el) => el.textContent)")
 
         assert trigger_label == "My Sub 5 Attempt"
         # Custom sits right after "No goal" -- ahead of Divisions/Runners.
-        assert group_heads[0] == "Custom"
+        assert group_heads == []
 
         card = _get_scorecard(base)
-        assert card["goal"] == {"kind": "custom", "name": "My Sub 5 Attempt"}
+        assert card["goal"]["sources"][1] == {"kind": "custom", "name": "My Sub 5 Attempt"}
         assert card["custom_goals"] == ["My Sub 5 Attempt"]
 
 
@@ -1779,75 +1758,52 @@ _PICKED_GOALS = ("[...document.querySelectorAll('.rank-page .scorecard-card "
 @pytest.mark.parametrize("fail_first", [False, True])
 @pytest.mark.parametrize("width", [1500, 850])
 def test_the_picker_keeps_players_and_replaces_the_division(fail_first, width, tmp_path):
-    """Round 14, his design: "what if we could select multiple options
-    (e.g., I could select 10 players plus a rank standard like Toad 1)."
-    The division is exclusive; players remain multi-select. Replace the
-    division with both a harder and an easier target while keeping two
-    players. The first PUT stays held until all clicks land, so local input
-    cannot depend on a server reply;
-    a pre-pick background GET is released last to test stale-read rejection.
-    A rejected first write must not discard the newer selection either."""
-    from test_ui_scorecard_auto_goal import _check_browser_errors
-
+    """Cross-control edits stay ordered while a write and stale read are held."""
+    from test_ui_scorecard_auto_goal import _check_browser_errors, _open_menu, _pick_rank, _label_is, CARD
     with serve_ui() as base:
         with get_driver().launch(headless=True, viewport=(width, 1000)) as page:
-            page.goto(f"{base}/ui/index.html")
+            page.goto(base)
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
-            page.evaluate(
-                "document.querySelector('.rank-page .scorecard-card "
-                ".search-select-trigger').click()")
-            page.wait_for(".rank-page .scorecard-card "
-                          '.search-menu-option[data-value="division:Bronze:V"]')
-            page.wait_for('.search-menu-option[data-value="runner:Raisn"]')
+            page.wait_for(CARD + " .search-select-trigger")
             page.evaluate(_HOLD_GOAL_RESPONSES.replace("FAIL_FIRST", json.dumps(fail_first)))
-            # The real WS staleness path starts a background card read. Its
-            # automatic-goal response predates all picks and arrives last.
             urllib.request.urlopen(urllib.request.Request(
                 f"{base}/api/ranks/mode", data=b'{"mode":"pb"}', method="PUT",
                 headers={"Content-Type": "application/json"}), timeout=10).read()
             _wait_until(page, "!!window.releaseOldCard")
-
-            for value in ("division:Bronze:V", "runner:RONC3NA", "runner:Raisn",
-                          "division:Silver:III", "division:Iron:IV",
-                          "division:Iron:IV", "division:Iron:IV"):
-                page.evaluate(_option_click(value))
-                page.wait_ms(250)
-                assert sum(v.startswith("division:") for v in page.evaluate(_PICKED_GOALS)) <= 1
-
-            still_open = page.count(".rank-page .scorecard-card .search-menu")
-            picked = page.evaluate(_PICKED_GOALS)
-            label = page.evaluate(
-                "document.querySelector('.rank-page .scorecard-card "
-                ".search-select-value').textContent.trim()")
-
-            assert still_open == 1, "the panel must stay open while picking several"
-            assert sorted(picked) == ["division:Iron:IV", "runner:RONC3NA", "runner:Raisn"], picked
-            assert label == "3 picked", label
-            assert len(page.evaluate("window.goalWrites")) == 1, "writes must be ordered"
+            _pick_rank(page, "division:Bronze:V")
+            _open_menu(page, "Player Goal")
+            page.wait_for('.search-menu-option[data-value="runner:Raisn"]')
+            for runner in ("RONC3NA", "Raisn"):
+                page.evaluate(_option_click("runner:" + runner))
+                page.wait_ms(100)
+            assert sorted(page.evaluate(_PICKED_GOALS)) == ["runner:RONC3NA", "runner:Raisn"]
+            page.click(CARD + ' [data-goal-control="Player Goal"] .search-select-trigger')
+            _pick_rank(page, "division:Silver:III")
+            _pick_rank(page, "division:Iron:IV")
+            _label_is(page, "Capless 4")
+            assert page.count(CARD + " .goal-pill") == 3
+            assert page.count(CARD + " .goal-pill:first-child button") == 0
+            assert len(page.evaluate("window.goalWrites")) == 1
             _wait_until(page, "!!window.releaseGoal")
             page.evaluate("window.releaseGoal()")
-            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(3)")
+            _wait_until(page, "window.goalReplies === 5")
             page.evaluate("window.releaseOldCard()")
             _wait_until(page, "window.oldCardReleased")
-            page.wait_ms(250)
-            assert sorted(page.evaluate(_PICKED_GOALS)) == sorted(picked)
-            assert page.count(".rank-page .scorecard-card .goal-pill") == 3
-            assert page.count(".rank-page .scorecard-card .inline-state.error") == 0
+            _label_is(page, "Capless 4")
+            assert page.count(CARD + " .goal-pill") == 3
+            assert page.count(CARD + " .inline-state.error") == 0
             _check_browser_errors(page, base)
             page.evaluate("document.querySelector('.scorecard-card').scrollIntoView()")
             (tmp_path / f"one-division-{width}.png").write_bytes(page.screenshot())
-
-        card = _get_scorecard(base)
-        assert card["goal"] == {"kind": "multi", "sources": [
+        assert _get_scorecard(base)["goal"] == {"kind": "multi", "sources": [
+            {"kind": "division", "tier": "Iron", "division": "IV"},
             {"kind": "runner", "runner": "RONC3NA"},
-            {"kind": "runner", "runner": "Raisn"},
-            {"kind": "division", "tier": "Iron", "division": "IV"}]}
+            {"kind": "runner", "runner": "Raisn"}]}
 
 
 def test_a_failed_goal_pick_reconciles_and_leaves_the_picker_ready_to_retry():
-    from test_ui_scorecard_auto_goal import _check_browser_errors
+    from test_ui_scorecard_auto_goal import _check_browser_errors, _label_is, _pick_rank
 
     with serve_ui() as base:
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
@@ -1862,13 +1818,13 @@ def test_a_failed_goal_pick_reconciles_and_leaves_the_picker_ready_to_retry():
             # This test holds only the rejected write, not its recovery read.
             page.evaluate("window.releaseOldCard = () => {}")
             page.evaluate(_option_click("division:Bronze:V"))
-            page.wait_for('.search-menu-option[data-value="division:Bronze:V"].is-picked')
+            _label_is(page, "Toad 5")
             _wait_until(page, "!!window.releaseGoal")
             page.evaluate("window.releaseGoal()")
             page.wait_for(".rank-page .scorecard-card .inline-state.error")
-            page.wait_for('.search-menu-option[data-value=""].is-picked')
+            _wait_until(page, "document.querySelector('.scorecard-card .search-select-value').textContent.startsWith('Automatic')")
             assert _get_scorecard(base)["goal"]["kind"] == "automatic"
-            page.evaluate(_option_click("division:Silver:III"))
+            _pick_rank(page, "division:Silver:III")
             _wait_until(page, "window.goalReplies === 2")
             _wait_until(page, "!document.querySelector('.rank-page .scorecard-card .inline-state.error')")
             _check_browser_errors(page, base)
@@ -1897,16 +1853,16 @@ def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+            page.wait_for(".rank-page .scorecard-card [data-goal-control=\"Custom Goals\"] .search-select-trigger")
             page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
-                ".search-select-trigger').click()")
+                "[data-goal-control=\"Custom Goals\"] .search-select-trigger').click()")
             page.wait_for(".rank-page .scorecard-card "
                           '.search-menu-option[data-value="custom:alpha"]')
             page.evaluate(_option_click("custom:alpha"))   # beta is already on
             # The picker updates locally; the legend and attribution arrive
             # with the computed card after the goal write has completed.
-            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(2)")
+            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(3)")
             page.wait_for(".rank-page .scorecard-card .score-line-source")
 
             state = page.evaluate(
@@ -1928,7 +1884,7 @@ def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
 
         legend = state["legend"]
         dots = state["dots"]
-        assert len(legend) == 2, f"the legend must name every pick: {legend}"
+        assert len(legend) == 3, f"the legend must name every pick: {legend}"
         assert legend[0]["label"] != legend[1]["label"], legend
         assert legend[0]["colour"] != legend[1]["colour"], (
             f"each pill needs its own colour: {legend}")
@@ -1944,7 +1900,7 @@ def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
                 "a dot's colour and its named source disagree: "
                 f"{dot} vs {by_colour}")
         # both picks really do own tiles, or the attribution is untested
-        assert len({dot["colour"] for dot in dots}) == 2, (
+        assert {"alpha", "beta"} <= {dot["title"] for dot in dots}, (
             f"only one source owns anything: {set(d['colour'] for d in dots)}")
 
 
@@ -1960,9 +1916,10 @@ def test_a_pills_cross_removes_that_pick_and_regrades_the_card():
     goal takes per tile) leaves Bronze V as a SINGLE goal (no legend), and
     every goal time on the card moves to Bronze V's slower cutoff."""
     with serve_ui() as base:
+        _put_custom_goal(base, "Fast set", {"star:1:0": 1000})
         body = json.dumps({"kind": "multi", "sources": [
             {"kind": "division", "tier": "Bronze", "division": "V"},
-            {"kind": "division", "tier": "Gold", "division": "I"}]}).encode()
+            {"kind": "custom", "name": "Fast set"}]}).encode()
         urllib.request.urlopen(urllib.request.Request(
             f"{base}/api/scorecard/goal", data=body, method="PUT",
             headers={"Content-Type": "application/json"})).read()
@@ -1977,7 +1934,7 @@ def test_a_pills_cross_removes_that_pick_and_regrades_the_card():
             before = page.evaluate(first_goal)
             at_rest = page.evaluate(
                 "getComputedStyle(document.querySelector('.rank-page "
-                ".scorecard-card .goal-pill .goal-pill-remove')).visibility")
+                ".scorecard-card .goal-pill:nth-child(2) .goal-pill-remove')).visibility")
             page.hover(".rank-page .scorecard-card .goal-legend .goal-pill:nth-child(2)")
             under_pointer = page.evaluate(
                 "getComputedStyle(document.querySelector('.rank-page "
@@ -2044,8 +2001,8 @@ def test_unpicking_the_last_goal_restores_automatic_and_one_pick_stays_single():
                 "document.querySelector('.rank-page .scorecard-card "
                 ".search-select-trigger').click()")
             page.wait_for(".rank-page .scorecard-card "
-                          ".search-menu-option.is-picked")
-            page.evaluate(_option_click("division:Bronze:V"))   # toggle it off
+                          '.search-menu-option[data-value=""]')
+            page.evaluate(_option_click(""))   # select Automatic
             page.wait_ms(300)
 
         assert _get_scorecard(base)["goal"]["kind"] == "automatic"

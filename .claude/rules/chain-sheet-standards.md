@@ -10,6 +10,7 @@ paths:
   - "src/sm64_events/ranks/timecurve.py"
   - "src/sm64_events/ranks/scoring.py"
   - "src/sm64_events/server/library_api.py"
+  - "src/sm64_events/server/scorecard_standards.py"
   - "src/sm64_events/ui/components/librarytarget.js"
   - "src/sm64_events/ui/components/librarymodel.js"
   - "src/sm64_events/ui/timecurve.js"

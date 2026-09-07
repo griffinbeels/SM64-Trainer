@@ -16,13 +16,13 @@
 // The caps a line used to wear (server-graded `you_rank`/`goal_rank` behind
 // a "Show rank caps" toggle, OFF by default) were DELETED in round 23 —
 // "Not going to use it ever" — toggle, draw and server grading together,
-// so no fetch grades 200 tiles for a cap nobody can switch on. Each legend
-// pill carries an × (round 23) that writes the goal back without that
-// pick, and the Copy button flashes "Copied ✓" for `COPIED_FLASH_MS`
+// so no fetch grades 200 tiles for a cap nobody can switch on. Player and
+// custom-set pills carry an ×; the mandatory rank pill has no remove control.
+// Rank alone needs no legend. The Copy button flashes "Copied ✓" for `COPIED_FLASH_MS`
 // before returning to its label. A goal time is editable IN PLACE (`GoalCell`, the round
 // 5-6 editor moved onto the line): edits live in `pendingOverrides` until
-// the "N edited → save as a named goal" bar writes them through
-// `PUT /api/scorecard/goal {kind:"custom", name, times}`.
+// the Save set bar patches that named set through PUT /api/scorecard/goal,
+// preserving its other entries and the independent rank/player selections.
 //
 // `divisionOptions()`/`fmtGapCs` stay exported import-free (no Preact) so
 // tests/test_ui_scorecard.py drives them under node; the pure logic lives
@@ -40,8 +40,8 @@ import { useIdentityFetch } from "../refetch.js";
 import { useMeasuredWidth } from "../viewport.js";
 import { attainableCs, fmtSeconds } from "../format.js";
 import { applyGoalOverrides, cardLayout, columnCountFor, divisionOptions,
-         fmtGapCs, goalGroups, parseGapTime } from "../scorecardgoal.js";
-import { capName, divisionDigit } from "./caps.js";
+         fmtGapCs, goalGroups, goalSources, goalToValue, goalToLabel,
+         changeGoalSources, parseGapTime } from "../scorecardgoal.js";
 import { entityIconSrc } from "./entityicons.js";
 import { Icon } from "./icons.js";
 import { RegionSwitch } from "./versionswitch.js";
@@ -58,84 +58,6 @@ const html = htm.bind(h);
 // rather than here.
 export { applyGoalOverrides, cardLayout, columnCountFor, divisionOptions,
          fmtGapCs, goalGroups, parseGapTime };
-
-function goalToValue(goal) {
-  if (!goal) return "";
-  if (goal.kind === "division") return `division:${goal.tier}:${goal.division}`;
-  if (goal.kind === "runner") return `runner:${goal.runner}`;
-  if (goal.kind === "custom") return `custom:${goal.name}`;
-  return "";
-}
-
-// The picker is a MULTI-select (round 14): its value is the list of picked
-// sources, and a stored goal of any kind reads back as that list -- a
-// single pick is simply a list of one, so there is no second shape for
-// "one goal" and nothing to migrate.
-function goalToValues(goal) {
-  if (!goal) return [];
-  if (goal.kind === "automatic") return [""];
-  if (goal.kind === "multi") {
-    return (goal.sources || []).map(goalToValue).filter(Boolean);
-  }
-  const one = goalToValue(goal);
-  return one ? [one] : [];
-}
-
-function goalToLabel(goal) {
-  if (!goal) return "Automatic goal";
-  if (goal.kind === "automatic") return goal.tier
-    ? `Automatic · ${capName(goal.tier)} ${divisionDigit(goal.division)}`
-    : "Automatic · waiting for rank";
-  if (goal.kind === "division") return `${capName(goal.tier)} ${divisionDigit(goal.division)}`;
-  if (goal.kind === "runner") return goal.runner;
-  if (goal.kind === "custom") return goal.name;
-  if (goal.kind === "multi") {
-    const sources = goal.sources || [];
-    // One name reads better than "1 picked"; past that the count IS the
-    // useful summary, and the panel itself lists which ones are on.
-    if (sources.length === 1) return goalToLabel(sources[0]);
-    return `${sources.length} picked`;
-  }
-  return "Automatic goal";
-}
-
-// The list of picks -> the goal to store. Nothing picked clears the goal;
-// ONE pick stores that goal in its own shape (so a division stays a
-// division everywhere it is read); several store a `multi`, whose per-tile
-// answer is the FASTEST offer among them (round 16).
-function valuesToGoal(values) {
-  // The empty value selects automatic mode exclusively. Adding a manual
-  // pick from automatic mode replaces it instead of freezing that rank.
-  if (values && values[values.length - 1] === "") return null;
-  const picked = (values || []).map(valueToGoal).filter(Boolean);
-  // SearchSelect appends each new pick. Divisions replace one another;
-  // keep the newest, even when it is easier, and retain every other source.
-  const division = picked.filter((goal) => goal.kind === "division").pop();
-  const goals = picked.filter((goal) => goal.kind !== "division" || goal === division);
-  if (!goals.length) return null;
-  if (goals.length === 1) return goals[0];
-  return { kind: "multi", sources: goals };
-}
-
-// Re-selecting an EXISTING custom goal (picked from the dropdown) carries no
-// `times` -- the server already has them (`_CUSTOM_KEY`); `times` is added
-// separately, only at SAVE time (see `saveCustomGoal` below), which is the
-// one call site allowed to turn a picker value into a body carrying data.
-function valueToGoal(value) {
-  if (!value) return null;
-  const [kind, ...rest] = value.split(":");
-  if (kind === "division") {
-    const [tier, division] = rest;
-    return { kind: "division", tier, division };
-  }
-  if (kind === "runner") return { kind: "runner", runner: rest.join(":") };
-  if (kind === "custom") return { kind: "custom", name: rest.join(":") };
-  return null;
-}
-
-// The picker's group list -- `goalGroups`, imported above -- lives in
-// scorecardgoal.js so it stays node-testable the same way divisionOptions()
-// already is; this file just calls it with whatever runners it has.
 
 // One colour per PICK of a multi goal (round 15). The server says which
 // source set each tile (`tile.goal_source`, an index into `goal.sources`),
@@ -171,30 +93,22 @@ function ScorecardSubhead({ regions, detectedRegion, onRegionsChange, goal, onRe
   </div>`;
 }
 
-// The legend: every pick, in the order they were picked, each wearing the
-// colour its dots use. His ask -- "it should show pills underneath the '4
-// picked'... otherwise, it's very hard to understand which of the options
-// you've selected." Round 23 gave each pill an × at its right: "I should
-// be able to click this to remove that specific player / rank standard
-// from my scorecard immediately." It shipped hover-revealed and he ruled
-// it out on sight -- "Pills look weird if the X is hidden by default.
-// Let's just show it at all times. Red X." -- so it is always drawn, red;
-// clicking it hands the pick's index up, and the card writes the goal
-// back without it through the same door the picker uses.
+// Rank alone needs no legend. With players/custom sets, every source gets
+// a matching pill and attribution colour. Rank is mandatory, so its pill
+// omits the remove button entirely, including its box and gap.
 function GoalLegend({ goal, onRemove }) {
-  if (!goal || goal.kind !== "multi") return "";
-  const sources = goal.sources || [];
-  if (!sources.length) return "";
+  const sources = goalSources(goal);
+  if (sources.length === 1) return "";
   return html`<div class="goal-legend">
     ${sources.map((source, index) => html`<span class="goal-pill"
         key=${`${index}:${goalToValue(source)}`}
         style=${`--pill-colour:${sourceColour(index)}`}>
       <span class="goal-pill-dot" aria-hidden="true"></span>
       <span class="goal-pill-label">${goalToLabel(source)}</span>
-      <button type="button" class="goal-pill-remove"
+      ${index > 0 ? html`<button type="button" class="goal-pill-remove"
           title=${`Remove ${goalToLabel(source)} from the goal`}
           aria-label=${`Remove ${goalToLabel(source)} from the goal`}
-          onclick=${() => onRemove && onRemove(index)}>×</button>
+          onclick=${() => onRemove && onRemove(index)}>×</button>` : ""}
     </span>`)}
   </div>`;
 }
@@ -294,7 +208,7 @@ function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
   // mark that can wrap onto a line of its own leaves a blank line under
   // the text and drops the icon below it. Titled, so the colour is never
   // the only way to read it.
-  const sourceColor = sourceColour(tile.goal_source);
+  const sourceColor = sourceTitle ? sourceColour(tile.goal_source) : null;
   const dot = sourceColor
     ? html`<span class="score-line-source" title=${sourceTitle || ""}
         style=${`--source-colour:${sourceColor}`} aria-hidden="true"></span>`
@@ -668,27 +582,18 @@ function ScorecardExports({ staleKey }) {
 // time, which is also what lets him confirm item 2 at a glance instead of
 // counting cells.
 
-// Appears only while there are unsaved goal edits -- his flow, verbatim:
-// "This should automatically adjust my goal time comparison... I should
-// then be able to SAVE my custom comparison with a given name." The name
-// field defaults to the ACTIVE goal's own name when it is already a custom
-// one, so re-editing and re-saving under the SAME name is the natural path
-// -- "If I modify a saved comparison, it should just overwrite it" needs no
-// separate control, since the store is a plain dict keyed by name and
-// saving under an unchanged name IS the overwrite. Discard is a pure local
-// reset (nothing has been written to the server yet), matching the
-// "abandonable with no side effects" rule every other multi-step control in
-// this app follows.
+// A set contains explicitly edited times, accumulated across scopes. Typing
+// a selected set's name updates it; a new name creates another reusable set.
 function ScorecardSaveBar({ pendingCount, initialName, busy, error, onSave, onDiscard }) {
   const [name, setName] = useState(initialName);
   useEffect(() => setName(initialName), [initialName]);
   return html`<div class="scorecard-savebar">
-    <span class="meta">${pendingCount} custom ${pendingCount === 1 ? "time" : "times"} edited</span>
-    <input class="scorecard-savebar-input" value=${name}
-        placeholder="Name this goal…"
+    <span class="meta">${pendingCount ? `${pendingCount} custom ${pendingCount === 1 ? "time" : "times"} edited` : "Click goal times to add stars or segments to this set."}</span>
+    <input class="scorecard-savebar-input" value=${name} disabled=${busy}
+        placeholder="Name this set…"
         oninput=${(inputEvent) => setName(inputEvent.target.value)} />
-    <button type="button" class="quiet-button" disabled=${busy || !name.trim()}
-        onclick=${() => onSave(name.trim())}>Save goal</button>
+    <button type="button" class="quiet-button" disabled=${busy || !name.trim() || !pendingCount}
+        onclick=${() => onSave(name.trim())}>Save set</button>
     <button type="button" class="quiet-button" disabled=${busy}
         onclick=${onDiscard}>Discard</button>
     ${error ? html`<${InlineState} kind="error">${error}<//>` : ""}
@@ -708,16 +613,42 @@ function regionNote(regions, detected) {
     : `${only.toUpperCase()} only · you are graded on ${detected.toUpperCase()}`;
 }
 
-function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
-  return html`<div class="scorecard-head"
-      title="Automatic goals aim one subdivision above this scope's MARELO rank, up to Mario 1.">
+function GoalSelector({ label, children }) {
+  return html`<div class="scorecard-goal-control" data-goal-control=${label}>
+    <span class="meta scorecard-goal-label">${label}</span>${children}
+  </div>`;
+}
+
+function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, onNewSet }) {
+  const sources = goalSources(goal);
+  const players = sources.filter((source) => source.kind === "runner");
+  const customs = sources.filter((source) => source.kind === "custom");
+  const summary = (items) => items.length === 1 ? goalToLabel(items[0])
+    : items.length ? `${items.length} selected` : "None";
+  return html`<div class="scorecard-head">
     <h3>Scorecard</h3>
-    <${SearchSelect} value=${goalToValues(goal)} valueLabel=${goalToLabel(goal)}
-        title="One division + any players" groups=${groups} onOpen=${onOpen}
-        onChange=${onGoalChange} align="right" multi />
-    ${goal && coverage.covered < coverage.tiles
-      ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>`
-      : ""}
+    <div class="scorecard-goal-controls">
+      <${GoalSelector} label="Rank Goal">
+        <${SearchSelect} value=${goalToValue(sources[0])}
+            valueLabel=${goalToLabel(sources[0])} title="Rank Goal"
+            groups=${groups.rank} align="right"
+            onChange=${(value) => onGoalChange("rank", [value])} />
+      <//>
+      <${GoalSelector} label="Player Goal">
+        <${SearchSelect} value=${players.map(goalToValue)} valueLabel=${summary(players)}
+            title="Player Goal" groups=${groups.players} onOpen=${onOpen} multi
+            onChange=${(values) => onGoalChange("runner", values)} align="right" />
+      <//>
+      <${GoalSelector} label="Custom Goals">
+        <${SearchSelect} value=${customs.map(goalToValue)} valueLabel=${summary(customs)}
+            title="Custom Goals" groups=${groups.custom} multi
+            onChange=${(values) => onGoalChange("custom", values)} align="right" />
+        <button type="button" class="quiet-button scorecard-new-set"
+            onclick=${onNewSet}>New set</button>
+      <//>
+    </div>
+    ${coverage.covered < coverage.tiles
+      ? html`<p class="meta scorecard-note">goal covers ${coverage.covered}/${coverage.tiles}</p>` : ""}
   </div>`;
 }
 
@@ -811,11 +742,12 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   // The picks' own names, by the index the server attributes tiles with --
   // so a dot's tooltip says WHICH pick set that star without any surface
   // re-deriving the winner.
-  const sourceNames = (data && data.goal && data.goal.kind === "multi"
-    ? (data.goal.sources || []).map(goalToLabel) : []);
+  const sourceNames = pendingGoal === undefined ? goalSources(data && data.goal).map(goalToLabel) : [];
   // entity_key -> goal_cs, UNSAVED. Lives here (not per-row) because a save
   // can gather edits made across several rows before he ever presses Save.
   const [pendingOverrides, setPendingOverrides] = useState({});
+  const editsRevision = useRef(0);
+  const [editingSet, setEditingSet] = useState(null);
   const [saveBusy, setSaveBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -839,6 +771,11 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     () => (data ? applyGoalOverrides(data, pendingOverrides) : null),
     [data, pendingOverrides]);
   function handleGoalOverride(entityKey, goalCs) {
+    editsRevision.current++;
+    if (editingSet === null) {
+      const customs = goalSources(pickerGoal).filter((source) => source.kind === "custom");
+      setEditingSet(customs.length === 1 ? customs[0].name : "");
+    }
     setPendingOverrides((current) => ({ ...current, [entityKey]: goalCs }));
   }
 
@@ -864,17 +801,15 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   }
 
   function discardOverrides() {
+    editsRevision.current++;
+    setEditingSet(null);
     setPendingOverrides({});
     setSaveError(null);
   }
 
-  function onGoalChange(values) {
-    // Picking a different base goal makes any unsaved edit ambiguous (it
-    // was relative to whatever was active a moment ago) -- discard rather
-    // than silently carry it onto a goal it was never made against.
-    setPendingOverrides({});
-    setSaveError(null);
-    writeGoal(valuesToGoal(values));
+  function onGoalChange(kind, values) {
+    discardOverrides();
+    writeGoal(changeGoalSources(pickerGoal, kind, values));
   }
 
   // The region pick is the server's, not this component's: it decides which
@@ -893,32 +828,31 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
     }
   }
 
-  // A legend pill's ×: the same write the picker makes, minus that pick --
-  // one pick left stores as that single goal, none left clears it, and the
-  // refetch re-grades every tile ("Everything should update accordingly").
+  // Removing an extra source preserves the mandatory rank and every other
+  // choice; the refetch recomputes each tile's winning goal and attribution.
   function removeSource(index) {
-    const removed = goalToValues(data && data.goal)[index];
-    if (!removed) return;
-    onGoalChange(goalToValues(pickerGoal).filter((value) => value !== removed));
+    const source = goalSources(pickerGoal)[index];
+    if (!source || index === 0) return;
+    const values = goalSources(pickerGoal).filter((one) => one.kind === source.kind
+      && goalToValue(one) !== goalToValue(source)).map(goalToValue);
+    onGoalChange(source.kind, values);
   }
 
   async function saveCustomGoal(name) {
-    if (!name || !displayData) return;
+    if (!name || !Object.keys(pendingOverrides).length) return;
+    const revision = editsRevision.current;
     setSaveBusy(true);
     setSaveError(null);
     try {
-      // The FULL currently-displayed times, not just the touched keys -- a
-      // save carries every star's existing target forward, so the ones he
-      // never opened keep whatever the base goal already gave them.
-      const times = {};
-      for (const row of displayData.rows) {
-        for (const tile of row.tiles) {
-          if (tile.goal_cs != null) times[tile.key] = tile.goal_cs;
-        }
+      const selected = goalSources(pickerGoal).filter((source) => source.kind === "custom")
+        .map(goalToValue);
+      const next = changeGoalSources(pickerGoal, "custom", [...new Set([...selected, `custom:${name}`])]);
+      const sources = goalSources(next).map((source) => source.kind === "custom" && source.name === name
+        ? { ...source, times: pendingOverrides } : source);
+      // A later edit or New set gesture must survive an earlier save reply.
+      if (await writeGoal({ kind: "multi", sources }) && editsRevision.current === revision) {
+        discardOverrides();
       }
-      // Keep the edits until the saved goal's computed card arrives. A
-      // failed or superseded save must not discard a newer set of edits.
-      if (await writeGoal({ kind: "custom", name, times })) setPendingOverrides({});
     } catch (err) {
       setSaveError(err.message || String(err));
     } finally {
@@ -935,15 +869,16 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
         ? html`<${InlineState}>Loading your scorecard…<//>`
         : html`<${ScorecardHead} goal=${pickerGoal} groups=${groups}
               onOpen=${loadRunnersOnce} scopeId=${scopeId}
-              coverage=${data.goal_coverage} onGoalChange=${onGoalChange} />
+              coverage=${data.goal_coverage} onGoalChange=${onGoalChange}
+              onNewSet=${() => { discardOverrides(); setEditingSet(""); }} />
             ${goalError ? html`<${InlineState} kind="error">${goalError}<//>` : ""}
             <${ScorecardSubhead} regions=${data.regions || ["us"]}
               detectedRegion=${data.detected_region || "us"}
               onRegionsChange=${onRegionsChange}
-              goal=${data.goal} onRemove=${removeSource} />
-            ${pendingCount > 0
+              goal=${pickerGoal} onRemove=${removeSource} />
+            ${editingSet !== null
               ? html`<${ScorecardSaveBar} pendingCount=${pendingCount}
-                    initialName=${data.goal && data.goal.kind === "custom" ? data.goal.name : ""}
+                    initialName=${editingSet || ""}
                     busy=${saveBusy} error=${saveError}
                     onSave=${saveCustomGoal} onDiscard=${discardOverrides} />`
               : ""}

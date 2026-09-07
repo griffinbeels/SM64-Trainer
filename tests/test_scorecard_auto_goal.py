@@ -89,7 +89,13 @@ def test_manual_choices_persist_across_scopes_and_clearing_restores_auto(tmp_pat
         assert response.status_code == 200
         saved = response.json()["goal"]
         for scope in ("overall", route, "course:4", "overall"):
-            assert client.get("/api/scorecard", params={"scope": scope}).json()["goal"] == saved
+            goal = client.get("/api/scorecard", params={"scope": scope}).json()["goal"]
+            if saved.get("kind") == "multi" and saved["sources"][0]["kind"] == "automatic":
+                assert goal["sources"][1:] == saved["sources"][1:]
+                rank = client.get("/api/marelo", params={"scope": scope}).json()
+                assert goal["sources"][0] == scorecard.automatic_goal(rank["tier"], rank["division"])
+            else:
+                assert goal == saved
             assert db.get_state("scorecard_goal", None) == saved
         assert client.put("/api/scorecard/goal", json=None).status_code == 200
         assert client.get("/api/scorecard", params={"scope": route}).json()["goal"]["kind"] == "automatic"
