@@ -1,15 +1,17 @@
 """Held and delayed pictures retain their identity through actual encoder cuts."""
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import time
 
 import av
 import pytest
 from sm64_events.replay.config import ReplayConfig
-from sm64_events.replay.extract import ClipExtractor
+from sm64_events.replay.extract import ClipExtractor, frame_times_of
 from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
 from sm64_events.replay.ledger import PictureLedger
-from sm64_events.replay.ring import SegmentRing
+from sm64_events.replay.media import MediaRun
+from sm64_events.replay.ring import SegmentInfo, SegmentRing
 
 from test_replay_picture_identity import encoder as encoder, picture, read_pictures
 from test_replay_service import attempt, make_service
@@ -30,6 +32,28 @@ def segment_pictures(path):
         return read_pictures(path)
     except IndexError:
         return []  # Record an audio-only tail in the diagnostic report too.
+
+
+def test_a_tiny_held_segment_keeps_its_picture(tmp_path, encoder):
+    """Actual 1128-byte synthetic-barcode segment from the full-run failure.
+
+    Autodetection calls it MPEG-PS/MP2 and misses H264 PTS369919. Both the
+    source probe and a cut containing only this segment must honor MPEG-TS.
+    """
+    ffmpeg, codec = encoder
+    path = Path(__file__).parent / "fixtures" / "replay_tiny_held.ts"
+    assert read_pictures(path) == [(369919 / 90000, 3)]
+    ticks = frame_times_of(ffmpeg, path, input_format="mpegts")
+    assert ticks and [round(t * 90000) for t in ticks] == [369919]
+    start = datetime.fromtimestamp(369919 / 90000, timezone.utc)
+    end = datetime.fromtimestamp(461141 / 90000, timezone.utc)
+    ring = SegmentRing(retention_s=None, max_bytes=10**8)
+    ring.add(SegmentInfo(path, "video", start, end, path.stat().st_size,
+                         (320, 96), MediaRun.starting_at(0)))
+    result = ClipExtractor(ReplayConfig(scratch_dir=tmp_path), codec, ffmpeg).extract(
+        ring, start, end, tmp_path / "tiny.mp4")
+    assert [number for _, number in read_pictures(result.path)] == [3]
+    assert result.source_pts == [369919]
 
 
 @pytest.fixture

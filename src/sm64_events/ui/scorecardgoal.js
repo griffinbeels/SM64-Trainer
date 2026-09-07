@@ -46,33 +46,55 @@ export function divisionOptions() {
   return options;
 }
 
-// The goal picker's whole group list: "Automatic goal" first, then whatever named
-// goals the player has SAVED (round 8, his own words: "Custom comparisons
-// should show up at the top of the goal dropdown selector" -- immediately
-// after automatic mode, then every division,
-// then whatever sheet runners the caller has fetched (possibly none yet --
-// `ui/components/scorecard.js`'s own header comment says why the Runners
-// group is fetched LAZILY, on the picker's first open, rather than eagerly
-// with everything else).
-//
-// Unlike Runners, an EMPTY Custom group is omitted entirely rather than
-// rendered with nothing under it -- Runners has to stay present as the drop
-// target for its own lazy fetch; a saved-goal list either has entries or it
-// does not, and a heading over nothing is a defect, not a placeholder.
-//
-// `runner:<name>`/`custom:<name>` are the SAME encoding `goalToValue`/
-// `valueToGoal` (scorecard.js) round-trip a goal through -- one value shape
-// per kind, never re-derived at the two ends.
+// Independent selectors share the existing goal wire shape. Automatic is
+// always stored without its computed rank, even when other sources are on.
+export function goalToValue(goal) {
+  if (goal.kind === "division") return `division:${goal.tier}:${goal.division}`;
+  if (goal.kind === "runner") return `runner:${goal.runner}`;
+  if (goal.kind === "custom") return `custom:${goal.name}`;
+  return "";
+}
+
+function valueToGoal(value) {
+  const [kind, ...rest] = value.split(":");
+  if (kind === "division") return { kind, tier: rest[0], division: rest[1] };
+  if (kind === "runner") return { kind, runner: rest.join(":") };
+  if (kind === "custom") return { kind, name: rest.join(":") };
+  return { kind: "automatic" };
+}
+
+export function goalSources(goal) {
+  const sources = goal?.kind === "multi" ? goal.sources || [] : goal ? [goal] : [];
+  const rank = sources.filter((source) => ["division", "automatic"].includes(source.kind)).pop()
+    || { kind: "automatic" };
+  return [rank, ...sources.filter((source) => ["runner", "custom"].includes(source.kind))];
+}
+
+export function goalToLabel(goal) {
+  if (goal.kind === "automatic") return goal.tier
+    ? `Automatic · ${capName(goal.tier)} ${divisionDigit(goal.division)}` : "Automatic";
+  if (goal.kind === "division") return `${capName(goal.tier)} ${divisionDigit(goal.division)}`;
+  return goal.kind === "runner" ? goal.runner : goal.name;
+}
+
+export function changeGoalSources(goal, kind, values) {
+  const old = goalSources(goal);
+  const rank = kind === "rank" ? valueToGoal(values[0] || "") : old[0];
+  const extras = kind === "rank" ? old.slice(1)
+    : [...old.slice(1).filter((source) => source.kind !== kind), ...values.map(valueToGoal)];
+  const sources = [rank.kind === "automatic" ? { kind: "automatic" } : rank, ...extras];
+  return sources.length > 1 ? { kind: "multi", sources }
+    : rank.kind === "automatic" ? null : rank;
+}
+
 export function goalGroups(runners, customNames) {
-  const groups = [{ label: "", options: [{ value: "", label: "Automatic goal" }] }];
-  if (customNames && customNames.length) {
-    groups.push({ label: "Custom", options: customNames.map(
-        (name) => ({ value: `custom:${name}`, label: name })) });
-  }
-  groups.push({ label: "Divisions", options: divisionOptions() });
-  groups.push({ label: "Runners", options: (runners || []).map(
-      (name) => ({ value: `runner:${name}`, label: name })) });
-  return groups;
+  return {
+    rank: [{ label: "", options: [{ value: "", label: "Automatic" }, ...divisionOptions()] }],
+    players: [{ label: "", options: (runners || []).map(
+      (name) => ({ value: `runner:${name}`, label: name })) }],
+    custom: [{ label: "", options: (customNames || []).map(
+      (name) => ({ value: `custom:${name}`, label: name })) }],
+  };
 }
 
 // "1'21\"32" / "23\"00" (no minutes, matching fmtSeconds' own display

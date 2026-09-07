@@ -43,12 +43,12 @@ class ConsentBody(BaseModel):
 def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer) -> dict:
     return {
         "platform": mode_cfg.mode.value,
-        "emu": capture_layer.status().as_dict(),
+        TrackerMode.EMU.value: capture_layer.status().as_dict(),
         # The N64 front-end (console-support's own vision pipeline) has
         # nothing to report yet -- this shape is what SETUP_PANES.n64 checks
         # to render its one placeholder line rather than a picker with
         # nothing behind it.
-        "n64": {"available": False},
+        TrackerMode.N64.value: {"available": False},
     }
 
 

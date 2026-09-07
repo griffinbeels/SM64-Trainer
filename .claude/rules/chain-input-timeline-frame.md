@@ -83,6 +83,15 @@ paused picture":
 
 ## Failure catalogue
 
+- **2026-09-06: a tiny held-picture segment was misread as audio only.**
+  The 1128-byte synthetic witness `tests/fixtures/replay_tiny_held.ts` contains
+  H264 PTS369919, but PyAV and ffprobe autodetected MPEG-PS/MP2. Forcing
+  MPEG-TS restored that exact frame without changing the bytes. The ring's
+  format is known: `extract.py` now passes it to source-frame probing and the
+  concat input; the independent test decoder does likewise. The real-file
+  regression in `tests/test_replay_held_picture.py` covers probing and a cut
+  whose entire source is this segment. No frame-map offset or tolerance changed.
+
 - **2026-09-06: direct source identity still inherited the fitted map's
   predecessor subtraction.** Fresh Wild Blue7718 slot138, Pyramid7685 slot342
   and Books7739 slot76 were decoded independently. Their pixels match each

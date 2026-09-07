@@ -11,6 +11,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
+import { EMU, N64 } from "../platform.js";
 
 const html = htm.bind(h);
 
@@ -187,11 +188,11 @@ export function N64SetupPane() {
   return html`<p class="setup-n64-note">N64 setup arrives with console support.</p>`;
 }
 
-export const SETUP_PANES = { emu: EmuSetupPane, n64: N64SetupPane };
+export const SETUP_PANES = { [EMU]: EmuSetupPane, [N64]: N64SetupPane };
 
 const PLATFORM_CHOICES = [
-  ["emu", "Emulator", "Project64 on this PC"],
-  ["n64", "N64", "A real console, capture card"],
+  [EMU, "Emulator", "Project64 on this PC"],
+  [N64, "N64", "A real console, capture card"],
 ];
 
 export function SetupModal({ onClose, initialPlatform, initialPane }) {

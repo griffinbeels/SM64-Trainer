@@ -76,7 +76,8 @@ class ClipResult:
     source_pts: list[int] | None = None
 
 
-def frame_times_of(ffmpeg: str | None, clip: Path) -> list[float] | None:
+def frame_times_of(ffmpeg: str | None, clip: Path, *,
+                   input_format: str | None = None) -> list[float] | None:
     """Every video frame's pts, in seconds, off ffprobe; None when it cannot
     be read. One call per cut (~100 ms for a 30 s clip)."""
     ffprobe = ffprobe_beside(ffmpeg)
@@ -85,6 +86,7 @@ def frame_times_of(ffmpeg: str | None, clip: Path) -> list[float] | None:
     try:
         out = subprocess.run(
             [ffprobe, "-v", "error", "-select_streams", "v:0",
+             *(["-f", input_format] if input_format else []),
              "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(clip)],
             capture_output=True, text=True, timeout=120, check=False,
             **quiet_spawn_kwargs())
@@ -244,7 +246,10 @@ class ClipExtractor:
             # source picture and report its UTC origin, keeping the source
             # identity and A/V offset unchanged. Never fabricate a new PTS for
             # a duplicate leading picture.
-            source_times = frame_times_of(self._ffmpeg, run[0].path)
+            # A tiny held-picture TS can be misdetected as MPEG program
+            # stream with audio only. The ring's format is already known.
+            source_times = frame_times_of(self._ffmpeg, run[0].path,
+                                          input_format="mpegts")
             if not source_times:
                 raise ValueError("no readable pictures at the requested start")
             source_ticks = [round(t * MEDIA_HZ) for t in source_times]
@@ -273,7 +278,7 @@ class ClipExtractor:
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "error",
             *(["-copyts"] if media_run else []),
-            "-i", concat, "-ss", f"{ss:.6f}", "-t", f"{dur:.6f}",
+            "-f", "mpegts", "-i", concat, "-ss", f"{ss:.6f}", "-t", f"{dur:.6f}",
             "-map", "0:v:0", "-map", "0:a:0",
             "-c:v", self._codec,
             "-g", str(max(1, fps // 2)),

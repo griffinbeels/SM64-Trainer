@@ -29,7 +29,10 @@ def picture(number):
 
 
 def read_pictures(path):
-    with av.open(str(path)) as container:
+    # Ring files are MPEG-TS even when a one-picture segment is too small
+    # for autodetection (which can mistake it for audio-only MPEG-PS).
+    container_format = "mpegts" if str(path).endswith(".ts") else None
+    with av.open(str(path), format=container_format) as container:
         stream = container.streams.video[0]
         stream.codec_context.thread_count = 1
         result = []

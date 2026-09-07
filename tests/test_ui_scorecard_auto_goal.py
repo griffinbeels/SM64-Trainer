@@ -12,8 +12,8 @@ from test_ui_scorecard import (
 from ui_fixture import FIXTURE_COURSE, FIXTURE_STAR
 
 CARD = ".rank-page .scorecard-card"
-LABEL = CARD + " .scorecard-head .search-select-value"
-TRIGGER = CARD + " .scorecard-head .search-select-trigger"
+LABEL = CARD + ' [data-goal-control="Rank Goal"] .search-select-value'
+TRIGGER = CARD + ' [data-goal-control="Rank Goal"] .search-select-trigger'
 
 
 def _wait(page, expression):
@@ -55,43 +55,28 @@ def _label_is(page, text):
           + json.dumps(text))
 
 
-def _open_menu(page):
-    page.click(TRIGGER)
+def _open_menu(page, label="Rank Goal"):
+    page.click(CARD + f' [data-goal-control="{label}"] .search-select-trigger')
     page.wait_for(CARD + " .search-menu")
 
 
-def _restore_auto_from_manual(page):
+def _pick_rank(page, value):
     _open_menu(page)
-    page.evaluate(_option_click("division:Bronze:I"))
-    _label_is(page, "Toad 1")
-    page.evaluate(_option_click(""))
-    page.wait_for(CARD + ' .search-menu-option[data-value=""].is-picked')
-    page.click(TRIGGER)
+    page.evaluate(_option_click(value))
+    _wait(page, f"!document.querySelector({json.dumps(CARD + ' .search-menu')})")
 
 
-def _save_named_edit(page, base, route):
-    payload = _read(base, "/api/scorecard?scope=" + route)
-    row = payload["rows"][0]
-    _expand_row_and_edit_goal(page, row["label"], row["tiles"][0]["label"], '1\'00"00')
-    page.click(CARD + " .scorecard-savebar-input")
-    page.evaluate("(() => { const input = document.querySelector("
-                  "'.scorecard-savebar-input');"
-                  "Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')"
-                  ".set.call(input, 'My route goal');"
-                  "input.dispatchEvent(new Event('input', {bubbles:true})); })()")
+def _name_and_save(page, name):
+    page.evaluate("(() => { const input = document.querySelector('.scorecard-savebar-input');"
+                  + f"input.value = {json.dumps(name)};"
+                  + "input.dispatchEvent(new Event('input', {bubbles:true})); })()")
     page.click(CARD + " .scorecard-savebar button:first-of-type")
-    _label_is(page, "My route goal")
-    assert page.count(CARD + " .score-line") == 1
-    assert _read(base, "/api/scorecard?scope=" + route)["rows"][0]["tiles"][0]["goal_cs"] == 6000
-    _scope(page, "overall")
-    _label_is(page, "My route goal")
-    _scope(page, route)
-    _label_is(page, "My route goal")
+    _wait(page, "!document.querySelector('.scorecard-savebar')")
 
 
 @pytest.mark.parametrize("width", [1500, 850])
 def test_automatic_manual_and_clear_flows_follow_the_visible_scope(width, tmp_path):
-    with serve_ui_live() as (base, service):
+    with serve_ui_live(reconcile_full_corpus=True) as (base, service):
         route = "route:" + str(service.db.insert_route("Practiced star", [
             {"need": 1, "candidates": [{"type": "star", "course": FIXTURE_COURSE,
                                       "star": FIXTURE_STAR}]}
@@ -102,52 +87,127 @@ def test_automatic_manual_and_clear_flows_follow_the_visible_scope(width, tmp_pa
             page.evaluate(_OPEN_RANK_TAB)
             page.wait_for(TRIGGER)
             _wait(page, f"document.querySelector({json.dumps(LABEL)})?.textContent.startsWith('Automatic · ')")
-            initial_label = page.evaluate(f"document.querySelector({json.dumps(LABEL)}).textContent")
-            _check_browser_errors(page, base)
+            initial = page.evaluate(f"document.querySelector({json.dumps(LABEL)}).textContent")
+            assert page.count(CARD + " .goal-pill, " + CARD + " .score-line-source") == 0
             _open_menu(page)
-            page.wait_for(CARD + ' .search-menu-option[data-value=""].is-picked')
-            assert not page.count(CARD + ' .search-menu-option[data-value="division:Iron:V"]')
+            values = page.evaluate("[...document.querySelectorAll('.scorecard-card .search-menu-option')].map(e=>e.dataset.value)")
+            assert values[0] == "" and all(v.startswith("division:") for v in values[1:])
+            assert "division:Iron:V" not in values
             page.click(TRIGGER)
-
             _scope(page, route)
-            assert page.evaluate(f"document.querySelector({json.dumps(LABEL)}).textContent") != initial_label
-            assert page.count(CARD + " .score-line") == 1
+            assert page.evaluate(f"document.querySelector({json.dumps(LABEL)}).textContent") != initial
             auto = _read(base, "/api/scorecard?scope=" + route)["goal"]
-            rank = _read(base, "/api/marelo?scope=" + route)
-            assert auto["kind"] == "automatic"
-            assert rank["scope_id"] == route
             page.evaluate(f"document.querySelector({json.dumps(CARD)}).scrollIntoView()")
             (tmp_path / f"automatic-{width}.png").write_bytes(page.screenshot())
 
-            _open_menu(page)
-            page.evaluate(_option_click("division:Bronze:I"))
+            _pick_rank(page, "division:Bronze:I")
             _label_is(page, "Toad 1")
+            _open_menu(page, "Player Goal")
             page.wait_for(CARD + ' .search-menu-option[data-value="runner:RONC3NA"]')
+            values = page.evaluate("[...document.querySelectorAll('.scorecard-card .search-menu-option')].map(e=>e.dataset.value)")
+            assert all(v.startswith("runner:") for v in values)
             page.evaluate(_option_click("runner:RONC3NA"))
-            _label_is(page, "2 picked")
-            page.click(TRIGGER)
+            page.wait_for(CARD + ' .search-menu-option.is-picked')
+            page.click(CARD + ' [data-goal-control="Player Goal"] .search-select-trigger')
             _scope(page, "overall")
-            _label_is(page, "2 picked")
-            assert page.count(CARD + " .goal-pill") == 2
+            _label_is(page, "Toad 1")
+            page.wait_for(CARD + " .goal-pill:nth-child(2)")
+            assert page.count(CARD + " .goal-pill:first-child button") == 0
+            assert page.count(CARD + " .goal-pill:first-child > *") == 2
             _scope(page, route)
-            _label_is(page, "2 picked")
-            page.click(CARD + ' .goal-pill-remove[aria-label="Remove RONC3NA from the goal"]')
             _label_is(page, "Toad 1")
 
-            # Unticking the last pick returns to automatic, with real times.
-            _open_menu(page)
-            page.evaluate(_option_click("division:Bronze:I"))
-            page.wait_for(CARD + ' .search-menu-option[data-value=""].is-picked')
+            # Automatic changes only the rank; a selected player stays on.
+            _pick_rank(page, "")
+            _wait(page, f"document.querySelector({json.dumps(LABEL)}).textContent.startsWith('Automatic · ')")
+            assert _read(base, "/api/scorecard?scope=" + route)["goal"]["sources"][0] == auto
+            page.click(CARD + ' .goal-pill-remove[aria-label="Remove RONC3NA from the goal"]')
+            _wait(page, "!document.querySelector('.goal-pill')")
             assert _read(base, "/api/scorecard?scope=" + route)["goal"] == auto
-            page.click(TRIGGER)
 
-            # The explicit automatic option also clears an entire manual set.
-            _restore_auto_from_manual(page)
-
-            # Saving a named edit must keep this route's single-row card.
-            _save_named_edit(page, base, route)
+            # A named set stores just edited entries and accumulates across scopes.
+            page.click(CARD + " .scorecard-new-set")
+            first = _read(base, "/api/scorecard?scope=" + route)["rows"][0]
+            _expand_row_and_edit_goal(page, first["label"], first["tiles"][0]["label"], '1"00')
+            _name_and_save(page, "Practice set")
+            key = first["tiles"][0]["key"]
+            assert service.db.get_state("scorecard_custom_goals", {})["Practice set"] == {key: 100}
+            _scope(page, "overall")
+            payload = _read(base, "/api/scorecard")
+            row, tile = next((r, t) for r in payload["rows"] for t in r["tiles"] if t["key"].startswith("segment:"))
+            _expand_row_and_edit_goal(page, row["label"], tile["label"], '2"00')
+            assert page.evaluate("document.querySelector('.scorecard-savebar-input').value") == "Practice set"
+            _name_and_save(page, "Practice set")
+            assert service.db.get_state("scorecard_custom_goals", {})["Practice set"] == {key: 100, tile["key"]: 200}
+            page.click(CARD + ' .goal-pill-remove[aria-label="Remove Practice set from the goal"]')
+            _wait(page, "!document.querySelector('.goal-pill')")
+            _open_menu(page, "Custom Goals")
+            assert page.count(CARD + " .search-menu-option") == 1
+            page.evaluate(_option_click("custom:Practice set"))
+            page.click(CARD + ' [data-goal-control="Custom Goals"] .search-select-trigger')
+            _wait(page, "document.querySelectorAll('.goal-pill').length === 2")
+            _wait(page, "document.querySelectorAll('.score-line-source').length > 0")
+            _scope(page, route)
+            assert _read(base, "/api/scorecard?scope=" + route)["rows"][0]["tiles"][0]["goal_cs"] == 100
             page.evaluate(f"document.querySelector({json.dumps(CARD)}).scrollIntoView()")
             (tmp_path / f"custom-{width}.png").write_bytes(page.screenshot())
             _check_browser_errors(page, base)
-        assert service.db.get_state("scorecard_goal", None) == {
-            "kind": "custom", "name": "My route goal"}
+
+
+def test_a_goal_set_save_does_not_discard_a_later_time_edit():
+    from test_ui_scorecard import _HOLD_GOAL_RESPONSES
+
+    with serve_ui_live() as (base, service):
+        with get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(CARD + " .score-line")
+            row = _read(base, "/api/scorecard")["rows"][0]
+            tile = row["tiles"][0]
+            page.click(CARD + " .scorecard-new-set")
+            _expand_row_and_edit_goal(page, row["label"], tile["label"], '1"00')
+            page.evaluate(_HOLD_GOAL_RESPONSES.replace("FAIL_FIRST", "false"))
+            page.evaluate("window.releaseOldCard = () => {}")
+            page.evaluate("(() => { const input = document.querySelector('.scorecard-savebar-input');"
+                          "input.value = 'Practice set';"
+                          "input.dispatchEvent(new Event('input', {bubbles:true})); })()")
+            page.click(CARD + " .scorecard-savebar button:first-of-type")
+            _wait(page, "!!window.releaseGoal")
+            _expand_row_and_edit_goal(page, row["label"], tile["label"], '2"00')
+            page.evaluate("window.releaseGoal()")
+            _wait(page, "!document.querySelector('.scorecard-savebar button').disabled")
+            assert service.db.get_state("scorecard_custom_goals", {})["Practice set"] == {tile["key"]: 100}
+            _name_and_save(page, "Practice set")
+            assert service.db.get_state("scorecard_custom_goals", {})["Practice set"] == {tile["key"]: 200}
+            _check_browser_errors(page, base)
+
+
+def test_reported_scorecard_times_open_the_corresponding_library_rows(tmp_path):
+    from test_ui_scorecard import _put_division_goal
+
+    with serve_ui_live(reconcile_full_corpus=True) as (base, service):
+        cases = [(4, 6, "100c + Race · Standard", "Big Penguin Race + 100c", '1\'30"94'),
+                 (8, 2, "Pillarless", "Inside the Ancient Pyramid", '1\'11"46')]
+        for course, star, active, _label, _expected in cases:
+            service.strat_by_star[(course, star)] = active
+        _put_division_goal(base, "Iron", "II")
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".log-list-card")
+            for course, _star, _active, label, expected in cases:
+                page.evaluate(_OPEN_RANK_TAB)
+                page.wait_for(CARD + " .score-line")
+                link = CARD + f' .score-line-link[title="Open {label} in the Library"]'
+                page.wait_for(link)
+                shown = page.evaluate(f"document.querySelector({json.dumps(link)})"
+                                      ".closest('.score-line').querySelector('.score-line-goal').textContent.trim()")
+                assert shown == expected
+                page.evaluate(f"document.querySelector({json.dumps(link)}).closest('.score-card').scrollIntoView()")
+                (tmp_path / f"goal-course-{course}.png").write_bytes(page.screenshot())
+                page.click(link)
+                page.wait_for(".library-target .library-section.open")
+                _wait(page, "[...document.querySelectorAll('.library-section.open .library-section-name')]"
+                      f".some(el => el.textContent === {json.dumps(label)})")
+                (tmp_path / f"library-course-{course}.png").write_bytes(page.screenshot())
+            _check_browser_errors(page, base)

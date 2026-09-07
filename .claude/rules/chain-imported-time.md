@@ -11,6 +11,7 @@ paths:
   - "src/sm64_events/library/export_column.py"
   - "src/sm64_events/server/import_api.py"
   - "src/sm64_events/server/scorecard_api.py"
+  - "src/sm64_events/server/scorecard_standards.py"
   - "src/sm64_events/tracking/importing.py"
   - "src/sm64_events/tracking/recordings.py"
   - "src/sm64_events/tracking/views.py"
@@ -92,3 +93,14 @@ tell an import bug from a reading bug.
 - 2026-09-05 hop 5 — the import stamped `entry.version or target.version` and the runner goal read the same fallback, so both AGREED and both were wrong: 3,123 entries on 68 rows wore a ROM the sheet never claimed for them. Fix at `sheet.entry_version`, one door for both readers. Worth carrying: agreement between two readers is not correctness, and the parity walk cannot see a rule both sides share.
 - 2026-09-05 hop 3 — a live refresh stamped the vetted pairing BEFORE fitting ladders, and the matcher compares ladders, so it matched nothing: 270 unmatched, zero vetted names, and an import that named strategies "Left side TJ" beside the vetted "Leftside". Fix by fitting before stamping.
 - 2026-09-05 hop 3 — a test pointed the library STORE at the bundled seed, and the store owns the file it is given: every `matched_strategy` was stripped from a tracked file, turning 14 unrelated tests red in the next full run with nothing failing at the time. Hand the store a copy, never a file you want to keep.
+
+- 2026-09-06 hop 8 — the rank-goal resolver inverted the entity-wide minimum
+  while its Library link opened a specific strategy. CCM Race +100c displayed
+  7034 cs from Slide/Xcam; SSL Standard displayed 1796 cs from Nuts Pless.
+  Injecting the intended ladders produced 9094/7146 cs, both Capless II and
+  both Capless III one cs slower. `scorecard_standards.tile_strategies` now
+  resolves canonical row identity once for the goal and link. A historical
+  alias identifies the row but does not supply its grading ladder. The
+  independent Library API regression is `test_scorecard_goal_standards.py`.
+  Player-import parity reads `player_goal_cs`, recorded during source merging,
+  because the always-active rank can legitimately set a faster final goal.

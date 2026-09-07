@@ -7833,6 +7833,11 @@
     display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px;
   }
   .scorecard-head h3 { margin: 0; margin-right: auto; }
+  .scorecard-goal-controls { display: flex; flex-wrap: wrap; gap: 10px 18px;
+    justify-content: flex-end; max-width: 100%; }
+  .scorecard-goal-control { display: grid; grid-template-columns: auto auto;
+    align-items: center; gap: 2px 6px; min-width: 0; }
+  .scorecard-goal-label { grid-column: 1 / -1; }
   .scorecard-note { margin: 0; flex-basis: 100%; }
   /* Round 25: this sits UNDER the cards now, as a direct child of the card
      grid rather than inside `.scorecard-head` -- "The button should go at

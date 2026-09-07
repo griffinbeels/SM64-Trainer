@@ -77,7 +77,7 @@ def test_unset_goal_compares_your_times_with_the_automatic_goal(tmp_path):
         assert tile["delta_cs"] == tile["you_cs"] - tile["goal_cs"]
 
 
-def test_a_runner_goal_with_no_sheet_times_grades_nothing(tmp_path):
+def test_a_runner_without_times_keeps_the_automatic_rank_targets(tmp_path):
     """A runner nobody on the sheet is named -- the goal is accepted and
     resolves to an empty map, same as a division goal with no matching
     ladder anywhere. No `goal_pending` any more (task 6): the resolver is
@@ -88,11 +88,11 @@ def test_a_runner_goal_with_no_sheet_times_grades_nothing(tmp_path):
         assert response.status_code == 200
 
         card = client.get("/api/scorecard").json()
-        assert card["goal"] == {"kind": "runner",
+        assert card["goal"]["sources"][1] == {"kind": "runner",
                                 "runner": "NobodyOnTheSheetIsNamedThis12345"}
         assert "goal_pending" not in card
-        assert not any(tile["goal_cs"] for row in card["rows"] for tile in row["tiles"])
-        assert card["goal_coverage"]["covered"] == 0
+        assert any(tile["goal_cs"] for row in card["rows"] for tile in row["tiles"])
+        assert card["goal"]["sources"][0]["kind"] == "automatic"
 
 
 def test_a_runner_goal_resolves_against_the_sheet(tmp_path):
@@ -115,11 +115,12 @@ def test_a_runner_goal_resolves_against_the_sheet(tmp_path):
         assert response.status_code == 200
 
         card = client.get("/api/scorecard").json()
-        assert card["goal"] == {"kind": "runner", "runner": runner}
+        assert card["goal"]["sources"][1] == {"kind": "runner", "runner": runner}
         assert "goal_pending" not in card
         tiles = [tile for row in card["rows"] for tile in row["tiles"]]
         assert any(tile["goal_cs"] is not None for tile in tiles)
-        assert 0 < card["goal_coverage"]["covered"] < card["goal_coverage"]["tiles"]
+        assert 0 < sum(t["player_goal_cs"] is not None for t in tiles) < len(tiles)
+        assert card["goal_coverage"]["covered"] == len(tiles)
 
 
 def _sheet_times(version):
@@ -236,16 +237,16 @@ def test_a_custom_goal_saves_and_resolves(tmp_path):
             "kind": "custom", "name": "Sub 90 Attempt",
             "times": {"star:1:0": 886, "star:1:1": 1500}})
         assert response.status_code == 200
-        assert response.json()["goal"] == {"kind": "custom", "name": "Sub 90 Attempt"}
+        assert response.json()["goal"]["sources"][1] == {"kind": "custom", "name": "Sub 90 Attempt"}
 
         card = client.get("/api/scorecard").json()
-        assert card["goal"] == {"kind": "custom", "name": "Sub 90 Attempt"}
+        assert card["goal"]["sources"][1] == {"kind": "custom", "name": "Sub 90 Attempt"}
         assert card["custom_goals"] == ["Sub 90 Attempt"]
         row = next(r for r in card["rows"] if r["course_id"] == 1)
         tiles = {tile["key"]: tile for tile in row["tiles"]}
         assert tiles["star:1:0"]["goal_cs"] == 886
         assert tiles["star:1:1"]["goal_cs"] == 1500
-        assert tiles["star:1:2"]["goal_cs"] is None
+        assert tiles["star:1:2"]["goal_cs"] is not None  # Rank remains active.
 
 
 def test_a_custom_goal_needs_a_name(tmp_path):
@@ -1045,7 +1046,7 @@ def test_a_multi_goal_takes_the_fastest_offer_and_unions_coverage(tmp_path):
         assert response.status_code == 200
         assert response.json()["goal"] == {
             "kind": "multi",
-            "sources": [{"kind": "custom", "name": "A"},
+            "sources": [{"kind": "automatic"}, {"kind": "custom", "name": "A"},
                         {"kind": "custom", "name": "B"}]}
 
         card = client.get("/api/scorecard").json()
@@ -1066,10 +1067,10 @@ def test_a_multi_goal_attributes_every_tile_to_the_source_that_set_it(tmp_path):
     with make_client(tmp_path) as (client, _db, _svc):
         client.put("/api/scorecard/goal", json={
             "kind": "custom", "name": "one",
-            "times": {"star:1:0": 4500, "star:1:1": 7000, "star:1:2": 5000}})
+            "times": {"star:1:0": 4500, "star:1:1": 7000, "star:1:2": 1000}})
         client.put("/api/scorecard/goal", json={
             "kind": "custom", "name": "two",
-            "times": {"star:1:0": 4000, "star:1:2": 5000}})
+            "times": {"star:1:0": 4000, "star:1:2": 1000}})
         client.put("/api/scorecard/goal", json={
             "kind": "multi",
             "sources": [{"kind": "custom", "name": "one"},
@@ -1078,12 +1079,12 @@ def test_a_multi_goal_attributes_every_tile_to_the_source_that_set_it(tmp_path):
         tiles = {tile["key"]: tile
                  for row in client.get("/api/scorecard").json()["rows"]
                  for tile in row["tiles"]}
-        assert tiles["star:1:0"]["goal_source"] == 1     # "two" is FASTER here
-        assert tiles["star:1:1"]["goal_source"] == 0     # only "one" covers it
-        assert tiles["star:1:2"]["goal_source"] == 0     # tie -> the earlier pick
-        # a tile no source covers is attributed to nobody
-        assert tiles["star:1:4"]["goal_cs"] is None
-        assert tiles["star:1:4"]["goal_source"] is None
+        assert tiles["star:1:0"]["goal_source"] == 2     # "two" is FASTER here
+        assert tiles["star:1:1"]["goal_source"] == 1     # only "one" covers it
+        assert tiles["star:1:2"]["goal_source"] == 1     # tie -> the earlier pick
+        # The rank covers a tile neither custom set names.
+        assert tiles["star:1:4"]["goal_cs"] is not None
+        assert tiles["star:1:4"]["goal_source"] == 0
 
 
 def test_a_single_goal_attributes_nothing(tmp_path):
@@ -1138,12 +1139,12 @@ def test_a_multi_goal_mixes_a_division_with_a_per_entity_source(tmp_path):
 
         # the faster per-entity time wins its own star...
         assert mixed["star:1:0"]["goal_cs"] == 100
-        assert mixed["star:1:0"]["goal_source"] == 0
+        assert mixed["star:1:0"]["goal_source"] == 1
         # ...and the division still covers every star it alone reaches
         other = next(key for key, tile in alone.items()
                      if key != "star:1:0" and tile["goal_cs"] is not None)
         assert mixed[other]["goal_cs"] == alone[other]["goal_cs"]
-        assert mixed[other]["goal_source"] == 1
+        assert mixed[other]["goal_source"] == 0
 
 
 def test_a_runner_goal_walks_the_sheet_once_and_reuses_it_until_something_moves(tmp_path, monkeypatch):

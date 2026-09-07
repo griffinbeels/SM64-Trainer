@@ -1395,7 +1395,14 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-06 after input timeline integration: **54,638 lines,
+Latest reading, 2026-09-06 for independent Scorecard goals: **54,703 lines,
+1,342 public names, 40.8 lines per public name, 63 pass-through (4.7%)**.
+No new forwarders. `server/scorecard_standards.py` chooses the canonical
+Library row for both the target and navigation; `server/scorecard_goals.py`
+owns selection normalization and named-set patches. The API module shrinks
+to 895 lines. The user-facing contract is [Goal](glossary.md#goal).
+
+Previous reading, 2026-09-06 after input timeline integration: **54,638 lines,
 1,337 public names, 40.9 lines per public name, 63 pass-through (4.7%)**.
 The ten added forwarders are format/resource boundaries: input read-time
 formatting and closure; action-group lookup; buffer/host integer conversion;
