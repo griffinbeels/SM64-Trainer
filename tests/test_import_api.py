@@ -266,6 +266,12 @@ def test_an_import_absorbs_the_rank_it_produced(tmp_path, monkeypatch):
         # targets cannot dilute this import below one aggregate subdivision.
         excluded = set(service.ranks.graded_entities()) - {"star:2:4"}
         monkeypatch.setattr(service, "rank_excluded", lambda: excluded)
+        # Overall grades against the fastest strategy at every tier. Pin all
+        # ways to the same reference ladder: the imported 12.63s must improve
+        # on 63s even when a new Sheet technique tightens the overall targets.
+        for strategy in service.ranks.ladders("star:2:4"):
+            for index, tier in enumerate(scoring.SCORE_ANCHORS):
+                service.ranks.set_threshold("star:2:4", strategy, tier, 10 + 2 * index)
         # A slow first time, then look at the rank -- that seeds the watermark
         # and absorbs the arrival, which is the state a real user is in.
         client.post("/api/import/manual", json={
