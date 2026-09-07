@@ -186,7 +186,7 @@ function ActionRow({ name, spans, templateSpans = [], view, seek, lead = 0 }) {
     <button class=${`action-span group-${span.group} ${ghost ? "is-template" : ""}`}
         key=${`${ghost ? "t" : "a"}${span.start}`}
         style=${style}
-        onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
+        onclick=${(event) => { event.stopPropagation(); seek(Math.max(view.start, span.start)); }}
         title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length, lead)} (${span.length}f)`}
         aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length, lead)}`}>
       <span class="action-span-name">${span.label}</span>
@@ -648,7 +648,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         ${(mine ? mine.bars : []).filter((bar) => spanInWindow(bar.start, bar.length, view)).map((bar) => html`
           <button class="input-bar" key=${bar.start}
                   style=${spanInWindow(bar.start, bar.length, view)}
-                  onclick=${(event) => { event.stopPropagation(); seek(bar.start); }}
+                  onclick=${(event) => { event.stopPropagation(); seek(Math.max(view.start, bar.start)); }}
                   title=${`${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)`}
                   aria-label=${`${name} held from ${spanLabel(bar.start, bar.length, lead)}, ${bar.length} frames`} />`)}
       </div>
