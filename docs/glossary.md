@@ -568,8 +568,8 @@ top of a [[tier]] from its bottom at a glance.
 ### Goal
 
 What the [[Scorecard]] grades every tile against. In automatic mode it aims
-one [[division]] above the current [[scope]]'s [[MARELO]] rank, capped at
-Mario 1, and follows scope and rank changes. A manual choice replaces it: a
+one [[division]] above the current [[scope]]'s [[MARELO]] [[rank]], capped at
+Mario 1, and follows [[scope]] and [[rank]] changes. A manual choice replaces it: a
 [[tier]] and [[division]] inside it, one [[runner]]'s own times, a set of
 times you typed yourself and saved under a name, or SEVERAL of those at
 once. The trainer turns it into one time per tile and the [[Scorecard]]
@@ -582,8 +582,8 @@ That coverage matters because a single pick falls short: a [[runner]] has
 nothing wherever they never recorded a time, and a hand-typed goal
 reaches only the tiles you typed.
 
-Manual choices persist across scope changes. Removing the last selection
-returns to automatic mode; the derived automatic rank is never saved as a
+Manual choices persist across [[scope]] changes. Removing the last selection
+returns to automatic mode; the derived automatic [[rank]] is never saved as a
 manual choice. Capless 4 through 1 have finite goal times; Capless 5 is the
 unbounded floor and is not a selectable goal.
 
