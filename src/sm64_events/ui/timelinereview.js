@@ -44,6 +44,7 @@ export function spanInWindow(start, length, view) {
 export function TimelineReviewControls({ templateKey, hasTemplate, offset,
     view, total, frame, lead, loopWindow, trackColumn, loading, onShift, onChange }) {
   const shiftDrag = useRef(null);
+  const shiftDisabled = loading || !templateKey;
   const beginShift = (event) => {
     if (event.button !== 0 || !templateKey || loading) return;
     const width = trackColumn.current?.getBoundingClientRect().width;
@@ -69,7 +70,7 @@ export function TimelineReviewControls({ templateKey, hasTemplate, offset,
   };
   return html`<div class="input-review-controls" aria-label="Timeline review controls" aria-busy=${loading}>
     ${hasTemplate && html`<div class="input-template-shift" role="group" aria-label="Template alignment">
-      <button class="input-template-drag" type="button" disabled=${loading || !templateKey}
+      <button class="input-template-drag" type="button" disabled=${shiftDisabled}
           title="Drag left or right to shift only the template; arrow keys move one frame"
           onpointerdown=${beginShift} onpointermove=${moveShift}
           onpointerup=${endShift} onpointercancel=${endShift} onlostpointercapture=${endShift}
@@ -78,14 +79,14 @@ export function TimelineReviewControls({ templateKey, hasTemplate, offset,
             event.preventDefault(); event.stopPropagation();
             onShift(offset + (event.key === "ArrowLeft" ? -1 : 1));
           }}>Shift template</button>
-      <button type="button" disabled=${loading || !templateKey}
+      <button type="button" disabled=${shiftDisabled}
           aria-label="Shift template earlier one frame" title="Template earlier by 1 frame"
           onclick=${() => onShift(offset - 1)}>−1f</button>
       <output class="input-template-offset" aria-label="Template offset">${offset > 0 ? "+" : ""}${offset}f</output>
-      <button type="button" disabled=${loading || !templateKey}
+      <button type="button" disabled=${shiftDisabled}
           aria-label="Shift template later one frame" title="Template later by 1 frame"
           onclick=${() => onShift(offset + 1)}>+1f</button>
-      <button type="button" disabled=${loading || !templateKey || offset === 0}
+      <button type="button" disabled=${shiftDisabled || offset === 0}
           aria-label="Reset template shift" onclick=${() => onShift(0)}>Reset</button>
       ${!loading && !templateKey && html`<span class="meta">Alignment unavailable for this template.</span>`}
     </div>`}
