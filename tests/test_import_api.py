@@ -243,7 +243,7 @@ def test_a_runner_name_with_a_colon_and_a_space_round_trips_through_delete(
         assert asked_for == [awkward]
 
 
-def test_an_import_absorbs_the_rank_it_produced(tmp_path):
+def test_an_import_absorbs_the_rank_it_produced(tmp_path, monkeypatch):
     """Nothing may appear without a gesture he made, and a full-screen MARELO
     takeover for a climb he did not run for is the exact shape he calls a bug
     (2026-08-01).
@@ -262,10 +262,14 @@ def test_an_import_absorbs_the_rank_it_produced(tmp_path):
         return scoring.progression_key(scored["tier"], scored["division"])
 
     with make_client(tmp_path) as (client, _db, service):
+        # Pin a one-entity scope so changing community coverage or fitted
+        # targets cannot dilute this import below one aggregate subdivision.
+        excluded = set(service.ranks.graded_entities()) - {"star:2:4"}
+        monkeypatch.setattr(service, "rank_excluded", lambda: excluded)
         # A slow first time, then look at the rank -- that seeds the watermark
         # and absorbs the arrival, which is the state a real user is in.
         client.post("/api/import/manual", json={
-            "entity_key": "star:1:0", "strat_tag": "Standard",
+            "entity_key": "star:2:4", "strat_tag": "Standard",
             "time_cs": 6300})
         client.get("/api/marelo")
         before = service.marelo_watermarks()["overall"]

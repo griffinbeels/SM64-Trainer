@@ -86,8 +86,8 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
     for target in payload["targets"]:
         entity = target.get("entity_key")
         approaches = target["approaches"]
-        # The target-named row IS Standard by name (below), so it never
-        # enters the ladder matcher, and the vetted "Standard" is RESERVED
+        # The target-named row occupies the canonical Standard slot, so the
+        # vetted "Standard" is RESERVED
         # for it: round 33 (2026-09-05) measured five entities where the
         # matcher paired some OTHER row with the vetted Standard (Big Boo's
         # "Double jump -> Dive strat", BitFS's "Half/Three-quarter spin")
@@ -105,6 +105,14 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
         matched = match_vetted(candidates, [
             approach if index not in standard_rows else {}
             for index, approach in enumerate(approaches)]) if entity else {}
+        # Recover title rows' unclaimed historical aliases (TJ Owlless, Pole
+        # Glitch, etc.) without reassigning an ordinary row's canonical slot.
+        # sheet_strategy independently keeps the title row's slot Standard.
+        remaining = {name: ladder for name, ladder in candidates.items()
+                     if name not in matched.values()}
+        matched.update(match_vetted(remaining, [
+            approach if index in standard_rows else {}
+            for index, approach in enumerate(approaches)]))
         for index, approach in enumerate(approaches):
             if index in matched:
                 approach["matched_strategy"] = matched[index]
@@ -117,10 +125,8 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
                 # called the same row by the star's own name, so the one row
                 # everyone practises had three names across three surfaces.
                 #
-                # A real vetted pairing still wins -- this is the fallback for
-                # a row the ladder matcher left unnamed, which is where the
-                # star's own row lands, since it has no distinct ladder to be
-                # paired against.
+                # A real vetted pairing still wins; Standard is the fallback
+                # when this row has no historical alias.
                 approach["matched_strategy"] = DEFAULT_STRATEGY
             else:
                 approach.pop("matched_strategy", None)

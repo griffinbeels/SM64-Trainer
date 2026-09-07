@@ -46,6 +46,9 @@ hardest-tier-wins classification and a finite inverse; they cannot promise the
 Strategy identity uses `library/strategy_signature.py`'s calibrated matching
 profile, independently of grading. Changing a rank formula must not reassign
 saved attempts to another Sheet row. The profile still follows new observations.
+Ordinary-row matches retain priority. Target-named rows recover unclaimed
+historical aliases such as TJ Owlless so existing PBs still open the right
+section; their canonical storage slot remains Standard.
 
 The current Sheet fit supplies the foundation in `RankStandards.ladders`.
 Unchanged materialized bundled defaults yield to it. Detectable legacy edits and

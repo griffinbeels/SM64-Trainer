@@ -50,12 +50,11 @@ def _practice_target(base, service, label):
 
 @pytest.mark.parametrize("width", [850, 1500])
 @pytest.mark.parametrize("label", ["Lakitu skip", "JRB door - Enter JRB"])
-def test_every_tier_and_division_is_visible_in_both_pages(width, label):
+def test_every_tier_and_division_is_visible_in_both_pages(width, label, tmp_path):
     with serve_ui_live() as (base, _service):
         entity = _practice_target(base, _service, label)
         card = f'.log-card[data-feed-key="{entity}"]'
-        out = REPO / ".planning/sheet-complete-tiers/visuals"
-        out.mkdir(parents=True, exist_ok=True)
+        out = tmp_path
         slug = "lakitu" if label == "Lakitu skip" else "jrb-door"
         with get_driver().launch(headless=True, viewport=(width, 1100)) as page:
             page.goto(base)

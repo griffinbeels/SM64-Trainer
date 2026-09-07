@@ -56,6 +56,11 @@ outcome without requiring adoption, then changes a cutoff and compares both.
 - 2026-09-06 round 2, identity — changing the grading formula reassigned 38
   strategy matches on identical workbook bytes. Matching now uses its own
   calibrated signature; same-workbook comparison returns zero reassignments.
+- 2026-09-06 round 2, snapshot rebuild — reserving Standard excluded title
+  rows from alias matching and erased names such as TJ Owlless. A constrained
+  second pass recovers unclaimed aliases without reassigning ordinary slots;
+  `test_library_adopt.py` pins both boundaries. Rebuilding with two formulas
+  that share the same stamp policy cannot expose that policy's alias loss.
 
 - 2026-09-06 hop 2 — task 0126, “in the library ... I can see a ladder” but
   Practice lacked it. Name matching was decorative only; automatic row links

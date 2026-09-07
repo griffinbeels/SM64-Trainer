@@ -97,6 +97,32 @@ def test_stamp_matches_names_the_vetted_strategy_on_the_approach():
     assert "matched_strategy" not in second
 
 
+def test_title_row_keeps_its_pb_alias_while_reserving_the_standard_slot():
+    from sm64_events.library.adoptions import sheet_strategy
+
+    target = {"entity_key": "star:2:4", "label": "Fall onto the Caged Island",
+              "approaches": [_approach("Fall onto the Caged Island", 11.70),
+                             _approach("Another way", 20.00)], "subsections": []}
+    adopt.stamp_matches({"targets": [target]}, {
+        "star:2:4": {"TJ Owlless": _ladder(11.70), "Standard": _ladder(20.00)}})
+    title, other = target["approaches"]
+    assert title["matched_strategy"] == "TJ Owlless"
+    assert sheet_strategy(target, title, "approach") == "Standard"
+    assert "matched_strategy" not in other
+    assert sheet_strategy(target, other, "approach") != "Standard"
+
+
+def test_recovering_title_aliases_does_not_reassign_an_ordinary_row():
+    target = {"entity_key": "star:1:4", "label": "Target",
+              "approaches": [_approach("Target", 30.90),
+                             _approach("Different way", 30.91)], "subsections": []}
+    adopt.stamp_matches({"targets": [target]}, {
+        "star:1:4": {"Skyjump": _ladder(30.90)}})
+    title, other = target["approaches"]
+    assert other["matched_strategy"] == "Skyjump"
+    assert title["matched_strategy"] == "Standard"
+
+
 def test_an_approach_whose_name_already_exists_is_not_re_added():
     payload = {"targets": [{"entity_key": "star:1:4", "approaches": [
         _approach("Skyjump", 24.00)], "subsections": []}]}
