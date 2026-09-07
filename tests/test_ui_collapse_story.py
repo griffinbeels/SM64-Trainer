@@ -87,3 +87,42 @@ def test_both_setups_are_idempotent(page):
         "(document.querySelectorAll('.practice-card.is-collapsed').length)")
     assert once == twice > 0, f"collapse setup is not idempotent: {once} -> {twice}"
     page.evaluate(_BY_NAME["page"].setup)
+
+
+@pytest.mark.parametrize("width", [1060, 1920])
+def test_collapsed_setup_returns_after_the_bodies_unmount(page, width):
+    """A static layout probe must not sample the closing animation's clip.
+
+    Use a supported slow tuning to expose the same race without relying on
+    machine load. The shipped Disclose must reach its normal terminal state;
+    the test neither finishes animations nor removes content for it.
+    """
+    page.set_viewport(width, 1080)
+    page.evaluate(_BY_NAME["page"].setup)
+    page.wait_ms(500)
+    assert page.count('.log-card-fold[aria-expanded="true"]') > 0
+    assert page.count('.log-card-disclose > .disclose-inner > *') > 0
+    page.evaluate("""(async () => {
+      const tuning = await import('/ui/feedtuning.js');
+      window.__collapseTestTuning = tuning.feedTuning();
+      tuning.setFeedTuning({...tuning.feedTuning(), closeMs: 1200});
+    })()""")
+    try:
+        page.evaluate(_BY_NAME["page-collapsed"].setup)
+        state = page.evaluate("""({
+          open: document.querySelectorAll('.log-card-fold[aria-expanded="true"]').length,
+          bodies: document.querySelectorAll('.log-card-disclose > .disclose-inner > *').length,
+          clips: [...document.querySelectorAll('.log-card-disclose')].map(el => ({
+            height: el.clientHeight, contentHeight: el.scrollHeight,
+            animations: el.getAnimations().map(a => a.playState)
+          }))
+        })""")
+        assert state["open"] == 0 and state["bodies"] == 0, state
+        assert all(clip["height"] == 0 and not clip["animations"]
+                   for clip in state["clips"]), state
+    finally:
+        page.evaluate("""(async () => {
+          const tuning = await import('/ui/feedtuning.js');
+          tuning.setFeedTuning(window.__collapseTestTuning);
+          delete window.__collapseTestTuning;
+        })()""")

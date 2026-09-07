@@ -157,12 +157,25 @@ document.querySelectorAll('.log-card-fold[aria-expanded="false"]')
 # `.is-closed` layout was completely unswept: this is the fix, not a new
 # Story, since reaching it needs no new page state, only a control this sweep
 # already knows how to drive by the same attribute.
-_COLLAPSE_ALL = """
+_COLLAPSE_ALL = _script("""
+if (!document.querySelector('.log-card-fold')) {
+  throw new Error('Collapsed story requires populated Practice log cards');
+}
 document.querySelectorAll('.card-collapse[aria-expanded="true"]')
   .forEach((b) => b.click());
 document.querySelectorAll('.log-card-fold[aria-expanded="true"]')
   .forEach((b) => b.click());
-"""
+// aria-expanded reports intent before Disclose finishes closing. Its body
+// unmounts only after animation cleanup; a fixed delay sampled that clip in
+// full-suite runs (1060/1920px), reporting transient clipping and decoration
+// overlap as final layout defects. Wait for the actual terminal state.
+const openToggles = '.card-collapse[aria-expanded="true"], .log-card-fold[aria-expanded="true"]';
+const bodies = '.log-card-disclose > .disclose-inner > *';
+if (!await waitFor(() => !document.querySelector(openToggles)
+    && !document.querySelector(bodies))) {
+  throw new Error(`Collapse did not settle: ${document.querySelectorAll(openToggles).length} open toggles, ${document.querySelectorAll(bodies).length} mounted bodies`);
+}
+""")
 
 # This branch's OWN surfaces (spec 2026-07-28-multi-step-segments) were never
 # in this file at all until 2026-07-29 -- every one of `page`/`active-target`/
