@@ -24,6 +24,7 @@ so pacing, Windows timer resolution and shutdown all live in one place.
 import logging
 from datetime import datetime, timezone
 from uuid import uuid4
+import zlib
 
 from sm64_events.inputs.frame import (MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE,
                                       InputFrame, decode)
@@ -70,6 +71,7 @@ class InputSampler:
         self._latest: InputFrame | None = None
         self._previous_buttons = 0
         self._counts = {"samples": 0, "straddles": 0, "frames": 0,
+                        "history_failures": 0,
                         "edge_checks": 0, "edge_mismatches": 0,
                         "skips": 0, "skipped_frames": 0, "worst_skip": 0}
 
@@ -159,10 +161,18 @@ class InputSampler:
         self._latest = latest
         if not unchanged:
             self._first_observed_utc = observed_utc
+            self._close_history()
+        try:
+            if not unchanged:
+                self._read_times = ReadTimes()
             if self._read_times is not None:
-                self._read_times.close()
-            self._read_times = ReadTimes()
-        self._read_times.add(observed_utc)
+                self._read_times.add(observed_utc)
+        except (OSError, ValueError, zlib.error) as error:
+            # The final state needs its complete observed history. A failed
+            # spool stays unavailable until a new state/frame starts; retrying
+            # every unchanged poll would hide lost instants and flood the log.
+            self._history_failed(error)
+            self._close_history()
         self._observed_utc = observed_utc
         return before
 
@@ -188,13 +198,21 @@ class InputSampler:
         if self._frame is None or self._latest is None:
             return
         frame, latest = self._frame, self._latest
-        history, lower, upper = self._read_times.finish()
-        self._read_times = None
-        observation = InputObservation(self._source_id, self._sequence,
-                                       self._observed_utc, self._first_observed_utc,
-                                       lower, upper, history)
+        sequence = self._sequence
         self._sequence += 1
         self._latest = None
+        if self._read_times is None:
+            return  # lost provenance is a capture hole, never a legacy sample
+        try:
+            history, lower, upper = self._read_times.finish()
+            observation = InputObservation(self._source_id, sequence,
+                                           self._observed_utc, self._first_observed_utc,
+                                           lower, upper, history)
+        except (OSError, ValueError, zlib.error) as error:
+            self._history_failed(error)
+            return
+        finally:
+            self._close_history()
         self._counts["frames"] += 1
         newly = latest.buttons & ~self._previous_buttons
         if newly or latest.pressed:
@@ -214,3 +232,15 @@ class InputSampler:
             # The sink writes to disk. A failed write is not a reason to stop
             # reading the pad, and must not take the poll loop down with it.
             log.exception("input sink failed on frame %d", frame)
+
+    def _history_failed(self, error: Exception) -> None:
+        self._counts["history_failures"] += 1
+        log.error("input observation history failed on frame %s", self._frame, exc_info=error)
+
+    def _close_history(self) -> None:
+        history, self._read_times = self._read_times, None
+        if history is not None:
+            try:
+                history.close()
+            except OSError as error:
+                self._history_failed(error)
