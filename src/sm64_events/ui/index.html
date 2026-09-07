@@ -5093,6 +5093,48 @@
     width: 100%; max-width: 760px; aspect-ratio: 4 / 3;
     object-fit: contain; border: 1px solid #2d465e; border-radius: 7px; background: #02070c;
   }
+  .replay-controls { max-width: 760px; padding: .55rem 0; container-type: inline-size; }
+  .replay-seek-row { display: flex; align-items: center; gap: .7rem; }
+  .replay-seek-row input { flex: 1; min-width: 40px; accent-color: var(--gold); }
+  .replay-media-time { font-variant-numeric: tabular-nums; font-size: .72rem; color: var(--muted); white-space: nowrap; }
+  .replay-control-row, .replay-playback-options, .replay-loop-row {
+    display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
+  }
+  .replay-control-row { justify-content: space-between; margin: .4rem 0; }
+  .replay-control-row .replay-transport { margin: 0; }
+  .replay-playback-options { min-width: 0; }
+  .replay-controls button, .replay-controls select { min-height: 34px; font-size: .72rem; }
+  .replay-speed { display: inline-flex; gap: .3rem; align-items: center; font-size: .72rem; }
+  .replay-speed select { width: auto; padding: .2rem .35rem; }
+  .replay-volume { width: 64px; min-width: 0; accent-color: var(--gold); }
+  .replay-loop-row { padding-top: .45rem; border-top: 1px solid var(--border-soft); }
+  .replay-loop-row .is-active { color: var(--gold); border-color: var(--gold); }
+  .replay-control-error { font-size: .75rem; color: var(--coral); }
+  .replay-player:fullscreen {
+    display: flex; flex-direction: column; align-items: center; padding: 12px;
+    background: #071321; overflow: auto;
+  }
+  .replay-player:fullscreen > video { flex: 1; min-height: 0; max-width: 100%; width: 100%; }
+  .replay-player:fullscreen .replay-controls { flex: none; width: 100%; max-width: 1000px; }
+  .replay-player:fullscreen .replay-actions { flex: none; }
+  .input-review-controls, .input-template-shift, .input-zoom-controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem;
+  }
+  .input-review-controls { justify-content: space-between; margin: .5rem 0; padding: .5rem 0; border-block: 1px solid var(--border-soft); }
+  .input-review-controls button { min-height: 34px; font-size: .72rem; padding-inline: .5rem; }
+  .input-template-drag { touch-action: none; cursor: ew-resize; color: var(--gold); }
+  .input-template-offset { color: var(--gold); font-size: .74rem; font-variant-numeric: tabular-nums; }
+  .input-zoom-range { font-size: .7rem; color: var(--muted); }
+  .input-zoom-controls input[type=range] { width: 110px; accent-color: var(--gold); }
+  .input-track-column { overflow: hidden; }
+  .input-loop-shade { position: absolute; inset-block: 0; pointer-events: none; background: rgba(123,166,255,.08); border-inline: 1px solid #7ba6ff; }
+  .review-latest-entry { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin: 0 0 12px; }
+  .review-latest-button { gap: .45rem; color: var(--gold); }
+  .review-latest-button kbd { color: var(--muted); border: 1px solid var(--border-soft); border-radius: 4px; padding: 0 .3rem; }
+  .review-latest-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal:has(.latest-review-surface) { width: min(100%,1000px); }
+  .latest-review-surface .replay-player > video { max-width: 100%; max-height: 55vh; }
+  .latest-review-surface .replay-controls { max-width: 100%; }
   /* ---- the input timeline -------------------------------------------------
      Lanes are HTML boxes at percentage widths, so they stretch with the drawer
      at any width with no aspect arithmetic. The one SVG (the stick) sets

@@ -16,10 +16,12 @@ import { InputTemplates } from "./inputtemplates.js";
 import { ReplayPlayer } from "./replay.js";
 import { InputTimeline } from "./inputtimeline.js";
 import { clipClock as buildClipClock } from "../frame.js";
+import { useReviewState } from "../reviewstate.js";
 
 const html = htm.bind(h);
 
 export function AttemptDrawer({ attemptId, imported = false, onCompare, onTemplateMarked, targetLabel }) {
+  const review = useReviewState(attemptId);
   const [video, setVideo] = useState(null);
   // Where the attempt's anchor sits inside the clip (the replay pre-pad,
   // measured from the clip's own first frame by the server). The timeline
@@ -42,6 +44,7 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
 
   return html`<div class="attempt-drawer">
     <${ReplayPlayer} attemptId=${attemptId} imported=${imported} onCompare=${onCompare}
+        reviewState=${review.state} onReviewState=${review.change} beforeSave=${review.flush}
         onVideoEl=${setVideo}
         onView=${(view) => {
           if (view) {
@@ -66,10 +69,13 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
               padAgreement=${clipClock.padAgreement}
               frameMapSource=${clipClock.frameMapSource}
               inputAlignment=${clipClock.inputAlignment}
+              reviewState=${review.state} onReviewState=${review.change}
               tools=${(data) => html`<${InputTemplates} attemptId=${attemptId}
                   data=${data} targetLabel=${targetLabel} onTemplateMarked=${onTemplateMarked} />`} />`
         : html`<div class="input-timeline-waiting">The input timeline appears
             once the replay is cut and checked against its footage.</div>`}
     </div>`}
+    ${review.error && html`<p class="replay-control-error" role="status">${review.error}
+      <button onclick=${() => review.flush().catch(() => {})}>Retry retaining changes</button></p>`}
   </div>`;
 }

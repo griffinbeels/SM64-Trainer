@@ -1632,6 +1632,18 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     def _fixture_inactive_status():
         return None
 
+    # The real preference owner, isolated from saved media and live sessions.
+    from sm64_events.replay.reviewstate import ReviewStateStore
+    review_states = ReviewStateStore()
+
+    @app.get("/api/attempts/{attempt_id}/replay/review-state")
+    def _fixture_review_get(attempt_id: int):
+        return review_states.get(attempt_id, None)
+
+    @app.put("/api/attempts/{attempt_id}/replay/review-state")
+    def _fixture_review_put(attempt_id: int, body: dict):
+        return review_states.put(attempt_id, None, body)
+
     @app.post("/api/attempts/{attempt_id}/replay")
     def _fixture_replay_view(attempt_id: int):
         rows = [a for a in database.attempts() if a.id == attempt_id]

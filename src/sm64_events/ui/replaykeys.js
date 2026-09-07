@@ -22,11 +22,17 @@ function typing(node) {
 
 function down(event) {
   const player = players.get(active), dir = direction(event.key);
-  if (!player || (!dir && event.key !== "ArrowDown") || event.repeat
+  const dialog = event.target?.closest?.('[role="dialog"]');
+  const ownDialog = active?.closest?.('[role="dialog"]');
+  if (!player || (!dir && event.key !== "ArrowDown" && event.key !== " ") || event.repeat
       || event.defaultPrevented || typing(event.target)
-      || event.target?.closest?.('[role="dialog"]')
+      || (dialog && dialog !== ownDialog)
+      || (event.key === " " && event.target?.closest?.('button,a,[role="button"]'))
       || event.metaKey || event.ctrlKey || event.altKey) return;
   event.preventDefault();
+  if (event.key === " ") {
+    stopHold(active); player.toggle?.(); return;
+  }
   if (!dir) {
     stopHold(active);
     player.toStart();
