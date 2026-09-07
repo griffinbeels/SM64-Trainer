@@ -48,6 +48,11 @@ outcome without requiring adoption, then changes a cutoff and compares both.
 
 ## Failure catalogue
 
+- 2026-09-06 round 3, hop 1 — the compulsory best-plus-one-frame elite target
+  made JRB's 57-player 2.46 plateau rank below Mario I. Supported fast peaks
+  may equal the record; sparse/smooth data retains the percentile fallback.
+  `test_library_peak.py` pins shared records, nearby frames, bridging tails,
+  slow-mode growth and false peaks; model-version refitting updates old caches.
 - 2026-09-06 round 2, hops 1/3/6 — 178/634 base ladders dropped tied tiers;
   Lakitu Standard's three inherited cutoffs replaced its fit; Library hid
   empty Capless. A 30-phase consecutive-frame test also exposed centisecond

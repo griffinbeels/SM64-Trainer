@@ -108,10 +108,10 @@ def test_every_saved_frame_is_one_subdivision_on_narrow_rows(best_frame):
     best = cs_of_frame(best_frame)
     ladder = {rank: round(seconds * 100) for rank, seconds in fit_ladder(
         [best] * 57 + [cs_of_frame(best_frame + 1)]).items()}
-    assert time_for_score(ladder, 99) == cs_of_frame(best_frame + 1)
+    assert time_for_score(ladder, 99) == best
     positions = []
     for offset in range(45):
-        progress = progress_for_time(ladder, cs_of_frame(best_frame + 1 + offset))
+        progress = progress_for_time(ladder, cs_of_frame(best_frame + offset))
         positions.append(progression_key(progress["tier"], progress["division"]))
     assert positions == list(range(44, -1, -1))
 

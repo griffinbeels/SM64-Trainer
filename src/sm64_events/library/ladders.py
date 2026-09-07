@@ -6,13 +6,15 @@ ladder extends slower by one game frame per division (user, 2026-09-06).
 These lower targets are provisional; additional submissions refine the fit.
 """
 import math
+from bisect import bisect_right
 
 from sm64_events.core.timefmt import attainable_cs, cs_of_frame, frame_at_or_after
 from sm64_events.library.ladder_estimates import estimate_times
 from sm64_events.library.strategy_signature import matching_profile
 from sm64_events.ranks.classify import RANK_NAMES
 
-# Mario's percentile anchors division I, not the tier's V cutoff. The interior
+# Mario's percentile is the division I fallback when no fast peak is supported.
+# It is not the tier's V cutoff. The interior
 # positions retain the empirically measured community shape; Bronze uses the
 # slowest observation, so even a real slow outlier participates in the fit.
 LADDER_PERCENTILES = {
@@ -20,7 +22,10 @@ LADDER_PERCENTILES = {
     "Platinum": 80.4, "Gold": 89.3, "Silver": 94.0, "Bronze": 100.0,
 }
 MIN_ENTRIES = 1
-LADDER_MODEL_VERSION = 3
+LADDER_MODEL_VERSION = 4
+PEAK_WINDOW_FRAMES = 3
+PEAK_MIN_ENTRIES = 3
+PEAK_DENSITY_RATIO = 2
 
 
 def _at_percentile(times, percent):
@@ -50,11 +55,36 @@ def make_attainable(raw, quantise=attainable_cs):
     return out
 
 
+def _elite_frame(times, fallback):
+    """First supported fast peak, or the calibrated elite percentile.
+
+    A bounded window avoids joining a peak to its slower tail through single
+    observations. Its density must drop in the next window; a smooth spread
+    is not a peak. Counts describe distinct players in each Sheet population.
+    The observed lower median resists an isolated record beside a shared peak.
+    """
+    frames = [frame_at_or_after(t) for t in times]
+    elite = frame_at_or_after(round(fallback))
+    for left, start in enumerate(frames):
+        if start > elite:
+            break
+        if left and start == frames[left - 1]:
+            continue
+        right = bisect_right(frames, start + PEAK_WINDOW_FRAMES - 1)
+        count = right - left
+        following = bisect_right(frames, start + 2 * PEAK_WINDOW_FRAMES - 1) - right
+        peak = frames[(left + right - 1) // 2]
+        if (count >= PEAK_MIN_ENTRIES and
+                count >= PEAK_DENSITY_RATIO * following and peak <= elite):
+            return peak
+    return elite
+
+
 def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs):
     """Eight tier cutoffs in seconds; 40 divisions plus the derived Capless five.
 
-    Mario I starts at the elite quantile, at least one frame slower than the
-    fastest observation. Nine subdivision steps connect it to Metal V. Their
+    Mario I starts at a supported fast peak, falling back to the elite quantile.
+    It may equal a shared record. Nine steps connect it to Metal V. Their
     spacing is a whole number of frames, so the top extrapolation lands exactly
     on the intended elite target. Slower tiers follow empirical quantiles, with
     a minimum five-frame separation to leave a frame for every subdivision.
@@ -63,8 +93,7 @@ def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs):
     if not times:
         return {}
     raw = place_at_percentiles(times, percentiles or LADDER_PERCENTILES)
-    elite = max(frame_at_or_after(times[0]) + 1,
-                frame_at_or_after(round(raw["Mario"])))
+    elite = _elite_frame(times, raw["Mario"])
     metal = frame_at_or_after(round(raw["Grandmaster"]))
     step = max(1, math.ceil((metal - elite) / 9))
     raw["Mario"] = cs_of_frame(elite + 4 * step)
@@ -139,6 +168,10 @@ def fit_payload(payload: dict) -> dict:
         "percentiles": dict(LADDER_PERCENTILES),
         "min_entries": MIN_ENTRIES,
         "mario_percentile_division": "I",
+        "mario_anchor": "supported_fast_peak_or_percentile",
+        "peak_window_frames": PEAK_WINDOW_FRAMES,
+        "peak_min_entries": PEAK_MIN_ENTRIES,
+        "peak_density_ratio": PEAK_DENSITY_RATIO,
         "minimum_frames_per_division": 1,
         "source": "sheet",
         "fitted_rows": fitted,
