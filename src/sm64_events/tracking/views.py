@@ -1193,15 +1193,31 @@ def entity_label(db, ek: str) -> str:
     name} dict (brief's "verified shape" was wrong -- confirmed live), and
     star_name also owns the 1-15/star_id==6 -> "100 Coins" special case that a
     raw lookup here would silently miss."""
+    return entity_labels(db, [ek])[ek]
+
+
+def entity_labels(db, keys) -> dict[str, str]:
+    """Names for one batch, reading the segment catalog at most once.
+
+    A full Sheet scope can contain hundreds of segments. Reloading and JSON
+    decoding every definition for each label made one Scorecard read spend
+    350ms here. The snapshot belongs to this call, so a later read sees any
+    rename immediately; single-key callers use the same naming rules.
+    """
     from sm64_events.memory.addresses import course_name, star_name
-    kind, _, rest = ek.partition(":")
-    if kind == "segment":
-        name = next((d["name"] for d in db.segment_defs()
-                     if str(d["id"]) == rest), None)
-        return name or f"segment {rest}"
-    course, _, star = rest.partition(":")
-    cid, sid = int(course), int(star)
-    return f"{course_name(cid)} — {star_name(cid, sid)}"
+    keys = dict.fromkeys(keys)
+    segments = ({str(d["id"]): d["name"] for d in db.segment_defs()}
+                if any(key.startswith("segment:") for key in keys) else {})
+    out = {}
+    for key in keys:
+        kind, _, rest = key.partition(":")
+        if kind == "segment":
+            out[key] = segments.get(rest) or f"segment {rest}"
+        else:
+            course, _, star = rest.partition(":")
+            cid, sid = int(course), int(star)
+            out[key] = f"{course_name(cid)} — {star_name(cid, sid)}"
+    return out
 
 
 def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
