@@ -148,6 +148,27 @@ test("loop zoom excludes B's next picture and refuses an ambiguous reset", () =>
     {times:[0,.1,.2,.3,.4],duration:.5}, [[0,100,3]], 3)).toBeNull();
 });
 
+test("clicking cropped input and action spans stays inside the zoomed view", async () => {
+  const action = {start:0,length:8,label:"Walking",group:"moving"};
+  const view = await timeline({map:[100,101,102,103,104,105,106,107],
+    times:[0,.1,.2,.3,.4,.5,.6,.7],stretches:[[0,100,8]],review:{},
+    data:{frames:8,actions:[action],
+      runs:[{start:0,length:8,buttons:32768,stick_x:40,stick_y:20,yaw:0,speed:4}],
+      template:{id:7,name:"Full action",frames:8,runs:[],actions:[],
+        source:{revision:"abc123",frames:8,runs:[],actions:[action]}}}});
+  await view.present(6);
+  fireEvent.click(view.getByRole("button", {name:"Zoom in timeline"}));
+  await waitFor(() => expect(view.container.querySelector(".input-zoom-range").textContent).toBe("Frames 4–7"));
+  const spans = view.container.querySelectorAll("button.input-bar, .action-span");
+  expect(spans.length).toBe(3);
+  for (const span of spans) {
+    view.video.currentTime = .75;
+    fireEvent.click(span);
+    expect(view.video.currentTime).toBeGreaterThan(.4);
+    expect(view.video.currentTime).toBeLessThan(.5);
+  }
+});
+
 test("the loop is a fixed input range while the template moves, and the zoom button opens it", async () => {
   const view = await timeline({map:[100,101,102,103,104],times:[0,.1,.2,.3,.4],
     stretches:[[0,100,5]],data:{frames:5,template:exampleTemplate()},
