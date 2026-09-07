@@ -1896,7 +1896,10 @@ def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
             page.wait_for(".rank-page .scorecard-card "
                           '.search-menu-option[data-value="custom:alpha"]')
             page.evaluate(_option_click("custom:alpha"))   # beta is already on
-            page.wait_ms(400)
+            # The picker updates locally; the legend and attribution arrive
+            # with the computed card after the goal write has completed.
+            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(2)")
+            page.wait_for(".rank-page .scorecard-card .score-line-source")
 
             state = page.evaluate(
                 "(() => {"
