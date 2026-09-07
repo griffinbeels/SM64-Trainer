@@ -5,8 +5,8 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { clipClock, stepGameFrame, jumpToStart, attemptStartTime } from "../frame.js";
 import { watchVideoPicture } from "../videopicture.js";
-import { holdIsRunning, holdRepeat, startHold,
-         stopHold } from "../holdrepeat.js";
+import { holdRepeat } from "../holdrepeat.js";
+import { watchReplayKeys } from "../replaykeys.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -64,53 +64,15 @@ function useReplayStepping(videoEl, state) {
   function toStart() {
     jumpToStart(videoEl.current, attemptStartTime(state));
   }
-  // ARROW KEYS step frames (round 32 item 54, his words: "Same exact
-  // functionality as the buttons, just with left / right arrow presses").
-  // The browser's own auto-repeat is IGNORED -- its delay and rate are the
-  // OS's, and he tuned this schedule -- so a held key runs `startHold`, the
-  // same one a held button runs.
+  // Arrow keys use the same hold schedule as the buttons. The coordinator
+  // gives them to one player when several attempt drawers are expanded.
   useEffect(() => {
-    const typing = (node) => {
-      if (!node) return false;
-      if (node.isContentEditable) return true;
-      const tag = (node.tagName || "").toLowerCase();
-      return tag === "input" || tag === "textarea" || tag === "select";
-    };
-    const dirOf = (key) =>
-      (key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0);
-    const down = (event) => {
-      const dir = dirOf(event.key);
-      if ((!dir && event.key !== "ArrowDown") || event.repeat || typing(event.target)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (!videoEl.current) return;
-      event.preventDefault();                 // the page must not scroll
-      if (event.key === "ArrowDown") {
-        stopHold(globalThis);
-        toStart();
-        return;
-      }
-      startHold(globalThis, () => step(dir), {
-        onPress: () => {
-          const video = videoEl.current;
-          if (!video || video.paused) return null;
-          return () => { video.play().catch(() => {}); };
-        },
-      });
-    };
-    const up = (event) => {
-      if (!dirOf(event.key) || !holdIsRunning(globalThis)) return;
-      stopHold(globalThis);
-    };
-    globalThis.addEventListener("keydown", down);
-    globalThis.addEventListener("keyup", up);
-    const blur = () => stopHold(globalThis);
-    globalThis.addEventListener("blur", blur);
-    return () => {
-      stopHold(globalThis);
-      globalThis.removeEventListener("keydown", down);
-      globalThis.removeEventListener("keyup", up);
-      globalThis.removeEventListener("blur", blur);
-    };
+    const video = videoEl.current;
+    if (!video) return undefined;
+    return watchReplayKeys(video.closest(".attempt-drawer") || video.closest(".replay-player"), {
+      step, toStart,
+      onPress: () => video.paused ? null : () => { video.play().catch(() => {}); },
+    });
   }, [state]);
 
   return { step, stepHold, toStart };
