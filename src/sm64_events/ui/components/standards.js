@@ -152,7 +152,9 @@ function StdSubRows({ rank, open, strats, bandFor, cellClass, cellStyle,
         ? band.divisions[DIVISION_NUMERALS.indexOf(numeral)] : null;
       const cutoff = division && !division.empty && division.slowCs != null
         ? division.slowCs : null;
-      const label = cutoff != null ? fmtSeconds(cutoff / 100) : "—";
+      const label = cutoff != null ? fmtSeconds(cutoff / 100)
+        : division && !division.empty && division.fastCs != null
+          ? `> ${fmtSeconds((division.fastCs - 1) / 100)}` : "—";
       // bandsOf sorts a division's entries slowest first, so the FASTEST
       // example within the subdivision — his band rule, one level finer —
       // is the last one; every clip entry carries a video by construction.

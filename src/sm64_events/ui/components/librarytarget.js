@@ -379,8 +379,8 @@ function DivisionGroup({ approach, band, division, query, isYou, trayKeys,
 // rank", and the TOC's number column "should also show what the range is ...
 // Capless included (e.g., 59"65+ (the slowest time) to 11"93". Capless has
 // no cutoff, so its slow end is the slowest VISIBLE entry with his own "+"
-// notation; a Capless band with no entries never renders (bandsOf filters
-// it). The fast end is the exclusive bound (librarymodel.js::tierFastBoundCs),
+// notation; without entries its label still shows the unbounded range.
+// The fast end is the exclusive bound (librarymodel.js::tierFastBoundCs),
 // so no number repeats between adjacent tiers.
 // `bandRangeLabel` / `divisionRangeLabel` moved to librarymodel.js on
 // 2026-08-10 -- the Overall Rank Standards section prints the same spans, and

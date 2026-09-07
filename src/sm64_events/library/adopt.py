@@ -8,10 +8,10 @@ vetted ladder's Mario cutoff sits within a few centiseconds of its approach's
 sheet best, which is exactly how the fit measurement paired 204 of them at a
 median 0.33s apart.
 
-So: match by that proximity, let the vetted ladder win wherever it matches, and
-adopt only what is left. Subsections are never adopted (they would clutter the
-segment list) and Castle Movements wait for a segment to exist — the user's
-ruling, 2026-08-05.
+Match using the historical grading signature to preserve strategy identity
+when the live grading model changes. Practice catalog placement handles all
+approaches and subsections; RankStore resolves their current Sheet standards
+under explicit user edits. See docs/sheet-rank-standards.md.
 """
 from sm64_events.library.adoptions import (DEFAULT_STRATEGY, shares_its_entity,
                                            strategy_name)
@@ -30,8 +30,8 @@ MATCH_DISTANCE = 0.05
 #   * where a star has four strategies within a second of each other (RR's
 #     "Somewhere Over the Rainbow"), a one-number match with any workable
 #     tolerance pairs them essentially at random.
-# Comparing the whole fitted ladder against the whole vetted one fixes both:
-# eight points on the same scale, and both are derived the same way.
+# Comparing the calibrated matching profile against the vetted ladder fixes
+# both. The profile retains that scale independently of current grading.
 
 
 def _distance(vetted: dict, fitted: dict) -> float | None:

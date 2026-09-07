@@ -158,7 +158,7 @@ function definedTiers(ladderCs) {
   return TIERS_HARDEST_FIRST.filter((tier) => ladderCs[tier] != null);
 }
 
-// Mirror of ranks/scoring.py::score_for -- piecewise linear in TIME through
+// Mirror of ranks/scoring.py::score_for -- piecewise linear in FRAMES through
 // the anchors; faster than the hardest tier extrapolates (capped at 100),
 // slower than the easiest decays asymptotically (the Iron tail).
 export function scoreFor(ladderCs, timeCs) {
