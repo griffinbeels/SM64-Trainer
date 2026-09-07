@@ -693,8 +693,9 @@ class ReplayService:
 
     def review_state(self, attempt_id: int) -> dict:
         """Preferences are readable before the first cut, without extraction."""
-        self._attempt(attempt_id)
-        return self._review_state.get(attempt_id, self.find_saved(attempt_id))
+        with self._cut_lock(attempt_id):
+            self._attempt(attempt_id)
+            return self._review_state.get(attempt_id, self.find_saved(attempt_id))
 
     def update_review_state(self, attempt_id: int, state: dict) -> dict:
         # Resolve the saved destination under the same lock as publication:
