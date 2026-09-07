@@ -20,9 +20,10 @@ def runs(spec):
 def test_identical_pictures_collapse_to_one_state():
     plan = plan_overlay(runs([(0, 5, 0x8000, 40, 0), (5, 5, 0, 0, 0),
                               (10, 5, 0x8000, 40, 0)]))
-    # The blank IS a state (index 0), and a neutral run reuses it rather than
-    # minting a second identical picture -- so two runs, two states.
-    assert len(plan.states) == 2
+    # Unknown capture is transparent; a captured neutral controller is still
+    # a real picture. Repeated active states share their own image.
+    assert len(plan.states) == 3
+    assert plan.states[0] is None
     assert plan.per_frame[0] == plan.per_frame[10]
     assert plan.states[plan.per_frame[5]] == (0, 0, 0, 0)
 
@@ -50,7 +51,7 @@ def test_a_capture_HOLE_draws_nothing_rather_than_the_last_pad():
     """The blank is the honest picture of "we do not know", and in an edit it
     reads as a gap rather than a stuck hand."""
     plan = plan_overlay(runs([(0, 2, 0x8000, 40, 0), (6, 2, 0x8000, 40, 0)]))
-    assert plan.states[plan.per_frame[3]] == (0, 0, 0, 0)
+    assert plan.states[plan.per_frame[3]] is None
 
 
 def test_the_video_frame_count_is_the_game_count_times_the_hold():
@@ -175,23 +176,23 @@ def test_a_run_with_no_facing_captured_still_plans():
 def test_the_mapped_script_draws_what_each_video_frame_actually_shows():
     """A duplicate holds the same pad for two slots; a skipped game frame's
     pad never draws; a slot before the map's coverage or outside the track
-    draws the blank. One line pair per CLIP frame, plus the demuxer's
-    repeated last entry."""
-    from sm64_events.inputs.overlay import mapped_concat_script, plan_overlay
+    draws the blank. Every source picture retains its own interval."""
+    from sm64_events.inputs.overlay import mapped_concat_script, plan_mapped_overlay
     runs = [{"start": 0, "length": 2, "buttons": 0x8000, "stick_x": 10,
              "stick_y": 0, "yaw": 0},
             {"start": 2, "length": 2, "buttons": 0x4000, "stick_x": 20,
              "stick_y": 0, "yaw": 0}]
-    plan = plan_overlay(runs, layer="combined", video_fps=60)
     # raw 90 = axis 0. The map: a lead-in slot (null), frame 90 twice (the
     # duplicate), 92 (91 skipped), then past the track (94).
     frame_map = [None, 90, 90, 92, 94]
-    script = mapped_concat_script(plan, lambda index: f"s{index}.png",
-                                  frame_map, [(0, 90, 4)])
+    plan = plan_mapped_overlay({"frame_map": frame_map,
+        "frame_times": [n / 60 for n in range(5)], "duration_s": 5 / 60,
+        "picture_states": [None, runs[0], runs[0], runs[1], None]})
+    script = mapped_concat_script(plan, lambda index: f"s{index}.png")
     files = [line for line in script.splitlines() if line.startswith("file")]
     blank, first, second = "file 's0.png'", "file 's1.png'", "file 's2.png'"
-    assert files == [blank, first, first, second, blank, blank]
-    #                 ^lead  ^90   ^dup   ^92     ^past  ^demuxer repeat
+    assert files == [blank, first, first, second, blank]
+    #                 ^lead  ^90   ^dup   ^92     ^unknown
 
 
 def test_the_mapped_encode_asks_for_the_maps_own_frame_count():

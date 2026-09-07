@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -47,13 +48,8 @@ from sm64_events.inputs.overlay import (DEFAULT_CODEC, DEFAULT_VIDEO_FPS,
                                         CODECS, LAYERS, concat_script,
                                         encode_argv, mapped_concat_script,
                                         output_name,
-                                        plan_overlay)  # noqa: E402
-
-_MISSING = find_uilab()
-if _MISSING:
-    raise SystemExit(_MISSING)
-
-from uilab.driver import get_driver                     # noqa: E402
+                                        plan_overlay, plan_mapped_overlay)  # noqa: E402
+from sm64_events.memory import addresses as A           # noqa: E402
 
 
 def ffmpeg_path() -> str:
@@ -100,8 +96,20 @@ def clip_view_from_server(base: str, attempt_id: int) -> dict | None:
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
-    except Exception:
-        return None
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        if error.code == 409:
+            try:
+                detail = json.loads(error.read(65536)).get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            if detail in ("no footage in the replay buffer",
+                          "no footage overlaps the requested span"):
+                return None
+        raise SystemExit(f"could not load the replay for overlay export: {error}") from error
+    except OSError as error:
+        raise SystemExit(f"could not load the replay for overlay export: {error}") from error
 
 
 def _show(page, state, settings) -> dict:
@@ -144,6 +152,11 @@ def render_states(base: str, plan, out_dir: Path, table, stick_max,
                   dead_zone, size: int, canvas: dict | None = None,
                   angle_units: int = 0x10000):
     """One transparent PNG per distinct picture, drawn by the real component."""
+    missing = find_uilab()
+    if missing:
+        raise SystemExit(missing)
+    from uilab.driver import get_driver
+
     files: list[Path] = []
     settings = {"buttons": table, "stickMax": stick_max,
                 "deadZone": dead_zone, "layer": plan.layer, "size": size,
@@ -170,19 +183,18 @@ def render_states(base: str, plan, out_dir: Path, table, stick_max,
         for index, state in enumerate(plan.states):
             # The blank state draws nothing at all -- a hole in capture is a
             # hole in the overlay, not the last pad held on screen.
-            shown = None if state == (0, 0, 0, 0) else state
             shots = {}
             for background in ("black", "white"):
-                _show(page, shown, {**settings, "bg": background})
+                _show(page, state, {**settings, "bg": background})
                 page.wait_ms(16)
                 shots[background] = page.screenshot(clip=canvas)
             target = out_dir / f"s{index:05d}.png"
-            target.write_bytes(recover_alpha(shots["black"], shots["white"]))
+            target.write_bytes(recover_alpha(shots["black"], shots["white"], empty=state is None))
             files.append(target)
     return files, canvas
 
 
-def recover_alpha(over_black: bytes, over_white: bytes) -> bytes:
+def recover_alpha(over_black: bytes, over_white: bytes, *, empty: bool = False) -> bytes:
     """True RGBA from two OPAQUE shots of the same picture.
 
     Compositing says `P = C*a + B*(1 - a)`, so over black `Pb = C*a` and over
@@ -225,27 +237,23 @@ def recover_alpha(over_black: bytes, over_white: bytes) -> bytes:
                             min(255, round(bg * scale)),
                             min(255, round(bb * scale)),
                             round(alpha))
+    if empty:
+        # The shared inspector still draws scaffolding for unknown input.
+        # An unknown overlay interval must instead be completely transparent.
+        out.putalpha(0)
     buffer = io.BytesIO()
     out.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
-def encode(plan, files: list[Path], out_path: Path, work: Path,
-           frame_map=None, seams=None) -> None:
+def encode(plan, files: list[Path], out_path: Path, work: Path) -> None:
     script = work / f"{plan.layer}.ffconcat"
-    if frame_map:
-        # The clip's own frame map decides which pad each video frame draws
-        # (round 32 item 17): the export then matches the footage from ITS
-        # frame 0, duplicates and skips included -- drop it at 0:00.
-        text = mapped_concat_script(plan, lambda index: files[index].name,
-                                    frame_map, seams or [])
-        frames = len(frame_map)
+    if plan.frame_times is not None:
+        text = mapped_concat_script(plan, lambda index: files[index].name)
     else:
         text = concat_script(plan, lambda index: files[index].name)
-        frames = None
     script.write_text(text, encoding="utf-8", newline="\n")
-    argv = encode_argv(ffmpeg_path(), str(script), str(out_path), plan,
-                       frames=frames)
+    argv = encode_argv(ffmpeg_path(), str(script), str(out_path), plan)
     result = subprocess.run(argv, capture_output=True, text=True,
                             encoding="utf-8", cwd=str(work),
                             **quiet_spawn_kwargs())
@@ -256,12 +264,14 @@ def encode(plan, files: list[Path], out_path: Path, work: Path,
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", type=int, required=True)
+    parser.add_argument("--plain", action="store_true",
+                        help="export the input track on the game clock without replay alignment")
     parser.add_argument("--layers", default=",".join(LAYERS),
                         help=f"comma-separated; any of {', '.join(LAYERS)}")
     parser.add_argument("--codec", default=DEFAULT_CODEC,
                         choices=sorted(CODECS))
     parser.add_argument("--fps", type=int, default=DEFAULT_VIDEO_FPS,
-                        help="match the clip's frame rate")
+                        help="frame rate for a plain track; mapped clips retain their picture times")
     parser.add_argument("--size", type=int, default=200,
                         help="the stick box's edge, in pixels")
     parser.add_argument("--out", default=None)
@@ -273,22 +283,31 @@ def main() -> int:
     base = args.base or running_base()
     if base is None:
         return _no_server()
-    data = track_from_server(base, args.attempt)
-    view = clip_view_from_server(base, args.attempt)
-    frame_map = (view or {}).get("frame_map")
-    if not data["runs"]:
+    view = None if args.plain else clip_view_from_server(base, args.attempt)
+    # A mapped picture already carries its pad. Fetching a raw-counter track
+    # can reject an otherwise usable clip spanning two source occurrences.
+    data = (track_from_server(base, args.attempt) if view is None else {
+        "buttons": A.BUTTON_BITS, "stick_max": A.STICK_MAX,
+        "dead_zone": A.STICK_DEAD_ZONE, "angle_units": A.ANGLE_UNITS})
+    if view is None and not data["runs"]:
         print(f"attempt #{args.attempt} has no captured input, so there is "
               "nothing to draw. That is a finding, not an error.")
         return 3
 
+    plans = []
+    for layer in [name.strip() for name in args.layers.split(",") if name.strip()]:
+        settings = dict(layer=layer, codec=args.codec, video_fps=args.fps)
+        try:
+            plans.append(plan_mapped_overlay(view, **settings) if view is not None
+                         else plan_overlay(data["runs"], **settings))
+        except ValueError as error:
+            raise SystemExit(f"{error}. Use --plain for a track without replay alignment.") from error
     out_dir = Path(args.out) if args.out else overlays_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"attempt-{args.attempt}"
     written = []
     canvas = None      # decided once, shared by every layer -- see widest_canvas
-    for layer in [name.strip() for name in args.layers.split(",") if name.strip()]:
-        plan = plan_overlay(data["runs"], layer=layer, codec=args.codec,
-                            video_fps=args.fps)
+    for plan in plans:
         with tempfile.TemporaryDirectory(prefix="sm64-overlay-") as work_name:
             work = Path(work_name)
             files, canvas = render_states(
@@ -296,22 +315,21 @@ def main() -> int:
                 data["dead_zone"], args.size, canvas,
                 data.get("angle_units", 0x10000))
             out_path = out_dir / output_name(stem, plan)
-            encode(plan, files, out_path, work,
-                   frame_map=frame_map, seams=data.get("stretches"))
+            encode(plan, files, out_path, work)
         written.append((out_path, plan, len(files)))
 
     print(f"read attempt #{args.attempt} from {base}\n")
     for out_path, plan, pictures in written:
         print(f"  {out_path}")
-        print(f"    {plan.video_frames} frames at {plan.video_fps} fps "
-              f"({plan.game_frames} game frames), {pictures} distinct "
-              f"pictures, {plan.codec}")
-    if frame_map:
-        print("\nThis export is MAPPED to the clip's own frame map: it "
-              "starts at the clip's frame 0 (not the anchor), so drop it at "
-              "0:00 over that clip — no offset, duplicates and skips "
-              "included.")
-    print("\nEvery layer is the same canvas, frame rate and frame 0, so they "
+        clock = (f"over {plan.duration_s:.6f}s at the clip's picture times"
+                 if plan.frame_times is not None else f"at {plan.video_fps} fps")
+        print(f"    {plan.video_frames} frames {clock}, {pictures} distinct pictures, {plan.codec}")
+    if view is not None:
+        print("\nMapped to the clip's captured states and picture times. Drop it "
+              "at 0:00 over that clip; unknown intervals are transparent.")
+    else:
+        print("\nPlain input track on the game clock; no replay alignment is available.")
+    print("\nEvery layer is the same canvas, clock and frame 0, so they "
           "stack in register — drop them on the timeline and delete the one "
           "you do not want. Nothing needs cropping.")
     print("Alignment against footage is NOT verified by this tool: record a "

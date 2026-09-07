@@ -89,7 +89,7 @@ class TemplateStore:
         if not decode(document).frames:
             raise DocumentError("this document has no captured input")
         now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
+        with self._lock, self._conn:
             if active:
                 self._conn.execute(
                     "UPDATE input_templates SET active=0"
@@ -101,15 +101,19 @@ class TemplateStore:
                 " VALUES (?,?,?,?,?,?,?,?)",
                 (kind, entity_key, strat_tag, name, origin, document,
                  1 if active else 0, now))
-            self._conn.commit()
             new_id = cursor.lastrowid
-        return self.get(new_id)
+            result = self._get(new_id)
+        return result
 
     def get(self, template_id: int) -> Template:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM input_templates WHERE id=?",
-                (template_id,)).fetchone()
+            return self._get(template_id)
+
+    def _get(self, template_id: int) -> Template:
+        """Read while the caller holds the shared connection lock."""
+        row = self._conn.execute(
+            "SELECT * FROM input_templates WHERE id=?",
+            (template_id,)).fetchone()
         if row is None:
             raise LookupError(f"no input template {template_id}")
         return _row(row)
@@ -152,16 +156,16 @@ class TemplateStore:
         return [_row(row) for row in rows]
 
     def activate(self, template_id: int) -> Template:
-        template = self.get(template_id)
-        with self._lock:
+        with self._lock, self._conn:
+            template = self._get(template_id)
             self._conn.execute(
                 "UPDATE input_templates SET active=0"
                 " WHERE kind=? AND entity_key=? AND IFNULL(strat_tag,'')=?",
                 (template.kind, template.entity_key, template.strat_tag or ""))
             self._conn.execute("UPDATE input_templates SET active=1 WHERE id=?",
                                (template_id,))
-            self._conn.commit()
-        return self.get(template_id)
+            result = self._get(template_id)
+        return result
 
     def delete(self, template_id: int) -> None:
         """Erase it. His standing ruling on deletion (2026-08-02): marking a
