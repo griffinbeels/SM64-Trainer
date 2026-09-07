@@ -1395,7 +1395,7 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-06 for complete Sheet ladders: **46,352 lines,
+Latest reading, 2026-09-06 for supported Sheet peaks: **46,385 lines,
 1,074 public names, 43.2 lines per public name, 53 pass-through (4.9%)**.
 The forwarder count is unchanged. The frame curve and the calibrated strategy
 signature own separate calculations; real Python/JS parity tests cover the
