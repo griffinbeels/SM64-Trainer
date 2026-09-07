@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import queue
 import threading
 
 from fastapi import FastAPI
@@ -174,3 +175,53 @@ def test_edit_racing_save_is_durable_after_publication(tmp_path, monkeypatch):
         assert Path(save.result(timeout=5)["path"]).exists()
         assert put.result(timeout=5) == updated
     assert make_service(tmp_path, [attempt()]).review_state(42) == updated
+
+
+def test_read_racing_save_never_loses_state_between_destination_lookup_and_read(tmp_path, monkeypatch):
+    service = make_service(tmp_path, [attempt()])
+    service.update_review_state(42, STATE)
+    get_started, finish_get = threading.Event(), threading.Event()
+    writer_progress = queue.Queue()
+    original_get = service._review_state.get
+
+    class ObservedLock:
+        """Keep real mutex behavior; report when the writer reaches contention."""
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if not self.lock.acquire(blocking=False):
+                writer_progress.put("waiting for reader")
+                self.lock.acquire()
+
+        def __exit__(self, *_):
+            self.lock.release()
+
+    lock = ObservedLock()
+    monkeypatch.setattr(service, "_cut_lock", lambda _: lock)
+
+    def paused_get(attempt_id, saved):
+        # The service already resolved saved=None. Pause exactly before it
+        # reads temporary state: promotion must not slip between these steps.
+        assert saved is None
+        get_started.set()
+        assert finish_get.wait(5)
+        return original_get(attempt_id, saved)
+
+    def save():
+        result = service.save(42)
+        writer_progress.put("published")
+        return result
+
+    monkeypatch.setattr(service._review_state, "get", paused_get)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reading = pool.submit(service.review_state, 42)
+        assert get_started.wait(5)
+        saving = pool.submit(save)
+        # Wait for actual progress, not a sleep-based guess about scheduling.
+        # Without the GET lock, Save finishes here and erases temporary state.
+        writer_progress.get(timeout=5)
+        finish_get.set()
+        assert reading.result(timeout=5) == STATE
+        assert Path(saving.result(timeout=5)["path"]).exists()
+    assert make_service(tmp_path, [attempt()]).review_state(42) == STATE
