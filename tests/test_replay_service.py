@@ -62,7 +62,7 @@ class FakeExtractor:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"mp4")
         return ClipResult(path=out_path, duration_s=(end - start).total_seconds(),
-                          truncated=False)
+                          truncated=False, start_utc=start)
 
 
 def make_service(tmp_path, attempts, cov=None):
@@ -81,9 +81,58 @@ def test_view_pads_span_and_returns_clip_url(tmp_path):
     assert res["duration_s"] == 17.0          # 12 s attempt + 3 pre + 2 post
     assert res["fps"] == 60                   # encoded rate
     assert res["game_fps"] == 30              # step unit: SM64 logic frames
+    assert res["attempt_start_slot"] is None  # no stamped picture association
+    assert res["input_span"] is None
     start, end, _ = svc.extractor.calls[0]
     assert start == T0 - timedelta(seconds=3)            # pre_pad
     assert end == T0 + timedelta(seconds=12 + 2)         # post_pad
+    # The anchor sits pre_pad into the clip, MEASURED from the clip's own
+    # first frame -- the input track starts at the anchor, so this is what
+    # lets the two share one axis (live report 2026-08-22: every input
+    # landed three seconds early) -- PLUS the display lag: the picture of
+    # a frame appears one game frame after its wall time (measured from his
+    # nine Forward-1 screenshots the same day).
+    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    assert res["anchor_offset_s"] == 3.0 + DISPLAY_LAG_FRAMES / 30
+
+
+def test_a_clip_with_no_stamped_rows_carries_no_map_at_all(tmp_path):
+    """ONE map path since 2026-09-05, and it is a read: the capture layer
+    stamps each picture with the frame that drew it. A clip recorded
+    without the layer -- no ledger, no feed log, or rows that name no
+    frame -- gets `frame_map: None`, and the panel says "Frame-exact
+    capture is off" rather than showing a derived guess. Four generations
+    of derived map used to answer here."""
+    svc = make_service(tmp_path, [attempt()])
+    assert svc.view(42)["frame_map"] is None          # no ledger at all
+
+    class TimeOnlyLedger:
+        """A desktop grab's rows: a composition time and nothing else."""
+        def rows_between(self, t0, t1):
+            return [{"ts": t0 + 0.5 + i / 30, "frame": None} for i in range(9)]
+
+        def feeds_between(self, t0, t1):
+            return [{"at": t0 + 0.5 + i / 30 + 0.004, "ts": t0 + 0.5 + i / 30}
+                    for i in range(9)]
+
+    svc2 = make_service(tmp_path / "b", [attempt()])
+    svc2.recorder.ledger = TimeOnlyLedger()
+    assert svc2.view(42)["frame_map"] is None
+
+
+def test_the_anchor_offset_follows_the_clip_s_REAL_start_not_the_pad(tmp_path):
+    """The ring may have evicted part of the lead-in; the offset is then
+    shorter than the pad, and the sidecar's own start_utc says by how much."""
+    class LateExtractor(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=res.duration_s,
+                              truncated=True,
+                              start_utc=start + timedelta(seconds=2))
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = LateExtractor()
+    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    assert svc.view(42)["anchor_offset_s"] == 1.0 + DISPLAY_LAG_FRAMES / 30
 
 
 def test_available_attempt_ids_saved_or_buffer_covered(tmp_path):
@@ -205,6 +254,8 @@ def test_view_fallback_tolerates_legacy_saved_file_without_sidecar(tmp_path):
     assert res["duration_s"] is None
     assert res["truncated"] is False
     assert res["fps"] == 60             # falls back to current config
+    from sm64_events.replay.service import DISPLAY_LAG_FRAMES
+    assert res["anchor_offset_s"] == 3.0 + DISPLAY_LAG_FRAMES / 30  # the pad, with no start_utc
 
 
 def test_view_prefers_scratch_cache_and_reports_saved_path(tmp_path):
@@ -454,3 +505,241 @@ def test_save_segment_attempt_filename_contains_segment_name_and_rta(tmp_path):
     name = Path(res["path"]).name
     assert "lblj" in name
     assert "-rta" in name
+
+
+def test_a_short_lead_in_is_not_a_warning_but_a_late_start_is(tmp_path):
+    """2026-08-28: "there's also this warning for 'starts mid attempt' --
+    but... I just reset as normal? What does this even mean?" `truncated`
+    only says the ring could not serve the whole PADDED span, which is
+    usually a shorter run-up with the attempt entirely present. The
+    question worth asking him is whether the clip starts after the ATTEMPT
+    did, and the timestamps answer that outright."""
+    class ShortLeadIn(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=res.duration_s - 1.5,
+                              truncated=True,
+                              start_utc=start + timedelta(seconds=1.5))
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = ShortLeadIn()
+    res = svc.view(42)
+    assert res["truncated"] is True          # the ring really was short
+    assert res["starts_mid_attempt"] is False, (
+        "1.5 s off a 3 s lead-in leaves the whole attempt in the clip")
+    assert res["ends_early"] is False
+
+
+def test_a_clip_that_really_starts_after_the_anchor_says_so(tmp_path):
+    class Late(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=res.duration_s - 5,
+                              truncated=True,
+                              start_utc=start + timedelta(seconds=5))
+
+    svc = make_service(tmp_path / "late", [attempt()])
+    svc.extractor = Late()
+    assert svc.view(42)["starts_mid_attempt"] is True
+
+
+def test_a_clip_cut_off_before_the_finish_says_that_instead(tmp_path):
+    class Stops(FakeExtractor):
+        def extract(self, ring, start, end, out_path):
+            res = super().extract(ring, start, end, out_path)
+            return ClipResult(path=res.path, duration_s=6.0,
+                              truncated=True, start_utc=start)
+
+    svc = make_service(tmp_path / "stops", [attempt()])
+    svc.extractor = Stops()
+    res = svc.view(42)
+    assert res["starts_mid_attempt"] is False and res["ends_early"] is True
+
+
+# The footage aligner, the picture-run quantiser, the learned ink anchor,
+# the ledger mapper, the digit refit and the pad reader were pinned here --
+# six generations of DERIVING which game frame a picture shows, each with a
+# refusal path and a never-costs-the-clip guard. The capture layer is told
+# the frame, so all of it was deleted 2026-09-05 along with
+# `replay/{mapalign,timerread,frameclock}.py` and `memory/present.py`.
+
+
+class ExactLedger:
+    """Rows a capture-layer clip carries: the plugin's own frame and pad."""
+    def __init__(self, count=3, pads=None):
+        self.count = count
+        self.pads = pads or {}
+    def rows_between(self, t0, t1):
+        return [{"ts": t0 + 0.5 + i / 30, "frame": 100 + i, "exact": True,
+                 "pad": self.pads.get(100 + i, [0, 0, 0]), "igt_overall": 40 + i,
+                 "vi_origin": 0x100000 + i, "lists_since": 1}
+                for i in range(self.count)]
+
+
+def test_a_capture_layer_clip_takes_its_stamps_as_the_map_and_audits_the_pads(tmp_path):
+    """Item 95: every row says `exact`, so the map IS the rows, and the
+    stamp's own pad is checked against the input track -- the clip's only
+    shipped check, and the number the timeline's chip draws. It reads the
+    pad the PLUGIN copied out of RDRAM beside the picture, so it involves
+    no pixels and cannot misread; the display reader it replaced scored
+    82-94% on clips the oracle certified perfect (2026-09-05)."""
+    import json as _json
+
+    class PaddedFeedLedger(FeedExactLedger):
+        def __init__(self, count, pads):
+            super().__init__(count)
+            self.pads = pads
+
+        def rows_between(self, t0, t1):
+            rows = super().rows_between(t0, t1)
+            for row in rows:
+                row["pad"] = self.pads.get(row["frame"], [0, 0, 0])
+            return rows
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = FeedExtractor(count=3)
+    svc.recorder.ledger = PaddedFeedLedger(
+        count=3, pads={100: [5, -9, 0x8000], 101: [5, -9, 0x8000], 102: [0, 0, 0]})
+    # The track disagrees with the stamp on frame 102 and nowhere else.
+    svc.track_pads = lambda attempt: {99: (5, -9, 0x8000), 100: (5, -9, 0x8000),
+                                      101: (5, -9, 0x8000), 102: (3, 0, 0)}
+    res = svc.view(42)
+    assert res["frame_map_source"] == "plugin"
+    assert res["pad_stamp_agreement"]["pictures"] == 3
+    assert res["pad_stamp_agreement"]["agree"] == 2
+    # `rows` is the clip's WHOLE picture count, so the chip can say how much
+    # of the clip the check covers rather than printing "3 of 3".
+    assert res["pad_stamp_agreement"]["rows"] == 3
+    assert res["pad_stamp_agreement"]["disagreements"] == [[2, 102, [3, 0, 0], [0, 0, 0]]]
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["frame_map_source"] == "plugin"
+    assert sidecar["picture_ledger"][0]["exact"] is True
+
+
+class FeedExactLedger(ExactLedger):
+    """A capture-layer ledger with the feed log the picture-feed path joins
+    on: one feed entry per row, written 4 ms after its present."""
+    def __init__(self, count, inexact_at=None):
+        super().__init__(count)
+        self.inexact_at = inexact_at
+    def rows_between(self, t0, t1):
+        rows = [{"ts": t0 + 1.5 + i / 30, "frame": 100 + i, "exact": i != self.inexact_at,
+                 "pad": [0, 0, 0], "igt_overall": 40 + i, "vi_origin": 0x100000 + i,
+                 "lists_since": 2 if i == self.inexact_at else 1}
+                for i in range(self.count)]
+        return rows
+    def feeds_between(self, t0, t1):
+        return [{"at": t0 + 1.0 + i / 30 + 0.004, "ts": t0 + 1.0 + i / 30,
+                 "run_id": "fixture", "pts": i * 3000 + 360}
+                for i in range(self.count)]
+
+
+class FeedExtractor(FakeExtractor):
+    """A picture-feed clip: every video frame carries its own time."""
+    def __init__(self, count):
+        super().__init__()
+        self.count = count
+    def extract(self, ring, start, end, out_path):
+        import dataclasses
+        from sm64_events.replay.media import MediaRun
+        frame_times = [i / 30 + 0.004 for i in range(self.count)]
+        return dataclasses.replace(super().extract(ring, start, end, out_path),
+                                   frame_times=frame_times, video_start_s=frame_times[0],
+                                   media_run=MediaRun("fixture", start.timestamp()),
+                                   source_pts=[i * 3000 + 360 for i in range(self.count)])
+
+
+def test_source_linked_picture_keeps_its_own_state_and_timer(tmp_path):
+    """Direct source identity does not inherit the old fitted map's offset.
+    An inexact capture stays unknown; its neighbor keeps its own state."""
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = FeedExtractor(count=120)
+    svc.recorder.ledger = FeedExactLedger(count=120, inexact_at=7)
+    svc.track_pads = lambda attempt: {}
+    res = svc.view(42)
+    assert res["frame_map_source"] == "plugin"
+    assert res["frame_map"][:7] == [100, 101, 102, 103, 104, 105, 106]
+    assert res["picture_ids"][:9] == [0, 1, 2, 3, 4, 5, 6, None, 8]
+    # Opening the cached clip preserves the very same capture occurrences.
+    assert svc.view(42)["picture_ids"] == res["picture_ids"]
+    assert res["frame_map"][7] is None                    # two lists: nothing claimed
+    assert res["frame_map"][8:12] == [108, 109, 110, 111]
+    assert res["picture_igt"][:3] == [40, 41, 42] and res["picture_igt"][7] is None
+    import json as _json
+    sidecar = _json.loads(
+        (svc.clips_dir / "clip_attempt_42.mp4").with_suffix(".json").read_text())
+    assert sidecar["plugin_inexact_rows"] == 1 and sidecar["picture_igt"][8] == 48
+
+
+def test_a_clip_whose_rows_are_not_all_stamped_gets_no_map(tmp_path):
+    """There is no second path to fall back to: rows the plugin did not
+    stamp cannot name a frame, so the map is dropped rather than derived."""
+    svc = make_service(tmp_path, [attempt()])
+    svc.recorder.ledger = FeedExactLedger(count=40)
+    svc.recorder.ledger.__class__ = type(
+        "Unstamped", (FeedExactLedger,),
+        {"rows_between": lambda self, t0, t1: [
+            {"ts": t0 + 1.5 + i / 30, "frame": 100 + i} for i in range(40)]})
+    svc.extractor = FeedExtractor(count=40)
+    res = svc.view(42)
+    assert res["frame_map"] is None and res["frame_map_source"] is None
+
+
+def test_picture_clock_lookup_keeps_the_matched_occurrence_across_a_reset(tmp_path):
+    svc = make_service(tmp_path, [attempt()])
+    rows = [{"frame": frame, "igt_overall": igt, "exact": True}
+            for frame, igt in zip([100, 101, 99, 100, 101], [50, 51, 2, 3, 4], strict=True)]
+    meta = {"picture_ledger": rows, "picture_rows": [1, 4, 2, None, 4],
+            "frame_map": [100, 100, 98, 99, 100]}
+    svc._take_the_stamps(meta, attempt())
+    assert meta["picture_igt"] == [51, 4, 2, None, 4]
+    assert meta["state_rows"] == [1, 4, 2, None, 4]
+    assert meta["frame_map"] == [101, 101, 99, None, 101]
+
+
+def test_a_picture_feed_without_a_retained_source_clock_does_not_get_a_map(tmp_path):
+    import dataclasses
+
+    class UnknownClock(FeedExtractor):
+        def extract(self, *args):
+            return dataclasses.replace(super().extract(*args), media_run=None, source_pts=None)
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.recorder.ledger = FeedExactLedger(count=40)
+    svc.extractor = UnknownClock(count=40)
+    result = svc.view(42)
+    assert result["frame_map"] is None
+
+
+def test_a_few_inexact_rows_keep_the_plugin_map_but_say_so(tmp_path):
+    """Review finding 9: a present that saw two display lists is marked
+    inexact; one such row in a hundred keeps the rows as the map and the
+    sidecar says the map is inferred there. Many such rows do not."""
+    class MostlyExactFeed(FeedExactLedger):
+        def __init__(self, count, inexact_every):
+            super().__init__(count)
+            self.inexact_every = inexact_every
+
+        def rows_between(self, t0, t1):
+            rows = super().rows_between(t0, t1)
+            for index, row in enumerate(rows):
+                if index % self.inexact_every == 0:
+                    row["exact"] = False
+            return rows
+
+    svc = make_service(tmp_path, [attempt()])
+    svc.extractor = FeedExtractor(count=200)
+    svc.recorder.ledger = MostlyExactFeed(count=200, inexact_every=200)
+    svc.track_pads = lambda attempt: {}
+    res = svc.view(42)
+    assert res["frame_map_source"] == "plugin"
+    assert res["plugin_inexact_rows"] == 1
+    # 20 of 200 inexact is past PLUGIN_EXACT_SHARE: there is nothing else to
+    # fall back to, so the clip carries no map and says so.
+    svc = make_service(tmp_path / "many", [attempt()])
+    svc.extractor = FeedExtractor(count=200)
+    svc.recorder.ledger = MostlyExactFeed(count=200, inexact_every=10)
+    svc.track_pads = lambda attempt: {}
+    res = svc.view(42)
+    assert res["frame_map"] is None and res["frame_map_source"] is None

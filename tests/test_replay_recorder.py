@@ -67,8 +67,10 @@ class FakeAvSink:
         self.started = True
     def stop(self):
         self.stopped = True
-    def submit(self, bgra):
+    def submit(self, bgra, tag=None):
         self.frames.append(bgra)
+        self.tags = getattr(self, "tags", [])
+        self.tags.append(tag)
     def submit_audio(self, pcm_bytes):
         self.audio.append(pcm_bytes)
 
@@ -278,8 +280,10 @@ def test_startup_wipes_scratch(tmp_path):
     buf = tmp_path / "buf"
     buf.mkdir(parents=True)
     (buf / "stale.ts").write_bytes(b"junk")
-    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(), found=None)
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
     rec.start()
+    assert wait_for(lambda: rec.status()["recording"])
     assert not (buf / "stale.ts").exists()
     rec.stop()
 
@@ -357,8 +361,10 @@ def test_startup_wipe_is_recursive_clips_cache_dies_with_buffer(tmp_path):
     (buf / "stale.ts").write_bytes(b"junk")
     (clips / "clip_attempt_1.mp4").write_bytes(b"stale clip")
     (clips / "clip_attempt_1.json").write_text("{}")
-    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(), found=None)
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
     rec.start()
+    assert wait_for(lambda: rec.status()["recording"])
     assert not (buf / "stale.ts").exists()
     assert not (clips / "clip_attempt_1.mp4").exists()
     assert not (clips / "clip_attempt_1.json").exists()
@@ -431,6 +437,45 @@ def test_recorder_injects_idle_check_tracking_idle_state(tmp_path):
     rec.stop()
 
 
+def test_failed_source_demand_does_not_leave_idle_half_changed(tmp_path, caplog):
+    video = FakeVideoSource()
+    def unavailable():
+        raise OSError("frame mapping closed")
+    video.refresh_demand = unavailable
+    rec = make_recorder(tmp_path, video, FakeAudioSource())
+    rec._video_source = video
+    rec._set_idle(True)
+    rec._idle_dropped = 5
+    rec.set_player_active()
+    assert not rec.is_idle()
+    assert rec._idle_since is None
+    assert rec._idle_dropped == 0
+    assert "replay frame demand notification failed" in caplog.text
+
+
+def test_startup_reconciles_unpause_before_source_publication(tmp_path):
+    class StartingPaused(FakeVideoSource):
+        def start(self, on_frame, on_stopped):
+            super().start(on_frame, on_stopped)
+            self.demand = not self.idle_check()
+            assert not self.demand
+            rec.set_session_paused(False)  # not published yet: notification has no target
+        def refresh_demand(self):
+            self.demand = not self.idle_check()
+
+    video = StartingPaused()
+    sink = FakeAvSink()
+    rec = make_recorder(tmp_path, video, FakeAudioSource(),
+                        video_sink_factory=lambda *args, **kwargs: sink)
+    rec.set_session_paused(True)
+    try:
+        rec._begin_capture(WIN)
+        assert not rec.is_idle()
+        assert video.demand
+    finally:
+        rec._teardown_capture()
+
+
 def test_session_pause_forces_idle_and_outranks_input(tmp_path):
     """Manual pause (POST /api/pause): forces the idle-discard state, and
     stray input pings must NOT resume it; unpausing resumes immediately
@@ -449,3 +494,78 @@ def test_session_pause_forces_idle_and_outranks_input(tmp_path):
     assert rec.status()["idle"] is False
     rec._maybe_idle_pause()                 # clock refreshed on unpause
     assert rec.status()["idle"] is False
+def test_the_picture_ledger_rides_the_capture_path(tmp_path):
+    """Item 40: every grab passes the picture ledger; identical grabs of one
+    presented picture land ONE row, a changed picture lands the next. And
+    item 38: the sink is fed ONE frame per row -- the three identical grabs
+    reach it once, and every write lands in the ledger's feed log.
+
+    Driven with STAMPED pictures because that is the only path that ships:
+    a grab with no stamp names no game frame at all now (the frame clock
+    that used to guess one was deleted 2026-09-05), so it is recorded by
+    time and the clip carries no map."""
+    from sm64_events.inputs.frame import InputFrame
+    from sm64_events.replay.pluginsource import FrameStamp
+
+    def stamp_at(frame):
+        return FrameStamp(frame=frame, igt_overall=73,
+                          pad=InputFrame(buttons=0, pressed=0,
+                                         stick_x=0, stick_y=0),
+                          vi_origin=0x100000, list_qpc=1, present_qpc=2,
+                          lists_since=1)
+
+    video, audio = FakeVideoSource(), SystemFakeAudioSource()
+    sink = FakeAvSink()
+    rec = make_recorder(tmp_path, video, audio,
+                        video_sink_factory=lambda cfg, on_seg, codec: sink)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)
+    same = np.zeros((480, 640, 4), dtype=np.uint8)
+    for tick in range(3):                    # the same zeros picture, thrice
+        video.on_frame(same, int(tick / 30 * 1e7), stamp_at(4242))
+    changed = np.full((480, 640, 4), 200, dtype=np.uint8)
+    video.on_frame(changed, int(3 / 30 * 1e7), stamp_at(4245))
+    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
+    rows = rec.ledger.rows_between(0.0, 1e12)
+    assert [row["frame"] for row in rows] == [4242, 4245]
+    assert [row["igt_overall"] for row in rows] == [73, 73]
+    assert rows[1]["ts"] - rows[0]["ts"] > 0
+    time.sleep(0.05)
+    assert len(sink.frames) == 2, "one fed frame per distinct picture"
+    assert [tag[1] for tag in sink.tags] == [row["ts"] for row in rows]
+    # The sink's feed callback is the ledger's feed log.
+    sink.on_fed(sink.tags[0], rows[0]["ts"] + 0.004)
+    assert rec.ledger.feeds_between(0.0, 1e12) == [
+        {"at": rows[0]["ts"] + 0.004, "ts": rows[0]["ts"],
+         "run_id": None, "pts": None, "repeat": False}]
+    rec.stop()
+
+
+def test_a_stamped_picture_files_the_stamps_own_frame(tmp_path):
+    """Item 95: a picture from the capture layer arrives with the game's own
+    frame counter; the recorder tags it with that frame, and the ledger row
+    says `exact` and carries the pad and the IGT. This is the ONLY way a
+    row gets a frame now -- the frame clock that used to derive one for a
+    desktop grab was deleted 2026-09-05."""
+    from sm64_events.inputs.frame import InputFrame
+    from sm64_events.replay.pluginsource import FrameStamp
+
+    video, audio = FakeVideoSource(), SystemFakeAudioSource()
+    sink = FakeAvSink()
+    rec = make_recorder(tmp_path, video, audio,
+                        video_sink_factory=lambda cfg, on_seg, codec: sink)
+    rec.start()
+    assert wait_for(lambda: video.on_frame is not None)
+    stamp = FrameStamp(frame=5150, igt_overall=91,
+                       pad=InputFrame(buttons=0x8000, pressed=0x8000, stick_x=3, stick_y=-70),
+                       vi_origin=0x100000, list_qpc=1, present_qpc=2, lists_since=1)
+    video.on_frame(np.full((480, 640, 4), 7, dtype=np.uint8), int(1 / 30 * 1e7), stamp)
+    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 1)
+    frame_tag, capture_ts = sink.tags[0]
+    assert frame_tag == 5150 and abs(capture_ts - (T0.timestamp() + 1 / 30)) < 1e-5
+    rows = rec.ledger.rows_between(T0.timestamp() - 1, T0.timestamp() + 1)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["frame"] == 5150 and row["exact"] is True and row["igt_overall"] == 91
+    assert row["pad"] == [3, -70, 0x8000] and row["vi_origin"] == 0x100000
+    rec.stop()

@@ -6,13 +6,19 @@ the internal name at +0x20 ("SUPER MARIO 64"), and the country code at
 in its own process (it is not in RDRAM), so `Pj64Memory.rom_header()` finds
 it by that magic and this module reads the byte.
 
-TWO BYTE ORDERS ARE ACCEPTED, and which one PJ64 1.6 uses is a LIVE-GATE
-ITEM (`sync/address_gates.py::version.rom`, part of the US baseline run):
-the ROM as shipped is big-endian (`80 37 12 40`), and PJ64 stores RDRAM as
-little-endian 32-bit words (`memory/base.py`) — if it stores the ROM the same
-way, the magic reads `40 12 37 80` and every word is reversed. Neither has
-been observed on this machine yet, so both are handled and the first run
-settles it; nothing here is asserted from reasoning alone.
+TWO BYTE ORDERS ARE ACCEPTED, and PJ64 1.6 on this machine is now OBSERVED
+(2026-08-23, read live at the start of an 8 MB committed region): it stores
+the ROM word-swapped — the magic reads `40 12 37 80` and every 32-bit word
+is reversed, matching how it stores RDRAM (`memory/base.py`). The big-endian
+order stays accepted for an emulator that stores the file as shipped.
+
+THE NAME FIELD IS THE PRACTICE ROM'S OWN, not vanilla's. The Usamune ROM
+writes `SM64 USAMUNE v1.93u` at +0x20 where vanilla writes `SUPER MARIO
+64` — read live off his ROM 2026-08-23, after the vanilla-only check made
+`detect_version` return None on the exact ROM this project reads, which
+skipped every sync gate needing `version.rom`. Both names are accepted (the
+Usamune one by prefix, so a version bump keeps matching) and the country
+byte — `E` on that same live header — still names the version either way.
 
 This is the emulator-side `detected` argument that
 `core/modes.py::effective_version` (feature/game-version) left open. The
@@ -23,6 +29,8 @@ ROM_MAGIC_BE = b"\x80\x37\x12\x40"
 ROM_MAGIC_WORD_SWAPPED = ROM_MAGIC_BE[::-1]      # 40 12 37 80
 HEADER_SIZE = 0x40
 INTERNAL_NAME = b"SUPER MARIO 64"
+USAMUNE_NAME_PREFIX = b"SM64 USAMUNE"
+NAME_FIELD = slice(0x20, 0x34)                   # 20 bytes, space-padded
 _COUNTRY = {0x45: "us", 0x4A: "jp"}              # 'E', 'J'
 
 
@@ -40,7 +48,11 @@ def normalise_header(raw: bytes) -> bytes | None:
 
 def version_from_header(raw: bytes) -> str | None:
     header = normalise_header(raw)
-    if header is None or header[0x20:0x20 + len(INTERNAL_NAME)] != INTERNAL_NAME:
+    if header is None:
+        return None
+    name = header[NAME_FIELD]
+    if not (name.startswith(INTERNAL_NAME)
+            or name.startswith(USAMUNE_NAME_PREFIX)):
         return None
     return _COUNTRY.get(header[0x3E])
 

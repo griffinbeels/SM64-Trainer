@@ -14,8 +14,43 @@ import { useMareloTurn } from "../mareloturn.js";
 import { ImportSection } from "./importsection.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
+import { SetupModal } from "./setupmodal.js";
 
 const html = htm.bind(h);
+
+// Sticks for the browser SESSION only (his ask: "does not reopen until the
+// next app session") -- sessionStorage, never localStorage.
+const SETUP_NOT_NOW_KEY = "sm64.setupNotNow";
+
+function seenSetupPrompt() {
+  try { return sessionStorage.getItem(SETUP_NOT_NOW_KEY) === "1"; }
+  catch { return false; }
+}
+
+function rememberSetupPrompt() {
+  try { sessionStorage.setItem(SETUP_NOT_NOW_KEY, "1"); } catch { /* private mode */ }
+}
+
+// Auto-open criteria: practicing on the emulator (or nothing chosen yet --
+// core/modes.py defaults there), the capture layer has never been touched,
+// and Project64 is at least findable (a folder we know, or it is running
+// right now) -- otherwise the modal would open onto a checklist with nothing
+// for him to act on yet. Never while the layer is already active.
+// His rule (2026-09-05, the first launch after the layer shipped): "If the
+// user hasn't installed / set up, it should trigger the screen. This should
+// trigger for existing users." So the screen opens whenever the layer is
+// not consented (or was and regressed) -- whether or not Project64 has been
+// seen yet: the Project64 row is itself the door for that. Only a build with
+// no layer to install, or the N64 platform, stays quiet.
+function shouldOfferSetup(setup) {
+  if (!setup || setup.platform === "n64") return false;
+  const emu = setup.emu;
+  if (!emu) return false;
+  // ...and for a layer this build has outgrown: the steps to update it are
+  // the onboarding, so the screen carries them the moment the page opens.
+  const stale = !!emu.consented_at && emu.wrapper_present && emu.wrapper_current === false;
+  return emu.state === "not_installed" || emu.state === "regressed" || stale;
+}
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
 
@@ -72,6 +107,24 @@ export function Header({ t, settingsOpen, closeSettings }) {
   const [celebrateOn, setCelebrateOn] = useState(celebrationsEnabled());
   const [skipStyle, setSkipStyle] = useState(climbSkipStyle());
   const mareloTurn = useMareloTurn(t.marelo);
+
+  // The setup screen (setupmodal.js): a manual "Setup" entry, PLUS a once-
+  // per-session auto-open the first time this page loads onto a fresh
+  // capture layer -- see shouldOfferSetup's own comment for the criteria.
+  // Closing it for ANY reason ("Not now", Esc, the backdrop) remembers that
+  // for the rest of this browser session, same as a manual open never
+  // re-triggers it: only the criteria above decide whether it opens itself.
+  const [setupOpen, setSetupOpen] = useState(false);
+  useEffect(() => {
+    if (seenSetupPrompt()) return;
+    send("GET", "/api/setup").then((setup) => {
+      if (shouldOfferSetup(setup)) setSetupOpen(true);
+    }).catch(() => {});
+  }, []);
+  const closeSetup = () => {
+    setSetupOpen(false);
+    rememberSetupPrompt();
+  };
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -262,6 +315,9 @@ export function Header({ t, settingsOpen, closeSettings }) {
               <${Icon} name="shield" />
               ${reportBusy ? "Generating…" : "Debug report"}
             </button>
+            <button type="button" onclick=${() => setSetupOpen(true)}>
+              <${Icon} name="settings" />Setup
+            </button>
           </div>
           ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
           ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
@@ -438,5 +494,6 @@ export function Header({ t, settingsOpen, closeSettings }) {
          the card it is about is what stops a second surface growing its own
          copy of this question. */""}
     <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
+    ${setupOpen && html`<${SetupModal} onClose=${closeSetup} initialPane="emu" />`}
   </header>`;
 }

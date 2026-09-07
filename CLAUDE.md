@@ -42,6 +42,9 @@ not in this map.
 
 ## Protect live play
 
+- Never restart the live server. Griffin restarts it when ready; it may be
+  serving another branch's work. Report when changes need a restart and leave
+  it to him. This does not prevent starting/closing isolated UI test fixtures.
 - Do not start `python -m sm64_events.main` for UI checks while the user may
   be playing. One recorder operates machine-wide (`core/recorder_lock.py`);
   one server owns each database (`storage/instance_lock.py`), with second

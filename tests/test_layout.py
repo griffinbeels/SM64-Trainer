@@ -42,3 +42,23 @@ def test_version_from_argv_reads_the_flag_and_refuses_an_unknown_version():
     assert L.version_from_argv([]) == "us"
     with pytest.raises(SystemExit):
         L.version_from_argv(["--version", "usa"])
+
+
+def test_the_controller_has_a_us_address_and_no_jp_one_yet():
+    assert L.US.player1_controller is not None
+    assert L.JP.player1_controller is None, (
+        "a JP value lands only after its gate is verified and the sync "
+        "report says so")
+
+
+def test_the_button_table_covers_every_n64_button_exactly_once():
+    from sm64_events.memory import addresses as A
+    names = [name for _bit, name in A.BUTTON_BITS]
+    assert len(names) == len(set(names)) == 14
+    covered = 0
+    for bit, _name in A.BUTTON_BITS:
+        assert bin(bit).count("1") == 1, f"{bit:#06x} is not a single bit"
+        covered |= bit
+    # 0x0080 (the console reset line) and 0x0040 (unused) are never set by a
+    # controller, so the table's coverage IS the validity mask.
+    assert covered == A.BUTTON_VALID_MASK

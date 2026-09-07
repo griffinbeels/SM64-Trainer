@@ -32,6 +32,7 @@ for what it is waiting on, and a loop that exhausts its budget returns
 """
 from sm64_events.memory import addresses as A
 from sm64_events.memory.behaviours import base_from_mario, pointer_of, symbol_of
+from sm64_events.inputs.frame import button_names, fits_controller
 from sm64_events.memory.version_probe import detect_version
 from sm64_events.sync.checks import (check_ticks, near, parse_frames,
                                      pool_contains, scan_ticking_u16, scan_u16,
@@ -682,7 +683,7 @@ def _hunt_frozen_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
 
 
 def _hunt_ticking_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
-    """The hunt for a RUNNING counter (Usamune's overall timer). Two images
+    """The hunt for Usamune's RUNNING leg counter. Two images
     TICK_SCAN_SECONDS apart name every u16 that advances at game rate -- a
     handful in 8 MB -- and the value he typed only has to be NEAR one of
     them: within 30 frames per second that passed since he answered, plus
@@ -723,7 +724,7 @@ def _hunt_ticking_u16(ctx, prompt_text: str) -> tuple[list[int], int | None]:
 
 def _check_usamune_overall(ctx) -> Verdict:
     found, _ = _hunt_ticking_u16(
-        ctx, "Stand in any course with the Usamune overall timer RUNNING and "
+        ctx, "Stand in any course with the Usamune timer RUNNING and "
              "visible; type what it reads right now (e.g. 0'20\"20) and press "
              "Enter -- it keeps running, that is fine.")
     if not found:
@@ -828,8 +829,9 @@ register(Gate(
     needs=("version.rom",), timeout_s=180.0,
     instruction="Stand in any course with the Usamune overall timer RUNNING "
                "and visible; when asked, type what it reads right now.",
-    proves="the RAM address holding Usamune's running overall star time "
-           "(a u16 that ticks at game rate and reads near what he typed).",
+    proves="the RAM address holding Usamune's running leg counter (a u16 "
+           "that ticks at game rate and reads near what he typed); subarea "
+           "banking is counter_epoch's separate contract.",
     check=_check_usamune_overall,
 ))
 register(Gate(
@@ -848,4 +850,77 @@ register(Gate(
     proves="candidates for Usamune's per-section counter -- DIAGNOSTICS ONLY, "
            "its terminal state is `candidate`; no shipped read depends on it.",
     check=_check_usamune_timer,
+))
+
+
+# --- player1_controller -----------------------------------------------------
+
+CONTROLLER_HOLD_TIMEOUT_S = 60.0
+
+
+def _check_player1_controller(ctx) -> Verdict:
+    """Prove the candidate is the LIVE pad, not a struct-shaped coincidence.
+
+    The razor is internal consistency (`inputs/frame.py::fits_controller`),
+    which is why the human has to deflect the stick AND hold a button: a run
+    of zeroes satisfies every range check anyone has ever written, and
+    satisfies this one too while nothing is moving. That is not hypothetical
+    -- the first hunt for this address returned exactly such a run, passed 200
+    consecutive live reads, and was wrong (2026-08-20).
+    """
+    candidate = ctx.candidate("player1_controller")
+    if candidate is None:
+        # A HUNT row, so a version with no shipped value has no candidate to
+        # offer -- no symbol map names this struct (the decomp's
+        # gPlayer1Controller is a pointer variable, not the struct itself).
+        # The hunt is `uv run python tools/probe_inputs.py --at scan`, which
+        # sweeps for the shape and prints what fits; its answer comes back
+        # here as the candidate.
+        return Verdict("missing",
+                       evidence="no candidate: run tools/probe_inputs.py "
+                                "--at scan against this ROM to hunt it, then "
+                                "re-run this gate")
+    deflected = held = None
+    start = ctx.now()
+    while ctx.now() - start < CONTROLLER_HOLD_TIMEOUT_S:
+        fit = fits_controller(ctx.raw().read_block(candidate,
+                                                   A.CONTROLLER_SIZE))
+        if fit is None:
+            return Verdict("failed", value=candidate,
+                           evidence="the struct stopped being self-consistent:"
+                                    " its raw stick, processed stick and"
+                                    " magnitude disagreed, so this address"
+                                    " does not hold a controller")
+        if max(abs(fit.raw_x), abs(fit.raw_y)) >= A.STICK_DEAD_ZONE:
+            deflected = (fit.raw_x, fit.raw_y, fit.stick_mag)
+        if fit.buttons:
+            held = fit.buttons
+        if deflected is not None and held is not None:
+            return Verdict(
+                "verified", value=candidate,
+                # A DICT, like every other gate's `measured` -- the wire model
+                # (`server/sync_api.py::VerdictBody.measured: dict | None`)
+                # 422'd the string this first shipped as, so the dashboard
+                # missed the one verdict his live run produced (2026-08-23).
+                measured={"stick_x": deflected[0], "stick_y": deflected[1],
+                          "magnitude": round(deflected[2], 1)},
+                evidence=f"the stick left the dead zone and buttons"
+                         f" {button_names(held) or ('none',)} were held, with"
+                         f" the dead-zone and magnitude relation holding on"
+                         f" every read")
+        ctx.sleep(POLL_INTERVAL_S)
+    return Verdict("failed", value=candidate,
+                   evidence="never saw the stick leave the dead zone AND a "
+                            "button held within the timeout")
+
+
+register(Gate(
+    id="address.player1_controller", feature="controller input", kind="address",
+    needs=("version.rom",), timeout_s=CONTROLLER_HOLD_TIMEOUT_S + 10,
+    instruction="Push the stick all the way to one edge and hold A at the "
+                "same time.",
+    proves="gPlayer1Controller's candidate address holds the live pad: its "
+           "processed stick is its raw stick through the game's own dead "
+           "zone, on every read.",
+    check=_check_player1_controller,
 ))

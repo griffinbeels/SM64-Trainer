@@ -278,7 +278,7 @@ async def _refresh_library_quietly(library, overrides, adoptions, service) -> No
 def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
-               adoptions_path=None, mode_path=None,
+               adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
                library_path=None, refresh_library_on_start=False,
                library_bundled_path=None) -> FastAPI:
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
@@ -403,6 +403,13 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        # The poll loop is stopped, so whatever input it buffered will never
+        # be flushed by another tick. Write it now or lose the last seconds
+        # of every session.
+        on_stop = getattr(poller, "on_stop", None)
+        if on_stop is not None:
+            with suppress(Exception):
+                on_stop()
         with suppress(Exception):
             pidfile_path().unlink()
 
@@ -552,6 +559,15 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
 
+    if inputs is not None:
+        from sm64_events.server.inputs_api import create_inputs_router
+        app.include_router(create_inputs_router(inputs))
+
+    if capture_layer is not None:
+        from sm64_events.server.setup_api import create_setup_router
+        app.include_router(create_setup_router(capture_layer,
+                                               mode_path=mode_path))
+
     if compare is not None:
         from sm64_events.server.compare_api import create_compare_router
         app.include_router(create_compare_router(compare))
@@ -587,7 +603,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         return pause_state(poller, replay)
 
     @app.post("/api/pause")
-    def set_pause(body: PauseBody):
+    async def set_pause(body: PauseBody):
         """MANUAL pause switch (reason precedence in pause_state): the
         poller stops reading and dispatching (no events, no journal rows)
         and the replay recorder discards footage (rides the idle
@@ -596,6 +612,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         idle gate re-trigger naturally (~idle_after_s later). Lives HERE,
         not api.py — it spans poller + replay, which only this composition
         surface holds."""
+        # Keep sampler flush and polling on the same event loop. A sync route
+        # runs in a worker thread and could replace a pending input mid-read.
         poller.set_paused(body.paused)
         if replay is not None:
             replay.recorder.set_session_paused(body.paused)
@@ -656,6 +674,21 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                    else "error" if service.db is None else "ok"),
             "session_id": service.session_id if service is not None else None,
             "memory": monitor.latest,
+            # The pad sampler's own counters. `edge_mismatches` is the one
+            # that matters: the game's buttonPressed says which frame a press
+            # was NEW on, so non-zero means a frame was filed under the wrong
+            # number. This is the only surface that reads it -- without it
+            # the live capture check has no number to check.
+            "inputs": (poller.input_sampler.health()
+                       if getattr(poller, "input_sampler", None) else None),
+            # Map v4's counter, or why not yet: "0x..." once hunted, "hunting"
+            # while the background sweep runs, "idle" between attempts, None
+            # with no hunter wired. Added after its first live check had to
+            # grep a silent log to learn the hunt was still mid-sweep
+            # (2026-08-25) -- the answer belongs on the surface checks read.
+            "present_counter": (poller.present_hunter.state()
+                                if getattr(poller, "present_hunter", None)
+                                else None),
         }
 
     @app.post("/api/diagnostics")

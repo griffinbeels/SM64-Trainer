@@ -270,3 +270,22 @@ def test_admin_restart_fallback_relaunches(monkeypatch):
         assert client.post("/api/admin/restart").status_code == 200
         _wait_for(spawned)
         assert spawned == [True]
+
+
+def test_health_carries_the_pad_samplers_counters_when_there_is_one():
+    """`edge_mismatches` is how a live capture is checked -- the game's own
+    buttonPressed confirming every frame number we assigned. It has to reach
+    a surface a person can read, and /health is that surface."""
+    class Sampler:
+        def sample(self):
+            return None
+
+        def health(self):
+            return {"frames": 3, "edge_checks": 2, "edge_mismatches": 0}
+
+    broadcaster = Broadcaster()
+    poller = Poller(OfflineMemory(), [], broadcaster, input_sampler=Sampler())
+    with TestClient(create_app(poller, broadcaster, debug_hooks=True)) as client:
+        assert client.get("/health").json()["inputs"]["edge_mismatches"] == 0
+    with make_client() as client:
+        assert client.get("/health").json()["inputs"] is None

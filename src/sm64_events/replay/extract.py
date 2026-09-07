@@ -28,10 +28,12 @@ resized the emulator window, so the encoder restarted) breaks a run the same
 way, for the same reason: ffmpeg would rescale the whole clip to the first
 segment's size and squash it if the aspect changed.
 """
+import os
+import math
 import shutil
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
@@ -39,6 +41,7 @@ from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
                                        video_quality_args)
 from sm64_events.replay.ring import SegmentRing
+from sm64_events.replay.media import MEDIA_HZ, MediaRun, picture_duration_filter
 
 _EDGE_TOLERANCE_S = 0.5   # clamping beyond this marks the clip truncated
 _GAP_TOLERANCE_S = 0.25   # segment join wider than this is a coverage hole
@@ -49,6 +52,88 @@ class ClipResult:
     path: Path
     duration_s: float
     truncated: bool
+    # The wall time of media time zero, not necessarily its first picture.
+    # The requested start moves back to the picture already displayed then,
+    # including a long VFR hold. What lets anything cut on the frame
+    # counter (the input track) line up with the clip: the attempt's anchor
+    # sits at `started_utc - start_utc` seconds into the video.
+    start_utc: datetime | None = None
+    # The clip's OWN first video timestamp, in its media timeline. An
+    # accurate cut leaves the sub-frame remainder on the first picture
+    # (5782: frames at k/60 + 0.011003 s), and a seek to (k + 0.5)/60 then
+    # lands before frame k begins, so the browser presents k - 1 -- every
+    # step one picture early (measured in Chromium, 2026-09-01). Everything
+    # that turns a time into a slot counts from this number.
+    video_start_s: float = 0.0
+    # Every video frame's own timestamp, in the clip's media timeline --
+    # present when the ring was fed one frame per picture (the picture
+    # feed, config.picture_feed): the clip is then VFR and NOTHING may
+    # count slots as k / fps. None for a CFR clip.
+    frame_times: list[float] | None = None
+    media_run: MediaRun | None = None
+    # Source MPEG-TS timestamps, in MEDIA_HZ ticks, for these exact slots.
+    # Unknown for older/CFR sources whose media origin was not retained.
+    source_pts: list[int] | None = None
+
+
+def frame_times_of(ffmpeg: str | None, clip: Path) -> list[float] | None:
+    """Every video frame's pts, in seconds, off ffprobe; None when it cannot
+    be read. One call per cut (~100 ms for a 30 s clip)."""
+    ffprobe = ffprobe_beside(ffmpeg)
+    if not ffprobe:
+        return None
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(clip)],
+            capture_output=True, text=True, timeout=120, check=False,
+            **quiet_spawn_kwargs())
+        if out.returncode:
+            return None
+        times = [float(line.split(",")[0]) for line in out.stdout.split()
+                 if line.strip()]
+        return times or None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def ffprobe_beside(ffmpeg: str | None) -> str | None:
+    """The ffprobe that ships beside `ffmpeg` -- by FILE name only. A plain
+    replace on the whole path turned D:/ffmpeg/bin/ffmpeg.EXE into
+    D:/ffprobe/bin/ffprobe.EXE (the standard install layout), so the first
+    version of this read 0.0 on the very clip it was written for and the
+    shipped fix would have done nothing; tools/probe_clip_seek.py caught it
+    on its first run (2026-09-01). PATH's ffprobe is the fallback."""
+    if not ffmpeg:
+        return None
+    binary = Path(ffmpeg)
+    sibling = binary.with_name(binary.name.replace("ffmpeg", "ffprobe"))
+    if binary.parent != Path(".") or sibling.exists():
+        if sibling.exists():
+            return str(sibling)
+    return shutil.which("ffprobe")
+
+
+def video_start_of(ffmpeg: str | None, clip: Path) -> float:
+    """The video stream's first pts, in seconds; 0.0 when it cannot be read
+    (no ffprobe, an unreadable file) -- the pre-2026-09-01 assumption."""
+    ffprobe = ffprobe_beside(ffmpeg)
+    if not ffprobe:
+        return 0.0
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=start_time", "-of", "csv=p=0", str(clip)],
+            capture_output=True, text=True, timeout=30, check=False,
+            **quiet_spawn_kwargs())
+        if out.returncode:
+            return 0.0
+        first = out.stdout.strip().splitlines()[0]
+        value = float(first.split(",")[0])
+        return value if value >= 0 else 0.0
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        # no ffprobe, a timeout, an unreadable file, an empty answer
+        return 0.0
 
 
 def _joinable(prev, seg) -> bool:
@@ -64,6 +149,8 @@ def _joinable(prev, seg) -> bool:
     picture outright if the aspect changed. Unknown dims (audio chunks, the
     in-process fallback writer) never force a break."""
     if (seg.utc_start - prev.utc_end).total_seconds() > _GAP_TOLERANCE_S:
+        return False
+    if prev.media_run != seg.media_run:
         return False
     return not (prev.dims and seg.dims and prev.dims != seg.dims)
 
@@ -98,6 +185,13 @@ class ClipExtractor:
         self._cfg = cfg
         self._codec = codec
         self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
+        self._picture_feed = bool(getattr(cfg, "picture_feed", False))
+
+    @property
+    def ffmpeg(self) -> str | None:
+        """The binary this extractor cuts with -- the service reads a cached
+        clip's first pts with the ffprobe beside it."""
+        return self._ffmpeg
 
     def extract(self, ring: SegmentRing, start: datetime, end: datetime,
                 out_path: Path) -> ClipResult:
@@ -137,7 +231,27 @@ class ClipExtractor:
                      or (end - e).total_seconds() > _EDGE_TOLERANCE_S
                      or hole_before or hole_after)
 
-        ss = max(0.0, (s - rs).total_seconds())
+        media_run = run[0].media_run
+        ss = (s.timestamp() - media_run.origin_ts if media_run
+              else max(0.0, (s - rs).total_seconds()))
+        # Select one representable source tick and use it for both ffmpeg's
+        # cut and the reverse map. Adding an unrounded float seek to ffprobe's
+        # rounded seconds can otherwise recover a neighboring timestamp.
+        seek_pts = math.ceil(ss * MEDIA_HZ) if media_run else None
+        if seek_pts is not None:
+            # An output -ss drops every picture preceding the seek, including
+            # the one still displayed during a VFR hold. Start on that actual
+            # source picture and report its UTC origin, keeping the source
+            # identity and A/V offset unchanged. Never fabricate a new PTS for
+            # a duplicate leading picture.
+            source_times = frame_times_of(self._ffmpeg, run[0].path)
+            if not source_times:
+                raise ValueError("no readable pictures at the requested start")
+            source_ticks = [round(t * MEDIA_HZ) for t in source_times]
+            seek_pts = max((t for t in source_ticks if t <= seek_pts),
+                           default=source_ticks[0])
+            ss = seek_pts / MEDIA_HZ
+            s = datetime.fromtimestamp(media_run.origin_ts + ss, timezone.utc)
         dur = (e - s).total_seconds()
         if dur * self._cfg.fps < 1:
             raise ValueError("span too short to extract")
@@ -145,8 +259,20 @@ class ClipExtractor:
         concat = "concat:" + "|".join(p.path.as_posix() for p in run)
         fps = self._cfg.fps
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Cut BESIDE the target and rename when the file is whole. Writing
+        # out_path directly means any second writer -- or any interruption --
+        # leaves a half-file that `view()`'s exists() check happily serves
+        # forever. His 100-coin clip came back as an unplayable black video
+        # whose H.264 stream was full of invalid NAL units, and whose sidecar
+        # counted 1921 frames where the file held 1380: two cuts wrote one
+        # path (2026-09-02). os.replace is atomic on Windows and POSIX.
+        # The suffix stays LAST: ffmpeg picks its muxer from the extension
+        # and refuses "clip.mp4.cut123" outright.
+        cut_path = out_path.with_name(
+            f"{out_path.stem}.cut{os.getpid()}{out_path.suffix}")
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "error",
+            *(["-copyts"] if media_run else []),
             "-i", concat, "-ss", f"{ss:.6f}", "-t", f"{dur:.6f}",
             "-map", "0:v:0", "-map", "0:a:0",
             "-c:v", self._codec,
@@ -154,19 +280,44 @@ class ClipExtractor:
             "-force_key_frames", "expr:gte(t,n_forced*0.5)",
             *self._codec_opts(),
             "-c:a", "copy",
-            "-fflags", "+genpts", "-avoid_negative_ts", "make_zero",
-            "-movflags", "+faststart", "-y", str(out_path),
+            # The picture feed's ring is VFR -- one frame per picture -- and
+            # the cut must keep every frame at its own time: a CFR conform
+            # here would put the 60 Hz grid's jitter straight back.
+            # ... in the segment's own 90 kHz time base: the encoder would
+            # otherwise round every stamp onto 1/r_frame_rate (see the sink).
+            *(["-fps_mode", "passthrough", "-enc_time_base", "demux"]
+              if self._picture_feed else []),
+            *(["-bsf:v", picture_duration_filter(round(dur * MEDIA_HZ))]
+              if media_run else []),
+            "-fflags", "+genpts", "-avoid_negative_ts",
+            "disabled" if media_run else "make_zero",
+            # MP4's default 1 kHz edit-list clock discards sub-millisecond
+            # origin precision even when the video track remains 90 kHz.
+            *(["-movie_timescale", str(MEDIA_HZ)] if media_run else []),
+            "-movflags", "+faststart", "-y", str(cut_path),
         ]
         try:
             subprocess.run(args, check=True, capture_output=True,
                            **quiet_spawn_kwargs())
         except subprocess.CalledProcessError as exc:
-            out_path.unlink(missing_ok=True)
+            cut_path.unlink(missing_ok=True)
             raise RuntimeError(
                 f"ffmpeg extract failed: {exc.stderr.decode('utf-8', 'replace')[-500:]}"
             ) from exc
 
-        return ClipResult(path=out_path, duration_s=dur, truncated=truncated)
+        # Probe the file we just wrote, THEN publish it. Probing after the
+        # rename let a racing writer change the file between the two, which is
+        # how a sidecar came to describe 1921 frames of a 1380-frame clip.
+        times = (frame_times_of(self._ffmpeg, cut_path)
+                 if self._picture_feed else None)
+        start_s = (times[0] if times
+                   else video_start_of(self._ffmpeg, cut_path))
+        os.replace(cut_path, out_path)
+        return ClipResult(path=out_path, duration_s=dur, truncated=truncated,
+                          start_utc=s, video_start_s=start_s,
+                          frame_times=times, media_run=media_run,
+                          source_pts=([round(t * MEDIA_HZ) + seek_pts for t in times]
+                                      if times and media_run else None))
 
     def _codec_opts(self) -> list[str]:
         """Quality settings for the cut, from the ONE registry in config.py.
@@ -177,6 +328,5 @@ class ClipExtractor:
         be transparent w.r.t. its source: the segment holds all the detail a
         clip can ever contain."""
         opts = video_quality_args(self._codec, "offline", CLIP_MAXRATE)
-        if self._codec == "h264_nvenc":
-            opts += ["-bf", "0"]  # keep the cut's pts contract frame-0 aligned
+        opts += ["-bf", "0"]  # preserve PTS with every supported encoder
         return opts

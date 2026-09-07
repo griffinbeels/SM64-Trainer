@@ -473,6 +473,27 @@ if (!document.querySelector('.library-grid')) {
 }
 """)
 
+_INPUT_DRAWER_SETUP = _script("""
+const practiceBtn = document.querySelector('button.nav-item[title="Practice"]');
+if (practiceBtn && practiceBtn.getAttribute('aria-current') !== 'page') {
+  practiceBtn.click();
+  await waitFor(() => !!document.querySelector('.log-list-card'));
+}
+document.querySelectorAll('.card-collapse[aria-expanded="false"]')
+  .forEach((b) => b.click());
+document.querySelectorAll('.log-card-fold[aria-expanded="false"]')
+  .forEach((b) => b.click());
+await waitFor(() => !!document.querySelector('.attempt-actions .icon-button'));
+// The drawer is opened by the FIRST attempt row's replay button -- there is no
+// URL that lands on it, so a plain page load can never reach this surface.
+if (!document.querySelector('.attempt-drawer')) {
+  document.querySelector('.attempt-actions .icon-button').click();
+}
+// The timeline FETCHES its track, so waiting for the drawer is not enough:
+// shooting between the two paints a spinner and reports it as the feature.
+await waitFor(() => !!document.querySelector('.input-lanes'));
+""")
+
 # The Rank tab's leaderboard section (Task 4, spec 2026-08-20-ranked-
 # leaderboard) -- neither Practice-page nor Segments-tab state, same as the
 # library stories above it. Guarded on `aria-current` rather than a bare
@@ -538,8 +559,37 @@ await waitFor(() => !!document.querySelector('.runner-page'));
 await sleep(60);
 """)
 
+# The setup screen (setupmodal.js) -- a modal, so no plain page load reaches
+# it. It opens off the settings drawer's own "Setup" button (header.js), so
+# this walks the same door a person does: open Settings, then Setup.
+_SETUP_SETUP = _script("""
+if (!document.querySelector('.settings-drawer')) {
+  const settingsBtn = document.querySelector('.nav-item.settings-link')
+    || document.querySelector('button[aria-label="Open settings"]');
+  if (settingsBtn) {
+    settingsBtn.click();
+    await waitFor(() => !!document.querySelector('.settings-drawer'));
+  }
+}
+if (!document.querySelector('.setup-platform-picks')) {
+  const setupBtn = Array.from(document.querySelectorAll('.settings-actions button'))
+    .find((b) => b.textContent.trim() === 'Setup');
+  if (setupBtn) {
+    setupBtn.click();
+    await waitFor(() => !!document.querySelector('.setup-platform-picks'));
+  }
+}
+""")
+
 STORIES = [
     Story(name="page", at="", setup=_EXPAND_ALL),
+    Story(name="setup-modal", at=".modal", setup=_SETUP_SETUP),
+    # The attempt drawer: the clip and the input timeline on one clock. It is
+    # opened by a button, so no page load reaches it -- same reason the
+    # recorder stories exist.
+    Story(name="input-timeline", at=".attempt-drawer",
+          setup=_INPUT_DRAWER_SETUP,
+          skip_if="!document.querySelector('.attempt-actions .icon-button')"),
     # Re-pointed 2026-08-04 (amendment A8, spec practice-log-entity-cards):
     # the Active Target card is DELETED -- ".objective-card" never renders on
     # the real practice page any more, so `skip_if` here would have started

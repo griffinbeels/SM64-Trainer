@@ -324,8 +324,8 @@ An [[attempt]] the trainer never watched you make, because you set the time
 before this tool existed. It is a real row in the [[practice log]] — stamped
 with the time you pressed Save, holding the [[personal best]] it brought — so you
 can clear it, undo it, or move it to another [[strategy]] exactly as you would
-a played one. Its public recording link opens a replay; the trainer downloads
-the video on first playback and reuses the local copy. Changing or removing
+a played one. Its public recording link opens the provider's player; clicking
+Download prepares a reusable local copy. Changing or removing
 the link affects only this [[attempt]] and survives rebuilding the [[journal]].
 
 It remembers the source that brought it — you typed it, or you named your
@@ -637,6 +637,335 @@ starts as. One frame is three centiseconds on the [[in-game time]] display, so
 a three-centisecond disagreement means exactly one frame.
 
 - **Lives** — the time formatter (`src/sm64_events/core/timefmt.py`)
+
+### Input frame
+
+What the controller was doing on one [[frame]], and what Mario was doing while
+you did it — every button held, how far the stick leaned, the action he was in,
+which way he faced and how fast he was going. The game rewrites the pad about
+two thirds of the way through each [[frame]], so the trainer reads it far
+faster than the game itself ticks and keeps the LAST reading of each one; his
+own state rides in that same reading, so the two can never describe different
+[[frame]]s.
+
+- **Lives** — the input decoder (`src/sm64_events/inputs/frame.py`)
+
+### Input track
+
+Every [[input frame]] of one [[attempt]], from its [[anchor]] to its
+[[outcome]] — what you did, at the [[frame]] you did it. The trainer numbers a
+track from its own start rather than from the [[session]]'s, so two tracks lie
+on one axis whatever hour of whatever day you played each of them; a [[reset]]
+in the middle of a track continues that axis rather than restarting it, and a
+[[frame]] the trainer did not capture stays a hole on it. Missing first or
+last samples preserve the attempt's full extent, so they cannot move frame zero
+or shift a saved template. Repeated raw counters alone cannot identify which
+capture an attempt belongs to.
+
+- **Lives** — the input store (`src/sm64_events/inputs/store.py`) resolves
+  the frames; the run derivation (`src/sm64_events/inputs/runs.py`) lays them
+  on the axis
+
+### Input timeline
+
+The surface that draws an [[input track]] as one lane per button over
+[[frame]]s, with the [[template track]] behind it, and every [[moment]] the
+[[journal]] holds inside the [[attempt]] as a tick on the same axis, wearing
+the same sentence the [[segment recorder]] gives it. It reports what each
+track was doing on a [[frame]] and names nothing as the reason — you read
+the gap yourself. It opens inside an [[attempt]]'s own row, beside that
+[[attempt]]'s clip, and follows the clip's clock rather than keeping one.
+It draws the [[lead-in]] before its own [[frame]] 0, so what you did on the
+way in is visible without moving where the [[attempt]] starts. On a clip the
+[[capture layer]] recorded, the time it prints for a [[frame]] is the timer
+the game itself held when it drew the picture on screen; on any other clip
+it counts from the [[attempt]]'s first [[frame]].
+
+- **Lives** — the timeline component
+  (`src/sm64_events/ui/components/inputtimeline.js`)
+
+### Lead-in
+
+The stretch of play the [[input timeline]] draws BEFORE the [[attempt]]
+itself: the lead its clip carries, from the clip's first [[frame]] to the
+[[frame]] your [[reset]] landed on. You are in the level for those
+[[frame]]s and your camera answers, so a timeline that began at the
+[[reset]] hid real input. They number backwards from zero and sit behind a
+shaded band, so the [[attempt]]'s own start and its own length — the number
+the [[ladder]] grades its [[personal best]] against — do not move. The
+timeline spans exactly what its clip shows -- the [[frame map]] names
+every [[frame]] the footage holds -- so every part of it points at video
+you can watch; with no clip there is no lead-in.
+
+- **Lives** — the track resolver
+  (`src/sm64_events/inputs/track.py`), which reaches back to the entry the
+  [[journal]] recorded
+- **Not** — part of the [[input track]] a [[template track]] or an export
+  carries. Those stay exactly the [[attempt]].
+
+### Frame map
+
+The list a clip carries naming which [[frame]] of the game each picture of
+that clip shows. The [[capture layer]] stamps every picture with the
+[[frame]] the game was drawing when it made that picture, the [[feed log]]
+says which stamped picture each encoded picture is, and the map is those
+stamps -- so a [[frame]] the emulator held on screen twice maps twice and
+one it skipped never maps, which no single offset can describe. Nothing
+aligns, joins or infers: the [[oracle reader]] certifies the result picture
+by picture, and a clip whose pictures carry no stamp gets NO map and says
+so on the [[input timeline]] rather than showing a guess. The
+[[input timeline]] and every [[overlay layer]] read the clip through its
+map.
+
+- **Lives** -- the clip's own metadata, written at extraction
+  (`src/sm64_events/replay/service.py`) from the [[feed log]] join
+  (`src/sm64_events/replay/feedmap.py`)
+- **Not** -- the [[input track]]'s own axis. The track says what you DID on
+  each [[frame]]; the map says which [[frame]] the footage SHOWS.
+
+### Picture feed
+
+The way the [[recorder]] hands pictures to the encoder since 2026-09-02:
+one encoded picture per distinct picture the [[picture ledger]] noticed,
+written as soon as it arrives and stamped with the picture's own
+composition time, with the game's audio in the same stream on the same
+clock. A clip cut from it holds every picture once, at its own time, so
+the trainer reads which [[frame]] a picture shows off the [[feed log]]
+rather than inferring it from how long the picture stayed on a 60 Hz
+grid -- the duplicates and skips that no offset could describe are gone
+because the feed duplicates nothing. A picture that stays on screen
+feeds nothing; after a second of silence the feed writes the last one
+again so the recording keeps rolling. His approved trade-off (item 38):
+a clip's picture rate follows the game's pictures instead of a fixed 60.
+
+- **Lives** -- `src/sm64_events/replay/ffmpeg_sink.py` (the feed itself:
+  the NUT stream, the heartbeat, the audio on the same clock); the
+  [[recorder]] decides what feeds (`src/sm64_events/replay/recorder.py`);
+  `src/sm64_events/replay/config.py` switches it (picture_feed)
+- **Not** -- the earlier feed, which re-sent the latest grab sixty times a
+  second onto a wall-clock grid and stamped it at the encoder's read;
+  that shape still serves clips cut before it and the in-process fallback.
+
+### Media run
+
+One encoder child's identity and clock origin. The first submitted picture
+starts the clock; video timestamps are integer ticks at 90,000 ticks per
+second. A restart creates a new identity even when the frame size is unchanged.
+Segments retain that identity so extraction cannot join unrelated clocks.
+The cut preserves its integer source offset and can recover each encoded
+picture's original timestamp without fitting a cadence.
+
+- **Lives** -- `src/sm64_events/replay/media.py`, shared by the sink,
+  segment ring, extractor and feed-log lookup.
+
+### Feed log
+
+The [[picture ledger]]'s record of each picture accepted by the encoder:
+its [[media run]], assigned integer timestamp and original captured-row time.
+A same-run heartbeat retains the held picture's row identity. The assigned
+media time stays separate from capture time, including when a delayed picture
+arrives after a heartbeat. Extraction joins exact run/timestamp keys; collisions
+and missing keys remain unknown rather than selecting a nearby picture.
+
+- **Lives** -- `src/sm64_events/replay/ledger.py` (the log),
+  `src/sm64_events/replay/feedmap.py` (the lookup),
+  `src/sm64_events/replay/service.py` (clip metadata and state occurrences).
+- **Not** -- the [[picture ledger]]'s rows. A row is a picture capture saw;
+  a log entry is an accepted encoder write, including heartbeat copies.
+
+### Picture ledger
+
+The record the [[recorder]] keeps of every distinct picture it grabs from
+the emulator's window: when the picture appeared, the [[frame]] the game
+was computing, and every extra fact a wiring line registers. His spec:
+capture holds all the information, so each picture of the video carries it
+for any future analysis. At extraction the trainer matches the clip's
+pictures to these rows through exact [[feed log]] keys. The matched row
+occurrence survives into the [[frame map]] and per-picture timer (the [[picture feed]]
+goes further: it writes one encoded picture per row and files each write
+in the ledger's [[feed log]]) -- and the clip's own
+metadata keeps its slice of the rows after the recording buffer forgets
+the footage. Registering one more per-picture fact takes one line.
+
+- **Lives** -- `src/sm64_events/replay/ledger.py`; the [[recorder]] feeds it
+  (`src/sm64_events/replay/recorder.py`) and extraction reads it back
+  (`src/sm64_events/replay/service.py`)
+- **Not** -- the [[input track]]. The track records what you PRESSED, 250
+  reads a second; the ledger records what the screen SHOWED, one row per
+  picture.
+
+### Clip start
+
+The time of a clip's first picture, in the clip's own clock. A cut
+lands on a picture boundary of the ring, never on a whole 60 Hz slot,
+so the first picture of a clip sits up to one slot after zero (his
+Log Rolling clip: 0.011 s). Every slot arithmetic in the [[input
+timeline]] counts from it: the time it seeks to for a slot, and the
+slot it reads back from the picture the browser presents. Assumed zero
+until 2026-09-01, which put every seek one picture early on such a clip
+while the [[frame map]] and the [[pad reader]] were right. A [[picture
+feed]] clip carries every picture's own time instead, and the clip start
+is the first of them.
+
+- **Lives** -- `src/sm64_events/replay/extract.py` measures it off the cut
+  (video_start_of), `src/sm64_events/replay/service.py` carries it in
+  the view as video_start_s (and measures it once for a clip cut before
+  it existed), `src/sm64_events/ui/frame.js` counts from it
+  (slotAtTime, timeOfSlot); `tools/probe_clip_seek.py` proves the
+  browser lands where the timeline asked.
+
+### Pad reader
+
+The reader that reads Usamune's input display out of every picture of a
+clip. The game paints the pad into each picture as six glyph cells -- a
+direction letter and up to two digits on the up-down line, the same on the
+left-right line -- and paints each glyph identically every time, so a cell
+either matches one known glyph by a clear margin or the reader calls it
+unknown, never a guess.
+
+It was part of extraction until 2026-09-05, pinning the [[frame map]] to
+what it read. The [[capture layer]] made that unnecessary and the reader's
+own accuracy made it unwanted: it read 82% to 94% of the pictures of three
+clips the [[oracle reader]] certified exact, every sampled disagreement a
+digit confusion off compressed video. What checks a clip now is the
+[[pad stamp audit]], which reads no pixels at all. The reader stays as an
+offline instrument, and the [[oracle reader]] borrows its glyph machinery.
+
+- **Lives** -- `src/sm64_events/replay/padread.py`;
+  `tools/score_pad_read.py` prints its verdict for one clip and
+  `tools/score_picture_offset.py` sweeps which picture shows which pad
+- **Not** -- the [[pad stamp audit]]: that compares two numbers the trainer
+  already holds, where this one recognises glyphs in a picture.
+
+### Pad stamp audit
+
+The check a clip carries saying whether the [[input timeline]] holds the
+same pad the game held. The [[capture layer]] copies the pad out of the
+game's memory beside every picture it stamps, so the trainer ends up with
+two independent records of one [[frame]]'s pad -- the plugin's copy and the
+[[input track]]'s -- and the audit compares them picture by picture. It
+reads no pixels, cannot misread, and costs nothing. It is SILENT when it
+passes: it has never failed, so saying so on screen states a fact about
+our own plumbing rather than about the [[attempt]] on screen, and only a
+DISAGREEMENT draws -- a chip on the [[input timeline]]'s header opening the
+list of contradicted pictures.
+
+- **Lives** -- `src/sm64_events/replay/service.py`; the clip's own metadata
+  keeps the verdict whether or not anything draws it
+- **Not** -- the [[oracle reader]]: that certifies WHICH [[frame]] a
+  picture shows, where this one certifies the PAD on the [[frame]] the map
+  already names.
+
+### Capture layer
+
+The wrapper graphics plugin the trainer installs into Project64 (2026-09-04,
+his ask: "redo our recording system so that the recording [[frame]]s ARE game
+[[frame]]s"). It forwards every call to the graphics plugin you already use;
+when the game submits a picture it copies the game's own memory -- the
+[[frame]] counter, the pad, Mario, the running IGT -- and when the plugin
+presents that picture it reads the picture off the GPU (itself, or through
+your plugin's own ReadScreen when your plugin draws on a thread of its own,
+as GLideN64_LINK_4.2 does) and hands both to the [[recorder]] through the
+[[frame stream]]. The [[recorder]] takes this camera as soon as a first
+picture arrives, in whichever order you opened the game and the trainer;
+a layer Project64 loaded that cannot read leaves the [[recorder]] on the
+desktop grab and says why on the [[setup screen]]. A clip made of these pictures
+carries no inference: each [[picture ledger]] row says `exact`, the
+[[frame map]] is the rows, and the [[pad reader]]
+only audit. The trainer installs it under your explicit consent on the
+[[setup screen]] (the file into Project64's Plugin folder, its `Graphics Dll`
+setting, a small ini naming your plugin) and undoes it from the same screen;
+without it the [[recorder]] photographs the desktop as before.
+
+- **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the plugin), built by
+  `tools/build_plugin.py` into `src/sm64_events/data/plugin/`;
+  `src/sm64_events/core/capturelayer.py` installs and undoes it;
+  `src/sm64_events/replay/pluginsource.py` is the [[recorder]]'s camera over
+  it
+- **Not** -- the desktop grab (`src/sm64_events/replay/video.py`): that
+  photographs the window ~120 times a second and the trainer must then work
+  out which [[frame]] each photograph shows.
+
+### Frame stream
+
+The shared-memory ring the [[capture layer]] writes and the [[recorder]]
+reads: one slot per presented picture, the copied memory beside its pixels,
+and -- in the other direction -- the table of addresses the trainer asks the
+plugin to copy, so the plugin itself knows no game address. Both sides
+compute its size from the same constants and a test pins the C offsets
+against the Python ones.
+
+- **Lives** -- `src/sm64_events/replay/framestream.py` (the trainer's side),
+  `plugin/gfxwrap/stream.h` (the plugin's)
+
+### Oracle reader
+
+The developer's check that reads the [[frame]] number the game prints into its own
+picture when Usamune's HUD memory display shows `0x8032D5D4`, and scores any
+[[frame map]] against it. It trusts a reading only when a neighbouring
+picture vouches for it (the counter steps by exactly one), so a misread
+contradicts its neighbours instead of passing. His ruling: the display is
+the oracle, never the shipped mechanism -- users will not enter a memory
+address to play.
+
+- **Lives** -- `src/sm64_events/replay/oracleread.py`; `tools/score_oracle.py`
+  prints the verdict for a clip
+- **Not** -- the [[pad reader]]: that reads what
+  the game always draws; this reads a display only a developer switches on.
+
+### Setup screen
+
+The modal that asks which platform you practice on -- Emulator or N64 -- and
+then shows that platform's checklist, each row a door to its own fix. The
+Emulator rows are Project64 (found, or how to let the trainer find it), the
+Usamune ROM, and the [[capture layer]]'s row: the exact ordered steps from
+where you are to a live layer -- close Project64, install (or the trainer
+updates the layer by itself), start Project64 -- each ticking as you do it,
+with the consent card saying what the install writes, why, and the undo. It
+opens on its own once each time you open the app while the trainer detects
+an emulator and you have not consented to the layer, or this build carries
+a newer layer than the one installed, and again from the header any time.
+N64's rows arrive with console support.
+
+- **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; its API is
+  `src/sm64_events/server/setup_api.py`
+
+### Overlay layer
+
+One transparent video file drawing part of the pad — the stick, the
+buttons, or both — for an [[attempt]], so you can lay it over that
+[[attempt]]'s footage in an editor. Every layer shares one canvas, one
+playback rate and one starting [[frame]], so they stack in register and you
+delete the one you do not want instead of cropping it.
+
+- **Lives** — the overlay planner (`src/sm64_events/inputs/overlay.py`)
+  → `tools/export_overlay.py`
+
+### Input document
+
+An [[input track]] written out as text you can send someone, and edit by hand.
+Export writes one, import reads one, and a [[template track]] is always one —
+which is what lets a template come from an [[attempt]] you marked, a file
+another player sent you, or one you typed out yourself. Each row carries the
+pad and what Mario was doing while you held it — his action, which way he
+faced, how fast he went — so the document is the whole example and not the
+controller alone; a row you type by hand may stop after the pad. Optional
+author credit travels with the document and does not establish an account.
+The optional template name travels with exports and autofills imports; a name
+the player types takes precedence.
+
+- **Lives** — the document format (`src/sm64_events/inputs/document.py`)
+
+### Template track
+
+The [[input track]] the trainer draws behind your own, so you can see where the
+two differ — its stick, buttons and actions on the same rows as yours,
+its speed on the same scale, and a second indicator in each direction dial. You mark the
+[[attempt]] that felt right and it becomes the template for that [[target]] on
+that [[strategy]]. The trainer shows both and names neither as the reason — it
+reports what each was doing on a [[frame]], and you read the gap.
+
+- **Lives** — the template store (`src/sm64_events/inputs/templates.py`)
 
 ### Epoch
 
@@ -1425,7 +1754,9 @@ doubt.
 ### Recorder
 
 The capture holding the last stretch of play, so a [[star]] you just took can
-become a clip without you having recorded anything deliberately.
+become a clip without you having recorded anything deliberately. Its camera
+is the [[capture layer]] once you have installed it and Project64 presents
+through it, and the desktop grab otherwise.
 
 - **Lives** — the recorder (`src/sm64_events/replay/recorder.py`)
 

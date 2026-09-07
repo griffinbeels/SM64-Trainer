@@ -24,6 +24,17 @@ def test_covering_selects_overlapping_only(tmp_path):
                                           "video_000003.bin"]
 
 
+def test_late_old_segment_cannot_move_coverage_backward_or_evict_newer_footage(tmp_path):
+    ring = SegmentRing(retention_s=None, max_bytes=250)
+    oldest, middle, newest = [seg(tmp_path, i) for i in range(3)]
+    for item in [oldest, newest, middle]:
+        ring.add(item)
+    assert ring.coverage("video") == (middle.utc_start, newest.utc_end)
+    assert ring.covering("video", T0, newest.utc_end) == [middle, newest]
+    assert not oldest.path.exists()
+    assert middle.path.exists() and newest.path.exists()
+
+
 def test_retention_evicts_and_deletes_files(tmp_path):
     ring = SegmentRing(retention_s=4.0, max_bytes=10**9)
     segs = [seg(tmp_path, i) for i in range(5)]

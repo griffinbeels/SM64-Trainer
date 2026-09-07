@@ -25,6 +25,16 @@ class ReplayConfig:
                                           # judders. SM64 LOGIC is 30 fps, but
                                           # capture must follow presents.
     segment_s: float = 2.0                # video segment / audio chunk length
+    # THE PICTURE FEED (round 32 item 38, built 2026-09-02): the ffmpeg
+    # sink encodes ONE video frame per DISTINCT captured picture, stamped
+    # by the wall clock at its write (VFR), instead of re-sending the
+    # latest grab at `fps` onto a CFR grid. Video frame k of a clip is
+    # then the k-th picture ledger row the cut covers, so the frame map
+    # is READ off the feed log rather than inferred from picture runs on
+    # a 60 Hz grid (17% of pictures landed one or three slots there).
+    # `fps` stays the grab cadence and the CFR fallback's rate. False
+    # restores the CFR feed; the in-process fallback writer ignores it.
+    picture_feed: bool = True
     max_buffer_bytes: int = 20 * 1024**3  # hard disk guard regardless of retention
     save_root: Path = field(default_factory=replays_root)
     scratch_dir: Path = field(default_factory=replay_scratch_dir)

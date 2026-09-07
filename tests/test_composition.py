@@ -4,9 +4,61 @@ own docstring: the held grab precedes everything that closes an attempt;
 level_changed precedes anchors)."""
 from pathlib import Path
 
+import pytest
+
 import sm64_events
 from sm64_events.main import build_detectors
 from source_scan import strip_comments
+
+
+@pytest.fixture(autouse=True)
+def _isolate_machine(monkeypatch, tmp_path):
+    """Build wiring may never open PJ64, shared mappings or an installed DLL."""
+    import subprocess
+    import threading
+    from types import SimpleNamespace
+    layers = []
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("composition test attempted a real machine boundary")
+
+    class Layer:
+        def __init__(self, **kwargs):
+            self.header = kwargs["stream_header"]
+            layers.append(self)
+
+        def refresh_if_stale(self):
+            return False
+
+        def refresh_loop(self, *args, **kwargs):
+            forbidden()
+
+    start = threading.Thread.start
+
+    def isolated_start(thread):
+        if thread.name == "capture-layer-refresh":
+            assert isinstance(thread._target.__self__, Layer)
+            return  # no unowned refresh daemon survives build()
+        return start(thread)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sm64_events.memory.pj64.Pj64Memory.attach", forbidden)
+    monkeypatch.setattr("sm64_events.replay.framestream.FrameStream", forbidden)
+    monkeypatch.setattr("sm64_events.core.capturelayer.CaptureLayer", Layer)
+    monkeypatch.setattr("sm64_events.core.capturelayer.WinRegistry", lambda: SimpleNamespace())
+    monkeypatch.setattr("sm64_events.core.capturelayer.WinProcesses", lambda: SimpleNamespace())
+    monkeypatch.setattr("sm64_events.core.capturelayer_win.WinRegistry.__init__", forbidden)
+    monkeypatch.setattr("sm64_events.core.capturelayer_win.WinProcesses.__init__", forbidden)
+    monkeypatch.setattr("sm64_events.core.updater.UpdateService.startup_maintenance",
+                        lambda *a, **kw: None)
+    monkeypatch.setattr(threading.Thread, "start", isolated_start)
+
+    def version_probe(args, **kwargs):
+        assert len(args) == 2 and args[1] == "-version"
+        return subprocess.CompletedProcess(args, 0, b"test ffmpeg", b"")
+
+    monkeypatch.setattr(subprocess, "run", version_probe)
+    return layers
 
 
 def test_detector_order_is_load_bearing():
@@ -151,6 +203,33 @@ def test_build_gives_the_poller_the_trackers_frame_heartbeat(monkeypatch):
     assert heartbeat.__func__ is TrackerService.settle_frame
 
 
+def test_build_wires_the_pad_stamp_audit_into_replay(monkeypatch):
+    """The ONE hook ReplayService still takes, and the only thing that makes
+    the timeline's pad-check chip appear. Unit tests below the composition
+    root pass even if it is never assigned, so pin the seam explicitly.
+
+    Six sibling hooks used to be pinned here (the footage aligner, the pad
+    reader, the clock join, the map quantiser, the digit refit, the ledger
+    mapper) -- one per generation of DERIVED frame map. The capture layer
+    stamps the frame instead, and they were deleted 2026-09-05."""
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_replay_service = main_mod.ReplayService
+
+    def spy(*args, **kwargs):
+        built = real_replay_service(*args, **kwargs)
+        captured["replay"] = built
+        return built
+
+    monkeypatch.setattr(main_mod, "ReplayService", spy)
+    main_mod.build()
+
+    replay = captured.get("replay")
+    assert replay is not None, "the enabled replay branch was not composed"
+    assert replay.track_pads is not None, (
+        "the pad-stamp audit was built but never wired into ReplayService")
+
+
 def _stubbed_main(monkeypatch):
     """A freshly reloaded `main` with everything build() would really touch
     stubbed out. Every stub here is load-bearing; the reason is on its line."""
@@ -181,62 +260,142 @@ def _stubbed_main(monkeypatch):
         def insert_segment_def(self, *args, **kwargs):
             return 1
 
+        # build() wires the input timeline on every layout, so the stub
+        # carries the stores and journal readers it asks for -- unreachable
+        # here, never read (events_between/landmark_names feed the timeline's
+        # moment markers, round 32 item 3).
+        inputs = None
+        input_templates = None
+        events_between = None
+        landmark_names = None
+
+        def attempts(self):
+            return []
+
     import importlib
     import sm64_events.main as main_mod
     importlib.reload(main_mod)
     # Patched at the name main.py imported it under, so service.py's own
     # already-imported annotation is unaffected.
     monkeypatch.setattr(main_mod, "Database", lambda path: _DbStub())
+    monkeypatch.setattr(main_mod, "_game_version", lambda: "us")
+    monkeypatch.setattr(main_mod, "configure_logging", lambda: None)
+    monkeypatch.setattr(main_mod, "migrate_legacy_data_dir", lambda: None)
     return main_mod
 
 
-def test_build_wires_replay_endpoints(monkeypatch, tmp_path):
-    # Stub instance lock so build() doesn't acquire a real file lock.
-    monkeypatch.setattr(
-        "sm64_events.storage.instance_lock.acquire_instance_lock",
-        lambda path: object())
-    # Stub pick_video_codec so build() skips the ~100 ms NVENC probe.
-    monkeypatch.setattr(
-        "sm64_events.replay.encoder.pick_video_codec",
-        lambda: "libx264")
-    # Patch Database at the name main.py imported it under so the type
-    # annotation in service.py (which already imported the real class) is
-    # unaffected.  Return a sentinel stub; TrackerService accepts db=None
-    # too, but a truthy object exercises the normal path.
-    # TrackerService.__init__ now loads segment defs eagerly, so the stub
-    # must answer segment_defs(). It also now reads the time_filters KV
-    # (via _time_filters()) up front, so the stub must answer get_state()
-    # too — mirroring Database.get_state's default-passthrough contract.
-    # build() also runs the editable-defaults seed reconcile (spec
-    # 2026-07-23-default-routes-foundation) before constructing the service,
-    # so the stub must answer routes() (reconcile reads it unconditionally)
-    # and insert_segment_def() (every bundled segment reads as "missing"
-    # against an empty segment_defs() stub, so reconcile inserts all of them).
-    import importlib
-    import sm64_events.main as main_mod
-    importlib.reload(main_mod)
-
-    class _DbStub:
-        def segment_defs(self):
-            return []
-
-        def get_state(self, key, default):
-            return default
-
-        def set_state(self, key, value):
-            pass
-
-        def routes(self):
-            return []
-
-        def insert_segment_def(self, *args, **kwargs):
-            return 1
-
-    monkeypatch.setattr(main_mod, "Database", lambda path: _DbStub())
+def test_build_wires_replay_endpoints(monkeypatch):
+    main_mod = _stubbed_main(monkeypatch)
     app = main_mod.build()
     paths = {r.path for r in app.routes}
     assert "/api/replay/status" in paths
     assert "/api/replay/clips/{name}" in paths
+
+
+def test_only_the_recorder_owner_can_open_or_reconfigure_the_frame_stream(
+        monkeypatch, _isolate_machine):
+    from threading import Event
+    from types import SimpleNamespace
+    from test_replay_recorder import FakeAudioSource, FakeAvSink, FakeVideoSource, WIN
+
+    main_mod = _stubbed_main(monkeypatch)
+    writes, streams, recorders = [], [], []
+    held = False
+    read_entered, read_finish, close_entered = Event(), Event(), Event()
+
+    class Lease:
+        def close(self):
+            nonlocal held
+            assert streams[-1].closed  # close mapping before another owner wins
+            held = False
+
+    def acquire():
+        nonlocal held
+        if held:
+            return None
+        held = True
+        return Lease()
+
+    class Stream:
+        def __init__(self):
+            assert held
+            self.closed = False
+            self.block_header = False
+            streams.append(self)
+
+        def set_table(self, entries, **kwargs):
+            assert held
+            writes.append(entries)
+
+        def header(self):
+            assert not self.closed
+            if self.block_header:
+                read_entered.set()
+                assert read_finish.wait(5)
+                assert not self.closed
+            return SimpleNamespace(initiated=False)
+
+        def set_want_frames(self, on):
+            assert held and not on
+
+        def close(self):
+            close_entered.set()
+            self.closed = True
+
+    real_recorder = main_mod.ReplayRecorder
+
+    def recorder(**kwargs):
+        kwargs.update(recorder_lock_factory=acquire,
+                      audio_factory=lambda pid: FakeAudioSource(),
+                      video_sink_factory=lambda *args: FakeAvSink())
+        result = real_recorder(**kwargs)
+        recorders.append(result)
+        return result
+
+    monkeypatch.setattr(main_mod, "ReplayRecorder", recorder)
+    monkeypatch.setattr("sm64_events.replay.framestream.FrameStream", Stream)
+    monkeypatch.setattr("sm64_events.replay.pluginsource.table_for",
+                        lambda layout: [("global_timer", 4 * (len(recorders) + 1), 4)])
+    monkeypatch.setattr("sm64_events.replay.pluginsource.DesktopUntilLayerPresents",
+                        lambda *args, **kwargs: FakeVideoSource())
+    monkeypatch.setattr(main_mod, "DwmSurfaceVideoSource", lambda *a, **kw: FakeVideoSource())
+    main_mod.build()
+    main_mod.build()
+    assert streams == [] and writes == []
+    first, second = recorders
+    try:
+        first._begin_capture(WIN)
+        assert writes == [[(4, 4)]]
+        second._begin_capture(WIN)
+        second._teardown_capture()
+        assert len(streams) == 1 and not streams[0].closed
+        assert writes == [[(4, 4)]]
+        # Pause a real status read inside header() while teardown races it.
+        # The mapping must remain open until that read returns.
+        streams[0].block_header = True
+        _close_during_status_read(_isolate_machine[0].header, first._teardown_capture,
+                                  read_entered, read_finish, close_entered)
+        assert _isolate_machine[0].header() is None
+        second._begin_capture(WIN)
+        assert writes == [[(4, 4)], [(8, 4)]]
+    finally:
+        first.stop()
+        second.stop()
+
+
+def _close_during_status_read(header, teardown, read_entered, read_finish, close_entered):
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reading = pool.submit(header)
+        assert read_entered.wait(5)
+        closing = pool.submit(teardown)
+        try:
+            assert not close_entered.wait(0.1)
+        finally:
+            read_finish.set()
+        assert reading.result(timeout=5).initiated is False
+        closing.result(timeout=5)
 
 
 def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
@@ -292,6 +451,8 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     import importlib
     import sm64_events.main as main_mod
     importlib.reload(main_mod)
+    main_mod = _stubbed_main(monkeypatch)
+    monkeypatch.setattr(main_mod, "acquire_instance_lock", lambda path: None)
     # ffmpeg must "exist" for the importer; a fake path is fine — the replay
     # sink's -version probe fails closed to the in-process encoder.
     monkeypatch.setattr(main_mod, "bundled_ffmpeg",

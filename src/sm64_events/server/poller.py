@@ -1,8 +1,24 @@
 # src/sm64_events/server/poller.py
-"""60 Hz poll loop: snapshot -> detectors -> broadcast.
+"""250 Hz poll loop: sample the pad every tick, snapshot once per GAME frame.
 
-Polling at ~60 Hz against 30 Hz game logic means every game frame is
-observed; the star dance lasts ~60-90 frames so edges cannot be missed.
+The rate is set by the CONTROLLER, not by the game. The game rewrites its
+controller struct ~62% of the way THROUGH each frame
+(`addresses.CONTROLLER_SETTLE_PHASE`), so a loop must look at the pad after
+that point or it reads the previous frame's input. Measured with
+`tools/probe_inputs.py` over four live sessions, 2026-08-20: at 60 Hz the last
+look of a frame lands at 50% and reads FRESH on 0% of frames — one frame late,
+every frame, invisibly. At 250 Hz it lands at 85% and reads fresh on 99%.
+
+Nothing else needs that rate. The game produces thirty frames a second, so the
+full snapshot and every detector run ONCE per game frame, late in it — which
+is both fresher than the old loop (whose phase was wherever the sleep landed)
+and cheaper: ~1.5% of a core against the ~20% the 60 Hz loop cost before the
+snapshot's byte swap came out.
+
+Two numbers that used to live in this docstring as folklore, both measured the
+same day: the old `hz=60` was the REQUESTED rate and 45.9 Hz was the achieved
+one (each tick worked for 3.4 ms and then slept a full interval), and no game
+frame went unobserved at any rate tried — 60, 120, 250 or 500.
 """
 import asyncio
 import logging
@@ -11,6 +27,8 @@ from time import perf_counter
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
+from sm64_events.core.timefmt import GAME_FPS
+from sm64_events.memory import addresses as A
 from sm64_events.detectors.anchors import BOOT_TIMER_MAX
 from sm64_events.memory.base import MemoryReadError
 
@@ -32,11 +50,48 @@ def _plausible(snap: GameSnapshot) -> bool:
 
 
 class Poller:
-    def __init__(self, memory, detectors, broadcaster, hz: int = 60, reader=None,
-                 on_frame=None):
+    SAMPLING_HZ = 250        # with a pad to catch after the game's rewrite
+    SNAPSHOT_HZ = 60         # without one: the old loop, every tick a read
+
+    def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
+                 reader=None, on_frame=None, input_sampler=None,
+):
         self.memory = memory
         self.detectors = list(detectors)
         self.broadcaster = broadcaster
+        # The rate follows the sampler. Without one there is nothing to do
+        # between game frames and every tick reads the whole snapshot -- so
+        # 250 Hz would be eight snapshots per game frame for no reason, on
+        # exactly the layouts (a version with no controller row yet) that
+        # have the least to spend.
+        if hz is None:
+            hz = (self.SAMPLING_HZ if input_sampler is not None
+                  else self.SNAPSHOT_HZ)
+        # The input half runs EVERY tick; the snapshot and the detectors run
+        # once per GAME frame. See this module's docstring for why the rate
+        # moved and why that costs less than the 60 Hz loop it replaces.
+        self.input_sampler = input_sampler
+        self._frame_now: int | None = None      # the frame ticks are landing in
+        self._snapshot_frame: int | None = None  # the last frame we snapshotted
+        self._ticks_in_frame = 0
+        # Consecutive ticks the sampler could not read. On the sampler-paced
+        # path a snapshot is due only when the FRAME advances, and a dead
+        # emulator advances nothing -- so the read that would notice it
+        # (MemoryReadError -> detach -> re-attach) was never reached: the
+        # tracker sat "attached" to a closed Project64 with a frozen
+        # snapshot (2026-09-05, the first install of the capture layer:
+        # PJ64 closed and reopened under a live tracker, and nothing came
+        # back). Past UNREADABLE_TICKS_BEFORE_READ the tick reads anyway.
+        self._unreadable_ticks = 0
+        # Wait until the game has FINISHED writing a frame before reading it.
+        # The pad's own rewrite lands ~62% in (addresses.CONTROLLER_SETTLE_PHASE,
+        # measured); the phases of the other fields are UNMEASURED, so this is
+        # "at least as late as the one field we checked", not a claim about all
+        # of them. Snapshotting on the frame-change tick instead would take
+        # every reading at the EARLIEST moment in a frame, which is worse than
+        # the arbitrary phase it replaced.
+        self._settle_ticks = max(
+            1, round(A.CONTROLLER_SETTLE_PHASE * hz / GAME_FPS))
         # Awaited with the live game frame after each tick's events are
         # published — the tracker's deferred-judgement heartbeat (main.py wires
         # TrackerService.settle_frame). Injected rather than duck-typed off
@@ -75,15 +130,67 @@ class Poller:
         if self.paused == paused:
             return
         self.paused = paused
+        if paused:
+            self._break_input_capture()
         if not paused:
             self._prev = None  # resume = fresh attach for detector streams
         log.info("session %s", "paused" if paused else "resumed")
 
+    def _break_input_capture(self) -> None:
+        if self.input_sampler is not None:
+            self.input_sampler.flush()
+        self._frame_now = self._snapshot_frame = None
+        self._ticks_in_frame = self._unreadable_ticks = 0
+
+    def _due_for_a_snapshot(self) -> bool:
+        """Sample the pad, and say whether this tick should read the game.
+
+        Returns True at most once per game frame, on the first tick at or
+        after the settle point — or on the tick that ENDS a frame which never
+        reached it, because a frame nobody snapshotted is a frame whose events
+        nobody saw.
+
+        It does NOT decide which frame the read will describe. `tick()` takes
+        that from the snapshot's own counter, because on the short-frame path
+        the read lands in the frame that just STARTED and claiming otherwise
+        would file a reading under a frame it cannot possibly hold.
+        """
+        frame_now = self.input_sampler.sample()
+        if frame_now is None:
+            self._unreadable_ticks += 1
+            return False                       # straddled or unreadable
+        self._unreadable_ticks = 0
+        if frame_now != self._frame_now:
+            ended = self._frame_now
+            self._frame_now = frame_now
+            self._ticks_in_frame = 0
+            return ended is not None and self._snapshot_frame != ended
+        self._ticks_in_frame += 1
+        return (self._snapshot_frame != frame_now
+                and self._ticks_in_frame >= self._settle_ticks)
+
+    #: consecutive unreadable sampler ticks (half a second at 250 Hz) before
+    #: the tick reads the snapshot regardless, so a dead emulator detaches
+    UNREADABLE_TICKS_BEFORE_READ = 125
+
     async def tick(self) -> None:
+        if self.input_sampler is not None:
+            due_for_a_snapshot = self._due_for_a_snapshot()
+            if (not due_for_a_snapshot
+                    and self._unreadable_ticks < self.UNREADABLE_TICKS_BEFORE_READ):
+                return
+            if not due_for_a_snapshot:
+                # Half a second of unreadable samples: read the snapshot
+                # anyway so a dead emulator raises and detaches below.
+                self._unreadable_ticks = 0
         try:
             curr = self.reader.read()
+            # Which frame this reading DESCRIBES comes from the snapshot's own
+            # counter, never from the sampler's guess before the read.
+            self._snapshot_frame = curr.global_timer
         except MemoryReadError:
             log.warning("lost emulator; detaching")
+            self._break_input_capture()
             self.memory.detach()
             self._prev = None
             self.latest = None
@@ -92,6 +199,7 @@ class Poller:
         if not _plausible(curr):
             log.error("memory layout mismatch (impossible values read) — "
                       "refusing to emit events; check the address registry")
+            self._break_input_capture()
             self.memory.detach()
             self._prev = None
             self.latest = None

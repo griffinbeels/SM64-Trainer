@@ -257,6 +257,23 @@ def test_the_fixture_reaches_a_real_compare_backend():
             "a fresh fixture should have no saved comparisons yet")
 
 
+def test_the_fixture_reaches_a_real_capture_layer():
+    """`/api/setup` must answer 200 with a real payload, not 404 -- confirms
+    `serve_ui()` wires `capture_layer=` into `create_app` (setup_api.py is
+    mounted only when one is given, same as the inputs router above), and
+    that `capture_layer_status` overrides actually reach the response, or the
+    setup modal's own uilab test would be reading a fixture state it never
+    asked for."""
+    with serve_ui(capture_layer_status={"state": "active", "pj64_dir": "C:/PJ64"}) as base:
+        with urllib.request.urlopen(f"{base}/api/setup", timeout=10) as r:
+            assert r.status == 200, r.status
+            body = json.loads(r.read())
+        assert body["platform"] == "emu"
+        assert body["emu"]["state"] == "active"
+        assert body["emu"]["pj64_dir"] == "C:/PJ64"
+        assert body["n64"] == {"available": False}
+
+
 # Two viewports, not one: 1500x1000 (comfortably wide, side-by-side rank
 # banners) and 850x1180 (the supported floor, min_viewport_width -- stacked
 # banners, the narrow objective-card band). Reach had only ever been proven
@@ -1153,6 +1170,297 @@ def test_the_library_search_story_reaches_its_own_result_rows(page):
     """)
 
 
+# --- input capture (2026-08-21) ---------------------------------------------
+# Added the same day the timeline landed, for the reason the header states: the
+# FIRST render of this surface showed "No inputs recorded for this attempt",
+# which is a clean page nobody is looking at. The chunks were there; they were
+# scoped so the attempt the drawer opens saw none of them. A sweep over that
+# would have reported the whole feature healthy while measuring an empty state.
+
+def test_the_attempt_drawer_reaches_a_populated_input_timeline(page):
+    reach(page, "input-timeline")
+    assert count(page, ".input-lanes") == 1, (
+        "the attempt drawer rendered no input lanes -- the fixture is "
+        "measuring the 'no inputs recorded' state, not the timeline")
+    bars = count(page, ".input-bar:not(.is-template)")
+    assert bars >= 3, (
+        f"only {bars} input bars drawn; a track with fewer button runs than "
+        "that cannot show a lane crowding its neighbour, which is what this "
+        "surface is measured for")
+
+
+def test_the_drawer_reaches_a_TEMPLATE_drawn_behind_the_run(page):
+    """The comparison is the whole point of the feature. Without a template
+    seeded, every sweep measures the single-track layout and the two-track one
+    -- the crowded case -- is unreachable, which is exactly how the
+    one-strategy star hid a class of defects for two days."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-template-note") == 1, (
+        "no template note rendered -- the fixture seeded no template, so the "
+        "compared-against layout is not being measured at all")
+    assert count(page, ".input-bar.is-template") >= 1, (
+        "the template note rendered but no template bars did")
+
+
+def test_the_inspector_reaches_a_frame_with_a_real_reading(page):
+    """The controller panel is the export's renderer too, so a fixture that
+    only ever shows it centred and empty measures neither consumer."""
+    reach(page, "input-timeline")
+    assert count(page, ".controller-panel") >= 1
+    # A BARE expression, never an arrow: the driver wraps what it is given in
+    # `() => { return (...); }`, so passing a function returns the function
+    # itself and comes back None -- measured 2026-08-21, and indistinguishable
+    # from a page with nothing on it.
+    values = page.evaluate(
+        "Array.from(document.querySelectorAll('.stick-value'))"
+        ".map((el) => el.textContent.trim())")
+    assert any(value and value != "--" for value in values), (
+        "every stick value read '--' -- the inspector is parked on a frame "
+        "with the stick centred, so the panel's populated layout is unmeasured")
+
+
+def test_the_drawer_draws_the_TEMPLATE_S_MARIO_behind_yours(page):
+    """His ruling 2026-08-22: the comparison includes "all mario data". The
+    template's action row, its speed line and its facing dial all render, or
+    the sweep measures a drawer that compares the pad alone."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-lane.is-actions") == 1, (
+        "both action tracks must share the same Mario lane")
+    assert count(page, ".input-lane.is-actions .action-span.is-template") >= 3
+    assert count(page, ".action-span.is-template") >= 3
+    assert count(page, ".speed-line.is-template") == 1
+    labels = page.evaluate(
+        "Array.from(document.querySelectorAll('.controller-panel-label'))"
+        ".map((el) => el.textContent.trim())")
+    assert "Mario faces" in labels, labels
+    assert count(page, ".facing-dial") == 1
+
+
+def test_the_drawer_reaches_a_MOMENT_on_the_track(page):
+    """Round 32 item 3: the journal's moments joined onto the track. The
+    fixture publishes one pole grab inside every attempt's captured span;
+    without it the moments row never renders and the sweep measures a drawer
+    with no such row -- the same "clean page nobody is looking at" failure
+    this file exists to catch. The tick reads the recorder's own sentence."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-lane.is-moments") == 1, (
+        "no moments row -- the fixture's attempt window holds no journal "
+        "moment inside its track, or the row is not drawn")
+    labels = page.evaluate(
+        "Array.from(document.querySelectorAll('.moment-mark'))"
+        ".map((el) => el.getAttribute('title'))")
+    assert any(label.startswith("Grab a pole in ") for label in labels), labels
+    # THE TICK, not the button. The button spans from its moment to the NEXT
+    # one, and the design system's own `button` rule centres flex content --
+    # so a guard measuring the button's left edge passed while the tick drew
+    # mid-span, a third of the timeline from its own frame (his report
+    # 2026-08-23). Every number here is READ OFF THE SURFACE -- the marker's
+    # own axis frame, the attempt's length from the header, the lead-in's
+    # from its note -- because the version that hard-coded the fixture's
+    # "30 frames into 63" went stale the moment the lead-in landed and
+    # reported a placement bug that did not exist (2026-08-31).
+    tick_at, button_at, track, marker_frame, total = page.evaluate(
+        "(() => {"
+        " const tick = document.querySelector('.moment-mark-tick')"
+        "  .getBoundingClientRect();"
+        " const button = document.querySelector('.moment-mark');"
+        " const lane = document.querySelector("
+        "  '.input-lane.is-moments .input-lane-track').getBoundingClientRect();"
+        " const head = document.querySelector('.input-timeline-head h4');"
+        " return [tick.left, button.getBoundingClientRect().left, lane,"
+        "  Number(button.getAttribute('data-frame')),"
+        "  Number(head.getAttribute('data-total'))];"
+        "})()")
+    expected = track["x"] + (marker_frame / total) * track["width"]
+    assert abs(tick_at - expected) < track["width"] / total, (
+        f"the moment's TICK sits at {tick_at:.0f}, its frame is at "
+        f"{expected:.0f} -- the label is being centred in the button again")
+    assert abs(tick_at - button_at) < 4, (
+        "the tick is not at the button's own left edge")
+
+
+def test_the_playhead_travels_over_the_tracks_and_never_the_labels(page):
+    """His report 2026-08-22: "I can drag the frame start position to the
+    left of the row labels... Frame 0 should start AFTER the labels". The
+    playhead lives in a column overlay whose left edge must be the tracks'
+    own left edge -- at the wide label width and the narrow one, since the
+    width is a container-query variable and a drift there is a playhead
+    over the words again."""
+    reach(page, "input-timeline")
+    for viewport in ((1400, 900), (860, 900)):
+        page.set_viewport(*viewport)
+        page.wait_ms(150)
+        column_left, track_left, label_right = page.evaluate(
+            "(() => { const c = document.querySelector('.input-track-column')"
+            ".getBoundingClientRect(); const t = document.querySelector("
+            "'.input-lane-track').getBoundingClientRect(); const l = document"
+            ".querySelector('.input-lane-name').getBoundingClientRect();"
+            " return [c.left, t.left, l.right]; })()")
+        assert abs(column_left - track_left) < 1.0, (
+            f"at {viewport}: the playhead column starts at {column_left:.1f} "
+            f"but the tracks start at {track_left:.1f}")
+        assert column_left >= label_right - 0.5, (
+            f"at {viewport}: the playhead column overlaps the label column")
+
+
+def test_the_open_drawer_stays_inside_its_card_below_the_supported_width(page):
+    """Below 760px the attempt rows become blocks, and a block's `height` is
+    a hard size where a table row's was a minimum -- so two row-height rules
+    pinned the drawer's row to 40px and the clip and the timeline painted
+    over every card beneath (his report 2026-08-23: "it gets totally messed
+    up on a small enough screen width"). Below the 850px floor is not swept,
+    so this is the one check that the drawer's row is exempt."""
+    reach(page, "input-timeline")
+    for viewport in ((600, 1400), (850, 1400)):
+        page.set_viewport(*viewport)
+        page.wait_ms(250)
+        drawer_bottom, card_bottom = page.evaluate(
+            "(() => { const d = document.querySelector('.attempt-drawer');"
+            " const c = d.closest('.log-card');"
+            " return [d.getBoundingClientRect().bottom,"
+            " c.getBoundingClientRect().bottom]; })()")
+        assert drawer_bottom <= card_bottom + 1, (
+            f"at {viewport}: the drawer ends at {drawer_bottom:.0f} but its "
+            f"card ends at {card_bottom:.0f} -- the drawer's row is clamped")
+    page.set_viewport(1400, 900)
+
+
+def test_the_timeline_reaches_a_LEAD_IN_and_frame_zero_stays_the_attempt(page):
+    """Round 32 items 51-52: he warps into the level, adjusts the camera,
+    then resets -- the track now reaches back to that entry. The lead must
+    RENDER (the shaded band + the header note), and FRAME 0 must still be
+    the attempt's own start: the readout total is the attempt's length,
+    not the track's."""
+    reach(page, "input-timeline")
+    assert count(page, ".input-lead-shade") == 1, (
+        "no lead band rendered -- the fixture seeded no level entry before "
+        "the anchor, so the lead-in layout is unreachable by every sweep")
+    # The lead-in NOTE is gone (his 2026-09-01 ruling: "we just shouldn't
+    # display the lead-in at all" -- the band stays, the numbers do not);
+    # the drawn span rides the header as data attributes for the sweeps.
+    assert count(page, ".input-lead-note") == 0
+    total, lead = page.evaluate(
+        "(() => { const h = document.querySelector('.input-timeline-head h4');"
+        " return [Number(h.getAttribute('data-total')),"
+        "  Number(h.getAttribute('data-lead'))]; })()")
+    assert lead > 0 and total > lead
+    # The header prints the ATTEMPT's own length -- the number on the row
+    # above it -- never the track's, which carries the clip's buffers.
+    frames_head = page.evaluate(
+        "document.querySelector('.input-timeline-head h4').textContent")
+    shown = int(frames_head.split("frames")[0].split("·")[-1].strip())
+    assert shown < total, (frames_head, total)
+    readout = page.evaluate(
+        "document.querySelector('.input-inspector-frame strong').textContent")
+    # BOTH halves are frame NUMBERS on the same zero-based axis, so the
+    # denominator is the LAST frame rather than how many there are.
+    assert int(readout.split("/")[1].strip()) == total - lead - 1
+
+
+def test_the_frame_readout_can_reach_its_own_last_frame(page):
+    """His report, 2026-09-05: the panel read 498 / 499 at the end of the
+    clip and no step could reach 499 -- "from a user perspective this looks
+    like an error, not intentional". The numerator was the zero-based axis
+    frame and the denominator was the COUNT, so the readout could never
+    equal itself. Seeking to the far right of the track must now land on
+    n / n. Mutation proof: put the count back and this goes red."""
+    reach(page, "input-timeline")
+    page.evaluate(
+        "(() => { const lanes = document.querySelector('.input-lanes');"
+        " const box = lanes.getBoundingClientRect();"
+        " lanes.dispatchEvent(new PointerEvent('pointerdown',"
+        "   {bubbles: true, clientX: box.right, clientY: box.top + 4}));"
+        " return true; })()")
+    page.wait_ms(200)
+    readout = page.evaluate(
+        "document.querySelector('.input-inspector-frame strong').textContent")
+    here, last = (part.strip() for part in readout.split("/"))
+    assert here == last, (
+        f"seeking to the end of the track reads {readout!r} -- the panel "
+        "cannot reach its own last frame")
+
+
+def test_a_disagreeing_picture_reaches_the_timeline_header(page):
+    """The clip's pad check is SILENT when it passes and speaks only when the
+    timeline contradicts what the game held. The fixture's synthetic view
+    carries one contradicted picture, so the chip renders here; the test
+    below proves it vanishes when nothing disagrees.
+
+    His ruling on the passing state, 2026-09-05: "displaying this to the user
+    is really weird lol, worthless information for them". A check that has
+    never failed is a fact about our plumbing, not about his run -- the same
+    call he made retiring the segment step indicator once the segment logic
+    worked."""
+    reach(page, "input-timeline")
+    page.wait_for(".input-screen-check", timeout_ms=8000)
+    chip = page.evaluate(
+        "document.querySelector('.input-screen-check').textContent")
+    assert "1 picture" in chip and "disagree with the game" in chip, chip
+    # No ratio and no count of what passed: the chip is news, not a statistic.
+    assert "/" not in chip and "all agree" not in chip, chip
+    # The chip is a DOOR (his rule: a datum on a summary surface leads to its
+    # evidence): click it and every disagreeing picture is listed as the panel
+    # frame it sits on, with what the game held and what the timeline holds;
+    # click a row and the panel goes there.
+    page.click(".input-screen-check")
+    page.wait_for(".input-screen-check-row", timeout_ms=4000)
+    row_text, frame_text = page.evaluate(
+        "(() => { const row = document.querySelector('.input-screen-check-row');"
+        " return [row.textContent, row.querySelector('.frame').textContent]; })()")
+    assert frame_text.startswith("frame ") and "71,0" in row_text and "70,0" in row_text, row_text
+    page.click(".input-screen-check-row")
+    page.wait_ms(200)
+    readout = page.evaluate(
+        "document.querySelector('.input-inspector-frame strong').textContent")
+    listed = int(frame_text.split()[1])
+    assert int(readout.split("/")[0].strip()) == listed, (readout, frame_text)
+
+
+def test_a_clip_whose_pads_all_agree_draws_no_chip_at_all(page):
+    """The half his ruling is actually about, and a state live data always
+    holds but the fixture cannot seed twice: every picture agreeing. Reached
+    the way `.claude/rules/ui-core.md` prescribes -- rewrite the captured
+    response on its way in -- so the REAL component renders a clean view.
+
+    The header must then carry the time, the frame count and nothing else.
+    Mutation proof: restore the "all agree" branch in `screenCheck` and this
+    goes red while its sibling above stays green."""
+    # A fresh page first: the drawer fetches its view once, on open, so a
+    # patch installed while it is already open changes nothing (measured --
+    # the previous test's payload rendered straight through).
+    page.evaluate("(() => { location.reload(); return true; })()")
+    page.wait_for(PROJECT.ready_selector, timeout_ms=15000)
+    page.wait_ms(400)
+    page.evaluate(
+        "(() => {"
+        "  const real = window.fetch;"
+        "  window.fetch = async (input, init) => {"
+        "    const response = await real(input, init);"
+        "    const url = typeof input === 'string' ? input : input.url;"
+        "    if (!/\/replay$/.test(url || '')) return response;"
+        "    const body = await response.clone().json();"
+        "    if (body && body.pad_stamp_agreement) {"
+        "      body.pad_stamp_agreement.agree = body.pad_stamp_agreement.pictures;"
+        "      body.pad_stamp_agreement.disagreements = [];"
+        "    }"
+        "    return new Response(JSON.stringify(body), {status: 200,"
+        "      headers: {'content-type': 'application/json'}});"
+        "  };"
+        "  return true; })()")
+    reach(page, "input-timeline")
+    page.wait_for(".input-timeline", timeout_ms=8000)
+    page.wait_ms(400)
+    head = page.evaluate(
+        "(() => { const h = document.querySelector('.input-timeline-head');"
+        "  return [h.textContent, document.querySelectorAll('.input-screen-check').length];"
+        " })()")
+    assert head[1] == 0, f"a clip whose pads all agree still drew a chip: {head[0]!r}"
+    assert "frames" in head[0] and "fps" in head[0], head[0]
+    # Put the real fetch back for whatever runs next on this shared page.
+    page.evaluate("(() => { location.reload(); return true; })()")
+    page.wait_for(PROJECT.ready_selector, timeout_ms=15000)
+
+
 # --- and it must not leave the state it reached behind ---------------------
 
 _SHARED_STORE_READ = re.compile(r"\brank_standards_path\b")
@@ -1316,3 +1624,27 @@ def test_the_runner_page_story_reaches_a_real_runner(page):
     assert ignore_buttons == 0, (
         f"found {ignore_buttons} button(s) in the runner page's breakdown -- "
         "read-only means no Ignore/Include control")
+
+
+def test_the_template_and_export_buttons_live_inside_the_timeline_box(page):
+    """His report 2026-09-02: "the buttons ... are a bit silly, because the
+    input timeline doesn't exist yet... so they should be hidden until the
+    input timeline is available. Then they should be put at the bottom of the
+    actual Inputs timeline box". They ride the timeline as its `tools` slot,
+    so they cannot exist without it and they sit under the controller
+    panel."""
+    reach(page, "input-timeline")
+    inside, after_panel = page.evaluate(
+        "(() => { const t = document.querySelector('.input-timeline');"
+        " const tools = t && t.querySelector('.attempt-drawer-tools');"
+        " if (!tools) return [false, false];"
+        " const panel = t.querySelector('.input-inspector');"
+        " return [true, panel"
+        "   ? tools.getBoundingClientRect().top >= panel.getBoundingClientRect().top"
+        "   : false]; })()")
+    assert inside, "the tools are not inside the input timeline box"
+    assert after_panel, "the tools sit above the controller panel"
+    # And nothing renders them a second time outside the timeline.
+    stray = page.evaluate(
+        "document.querySelectorAll('.attempt-drawer-tools').length")
+    assert stray == 1, f"{stray} tool rows on the page"

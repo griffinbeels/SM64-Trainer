@@ -41,6 +41,28 @@ def server_port() -> int:
     return 8064 if is_frozen() else 8065
 
 
+def candidate_server_ports() -> tuple[int, ...]:
+    """Every port a trainer on this machine might be answering on.
+
+    A TOOL looking for a running server cannot just use `server_port()`: the
+    instance he is actually playing on is usually neither of its answers --
+    `run-test-server.bat` sets SM64_PORT=8066 -- so probing only the frozen
+    and source ports reads as "no server is running" when his is right there
+    (measured twice, 2026-08-02 and the session before it).
+
+    It lives HERE rather than in each tool because there is one source of
+    truth for this port, enforced by `tests/test_single_source.py`; a second
+    literal is a tool that probes the wrong world. Ordered so the port this
+    process would itself bind is tried first.
+    """
+    ordered = [server_port(), 8066, 8065, 8064]
+    seen: list[int] = []
+    for port in ordered:
+        if port not in seen:
+            seen.append(port)
+    return tuple(seen)
+
+
 def data_root() -> Path:
     """Base directory for all persisted state.
 
@@ -119,6 +141,17 @@ def compilations_dir() -> Path:
     return replays_root() / "compilations"
 
 
+def overlays_dir() -> Path:
+    # Transparent input-overlay layers (tools/export_overlay.py). UNDER
+    # replays_root() (== the ReplayService save_root) for the same reason
+    # compilations_dir() is: /api/replay/reveal only opens files inside
+    # save_root, so an export is revealable with no new endpoint -- which
+    # matters here more than usual, because these files exist to be dragged
+    # into an editor and a path in prose is a dead link the next time
+    # anything moves.
+    return replays_root() / "overlays"
+
+
 def diagnostics_dir() -> Path:
     # One-button debug reports (task 0092). UNDER replays_root() (== the
     # ReplayService save_root) for the same reason compilations_dir() is:
@@ -135,6 +168,26 @@ def mode_settings_path() -> Path:
     # EMU/N64 tracker mode + game version (core/modes.py) — a JSON overlay
     # like replay_settings.json, so switching modes needs no db migration.
     return data_root() / "data" / "tracker_mode.json"
+
+
+def capture_layer_settings_path() -> Path:
+    # The capture layer's consent + what it installed (core/capturelayer.py):
+    # a JSON overlay like tracker_mode.json, so an undo needs no migration.
+    return data_root() / "data" / "capture_layer.json"
+
+
+def bundled_plugin_dll() -> Path | None:
+    """The capture layer DLL (`sm64_trainer_gfx.dll`) shipped with this
+    build: beside a frozen exe under ``sys._MEIPASS/sm64_events/data/plugin``,
+    else the package's own data folder; None when this build carries none
+    (a clone that never built it), which the setup screen reports rather
+    than installing nothing."""
+    name = "sm64_trainer_gfx.dll"
+    if is_frozen():
+        cand = Path(getattr(sys, "_MEIPASS", "")) / "sm64_events" / "data" / "plugin" / name
+        return cand if cand.exists() else None
+    cand = Path(__file__).resolve().parents[1] / "data" / "plugin" / name
+    return cand if cand.exists() else None
 
 
 def update_state_path() -> Path:

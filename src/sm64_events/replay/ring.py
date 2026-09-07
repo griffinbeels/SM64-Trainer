@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from sm64_events.replay.media import MediaRun
+
 # Free disk we refuse to consume: a near-full system volume thrashes the whole
 # machine (Windows squeezes the pagefile), which reads as the same "everything
 # is laggy / out of memory" symptom as a RAM leak. The buffer never grows so
@@ -45,12 +47,16 @@ class SegmentInfo:
     # treats a dims change like a coverage hole. None = unknown (audio chunks,
     # the in-process fallback writer): never forces a break.
     dims: tuple[int, int] | None = None
+    # Only the picture feed promises source PTS relative to this exact run.
+    # None means the source clock is unknown, including legacy/CFR segments.
+    media_run: MediaRun | None = None
 
 
 class SegmentRing:
     def __init__(self, retention_s: float | None, max_bytes: int,
                  free_bytes_fn=None,
-                 disk_margin_bytes: int = _DISK_MARGIN_BYTES):
+                 disk_margin_bytes: int = _DISK_MARGIN_BYTES,
+                 on_evict=None):
         self._retention_s = retention_s
         self._max_bytes = max_bytes
         # free_bytes_fn() -> bytes free on the scratch volume (None = no disk
@@ -61,10 +67,17 @@ class SegmentRing:
         self._segments: deque[SegmentInfo] = deque()
         self._total_bytes = 0
         self._lock = threading.Lock()  # 1 encoder writer, N API reader threads
+        self._on_evict = on_evict
 
     @property
     def total_bytes(self) -> int:
         return self._total_bytes
+
+    def reset(self) -> None:
+        """Forget metadata after the recorder owner resets its scratch files."""
+        with self._lock:
+            self._segments.clear()
+            self._total_bytes = 0
 
     @property
     def retention_s(self) -> float | None:
@@ -85,12 +98,14 @@ class SegmentRing:
                 self._evict(now=self._segments[-1].utc_end)
 
     def add(self, seg: SegmentInfo) -> None:
-        """Assumes utc_end is monotonically non-decreasing across add() calls
-        (one writer thread, segments emitted in stream order)."""
+        """Keep source order even when an old child's final CSV arrives late."""
         with self._lock:
+            late = bool(self._segments and seg.utc_start < self._segments[-1].utc_start)
             self._segments.append(seg)
+            if late:
+                self._segments = deque(sorted(self._segments, key=lambda item: item.utc_start))
             self._total_bytes += seg.size_bytes
-            self._evict(now=seg.utc_end)
+            self._evict(now=self._segments[-1].utc_end)
 
     def _evict(self, now: datetime) -> None:
         # caller holds self._lock
@@ -98,6 +113,8 @@ class SegmentRing:
             old = self._segments.popleft()
             self._total_bytes -= old.size_bytes
             old.path.unlink(missing_ok=True)
+            if self._on_evict is not None:
+                self._on_evict(old)
 
         if self._retention_s is not None:
             horizon = now - timedelta(seconds=self._retention_s)
