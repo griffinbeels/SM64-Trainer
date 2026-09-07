@@ -233,6 +233,11 @@ class FrameStream:
         self._put_u32(H_WANT_FRAMES, 1 if on else 0)
 
     def touch(self) -> None:
+        """Renew the reader's lease; gfxwrap v2 expires demand after 3s.
+
+        Only the recorder owner writes this. Setting want_frames alone is
+        insufficient: a crashed reader can leave that bit set in PJ64's map.
+        """
         self._put_u32(H_TRACKER_ALIVE, self._u32(H_TRACKER_ALIVE) + 1)
 
     def alive_since(self, previous_alive: int) -> bool:

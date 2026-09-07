@@ -84,6 +84,7 @@ def check_drive(host: Path, wrapper: Path, *flags, pictures_via=F.STATUS_GL_CONT
     stream = F.FrameStream(name)
     try:
         stream.set_table([(0, 4), (64, 4)], rdram_bytes=8 << 20)
+        stream.touch()  # v2 capture requires a live reader lease
         stream.set_want_frames(True)
         output = drive(host, wrapper, 5, name, *flags)
         assert "drove 5 frames" in output
@@ -195,6 +196,7 @@ def test_a_stamp_entry_past_the_committed_rdram_is_dropped_not_a_crash(built):
     stream = F.FrameStream(name)
     try:
         stream.set_table([(0, 4), (6 << 20, 4)], rdram_bytes=8 << 20)
+        stream.touch()
         stream.set_want_frames(True)
         drive(built["host"], built["wrapper"], 3, name, "--rdram-mb", "4")
         slots, _ = stream.read_new(0)
@@ -215,6 +217,7 @@ def test_an_entry_committed_after_initiate_is_copied_once_the_rom_opens(built):
     stream = F.FrameStream(name)
     try:
         stream.set_table([(0, 4), (6 << 20, 4)], rdram_bytes=8 << 20)
+        stream.touch()
         stream.set_want_frames(True)
         drive(built["host"], built["wrapper"], 3, name, "--commit-late")
         slots, _ = stream.read_new(0)
@@ -235,6 +238,7 @@ def test_gl_state_the_wrapped_plugin_leaves_bound_does_not_redirect_the_capture(
     try:
         stream.set_table([(0, 4)], rdram_bytes=8 << 20)
         stream.set_want_frames(True)
+        stream.touch()
         drive(built["host"], built["wrapper"], 5, name, "--dirty-gl")
         slots, _ = stream.read_new(0)
         assert [slot.seq for slot in slots] == [1, 2, 3, 4, 5]

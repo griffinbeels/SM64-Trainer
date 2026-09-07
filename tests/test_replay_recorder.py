@@ -280,8 +280,10 @@ def test_startup_wipes_scratch(tmp_path):
     buf = tmp_path / "buf"
     buf.mkdir(parents=True)
     (buf / "stale.ts").write_bytes(b"junk")
-    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(), found=None)
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
     rec.start()
+    assert wait_for(lambda: rec.status()["recording"])
     assert not (buf / "stale.ts").exists()
     rec.stop()
 
@@ -359,8 +361,10 @@ def test_startup_wipe_is_recursive_clips_cache_dies_with_buffer(tmp_path):
     (buf / "stale.ts").write_bytes(b"junk")
     (clips / "clip_attempt_1.mp4").write_bytes(b"stale clip")
     (clips / "clip_attempt_1.json").write_text("{}")
-    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(), found=None)
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
     rec.start()
+    assert wait_for(lambda: rec.status()["recording"])
     assert not (buf / "stale.ts").exists()
     assert not (clips / "clip_attempt_1.mp4").exists()
     assert not (clips / "clip_attempt_1.json").exists()

@@ -51,7 +51,8 @@ LAYER_WATCH_S = 1.0
 LAYER_RETRY_S = 15.0
 
 
-def pictures_flow(stream: F.FrameStream, timeout_s: float = PICTURE_PROBE_S) -> tuple:
+def pictures_flow(stream: F.FrameStream, timeout_s: float = PICTURE_PROBE_S,
+                  stop_event: threading.Event | None = None) -> tuple:
     """Whether the capture layer can hand over a picture RIGHT NOW: asks for
     frames and waits for its write sequence to advance. `(True, None)` on
     the first picture; `(False, reason)` otherwise, frames turned back off,
@@ -62,14 +63,24 @@ def pictures_flow(stream: F.FrameStream, timeout_s: float = PICTURE_PROBE_S) -> 
     the desktop grab is, with this reason beside it."""
     import time
     before = stream.header()
-    stream.set_want_frames(True)
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        stream.wait(0.05)
-        if stream.header().write_seq != before.write_seq:
-            return True, None
-    after = stream.header()
-    stream.set_want_frames(False)
+    try:
+        if stop_event is not None and stop_event.is_set():
+            return False, "the picture probe was stopped"
+        stream.touch()
+        stream.set_want_frames(True)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if stop_event is not None and stop_event.is_set():
+                return False, "the picture probe was stopped"
+            stream.touch()
+            stream.wait(0.05)
+            if stream.header().write_seq != before.write_seq:
+                return True, None
+        after = stream.header()
+    finally:
+        # A probe owns demand only while probing. The selected source takes
+        # over in start(), including after a successful probe.
+        stream.set_want_frames(False)
     if not after.initiated:
         return False, "the capture layer is not initiated"
     if after.dropped > before.dropped:
@@ -218,15 +229,28 @@ class DesktopUntilLayerPresents:
 
     def start(self, on_frame, on_stopped) -> None:
         self._on_stopped = on_stopped
-        self._desktop.start(on_frame, on_stopped)
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._watch, name="layer-watch", daemon=True)
-        self._thread.start()
+        if self._stop.is_set():
+            return
+        try:
+            self._desktop.start(on_frame, on_stopped)
+            self._thread = threading.Thread(target=self._watch, name="layer-watch", daemon=True)
+            self._thread.start()
+        except BaseException:
+            self.stop()
+            raise
+
+    def request_stop(self) -> None:
+        self._stop.set()
+        try:
+            self._stream.set_want_frames(False)
+        except Exception:
+            log.debug("frame stream gone at stop", exc_info=True)
 
     def stop(self) -> None:
-        self._stop.set()
+        self.request_stop()
         thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
+        if (thread is not None and thread is not threading.current_thread()
+                and thread.ident is not None):
             thread.join(timeout=2.0)
         self._thread = None
         try:
@@ -251,7 +275,14 @@ class DesktopUntilLayerPresents:
             last = alive
             if not moving or time.monotonic() < next_probe:
                 continue
-            flowing, reason = pictures_flow(self._stream)
+            try:
+                flowing, reason = pictures_flow(self._stream, stop_event=self._stop)
+            except Exception:
+                log.exception("capture layer probe failed; staying on desktop capture")
+                next_probe = time.monotonic() + LAYER_RETRY_S
+                continue
+            if self._stop.is_set():
+                return
             if flowing:
                 self.upgraded = True
                 log.info("capture layer started presenting; handing the recorder over to it")
@@ -304,17 +335,23 @@ class PluginVideoSource:
                 self._stream.set_want_frames(not self._idle_check())
 
     def start(self, on_frame, on_stopped) -> None:
-        if self._thread is not None:
-            return
-        self._stop.clear()
-        with self._demand_lock:
-            self._accept_demand = True
-            self._stream.set_want_frames(not self._idle_check())
-        self._thread = threading.Thread(target=self._loop, args=(on_frame, on_stopped),
-                                        name="plugin-frames", daemon=True)
-        self._thread.start()
+        try:
+            with self._demand_lock:
+                if self._thread is not None or self._stop.is_set():
+                    return
+                self._stream.touch()
+                self._accept_demand = True
+                self._stream.set_want_frames(not self._idle_check())
+                self._thread = threading.Thread(target=self._loop, args=(on_frame, on_stopped),
+                                                name="plugin-frames", daemon=True)
+                self._thread.start()
+        except BaseException:
+            self.request_stop()
+            self._thread = None
+            raise
 
-    def stop(self) -> None:
+    def request_stop(self) -> None:
+        """Revoke capture immediately, before any joins or encoder draining."""
         self._stop.set()
         try:
             with self._demand_lock:
@@ -322,16 +359,34 @@ class PluginVideoSource:
                 self._stream.set_want_frames(False)
         except Exception:
             log.debug("frame stream gone at stop", exc_info=True)
+
+    def stop(self) -> None:
+        self.request_stop()
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            if self._thread is not threading.current_thread():
+                self._thread.join(timeout=2.0)
             self._thread = None
 
     def _loop(self, on_frame, on_stopped) -> None:
+        try:
+            self._read_loop(on_frame)
+        except Exception:
+            log.exception("plugin frame reader failed; source ends")
+        finally:
+            self.request_stop()
+            try:
+                on_stopped()
+            except Exception:
+                log.exception("plugin source on_stopped failed")
+
+    def _read_loop(self, on_frame) -> None:
         import time
         last_alive = self._stream.header().alive
         last_alive_check = time.monotonic()
         while not self._stop.is_set():
             self._stream.wait(WAIT_S)
+            if self._stop.is_set():
+                break
             slots, skipped = self._stream.read_new(self._last_seq)
             self._skipped += skipped
             for slot in slots:
@@ -355,7 +410,9 @@ class PluginVideoSource:
             now = time.monotonic()
             if now - last_alive_check >= IDLE_POLL_S:
                 last_alive_check = now
-                self._stream.touch()
+                with self._demand_lock:
+                    if self._accept_demand:
+                        self._stream.touch()
                 alive = self._stream.header().alive
                 if alive == last_alive and (self._stream.header().initiated is False
                                             or not self._stream.plugin_process_alive()):
@@ -366,10 +423,6 @@ class PluginVideoSource:
                     log.info("capture layer stopped presenting; source ends")
                     break
                 last_alive = alive
-        try:
-            on_stopped()
-        except Exception:
-            log.exception("plugin source on_stopped failed")
 
     def status(self) -> dict:
         return {"delivered": self._delivered, "skipped": self._skipped,

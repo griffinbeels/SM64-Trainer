@@ -35,6 +35,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 
@@ -341,6 +342,10 @@ class FfmpegAvSink:
         self._anchor_utc: datetime | None = None
         self._fed = 0
         self._seg_n_base = 0
+        # A recorder keeps old ring files across detach/reattach, but the
+        # next attach constructs a new sink whose respawn counter starts at
+        # zero. Its files must never overwrite the prior sink's identities.
+        self._file_session = uuid4().hex
         self._restarts = 0
         self._fail_streak = 0
         self._spawned_at_mono = 0.0
@@ -432,7 +437,8 @@ class FfmpegAvSink:
         self._pipe_name = rf"\\.\pipe\sm64av_{os.getpid()}_{_pipe_seq}"
         if not self._picture:
             self._open_audio_pipe()
-        pattern = str(self._cfg.scratch_dir / f"av_{self._seg_n_base:02d}_%06d.ts")
+        pattern = str(self._cfg.scratch_dir /
+                      f"av_{self._file_session}_{self._seg_n_base:02d}_%06d.ts")
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "warning",
             *(["-copyts"] if self._picture else []),
