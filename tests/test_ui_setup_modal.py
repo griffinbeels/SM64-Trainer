@@ -148,6 +148,7 @@ def test_the_steps_render_in_order_with_live_ticks_and_the_screen_opens_for_a_st
             get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
         page.wait_for(".setup-platform-picks")          # opened by itself
+        page.wait_for(".setup-tick-label")              # capture status loaded
         labels = page.evaluate(
             "Array.from(document.querySelectorAll('.setup-tick-label')).map(e => e.textContent)")
         assert [label.split(" ")[0] for label in labels] == ["Close", "Capture", "Start"]
@@ -171,6 +172,7 @@ def test_a_first_install_puts_the_install_button_on_its_step_after_close(tmp_pat
             get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
         page.wait_for(".setup-platform-picks")
+        page.wait_for(".setup-tick")
         marks = page.evaluate(
             "Array.from(document.querySelectorAll('.setup-tick')).map(e => e.textContent)")
         assert marks == ["✓", "○", "○"]
