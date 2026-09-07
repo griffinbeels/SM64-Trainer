@@ -20,13 +20,13 @@ def test_two_drawers_navigate_the_reported_picture_and_show_attempt_times(tmp_pa
               "anchor_offset_s": 0, "attempt_start_slot": 3,
               "source": "buffer", "truncated": False,
               "pad_stamp_agreement": {"pictures": 7,"agree": 6,
-                  "disagreements": [[5,51,[0,0,32768],[0,0,16384]]]}}
+                  "disagreements": [[5,51,[40,80,32768],[40,80,16384]]]}}
     inputs = {"fps":30,"frames":7,"lead_frames":3,"attempt_frames":4,
               "kind":"star","entity_key":"2-2","target":"star 2 2",
               "stretches":[[0,1000,3],[3,50,4]],
               "buttons":[[32768,"A"],[16384,"B"]],"stick_max":84,"dead_zone":8,
               "angle_units":65536,
-              "runs":[{"start":n,"length":1,"buttons":32768 if n != 4 else 16384,
+              "runs":[{"start":n,"length":1,"buttons":32768 if n == 4 else 16384,
                        "stick_x":40,"stick_y":80,"yaw":0,"speed":5} for n in range(7)],
               "actions":[{"start":4,"length":1,"action":1,"label":"Jump","group":"airborne"}],
               "markers":[{"frame":4,"label":"Grabbed the pole beside the haunted balcony","type":"pole"}],
@@ -93,7 +93,7 @@ def test_two_drawers_navigate_the_reported_picture_and_show_attempt_times(tmp_pa
         # The input bar after the reset must find raw 51, not the earlier 1000.
         page.click(f'{first} button:text-is("Back 1")')
         page.wait_for(f'{first} video[data-picture="3"]')
-        page.click(f'{first} button.input-bar[title^=\'B 00"03\']')
+        page.click(f'{first} button.input-bar[title^=\'A 00"03\']')
         page.wait_for(f'{first} video[data-picture="4"]')
         # Move away, then follow the discrepancy's decoded picture slot.
         page.click(f'{first} button:text-is("Back 1")')
@@ -101,9 +101,10 @@ def test_two_drawers_navigate_the_reported_picture_and_show_attempt_times(tmp_pa
         page.click(f'{first} .input-screen-check')
         page.click(f'{first} .input-screen-check-row')
         page.wait_for(f'{first} video[data-picture="4"]')
-        assert "game neutral · B" in page.evaluate(f"document.querySelector({json.dumps(first+' .input-screen-check-row')}).textContent")
-        assert "timeline neutral · A" in page.evaluate(f"document.querySelector({json.dumps(first+' .input-screen-check-row')}).textContent")
+        assert "game U80 R40 · B" in page.evaluate(f"document.querySelector({json.dumps(first+' .input-screen-check-row')}).textContent")
+        assert "timeline U80 R40 · A" in page.evaluate(f"document.querySelector({json.dumps(first+' .input-screen-check-row')}).textContent")
         assert "frame 1" in page.evaluate(f"document.querySelector({json.dumps(first+' .input-screen-check-row')}).textContent")
+        assert page.count(f'{first} .controller-buttons[aria-label="Holding A"]') == 1
         assert 'at 00"03' in page.evaluate(f"document.querySelector({json.dumps(first+' .input-inspector-moment')}).textContent")
         for width in (1500,850):
             page.set_viewport(width,1100)
