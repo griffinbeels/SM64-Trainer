@@ -56,6 +56,25 @@ def test_latest_drawer_review_controls_and_reopening(tmp_path):
         page.click('.replay-loop-row button:text-is("Set B")')
         page.wait_for('.replay-loop-row button:text-is("Loop"):not([disabled])')
         page.click('.replay-loop-row button:text-is("Loop")')
+        loop_frames = page.evaluate("""(async () => {
+          const video=document.querySelector('.latest-review-surface video');
+          const frames=[];let handle;
+          const canvas=document.createElement('canvas');canvas.width=320;canvas.height=96;
+          const ctx=canvas.getContext('2d',{willReadFrequently:true});
+          const read=(_now,meta)=>{
+            ctx.drawImage(video,0,0,320,96);
+            const number=Array.from({length:8},(_,bit)=>
+              ctx.getImageData(bit*40+20,48,1,1).data[0]>128 ? 1<<bit : 0).reduce((a,b)=>a+b,0);
+            frames.push({time:meta.mediaTime,number});handle=video.requestVideoFrameCallback(read);
+          };
+          handle=video.requestVideoFrameCallback(read);
+          window.allowLoopPlayback=true;video.playbackRate=.25;
+          await video.play();await new Promise(resolve=>setTimeout(resolve,2100));video.pause();
+          video.cancelVideoFrameCallback(handle);return frames;
+        })()""")
+        (tmp_path / "loop-pictures.json").write_text(json.dumps(loop_frames))
+        assert sum(frame["number"] == 3 for frame in loop_frames) >= 2, loop_frames
+        assert all(frame["number"] in (3,4) for frame in loop_frames), loop_frames
         page.click('.input-zoom-controls button:text-is("Zoom to loop")')
         page.click('button[aria-label="Shift template earlier one frame"]')
         page.wait_for('.input-template-offset:text-is("-1f")')

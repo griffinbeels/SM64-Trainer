@@ -6,6 +6,21 @@ import { useReviewState } from "../../src/sm64_events/ui/reviewstate.js";
 
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 
+test("retry reloads preferences after the initial GET fails", async () => {
+  let hook, fail=true;
+  vi.stubGlobal("fetch",vi.fn(async()=> {
+    if(fail) throw new Error("offline");
+    return {ok:true,json:async()=>({template_offsets:{},zoom:{start:1,end:4},loop:null})};
+  }));
+  function Probe(){hook=useReviewState(913);return null;}
+  render(h(Probe));
+  await waitFor(()=>expect(hook.error).toContain("offline"));
+  expect(hook.state).toBeNull(); fail=false;
+  await act(async()=>hook.retry());
+  await waitFor(()=>expect(hook.state?.zoom).toEqual({start:1,end:4}));
+  expect(hook.error).toBeNull();
+});
+
 test("a late first write cannot overwrite later edits; closing preserves queued state", async () => {
   let hook, release;
   const writes=[];
