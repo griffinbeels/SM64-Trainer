@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { useOverlayRows, useTemplateRevision } from "../inputpreferences.js";
 import { slotAtTime, timeOfSlot } from "../frame.js";
 import { watchVideoPicture } from "../videopicture.js";
+import { spanInWindow, templateOnAxis, templateReviewKey, timelineWindow, TimelineReviewControls } from "../timelinereview.js";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
@@ -177,19 +178,20 @@ function spanLabel(start, length, lead = 0) {
 
 // Both action tracks occupy the SAME lane. The template's outlined band is
 // taller, so identical timing still leaves an amber edge around your action.
-function ActionRow({ name, spans, templateSpans = [], percent, seek, total = 0, lead = 0 }) {
-  const draw = (span, ghost) => html`
+function ActionRow({ name, spans, templateSpans = [], view, seek, lead = 0 }) {
+  const draw = (span, ghost) => {
+    const style = spanInWindow(span.start, span.length, view);
+    if (!style) return null;
+    return html`
     <button class=${`action-span group-${span.group} ${ghost ? "is-template" : ""}`}
         key=${`${ghost ? "t" : "a"}${span.start}`}
-        style=${total && span.start + span.length >= total
-          ? `right:0;width:${percent(span.length)}`
-          : `left:${percent(span.start)};width:${percent(span.length)};`
-            + `max-width:calc(100% - ${percent(span.start)})`}
+        style=${style}
         onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
         title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length, lead)} (${span.length}f)`}
         aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length, lead)}`}>
       <span class="action-span-name">${span.label}</span>
     </button>`;
+  };
   return html`<div class=${`input-lane is-actions ${templateSpans.length ? "has-template" : ""}`}>
     <span class="input-lane-name">${name}</span>
     <div class="input-lane-track">
@@ -210,17 +212,18 @@ function ActionRow({ name, spans, templateSpans = [], percent, seek, total = 0, 
 // `lead` is the lead-in's length: a marker's own frame is on the AXIS, and
 // the time it states must be on the ATTEMPT's clock, so a moment inside the
 // lead reads negative rather than pretending the attempt started earlier.
-function MomentRow({ markers, total, percent, seek, lead = 0 }) {
+function MomentRow({ markers, total, view, seek, lead = 0 }) {
   return html`<div class="input-lane is-moments">
     <span class="input-lane-name">Moments</span>
     <div class="input-lane-track">
       ${markers.map((marker, index) => {
+        if (marker.frame < view.start || marker.frame >= view.end) return null;
         const next = index + 1 < markers.length ? markers[index + 1].frame : total;
         const room = Math.max(next - marker.frame, 1);
         return html`
           <button class=${`moment-mark type-${marker.type}`} key=${`${marker.frame}-${index}`}
                   data-frame=${marker.frame}
-                  style=${`left:${percent(marker.frame)};width:${percent(room)}`}
+                  style=${spanInWindow(marker.frame, room, view)}
                   onclick=${(event) => { event.stopPropagation(); seek(marker.frame); }}
                   title=${`${marker.label} — ${timeLabel(marker.frame - lead)}`}
                   aria-label=${`${marker.label} at ${timeLabel(marker.frame - lead)}`}>
@@ -319,6 +322,21 @@ export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
     if (shown != null && shown >= raw) return timeOfSlot(slot, clock);
   }
   return null;
+}
+
+export function mappedLoopWindow(loop, frameMap, clock, stretches, total) {
+  if (!loop || !(loop.end > loop.start)) return null;
+  let lastSlot = slotAtTime(loop.end, clock);
+  // B is the exclusive edge of the selected picture. Using the next
+  // picture would add an input the player did not include in the loop.
+  if (timeOfSlot(lastSlot, clock) >= loop.end) lastSlot -= 1;
+  if (lastSlot < 0) return null;
+  const start = mappedFrameAtTime(loop.start, frameMap, clock, stretches, total);
+  const last = mappedFrameAtTime(timeOfSlot(lastSlot, clock), frameMap, clock, stretches, total);
+  if (start == null || last == null || last < start
+      || mappedTimeAtFrame(start, frameMap, clock, stretches) == null
+      || mappedTimeAtFrame(last, frameMap, clock, stretches) == null) return null;
+  return { start, end: Math.min(total, last + 1) };
 }
 
 // THE CLIP'S OWN CHECK (`pad_stamp_agreement`), and it is SILENT WHEN IT
@@ -422,6 +440,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
                                 padAgreement = null,
                                 frameMapSource = null,
                                 inputAlignment = null,
+                                reviewState = null, onReviewState = null,
                                 compact = false,
                                 tools = null }) {
   const [state, setState] = useState({ phase: "loading" });
@@ -432,6 +451,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   const [retry, setRetry] = useState(0);
   const [checkOpen, setCheckOpen] = useState(false);   // the screen-check list
   const [setupOpen, setSetupOpen] = useState(false);
+  const [localReview, setLocalReview] = useState({});
   // The pointer and the playhead both work in the TRACK column's own box,
   // never the lane row's: the row starts with the label column, and a
   // playhead measured against it could be dragged over the words "Stick"
@@ -497,11 +517,37 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   }, [video, state, anchorOffsetS, frameMap, clock]);
 
   const data = state.phase === "ready" ? state.data : null;
+  const review = reviewState || localReview;
+  const reviewLoading = !!onReviewState && reviewState == null;
+  const total = data?.frames || 1;
+  const lead = data?.lead_frames || 0;
+  const templateKey = onReviewState && !data?.template?.source?.revision
+    ? null : templateReviewKey(data?.template);
+  const savedOffset = review.template_offsets?.[templateKey];
+  const offset = Number.isInteger(savedOffset) ? savedOffset : 0;
+  const template = useMemo(() => templateOnAxis(data?.template, lead, offset), [data, lead, offset]);
+  const view = timelineWindow(review.zoom, total);
   const lanes = useMemo(
     () => (data ? lanesOf(data.runs, data.buttons) : []), [data]);
   const templateLanes = useMemo(
-    () => (data && data.template ? lanesOf(data.template.runs, data.buttons) : []),
-    [data]);
+    () => (template ? lanesOf(template.runs, data.buttons) : []), [data, template]);
+  // A delivered picture only moves the inspector/playhead. Generating paths
+  // visits every run, so retain this geometry until source/shift changes.
+  const curves = useMemo(() => {
+    if (!data) return {};
+    const ghostRuns = template?.runs || [];
+    const peak = speedPeak(data.runs, ghostRuns);
+    const reach = stickReach(data.stick_max, data.runs, ghostRuns);
+    const paths = (runs) => ({
+      x: curvePath(runs, (group) => stickPath(group, "x", reach)),
+      y: curvePath(runs, (group) => stickPath(group, "y", reach)),
+      speed: curvePath(runs, (group) => speedPath(group, peak)),
+    });
+    return { mine: paths(data.runs), template: paths(ghostRuns) };
+  }, [data, template]);
+  const loopWindow = useMemo(() => data ? mappedLoopWindow(review.loop, frameMap,
+    { ...clock, duration: Number.isFinite(video?.duration) ? video.duration : clock?.duration },
+    data.stretches, total) : null, [review.loop, frameMap, clock, data, video?.duration, total]);
 
   if (state.phase === "loading") {
     return html`<div class="input-timeline is-loading">Reading inputs…</div>`;
@@ -522,12 +568,10 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     </div>`;
   }
 
-  const total = data.frames || 1;
   // The lead-in: frames before the attempt's own first (the level entry to
   // the reset). FRAME 0 stays the attempt's start -- the lead draws as
   // negative numbers and a shaded band, so the attempt's own length (the
   // number his PB is graded on) reads unchanged.
-  const lead = data.lead_frames || 0;
   const attemptFrames = data.attempt_frames || (total - lead);
   const boundedClock = { ...clock, duration: Number.isFinite(video?.duration)
     ? video.duration : clock?.duration };
@@ -561,19 +605,28 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     if (!box) return;
     const rect = box.getBoundingClientRect();
     if (rect.width <= 0) return;
-    seek(Math.round(((event.clientX - rect.left) / rect.width) * total));
+    const next = Math.round(view.start + ((event.clientX - rect.left) / rect.width) * (view.end - view.start));
+    seek(Math.max(view.start, Math.min(view.end - 1, next)));
+  };
+
+  const updateReview = (patch) => {
+    if (reviewLoading) return;
+    if (onReviewState) onReviewState(patch);
+    else setLocalReview((old) => ({ ...old, ...patch }));
+  };
+  const shiftTemplate = (next) => {
+    if (!templateKey) return;
+    updateReview({ template_offsets: { ...review.template_offsets,
+      [templateKey]: Math.max(-1000000, Math.min(1000000, Math.round(next))) } });
   };
 
   const here = frameAt(data.runs, frame);
   const nowDoing = actionAt(data.actions, frame);
   const markers = data.markers || [];
   const lastMoment = momentAt(markers, frame);
-  const template = data.template && !data.template.error ? data.template : null;
   const there = template ? frameAt(template.runs, frame) : null;
   const thereDoing = template ? actionAt(template.actions, frame) : null;
-  const peak = speedPeak(data.runs, template ? template.runs : []);
-  const reach = stickReach(data.stick_max, data.runs, template ? template.runs : []);
-  const percent = (value) => `${(value / total) * 100}%`;
+  const percent = (value) => `${((value - view.start) / (view.end - view.start)) * 100}%`;
 
   // ONE lane per button, with the template's bars drawn BEHIND yours inside
   // it — which is what "drawn behind your own" means, and what two stacked
@@ -588,13 +641,13 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     return html`<div class="input-lane" key=${bit}>
       <span class="input-lane-name">${name}</span>
       <div class="input-lane-track">
-        ${(ghost ? ghost.bars : []).map((bar) => html`
+        ${(ghost ? ghost.bars : []).filter((bar) => spanInWindow(bar.start, bar.length, view)).map((bar) => html`
           <span class="input-bar is-template" key=${`t${bar.start}`}
-                style=${`left:${percent(bar.start)};width:${percent(bar.length)}`}
+                style=${spanInWindow(bar.start, bar.length, view)}
                 title=${`Template — ${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)`} />`)}
-        ${(mine ? mine.bars : []).map((bar) => html`
+        ${(mine ? mine.bars : []).filter((bar) => spanInWindow(bar.start, bar.length, view)).map((bar) => html`
           <button class="input-bar" key=${bar.start}
-                  style=${`left:${percent(bar.start)};width:${percent(bar.length)}`}
+                  style=${spanInWindow(bar.start, bar.length, view)}
                   onclick=${(event) => { event.stopPropagation(); seek(bar.start); }}
                   title=${`${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)`}
                   aria-label=${`${name} held from ${spanLabel(bar.start, bar.length, lead)}, ${bar.length} frames`} />`)}
@@ -631,11 +684,17 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         data.template.error
           ? html` — <span class="is-error">that template no longer loads:${" "}
               ${data.template.error}</span>`
-          : html` — ${data.template.author || "Uncredited"}. Both start at frame 0.
+          : html` — ${data.template.author || "Uncredited"}. ${offset === 0
+              ? "Both start at frame 0." : `Template shifted ${offset > 0 ? "+" : ""}${offset} frames.`}
               ${data.template.frames > total - lead
                 ? "The template continues beyond this attempt’s visible timeline."
                 : data.template.frames < attemptFrames ? "The template ends before your attempt." : ""}`}</span>
     </div>`}
+
+    <${TimelineReviewControls} templateKey=${templateKey} hasTemplate=${!!template}
+        offset=${offset} view=${view} total=${total} frame=${frame} lead=${lead}
+        loopWindow=${loopWindow} trackColumn=${trackColumn} loading=${reviewLoading}
+        onShift=${shiftTemplate} onChange=${updateReview} />
 
     ${template && html`<div class="input-overlay-controls">
       <div class="input-overlay-legend"><span class="is-attempt">Your attempt — solid</span>
@@ -657,46 +716,50 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
          onpointermove=${(event) => { if (event.buttons & 1) seekFromPointer(event); }}
          role="group" aria-label="Input lanes">
       <div class="input-track-column" ref=${trackColumn}>
-        ${lead > 0 && html`<div class="input-lead-shade"
-            style=${`width:${percent(lead)}`}></div>`}
-        ${frame != null && html`<div class="input-playhead" style=${`left:${percent(frame)}`}></div>`}
+        ${spanInWindow(0, lead, view) && html`<div class="input-lead-shade"
+            style=${spanInWindow(0, lead, view)}></div>`}
+        ${loopWindow && spanInWindow(loopWindow.start, loopWindow.end - loopWindow.start, view) && html`
+          <div class=${`input-loop-shade ${review.loop.enabled ? "is-enabled" : ""}`}
+              style=${spanInWindow(loopWindow.start, loopWindow.end - loopWindow.start, view)}></div>`}
+        ${frame != null && frame >= view.start && frame < view.end && html`
+          <div class="input-playhead" style=${`left:${percent(frame)}`}></div>`}
       </div>
       <div class="input-lane is-stick">
         <span class="input-lane-name">Stick</span>
         <div class="input-lane-track">
-          <svg viewBox=${`0 0 ${total} ${STICK_HEIGHT}`} height=${STICK_HEIGHT}
+          <svg viewBox=${`${view.start} 0 ${view.end - view.start} ${STICK_HEIGHT}`} height=${STICK_HEIGHT}
                preserveAspectRatio="none" aria-hidden="true">
             <line x1="0" y1=${STICK_HEIGHT / 2} x2=${total} y2=${STICK_HEIGHT / 2}
                   class="stick-axis" vector-effect="non-scaling-stroke" />
             ${template && overlayVisible("stick") && html`
               <path class="stick-line is-x is-template" vector-effect="non-scaling-stroke"
-                    d=${curvePath(template.runs, (runs) => stickPath(runs, "x", reach))} />
+                    d=${curves.template.x} />
               <path class="stick-line is-y is-template" vector-effect="non-scaling-stroke"
-                    d=${curvePath(template.runs, (runs) => stickPath(runs, "y", reach))} />`}
+                    d=${curves.template.y} />`}
             <path class="stick-line is-x" vector-effect="non-scaling-stroke"
-                  d=${curvePath(data.runs, (runs) => stickPath(runs, "x", reach))} />
+                  d=${curves.mine.x} />
             <path class="stick-line is-y" vector-effect="non-scaling-stroke"
-                  d=${curvePath(data.runs, (runs) => stickPath(runs, "y", reach))} />
+                  d=${curves.mine.y} />
           </svg>
         </div>
       </div>
       ${((data.actions || []).length > 0 || (template && template.actions?.length > 0)) && html`
-        <${ActionRow} name="Mario" spans=${data.actions || []} percent=${percent}
+        <${ActionRow} name="Mario" spans=${data.actions || []} view=${view}
             templateSpans=${template && overlayVisible("actions") ? template.actions || [] : []}
-            seek=${seek} total=${total} lead=${lead} />`}
+            seek=${seek} lead=${lead} />`}
       ${markers.length > 0 && html`
-        <${MomentRow} markers=${markers} total=${total} percent=${percent}
+        <${MomentRow} markers=${markers} total=${total} view=${view}
             seek=${seek} lead=${lead} />`}
       <div class="input-lane is-speed">
         <span class="input-lane-name">Speed</span>
         <div class="input-lane-track">
-          <svg viewBox=${`0 0 ${total} ${SPEED_HEIGHT}`} height=${SPEED_HEIGHT}
+          <svg viewBox=${`${view.start} 0 ${view.end - view.start} ${SPEED_HEIGHT}`} height=${SPEED_HEIGHT}
                preserveAspectRatio="none" aria-hidden="true">
             ${template && overlayVisible("speed") && html`
               <path class="speed-line is-template" vector-effect="non-scaling-stroke"
-                    d=${curvePath(template.runs, (runs) => speedPath(runs, peak))} />`}
+                    d=${curves.template.speed} />`}
             <path class="speed-line" vector-effect="non-scaling-stroke"
-                  d=${curvePath(data.runs, (runs) => speedPath(runs, peak))} />
+                  d=${curves.mine.speed} />
           </svg>
         </div>
       </div>
