@@ -23,7 +23,7 @@ import { watchVideoPicture } from "../videopicture.js";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { fmtIgtShort } from "../format.js";
-import { ControllerPanel, FacingDial, stickPhrase } from "./controllerpanel.js";
+import { ControllerPanel, FacingDial, heldNames, stickPhrase, stickWords } from "./controllerpanel.js";
 import { SetupModal } from "./setupmodal.js";
 
 const html = htm.bind(h);
@@ -167,7 +167,8 @@ function stickPath(runs, axis, reach) {
 // form, so this surface cannot spell a time differently from the rest.
 const timeLabel = fmtIgtShort;
 
-function spanLabel(start, length) {
+function spanLabel(start, length, lead = 0) {
+  start -= lead;
   return length === 1
     ? timeLabel(start)
     : `${timeLabel(start)}–${timeLabel(start + length - 1)}`;
@@ -175,7 +176,7 @@ function spanLabel(start, length) {
 
 // Both action tracks occupy the SAME lane. The template's outlined band is
 // taller, so identical timing still leaves an amber edge around your action.
-function ActionRow({ name, spans, templateSpans = [], percent, seek, total = 0 }) {
+function ActionRow({ name, spans, templateSpans = [], percent, seek, total = 0, lead = 0 }) {
   const draw = (span, ghost) => html`
     <button class=${`action-span group-${span.group} ${ghost ? "is-template" : ""}`}
         key=${`${ghost ? "t" : "a"}${span.start}`}
@@ -184,8 +185,8 @@ function ActionRow({ name, spans, templateSpans = [], percent, seek, total = 0 }
           : `left:${percent(span.start)};width:${percent(span.length)};`
             + `max-width:calc(100% - ${percent(span.start)})`}
         onclick=${(event) => { event.stopPropagation(); seek(span.start); }}
-        title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length)} (${span.length}f)`}
-        aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length)}`}>
+        title=${`${ghost ? "Template — " : ""}${span.label} — ${spanLabel(span.start, span.length, lead)} (${span.length}f)`}
+        aria-label=${`${ghost ? "Template " : ""}${span.label} from ${spanLabel(span.start, span.length, lead)}`}>
       <span class="action-span-name">${span.label}</span>
     </button>`;
   return html`<div class=${`input-lane is-actions ${templateSpans.length ? "has-template" : ""}`}>
@@ -294,9 +295,24 @@ export function mappedTimeAtFrame(frame, frameMap, clock, stretches) {
   if (frame == null || !frameMap || !frameMap.length) return null;
   const raw = gameFrameOf(frame, stretches);
   if (raw === null || trackFrameOf(raw, stretches) !== frame) return null;
-  // The FIRST video frame showing this game frame -- or, when the capture
-  // skipped it entirely, the first one past it (his 26, 27, 27, 29 shape:
-  // frame 28's picture never existed, so its inputs show over 29's slot).
+  // Prefer the exact counter within one visit. A preceding epoch can have
+  // larger counters, so >= alone would seek there before finding this frame.
+  let first = null, matchedEpoch = null, epoch = 0, previous = null;
+  for (let slot = 0; slot < frameMap.length; slot += 1) {
+    const shown = frameMap[slot];
+    if (shown == null) continue;
+    if (previous != null && shown < previous) epoch += 1;
+    if (shown === raw) {
+      if (matchedEpoch !== null && matchedEpoch !== epoch) return null;
+      if (first === null) first = slot;
+      matchedEpoch = epoch;
+    }
+    previous = shown;
+  }
+  if (first !== null) return timeOfSlot(first, clock);
+  // A skipped frame can choose the next capture only on an ascending map.
+  // Without an occurrence match, a reset makes that neighbor ambiguous.
+  if (epoch) return null;
   for (let slot = 0; slot < frameMap.length; slot += 1) {
     const shown = frameMap[slot];
     if (shown != null && shown >= raw) return timeOfSlot(slot, clock);
@@ -355,22 +371,27 @@ function frameMapNote(frameMapSource, inputAlignment, openSetup) {
 // PANEL frame it sits on -- "which 2 disagree?" answered on the surface, and
 // a click goes there. `disagreements` rows are
 // [slot, frame, track pad, stamped pad], each pad [stick_x, stick_y, buttons].
-function padOf(pad) {
-  return Array.isArray(pad) ? `${pad[0]},${pad[1]}` : "--";
+function padOf(pad, buttons) {
+  if (!Array.isArray(pad)) return "--";
+  const { vertical, horizontal } = stickWords(pad[0], pad[1]);
+  const stick = [vertical, horizontal].filter(Boolean).join(" ") || "neutral";
+  const held = heldNames(pad[2], buttons).join(" + ") || "no buttons";
+  return `${stick} · ${held}`;
 }
 
-function DisagreementList({ agreement, stretches, seek, lead }) {
+function DisagreementList({ agreement, stretches, seek, seekSlot, slotCount, lead, buttons }) {
   const rows = (agreement && agreement.disagreements) || [];
   if (!rows.length) return null;
   return html`<ul class="input-screen-check-list">
     ${rows.map(([slot, raw, tracked, stamped]) => {
       const axis = raw == null ? null : trackFrameOf(raw, stretches);
+      const hasSlot = Number.isInteger(slot) && slot >= 0 && slot < slotCount;
       return html`<li key=${slot}>
         <button type="button" class="input-screen-check-row"
-            disabled=${axis == null}
-            onclick=${() => axis != null && seek(axis + lead)}>
-          <span class="frame">${axis == null ? "outside the track" : `frame ${axis}`}</span>
-          <span>game <strong>${padOf(stamped)}</strong>${" "}\u00b7${" "}timeline${" "}<strong>${padOf(tracked)}</strong></span>
+            disabled=${seekSlot ? !hasSlot : axis == null}
+            onclick=${() => seekSlot ? seekSlot(slot) : axis != null && seek(axis)}>
+          <span class="frame">${axis == null ? "outside the track" : `frame ${axis - lead}`}</span>
+          <span>game <strong>${padOf(stamped, buttons)}</strong>${" "}·${" "}timeline${" "}<strong>${padOf(tracked, buttons)}</strong></span>
         </button>
       </li>`;
     })}
@@ -507,6 +528,14 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // number his PB is graded on) reads unchanged.
   const lead = data.lead_frames || 0;
   const attemptFrames = data.attempt_frames || (total - lead);
+  const boundedClock = { ...clock, duration: Number.isFinite(video?.duration)
+    ? video.duration : clock?.duration };
+  const slotCount = clock?.times?.length || frameMap?.length || 0;
+  const seekSlot = video ? (slot) => {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= slotCount) return;
+    if (!video.paused) video.pause();
+    video.currentTime = timeOfSlot(slot, boundedClock);
+  } : null;
   const seek = (next) => {
     const clamped = Math.max(0, Math.min(total - 1, next));
     if (video) {
@@ -514,9 +543,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       // reads the new time back on the next frame, so the two cannot
       // disagree even for a frame.
       if (!video.paused) video.pause();
-      const mapped = mappedTimeAtFrame(clamped, frameMap,
-        { ...clock, duration: Number.isFinite(video.duration) ? video.duration : clock?.duration },
-        data.stretches);
+      const mapped = mappedTimeAtFrame(clamped, frameMap, boundedClock, data.stretches);
       if (mapped !== null) {
         video.currentTime = mapped;
         return;
@@ -563,13 +590,13 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
         ${(ghost ? ghost.bars : []).map((bar) => html`
           <span class="input-bar is-template" key=${`t${bar.start}`}
                 style=${`left:${percent(bar.start)};width:${percent(bar.length)}`}
-                title=${`Template — ${name} ${spanLabel(bar.start, bar.length)} (${bar.length}f)`} />`)}
+                title=${`Template — ${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)`} />`)}
         ${(mine ? mine.bars : []).map((bar) => html`
           <button class="input-bar" key=${bar.start}
                   style=${`left:${percent(bar.start)};width:${percent(bar.length)}`}
                   onclick=${(event) => { event.stopPropagation(); seek(bar.start); }}
-                  title=${`${name} ${spanLabel(bar.start, bar.length)} (${bar.length}f)`}
-                  aria-label=${`${name} held from ${spanLabel(bar.start, bar.length)}, ${bar.length} frames`} />`)}
+                  title=${`${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)`}
+                  aria-label=${`${name} held from ${spanLabel(bar.start, bar.length, lead)}, ${bar.length} frames`} />`)}
       </div>
     </div>`;
   };
@@ -594,7 +621,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       <button onclick=${() => setRetry((value) => value + 1)}>Retry</button>
     </p>`}
     ${checkOpen && html`<${DisagreementList} agreement=${padAgreement}
-        stretches=${data.stretches} seek=${seek} lead=${lead} />`}
+        stretches=${data.stretches} seek=${seek} seekSlot=${seekSlot}
+        slotCount=${slotCount} lead=${lead} buttons=${data.buttons} />`}
 
     ${data.template && html`<div class="input-template-note">
       <${Icon} name="bookmark" size=${13} />
@@ -654,7 +682,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       ${((data.actions || []).length > 0 || (template && template.actions?.length > 0)) && html`
         <${ActionRow} name="Mario" spans=${data.actions || []} percent=${percent}
             templateSpans=${template && overlayVisible("actions") ? template.actions || [] : []}
-            seek=${seek} total=${total} />`}
+            seek=${seek} total=${total} lead=${lead} />`}
       ${markers.length > 0 && html`
         <${MomentRow} markers=${markers} total=${total} percent=${percent}
             seek=${seek} lead=${lead} />`}
@@ -718,7 +746,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
           template: ${thereDoing.label}</span>`}
         ${lastMoment && html`<span class="input-inspector-moment"
             title="The last moment before this frame">
-          ${lastMoment.label}${" "}<span class="meta">at ${timeLabel(lastMoment.frame)}</span></span>`}
+          ${lastMoment.label}${" "}<span class="meta">at ${timeLabel(lastMoment.frame - lead)}</span></span>`}
       </div>
     </footer>
     ${typeof tools === "function" ? tools(data) : tools}

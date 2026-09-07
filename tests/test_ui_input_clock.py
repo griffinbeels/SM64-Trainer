@@ -184,6 +184,19 @@ def test_a_counter_restart_converts_through_its_own_stretch():
     assert run_function(BOTH, f"trackFrameOf(500, {stretches})") is None
 
 
+def test_seek_finds_a_lower_counter_after_a_disjoint_restart():
+    stretches = "[[0,1000,3],[3,50,2]]"
+    args = f"[1000,1001,1002,50,51], {CFR}, {stretches}"
+    assert run_function(BOTH, f"mappedTimeAtFrame(4, {args})") == 4.5 / 60
+    assert run_function(BOTH, f"mappedTimeAtFrame(3, {args})") == 3.5 / 60
+
+
+def test_seek_does_not_choose_a_repeated_or_missing_counter_across_epochs():
+    args = f"[100,101,99,100,101], {CFR}, [[0,99,5]]"
+    assert run_function(BOTH, f"mappedTimeAtFrame(1, {args})") is None
+    assert run_function(BOTH, f"mappedTimeAtFrame(3, {args})") is None
+
+
 def test_pictures_outside_the_track_do_not_borrow_its_first_or_last_input():
     lead = "[80], 60, [[0, 90, 20]], 20"
     assert run_function(BOTH, f"mappedFrameAtTime(0.001, {lead})") is None

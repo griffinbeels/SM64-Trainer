@@ -6,7 +6,8 @@ import { InputTimeline } from "../../src/sm64_events/ui/components/inputtimeline
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alignment = null, inputSpan = undefined }) {
+async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alignment = null, inputSpan = undefined,
+                          data = {}, agreement = null }) {
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({
     attempt_id: 42, fps: 30, frames: 3, attempt_frames: 3, stretches,
     buttons: [[32768,"A"], [16384,"B"]], stick_max: 84, dead_zone: 8,
@@ -15,7 +16,7 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alig
       {start:0, length:1, buttons:32768, stick_x:40, stick_y:80, yaw:0, speed:5},
       {start:1, length:1, buttons:16384, stick_x:-40, stick_y:80, yaw:100, speed:6},
       {start:2, length:1, buttons:32768, stick_x:60, stick_y:80, yaw:200, speed:7},
-    ],
+    ], ...data,
   }) })));
   let callback;
   const video = {currentTime: times[0] + .001, duration: times.at(-1) + .1,
@@ -26,6 +27,7 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alig
   };
   const props = {attemptId:42, video,
     frameMap: map, pictureIgt: igts, inputAlignment: alignment, inputSpan,
+    padAgreement: agreement,
     frameMapSource: map ? "plugin" : null, clock:{times}};
   const view = render(h(InputTimeline, props));
   await waitFor(() => expect(view.container.querySelector(".input-inspector")).not.toBeNull());
@@ -108,4 +110,37 @@ test("clicking mapped input still seeks its encoded picture", async () => {
   fireEvent.click(view.container.querySelector("button.input-bar"));
   expect(view.video.currentTime).toBeGreaterThanOrEqual(0);
   expect(view.video.currentTime).toBeLessThan(.1);
+});
+
+test("discrepancies seek their picture slot and display both buttons and attempt frames", async () => {
+  const view = await timeline({map:[100,101,100], times:[0,.1,.2],
+    data:{lead_frames:1},
+    agreement:{pictures:3, agree:2, disagreements:[[2,100,[0,0,32768],[0,0,16384]]]}});
+  fireEvent.click(view.container.querySelector(".input-screen-check"));
+  const row = view.container.querySelector(".input-screen-check-row");
+  expect(row.textContent).toContain("frame -1");
+  expect(row.textContent).toContain("game neutral · B");
+  expect(row.textContent).toContain("timeline neutral · A");
+  fireEvent.click(row);
+  expect(view.video.currentTime).toBeGreaterThan(.2);
+  expect(view.video.currentTime).toBeLessThan(.3);
+});
+
+test("padded action, input and moment labels share the attempt's zero", async () => {
+  const view = await timeline({map:[160,190], times:[0,.1], stretches:[[0,100,100]],
+    data:{frames:100, lead_frames:60, attempt_frames:40,
+      runs:[{start:90,length:1,buttons:32768,stick_x:40,stick_y:80,yaw:0,speed:5}],
+      actions:[{start:90,length:1,action:1,label:"Jump",group:"airborne"}],
+      markers:[{frame:90,label:"Grabbed the pole",type:"pole"}],
+      template:{name:"Example",frames:40,author:"Other player",
+        runs:[{start:90,length:1,buttons:32768,stick_x:40,stick_y:80,yaw:0,speed:5}],
+        actions:[{start:90,length:1,action:1,label:"Jump",group:"airborne"}]}}});
+  await view.present(1);
+  for (const selector of [".input-bar", ".action-span", ".moment-mark"]) {
+    for (const element of view.container.querySelectorAll(selector)) {
+      expect(element.title).toContain('01"00');
+      expect(element.title).not.toContain('03"00');
+    }
+  }
+  expect(view.container.querySelector(".input-inspector-moment").textContent).toContain('at 01"00');
 });
