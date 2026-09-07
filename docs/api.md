@@ -342,7 +342,7 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
 - `POST /api/attempts/{id}/replay` — cut or reuse the attempt's clip. Returns
   `{clip_url, duration_s, truncated, fps, game_fps, source, anchor_offset_s,
   attempt_start_slot, input_span, frame_map, frame_map_source, input_alignment,
-  picture_ids, picture_igt, pad_stamp_agreement,
+  picture_ids, picture_states, picture_igt, pad_stamp_agreement,
   video_start_s, frame_times, encode, feed_match, plugin_inexact_rows, saved_path}`.
   `source` is `buffer` or `saved`; `saved_path` names an existing saved copy.
   `fps` describes the encoded rate and `game_fps` is the 30 Hz game clock.
@@ -361,6 +361,10 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
   wall-clock anchor without claiming an input association.
   `picture_ids[k]` identifies the captured picture occurrence within this clip:
   heartbeat copies share an ID, separate visits to the same raw counter do not.
+  `picture_states[k]` is `{buttons, stick_x, stick_y, yaw}` from that validated
+  capture occurrence, or null when its pad is unavailable; the whole field is
+  null without a verified map. Yaw may be null independently. Mapped overlay
+  exports use this state with `frame_times` and `duration_s`, including holds.
   Null IDs remain individually selectable unknown pictures. Controls walk slots
   in order and seek inside their recorded intervals; they do not order raw
   counters or clamp a VFR seek to a 30 Hz grid.
@@ -373,7 +377,10 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
   `pad_stamp_agreement` is `{pictures, agree, rows, disagreements}` comparing
   captured RAM pads with stored inputs; each disagreement is
   `[slot, frame, track_pad, stamped_pad]`. This does not independently check
-  pixels or certify the plugin's picture/state association.
+  pixels or certify the plugin's picture/state association. Slot means decoded
+  video slot, not ledger row. Only represented exact captures with unambiguous
+  raw-frame track lookup are checked; dropped/inexact captures and repeated
+  counter occurrences cannot raise a displayed-picture disagreement.
   `feed_match` is `{frames, matched, repeats, unmatched, method: "source_pts",
   run_id}` for new cuts. `plugin_inexact_rows` counts unstamped/inexact ledger
   rows. Every read, including cached and saved clips, validates the retained

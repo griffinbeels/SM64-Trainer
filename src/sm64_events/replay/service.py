@@ -74,6 +74,27 @@ def _parse_utc(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def _picture_states(meta: dict) -> list | None:
+    """Project validated capture references; never resolve a repeated counter."""
+    slots = meta.get("state_rows")
+    if slots is None:
+        return None
+    rows = meta.get("picture_ledger") or []
+    states = []
+    for index in slots:
+        row = rows[index] if index is not None else {}
+        pad, mario = row.get("pad"), row.get("mario")
+        if (not isinstance(pad, (list, tuple)) or len(pad) != 3
+                or not all(type(value) is int for value in pad)):
+            states.append(None)
+            continue
+        yaw = (mario[1] if isinstance(mario, (list, tuple)) and len(mario) == 3
+               and type(mario[1]) is int else None)
+        states.append({"stick_x": pad[0], "stick_y": pad[1],
+                       "buttons": pad[2], "yaw": yaw})
+    return states
+
+
 def _open_explorer_select(path: Path) -> None:
     """Open File Explorer with the file pre-selected. explorer.exe wants the
     /select,"path" form as ONE argument string; it always exits 1, so this is
@@ -379,6 +400,9 @@ class ReplayService:
                 # Capture occurrence per slot, scoped to this clip. Heartbeats
                 # keep the same ID; revisiting a raw counter gets another ID.
                 "picture_ids": m.get("picture_rows"),
+                # Exporters use the same captured occurrence, including across
+                # repeated counters. A raw-frame lookup cannot recover this.
+                "picture_states": _picture_states(m),
                 # A capture-layer clip: the game's own timer per video
                 # slot, from the stamps (None where a slot has none).
                 "picture_igt": m.get("picture_igt"),
@@ -586,10 +610,22 @@ class ReplayService:
             return
         pictures = agree = 0
         disagreements = []
-        for slot, row in enumerate(meta.get("picture_ledger") or []):
+        rows = meta.get("picture_ledger") or []
+        slots = meta.get("state_rows") or []
+        # Only represented exact captures describe a displayed picture. Ledger
+        # rows can also include dropped grabs and inexact/unknown slots.
+        occurrences = {}
+        for index in slots:
+            if index is not None:
+                occurrences.setdefault(rows[index].get("frame"), set()).add(index)
+        for slot, index in enumerate(slots):
+            if index is None:
+                continue
+            row = rows[index]
             stamped = row.get("pad")
             frame = row.get("frame")
-            if stamped is None or frame is None or frame not in pads:
+            if (not row.get("exact") or stamped is None or frame is None
+                    or frame not in pads or len(occurrences[frame]) != 1):
                 continue
             pictures += 1
             tracked = list(pads[frame])
@@ -604,7 +640,7 @@ class ReplayService:
         # of a number against itself. His 2026-09-01 ruling on the reader's
         # chip: "checked 1207/1207" was "literally and objectively wrong".
         meta["pad_stamp_agreement"] = {"pictures": pictures, "agree": agree,
-                                       "rows": len(meta.get("picture_ledger") or []),
+                                       "rows": len(slots),
                                        "disagreements": disagreements}
         if pictures and agree != pictures:
             log.warning("pad stamps disagree with the track on %d of %d pictures",

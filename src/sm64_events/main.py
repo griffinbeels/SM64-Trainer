@@ -4,6 +4,7 @@ import json
 import logging
 import shutil
 import sys
+from threading import RLock
 
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
@@ -297,6 +298,13 @@ def build():
     service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
     replay = None
     frame_stream = None
+    stream_lock = RLock()
+
+    def stream_header():
+        # Status polling shares the mapping lifetime with capture teardown.
+        with stream_lock:
+            return frame_stream.header() if frame_stream is not None else None
+
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
         codec = pick_video_codec()
@@ -336,25 +344,38 @@ def build():
         # THE CAPTURE LAYER (round 32 item 95): when the wrapper plugin inside
         # Project64 is presenting, every picture comes from it already stamped
         # with the game's own frame counter and pad (replay/pluginsource.py),
-        # and the desktop grab is not used. The stream is opened here so the
-        # address table -- from THIS layout, never from the plugin -- is in
-        # the header before the first frame is wanted; a machine with no
-        # layer just holds an idle mapping. Decided per attach: the layer is
-        # live when its heartbeat moves within a fifth of a second.
-        try:
-            from sm64_events.memory.addresses import RDRAM_FULL_SIZE
-            from sm64_events.replay.framestream import FrameStream
-            from sm64_events.replay.pluginsource import PluginVideoSource, table_for
-            frame_stream = FrameStream()
-            stamp_table = table_for(layout)
-            frame_stream.set_table([(offset, length) for _name, offset, length in stamp_table],
-                                   rdram_bytes=RDRAM_FULL_SIZE)
-        except Exception:
-            logging.getLogger("sm64.replay").exception(
-                "frame stream unavailable; desktop capture only")
+        # and the desktop grab is not used. Opening the mapping and writing
+        # its address table are recorder-owner operations: even creating an
+        # otherwise idle mapping can change the plugin's shared state.
+        from sm64_events.memory.addresses import RDRAM_FULL_SIZE
+        from sm64_events.replay.framestream import FrameStream
+        from sm64_events.replay.pluginsource import PluginVideoSource, table_for
+        stamp_table = table_for(layout)
+
+        def release_capture():
+            nonlocal frame_stream
+            with stream_lock:
+                owned, frame_stream = frame_stream, None
+                if owned is not None:
+                    try:
+                        owned.set_want_frames(False)
+                    finally:
+                        owned.close()
 
         def video_factory(win):
-            if frame_stream is None:
+            nonlocal frame_stream
+            # ReplayRecorder calls this only after acquiring the machine-wide
+            # capture lock. A viewer-only server must make zero mapping writes.
+            try:
+                with stream_lock:
+                    frame_stream = FrameStream()
+                    frame_stream.set_table(
+                        [(offset, length) for _name, offset, length in stamp_table],
+                        rdram_bytes=RDRAM_FULL_SIZE)
+            except Exception:
+                release_capture()
+                logging.getLogger("sm64.replay").exception(
+                    "frame stream unavailable; desktop capture only")
                 return DwmSurfaceVideoSource(win, fps=replay_cfg.fps)
             import time as _time
             from sm64_events.replay.pluginsource import DesktopUntilLayerPresents, pictures_flow
@@ -394,7 +415,8 @@ def build():
             fallback_audio_factory=lambda pid: SystemAudioSource(
                 rate=replay_cfg.audio_rate, pid=pid),
             codec=codec,
-            video_sink_factory=video_sink_factory)
+            video_sink_factory=video_sink_factory,
+            release_capture=release_capture)
         replay = ReplayService(
             cfg=replay_cfg, recorder=recorder,
             extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
@@ -510,7 +532,7 @@ def build():
         registry=WinRegistry(), processes=WinProcesses(),
         settings_path=capture_layer_settings_path(),
         dll_source=bundled_plugin_dll(),
-        stream_header=(frame_stream.header if frame_stream is not None else None))
+        stream_header=stream_header)
     try:
         # A build carrying a newer layer than the one installed refreshes it
         # while Project64 is closed -- the update path for every plugin fix,

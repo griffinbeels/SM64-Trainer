@@ -10,6 +10,7 @@ paths:
   - "src/sm64_events/replay/framestream.py"
   - "src/sm64_events/replay/oracleread.py"
   - "src/sm64_events/replay/ledger.py"
+  - "src/sm64_events/replay/picturearchive.py"
   - "src/sm64_events/replay/ffmpeg_sink.py"
   - "src/sm64_events/replay/media.py"
   - "src/sm64_events/replay/ring.py"
@@ -20,6 +21,7 @@ paths:
   - "src/sm64_events/replay/navigation.py"
   - "src/sm64_events/ui/frame.js"
   - "src/sm64_events/ui/videopicture.js"
+  - "src/sm64_events/ui/replaykeys.js"
   - "src/sm64_events/ui/components/replay.js"
   - "src/sm64_events/ui/components/inputtimeline.js"
   - "src/sm64_events/ui/components/attemptdrawer.js"
@@ -36,7 +38,7 @@ symptom vanishes) — the earliest hop whose correction prevents the failure is
 the one to fix.
 
 - **Value:** the game frame a video picture shows, and therefore the pad the input timeline's panel draws beside that picture.
-- **Captured identity:** the frame counter THE CAPTURE LAYER (`plugin/gfxwrap`) copied out of RDRAM inside Project64 at ProcessDList. `exact` means one display list since present; it does not independently prove which pixels were returned. The feed-to-clip timestamp join and picture-lag convention still require the independent witness.
+- **Captured identity:** the counter and state copied by the capture layer inside Project64 at ProcessDList. `exact` means one display list since present; it does not independently prove returned pixels. Source-PTS transport tests and three independently decoded live timer/pad witnesses support the current same-row projection. The older predecessor convention was rejected; these witnesses do not certify untested renderers.
 - **The independent witness:** THE ORACLE (`replay/oracleread.py`, `tools/score_oracle.py --attempt N`) — the frame number Usamune's HUD memory display of `0x8032D5D4` prints into the picture, read map-free through the +1 rule. It never ships to a user; it is how any claim about the map is settled.
 - **Sink:** the panel under the timeline (FRAME n / N, the stick box, the button chips) on the picture the `<video>` is presenting.
 - **Clock path:** `MediaRun` retains an encoder's first-picture origin and unique run ID. The sink assigns monotonic 90 kHz video PTS, preserves them through NUT/TS, and records each actual PTS with its captured row. The cut subtracts an explicit integer source tick; its `source_pts` restores that tick to each decoded slot. `feed_map` looks up `(run_id, source_pts)` exactly, without fitting a bias. `picture_rows` retains the matched occurrence, and `state_rows` resolves its state without crossing a counter reset. This proves media association only; the plugin's picture/state interpretation is a separate witness.
@@ -324,3 +326,31 @@ behaviors; the real-browser barcode test checks pixels AND IGT on every step.
 This boundary does not resolve the input store's overlapping epochs, missing
 lead-axis samples, cached historical maps, or the plugin's picture/state lag.
 Those are distinct upstream identity requirements, not reasons to guess here.
+
+## Final-review regressions — 2026-09-07
+
+- Temporary observation-spool failures must produce missing input provenance,
+  not terminate polling. Creation, writes and finalization are separate failure
+  sites (`tests/test_inputs_wrap_failures.py`). A read outage that splits source
+  identity remains ambiguous even if observed counters later increase.
+- The capture mapping/address table and scratch initialization belong to the
+  recorder lock owner. A losing viewer cannot mutate shared capture state or
+  erase footage. Composition tests use inert OS/plugin adapters and exercise
+  two owners with different address tables (`tests/test_composition.py`).
+- A fixed 63,000-row ledger discarded identity while whole-session footage was
+  still available. Scratch identity now follows retained video, with bounded
+  memory and eviction tied to removed source intervals. Its retention tests
+  use synthetic timestamps and tiny data, not hours of live capture.
+- Mapped exports retain captured states, VFR timestamps and final holds. Raw
+  counters cannot select source state across resets. Discrepancy evidence also
+  names decoded slots: unrepresented captures and ambiguous raw-only lookups
+  cannot implicate a displayed picture (`tests/test_replay_display_evidence.py`).
+- Reset seeks previously selected an earlier high counter through `>=`; the
+  unique lower-counter occurrence now wins. One active replay owns keyboard
+  shortcuts when several drawers are open. Padded labels subtract lead exactly
+  once, while discrepancy clicks use the decoded slot directly. The real-browser
+  two-drawer regression checks independent picture barcodes and both widths.
+
+Capture-demand cleanup, the expiring plugin consumer lease and direct GL state
+restoration are independently reviewed lifecycle fixes. They do not establish
+the cause of Griffin's intermittent physical monitor flash.

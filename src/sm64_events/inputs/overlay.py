@@ -22,11 +22,10 @@ states and their actual intervals, including the final hold. Plain tracks
 still use the game's uniform clock. A raw counter alone cannot identify a
 picture after a save-state reset.
 
-**The alignment is measured, not assumed.** The clip is captured off the
-emulator window on a wall clock while inputs are sampled from RAM on the frame
-counter, so "frame 0 is frame 0" is a claim. `score_overlay_alignment` is the
-gate: record a clip with Usamune's own input display turned on, and score our
-overlay against Usamune's pixels in that same footage.
+**Picture state comes from the validated replay view.** A captured picture's
+source identity joins its pixels to its pad stamp. The independent live check
+compares that result with Usamune's input display in the same footage; a plain
+track export makes no claim about its alignment with an external recording.
 """
 from dataclasses import dataclass, replace
 import math
