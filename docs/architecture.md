@@ -1395,7 +1395,20 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-06 for supported Sheet peaks: **46,385 lines,
+Latest reading, 2026-09-06 after input timeline integration: **54,638 lines,
+1,337 public names, 40.9 lines per public name, 63 pass-through (4.7%)**.
+The ten added forwarders are format/resource boundaries: input read-time
+formatting and closure; action-group lookup; buffer/host integer conversion;
+encoder flush; frame-stream demand and heartbeat writes; and the archive's
+two time-window queries. Their callers use the owning interfaces rather than
+SQLite statements or shared-memory offsets. This measurement establishes no
+need for another restructuring pass. `replay/padread.py` enters the oversized
+list at 1,067 lines; it is the offline pixel-reading instrument, separate from
+runtime picture association. The runtime's source identity, evidence retention,
+and live acceptance contracts are in the
+[input timeline chain](../.claude/rules/chain-input-timeline-frame.md).
+
+Previous reading, 2026-09-06 for supported Sheet peaks: **46,385 lines,
 1,074 public names, 43.2 lines per public name, 53 pass-through (4.9%)**.
 The forwarder count is unchanged. The frame curve and the calibrated strategy
 signature own separate calculations; real Python/JS parity tests cover the
