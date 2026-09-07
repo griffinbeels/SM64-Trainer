@@ -1745,12 +1745,49 @@ def _option_click(value: str) -> str:
             f".search-menu-option[data-value=\"{value}\"]').click()")
 
 
-def test_the_picker_takes_several_goals_and_keeps_the_panel_open():
+_HOLD_GOAL_RESPONSES = """(() => {
+  const original = window.fetch.bind(window);
+  window.goalWrites = [];
+  window.goalReplies = 0;
+  window.fetch = async (input, init) => {
+    const path = new URL(input, location.href).pathname;
+    if (path === '/api/scorecard/goal') {
+      window.goalWrites.push(JSON.parse(init.body));
+      if (window.goalWrites.length === 1) {
+        const response = FAIL_FIRST
+          ? new Response(JSON.stringify({detail: 'Goal save failed'}), {status: 503})
+          : await original(input, init);
+        await new Promise(resolve => { window.releaseGoal = resolve; });
+        window.goalReplies++;
+        return response;
+      }
+    }
+    const response = await original(input, init);
+    if (path === '/api/scorecard/goal') window.goalReplies++;
+    if (path === '/api/scorecard' && !window.releaseOldCard) {
+      await new Promise(resolve => { window.releaseOldCard = resolve; });
+      window.oldCardReleased = true;
+    }
+    return response;
+  };
+})()"""
+
+_PICKED_GOALS = ("[...document.querySelectorAll('.rank-page .scorecard-card "
+                 ".search-menu-option.is-picked')].map(el => el.dataset.value)")
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_the_picker_takes_several_goals_and_keeps_the_panel_open(fail_first):
     """Round 14, his design: "what if we could select multiple options
     (e.g., I could select 10 players plus a rank standard like Toad 1)."
     Two picks through the REAL panel: it must stay open between them (ten
     picks cannot cost ten trips through the trigger), mark what is on, and
-    store a `multi` goal whose sources are both."""
+    store a `multi` goal whose sources are both. The first PUT stays held
+    until both clicks land, so local input cannot depend on a server reply;
+    a pre-pick background GET is released last to test stale-read rejection.
+    A rejected first write must not discard the newer selection either."""
+    from test_ui_scorecard_auto_goal import _check_browser_errors
+
     with serve_ui() as base:
         with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
             page.goto(f"{base}/ui/index.html")
@@ -1762,28 +1799,73 @@ def test_the_picker_takes_several_goals_and_keeps_the_panel_open():
                 ".search-select-trigger').click()")
             page.wait_for(".rank-page .scorecard-card "
                           '.search-menu-option[data-value="division:Bronze:V"]')
+            page.evaluate(_HOLD_GOAL_RESPONSES.replace("FAIL_FIRST", json.dumps(fail_first)))
+            # The real WS staleness path starts a background card read. Its
+            # automatic-goal response predates both picks and arrives last.
+            urllib.request.urlopen(urllib.request.Request(
+                f"{base}/api/ranks/mode", data=b'{"mode":"pb"}', method="PUT",
+                headers={"Content-Type": "application/json"}), timeout=10).read()
+            _wait_until(page, "!!window.releaseOldCard")
 
             for value in ("division:Bronze:V", "division:Silver:III"):
                 page.evaluate(_option_click(value))
                 page.wait_ms(250)
 
             still_open = page.count(".rank-page .scorecard-card .search-menu")
-            picked = page.evaluate(
-                "Array.from(document.querySelectorAll('.rank-page "
-                ".scorecard-card .search-menu-option.is-picked'))"
-                ".map((el) => el.dataset.value)")
+            picked = page.evaluate(_PICKED_GOALS)
             label = page.evaluate(
                 "document.querySelector('.rank-page .scorecard-card "
                 ".search-select-value').textContent.trim()")
 
-        assert still_open == 1, "the panel must stay open while picking several"
-        assert sorted(picked) == ["division:Bronze:V", "division:Silver:III"], picked
-        assert label == "2 picked", label
+            assert still_open == 1, "the panel must stay open while picking several"
+            assert sorted(picked) == ["division:Bronze:V", "division:Silver:III"], picked
+            assert label == "2 picked", label
+            assert len(page.evaluate("window.goalWrites")) == 1, "writes must be ordered"
+            _wait_until(page, "!!window.releaseGoal")
+            page.evaluate("window.releaseGoal()")
+            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(2)")
+            page.evaluate("window.releaseOldCard()")
+            _wait_until(page, "window.oldCardReleased")
+            page.wait_ms(250)
+            assert sorted(page.evaluate(_PICKED_GOALS)) == sorted(picked)
+            assert page.count(".rank-page .scorecard-card .goal-pill") == 2
+            assert page.count(".rank-page .scorecard-card .inline-state.error") == 0
+            _check_browser_errors(page, base)
 
         card = _get_scorecard(base)
         assert card["goal"] == {"kind": "multi", "sources": [
             {"kind": "division", "tier": "Bronze", "division": "V"},
             {"kind": "division", "tier": "Silver", "division": "III"}]}
+
+
+def test_a_failed_goal_pick_reconciles_and_leaves_the_picker_ready_to_retry():
+    from test_ui_scorecard_auto_goal import _check_browser_errors
+
+    with serve_ui() as base:
+        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".log-list-card")
+            page.evaluate(_OPEN_RANK_TAB)
+            page.wait_for(".rank-page .scorecard-card .search-select-trigger")
+            page.evaluate("document.querySelector('.rank-page .scorecard-card "
+                          ".search-select-trigger').click()")
+            page.wait_for('.search-menu-option[data-value="division:Bronze:V"]')
+            page.evaluate(_HOLD_GOAL_RESPONSES.replace("FAIL_FIRST", "true"))
+            # This test holds only the rejected write, not its recovery read.
+            page.evaluate("window.releaseOldCard = () => {}")
+            page.evaluate(_option_click("division:Bronze:V"))
+            page.wait_for('.search-menu-option[data-value="division:Bronze:V"].is-picked')
+            _wait_until(page, "!!window.releaseGoal")
+            page.evaluate("window.releaseGoal()")
+            page.wait_for(".rank-page .scorecard-card .inline-state.error")
+            page.wait_for('.search-menu-option[data-value=""].is-picked')
+            assert _get_scorecard(base)["goal"]["kind"] == "automatic"
+            page.evaluate(_option_click("division:Silver:III"))
+            _wait_until(page, "window.goalReplies === 2")
+            _wait_until(page, "!document.querySelector('.rank-page .scorecard-card .inline-state.error')")
+            _check_browser_errors(page, base)
+        assert _get_scorecard(base)["goal"] == {
+            "kind": "division", "tier": "Silver", "division": "III"}
 
 
 def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
@@ -1814,7 +1896,10 @@ def test_the_legend_names_every_pick_and_each_dot_wears_its_pick_colour():
             page.wait_for(".rank-page .scorecard-card "
                           '.search-menu-option[data-value="custom:alpha"]')
             page.evaluate(_option_click("custom:alpha"))   # beta is already on
-            page.wait_ms(400)
+            # The picker updates locally; the legend and attribution arrive
+            # with the computed card after the goal write has completed.
+            page.wait_for(".rank-page .scorecard-card .goal-pill:nth-child(2)")
+            page.wait_for(".rank-page .scorecard-card .score-line-source")
 
             state = page.evaluate(
                 "(() => {"

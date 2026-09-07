@@ -233,8 +233,8 @@ def library_ladders(payload: dict, rows: dict, qualified=()) -> dict:
     reads the CURRENT payload every time the library changes, so the layer
     follows the sheet rather than a release.
 
-    Vetted ladders still win on read (`RankStandards.ladders` merges
-    fitted UNDER vetted), so nothing the community published moves.
+    Current fits supply the foundation on read. Explicit user edits survive
+    per cutoff; unchanged materialized seed defaults yield to the Sheet.
     Shared 100-coin entities use route-qualified Sheet names, preserving
     distinct rows without inventing an exit-star variant. First fitted
     row per name wins, so a repeated name inside one

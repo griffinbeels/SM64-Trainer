@@ -43,14 +43,44 @@ def _seed_version(d: dict) -> int:
     return v if isinstance(v, int) else 0
 
 
+def _preserve_legacy_edits(stored: dict, seed: dict) -> bool:
+    """Remember detectable manual edits before a future bundled seed changes.
+
+    Only a matching seed version supplies a trustworthy baseline. An older
+    unmarked file cannot distinguish a user edit from a changed seed cutoff,
+    so that case retains the existing reconciliation behavior.
+    """
+    if _seed_version(stored) != _seed_version(seed):
+        return False
+    changed = False
+    for ek, entity in stored.get("entities", {}).items():
+        baseline = seed.get("entities", {}).get(ek, {})
+        for layer, override in (("strategies", "sheet_overrides"),
+                                ("jp_strategies", "sheet_jp_overrides")):
+            for strat, ladder in entity.get(layer, {}).items():
+                if strat not in baseline.get("strategies", {}):
+                    continue
+                seeded = baseline.get(layer, {}).get(strat, {})
+                existing = entity.get(override, {}).get(strat, {})
+                edits = {rank: value for rank, value in ladder.items()
+                         if (rank not in seeded or value != seeded[rank])
+                         and rank not in existing}
+                if edits:
+                    entity.setdefault(override, {}).setdefault(strat, {}).update(edits)
+                    changed = True
+    return changed
+
+
 def _reconcile(stored: dict, seed: dict) -> dict:
     """Bring an older stored seed up to a newer bundled one. The bundled seed
     wins for community data (strategies/times, videos, jp_strategies, clock, new
     entities/strats); user-CREATED entities/strats (absent from the seed) are
     preserved -- their base ladder AND their JP overlay (`jp_strategies` is
     also where the standards editor writes a typed JP time, 2026-08-15). A JP
-    time typed onto a SEEDED strategy loses to the seed exactly as a typed US
-    time on it does. Returns a new dict (does not mutate inputs).
+    time without explicit edit provenance on a SEEDED strategy loses to the
+    seed, as an unmarked US time does. Explicit cutoff edits survive in their
+    own overlays, even when the typed number equals a seed value. Returns a
+    new dict (does not mutate inputs).
 
     KNOWN GAP (found 2026-07-23, not yet fixed): this does not clear the
     `deleted_strats` tombstone KV (storage-side, see tracking/service.py
@@ -81,8 +111,9 @@ def _reconcile(stored: dict, seed: dict) -> dict:
             oent[ek].setdefault("exit_variants", {}).setdefault(label, star)
         if se.get("user_videos"):                      # hand-attached per-cutoff
             oent[ek]["user_videos"] = json.loads(json.dumps(se["user_videos"]))
-        if se.get("sheet_overrides"):
-            oent[ek]["sheet_overrides"] = json.loads(json.dumps(se["sheet_overrides"]))
+        for layer in ("sheet_overrides", "sheet_jp_overrides"):
+            if se.get(layer):
+                oent[ek][layer] = json.loads(json.dumps(se[layer]))
     return out
 
 
@@ -95,10 +126,10 @@ def _reconcile(stored: dict, seed: dict) -> dict:
 # already AT v6 never reconciles again, so no version bump can reach it.
 # Measured 2026-09-01 on all three live files (this worktree v6, main v5, the
 # installed exe v5): each held the stale copy, byte-equal to the ladder pinned
-# here. The pinned value IS the guard -- a ladder he has since typed over is
-# his, whatever its name, and stays. Pinned rather than compared against the
-# seed's CURRENT new-home ladder because a user who skips from v5 straight to
-# a seed where xcams has moved the Under-21 cutoffs would keep the stale copy
+# here. The pinned value guards unmarked data; explicit cutoff edits also
+# keep the strategy, even when they equal that value. Pinned rather than
+# compared against the seed's CURRENT new-home ladder because a user who skips
+# from v5 straight to a seed where xcams has moved the Under-21 cutoffs would keep the stale copy
 # forever. `tests/test_ranks_standards.py` checks every row against the
 # bundled seed, so a row cannot outlive the move it describes.
 SEED_MOVES = {
@@ -110,9 +141,10 @@ SEED_MOVES = {
 
 def _repair_moved_strats(data: dict) -> bool:
     """Drop each SEED_MOVES strategy from its old entity while its ladder is
-    still the pinned stale one, taking the community data filed under that
-    name (JP overlay, videos, clips) with it and carrying a hand-attached
-    video to the new home. Runs on EVERY load, after any reconcile, because
+    still the pinned stale one with no explicit cutoff edits, taking the
+    community data filed under that name (JP overlay, videos, clips) with it.
+    Carries a hand-attached video to the new home. Runs on EVERY load, after
+    any reconcile, because
     the stale copy survives an equal-version load untouched. Mutates `data`;
     True when anything changed, so the caller writes the file back once."""
     changed = False
@@ -120,6 +152,11 @@ def _repair_moved_strats(data: dict) -> bool:
     for (old_ek, strat), (new_ek, stale_ladder) in SEED_MOVES.items():
         old = entities.get(old_ek) or {}
         if old.get("strategies", {}).get(strat) != stale_ladder:
+            continue
+        # An explicit edit can equal the old seed value. That provenance is
+        # stronger than numeric equality, so the old name is now user data.
+        if (old.get("sheet_overrides", {}).get(strat)
+                or old.get("sheet_jp_overrides", {}).get(strat)):
             continue
         del old["strategies"][strat]
         for community in ("jp_strategies", "videos", "clips"):
@@ -141,12 +178,12 @@ class RankStandards:
         self.path = Path(path)
         self.seed_path = Path(seed_path) if seed_path else None
         # Ladders derived from the Ultimate Sheet, kept in their OWN file and
-        # merged only on READ. That is what makes "a fitted ladder never
-        # overwrites a vetted one" structural rather than a rule a test has to
-        # remember: nothing here can write into `self._data`, so `save()`
-        # cannot spill sheet-derived data into the user's standards file.
+        # merged only on READ. A current fit supplies the foundation; inherited
+        # seed numbers yield to it while genuine user edits overlay individual
+        # cutoffs. Nothing copies a fit into the user's saved standards.
         self.sheet_path = Path(sheet_path) if sheet_path else None
         self._data = {"version": 1, "entities": {}}
+        self._seed = {"entities": {}}
         self._sheet = {}
         self._sheet_jp = {}
         self._sheet_estimates = {}
@@ -183,9 +220,10 @@ class RankStandards:
         self._load_sheet()
         data = self._read_valid(self.path)
         seed = self._read_valid(self.seed_path)
+        self._seed = seed or {"entities": {}}
         if data is None:
             if seed is not None:
-                self._data = seed
+                self._data = json.loads(json.dumps(seed))
                 self._materialize()                    # write seed into the data dir
                 return
             _log.warning("no usable rank standards at %s; starting empty", self.path)
@@ -202,8 +240,9 @@ class RankStandards:
         # under the wrong entity (SEED_MOVES) -- the reconcile above is what
         # preserves it, and an already-current file never gets here otherwise.
         repaired = _repair_moved_strats(data)
+        preserved = seed is not None and _preserve_legacy_edits(data, seed)
         self._data = data
-        if reconciled or repaired:
+        if reconciled or repaired or preserved:
             self._materialize()
 
     def _materialize(self) -> None:
@@ -227,8 +266,23 @@ class RankStandards:
         """The user's own dict, for the paths that MUTATE it."""
         return self._entity(ek).get("strategies", {})
 
+    def _stored_cutoffs(self, ek, strat, layer) -> dict:
+        """Stored values that may overlay the current foundation.
+
+        A materialized seed is not an edit. With a Sheet foundation, only
+        differences from the seed are legacy manual changes; explicit edits
+        have their own overlays so typing the old seed value still counts.
+        Without a fit, the whole stored ladder remains authoritative.
+        """
+        stored = self._entity(ek).get(layer, {}).get(strat, {})
+        if not self.is_fitted(ek, strat):
+            return stored
+        baseline = self._seed["entities"].get(ek, {}).get(layer, {}).get(strat, {})
+        return {rank: value for rank, value in stored.items()
+                if rank not in baseline or value != baseline[rank]}
+
     def ladders(self, ek, version=None) -> dict:
-        """Every ladder for this entity, vetted merged over sheet-derived,
+        """Every ladder for this entity, user edits over the current Sheet fit,
         RESOLVED on `version` -- "us", "jp", or None for the grading version.
         On "jp" each strategy's annotated JP values overlay its base ladder
         rank by rank (`jp_deltas`); a strategy with no annotation is the same
@@ -238,9 +292,11 @@ class RankStandards:
         A new dict each call, deliberately: a caller that mutated the result
         would be editing a merge rather than the store, so the mutating paths
         take `_stored_ladders` instead."""
-        vetted = self._stored_ladders(ek)
-        fitted = self._sheet.get(ek)
-        base = dict(vetted) if not fitted else {**fitted, **vetted}
+        stored = self._stored_ladders(ek)
+        fitted = self._sheet.get(ek, {})
+        base = {strat: {**fitted.get(strat, {}),
+                        **self._stored_cutoffs(ek, strat, "strategies")}
+                for strat in dict.fromkeys([*fitted, *stored])}
         for strat, overrides in self._entity(ek).get("sheet_overrides", {}).items():
             base[strat] = {**base.get(strat, {}), **overrides}
         if self._resolve(version) != "jp":
@@ -268,9 +324,9 @@ class RankStandards:
     def apply_sheet_ladders(self, mapping: dict) -> None:
         """Merge user-assigned library ladders into the sheet-derived layer.
 
-        Same layer as the bundled ones on purpose: both are sheet-derived, both
-        lose to a vetted ladder, and neither can ever be written into the
-        user's standards file. Called again whenever an assignment changes, so
+        Same layer as the bundled ones on purpose: both are sheet-derived,
+        both supply the foundation beneath user edits, and neither is copied
+        into the user's standards file. Called whenever an assignment changes, so
         it REPLACES what it added last time rather than accumulating."""
         self._load_sheet()
         self._sheet_estimates = {}
@@ -290,25 +346,25 @@ class RankStandards:
                 if self.is_fitted(ek, name)}
 
     def is_fitted(self, ek, strat) -> bool:
-        """Whether this ladder came from the sheet rather than the community's
-        vetted standards -- what a surface needs to say so."""
-        return strat in self._sheet.get(ek, {}) and strat not in self._stored_ladders(ek)
+        """Whether this strategy has a Sheet foundation, including seeded names."""
+        return strat in self._sheet.get(ek, {})
 
     def fitted_strategies(self, ek) -> list:
-        return [s for s in self._sheet.get(ek, {}) if s not in self._stored_ladders(ek)]
+        return list(self._sheet.get(ek, {}))
 
     def jp_deltas(self, ek, strat) -> dict:
         """{rank: JP seconds} where the JP time is ANNOTATED as different.
-        Two annotation sources, merged RANK BY RANK: the sheet layer's fitted
-        JP ladder underneath, the user's own file on top -- the vetted seed's
-        sparse `jp_strategies` and every JP time typed into the standards
-        editor both live there. Per rank rather than whole-ladder, so one
+        Sources merge RANK BY RANK: the Sheet's fitted JP ladder underneath,
+        legacy manual changes and explicitly typed JP times on top. Unchanged
+        seed annotations yield to a Sheet foundation just like US cutoffs.
+        Per rank rather than whole-ladder, so one
         edited JP rank on a sheet-fitted strategy keeps the other fitted JP
         ranks instead of hiding them. Empty means no annotated difference,
         and the base ladder applies to BOTH versions (user's rule,
         2026-08-07: combined unless a difference is written down)."""
         return {**self._sheet_jp.get(ek, {}).get(strat, {}),
-                **self._entity(ek).get("jp_strategies", {}).get(strat, {})}
+                **self._stored_cutoffs(ek, strat, "jp_strategies"),
+                **self._entity(ek).get("sheet_jp_overrides", {}).get(strat, {})}
 
     def has_jp_ladder(self, ek, strat) -> bool:
         return bool(self.jp_deltas(ek, strat))
@@ -319,15 +375,15 @@ class RankStandards:
         return [strat for strat in self.ladders(ek, "us") if self.jp_deltas(ek, strat)]
 
     def clearable_jp_strategies(self, ek) -> list:
-        """The strategies whose JP overlay lives in the USER's file (the vetted
-        seed's annotations and every typed JP time both do) -- the ones
-        `clear_jp` can actually drop. A sheet-fitted JP ladder is not among
-        them; the editor's "JP differs" checkbox reads THIS to know whether
-        unticking would do anything, rather than intersecting two lists that
-        answer different questions (whole-branch review, 2026-08-15)."""
-        return [strat for strat, overlay
-                in self._entity(ek).get("jp_strategies", {}).items()
-                if overlay and strat in self.ladders(ek, "us")]
+        """Strategies with an effective JP overlay that `clear_jp` can drop.
+
+        Inherited seed annotations count only without a Sheet foundation;
+        explicit edits and legacy manual changes count in either case. The
+        Sheet's JP ladder is read-only and never makes a strategy clearable.
+        """
+        explicit = self._entity(ek).get("sheet_jp_overrides", {})
+        return [strat for strat in self.ladders(ek, "us")
+                if explicit.get(strat) or self._stored_cutoffs(ek, strat, "jp_strategies")]
 
     def ladder_cs(self, ek, strat, version=None) -> dict:
         """The ladder a time on `version` grades against, in centiseconds --
@@ -447,10 +503,7 @@ class RankStandards:
         """Strategy names the bundled community seed defines for this entity —
         THE custom-vs-default distinction (the same one _reconcile uses).
         Seeded strats are community data: protected from full deletion."""
-        seed = self._read_valid(self.seed_path)
-        if seed is None:
-            return []
-        return list(seed["entities"].get(ek, {}).get("strategies", {}).keys())
+        return list(self._seed["entities"].get(ek, {}).get("strategies", {}))
 
     def cutoff_videos(self, ek, extra_clips=None, dead_urls=None, version=None) -> dict:
         """{strat: {rank: url}} — auto band videos (from clips) merged with the
@@ -495,12 +548,13 @@ class RankStandards:
         if rank not in RANK_NAMES or rank == "Iron":
             raise ValueError(f"unknown rank {rank!r}")
         layer = "jp_strategies" if self._resolve(version) == "jp" else "strategies"
-        # A hand edit of one derived cutoff overrides that cutoff only. The
-        # unedited thresholds keep following Sheet refreshes; fitted values
-        # are never copied into the user's standards file.
-        if layer == "strategies" and self.is_fitted(ek, strat):
-            layer = "sheet_overrides"
-        self._ensure(ek).setdefault(layer, {}).setdefault(strat, {})[rank] = float(seconds)
+        # Record intent even without a current fit: a later Sheet assignment
+        # must preserve an edit that happens to equal the old seed number.
+        override = "sheet_jp_overrides" if layer == "jp_strategies" else "sheet_overrides"
+        entity = self._ensure(ek)
+        if layer == "jp_strategies" or not self.is_fitted(ek, strat):
+            entity.setdefault(layer, {}).setdefault(strat, {})[rank] = float(seconds)
+        entity.setdefault(override, {}).setdefault(strat, {})[rank] = float(seconds)
         self.save()
 
     def clear_jp(self, ek, strat) -> None:
@@ -509,6 +563,7 @@ class RankStandards:
         versions again. A sheet-fitted JP ladder is not the user's to clear
         and stays (it lives in its own read-only layer)."""
         self._entity(ek).get("jp_strategies", {}).pop(strat, None)
+        self._entity(ek).get("sheet_jp_overrides", {}).pop(strat, None)
         self.save()
 
     def create_strategy(self, ek, strat, exit_star=None) -> str:
@@ -549,6 +604,7 @@ class RankStandards:
         # silently no-op and the strategy would still be there next load.
         self._stored_ladders(ek).pop(strat, None)
         self._entity(ek).get("sheet_overrides", {}).pop(strat, None)
+        self._entity(ek).get("sheet_jp_overrides", {}).pop(strat, None)
         self.user_videos(ek).pop(strat, None)
         # Its JP overlay goes with it -- found 2026-08-15 by the modal's own
         # test cleanup: without this a deleted JP-carrying strategy left an
@@ -581,9 +637,8 @@ class RankStandards:
         self.save()
 
     def reset_entity(self, ek) -> None:
-        seed = self._read_valid(self.seed_path) or {"entities": {}}
-        if ek in seed["entities"]:
-            self._data["entities"][ek] = seed["entities"][ek]
+        if ek in self._seed["entities"]:
+            self._data["entities"][ek] = json.loads(json.dumps(self._seed["entities"][ek]))
         else:
             self._data["entities"].pop(ek, None)
         self.save()

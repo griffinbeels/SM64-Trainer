@@ -500,7 +500,12 @@ if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head'), 150
   throw new Error('Returning from the runner did not render the Rank page');
 const head = document.querySelector('.leaderboard-card-head');
 if (head.getAttribute('aria-expanded') !== 'true') head.click();
-await waitFor(() => !!document.querySelector('.leaderboard-row'));
+// The header mounts before the cold community ratings request finishes.
+// A full parallel sweep can outlast the generic three-second wait; its
+// false result must never become a null.scrollIntoView layout "defect".
+if (!await waitFor(() => !!document.querySelector('.leaderboard-row'), 15000))
+  throw new Error('Leaderboard rows did not load: '
+    + (document.querySelector('.leaderboard-card-body')?.textContent || 'body absent'));
 document.querySelector('.leaderboard').scrollIntoView({block: 'start'});
 await sleep(400);   // the fold's open run must land before anything measures
 """)
@@ -522,7 +527,9 @@ if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head')
 if (!document.querySelector('.runner-page')) {
   const head = document.querySelector('.leaderboard-card-head');
   if (head.getAttribute('aria-expanded') !== 'true') head.click();   // closed by default
-  await waitFor(() => !!document.querySelector('.leaderboard-row'));
+  if (!await waitFor(() => !!document.querySelector('.leaderboard-row'), 15000))
+    throw new Error('Leaderboard rows did not load before runner setup: '
+      + (document.querySelector('.leaderboard-card-body')?.textContent || 'body absent'));
   const row = Array.from(document.querySelectorAll('.leaderboard-row'))
     .find((candidate) => !candidate.classList.contains('is-you'));
   if (row) row.click();

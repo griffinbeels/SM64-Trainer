@@ -153,10 +153,21 @@ def test_a_time_typed_by_hand_becomes_the_cards_personal_best(tmp_path):
             assert status and "is-ok" in status["cls"], (
                 f"the save reported {status!r}")
 
+            # Saved confirms persistence; the session refresh updates the PB
+            # and log asynchronously. Wait for those exact rendered values,
+            # not a delay or the editor's own echo of the typed time.
             landed = page.evaluate("""
-              (() => {
-                const el = document.querySelector('.log-card-pb, .pbtag, .log-card');
-                return el ? el.textContent : '';
+              (async () => {
+                const end = performance.now() + 15000;
+                while (performance.now() < end) {
+                  const pb = document.querySelector('.log-card .pbtag');
+                  const rows = [...document.querySelectorAll('.attempt-table tr')];
+                  if (pb?.textContent.includes('10"03')
+                      && rows.some(row => row.textContent.includes('10"03')))
+                    return pb.textContent;
+                  await new Promise(resolve => setTimeout(resolve, 40));
+                }
+                return document.querySelector('.log-card .pbtag')?.textContent || '';
               })()
             """)
             assert '0\'10"03' in landed, (

@@ -8,10 +8,10 @@ vetted ladder's Mario cutoff sits within a few centiseconds of its approach's
 sheet best, which is exactly how the fit measurement paired 204 of them at a
 median 0.33s apart.
 
-So: match by that proximity, let the vetted ladder win wherever it matches, and
-adopt only what is left. Subsections are never adopted (they would clutter the
-segment list) and Castle Movements wait for a segment to exist — the user's
-ruling, 2026-08-05.
+Match using the historical grading signature to preserve strategy identity
+when the live grading model changes. Practice catalog placement handles all
+approaches and subsections; RankStore resolves their current Sheet standards
+under explicit user edits. See docs/sheet-rank-standards.md.
 """
 from sm64_events.library.adoptions import (DEFAULT_STRATEGY, shares_its_entity,
                                            strategy_name)
@@ -30,8 +30,8 @@ MATCH_DISTANCE = 0.05
 #   * where a star has four strategies within a second of each other (RR's
 #     "Somewhere Over the Rainbow"), a one-number match with any workable
 #     tolerance pairs them essentially at random.
-# Comparing the whole fitted ladder against the whole vetted one fixes both:
-# eight points on the same scale, and both are derived the same way.
+# Comparing the calibrated matching profile against the vetted ladder fixes
+# both. The profile retains that scale independently of current grading.
 
 
 def _distance(vetted: dict, fitted: dict) -> float | None:
@@ -56,7 +56,7 @@ def match_vetted(vetted: dict, approaches: list) -> dict:
     scored = []
     for strategy, ladder in vetted.items():
         for index, approach in enumerate(approaches):
-            fitted = approach.get("ladder")
+            fitted = approach.get("matching_profile", approach.get("ladder"))
             if not fitted:
                 continue
             distance = _distance(ladder, fitted)
@@ -86,8 +86,8 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
     for target in payload["targets"]:
         entity = target.get("entity_key")
         approaches = target["approaches"]
-        # The target-named row IS Standard by name (below), so it never
-        # enters the ladder matcher, and the vetted "Standard" is RESERVED
+        # The target-named row occupies the canonical Standard slot, so the
+        # vetted "Standard" is RESERVED
         # for it: round 33 (2026-09-05) measured five entities where the
         # matcher paired some OTHER row with the vetted Standard (Big Boo's
         # "Double jump -> Dive strat", BitFS's "Half/Three-quarter spin")
@@ -105,6 +105,14 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
         matched = match_vetted(candidates, [
             approach if index not in standard_rows else {}
             for index, approach in enumerate(approaches)]) if entity else {}
+        # Recover title rows' unclaimed historical aliases (TJ Owlless, Pole
+        # Glitch, etc.) without reassigning an ordinary row's canonical slot.
+        # sheet_strategy independently keeps the title row's slot Standard.
+        remaining = {name: ladder for name, ladder in candidates.items()
+                     if name not in matched.values()}
+        matched.update(match_vetted(remaining, [
+            approach if index in standard_rows else {}
+            for index, approach in enumerate(approaches)]))
         for index, approach in enumerate(approaches):
             if index in matched:
                 approach["matched_strategy"] = matched[index]
@@ -117,10 +125,8 @@ def stamp_matches(payload: dict, vetted_by_entity: dict) -> dict:
                 # called the same row by the star's own name, so the one row
                 # everyone practises had three names across three surfaces.
                 #
-                # A real vetted pairing still wins -- this is the fallback for
-                # a row the ladder matcher left unnamed, which is where the
-                # star's own row lands, since it has no distinct ladder to be
-                # paired against.
+                # A real vetted pairing still wins; Standard is the fallback
+                # when this row has no historical alias.
                 approach["matched_strategy"] = DEFAULT_STRATEGY
             else:
                 approach.pop("matched_strategy", None)

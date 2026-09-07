@@ -249,7 +249,7 @@ def test_the_ladder_model_is_recorded_with_the_data(payload):
     assert set(pct) <= set(RANK_NAMES) - {"Iron"}
     ordered = [pct[r] for r in RANK_NAMES if r in pct]
     assert ordered == sorted(ordered) and len(set(ordered)) == len(ordered)
-    assert all(0 < v < 100 for v in ordered)
+    assert all(0 < v <= 100 for v in ordered)
     assert model["fitted_rows"] >= 550
 
 

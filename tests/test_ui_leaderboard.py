@@ -171,8 +171,9 @@ def test_excluding_an_entity_narrows_the_board_like_your_own_tab(page):
         const btn = Array.from(document.querySelectorAll('.rank-breakdown button.chip'))
           .find((candidate) => candidate.textContent.trim() === 'Ignore');
         if (!btn) return false;
+        const label = btn.closest('tr').querySelector('.rank-cell-name').textContent.trim();
         btn.click();
-        return true;
+        return label;
       })()
     """)
     assert clicked, "no practiced entity with an Ignore button on the Rank tab"
@@ -185,12 +186,17 @@ def test_excluding_an_entity_narrows_the_board_like_your_own_tab(page):
         # not leave it edited for the next test in this module-scoped page
         # (ui-core.md's own rule for anything that writes to the real store).
         restored = page.evaluate("""
-          (() => {
+          (async () => {
+            const end = performance.now() + 8000;
+            while (performance.now() < end) {
             const btn = Array.from(document.querySelectorAll('.rank-breakdown button.chip'))
-              .find((candidate) => candidate.textContent.trim() === 'Include');
-            if (!btn) return false;
-            btn.click();
-            return true;
+              .find((candidate) => candidate.textContent.trim() === 'Include'
+                && candidate.closest('tr').querySelector('.rank-cell-name').textContent.trim() ===
+        """ + json.dumps(clicked) + """);
+              if (btn) { btn.click(); return true; }
+              await new Promise(resolve => setTimeout(resolve, 40));
+            }
+            return false;
           })()
         """)
         assert restored, "could not find the Include button to undo the exclusion"

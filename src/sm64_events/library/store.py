@@ -63,8 +63,8 @@ def build_and_stamp(data: bytes, overrides: dict | None = None, step=None) -> di
     your …" on the Library tab, and cannot resolve
     `library/export_column.py::column_lines`'s matched-strategy path either.
 
-    Fit BEFORE stamp, in that order, because the matcher compares LADDERS
-    (`adopt.match_vetted`) and an unfitted row cannot match anything. Until
+    Fit BEFORE stamp: fitting also computes the stable identity signature
+    (`strategy_signature.matching_profile`) used by `adopt.match_vetted`. Until
     round 33 (2026-09-05) this stamped first and `refresh()` fitted after,
     so every live refresh lost the vetted pairing -- measured on the live
     workbook: 270 approaches unmatched and none carrying a vetted name,
