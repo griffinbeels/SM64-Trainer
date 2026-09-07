@@ -7,13 +7,25 @@ fill rate applies. This is task 0126's corrected contract, including the user's
 
 ## Fitting
 
-`library/ladders.py` model 3 fits each row's own population. Annotated US and JP
+`library/ladders.py` model 4 fits each row's own population. Annotated US and JP
 times remain separate; unannotated times form the combined base. Missing samples
 use the published best/ideal or the audited related-row estimate, retaining zero
 actual submissions and explicit provenance. New observations replace estimates.
 
-Mario I targets the 6.7th percentile, at least one game frame slower than the
-fastest submission. Mario V and Metal V are fitted jointly around that target;
+Mario I targets the fastest supported performance peak, which may equal a
+widely shared record. The fitter scans three-frame windows (two frames between
+their endpoints), requiring at least three players and twice the population of
+the next equally wide window. It takes the first qualifying window's observed
+lower median, provided that is at or faster than the calibrated 6.7th percentile.
+This recognizes nearby-frame clusters, ignores isolated records, and prevents
+a slower global mode from softening the elite target. Bounded windows prevent
+a few slower observations from joining and erasing a supported fast peak.
+
+Without that evidence, smooth or sparse populations use the elite percentile
+as a provisional fallback. There is no compulsory extra frame above the record.
+The window, support and density settings are explicit in the model metadata;
+they are fitting heuristics, not a claim to measure an individual's consistency.
+Mario V and Metal V are fitted jointly around Mario I;
 the top nine subdivision steps use a whole number of frames. Slower tiers follow
 the empirical percentiles, with Bronze including the slowest observation. Every
 adjacent tier cutoff is at least five frames apart. If a range is too narrow,
@@ -22,8 +34,8 @@ dropping ranks or requiring identical cutoffs. The Library identifies that
 extension as estimated targets beyond the submitted range.
 
 For example, the current JRB door row has 57 submissions at 2.46 seconds and one
-at 2.50. Mario I is 2.50; Mario V is 2.63; Metal V is 2.80; Toad V is 3.80.
-Capless I is 3.83, and each successive frame reaches the next lower subdivision.
+at 2.50. Mario I is 2.46; Mario V is 2.60; Metal V is 2.76; Toad V is 3.76.
+Capless I is 3.80, and each successive frame reaches the next lower subdivision.
 The observed maximum is evidence, not a claim about the slowest possible run.
 
 ## Grading and Capless
