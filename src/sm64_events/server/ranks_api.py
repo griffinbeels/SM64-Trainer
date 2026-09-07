@@ -16,7 +16,7 @@ from sm64_events.links import xcams_url
 from sm64_events.memory.addresses import COURSE_NAMES
 from sm64_events.ranks import classify, history, scopes, scoring
 from sm64_events.tracking import marelo as marelo_bridge
-from sm64_events.tracking.views import entity_label, segment_courses
+from sm64_events.tracking.views import entity_labels, segment_courses
 
 
 def _http(e: Exception) -> HTTPException:
@@ -134,7 +134,6 @@ def _append_excluded_rows(service, scope_id: str, groups: list[dict],
             seen.add(key)
             out["entities"].append({
                 "key": key, "score": None, "gain": 0.0,
-                "label": entity_label(service.db, key),
                 "excluded": True, "tier": None, "division": None,
                 # Same "no score yet" shape the scored loop above gives an
                 # unpracticed entity -- an excluded row is unscored too, it
@@ -170,7 +169,6 @@ def _score_scope(service, scope_id: str) -> dict:
     # score has no single ladder of its own.
     ladders_by_key = marelo_bridge.entity_ladders(service.ranks, keys)
     for entity in out["entities"]:
-        entity["label"] = entity_label(service.db, entity["key"])
         # Always False here: `groups` above was already built from the
         # NON-excluded rankable set, so nothing excluded ever reaches
         # aggregate's numerator/denominator. The excluded rows themselves
@@ -207,6 +205,9 @@ def _score_scope(service, scope_id: str) -> dict:
     for entity in out["entities"]:
         entity["pb_attempt_id"] = your_pbs.get(entity["key"], {}).get("attempt_id")
     _append_excluded_rows(service, scope_id, groups, excluded, out)
+    labels = entity_labels(service.db, (entity["key"] for entity in out["entities"]))
+    for entity in out["entities"]:
+        entity["label"] = labels[entity["key"]]
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)
     return out
@@ -721,10 +722,11 @@ def create_ranks_router(service, library=None, adoptions=None,
         scope_id = scope or _active_scope(service)
         groups = _scope_groups(scope_id)
         keys = [key for group in groups for key in group["candidates"]]
+        labels = entity_labels(service.db, keys)
         breakdown = _rated_sheet().runner_breakdown(
             name, groups, you_scores=_you_scores(keys),
             you_times=board.you_times_by_entity(service.db.pbs(), service.ranks, keys),
-            label_of=lambda key: entity_label(service.db, key))
+            label_of=labels.__getitem__)
         if breakdown is None:
             raise HTTPException(404, f"unknown runner {name!r}")
         return {**breakdown, "scope_id": scope_id,
