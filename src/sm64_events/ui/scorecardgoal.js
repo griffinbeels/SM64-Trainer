@@ -21,11 +21,10 @@
 // reachable at the path the brief names.
 import { RANK_NAMES, DIVISION_NUMERALS, capName, divisionDigit } from "./components/caps.js";
 
-// Every division goal a player can aim at, hardest first ("Mario 1" leads,
-// Capless excluded -- its tail has no cutoff to aim at). 8 tiers x 5
-// divisions = 40.
+// Every finite division goal, hardest first. Only Capless 5 has no cutoff;
+// its four higher subdivisions have finite times on the scoring curve.
 export function divisionOptions() {
-  const tiers = RANK_NAMES.filter((tier) => tier !== "Iron");
+  const tiers = RANK_NAMES;
   // DIVISION_NUMERALS is bottom-of-tier-first (V..I); a goal picker reads
   // top-down as best-to-worst, so it walks the SAME registry reversed
   // rather than inventing a second division order.
@@ -33,6 +32,7 @@ export function divisionOptions() {
   const options = [];
   for (const tier of tiers) {
     for (const division of divisions) {
+      if (tier === "Iron" && division === "V") continue;
       // `value` is an IDENTITY the server round-trips and validates
       // (PUT /api/scorecard/goal's `tier`/`division` fields), never shown to
       // a player -- string concatenation rather than a template literal on
@@ -46,10 +46,10 @@ export function divisionOptions() {
   return options;
 }
 
-// The goal picker's whole group list: "No goal" first, then whatever named
+// The goal picker's whole group list: "Automatic goal" first, then whatever named
 // goals the player has SAVED (round 8, his own words: "Custom comparisons
 // should show up at the top of the goal dropdown selector" -- immediately
-// after "No goal", since that IS the top of the list), then every division,
+// after automatic mode, then every division,
 // then whatever sheet runners the caller has fetched (possibly none yet --
 // `ui/components/scorecard.js`'s own header comment says why the Runners
 // group is fetched LAZILY, on the picker's first open, rather than eagerly
@@ -64,7 +64,7 @@ export function divisionOptions() {
 // `valueToGoal` (scorecard.js) round-trip a goal through -- one value shape
 // per kind, never re-derived at the two ends.
 export function goalGroups(runners, customNames) {
-  const groups = [{ label: "", options: [{ value: "", label: "No goal" }] }];
+  const groups = [{ label: "", options: [{ value: "", label: "Automatic goal" }] }];
   if (customNames && customNames.length) {
     groups.push({ label: "Custom", options: customNames.map(
         (name) => ({ value: `custom:${name}`, label: name })) });

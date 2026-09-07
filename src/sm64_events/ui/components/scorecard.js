@@ -73,6 +73,7 @@ function goalToValue(goal) {
 // "one goal" and nothing to migrate.
 function goalToValues(goal) {
   if (!goal) return [];
+  if (goal.kind === "automatic") return [""];
   if (goal.kind === "multi") {
     return (goal.sources || []).map(goalToValue).filter(Boolean);
   }
@@ -81,7 +82,10 @@ function goalToValues(goal) {
 }
 
 function goalToLabel(goal) {
-  if (!goal) return "No goal";
+  if (!goal) return "Automatic goal";
+  if (goal.kind === "automatic") return goal.tier
+    ? `Automatic · ${capName(goal.tier)} ${divisionDigit(goal.division)}`
+    : "Automatic · waiting for rank";
   if (goal.kind === "division") return `${capName(goal.tier)} ${divisionDigit(goal.division)}`;
   if (goal.kind === "runner") return goal.runner;
   if (goal.kind === "custom") return goal.name;
@@ -92,7 +96,7 @@ function goalToLabel(goal) {
     if (sources.length === 1) return goalToLabel(sources[0]);
     return `${sources.length} picked`;
   }
-  return "No goal";
+  return "Automatic goal";
 }
 
 // The list of picks -> the goal to store. Nothing picked clears the goal;
@@ -100,6 +104,9 @@ function goalToLabel(goal) {
 // division everywhere it is read); several store a `multi`, whose per-tile
 // answer is the FASTEST offer among them (round 16).
 function valuesToGoal(values) {
+  // The empty value selects automatic mode exclusively. Adding a manual
+  // pick from automatic mode replaces it instead of freezing that rank.
+  if (values && values[values.length - 1] === "") return null;
   const goals = (values || []).map(valueToGoal).filter(Boolean);
   if (!goals.length) return null;
   if (goals.length === 1) return goals[0];
@@ -697,8 +704,9 @@ function regionNote(regions, detected) {
     : `${only.toUpperCase()} only · you are graded on ${detected.toUpperCase()}`;
 }
 
-function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange, scopeId }) {
-  return html`<div class="scorecard-head">
+function ScorecardHead({ goal, groups, onOpen, coverage, onGoalChange }) {
+  return html`<div class="scorecard-head"
+      title="Automatic goals aim one subdivision above this scope's MARELO rank, up to Mario 1.">
     <h3>Scorecard</h3>
     <${SearchSelect} value=${goalToValues(goal)} valueLabel=${goalToLabel(goal)}
         title="Pick one or more goals" groups=${groups} onOpen=${onOpen}
@@ -762,11 +770,6 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
   const displayData = useMemo(
     () => (data ? applyGoalOverrides(data, pendingOverrides) : null),
     [data, pendingOverrides]);
-  // Editing even ONE star without a base goal set still means "I am
-  // comparing against something now" -- coloring should not wait for a
-  // saved goal to exist.
-  const hasGoal = !!(data && data.goal) || Object.keys(pendingOverrides).length > 0;
-
   function handleGoalOverride(entityKey, goalCs) {
     setPendingOverrides((current) => ({ ...current, [entityKey]: goalCs }));
   }
@@ -856,7 +859,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
       // round trip before the picker could name the new goal, so for that
       // beat the card read "No goal" with nothing pending -- a wrong state
       // on screen, and the race a render test lost (round 29).
-      const fresh = await getJSON("/api/scorecard");
+      const fresh = await getJSON(`/api/scorecard?scope=${encodeURIComponent(scopeId)}`);
       setPendingOverrides({});
       setData(fresh);
     } catch (err) {
@@ -868,7 +871,7 @@ export function Scorecard({ t, scopeId = "overall", openLibrary = null }) {
 
   const pendingCount = Object.keys(pendingOverrides).length;
 
-  return html`<div class="practice-card scorecard-card">
+  return html`<div class="practice-card scorecard-card" data-scope=${data && data.scope}>
     ${error
       ? html`<${InlineState} kind="error">${error.message}<//>`
       : !data
