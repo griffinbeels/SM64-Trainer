@@ -12,6 +12,8 @@ convenience: it means the browser never names a button bit, so there is no
 second copy of the table to drift from `memory/addresses.py`. A duplicate that
 cannot be written needs no parity test to keep it honest.
 """
+import hashlib
+
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.inputs.document import DocumentError, decode
 from sm64_events.inputs.frame import InputFrame
@@ -311,6 +313,14 @@ class InputsService:
         # would move a first captured frame after a leading gap back to zero.
         payload["runs"] = [_run_payload(run) for run in collapse(frames, _same_pad)]
         payload["actions"] = [_action_payload(run) for run in collapse(frames, _same_action)]
+        # Review can translate the whole example into a shorter attempt. Keep
+        # its original axis and gaps available, including the currently hidden
+        # tail; the legacy fields remain lead-shifted and clipped as before.
+        payload["source"] = {
+            "frames": document.frame_count,
+            "runs": payload["runs"], "actions": payload["actions"],
+            "revision": hashlib.sha256(template.document.encode("utf-8")).hexdigest(),
+        }
         for name in ("runs", "actions"):
             payload[name] = ([] if limit == 0 else
                              _shifted_spans(payload[name], shift, limit or 0))

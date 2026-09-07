@@ -65,6 +65,20 @@ def create_replay_router(replay) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
 
+    @router.get("/attempts/{attempt_id}/replay/review-state")
+    def review_state(attempt_id: int):
+        try:
+            return replay.review_state(attempt_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e) from e
+
+    @router.put("/attempts/{attempt_id}/replay/review-state")
+    def put_review_state(attempt_id: int, body: dict):
+        try:
+            return replay.update_review_state(attempt_id, body)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e) from e
+
     @router.get("/replay/clips/{name}")
     def clip(name: str):
         try:

@@ -21,6 +21,7 @@ from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.association import association_problem, valid_picture_times
 from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
+from sm64_events.replay.reviewstate import ReviewStateStore
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -175,6 +176,7 @@ class ReplayService:
         # (2026-09-02). The second caller waits, then finds the cached clip.
         self._cut_locks: dict[int, threading.Lock] = {}
         self._cut_locks_guard = threading.Lock()
+        self._review_state = ReviewStateStore()
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
@@ -689,7 +691,26 @@ class ReplayService:
                 return
             time.sleep(0.25)
 
+    def review_state(self, attempt_id: int) -> dict:
+        """Preferences are readable before the first cut, without extraction."""
+        self._attempt(attempt_id)
+        return self._review_state.get(attempt_id, self.find_saved(attempt_id))
+
+    def update_review_state(self, attempt_id: int, state: dict) -> dict:
+        # Resolve the saved destination under the same lock as publication:
+        # a PUT racing Save must not become temporary after promotion finishes.
+        with self._cut_lock(attempt_id):
+            self._attempt(attempt_id)
+            return self._review_state.put(attempt_id, self.find_saved(attempt_id), state)
+
     def save(self, attempt_id: int) -> dict:
+        """Serialize extraction, publication, and review-state promotion."""
+        with self._cut_lock(attempt_id):
+            result = self._save(attempt_id)
+            self._review_state.promote(attempt_id, Path(result["path"]))
+            return result
+
+    def _save(self, attempt_id: int) -> dict:
         """Persist a clip to the permanent save tree (date/session/).
 
         Idempotent: an attempt that already has a saved file returns it
@@ -704,7 +725,7 @@ class ReplayService:
         if existing is not None:
             m = self._saved_meta(existing)
             return {"path": str(existing), "truncated": m.get("truncated", False)}
-        self.view(attempt_id)  # ensure clip exists (cached when already cut)
+        self._view(attempt_id)  # caller holds the cut lock
         clip = self.clips_dir / _CLIP_NAME.format(id=attempt_id)
         ended_local = _parse_utc(a.ended_utc).astimezone()  # folder by local date
         dest_dir = (self.cfg.save_root / ended_local.strftime("%Y-%m-%d")
@@ -763,6 +784,7 @@ class ReplayService:
     # -- lifecycle (called from app lifespan) --------------------------------
 
     def lifecycle_start(self) -> None:
+        self._review_state.clear()
         # Start recorder first; it may wipe scratch_dir contents on init.
         # clips_dir is created after so a future recursive wipe doesn't
         # evict a directory we made first.
@@ -770,4 +792,7 @@ class ReplayService:
         self.clips_dir.mkdir(parents=True, exist_ok=True)
 
     def lifecycle_stop(self) -> None:
-        self.recorder.stop()
+        try:
+            self.recorder.stop()
+        finally:
+            self._review_state.clear()
