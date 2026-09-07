@@ -234,3 +234,36 @@ def test_no_game_reset_when_reattach_stays_mid_game():
                reader=ScriptedReader([snap(5000), MemoryReadError("x"), snap(5000)]))
     asyncio.run(p.tick()); asyncio.run(p.tick()); asyncio.run(p.tick())
     assert not any(e.type == "game_reset" for e in b.events)
+
+
+class UnreadableSampler:
+    """A sampler over a Project64 that has gone: every sample fails."""
+    def __init__(self):
+        self.calls = 0
+    def sample(self):
+        self.calls += 1
+        return None
+    def flush(self):
+        pass
+    def clock_pair(self):
+        return None
+
+
+def test_a_dead_emulator_detaches_even_though_the_sampler_never_sees_a_frame():
+    """2026-09-05, the capture layer's first install: Project64 closed and
+    reopened under a live tracker, and the tracker sat 'attached' with a
+    frozen snapshot for the rest of the session. On the sampler-paced path
+    a snapshot was due only when the FRAME advanced, and a closed emulator
+    advances nothing, so the read that raises and detaches was never
+    reached. Now half a second of unreadable samples forces the read."""
+    mem = StubMemory()
+    b = RecordingBroadcaster()
+    p = Poller(mem, [EchoDetector()], b,
+               reader=ScriptedReader([MemoryReadError("gone")]),
+               input_sampler=UnreadableSampler())
+    for _ in range(Poller.UNREADABLE_TICKS_BEFORE_READ - 1):
+        asyncio.run(p.tick())
+    assert mem.detached is False           # not yet: a straddle is not a death
+    asyncio.run(p.tick())
+    assert mem.detached is True
+    assert [e.type for e in b.events] == ["emulator_disconnected"]

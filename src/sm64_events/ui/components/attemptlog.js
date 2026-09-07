@@ -15,7 +15,8 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
-import { ReplayPlayer } from "./replay.js";
+import { AttemptDrawer } from "./attemptdrawer.js";
+import { displayName } from "../entitysection.js";
 import { StatMenu } from "./statmenu.js";
 import { RankIcon } from "./rankicon.js";
 import { StratPicker } from "./stratpicker.js";
@@ -243,7 +244,9 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
         recording: recording?.clip_url ? recording : null })
     : null;
   const expandedRow = showReplay
-    ? html`<tr class="replay-row"><td colspan="6"><${ReplayPlayer} attemptId=${a.id} imported=${a.imported} onCompare=${onCompare} /></td></tr>`
+    ? html`<tr class="replay-row"><td colspan="6"><${AttemptDrawer} attemptId=${a.id} imported=${a.imported}
+        targetLabel=${sec ? displayName(sec, (t.view.catalog || {}).courses || []).name : null}
+        onCompare=${onCompare} onTemplateMarked=${t.refresh} /></td></tr>`
     : null;
   return [row, expandedRow];
 }

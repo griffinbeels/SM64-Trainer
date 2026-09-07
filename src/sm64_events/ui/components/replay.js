@@ -1,9 +1,12 @@
 // src/sm64_events/ui/components/replay.js — inline clip player + recording dot
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
-import { stepGameFrame, jumpToStart } from "../frame.js";
+import { clipClock, stepGameFrame, jumpToStart, attemptStartTime } from "../frame.js";
+import { watchVideoPicture } from "../videopicture.js";
+import { holdRepeat } from "../holdrepeat.js";
+import { watchReplayKeys } from "../replaykeys.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -13,13 +16,20 @@ import { ReplayTransport } from "./replaytransport.js";
 const html = htm.bind(h);
 
 // Expanded row under an attempt: extract on mount (server caches), then play.
-export function ReplayPlayer({ attemptId, imported = false, onCompare }) {
+// `onVideoEl` reports the <video> element upward so a sibling can follow
+// the SAME clock -- the input timeline does. Mirrors VideoStage's own
+// `onEl` rather than inventing a second way to hand an element out.
+// `onView` reports the clip's metadata the same way, because that clock
+// only lines up with the input track once the sibling knows where in the
+// clip the attempt's anchor sits (`anchor_offset_s`).
+export function ReplayPlayer({ attemptId, imported = false, onCompare, onVideoEl, onView }) {
   const [url, setUrl] = useState(undefined);
   const [nativeUnavailable, setNativeUnavailable] = useState(imported);
   const [initialLink, setInitialLink] = useState(true);
   return html`<div class="attempt-recording">
     ${!nativeUnavailable
       ? html`<${NativeReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
+          onVideoEl=${onVideoEl} onView=${onView}
           onUnavailable=${() => setNativeUnavailable(true)} />`
       : url ? html`<${ExternalVideo} key=${url} url=${url} autoplay=${initialLink}
           replayActions onCompare=${onCompare} />`
@@ -31,7 +41,44 @@ export function ReplayPlayer({ attemptId, imported = false, onCompare }) {
   </div>`;
 }
 
-function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
+function useReplayStepping(videoEl, state) {
+  // The shared clock walks captured pictures in order, skipping known
+  // heartbeat copies and preserving the clip's actual timestamp intervals.
+  // Only legacy clips without a picture clock use 30 Hz time stepping.
+  function step(dir) {
+    stepGameFrame(videoEl.current, dir, state.game_fps || 30,
+                  state.frame_map || null, clipClock(state));
+  }
+  // A press remembers whether the clip was playing; the release hands that
+  // back, so a hold mid-playback scrubs and then plays on, while a step on
+  // a paused clip stays on the frame it reached.
+  function stepHold(dir) {
+    return holdRepeat(() => step(dir), {
+      onPress: () => {
+        const video = videoEl.current;
+        if (!video || video.paused) return null;
+        return () => { video.play().catch(() => {}); };
+      },
+    });
+  }
+  function toStart() {
+    jumpToStart(videoEl.current, attemptStartTime(state));
+  }
+  // Arrow keys use the same hold schedule as the buttons. The coordinator
+  // gives them to one player when several attempt drawers are expanded.
+  useEffect(() => {
+    const video = videoEl.current;
+    if (!video) return undefined;
+    return watchReplayKeys(video.closest(".attempt-drawer") || video.closest(".replay-player"), {
+      step, toStart,
+      onPress: () => video.paused ? null : () => { video.play().catch(() => {}); },
+    });
+  }, [state]);
+
+  return { step, stepHold, toStart };
+}
+
+function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, onView }) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
@@ -43,6 +90,32 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
   // moment the user started playing in game. Playback may start ONLY here
   // (once) or from the player's own controls.
   const autoPlayed = useRef(false);
+  const stopObserving = useRef(null);
+  const attachVideoEl = useCallback((el) => {
+    if (videoEl.current === el) return;
+    if (stopObserving.current) stopObserving.current();
+    videoEl.current = el;
+    stopObserving.current = el ? watchVideoPicture(el, () => {}) : null;
+    if (onVideoEl) onVideoEl(el);
+    if (!el) return;
+    attachSharedVolume(el);
+  }, [onVideoEl]);
+
+  // Seek after metadata arrives, before the one initial play(). Both the
+  // initial position and Start use the same real-picture destination.
+  useEffect(() => {
+    const video = videoEl.current;
+    if (!video || state.phase !== "ready") return undefined;
+    const begin = () => {
+      if (autoPlayed.current) return;
+      autoPlayed.current = true;
+      jumpToStart(video, attemptStartTime(state));
+      video.play().catch(() => {});
+    };
+    if (video.readyState >= 1) begin();
+    else video.addEventListener("loadedmetadata", begin, { once: true });
+    return () => video.removeEventListener("loadedmetadata", begin);
+  }, [state]);
 
   useEffect(() => {
     let alive = true;
@@ -50,6 +123,8 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
       .then((r) => {
         if (!alive) return;
         setState({ phase: "ready", ...r });
+        if (onView) onView(r);
+        if (!r.clip_url) onUnavailable();
         // saved_path persists across sessions (server globs the save tree):
         // the Save button correctly shows "Saved" for clips saved last week
         setSavedPath(r.saved_path || null);
@@ -57,6 +132,9 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
       .catch((e) => {
         if (!alive) return;
         setState({ phase: "error", message: String(e) });
+        // The drawer waits for this answer before it shows the timeline
+        // (his 2026-09-01 ruling): a clip that cannot be cut is an answer.
+        if (onView) onView(null);
         onUnavailable();
       });
     return () => { alive = false; };
@@ -67,23 +145,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
     setSavedPath(r.path);
   }
 
-  // Frame stepping: pause first (stepping implies pause), then seek to the
-  // MIDDLE of the adjacent frame — (n±1 + 0.5)/fps — so floating-point
-  // rounding can never straddle a frame boundary. Steps move in GAME
-  // frames (30 fps SM64 logic), not encoded frames (60 fps presents):
-  // each game frame spans two near-identical encoded frames, so stepping
-  // 1/60 visibly changed the image only every SECOND press (live-reported
-  // 2026-06-12 — "have to press twice").
-  // Known caveat (expected, not a bug): capture isn't phase-locked to the
-  // game and presents jitter (~59.90-60.05/s, user-measured) — a game
-  // frame occasionally spans 1 or 3 encoded frames, so once in a while a
-  // single press lands on a duplicate; the next press recovers.
-  function step(dir) {
-    stepGameFrame(videoEl.current, dir, state.game_fps || 30);
-  }
-  function toStart() {
-    jumpToStart(videoEl.current, 0);
-  }
+  const { step, stepHold, toStart } = useReplayStepping(videoEl, state);
 
   function togglePlay() {
     const v = videoEl.current;
@@ -97,6 +159,9 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
   if (state.phase === "error")
     return html`<div class="replay-state"><${InlineState} kind="error">
       Replay unavailable · ${state.message}<//></div>`;
+  // A timeline can exist without footage. An empty video element would
+  // falsely become its clock and prevent standalone input inspection.
+  if (!state.clip_url) return null;
   function revealSaved(e) {
     e.preventDefault();
     send("POST", "/api/replay/reveal", { path: savedPath });
@@ -104,8 +169,11 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
 
   return html`<div class="replay-player">
     <div class="replay-status-row">
-      ${state.truncated && html`<span class="replay-notice warning">
+      ${state.starts_mid_attempt && html`<span class="replay-notice warning">
         <${Icon} name="clock" size=${14} /> Starts mid-attempt
+      </span>`}
+      ${state.ends_early && html`<span class="replay-notice warning">
+        <${Icon} name="clock" size=${14} /> Ends before the finish
       </span>`}
       ${state.source === "saved" && html`<span class="replay-notice">
         <${Icon} name="save" size=${14} /> Playing saved replay
@@ -114,19 +182,10 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable }) {
     <video controls preload="auto" src=${state.clip_url}
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}
-           ref=${(el) => {
-             videoEl.current = el; // null on unmount — step()/toggle guard
-             if (!el) return;
-             if (!el.dataset.sharedVolume) { // ref re-fires on every render
-               el.dataset.sharedVolume = "1";
-               attachSharedVolume(el);
-             }
-             if (!autoPlayed.current) { // see autoPlayed above: once per mount
-               autoPlayed.current = true;
-               el.play().catch(() => {});
-             }
-           }}></video>
+           ref=${attachVideoEl}></video>
     <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
+      startTitle="Jump to the attempt start (↓)"
+      stepHandlers=${stepHold}
       onToggle=${togglePlay} note=${`1 frame = 1/${state.game_fps || 30} s`} />
     <div class="replay-actions">
       <button onclick=${saveReplay} disabled=${savedPath !== null}>

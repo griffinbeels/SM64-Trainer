@@ -69,6 +69,11 @@ class DwmSurfaceVideoSource:
     publishes them; the grab thread reads cached values only. Frames flow
     grab -> queue -> deliver (encode), as with the GDI source."""
 
+    frame_source = "desktop"
+    #: why the recorder is on this camera when the capture layer is installed
+    #: -- set by the factory that chose it, read back on /api/replay/status
+    frame_source_note = None
+
     def __init__(self, win: WindowInfo, fps: int = 60):
         self._win = win
         self._fps = fps

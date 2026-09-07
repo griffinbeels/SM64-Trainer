@@ -664,6 +664,75 @@ MIGRATIONS = [
     );
     ALTER TABLE held_times ADD COLUMN video TEXT;
     """,
+    # v32 -- captured controller input, in run-length chunks.
+    #
+    # Keyed by the game's frame counter AND wall clock, never by attempt id:
+    # attempts are re-derived from the journal on every reprojection, so a row
+    # keyed to one orphans itself. Wall clock is also the only TOTAL order --
+    # the frame counter restarts on a console reset, so frame numbers repeat
+    # within a session.
+    #
+    # Size: ~10 bytes per run of identical frames, and 45 s of real play
+    # compresses from 1,348 frames to 289 runs (tools/probe_inputs.py,
+    # 2026-08-20). A rounding error beside the clip ring.
+    """
+    CREATE TABLE input_chunks (
+      id           INTEGER PRIMARY KEY,
+      session_id   INTEGER NOT NULL,
+      start_frame  INTEGER NOT NULL,
+      end_frame    INTEGER NOT NULL,
+      started_utc  TEXT NOT NULL,
+      ended_utc    TEXT NOT NULL,
+      runs         BLOB NOT NULL
+    );
+    CREATE INDEX idx_input_chunks_utc ON input_chunks (started_utc, ended_utc);
+    """,
+    # v33 -- template tracks: the input a run is compared against.
+    #
+    # A template is a DOCUMENT, not a flag on an attempt (his ruling
+    # 2026-08-20). That is what lets one come from an attempt he marked, a
+    # file another player sent him, or one he typed out by hand -- `origin`
+    # says which, and nothing downstream cares. Storing the document TEXT
+    # rather than a row per frame is the same decision: what he exports and
+    # what he compares against are then the same bytes, so a round trip
+    # cannot quietly change what he is comparing to.
+    #
+    # One ACTIVE template per (kind, entity, strategy). The partial unique
+    # index is what makes that a fact rather than a convention.
+    """
+    CREATE TABLE input_templates (
+      id           INTEGER PRIMARY KEY,
+      kind         TEXT NOT NULL,
+      entity_key   TEXT NOT NULL,
+      strat_tag    TEXT,
+      name         TEXT NOT NULL,
+      origin       TEXT NOT NULL,
+      document     TEXT NOT NULL,
+      active       INTEGER NOT NULL DEFAULT 0,
+      created_utc  TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX idx_input_templates_active
+      ON input_templates (kind, entity_key, IFNULL(strat_tag, ''))
+      WHERE active = 1;
+    """,
+    # v34 -- the run format a chunk was written in.
+    #
+    # v2 adds what MARIO was doing on each frame (his action, his face-angle
+    # yaw), which round 32 asked for: "adding extra diagnostic info about
+    # mario alongside the timeline". Stored PER CHUNK rather than guessed from
+    # the blob's length, because a v1 chunk and a v2 chunk can be the same
+    # size at different run counts -- length is not a discriminator, and
+    # treating it as one decodes one as the other and returns plausible
+    # nonsense. Existing rows default to 1 and keep decoding as what they are.
+    """
+    ALTER TABLE input_chunks ADD COLUMN format INTEGER NOT NULL DEFAULT 1;
+    """,
+    # v35 -- the journal by wall clock, for the input timeline's moment
+    # markers: an attempt's rows are the ones inside its started/ended span
+    # (`events_between`), and the journal was only ever indexed by id.
+    """
+    CREATE INDEX idx_events_wall ON events (wall_time_utc);
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -697,6 +766,8 @@ class Database:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
+        self._inputs = None
+        self._input_templates = None
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._migrate()
         self._repair_landmark_keys()
@@ -779,7 +850,27 @@ class Database:
     def _migrate(self) -> None:
         with self._lock:
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
-            for i, script in enumerate(MIGRATIONS[version:], start=version + 1):
+            steps = []
+            # Input-timeline used v27-v30 before the import sync and v31-v34
+            # before the recording-link sync. Main now owns v27-v31; inputs
+            # follow at v32-v35. Apply only each history's missing main block
+            # atomically, preserving the already-applied input prefix and bytes.
+            # Version alone cannot identify these unreleased branch databases.
+            has_inputs = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='input_chunks'"
+            ).fetchone()
+            if 27 <= version <= 30 and has_inputs:
+                version += 5
+                steps.append((version, ";\n".join(MIGRATIONS[26:31])))
+            elif 31 <= version <= 34 and has_inputs:
+                has_recordings = self._conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='attempt_recordings'"
+                ).fetchone()
+                if not has_recordings:
+                    version += 1
+                    steps.append((version, MIGRATIONS[30]))
+            steps.extend(enumerate(MIGRATIONS[version:], start=version + 1))
+            for i, script in steps:
                 # One transaction per entry: a mid-migration crash rolls back
                 # BOTH the partial schema changes and the version write
                 # (PRAGMA user_version is a header field — transactional).
@@ -870,6 +961,18 @@ class Database:
                              r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
                     for r in rows]
 
+    def events_between(self, started_utc: str, ended_utc: str) -> list[EventRow]:
+        """The journal rows inside a wall-clock span, inclusive at both ends,
+        oldest first. An attempt's own span is bounded by two of its rows'
+        times, so inclusive is what returns the row that closed it."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE wall_time_utc >= ? AND wall_time_utc <= ?"
+                " ORDER BY id", (started_utc, ended_utc)).fetchall()
+            return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
+                             r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
+                    for r in rows]
+
     # -- sessions ----------------------------------------------------------
     def insert_session(self, started_utc: str, label: str | None = None) -> int:
         with self._lock:
@@ -915,6 +1018,10 @@ class Database:
         the row does."""
         with self._lock:
             self._conn.execute("DELETE FROM events WHERE session_id=?",
+                               (session_id,))
+            # Its captured input goes with it: a chunk outliving its session
+            # is a few hundred KB an hour that no attempt can ever resolve.
+            self._conn.execute("DELETE FROM input_chunks WHERE session_id=?",
                                (session_id,))
             self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
             self._conn.commit()
@@ -1657,6 +1764,7 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM events")
             self._conn.execute("DELETE FROM pbs")
+            self._conn.execute("DELETE FROM input_chunks")
             # A held time is imported history too: it came in with a
             # column and goes out with everything else.
             self._conn.execute("DELETE FROM held_times")
@@ -1664,6 +1772,28 @@ class Database:
             self._conn.execute("DELETE FROM sessions WHERE id<>?",
                                (keep_session_id,))
             self._conn.commit()
+
+    # -- captured input ------------------------------------------------------
+    @property
+    def inputs(self):
+        """The input-chunk store over this connection and lock.
+
+        Exposed here rather than letting callers reach for `_conn`/`_lock`:
+        the composition root would then hold two private attributes of this
+        class, and every test double would have to grow them too.
+        """
+        if self._inputs is None:
+            from sm64_events.inputs.store import InputStore
+            self._inputs = InputStore(self._conn, self._lock)
+        return self._inputs
+
+    @property
+    def input_templates(self):
+        """The template-track store, over the same connection and lock."""
+        if self._input_templates is None:
+            from sm64_events.inputs.templates import TemplateStore
+            self._input_templates = TemplateStore(self._conn, self._lock)
+        return self._input_templates
 
     # -- ui_state ------------------------------------------------------------
     def get_state(self, key: str, default):

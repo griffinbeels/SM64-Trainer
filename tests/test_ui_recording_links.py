@@ -314,6 +314,19 @@ def test_native_capture_is_preferred_and_survives_link_edit(page):
     assert page.evaluate("calls.filter(call => call.path === '/api/media' && call.method === 'POST').length") == 0
 
 
+def test_imported_attempt_drawer_opens_recording_without_waiting_for_native_inputs(page):
+    page.evaluate("""(async () => {
+      const {h, render} = await import('preact');
+      const {AttemptDrawer} = await import('/ui/components/attemptdrawer.js');
+      render(h(AttemptDrawer, {attemptId:4242, imported:true}),
+        document.querySelector('#recording-test'));
+    })()""")
+    page.wait_for('#recording-test .recording-link input')
+    assert page.evaluate("document.querySelector('#recording-test .input-timeline-waiting')") is None
+    assert page.evaluate("calls.filter(call => call.path.endsWith('/replay')).length") == 0
+    assert page.evaluate("document.querySelector('#recording-test').textContent.includes('Add a public recording')")
+
+
 def test_replacing_external_link_requires_new_download_gesture(page):
     mount(page, url='https://recording.example/old')
     click(page, "Download")

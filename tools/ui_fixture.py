@@ -26,13 +26,14 @@ import sqlite3
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 import uvicorn
 
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
+from sm64_events.core.capturelayer import LayerRefused, LayerStatus
 from sm64_events.core.events import Event
 from sm64_events.memory.behaviours import pointer_of
 from sm64_events.core.timefmt import format_igt
@@ -97,6 +98,52 @@ class _OfflineMemory:
 
     def detach(self) -> None:
         pass
+
+
+class _FixtureCaptureLayer:
+    """A capture layer whose STATUS is fixed for the fixture's whole
+    lifetime -- a real install/uninstall needs a real Project64 and a real
+    registry, neither of which this offline fixture has. `install`/
+    `uninstall` are recorded (so a driven test can assert they were called)
+    and either succeed by returning the fixed status or refuse with a fixed
+    reason; nothing here simulates a state MACHINE. A test that wants a
+    different state asks `serve_ui(capture_layer_status={...})` for a fresh
+    fixture at that state, the same way every other fixture knob works."""
+
+    def __init__(self, status: LayerStatus, refuse: str | None = None):
+        self._status = status
+        self._refuse = refuse
+        self.installs: list[bool] = []
+        self.uninstalls = 0
+
+    def status(self) -> LayerStatus:
+        return self._status
+
+    def install(self, consent: bool) -> LayerStatus:
+        self.installs.append(consent)
+        if self._refuse or not consent:
+            raise LayerRefused(self._refuse or "consent is required")
+        return self._status
+
+    def uninstall(self) -> LayerStatus:
+        self.uninstalls += 1
+        if self._refuse:
+            raise LayerRefused(self._refuse)
+        return self._status
+
+
+def _fixture_capture_layer_status(**overrides) -> LayerStatus:
+    # The default is an ACTIVE layer: the setup screen opens by itself for
+    # any state short of that (his rule 2026-09-05), and the general sweep
+    # must not be interrupted by a modal nobody asked this fixture for. A
+    # test that wants the first-run state asks for `state="not_installed"`.
+    fields = dict(pj64_dir="C:/Project64", pj64_running=True,
+                 registry_graphics_dll="sm64_trainer_gfx.dll", wrapper_present=True,
+                 wrapper_current=True, wrapper_selected=True,
+                 wrapped_name="GLideN64_LINK_4.2.dll", layer_alive=True, gl_context=True,
+                 consented_at="2026-09-05T00:00:00+00:00", problems=[], state="active")
+    fields.update(overrides)
+    return LayerStatus(**fields)
 
 
 # Task 6 fix round 2 (the root cause is cited three times in
@@ -214,6 +261,143 @@ def _place_time(payload: dict, igt_frames: int) -> dict:
             "igt": format_igt(igt_frames)}
 
 
+def seed_inputs(database, session_id: int, template: bool = True) -> None:
+    """Give the seeded attempts a real INPUT TRACK, and one a TEMPLATE.
+
+    Without this the attempt drawer renders its "no inputs recorded" state --
+    a clean page nobody is looking at, which ui-core.md names as the failure
+    mode that has been the root cause three times here.
+
+    The shape is taken from a real 500 Hz capture (tools/probe_inputs.py,
+    2026-08-20): a run-up, a dive (A, then A+B), a release, a HOLE where
+    capture stopped, and a ground pound. Each track starts at its attempt's
+    own `anchor_frame`, because that is what `track_for_attempt` trims on.
+
+    Practice seeding uses identical wall-clock instants for many events. Its
+    stars and segments therefore share one ordered capture per session, with
+    one reading per raw counter. Independent overlapping chunks would invent
+    counter resets and make every timeline legitimately ambiguous.
+    """
+    from sm64_events.inputs.document import encode
+    from sm64_events.inputs.frame import InputFrame
+    from sm64_events.inputs.service import entity_key_of
+    from sm64_events.memory import addresses as _A
+
+    def track(base: int, shift: int = 0):
+        # Mario's own state moves too (round 32): a run-up that accelerates,
+        # a dive that turns him, a ground pound that stops him dead. A fixture
+        # whose speed line is flat and whose action row is one span cannot
+        # show either row crowding its neighbour.
+        rows = []
+        rows += [(base + n, InputFrame(0, 0, -45, -45, _A.ACT_WALKING
+                                       if hasattr(_A, "ACT_WALKING") else 0x00440440,
+                                       -8000 - n * 60, 4.0 + n * 2.1))
+                 for n in range(13)]
+        rows += [(base + 13 + shift, InputFrame(0x8000, 0x8000, -45, -45,
+                                                _A.ACT_JUMP if hasattr(_A, "ACT_JUMP")
+                                                else 0x03000880, -8800, 31.5))]
+        rows += [(base + 14 + shift + n, InputFrame(0xC000, 0, -45, -45,
+                                                    _A.ACT_DIVE, -8800 + n * 120,
+                                                    33.0 - n * 0.4))
+                 for n in range(14)]
+        rows += [(base + 28 + shift + n, InputFrame(0, 0, 60, 10,
+                                                    _A.ACT_DIVE_SLIDE,
+                                                    -7100, 26.0 - n * 2.4))
+                 for n in range(9)]
+        # A HOLE: nothing until +50, so the timeline must draw a gap rather
+        # than interpolate across one.
+        rows += [(base + 50 + n, InputFrame(0x2000, 0x2000 if n == 0 else 0,
+                                            0, -70, _A.ACT_GROUND_POUND
+                                            if hasattr(_A, "ACT_GROUND_POUND")
+                                            else 0x008008A9, -7100, 0.0))
+                 for n in range(6)]
+        rows += [(base + 56 + n, InputFrame(0x0008, 0x0008 if n == 0 else 0,
+                                            0, 0, 0x0C400201, -7100, 0.0))
+                 for n in range(3)]
+        rows += [(base + 59 + n, InputFrame(0, 0, 0, 0, 0x0C400201, -7100, 0.0))
+                 for n in range(4)]
+        return rows
+
+    attempts = [attempt for attempt in database.attempts()
+                if attempt.session_id == session_id and attempt.anchor_frame is not None]
+    if not attempts:
+        return
+    captures = {}
+    from datetime import datetime, timedelta
+
+    def moments_before(stamp: str, seconds: float) -> datetime:
+        return datetime.fromisoformat(stamp) - timedelta(seconds=seconds)
+
+    def capture_for(attempt):
+        return captures.setdefault(attempt.session_id, {
+            "samples": {}, "start": attempt.started_utc, "end": attempt.ended_utc})
+
+    # THE LEAD-IN (round 32 items 51-52): capture for the stretch between the
+    # level entry `seed_practice` published and the attempt's own first
+    # frame, so the drawer's timeline renders the lead band and the negative
+    # numbering. The ENTRY is read back from the journal rather than
+    # recomputed here -- the same query the service runs -- because the
+    # rule for where a track starts (Usamune's igt, which can reach back
+    # past our anchor) lives in one place and a second copy here drew no
+    # lead at all for the one attempt whose igt outruns its rta.
+    lead_seeded = 0
+    for attempt in attempts:
+        if attempt.anchor_frame is None:
+            continue                      # no attempt-start frame, no lead
+        entries = [row.frame for row in
+                   database.events_between(
+                       moments_before(attempt.started_utc, 60.0).isoformat(),
+                       attempt.started_utc)
+                   if row.session_id == session_id
+                   and row.type == "level_changed" and row.frame is not None
+                   and row.frame < attempt.anchor_frame]
+        if not entries:
+            continue
+        entry = max(entries)
+        lead_seeded += 1
+        span = max(2, attempt.anchor_frame - entry)
+        capture = capture_for(attempt)
+        capture["samples"].update(
+            (entry + n, InputFrame(0, 0, 0, min(30 + n, 80)))
+            for n in range(span))
+        capture["start"] = min(capture["start"],
+                               moments_before(attempt.started_utc, 30.0).isoformat())
+        capture["end"] = max(capture["end"], attempt.ended_utc)
+    if not lead_seeded:
+        raise AssertionError(
+            "seed_inputs seeded no lead-in: seed_practice published no level "
+            "entry before any attempt, so the timeline's lead layout is "
+            "unreachable by every sweep")
+    # A star's authored track owns overlap with a subsection's local sample
+    # shape. Stable ordering keeps the shared physical stream independent of
+    # the projection query's presentation order.
+    ordered = sorted(attempts, key=lambda row: (
+        row.segment_id is None, row.anchor_frame, row.id))
+    for index, attempt in enumerate(ordered):
+        capture = capture_for(attempt)
+        base = attempt.anchor_frame
+        # Attempt-specific input replaces lead-in filler, including its holes.
+        for number in range(base, base + 63):
+            capture["samples"].pop(number, None)
+        capture["samples"].update(track(base, index % 3))
+        capture["start"] = min(capture["start"], attempt.started_utc)
+        capture["end"] = max(capture["end"], attempt.ended_utc)
+    for session, capture in captures.items():
+        database.inputs.append(session, sorted(capture["samples"].items()),
+                               capture["start"], capture["end"])
+    if not template:
+        return
+    marked = attempts[-1]
+    kind, key = entity_key_of(marked)
+    base = marked.anchor_frame if marked.anchor_frame else 1000
+    database.input_templates.save(
+        kind=kind, entity_key=key, strat_tag=marked.strat_tag,
+        name="my best run", origin=f"attempt:{marked.id}",
+        document=encode(track(base, 0), target="star",
+                        strategy=marked.strat_tag, version="us",
+                        origin=f"attempt {marked.id}"))
+
+
 def seed_practice(service, course_id: int = FIXTURE_COURSE,
                   star_id: int = FIXTURE_STAR,
                   level: int = FIXTURE_LEVEL, attempts: bool = True,
@@ -284,6 +468,23 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
             await service.publish(Event(
                 type="practice_reset", frame=1000 + index * 1000,
                 timestamp_utc=now, payload={"igt_frames_before": 0}))
+            # ONE MOMENT INSIDE EVERY TRACK, so the input timeline's moment
+            # row has a marker to draw: a pole grab 30 frames after the
+            # anchor, inside the 63 frames `seed_inputs` captures from it.
+            # No seeded definition starts or ends on a pole in this level,
+            # so it records nothing and changes no other card.
+            await service.publish(Event(
+                type="moment_reached", frame=1030 + index * 1000,
+                timestamp_utc=now,
+                payload=_place_time({"kind": "pole_grab", "ordinal": 1,
+                                     "landmark": {
+                                         "key": f"{level}:1:bhvPole:640,0,1280",
+                                         "kind_key": "kind:bhvPole",
+                                         "home": [0, 0, 0],
+                                         "pos": [640, 0, 1280],
+                                         "placed": False, "nameable": True},
+                                     "level": level,
+                                     "area": 1, "action": 0x00000841}, 31)))
             # TWO DOORS PER RUN, when asked -- the start triggers
             # `_subsection_definition` uses (`moment_reached door_open`,
             # ordinals 1 and 2). Without these the seeded subsections exist as
@@ -323,6 +524,19 @@ def seed_practice(service, course_id: int = FIXTURE_COURSE,
         await service.publish(Event(
             type="practice_reset", frame=4000, timestamp_utc=now,
             payload={"igt_frames_before": 0}))
+        # The same pole grab inside THIS track too: it is the newest attempt,
+        # so it is the one the drawer story opens.
+        await service.publish(Event(
+            type="moment_reached", frame=4030, timestamp_utc=now,
+            payload=_place_time({"kind": "pole_grab", "ordinal": 1,
+                                 "landmark": {
+                                     "key": f"{level}:1:bhvPole:640,0,1280",
+                                     "kind_key": "kind:bhvPole",
+                                     "home": [0, 0, 0],
+                                     "pos": [640, 0, 1280],
+                                     "placed": False, "nameable": True},
+                                 "level": level,
+                                 "area": 1, "action": 0x00000841}, 31)))
         await service.publish(Event(
             type="star_collected", frame=4350, timestamp_utc=now,
             payload={"course_id": course_id, "star_id": star_id,
@@ -477,6 +691,43 @@ def _pad_log_with_more_entities(service) -> None:
             frame += 100
             previous_level = level
 
+    _run_coro(go())
+
+
+def _seed_level_entries(service, level: int) -> None:
+    """The level entries the input timeline's LEAD-IN is measured from.
+
+    Round 32 items 51-52. His report: "the input timeline should begin when
+    mario actually spawns into the level" -- so the track reaches back to
+    the latest `level_changed` before the attempt's anchor, and without one
+    in the journal every sweep measures the lead-less layout.
+
+    Published HERE rather than beside each reset in `seed_practice`: a
+    `level_changed` disarms a segment and can retire a target, so entries
+    in play order undid the seeding the rest of this file arranges (27
+    tests red across five files, measured 2026-08-31). Nothing is armed or
+    open yet at this point, and replay ORDER does not matter to the lead --
+    the timeline resolves it by frame and wall clock -- so carrying the
+    entries early costs nothing and disturbs nothing.
+
+    The frames are the ones `seed_practice` anchors its attempts at, each
+    far enough back to sit before the attempt's own FIRST frame rather than
+    merely before its reset: the last attempt's igt (784) outruns its rta
+    (350), so its track already starts at 3567.
+    """
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=UTC)
+
+    async def go() -> None:
+        for frame in (940, 1940, 2940, 3500):
+            await service.publish(Event(
+                type="level_changed", frame=frame, timestamp_utc=now,
+                payload=_place_time({"from": level, "to": level}, 0)))
+
+    # Through the helper, never asyncio.run directly: this seeder was written
+    # on this branch before main grew _run_coro, and under xdist it ran on
+    # workers whose browser loop was already up (2026-09-02: 6 failed + 4
+    # errors per full door, green alone, "cannot be called from a running
+    # event loop" seven times).
     _run_coro(go())
 
 
@@ -1130,6 +1381,8 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               arm_hundred_coin: tuple[int, int] | None = None,
               seed_reds_run: bool = False,
               pad_journal: int = 0,
+              capture_layer_status: dict | None = None,
+              capture_layer_refuse: str | None = None,
               bundled_library: bool = True):
     """Yield the base URL of an offline instance; stop it on the way out.
 
@@ -1241,6 +1494,16 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     `pad_journal` bulk-inserts that many inert journal rows before the server
     starts, so per-poll endpoint costs match a LIVE-sized journal instead of a
     fresh one (see `_pad_journal` -- the burst latency gate is why).
+
+    `capture_layer_status` overrides fields of the setup screen's capture-
+    layer status (`_fixture_capture_layer_status`, `LayerStatus.as_dict()`'s
+    own keys) -- default is an ACTIVE layer, deliberately NOT a state that
+    makes the header's setup modal auto-open (anything short of active or
+    needs_restart does, since 2026-09-05), so the general sweep is not
+    interrupted by a modal nobody asked this fixture for. A first-run test
+    asks for `state="not_installed"`. `capture_layer_refuse` makes every
+    install/uninstall attempt fail with that sentence, for driving the 409
+    path.
     """
     scratch = None
     if db_path is None:
@@ -1323,7 +1586,22 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     # `mode_path` into scratch for the same reason: a render test that flips
     # the Game version setting must not write the REAL data dir's
     # tracker_mode.json and leave the next dev server grading on JP.
+    # The inputs router, over the SAME db: without it the attempt drawer's
+    # timeline 404s and the sweep measures a page that says "could not read
+    # this attempt's inputs" -- a clean render of the wrong thing, which is
+    # the failure mode ui-core.md warns about.
+    from sm64_events.inputs.service import InputsService
+    inputs = InputsService(database.inputs, database.input_templates,
+                           database.attempts, events=database.events_between,
+                           landmark_names=database.landmark_names)
+    # The setup screen's own capture layer -- see _FixtureCaptureLayer's
+    # docstring for why this is a fixed status rather than a simulated
+    # install/uninstall state machine.
+    capture_layer = _FixtureCaptureLayer(
+        _fixture_capture_layer_status(**(capture_layer_status or {})),
+        refuse=capture_layer_refuse)
     app = create_app(poller, broadcaster, service=service, compare=compare,
+                     inputs=inputs, capture_layer=capture_layer,
                      adoptions_path=Path(compare_cache_scratch.name)
                      / "library_adoptions.json",
                      mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json",
@@ -1337,6 +1615,61 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                      library_bundled_path=(None if bundled_library else
                                            Path(compare_cache_scratch.name)
                                            / "no-library.json.gz"))
+
+    # A CLIP'S FRAME MAP, without a clip (round 32 item 53). The timeline's
+    # buffers are the video's, so with no replay service the drawer draws
+    # the lead-less layout and the shaded band is unreachable by every
+    # sweep -- the "clean page nobody is looking at" trap again. This
+    # answers the drawer's own replay POST with a synthetic view whose
+    # `frame_map` carries three seconds of run-up and two of tail around
+    # the attempt, which is exactly what the real thing carries; the video
+    # URL 404s and the player shows its own empty state, which is honest.
+    # These optional services are deliberately absent in the offline fixture.
+    # Return their inactive state so a browser smoke check can treat every
+    # unexpected HTTP error as a failure, instead of filtering known 404s.
+    @app.get("/api/replay/status")
+    @app.get("/api/update/status")
+    def _fixture_inactive_status():
+        return None
+
+    @app.post("/api/attempts/{attempt_id}/replay")
+    def _fixture_replay_view(attempt_id: int):
+        rows = [a for a in database.attempts() if a.id == attempt_id]
+        if not rows or rows[0].anchor_frame is None:
+            return {"clip_url": None, "duration_s": 0, "fps": 60,
+                    "game_fps": 30, "frame_map": None, "source": "buffer",
+                    "anchor_offset_s": 0, "truncated": False,
+                    "saved_path": None}
+        attempt = rows[0]
+        close = attempt.anchor_frame + (attempt.rta_frames or 0)
+        first = (close - (attempt.igt_frames - 1)
+                 if attempt.igt_frames else attempt.anchor_frame)
+        pre, post = 90, 60                       # 3 s and 2 s at 30 fps
+        frame_map = []
+        for raw in range(first - pre, close + post):
+            frame_map.extend([raw, raw])          # 30 fps game, 60 fps video
+        # THE CLIP'S CHECK rides the view too: the timeline header shows how
+        # many of the capture layer's stamped pads the timeline holds, so the
+        # chip is reachable by the sweeps. One contradicted picture, so the
+        # "disagree" wording is the one that renders.
+        pictures = len(frame_map) // 2
+        # A capture-layer clip's stamps: the game's timer per slot, one
+        # frame ahead of the track's own count inside the attempt, None in
+        # the run-up and the tail -- so the inspector's stamped clock is
+        # reachable by the sweeps.
+        picture_igt = [raw - first + 1 if first <= raw < close else None
+                       for raw in frame_map]
+        return {"clip_url": None,
+                "duration_s": len(frame_map) / 60,
+                "fps": 60, "game_fps": 30, "frame_map": frame_map,
+                "picture_igt": picture_igt,
+                "source": "buffer", "anchor_offset_s": pre / 30,
+                "truncated": False, "saved_path": None,
+                "pad_stamp_agreement": {
+                    "pictures": pictures, "agree": pictures - 1,
+                    "rows": pictures + 40,
+                    "disagreements": [[pre * 2 + 40, first + 20,
+                                       [71, 0, 0], [70, 0, 0]]]}}
 
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(
@@ -1369,6 +1702,22 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             # target set below survives untouched and coexists with the
             # still-armed segment. Setting a star target itself only journals
             # `target_set` -- it does not read or touch segment arm state.
+            # THE LEVEL ENTRIES the timeline's LEAD-IN is measured from
+            # (round 32 items 51-52), published BEFORE anything arms.
+            # A `level_changed` disarms a segment and can retire a target
+            # whatever level it names, so one published in play order beside
+            # each reset undid the seeding this file spends its length
+            # arranging (measured: 27 tests red across five files). Here,
+            # with nothing armed and nothing open yet, it disturbs nothing --
+            # and the journal only has to CARRY the entry for the timeline
+            # to find it, since the lead is resolved by frame and wall clock
+            # rather than by replay order. The frames are the ones
+            # `seed_practice` will anchor its attempts at, each far enough
+            # back to sit before the attempt's own first frame (the last
+            # attempt's igt outruns its rta, so its track already starts at
+            # 3567 -- 3500, not merely below its 4000 reset).
+            _seed_level_entries(service,
+                                (stage or (FIXTURE_COURSE, FIXTURE_LEVEL))[1])
             if arm_segment is not None:
                 # Pad FIRST: each padding entity is a real course-crossing
                 # level_changed that would disarm `arm_segment`'s own
@@ -1388,6 +1737,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
                           moments=seed_subsections)
             _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
                          with_pb=target is None)
+            seed_inputs(database, service.session_id)
             if target_segment is not None:
                 # AFTER _seed_target, not before: retiring the star target
                 # _seed_target just set is the whole point (see

@@ -3568,7 +3568,7 @@
   .reset-toggle input { position: absolute; opacity: 0; pointer-events: none; }
   .reset-toggle:has(input:checked) { color: var(--gold-soft); border-color: #8e7330; }
   .attempt-table { margin: 0; font-size: .79rem; font-variant-numeric: tabular-nums; }
-  .attempt-table tr { height: 40px; }
+  .attempt-table tr:not(.replay-row) { height: 40px; }   /* the drawer's row grows -- see the narrow-layout note by --log-row-height */
   .attempt-table td { padding: .3rem .36rem; border-bottom: 1px solid var(--border-soft); }
   .attempt-index { width: 38px; }
   /* Round 5 (addendum, task 8, 2026-07-26 -- "sweep every container sized
@@ -4853,6 +4853,86 @@
     background: rgba(99,45,55,.22); color: #f0a4aa;
   }
 
+  /* The setup screen (setupmodal.js) -- a platform picker + a per-platform
+     checklist, over `.modal-large`. Every state change here is a mount, not
+     a display toggle, so newly-appearing content (a row's body, the
+     disabled reason, the active line) plays a short entrance animation
+     rather than snapping in -- `animation`, not `transition`, since there is
+     no prior DOM state for a transition to interpolate from. */
+  .setup-platform-picks {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .6rem; margin-bottom: 1rem;
+  }
+  .setup-platform-choice {
+    display: flex; flex-direction: column; align-items: flex-start; gap: .2rem;
+    padding: .85rem 1rem; border: 1px solid var(--border-soft);
+    border-radius: 10px; background: #101f31; color: var(--text);
+    cursor: pointer; text-align: left;
+    transition: border-color .15s ease, background-color .15s ease;
+  }
+  .setup-platform-choice:hover { border-color: #5b90c4; }
+  .setup-platform-choice.is-selected {
+    border-color: var(--gold-soft); background: #16283f;
+  }
+  .setup-platform-name { font-weight: 650; }
+  .setup-platform-detail { font-size: .78rem; color: var(--muted); }
+  .setup-error { color: #e08585; font-size: .85em; margin: 0 0 .6rem; }
+  .setup-checklist { display: flex; flex-direction: column; gap: .65rem; }
+  .setup-row {
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    padding: .7rem .8rem; background: #0e1c2c;
+  }
+  .setup-row-head { display: flex; align-items: center; gap: .5rem; }
+  .setup-status-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
+    background: #5b6b7d;
+  }
+  .setup-row-ok .setup-status-dot { background: #59d98e; }
+  .setup-row-warn .setup-status-dot { background: #e0b34a; }
+  .setup-row-title { font-weight: 600; }
+  .setup-row-detail { margin: .35rem 0 0; color: var(--muted); font-size: .8rem; }
+  .setup-row-body { margin-top: .55rem; }
+  /* A short name stays inline; a PATH gets its own line and wraps anywhere,
+     because an inline code span broken across two lines paints two
+     overlapping boxes (the responsive sweep's "code x code" overlap). */
+  .setup-name {
+    background: #081422; padding: .05rem .3rem; border-radius: 4px;
+    font-family: monospace; font-size: .78rem; white-space: nowrap;
+  }
+  .setup-path {
+    display: block; margin: .15rem 0 0; overflow-wrap: anywhere;
+    background: #081422; padding: .15rem .4rem; border-radius: 4px;
+    font-family: monospace; font-size: .78rem;
+  }
+  .setup-writes { margin: .3rem 0 .4rem 1.1rem; padding: 0; font-size: .82rem; list-style: disc; }
+  .setup-writes li { margin: .2rem 0; }
+  .setup-consent-card p { margin: .3rem 0; font-size: .82rem; color: var(--text); }
+  .setup-consent-card .primary-button { margin-top: .5rem; }
+  .setup-disabled-reason { margin: .4rem 0 0; color: #e0a4a4; font-size: .78rem; }
+  .setup-active-line {
+    display: flex; align-items: center; gap: .4rem; color: #59d98e;
+  }
+  .setup-active-line button { margin-left: .5rem; }
+  .setup-active-line button:first-of-type { margin-left: auto; }
+  .setup-row-problem { color: #e0c48a; }
+  .setup-steps { list-style: none; margin: .5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+  .setup-step { display: flex; align-items: center; gap: .55rem; font-size: .85rem; color: var(--muted); }
+  .setup-step.is-next { color: var(--text); }
+  .setup-step.is-done { color: #59d98e; }
+  .setup-tick { width: 1.1rem; text-align: center; flex: 0 0 auto; }
+  .setup-step .primary-button { margin-left: auto; }
+  .setup-n64-note { color: var(--muted); margin: 0; }
+  @media (prefers-reduced-motion: no-preference) {
+    .setup-row-body, .setup-disabled-reason, .setup-active-line,
+    .setup-consent-card {
+      animation: setup-row-in .2s ease-out;
+    }
+    @keyframes setup-row-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+
   .strategy-name-field { margin-bottom: 1rem; }
   .stratname { margin: 0; }
   /* "Include in ranking" — a checkbox ROW, and deliberately NOT a
@@ -5013,6 +5093,373 @@
     width: 100%; max-width: 760px; aspect-ratio: 4 / 3;
     object-fit: contain; border: 1px solid #2d465e; border-radius: 7px; background: #02070c;
   }
+  /* ---- the input timeline -------------------------------------------------
+     Lanes are HTML boxes at percentage widths, so they stretch with the drawer
+     at any width with no aspect arithmetic. The one SVG (the stick) sets
+     preserveAspectRatio in the markup, because the default is `slice` and
+     crops whatever the container's aspect does not cover.
+     Layout gates on @container, never @media: this lives inside a drawer whose
+     width is the drawer's, not the window's. */
+  .attempt-drawer { container-type: inline-size; container-name: drawer; }
+  .attempt-drawer-inputs { margin-top: .6rem; }
+  .attempt-drawer-tools {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
+    margin-top: .5rem;
+  }
+  .attempt-drawer-tools .button-link {
+    display: inline-flex; align-items: center; gap: .3rem;
+    padding: .28rem .55rem; border: 1px solid #2d465e; border-radius: 7px;
+    color: #b8c9da; font-size: .72rem; text-decoration: none;
+  }
+  .attempt-drawer-tools .button-link:hover { border-color: var(--gold-soft); color: #e8eef5; }
+
+  .input-timeline {
+    border: 1px solid #23384c; border-radius: 9px; background: #071019;
+    padding: .55rem .65rem;
+  }
+  .input-timeline.is-loading, .input-timeline.is-error { color: #8fa3b6; font-size: .75rem; }
+  .input-timeline.is-empty {
+    display: flex; gap: .55rem; align-items: flex-start; color: #8fa3b6;
+  }
+  .input-timeline.is-empty strong { color: #cfdcea; font-size: .78rem; }
+  .input-timeline.is-empty p { margin: .2rem 0 0; font-size: .7rem; line-height: 1.35; }
+  .input-timeline .is-error { color: #e39a7c; }
+
+  .input-timeline-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: .5rem; flex-wrap: wrap; margin-bottom: .45rem;
+  }
+  .input-timeline-head h4 { margin: .1rem 0 0; font-size: .82rem; color: #dce7f2; }
+
+  .input-template-note {
+    display: flex; align-items: center; gap: .3rem; flex-wrap: wrap;
+    font-size: .69rem; color: #9db1c5; margin-bottom: .4rem;
+  }
+  .input-template-note strong { color: #e3c27c; }
+
+  /* The label column's width lives in ONE variable: the lane grid reads it
+     for its first column and the track column overlay reads it for where
+     the tracks begin, so the playhead can only ever travel over the tracks
+     -- never over the words "Stick" and "Mario" (his report 2026-08-22). */
+  .input-lanes {
+    position: relative; cursor: crosshair; touch-action: none;
+    --lane-label: 3.4rem; --lane-gap: .4rem;
+  }
+  .input-lane {
+    display: grid; grid-template-columns: var(--lane-label) 1fr;
+    align-items: center; gap: var(--lane-gap); margin-bottom: .18rem;
+  }
+  .input-track-column {
+    position: absolute; top: 0; bottom: 0; right: 0;
+    left: calc(var(--lane-label) + var(--lane-gap));
+    pointer-events: none; z-index: 2;
+  }
+  .input-lane-name {
+    font-size: .64rem; color: #8fa3b6; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .input-lane-track {
+    position: relative; height: 14px; border-radius: 4px;
+    background: #0c1723; overflow: hidden;
+  }
+  .input-lane.is-stick .input-lane-track { height: 46px; background: #0a1420; }
+  /* EVERY lane's svg, not just the stick's. An inline <svg> sits on the text
+     baseline and earns ~3px of descender space under it, so the speed lane
+     measured 33px inside its own 30px box and the sweep's clip probe fired.
+     `display: block` is what removes the baseline; scoping the rule to one
+     lane meant the next lane to get an svg inherited the bug. */
+  .input-lane-track svg { display: block; width: 100%; height: 100%; }
+  .input-bar {
+    position: absolute; top: 2px; bottom: 2px; min-width: 2px; padding: 0;
+    border: 0; border-radius: 3px; background: var(--gold); cursor: pointer;
+    transition: filter .12s ease;
+    /* MEASURED, not guessed (2026-08-21): the shell's own `button` rule gives
+       every button `display: inline-flex` and `min-height: 34px`, so a bar in
+       a 14px lane came out 34px tall and the sweep's clip probe reported
+       `scrollHeight 36 > clientHeight 14` at every width. `top`/`bottom` do
+       not win against a min-height. Both have to be named here, and the
+       font-size/line-height keep an empty button from earning a line box. */
+    display: block; min-height: 0; height: auto;
+    font-size: 0; line-height: 0; overflow: hidden;
+  }
+  .input-bar:hover, .input-bar:focus-visible { filter: brightness(1.25); }
+  /* The template is CONTEXT, so it is quieter than your own run -- but it
+     still carries real colour. Dimming the other half to make one read is a
+     second bug, not the price of fixing the first (his ruling 2026-07-27). */
+  /* The template sits BEHIND your own bar, taller and quieter, so the offset
+     between the two is a thing you look at rather than a thing we describe.
+     It still carries real colour: dimming the other half to make one read is
+     a second bug, not the price of fixing the first (his ruling 2026-07-27). */
+  .input-bar.is-template {
+    top: 0; bottom: 0; border-radius: 2px; background: #3d6c99;
+    cursor: default; z-index: 0;
+  }
+  .input-lane-track .input-bar:not(.is-template) { z-index: 1; }
+  .stick-axis { stroke: #1d2c3b; stroke-width: 1; }
+  .stick-line { fill: none; stroke-width: 1.6; }
+  .stick-line.is-x { stroke: #6fb1e0; }
+  .stick-line.is-y { stroke: #7fd6a2; }
+  .stick-line.is-template { stroke-width: 1.1; opacity: .6; stroke-dasharray: 3 2; }
+  /* ---- Mario's own rows (round 32) ---------------------------------------
+     What he was DOING, how fast, and which way he faced -- beside what was
+     pressed, so "where are the opportunities to go faster" is a comparison
+     you make by eye rather than one we assert for you. */
+  .input-lane.is-actions .input-lane-track { height: 20px; background: #0b1a14; }
+  .input-lane.is-speed .input-lane-track { height: 30px; background: #0a1420; }
+  .action-span {
+    /* border-box so the padding cannot push a span past the room its own
+       inline max-width leaves it: a short span near the right edge rendered
+       ~6px wide whatever its share and hung 3px outside the lane. */
+    position: absolute; top: 2px; bottom: 2px; min-width: 3px; padding: 0 .2rem;
+    box-sizing: border-box;
+    display: flex; align-items: center; justify-content: flex-start;
+    min-height: 0; height: auto;
+    border: 0; border-radius: 3px; overflow: hidden; cursor: pointer;
+    font-size: .6rem; line-height: 1; color: #06110c; font-weight: 700;
+    background: #4d7f6a;
+  }
+  .action-span:hover, .action-span:focus-visible { filter: brightness(1.2); }
+  .action-span-name { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  /* One hue per action GROUP, because the group is the thing you read at a
+     glance -- airborne vs moving vs stationary -- and the exact name is what
+     the label and the tooltip are for. */
+  .action-span.group-stationary { background: #5a6b7d; }
+  .action-span.group-moving { background: #4d8f5f; }
+  .action-span.group-airborne { background: #6f9fd8; }
+  .action-span.group-submerged { background: #4d8f97; }
+  .action-span.group-cutscene { background: #8a7bbd; }
+  .action-span.group-automatic { background: #b58f5a; }
+  .action-span.group-object { background: #b5705a; }
+  /* The moments row: one tick per journal moment, its sentence given the
+     room up to the next tick. The tick is the fact; the name is a courtesy
+     that gives way first. Same button reset as the bars, same reason. */
+  .input-lane.is-moments .input-lane-track { height: 20px; background: #14101c; }
+  .moment-mark {
+    position: absolute; top: 0; bottom: 0; min-width: 2px; padding: 0;
+    display: flex; align-items: center; gap: .2rem;
+    /* flex-start is LOAD-BEARING: the design system's own button rule
+       centres flex content, and this button spans from its moment to the
+       NEXT one -- centred, the tick drew mid-span, a third of the timeline
+       away from its own frame (his report 2026-08-23: "appears in the
+       center of the timeline, when it actually starts way earlier"). */
+    justify-content: flex-start;
+    min-height: 0; height: auto; border: 0; border-radius: 0;
+    background: transparent; overflow: hidden; cursor: pointer;
+    font-size: .6rem; line-height: 1; color: #d9c6f0; text-align: left;
+  }
+  /* The shell's button:hover paints a background over the button's whole
+     span, which reads as a mystery band from the moment to the next one.
+     The tick and the label brighten instead (the rule below). */
+  .moment-mark:hover, .moment-mark:focus-visible { background: transparent; }
+  .moment-mark-tick {
+    flex: none; width: 2px; align-self: stretch; background: #c9a6ff;
+    border-radius: 1px;
+  }
+  .moment-mark.type-star_collected .moment-mark-tick { background: var(--gold); }
+  .moment-mark-name { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  .moment-mark:hover, .moment-mark:focus-visible { filter: brightness(1.25); }
+  .input-inspector-moment { color: #d9c6f0; }
+  .input-inspector-moment .meta { color: #8fa3b6; }
+  .speed-line { fill: none; stroke: #e3c27c; stroke-width: 1.6; }
+  .speed-line.is-template { stroke-width: 1.1; opacity: .6; stroke-dasharray: 3 2; }
+  /* The template's action row wears the same colours at lower weight: the
+     same visual language as the ghost bars and the dashed stick, so one eye
+     reads "template" across every lane. */
+  .action-span.is-template { opacity: .55; }
+  .input-inspector-action.is-template { opacity: .7; }
+
+  /* Attempt and template keep their identity in every overlaid row. The
+     taller outlined ghost remains visible even for exactly matching holds. */
+  .input-timeline { --input-you: #78b7ed; --input-template: #e7b85c; }
+  .input-timeline .input-bar:not(.is-template) { background: var(--input-you); }
+  .input-timeline .input-bar.is-template {
+    background: #e7b85c35; border: 1px dashed var(--input-template);
+    box-sizing: border-box;
+  }
+  .input-timeline .stick-line.is-x { stroke: var(--input-you); }
+  .input-timeline .stick-line.is-y { stroke: #beddfa; }
+  .input-timeline .stick-line.is-x.is-template { stroke: var(--input-template); }
+  .input-timeline .stick-line.is-y.is-template { stroke: #f5d9a1; }
+  .input-timeline .stick-line.is-template,
+  .input-timeline .speed-line.is-template { opacity: 1; stroke-width: 1.6; }
+  .input-timeline .speed-line { stroke: var(--input-you); }
+  .input-timeline .speed-line.is-template { stroke: var(--input-template); }
+  .input-timeline .action-span { background: var(--input-you); }
+  .input-timeline .action-span.is-template {
+    background: #e7b85c35; color: #f5d9a1; opacity: 1;
+    border: 1px dashed var(--input-template);
+  }
+  .input-lane.is-actions.has-template .input-lane-track { height: 28px; }
+  .input-lane.is-actions.has-template .action-span:not(.is-template) {
+    top: 6px; bottom: 6px; z-index: 1;
+  }
+  .input-timeline .stick-box-stem:not(.is-template),
+  .input-timeline .facing-needle:not(.is-template) { stroke: var(--input-you); }
+  .input-timeline .stick-box-dot:not(.is-template),
+  .input-timeline .facing-head:not(.is-template) { fill: #d5eafd; stroke: var(--input-you); }
+  .input-timeline .stick-box-stem.is-template,
+  .input-timeline .facing-needle.is-template { stroke: var(--input-template); stroke-dasharray: 4 2; }
+  .input-timeline .stick-box-dot.is-template,
+  .input-timeline .facing-head.is-template { fill: none; stroke: var(--input-template); stroke-width: 2; }
+  .input-timeline .stick-values .is-template,
+  .input-timeline .controller-buttons.is-template { color: var(--input-template); }
+  .controller-reading { display: flex; flex-direction: column; gap: .15rem; }
+  .controller-reading + .controller-reading { margin-top: .45rem; }
+  .controller-reading-label { font-size: .6rem; color: #9db1c5; }
+  .input-timeline .controller-reading:not(.is-template) .stick-value:not(.is-centred) { color: var(--input-you); }
+  .input-timeline .controller-reading.is-template .stick-value:not(.is-centred) { color: var(--input-template); }
+  .input-overlay-controls { margin: .4rem 0 .65rem; font-size: .72rem; }
+  .input-overlay-legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; margin-bottom: .3rem; }
+  .input-overlay-legend .is-attempt { color: var(--input-you); }
+  .input-overlay-legend .is-template { color: var(--input-template); }
+  .input-overlay-controls summary { cursor: pointer; color: #c5d7e6; width: fit-content; }
+  .input-overlay-switches { display: flex; flex-wrap: wrap; gap: .4rem .8rem; padding-top: .5rem; }
+  .input-overlay-switches label { display: flex; align-items: center; gap: .3rem; cursor: pointer; }
+  .input-overlay-switches input { accent-color: var(--input-template); }
+  .input-template-tools { flex-wrap: wrap; }
+  .input-template-tools [role="status"] { flex-basis: 100%; color: #a4d8b4; }
+  .input-template-manager { min-width: 0; }
+  .input-template-manager form, .input-template-manager label {
+    display: flex; flex-direction: column; gap: .45rem; align-items: stretch;
+  }
+  .input-template-manager form { gap: .85rem; }
+  .input-template-manager label { font-size: .8rem; color: #d2dfeb; }
+  .input-template-manager input, .input-template-manager textarea {
+    width: 100%; min-width: 0; box-sizing: border-box;
+  }
+  .input-template-manager textarea { resize: vertical; font-family: monospace; font-size: .72rem; }
+  .input-template-manager .is-error { color: #efaa91; overflow-wrap: anywhere; }
+  .input-template-manager strong, .input-template-manager p { overflow-wrap: anywhere; }
+  .input-import-preview { border-left: 3px solid #e7b85c; padding: .3rem .75rem; background: #e7b85c0a; }
+  .input-template-list { padding: 0; list-style: none; max-height: 42vh; overflow-y: auto; }
+  .input-template-list li { padding: .75rem 0; border-bottom: 1px solid #283d50; }
+  .input-template-list p { margin: .3rem 0 .5rem; }
+  .input-template-actions, .input-template-remove { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .input-template-remove { align-items: center; margin-top: .6rem; }
+
+  .facing-panel .facing-ring {
+    fill: #081420; stroke: #33506c; stroke-width: 2;
+  }
+  .facing-tick { stroke: #24405a; stroke-width: 2; }
+  .facing-needle { stroke: #e3c27c; stroke-width: 2.5; }
+  .facing-head { fill: #f7e6bd; stroke: #e3c27c; stroke-width: 1.5; }
+  .facing-hub { fill: #33506c; }
+  .stick-value.is-speed { color: #7fd6a2; font-size: .72rem; }
+  .input-inspector-action {
+    margin-left: .5rem; padding: .1rem .4rem; border-radius: 5px;
+    background: #14261d; color: #9fd8bb; font-size: .68rem; font-weight: 700;
+  }
+
+  /* Step buttons are held (ui/holdrepeat.js): no text selection or touch
+     zoom on a long press. */
+  .replay-transport button {
+    touch-action: manipulation; user-select: none; -webkit-user-select: none;
+  }
+  .input-playhead {
+    position: absolute; top: 0; bottom: 0; width: 0;
+    border-left: 1px solid #f4f7fb; pointer-events: none;
+  }
+  /* The lead-in (level entry -> the reset): real in-level frames before the
+     attempt's own frame 0, shaded so the extension explains itself. */
+  .input-lead-shade {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    /* Reads as its own region at a glance -- at .13 it was invisible in a
+       render, which is the "correct but unexplained" state he rejects.
+       It overlays the lanes, so the tint stays light enough that the
+       lead's OWN bars and stick line read through it. */
+    background: rgba(126, 152, 184, .22); pointer-events: none;
+    border-right: 1px dashed rgba(170, 192, 216, .7);
+  }
+  /* THE DISAGREEMENT CHIP, and it only exists when there IS one: the clip's
+     pad check is silent when it passes (2026-09-05 -- "worthless information"
+     for a check that has never failed), so there is no clean state and no
+     green. Amber, and a DOOR: it opens the list of contradicted pictures. */
+  .input-screen-check {
+    display: inline-block; font: inherit; font-size: .7rem; margin-left: .55rem;
+    padding: .05rem .45rem; border-radius: 999px; line-height: 1.4;
+    white-space: nowrap; cursor: pointer;
+    border: 1px solid rgba(230, 180, 90, .6); color: #f0c877;
+    background: rgba(160, 110, 30, .2);
+  }
+  .input-screen-check:hover, .input-screen-check.is-open {
+    background: rgba(160, 110, 30, .35);
+  }
+  .input-screen-check-list {
+    list-style: none; margin: .2rem 0 .5rem; padding: 0;
+    display: flex; flex-wrap: wrap; gap: .3rem .5rem;
+  }
+  .input-screen-check-row {
+    font: inherit; font-size: .72rem; color: #e6d9b8; cursor: pointer;
+    background: rgba(160, 110, 30, .12); border: 1px solid rgba(230, 180, 90, .35);
+    border-radius: .4rem; padding: .15rem .5rem; display: inline-flex; gap: .5rem;
+    justify-content: flex-start; align-items: center;   /* a row anchors left */
+  }
+  .input-screen-check-row:hover { background: rgba(160, 110, 30, .3); }
+  .input-screen-check-row .frame { font-weight: 600; color: #f0c877; }
+  .input-screen-check-row .axis { color: #8fa3b8; }
+
+  /* A nudge, not a warning -- every source here is a real, working map, this
+     one just built from less direct evidence than the wrapper plugin's own
+     frame stream. Sits beneath the header's title/screen-check line rather
+     than beside it: at 850px the chip already wraps its own line. */
+  .input-frame-map-note {
+    display: flex; align-items: center; gap: .4rem; margin: .25rem 0 0;
+    font-size: .72rem; color: #8fa3b8;
+  }
+  .input-frame-map-note button {
+    font: inherit; font-size: .72rem; color: #f0c877; background: none;
+    border: none; min-height: 0; padding: 0; text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .input-inspector {
+    display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
+    margin-top: .5rem; padding-top: .5rem; border-top: 1px solid #182735;
+  }
+  .input-inspector-frame { display: flex; flex-direction: column; }
+  .input-inspector-frame strong { font-size: .95rem; color: #f0f5fa; }
+  .input-inspector-read { font-size: .72rem; color: #9db1c5; }
+
+  /* ---- the controller panel (Usamune's ONCOMB, and the export's renderer) */
+  .controller-panel { display: flex; flex-direction: column; gap: .3rem; }
+  .controller-panel-label {
+    font-size: .62rem; text-transform: uppercase; letter-spacing: .06em;
+    color: #7f93a7;
+  }
+  .controller-panel-body { display: flex; align-items: center; gap: .45rem; }
+  .stick-box { display: block; flex: none; }
+  .stick-box-frame { fill: #081420; stroke: #33506c; stroke-width: 2; }
+  .stick-box-cross { stroke: #1b2c3d; stroke-width: 1.5; }
+  .stick-box-cap { fill: none; stroke: #24405a; stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .stick-box-stem { stroke: #6fb1e0; stroke-width: 2; }
+  .stick-box-dot { fill: #f0f5fa; stroke: #6fb1e0; stroke-width: 1.5; }
+  .stick-values { display: flex; flex-direction: column; gap: .1rem; }
+  .stick-value {
+    font-variant-numeric: tabular-nums; font-weight: 700; font-size: .82rem;
+    color: var(--gold); min-width: 3.1rem;
+  }
+  .stick-value.is-centred { color: #4d6076; font-weight: 500; }
+  .controller-buttons { display: flex; flex-wrap: wrap; gap: .2rem; }
+  .controller-button {
+    padding: .1rem .34rem; border-radius: 5px; font-size: .64rem; font-weight: 700;
+    background: #24405a; color: #e8eef5; border: 1px solid #35597a;
+  }
+  .controller-button.is-empty {
+    background: transparent; border-color: #1d2c3b; color: #566b80; font-weight: 500;
+  }
+  .controller-button.btn-a { background: #2f4fb0; border-color: #4f74e0; }
+  .controller-button.btn-b { background: #2f8a4d; border-color: #4fc37a; }
+  .controller-button.btn-z { background: #6b6b6b; border-color: #9a9a9a; }
+  .controller-button.btn-start { background: #b03a3a; border-color: #e06060; }
+
+  /* 850px is the supported floor, and the drawer is narrower than the window.
+     The lane label column and the inspector are what run out of room first. */
+  @container drawer (max-width: 520px) {
+    .input-lanes { --lane-label: 2.4rem; }
+    .input-inspector { gap: .5rem; }
+    .input-inspector-read { flex-basis: 100%; }
+  }
+
   .replay-status-row { min-height: 26px; display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .35rem; }
   .replay-notice {
     display: inline-flex; align-items: center; gap: .3rem;
@@ -6308,7 +6755,13 @@
     border-top: 1px solid var(--border-soft);
     background: rgba(0, 0, 0, var(--log-body-tint, 0.16));
   }
-  .log-card-body .attempt-table tr { height: var(--log-row-height, 40px); }
+  /* NOT the replay row. In the narrow layout the rows become blocks, and
+     on a block `height` is a hard size where on a table row it was only a
+     minimum -- so this rule pinned the open drawer's row to 40px and the
+     clip and the timeline painted over every card beneath (his report
+     2026-08-23, "it gets totally messed up on a small enough screen
+     width"). Above 760px the row was still a table row and grew. */
+  .log-card-body .attempt-table tr:not(.replay-row) { height: var(--log-row-height, 40px); }
   /* A row on a strategy OTHER than the one being practised is dimmed, so
      the rows that belong to what you are doing are the ones that read
      (his call, 2026-08-23: "slightly dim the row, so that it's very clear

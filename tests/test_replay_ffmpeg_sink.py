@@ -12,6 +12,25 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pytest
 
+from sm64_events.replay.ffmpeg_sink import fill_plane
+
+
+@pytest.mark.parametrize("width", [1190, 1192, 640, 1601])
+def test_fill_plane_lays_a_picture_into_a_padded_plane(width):
+    """FFmpeg pads a plane's rows to 32 bytes: 1190 px of BGRA is 4760 bytes
+    in a 4768-byte line, and a raw update refused it on every picture
+    (2026-09-05, Project64's start-up window). Every row must land at the
+    plane's own line size, whatever the width."""
+    av = pytest.importorskip("av")
+    import numpy as np
+    height = 3
+    picture = np.arange(height * width * 4, dtype=np.uint32).astype(np.uint8).reshape(height, width, 4)
+    frame = av.VideoFrame(width, height, "bgra")
+    plane = frame.planes[0]
+    fill_plane(plane, picture)
+    laid = np.frombuffer(bytes(plane), dtype=np.uint8).reshape(height, plane.line_size)
+    assert np.array_equal(laid[:, :width * 4], picture.reshape(height, width * 4))
+
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.ffmpeg_sink import FfmpegAvSink, parse_segment_csv
@@ -27,6 +46,8 @@ def _ffmpeg():
 
 
 def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
+    """The CFR feed's contract (picture_feed=False): the pre-2026-09-02
+    ring, still the shape the in-process fallback and older clips have."""
     """Pins the ffmpeg arg contract — each flag is load-bearing for the
     single-clock sync model (see ffmpeg_sink docstring / the drift memory):
     wallclock BEFORE each input, cfr video, aresample=async audio, both
@@ -48,7 +69,8 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
         "sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
     monkeypatch.setattr(
         "sm64_events.replay.ffmpeg_sink._assign_kill_on_close", lambda p: None)
-    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
+    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0,
+                       picture_feed=False)
     sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg")
     sink._spawn(320, 240)
     for t in sink._readers:
@@ -125,6 +147,32 @@ def test_spawn_args_follow_the_picked_codec(tmp_path, monkeypatch):
     assert "-forced-idr" not in a           # NVENC-only knob
 
 
+def test_mux_initialization_failure_closes_its_child_and_leaves_no_feed(tmp_path, monkeypatch):
+    from sm64_events.replay import ffmpeg_sink
+
+    events = []
+    class Child:
+        stdin = io.BytesIO()
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+        def wait(self, timeout):
+            events.append("waited")
+            return 0
+
+    child = Child()
+    def broken_mux(*args):
+        raise OSError("mux unavailable")
+
+    monkeypatch.setattr(ffmpeg_sink.subprocess, "Popen", lambda *args, **kw: child)
+    sink = FfmpegAvSink(ReplayConfig(scratch_dir=tmp_path), lambda seg: None,
+                        on_fed=lambda *args, **kw: events.append("fed"))
+    monkeypatch.setattr(sink, "_open_mux", broken_mux)
+    monkeypatch.setattr(sink, "_respawn_delay", lambda: 0)
+    assert sink._write_frame(np.zeros((96, 320, 4), np.uint8), (1, T0.timestamp())) is None
+    assert sink._proc is None and child.stdin.closed
+    assert events == ["waited"]
+
+
 def test_respawn_backoff_scales_with_young_deaths_and_resets(tmp_path):
     """A child that dies young (encoder init failure, full disk) must not be
     respawned per write attempt — that ran 331 restarts in one sitting
@@ -156,6 +204,24 @@ def test_parse_segment_csv_relative_to_origin(tmp_path):
     assert parse_segment_csv("missing.ts,0,2\n", T0, 0.0, tmp_path) is None
 
 
+def test_an_old_childs_final_segment_retains_its_own_media_clock(tmp_path):
+    from sm64_events.replay.media import MediaRun
+
+    path = tmp_path / "old.ts"
+    path.write_bytes(b"old segment")
+    old = MediaRun("old", T0.timestamp())
+    received = []
+    sink = FfmpegAvSink(ReplayConfig(scratch_dir=tmp_path), received.append)
+    sink._anchor_utc = T0 + timedelta(seconds=50)
+    sink._media_run = MediaRun("new", sink._anchor_utc.timestamp())
+    proc = type("Child", (), {"stdout": io.BytesIO(b"old.ts,2,4\n")})()
+    sink._segment_list_loop(proc, (320, 240), old)
+    assert len(received) == 1
+    assert received[0].media_run == old
+    assert received[0].utc_start == T0 + timedelta(seconds=2)
+    assert received[0].utc_end == T0 + timedelta(seconds=4)
+
+
 @pytest.mark.skipif(bundled_ffmpeg() is None and shutil.which("ffmpeg") is None,
                     reason="no ffmpeg")
 def test_av_sink_produces_synced_av_segments(tmp_path):
@@ -163,7 +229,9 @@ def test_av_sink_produces_synced_av_segments(tmp_path):
     whose audio and video durations match (one clock) and whose wall spans
     are ~2 s each."""
     import av
-    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60)
+    # The CFR feed's own proof; the picture feed has its own in
+    # test_replay_picture_feed.py (one frame per picture, ~30/s).
+    cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, picture_feed=False)
     segs = []
     sink = FfmpegAvSink(cfg, segs.append, ffmpeg=_ffmpeg())
     sink.start()

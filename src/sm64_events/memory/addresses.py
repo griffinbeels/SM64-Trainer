@@ -86,15 +86,16 @@ PARTICLE_DUST = 1 << 0
 # Usamune practice-timer globals — STATIC addresses in expansion RAM
 # (slot-independent, unlike the object-pool counters below), in no symbol
 # map, so a new version HUNTS them (`sync/address_gates.py`, the exact-value
-# scan of the displayed time): `layout.usamune_overall` (u16, running OVERALL
-# star time: keeps counting across area warps, resets with Usamune level
-# resets), `layout.usamune_star_result` (u16, written at the grab with the
-# EXACT final time Usamune displays; persists after the grab, 0 until then).
+# scan of the displayed time): `layout.usamune_overall` (u16, Usamune's
+# RUNNING leg counter; despite the historical name, it restarts at retries,
+# deeper-area loads and in-level teleports -- `detectors/counter_epoch.py`
+# carries the live-journal proof and banks involuntary restarts),
+# `layout.usamune_star_result` (u16, written at the grab with the EXACT final
+# whole-star time Usamune displays; persists after the grab, 0 until then).
 # US neighbours observed 2026-06-10: +0x-2 constant 256; +0x2 written at grab.
-# `layout.usamune_timer` is the SECTION (per-area) counter — slot-dependent
-# AND resets on area warps inside a level, so it must NOT be the event IGT
-# source (it under-reported multi-area stars like "Inside the Ancient
-# Pyramid"). Kept for diagnostics only.
+# `layout.usamune_timer` is a second SECTION/per-area counter in the object
+# pool -- slot-dependent, and likewise not a whole-star event source. Kept for
+# diagnostics only.
 
 # Trap, do not reuse for IGT: the vanilla HUD race timer (gHudDisplay.timer,
 # `layout.hud_display` + HUD_TIMER_OFF, u16) and sTimerRunning (`layout.hud_timer_running`,
@@ -646,6 +647,120 @@ DIALOG_ACTIONS = frozenset({ACT_READING_AUTOMATIC_DIALOG,
 # decomp-only and BOX_OPENS_AT_STATE below deliberately does not gate on it;
 # see that constant's own comment.
 MARIO_ACTION_STATE_OFF = 0x18  # u16
+
+# --- what Mario was DOING, for the input timeline's diagnostic rows ---------
+# Round 32's ask (2026-08-21, from his Discord thread): "adding extra
+# diagnostic info about mario alongside the timeline" -- his orientation, and
+# his state over time as a separate row.
+#
+# Both are OFFSETS off gMarioStates[0], which memory/layout.py already carries
+# a verified address for, so neither needs a layout row or an address gate of
+# its own. decomp `struct MarioState`: faceAngle is a Vec3s at 0x2C
+# (pitch, yaw, roll), so yaw -- the one that answers "which way is he facing"
+# -- is 0x2E. Corroborated by the offsets this file already pins around it
+# (particleFlags 0x08, action 0x0C, actionState 0x18, actionTimer 0x1A all
+# match the same struct). VERIFY until read live with him.
+MARIO_FACE_ANGLE_OFF = 0x2C      # Vec3s {pitch, yaw, roll}
+MARIO_YAW_OFF = 0x2E             # s16, the yaw of that vector
+# forwardVel -- the speed a runner means by "speed", and the one every guide
+# quotes. decomp `struct MarioState`: pos (Vec3f) 0x3C, vel (Vec3f) 0x48,
+# forwardVel 0x54. His ask, 2026-08-21: "so we can exactly see how his speed
+# changes over time and where there are opportunities to go faster".
+# VERIFY until read live with him.
+MARIO_FORWARD_VEL_OFF = 0x54     # f32
+
+# An s16 angle spans the whole circle, so degrees are (value / 65536) * 360.
+# The game's own units are what every other tool shows ("the 64xxx whatever
+# the number is that we have in usamune"), and a 360-degree reading is what he
+# asked to see instead.
+ANGLE_UNITS = 0x10000
+
+
+def yaw_degrees(yaw: int) -> float:
+    """A face-angle yaw as compass degrees in [0, 360)."""
+    return (yaw % ANGLE_UNITS) * 360.0 / ANGLE_UNITS
+
+
+# SM64 encodes an action's GROUP in its own id (decomp `include/sm64.h`), so
+# every action names its family even when this file has never heard of the
+# specific one. That is what lets the timeline's action row say "airborne"
+# rather than print a hex number and call it information.
+ACT_ID_MASK = 0x000001FF
+ACT_GROUP_MASK = 0x000001C0
+ACTION_GROUPS = {
+    0 << 6: "stationary",
+    1 << 6: "moving",
+    2 << 6: "airborne",
+    3 << 6: "submerged",
+    4 << 6: "cutscene",
+    5 << 6: "automatic",
+    6 << 6: "object",
+}
+
+
+def action_group(action: int) -> str:
+    return ACTION_GROUPS.get(action & ACT_GROUP_MASK, "unknown")
+
+
+def action_label(action: int) -> str:
+    """The action's own name where this file knows it, else its GROUP.
+
+    Never a bare hex id: a number nobody can read is not diagnostic
+    information, and pretending otherwise is how a row full of `0x0188088A`
+    ends up on screen.
+    """
+    if not action:
+        return "none"
+    name = _ACTION_NAMES.get(action)
+    if name is not None:
+        return name
+    return action_group(action)
+
+
+def _build_action_names() -> dict[int, str]:
+    """Every `ACT_*` constant in this module, by value.
+
+    Derived rather than hand-listed, so a new constant is named the moment it
+    is added and a renamed one cannot leave a stale label behind.
+    """
+    return {value: word.replace("_", " ")
+            for value, word in _build_action_words().items()}
+
+
+def _build_action_words() -> dict[int, str]:
+    """The same table as ONE WORD per action -- `dive_slide`, never `dive
+    slide` -- which is what a whitespace-split document row can carry."""
+    out: dict[int, str] = {}
+    for key, value in list(globals().items()):
+        if not key.startswith("ACT_") or not isinstance(value, int):
+            continue
+        if key in ("ACT_ID_MASK", "ACT_GROUP_MASK"):
+            continue
+        out.setdefault(value, key[len("ACT_"):].lower())
+    return out
+
+
+def action_word(action: int) -> str:
+    """An action as ONE word that `action_from_word` turns back into the same
+    id: its decomp name where this file knows it, else its hex id. Unlike
+    `action_label` this never answers with the group, because a group is not
+    reversible and a document row has to survive a round trip exactly."""
+    if not action:
+        return "-"
+    word = _ACTION_WORDS.get(action)
+    return word if word is not None else f"0x{action:08X}"
+
+
+def action_from_word(word: str) -> int | None:
+    """Inverse of `action_word`; None for a word this file cannot read."""
+    if word == "-":
+        return 0
+    if word.startswith("0x"):
+        try:
+            return int(word, 16)
+        except ValueError:
+            return None
+    return _ACTION_IDS.get(word)
 
 # The frame each reading action's OWN handler actually creates the dialog
 # box -- keyed off MARIO_ACTION_STATE, not off entering the action. THE FIX
@@ -1334,3 +1449,56 @@ def node_short_label(key: str) -> str:
     if course in COURSE_ABBREV:
         return COURSE_ABBREV[course]
     return _SHORT_LEVEL_NAMES.get(level, node_label(key))
+
+
+# --- the controller ---------------------------------------------------------
+# decomp's `struct Controller`, one per entry of gControllers. These offsets
+# are version-independent; the ARRAY's address is not (memory/layout.py).
+CONTROLLER_SIZE = 0x20
+CONTROLLER_RAW_STICK_X_OFF = 0x00     # s16, the pad's own value (|x| up to ~84)
+CONTROLLER_RAW_STICK_Y_OFF = 0x02     # s16
+CONTROLLER_STICK_X_OFF = 0x04         # f32, dead-zoned and clamped to 64
+CONTROLLER_STICK_Y_OFF = 0x08         # f32
+CONTROLLER_STICK_MAG_OFF = 0x0C       # f32, hypotenuse of the two above
+CONTROLLER_BUTTON_DOWN_OFF = 0x10     # u16, everything held THIS frame
+CONTROLLER_BUTTON_PRESSED_OFF = 0x12  # u16, everything NEWLY down this frame
+CONTROLLER_STATUS_PTR_OFF = 0x14      # -> gControllerStatuses
+CONTROLLER_DATA_PTR_OFF = 0x18        # -> gControllerPads
+CONTROLLER_PORT_OFF = 0x1C            # s32, 0 for player one
+
+# The dead zone the game puts the raw stick through, and the cap it clamps
+# the result to (decomp's adjust_analog_stick). Both are what make a
+# controller struct checkable AGAINST ITSELF, which is how its address was
+# found at all -- see inputs/frame.py::fits_controller.
+STICK_DEAD_ZONE = 8
+STICK_DEAD_ZONE_SHIFT = 6
+STICK_MAX = 64
+
+# CONT_TYPE_NORMAL: what gControllerStatuses[0].type reads for a standard pad
+# plugged into port 1, and errno for a port with nothing in it. Together they
+# are the corroboration that pinned gPlayer1Controller's address.
+CONT_TYPE_NORMAL = 0x0005
+CONT_ERRNO_NO_CONTROLLER = 0x08
+
+# The N64 pad's button word, high bit first so a rendered lane list reads
+# A, B, Z, Start, D-pad, L, R, C-buttons.
+BUTTON_BITS = (
+    (0x8000, "A"), (0x4000, "B"), (0x2000, "Z"), (0x1000, "Start"),
+    (0x0800, "Dup"), (0x0400, "Ddown"), (0x0200, "Dleft"), (0x0100, "Dright"),
+    (0x0020, "L"), (0x0010, "R"),
+    (0x0008, "Cup"), (0x0004, "Cdown"), (0x0002, "Cleft"), (0x0001, "Cright"),
+)
+# 0x0080 is the console RESET line and 0x0040 is unused; a controller never
+# sets either, so a word with one of them set is not a button word.
+BUTTON_VALID_MASK = 0xFF3F
+
+# How far through a frame the game rewrites the controller struct, as a
+# fraction of the frame. MEASURED by tools/probe_inputs.py over four live
+# sessions 2026-08-20: 0.61-0.65 at 250 and 500 Hz. This is the whole reason
+# the poll loop samples faster than 60 Hz -- at 60 Hz the last look of each
+# frame lands at 50% and reads the PREVIOUS frame's input on 100% of frames,
+# one frame late, invisibly. Do not "simplify" this to 0.5.
+CONTROLLER_SETTLE_PHASE = 0.62
+_ACTION_WORDS = _build_action_words()
+_ACTION_IDS = {word: value for value, word in _ACTION_WORDS.items()}
+_ACTION_NAMES = _build_action_names()

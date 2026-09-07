@@ -58,6 +58,23 @@ def test_verdict_roundtrips_json_and_rejects_unknown_status():
         G.Verdict("meh")
 
 
+def test_no_gate_hands_measured_a_string():
+    """`Verdict.measured` is `dict | None` (gates.py), and the wire model
+    (`server/sync_api.py::VerdictBody`) enforces it -- a gate passing a
+    string gets its verdict 422'd off the live dashboard, which is exactly
+    how the controller gate's one live verdict went missing (2026-08-23).
+    Source scan, because the bad call only runs with an emulator attached."""
+    import re
+    from pathlib import Path
+    src = Path(G.__file__).parent
+    offenders = []
+    for module in sorted(src.glob("*_gates.py")):
+        for match in re.finditer(r"measured\s*=\s*f?[\"']",
+                                 module.read_text(encoding="utf-8")):
+            offenders.append(f"{module.name}: {match.group(0)!r}")
+    assert not offenders, offenders
+
+
 def test_reads_label_names_what_each_kind_reads():
     """The dashboard's READS column: one derivation, server-side."""
     assert G.reads_label(G.Gate("address.global_timer", "version", "address", "i", "p", _ok)) == "gGlobalTimer"

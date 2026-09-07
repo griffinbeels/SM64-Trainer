@@ -27,6 +27,22 @@ from sm64_events.desktop.window import (
 WIDE = MIN_WINDOW_WIDTH + 150
 
 
+def test_desktop_allows_user_initiated_template_downloads(monkeypatch):
+    from sm64_events.desktop import window
+    monkeypatch.setitem(window.webview.settings, "ALLOW_DOWNLOADS", False)
+    started = []
+
+    def start(**kwargs):
+        # WebView2 otherwise cancels DownloadStarting before presenting its
+        # native Save dialog, even though the same export works in Chrome.
+        assert window.webview.settings["ALLOW_DOWNLOADS"] is True
+        started.append(kwargs)
+
+    monkeypatch.setattr(window.webview, "start", start)
+    window.run()
+    assert len(started) == 1
+
+
 class _FakeWin:
     def __init__(self, w, h, x, y):
         self.width = w

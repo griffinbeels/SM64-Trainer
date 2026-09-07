@@ -618,6 +618,88 @@ TRIGGER_JOURNAL_TYPES: dict[str, frozenset[str]] = {
 }
 
 
+# WHAT COUNTS AS A STEP HE DID -- the rule two surfaces share: the segment
+# recorder's default "steps" view (GET /api/segments/timeline) and the input
+# timeline's moment markers (inputs/markers.py). Lives here, beside the
+# sentence each row gets, so neither surface can keep its own copy of the set.
+#
+# The recorder's default "steps" view membership rule: a type
+# clears the bar if it is ever a SEEDED segment definition's ONLY route in or
+# out -- the definition has no other trigger clause that could record it, so
+# excluding the type would make that definition unrecordable through the
+# default view. "Sole" is a PER-DEFINITION property, not a raw use-count: a
+# type that backs several definitions but always as one of several
+# OR-alternative start/end clauses is not sole for any of them, because the
+# alternative already covers it.
+#
+# Measured directly against all 84 definitions in src/sm64_events/data/
+# defaults.seed.json (2026-07-28; re-derived independently twice after an
+# earlier pass miscounted by reading only each definition's FIRST start/end
+# clause and missing OR-alternatives -- attempt_anchor is never first, so
+# that method undercounted it as 0/1 instead of the 7 real uses below):
+#
+#   trigger type     sole START for     sole END for
+#   area_enter       1 (BitS Entry)     4 (BoB/BBH/SL -> Basement,
+#                                           Bowser 2 -> Upstairs)
+#   attempt_anchor   0                  0  -- all 7 uses (LBLJ, the 3 pipe
+#                                           entries, Bowser 1/2/3) are the
+#                                           SECOND start clause behind a
+#                                           level_enter; every one of those
+#                                           definitions is already reachable
+#                                           by entering the level normally,
+#                                           so attempt_anchor is an F1-retry
+#                                           echo, never the only way in
+#   spawned          1 (Lakitu Skip)    0
+#
+# level_changed/star_collected/warp_entered/key_grabbed (the base four) cover
+# 63/65 starts and 61/65 ends (~95%) on their own and are never excluded
+# regardless of this table -- they are the foundation this rule sits on top
+# of, not a case it decides.
+#
+# area_changed clears the bar (5 sole uses) despite dominating raw volume
+# (1,678 of 18,656 real events, 2026-07-28) and is unconditionally included --
+# every area_changed row is a real castle-region crossing.
+#
+# spawned also clears the bar (Lakitu Skip's only start), but the raw type is
+# 1,164 events, almost all ordinary respawns after a death or reset that no
+# definition needs. Lakitu Skip's clause (`{"type": "spawned", "level": 16}`)
+# does not itself distinguish them, but every spawned event also carries a
+# `kind` the matcher doesn't check (detectors/spawn.py): "intro" (edge out of
+# the file-select cutscene) or "spawn" (an ordinary respawn-in). Measured
+# against the real journal (2026-07-28): of 1,164 spawned events, 28 are
+# kind="intro" and 1,136 are kind="spawn"; of the 27 kind="intro" spawns at
+# level 16 -- exactly what Lakitu Skip's clause matches -- ALL 27 are
+# kind="intro", never an ordinary respawn. So the default view includes a
+# spawned row only when kind == "intro" (`is_step` below),
+# not the raw type -- narrower than the type-level criterion strictly asks
+# for, but it is what the criterion's own need actually is.
+#
+# attempt_anchor (practice_reset/state_loaded) and game_reset (0 sole uses
+# each) stay excluded, reachable only via `view=all`.
+#
+# Property this rule protects: no seeded definition in defaults.seed.json is
+# unrecordable from the default view. tests/test_api.py derives the
+# sole-route table above straight from the seed file (never hard-codes it)
+# and fails in EITHER direction: a future corpus edit that makes an excluded
+# type sole-route without this file being updated, or this file including a
+# type the corpus doesn't back.
+STEP_TYPES = frozenset(
+    {"level_changed", "star_collected", "warp_entered", "key_grabbed",
+     "area_changed", "moment_reached"})
+
+
+def is_step(row) -> bool:
+    """The recorder's default (`view=steps`) membership predicate -- see the comment above
+    STEP_TYPES for the sole-route criterion this encodes. Every
+    type in STEP_TYPES qualifies unconditionally; `spawned` only
+    qualifies when payload `kind == "intro"` (a fresh-file spawn) -- the
+    narrow subset Lakitu Skip's clause actually needs. An ordinary respawn
+    (`kind == "spawn"`) stays out even though the raw type clears the bar."""
+    if row.type in STEP_TYPES:
+        return True
+    return row.type == "spawned" and row.payload.get("kind") == "intro"
+
+
 def label_event(row, names: dict | None = None) -> str | None:
     """`names` is the LANDMARK CATALOGUE (key -> name); only the
     labellers listed in `_READS_THE_CATALOGUE` read it, so adding an
