@@ -20,10 +20,10 @@ def test_every_nonempty_population_gets_every_tier():
 
 def test_a_tight_door_extends_slower_while_the_top_stays_near_the_observations():
     ladder = {r: round(t * 100) for r, t in ladders.fit_ladder([246] * 57 + [250]).items()}
-    assert time_for_score(ladder, 99) == 250
-    assert ladder["Mario"] == 263
-    assert ladder["Bronze"] == 380
-    assert time_for_score(ladder, 8) == 383
+    assert time_for_score(ladder, 99) == 246
+    assert ladder["Mario"] == 260
+    assert ladder["Bronze"] == 376
+    assert time_for_score(ladder, 8) == 380
 
 
 def test_a_real_slow_outlier_participates_in_the_fit():

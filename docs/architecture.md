@@ -1395,14 +1395,14 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-06 for independent Scorecard goals: **46,412 lines,
+Latest reading, 2026-09-06 for independent Scorecard goals: **46,445 lines,
 1,079 public names, 43.0 lines per public name, 53 pass-through (4.9%)**.
 No new forwarders. `server/scorecard_standards.py` chooses the canonical
 Library row for both the target and navigation; `server/scorecard_goals.py`
 owns selection normalization and named-set patches. The API module shrinks
 to 895 lines. The user-facing contract is [Goal](glossary.md#goal).
 
-Previous reading, 2026-09-06 for complete Sheet ladders: **46,352 lines,
+Previous reading, 2026-09-06 for supported Sheet peaks: **46,385 lines,
 1,074 public names, 43.2 lines per public name, 53 pass-through (4.9%)**.
 The forwarder count is unchanged. The frame curve and the calibrated strategy
 signature own separate calculations; real Python/JS parity tests cover the

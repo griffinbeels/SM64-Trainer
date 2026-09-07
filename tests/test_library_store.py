@@ -69,6 +69,27 @@ def test_an_old_fitting_model_refits_offline_without_rewriting_either_snapshot(t
     assert (local.read_bytes(), bundled.read_bytes()) == before
 
 
+def test_model_three_cached_peak_is_refitted_offline_to_the_shared_record(tmp_path):
+    from sm64_events.ranks.scoring import time_for_score
+    local, bundled = tmp_path / "local.gz", tmp_path / "bundled.gz"
+    payload = _snapshot("2026-09-06T12:00:00")
+    payload["ladder_model"] = {"version": 3}
+    row = payload["targets"][0]["approaches"][0]
+    row["entries"] = [{"runner": str(i), "time_cs": t, "version": None}
+                      for i, t in enumerate([246] * 57 + [250])]
+    row["matched_strategy"] = "Preserved name"
+    row["ladder"] = {"Mario": 2.63, "Grandmaster": 2.8}
+    write_snapshot(local, payload)
+    before = local.read_bytes()
+    store = LibraryStore(local, bundled)
+    store.load()
+    fitted = store.payload["targets"][0]["approaches"][0]
+    ladder = {r: round(t * 100) for r, t in fitted["ladder"].items()}
+    assert time_for_score(ladder, 99) == 246
+    assert fitted["matched_strategy"] == "Preserved name"
+    assert local.read_bytes() == before
+
+
 def test_a_newer_release_replaces_a_stale_local_copy(tmp_path):
     local, bundled = tmp_path / "local.json.gz", tmp_path / "bundled.json.gz"
     write_snapshot(local, _snapshot("2026-01-01T00:00:00", "stale"))
