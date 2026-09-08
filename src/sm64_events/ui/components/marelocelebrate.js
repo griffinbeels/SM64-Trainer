@@ -46,8 +46,9 @@ function celebrationTuning(tune) {
   return climb;
 }
 
-async function ackScope(scopeId, key, onDone) {
-  try { await send("POST", "/api/marelo/ack", { scope: scopeId, key }); }
+async function ackScope(scopeId, celebration, onDone) {
+  try { await send("POST", "/api/marelo/ack", { scope: scopeId, key: celebration.key,
+    calibration_revision: celebration.calibration_revision }); }
   finally { onDone(); }
 }
 
@@ -208,7 +209,7 @@ export function MareloCelebration({ celebration, scopeId, marelo, routes,
     // ordinary value change on an EXISTING element and the CSS transition
     // has a genuine prior state to interpolate from.
     setLifted(false);
-    const timer = setTimeout(() => ackScope(scopeId, celebration.key, onDone),
+    const timer = setTimeout(() => ackScope(scopeId, celebration, onDone),
                              tune.flyBackMs * scale);
     return () => clearTimeout(timer);
   }, [celebration && celebration.key, phase]);
@@ -321,7 +322,7 @@ export function RankUpCelebration(props) {
   //     NEVER be triggered outside of updating a PB… it feels like a bug
   //     (because I didn't trigger it)" (user, 2026-08-01).
   if (!celebrationsEnabled() || turn.unprompted) {
-    ackScope(props.scopeId, props.celebration.key, props.onDone);
+    ackScope(props.scopeId, props.celebration, props.onDone);
     return null;
   }
   // Strategy, THEN star, THEN marelo (user, 2026-07-29). The two entity
@@ -331,4 +332,3 @@ export function RankUpCelebration(props) {
   if (!turn.ready) return null;
   return html`<${MareloCelebration} ...${props} />`;
 }
-

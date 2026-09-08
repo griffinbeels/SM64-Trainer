@@ -1609,15 +1609,25 @@ class TrackerService:
         never move it; broadcasts only on a real raise, so the OTHER open
         client (browser/GUI parity, rule 10) dismisses the same celebration
         instead of showing it a second time."""
+        if self.acknowledge_watermark(scope_id, key):
+            await self.publish_celebration_ack(scope_id, key)
+
+    def acknowledge_watermark(self, scope_id: str, key: int) -> bool:
+        """Commit an ACK synchronously; the server can guard it with publication."""
         if self.db is None:
             raise RuntimeError("tracking database unavailable")
         watermarks = self.marelo_watermarks()
         if key > watermarks.get(scope_id, -1):
             watermarks[scope_id] = int(key)
             self.db.set_state("marelo_watermarks", watermarks)
-            await self.broadcaster.publish(Event(
-                type="marelo_changed", frame=0, timestamp_utc=_now(),
-                payload={"scope_id": scope_id, "key": key}))
+            return True
+        return False
+
+    async def publish_celebration_ack(self, scope_id: str, key: int) -> None:
+        """Notify clients after the committed ACK has released any update lock."""
+        await self.broadcaster.publish(Event(
+            type="marelo_changed", frame=0, timestamp_utc=_now(),
+            payload={"scope_id": scope_id, "key": key}))
 
     def sync_watermark(self, scope_id: str, key: int) -> None:
         """Follow a rank DOWN silently so re-climbing celebrates again.

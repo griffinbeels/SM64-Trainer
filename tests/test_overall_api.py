@@ -193,7 +193,7 @@ def test_old_pinned_get_cannot_move_current_watermarks(app_state, monkeypatch, o
         assert response.headers["X-Rank-Calibration"] == old_revision
         assert response.json()["celebration"] is None
         assert service.marelo_watermarks() == saved
-        assert service.db.get_state("marelo_active_scope") == "route:previous"
+        assert service.db.get_state("marelo_active_scope", None) == "route:previous"
 
 
 def test_empty_read_stays_empty_when_the_first_generation_publishes(tmp_path):
@@ -227,3 +227,63 @@ def test_current_read_rejects_stale_user_settings_and_region(app_state, change):
             service.ranks.grading_version = "jp"
         assert not service.ranks.is_current_read
     assert service.ranks.is_current_read
+
+
+@pytest.mark.parametrize("versioned", [True, False])
+def test_delayed_ack_cannot_erase_a_real_rise_after_a_harder_refresh(app_state, versioned):
+    app, service, store = app_state
+    with TestClient(app) as client:
+        service.db.insert_pb(2, 4, "Standard", "igt", 450, None, "first", game_version="us")
+        client.get("/api/marelo")
+        service.db.insert_pb(2, 4, "Standard", "igt", 420, None, "better", game_version="us")
+        old = client.get("/api/marelo").json()
+        pending = {"scope": "overall", "key": old["celebration"]["key"]}
+        if versioned:
+            pending["calibration_revision"] = old["celebration"]["calibration_revision"]
+        assert store.absorb(observations(-100))["applied"]
+        absorb_after_regrade(service)
+        fresh = client.get("/api/marelo").json()
+        watermark = service.marelo_watermarks()["overall"]
+        assert watermark < pending["key"]
+        broadcasts = service.broadcaster._seq
+        assert client.post("/api/marelo/ack", json=pending).status_code == 200
+        assert service.marelo_watermarks()["overall"] == watermark
+        assert service.broadcaster._seq == broadcasts
+        service.db.insert_pb(2, 4, "Standard", "igt", 410, None, "new rise", game_version="us")
+        earned = client.get("/api/marelo").json()
+        assert fresh["marelo"] < earned["marelo"] < old["marelo"]
+        assert earned["celebration"] is not None
+        current_ack = {"scope": "overall", "key": earned["celebration"]["key"],
+                       "calibration_revision": earned["celebration"]["calibration_revision"]}
+        assert client.post("/api/marelo/ack", json=current_ack).status_code == 200
+        assert service.marelo_watermarks()["overall"] == current_ack["key"]
+        assert service.broadcaster._seq == broadcasts + 1
+        assert client.post("/api/marelo/ack", json=current_ack).status_code == 200
+        assert service.broadcaster._seq == broadcasts + 1
+        assert client.get("/api/marelo").json()["celebration"] is None
+
+
+def test_ack_releases_publication_lock_before_websocket_notification(app_state, monkeypatch):
+    import asyncio
+    from sm64_events.server.rank_watermarks import acknowledge
+    from sm64_events.server.ranks_api import _build_marelo, _score_scope
+    _app, service, store = app_state
+    service.db.insert_pb(2, 4, "Standard", "igt", 450, None, "first", game_version="us")
+    _build_marelo(service, "overall")
+    service.db.insert_pb(2, 4, "Standard", "igt", 420, None, "better", game_version="us")
+    earned = _build_marelo(service, "overall")["celebration"]
+
+    async def publish(event):
+        # A different thread must acquire the same lock while the notification
+        # coroutine is running; an RLock check on this thread would prove nothing.
+        def can_publish():
+            acquired = store.calibrations.update_lock.acquire(timeout=1)
+            if acquired:
+                store.calibrations.update_lock.release()
+            return acquired
+        assert await asyncio.to_thread(can_publish)
+        assert event.type == "marelo_changed"
+
+    monkeypatch.setattr(service.broadcaster, "publish", publish)
+    asyncio.run(acknowledge(service, "overall", earned["key"],
+                            earned["calibration_revision"], _score_scope))

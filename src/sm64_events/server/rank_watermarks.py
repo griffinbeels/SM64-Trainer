@@ -55,7 +55,8 @@ def celebration_for(service, scope_id, scored, active_scope):
                 celebration = scopes.celebration_delta(
                     scored["tier"], scored["division"], service.marelo_watermarks().get(scope_id))
         service.seed_watermark(scope_id, key)
-        return celebration
+        return ({**celebration, "calibration_revision": scored.get("calibration_revision")}
+                if celebration else None)
 
 
 def absorb_regrade(service, score_scope):
@@ -74,3 +75,25 @@ def absorb_regrade(service, score_scope):
             if not _current(service, scored):
                 return
             _absorb(service, scope_id, scored, revisions)
+
+
+async def acknowledge(service, scope_id, key, revision, score_scope):
+    """Ignore stale ACKs; older clients cannot acknowledge above today's grade."""
+    with _update_lock(service):
+        if not _current(service):
+            return
+        current_revision = getattr(service.ranks, "calibration_revision", None)
+        if revision is not None and revision != current_revision:
+            return
+        scored = score_scope(service, scope_id)
+        if not _current(service, scored) or not scored["tier"]:
+            return
+        revisions = service.db.get_state(_REVISIONS, {})
+        if revisions.get(scope_id) != current_revision:
+            _absorb(service, scope_id, scored, revisions)
+        # A deliberate slower PB can lower the grade within the same revision.
+        # Its delayed ACK must not erase the next genuine climb either.
+        accepted = min(key, scoring.progression_key(scored["tier"], scored["division"]))
+        changed = service.acknowledge_watermark(scope_id, accepted)
+    if changed:
+        await service.publish_celebration_ack(scope_id, accepted)

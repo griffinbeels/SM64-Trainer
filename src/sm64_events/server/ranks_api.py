@@ -20,7 +20,7 @@ from sm64_events.ranks.calibration import resolve_curve
 from sm64_events.server.overall_api import create_overall_router
 from sm64_events.server.rank_reading import read_dependency
 from sm64_events.server.rank_history import build_history
-from sm64_events.server.rank_watermarks import absorb_regrade, celebration_for
+from sm64_events.server.rank_watermarks import absorb_regrade, acknowledge, celebration_for
 from sm64_events.tracking import marelo as marelo_bridge
 from sm64_events.tracking.views import entity_labels, segment_courses
 
@@ -67,6 +67,7 @@ class AckBody(BaseModel):
     that same 400 instead of being silently accepted."""
     scope: str | None = None
     key: int
+    calibration_revision: str | None = None
 
 
 def _active_scope(service) -> str:
@@ -565,7 +566,7 @@ def create_ranks_router(service, library=None, adoptions=None,
         if body.scope is None:
             raise HTTPException(400, "ack needs a scope")
         try:
-            await service.ack_celebration(body.scope, body.key)
+            await acknowledge(service, body.scope, body.key, body.calibration_revision, _score_scope)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}
