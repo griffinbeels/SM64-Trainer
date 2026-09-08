@@ -180,9 +180,12 @@ def fit_payload(payload: dict, *, policy=None, identity_of=None) -> dict:
         item.pop("ladder_jp", None)
         item.pop("ladder_jp_samples", None)
         item.pop("ladder_jp_extended", None)
+        item.pop("ladder_jp_policy_revision", None)
         if version != "jp" and jp_times:
             jp_settings = policy.resolve(target_id, version="jp", strategy=strategy, layer="strategy")
             item["ladder_jp"] = fit_ladder(jp_times, settings=jp_settings)
+            item["ladder_jp_policy_revision"] = policy.effective_revision(
+                target_id, version="jp", strategy=strategy, layer="strategy")
             item["ladder_jp_samples"] = len(jp_times)
             item["ladder_jp_extended"] = round(item["ladder_jp"]["Bronze"] * 100) > attainable_cs(max(jp_times))
     default_settings = policy.resolve("", layer="strategy")

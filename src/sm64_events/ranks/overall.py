@@ -13,7 +13,7 @@ from sm64_events.library.ladders import fit_ladder
 from sm64_events.library.populations import collect_populations, quantile
 from sm64_events.ranks import scoring
 from sm64_events.ranks.curve_types import CompiledCurve
-from sm64_events.ranks.curves import compile_curve, score_for, time_for_score
+from sm64_events.ranks.curves import compile_curve, score_evaluator, time_for_score
 from sm64_events.ranks.policy import RankingPolicy
 
 OVERALL_MODEL_VERSION = 1
@@ -122,7 +122,7 @@ def _family_summaries(population, settings):
 
 
 def _community_model(population, community, settings, families):
-    return lambda time: score_for(community, time), {"milestones": [], "provisional_influence": 0.}
+    return score_evaluator(community), {"milestones": [], "provisional_influence": 0.}
 
 
 def _family_model(population, community, settings, families):
@@ -134,10 +134,13 @@ def _family_model(population, community, settings, families):
                      for runner in family.best_by_runner}
     influence = min(1., len(sparse_people) / settings["confidence_runners"]) if sparse_ids else 1.
     weight = settings["milestone_weight"] if len(families) > 1 else 0.
+    candidate_score = score_evaluator(candidate)
+    baseline_score = score_evaluator(baseline)
+    community_score = score_evaluator(community)
 
     def evaluate(time):
-        milestone = influence * score_for(candidate, time) + (1 - influence) * score_for(baseline, time)
-        return weight * milestone + (1 - weight) * score_for(community, time)
+        milestone = influence * candidate_score(time) + (1 - influence) * baseline_score(time)
+        return weight * milestone + (1 - weight) * community_score(time)
 
     return evaluate, {"milestones": landmarks, "provisional_influence": influence,
                       "effective_milestone_weight": weight}

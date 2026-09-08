@@ -7,7 +7,8 @@ import pytest
 
 from sm64_events.core.timefmt import cs_of_frame, frame_at_or_after
 from sm64_events.ranks import scoring
-from sm64_events.ranks.curves import compile_curve, from_ladder, progress_for_time, score_for, time_for_score, with_anchors
+from sm64_events.ranks.curves import (compile_curve, from_ladder, progress_for_time,
+                                      score_evaluator, score_for, time_for_score, with_anchors)
 from sm64_events.ranks.timecurve import frame_position
 
 
@@ -43,6 +44,50 @@ def test_full_nodes_survive_json_and_define_intermediate_scores():
                                   for rank, score in scoring.SCORE_ANCHORS.items()}
     nodes[0][0] = 999
     assert curve["nodes"][0][0] == 1000
+
+
+@pytest.mark.parametrize("curve", [
+    compile_curve([[1000, 100], [1100, 90], [1300, 10], [2000, 2]]),
+    from_ladder({"Mario": 1001, "Gold": 1800, "Bronze": 2400}),
+    from_ladder({}),
+])
+def test_bound_evaluator_preserves_scores_errors_and_detaches_mutable_inputs(curve):
+    original = copy.deepcopy(curve)
+    evaluate = score_evaluator(curve)
+    for time in [-1, 0, .1, 999, 1000, 1001.5, 1200, 2000, 50000,
+                 1e100, True, None, "1000", float("nan"), float("inf")]:
+        try:
+            expected = score_for(original, time)
+        except ValueError as error:
+            with pytest.raises(ValueError) as actual:
+                evaluate(time)
+            assert actual.value.args == error.args
+        else:
+            assert evaluate(time) == expected
+    curve["ladder_cs"].clear()
+    if curve["nodes"]:
+        curve["nodes"][0][0] = 2
+        curve["nodes"][1][1] = 99
+    curve["nodes"].clear()
+    curve["metadata"] = None
+    assert evaluate(1200) == score_for(original, 1200)
+    with pytest.raises(ValueError, match="metadata"):
+        score_for(curve, 1200)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("schema_version", 2), ("interpolation", "formula"),
+    ("metadata", None), ("ladder_cs", {"Other": 100}),
+    ("nodes", [[1000, 90], [999, 95]]),
+])
+def test_bound_evaluator_rejects_invalid_curves_at_binding(field, value):
+    curve = compile_curve([[1000, 100], [1100, 90], [1300, 10]])
+    curve[field] = value
+    with pytest.raises(ValueError) as ordinary:
+        score_for(curve, 1200)
+    with pytest.raises(ValueError) as bound:
+        score_evaluator(curve)
+    assert bound.value.args == ordinary.value.args
 
 
 @pytest.mark.parametrize("phase", range(30))

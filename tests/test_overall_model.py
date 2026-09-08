@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from sm64_events.core.timefmt import cs_of_frame, frame_at_or_after
+from sm64_events.library.ladders import fit_payload
 from sm64_events.ranks import scoring
 from sm64_events.ranks.curves import compile_curve, from_ladder, score_for, time_for_score
 from sm64_events.ranks.overall import DIVISION_SCORES, _calibrate, _milestone_curve, fit_overall
@@ -58,6 +59,44 @@ def test_single_effective_family_is_exactly_the_community_model():
     community = fit_overall(rows, policy=_policy(model="community"))
     assert progression["nodes"] == community["nodes"]
     assert progression["metadata"]["family_count"] == 1
+
+
+@pytest.mark.parametrize("model", ["community", "family_milestones"])
+def test_bound_fit_matches_revalidating_score_queries_exactly(monkeypatch, model):
+    from sm64_events.ranks import overall
+    rows = [_row("slow", range(1600, 2000, 10)),
+            _row("fast", range(1000, 1400, 10)), _row("new", [700], "new")]
+    policy = _policy(model=model, families=_families("slow", "fast"))
+    bound = fit_overall(rows, policy=policy)
+    monkeypatch.setattr(overall, "score_evaluator", lambda curve: lambda time: score_for(curve, time))
+    assert fit_overall(rows, policy=policy) == bound
+
+
+def test_jp_fit_policy_stamp_tracks_resolved_scope_and_clears_with_companion():
+    row = _row("Source", range(1000, 1800, 10), version="us")
+    row["entries"] += _row("Source", range(800, 1600, 10), version="jp")["entries"]
+    payload = {"targets": [{"entity_key": "segment:999", "approaches": [row], "subsections": []}]}
+    def identity(*_):
+        return "seg:stable", "Standard"
+    base = RankingPolicy()
+    policy = RankingPolicy({"layers": {"strategy": {"patches": [
+        {"target_id": "seg:stable", "strategy": "Standard", "version": "jp",
+         "parameters": {"percentiles": {"Master": 50}}}]}}})
+    fit_payload(payload, policy=base, identity_of=identity)
+    us_stamp, jp_stamp = row["ladder_policy_revision"], row["ladder_jp_policy_revision"]
+    base_jp = dict(row["ladder_jp"])
+    fit_payload(payload, policy=policy, identity_of=identity)
+    assert row["ladder_policy_revision"] == us_stamp
+    assert row["ladder_jp_policy_revision"] != jp_stamp
+    assert row["ladder_jp_policy_revision"] == policy.effective_revision(
+        "seg:stable", version="jp", strategy="Standard", layer="strategy")
+    assert row["ladder_jp"] != base_jp
+    fit_payload(payload, policy=base, identity_of=identity)
+    assert row["ladder_jp_policy_revision"] == jp_stamp
+    assert row["ladder_jp"] == base_jp
+    row["entries"] = [entry for entry in row["entries"] if entry["version"] == "us"]
+    fit_payload(payload, policy=base, identity_of=identity)
+    assert "ladder_jp" not in row and "ladder_jp_policy_revision" not in row
 
 
 def test_duplicates_cosmetic_aliases_and_row_order_cannot_create_stages():

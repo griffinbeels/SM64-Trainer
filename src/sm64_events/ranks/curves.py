@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_left
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache
+from types import MappingProxyType
 from typing import Any
 
 from sm64_events.core.timefmt import cs_of_frame
@@ -25,7 +26,8 @@ from sm64_events.ranks import scoring
 from sm64_events.ranks.curve_types import CompiledCurve
 from sm64_events.ranks.timecurve import frame_position
 
-__all__ = ["compile_curve", "from_ladder", "with_anchors", "score_for", "time_for_score", "progress_for_time"]
+__all__ = ["compile_curve", "from_ladder", "with_anchors", "score_for", "score_evaluator",
+           "time_for_score", "progress_for_time"]
 
 _MIN_SCORE = float.fromhex("0x0.0000000000001p-1022")
 # The browser must be able to represent and advance every returned frame/time.
@@ -432,6 +434,26 @@ def _inverse(prepared, target):
 def score_for(curve: CompiledCurve, time_cs: float) -> float | None:
     """Score one displayed time; an empty legacy curve is unrankable."""
     ladder, prepared = _validate(curve)
+    return _score_time(ladder, prepared, time_cs)
+
+
+def score_evaluator(curve: CompiledCurve) -> Callable[[float], float | None]:
+    """Bind a detached, validated curve for repeated pure fitting queries.
+
+    Later edits to the serialized input cannot change this evaluator. Each
+    query still validates its time with the same rules as ``score_for``.
+    """
+    ladder, prepared = _validate(curve)
+    bound_ladder = MappingProxyType(ladder)
+    bound_prepared = tuple(tuple(axis) for axis in prepared) if prepared is not None else None
+
+    def evaluate(time_cs):
+        return _score_time(bound_ladder, bound_prepared, time_cs)
+
+    return evaluate
+
+
+def _score_time(ladder, prepared, time_cs):
     time = _number(time_cs, "Time")
     if prepared is None:
         return scoring.score_for(ladder, time)
