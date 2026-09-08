@@ -7,6 +7,48 @@ from sm64_events.library.audit import row_key
 from sm64_events.library.mapping import segment_seed_key
 from sm64_events.library.seed_targets import seed_for
 
+_BOWSER_REDS = frozenset({"star:16:0", "star:17:0", "star:18:0"})
+
+
+def _bowser_reds_endpoint(target, item, kind):
+    if kind != "approach" or target.get("entity_key") not in _BOWSER_REDS:
+        return None
+    # These targets record the full reds-to-pipe route, with explicit Xcam
+    # rows for the earlier star grab. A vetted strategy match is not clock
+    # evidence: the bundled BitS Xcam row is matched to Ultimate Cycle (Pipe).
+    from sm64_events.library.adoptions import _normalized
+    return ("star" if "red coin star xcam" in _normalized(item.get("name"))
+            else "pipe")
+
+
+def scoring_rows(payload, assignments, definitions):
+    """Resolve Overall clock targets without moving legacy strategy storage.
+
+    Bowser Pipe strategy ladders remain stored on the paired star. Their
+    measurements belong to the existing reds-inclusive local segment; the
+    exclusive No Reds segment is a different target. Explicit assignments
+    to another entity and deliberate unlinks survive. Missing paired segments
+    get an empty assignment so an inherited star cannot absorb their times.
+    """
+    from sm64_events.tracking.activestrat import reds_pipe_segments
+    by_course, _grading_entities = reds_pipe_segments(definitions)
+    resolved = dict(assignments)
+    for target in payload.get("targets", []):
+        for item in target.get("approaches", []):
+            endpoint = _bowser_reds_endpoint(target, item, "approach")
+            if endpoint is None:
+                continue
+            identity = row_identity(target, item, "approach", assignments)
+            if identity is None or identity[0] != target["entity_key"]:
+                continue
+            key = row_key(target, item["name"], item["ids"])
+            if endpoint == "star":
+                resolved[key] = target["entity_key"]
+            else:
+                segment_id = by_course.get(int(target["entity_key"].split(":")[1]))
+                resolved[key] = f"segment:{segment_id}" if segment_id is not None else ""
+    return resolved
+
 
 def target_entity(target, definitions):
     """Resolve a whole target against this database's actual definitions."""
@@ -79,6 +121,9 @@ def scoring_identity(target, item, kind, rows, clock_of=None):
     if identity is None:
         return None
     entity, _strategy = identity
+    if (_bowser_reds_endpoint(target, item, kind) == "pipe"
+            and entity == target["entity_key"]):
+        return None  # Legacy consumers without a scoring map still cannot mix endpoints.
     clock = clock_of(entity) if clock_of else ("igt" if entity.startswith("star:") else None)
     if clock == "igt" and timed_in_real_time(item):
         return None

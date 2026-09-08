@@ -171,7 +171,10 @@ def rate_runners(payload: dict, ranks_store, adopted_rows: dict, *,
         return resolved[entity_key]["metadata"].get("unannotated_region", "both")
 
     clock_of = getattr(ranks_store, "clock_for", lambda key: "igt")
-    best = best_entries(payload, adopted_rows, version=version, strict=True,
+    assignments = getattr(ranks_store, "scoring_rows", None)
+    if assignments is None:
+        assignments = adopted_rows
+    best = best_entries(payload, assignments, version=version, strict=True,
                         clock_of=clock_of, unannotated_region_of=unannotated_region_of)
     times = {runner: {key: entry["time_cs"] for key, entry in by_entity.items()}
              for runner, by_entity in best.items()}
