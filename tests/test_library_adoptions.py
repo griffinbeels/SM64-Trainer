@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sm64_events.library import adoptions as ad
 from sm64_events.library.audit import row_key
 from sm64_events.library.build import SCHEMA_VERSION
+from sm64_events.library.ladders import fit_payload
 from sm64_events.library.store import LibraryStore
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.library_api import create_library_router
@@ -163,22 +164,24 @@ def test_the_routes_report_a_refusal_rather_than_failing_silently(wiring):
 
 
 def test_a_refresh_re_syncs_adopted_ladders(wiring, monkeypatch):
-    """standards._sheet holds ladders derived from the payload as of the last
-    adopt/unadopt/load -- a refresh replaces that payload in place with no
-    call of its own, so an adopted strategy keeps grading against the
-    PRE-refresh ladder until something re-syncs it. The refresh route must."""
+    """A refresh publishes observations and adopted standards together."""
     adoptions, standards, keys, _ = wiring
     key = keys["Lobby door (L) - BoB door"]
     adoptions.adopt(key, "segment:42")
     assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 276
 
+    moved = _payload()
+    moved["sheet_revision"] = "2026-08-06T00:00:00"
+    for entry in moved["targets"][0]["approaches"][0]["entries"]:
+        entry["time_cs"] += 30
+    fit_payload(moved)
+    expected = round(moved["targets"][0]["approaches"][0]["ladder"]["Mario"] * 100)
+    assert expected != 276
+
     def fake_refresh(fetch_fn, overrides=None):
-        # The SAME store object refresh() mutates in place, exactly as a real
-        # POST /api/library/refresh does -- the adopted row's ladder moved.
-        moved = _payload()
-        moved["targets"][0]["approaches"][0]["ladder"]["Mario"] = 3.00
-        adoptions.store._payload = moved
-        return {"applied": True, "sheet_revision": "2026-08-06T00:00:00"}
+        # Replace only the network/build boundary; actual activation remains
+        # the same absorb transaction used by a successful real refresh.
+        return adoptions.store.absorb(moved)
     monkeypatch.setattr(adoptions.store, "refresh", fake_refresh)
 
     app = FastAPI()
@@ -186,7 +189,7 @@ def test_a_refresh_re_syncs_adopted_ladders(wiring, monkeypatch):
     client = TestClient(app)
     response = client.post("/api/library/refresh")
     assert response.status_code == 200 and response.json()["applied"] is True
-    assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == 300
+    assert standards.ladder_cs("segment:42", ad.DEFAULT_STRATEGY)["Mario"] == expected
 
 
 def test_the_adopt_routes_are_absent_without_a_standards_store(wiring):
