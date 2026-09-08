@@ -1,5 +1,6 @@
 """Require rendered-test dependencies before the existing integration runner."""
 import os
+import argparse
 import hashlib
 import importlib.metadata
 from pathlib import Path
@@ -17,6 +18,12 @@ def prepare_environment() -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--probe', action='store_true')
+    parser.add_argument('--workers', type=int, help='Ceiling within the shared test budget; scope stays full')
+    args = parser.parse_args()
+    if args.workers is not None and args.workers < 0:
+        parser.error('workers must be nonnegative')
     prepare_environment()
     component_runner = Path(__file__).resolve().parents[1] / "tests/frontend/node_modules/vitest/vitest.mjs"
     if not component_runner.is_file():
@@ -45,7 +52,7 @@ def main() -> int:
     except ImportError as exc:
         print(f"full: unavailable: {exc}", file=sys.stderr)
         return 2
-    if "--probe" in sys.argv[1:]:
+    if args.probe:
         import uilab
         digest = hashlib.sha256()
         for source in sorted(Path(uilab.__file__).parent.rglob("*.py")):
@@ -58,6 +65,8 @@ def main() -> int:
               f"vitest {hashlib.sha256(component_runner.read_bytes()).hexdigest()}")
         return 0
     sys.argv = [str(Path(__file__).with_name("run_tests.py"))]
+    if args.workers is not None:
+        sys.argv.extend(['--workers', str(args.workers)])
     runpy.run_path(sys.argv[0], run_name="__main__")
     return 0
 
