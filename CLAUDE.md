@@ -64,6 +64,9 @@ not in this map.
   including stale client code; never write derived UI state back as game events.
 - Clean up only processes this task owns. End every server or harness started
   for this task in the same session, and verify its listener/children exited.
+- Session-start process inspection is report-only (`tools/dev_cleanup.py`).
+  A PID without a listener may be a live server's launcher or a recorder;
+  socket absence and command-line matching never authorize termination.
 
 ## Domain contracts
 
