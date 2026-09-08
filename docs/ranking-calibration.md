@@ -134,7 +134,10 @@ failure and reader tests are in
 
 Successful refresh activates automatically, with no publish approval or season
 boundary. Regrading updates celebration watermarks without awarding a PB or an
-earned rank-up. Saved times and attribution remain unchanged.
+earned rank-up. The first read of a new revision absorbs the change itself;
+older pinned reads cannot change current watermarks. A celebration carries its
+own revision into acknowledgement, so dismissing an old popup after a refresh
+cannot suppress a later earned rise. Saved times and attribution remain unchanged.
 
 History retains its existing meaning: saved performances evaluated against
 **current standards and current route membership**. PB mode uses the latest
