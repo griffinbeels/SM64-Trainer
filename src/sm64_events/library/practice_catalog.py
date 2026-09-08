@@ -58,7 +58,7 @@ class _Catalog:
             sid = self.targets[key]
             return f"segment:{sid}" if sid in self.by_id else None
         parent = target_entity(target, self.definitions)
-        if seed_for(target) in deleted_seed_keys(self.db, "segments"):
+        if (seed := seed_for(target)) and seed in deleted_seed_keys(self.db, "segments"):
             return None
         if parent is None and target.get("miss_reason") == "castle_movement":
             sid = self.create(target["label"], [])
