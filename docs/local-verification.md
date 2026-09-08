@@ -87,3 +87,8 @@ a measured preceding task held the allocation for about 17 minutes during this
 pilot. This avoids cancelling a newly admitted suite near its completion merely
 because it spent its budget queued. Quick-check timeouts remain unchanged, and
 the longer budget neither bypasses admission nor skips required tests.
+The integration command caps workers at four within the shared resource budget.
+During onboarding integration, eight workers produced seven leaderboard-loading
+timeouts; the same failing viewport passed unchanged in isolation. The full
+wrapper accepts only a worker ceiling and its identity probe, never pytest
+selection arguments. Every test and responsive viewport still runs.

@@ -1,17 +1,35 @@
-"""The real `Registry`/`Processes` adapters for `capturelayer.py` -- split
-out once that module passed its ~300-line budget (round 32 item 95). Every
-test exercises `CaptureLayer` through the `FakeRegistry`/`FakeProcesses`
-pair instead; nothing here is unit-testable without a real Windows machine,
-so it stays a thin, deliberately dumb translation of the Win32 calls into
-the two Protocols `capturelayer.py` declares."""
+"""Windows discovery/registry adapters and Project64 compatibility evidence.
+
+Compatibility tests cover resource versions and exact known unversioned builds.
+Native API probes additionally check the actual executable without launching it.
+The installer itself uses the fake Registry/Processes protocols in its tests.
+"""
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import hashlib
 from pathlib import Path
 
 _MAX_PATH = 260
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+# LINK's unversioned Project64 1.6, distributed in Wermi's build v7:
+# https://wermi.neocities.org/emuguide/getting_emu/
+# Fingerprinted from the working installation reported in onboarding round 3.
+# VERSIONINFO is absent in this build. Names, folders and window titles are not
+# compatibility evidence; accept only these exact bytes when metadata is absent.
+_UNVERSIONED_16_BUILDS = {
+    "8d7d373d024206f7513721b320ef3359b885aa6ea73dc2c14b3a42f0c099be2b":
+        "LINK's Project64 1.6 (Wermi build v7)",
+}
+
+
+def _known_unversioned_build(path: Path) -> str | None:
+    try:
+        return _UNVERSIONED_16_BUILDS.get(hashlib.sha256(path.read_bytes()).hexdigest())
+    except OSError:
+        return None
 
 
 def executable_version(path: Path) -> str | None:
@@ -74,11 +92,12 @@ class WinProcesses:
     def check_folder(folder: str) -> dict:
         path = Path(folder) / "Project64.exe"
         version = executable_version(path) if path.is_file() else None
-        supported = version is not None and version.split(".")[:2] == ["1", "6"]
+        build = _known_unversioned_build(path) if version is None else None
+        supported = bool(build) or (version is not None and version.split(".")[:2] == ["1", "6"])
         return {"state": "ready" if supported else "unsupported", "pid": None,
-                "path": str(path), "version": version,
+                "path": str(path), "version": version, "build": build,
                 "message": ("Project64 v1.6 found." if supported else
-                            "Open Project64 v1.6. This installation could not be verified as version 1.6.")}
+                            "This Project64 build could not be verified as version 1.6.")}
 
     def setup_target(self) -> dict:
         images = self._images()

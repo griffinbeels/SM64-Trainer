@@ -68,9 +68,16 @@ class SetupRuntime:
             game=latest.global_timer if latest else None)
         same_process = target.get("pid") is not None and target["pid"] == layer.plugin_pid
         plugin = same_process and layer.layer_alive
+        # AFK deliberately revokes picture demand. The current source's decoded
+        # picture count is still proof of capture, including when Setup is first
+        # opened after going idle. Bind that receipt to its original plugin PID;
+        # a stopped/replaced source, desktop fallback or heartbeat alone cannot
+        # qualify. Active sources must continue delivering fresh pictures.
+        idle_receipt = (recorder.get("idle") and health.get("plugin_pid") == target.get("pid")
+                        and (health.get("delivered") or 0) > 0)
         captured = (recorder.get("recording") and recorder.get("frame_source") == "plugin"
-                    and counters["delivered"])
-        pictures = layer.pictures_flowing if rom["state"] == "jp" else captured
+                    and (counters["delivered"] or idle_receipt))
+        pictures = (layer.pictures_flowing or captured) if rom["state"] == "jp" else captured
         checks = {"plugin": bool(plugin), "pictures": bool(plugin and pictures),
                   "inputs": bool(counters["inputs"] and rom["state"] == "supported"),
                   "game": bool(counters["game"] and not self.poller.paused

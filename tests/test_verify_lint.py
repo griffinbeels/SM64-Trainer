@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -125,6 +126,16 @@ def test_full_gate_removes_inherited_selection_and_preserves_budget(monkeypatch)
     assert all(name not in os.environ for name in
                ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD"))
     assert os.environ["SM64_TEST_WORKERS"] == "2"
+
+
+@pytest.mark.parametrize('arguments', [['--workers', '-1'], ['-k', 'onboarding'], ['tests/test_onboarding.py']])
+def test_full_gate_rejects_invalid_budget_and_partial_scope(monkeypatch, arguments):
+    monkeypatch.syspath_prepend(str(ROOT / 'tools'))
+    import verify_full
+    monkeypatch.setattr(sys, 'argv', ['verify_full.py', *arguments])
+    with pytest.raises(SystemExit) as error:
+        verify_full.main()
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("language,valid,invalid", [

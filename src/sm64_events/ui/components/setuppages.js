@@ -129,9 +129,13 @@ export function N64SetupPane({ onEmulator, onFinish, busy }) {
 export function CompletionPage({ setup, onFinish, busy }) {
   const limited = setup.emu.verification?.limited;
   return html`<div class="setup-completion">
+    <div class="setup-celebration">
+    <div class="setup-confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => html`<i key=${i}
+      style=${`--x:${(i * 47 % 101) - 50}%;--rise:${45 + i * 19 % 70}px;--drift:${(i % 2 ? 1 : -1) * (30 + i * 13 % 100)}px;--delay:${i % 6 * 55}ms;--turn:${i % 2 ? 320 : -280}deg;background:${["#f5cf68", "#82e9a7", "#8fc8ff", "#f497bc"][i % 4]}`}></i>`)}</div>
     <div class="setup-cast" aria-label="Boo, Toad and Ukiki">
       ${[["boo_normal", "Boo"], ["toad", "Toad"], ["ukiki_1", "Ukiki"]].map(([stem, name]) =>
         html`<img key=${stem} src=${castSrc(stem)} alt=${name} draggable="false"/>`)}
+    </div>
     </div>
     <p>${limited ? "Practice Replay is installed. Your setup is saved when you finish." : "Your game, replays and inputs are connected."}</p>
     ${limited && html`<p class="setup-warning">${setup.emu.rom.warning}</p>`}

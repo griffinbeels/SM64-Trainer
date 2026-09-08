@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/sm64_events/core/capturelayer.py"
+  - "src/sm64_events/core/capturelayer_win.py"
   - "src/sm64_events/core/paths.py"
   - "src/sm64_events/core/setup_runtime.py"
   - "src/sm64_events/core/onboarding.py"
@@ -23,6 +24,10 @@ paths:
 - **One clock:** server monotonic time bounds fresh evidence to three seconds;
   the browser separately acknowledges progress for about one second. Neither
   polling frequency nor persisted completion can establish current readiness.
+  During intentional recorder idle, a positive decoded-picture receipt from the
+  current source's original plugin PID substitutes for fresh picture delivery.
+  Heartbeat, ROM, game and neutral input sampling must still be live. The receipt
+  cannot qualify a stopped recorder, desktop fallback, or another plugin PID.
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
 |---|-----|-----------------------|--------|------------------|--------------------|------------------------------------------|--------------------------------------------|
@@ -44,6 +49,25 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-09-07, hop 2: AFK revoked picture demand as designed, then setup rejected
+  the stalled delivery counter despite a live plugin, ROM, inputs and game.
+  `/api/replay/status` showed idle=true, recording=true and 3348 delivered;
+  `/api/setup` had only pictures=false. Setup now accepts the source's PID-bound
+  delivered-picture receipt during intentional idle, including first opening
+  Setup while already AFK. Active stalls still fail. `test_onboarding.py` tests
+  both entrances plus broken evidence; `test_pluginsource.py` binds the receipt
+  to the original producer; the browser test uses the real SetupRuntime and
+  checks both AFK success and subsequent heartbeat failure.
+
+- 2026-09-07, hop 2: Project64 was found but rejected while both playing and idle.
+  Wermi v7's LINK executable has no Windows VERSIONINFO resource; requiring that
+  resource confused compatibility with metadata availability. Exact known-build
+  SHA-256 recognition now covers that unversioned binary. Unknown bytes or an
+  explicitly unsupported resource version remain rejected. `test_capturelayer_win.py`
+  changes a byte to disprove recognition, and the real adapter was checked against
+  the same running executable before/after without restarting it. An unresolved
+  target now stays on Connect Project64 instead of jumping to installation.
 
 - 2026-09-07, hops 2–3: “It marked as complete & active WHEN I OPENED JUST PJ64.”
   The old UI treated pj64_running and the grading preference as ROM evidence.

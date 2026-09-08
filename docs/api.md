@@ -490,6 +490,8 @@ Runtime fields in `emu`:
   This does not require a local consent timestamp and does not imply live readiness.
   A verified installation in supported Project64 suppresses automatic onboarding.
 - `target`: Project64 executable path, PID, file version, state and recovery message.
+  `build` identifies an exact known unversioned build by SHA-256; `version` stays
+  null when Windows version metadata is absent. Names alone never qualify a build.
   Only verified v1.6 qualifies; multiple processes require closing extra copies.
 - `rom`: loaded cartridge header identity (`state`, `region`, `name`, `warning`).
   States are missing, supported US Usamune v1.93u, JP Usamune, or unsupported.
@@ -497,6 +499,11 @@ Runtime fields in `emu`:
 - `checks`: plugin heartbeat from the target PID, recent pictures, input samples
   and game progression. Fresh counter movement remains readable by multiple
   clients for three seconds; a new source or counter reset must prove itself again.
+  Intentional recorder idle can use an existing positive delivered-picture count
+  from that source's original PID (`frame_source_health.plugin_pid` in replay
+  status). It does not require new pictures or controller activity while AFK.
+  Live heartbeat, ROM and game/input sampling remain required; active capture
+  stalls, stopped recording and desktop fallback do not receive this exception.
 - `verification`: `{step, message, ready, limited, installed, checks}`.
   Installation is not readiness. US requires all checks; JP verifies the
   available plugin/picture path, bypasses unimplemented tracking, and carries
