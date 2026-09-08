@@ -73,3 +73,8 @@ The full wrapper removes inherited `PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, and
 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` before both dependency probing and execution,
 so shell settings cannot silently select a partial suite or disable its plugins.
 CPU/resource configuration remains controlled by the existing runner.
+The full integration check has a 3600-second budget including shared admission:
+a measured preceding task held the allocation for about17 minutes during this
+pilot. This avoids cancelling a newly admitted suite near its completion merely
+because it spent its budget queued. Quick-check timeouts remain unchanged, and
+the longer budget neither bypasses admission nor skips required tests.
