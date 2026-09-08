@@ -70,3 +70,16 @@ def row_identity(target, item, kind, rows):
         if entity and entity.startswith("segment:"):
             entity = None
     return (entity, sheet_strategy(target, item, kind)) if entity else None
+
+
+def scoring_identity(target, item, kind, rows, clock_of=None):
+    """A locally placed row with a compatible clock, for fits and board scores."""
+    from sm64_events.library.import_runner import timed_in_real_time
+    identity = row_identity(target, item, kind, rows)
+    if identity is None:
+        return None
+    entity, _strategy = identity
+    clock = clock_of(entity) if clock_of else ("igt" if entity.startswith("star:") else None)
+    if clock == "igt" and timed_in_real_time(item):
+        return None
+    return identity
