@@ -31,6 +31,30 @@ def test_frozen_paths_live_under_localappdata(monkeypatch, tmp_path):
     assert paths.logs_dir() == root / "logs"
 
 
+def test_installation_record_is_shared_between_worktrees_without_sharing_practice_data(monkeypatch, tmp_path):
+    monkeypatch.setattr(paths, "is_frozen", lambda: False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user"))
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.chdir(first)
+    (first / "data").mkdir()
+    legacy = first / "data" / "capture_layer.json"
+    legacy.write_text('{"pj64_dir":"C:/Games/PJ64","consented_at":"yesterday"}')
+    paths.migrate_capture_layer_settings()
+    shared = paths.capture_layer_settings_path()
+    assert shared.read_bytes() == legacy.read_bytes()
+    first_db = paths.db_path().resolve()
+    monkeypatch.chdir(second)
+    assert paths.capture_layer_settings_path() == shared
+    assert paths.db_path().resolve() != first_db
+    (second / "data").mkdir()
+    (second / "data" / "capture_layer.json").write_text('{"pj64_dir":"stale"}')
+    paths.migrate_capture_layer_settings()
+    assert shared.read_bytes() == legacy.read_bytes()
+    assert legacy.exists()  # Migration copies; it never removes old metadata.
+
+
 def test_bundled_ffmpeg_none_from_source(monkeypatch):
     monkeypatch.setattr(paths, "is_frozen", lambda: False)
     assert paths.bundled_ffmpeg() is None

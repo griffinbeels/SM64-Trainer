@@ -1,26 +1,10 @@
-"""GET|PUT|POST|DELETE /api/setup -- the first-run setup screen's API.
+"""Installation, observed readiness and completion for the setup wizard.
 
-The setup screen (setupmodal.js) is a checklist over TWO things this project
-already persists separately: which platform the player practices on
-(core/modes.py, EMU/N64 -- the same record header.js's Game version dropdown
-reads) and the CAPTURE LAYER's own state (core/capturelayer.py -- whether the
-frame-exact wrapper plugin is installed into Project64). This router is a thin
-skin over both: it never derives anything itself, it asks
-`capture_layer.status()` and the mode file and hands back one payload the
-modal renders directly.
-
-`capture_layer` is injected exactly like `inputs`/`compare` in server/app.py --
-`create_app(..., capture_layer=None)` mounts this router only when one is
-given, so a broadcast-only second instance (no capture layer object at all)
-carries no dead routes. A `LayerRefused` from `install`/`uninstall` becomes a
-409 whose body IS the sentence the checklist shows where the click landed --
-never a bare status code, the same contract `inputs_api.py` follows for its
-own domain exceptions.
-
-The platform PUT touches only `ModeConfig.mode`; the stored `version` (JP/US/
-Auto-detect, header.js's own Game version control) is read back unchanged.
-Nothing here re-grades or broadcasts -- unlike the game version, a practice
-platform choice does not change which standards apply."""
+The observer is injected by main; fixtures never inspect the live environment.
+Platform selection stays local in the wizard until completion. The existing
+platform PUT remains available and preserves the user's grading preference.
+"""
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -30,6 +14,10 @@ from pydantic import BaseModel
 from sm64_events.core.capturelayer import CaptureLayer, LayerRefused
 from sm64_events.core.modes import (ModeConfig, TrackerMode,
                                     load_mode_config, save_mode_config)
+from sm64_events.core.onboarding import SetupRecord, identify_rom, readiness
+from sm64_events.core.paths import mode_settings_path
+
+log = logging.getLogger("sm64.setup")
 
 
 class PlatformBody(BaseModel):
@@ -40,55 +28,81 @@ class ConsentBody(BaseModel):
     consent: bool
 
 
-def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer) -> dict:
-    return {
-        "platform": mode_cfg.mode.value,
-        TrackerMode.EMU.value: capture_layer.status().as_dict(),
-        # The N64 front-end (console-support's own vision pipeline) has
-        # nothing to report yet -- this shape is what SETUP_PANES.n64 checks
-        # to render its one placeholder line rather than a picker with
-        # nothing behind it.
-        TrackerMode.N64.value: {"available": False},
-    }
+def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer,
+               observer=None, record=None) -> dict:
+    layer = capture_layer.status()
+    observed = observer(layer) if observer else {
+        "target": {"state": "unknown", "message": "Waiting for the setup connection."},
+        "rom": identify_rom(None), "checks": {}}
+    return {"platform": mode_cfg.mode.value,
+            TrackerMode.EMU.value: {**layer.as_dict(), **observed,
+                    "verification": readiness(layer, observed)},
+            "onboarding": record.read() if record else {},
+            TrackerMode.N64.value: {"available": False}}
 
 
-def create_setup_router(capture_layer: CaptureLayer,
-                        mode_path: Path | None = None) -> APIRouter:
-    """`mode_path` overrides where the platform setting persists (tests);
-    production takes core.paths.mode_settings_path() via load/save's own
-    default, exactly like server/mode_api.py."""
+def create_setup_router(capture_layer: CaptureLayer, mode_path: Path | None = None,
+                        observer=None) -> APIRouter:
     router = APIRouter(prefix="/api")
+    record = SetupRecord((mode_path or mode_settings_path()).with_name("onboarding.json"))
+
+    def payload():
+        return setup_json(load_mode_config(mode_path), capture_layer, observer, record)
+
+    def save_platform(platform):
+        current = load_mode_config(mode_path)
+        save_mode_config(ModeConfig(mode=platform, version=current.version), mode_path)
 
     @router.get("/setup")
     def get_setup():
-        return setup_json(load_mode_config(mode_path), capture_layer)
+        return payload()
 
     @router.put("/setup/platform")
-    async def put_platform(body: PlatformBody):
+    def put_platform(body: PlatformBody):
         try:
-            mode = TrackerMode(body.platform.strip().lower())
+            platform = TrackerMode(body.platform.strip().lower())
         except ValueError:
-            return JSONResponse(status_code=422, content={
-                "detail": f"unknown platform {body.platform!r}"})
-        current = load_mode_config(mode_path)
-        cfg = ModeConfig(mode=mode, version=current.version)
-        save_mode_config(cfg, mode_path)
-        return setup_json(cfg, capture_layer)
+            return JSONResponse(status_code=422, content={"detail": f"Unknown platform: {body.platform}."})
+        save_platform(platform)
+        return payload()
+
+    @router.post("/setup/complete")
+    def complete_setup(body: PlatformBody):
+        try:
+            platform = TrackerMode(body.platform.strip().lower())
+        except ValueError:
+            return JSONResponse(status_code=422, content={"detail": "Unknown platform."})
+        verification = payload()[TrackerMode.EMU.value]["verification"]
+        if platform is TrackerMode.EMU and not verification["ready"]:
+            return JSONResponse(status_code=409, content={"detail": verification["message"]})
+        save_platform(platform)
+        record.complete(platform.value, platform is TrackerMode.N64 or verification["limited"])
+        return payload()
 
     @router.post("/setup/capture-layer")
-    async def install_capture_layer(body: ConsentBody):
+    def install_capture_layer(body: ConsentBody):
         try:
             capture_layer.install(body.consent)
+            record.write(started=True, completed_at=None)
         except LayerRefused as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        return setup_json(load_mode_config(mode_path), capture_layer)
+        except OSError:
+            log.exception("setup installation failed")
+            return JSONResponse(status_code=409, content={
+                "detail": "Couldn't write to the Project64 folder. Check its permissions, then try again."})
+        return payload()
 
     @router.delete("/setup/capture-layer")
-    async def uninstall_capture_layer():
+    def uninstall_capture_layer():
         try:
             capture_layer.uninstall()
+            record.write(started=True, completed_at=None)
         except LayerRefused as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        return setup_json(load_mode_config(mode_path), capture_layer)
+        except OSError:
+            log.exception("setup removal failed")
+            return JSONResponse(status_code=409, content={
+                "detail": "Couldn't restore your graphics setting. Close Project64 and try again."})
+        return payload()
 
     return router
