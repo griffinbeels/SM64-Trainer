@@ -31,6 +31,7 @@ segment's size and squash it if the aspect changed.
 import os
 from sm64_events.core.profiling import measured
 import math
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -79,12 +80,20 @@ class ClipResult:
 
 @measured("replay.probe_frames")
 def frame_times_of(ffmpeg: str | None, clip: Path, *,
-                   input_format: str | None = None) -> list[float] | None:
-    """Every video frame's pts, in seconds, off ffprobe; None when it cannot
-    be read. One call per cut (~100 ms for a 30 s clip)."""
+                   input_format: str | None = None,
+                   native_packets: bool = False) -> list[float] | None:
+    """Every video frame's PTS; None when it cannot be read.
+
+    Native encoder callers can use guarded packet timestamps. Other media
+    retains decoded-frame semantics, including presentation reordering.
+    """
     ffprobe = ffprobe_beside(ffmpeg)
     if not ffprobe:
         return None
+    if native_packets:
+        times = _native_packet_times(ffprobe, clip, input_format)
+        if times is not None:
+            return times
     try:
         out = subprocess.run(
             [ffprobe, "-v", "error", "-select_streams", "v:0",
@@ -98,6 +107,49 @@ def frame_times_of(ffmpeg: str | None, clip: Path, *,
                  if line.strip()]
         return times or None
     except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _native_packet_times(ffprobe: str, clip: Path,
+                         input_format: str | None) -> list[float] | None:
+    """Read timestamps without decoding pixels, only for our native encoder.
+
+    Our H264 mux writes one picture per packet with no B frames. Arbitrary
+    downloads do not have that contract and must keep the decoded-frame path.
+    Refuse reordered, discarded, corrupt or incomplete packets rather than
+    sorting them into an apparently plausible picture map.
+    """
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             *(["-f", input_format] if input_format else []),
+             "-show_entries",
+             "stream=codec_name,has_b_frames,time_base:packet=pts,dts,flags",
+             "-of", "json", str(clip)],
+            capture_output=True, text=True, timeout=120, check=False,
+            **quiet_spawn_kwargs())
+        if out.returncode or out.stderr.strip():
+            return None
+        data = json.loads(out.stdout)
+        streams = data.get("streams", [])
+        if len(streams) != 1:
+            return None
+        stream = streams[0]
+        if (stream.get("codec_name") != "h264" or stream.get("has_b_frames") != 0
+                or stream.get("time_base") != "1/90000"):
+            return None
+        ticks = []
+        for packet in data.get("packets", []):
+            pts = packet.get("pts")
+            flags = packet.get("flags")
+            if (type(pts) is not int or packet.get("dts") != pts
+                    or not isinstance(flags, str) or any(flag in flags for flag in "DC")
+                    or (ticks and pts <= ticks[-1])):
+                return None
+            ticks.append(pts)
+        # Preserve ffprobe's existing six-decimal public representation.
+        return [round(t / MEDIA_HZ, 6) for t in ticks] or None
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -252,7 +304,7 @@ class ClipExtractor:
             # A tiny held-picture TS can be misdetected as MPEG program
             # stream with audio only. The ring's format is already known.
             source_times = frame_times_of(self._ffmpeg, run[0].path,
-                                          input_format="mpegts")
+                                          input_format="mpegts", native_packets=True)
             if not source_times:
                 raise ValueError("no readable pictures at the requested start")
             source_ticks = [round(t * MEDIA_HZ) for t in source_times]
@@ -316,7 +368,7 @@ class ClipExtractor:
         # Probe the file we just wrote, THEN publish it. Probing after the
         # rename let a racing writer change the file between the two, which is
         # how a sidecar came to describe 1921 frames of a 1380-frame clip.
-        times = (frame_times_of(self._ffmpeg, cut_path)
+        times = (frame_times_of(self._ffmpeg, cut_path, native_packets=True)
                  if self._picture_feed else None)
         start_s = (times[0] if times
                    else video_start_of(self._ffmpeg, cut_path))
