@@ -48,6 +48,9 @@ def prepare(payload, assignments, definitions, standards, policy):
     for target, item, key, kind in _rows(payload):
         identity = scoring_identity(target, item, kind, grading_rows, standards.clock_for)
         if identity is None:
+            placed = row_identity(target, item, kind, grading_rows)
+            if placed is not None:
+                grouped.setdefault(placed[0], [])
             continue
         entity, strategy = identity
         stable = (entity if entity.startswith("star:") else identities.get(entity))
@@ -63,7 +66,7 @@ def prepare(payload, assignments, definitions, standards, policy):
     for entity, rows in grouped.items():
         versions = {}
         for version in ("us", "jp"):
-            curve = fit_overall(rows, policy=policy, target_id=identities[entity], version=version)
+            curve = fit_overall(rows, policy=policy, target_id=identities.get(entity) or entity, version=version)
             if curve is not None:
                 versions[version] = curve
         # Empty is an explicit no-compatible-evidence result, not permission

@@ -599,42 +599,12 @@ def _ladder_is_fitted(ranks, ek, best_ladder_cs: dict) -> bool:
 
 
 def entity_rank(ranks, ek, frames, version=None) -> dict | None:
-    """The star/segment's OWN rank: the time graded against the entity's
-    best-possible ladder (pointwise best across every strategy) rather than
-    the active strategy's. THE number MARELO aggregates.
+    """Grade this absolute time on the target's independent Overall curve.
 
-    This is why a mastered slow strategy reads Mario on one banner and
-    honestly less on the other: the strategy banner asks 'how well do I run
-    THIS strat', this one asks 'how close is this to the fastest this star
-    can be'. None when the entity has no standards or there is no time to
-    grade (the banner is simply not rendered — no sentinel wording, unlike
-    `_section_banner`; keeping this a plain None/dict contract, not a
-    sentinel one, was a deliberate choice on 2026-07-25 round 2 rather than
-    inventing wording nobody asked for).
-
-    Shape deliberately mirrors `_section_banner`'s graded output — SAME
-    fields (`_graded_progress`), so the UI renders both through the SAME
-    ui/components/ranks.js RankBanner, side by side, with different data.
-    Spec 2026-07-25 round 3: the user asked for the two banners to be
-    genuinely interchangeable — same gradient, same bar, same `next:` line
-    with its time delta — after round 2 still left this one looking like a
-    lesser chip beside a full banner ("it feels like it's just a visual
-    error"). Also carries `fastest_strat` (_fastest_strategy) — the strategy
-    that actually sets this best-possible ladder — so the UI can explain a
-    low entity rank next to a high strategy rank ("Iron I · fastest here is
-    Sign Clip") instead of leaving the two numbers to look like a
-    contradiction (live user report 2026-07-25).
-
-    `fitted` is NOT fastest_strat's own is_fitted -- `best_ladder` is a
-    POINTWISE minimum, so a different strategy can own an easier tier than
-    the one that wins the hardest tier `_fastest_strategy` identifies (its
-    own hardest-tier-first narrowing stops at the first uniquely-identified
-    strategy and never claims to speak for every tier). `_ladder_is_fitted`
-    asks every strategy that actually SETS a tier, not just the one strategy
-    named as "fastest" -- measured against the bundled seeds, 8 of 117
-    entities have a vetted fastest_strat while a fitted strategy alone still
-    sets one of the easier tiers a run is graded against there, which
-    fastest_strat's own is_fitted silently missed."""
+    MARELO aggregates the same score. The returned banner fields match the
+    Strategy banner; missing standards/time returns None. Legacy attribution
+    applies only while its effective curve still equals the strategy envelope.
+    """
     if ranks is None or frames is None:
         return None
     # `version` is the ROM that set THIS time (None = the running one). It
@@ -647,7 +617,8 @@ def entity_rank(ranks, ek, frames, version=None) -> dict | None:
     progress = curves.progress_for_time(curve, classify.display_cs(frames))
     if progress is None:
         return None
-    legacy = curve["interpolation"] == "legacy"
+    legacy = (curve["interpolation"] == "legacy"
+              and curve["ladder_cs"] == scoring.best_ladder(ranks.ladders(ek, version)))
     ladder = curve["ladder_cs"]
     fastest_strat = _fastest_strategy(ranks, ek, ladder) if legacy else None
     return {**progress, "rank": progress["tier"], "score": round(progress["score"], 1),

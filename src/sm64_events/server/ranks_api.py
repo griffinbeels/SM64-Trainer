@@ -339,7 +339,9 @@ def _read_library(reader, entity, *, library, adoptions, ranks, **kwargs):
 
 def _overall_fields(standards, entity, version, ladders):
     curve = resolve_curve(standards, entity, version)
-    legacy = curve["interpolation"] == "legacy"
+    legacy = (curve["interpolation"] == "legacy"
+              and not standards.overall_overrides(entity, version)
+              and curve["ladder_cs"] == scoring.best_ladder(ladders))
     return {"overall": {rank: cs / 100 for rank, cs in curve["ladder_cs"].items()},
             "overall_curve": curve,
             "overall_overrides": standards.overall_overrides(entity, version),
@@ -411,22 +413,9 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # file); a sheet-fitted JP ladder is not, and the editor's
                 # checkbox says so instead of offering a click that no-ops.
                 "clearable_jp_strategies": service.ranks.clearable_jp_strategies(entity),
-                # THE entity's own ladder -- the pointwise best across every
-                # strategy, which is what `views.entity_rank` grades against
-                # and therefore what "rank up OVERALL" actually costs. It has
-                # never been showable before: the entity's RANK had a banner
-                # from the beginning, its STANDARDS had no surface at all, so
-                # the only cutoffs anyone could read were per-strategy ones
-                # (user, 2026-08-10: "make it very clear what it takes for you
-                # to rank up overall, versus rank up per strategy"). Served in
-                # SECONDS like `strategies`, so one formatter reads both, and
-                # derived HERE rather than in the browser because a second
-                # pointwise-min in JS is the divergence this project has a
-                # rule against.
+                # Full Overall curve and its display cutoffs. Strategy edits
+                # do not define these; both banners use the shared evaluator.
                 **_overall_fields(service.ranks, entity, resolved, ladders),
-                # The ONE strategy that sets every Overall cutoff, or null --
-                # the practice card prints why that strategy's ladder IS the
-                # Overall one (scoring.sole_overall_owner has the story).
                 # Which of the names above (keys of "strategies") came off the
                 # Ultimate Sheet rather than community-vetted standards --
                 # ranks.is_fitted's own contract, exposed as a sibling LIST
