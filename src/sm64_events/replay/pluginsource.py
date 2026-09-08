@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sm64_events.core.profiling import measured, profile
 from sm64_events.inputs.frame import MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE, InputFrame, decode
 from sm64_events.memory import addresses as A
 from sm64_events.memory.addresses import KSEG0_BASE
@@ -49,6 +50,15 @@ PICTURE_PROBE_S = 0.6
 LAYER_WATCH_S = 1.0
 #: after the layer refused pictures, how long before it is asked again
 LAYER_RETRY_S = 15.0
+
+
+def _refresh_profile(stream: F.FrameStream, stop_event: threading.Event) -> None:
+    """Profiling must never make an otherwise working capture source fail."""
+    try:
+        stream.graphics_profile.refresh(
+            profile.session_id if profile.active() else None, stop_event)
+    except (OSError, ValueError):
+        log.debug("graphics profiling mapping unavailable", exc_info=True)
 
 
 def pictures_flow(stream: F.FrameStream, timeout_s: float = PICTURE_PROBE_S,
@@ -158,6 +168,7 @@ class FrameStamp:
         return out
 
 
+@measured("capture.decode_stamp")
 def decode_stamp(slot: F.Slot, table: list, layout) -> FrameStamp | None:
     """The stamp a slot carries, decoded; None when the counter is missing."""
     by_name = {}
@@ -184,6 +195,7 @@ def decode_stamp(slot: F.Slot, table: list, layout) -> FrameStamp | None:
                       lists_since=slot.lists_since)
 
 
+@measured("capture.bgr_to_bgra")
 def to_bgra_top_down(pixels_bgr_bottom_up: np.ndarray) -> np.ndarray:
     """The (H, W, 4) top-down array the sink expects, from a slot's rows."""
     height, width = pixels_bgr_bottom_up.shape[:2]
@@ -225,7 +237,10 @@ class DesktopUntilLayerPresents:
             self._desktop.set_idle_check(fn)
 
     def status(self) -> dict | None:
-        return self._desktop.status() if hasattr(self._desktop, "status") else None
+        result = self._desktop.status() if hasattr(self._desktop, "status") else None
+        _refresh_profile(self._stream, self._stop)
+        measured = self._stream.graphics_profile.snapshot(self._stream.header().plugin_pid)
+        return {**(result or {}), "graphics_profile": measured}
 
     def start(self, on_frame, on_stopped) -> None:
         self._on_stopped = on_stopped
@@ -241,6 +256,7 @@ class DesktopUntilLayerPresents:
 
     def request_stop(self) -> None:
         self._stop.set()
+        _refresh_profile(self._stream, self._stop)
         try:
             self._stream.set_want_frames(False)
         except Exception:
@@ -265,6 +281,7 @@ class DesktopUntilLayerPresents:
         next_probe = 0.0
         last = self._stream.header().alive
         while not self._stop.wait(LAYER_WATCH_S):
+            _refresh_profile(self._stream, self._stop)
             try:
                 header = self._stream.header()
             except Exception:
@@ -353,6 +370,7 @@ class PluginVideoSource:
     def request_stop(self) -> None:
         """Revoke capture immediately, before any joins or encoder draining."""
         self._stop.set()
+        _refresh_profile(self._stream, self._stop)
         try:
             with self._demand_lock:
                 self._accept_demand = False
@@ -410,6 +428,7 @@ class PluginVideoSource:
             now = time.monotonic()
             if now - last_alive_check >= IDLE_POLL_S:
                 last_alive_check = now
+                _refresh_profile(self._stream, self._stop)
                 with self._demand_lock:
                     if self._accept_demand:
                         self._stream.touch()
@@ -425,6 +444,9 @@ class PluginVideoSource:
                 last_alive = alive
 
     def status(self) -> dict:
+        _refresh_profile(self._stream, self._stop)
+        header = self._stream.header()
         return {"delivered": self._delivered, "skipped": self._skipped,
                 "undecodable": self._undecodable,
-                "dropped_by_plugin": self._stream.header().dropped}
+                "dropped_by_plugin": header.dropped,
+                "graphics_profile": self._stream.graphics_profile.snapshot(header.plugin_pid)}

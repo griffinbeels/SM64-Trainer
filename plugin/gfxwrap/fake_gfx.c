@@ -83,6 +83,8 @@ EXPORT void CALL UpdateScreen(void) {
 }
 
 EXPORT void CALL ReadScreen(void **dest, long *width, long *height) {
+    /* Instrument sensitivity witness, confined to the fake renderer. */
+    if (GetEnvironmentVariableA("SM64_FAKE_READSCREEN_DELAY", NULL, 0)) Sleep(25);
     *dest = NULL; *width = 0; *height = 0;
     if (!g_have_gfx) return;
     RECT client;
