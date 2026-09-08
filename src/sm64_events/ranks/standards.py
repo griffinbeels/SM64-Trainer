@@ -357,7 +357,7 @@ class RankStandards:
                     "source": "missing", "version": version,
                     "note": "No compatible population for this game version."})
             curve = generated or curves.from_ladder(
-                scoring.best_ladder(self._overall_fallback(ek, version) if self.calibrations is not None
+                scoring.best_ladder(self._overall_fallback(ek, version) if generation is not None
                                     else self.ladders(ek, version)),
                 metadata={"source": "legacy", "estimated": True,
                           "note": "No compatible population; using existing standards."})

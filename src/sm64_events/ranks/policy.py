@@ -120,12 +120,8 @@ def _validate_settings(layer, settings):
     else:
         if set(settings) != {"model", "weights"} or not isinstance(settings["weights"], dict):
             raise ValueError("route settings require model and target weights")
-        for target, value in settings["weights"].items():
-            if not isinstance(target, str) or not target:
-                raise ValueError("route weight targets must be stable names")
-            _number(value, f"weights.{target}", 0)
-            if value == 0:
-                raise ValueError("route weights must be positive")
+        if settings["weights"]:
+            raise ValueError("required_slots uses equal weights; custom route weights are not supported")
 
 
 class RankingPolicy:

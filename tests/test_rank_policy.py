@@ -24,7 +24,6 @@ def test_target_region_strategy_and_route_patches_do_not_leak():
             {"target_id": "star:2:4", "version": "jp", "parameters": {"milestone_weight": .2}}]},
         "strategy": {"patches": [{"target_id": "star:2:4", "strategy": "Owl",
                                    "parameters": {"peak_min_entries": 12}}]},
-        "route": {"patches": [{"target_id": "route:16", "parameters": {"weights": {"star:2:4": 2}}}]},
     }})
     base = RankingPolicy()
     assert policy.resolve("star:2:4")["milestone_weight"] == .4
@@ -33,8 +32,14 @@ def test_target_region_strategy_and_route_patches_do_not_leak():
     assert policy.resolve("star:2:4")["families"] == base.resolve("star:2:4")["families"]
     assert policy.resolve("star:2:4", strategy="Owl", layer="strategy")["peak_min_entries"] == 12
     assert policy.resolve("star:2:4", strategy="Standard", layer="strategy") == base.resolve("", layer="strategy")
-    assert policy.resolve("route:16", layer="route")["weights"] == {"star:2:4": 2}
+    assert policy.resolve("route:16", layer="route")["weights"] == {}
     assert policy.resolve("route:70", layer="route")["weights"] == {}
+
+
+def test_unimplemented_route_weights_fail_instead_of_silently_doing_nothing():
+    with pytest.raises(ValueError, match="custom route weights are not supported"):
+        RankingPolicy({"layers": {"route": {"patches": [
+            {"target_id": "route:16", "parameters": {"weights": {"star:2:4": 2}}}]}}})
 
 
 def test_revision_is_content_based_and_effective_revision_is_local():
