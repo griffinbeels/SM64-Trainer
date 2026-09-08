@@ -268,7 +268,7 @@ class Adoptions:
     unadopt actually remove a strategy."""
 
     def __init__(self, path, store, standards, qualified=(), segment_defs=None,
-                 provision=None):
+                 provision=None, policy=None):
         self.path = Path(path)
         self.store = store               # LibraryStore
         self.standards = standards       # RankStandards
@@ -278,6 +278,10 @@ class Adoptions:
         self.segment_defs = segment_defs
         self.provision = provision
         self._automatic = {}
+        self.policy = policy
+        if standards is not None and hasattr(store, "calibrations"):
+            standards.calibrations = store.calibrations
+            store.prepare_calibration = self._prepare_calibration
 
     def load(self) -> None:
         self._rows = load(self.path)
@@ -291,12 +295,18 @@ class Adoptions:
         The reservation prevents downstream automatic placement from putting
         a deliberately unlinked row back. Consumers resolve through row_identity.
         """
+        generation = getattr(self.store, "calibrations", None)
+        if generation is not None and generation.pinned is not None:
+            return dict(generation.pinned.rows)
+        return self._resolved_rows(self.store.payload, self._automatic)
+
+    def _resolved_rows(self, payload, automatic):
         from sm64_events.library.placements import automatic_rows
         definitions = list(self.segment_defs()) if self.segment_defs else []
         existing = {f"segment:{d['id']}" for d in definitions}
-        generated = {key: entity for key, entity in self._automatic.items()
+        generated = {key: entity for key, entity in automatic.items()
                      if entity in existing}
-        return automatic_rows(self.store.payload,
+        return automatic_rows(payload,
                               {**generated, **dict.fromkeys(self._unlinked, ""),
                                **self._rows}, definitions)
 
@@ -309,10 +319,25 @@ class Adoptions:
         return library_ladders(self.store.payload, self.rows(), self.qualified)
 
     def _sync(self) -> None:
+        if self.standards is not None and hasattr(self.store, "recalibrate"):
+            self.store.recalibrate()
+            return
         if self.provision is not None:
             self._automatic = self.provision(self.store.payload, self._rows)
         if self.standards is not None:
             self.standards.apply_sheet_ladders(self.ladders())
+
+    def _prepare_calibration(self, payload):
+        from sm64_events.library.calibration import prepare
+        from sm64_events.ranks.policy import RankingPolicy
+        automatic = self.provision(payload, self._rows) if self.provision else {}
+        assignments = self._resolved_rows(payload, automatic)
+        definitions = list(self.segment_defs()) if self.segment_defs else []
+        policy = self.policy() if callable(self.policy) else self.policy
+        candidate = prepare(payload, assignments, definitions, self.standards,
+                            policy or RankingPolicy())
+        self._automatic = automatic
+        return candidate
 
     def adopt(self, key: str, entity: str) -> dict:
         target, item, name = validate(self.store.payload, key, entity,

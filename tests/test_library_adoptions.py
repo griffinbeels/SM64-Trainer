@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from sm64_events.library import adoptions as ad
 from sm64_events.library.audit import row_key
+from sm64_events.library.build import SCHEMA_VERSION
 from sm64_events.library.store import LibraryStore
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.library_api import create_library_router
@@ -28,7 +29,7 @@ def _payload():
                 "entries": [{"runner": f"r{i}", "time_cs": 276 + i,
                              "video": None, "version": None, "platform": None}
                             for i in range(entries)]}
-    return {"schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+    return {"schema_version": SCHEMA_VERSION, "sheet_revision": "2026-08-05T09:15:18",
             "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
                 {"entity_key": None, "group": "Castle Movements (Lobby)",
                  "section": "★ BoB", "label": "Lobby door (L) - BoB door",
