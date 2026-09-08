@@ -19,9 +19,14 @@ because its shape is not what the readers expect."""
 import gzip
 import json
 import logging
+import os
+import tempfile
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.library.build import SCHEMA_VERSION
+from sm64_events.ranks.calibration import Calibration, CalibrationRegistry, fingerprint, observation_fingerprint
 
 _log = logging.getLogger("sm64.library")
 
@@ -45,15 +50,43 @@ def read_snapshot(path) -> dict | None:
 
 
 def write_snapshot(path, payload: dict) -> None:
+    """Replace one complete gzip atomically; invalid data leaves old bytes intact."""
     path = Path(path)
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    compressed = gzip.compress(encoded, compresslevel=9, mtime=0)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # mtime=0 so an unchanged sheet round-trips to identical bytes.
-    with gzip.GzipFile(path, "wb", compresslevel=9, mtime=0) as out:
-        out.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.",
+                                         suffix=".tmp", delete=False) as out:
+            temporary = Path(out.name)
+            out.write(compressed)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _usable(snapshot) -> bool:
     return bool(snapshot) and snapshot.get("schema_version") == SCHEMA_VERSION
+
+
+def _validated_revision(payload):
+    """A refresh needs the supported shape and a comparable Sheet timestamp."""
+    if (not isinstance(payload, dict) or not _usable(payload)
+            or not isinstance(payload.get("targets"), list)):
+        raise ValueError("library refresh requires the current schema and a targets list")
+    revision = payload.get("sheet_revision")
+    if not isinstance(revision, str) or not revision:
+        raise ValueError("library refresh requires a Sheet revision timestamp")
+    try:
+        parsed = datetime.fromisoformat(revision)
+    except ValueError as exc:
+        raise ValueError("library refresh requires a valid Sheet revision timestamp") from exc
+    # Workbook Log timestamps have no offset; use a common comparison basis.
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
 
 
 def build_and_stamp(data: bytes, overrides: dict | None = None, step=None) -> dict:
@@ -128,32 +161,49 @@ class LibraryStore:
                 f"the bundled one without ever writing it")
         self._payload = None
         self._source = None   # "local" | "bundled" | None (nothing loaded)
+        self.calibrations = CalibrationRegistry()
+        self.prepare_calibration = None  # (detached payload) -> complete Calibration
 
     # ---- load ----
     def load(self) -> None:
-        bundled = read_snapshot(self.bundled_path)
-        local = read_snapshot(self.path)
-        self._payload = newer(local, bundled)
-        if self._payload is not None:
+        with self.calibrations.update_lock:
+            bundled = read_snapshot(self.bundled_path)
+            local = read_snapshot(self.path)
+            selected = newer(local, bundled)
+            if selected is None:
+                _log.info("no usable sheet library at %s or %s", self.path, self.bundled_path)
+                return
             from sm64_events.library.ladders import LADDER_MODEL_VERSION, fit_payload
-            if (self._payload.get("ladder_model") or {}).get("version") != LADDER_MODEL_VERSION:
-                # Refit the selected observations, even offline. Never replace
-                # a newer local Sheet with an older release just to update the
-                # fitting model, or rewrite the read-only bundled snapshot.
-                fit_payload(self._payload)
-        self._source = ("local" if self._payload is local and local is not None
-                        else "bundled" if self._payload is not None else None)
-        if self._payload is None:
-            _log.info("no usable sheet library at %s or %s", self.path,
-                      self.bundled_path)
-        elif local is not None and self._payload is not local:
-            _log.info("bundled sheet library is newer (%s) than the local copy "
-                      "(%s); using the bundled one",
-                      bundled.get("sheet_revision") if bundled else None,
-                      local.get("sheet_revision"))
+            from sm64_events.ranks.policy import RankingPolicy
+
+            payload = deepcopy(selected)
+            selected_date = _validated_revision(payload)
+            current = self._current_payload()
+            if current is not None and selected_date < _validated_revision(current):
+                _log.info("keeping the active library instead of an older disk snapshot")
+                return
+            model = payload.get("ladder_model") or {}
+            if (model.get("version") != LADDER_MODEL_VERSION
+                    or model.get("policy_revision") != RankingPolicy().revision):
+                # Refit selected observations offline without rewriting either
+                # snapshot. A bound callback resolves effective local policy.
+                fit_payload(payload)
+            candidate = self._prepare(payload)
+            if candidate is not None:
+                self.calibrations.publish(candidate)
+                payload = candidate.payload
+            self._payload = payload
+            self._source = "local" if selected is local else "bundled"
+            if local is not None and selected is not local:
+                _log.info("bundled sheet library is newer (%s) than the local copy "
+                          "(%s); using the bundled one", bundled.get("sheet_revision"),
+                          local.get("sheet_revision"))
 
     @property
     def payload(self) -> dict:
+        calibration = self.calibrations.read
+        if calibration is not None:
+            return calibration.payload
         return self._payload or {"schema_version": SCHEMA_VERSION,
                                  "sheet_revision": None, "targets": [],
                                  "runners": [], "ladder_model": {}}
@@ -163,8 +213,12 @@ class LibraryStore:
         return self.payload.get("sheet_revision")
 
     def status(self) -> dict:
-        payload = self.payload
+        calibration = self.calibrations.read
+        payload = calibration.payload if calibration is not None else self.payload
         return {"sheet_revision": payload.get("sheet_revision"),
+                "calibration_revision": calibration.revision if calibration is not None else None,
+                "data_revision": (calibration.data_revision if calibration is not None else
+                                  observation_fingerprint(payload) if self._payload is not None else None),
                 "fetched_at": payload.get("fetched_at"),
                 "targets": len(payload["targets"]),
                 "runners": len(payload.get("runners") or []),
@@ -269,7 +323,7 @@ class LibraryStore:
 
     # ---- refresh ----
     def refresh(self, fetch_fn, overrides=None, step=None) -> dict:
-        """Fetch the live sheet, rebuild, and keep it only if it is NEWER.
+        """Fetch the live sheet and keep newer dates or corrected same-date data.
 
         A refresh that lands on an older revision than what we already have is
         not an error and is not applied: the sheet is the authority on its own
@@ -286,23 +340,82 @@ class LibraryStore:
         return self.absorb(build_and_stamp(data, overrides, step=step))
 
     def absorb(self, fresh: dict) -> dict:
-        """Keep an already-built payload if it is NEWER than what we hold --
-        the tail of `refresh`, on its own so a caller that already has the
-        bytes (the column export, round 33) can refresh the library without
-        a second download."""
-        current = self._payload
-        if current is not None and newer(current, fresh) is current:
-            return {"applied": False, "sheet_revision": self.revision,
-                    "fetched_revision": fresh.get("sheet_revision"),
-                    "reason": "the live sheet is not newer than what we have"}
+        """Prepare, save, then publish a complete calibration under one lock.
+
+        The Sheet timestamp protects against rollback; observation content
+        detects same-date corrections. A pinned request never supplies the
+        update baseline and keeps reading its old complete generation.
+        """
+        with self.calibrations.update_lock:
+            payload = deepcopy(fresh)
+            incoming_date = _validated_revision(payload)
+            current = self._current_payload()
+            if current is not None and incoming_date < _validated_revision(current):
+                return self._update_result(False, current, payload, "the live sheet is older than what we have")
+            candidate = self._prepare(payload)
+            if candidate is not None:
+                payload = candidate.payload
+            if self._unchanged(payload, candidate):
+                return self._update_result(False, current, payload, "observations and calibration are unchanged")
+            self._activate(payload, candidate)
+            return self._update_result(True, payload, payload)
+
+    def recalibrate(self) -> dict:
+        """Apply policy/assignment changes to the current unpinned observations."""
+        with self.calibrations.update_lock:
+            current = self._current_payload()
+            if current is None or self.prepare_calibration is None:
+                return self._update_result(False, current, current, "no calibration preparation is available")
+            candidate = self._prepare(deepcopy(current))
+            if self._unchanged(candidate.payload, candidate):
+                return self._update_result(False, current, current, "observations and calibration are unchanged")
+            self._activate(candidate.payload, candidate)
+            return self._update_result(True, candidate.payload, candidate.payload)
+
+    def _current_payload(self):
+        active = self.calibrations.active
+        return active.payload if active is not None else self._payload
+
+    def _prepare(self, payload):
+        # Validate all JSON numbers before invoking a callback with side effects.
+        fingerprint(payload)
+        if self.prepare_calibration is None:
+            if self.calibrations.active is not None:
+                raise ValueError("an active calibration requires its preparation callback")
+            return None
+        candidate = self.prepare_calibration(payload)
+        if not isinstance(candidate, Calibration):
+            raise TypeError("prepare_calibration must return a complete Calibration")
+        _validated_revision(candidate.payload)
+        if candidate.data_revision != observation_fingerprint(candidate.payload):
+            raise ValueError("prepared calibration does not match its observations")
+        return candidate
+
+    def _unchanged(self, payload, candidate):
+        active = self.calibrations.active
+        if candidate is not None and active is not None:
+            return candidate.revision == active.revision
+        current = self._current_payload()
+        return (candidate is None and current is not None
+                and observation_fingerprint(payload) == observation_fingerprint(current))
+
+    def _activate(self, payload, candidate):
         if self.path:
-            write_snapshot(self.path, fresh)
-        self._payload = fresh
-        # "local" only means something once written -- a pathless store (no
-        # embedder passes one; create_app always does) never persists this
-        # payload anywhere, so claiming "local" here would have status()
-        # report a copy on disk that was never actually saved.
+            write_snapshot(self.path, payload)
+        if candidate is not None:
+            self.calibrations.publish(candidate)
+        self._payload = payload
         self._source = "local" if self.path else None
-        return {"applied": True, "sheet_revision": fresh.get("sheet_revision"),
-                "fetched_revision": fresh.get("sheet_revision"),
-                "targets": len(fresh["targets"])}
+
+    def _update_result(self, applied, payload, fresh, reason=None):
+        active = self.calibrations.active
+        result = {"applied": applied, "sheet_revision": (payload or {}).get("sheet_revision"),
+                  "fetched_revision": (fresh or {}).get("sheet_revision"),
+                  "calibration_revision": active.revision if active is not None else None,
+                  "data_revision": (active.data_revision if active is not None else
+                                    observation_fingerprint(payload) if payload is not None else None)}
+        if reason:
+            result["reason"] = reason
+        elif payload is not None:
+            result["targets"] = len(payload["targets"])
+        return result
