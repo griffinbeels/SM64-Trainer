@@ -50,6 +50,7 @@ from sm64_events.memory.addresses import (COURSE_BY_LEVEL, COURSE_NAMES,
                                           course_name, star_count, star_name)
 from sm64_events.ranks import classify
 from sm64_events.ranks import scoring
+from sm64_events.ranks.calibration import calibrated_view
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
@@ -640,14 +641,19 @@ def entity_rank(ranks, ek, frames, version=None) -> dict | None:
     # matters most here of anywhere: this is the number MARELO aggregates, so
     # a JP time landing on a US best-possible ladder would inflate the rating
     # for the whole corpus rather than one banner.
-    ladder = scoring.best_ladder(ranks.ladders(ek, version))
-    if not ladder:
+    from sm64_events.ranks import curves
+    from sm64_events.ranks.calibration import resolve_curve
+    curve = resolve_curve(ranks, ek, version)
+    progress = curves.progress_for_time(curve, classify.display_cs(frames))
+    if progress is None:
         return None
-    progress = _graded_progress(ladder, classify.display_cs(frames))
-    fastest_strat = _fastest_strategy(ranks, ek, ladder)
-    return {**progress, "score": round(progress["score"], 1),
+    legacy = curve["interpolation"] == "legacy"
+    ladder = curve["ladder_cs"]
+    fastest_strat = _fastest_strategy(ranks, ek, ladder) if legacy else None
+    return {**progress, "rank": progress["tier"], "score": round(progress["score"], 1),
             "fastest_strat": fastest_strat,
-            "fitted": _ladder_is_fitted(ranks, ek, ladder)}
+            "fitted": _ladder_is_fitted(ranks, ek, ladder) if legacy else True,
+            "calibration": curve["metadata"]}
 
 
 def ranks_share_ladder(ranks, ek, strat) -> bool:
@@ -668,8 +674,10 @@ def ranks_share_ladder(ranks, ek, strat) -> bool:
     """
     if ranks is None or not strat:
         return False
+    from sm64_events.ranks.calibration import resolve_curve
+    curve = resolve_curve(ranks, ek)
     ladder = ranks.ladder_cs(ek, strat)
-    return bool(ladder) and ladder == scoring.best_ladder(ranks.ladders(ek))
+    return bool(ladder) and curve["interpolation"] == "legacy" and ladder == curve["ladder_cs"]
 
 
 def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
@@ -1244,6 +1252,7 @@ def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
             "steps": card_step_labels(d)}
 
 
+@calibrated_view
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -1876,9 +1885,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, grading_ek, seg_strat, seg_basis, rank_mode,
                 pb_untagged=seg_pb_untagged),
             "entity_rank": entity_rank(
-                service.ranks, grading_ek, seg_basis and seg_basis["frames"],
+                service.ranks, seg_ek, seg_basis and seg_basis["frames"],
                 version=seg_basis and seg_basis.get("version")),
-            "one_ladder": ranks_share_ladder(service.ranks, grading_ek, seg_strat),
+            "one_ladder": (grading_ek == seg_ek and
+                           ranks_share_ladder(service.ranks, seg_ek, seg_strat)),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),
@@ -2053,6 +2063,7 @@ def _resolve_cands(cands, seg_names):
     return out
 
 
+@calibrated_view
 def build_run_view(db, service) -> dict:
     """Live run state for the run panel: the active run (resolved step names +
     elapsed + per-step PB-cumulative and gold-duration for ±/gold) plus the

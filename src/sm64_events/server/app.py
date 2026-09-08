@@ -265,14 +265,23 @@ async def _refresh_library_quietly(library, overrides, adoptions, service) -> No
     if not result.get("applied"):
         log.info("library refresh at startup: %s", result.get("reason", "nothing newer"))
         return
-    if adoptions is not None:
-        adoptions.load()
     absorb_after_regrade(service)
     notify = getattr(service, "_rank_standards_changed", None)
     if notify is not None:
         await notify()
     log.info("library refreshed at startup to sheet revision %s",
              result.get("sheet_revision"))
+
+
+def _install_ui_revalidation(app):
+    @app.middleware("http")
+    async def ui_always_revalidate(request, call_next):
+        """Edit + refresh must never combine cached old modules with new ones."""
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/ui"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def create_app(poller: Poller, broadcaster: Broadcaster,
@@ -416,20 +425,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
 
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
 
-    @app.middleware("http")
-    async def _ui_always_revalidate(request, call_next):
-        """The UI contract is edit + refresh (no build, no restart). With
-        no Cache-Control, browsers apply HEURISTIC freshness to /ui module
-        files and can serve a STALE module alongside fresh ones — live
-        incident 2026-06-12: cached store.js (no togglePause) + fresh
-        header.js (with the pause button) = a dead control and no request
-        ever sent. no-cache forces revalidation on every load (cheap 304s
-        on localhost) so module versions can never mix."""
-        response = await call_next(request)
-        p = request.url.path
-        if p == "/" or p.startswith("/ui"):
-            response.headers["Cache-Control"] = "no-cache"
-        return response
+    _install_ui_revalidation(app)
 
     app.mount("/ui", StaticFiles(directory=str(_UI_INDEX.parent)), name="ui")
     # The climb tuning inspector (/ui/tune.html) saves straight into
@@ -494,6 +490,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         app.state.library_adoptions = adoptions
     app.state.library_overrides = library_overrides
     app.state.adoptions = adoptions
+    from sm64_events.server.rank_reading import install_calibration_reads
+    install_calibration_reads(app, standards, library)
     # The live segment list the auto-match pairs entity-less targets against
     # (round 6). Read per request so a segment built mid-session pairs on the
     # next page load; empty when the db is degraded rather than an error.

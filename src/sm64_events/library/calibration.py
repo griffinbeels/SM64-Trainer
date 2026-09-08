@@ -22,7 +22,7 @@ def prepare(payload, assignments, definitions, standards, policy):
     grading_rows = scoring_rows(payload, assignments, definitions)
 
     def strategy_identity(target, item, kind):
-        kind = kind[:-1] if kind.endswith("s") else kind
+        kind = {"approaches": "approach", "subsections": "subsection"}.get(kind, kind)
         placed = row_identity(target, item, kind, assignments)
         entity, strategy = placed or ("", item.get("matched_strategy") or item.get("name"))
         stable = entity if entity.startswith("star:") else identities.get(entity)
@@ -36,8 +36,10 @@ def prepare(payload, assignments, definitions, standards, policy):
         previous = item.get("ladder_policy_revision") or policy.effective_revision(
             "", version=version, layer="strategy")
         expected = policy.effective_revision(stable, version, strategy, "strategy")
-        jp_changed = policy.resolve(stable, "jp", strategy, "strategy") != policy.resolve(
-            "", "jp", layer="strategy")
+        previous_jp = item.get("ladder_jp_policy_revision") or policy.effective_revision(
+            "", version="jp", layer="strategy")
+        jp_changed = bool(item.get("ladder_jp")) and previous_jp != policy.effective_revision(
+            stable, "jp", strategy, "strategy")
         if expected != previous or jp_changed:
             fit_payload(payload, policy=policy, identity_of=strategy_identity)
             break
@@ -64,8 +66,9 @@ def prepare(payload, assignments, definitions, standards, policy):
             curve = fit_overall(rows, policy=policy, target_id=identities[entity], version=version)
             if curve is not None:
                 versions[version] = curve
-        if versions:
-            overall[entity] = versions
+        # Empty is an explicit no-compatible-evidence result, not permission
+        # to resurrect excluded observations through a strategy fallback.
+        overall[entity] = versions
     layers = standards.sheet_layers(library_ladders(payload, assignments))
     return build_calibration(payload, assignments, layers, overall,
                              {key: value for key, value in identities.items() if value},

@@ -7,14 +7,19 @@ directly instead (an unknown scope IS a 404, not a caught LookupError).
 `/leaderboard*` (Task 3 of spec 2026-08-20-ranked-leaderboard) is the same
 scope machinery pointed at the community sheet instead of the user alone --
 see `library/board.py`'s module docstring for the scoring/caching contract."""
-from fastapi import APIRouter, HTTPException
+from functools import partial
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from sm64_events.library import board
 from sm64_events.library.examples import example_clips, sheet_best
 from sm64_events.links import xcams_url
 from sm64_events.memory.addresses import COURSE_NAMES
-from sm64_events.ranks import classify, history, scopes, scoring
+from sm64_events.ranks import classify, scopes, scoring
+from sm64_events.ranks.calibration import resolve_curve
+from sm64_events.server.overall_api import create_overall_router
+from sm64_events.server.rank_reading import read_dependency
+from sm64_events.server.rank_history import build_history
 from sm64_events.tracking import marelo as marelo_bridge
 from sm64_events.tracking.views import entity_labels, segment_courses
 
@@ -92,8 +97,7 @@ def _groups(service, scope_id: str, excluded: set[str] | None = None):
     # cannot see them would omit every runner rated only there (measured:
     # 444 of the sheet's runners omitted from `overall`) while his own card
     # graded them. Excluded-only runners still correctly remain omitted.
-    ladders = {key: service.ranks.ladders(key)
-               for key in service.ranks.graded_entities()}
+    ladders = marelo_bridge.entity_curves(service.ranks, service.ranks.graded_entities())
     rankable = scopes.rankable_entities(
         ladders, service.rank_excluded() if excluded is None else excluded)
     groups = scopes.entity_groups(
@@ -210,6 +214,7 @@ def _score_scope(service, scope_id: str) -> dict:
         entity["label"] = labels[entity["key"]]
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)
+    out["calibration_revision"] = service.ranks.calibration_revision
     return out
 
 
@@ -325,6 +330,24 @@ def _scope_label(service, scope_id: str) -> str:
     return scope_id
 
 
+def _read_library(reader, entity, *, library, adoptions, ranks, **kwargs):
+    if library is None or ranks is None:
+        return {}
+    rows = adoptions.rows() if adoptions is not None else {}
+    return reader(library.payload, rows, entity, ranks.has_jp_ladder, **kwargs)
+
+
+def _overall_fields(standards, entity, version, ladders):
+    curve = resolve_curve(standards, entity, version)
+    legacy = curve["interpolation"] == "legacy"
+    return {"overall": {rank: cs / 100 for rank, cs in curve["ladder_cs"].items()},
+            "overall_curve": curve,
+            "overall_overrides": standards.overall_overrides(entity, version),
+            "calibration_revision": standards.calibration_revision,
+            "overall_owners": scoring.best_ladder_owners(ladders) if legacy else {},
+            "sole_overall_owner": scoring.sole_overall_owner(ladders) if legacy else None}
+
+
 def create_ranks_router(service, library=None, adoptions=None,
                         video_checks_path=None) -> APIRouter:
     """`library`/`adoptions` (the LibraryStore + Adoptions app.py already
@@ -334,15 +357,7 @@ def create_ranks_router(service, library=None, adoptions=None,
     overrides where the liveness verdicts load from (tests; production takes
     the bundled seed)."""
 
-    def _from_library(reader, entity: str, **kwargs) -> dict:
-        """One of `library/examples.py`'s two readers (`example_clips`,
-        `sheet_best`) over this instance's library, or {} when there is no
-        library or no standards to grade on (a broadcast-only instance)."""
-        if library is None or service.ranks is None:
-            return {}
-        rows = adoptions.rows() if adoptions is not None else {}
-        return reader(library.payload, rows, entity,
-                      service.ranks.has_jp_ladder, **kwargs)
+    _from_library = partial(_read_library, library=library, adoptions=adoptions, ranks=service.ranks)
 
     # Videos the liveness sweep (tools/check_videos.py) marked gone — round 2
     # of task 0098: a dead video must never be THE example a standard links
@@ -356,7 +371,8 @@ def create_ranks_router(service, library=None, adoptions=None,
     # module-level singleton would leak one test's cached board into an
     # unrelated test whose inputs merely look identical.
     board_cache = board.RatingsCache()
-    router = APIRouter(prefix="/api")
+    router = APIRouter(prefix="/api", dependencies=[Depends(read_dependency(service.ranks))])
+    router.include_router(create_overall_router(service, absorb_after_regrade))
 
     @router.get("/ranks/standards")
     def get_standards(entity: str | None = None, version: str | None = None):
@@ -407,13 +423,10 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # derived HERE rather than in the browser because a second
                 # pointwise-min in JS is the divergence this project has a
                 # rule against.
-                "overall": {rank: cs / 100 for rank, cs
-                            in scoring.best_ladder(ladders).items()},
-                "overall_owners": scoring.best_ladder_owners(ladders),
+                **_overall_fields(service.ranks, entity, resolved, ladders),
                 # The ONE strategy that sets every Overall cutoff, or null --
                 # the practice card prints why that strategy's ladder IS the
                 # Overall one (scoring.sole_overall_owner has the story).
-                "sole_overall_owner": scoring.sole_overall_owner(ladders),
                 # Which of the names above (keys of "strategies") came off the
                 # Ultimate Sheet rather than community-vetted standards --
                 # ranks.is_fitted's own contract, exposed as a sibling LIST
@@ -576,30 +589,7 @@ def create_ranks_router(service, library=None, adoptions=None,
         scope_id = scope or _active_scope(service)
         groups = _groups(service, scope_id)
         mode = _rank_mode(service)
-        keys = [key for group in groups for key in group["candidates"]]
-        ladders = marelo_bridge.entity_ladders(service.ranks, keys)
-
-        def scorer(key, frames):
-            # `progress_for_time`, not `score_for`: it carries the ladder's
-            # displayed-centisecond boundary rule, and this chart has to end
-            # on the SAME number the card above it shows (see the comment
-            # below about sharing a source) -- a raw curve score would put
-            # its last point a hair under a division edge the card has
-            # already awarded.
-            ladder = ladders.get(key)
-            return None if ladder is None else scoring.progress_for_time(
-                ladder, classify.display_cs(frames))["score"]
-
-        # Same source as the RATING, mode for mode (tracking/marelo.py): the
-        # saved pbs in pb mode, every success in the averages. A chart drawn
-        # from a different source than the card above it ends on a different
-        # number, and _decimate always keeps the newest point.
-        feed = (marelo_bridge.pb_feed(service.db.pbs(), service.ranks.clock_for)
-                if classify.RANK_MODES[mode]["order"] is None
-                else marelo_bridge.successes_for(service.db.attempts(),
-                                                 service.ranks.clock_for))
-        return {"scope_id": scope_id,
-                "points": history.history_series(feed, groups, scorer, mode)}
+        return build_history(service, scope_id, groups, mode)
 
     @router.get("/marelo/exclusions")
     def marelo_exclusions():

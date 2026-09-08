@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from sm64_events.library.assignment_transaction import atomic_assignment, atomic_bytes
 
 _log = logging.getLogger("sm64.library")
 
@@ -38,10 +39,9 @@ def load(path) -> dict:
 def save(path, rows: dict, *, unlinked=()) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 2, "rows": dict(sorted(rows.items())),
-                               "unlinked": sorted(unlinked)},
-                               indent=1, ensure_ascii=False),
-                    encoding="utf-8", newline="")
+    atomic_bytes(path, json.dumps({"version": 2, "rows": dict(sorted(rows.items())),
+                                  "unlinked": sorted(unlinked)},
+                                 indent=1, ensure_ascii=False).encode("utf-8"))
 
 
 def strategy_name(target_label: str, row_name: str, *, kind: str = "approach") -> str:
@@ -283,6 +283,7 @@ class Adoptions:
             standards.calibrations = store.calibrations
             store.prepare_calibration = self._prepare_calibration
 
+    @atomic_assignment
     def load(self) -> None:
         self._rows = load(self.path)
         self._unlinked = {key for key in _read(self.path).get("unlinked", [])
@@ -296,8 +297,8 @@ class Adoptions:
         a deliberately unlinked row back. Consumers resolve through row_identity.
         """
         generation = getattr(self.store, "calibrations", None)
-        if generation is not None and generation.pinned is not None:
-            return dict(generation.pinned.rows)
+        if generation is not None and generation.read is not None:
+            return dict(generation.read.rows)
         return self._resolved_rows(self.store.payload, self._automatic)
 
     def _resolved_rows(self, payload, automatic):
@@ -339,6 +340,7 @@ class Adoptions:
         self._automatic = automatic
         return candidate
 
+    @atomic_assignment
     def adopt(self, key: str, entity: str) -> dict:
         target, item, name = validate(self.store.payload, key, entity,
                                       self.qualified)
@@ -350,6 +352,7 @@ class Adoptions:
                 "strategy": name, "ladder": item["ladder"],
                 "target": target["label"]}
 
+    @atomic_assignment
     def unadopt(self, key: str) -> dict:
         removed = self.rows().get(key)
         self._rows.pop(key, None)
@@ -376,6 +379,7 @@ class Adoptions:
                     {"index": position, "label": target["label"]})
         return out
 
+    @atomic_assignment
     def adopt_target(self, index: int, entity: str) -> dict:
         """Assign EVERY laddered approach of one target to `entity` — round
         7: "If we link a segment, then it should automatically load ALL
@@ -415,6 +419,7 @@ class Adoptions:
         return {"adopted": adopted, "skipped": skipped,
                 "entity_key": entity, "target": target["label"]}
 
+    @atomic_assignment
     def unadopt_target(self, index: int) -> dict:
         """Remove every one of this target's own approach assignments —
         never a piece's, and never another target's rows on the same
