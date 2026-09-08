@@ -134,6 +134,38 @@ def test_second_install_leaves_the_ini_wrapped_name_alone(pj64_dir, dll_source, 
     assert WRAPPER_DLL not in ini_text
 
 
+def test_failed_install_restores_files_and_does_not_select_a_half_install(pj64_dir, dll_source, settings_path, monkeypatch):
+    layer, registry, _ = make_layer(pj64_dir, dll_source, settings_path)
+    before = settings_path.read_bytes()
+    def fail(*args):
+        raise PermissionError("settings folder is read-only")
+    monkeypatch.setattr(layer, "_save_overlay", fail)
+    with pytest.raises(PermissionError):
+        layer.install(True)
+    assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == ORIGINAL_GRAPHICS_DLL
+    assert not (pj64_dir / "Plugin" / WRAPPER_DLL).exists()
+    assert not (pj64_dir / "Plugin" / WRAPPER_INI).exists()
+    assert settings_path.read_bytes() == before
+
+
+def test_install_rejects_an_unverified_executable(pj64_dir, dll_source, settings_path):
+    layer, registry, processes = make_layer(pj64_dir, dll_source, settings_path)
+    processes.check_folder = lambda path: {"state": "unsupported", "message": "Use Project64 v1.6"}
+    with pytest.raises(LayerRefused, match="v1.6"):
+        layer.install(True)
+    assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == ORIGINAL_GRAPHICS_DLL
+
+
+def test_automatic_refresh_also_leaves_an_unsupported_emulator_alone(pj64_dir, dll_source, settings_path):
+    layer, _, processes = make_layer(pj64_dir, dll_source, settings_path)
+    layer.install(True)
+    previous = (pj64_dir / "Plugin" / WRAPPER_DLL).read_bytes()
+    dll_source.write_bytes(b"a newer wrapper")
+    processes.check_folder = lambda path: {"state": "unsupported", "message": "Use Project64 v1.6"}
+    assert not layer.refresh_if_stale()
+    assert (pj64_dir / "Plugin" / WRAPPER_DLL).read_bytes() == previous
+
+
 def test_install_refuses_without_consent(pj64_dir, dll_source, settings_path):
     layer, _registry, _processes = make_layer(pj64_dir, dll_source, settings_path)
 
@@ -368,6 +400,22 @@ def test_locate_remembers_the_folder_then_finds_it_with_the_process_gone(pj64_di
 
     processes.image_path = None
     assert layer.locate() == pj64_dir
+
+
+def test_matching_install_is_recognized_without_a_local_consent_record(pj64_dir, dll_source, settings_path):
+    layer, registry, _ = make_layer(pj64_dir, dll_source, settings_path)
+    layer.install(True)
+    fresh = CaptureLayer(registry, FakeProcesses(str(pj64_dir / "Project64.exe")),
+                         settings_path.with_name("fresh-checkout.json"), dll_source)
+    status = fresh.status()
+    assert status.consented_at is None
+    assert status.installation_verified
+    assert status.state == NEEDS_RESTART
+    dll_source.write_bytes(b"a different shipped version")
+    assert not fresh.status().installation_verified
+    (pj64_dir / "Plugin" / WRAPPER_INI).unlink()
+    assert not fresh.status().installation_verified
+    assert fresh.status().state == NOT_INSTALLED
 
 
 # -- overlay resilience --------------------------------------------------------------

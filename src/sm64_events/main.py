@@ -527,12 +527,16 @@ def build():
     # registry and process list; its heartbeat comes from the frame stream
     # when replay opened one, so "active" means the plugin is presenting.
     from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
-    from sm64_events.core.paths import bundled_plugin_dll, capture_layer_settings_path
+    from sm64_events.core.paths import (bundled_plugin_dll, capture_layer_settings_path,
+                                        migrate_capture_layer_settings)
+    migrate_capture_layer_settings()
     capture_layer = CaptureLayer(
         registry=WinRegistry(), processes=WinProcesses(),
         settings_path=capture_layer_settings_path(),
         dll_source=bundled_plugin_dll(),
         stream_header=stream_header)
+    from sm64_events.core.setup_runtime import SetupRuntime
+    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
     try:
         # A build carrying a newer layer than the one installed refreshes it
         # while Project64 is closed -- the update path for every plugin fix,
@@ -553,6 +557,7 @@ def build():
                       inputs=inputs,
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry, capture_layer=capture_layer,
+                      setup_observer=setup_observer,
                       refresh_library_on_start=True)
 
 

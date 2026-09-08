@@ -915,17 +915,19 @@ address to play.
 
 ### Setup screen
 
-The modal that asks which platform you practice on -- Emulator or N64 -- and
-then shows that platform's checklist, each row a door to its own fix. The
-Emulator rows are Project64 (found, or how to let the trainer find it), the
-Usamune ROM, and the [[capture layer]]'s row: the exact ordered steps from
-where you are to a live layer -- close Project64, install (or the trainer
-updates the layer by itself), start Project64 -- each ticking as you do it,
-with the consent card saying what the install writes, why, and the undo. It
-opens on its own once each time you open the app while the trainer detects
-an emulator and you have not consented to the layer, or this build carries
-a newer layer than the one installed, and again from the header any time.
-N64's rows arrive with console support.
+The installation wizard: Select platform, Connect Project64, Set up Practice
+Replay, and completion. Each page reveals its current action and relevant help.
+The emulator sequence is find Project64 v1.6, close it, explicitly install the
+[[capture layer]], reopen Project64, then open Usamune once to verify. A US
+setup completes only with fresh game, replay pictures and input data. JP can
+finish the available installation with an explicit unsupported-tracking warning.
+N64 currently explains that support is in development and offers emulator setup.
+
+Pages advance automatically after a visible acknowledgment. Back reviews prior
+pages without advancing again. Not now defers incomplete setup for the current
+app visit; Ready to practice saves completion and opens Practice. Setup is always
+available in Settings; it also opens automatically for a missing, regressed,
+outdated or unfinished emulator installation. Beginner guides appear where needed.
 
 - **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; its API is
   `src/sm64_events/server/setup_api.py`
