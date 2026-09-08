@@ -1,0 +1,8 @@
+{
+  "include": ["src/sm64_events/core/timefmt.py"],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.12",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": ["src"]
+}
