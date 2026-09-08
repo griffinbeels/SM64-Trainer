@@ -204,3 +204,117 @@ def test_new_pin_cannot_erase_divisions_even_with_distinct_tier_cutoffs():
     pin = cs_of_frame(frame_at_or_after(curve["ladder_cs"]["Gold"]) + 1)
     with pytest.raises(ValueError, match="no attainable"):
         with_anchors(curve, {"Silver": pin})
+
+
+def assert_complete_curve(curve):
+    assert curve["interpolation"] == "pchip"
+    for target in division_scores()[1:]:
+        goal = time_for_score(curve, target)
+        assert goal is not None and goal > 0
+        assert goal == cs_of_frame(frame_at_or_after(goal))
+        actual = progress_for_time(curve, goal)
+        assert (actual["tier"], actual["division"]) == scoring.division_for(target)
+    scores = [score_for(curve, cs_of_frame(frame)) for frame in range(1, 1200)]
+    assert all(a >= b for a, b in zip(scores, scores[1:], strict=False))
+    assert all(0 < score <= 100 for score in scores)
+
+
+def test_existing_pin_survives_faster_refresh_crossing_it_and_other_tiers_still_evolve():
+    old = compile_curve(calibrated_nodes(), {"revision": "old"})
+    pin = {"Silver": old["ladder_cs"]["Silver"]}
+    refreshed = []
+    for shift in (120, 110):
+        fresh = compile_curve([[cs_of_frame(frame_at_or_after(time) - shift), score]
+                               for time, score in calibrated_nodes()], {"revision": f"fresh-{shift}"})
+        original = copy.deepcopy(fresh)
+        assert fresh["ladder_cs"]["Bronze"] < pin["Silver"]
+        with pytest.raises(ValueError, match="cross"):
+            with_anchors(fresh, pin)
+        result = with_anchors(fresh, pin, preserve_unpinned=False)
+        assert fresh == original
+        assert result["ladder_cs"]["Silver"] == pin["Silver"]
+        assert result["ladder_cs"]["Mario"] == fresh["ladder_cs"]["Mario"]
+        assert {score for _, score in result["nodes"]} >= {score for _, score in fresh["nodes"]}
+        provenance = result["metadata"]["anchor_adjustments"]
+        assert result["metadata"]["revision"] == f"fresh-{shift}"
+        assert provenance["fixed_cs"] == pin
+        assert provenance["moved_automatic_cs"]["Bronze"]["generated"] == fresh["ladder_cs"]["Bronze"]
+        assert provenance["all_divisions_reachable"]
+        assert provenance["fallback_reason"] is None
+        assert_complete_curve(result)
+        refreshed.append(result)
+    assert refreshed[0]["ladder_cs"]["Mario"] != refreshed[1]["ladder_cs"]["Mario"]
+
+
+def test_relaxed_projection_keeps_multiple_pins_and_fractional_interior_nodes():
+    nodes = calibrated_nodes()
+    index = next(i for i, (_, score) in enumerate(nodes) if score == 37)
+    nodes.insert(index + 1, [(nodes[index][0] + nodes[index + 1][0]) / 2, 35])
+    curve = compile_curve(nodes)
+    pins = {"Gold": cs_of_frame(frame_at_or_after(curve["ladder_cs"]["Gold"]) - 6),
+            "Silver": cs_of_frame(frame_at_or_after(curve["ladder_cs"]["Silver"]) + 6)}
+    result = with_anchors(curve, pins, preserve_unpinned=False)
+    assert {rank: result["ladder_cs"][rank] for rank in pins} == pins
+    assert any(score == 35 for _, score in result["nodes"])
+    assert_complete_curve(result)
+
+
+def test_minimum_feasible_pin_spacing_retains_all_five_divisions_per_tier():
+    curve = compile_curve(calibrated_nodes())
+    ranks = list(scoring.SCORE_ANCHORS)
+    pins = {rank: cs_of_frame(5 + i * 5) for i, rank in enumerate(ranks)}
+    result = with_anchors(curve, pins, preserve_unpinned=False)
+    assert result["ladder_cs"] == pins
+    assert_complete_curve(result)
+
+
+@pytest.mark.parametrize("pins,reason", [
+    ({"Gold": 1000, "Silver": 1000}, "too few"),
+    ({"Gold": 1000, "Silver": 1003}, "too few"),
+    ({"Mario": 3}, "too few"),
+    ({"Silver": 1021}, "whole game-frame"),
+])
+def test_inherited_unattainable_pins_have_exact_labeled_legacy_fallback(pins, reason):
+    curve = compile_curve(calibrated_nodes(), {"revision": "fresh"})
+    result = with_anchors(curve, pins, preserve_unpinned=False)
+    assert result["interpolation"] == "legacy"
+    assert {rank: result["ladder_cs"][rank] for rank in pins} == pins
+    assert result["metadata"]["revision"] == "fresh"
+    provenance = result["metadata"]["anchor_adjustments"]
+    assert provenance["mode"] == "existing_pins"
+    assert provenance["fixed_cs"] == pins
+    assert reason in provenance["fallback_reason"]
+    assert provenance["interpolation"] == "legacy"
+    if reason == "too few":
+        assert not provenance["all_divisions_reachable"]
+        assert provenance["unreachable_divisions"]
+    times = list(result["ladder_cs"].values())
+    assert times == sorted(times)
+    for time in range(1, 2500, 7):
+        assert progress_for_time(result, time) == scoring.progress_for_time(result["ladder_cs"], time)
+
+
+@pytest.mark.parametrize("pins", [{"Gold": 1200, "Silver": 1100}, {"Gold": -1},
+                                {"Silver": math.nan}, {"Mario": 0}])
+def test_relaxed_mode_never_accepts_contradictory_or_invalid_explicit_pins(pins):
+    with pytest.raises(ValueError):
+        with_anchors(compile_curve(calibrated_nodes()), pins, preserve_unpinned=False)
+
+
+def test_existing_legacy_curve_keeps_its_literal_pins_and_records_projection():
+    curve = from_ladder({"Mario": 885, "Grandmaster": 900, "Bronze": 940})
+    result = with_anchors(curve, {"Mario": 901}, preserve_unpinned=False)
+    assert result["ladder_cs"] == {"Mario": 901, "Grandmaster": 901, "Bronze": 940}
+    assert result["metadata"]["anchor_adjustments"]["moved_automatic_cs"] == {
+        "Grandmaster": {"generated": 900, "effective": 901}}
+    assert curve["ladder_cs"]["Mario"] == 885
+
+
+def test_no_pins_or_unchanged_pins_preserve_generated_curve_without_input_mutation():
+    curve = compile_curve(calibrated_nodes())
+    assert with_anchors(curve, {}, preserve_unpinned=False) == curve
+    result = with_anchors(curve, {"Silver": curve["ladder_cs"]["Silver"]}, preserve_unpinned=False)
+    assert result["ladder_cs"] == curve["ladder_cs"]
+    assert result["nodes"] == curve["nodes"]
+    assert result["metadata"]["anchor_adjustments"]["moved_automatic_cs"] == {}
+    assert "anchor_adjustments" not in curve["metadata"]

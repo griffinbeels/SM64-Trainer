@@ -107,18 +107,30 @@ def from_ladder(ladder_cs: Mapping[str, int], metadata: dict | None = None) -> C
             "ladder_cs": ladder, "metadata": _metadata(metadata)}
 
 
-def with_anchors(curve: CompiledCurve, anchors_cs: Mapping[str, int]) -> CompiledCurve:
+def with_anchors(curve: CompiledCurve, anchors_cs: Mapping[str, int], *,
+                 preserve_unpinned: bool = True) -> CompiledCurve:
     """Pin selected tiers while retaining every unpinned tier cutoff.
 
     Interior nodes keep their relative frame position between neighboring tier
     anchors. Outer nodes translate with the closest tier. PCHIP pins must be
     whole-frame times; legacy pins retain exact hand-entered centiseconds.
     Reset belongs to the caller: apply its remaining pins to the generated curve.
+
+    Existing saved pins use preserve_unpinned=False after a refit. Automatic
+    division boundaries then move as little as possible around those pins,
+    retaining one frame per division where possible. Inherited nonframe or
+    too-tight pins explicitly fall back to legacy interpolation; the pins are
+    never changed. metadata.anchor_adjustments records the effective changes,
+    fallback reason and unreachable divisions. Crossed explicit pins still fail.
     """
     ladder, prepared = _validate(curve)
     pins = _ladder(anchors_cs)
     if any(value <= 0 for value in pins.values()):
         raise ValueError("Pinned cutoffs must be positive")
+    if type(preserve_unpinned) is not bool:
+        raise ValueError("preserve_unpinned must be a boolean")
+    if pins and not preserve_unpinned:
+        return _existing_anchors(curve, ladder, pins, prepared)
     if not pins or all(ladder.get(rank) == value for rank, value in pins.items()):
         return deepcopy(curve)
     combined = ladder | pins
@@ -137,31 +149,162 @@ def with_anchors(curve: CompiledCurve, anchors_cs: Mapping[str, int]) -> Compile
     scores = list(scoring.SCORE_ANCHORS.values())
     old_positions = [_anchor_position(prepared, ladder[rank], score)
                      for rank, score in scoring.SCORE_ANCHORS.items()]
-    remapped = {score: time for time, score in zip(combined.values(), scores, strict=True)}
-    for time, score in curve["nodes"]:
-        if score in remapped:
-            continue
-        position = frame_position(time)
-        if score > scores[0]:
-            updated = position + new_positions[0] - old_positions[0]
-        elif score < scores[-1]:
-            updated = position + new_positions[-1] - old_positions[-1]
-        else:
-            i = next(i for i in range(len(scores) - 1) if scores[i] > score > scores[i + 1])
-            fraction = (position - old_positions[i]) / (old_positions[i + 1] - old_positions[i])
-            updated = new_positions[i] + fraction * (new_positions[i + 1] - new_positions[i])
-        lower = math.floor(updated)
-        # Unlike display_position this conversion retains fractional nodes.
-        remapped[score] = (cs_of_frame(lower) + (updated - lower)
-                           * (cs_of_frame(lower + 1) - cs_of_frame(lower))) if updated > 0 else 0
     try:
-        result = compile_curve([[time, score] for score, time in sorted(remapped.items(), reverse=True)],
+        result = compile_curve(_remap_nodes(curve["nodes"], scores, old_positions, new_positions),
                                curve["metadata"])
     except ValueError as exc:
         raise ValueError(f"Pinned cutoffs cannot preserve the curve's ordered nodes: {exc}") from exc
     if result["ladder_cs"] != combined:
         raise ValueError("Pinned cutoffs cannot preserve all tier boundaries at game-frame resolution")
     _require_divisions(_prepare(_nodes(result["nodes"])))
+    return result
+
+
+def _display_coordinate(position):
+    """Inverse frame coordinate without rounding fractional interior nodes."""
+    if position <= 0:
+        return 0
+    lower = math.floor(position)
+    return cs_of_frame(lower) + (position - lower) * (cs_of_frame(lower + 1) - cs_of_frame(lower))
+
+
+def _remap_nodes(nodes, scores, old_positions, new_positions, *, keep_positive_fast=False):
+    remapped = {score: _display_coordinate(position)
+                for score, position in zip(scores, new_positions, strict=True)}
+    fast_scale = 1.
+    if keep_positive_fast:
+        fastest = min((frame_position(time) for time, score in nodes if score > scores[0]),
+                      default=old_positions[0])
+        span = old_positions[0] - fastest
+        if span > 0:
+            fast_scale = min(1., (new_positions[0] - .5) / span)
+    for time, score in nodes:
+        if score in remapped:
+            continue
+        position = frame_position(time)
+        if score > scores[0]:
+            updated = new_positions[0] - (old_positions[0] - position) * fast_scale
+        elif score < scores[-1]:
+            updated = position + new_positions[-1] - old_positions[-1]
+        else:
+            i = next(i for i in range(len(scores) - 1) if scores[i] > score > scores[i + 1])
+            fraction = (position - old_positions[i]) / (old_positions[i + 1] - old_positions[i])
+            updated = new_positions[i] + fraction * (new_positions[i + 1] - new_positions[i])
+        remapped[score] = _display_coordinate(updated)
+    return [[time, score] for score, time in sorted(remapped.items(), reverse=True)]
+
+
+def _division_boundaries():
+    return [low + index * (high - low) / scoring.DIVISIONS_PER_TIER
+            for tier in scoring.RANK_NAMES for low, high in [scoring.tier_band(tier)]
+            for index in reversed(range(scoring.DIVISIONS_PER_TIER))
+            if low + index * (high - low) / scoring.DIVISIONS_PER_TIER > 0]
+
+
+def _existing_anchors(curve, ladder, pins, prepared):
+    """Recalibration changes automatic boundaries, never a saved explicit pin."""
+    reason = "Inherited legacy interpolation retains exact custom cutoff semantics"
+    if prepared is not None:
+        if any(cs_of_frame(round(frame_position(time))) != time for time in pins.values()):
+            reason = "An inherited cutoff is not a whole game-frame time"
+        else:
+            scores = _division_boundaries()
+            original = [_continuous_position(prepared, score) for score in scores]
+            fixed = {scores.index(scoring.SCORE_ANCHORS[rank]): round(frame_position(time))
+                     for rank, time in pins.items()}
+            try:
+                desired = [frame_position(goal) if (goal := _inverse(prepared, score)) is not None
+                           else math.floor(position)
+                           for score, position in zip(scores, original, strict=True)]
+                projected = _project_ordered(desired, fixed, gap=1, limit=_MAX_FRAME)
+                result = compile_curve(_remap_nodes(curve["nodes"], scores, original, projected,
+                                                   keep_positive_fast=True),
+                                       curve["metadata"])
+                _require_divisions(_prepare(_nodes(result["nodes"])))
+                return _anchor_metadata(result, ladder, pins)
+            except ValueError as exc:
+                reason = f"Inherited pins cannot retain all 45 divisions: {exc}"
+    # A supported, visibly labeled compatibility result lets fresh observations
+    # activate even when historical custom pins cannot support the new curve.
+    ranks = scoring.defined_tiers(ladder | pins)
+    fixed = {ranks.index(rank): time for rank, time in pins.items()}
+    cutoffs = _project_ordered([pins.get(rank, ladder.get(rank)) for rank in ranks],
+                               fixed, gap=0, limit=_MAX_CS)
+    result = from_ladder(dict(zip(ranks, cutoffs, strict=True)), curve["metadata"])
+    return _anchor_metadata(result, ladder, pins, reason)
+
+
+def _project_ordered(desired, fixed, *, gap, limit):
+    """Nearest ordered integer coordinates with exact fixed boundaries.
+
+    Subtracting each index's minimum gap turns this into ordinary isotonic
+    projection. Pool adjacent reversed means inside each fixed interval, then
+    clip to its fixed bounds. Rounding monotone means preserves their order.
+    """
+    adjusted = [value - i * gap for i, value in enumerate(desired)]
+    bounds = [(-1, 1), *sorted((i, value - i * gap) for i, value in fixed.items()),
+              (len(desired), limit - (len(desired) - 1) * gap)]
+    if any(a > b for (_, a), (_, b) in zip(bounds, bounds[1:], strict=False)):
+        raise ValueError("Saved cutoff intervals leave too few positive game frames")
+    projected = [0] * len(desired)
+    for (start, low), (end, high) in zip(bounds, bounds[1:], strict=False):
+        pools = []
+        for value in adjusted[start + 1:end]:
+            pools.append((value, 1))
+            while len(pools) > 1 and pools[-2][0] / pools[-2][1] > pools[-1][0] / pools[-1][1]:
+                right, nr = pools.pop()
+                left, nl = pools.pop()
+                pools.append((left + right, nl + nr))
+        values = [round(max(low, min(high, total / count)))
+                  for total, count in pools for _ in range(count)]
+        projected[start + 1:end] = values
+        if end < len(desired):
+            projected[end] = high
+    return [value + i * gap for i, value in enumerate(projected)]
+
+
+def _continuous_position(prepared, target):
+    """A division's continuous crossing, including extrapolated source nodes."""
+    x, y, slopes = prepared
+    if target in y:
+        return x[y.index(target)]
+    if target > y[0]:
+        distance = ((target - y[0]) / -slopes[0] if slopes[0]
+                    else math.sqrt(target - y[0]) * (x[1] - x[0]))
+        return x[0] - distance
+    if target < y[-1]:
+        ratio = y[-1] / target - 1
+        distance = ratio * y[-1] / -slopes[-1] if slopes[-1] else math.sqrt(ratio) * (x[-1] - x[-2])
+        return x[-1] + distance
+    i = next(i for i in range(len(y) - 1) if y[i] > target > y[i + 1])
+    low, high = x[i], x[i + 1]
+    for _ in range(52):
+        middle = (low + high) / 2
+        if _score(prepared, middle) >= target:
+            low = middle
+        else:
+            high = middle
+    return (low + high) / 2
+
+
+def _anchor_metadata(result, generated, pins, reason=None):
+    missing = []
+    if result["interpolation"] == "legacy":
+        for score in _division_boundaries():
+            tier, division = scoring.division_for(score)
+            goal = time_for_score(result, score)
+            progress = (progress_for_time(result, cs_of_frame(math.floor(frame_position(goal))))
+                        if goal is not None and goal >= 0 else None)
+            if progress is None or (progress["tier"], progress["division"]) != (tier, division):
+                missing.append({"tier": tier, "division": division})
+    result["metadata"]["anchor_adjustments"] = {
+        "mode": "existing_pins", "fixed_cs": dict(pins),
+        "moved_automatic_cs": {rank: {"generated": generated.get(rank), "effective": time}
+                               for rank, time in result["ladder_cs"].items()
+                               if rank not in pins and generated.get(rank) != time},
+        "interpolation": result["interpolation"], "fallback_reason": reason,
+        "all_divisions_reachable": not missing, "unreachable_divisions": missing,
+    }
     return result
 
 
