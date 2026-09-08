@@ -27,5 +27,5 @@ name = "integration-tests"
 lanes = ["full"]
 command = ["uv", "run", "--offline", "--frozen", "python", "tools/verify_full.py"]
 identity_command = ["uv", "run", "--offline", "--frozen", "python", "tools/verify_full.py", "--probe"]
-# Includes admission behind other task-owned suites; observed predecessor17min.
+# Includes admission behind other task-owned suites; observed predecessor 17min.
 timeout = 3600

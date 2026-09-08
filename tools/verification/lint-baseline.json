@@ -468,7 +468,14 @@
     "2aa0335903c5d6782de31c6faa974c06463c7e138cfebccf4590e7cbed023db3",
     "fd92ef6bd85592d05d4e1c46e28879611f111aaf1cb0326ae754214d934bd0b9",
     "03dbe7e2071dd0d5d43f2499be33f1ce3f29ce8706498359455f8347b2b831de",
-    "54609c5848787517dba2a9f3bd44e3eebae33495e8d113b8d5bd2310cd463406"
+    "54609c5848787517dba2a9f3bd44e3eebae33495e8d113b8d5bd2310cd463406",
+    "033b7ff7d6d7ead43c8c7b0a284eb32317fff200dd84e4fe1299c7298c498a23",
+    "2615f511bef94edf4d7c06bfebc4c5dd679ef550f9751e4f104f4c478934a167",
+    "3ac421daa9482405e30bfce58832fc061e4e05173405eeaea48a09b618b6b439",
+    "fb4b21c49d76528b61fd318b21e7f284cd37aa6f4b2ed3fa75c9b6312e9539f0",
+    "edaf9fbfcd19f04f66469c8879f87f73b8339bde88ae3b847f08f99abad56016",
+    "562a1b10558a7cfca29820f097a37d27e538557d0fe010f712c57d002b4618ae",
+    "8949fc3443494399828bb22d86879b8606203f28ad449ae8d5a479220293df73"
   ],
   "findings": [
     {
@@ -3248,6 +3255,98 @@
       "line": 74,
       "rule": "no-unused-vars",
       "message": "'error' is defined but never used."
+    },
+    {
+      "path": "src/sm64_events/core/capturelayer.py",
+      "line": 244,
+      "rule": "C901",
+      "message": "`status` is too complex (21 > 15)"
+    },
+    {
+      "path": "src/sm64_events/core/capturelayer.py",
+      "line": 244,
+      "rule": "PLR0912",
+      "message": "Too many branches (21 > 18)"
+    },
+    {
+      "path": "src/sm64_events/core/capturelayer.py",
+      "line": 244,
+      "rule": "PLR0915",
+      "message": "Too many statements (60 > 50)"
+    },
+    {
+      "path": "src/sm64_events/main.py",
+      "line": 207,
+      "rule": "PLR0915",
+      "message": "Too many statements (163 > 50)"
+    },
+    {
+      "path": "tools/ui_fixture.py",
+      "line": 1367,
+      "rule": "C901",
+      "message": "`serve_ui_live` is too complex (27 > 15)"
+    },
+    {
+      "path": "tools/ui_fixture.py",
+      "line": 1367,
+      "rule": "PLR0912",
+      "message": "Too many branches (22 > 18)"
+    },
+    {
+      "path": "tools/ui_fixture.py",
+      "line": 1367,
+      "rule": "PLR0915",
+      "message": "Too many statements (90 > 50)"
+    }
+  ],
+  "adoptions": [
+    {
+      "source_commit": "f08871424461736dc5f41711e592fa607aa8911c",
+      "reason": "Reviewed adoption of seven pre-existing complexity findings after onboarding landed on main; affected files are unchanged from this commit. No adapter findings adopted.",
+      "findings": [
+        {
+          "path": "src/sm64_events/core/capturelayer.py",
+          "line": 244,
+          "rule": "C901",
+          "message": "`status` is too complex (21 > 15)"
+        },
+        {
+          "path": "src/sm64_events/core/capturelayer.py",
+          "line": 244,
+          "rule": "PLR0912",
+          "message": "Too many branches (21 > 18)"
+        },
+        {
+          "path": "src/sm64_events/core/capturelayer.py",
+          "line": 244,
+          "rule": "PLR0915",
+          "message": "Too many statements (60 > 50)"
+        },
+        {
+          "path": "src/sm64_events/main.py",
+          "line": 207,
+          "rule": "PLR0915",
+          "message": "Too many statements (163 > 50)"
+        },
+        {
+          "path": "tools/ui_fixture.py",
+          "line": 1367,
+          "rule": "C901",
+          "message": "`serve_ui_live` is too complex (27 > 15)"
+        },
+        {
+          "path": "tools/ui_fixture.py",
+          "line": 1367,
+          "rule": "PLR0912",
+          "message": "Too many branches (22 > 18)"
+        },
+        {
+          "path": "tools/ui_fixture.py",
+          "line": 1367,
+          "rule": "PLR0915",
+          "message": "Too many statements (90 > 50)"
+        }
+      ]
     }
   ]
 }

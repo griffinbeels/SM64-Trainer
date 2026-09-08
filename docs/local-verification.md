@@ -45,6 +45,15 @@ Moving identical code within the same file can retain its allowance; this is a
 debt baseline, not a semantic proof. Changes near old debt may require addressing
 that debt. Baseline refresh is never an automatic fix and must be reviewed.
 
+The onboarding merge `f0887142` was reviewed separately during adoption: seven
+existing findings were added after proving their files match that main commit.
+They are `capturelayer.status` (C901:21, PLR0912:21, PLR0915:60), application
+startup in `main.py` (PLR0915:163), and `ui_fixture.serve_ui_live` (C901:27,
+PLR0912:22, PLR0915:90). These numbers are diagnostic complexity/branch/statement
+counts, respectively. The baseline retains its original entries and records the
+full source commit, reason and seven diagnostics in `adoptions`; none of the
+new verification implementation's findings were adopted.
+
 `--fix --files ...` only permits Ruff's F401 unused-import removal. Review imports
 used exclusively for registration side effects before requesting that fix; mark
 intentional imports explicitly. No ESLint automatic fixes are enabled in this
@@ -74,7 +83,7 @@ The full wrapper removes inherited `PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, and
 so shell settings cannot silently select a partial suite or disable its plugins.
 CPU/resource configuration remains controlled by the existing runner.
 The full integration check has a 3600-second budget including shared admission:
-a measured preceding task held the allocation for about17 minutes during this
+a measured preceding task held the allocation for about 17 minutes during this
 pilot. This avoids cancelling a newly admitted suite near its completion merely
 because it spent its budget queued. Quick-check timeouts remain unchanged, and
 the longer budget neither bypasses admission nor skips required tests.
