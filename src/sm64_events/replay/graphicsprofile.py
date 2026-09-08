@@ -42,8 +42,9 @@ def decode_snapshot(raw: bytes, pid: int, generation: int) -> dict | None:
         return None
     version, writer, sequence, captured = struct.unpack_from("<4I", raw, 8)
     frequency, = struct.unpack_from("<q", raw, 24)
+    producer_qpc, = struct.unpack_from("<q", raw, 40)
     if (version != VERSION or writer != pid or sequence % 2
-            or captured != generation or not generation or frequency <= 0):
+            or captured != generation or not generation or frequency <= 0 or producer_qpc <= 0):
         return None
     metrics = {}
     for index, name in enumerate(STAGES):
@@ -60,6 +61,7 @@ def decode_snapshot(raw: bytes, pid: int, generation: int) -> dict | None:
             "histogram_counts": buckets,
         }
     return {"version": version, "plugin_pid": writer, "generation": captured,
+            "producer_instance": producer_qpc,
             "clock": "cpu_wall", "percentiles": "log2_us_bucket_upper_bounds",
             "metrics": metrics}
 

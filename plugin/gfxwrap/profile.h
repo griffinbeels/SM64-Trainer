@@ -24,7 +24,8 @@ typedef struct {
     uint32_t generation;
     int64_t frequency;
     volatile uint32_t request, heartbeat; /* reader owns only these fields */
-    uint8_t reserved[24];
+    int64_t producer_qpc; /* new InitiateGFX, including same PID/session */
+    uint8_t reserved[16];
     profile_metric_t metrics[PROFILE_STAGES];
 } profile_stream_t;
 _Static_assert(offsetof(profile_stream_t, metrics) == 64, "profile metrics offset");
@@ -55,6 +56,7 @@ static void profile_open(const char *stream_name) {
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     g_profile->frequency = frequency.QuadPart;
+    g_profile->producer_qpc = qpc_now();
     g_profile->generation = 0;
     memset(g_profile->metrics, 0, sizeof g_profile->metrics);
     MemoryBarrier();

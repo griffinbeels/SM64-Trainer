@@ -9,6 +9,7 @@ def snapshot_bytes():
     raw = bytearray(G.SIZE)
     raw[:8] = G.MAGIC
     struct.pack_into("<4Iq", raw, 8, G.VERSION, 42, 2, 123, 1_000_000)
+    struct.pack_into("<q", raw, 40, 777)
     # Three independently specified samples, 0us, 2us and 9us.
     buckets = [0] * 32
     buckets[0], buckets[2], buckets[4] = 1, 1, 1
@@ -18,6 +19,7 @@ def snapshot_bytes():
 
 def test_histogram_exports_bounds_and_empty_stages_are_unknown():
     result = G.decode_snapshot(snapshot_bytes(), 42, 123)
+    assert result["producer_instance"] == 777
     metric = result["metrics"]["update_screen"]
     assert metric["count"] == 3
     assert metric["total_ms"] == .011 and metric["max_ms"] == .009
@@ -27,12 +29,23 @@ def test_histogram_exports_bounds_and_empty_stages_are_unknown():
     assert empty["p99_upper_ms"] is None
 
 
+def test_same_pid_and_session_native_reinitialization_has_a_distinct_identity():
+    first = snapshot_bytes()
+    reopened = first.copy()
+    struct.pack_into("<q", reopened, 40, 888)
+    before = G.decode_snapshot(first, 42, 123)
+    after = G.decode_snapshot(reopened, 42, 123)
+    assert before["generation"] == after["generation"]
+    assert before["plugin_pid"] == after["plugin_pid"]
+    assert before["producer_instance"] != after["producer_instance"]
+
+
 def test_absent_torn_old_and_inconsistent_snapshots_are_unavailable():
     raw = snapshot_bytes()
     assert G.decode_snapshot(raw, 41, 123) is None
     assert G.decode_snapshot(raw, 42, 124) is None
     assert G.decode_snapshot(raw[:100], 42, 123) is None
-    for offset, value in ((8, 2), (16, 3), (24, 0), (64, 4)):
+    for offset, value in ((8, 2), (16, 3), (24, 0), (40, 0), (64, 4)):
         broken = raw.copy()
         struct.pack_into("<I", broken, offset, value)
         assert G.decode_snapshot(broken, 42, 123) is None
