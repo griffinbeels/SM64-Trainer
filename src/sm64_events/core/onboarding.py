@@ -87,7 +87,7 @@ def readiness(layer, observation: dict) -> dict:
     elif rom["state"] == "jp":
         step, message = "ready", "Practice Replay installed. JP tracking will arrive in a later patch."
     elif not checks.get("inputs") or not checks.get("game"):
-        step, message = "verify", "Waiting for gameplay and input data. Resume the game and move Mario."
+        step, message = "verify", "Waiting for game and controller data. Keep Usamune running; no controller input is needed."
     else:
         step, message = "ready", "Game pictures and inputs verified."
     if layer.state == "unavailable":

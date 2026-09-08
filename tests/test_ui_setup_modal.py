@@ -127,7 +127,17 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
         wait_page(page, "complete")
         assert page.count(".setup-cast img") == 3
         assert page.count(".setup-not-now") == 0
+        assert page.count('.setup-confetti i') == 24
+        assert page.evaluate("Array.from(document.querySelectorAll('.setup-confetti i')).some(el => Number(getComputedStyle(el).opacity) > .1)")
         (tmp_path / "complete.png").write_bytes(page.screenshot())
+        page.wait_ms(800)  # Entry is finished; sample the continuing float.
+        heights = []
+        for _ in range(4):
+            heights.append(page.evaluate("Array.from(document.querySelectorAll('.setup-cast img')).map(el => el.getBoundingClientRect().y)"))
+            page.wait_ms(400)
+        assert all(max(row[i] for row in heights) - min(row[i] for row in heights) > 3 for i in range(3))
+        page.wait_ms(1000)
+        assert page.evaluate("Array.from(document.querySelectorAll('.setup-confetti i')).every(el => Number(getComputedStyle(el).opacity) === 0)")
         click_text(page, "Ready to practice!")
         page.wait_ms(400)
         assert page.count(".setup-modal") == 0
@@ -273,6 +283,72 @@ def symbol_centers(page):
       })""")
 
 
+def test_existing_install_rechecks_unresolved_emulator_before_step_three(tmp_path):
+    observed = {"target": {"state": "unsupported", "message": "This build needs verification."},
+                "rom": dict(MISSING_ROM), "checks": {}}
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_ms(500)
+        page.evaluate(_SETUP_SETUP)
+        wait_page(page, "connect")
+        assert page.count(".setup-install") == 0
+        assert page.count('.setup-dot.is-done') == 1
+        assert "needs verification" in body(page)
+        (tmp_path / "connection-recheck.png").write_bytes(page.screenshot())
+        observed["target"] = {"state": "ready", "pid": 123, "version": None,
+                              "build": "Known unversioned Project64 1.6"}
+        wait_page(page, "install")
+        wait_step(page, "rom")
+        assert "Open Usamune" in body(page)
+        assert page.count(".setup-install-action") == 0
+        assert page.count(".setup-completion") == 0
+        (tmp_path / "recognized-idle-project64.png").write_bytes(page.screenshot())
+        assert page.problems() == []
+
+
+def test_afk_recording_pause_keeps_setup_checked(tmp_path):
+    from dataclasses import asdict
+    from test_onboarding import runtime, installed as runtime_layer
+
+    probe, now, target, inputs, recorder, memory, poller = runtime()
+    recorder["frame_source_health"]["plugin_pid"] = 123
+    layer = asdict(runtime_layer())
+
+    def observe(status):
+        now[0] += 5  # Every poll exceeds the picture freshness window.
+        inputs["frames"] += 150
+        poller.latest.global_timer += 150
+        if not recorder.get("idle"):
+            recorder["frame_source_health"]["delivered"] += 150
+        return probe(status)
+
+    with serve_ui(capture_layer_status=layer, setup_observer=observe) as url, get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_ms(1000)
+        page.evaluate(_SETUP_SETUP)
+        wait_page(page, "install")
+        wait_step(page, "ready")
+        recorder["idle"] = True
+        page.wait_ms(4500)
+        assert 'data-substep="ready"' in page.evaluate("document.querySelector('.setup-install').outerHTML")
+        assert "Setup checked" in body(page)
+        assert page.count('.setup-not-now') == 0
+        assert page.count('.setup-arrow-ready[aria-label="Forward"]') == 1
+        glow = []
+        for _ in range(3):
+            glow.append(float(page.evaluate("getComputedStyle(document.querySelector('.setup-arrow-ready'), '::after').opacity")))
+            page.wait_ms(500)
+        assert max(glow) - min(glow) > .1
+        assert all(max(c["dx"], c["dy"]) < .75 for c in symbol_centers(page))
+        (tmp_path / "setup-checked-while-afk.png").write_bytes(page.screenshot())
+        layer["layer_alive"] = False
+        wait_step(page, "verify")
+        assert "Checking your setup" in body(page)
+        assert page.count('.setup-not-now') == 1
+        assert page.count('.setup-arrow-ready') == 0
+        assert page.problems() == []
+
+
 @pytest.mark.parametrize("width", [850, 1440])
 def test_symbols_are_centered_and_footer_survives_text_growth(tmp_path, width):
     with serve_ui() as url, get_driver().launch(viewport=(width, 600)) as page:
@@ -305,10 +381,10 @@ def test_symbols_are_centered_and_footer_survives_text_growth(tmp_path, width):
           const nav=document.querySelector('.setup-navigation').getBoundingClientRect();
           const dots=document.querySelector('.setup-progress').getBoundingClientRect();
           const a=document.querySelector('[aria-label="Forward"]').getBoundingClientRect();
-          const b=document.querySelector('.setup-not-now').getBoundingClientRect();
+          const b=document.querySelector('.setup-not-now')?.getBoundingClientRect();
           const modal=document.querySelector('.modal');
           return {center:Math.abs(dots.x+dots.width/2-nav.x-nav.width/2),
-            overlap:Math.min(a.right,b.right)>Math.max(a.left,b.left)
+            overlap:!!b && Math.min(a.right,b.right)>Math.max(a.left,b.left)
               && Math.min(a.bottom,b.bottom)>Math.max(a.top,b.top),
             overflow:modal.scrollWidth>modal.clientWidth, bottom:nav.bottom<=innerHeight};
         })()""")

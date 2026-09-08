@@ -113,10 +113,12 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
     if (!setup || initialized.current) return;
     initialized.current = true;
     if (setup.emu.consented_at || setup.emu.wrapper_present) {
+      const next = setup.platform === N64 ? "console"
+        : setup.emu.target?.state === "ready" ? "install" : "connect";
       setPlatform(setup.platform);
-      setPage(setup.platform === N64 ? "console" : "install");
-      setReached(pagesFor(setup.platform));
-      setReview(manual);
+      setPage(next);
+      setReached(next === "connect" ? ["platform", "connect"] : pagesFor(setup.platform));
+      setReview(manual && next !== "connect");
     } else if (!initial.platform && setup.onboarding?.started) {
       setPlatform(EMU); setPage("install"); setReached(["platform", "connect", "install"]);
     }
@@ -166,6 +168,7 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
   const pages = pagesFor(platform), index = pages.indexOf(page);
   const back = index > 0;
   const forward = review && canReviewForward(page, {platform, pages: reached}, setup) && !offline;
+  const stepComplete = canAdvance(page, setup) || forward;
   const title = setupTitle(page, setup);
 
 
@@ -180,9 +183,9 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
               aria-current=${at === index ? "step" : undefined}></span>`)}</div>
             <span>Step ${index + 1} of ${pages.length}</span>
           </div>
-          <span>${forward && html`<button type="button" class="setup-arrow" aria-label="Forward" disabled=${busy}
+          <span>${forward && html`<button type="button" class="setup-arrow setup-arrow-ready" aria-label="Forward" disabled=${busy}
             onclick=${() => go(pages[index + 1], false, true)}><${Icon} name="arrowRight" size=${22}/></button>`}
-            ${!["complete", "console"].includes(page) && html`<button type="button" class="setup-not-now"
+            ${!stepComplete && !["complete", "console"].includes(page) && html`<button type="button" class="setup-not-now"
               disabled=${busy} onclick=${onClose}>Not now</button>`}</span>
         </div>
       </div>`}>
