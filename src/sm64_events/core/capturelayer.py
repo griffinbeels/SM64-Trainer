@@ -33,11 +33,14 @@ import hashlib
 import json
 import logging
 import shutil
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
+
+from sm64_events.core.onboarding import CounterWindow
 
 log = logging.getLogger("sm64.capturelayer")
 
@@ -108,9 +111,21 @@ class LayerStatus:
     #: the exact set of steps the user needs to follow to set everything up
     #: PERFECTLY" -- including close Project64, wait, start it again.
     steps: list = field(default_factory=list)
+    plugin_pid: int | None = None
+    pictures_flowing: bool = False
+    plugin_dir: str | None = None
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "installation_verified": self.installation_verified}
+
+    @property
+    def installation_verified(self) -> bool:
+        """Current files/configuration, independent of this checkout's history."""
+        return self.wrapper_current and _configured(self.wrapper_present, self.wrapper_selected, self.wrapped_name)
+
+
+def _configured(present: bool, selected: bool, wrapped: str | None) -> bool:
+    return bool(present and selected and wrapped and wrapped.lower() != WRAPPER_DLL.lower())
 
 
 def _now_iso() -> str:
@@ -144,7 +159,8 @@ class CaptureLayer:
         self._settings_path = settings_path
         self._dll_source = dll_source
         self._stream_header = stream_header or (lambda: None)
-        self._last_alive: int | None = None   # the previous status() call's heartbeat
+        self._activity = CounterWindow()
+        self._activity_lock = threading.Lock()
 
     # -- overlay -----------------------------------------------------
 
@@ -236,7 +252,7 @@ class CaptureLayer:
                              and registry_graphics_dll.lower() == WRAPPER_DLL.lower())
         wrapper_present = False
         wrapper_current = False
-        wrapped_name = overlay.get("wrapped")
+        wrapped_name = None  # Installation evidence comes from the actual INI.
 
         if pj64_dir is not None:
             plugin_dir = self._plugin_dir(pj64_dir)
@@ -250,25 +266,11 @@ class CaptureLayer:
                 if ini_wrapped is not None:
                     wrapped_name = ini_wrapped
 
-        header = self._stream_header()
-        layer_alive = False
+        header, activity = self._stream_activity()
+        layer_alive = activity.get("alive", False)
         gl_context = False
         pictures_via = None
         if header is not None:
-            alive = getattr(header, "alive", None)
-            if isinstance(alive, int):
-                if self._last_alive is None:
-                    # The first read after boot has nothing to compare
-                    # against; a second read a few heartbeats later (60/s)
-                    # answers it, instead of a "restart Project64" that a
-                    # running game did not earn.
-                    time.sleep(0.05)
-                    later = getattr(self._stream_header(), "alive", alive)
-                    layer_alive = isinstance(later, int) and later != alive
-                    alive = later if isinstance(later, int) else alive
-                else:
-                    layer_alive = alive != self._last_alive
-                self._last_alive = alive
             status_bits = getattr(header, "status", None)
             if isinstance(status_bits, int):
                 gl_context = bool(status_bits & STATUS_GL_CONTEXT)
@@ -283,9 +285,9 @@ class CaptureLayer:
         # layer shipped: no screen, because PJ64 was not running yet).
         if self._dll_source is None:
             state = UNAVAILABLE
-        elif consented_at is None:
+        elif consented_at is None and not _configured(wrapper_present, wrapper_selected, wrapped_name):
             state = NOT_INSTALLED
-        elif pj64_dir is None or not wrapper_selected or not wrapper_present:
+        elif pj64_dir is None or not _configured(wrapper_present, wrapper_selected, wrapped_name):
             state = REGRESSED
         elif layer_alive:
             state = ACTIVE
@@ -304,8 +306,8 @@ class CaptureLayer:
                 f"another graphics plugin is selected ({registry_graphics_dll}); "
                 "re-install to restore the capture layer")
         elif state == REGRESSED:
-            problems.append("the capture layer's file is missing from Project64's "
-                            "Plugin folder; re-install to restore it")
+            problems.append("the capture layer's files or configuration are missing from Project64's "
+                            "Plugin folder; re-install to restore them")
         elif state == NEEDS_RESTART:
             problems.append("restart Project64 to load the capture layer")
         if header is not None and pictures_via is None and getattr(header, "dropped", 0):
@@ -340,7 +342,27 @@ class CaptureLayer:
             consented_at=consented_at,
             problems=problems,
             state=state,
+            plugin_pid=getattr(header, "plugin_pid", None),
+            pictures_flowing=activity.get("pictures", False),
+            plugin_dir=str(self._plugin_dir(pj64_dir)) if pj64_dir else None,
         )
+
+    def _stream_activity(self) -> tuple:
+        """Movement has a time window, not a consumable per-HTTP-call edge."""
+        with self._activity_lock:
+            header = self._stream_header()
+            key = ("stream", getattr(header, "plugin_pid", None)) if header else None
+            first = key != self._activity.key
+            activity = self._activity.observe(key, alive=getattr(header, "alive", None),
+                                              pictures=getattr(header, "write_seq", None))
+            if first and header is not None:
+                # Preserve the bounded first-read probe for an already-running game.
+                time.sleep(0.05)
+                header = self._stream_header()
+                key = ("stream", getattr(header, "plugin_pid", None)) if header else None
+                activity = self._activity.observe(key, alive=getattr(header, "alive", None),
+                                                  pictures=getattr(header, "write_seq", None))
+            return header, activity
 
     def install(self, consent: bool) -> LayerStatus:
         if not consent:
@@ -352,6 +374,11 @@ class CaptureLayer:
             raise LayerRefused("close Project64, then install")
         if self._dll_source is None or not self._dll_source.exists():
             raise LayerRefused("this build carries no capture layer")
+        validate = getattr(self._processes, "check_folder", None)
+        if validate is not None:
+            target = validate(str(pj64_dir))
+            if target["state"] != "ready":
+                raise LayerRefused(target["message"])
 
         plugin_dir = self._plugin_dir(pj64_dir)
         plugin_dir.mkdir(parents=True, exist_ok=True)
@@ -368,16 +395,19 @@ class CaptureLayer:
         else:
             wrapped_name = current_graphics_dll
 
-        shutil.copyfile(self._dll_source, dll_path)
-        self._write_wrapped_name(ini_path, wrapped_name)
-        self._set_registry_graphics_dll(WRAPPER_DLL)
-
         overlay = self._load_overlay()
         overlay["consented_at"] = _now_iso()
         overlay["pj64_dir"] = str(pj64_dir)
         overlay["wrapped"] = wrapped_name
         overlay["uninstalled_at"] = None
-        self._save_overlay(overlay)
+        from sm64_events.core.setup_files import restore_on_failure
+        with restore_on_failure([dll_path, ini_path, self._settings_path]):
+            shutil.copyfile(self._dll_source, dll_path)
+            self._write_wrapped_name(ini_path, wrapped_name)
+            self._save_overlay(overlay)
+            # Last write: if copying or persistence fails, Project64 keeps
+            # its previous graphics selection and the files are restored.
+            self._set_registry_graphics_dll(WRAPPER_DLL)
 
         return self.status()
 
@@ -425,6 +455,9 @@ class CaptureLayer:
             return False
         pj64_dir = self.locate()
         if pj64_dir is None:
+            return False
+        validate = getattr(self._processes, "check_folder", None)
+        if validate is not None and validate(str(pj64_dir))["state"] != "ready":
             return False
         dll_path = self._plugin_dir(pj64_dir) / WRAPPER_DLL
         if not dll_path.exists() or _files_match(dll_path, self._dll_source):

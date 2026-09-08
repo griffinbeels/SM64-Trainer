@@ -279,6 +279,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
                adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
+               setup_observer=None,
                library_path=None, refresh_library_on_start=False,
                library_bundled_path=None) -> FastAPI:
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
@@ -566,7 +567,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     if capture_layer is not None:
         from sm64_events.server.setup_api import create_setup_router
         app.include_router(create_setup_router(capture_layer,
-                                               mode_path=mode_path))
+                                               mode_path=mode_path, observer=setup_observer))
 
     if compare is not None:
         from sm64_events.server.compare_api import create_compare_router
