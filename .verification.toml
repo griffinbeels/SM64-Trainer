@@ -1,0 +1,23 @@
+schema_version = 1
+
+[[checks]]
+name = "lint"
+lanes = ["quick"]
+command = ["{python}", "{project}/tools/verify_lint.py"]
+identity_command = ["{python}", "{project}/tools/verify_lint.py", "--probe"]
+fix_command = ["{python}", "{project}/tools/verify_lint.py", "--fix", "--files", "{files}"]
+timeout = 150
+
+[[checks]]
+name = "lint-all"
+lanes = ["full"]
+command = ["{python}", "{project}/tools/verify_lint.py", "--all"]
+identity_command = ["{python}", "{project}/tools/verify_lint.py", "--probe"]
+timeout = 150
+
+[[checks]]
+name = "integration-tests"
+lanes = ["full"]
+command = ["uv", "run", "--offline", "--frozen", "python", "tools/verify_full.py"]
+identity_command = ["uv", "run", "--offline", "--frozen", "python", "tools/verify_full.py", "--probe"]
+timeout = 1200

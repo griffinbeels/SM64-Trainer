@@ -1,0 +1,5 @@
+{
+  "name": "sm64-verification-tools",
+  "private": true,
+  "devDependencies": { "eslint": "9.39.5" }
+}
