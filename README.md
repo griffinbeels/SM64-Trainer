@@ -145,6 +145,12 @@ Overall, a single course, or any route. It has its own tab with a ladder, a
 history chart, and a per-entity breakdown of where your next rank is coming
 from.
 
+**Living Overall ranks.** Each star or segment blends progression through
+compatible strategies with the community's submitted best times. Valid Sheet
+refreshes update Strategy standards, Overall ranks, and MARELO automatically;
+saved times stay unchanged. Strategy and Overall cutoffs have separate edits.
+See [ranking calibration and tuning](docs/ranking-calibration.md).
+
 **Routes.** Build an ordered route of stars and segments — including
 "complete K of N" group steps — and see per-step and cumulative success rates.
 Pick one as active and the Practice tab focuses on just that route. Export any

@@ -55,7 +55,7 @@ def entity_ladders(ranks_store, keys: Iterable[str], version=None
 def classify_entity(ladder: dict[str, int], score: float | None,
                     n: int) -> dict:
     """{tier, division, next_tier, next_division, gain} for one score
-    against one entity's own best-possible ladder (`ladder`, e.g. one value
+    against one entity's resolved Overall display ladder (`ladder`, e.g. one value
     of `entity_ladders`'s result), `gain` diluted by the scope's `n` slots.
 
     `ranks.scopes.aggregate` only sees SCORES, not ladders, and grades tier/

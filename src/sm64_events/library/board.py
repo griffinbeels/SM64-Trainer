@@ -22,9 +22,10 @@ threshold edit, a JP overlay, a new strategy, or a reset. Keying on it would
 serve a stale board forever after any standards edit, and stale-but-plausible
 is the failure mode nobody reports. `_standards_fingerprint` uses the effective
 calibration revision, or hashes the whole legacy store, the same dict
-`set_threshold`/`create_strategy`/
-`clear_jp`/`reset_entity` all mutate -- proved in `tests/test_library_board.py`
-by editing one threshold and asserting the board's numbers change.
+`set_threshold`/`create_strategy`/`clear_jp`/`reset_entity` all mutate. Legacy
+fallback fixtures in `tests/test_library_board.py` verify that edits invalidate
+the cache. Generated Overall remains independent of personal Strategy edits;
+its scores move with calibration changes and separate Overall pins.
 
 The per-scope row memo below keys on the resolved groups as well as the
 scope id, so an exclusion toggle or a route edit -- neither of which moves
