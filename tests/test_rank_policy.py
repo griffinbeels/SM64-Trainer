@@ -29,7 +29,8 @@ def test_target_region_strategy_and_route_patches_do_not_leak():
     base = RankingPolicy()
     assert policy.resolve("star:2:4")["milestone_weight"] == .4
     assert policy.resolve("star:2:4", version="jp")["milestone_weight"] == .2
-    assert policy.resolve("star:1:5") == {**base.resolve("star:1:5"), "families": []}
+    assert policy.resolve("star:1:5") == base.resolve("star:1:5")
+    assert policy.resolve("star:2:4")["families"] == base.resolve("star:2:4")["families"]
     assert policy.resolve("star:2:4", strategy="Owl", layer="strategy")["peak_min_entries"] == 12
     assert policy.resolve("star:2:4", strategy="Standard", layer="strategy") == base.resolve("", layer="strategy")
     assert policy.resolve("route:16", layer="route")["weights"] == {"star:2:4": 2}
@@ -50,6 +51,14 @@ def test_revision_is_content_based_and_effective_revision_is_local():
     settings = first.resolve("one")
     settings["community_fit"]["percentiles"]["Mario"] = -100
     assert first.resolve("one")["community_fit"]["percentiles"]["Mario"] > 0
+
+
+def test_family_mapping_can_be_cleared_for_one_target_without_erasing_others():
+    baseline = RankingPolicy()
+    policy = RankingPolicy({"layers": {"overall": {"patches": [
+        {"target_id": "star:2:4", "parameters": {"families": []}}]}}})
+    assert policy.resolve("star:2:4")["families"] == []
+    assert policy.resolve("star:1:5") == baseline.resolve("star:1:5")
 
 
 @pytest.mark.parametrize("parameters", [
@@ -84,3 +93,22 @@ def test_strategy_policy_changes_ladder_without_changing_matching_profile():
     assert original["ladder"] != updated["ladder"]
     assert original["matching_profile"] == updated["matching_profile"]
     assert fit_ladder([1000, float("inf"), float("nan"), -1, 0, True]) == fit_ladder([1000])
+
+
+def test_strategy_fit_uses_resolved_stable_identity_for_scoped_parameters():
+    row = {"name": "Source title", "matched_strategy": "Standard", "entries": [
+        {"runner": str(i), "time_cs": 1000 + 10 * i} for i in range(100)]}
+    payload = {"targets": [{"entity_key": "segment:987", "approaches": [row], "subsections": []}]}
+    policy = RankingPolicy({"layers": {"strategy": {"patches": [
+        {"target_id": "seg:stable-clock", "strategy": "Longjump", "parameters": {"percentiles": {"Master": 50}}}]}}})
+    original = fit_payload(deepcopy(payload), policy=policy)["targets"][0]["approaches"][0]
+    calls = []
+
+    def identity_of(target, item, kind):
+        calls.append((target["entity_key"], item["name"], kind))
+        return "seg:stable-clock", "Longjump"
+
+    fitted = fit_payload(deepcopy(payload), policy=policy, identity_of=identity_of)["targets"][0]["approaches"][0]
+    assert calls == [("segment:987", "Source title", "approaches")]
+    assert fitted["ladder"] != original["ladder"]
+    assert fitted["matching_profile"] == original["matching_profile"]

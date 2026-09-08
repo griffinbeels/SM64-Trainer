@@ -130,11 +130,14 @@ def row_times(item):
     return [], None
 
 
-def fit_payload(payload: dict, *, policy=None) -> dict:
+def fit_payload(payload: dict, *, policy=None, identity_of=None) -> dict:
     """Fit every row from observations, its own anchor, or a named related row.
 
     Estimates never count as submissions or become another estimate's source.
-    Refitting clears their provenance as soon as real observations arrive."""
+    Refitting clears their provenance as soon as real observations arrive.
+    ``identity_of(target, item, kind)`` optionally supplies the stable target and
+    canonical strategy after placement; source identities remain the fallback.
+    """
     from sm64_events.ranks.policy import RankingPolicy
 
     policy = policy or RankingPolicy()
@@ -152,8 +155,11 @@ def fit_payload(payload: dict, *, policy=None) -> dict:
                 target, kind, item, populations)
             if provenance:
                 item["ladder_estimate"] = provenance
-        target_id = item.get("target_id") or item.get("entity_key") or target.get("entity_key") or ""
-        strategy = item.get("matched_strategy") or item.get("name")
+        if identity_of is not None:
+            target_id, strategy = identity_of(target, item, kind)
+        else:
+            target_id = item.get("target_id") or item.get("entity_key") or target.get("entity_key") or ""
+            strategy = item.get("matched_strategy") or item.get("name")
         settings = policy.resolve(target_id, version=version or "us", strategy=strategy, layer="strategy")
         ladder = fit_ladder(times, settings=settings)
         item["ladder_policy_revision"] = policy.effective_revision(

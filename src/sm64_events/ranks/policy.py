@@ -31,6 +31,12 @@ def _merge(base, patch):
     for key, value in patch.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = _merge(result[key], value)
+        elif key == "patches" and isinstance(value, list) and isinstance(result.get(key), list):
+            # A temporary target adjustment must not erase other targets'
+            # reviewed family mappings. Passing the unchanged full shipped
+            # policy is also a no-op, including its revision fingerprint.
+            if value != result[key]:
+                result[key].extend(deepcopy(value))
         else:
             result[key] = deepcopy(value)
     return result
@@ -126,8 +132,10 @@ class RankingPolicy:
     """Shipped defaults with optional JSON-shaped patches; no global mutation.
 
     ``data`` may override only the namespaces needed by a comparison or user
-    setting. Patch selectors are target_id, version and (strategy layer only)
-    strategy. An empty selector applies to every target in its own layer.
+    setting. Supplied patches append after shipped patches, preserving unrelated
+    targets; a target patch with families=[] explicitly clears its family map.
+    Selectors are target_id, version and (strategy layer only) strategy. An empty
+    selector applies to every target in its own layer.
     """
 
     def __init__(self, data=None):
