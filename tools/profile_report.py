@@ -124,6 +124,24 @@ def process_metrics(samples: list[dict], issues: list[str]) -> dict:
     return process_summary
 
 
+def replay_metrics(samples: list[dict], issues: list[str]) -> dict:
+    statuses = [sample.get("replay", {}) for sample in samples]
+    counters = {}
+    for key in ("grabs_skipped", "delivered", "skipped", "undecodable", "dropped_by_plugin"):
+        values = [status.get(key) if key == "grabs_skipped" else
+                  (status.get("frame_source_health") or {}).get(key) for status in statuses]
+        numeric = [value for value in values if isinstance(value, (int, float))]
+        counters[key] = counter_delta(numeric) if numeric else None
+        if numeric and len(numeric) != len(values):
+            issues.append(f"Replay counter {key} missing in some samples")
+        if numeric and counters[key]["resets"]:
+            issues.append(f"Replay counter {key} reset")
+    gauges = {key: distribution([status[key] for status in statuses
+                                 if isinstance(status.get(key), (int, float))])
+              for key in ("encode_backlog", "disk_bytes")}
+    return {"counters": counters, "gauges": gauges}
+
+
 def summarize(folder: Path) -> dict:
     meta = json.loads((folder / "capture.json").read_text(encoding="utf-8"))
     sample_path = folder / "samples.jsonl"
@@ -133,9 +151,14 @@ def summarize(folder: Path) -> dict:
     metrics = system_metrics(meta, samples, issues)
     processes = process_metrics(samples, issues)
     graphics = graphics_summary(samples, issues)
+    replay = replay_metrics(samples, issues)
+    final = meta.get("final_profile", {})
     return {"metadata": meta, "valid": not issues, "issues": sorted(set(issues)),
             "metrics": metrics, "stages": stages, "counters": counters,
-            "processes": processes, "graphics": graphics, "gpu": None,
+            "processes": processes, "graphics": graphics, "gpu": None, "replay": replay,
+            "histogram_definition": {key: final.get(key) for key in ("quantile_method", "buckets_ms")},
+            "coverage": {"native_graphics": graphics is not None,
+                         "wpr_gpu": "GPU" in meta.get("external_traces", {}).get("wpr_profiles", [])},
             "limitations": ["System sampling does not measure display frame time or GPU engine utilization.",
                             "Stage quantiles describe final cumulative histogram bounds; they are not averaged sample percentiles.",
                             "A matched pair is descriptive evidence, not proof of causation or accuracy."]}
@@ -153,6 +176,10 @@ def compare(before: dict, after: dict) -> dict:
         issues.append("Mismatched counter coverage")
     if bool(before.get("graphics")) != bool(after.get("graphics")):
         issues.append("Mismatched native graphics coverage")
+    if before.get("histogram_definition") != after.get("histogram_definition"):
+        issues.append("Mismatched backend histogram definition")
+    if before.get("coverage") != after.get("coverage"):
+        issues.append("Mismatched profiler coverage")
     for name, stage in before["stages"].items():
         other = after["stages"].get(name, {})
         if any(stage.get(key) != other.get(key) for key in ("quantile_method", "buckets_ms")):
@@ -182,6 +209,21 @@ def measurement_changes(before: dict, after: dict) -> dict:
             if isinstance(old.get(key), (int, float)) and isinstance(new.get(key), (int, float)):
                 changes[f"graphics.{name}.{key}"] = {
                     "before": old[key], "after": new[key], "difference": new[key] - old[key]}
+    changes.update(replay_changes(before.get("replay", {}), after.get("replay", {})))
+    return changes
+
+
+def replay_changes(before: dict, after: dict) -> dict:
+    changes = {}
+    for group, keys in (("counters", ("delta",)), ("gauges", ("p50", "p95", "p99", "max"))):
+        for name, old in before.get(group, {}).items():
+            new = after.get(group, {}).get(name)
+            if not isinstance(old, dict) or not isinstance(new, dict):
+                continue
+            for key in keys:
+                if isinstance(old.get(key), (int, float)) and isinstance(new.get(key), (int, float)):
+                    changes[f"replay.{name}.{key}"] = {
+                        "before": old[key], "after": new[key], "difference": new[key] - old[key]}
     return changes
 
 

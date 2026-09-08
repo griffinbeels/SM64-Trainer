@@ -9,6 +9,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -60,8 +61,16 @@ def command(args: list[str], timeout: float = 15) -> str:
     return result.stdout.strip()
 
 
+def tool_path(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    sibling = Path(sys.executable).parent / (name + (".exe" if os.name == "nt" else ""))
+    return str(sibling) if sibling.is_file() else None
+
+
 def doctor() -> dict:
-    tools = {name: shutil.which(name) for name in ("wpr", "wpa", "py-spy", "nvidia-smi")}
+    tools = {name: tool_path(name) for name in ("wpr", "wpa", "py-spy", "nvidia-smi")}
     return {"tools_on_path": tools, "psutil": importlib.util.find_spec("psutil") is not None,
             "note": "Missing means not found on PATH, not proof of absence. GPU data is unavailable unless captured separately."}
 
@@ -135,21 +144,30 @@ class ExternalTraces:
         self.wpr = None
         self.spy = None
         self.spy_log = None
+        self.profiles = []
+        self.missing = []
 
     def start(self, seconds: float, wpr: bool, spy_pid: int | None):
         if wpr:
-            exe = shutil.which("wpr")
+            exe = tool_path("wpr")
             if not exe or "-instancename" not in command([exe, "-help", "advanced"]):
                 raise RuntimeError("WPR with named instance support is required")
+            available = {line.split()[0] for line in command([exe, "-profiles"]).splitlines() if line.split()}
+            self.profiles = ["GeneralProfile"]
+            if "GPU" in available:
+                self.profiles.append("GPU")
+            else:
+                self.missing.append("WPR GPU profile unavailable; no GPU activity trace requested")
             # Memory mode is bounded; filemode can fill the disk. Name is always last.
             self.wpr = exe
             (self.output / "wpr-owner.json").write_text(json.dumps({
                 "instance": self.instance,
                 "recovery": [exe, "-stop", str(self.output / "system.etl"),
                              "-instancename", self.instance]}), encoding="utf-8")
-            command([exe, "-start", "GeneralProfile", "-instancename", self.instance])
+            command([exe, *[arg for profile in self.profiles for arg in ("-start", profile)],
+                     "-instancename", self.instance])
         if spy_pid:
-            exe = shutil.which("py-spy")
+            exe = tool_path("py-spy")
             if not exe:
                 raise RuntimeError("py-spy is not on PATH; install it explicitly before requesting stacks")
             self.spy_log = (self.output / "py-spy.log").open("w", encoding="utf-8")
@@ -257,6 +275,7 @@ def capture(args) -> Path:
                 meta["errors"].append(f"Profile stop failed; server capture expires automatically: {exc}")
         meta["elapsed_s"] = time.perf_counter() - started
         meta["errors"].extend(traces.close())
+        meta["external_traces"] = {"wpr_profiles": traces.profiles, "missing": traces.missing}
         (args.output / "capture.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return args.output
 

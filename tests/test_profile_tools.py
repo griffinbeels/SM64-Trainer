@@ -101,17 +101,19 @@ def test_wpr_cleanup_can_only_target_owned_named_instance(tmp_path, monkeypatch)
 
     def command(args, timeout=15):
         calls.append(args)
-        return "-instancename"
+        return "GeneralProfile First level triage\nGPU GPU activity" if "-profiles" in args else "-instancename"
 
     monkeypatch.setattr(capture.shutil, "which", lambda _name: "wpr.exe")
     monkeypatch.setattr(capture, "command", command)
     traces = capture.ExternalTraces(tmp_path)
     traces.start(1, True, None)
     assert traces.close() == []
-    mutations = [c for c in calls if "-help" not in c]
+    mutations = [c for c in calls if any(action in c for action in ("-start", "-stop", "-cancel"))]
     assert all(c[-2:] == ["-instancename", traces.instance] for c in mutations)
     assert all("-filemode" not in c for c in mutations)
     assert mutations[-1][1] == "-stop"
+    assert "GPU" in mutations[0]
+    assert traces.profiles == ["GeneralProfile", "GPU"]
 
 
 def test_failed_wpr_start_never_cancels_another_capture(tmp_path, monkeypatch):
@@ -144,3 +146,23 @@ def test_graphics_generation_change_is_not_merged_into_one_histogram(tmp_path):
     assert not result["valid"]
     assert result["graphics"]["metrics"]["gl_read_pixels"]["count"] == 1
     assert "Native graphics profile generation changed" in result["issues"]
+
+
+def test_replay_loss_reset_and_backlog_remain_visible(tmp_path):
+    _meta, samples = capture_folder(tmp_path)
+    samples[0]["replay"] = {"grabs_skipped": 9, "encode_backlog": 3}
+    samples[1]["replay"] = {"grabs_skipped": 1, "encode_backlog": 12}
+    (tmp_path / "samples.jsonl").write_text("\n".join(map(json.dumps, samples)), encoding="utf-8")
+    result = report.summarize(tmp_path)
+    assert not result["valid"]
+    assert result["replay"]["counters"]["grabs_skipped"]["delta"] is None
+    assert result["replay"]["gauges"]["encode_backlog"]["max"] == 12
+    assert result["coverage"]["native_graphics"] is False
+
+
+def test_backend_histogram_definition_must_match(tmp_path):
+    capture_folder(tmp_path)
+    before = report.summarize(tmp_path)
+    after = copy.deepcopy(before)
+    after["histogram_definition"] = {"buckets_ms": [123]}
+    assert not report.compare(before, after)["comparable"]

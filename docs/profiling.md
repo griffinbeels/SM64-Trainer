@@ -60,13 +60,14 @@ invalidate comparisons. GPU absence is `null`, never zero.
 
 Add `--wpr` to request a bounded memory-mode Windows Performance Recorder trace.
 WPR must be installed and may require elevation. The tool checks local named
-instance support, starts a UUID-owned `GeneralProfile`, and stops only that
+instance support, starts UUID-owned `GeneralProfile` and `GPU` profiles, and stops only that
 instance. A conflicting recording is not cancelled. `system.etl` opens in Windows
 Performance Analyzer (WPA); `doctor` checks availability on PATH but does not
 install software. WPR includes system evidence that Python and browser timers
-cannot supply. Start with CPU scheduling/stacks, disk I/O and relevant graphics
-events; use a targeted graphics profile/tool when GeneralProfile lacks the GPU
-event needed for the hypothesis.
+cannot supply. Start with CPU scheduling/stacks, disk I/O and GPU activity.
+The installed `wpr -profiles` is queried first; if GPU is absent, the artifact
+explicitly records that gap and the report marks GPU trace coverage unavailable.
+Native graphics CPU wall times remain a separate measurement from GPU events.
 
 Normal completion, Ctrl+C and errors stop owned traces. A forcibly killed capture
 process cannot execute cleanup: `wpr-owner.json` records the exact named-instance
