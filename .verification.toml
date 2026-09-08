@@ -9,6 +9,13 @@ fix_command = ["{python}", "{project}/tools/verify_lint.py", "--fix", "--files",
 timeout = 150
 
 [[checks]]
+name = "types-pilot"
+lanes = ["quick"]
+command = ["{python}", "{project}/tools/verify_types.py"]
+identity_command = ["{python}", "{project}/tools/verify_types.py", "--probe"]
+timeout = 60
+
+[[checks]]
 name = "lint-all"
 lanes = ["full"]
 command = ["{python}", "{project}/tools/verify_lint.py", "--all"]

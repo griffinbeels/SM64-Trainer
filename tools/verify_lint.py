@@ -45,6 +45,7 @@ def git(*args: str, root: Path = ROOT) -> str:
 
 def selected_files(explicit: list[str] | None, root: Path = ROOT,
                    all_files: bool = False) -> list[str]:
+    supplied = explicit is not None
     if explicit is None:
         if all_files:
             names = git("ls-files", "-z", root=root)
@@ -65,6 +66,8 @@ def selected_files(explicit: list[str] | None, root: Path = ROOT,
         if not path.is_relative_to(root.resolve()):
             raise Unavailable(f"path escapes checkout: {name}")
         if not path.is_file():
+            if not supplied:
+                continue  # Automatic inventory includes tracked worktree deletions.
             raise Unavailable(f"selected file missing: {name}")
         if path.suffix in SUFFIXES:
             selected.add(path.relative_to(root.resolve()).as_posix())

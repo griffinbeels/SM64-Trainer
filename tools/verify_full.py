@@ -10,7 +10,14 @@ from verify_lint import git
 from find_uilab import find_uilab
 
 
+def prepare_environment() -> None:
+    """The full gate owns selection/plugins; the caller retains resource limits."""
+    for name in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD"):
+        os.environ.pop(name, None)
+
+
 def main() -> int:
+    prepare_environment()
     component_runner = Path(__file__).resolve().parents[1] / "tests/frontend/node_modules/vitest/vitest.mjs"
     if not component_runner.is_file():
         print("full: unavailable: run npm ci --prefix tests/frontend --ignore-scripts", file=sys.stderr)

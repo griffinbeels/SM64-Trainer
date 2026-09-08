@@ -105,3 +105,46 @@ def test_main_reports_missing_baseline_as_unavailable(tmp_path, monkeypatch):
 def test_baseline_records_exact_versions():
     baseline = json.loads(lint.BASELINE.read_text(encoding="utf-8"))
     assert baseline["versions"] == {"ruff": lint.RUFF, "eslint": lint.ESLINT}
+
+
+def test_automatic_scope_omits_worktree_deletions(tmp_path, monkeypatch):
+    monkeypatch.setattr(lint, "git", lambda *args, **kwargs: "deleted.py\0")
+    assert lint.selected_files(None, root=tmp_path, all_files=True) == []
+    with pytest.raises(lint.Unavailable, match="selected file missing"):
+        lint.selected_files(["deleted.py"], root=tmp_path)
+
+
+def test_full_gate_removes_inherited_selection_and_preserves_budget(monkeypatch):
+    import os
+    monkeypatch.syspath_prepend(str(ROOT / "tools"))
+    import verify_full
+    for name in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD"):
+        monkeypatch.setenv(name, "bad inherited override")
+    monkeypatch.setenv("SM64_TEST_WORKERS", "2")
+    verify_full.prepare_environment()
+    assert all(name not in os.environ for name in
+               ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD"))
+    assert os.environ["SM64_TEST_WORKERS"] == "2"
+
+
+@pytest.mark.parametrize("language,valid,invalid", [
+    ("python", "def value() -> int:\n    return 1\n", "def value() -> int:\n    return 'wrong'\n"),
+    ("javascript", "/** @type {number} */\nconst value = 1;\n", "/** @type {number} */\nconst value = 'wrong';\n"),
+])
+def test_real_type_checker_rejects_wrong_contract(tmp_path, language, valid, invalid):
+    if language == "python":
+        source = tmp_path / "probe.py"
+        config = tmp_path / "pyrightconfig.json"
+        config.write_text(json.dumps({"include": [source.name], "typeCheckingMode": "strict",
+                                      "venvPath": str(ROOT), "venv": ".venv"}), encoding="utf-8")
+        checker = ROOT / "tools/verification/node_modules/pyright/index.js"
+    else:
+        source = tmp_path / "probe.js"
+        config = tmp_path / "jsconfig.json"
+        config.write_text(json.dumps({"files": [source.name], "compilerOptions": {
+            "checkJs": True, "allowJs": True, "noEmit": True, "strict": True}}), encoding="utf-8")
+        checker = ROOT / "tools/verification/node_modules/typescript/lib/tsc.js"
+    source.write_text(valid, encoding="utf-8")
+    assert lint.run(["node", str(checker), "--project", str(config)]).returncode == 0
+    source.write_text(invalid, encoding="utf-8")
+    assert lint.run(["node", str(checker), "--project", str(config)]).returncode != 0

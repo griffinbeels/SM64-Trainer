@@ -54,11 +54,22 @@ The legacy `tools/lint_changed.py` and commit hook retain their staged-content
 semantics for compatibility. The standalone verifier is the required workflow
 boundary; their fail-open results cannot supply its successful evidence.
 
-The draft lane adds no test-writing requirement. It currently enforces the
-existing curated lint rules; type checking and additional ecosystem adapters
-are separate adoption work. Full verification retains the existing integration
+The draft lane adds no test-writing requirement. It enforces the existing
+curated lint rules plus a narrow strict type pilot: Pyright 1.1.405 checks
+`core/timefmt.py`, and TypeScript 5.9.3 checks `ui/timecurve.js` through JSDoc.
+These scopes are declared in `pyrightconfig.json` and
+`jsconfig.verification.json`; this does not establish typing of their callers
+or the rest of the application. The Python checker uses the project's .venv,
+avoiding accidental analysis against the machine's different Python version.
+Type tools install through the same npm lockfile; `python tools/verify_types.py`
+runs the pilot directly. Additional ecosystem adapters are separate adoption
+work. Full verification retains the existing integration
 suite. No live recorder or server is restarted by these commands.
 The full entry point refuses `UILAB_SKIP=1`, missing uilab, and missing
 Playwright Chromium before invoking that runner, which otherwise allows some
 rendered tests to skip. Other legitimate platform-specific skips remain visible
 in the test report; this pilot does not claim that every skip is a failure.
+The full wrapper removes inherited `PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, and
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD` before both dependency probing and execution,
+so shell settings cannot silently select a partial suite or disable its plugins.
+CPU/resource configuration remains controlled by the existing runner.
