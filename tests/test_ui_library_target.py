@@ -612,7 +612,7 @@ OPEN_OVERALL = (
 # Round 2 (2026-08-10): the section is the same SHAPE as the entry bands below
 # it -- cap art, Capless first, five indented subdivisions per band -- so the
 # guards read bands and divisions, not table rows.
-READ_LADDER = """
+READ_LADDER = r"""
   (() => {
     const bands = Array.from(document.querySelectorAll(
       '.library-target .library-overall-band'));
@@ -690,22 +690,46 @@ def test_every_band_opens_into_five_subdivisions_wearing_their_own_caps(library_
             assert division["range"], (band["tier"], division)
 
 
-def test_the_overall_ladder_is_the_best_across_strategies_not_one_of_them(library_page):
-    """The load-bearing assertion, and it cannot pass by accident: on star:2:4
-    the pointwise-best ladder is SPLIT -- one strategy sets the hardest tiers
-    and another the rest -- so a ladder echoing any single strategy's would
-    name one owner throughout. Ranges are asserted non-empty separately,
-    because a list of cap names with no times would satisfy the owner check on
-    its own. The Capless floor has no cutoff and so names no owner: that is
-    correct, not a gap."""
+def assert_compiled_overall(page, data):
+    """Compare the painted goals with the backend's full curve, all 45 rows."""
+    from sm64_events.core.timefmt import format_igt, frame_at_or_after
+    from sm64_events.ranks import scoring
+    from sm64_events.ranks.curves import time_for_score
+
+    curve = data["overall_curve"]
+    assert curve["interpolation"] == "pchip"
+    assert data["overall_owners"] == {} and data["sole_overall_owner"] is None
+    bands = page.evaluate(READ_LADDER)
+    assert [band["tier"] for band in bands] == list(reversed(scoring.RANK_NAMES))
+    for band in bands:
+        assert band["range"], band
+        assert band["headCaps"] == 1, band
+        low, high = scoring.tier_band(band["tier"])
+        assert len(band["divisions"]) == scoring.DIVISIONS_PER_TIER
+        for index, division in enumerate(band["divisions"]):
+            goal = time_for_score(curve, low + index * (high - low) / scoring.DIVISIONS_PER_TIER)
+            assert division["caps"] == 1 and division["range"], division
+            if goal is None:
+                assert (band["tier"], index) == ("Iron", 0)
+                assert division["range"].endswith("+"), division
+            else:
+                printed = format_igt(frame_at_or_after(goal)).removeprefix("0'")
+                assert division["range"].split(" – ")[0] == printed, (band["tier"], index, division, goal)
+    note = page.evaluate("document.querySelector('.library-overall-body').textContent")
+    assert "community standing" in note and "strategy families" in note, note
+    assert str(curve["metadata"]["population_count"]) + " eligible Sheet" in note, note
+    assert "set by" not in note, note
+    return bands
+
+
+def test_the_overall_ladder_shows_full_compiled_goals_and_community_basis(library_page, library_server):
+    """Overall blends progression and community evidence, independently of
+    the strategy ladders. Retain the complete cap/division table while proving
+    every displayed goal comes from the full curve rather than an envelope."""
     library_page.evaluate(OPEN_OVERALL)
     library_page.wait_for(".library-overall-band", timeout_ms=10000)
-    bands = library_page.evaluate(READ_LADDER)
-    graded = [band for band in bands if band["tier"] != "Iron"]
-    assert all(band["range"] for band in graded), graded
-    owners = {band["by"] for band in graded}
-    assert len(owners) >= 2, owners
-    assert "" not in owners, owners
+    data = api(library_server, "/api/ranks/standards?entity=star:2:4&version=us")
+    assert_compiled_overall(library_page, data)
 
 
 def test_the_overall_section_marks_where_you_are_and_what_is_next(library_page):
