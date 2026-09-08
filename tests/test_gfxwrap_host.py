@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import build_plugin  # noqa: E402
 
 from sm64_events.core.paths import bundled_plugin_dll  # noqa: E402
+from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 from sm64_events.replay import framestream as F  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not build_plugin.toolchain_available(),
@@ -166,6 +167,42 @@ def test_no_frames_are_captured_while_the_tracker_does_not_want_them(built):
         drive(built["host"], built["wrapper"], 3, name)
         header = stream.header()
         assert header.write_seq == 0 and header.lists == 3 and header.alive == 6
+    finally:
+        stream.close()
+
+
+@pytest.mark.parametrize("capture", [False, True])
+def test_optional_native_profile_preserves_demand_and_identifies_slow_readscreen(built, capture):
+    """Real C timers must see an injected delay in the actual wrapped call."""
+    name = unique_name()
+    stream = F.FrameStream(name)
+    try:
+        stream.set_table([(0, 4)], rdram_bytes=8 << 20)
+        stream.touch()
+        stream.set_want_frames(capture)
+        stream.graphics_profile.refresh("native-profile-sensitivity")
+        result = subprocess.run(
+            [str(built["host"]), "--drive", str(built["wrapper"]), "3",
+             "--stream", name, "--no-context", "--cpu-thread"],
+            capture_output=True, text=True, timeout=60,
+            env={**QUIET, "SM64_FAKE_READSCREEN_DELAY": "1"},
+            **quiet_spawn_kwargs(), check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
+        stats = stream.graphics_profile.snapshot(stream.header().plugin_pid)
+        assert stats is not None
+        metrics = stats["metrics"]
+        assert metrics["update_screen"]["count"] == 6
+        assert metrics["vi_call_interval"]["count"] == 5
+        assert metrics["wrapped_read_screen"]["count"] == (3 if capture else 0)
+        assert stream.header().write_seq == (3 if capture else 0)
+        if capture:
+            assert metrics["wrapped_read_screen"]["max_ms"] >= 20
+            assert metrics["wrapped_update_screen"]["total_ms"] < metrics["wrapped_read_screen"]["total_ms"]
+            slots, skipped = stream.read_new(0)
+            assert not skipped
+            for index, slot in enumerate(slots):
+                assert slot.table[0] == (1000 + index).to_bytes(4, "little")
+                assert tuple(slot.pixels[24, 32]) == (index, 2 * index, 3 * index)
     finally:
         stream.close()
 

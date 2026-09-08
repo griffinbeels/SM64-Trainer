@@ -225,7 +225,7 @@ def test_the_desktop_camera_stays_when_the_layer_refuses_pictures(layout, stream
         assert source.frame_source_note is not None, "the refusal was never noted"
         assert "refused" in source.frame_source_note
         assert not stopped.is_set() and source.upgraded is False
-        assert source.status() == {"grabs": 0}
+        assert source.status() == {"grabs": 0, "graphics_profile": None}
     finally:
         stop_beat.set()
         source.stop()
