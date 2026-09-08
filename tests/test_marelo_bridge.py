@@ -196,8 +196,10 @@ def test_pb_feed_is_chronological_and_shaped_like_successes_for():
     rows = [pb(id=1, frames=1500, saved_utc="a"),
             pb(id=2, frames=1350, saved_utc="b")]
     assert pb_feed(rows, clock_of) == [
-        {"utc": "a", "key": "star:1:0", "strat": "Fast", "frames": 1500},
-        {"utc": "b", "key": "star:1:0", "strat": "Fast", "frames": 1350}]
+        {"utc": "a", "key": "star:1:0", "strat": "Fast", "frames": 1500,
+         "game_version": None, "timer_mode": "igt"},
+        {"utc": "b", "key": "star:1:0", "strat": "Fast", "frames": 1350,
+         "game_version": None, "timer_mode": "igt"}]
 
 
 def test_pb_feed_skips_untagged_rows_and_the_wrong_clock():
@@ -209,4 +211,5 @@ def test_pb_feed_carries_segment_rows_on_rta():
     rows = [pb(course_id=None, star_id=None, segment_id=5, timer_mode="rta",
                strat_tag="Standard", frames=300, saved_utc="a")]
     assert pb_feed(rows, clock_of) == [
-        {"utc": "a", "key": "segment:5", "strat": "Standard", "frames": 300}]
+        {"utc": "a", "key": "segment:5", "strat": "Standard", "frames": 300,
+         "game_version": None, "timer_mode": "rta"}]
