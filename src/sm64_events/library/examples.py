@@ -7,10 +7,11 @@ only supplies the published observations and their links.
 """
 from sm64_events.library.adoptions import _rows
 from sm64_events.library.placements import row_identity
+from sm64_events.library.sheet import entry_version
 
 
 def strategy_entries(payload: dict, adoption_rows: dict, entity: str,
-                     has_jp_ladder):
+                     has_jp_ladder, version: str = "us"):
     """Yield `(strategy, entry)` for every sheet entry that grades on one of
     this entity's ladders — THE walk both readers below share.
 
@@ -32,25 +33,26 @@ def strategy_entries(payload: dict, adoption_rows: dict, entity: str,
         for entry in item["entries"]:
             if entry.get("time_cs") is None:
                 continue
-            if entry.get("version") == "JP" and jp_split:
+            if jp_split and entry_version(entry) not in (None, version):
                 continue
             yield strat, entry
 
 
 def example_clips(payload: dict, adoption_rows: dict, entity: str,
-                  has_jp_ladder) -> dict:
+                  has_jp_ladder, version: str = "us") -> dict:
     """{strategy: [[time_cs, url], ...]} for one entity — the extra clips
     `RankStandards.cutoff_videos` merges beside the vetted xcams ones."""
     out: dict[str, list] = {}
     for strat, entry in strategy_entries(payload, adoption_rows, entity,
-                                         has_jp_ladder):
+                                         has_jp_ladder, version):
         if entry.get("video"):
             out.setdefault(strat, []).append([entry["time_cs"], entry["video"]])
     return out
 
 
 def sheet_best(payload: dict, adoption_rows: dict, entity: str,
-               has_jp_ladder, dead_urls: frozenset | set = frozenset()) -> dict:
+               has_jp_ladder, dead_urls: frozenset | set = frozenset(),
+               version: str = "us") -> dict:
     """{strategy: {"time_cs", "runner", "video"}} — the fastest time anybody
     has recorded on the Ultimate Sheet for each of this entity's strategies.
 
@@ -79,7 +81,7 @@ def sheet_best(payload: dict, adoption_rows: dict, entity: str,
     """
     out: dict[str, dict] = {}
     for strat, entry in strategy_entries(payload, adoption_rows, entity,
-                                         has_jp_ladder):
+                                         has_jp_ladder, version):
         best = out.get(strat)
         if best is None or entry["time_cs"] < best["time_cs"]:
             video = entry.get("video")

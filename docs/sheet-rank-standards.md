@@ -55,6 +55,18 @@ hardest-tier-wins classification and a finite inverse; they cannot promise the
 
 ## Identity, edits, and refresh
 
+HMC Toad has two separate full-segment clocks: HMC result → Toad grab → HMC
+entrance, and HMC door → Toad grab → HMC entrance. Each owns its US/JP samples,
+standards, examples and sheet best. Neither grades the pickup-only castle star.
+The 16-star presets use the result-start segment between HMC visits, completing
+after the star-grab step. The full segments rank by default; explicit exclusions
+still win and the pickup-only star remains excluded by default.
+
+Seeded segment rows may declare an exact `sheet_target` binding. Placement
+resolves this against local seed identities, including offline caches. A formerly
+Sheet-created manual entry retains its registry ID and PBs when promoted to the
+seeded clock. User edits remain dirty and deletions stay deleted.
+
 Strategy identity uses `library/strategy_signature.py`'s calibrated matching
 profile, independently of grading. Changing a rank formula must not reassign
 saved attempts to another Sheet row. The profile still follows new observations.

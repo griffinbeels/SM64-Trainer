@@ -374,7 +374,7 @@ def create_ranks_router(service, library=None, adoptions=None,
         ladders = service.ranks.ladders(entity, resolved)
         alive = lambda clips: [c for c in clips if c[1] not in dead_videos]
         extra_clips = {strat: alive(clips) for strat, clips
-                       in _from_library(example_clips, entity).items()}
+                       in _from_library(example_clips, entity, version=resolved).items()}
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": ladders,
                 "estimated_strategies": service.ranks.estimated_strategies(entity),
@@ -455,7 +455,7 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # Same liveness verdicts as `cutoff_videos` above, opposite
                 # consequence -- `sheet_best` says why.
                 "sheet_best": _from_library(sheet_best, entity,
-                                            dead_urls=dead_videos),
+                                            dead_urls=dead_videos, version=resolved),
                 "user_videos": service.ranks.user_videos(entity),
                 "seeded": service.ranks.seeded_strategies(entity),
                 # Grouping is resolved HERE, not in the browser: a 100-coin

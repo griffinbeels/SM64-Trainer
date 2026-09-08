@@ -5,6 +5,7 @@ A subsection can only resolve to its own segment, never its parent's clock.
 """
 from sm64_events.library.audit import row_key
 from sm64_events.library.mapping import segment_seed_key
+from sm64_events.library.seed_targets import seed_for
 
 
 def target_entity(target, definitions):
@@ -17,6 +18,10 @@ def target_entity(target, definitions):
         seed = segment_seed_key(entity)
         return next((f"segment:{d['id']}" for d in definitions
                      if seed and d.get("seed_key") == seed), None)
+    seed = seed_for(target)
+    if seed:
+        return next((f"segment:{d['id']}" for d in definitions
+                     if d.get("seed_key") == seed), None)
     match = auto_match(target.get("label", ""),
                        [(d["id"], d["name"]) for d in definitions])
     return match["entity"] if match else None

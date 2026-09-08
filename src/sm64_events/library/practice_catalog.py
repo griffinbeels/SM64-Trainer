@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 from sm64_events.library.audit import row_key, target_key
 from sm64_events.library.placements import automatic_rows, target_entity
+from sm64_events.library.seed_targets import seed_for
+from sm64_events.tracking.defaults import deleted_seed_keys
 
 STATE_KEY = "sheet_practice_catalog"
 
@@ -56,6 +58,8 @@ class _Catalog:
             sid = self.targets[key]
             return f"segment:{sid}" if sid in self.by_id else None
         parent = target_entity(target, self.definitions)
+        if seed_for(target) in deleted_seed_keys(self.db, "segments"):
+            return None
         if parent is None and target.get("miss_reason") == "castle_movement":
             sid = self.create(target["label"], [])
             self.targets[key] = sid

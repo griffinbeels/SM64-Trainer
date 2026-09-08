@@ -1524,7 +1524,7 @@ def fires_from(trig: dict, level: int) -> bool:
 def _exit_landing_is_impossible(start_clause: dict, level: int) -> bool:
     """A course exit lands in the castle — did this one land somewhere else?
 
-    52 of the 53 seeded `level_exit` clauses omit `to`, so the DEFINITION says
+    52 of the 54 seeded `level_exit` clauses omit `to`, so the DEFINITION says
     nothing about where the player ends up and the emulator decides. The world
     is hub-and-spoke: leaving anything but a castle level (6/16/26) puts Mario
     in one, so an arm on such a clause that lands elsewhere is a menu warp and
@@ -1599,8 +1599,8 @@ def can_run_from(d, start_clause: dict, level: int | None) -> bool:
 #
 # NB this is NOT arm_level's mapping: a level_exit ARMS at its destination but
 # ORIGINATES at its source. "SSL -> LLL" is filed under SSL because that is
-# what the rule keys on (52 of the 53 seeded exits omit `to`; the one that
-# carries it, MIPS Clip, is still filed by its source, which is the point).
+# what the rule keys on (52 of the 54 seeded exits omit `to`; MIPS Clip and
+# HMC Toad result-start carry it and are still filed by their source).
 _ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
     "level_exit": ("from", "from_subarea"),
     "level_enter": ("to", "to_subarea"),

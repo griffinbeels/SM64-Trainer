@@ -44,7 +44,11 @@ RANKED_SEGMENT_CATEGORIES = frozenset({"Bowser Fights", "100 Coin Exit"})
 # them dimmed: "these should not be ignored in any route, because those are
 # just the Bowser Course entries (i.e., No Reds). These are actually very
 # important and should be part of the default ranking."
-RANKED_SEGMENT_SEED_KEYS = frozenset({"seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe"})
+RANKED_SEGMENT_SEED_KEYS = frozenset({
+    "seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
+    # Full Toad routes have Sheet standards; the pickup-only star stays separate.
+    "seg:hmc-toad-result", "seg:hmc-toad-door",
+})
 
 
 def ranks_by_default(definition: dict) -> bool:

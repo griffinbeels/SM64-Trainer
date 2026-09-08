@@ -1865,7 +1865,7 @@ def test_reclassified_attempt_regrades_its_medal(tmp_path):
 
 
 def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
-    """84 seeded segments must NOT become 84 practice cards.
+    """The full seeded corpus must not become a page full of practice cards.
 
     Segment sections are scoped to segments with activity (plus the target and
     anything armed), so shipping the route corpus leaves a fresh install's
@@ -1882,7 +1882,7 @@ def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
     db, svc = make(tmp_path)
     seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed_data) == []
-    assert len(db.segment_defs()) == 84
+    assert len(db.segment_defs()) == len(seed_data["segments"])
 
     view = build_session_view(db, svc, clock="igt")
     assert view["segments"] == []
@@ -2863,7 +2863,7 @@ def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp
 
 
 def _service_with_corpus(tmp_path):
-    """A fresh service with the SHIPPED 84-def corpus reconciled -- unlike
+    """A fresh service with the SHIPPED corpus reconciled -- unlike
     `_make_with_def`'s hand-built reds->pipe stand-in above, this exercises
     the REAL seg:reds->pipe:bitdw definition `reds_pipe_segments` pairs by
     seed_key prefix, which is what the star section's own `parents` stamp
