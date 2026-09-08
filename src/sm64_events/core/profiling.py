@@ -5,6 +5,7 @@ histogram bucket upper bounds, not exact samples. Disabled wrappers only test
 a boolean; active sessions expire even if their client disappears.
 """
 import math
+import os
 import threading
 import time
 import uuid
@@ -28,6 +29,8 @@ class Profiler:
         self._start = self._end = self._deadline = 0.0
         self._started_utc = None
         self._stages = {}
+        self._pending = {}
+        self._outside_window = 0
         self._overflow = 0
 
     def active(self):
@@ -54,6 +57,8 @@ class Profiler:
             self._end = self._deadline
             self._started_utc = datetime.now(timezone.utc).isoformat()
             self._stages = {}
+            self._pending = {}
+            self._outside_window = 0
             self._overflow = 0
             self.enabled = True
         return self.snapshot()
@@ -68,41 +73,62 @@ class Profiler:
                 self.enabled = False
         return self.snapshot()
 
-    def begin(self):
+    def begin(self, name=None):
         if not self.active():
             return None
-        return self.session_id, self._clock()
+        with self._lock:
+            if not self.enabled or self._clock() >= self._deadline:
+                return None
+            if name is not None:
+                if name not in self._pending and len(self._pending) >= MAX_STAGES:
+                    self._overflow += 1
+                    return None
+                self._pending[name] = self._pending.get(name, 0) + 1
+            return self.session_id, self._clock(), name
 
     def finish(self, name, token, *, error=False):
         if token is not None:
-            self.record(name, (self._clock() - token[1]) * 1000,
-                        session_id=token[0], error=error)
+            with self._lock:
+                if token[0] != self.session_id:
+                    return
+                now = self._clock()
+                if len(token) > 2 and token[2] is not None:
+                    self._pending[token[2]] -= 1
+                if not self.enabled or now >= self._deadline:
+                    self._outside_window += 1
+                    return
+                self._record_locked(name, (now - token[1]) * 1000, error)
 
     def record(self, name, duration_ms, *, session_id, error=False):
         if (not self.active() or not math.isfinite(duration_ms)
                 or duration_ms < 0):
             return
         with self._lock:
-            if not self.enabled or session_id != self.session_id:
+            if (not self.enabled or session_id != self.session_id
+                    or self._clock() >= self._deadline):
                 return
-            if name not in self._stages:
-                if len(self._stages) >= MAX_STAGES:
-                    self._overflow += 1
-                    return
-                self._stages[name] = [0, 0., math.inf, 0., 0,
-                                      [0] * (len(BUCKETS_MS) + 1)]
-            row = self._stages[name]
-            row[0] += 1
-            row[1] += duration_ms
-            row[2] = min(row[2], duration_ms)
-            row[3] = max(row[3], duration_ms)
-            row[4] += int(error)
-            row[5][bisect_left(BUCKETS_MS, duration_ms)] += 1
+            self._record_locked(name, duration_ms, error)
+
+    def _record_locked(self, name, duration_ms, error):
+        if name not in self._stages:
+            if len(self._stages) >= MAX_STAGES:
+                self._overflow += 1
+                return
+            self._stages[name] = [0, 0., math.inf, 0., 0,
+                                  [0] * (len(BUCKETS_MS) + 1)]
+        row = self._stages[name]
+        row[0] += 1
+        row[1] += duration_ms
+        row[2] = min(row[2], duration_ms)
+        row[3] = max(row[3], duration_ms)
+        row[4] += int(error)
+        row[5][bisect_left(BUCKETS_MS, duration_ms)] += 1
 
     def snapshot(self):
         self.active()
         with self._lock:
             return {"version": 1, "enabled": self.enabled,
+                    "process_id": os.getpid(),
                     "session_id": self.session_id, "started_utc": self._started_utc,
                     "elapsed_s": max(0., (self._clock() if self.enabled else self._end)
                                      - self._start),
@@ -111,7 +137,9 @@ class Profiler:
                     "quantile_method": "histogram_upper_bound",
                     "buckets_ms": list(BUCKETS_MS),
                     "stages": {name: _summary(row) for name, row in self._stages.items()},
-                    "counters": {"stage_limit_rejections": self._overflow}}
+                    "pending_calls": {name: count for name, count in self._pending.items() if count},
+                    "counters": {"stage_limit_rejections": self._overflow,
+                                 "completed_outside_window": self._outside_window}}
 
 
 def _summary(row):
@@ -142,7 +170,7 @@ scheduling delay, unlike the operation duration. No game clock is modified.
     previous = threading.local()
 
     def begin():
-        token = profile.begin()
+        token = profile.begin(name)
         if token and interval:
             last = getattr(previous, "token", None)
             if last and last[0] == token[0]:

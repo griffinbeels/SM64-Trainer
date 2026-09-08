@@ -13,6 +13,7 @@ second copy of the table to drift from `memory/addresses.py`. A duplicate that
 cannot be written needs no parity test to keep it honest.
 """
 import hashlib
+from sm64_events.core.profiling import measured
 
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.inputs.document import DocumentError, decode
@@ -229,6 +230,7 @@ class InputsService:
                 for number, frame in
                 self.store.frames_between(start.isoformat(), end)}
 
+    @measured("inputs.timeline")
     def timeline(self, attempt_id: int,
                  span: tuple[int, int] | None = None) -> dict:
         """Widen the selected capture occurrence to include `span` buffers.

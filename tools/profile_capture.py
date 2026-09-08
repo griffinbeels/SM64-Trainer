@@ -22,6 +22,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 
 PROFILE = "/api/diagnostics/profile"
 MAX_RESPONSE = 4 * 1024 * 1024
+MAX_SAMPLE_LOG = 64 * 1024 * 1024
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -48,6 +49,9 @@ def request(origin: str, path: str, body: dict | None = None) -> dict:
     if len(raw) > MAX_RESPONSE:
         raise ValueError("Profile response exceeds 4 MiB")
     result = json.loads(raw)
+    if result is None and path == "/api/replay/status":
+        # A server without a recorder legitimately returns JSON null.
+        return {"available": False}
     if not isinstance(result, dict):
         raise ValueError("Expected an object from profiling endpoint")
     return result
@@ -66,13 +70,20 @@ def tool_path(name: str) -> str | None:
     if found:
         return found
     sibling = Path(sys.executable).parent / (name + (".exe" if os.name == "nt" else ""))
-    return str(sibling) if sibling.is_file() else None
+    if sibling.is_file():
+        return str(sibling)
+    if os.name == "nt" and name in {"wpr", "wpa", "wpaexporter", "xperf"}:
+        toolkit = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Windows Kits/10/Windows Performance Toolkit"
+        candidate = toolkit / (name + ".exe")
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def doctor() -> dict:
-    tools = {name: tool_path(name) for name in ("wpr", "wpa", "py-spy", "nvidia-smi")}
+    tools = {name: tool_path(name) for name in ("wpr", "wpa", "wpaexporter", "xperf", "py-spy", "nvidia-smi")}
     return {"tools_on_path": tools, "psutil": importlib.util.find_spec("psutil") is not None,
-            "note": "Missing means not found on PATH, not proof of absence. GPU data is unavailable unless captured separately."}
+            "note": "Searches PATH, this Python environment and the standard Windows Performance Toolkit install. GPU data requires a separate trace."}
 
 
 def digest(path: Path) -> str:
@@ -230,17 +241,22 @@ def validate_capture(args) -> tuple[str, dict]:
 def collect_samples(origin: str, output: Path, sampler: SystemSampler,
                     started: float, seconds: float, interval: float):
     deadline = started + seconds
+    written = 0
     with (output / "samples.jsonl").open("w", encoding="utf-8") as stream:
         while time.perf_counter() < deadline:
             tick = time.perf_counter()
             sample = {"elapsed_s": tick - started, "system": sampler.sample()}
-            for name, path in (("profile", PROFILE), ("replay", "/api/replay/status")):
+            for name, path in (("profile", PROFILE), ("replay", "/api/replay/status"), ("health", "/health")):
                 try:
                     sample[name] = request(origin, path)
                 except (OSError, ValueError) as exc:
                     sample[name] = {"error": str(exc)}
             sample["observer_ms"] = (time.perf_counter() - tick) * 1000
-            stream.write(json.dumps(sample) + "\n")
+            line = json.dumps(sample) + "\n"
+            written += len(line.encode("utf-8"))
+            if written > MAX_SAMPLE_LOG:
+                raise ValueError("Sample log exceeds 64 MiB; shorten the capture or increase the interval")
+            stream.write(line)
             time.sleep(max(0, min(deadline - time.perf_counter(), interval - (time.perf_counter() - tick))))
 
 

@@ -35,6 +35,7 @@ hosting that app's session. The chain is config wiring, not policy —
 main.py decides the factories (currently: per-process tap PRIMARY so only
 the game is recorded, device loopback as the fallback; see audio.py)."""
 import logging
+from sm64_events.core.profiling import measured
 import shutil
 import threading
 import time
@@ -629,6 +630,7 @@ class ReplayRecorder:
             return self.ledger.observe(bgra, capture_ts, None)
         return False
 
+    @measured("replay.on_frame", interval=True)
     def _on_frame(self, bgra: np.ndarray, ts_100ns: int, stamp=None) -> None:
         # NO idle gate here: frames keep flowing so the sink's timeline and
         # `_latest` stay fresh; idle discard happens per completed segment
@@ -734,6 +736,7 @@ class ReplayRecorder:
 
     # -- audio callback (library thread) -------------------------------------
 
+    @measured("replay.on_pcm", interval=True)
     def _on_pcm(self, pcm_s16: np.ndarray) -> None:
         # PRIMARY: hand raw interleaved s16le PCM to the AV sink's audio pipe;
         # ffmpeg wall-clock-stamps it and aresample-locks it to the video

@@ -30,6 +30,7 @@ from sm64_events.core.version import __version__
 from sm64_events.server.api import create_api_router
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
+from sm64_events.server.profile_api import create_profile_router
 
 log = logging.getLogger("sm64.server")
 
@@ -436,6 +437,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # source checkout, and it refuses itself when frozen.
     from sm64_events.server.tuning_api import create_tuning_router
     app.include_router(create_tuning_router())
+    app.include_router(create_profile_router())
     # The version-sync dashboard (/ui/sync.html). Mounted unconditionally like
     # the tuning router -- it needs only the broadcaster, so a second (broadcast-
     # only) instance can still show and record coverage.

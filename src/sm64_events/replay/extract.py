@@ -29,6 +29,7 @@ way, for the same reason: ffmpeg would rescale the whole clip to the first
 segment's size and squash it if the aspect changed.
 """
 import os
+from sm64_events.core.profiling import measured
 import math
 import shutil
 import subprocess
@@ -76,6 +77,7 @@ class ClipResult:
     source_pts: list[int] | None = None
 
 
+@measured("replay.probe_frames")
 def frame_times_of(ffmpeg: str | None, clip: Path, *,
                    input_format: str | None = None) -> list[float] | None:
     """Every video frame's pts, in seconds, off ffprobe; None when it cannot
@@ -195,6 +197,7 @@ class ClipExtractor:
         clip's first pts with the ffprobe beside it."""
         return self._ffmpeg
 
+    @measured("replay.extract")
     def extract(self, ring: SegmentRing, start: datetime, end: datetime,
                 out_path: Path) -> ClipResult:
         """Slice [start, end) from the ring into a browser-scrubbable MP4.

@@ -95,6 +95,18 @@ def test_thread_safe_bounded_counts():
     assert snap["counters"]["stage_limit_rejections"] > 0
 
 
+def test_stall_crossing_capture_deadline_is_not_reported_as_no_work():
+    clock = [1.]
+    p = profiling.Profiler(lambda: clock[0])
+    p.start(1)
+    token = p.begin("hung-readback")
+    clock[0] = 3
+    assert p.snapshot()["pending_calls"] == {"hung-readback": 1}
+    p.finish("hung-readback", token)
+    assert p.snapshot()["pending_calls"] == {}
+    assert p.snapshot()["counters"]["completed_outside_window"] == 1
+
+
 def test_profile_api_ownership_expiry_and_bad_requests():
     clock = [1.]
     p = profiling.Profiler(lambda: clock[0])

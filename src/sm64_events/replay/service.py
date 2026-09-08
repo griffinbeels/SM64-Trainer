@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from sm64_events.core.timefmt import GAME_FPS, format_igt
+from sm64_events.core.profiling import measured
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.association import association_problem, valid_picture_times
 from sm64_events.replay.feedmap import feed_map
@@ -296,11 +297,13 @@ class ReplayService:
             return {}
         return json.loads(meta.read_text())
 
+    @measured("replay.view")
     def view(self, attempt_id: int) -> dict:
         """Clip metadata, cutting at most once per attempt at a time."""
         with self._cut_lock(attempt_id):
             return self._view(attempt_id)
 
+    @measured("replay.prepare_view")
     def _view(self, attempt_id: int) -> dict:
         """Return clip metadata, extracting and caching on first call.
 
@@ -487,6 +490,7 @@ class ReplayService:
                            .total_seconds() > self._COVERAGE_SLACK_S),
         }
 
+    @measured("replay.associate_pictures")
     def _map_from_feeds(self, meta: dict, res) -> None:
         """The frame map READ off the picture feed's log (item 38).
 
@@ -586,6 +590,7 @@ class ReplayService:
         meta["picture_igt"] = igts if any(igt is not None for igt in igts) else None
         self._audit_pad_stamps(meta, attempt)
 
+    @measured("replay.audit_inputs")
     def _audit_pad_stamps(self, meta: dict, attempt) -> None:
         """THE CLIP'S OWN CHECK, and the only one that ships: every exact
         row's copied pad against the input track's pad at that frame, as
@@ -679,6 +684,7 @@ class ReplayService:
                              - _parse_utc(start)).total_seconds())
         return wall + DISPLAY_LAG_FRAMES / GAME_FPS
 
+    @measured("replay.wait_for_tail")
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last
         segment's rotation (spec: post-padding race)."""

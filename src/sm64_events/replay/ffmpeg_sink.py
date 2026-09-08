@@ -24,6 +24,7 @@ frame chain rule for measured failures and tests/test_replay_picture_identity.py
 for independent pixel identities through the actual sink, segments and cut.
 """
 import ctypes
+from sm64_events.core.profiling import measured
 import ctypes.wintypes as wt
 import logging
 import os
@@ -733,6 +734,7 @@ class FfmpegAvSink:
             if htimer:
                 kernel32.CloseHandle(htimer)
 
+    @measured("replay.write_frame")
     def _write_frame(self, frame, tag) -> float | None:
         """One frame to ffmpeg's stdin, spawning or re-spawning the child
         as its size demands. Returns the write's duration in ms, or None
@@ -831,6 +833,7 @@ class FfmpegAvSink:
             except Exception:
                 log.debug("NUT mux close failed (child gone?)", exc_info=True)
 
+    @measured("replay.mux_picture")
     def _mux_picture(self, frame: np.ndarray, stamp: float) -> int:
         """One picture into the NUT stream at wall time `stamp`. The
         reusable AVFrame's plane is updated in place (one copy) and the
@@ -854,6 +857,7 @@ class FfmpegAvSink:
             self._last_video_pts = pts
             return pts
 
+    @measured("replay.mux_audio")
     def _mux_audio_chunk(self, pcm: bytes, pts_us: int) -> None:
         """One chunk of interleaved s16le stereo into the NUT stream at
         `pts_us` (its first sample's wall time, PICTURE_TIME_BASE). Raises

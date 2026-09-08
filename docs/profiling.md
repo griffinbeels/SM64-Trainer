@@ -55,6 +55,10 @@ it is not CPU overhead. Profile histograms are cumulative within one capture:
 the report uses the final histogram and never averages successive percentiles.
 Missing data remains unavailable; counter resets and server-session changes
 invalidate comparisons. GPU absence is `null`, never zero.
+Each sample also reads `/health` for input skip/mismatch counters. The sample log
+has a 64 MiB cap; exceeding it marks the capture incomplete instead of filling
+the disk. Record meaningful activity and sufficient capture margins rather than
+assuming an empty histogram means zero cost.
 
 ## Whole-desktop lag and graphics attribution
 
@@ -63,11 +67,68 @@ WPR must be installed and may require elevation. The tool checks local named
 instance support, starts UUID-owned `GeneralProfile` and `GPU` profiles, and stops only that
 instance. A conflicting recording is not cancelled. `system.etl` opens in Windows
 Performance Analyzer (WPA); `doctor` checks availability on PATH but does not
-install software. WPR includes system evidence that Python and browser timers
+install software (it also checks the venv and standard Toolkit install directory).
+WPR includes system evidence that Python and browser timers
 cannot supply. Start with CPU scheduling/stacks, disk I/O and GPU activity.
 The installed `wpr -profiles` is queried first; if GPU is absent, the artifact
 explicitly records that gap and the report marks GPU trace coverage unavailable.
 Native graphics CPU wall times remain a separate measurement from GPU events.
+
+For agent-readable offline summaries:
+
+```powershell
+uv run --group profiling python tools/profile_etl.py data/profiles/before/system.etl --output data/profiles/before/etl-analysis
+```
+
+This exports CPU/module, CPU/disk, DPC/ISR, hard-fault, process and trace statistics
+with xperf, preserving raw reports and a manifest. Missing loss information is
+unknown; unresolved symbols are not evidence of no work. GPU tables remain in
+the ETL for WPA analysis.
+
+## Browser timeline and playback
+
+`profile_browser.py` imports an otherwise inactive diagnostic module and records
+a bounded Chrome Performance trace plus rAF scheduling gaps, long tasks, video
+playback quality, waiting/seeking events, API resource timings and action markers.
+No UI module imports it during normal use. It never changes playback rate or
+seeks on its own. Explicit action files drive the same controls used for practice.
+
+```powershell
+uv run --group profiling python tools/profile_browser.py --url http://localhost:8065 --seconds 30 --actions review-actions.json --output data/profiles/browser-before
+```
+
+Actions are a list of `{"action":"click","value":"CSS selector"}`,
+`{"action":"wait","value":"CSS selector"}`, `{"action":"press","value":"Space"}`,
+or `{"action":"mark","value":"description"}`. Waits require visible elements;
+each action has begin/end markers. Choose selectors from the actual review state.
+Inspect first-picture events and timeline readiness separately; a player shell is
+not proof of a usable synchronized replay. Downloaded footage retains its own
+frame timing capabilities, never inferred game-frame accuracy.
+
+The default creates an owned headless browser. `--cdp-url http://localhost:PORT`
+instead attaches to exactly one existing page matching `--url`, without navigating
+or focusing it. That browser must already expose its debugging endpoint; the tool
+does not restart Chrome, WebView2, the trainer or Project64. Headless and attached
+results are different environments and must not be treated as a matched pair.
+Use identical viewport, workload, media, browser version and trace settings.
+`--no-trace` runs just the inexpensive observers for an instrumentation comparison.
+`chrome-trace.json` opens in Chrome Performance; `browser.json` records summaries.
+Hidden-tab time is explicit. rAF gaps are callback scheduling, not display FPS;
+video counters are unavailable after a source reset rather than subtracted across
+different media. Unsupported long-task APIs and GPU counters remain null.
+
+## Backend coverage and boundary effects
+
+Stages cover poll tick duration/interval, input read and emit, timeline assembly,
+capture slot read/decode/conversion, recorder callbacks, video/audio mux, extraction,
+frame probing, tail wait, picture association, input audit and total replay view.
+These durations include nested work; do not sum them. The collector retains fixed
+histograms rather than an unbounded event log. It is disabled by default, needs no
+per-frame disk write, and retains only the most recent session. Calls finishing
+outside the capture window are censored: pending and late-completion counters make
+that visible and invalidate automatic comparisons. Re-run with enough head/tail
+room for the operation. Measure profiler-off versus profiler-on as well as before
+versus after; profiling itself is an intervention.
 
 Normal completion, Ctrl+C and errors stop owned traces. A forcibly killed capture
 process cannot execute cleanup: `wpr-owner.json` records the exact named-instance
@@ -86,21 +147,19 @@ mistake scheduler wake delay or backend stage duration for displayed frame time.
 Compare profiler-off and profiler-on runs to check observer overhead. Accuracy
 still needs decoded video/input-frame/audio tests plus representative live review.
 
-The companion browser capture supports an explicitly supplied CDP debugging
-endpoint or an isolated headless browser:
-
-```powershell
-uv run --group profiling python tools/profile_browser.py --url http://localhost:8065/ui/ --seconds 30 --output data/profiles/browser-before
-```
-
-Use `--cdp-url` to attach to an existing debugging endpoint. `--actions` accepts a
-JSON file of `{ "action": "click|wait|press|mark", "value": "..." }` operations;
-run `--help` for the command's exact contract. It exports `browser.json` and an
-optional Chrome trace. Keep browser captures beside the matching backend
-session; the Python comparison report does not merge browser artifacts.
+Keep browser captures beside the matching backend session; the Python comparison
+report does not merge browser artifacts. Trace buffer saturation or known event
+loss marks a browser capture incomplete. A navigation failure still attempts to
+stop the owned trace; existing unrelated traces are never ended.
 Native graphics profile histograms, when the instrumented plugin
 supports them, are retained separately from backend stages. Their CPU wall times
 include GPU waits; VI-call intervals are not displayed FPS or GPU engine timing.
+
+The instrumented wrapper must be built from `plugin/gfxwrap` and packaged using
+`tools/build_plugin.py`. Updating the bundle alone does not update the DLL loaded
+by Project64. The existing capture setup flow owns installation when the emulator
+can safely be closed; never overwrite its loaded plugin or restart a live recording
+to obtain a profile. Older wrappers report native profiling as unavailable.
 
 Primary references: [WPR command options](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/wpr-command-line-options),
 [Windows Performance Toolkit](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/),

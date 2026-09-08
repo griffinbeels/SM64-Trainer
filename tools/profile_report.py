@@ -29,14 +29,16 @@ def graphics_summary(samples: list[dict], issues: list[str]) -> dict | None:
     available = [g for g in graphics if isinstance(g, dict)]
     if not available:
         return None
-    identities = {(g.get("plugin_pid"), g.get("generation")) for g in available}
+    identities = {(g.get("plugin_pid"), g.get("generation"), g.get("producer_instance")) for g in available}
     if len(identities) != 1:
         issues.append("Native graphics profile generation changed")
     final = available[-1]
     for name in final.get("metrics", {}):
-        counts = [g.get("metrics", {}).get(name, {}).get("count", 0) for g in available]
-        if counter_delta(counts)["resets"]:
-            issues.append(f"Native graphics stage {name} reset")
+        for field in ("count", "total_ms"):
+            values = [g.get("metrics", {}).get(name, {}).get(field) for g in available]
+            numeric = [value for value in values if isinstance(value, (int, float))]
+            if counter_delta(numeric)["resets"]:
+                issues.append(f"Native graphics stage {name} reset ({field})")
     return final
 
 
@@ -57,6 +59,7 @@ def profile_summary(meta: dict, samples: list[dict], issues: list[str]) -> tuple
         if any(s.get("replay", {}).get(key) != value for s in samples):
             issues.append(f"Recorder configuration changed during capture: {key}")
     stages = meta.get("final_profile", {}).get("stages", {})
+    check_boundaries(meta.get("final_profile", {}), issues)
     if not stages:
         issues.append("No instrumented stage observations")
     counters = {}
@@ -74,6 +77,13 @@ def profile_summary(meta: dict, samples: list[dict], issues: list[str]) -> tuple
         if counter_delta(counts)["resets"]:
             issues.append(f"Stage {name} reset during capture")
     return stages, counters
+
+
+def check_boundaries(final: dict, issues: list[str]) -> None:
+    if final.get("pending_calls") or final.get("counters", {}).get("completed_outside_window", 0):
+        issues.append("Stage calls crossed the capture boundary; durations are censored")
+    if final.get("counters", {}).get("stage_limit_rejections", 0):
+        issues.append("Stage limit rejected observations")
 
 
 def lazy_counter_values(values: list) -> tuple[list[float], bool]:
@@ -142,6 +152,20 @@ def replay_metrics(samples: list[dict], issues: list[str]) -> dict:
     return {"counters": counters, "gauges": gauges}
 
 
+def input_metrics(samples: list[dict], issues: list[str]) -> dict:
+    statuses = [(sample.get("health", {}).get("inputs") or {}) for sample in samples]
+    result = {}
+    for key in ("skips", "skipped_frames", "edge_mismatches", "frames", "samples"):
+        values = [status.get(key) for status in statuses]
+        numeric = [value for value in values if isinstance(value, (int, float))]
+        result[key] = counter_delta(numeric) if numeric else None
+        if numeric and len(numeric) != len(values):
+            issues.append(f"Input counter {key} missing in some samples")
+        if numeric and result[key]["resets"]:
+            issues.append(f"Input counter {key} reset")
+    return result
+
+
 def summarize(folder: Path) -> dict:
     meta = json.loads((folder / "capture.json").read_text(encoding="utf-8"))
     sample_path = folder / "samples.jsonl"
@@ -152,12 +176,14 @@ def summarize(folder: Path) -> dict:
     processes = process_metrics(samples, issues)
     graphics = graphics_summary(samples, issues)
     replay = replay_metrics(samples, issues)
+    inputs = input_metrics(samples, issues)
     final = meta.get("final_profile", {})
     return {"metadata": meta, "valid": not issues, "issues": sorted(set(issues)),
             "metrics": metrics, "stages": stages, "counters": counters,
-            "processes": processes, "graphics": graphics, "gpu": None, "replay": replay,
+            "processes": processes, "graphics": graphics, "gpu": None, "replay": replay, "inputs": inputs,
             "histogram_definition": {key: final.get(key) for key in ("quantile_method", "buckets_ms")},
             "coverage": {"native_graphics": graphics is not None,
+                         "input_counters": any(value is not None for value in inputs.values()),
                          "wpr_gpu": "GPU" in meta.get("external_traces", {}).get("wpr_profiles", [])},
             "limitations": ["System sampling does not measure display frame time or GPU engine utilization.",
                             "Stage quantiles describe final cumulative histogram bounds; they are not averaged sample percentiles.",
@@ -210,6 +236,11 @@ def measurement_changes(before: dict, after: dict) -> dict:
                 changes[f"graphics.{name}.{key}"] = {
                     "before": old[key], "after": new[key], "difference": new[key] - old[key]}
     changes.update(replay_changes(before.get("replay", {}), after.get("replay", {})))
+    for name, old in before.get("inputs", {}).items():
+        new = after.get("inputs", {}).get(name)
+        if isinstance(old, dict) and isinstance(new, dict) and old.get("delta") is not None and new.get("delta") is not None:
+            changes[f"inputs.{name}.delta"] = {
+                "before": old["delta"], "after": new["delta"], "difference": new["delta"] - old["delta"]}
     return changes
 
 

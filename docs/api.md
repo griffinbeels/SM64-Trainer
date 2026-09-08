@@ -6,6 +6,15 @@ the project? Start with the [README](../README.md). Developing here? Read
 
 ## Admin endpoints (localhost only)
 
+Bounded profiling is separate from diagnostic log export: `GET /api/diagnostics/profile`
+returns the current/final capture. `POST /api/diagnostics/profile/start` accepts
+`{"duration_s": 60}` (1–300 seconds), returns 201 and a `session_id`, and refuses
+an already active capture with 409. `POST /api/diagnostics/profile/stop` requires
+that exact `{"session_id": "..."}`; a mismatch returns 409 without stopping it.
+Durations are inclusive wall time; histogram quantiles are upper bounds.
+`pending_calls` and `completed_outside_window` expose censored operations.
+No recorder restart or capture-rate change occurs. See [profiling](profiling.md).
+
 | Endpoint | Description |
 |---|---|
 | `POST /api/uilog` `{surface, ...}` → `{recorded}` | **What the browser just PAINTED**, not an event. `surface` is `selector` (the quick-select row's cells, each `{name, active}`) or `target` (every objective card on the page, in DOM order). The server stamps the wall clock and the live game frame; `tools/what_happened.py` interleaves the result with the journal, which is what makes "the cell vanished BEFORE the level change" a readable fact. Always 200 — a body it does not recognise is dropped with `{"recorded": false}`, because an instrument that can make its subject throw is worse than none. |

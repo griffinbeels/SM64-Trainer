@@ -19,6 +19,12 @@ only a spec could justify, that is a bug in this file — fix it here.
 
 ## Data flow
 
+Opt-in performance diagnostics are documented in [profiling](profiling.md).
+Backend stages use bounded inclusive wall-time histograms; the native graphics
+sidecar has its own version and producer identity and does not change the picture
+stream ABI. Browser and system traces supply different evidence and must not be
+interpreted as substitutes for frame/audio/input correctness checks.
+
 ```
 Project64 1.6 process (Windows)
       │  ReadProcessMemory, ~60 Hz poll (game logic runs at 30 fps)
