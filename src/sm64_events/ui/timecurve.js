@@ -1,6 +1,9 @@
 // Browser twin of ranks/timecurve.py. Real implementation parity is tested.
+/** @typedef {readonly [number, number]} Point */
+/** @param {number} frame */
 function csOfFrame(frame) { return Math.floor(frame * 100 / 30); }
 
+/** @param {number} cs */
 export function framePosition(cs) {
   if (cs <= 0) return cs * .3;
   const whole = Math.floor(Math.ceil(cs) / 100);
@@ -11,19 +14,23 @@ export function framePosition(cs) {
   return upper - 1 + (cs - lowerCs) / (upperCs - lowerCs);
 }
 
+/** @param {number} value */
 function pyRound(value) {
   const floor = Math.floor(value), diff = value - floor;
   return diff > .5 ? floor + 1 : diff < .5 ? floor : floor % 2 === 0 ? floor : floor + 1;
 }
 
+/** @param {number} frame */
 export function displayPosition(frame) {
   if (frame <= 0) return pyRound(frame / .3);
   const lower = Math.floor(frame);
   return pyRound(csOfFrame(lower) + (frame - lower) * (csOfFrame(lower + 1) - csOfFrame(lower)));
 }
 
+/** @param {readonly Point[]} points */
 function topNeighbor(points) { return points.slice(1).find((p) => p[0] > points[0][0]); }
 
+/** @param {readonly Point[]} points @returns {Point} */
 function tailEdge(points) {
   const [easiest, score] = points[points.length - 1];
   const previous = points.slice(0, -1).reverse().find((p) => p[0] < easiest);
@@ -31,6 +38,7 @@ function tailEdge(points) {
   return [easiest + 4 * step, score / 5];
 }
 
+/** @param {readonly Point[]} points @param {number} position */
 export function scoreAt(points, position) {
   const [hardest, score] = points[0];
   if (position <= hardest) {
@@ -48,6 +56,7 @@ export function scoreAt(points, position) {
   return low * end / position;
 }
 
+/** @param {readonly Point[]} points @param {number} target */
 export function positionAt(points, target) {
   const [hardest, score] = points[0];
   if (target >= score) {
