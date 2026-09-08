@@ -20,11 +20,12 @@ from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.ring import SegmentRing
 
 
-def picture(number):
-    image = np.zeros((96, 320, 4), dtype=np.uint8)
+def picture(number, size=(320, 96)):
+    width, height = size
+    image = np.zeros((height, width, 4), dtype=np.uint8)
     image[:, :, 3] = 255
     for bit in range(8):
-        image[:, bit * 40:(bit + 1) * 40, :3] = 255 if number & (1 << bit) else 0
+        image[:, bit * width // 8:(bit + 1) * width // 8, :3] = 255 if number & (1 << bit) else 0
     return image
 
 
@@ -38,22 +39,23 @@ def read_pictures(path):
         result = []
         for frame in container.decode(stream):
             pixels = frame.to_ndarray(format="gray")
+            cell = frame.width // 8
             number = sum(1 << bit for bit in range(8)
-                         if pixels[40:56, bit * 40 + 12:bit * 40 + 28].mean() > 128)
+                         if pixels[40:56, bit * cell + cell//3:bit * cell + 2*cell//3].mean() > 128)
             result.append((float(frame.pts * frame.time_base), number))
         return result
 
 
-@pytest.fixture(scope="module", params=["libx264", "h264_nvenc"])
+@pytest.fixture(scope="module", params=["libx264", "h264_nvenc", "h264_amf", "h264_qsv"])
 def encoder(request):
     ff = bundled_ffmpeg() or shutil.which("ffmpeg")
     if not ff:
         pytest.skip("ffmpeg required")
     codec = request.param
     probe = subprocess.run(
-        [ff, "-v", "error", "-f", "lavfi", "-i", "color=size=320x96",
+        [ff, "-v", "error", "-f", "lavfi", "-i", "color=size=640x480",
          "-frames:v", "1", "-c:v", codec, "-f", "null", "-"],
-        capture_output=True, timeout=15, **quiet_spawn_kwargs())
+        capture_output=True, timeout=15, check=False, **quiet_spawn_kwargs())
     if probe.returncode:
         pytest.skip(f"{codec} unavailable: {probe.stderr.decode(errors='replace')[-300:]}")
     return ff, codec
@@ -72,7 +74,9 @@ def record_picture_schedule(sink, ledger, schedule):
         for number in range(120):
             if schedule == "queued_audio_and_catchup" and number == 45:
                 time.sleep(0.22)  # several real pictures then arrive in a burst
-            pixels, stamp = picture(number), time.time()
+            # A normal capture size: AMF rejects the 96px-high tiny browser
+            # fixture even though it works at gameplay dimensions.
+            pixels, stamp = picture(number, size=(640, 480)), time.time()
             if schedule == "timestamp_collision" and number < 3:
                 stamp = origin + [0, 0.000001, 0.000012][number]
             assert ledger.observe(pixels, stamp, number, {"exact": True})

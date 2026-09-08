@@ -96,7 +96,13 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
     assert after("-b:v") == "0"     # a bitrate target would override -cq
 
 
-def test_spawn_args_follow_the_picked_codec(tmp_path, monkeypatch):
+@pytest.mark.parametrize("codec,quality_flag,idr_flag", [
+    ("libx264", "-crf", None), ("h264_nvenc", "-cq", "-forced-idr"),
+    ("h264_amf", "-qp_p", "-forced_idr"),
+    ("h264_qsv", "-global_quality", "-forced_idr"),
+])
+def test_spawn_args_follow_the_picked_codec(tmp_path, monkeypatch, codec, quality_flag,
+                                          idr_flag):
     """The sink encodes with pick_video_codec()'s answer, threaded through the
     recorder. Hardcoding h264_nvenc here was the flashing-mouse bug
     (2026-08-07): on a machine without an NVIDIA encoder the child died at
@@ -118,14 +124,18 @@ def test_spawn_args_follow_the_picked_codec(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "sm64_events.replay.ffmpeg_sink._assign_kill_on_close", lambda p: None)
     cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
-    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg", codec="libx264")
+    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg", codec=codec)
     sink._spawn(320, 240)
     for t in sink._readers:
         t.join(timeout=5)
     a = captured["args"]
-    assert a[a.index("-c:v") + 1] == "libx264"
-    assert "-crf" in a and "-cq" not in a   # quality registry followed the codec
-    assert "-forced-idr" not in a           # NVENC-only knob
+    assert a[a.index("-c:v") + 1] == codec
+    assert quality_flag in a
+    assert a[a.index("-bf") + 1] == "0"
+    if idr_flag:
+        assert a[a.index(idr_flag) + 1] == "1"
+    else:
+        assert "-forced-idr" not in a and "-forced_idr" not in a
 
 
 def test_mux_initialization_failure_closes_its_child_and_leaves_no_feed(tmp_path, monkeypatch):
@@ -291,6 +301,36 @@ def test_audio_pacer_does_not_overpad_when_audio_runs_ahead():
         clock[0] = k * 0.005
         assert p.tick() == 0          # already ahead → never pads
     assert sum(len(b) // 4 for b in written) == 48000  # only the real burst
+
+
+def test_picture_audio_waits_between_batches_then_fills_real_silence():
+    """Padding between valid callbacks used to displace their real PCM."""
+    from sm64_events.replay.ffmpeg_sink import AudioPacer
+    clock, padding, real = [0.0], [], []
+    pacer = AudioPacer(48000, lambda: clock[0], padding.append,
+                      write_at=lambda data, end: real.append((data, end)), idle_grace_s=.05)
+    a, b = _sec_of_pcm(.01), _sec_of_pcm(.03)
+    pacer.feed(a, ends_at=10.0)
+    for tick in [.005, .015, .025, .035]:
+        clock[0] = tick
+        assert pacer.tick() == 0
+    pacer.feed(b, ends_at=10.03)
+    clock[0] = .075  # still inside the next batch's grace
+    assert pacer.tick() == 0
+    clock[0] = .1  # source really went quiet: catch up to the wall clock
+    assert pacer.tick() == 48000 * .06
+    assert real == [(a, 10.0), (b, 10.03)]  # every real byte and stamp survived
+    assert sum(len(p) // 4 for p in padding) == 48000 * .06
+
+
+def test_empty_audio_does_not_keep_a_silent_source_alive():
+    from sm64_events.replay.ffmpeg_sink import AudioPacer
+    clock, written = [0.0], []
+    pacer = AudioPacer(48000, lambda: clock[0], written.append, idle_grace_s=.05)
+    pacer.tick()
+    clock[0] = .1
+    pacer.feed(b"")
+    assert pacer.tick() == 4800  # works even before the first real batch
 
 
 def test_kill_on_close_job_reaps_child_when_handle_dies():

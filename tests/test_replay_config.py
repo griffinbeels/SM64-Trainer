@@ -65,14 +65,15 @@ def test_every_stage_pins_a_quality_target():
     """THE blurry-recording regression: an encoder with no rate control falls
     back to ffmpeg's ~2 Mbps default, which crushed every saved clip no matter
     how good its ring segment was (12.5 Mbps in -> 2.1 Mbps out, measured
-    2026-07-23). Both stages, both codecs, must name a quality target."""
-    for codec, quality_flag in (("h264_nvenc", "-cq"), ("libx264", "-crf")):
+    2026-07-23). Every supported codec and stage must name a quality target."""
+    for codec, quality_flag in (("h264_nvenc", "-cq"), ("libx264", "-crf"),
+                                ("h264_amf", "-qp_p"), ("h264_qsv", "-global_quality")):
         for stage, maxrate in (("realtime", RING_MAXRATE),
                                ("offline", CLIP_MAXRATE)):
             args = video_quality_args(codec, stage, maxrate)
             assert quality_flag in args, f"{codec}/{stage} has no quality target"
             assert args[args.index(quality_flag) + 1].isdigit()
-            assert "-preset" in args
+            assert ("-quality" if codec == "h264_amf" else "-preset") in args
 
 
 def test_nvenc_quality_target_is_not_overridden_by_a_bitrate():

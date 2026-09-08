@@ -155,6 +155,11 @@ it happens — and save the ones worth keeping, forever. Audio is captured from
 Project64 alone, so a Discord call, music or a video playing in the background
 never ends up in a clip you upload.
 
+Replay encoding checks for compatible NVIDIA, AMD or Intel hardware at startup,
+with CPU encoding as fallback. Hardware must pass a picture/timestamp check
+before it is selected. See [capture performance and GPU support](docs/replay-pipeline-cost.md)
+for the verification status and remaining transfer costs.
+
 **Library.** Browse the whole community spreadsheet without leaving the app —
 every star and segment's proven ways to do it, laid out beginner to expert
 with real recorded times filed by the rank and subdivision they'd earn

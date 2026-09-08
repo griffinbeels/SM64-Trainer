@@ -230,6 +230,46 @@ def test_build_wires_the_pad_stamp_audit_into_replay(monkeypatch):
         "the pad-stamp audit was built but never wired into ReplayService")
 
 
+@pytest.mark.parametrize("ffmpeg_works", [True, False])
+def test_codec_selection_targets_the_backend_that_will_actually_run(monkeypatch, ffmpeg_works):
+    import subprocess
+    main_mod = _stubbed_main(monkeypatch)
+    binary = "C:/specific/build/ffmpeg.exe"
+    selected = "h264_amf" if ffmpeg_works else "libx264"
+    calls, captured = [], {}
+    monkeypatch.setattr(main_mod, "bundled_ffmpeg", lambda: binary)
+
+    def version(args, **kwargs):
+        assert args == [binary, "-version"]
+        calls.append("version")
+        if not ffmpeg_works:
+            raise OSError("binary cannot run")
+        return subprocess.CompletedProcess(args, 0)
+
+    def pick(ffmpeg=None):
+        assert calls == ["version"]  # select after resolving the backend
+        assert ffmpeg == (binary if ffmpeg_works else None)
+        calls.append("pick")
+        return selected
+
+    monkeypatch.setattr(subprocess, "run", version)
+    monkeypatch.setattr("sm64_events.replay.encoder.pick_video_codec", pick)
+    for name in ("ReplayRecorder", "ClipExtractor", "CompilationBuilder"):
+        real = getattr(main_mod, name)
+
+        def spy(*args, _name=name, _real=real, **kwargs):
+            captured[_name] = kwargs
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(main_mod, name, spy)
+    main_mod.build()
+    assert calls == ["version", "pick"]
+    for name in ("ReplayRecorder", "ClipExtractor", "CompilationBuilder"):
+        assert captured[name]["codec"] == selected
+    sink_factory = captured["ReplayRecorder"]["video_sink_factory"]
+    assert (sink_factory is not None) == ffmpeg_works
+
+
 def _stubbed_main(monkeypatch):
     """A freshly reloaded `main` with everything build() would really touch
     stubbed out. Every stub here is load-bearing; the reason is on its line."""
@@ -238,7 +278,7 @@ def _stubbed_main(monkeypatch):
         "sm64_events.storage.instance_lock.acquire_instance_lock",
         lambda path: object())
     monkeypatch.setattr(
-        "sm64_events.replay.encoder.pick_video_codec", lambda: "libx264")
+        "sm64_events.replay.encoder.pick_video_codec", lambda ffmpeg=None: "libx264")
 
     class _DbStub:
         # TrackerService loads segment defs and the time_filters KV eagerly;
@@ -447,7 +487,7 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
         "sm64_events.storage.instance_lock.acquire_instance_lock",
         lambda path: None)                    # lock held elsewhere: db-less boot
     monkeypatch.setattr(
-        "sm64_events.replay.encoder.pick_video_codec", lambda: "libx264")
+        "sm64_events.replay.encoder.pick_video_codec", lambda ffmpeg=None: "libx264")
     import importlib
     import sm64_events.main as main_mod
     importlib.reload(main_mod)

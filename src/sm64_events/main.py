@@ -307,7 +307,6 @@ def build():
 
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
-        codec = pick_video_codec()
         # Per-process loopback is PRIMARY: a replay must carry the game and
         # nothing else — no Discord call, no music (user report 2026-07-30).
         # Device-wide loopback is the fallback for machines where the
@@ -341,6 +340,7 @@ def build():
             except Exception:
                 logging.getLogger("sm64.replay").exception(
                     "ffmpeg probe failed - using in-process encoder")
+        codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
         # THE CAPTURE LAYER (round 32 item 95): when the wrapper plugin inside
         # Project64 is presenting, every picture comes from it already stamped
         # with the game's own frame counter and pad (replay/pluginsource.py),

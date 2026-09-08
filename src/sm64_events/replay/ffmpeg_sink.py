@@ -42,7 +42,9 @@ import numpy as np
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.timefmt import GAME_FPS
-from sm64_events.replay.config import RING_MAXRATE, video_quality_args
+from sm64_events.replay.config import (
+    RING_MAXRATE, forced_idr_args, raw_picture_args, video_quality_args,
+)
 from sm64_events.replay.ring import SegmentInfo
 from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, MediaRun, picture_duration_filter
 
@@ -179,7 +181,7 @@ class AudioPacer:
     unit-testable without ffmpeg. `feed` writes real PCM; `tick` pads silence
     to realtime. Returns samples written so callers/tests can observe."""
 
-    def __init__(self, rate: int, now, write, write_at=None):
+    def __init__(self, rate: int, now, write, write_at=None, idle_grace_s=0.0):
         self._rate = rate
         self._now = now
         self._write = write
@@ -187,12 +189,17 @@ class AudioPacer:
         # itself (the picture feed's NUT stream); padding still goes
         # through `write`, which stamps it as ending now.
         self._write_at = write_at
+        self._idle_grace_s = idle_grace_s
+        self._last_real_at = None
         self._t0 = None
         self._delivered = 0
 
     def feed(self, real_pcm: bytes, ends_at: float | None = None) -> None:
+        if not real_pcm:
+            return
+        self._last_real_at = self._now()
         if self._t0 is None:
-            self._t0 = self._now()
+            self._t0 = self._last_real_at
         if ends_at is not None and self._write_at is not None:
             self._write_at(real_pcm, ends_at)
         else:
@@ -200,9 +207,14 @@ class AudioPacer:
         self._delivered += len(real_pcm) // 4  # 2ch * s16
 
     def tick(self) -> int:
+        now = self._now()
         if self._t0 is None:
-            self._t0 = self._now()
-        expected = int((self._now() - self._t0) * self._rate)
+            self._t0 = now
+        # A normal callback batch is not a silent gap. Speculative padding
+        # occupies its timestamps and pushes the next real PCM forward.
+        if self._last_real_at is not None and now - self._last_real_at < self._idle_grace_s:
+            return 0
+        expected = int((now - self._t0) * self._rate)
         pad = expected - self._delivered
         if pad > 0:
             self._write(b"\x00" * (pad * 4))
@@ -449,6 +461,7 @@ class FfmpegAvSink:
             # with scene difficulty.
             "-c:v", self._codec,
             *video_quality_args(self._codec, "realtime", RING_MAXRATE),
+            *raw_picture_args(self._codec),
             # bf=0: B-frames shift a segment's start_time off frame 0, breaking
             # the pts contract the extractor cuts against.
             "-bf", "0",
@@ -458,10 +471,7 @@ class FfmpegAvSink:
             "-g", str(int((GAME_FPS if self._picture else fps) * seg_s)),
             *(["-force_key_frames", f"expr:gte(t,n_forced*{seg_s})"]
               if self._picture else []),
-            # forced-idr is an NVENC knob; x264 already emits IDR at every
-            # -g boundary (closed GOP is its default), which is all the
-            # segment muxer needs to cut on.
-            *(["-forced-idr", "1"] if self._codec == "h264_nvenc" else []),
+            *forced_idr_args(self._codec),
             # CFR locks every frame to the wall-clock grid; the picture
             # feed keeps each frame at the time it was written instead.
             # ... and keeps the INPUT's microsecond time base through the
@@ -906,7 +916,7 @@ class FfmpegAvSink:
 
         pacer = AudioPacer(rate, _time.perf_counter,
                            write=lambda buf: _put_at(buf, _time.time()),
-                           write_at=_put_at)
+                           write_at=_put_at, idle_grace_s=0.05)
         while not self._stop.is_set():
             drained = False
             while True:
