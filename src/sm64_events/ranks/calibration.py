@@ -4,12 +4,13 @@ Build a complete value before publishing it. Request readers pin that value,
 so a concurrent refresh cannot splice new observations into old standards.
 User edits remain in RankStandards and participate in its effective fingerprint.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
+from functools import wraps
 from threading import RLock
 
 from sm64_events.ranks.curve_types import CompiledCurve
@@ -31,7 +32,7 @@ def observation_fingerprint(payload: dict) -> str:
     def source(value):
         if isinstance(value, dict):
             return {key: source(item) for key, item in value.items()
-                    if key not in _DERIVED_FIELDS}
+                    if key not in _DERIVED_FIELDS and not key.startswith("ladder_")}
         if isinstance(value, list):
             return [source(item) for item in value]
         return value
@@ -49,13 +50,15 @@ class Calibration:
     overall: dict[str, dict[str, CompiledCurve]]
     identities: dict[str, str]
     policy_revision: str
+    scoring_rows: dict
 
 
-def build_calibration(payload, rows, layers, overall, identities, policy_revision=""):
+def build_calibration(payload, rows, layers, overall, identities, policy_revision="", scoring_rows=None):
     """Detach a candidate from mutable fitter inputs before it becomes visible."""
     data_revision = observation_fingerprint(payload)
     content = deepcopy({"rows": rows, "layers": layers, "overall": overall,
-                        "identities": identities, "policy_revision": policy_revision})
+                        "identities": identities, "policy_revision": policy_revision,
+                        "scoring_rows": rows if scoring_rows is None else scoring_rows})
     revision = fingerprint({"schema": 1, "observations": data_revision, **content})
     return Calibration(revision, data_revision, deepcopy(payload), **content)
 
@@ -106,3 +109,14 @@ def resolve_curve(ranks_store, entity_key, version=None) -> CompiledCurve:
                else ranks_store.ladders(entity_key, version))
     return curves.from_ladder(scoring.best_ladder(ladders),
                               metadata={"source": "legacy", "estimated": True})
+
+
+def calibrated_view(builder):
+    """Pin complete view builders used by HTTP and standalone broadcasts alike."""
+    @wraps(builder)
+    def read(db, service, *args, **kwargs):
+        ranks = getattr(service, "ranks", None)
+        context = ranks.read_context() if hasattr(ranks, "read_context") else nullcontext()
+        with context:
+            return builder(db, service, *args, **kwargs)
+    return read
