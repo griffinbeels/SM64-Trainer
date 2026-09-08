@@ -24,6 +24,23 @@ def client_for(service):
     return TestClient(app)
 
 
+def test_api_rejects_expired_edits_and_retains_newest_edit_in_the_current_session(tmp_path):
+    service = make_service(tmp_path, [attempt()])
+    client = client_for(service)
+    path = "/api/attempts/42/replay/review-state"
+    token = client.get(path).headers["X-Replay-Review-Session"]
+    writer = "a" * 32
+    def header(sequence):
+        return {"X-Replay-Review-Edit": f"{token}/{writer}/{sequence}"}
+    assert client.put(path, json=STATE, headers=header(2)).json() == STATE
+    assert client.put(path, json=empty_state(), headers=header(1)).json() == STATE
+    restarted = client_for(make_service(tmp_path, [attempt()]))
+    refused = restarted.put(path, json=STATE, headers=header(3))
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "review session changed; reopen the replay"
+    assert restarted.get(path).json() == empty_state()
+
+
 def test_review_before_extraction_survives_clients_but_not_service_restart(tmp_path):
     service = make_service(tmp_path, [attempt()])
     path = "/api/attempts/42/replay/review-state"
@@ -136,7 +153,8 @@ def test_endpoint_preserves_missing_attempt_and_database_errors(tmp_path):
 
 
 @pytest.mark.parametrize("raw", [b"torn", b"{}", b"x" * 40_000,
-                                b'{"version":2,"state":{}}'])
+                                b'{"version":2,"state":{}}'],
+                         ids=["torn", "empty", "oversized", "unknown-version"])
 def test_corrupt_saved_preferences_degrade_to_default_without_rewriting(tmp_path, raw):
     service = make_service(tmp_path, [attempt()])
     saved = Path(service.save(42)["path"])

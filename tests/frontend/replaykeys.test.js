@@ -16,6 +16,7 @@ function player() {
   root.append(button); document.body.append(root);
   const step = vi.fn(), toStart = vi.fn(), resume = vi.fn();
   stops.push(watchReplayKeys(root, {step,toStart,onPress:()=>resume}));
+  button.focus();
   return {root,button,step,toStart,resume};
 }
 
@@ -59,13 +60,16 @@ test("pointer interaction changes ownership and fields or dialogs retain their a
   expect(first.step).toHaveBeenCalledTimes(1);
 });
 
-test("unmount stops the hold and returns shortcuts to the remaining player", () => {
+test("unmount stops the hold without handing keys to an unrelated remaining player", () => {
   vi.useFakeTimers();
   const first = player(), second = player();
   key("keydown");
   stops.pop()(); second.root.remove();
   vi.advanceTimersByTime(1000);
   expect(second.step).toHaveBeenCalledTimes(1);
+  key("keydown"); key("keyup");
+  expect(first.step).not.toHaveBeenCalled();
+  first.button.focus();
   key("keydown"); key("keyup");
   expect(first.step).toHaveBeenCalledTimes(1);
 });
@@ -79,6 +83,7 @@ test("JKL shuttles only the active video, contains repeats and leaves fields alo
   video.currentTime = 10;
   video.play = vi.fn().mockResolvedValue(); video.pause = vi.fn();
   stops.push(watchReplayKeys(root, { video, step: vi.fn(), toStart: vi.fn() }));
+  root.dispatchEvent(new Event("pointerdown", {bubbles:true}));
   key("keydown", video, { key: "l" });
   key("keydown", video, { key: "l" });
   expect(video.playbackRate).toBe(2);
@@ -111,6 +116,7 @@ test("K chords step, loop commands share transport ownership, play respects the 
   video.pause = vi.fn(); video.play = vi.fn().mockResolvedValue();
   const step = vi.fn(), commands = { in: vi.fn(), out: vi.fn(), clear: vi.fn(), start: vi.fn(), range: { start: 2, end: 4, enabled: true } };
   stops.push(watchReplayKeys(root, { video, step, toStart: vi.fn() }));
+  root.dispatchEvent(new Event("pointerdown", {bubbles:true}));
   stops.push(watchReviewCommands(video, () => commands));
   key("keydown", video, { key: "k" });
   for (const [letter, direction] of [["j", -1], ["l", 1]]) {

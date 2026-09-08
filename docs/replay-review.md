@@ -3,6 +3,11 @@
 Open a replay from its attempt row. Click the video or press Space to play or
 pause. Native recordings and downloaded videos share the playback controls.
 
+The seek bar shows current / total time on its right. Mouse seeking returns
+focus to review; keyboard focus still lets you adjust the slider normally.
+The speaker toggles mute, with a red X when muted. Hover or keyboard-focus the
+speaker to reveal volume. The speedometer and multiplier select playback speed.
+
 - J shuttles backward; K pauses; L plays forward. Repeated J or L presses raise
   the requested speed through 1×, 2×, 4× and 8×. Reverse uses silent, bounded
   seeks because browser video does not reliably support negative playback rate.
@@ -27,6 +32,10 @@ pause. Native recordings and downloaded videos share the playback controls.
 Playback shortcuts belong to the active review. Clicking or tabbing outside
 releases them; text fields retain their normal keys. Wheel gestures over the
 lanes and navigator do not scroll or zoom the surrounding page.
+When a newly opened replay becomes ready, its timeline receives focus only if
+the opening is still the latest interaction and the tab stayed active. A slower
+response cannot take ownership from a more recently opened replay. Clicking
+inside a ready replay activates that replay's shortcuts.
 
 Zoom and template shifting change inspection coordinates only. The input
 inspector still follows delivered video pictures, with missing associations
@@ -68,6 +77,22 @@ Use the
 [profiling guide](profiling.md) to measure complete extraction and review latency;
 the current service still waits for closed segments covering the post-attempt
 tail. It has no during-attempt final-MP4 preparation worker or progressive tail.
+
+## Resource cost
+
+Capture's bottom-up BGR to top-down BGRA conversion copies each channel in bulk
+into a fresh owned buffer. This preserves row orientation, padding, alpha and
+retained heartbeat pictures. Eight decoded pictures from the saved Whomp's
+Fortress 100 Coins 1'29"96 example (1600×1200) were compared in six alternating
+before/after rounds: median conversion CPU time fell from 7.08 to 3.42 ms per
+picture, with identical output pixels. This isolates conversion cost; it does
+not measure total machine load or live recording overhead.
+
+During browser playback, static input bars and markers retain their rendered
+subtree while the playhead and inspector follow delivered pictures. Source,
+mapping, zoom, template and visibility changes invalidate the relevant cache.
+`tests/test_ui_input_timeline_performance.py` checks a thousand-marker timeline
+and verifies that a cached bar seeks the replacement map correctly.
 
 The J/K/L convention follows the [DaVinci Resolve editor guide](https://documents.blackmagicdesign.com/UserManuals/DaVinci-Resolve-20-Editors-Guide.pdf).
 Browser reverse playback limitations are described in

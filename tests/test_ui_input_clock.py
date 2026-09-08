@@ -15,7 +15,7 @@ from pathlib import Path
 from source_scan import strip_comments
 
 TIMELINE = (Path(__file__).resolve().parents[1]
-            / "src/sm64_events/ui/components/inputtimeline.js")
+            / "src/sm64_events/ui/components/inputtimelinemodel.js")
 
 
 def declaration(name: str) -> str:
@@ -26,7 +26,7 @@ def declaration(name: str) -> str:
                        code, re.M | re.S)
              or re.search(rf"^export const {name}\s*=.*?;\s*$", code,
                           re.M | re.S))
-    assert match, f"no top-level `export const {name} = ...;` in inputtimeline.js"
+    assert match, f"no top-level `export const {name} = ...;` in inputtimelinemodel.js"
     return match.group(0).replace("export ", "", 1)
 
 
@@ -43,12 +43,14 @@ def run(expression: str):
 def run_function(name, expression: str):
     code = strip_comments(TIMELINE.read_text(encoding="utf-8"))
     names = [name] if isinstance(name, str) else list(name)
+    if "mappedTimeAtFrame" in names:
+        names.insert(0, "mappedOccurrence")
     parts = []
     for one in names:
         match = re.search(rf"^export function {one}\(.*?^\}}\s*$", code,
                           re.M | re.S)
         assert match, (
-            f"no top-level `export function {one}(...)` in inputtimeline.js")
+            f"no top-level `export function {one}(...)` in inputtimelinemodel.js")
         parts.append(match.group(0).replace("export ", "", 1))
     # The mapped clock counts slots from the clip's own first timestamp
     # through frame.js's two helpers (2026-09-01); the component imports
@@ -242,7 +244,7 @@ def test_every_always_drawn_lane_names_a_button_the_server_sends():
     from sm64_events.memory import addresses as A
     code = strip_comments(TIMELINE.read_text(encoding="utf-8"))
     match = re.search(r"^export const CORE_BUTTONS\s*=\s*(\[.*?\]);", code, re.M)
-    assert match, "no CORE_BUTTONS in inputtimeline.js"
+    assert match, "no CORE_BUTTONS in inputtimelinemodel.js"
     core = json.loads(match.group(1))
     names = {name for _bit, name in A.BUTTON_BITS}
     assert set(core) <= names, set(core) - names

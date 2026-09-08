@@ -48,6 +48,7 @@ def check_navigation(page, video):
     page.mouse.up()
     page.wait_for_function("document.querySelector('.timeline-scroll').getAttribute('aria-valuenow') === '0'")
     volume = page.locator(".replay-volume")
+    page.get_by_role("button", name="Mute", exact=True).focus()
     volume.focus()
     page.keyboard.press("End")
     assert video.evaluate("v => v.volume") == 1

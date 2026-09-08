@@ -703,12 +703,17 @@ class ReplayService:
             self._attempt(attempt_id)
             return self._review_state.get(attempt_id, self.find_saved(attempt_id))
 
-    def update_review_state(self, attempt_id: int, state: dict) -> dict:
+    @property
+    def review_session_token(self) -> str:
+        return self._review_state.session_token
+
+    def update_review_state(self, attempt_id: int, state: dict,
+                            edit: str | None = None) -> dict:
         # Resolve the saved destination under the same lock as publication:
         # a PUT racing Save must not become temporary after promotion finishes.
         with self._cut_lock(attempt_id):
             self._attempt(attempt_id)
-            return self._review_state.put(attempt_id, self.find_saved(attempt_id), state)
+            return self._review_state.put(attempt_id, self.find_saved(attempt_id), state, edit)
 
     def save(self, attempt_id: int) -> dict:
         """Serialize extraction, publication, and review-state promotion."""

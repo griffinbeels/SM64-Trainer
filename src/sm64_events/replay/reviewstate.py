@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import uuid
 
 log = logging.getLogger("sm64.replay")
 MAX_FRAMES = 1_000_000
@@ -108,6 +109,8 @@ class ReviewStateStore:
     def __init__(self):
         self._temporary: dict[int, dict] = {}
         self._lock = threading.Lock()
+        self.session_token = uuid.uuid4().hex
+        self._edits: dict[tuple[int, str], int] = {}
 
     def get(self, attempt_id: int, saved: Path | None) -> dict:
         with self._lock:
@@ -115,14 +118,27 @@ class ReviewStateStore:
                 return copy.deepcopy(self._temporary[attempt_id])
             return _read(saved) if saved is not None else empty_state()
 
-    def put(self, attempt_id: int, saved: Path | None, state: dict) -> dict:
+    def put(self, attempt_id: int, saved: Path | None, state: dict,
+            edit: str | None = None) -> dict:
         state = validate_state(state)
         with self._lock:
+            writer = None
+            if edit is not None:
+                match = re.fullmatch(r"([0-9a-f]{32})/([0-9a-f]{32})/([1-9][0-9]{0,15})", edit)
+                if match is None or match[1] != self.session_token:
+                    raise ValueError("review session changed; reopen the replay")
+                writer, sequence = (attempt_id, match[2]), int(match[3])
+                if sequence <= self._edits.get(writer, 0):
+                    current = self._temporary.get(attempt_id)
+                    return copy.deepcopy(current) if current is not None else (
+                        _read(saved) if saved is not None else empty_state())
             if saved is None:
                 self._temporary[attempt_id] = state
             else:
                 _write(saved, state)
                 self._temporary.pop(attempt_id, None)
+            if writer is not None:
+                self._edits[writer] = sequence
             return copy.deepcopy(state)
 
     def promote(self, attempt_id: int, saved: Path) -> None:
@@ -135,3 +151,5 @@ class ReviewStateStore:
     def clear(self) -> None:
         with self._lock:
             self._temporary.clear()
+            self._edits.clear()
+            self.session_token = uuid.uuid4().hex

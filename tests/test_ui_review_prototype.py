@@ -7,7 +7,7 @@ from test_ui_replay_picture_steps import tiny_video, PROJECT, STORY, get_driver
 
 
 def test_review_component_contracts():
-    run_frontend("reviewmedia.test.js", "reviewstate.test.js", "latestreview.test.js", "replaykeys.test.js")
+    run_frontend("reviewmedia.test.js", "reviewstate.test.js", "latestreview.test.js", "replaykeys.test.js", "replayfocus.test.js")
 
 
 def test_drawer_review_controls_and_reopening(tmp_path):

@@ -1,0 +1,9 @@
+{
+  "name": "sm64-verification-tools",
+  "private": true,
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "pyright": "1.1.405",
+    "typescript": "5.9.3"
+  }
+}

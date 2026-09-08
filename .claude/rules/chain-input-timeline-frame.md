@@ -23,7 +23,7 @@ paths:
   - "src/sm64_events/ui/videopicture.js"
   - "src/sm64_events/ui/replaykeys.js"
   - "src/sm64_events/ui/components/replay.js"
-  - "src/sm64_events/ui/components/inputtimeline.js"
+  - "src/sm64_events/ui/components/inputtimeline*.js"
   - "src/sm64_events/ui/components/attemptdrawer.js"
   - "src/sm64_events/ui/components/controllerpanel.js"
 ---

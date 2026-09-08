@@ -200,7 +200,11 @@ def to_bgra_top_down(pixels_bgr_bottom_up: np.ndarray) -> np.ndarray:
     """The (H, W, 4) top-down array the sink expects, from a slot's rows."""
     height, width = pixels_bgr_bottom_up.shape[:2]
     out = np.empty((height, width, 4), dtype=np.uint8)
-    out[:, :, :3] = pixels_bgr_bottom_up[::-1]
+    # A three-byte inner slice takes NumPy's tiny-copy path for every pixel.
+    # Channel strides use its native bulk-copy loop instead. Keep a new owned
+    # array: the recorder may retain a picture for a later heartbeat.
+    for channel in range(3):
+        out[:, :, channel] = pixels_bgr_bottom_up[::-1, :, channel]
     out[:, :, 3] = 255
     return out
 

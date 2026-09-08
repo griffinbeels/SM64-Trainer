@@ -59,14 +59,8 @@ def encoder(request):
     return ff, codec
 
 
-@pytest.mark.parametrize("schedule", ["regular", "queued_audio_and_catchup", "timestamp_collision"])
-def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, encoder, schedule):
-    ff, codec = encoder
-    config = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=1.0)
-    ring = SegmentRing(retention_s=None, max_bytes=10**8)
-    ledger = PictureLedger()
-    sink = FfmpegAvSink(config, ring.add, ffmpeg=ff, codec=codec,
-                        on_fed=lambda tag, at, **clock: ledger.mark_fed(tag[1] if tag else None, at, **clock))
+def record_picture_schedule(sink, ledger, schedule):
+    """Feed the independent identities through capture timing edge cases."""
     sink.start()
     if schedule == "queued_audio_and_catchup":
         # The audio tap can start before the first picture. Its first chunk
@@ -88,6 +82,17 @@ def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, 
                 time.sleep(delay)
     finally:
         sink.stop()
+
+
+@pytest.mark.parametrize("schedule", ["regular", "queued_audio_and_catchup", "timestamp_collision"])
+def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, encoder, schedule):
+    ff, codec = encoder
+    config = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=1.0)
+    ring = SegmentRing(retention_s=None, max_bytes=10**8)
+    ledger = PictureLedger()
+    sink = FfmpegAvSink(config, ring.add, ffmpeg=ff, codec=codec,
+                        on_fed=lambda tag, at, **clock: ledger.mark_fed(tag[1] if tag else None, at, **clock))
+    record_picture_schedule(sink, ledger, schedule)
     coverage = ring.coverage("video")
     segments = ring.covering("video", *coverage)
     original = [row for segment in segments for row in read_pictures(segment.path)]

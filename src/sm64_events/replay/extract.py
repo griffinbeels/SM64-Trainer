@@ -312,18 +312,7 @@ class ClipExtractor:
             # a duplicate leading picture.
             # A tiny held-picture TS can be misdetected as MPEG program
             # stream with audio only. The ring's format is already known.
-            probe = ffprobe_beside(self._ffmpeg)
-            packets = _native_packet_index(probe, run[0].path, "mpegts") if probe else None
-            source_times = ([round(p["pts"] / MEDIA_HZ, 6) for p in packets] if packets else
-                            frame_times_of(self._ffmpeg, run[0].path, input_format="mpegts"))
-            if not source_times:
-                raise ValueError("no readable pictures at the requested start")
-            source_ticks = [round(t * MEDIA_HZ) for t in source_times]
-            seek_pts = max((t for t in source_ticks if t <= seek_pts),
-                           default=source_ticks[0])
-            if packets and self._picture_feed:
-                copy_pts = max((p["pts"] for p in packets
-                                if "K" in p["flags"] and p["pts"] <= seek_pts), default=None)
+            seek_pts, copy_pts = self._source_seek(run[0].path, seek_pts)
             ss = seek_pts / MEDIA_HZ
             s = datetime.fromtimestamp(media_run.origin_ts + ss, timezone.utc)
         dur = (e - s).total_seconds()
@@ -401,6 +390,23 @@ class ClipExtractor:
                           frame_times=times, media_run=media_run,
                           source_pts=([round(t * MEDIA_HZ) + seek_pts for t in times]
                                       if times and media_run else None))
+
+    def _source_seek(self, path: Path, requested_pts: int) -> tuple[int, int | None]:
+        """Resolve the held source picture and its decode-only keyframe pre-roll."""
+        probe = ffprobe_beside(self._ffmpeg)
+        packets = _native_packet_index(probe, path, "mpegts") if probe else None
+        source_times = ([round(p["pts"] / MEDIA_HZ, 6) for p in packets] if packets else
+                        frame_times_of(self._ffmpeg, path, input_format="mpegts"))
+        if not source_times:
+            raise ValueError("no readable pictures at the requested start")
+        source_ticks = [round(t * MEDIA_HZ) for t in source_times]
+        seek_pts = max((t for t in source_ticks if t <= requested_pts),
+                       default=source_ticks[0])
+        copy_pts = None
+        if packets and self._picture_feed:
+            copy_pts = max((p["pts"] for p in packets
+                            if "K" in p["flags"] and p["pts"] <= seek_pts), default=None)
+        return seek_pts, copy_pts
 
     def _codec_opts(self) -> list[str]:
         """Quality settings for the cut, from the ONE registry in config.py.

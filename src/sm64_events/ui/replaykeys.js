@@ -24,35 +24,44 @@ function typing(node) {
     || /^(INPUT|TEXTAREA|SELECT)$/.test(node?.tagName || "");
 }
 
-function down(event) {
-  const player = players.get(active), dir = direction(event.key);
-  const key = event.key.toLowerCase();
+function editingElsewhere(event) {
   const dialog = event.target?.closest?.('[role="dialog"]');
   const ownDialog = active?.closest?.('[role="dialog"]');
-  if (!player || (!dir && event.key !== "ArrowDown" && event.key !== " " && !["j", "k", "l", "i", "o", "x"].includes(key))
-      || event.defaultPrevented || typing(event.target)
+  return typing(event.target)
       || (dialog && dialog !== ownDialog)
-      || (event.key === " " && event.target?.closest?.('button,a,[role="button"]'))
-      || event.metaKey || event.ctrlKey || event.altKey) return;
+      || (event.key === " " && event.target?.closest?.('button,a,[role="button"]'));
+}
+
+function shuttleKey(player, key) {
+  stopHold(active);
+  if (key === "k") { heldK = true; player.shuttle.pause(); }
+  else if (heldK) { player.shuttle.pause(); startHold(active, () => player.step(key === "j" ? -1 : 1)); }
+  else player.shuttle.run(key === "j" ? -1 : 1);
+}
+
+function down(event) {
+  const player = players.get(active), key = event.key.toLowerCase();
+  const supported = ["arrowleft", "arrowright", "arrowdown", " ", "j", "k", "l", "i", "o", "x"].includes(key);
+  if (!player || !supported || event.defaultPrevented || editingElsewhere(event)
+      || modified(event)) return;
   event.preventDefault();
   event.stopPropagation();
   if (event.repeat) return;
   if (["i", "o", "x"].includes(key)) {
     stopHold(active); player.shuttle.stop();
-    reviewCommand(player.video, key === "i" ? (event.shiftKey ? "start" : "in") : key === "o" ? "out" : "clear");
+    const command = { i: "in", o: "out", x: "clear" }[key];
+    reviewCommand(player.video, event.shiftKey && key === "i" ? "start" : command);
     return;
   }
   if (["j", "k", "l"].includes(key)) {
-    stopHold(active);
-    if (key === "k") { heldK = true; player.shuttle.pause(); }
-    else if (heldK) { player.shuttle.pause(); startHold(active, () => player.step(key === "j" ? -1 : 1)); }
-    else player.shuttle.run(key === "j" ? -1 : 1);
+    shuttleKey(player, key);
     return;
   }
   player.shuttle.stop();
   if (event.key === " ") {
     stopHold(active); player.toggle?.(); return;
   }
+  const dir = direction(event.key);
   if (!dir) {
     stopHold(active);
     player.toStart();
@@ -60,6 +69,8 @@ function down(event) {
     startHold(active, () => player.step(dir), { onPress: player.onPress });
   }
 }
+
+function modified(event) { return event.metaKey || event.ctrlKey || event.altKey; }
 
 function up(event) {
   const key = event.key.toLowerCase();
@@ -87,7 +98,9 @@ export function watchReplayKeys(root, player) {
   }
   const shuttle = replayShuttle(player.video);
   players.set(root, { ...player, shuttle });
-  activate(root);
+  // Network completion is not an interaction. The loading focus guard or an
+  // actual click/focus chooses ownership, even when responses finish out of order.
+  if (root.contains(document.activeElement)) activate(root);
   const claim = () => activate(root);
   root.addEventListener("pointerdown", claim);
   root.addEventListener("focusin", claim);
@@ -97,7 +110,7 @@ export function watchReplayKeys(root, player) {
     root.removeEventListener("pointerdown", claim);
     root.removeEventListener("focusin", claim);
     players.delete(root);
-    if (active === root) { active = [...players.keys()].at(-1) || null; heldK = false; }
+    if (active === root) { active = null; heldK = false; }
     if (!players.size) {
       globalThis.removeEventListener("keydown", down);
       globalThis.removeEventListener("keyup", up);

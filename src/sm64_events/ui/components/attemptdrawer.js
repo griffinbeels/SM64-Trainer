@@ -10,7 +10,7 @@
 // simply absent, which is the honest rendering of "there is no footage",
 // rather than a drawer that refuses to open.
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { InputTemplates } from "./inputtemplates.js";
 import { ReplayPlayer } from "./replay.js";
@@ -18,10 +18,13 @@ import { InputTimeline } from "./inputtimeline.js";
 import { clipClock as buildClipClock } from "../frame.js";
 import { useReviewState } from "../reviewstate.js";
 import { ReviewSplit } from "../reviewsplit.js";
+import { watchReplayFocus } from "../replayfocus.js";
 
 const html = htm.bind(h);
 
 export function AttemptDrawer({ attemptId, imported = false, onCompare, onTemplateMarked, targetLabel }) {
+  const root = useRef(null);
+  useLayoutEffect(() => watchReplayFocus(root.current), [attemptId]);
   const review = useReviewState(attemptId);
   const [video, setVideo] = useState(null);
   // Where the attempt's anchor sits inside the clip (the replay pre-pad,
@@ -43,7 +46,7 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
   // cannot be cut is an answer too: the timeline then shows unchecked.
   const [replaySettled, setReplaySettled] = useState(false);
 
-  return html`<div class="attempt-drawer">
+  return html`<div class="attempt-drawer" ref=${root}>
     <${ReplayPlayer} attemptId=${attemptId} imported=${imported} onCompare=${onCompare}
         reviewState=${review.state} onReviewState=${review.change} beforeSave=${review.flush}
         onVideoEl=${setVideo}

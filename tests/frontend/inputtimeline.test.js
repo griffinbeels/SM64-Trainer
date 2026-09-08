@@ -19,12 +19,11 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alig
     ], ...data,
   }) })));
   let callback;
-  const video = {currentTime: times[0] + .001, duration: times.at(-1) + .1,
+  const video = Object.assign(new EventTarget(), {currentTime: times[0] + .001, duration: times.at(-1) + .1,
     paused: true, pause() {},
-    addEventListener() {}, removeEventListener() {},
     requestVideoFrameCallback(fn) { callback = fn; return 1; },
     cancelVideoFrameCallback() {},
-  };
+  });
   let props = {attemptId:42, video,
     frameMap: map, pictureIgt: igts, inputAlignment: alignment, inputSpan,
     padAgreement: agreement,
@@ -46,6 +45,18 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alig
     // retain the callback's slot, rather than looking up a raw number again.
     await act(async () => callback(0, {mediaTime:times[slot]}));
   }};
+}
+
+function clickTimeline(view, x) {
+  const lanes = view.container.querySelector(".input-lanes");
+  lanes.setPointerCapture = vi.fn();
+  lanes.hasPointerCapture = () => true;
+  lanes.releasePointerCapture = vi.fn();
+  for (const type of ["pointerdown", "pointerup"]) {
+    const event = new Event(type, {bubbles:true,cancelable:true});
+    Object.assign(event, {clientX:x,button:0,pointerId:1});
+    fireEvent(lanes, event);
+  }
 }
 
 test("the captured span prevents an old held picture from stretching the track", async () => {
@@ -126,14 +137,12 @@ test("zoom follows the presented frame and scrubbing uses the cropped axis", asy
   const view = await timeline({map:[100,101,102,103,104,105,106,107],
     times:[0,.1,.2,.3,.4,.5,.6,.7],stretches:[[0,100,8]], data:{frames:8},review:{}});
   await view.present(6);
-  view.video.currentTime = .02; // A requested seek is not the delivered picture.
+  Object.assign(view.video, {currentTime: .02}); // A requested seek is not the delivered picture.
   fireEvent.click(view.getByRole("button", {name:"Zoom in timeline"}));
   await waitFor(() => expect(view.container.querySelector(".input-zoom-range").textContent).toBe("Frames 4–7"));
   expect(view.container.querySelector(".is-stick svg").getAttribute("viewBox")).toBe("4 0 4 46");
   view.container.querySelector(".input-track-column").getBoundingClientRect = () => ({left:100,width:400});
-  const event = new Event("pointerdown", {bubbles:true});
-  Object.assign(event, {clientX:300});
-  fireEvent(view.container.querySelector(".input-lanes"), event);
+  clickTimeline(view, 300);
   expect(view.video.currentTime).toBeGreaterThan(.6);
   expect(view.video.currentTime).toBeLessThan(.7);
   fireEvent.click(view.getByRole("button", {name:"Fit"}));
@@ -183,9 +192,7 @@ test("the loop is a fixed input range while the template moves, and the zoom but
   fireEvent.click(view.getByRole("button", {name:"Zoom to loop"}));
   await waitFor(() => expect(view.container.querySelector(".input-zoom-range").textContent).toBe("Frames 1–2"));
   view.container.querySelector(".input-track-column").getBoundingClientRect = () => ({left:0,width:200});
-  const event = new Event("pointerdown", {bubbles:true});
-  Object.assign(event, {clientX:200});
-  fireEvent(view.container.querySelector(".input-lanes"), event);
+  clickTimeline(view, 200);
   expect(view.video.currentTime).toBeGreaterThan(.2);
   expect(view.video.currentTime).toBeLessThan(.3);
 });

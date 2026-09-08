@@ -7,7 +7,7 @@ guarantees no partial clip file survives those, so a retry is always safe.
 Endpoints are sync `def` on purpose: extraction is CPU/GPU-bound and FastAPI
 runs sync endpoints in its threadpool — the event loop (poller, websockets)
 never blocks."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -29,6 +29,50 @@ def _http(e: Exception) -> HTTPException:
     if isinstance(e, ValueError):
         return HTTPException(409, str(e))
     return HTTPException(503, str(e))
+
+
+def _review_routes(router, replay):
+    @router.get("/attempts/{attempt_id}/replay/review-state")
+    def review_state(attempt_id: int, response: Response):
+        try:
+            state = replay.review_state(attempt_id)
+            response.headers["X-Replay-Review-Session"] = replay.review_session_token
+            return state
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e) from e
+
+    @router.put("/attempts/{attempt_id}/replay/review-state")
+    def put_review_state(attempt_id: int, body: dict,
+                        x_replay_review_edit: str | None = Header(default=None)):
+        try:
+            return replay.update_review_state(attempt_id, body, edit=x_replay_review_edit)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e) from e
+
+
+
+def _media_routes(router, replay):
+    @router.get("/replay/clips/{name}")
+    def clip(name: str):
+        try:
+            path = replay.clip_path(name)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return FileResponse(path, media_type="video/mp4")  # native Range/206
+
+    # HEAD serves the progress-graph click's existence probe (auto-open the
+    # player only when a saved file exists) — FastAPI does NOT add HEAD to
+    # GET routes by itself; FileResponse already sends headers-only for HEAD.
+    @router.api_route("/replay/saved/{attempt_id}", methods=["GET", "HEAD"])
+    def saved(attempt_id: int):
+        # Saved clips outlive the buffer: this is how a PB stays watchable
+        # in later sessions (view() falls back here when the ring is gone).
+        try:
+            path = replay.saved_clip_path(attempt_id)
+        except (LookupError, ValueError, RuntimeError) as e:
+            raise _http(e)
+        return FileResponse(path, media_type="video/mp4")  # native Range/206
+
 
 
 def create_replay_router(replay) -> APIRouter:
@@ -65,40 +109,9 @@ def create_replay_router(replay) -> APIRouter:
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
 
-    @router.get("/attempts/{attempt_id}/replay/review-state")
-    def review_state(attempt_id: int):
-        try:
-            return replay.review_state(attempt_id)
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e) from e
+    _review_routes(router, replay)
 
-    @router.put("/attempts/{attempt_id}/replay/review-state")
-    def put_review_state(attempt_id: int, body: dict):
-        try:
-            return replay.update_review_state(attempt_id, body)
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e) from e
-
-    @router.get("/replay/clips/{name}")
-    def clip(name: str):
-        try:
-            path = replay.clip_path(name)
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return FileResponse(path, media_type="video/mp4")  # native Range/206
-
-    # HEAD serves the progress-graph click's existence probe (auto-open the
-    # player only when a saved file exists) — FastAPI does NOT add HEAD to
-    # GET routes by itself; FileResponse already sends headers-only for HEAD.
-    @router.api_route("/replay/saved/{attempt_id}", methods=["GET", "HEAD"])
-    def saved(attempt_id: int):
-        # Saved clips outlive the buffer: this is how a PB stays watchable
-        # in later sessions (view() falls back here when the ring is gone).
-        try:
-            path = replay.saved_clip_path(attempt_id)
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return FileResponse(path, media_type="video/mp4")  # native Range/206
+    _media_routes(router, replay)
 
     @router.post("/attempts/{attempt_id}/replay/save")
     def save(attempt_id: int):

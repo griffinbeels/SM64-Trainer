@@ -86,10 +86,38 @@ function useReplayStepping(videoEl, state) {
   return { step, stepHold, toStart };
 }
 
-function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, onView,
-    reviewState, onReviewState, beforeSave }) {
+function useNativeReplayState(attemptId, onView, onUnavailable) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    send("POST", `/api/attempts/${attemptId}/replay`)
+      .then((r) => {
+        if (!alive) return;
+        setState({ phase: "ready", ...r });
+        if (onView) onView(r);
+        if (!r.clip_url) onUnavailable();
+        // saved_path persists across sessions (server globs the save tree):
+        // the Save button correctly shows "Saved" for clips saved last week
+        setSavedPath(r.saved_path || null);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setState({ phase: "error", message: String(e) });
+        // The drawer waits for this answer before it shows the timeline
+        // (his 2026-09-01 ruling): a clip that cannot be cut is an answer.
+        if (onView) onView(null);
+        onUnavailable();
+      });
+    return () => { alive = false; };
+  }, [attemptId]);
+
+  return { state, savedPath, setSavedPath };
+}
+
+function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, onView,
+    reviewState, onReviewState, beforeSave }) {
+  const { state, savedPath, setSavedPath } = useNativeReplayState(attemptId, onView, onUnavailable);
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
   const [mediaVideo, setMediaVideo] = useState(null);
   const [saveError, setSaveError] = useState(null);
@@ -129,29 +157,6 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
     else video.addEventListener("loadedmetadata", begin, { once: true });
     return () => video.removeEventListener("loadedmetadata", begin);
   }, [state]);
-
-  useEffect(() => {
-    let alive = true;
-    send("POST", `/api/attempts/${attemptId}/replay`)
-      .then((r) => {
-        if (!alive) return;
-        setState({ phase: "ready", ...r });
-        if (onView) onView(r);
-        if (!r.clip_url) onUnavailable();
-        // saved_path persists across sessions (server globs the save tree):
-        // the Save button correctly shows "Saved" for clips saved last week
-        setSavedPath(r.saved_path || null);
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setState({ phase: "error", message: String(e) });
-        // The drawer waits for this answer before it shows the timeline
-        // (his 2026-09-01 ruling): a clip that cannot be cut is an answer.
-        if (onView) onView(null);
-        onUnavailable();
-      });
-    return () => { alive = false; };
-  }, [attemptId]);
 
   async function saveReplay() {
     setSaving(true); setSaveError(null);
@@ -210,7 +215,14 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
       startTitle="Jump to the attempt start (↓)"
       stepHandlers=${stepHold}
       onToggle=${togglePlay} note="← → Step · J K L Playback · I O Loop · X Clear · Shift+I Loop start" />
-    <div class="replay-actions">
+    <${ReplayActions} savedPath=${savedPath} saving=${saving} saveReplay=${saveReplay}
+      revealSaved=${revealSaved} onCompare=${onCompare} />
+    ${saveError && html`<p class="replay-control-error" role="status">${saveError}</p>`}
+  </div>`;
+}
+
+function ReplayActions({ savedPath, saving, saveReplay, revealSaved, onCompare }) {
+  return html`<div class="replay-actions">
       <button onclick=${saveReplay} disabled=${savedPath !== null || saving}>
         <${Icon} name=${savedPath ? "check" : "save"} size=${15} />
         ${savedPath ? "Saved" : saving ? "Saving…" : "Save replay"}</button>
@@ -220,9 +232,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
           title="Open this run in the Compare tab">
         <${Icon} name="compare" size=${15} /> Compare
       </button>`}
-    </div>
-    ${saveError && html`<p class="replay-control-error" role="status">${saveError}</p>`}
-  </div>`;
+    </div>`;
 }
 
 function fmtGB(bytes) {
