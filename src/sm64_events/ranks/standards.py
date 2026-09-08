@@ -319,6 +319,19 @@ class RankStandards:
         pinned = self._read_user.get()
         return pinned[0] if pinned else self._data
 
+    @property
+    def is_current_read(self) -> bool:
+        """Whether this reading may update state belonging to the live calibration.
+
+        Callers that mutate shared derived state check this while holding the
+        calibration registry's update_lock, so publication cannot pass the check.
+        """
+        pinned = self._read_user.get()
+        return ((not pinned or (pinned[1] == self._user_revision
+                                and pinned[2] == self._grading_version))
+                and (self.calibrations is None
+                     or self.calibrations.read is self.calibrations.active))
+
     def _fitted(self, ek, layer="strategies"):
         generation = self.calibrations.read if self.calibrations else None
         if generation is not None:

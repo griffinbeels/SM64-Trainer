@@ -12,8 +12,11 @@ import hashlib
 import json
 from functools import wraps
 from threading import RLock
+from typing import cast
 
 from sm64_events.ranks.curve_types import CompiledCurve
+
+_UNPINNED = object()
 
 
 def fingerprint(value) -> str:
@@ -68,7 +71,7 @@ class CalibrationRegistry:
 
     def __init__(self):
         self._active = None
-        self._pinned = ContextVar(f"rank_calibration_{id(self)}", default=None)
+        self._pinned = ContextVar(f"rank_calibration_{id(self)}", default=_UNPINNED)
         self.update_lock = RLock()
 
     @property
@@ -77,16 +80,23 @@ class CalibrationRegistry:
 
     @property
     def read(self) -> Calibration | None:
-        return self._pinned.get() or self._active
+        value = self._pinned.get()
+        return self._active if value is _UNPINNED else cast(Calibration | None, value)
 
     @property
     def pinned(self) -> Calibration | None:
-        return self._pinned.get()
+        return self.read if self.is_pinned else None
+
+    @property
+    def is_pinned(self) -> bool:
+        """An explicitly empty reading is pinned too, before first publication."""
+        return self._pinned.get() is not _UNPINNED
 
     def publish(self, candidate: Calibration) -> None:
         if not isinstance(candidate, Calibration):
             raise TypeError("publish requires a complete Calibration")
-        self._active = candidate
+        with self.update_lock:
+            self._active = candidate
 
     @contextmanager
     def pin(self, *, current=False):

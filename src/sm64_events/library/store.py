@@ -204,7 +204,8 @@ class LibraryStore:
         calibration = self.calibrations.read
         if calibration is not None:
             return calibration.payload
-        return self._payload or {"schema_version": SCHEMA_VERSION,
+        held_empty = self.calibrations.is_pinned and self.calibrations.active is not None
+        return (None if held_empty else self._payload) or {"schema_version": SCHEMA_VERSION,
                                  "sheet_revision": None, "targets": [],
                                  "runners": [], "ladder_model": {}}
 

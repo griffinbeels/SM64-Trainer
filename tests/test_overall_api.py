@@ -11,7 +11,7 @@ from sm64_events.library.adoptions import Adoptions
 from sm64_events.library.build import SCHEMA_VERSION
 from sm64_events.library.ladders import fit_payload
 from sm64_events.library.store import LibraryStore
-from sm64_events.ranks import curves
+from sm64_events.ranks import curves, scoring
 from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.broadcaster import Broadcaster
@@ -129,3 +129,101 @@ def test_a_get_cannot_mix_a_new_snapshot_with_its_old_curve_or_response_header(a
         assert response.json() == {"revision": old, "after": old, "source": 1300, "score": score}
         assert response.headers["X-Rank-Calibration"] == old
         assert standards(client)["calibration_revision"] != old
+
+
+def test_first_read_after_publication_absorbs_before_the_refresh_callback(app_state):
+    app, service, store = app_state
+    service.db.insert_pb(2, 4, "Standard", "igt", 450, None, "first", game_version="us")
+    with TestClient(app) as client:
+        before = client.get("/api/marelo").json()
+        assert store.absorb(observations(100))["applied"]
+        # The worker has published, but the event-loop refresh callback has not run.
+        published = client.get("/api/marelo").json()
+        assert published["marelo"] > before["marelo"]
+        assert published["celebration"] is None
+        assert service.marelo_watermarks()["overall"] == scoring.progression_key(
+            published["tier"], published["division"])
+        absorb_after_regrade(service)
+        service.db.insert_pb(2, 4, "Standard", "igt", 420, None, "better", game_version="us")
+        earned = client.get("/api/marelo").json()
+        assert earned["marelo"] > published["marelo"]
+        assert earned["celebration"] is not None
+        # A deliberately saved slower PB must still lower the basis and watermark.
+        service.db.insert_pb(2, 4, "Standard", "igt", 480, None, "slower", game_version="us")
+        slower = client.get("/api/marelo").json()
+        assert slower["marelo"] < published["marelo"]
+        assert slower["celebration"] is None
+        service.db.insert_pb(2, 4, "Standard", "igt", 450, None, "improved", game_version="us")
+        assert client.get("/api/marelo").json()["celebration"] is not None
+
+
+@pytest.mark.parametrize("offset", [-100, 100])
+def test_old_pinned_get_cannot_move_current_watermarks(app_state, monkeypatch, offset):
+    from sm64_events.server import ranks_api
+    app, service, store = app_state
+    service.db.insert_pb(2, 4, "Standard", "igt", 450, None, "first", game_version="us")
+    entered, resume = Event(), Event()
+    original = ranks_api._score_scope
+    with TestClient(app) as client:
+        before = client.get("/api/marelo").json()
+        old_revision = before["calibration_revision"]
+        service.db.set_state("marelo_active_scope", "route:previous")
+
+        def paused_score(tracker, scope_id):
+            scored = original(tracker, scope_id)
+            if scored["calibration_revision"] == old_revision:
+                entered.set()
+                assert resume.wait(15), "refresh did not release the old GET"
+            return scored
+
+        monkeypatch.setattr(ranks_api, "_score_scope", paused_score)
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            pending = worker.submit(client.get, "/api/marelo")
+            try:
+                assert entered.wait(15), "old GET did not reach its pinned score"
+                assert store.absorb(observations(offset))["applied"]
+                absorb_after_regrade(service)
+                saved = deepcopy(service.marelo_watermarks())
+                assert saved["overall"] != scoring.progression_key(before["tier"], before["division"])
+            finally:
+                resume.set()
+            response = pending.result(timeout=15)
+        assert response.status_code == 200
+        assert response.json()["calibration_revision"] == old_revision
+        assert response.headers["X-Rank-Calibration"] == old_revision
+        assert response.json()["celebration"] is None
+        assert service.marelo_watermarks() == saved
+        assert service.db.get_state("marelo_active_scope") == "route:previous"
+
+
+def test_empty_read_stays_empty_when_the_first_generation_publishes(tmp_path):
+    ranks = RankStandards(tmp_path / "ranks.json")
+    ranks.load()
+    store = LibraryStore()
+    Adoptions(tmp_path / "links.json", store, ranks)
+    with ranks.read_context():
+        assert ranks.is_current_read
+        assert store.payload["targets"] == []
+        assert store.absorb(observations())["applied"]
+        assert not ranks.is_current_read
+        assert store.calibrations.read is None
+        assert store.payload["targets"] == []
+        assert ranks.overall_curve(ENTITY)["ladder_cs"] == {}
+        with ranks.read_context():
+            assert not ranks.is_current_read
+            assert store.payload["targets"] == []
+    assert ranks.is_current_read
+    assert store.payload["targets"]
+
+
+@pytest.mark.parametrize("change", ["user", "region"])
+def test_current_read_rejects_stale_user_settings_and_region(app_state, change):
+    _app, service, _store = app_state
+    with service.ranks.read_context():
+        assert service.ranks.is_current_read
+        if change == "user":
+            service.ranks.create_strategy(ENTITY, "Personal")
+        else:
+            service.ranks.grading_version = "jp"
+        assert not service.ranks.is_current_read
+    assert service.ranks.is_current_read

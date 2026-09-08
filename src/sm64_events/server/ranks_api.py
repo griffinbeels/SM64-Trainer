@@ -20,6 +20,7 @@ from sm64_events.ranks.calibration import resolve_curve
 from sm64_events.server.overall_api import create_overall_router
 from sm64_events.server.rank_reading import read_dependency
 from sm64_events.server.rank_history import build_history
+from sm64_events.server.rank_watermarks import absorb_regrade, celebration_for
 from sm64_events.tracking import marelo as marelo_bridge
 from sm64_events.tracking.views import entity_labels, segment_courses
 
@@ -232,58 +233,12 @@ def absorb_after_regrade(service) -> None:
     LOWER has its watermark lowered too (what sync_watermark would do on the
     next build anyway), so a later real climb still celebrates from the
     right floor."""
-    if service.db is None or service.ranks is None:
-        return
-    watermarks = service.marelo_watermarks()
-    for scope_id in list(watermarks):
-        try:
-            scored = _score_scope(service, scope_id)
-        except (LookupError, ValueError):
-            continue                        # a scope that no longer resolves
-        if not scored["tier"]:
-            continue
-        watermarks[scope_id] = int(scoring.progression_key(scored["tier"],
-                                                           scored["division"]))
-    service.db.set_state("marelo_watermarks", watermarks)
+    absorb_regrade(service, _score_scope)
 
 
 def _build_marelo(service, scope_id: str) -> dict:
     out = _score_scope(service, scope_id)
-    out["celebration"] = None
-    if out["tier"]:
-        key = scoring.progression_key(out["tier"], out["division"])
-        service.sync_watermark(scope_id, key)          # follow a drop down
-        # ONLY the active scope may celebrate, and only when arriving here was
-        # not itself the thing that made it active (live report 2026-07-28:
-        # "Swapping between routes like that should never trigger any rank
-        # up"). Two rules, and each covers a hole the other cannot:
-        #
-        #   * `scope_id == active` stops the RANK TAB firing one. Browsing the
-        #     scope chips fetches /api/marelo?scope=<other>, which is looking
-        #     at a rating, not earning it.
-        #   * `note_active_scope` stops the SWITCH itself firing one. A
-        #     watermark could only ever be raised by ack_celebration -- i.e.
-        #     by a celebration having been SHOWN -- so every scope held a
-        #     rank-up it had never displayed and discharged it the moment the
-        #     user looked at that scope.
-        #
-        # Arriving ABSORBS instead: the rank a scope already holds is the new
-        # baseline. The cost, decided by the user rather than assumed: scopes
-        # overlap (one star feeds many routes), so a rank-up genuinely earned
-        # on a route you were not focused on is absorbed silently and never
-        # celebrated. The rank itself is still there to see.
-        active = _active_scope(service)
-        if scope_id == active:
-            if service.note_active_scope(active):
-                service.absorb_watermark(scope_id, key)
-            else:
-                out["celebration"] = scopes.celebration_delta(
-                    out["tier"], out["division"],
-                    service.marelo_watermarks().get(scope_id))
-        # A scope's FIRST rank is not a rank-up. Seeding it silently is what
-        # stops the first view of a scope celebrating the user's whole
-        # history at once. seed_watermark is a no-op once the key exists.
-        service.seed_watermark(scope_id, key)
+    out["celebration"] = celebration_for(service, scope_id, out, _active_scope(service))
     # There is NO per-entity celebration here any more (task 0012,
     # 2026-07-26). A star's or segment's own rank-up is performed live by the
     # rank banner climbing (ui/rankclimb.js) rather than held as a payload to
