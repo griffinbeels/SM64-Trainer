@@ -2,12 +2,13 @@
 // Each player's hold has its own host, so changing focus cannot resume or
 // cancel another player's hold through a shared window timer.
 import { startHold, stopHold } from "./holdrepeat.js";
+import { replayShuttle } from "./replayshuttle.js";
 
 const players = new Map();
 let active = null;
 
 function activate(root) {
-  if (active && active !== root) stopHold(active);
+  if (active && active !== root) { stopHold(active); players.get(active)?.shuttle.stop(); }
   active = root;
 }
 
@@ -22,14 +23,23 @@ function typing(node) {
 
 function down(event) {
   const player = players.get(active), dir = direction(event.key);
+  const key = event.key.toLowerCase();
   const dialog = event.target?.closest?.('[role="dialog"]');
   const ownDialog = active?.closest?.('[role="dialog"]');
-  if (!player || (!dir && event.key !== "ArrowDown" && event.key !== " ") || event.repeat
+  if (!player || (!dir && event.key !== "ArrowDown" && event.key !== " " && !["j", "k", "l"].includes(key))
       || event.defaultPrevented || typing(event.target)
       || (dialog && dialog !== ownDialog)
       || (event.key === " " && event.target?.closest?.('button,a,[role="button"]'))
       || event.metaKey || event.ctrlKey || event.altKey) return;
   event.preventDefault();
+  event.stopPropagation();
+  if (event.repeat) return;
+  if (["j", "k", "l"].includes(key)) {
+    stopHold(active);
+    if (key === "k") player.shuttle.pause(); else player.shuttle.run(key === "j" ? -1 : 1);
+    return;
+  }
+  player.shuttle.stop();
   if (event.key === " ") {
     stopHold(active); player.toggle?.(); return;
   }
@@ -46,7 +56,11 @@ function up(event) {
 }
 
 function blur() {
-  if (active) stopHold(active);
+  if (active) { stopHold(active); players.get(active)?.shuttle.stop(); }
+}
+
+function outside(event) {
+  if (active && !active.contains(event.target)) activate(null);
 }
 
 export function watchReplayKeys(root, player) {
@@ -55,14 +69,18 @@ export function watchReplayKeys(root, player) {
     globalThis.addEventListener("keydown", down);
     globalThis.addEventListener("keyup", up);
     globalThis.addEventListener("blur", blur);
+    globalThis.addEventListener("pointerdown", outside, true);
+    globalThis.addEventListener("focusin", outside, true);
   }
-  players.set(root, player);
+  const shuttle = replayShuttle(player.video);
+  players.set(root, { ...player, shuttle });
   activate(root);
   const claim = () => activate(root);
   root.addEventListener("pointerdown", claim);
   root.addEventListener("focusin", claim);
   return () => {
     stopHold(root);
+    shuttle.dispose();
     root.removeEventListener("pointerdown", claim);
     root.removeEventListener("focusin", claim);
     players.delete(root);
@@ -71,6 +89,8 @@ export function watchReplayKeys(root, player) {
       globalThis.removeEventListener("keydown", down);
       globalThis.removeEventListener("keyup", up);
       globalThis.removeEventListener("blur", blur);
+      globalThis.removeEventListener("pointerdown", outside, true);
+      globalThis.removeEventListener("focusin", outside, true);
     }
   };
 }

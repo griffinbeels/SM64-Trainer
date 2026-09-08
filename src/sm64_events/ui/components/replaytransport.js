@@ -4,6 +4,7 @@ import { useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { pictureInterval, useReviewMedia } from "../reviewmedia.js";
+import { stopShuttle } from "../replayshuttle.js";
 
 const html = htm.bind(h);
 const stamp = seconds => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
@@ -40,7 +41,10 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
   async function fullscreen() {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
-      else await video?.closest(".replay-player")?.requestFullscreen();
+      else {
+        const drawer = video?.closest(".attempt-drawer");
+        await (drawer?.querySelector(".attempt-drawer-inputs") ? drawer : video?.closest(".replay-player"))?.requestFullscreen();
+      }
     } catch { setError("Fullscreen is unavailable in this window."); }
   }
   return html`<div class="replay-controls">
@@ -48,7 +52,7 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
       <span class="replay-media-time">${stamp(media.time)}</span>
       <input type="range" min="0" max=${media.duration || 1} step="any"
         value=${media.time} disabled=${!media.duration} aria-label="Seek recording"
-        oninput=${e => { if (video) video.currentTime = Number(e.currentTarget.value); }} />
+        oninput=${e => { if (video) { stopShuttle(video); video.currentTime = Number(e.currentTarget.value); } }} />
       <span class="replay-media-time">${stamp(media.duration)}</span>
     </div>
     <div class="replay-control-row"><div class="replay-transport">
@@ -68,7 +72,7 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
     </div><div class="replay-playback-options">
       <label class="replay-speed">Speed <select value=${media.rate} aria-label="Playback speed"
         onchange=${e => { if (video) video.playbackRate = Number(e.currentTarget.value); }}>
-        ${[.1, .25, .5, .75, 1, 1.5, 2].map(rate => html`<option value=${rate}>${rate}×</option>`)}
+        ${[.1, .25, .5, .75, 1, 1.5, 2, 4, 8].map(rate => html`<option value=${rate}>${rate}×</option>`)}
       </select></label>
       <button title=${media.muted ? "Unmute" : "Mute"} aria-label=${media.muted ? "Unmute" : "Mute"}
         aria-pressed=${media.muted} onclick=${() => { if (video) video.muted = !video.muted; }}>
@@ -77,9 +81,10 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
         value=${media.volume} aria-label="Volume" oninput=${e => {
           if (video) { video.volume = Number(e.currentTarget.value); video.muted = false; }
         }} />
-      <button onclick=${fullscreen} title="Fullscreen player and controls">Fullscreen</button>
+      <button onclick=${fullscreen} title="Fullscreen review with timeline">Fullscreen</button>
     </div></div>
     <div class="replay-loop-row">
+      ${media.shuttle && html`<output class="replay-shuttle-state" aria-live="polite">${media.shuttle}</output>`}
       <button disabled=${!interval || !reviewReady} onclick=${() => mark("start")}
         title="Set A at the start of the displayed picture">Set A</button>
       <span class="replay-media-time">${(loop?.start ?? marks.start) == null ? "—" : stamp(loop?.start ?? marks.start)}</span>

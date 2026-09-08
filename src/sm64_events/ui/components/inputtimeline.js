@@ -27,6 +27,8 @@ import { fmtIgtShort } from "../format.js";
 import { ControllerPanel, FacingDial, heldNames, stickPhrase, stickWords } from "./controllerpanel.js";
 import { SetupModal } from "./setupmodal.js";
 import { EMU } from "../platform.js";
+import { TimelineScroll } from "../timelinescroll.js";
+import { stopShuttle } from "../replayshuttle.js";
 
 const html = htm.bind(h);
 
@@ -577,11 +579,13 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     ? video.duration : clock?.duration };
   const slotCount = clock?.times?.length || frameMap?.length || 0;
   const seekSlot = video ? (slot) => {
+    stopShuttle(video);
     if (!Number.isInteger(slot) || slot < 0 || slot >= slotCount) return;
     if (!video.paused) video.pause();
     video.currentTime = timeOfSlot(slot, boundedClock);
   } : null;
   const seek = (next) => {
+    stopShuttle(video);
     const clamped = Math.max(0, Math.min(total - 1, next));
     if (video) {
       // Seeking the video is how the timeline moves: the clock loop above
@@ -711,7 +715,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       </details>
     </div>`}
 
-    <div class="input-lanes"
+    <div class="input-lanes" tabindex="0"
          onpointerdown=${seekFromPointer}
          onpointermove=${(event) => { if (event.buttons & 1) seekFromPointer(event); }}
          role="group" aria-label="Input lanes">
@@ -766,6 +770,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       ${bits.map((bit) => laneRow(bit))}
     </div>
 
+    <${TimelineScroll} view=${view} total=${total} trackColumn=${trackColumn}
+      loading=${reviewLoading} onChange=${updateReview} />
     <footer class="input-inspector">
       <div class="input-inspector-frame">
         <span class="eyebrow">Frame</span>

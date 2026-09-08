@@ -36,7 +36,7 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
       picture: presentedVideoTime(video),
       duration: Number.isFinite(video.duration) ? video.duration : 0,
       rate: video.playbackRate, volume: video.volume, muted: video.muted,
-      playing: !video.paused });
+      playing: !video.paused, shuttle: video.dataset.reviewShuttle || "" });
     const arm = () => {
       clearTimeout(timer);
       const { loop: range, clock: sourceClock, step: sourceStep } = latest.current;
@@ -64,7 +64,7 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
       video.play().catch(() => {});
     };
     const events = ["loadedmetadata", "durationchange", "timeupdate", "play", "pause",
-      "ratechange", "volumechange", "seeked", "playing"];
+      "ratechange", "volumechange", "seeked", "playing", "reviewshuttlechange"];
     events.forEach(name => video.addEventListener(name, changed));
     video.addEventListener("seeking", seeking);
     video.addEventListener("waiting", seeking);

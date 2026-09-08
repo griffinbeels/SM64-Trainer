@@ -3,18 +3,20 @@ import base64
 import json
 
 from frontend_runner import run_frontend
-from test_ui_replay_picture_steps import tiny_video, PROJECT, get_driver
+from test_ui_replay_picture_steps import tiny_video, PROJECT, STORY, get_driver
 
 
 def test_review_component_contracts():
     run_frontend("reviewmedia.test.js", "reviewstate.test.js", "latestreview.test.js", "replaykeys.test.js")
 
 
-def test_latest_drawer_review_controls_and_reopening(tmp_path):
+def test_drawer_review_controls_and_reopening(tmp_path):
     path = tmp_path / "review.mp4"
     times, numbers = tiny_video(path)
+    # Match frame_times_of's six-decimal wire format. Extra fixture precision
+    # would place a 90 kHz slot just after Chromium's delivered mediaTime.
     replay = {"clip_url": "data:video/mp4;base64," + base64.b64encode(path.read_bytes()).decode(),
-              "frame_times": times, "picture_ids": numbers,
+              "frame_times": [round(t, 6) for t in times], "picture_ids": numbers,
               "frame_map": list(range(100, 108)), "picture_igt": list(range(8)),
               "frame_map_source": "plugin", "duration_s": times[-1] + 1/30,
               "fps": 30, "game_fps": 30, "anchor_offset_s": .1,
@@ -45,34 +47,54 @@ def test_latest_drawer_review_controls_and_reopening(tmp_path):
           HTMLMediaElement.prototype.play=function() {
             return play.call(this).then(()=>{if(!window.allowLoopPlayback)this.pause();});
           };
+          const request=HTMLVideoElement.prototype.requestVideoFrameCallback;
+          HTMLVideoElement.prototype.requestVideoFrameCallback=function(callback) {
+            return request.call(this,(now,meta)=>{
+              window.loopObserver?.(now,meta);
+              callback(now,meta);
+            });
+          };
         })()""".replace("REPLAY",json.dumps(replay)).replace("INPUTS",json.dumps(inputs)))
-        page.click(".review-latest-button")
-        page.wait_for(".latest-review-surface .input-inspector")
+        page.evaluate(STORY.setup)
+        page.wait_for(".attempt-drawer .input-inspector")
         page.wait_for('.replay-loop-row button:text-is("Set A"):not([disabled])')
-        assert page.evaluate("document.querySelector('.latest-review-surface video').controls") is False
+        page.click('.replay-transport button:text-is("Start")')
+        page.wait_for('.input-inspector-frame .is-stamped:text-is(\'00"10\')')
+        assert page.evaluate("document.querySelector('.attempt-drawer video').controls") is False
         page.click('.replay-loop-row button:text-is("Set A")')
         page.click('.replay-transport button:text-is("Forward 1")')
         page.wait_for('.input-inspector-frame .is-stamped:text-is(\'00"16\')')
         page.click('.replay-loop-row button:text-is("Set B")')
         page.wait_for('.replay-loop-row button:text-is("Loop"):not([disabled])')
         page.click('.replay-loop-row button:text-is("Loop")')
+        page.wait_for('.replay-loop-row button[aria-pressed="true"]:text-is("Loop")')
+        (tmp_path / "loop-bounds.json").write_text(json.dumps(page.evaluate(
+            "Array.from(document.querySelectorAll('.replay-loop-row .replay-media-time'), e=>e.textContent)")))
         loop_frames = page.evaluate("""(async () => {
-          const video=document.querySelector('.latest-review-surface video');
-          const frames=[];let handle;
+          const video=document.querySelector('.attempt-drawer video');
+          const frames=[], seen=new Set();
+          window.loopEvents=[];
+          for (const name of ['play','playing','pause','seeking','seeked','waiting','timeupdate','ended'])
+            video.addEventListener(name,()=>window.loopEvents.push({name,time:video.currentTime,
+              wall:performance.now(),paused:video.paused,seeking:video.seeking}));
           const canvas=document.createElement('canvas');canvas.width=320;canvas.height=96;
           const ctx=canvas.getContext('2d',{willReadFrequently:true});
           const read=(_now,meta)=>{
+            if(seen.has(meta.presentedFrames))return;
+            seen.add(meta.presentedFrames);
             ctx.drawImage(video,0,0,320,96);
             const number=Array.from({length:8},(_,bit)=>
               ctx.getImageData(bit*40+20,48,1,1).data[0]>128 ? 1<<bit : 0).reduce((a,b)=>a+b,0);
-            frames.push({time:meta.mediaTime,number});handle=video.requestVideoFrameCallback(read);
+            frames.push({time:meta.mediaTime,number,current:video.currentTime,wall:performance.now(),seeking:video.seeking});
           };
-          handle=video.requestVideoFrameCallback(read);
+          // Read before the application callback can seek away from this picture.
+          window.loopObserver=read;
           window.allowLoopPlayback=true;video.playbackRate=.25;
           await video.play();await new Promise(resolve=>setTimeout(resolve,2100));video.pause();
-          video.cancelVideoFrameCallback(handle);return frames;
+          window.loopObserver=null;return frames;
         })()""")
         (tmp_path / "loop-pictures.json").write_text(json.dumps(loop_frames))
+        (tmp_path / "loop-events.json").write_text(json.dumps(page.evaluate("window.loopEvents")))
         assert sum(frame["number"] == 3 for frame in loop_frames) >= 2, loop_frames
         assert all(frame["number"] in (3,4) for frame in loop_frames), loop_frames
         page.click('.input-zoom-controls button:text-is("Zoom to loop")')
@@ -80,18 +102,18 @@ def test_latest_drawer_review_controls_and_reopening(tmp_path):
         page.wait_for('.input-template-offset:text-is("-1f")')
         # Controls sit below the whole picture, including its bottom HUD.
         assert page.evaluate("""(() => {
-          const video=document.querySelector('.latest-review-surface video').getBoundingClientRect();
-          const controls=document.querySelector('.latest-review-surface .replay-controls').getBoundingClientRect();
+          const video=document.querySelector('.attempt-drawer video').getBoundingClientRect();
+          const controls=document.querySelector('.attempt-drawer .replay-controls').getBoundingClientRect();
           return controls.top >= video.bottom;
         })()""")
         for width,height in [(1500,1100),(850,900),(850,540)]:
             page.set_viewport(width,height)
             (tmp_path/f"review-{width}-{height}.png").write_bytes(page.screenshot())
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-            assert page.evaluate("""Array.from(document.querySelectorAll('.latest-review-surface button'))
+            assert page.evaluate("""Array.from(document.querySelectorAll('.attempt-drawer button'))
               .every(button => {const r=button.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth;})""")
-        page.click('.modal-close')
-        page.click('.review-latest-button')
+        page.click('.attempt-actions .icon-button')
+        page.evaluate(STORY.setup)
         page.wait_for('.input-template-offset:text-is("-1f")')
         page.wait_for('.replay-loop-row button[aria-pressed="true"]:text-is("Loop")')
         assert page.problems() == []

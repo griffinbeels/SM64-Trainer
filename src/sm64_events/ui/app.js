@@ -17,7 +17,6 @@ import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
 import { RunnerPage } from "./components/runnerpage.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
-import { ReviewLatest } from "./components/reviewlatest.js";
 
 const html = htm.bind(h);
 
@@ -263,7 +262,6 @@ function App() {
     <main class="app-main">
       <${Header} t=${t} settingsOpen=${settingsOpen}
         closeSettings=${() => setSettingsOpen(false)} setTab=${setTab} />
-      <${ReviewLatest} t=${t} openCompare=${openCompare} />
       <div class="workspace ${tab === "Practice" ? "practice-workspace" : ""}">
         ${/* Compare stays mounted across tab switches so loaded media and sync
              survive leaving and returning. */""}

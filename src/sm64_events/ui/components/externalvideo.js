@@ -9,6 +9,7 @@ import { publicRecordingUrl } from "./recordinglink.js";
 import { ReplayTransport } from "./replaytransport.js";
 import { jumpToStart } from "../frame.js";
 import { watchReplayKeys } from "../replaykeys.js";
+import { stopShuttle } from "../replayshuttle.js";
 import { presentedVideoTime } from "../videopicture.js";
 
 const html = htm.bind(h);
@@ -87,6 +88,7 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
   function step(direction) {
     const video = videoRef.current;
     if (!video || !canStep) return;
+    stopShuttle(video);
     video.pause();
     const presented = presentedVideoTime(video);
     if (presented === null) return;
@@ -98,6 +100,7 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
   }
   function toStart() {
     const video = videoRef.current;
+    stopShuttle(video);
     jumpToStart(video, Math.min(startS ?? media.start_s ?? 0, video?.duration || Infinity));
   }
   function togglePlay() {
@@ -108,8 +111,8 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
   }
   useEffect(() => {
     if (!mediaVideo) return undefined;
-    return watchReplayKeys(mediaVideo.closest(".replay-player"), {
-      step, toStart, toggle: togglePlay,
+    return watchReplayKeys(mediaVideo.closest(".attempt-drawer") || mediaVideo.closest(".replay-player"), {
+      step, toStart, toggle: togglePlay, video: mediaVideo,
       onPress: () => mediaVideo.paused ? null : () => mediaVideo.play().catch(() => {}),
     });
   }, [mediaVideo, stepS, startS]);
@@ -119,7 +122,7 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
     link.click();
   }
   return html`<div class="replay-player external-video-local">
-    <video class="library-example-thumb" src=${media.clip_url} title=${label}
+    <video class="library-example-thumb" src=${media.clip_url} title=${label} tabindex="0" onclick=${togglePlay}
       preload="metadata" ref=${attach}
       onerror=${onError} onplay=${() => setPlaying(true)} onpause=${() => setPlaying(false)}
       onloadedmetadata=${() => {
@@ -135,7 +138,7 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
       onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
       reviewReady=${reviewState !== null}
       onToggle=${togglePlay} canStep=${canStep} frameKind="encoded video"
-      note=${canStep ? "Video frames · ← → to step" : "Frame timing unavailable"} />
+      note=${canStep ? "← → Step · J Reverse · K Pause · L Forward" : "J Reverse · K Pause · L Forward · Frame timing unavailable"} />
     ${replayActions && html`<div class="replay-actions">
       <button onclick=${saveReplay} title="Save a copy of this recording">
         <${Icon} name="save" size=${15} /> Save replay</button>

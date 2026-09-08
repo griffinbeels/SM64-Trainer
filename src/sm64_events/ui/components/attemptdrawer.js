@@ -17,6 +17,7 @@ import { ReplayPlayer } from "./replay.js";
 import { InputTimeline } from "./inputtimeline.js";
 import { clipClock as buildClipClock } from "../frame.js";
 import { useReviewState } from "../reviewstate.js";
+import { ReviewSplit } from "../reviewsplit.js";
 
 const html = htm.bind(h);
 
@@ -59,7 +60,7 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
           }
           setReplaySettled(true);
         }} />
-    ${!imported && html`<div class="attempt-drawer-inputs">
+    ${!imported && html`<${ReviewSplit} /><div class="attempt-drawer-inputs">
       ${replaySettled
         ? html`<${InputTimeline} attemptId=${attemptId} video=${video}
               anchorOffsetS=${anchorOffsetS}

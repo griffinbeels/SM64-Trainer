@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
 import { watchReplayKeys } from "../../src/sm64_events/ui/replaykeys.js";
+import { stopShuttle } from "../../src/sm64_events/ui/replayshuttle.js";
 
 const stops = [];
 afterEach(() => {
@@ -66,4 +67,38 @@ test("unmount stops the hold and returns shortcuts to the remaining player", () 
   expect(second.step).toHaveBeenCalledTimes(1);
   key("keydown"); key("keyup");
   expect(first.step).toHaveBeenCalledTimes(1);
+});
+
+test("JKL shuttles only the active video, contains repeats and leaves fields alone", () => {
+  vi.useFakeTimers();
+  const root = document.createElement("div"), video = document.createElement("video");
+  const input = document.createElement("input");
+  root.append(video, input); document.body.append(root);
+  Object.defineProperty(video, "duration", { value: 20 });
+  video.currentTime = 10;
+  video.play = vi.fn().mockResolvedValue(); video.pause = vi.fn();
+  stops.push(watchReplayKeys(root, { video, step: vi.fn(), toStart: vi.fn() }));
+  key("keydown", video, { key: "l" });
+  key("keydown", video, { key: "l" });
+  expect(video.playbackRate).toBe(2);
+  key("keydown", input, { key: "k" });
+  expect(video.pause).not.toHaveBeenCalled();
+  key("keydown", video, { key: "k" });
+  expect(video.pause).toHaveBeenCalledTimes(1);
+  expect(video.playbackRate).toBe(1);
+  key("keydown", video, { key: "j" });
+  vi.advanceTimersByTime(200);
+  expect(video.currentTime).toBeLessThan(10);
+  const repeated = new KeyboardEvent("keydown", { key: "ArrowRight", repeat: true, bubbles: true, cancelable: true });
+  video.dispatchEvent(repeated);
+  expect(repeated.defaultPrevented).toBe(true);
+  stopShuttle(video); // Explicit stepping/scrubbing owns the next picture.
+  const stopped = video.currentTime;
+  vi.advanceTimersByTime(500);
+  expect(video.currentTime).toBe(stopped);
+  const other = document.createElement("button"); document.body.append(other);
+  other.focus();
+  const plays = video.play.mock.calls.length;
+  key("keydown", other, { key: "l" });
+  expect(video.play).toHaveBeenCalledTimes(plays);
 });

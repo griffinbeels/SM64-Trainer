@@ -7,6 +7,7 @@ import { clipClock, stepGameFrame, jumpToStart, attemptStartTime } from "../fram
 import { watchVideoPicture } from "../videopicture.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { watchReplayKeys } from "../replaykeys.js";
+import { stopShuttle } from "../replayshuttle.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -49,6 +50,7 @@ function useReplayStepping(videoEl, state) {
   // heartbeat copies and preserving the clip's actual timestamp intervals.
   // Only legacy clips without a picture clock use 30 Hz time stepping.
   function step(dir) {
+    stopShuttle(videoEl.current);
     stepGameFrame(videoEl.current, dir, state.game_fps || 30,
                   state.frame_map || null, clipClock(state));
   }
@@ -65,6 +67,7 @@ function useReplayStepping(videoEl, state) {
     });
   }
   function toStart() {
+    stopShuttle(videoEl.current);
     jumpToStart(videoEl.current, attemptStartTime(state));
   }
   // Arrow keys use the same hold schedule as the buttons. The coordinator
@@ -73,7 +76,7 @@ function useReplayStepping(videoEl, state) {
     const video = videoEl.current;
     if (!video) return undefined;
     return watchReplayKeys(video.closest(".attempt-drawer") || video.closest(".replay-player"), {
-      step, toStart,
+      step, toStart, video,
       toggle: () => video.paused ? video.play().catch(() => {}) : video.pause(),
       onPress: () => video.paused ? null : () => { video.play().catch(() => {}); },
     });
@@ -193,7 +196,8 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
         <${Icon} name="save" size=${14} /> Playing saved replay
       </span>`}
     </div>
-    <video preload="auto" src=${state.clip_url} aria-label="Attempt recording"
+    <video preload="auto" src=${state.clip_url} aria-label="Attempt recording" tabindex="0"
+           onclick=${togglePlay}
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}
            ref=${attachVideoEl}></video>
@@ -204,7 +208,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
       onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
       startTitle="Jump to the attempt start (↓)"
       stepHandlers=${stepHold}
-      onToggle=${togglePlay} note="Captured pictures · ← → to step" />
+      onToggle=${togglePlay} note="← → Step · J Reverse · K Pause · L Forward" />
     <div class="replay-actions">
       <button onclick=${saveReplay} disabled=${savedPath !== null || saving}>
         <${Icon} name=${savedPath ? "check" : "save"} size=${15} />

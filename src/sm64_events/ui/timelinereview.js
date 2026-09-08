@@ -102,13 +102,6 @@ export function TimelineReviewControls({ templateKey, hasTemplate, offset,
           title=${loopWindow ? "Show the loop's inputs" : "Set A and B on mapped pictures to zoom to a loop"}
           onclick=${() => onChange({ zoom: loopWindow })}>Zoom to loop</button>
       <span class="input-zoom-range">Frames ${view.start - lead}–${view.end - lead - 1}</span>
-      ${view.end - view.start < total && html`<input type="range" min="0"
-          max=${total - (view.end - view.start)} step="1" value=${view.start}
-          aria-label="Visible timeline start" disabled=${loading}
-          oninput=${(event) => {
-            const start = Number(event.target.value);
-            onChange({ zoom: { start, end: start + view.end - view.start } });
-          }} />`}
     </div>
   </div>`;
 }
