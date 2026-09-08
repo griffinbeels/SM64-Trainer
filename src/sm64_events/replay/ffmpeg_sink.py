@@ -243,26 +243,6 @@ def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
         size_bytes=size, dims=dims, media_run=media_run)
 
 
-def fill_plane(plane, frame: np.ndarray) -> None:
-    """Copy a (H, W, 4) BGRA picture into an AVFrame plane. FFmpeg pads each
-    row of a plane to a 32-byte line size, so a width that is not a
-    multiple of 8 has a plane larger than the picture (1190 px: 4760 bytes
-    of pixels, a 4768-byte line) and `update` refuses the raw bytes -- which
-    made the sink respawn ffmpeg on EVERY picture while Project64's window
-    was 1190 wide during its start-up (2026-09-05: "got 2360960 bytes; need
-    2364928 bytes"), i.e. record nothing at that size. Such a picture is
-    laid out row by row into a buffer of the plane's own shape first."""
-    height, width = frame.shape[:2]
-    row_bytes = width * 4
-    line = plane.line_size
-    if line == row_bytes:
-        plane.update(frame if frame.flags["C_CONTIGUOUS"] else np.ascontiguousarray(frame))
-        return
-    rows = np.zeros((height, line), dtype=np.uint8)
-    rows[:, :row_bytes] = frame.reshape(height, row_bytes)
-    plane.update(rows)
-
-
 class _WriteAll:
     """The child's stdin for the NUT muxer: a raw pipe's write() may take
     fewer bytes than offered under backpressure, and libavformat's custom
@@ -310,7 +290,6 @@ class FfmpegAvSink:
         self._mux = None            # the NUT container over stdin (picture feed)
         self._mux_stream = None
         self._mux_audio = None
-        self._mux_frame = None      # one reusable AVFrame; planes updated in place
         self._mux_lock = threading.Lock()   # the feeder and the audio thread share it
         # The picture feed's stamps are seconds since THIS run's epoch (the
         # first picture): small numbers that never wrap MPEG-TS's 33-bit clock, on
@@ -819,13 +798,11 @@ class FfmpegAvSink:
         audio.time_base = PICTURE_TIME_BASE
         audio.codec_context.time_base = PICTURE_TIME_BASE
         self._mux_audio = audio
-        self._mux_frame = av.VideoFrame(w, h, "bgra")
-        self._mux_frame.time_base = MEDIA_TIME_BASE
 
     def _close_mux(self) -> None:
         with self._mux_lock:
             mux, self._mux = self._mux, None
-            self._mux_stream = self._mux_audio = self._mux_frame = None
+            self._mux_stream = self._mux_audio = None
             if mux is None:
                 return
             try:
@@ -835,15 +812,18 @@ class FfmpegAvSink:
 
     @measured("replay.mux_picture")
     def _mux_picture(self, frame: np.ndarray, stamp: float) -> int:
-        """One picture into the NUT stream at wall time `stamp`. The
-        reusable AVFrame's plane is updated in place (one copy) and the
-        rawvideo 'encode' is the second; the mux write blocks on the
-        pipe's backpressure exactly as the raw write did."""
+        """Wrap the owned BGRA bytes as rawvideo, preserving the media clock.
+
+        Rawvideo encoding only copied these bytes through a padded AVFrame
+        and a second packet buffer. Packet retains the source buffer through
+        muxing; submit() already supplies contiguous pixels whose lifetime
+        includes queued writes and heartbeats. NUT/pipe backpressure remains.
+        """
+        import av
+
         with self._mux_lock:
             if self._mux is None:
                 raise OSError("no NUT mux open")
-            picture = self._mux_frame
-            fill_plane(picture.planes[0], frame)
             # Allocate the actual transport tick here, before encoding. Two
             # catch-up pictures can quantize to the same tick; a delayed grab
             # can even predate a heartbeat already written. FFmpeg must not
@@ -851,9 +831,12 @@ class FfmpegAvSink:
             # order and file its assigned PTS alongside its capture identity.
             pts = max(self._media_run.ticks_at(stamp),
                       self._last_video_pts + 1 if self._last_video_pts is not None else 0)
-            picture.pts = pts
-            for packet in self._mux_stream.encode(picture):
-                self._mux.mux(packet)
+            packet = av.Packet(memoryview(frame))
+            packet.stream = self._mux_stream
+            packet.time_base = MEDIA_TIME_BASE
+            packet.pts = packet.dts = pts
+            packet.is_keyframe = True
+            self._mux.mux(packet)
             self._last_video_pts = pts
             return pts
 

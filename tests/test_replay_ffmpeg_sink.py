@@ -12,25 +12,6 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pytest
 
-from sm64_events.replay.ffmpeg_sink import fill_plane
-
-
-@pytest.mark.parametrize("width", [1190, 1192, 640, 1601])
-def test_fill_plane_lays_a_picture_into_a_padded_plane(width):
-    """FFmpeg pads a plane's rows to 32 bytes: 1190 px of BGRA is 4760 bytes
-    in a 4768-byte line, and a raw update refused it on every picture
-    (2026-09-05, Project64's start-up window). Every row must land at the
-    plane's own line size, whatever the width."""
-    av = pytest.importorskip("av")
-    import numpy as np
-    height = 3
-    picture = np.arange(height * width * 4, dtype=np.uint32).astype(np.uint8).reshape(height, width, 4)
-    frame = av.VideoFrame(width, height, "bgra")
-    plane = frame.planes[0]
-    fill_plane(plane, picture)
-    laid = np.frombuffer(bytes(plane), dtype=np.uint8).reshape(height, plane.line_size)
-    assert np.array_equal(laid[:, :width * 4], picture.reshape(height, width * 4))
-
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.ffmpeg_sink import FfmpegAvSink, parse_segment_csv

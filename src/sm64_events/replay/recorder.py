@@ -4,10 +4,10 @@ surface.
 
 Two video paths:
 - ffmpeg sink (PRIMARY when ffmpeg.exe is on PATH — main.py probes):
-  _on_frame becomes a lock-free reference swap into the sink; pacing,
-  encode and segmentation run in a child process (ffmpeg_sink.py
-  docstring carries why in-process encoding was structurally glitchy:
-  GIL co-tenancy).
+  _on_frame applies queue/ledger selection, prepares accepted plugin pixels,
+  and submits owned BGRA. The sink muxes explicit timestamps into NUT;
+  the child handles compression and segmentation. Legacy CFR remains an
+  explicit configuration fallback, not the plugin picture feed.
 - in-process fallback: the CFR-conform path below feeds SegmentWriter.
 
 Threading: capture callbacks arrive on library threads (the video
@@ -51,6 +51,7 @@ from sm64_events.replay.clock import CaptureClock, qpc_100ns
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.encoder import SegmentWriter, pick_video_codec
 from sm64_events.replay.ledger import PictureLedger
+from sm64_events.replay.pixels import BgrPicture, as_bgra
 from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.window import WindowInfo
 
@@ -624,22 +625,26 @@ class ReplayRecorder:
         desktop camera, before the layer publishes) is recorded by TIME
         only: it names no frame, so the clip gets no map and the timeline
         says frame-exact capture is off rather than showing a guess."""
+        preparation = {"prepare": bgra.as_bgra} if isinstance(bgra, BgrPicture) else {}
         if stamp is not None and tag is not None:
-            return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras())
+            return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras(), **preparation)
         if capture_ts is not None:
-            return self.ledger.observe(bgra, capture_ts, None)
+            return self.ledger.observe(bgra, capture_ts, None, **preparation)
         return False
 
     @measured("replay.on_frame", interval=True)
-    def _on_frame(self, bgra: np.ndarray, ts_100ns: int, stamp=None) -> None:
+    def _on_frame(self, bgra: np.ndarray | BgrPicture, ts_100ns: int, stamp=None) -> None:
         # NO idle gate here: frames keep flowing so the sink's timeline and
         # `_latest` stay fresh; idle discard happens per completed segment
         # in _on_segment.
-        # ffmpeg-sink path: a lock-free reference swap, nothing else — the
-        # sink's feeder paces CFR and the child process encodes. The entire
-        # in-process CFR/dedup/encode machinery below is bypassed.
+        # The sink owns queued VFR delivery or the configured legacy CFR
+        # feeder. The in-process writer below is bypassed when it is present.
         sink = self._video_sink
         if sink is not None:
+            if not self._picture_feed:
+                # CFR submits every grab. Prepare before observing, including
+                # a folded grab, so allocation failure cannot alter its ledger.
+                bgra = as_bgra(bgra)
             # Tag the picture AT CAPTURE (round 32 items 17 + 30): the RAM
             # frame current right now (map v2's key) and this picture's own
             # composition time -- WGC's SystemRelativeTime through the run's
@@ -674,10 +679,10 @@ class ReplayRecorder:
                 # changed nothing feeds nothing. The tag's second field is
                 # the row's own ts, which the feed log keys on.
                 if new_picture:
-                    sink.submit(bgra, tag if tag is not None
+                    sink.submit(as_bgra(bgra), tag if tag is not None
                                 else (None, capture_ts))
                 return
-            sink.submit(bgra, tag)
+            sink.submit(as_bgra(bgra), tag)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
         # a single callback thread, so they need no lock — if that ever changes,
@@ -692,6 +697,9 @@ class ReplayRecorder:
         # Drop backwards/duplicate (encoder will also guard, but be explicit)
         if target <= self._last_index:
             return
+
+        # Legacy writer also receives owned BGRA, prepared before any fills.
+        bgra = as_bgra(bgra)
 
         # Fill small delivery gaps (WGC sends frames only on change) by
         # re-encoding the last frame; beyond one segment's worth, stop

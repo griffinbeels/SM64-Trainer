@@ -1,5 +1,5 @@
 """The plugin video source: a slot's stamp bytes decode through the
-sampler's own decoder, the picture arrives top-down BGRA in WGC's timebase,
+sampler's own decoder, owned pixels prepare top-down BGRA in WGC's timebase,
 and the recorder files the stamp's frame without asking the frame clock."""
 import os
 import threading
@@ -14,6 +14,7 @@ from sm64_events.memory.buffer import BufferMemory
 from sm64_events.memory.layout import layout_for
 from sm64_events.replay import framestream as F
 from sm64_events.replay import pluginsource as P
+from sm64_events.replay.pixels import BgrPicture, to_bgra_top_down
 
 
 @pytest.fixture
@@ -67,7 +68,7 @@ def test_capture_conversion_keeps_every_channel_row_and_owns_its_pixels(width):
     source = np.random.default_rng(82).integers(0, 256, (9, width + 3, 3), dtype=np.uint8)
     cropped = source[:, :width]  # padded rows, including non-aligned widths
     expected = np.concatenate((cropped[::-1], np.full((9, width, 1), 255, dtype=np.uint8)), axis=2)
-    actual = P.to_bgra_top_down(cropped)
+    actual = to_bgra_top_down(cropped)
     source.fill(0)  # a later producer write cannot change a retained heartbeat
     assert actual.flags.c_contiguous
     np.testing.assert_array_equal(actual, expected)
@@ -96,7 +97,7 @@ def test_decode_stamp_is_none_without_the_counter(layout):
     assert P.decode_stamp(slot, P.table_for(layout), layout) is None
 
 
-def test_the_source_delivers_top_down_bgra_and_the_stamp(layout, stream):
+def test_the_source_delivers_owned_pixels_and_the_stamp(layout, stream):
     table = P.table_for(layout)
     memory = rdram_with(layout, frame=4242)
     picture = np.zeros((3, 4, 3), dtype=np.uint8)
@@ -112,14 +113,20 @@ def test_the_source_delivers_top_down_bgra_and_the_stamp(layout, stream):
         time.sleep(0.01)
     source.stop()
     assert len(got) == 1
-    bgra, ts_100ns, stamp = got[0]
+    captured, ts_100ns, stamp = got[0]
+    assert isinstance(captured, BgrPicture)
+    assert source.status()["delivered"] == 1
+    # Overwrite the ring and close its mapping before preparing the picture.
+    for _ in range(F.SLOT_COUNT):
+        stream.publish(np.zeros_like(picture), raw_table(memory, table))
+    assert stream.header().want_frames == 0
+    stream.close()
+    bgra = captured.as_bgra()
     assert bgra.shape == (3, 4, 4) and bgra.dtype == np.uint8
     assert tuple(bgra[2, 0]) == (255, 0, 0, 255)     # the last row now: top-down
     assert tuple(bgra[0, 0]) == (0, 0, 0, 255)
     assert ts_100ns == 200 * 10_000_000 // P.QPC_FREQUENCY
     assert stamp.frame == 4242 and stamp.pad.stick_x == 12
-    assert stream.header().want_frames == 0                # released at stop
-    assert source.status()["delivered"] == 1
 
 
 def test_pictures_flow_answers_true_on_the_first_picture(layout, stream):

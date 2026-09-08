@@ -7,6 +7,7 @@ paths:
   - "src/sm64_events/replay/recorder.py"
   - "plugin/gfxwrap/gfxwrap.c"
   - "src/sm64_events/replay/pluginsource.py"
+  - "src/sm64_events/replay/pixels.py"
   - "src/sm64_events/replay/framestream.py"
   - "src/sm64_events/replay/oracleread.py"
   - "src/sm64_events/replay/ledger.py"
@@ -298,6 +299,16 @@ paused picture":
   by replacing "ffmpeg" in the WHOLE path, which renamed the install folder too
   — a fallback that returns the old assumption is indistinguishable from the fix
   working on a clip that never needed it.
+
+## Pixel preparation at hop 4
+
+`replay/pixels.py` retains the sequence-checked owned BGR slot copy. The ledger
+samples the same top-down BGRA pixels before full conversion, including alpha
+and odd edges. Preparation of an accepted picture occurs before ledger state or
+archive mutation. The sink wraps contiguous BGRA as a raw NUT packet without
+the former padded-frame/rawvideo-encode copies; source PTS, audio and feed
+identity are unchanged. See [the operation audit](../../docs/replay-pipeline-cost.md)
+for active/fallback paths and the parity witnesses.
 
 ## Browser boundary regression — 2026-09-06
 

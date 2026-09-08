@@ -24,8 +24,6 @@ import logging
 import threading
 from dataclasses import dataclass
 
-import numpy as np
-
 from sm64_events.core.profiling import measured, profile
 from sm64_events.inputs.frame import MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE, InputFrame, decode
 from sm64_events.memory import addresses as A
@@ -33,6 +31,7 @@ from sm64_events.memory.addresses import KSEG0_BASE
 from sm64_events.memory.base import RdramReader
 from sm64_events.replay import framestream as F
 from sm64_events.replay.clock import _FREQ as QPC_FREQUENCY
+from sm64_events.replay.pixels import BgrPicture
 
 log = logging.getLogger("sm64.replay")
 
@@ -195,20 +194,6 @@ def decode_stamp(slot: F.Slot, table: list, layout) -> FrameStamp | None:
                       lists_since=slot.lists_since)
 
 
-@measured("capture.bgr_to_bgra")
-def to_bgra_top_down(pixels_bgr_bottom_up: np.ndarray) -> np.ndarray:
-    """The (H, W, 4) top-down array the sink expects, from a slot's rows."""
-    height, width = pixels_bgr_bottom_up.shape[:2]
-    out = np.empty((height, width, 4), dtype=np.uint8)
-    # A three-byte inner slice takes NumPy's tiny-copy path for every pixel.
-    # Channel strides use its native bulk-copy loop instead. Keep a new owned
-    # array: the recorder may retain a picture for a later heartbeat.
-    for channel in range(3):
-        out[:, :, channel] = pixels_bgr_bottom_up[::-1, :, channel]
-    out[:, :, 3] = 255
-    return out
-
-
 class DesktopUntilLayerPresents:
     """The camera the recorder gets while the capture layer is installed but
     not presenting: the desktop grab, with a watch on the frame stream.
@@ -319,7 +304,7 @@ class DesktopUntilLayerPresents:
 class PluginVideoSource:
     """The recorder's `VideoSource` over the frame stream.
 
-    `on_frame(bgra, ts_100ns, stamp)`: the picture top-down BGRA, its present
+    `on_frame(pixels, ts_100ns, stamp)`: an owned BgrPicture, its present
     time in WGC's timebase (QPC in 100 ns -- the same clock the DWM source
     stamps with, so the CaptureClock needs no second anchor), and the
     decoded `FrameStamp`. Frames are asked for while the recorder is not
@@ -425,7 +410,7 @@ class PluginVideoSource:
                     continue
                 ts_100ns = slot.present_qpc * 10_000_000 // QPC_FREQUENCY
                 try:
-                    on_frame(to_bgra_top_down(slot.pixels), ts_100ns, stamp)
+                    on_frame(BgrPicture(slot.pixels), ts_100ns, stamp)
                     self._delivered += 1
                 except Exception:
                     log.exception("plugin frame callback failed; frame dropped")

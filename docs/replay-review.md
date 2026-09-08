@@ -80,7 +80,14 @@ tail. It has no during-attempt final-MP4 preparation worker or progressive tail.
 
 ## Resource cost
 
-Capture's bottom-up BGR to top-down BGRA conversion copies each channel in bulk
+The [capture operation audit](replay-pipeline-cost.md) identifies which desktop-era
+paths are inactive, which copies were removed, and which GPU/CPU transfers remain.
+Accepted plugin pictures now prepare BGRA once; rejected pictures skip the full
+conversion. The NUT feed wraps those bytes directly instead of copying through a
+padded video frame and rawvideo encoder. Exact pixel/timestamp/audio regressions
+and isolated before/after measurements are recorded in that audit.
+
+The preceding optimization made bottom-up BGR to top-down BGRA conversion copy each channel in bulk
 into a fresh owned buffer. This preserves row orientation, padding, alpha and
 retained heartbeat pictures. Eight decoded pictures from the saved Whomp's
 Fortress 100 Coins 1'29"96 example (1600×1200) were compared in six alternating
