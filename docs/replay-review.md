@@ -8,12 +8,21 @@ pause. Native recordings and downloaded videos share the playback controls.
   seeks because browser video does not reliably support negative playback rate.
 - Left/Right step captured pictures where timing is available. Clicking a step,
   Start, or a position stops the shuttle so it cannot overwrite that selection.
+- Drag across the input lanes to set and enable a loop, including both selected
+  endpoint frames. A click still seeks. Unmapped or ambiguous video boundaries
+  decline the selection instead of guessing.
+- I sets In, O sets Out and X clears both markers. Completing both endpoints
+  enables the loop. Play starts at In when outside the loop and continues from
+  the current position when inside. Shift+I jumps to In without pausing playback.
+- Hold K and tap J/L to step one picture backward/forward.
 - Wheel over the input lanes to zoom around the pointer. The full-width bar
   below them shows the visible portion of the complete timeline; drag its thumb
   to pan. When focused, Left/Right pan and Home/End reach the two ends.
 - Fullscreen includes the gameplay, controls and input timeline. Drag the
   horizontal divider, or focus it and press Up/Down, to adjust the split.
   The available range adapts to keep controls reachable in short windows.
+  The input inspector and template tools sit beside the playback controls,
+  above the lanes, and return below the lanes when leaving fullscreen.
 
 Playback shortcuts belong to the active review. Clicking or tabbing outside
 releases them; text fields retain their normal keys. Wheel gestures over the
@@ -24,7 +33,7 @@ inspector still follows delivered video pictures, with missing associations
 left unknown. Downloaded footage does not acquire game-frame identity merely
 by sharing a player.
 
-The A/B loop currently has a known boundary limitation: the browser can present
+Loop playback currently has a known boundary limitation: the browser can present
 an out-of-range picture before the timer seeks back to A. The independently
 decoded loop regression in `tests/test_ui_review_prototype.py` remains failing;
 manual picture stepping passes. Its observer reads pixels before application
@@ -34,14 +43,31 @@ Browser frame callbacks are [best effort](https://developer.mozilla.org/en-US/do
 
 ## Extraction
 
-Native H264 timestamp probing can read packet PTS instead of decoding pixels.
-The fast path requires the native encoder contract and verified stream/packet
-properties; unsupported or reordered media uses decoded-frame probing. This
-does not change encoding, audio, cut boundaries or source-PTS association.
-Regression coverage lives in `tests/test_replay_packet_probe.py`, alongside the
-real encoder picture-identity and held-picture tests. Use the
+Native H264 footage now copies its already-encoded video and audio into MP4.
+The preceding keyframe stays in the file as decoder pre-roll, hidden by a
+90 kHz edit list, so the visible cut begins on the same picture without another
+video encode. Picture PTS, held intervals and source associations remain intact.
+Only explicitly discarded negative-time packets are excluded from this native
+output's visible picture index. Unsupported or reordered sources retain the
+existing transcode/decoded-frame fallback.
+
+The retained 30.198836-second Cavern attempt (#85, 880 pictures) measured
+3.240 seconds before and 0.455 seconds after in an offline closed-footage
+counterfactual. The entire source-PTS vector and visible timestamp vector matched
+the original. The original segment CSV was removed at shutdown; the probe
+reconstructed adjacent final holds and required this exact vector match. This
+measurement excludes the live tail wait, HTTP and browser startup. It is not an
+instant-completion claim. The original click-time stage measurements are absent.
+
+Regression coverage includes `tests/test_replay_packet_probe.py`, pixel-for-pixel
+native cuts in `tests/test_replay_picture_identity.py`, held-picture and audio
+flash/click checks, and `tests/test_ui_replay_copy.py` for browser pre-roll handling.
+The packet-copy mechanism is described in the
+[FFmpeg streamcopy documentation](https://ffmpeg.org/ffmpeg.html#Streamcopy).
+Use the
 [profiling guide](profiling.md) to measure complete extraction and review latency;
-a faster timestamp probe alone does not establish immediate replay readiness.
+the current service still waits for closed segments covering the post-attempt
+tail. It has no during-attempt final-MP4 preparation worker or progressive tail.
 
 The J/K/L convention follows the [DaVinci Resolve editor guide](https://documents.blackmagicdesign.com/UserManuals/DaVinci-Resolve-20-Editors-Guide.pdf).
 Browser reverse playback limitations are described in

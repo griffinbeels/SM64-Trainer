@@ -57,16 +57,16 @@ def test_drawer_review_controls_and_reopening(tmp_path):
         })()""".replace("REPLAY",json.dumps(replay)).replace("INPUTS",json.dumps(inputs)))
         page.evaluate(STORY.setup)
         page.wait_for(".attempt-drawer .input-inspector")
-        page.wait_for('.replay-loop-row button:text-is("Set A"):not([disabled])')
+        page.wait_for('.replay-loop-row button:text-is("Set In"):not([disabled])')
         page.click('.replay-transport button:text-is("Start")')
         page.wait_for('.input-inspector-frame .is-stamped:text-is(\'00"10\')')
         assert page.evaluate("document.querySelector('.attempt-drawer video').controls") is False
-        page.click('.replay-loop-row button:text-is("Set A")')
+        page.click('.replay-loop-row button:text-is("Set In")')
         page.click('.replay-transport button:text-is("Forward 1")')
         page.wait_for('.input-inspector-frame .is-stamped:text-is(\'00"16\')')
-        page.click('.replay-loop-row button:text-is("Set B")')
+        page.click('.replay-loop-row button:text-is("Set Out")')
         page.wait_for('.replay-loop-row button:text-is("Loop"):not([disabled])')
-        page.click('.replay-loop-row button:text-is("Loop")')
+        # Completing In/Out enables looping automatically.
         page.wait_for('.replay-loop-row button[aria-pressed="true"]:text-is("Loop")')
         (tmp_path / "loop-bounds.json").write_text(json.dumps(page.evaluate(
             "Array.from(document.querySelectorAll('.replay-loop-row .replay-media-time'), e=>e.textContent)")))

@@ -3,7 +3,8 @@ import base64
 import pytest
 
 from playwright.sync_api import sync_playwright
-from test_ui_replay_picture_steps import PROJECT, STORY, tiny_video
+from test_ui_replay_picture_steps import PROJECT, STORY
+from test_ui_review_selection import selection_media
 
 
 def check_playback(page, video):
@@ -84,7 +85,8 @@ def configure_media(page, replay, downloaded, clip):
 @pytest.mark.parametrize("downloaded", [False, True])
 def test_review_gestures_fullscreen_and_volume(tmp_path, downloaded):
     clip = tmp_path / "controls.mp4"
-    times, identities = tiny_video(clip)
+    media = selection_media(clip)
+    times, identities = media["frame_times"], media["picture_ids"]
     replay = {"clip_url": "data:video/mp4;base64," + base64.b64encode(clip.read_bytes()).decode(),
               "frame_times": [round(t, 6) for t in times], "picture_ids": identities, "frame_map": list(range(100, 108)),
               "frame_map_source": "plugin", "fps": 30, "game_fps": 30,

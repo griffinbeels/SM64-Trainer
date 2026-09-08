@@ -8,6 +8,7 @@ import { watchVideoPicture } from "../videopicture.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { watchReplayKeys } from "../replaykeys.js";
 import { stopShuttle } from "../replayshuttle.js";
+import { playReview } from "../reviewcommands.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -77,7 +78,7 @@ function useReplayStepping(videoEl, state) {
     if (!video) return undefined;
     return watchReplayKeys(video.closest(".attempt-drawer") || video.closest(".replay-player"), {
       step, toStart, video,
-      toggle: () => video.paused ? video.play().catch(() => {}) : video.pause(),
+      toggle: () => video.paused ? playReview(video) : video.pause(),
       onPress: () => video.paused ? null : () => { video.play().catch(() => {}); },
     });
   }, [state]);
@@ -167,7 +168,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
   function togglePlay() {
     const v = videoEl.current;
     if (!v) return;
-    if (v.paused) v.play().catch(() => {});
+    if (v.paused) playReview(v);
     else v.pause();
   }
 
@@ -208,7 +209,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
       onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
       startTitle="Jump to the attempt start (↓)"
       stepHandlers=${stepHold}
-      onToggle=${togglePlay} note="← → Step · J Reverse · K Pause · L Forward" />
+      onToggle=${togglePlay} note="← → Step · J K L Playback · I O Loop · X Clear · Shift+I Loop start" />
     <div class="replay-actions">
       <button onclick=${saveReplay} disabled=${savedPath !== null || saving}>
         <${Icon} name=${savedPath ? "check" : "save"} size=${15} />

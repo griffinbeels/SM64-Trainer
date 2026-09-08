@@ -10,6 +10,7 @@ import { ReplayTransport } from "./replaytransport.js";
 import { jumpToStart } from "../frame.js";
 import { watchReplayKeys } from "../replaykeys.js";
 import { stopShuttle } from "../replayshuttle.js";
+import { playReview } from "../reviewcommands.js";
 import { presentedVideoTime } from "../videopicture.js";
 
 const html = htm.bind(h);
@@ -83,8 +84,11 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
     videoRef.current = element; setMediaVideo(element);
     if (element) attachSharedVolume(element);
   }, []);
-  const stepS = Number(media.frame_step_s);
-  const canStep = Number.isFinite(stepS) && stepS > 0;
+  const measuredStep = Number(media.frame_step_s);
+  // Keep missing timing stable across renders: NaN in effect dependencies
+  // re-registers the shortcuts and stops an active shuttle on each play event.
+  const stepS = Number.isFinite(measuredStep) && measuredStep > 0 ? measuredStep : null;
+  const canStep = stepS !== null;
   function step(direction) {
     const video = videoRef.current;
     if (!video || !canStep) return;
@@ -106,7 +110,7 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) video.play().catch(() => {});
+    if (video.paused) playReview(video);
     else video.pause();
   }
   useEffect(() => {
@@ -138,7 +142,7 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
       onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
       reviewReady=${reviewState !== null}
       onToggle=${togglePlay} canStep=${canStep} frameKind="encoded video"
-      note=${canStep ? "← → Step · J Reverse · K Pause · L Forward" : "J Reverse · K Pause · L Forward · Frame timing unavailable"} />
+      note=${canStep ? "← → Step · J K L Playback · I O Loop · X Clear · Shift+I Loop start" : "J Reverse · K Pause · L Forward · Frame timing unavailable"} />
     ${replayActions && html`<div class="replay-actions">
       <button onclick=${saveReplay} title="Save a copy of this recording">
         <${Icon} name="save" size=${15} /> Save replay</button>

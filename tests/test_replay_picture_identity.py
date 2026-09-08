@@ -91,6 +91,11 @@ def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, 
     coverage = ring.coverage("video")
     segments = ring.covering("video", *coverage)
     original = [row for segment in segments for row in read_pictures(segment.path)]
+    source_pixels = {}
+    for segment in segments:
+        with av.open(str(segment.path)) as container:
+            source_pixels.update({round(frame.pts * frame.time_base * 90000): frame.to_ndarray(format="yuv420p").tobytes()
+                                  for frame in container.decode(video=0)})
     # Calibrate the pixel reader against the independent source identities.
     assert [number for _, number in original] == list(range(120)) + [119] * (len(original) - 120)
     rows = ledger.rows_between(0, 1e12)
@@ -108,6 +113,9 @@ def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, 
         result = ClipExtractor(cfg=config, codec=codec, ffmpeg=ff).extract(
             ring, start, start + timedelta(seconds=1.0), tmp_path / f"cut-{phase}.mp4")
         decoded = read_pictures(result.path)
+        with av.open(str(result.path)) as container:
+            copied_pixels = [frame.to_ndarray(format="yuv420p").tobytes() for frame in container.decode(video=0)]
+        assert copied_pixels == [source_pixels[pts] for pts in result.source_pts], "native cuts must not re-encode pixels"
         mapped, _, stats = feed_map(result.source_pts, result.media_run.id,
                                     rows, feeds, lambda row: row["frame"])
         assert mapped is not None, stats

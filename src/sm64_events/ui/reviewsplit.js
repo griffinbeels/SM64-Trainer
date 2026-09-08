@@ -12,8 +12,10 @@ export function ReviewSplit() {
     const root = node.closest(".attempt-drawer"), height = root.clientHeight;
     const controls = root.querySelector(".replay-controls")?.offsetHeight || 0;
     const actions = root.querySelector(".replay-actions")?.offsetHeight || 0;
-    const min = Math.min(70, Math.ceil((controls + actions + 140) / height * 100));
-    const max = Math.max(min, Math.min(85, Math.floor((height - 160) / height * 100)));
+    const readout = root.querySelector(".review-readout.is-docked")?.offsetHeight || 0;
+    const tools = Math.max(controls + actions + 24, readout);
+    const max = Math.min(85, Math.floor((height - 180) / height * 100));
+    const min = Math.min(max, Math.ceil((tools + 100) / height * 100));
     const percent = Math.max(min, Math.min(max, next));
     root.style.setProperty("--review-video-share", `${percent}%`);
     current.current = percent;

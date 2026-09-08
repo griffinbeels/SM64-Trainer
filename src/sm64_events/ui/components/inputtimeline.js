@@ -29,6 +29,8 @@ import { SetupModal } from "./setupmodal.js";
 import { EMU } from "../platform.js";
 import { TimelineScroll } from "../timelinescroll.js";
 import { stopShuttle } from "../replayshuttle.js";
+import { pictureInterval } from "../reviewmedia.js";
+import { ReviewReadout } from "../reviewreadout.js";
 
 const html = htm.bind(h);
 
@@ -341,6 +343,21 @@ export function mappedLoopWindow(loop, frameMap, clock, stretches, total) {
   return { start, end: Math.min(total, last + 1) };
 }
 
+export function loopFromFrames(a, b, frameMap, clock, stretches, total) {
+  const first = Math.min(a, b), last = Math.max(a, b);
+  const startTime = mappedTimeAtFrame(first, frameMap, clock, stretches);
+  const endTime = mappedTimeAtFrame(last, frameMap, clock, stretches);
+  if (startTime == null || endTime == null || endTime < startTime
+      || mappedFrameAtTime(startTime, frameMap, clock, stretches, total) !== first
+      || mappedFrameAtTime(endTime, frameMap, clock, stretches, total) !== last) return null;
+  const start = pictureInterval(startTime, clock, null, clock.duration)?.start;
+  let slot = slotAtTime(endTime, clock);
+  while (slot + 1 < frameMap.length && mappedFrameAtTime(timeOfSlot(slot + 1, clock),
+    frameMap, clock, stretches, total) === last) slot += 1;
+  const end = pictureInterval(timeOfSlot(slot, clock), clock, null, clock.duration)?.end;
+  return Number.isFinite(start) && end > start ? { start, end, enabled: true } : null;
+}
+
 // THE CLIP'S OWN CHECK (`pad_stamp_agreement`), and it is SILENT WHEN IT
 // PASSES. The capture layer copies the pad out of RDRAM beside every picture
 // it stamps, so extraction can compare that against what the timeline holds
@@ -459,6 +476,9 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   // playhead measured against it could be dragged over the words "Stick"
   // and "Mario" (his report, 2026-08-22).
   const trackColumn = useRef(null);
+  const selection = useRef(null);
+  const [selectedRange, setSelectedRange] = useState(null);
+  const [selectionError, setSelectionError] = useState(null);
 
   // The server excludes heartbeat copies from these bounds: an old held
   // picture remains in the video without stretching the input axis through
@@ -604,13 +624,41 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       setFrame(clamped);
     }
   };
-  const seekFromPointer = (event) => {
+  const pointerFrame = (event) => {
     const box = trackColumn.current;
-    if (!box) return;
+    if (!box) return null;
     const rect = box.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const next = Math.round(view.start + ((event.clientX - rect.left) / rect.width) * (view.end - view.start));
-    seek(Math.max(view.start, Math.min(view.end - 1, next)));
+    if (rect.width <= 0) return null;
+    const next = Math.floor(view.start + ((event.clientX - rect.left) / rect.width) * (view.end - view.start));
+    return Math.max(view.start, Math.min(view.end - 1, next));
+  };
+  const beginSelection = (event) => {
+    if (event.button !== 0) return;
+    const first = pointerFrame(event);
+    if (first == null) return;
+    event.preventDefault(); event.stopPropagation();
+    event.currentTarget.focus({ preventScroll: true });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    selection.current = { pointer: event.pointerId, first, last: first, x: event.clientX, dragged: false };
+    setSelectionError(null);
+  };
+  const moveSelection = (event) => {
+    const drag = selection.current;
+    if (event.pointerId !== drag?.pointer) return;
+    drag.last = pointerFrame(event) ?? drag.last;
+    drag.dragged ||= Math.abs(event.clientX - drag.x) >= 4;
+    if (drag.dragged) setSelectedRange({ start: Math.min(drag.first, drag.last), end: Math.max(drag.first, drag.last) + 1 });
+  };
+  const finishSelection = (event) => {
+    const drag = selection.current;
+    if (event.pointerId !== drag?.pointer) return;
+    selection.current = null; setSelectedRange(null);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event.type !== "pointerup") return;
+    if (!drag.dragged) { seek(drag.first); return; }
+    const loop = video && loopFromFrames(drag.first, drag.last, frameMap, boundedClock, data.stretches, total);
+    if (loop && !reviewLoading) { stopShuttle(video); video.pause(); updateReview({ loop }); }
+    else setSelectionError("That selection has no unambiguous video boundaries. Set In and Out on the video instead.");
   };
 
   const updateReview = (patch) => {
@@ -716,10 +764,12 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     </div>`}
 
     <div class="input-lanes" tabindex="0"
-         onpointerdown=${seekFromPointer}
-         onpointermove=${(event) => { if (event.buttons & 1) seekFromPointer(event); }}
+         title="Click to seek; drag to select a loop"
+         onpointerdown=${beginSelection} onpointermove=${moveSelection}
+         onpointerup=${finishSelection} onpointercancel=${finishSelection} onlostpointercapture=${finishSelection}
          role="group" aria-label="Input lanes">
       <div class="input-track-column" ref=${trackColumn}>
+        ${selectedRange && html`<div class="input-selection-shade" style=${spanInWindow(selectedRange.start, selectedRange.end - selectedRange.start, view)}></div>`}
         ${spanInWindow(0, lead, view) && html`<div class="input-lead-shade"
             style=${spanInWindow(0, lead, view)}></div>`}
         ${loopWindow && spanInWindow(loopWindow.start, loopWindow.end - loopWindow.start, view) && html`
@@ -772,6 +822,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
 
     <${TimelineScroll} view=${view} total=${total} trackColumn=${trackColumn}
       loading=${reviewLoading} onChange=${updateReview} />
+    ${selectionError && html`<p class="replay-control-error" role="status">${selectionError}</p>`}
+    <${ReviewReadout}>
     <footer class="input-inspector">
       <div class="input-inspector-frame">
         <span class="eyebrow">Frame</span>
@@ -820,6 +872,7 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
       </div>
     </footer>
     ${typeof tools === "function" ? tools(data) : tools}
+    </${ReviewReadout}>
     ${setupOpen && html`<${SetupModal} onClose=${() => setSetupOpen(false)}
         initialPane=${EMU} />`}
   </div>`;

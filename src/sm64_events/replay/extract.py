@@ -3,22 +3,16 @@
 The ring holds combined audio+video MPEG-TS segments — the FfmpegAvSink
 encoded ONE continuous A/V stream on a single wall-clock and the segment muxer
 sliced it, so audio and video are already locked together inside every
-segment. Extraction is therefore a pure CUT, not a re-mux: concatenate the
-covering segments, accurate-seek to the span start, re-encode the video for
-dense keyframes (0.5 s GOP) + faststart so the browser can scrub, and
-stream-copy the already-synced audio. No PCM assembly, no per-frame interleave,
-no timestamp reconstruction — those (and the whole two-clock drift class they
-caused) are gone with the PCM-sidecar design.
+segment. Verified native H264 is copied into MP4 without another encode. The
+preceding keyframe remains as decoder pre-roll; a 90 kHz edit list hides its
+leading pictures and trims audio on the same clock. The visible first picture,
+VFR holds and source identities remain unchanged. Packet probing ignores only
+explicitly discarded negative-time pre-roll on this known output path.
 
-The re-encode exists ONLY to move the keyframes, so it runs at a constant-
-quality target (`config.py::video_quality_args`): a saved clip must never look
-softer than the ring segments it was cut from.
-
-Why re-encode video but copy audio: `-c copy` can only cut on keyframes (our
-2 s segment boundaries), so frame-accurate edges need a video re-encode; audio
-copies losslessly and the cut lands on the nearest AAC frame (<~21 ms, a fixed
-sub-frame offset, never drift). MPEG-TS is self-framing, so `concat:` across
-segment files needs no moov and preserves A/V sync across boundaries.
+Unknown/reordered sources retain accurate-seek video re-encoding (0.5 s GOP)
+and audio copying. Its constant-quality target lives in
+`config.py::video_quality_args`. Both paths publish atomically with faststart;
+neither reconstructs timestamps or assembles separate audio clocks.
 
 Coverage holes (idle-discarded footage) are honoured: the extractor uses only
 the maximal contiguous run of segments containing the span start and marks the
@@ -81,7 +75,8 @@ class ClipResult:
 @measured("replay.probe_frames")
 def frame_times_of(ffmpeg: str | None, clip: Path, *,
                    input_format: str | None = None,
-                   native_packets: bool = False) -> list[float] | None:
+                   native_packets: bool = False,
+                   native_preroll: bool = False) -> list[float] | None:
     """Every video frame's PTS; None when it cannot be read.
 
     Native encoder callers can use guarded packet timestamps. Other media
@@ -91,7 +86,8 @@ def frame_times_of(ffmpeg: str | None, clip: Path, *,
     if not ffprobe:
         return None
     if native_packets:
-        times = _native_packet_times(ffprobe, clip, input_format)
+        times = _native_packet_times(ffprobe, clip, input_format,
+                                     allow_preroll=native_preroll)
         if times is not None:
             return times
     try:
@@ -111,7 +107,18 @@ def frame_times_of(ffmpeg: str | None, clip: Path, *,
 
 
 def _native_packet_times(ffprobe: str, clip: Path,
-                         input_format: str | None) -> list[float] | None:
+                         input_format: str | None, *,
+                         allow_preroll: bool = False) -> list[float] | None:
+    packets = _native_packet_index(ffprobe, clip, input_format,
+                                   allow_preroll=allow_preroll)
+    if not packets:
+        return None
+    return [round(p["pts"] / MEDIA_HZ, 6) for p in packets if "D" not in p["flags"]] or None
+
+
+def _native_packet_index(ffprobe: str, clip: Path,
+                         input_format: str | None, *,
+                         allow_preroll: bool = False) -> list[dict] | None:
     """Read timestamps without decoding pixels, only for our native encoder.
 
     Our H264 mux writes one picture per packet with no B frames. Arbitrary
@@ -143,12 +150,13 @@ def _native_packet_times(ffprobe: str, clip: Path,
             pts = packet.get("pts")
             flags = packet.get("flags")
             if (type(pts) is not int or packet.get("dts") != pts
-                    or not isinstance(flags, str) or any(flag in flags for flag in "DC")
+                    or not isinstance(flags, str) or "C" in flags
+                    or ("D" in flags and not (allow_preroll and pts < 0))
+                    or (allow_preroll and pts < 0 and "D" not in flags)
                     or (ticks and pts <= ticks[-1])):
                 return None
             ticks.append(pts)
-        # Preserve ffprobe's existing six-decimal public representation.
-        return [round(t / MEDIA_HZ, 6) for t in ticks] or None
+        return data.get("packets") or None
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
         return None
 
@@ -295,6 +303,7 @@ class ClipExtractor:
         # cut and the reverse map. Adding an unrounded float seek to ffprobe's
         # rounded seconds can otherwise recover a neighboring timestamp.
         seek_pts = math.ceil(ss * MEDIA_HZ) if media_run else None
+        copy_pts = None
         if seek_pts is not None:
             # An output -ss drops every picture preceding the seek, including
             # the one still displayed during a VFR hold. Start on that actual
@@ -303,13 +312,18 @@ class ClipExtractor:
             # a duplicate leading picture.
             # A tiny held-picture TS can be misdetected as MPEG program
             # stream with audio only. The ring's format is already known.
-            source_times = frame_times_of(self._ffmpeg, run[0].path,
-                                          input_format="mpegts", native_packets=True)
+            probe = ffprobe_beside(self._ffmpeg)
+            packets = _native_packet_index(probe, run[0].path, "mpegts") if probe else None
+            source_times = ([round(p["pts"] / MEDIA_HZ, 6) for p in packets] if packets else
+                            frame_times_of(self._ffmpeg, run[0].path, input_format="mpegts"))
             if not source_times:
                 raise ValueError("no readable pictures at the requested start")
             source_ticks = [round(t * MEDIA_HZ) for t in source_times]
             seek_pts = max((t for t in source_ticks if t <= seek_pts),
                            default=source_ticks[0])
+            if packets and self._picture_feed:
+                copy_pts = max((p["pts"] for p in packets
+                                if "K" in p["flags"] and p["pts"] <= seek_pts), default=None)
             ss = seek_pts / MEDIA_HZ
             s = datetime.fromtimestamp(media_run.origin_ts + ss, timezone.utc)
         dur = (e - s).total_seconds()
@@ -330,15 +344,21 @@ class ClipExtractor:
         # and refuses "clip.mp4.cut123" outright.
         cut_path = out_path.with_name(
             f"{out_path.stem}.cut{os.getpid()}{out_path.suffix}")
+        # Native H264 already exists. Keep the prior keyframe as decode-only
+        # pre-roll; an exact 90 kHz MP4 edit list hides it. Visible timestamps,
+        # the requested first held picture and audio all retain the same origin.
+        # Unknown/reordered sources keep the established transcode path.
+        preroll = (seek_pts - copy_pts) / MEDIA_HZ if copy_pts is not None else 0.0
+        cut_ss, cut_duration = ss - preroll, dur + preroll
+        video_args = (["-c:v", "copy"] if copy_pts is not None else [
+            "-c:v", self._codec, "-g", str(max(1, fps // 2)),
+            "-force_key_frames", "expr:gte(t,n_forced*0.5)", *self._codec_opts()])
         args = [
             self._ffmpeg, "-hide_banner", "-loglevel", "error",
             *(["-copyts"] if media_run else []),
-            "-f", "mpegts", "-i", concat, "-ss", f"{ss:.6f}", "-t", f"{dur:.6f}",
+            "-f", "mpegts", "-i", concat, "-ss", f"{cut_ss:.6f}", "-t", f"{cut_duration:.6f}",
             "-map", "0:v:0", "-map", "0:a:0",
-            "-c:v", self._codec,
-            "-g", str(max(1, fps // 2)),
-            "-force_key_frames", "expr:gte(t,n_forced*0.5)",
-            *self._codec_opts(),
+            *video_args,
             "-c:a", "copy",
             # The picture feed's ring is VFR -- one frame per picture -- and
             # the cut must keep every frame at its own time: a CFR conform
@@ -347,13 +367,15 @@ class ClipExtractor:
             # otherwise round every stamp onto 1/r_frame_rate (see the sink).
             *(["-fps_mode", "passthrough", "-enc_time_base", "demux"]
               if self._picture_feed else []),
-            *(["-bsf:v", picture_duration_filter(round(dur * MEDIA_HZ))]
+            *(["-bsf:v", picture_duration_filter(round(cut_duration * MEDIA_HZ))]
               if media_run else []),
             "-fflags", "+genpts", "-avoid_negative_ts",
             "disabled" if media_run else "make_zero",
             # MP4's default 1 kHz edit-list clock discards sub-millisecond
             # origin precision even when the video track remains 90 kHz.
             *(["-movie_timescale", str(MEDIA_HZ)] if media_run else []),
+            *(["-output_ts_offset", f"{-preroll:.6f}", "-use_editlist", "1"]
+              if copy_pts is not None else []),
             "-movflags", "+faststart", "-y", str(cut_path),
         ]
         try:
@@ -368,7 +390,8 @@ class ClipExtractor:
         # Probe the file we just wrote, THEN publish it. Probing after the
         # rename let a racing writer change the file between the two, which is
         # how a sidecar came to describe 1921 frames of a 1380-frame clip.
-        times = (frame_times_of(self._ffmpeg, cut_path, native_packets=True)
+        times = (frame_times_of(self._ffmpeg, cut_path, native_packets=True,
+                                native_preroll=copy_pts is not None)
                  if self._picture_feed else None)
         start_s = (times[0] if times
                    else video_start_of(self._ffmpeg, cut_path))

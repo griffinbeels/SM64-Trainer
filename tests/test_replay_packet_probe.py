@@ -86,3 +86,23 @@ def test_arbitrary_media_never_assumes_packet_identity(monkeypatch, tmp_path):
     monkeypatch.setattr(extract.subprocess, "run", lambda *args, **kwargs:
                         subprocess.CompletedProcess(args, 0, "0.000000\n", ""))
     assert extract.frame_times_of("ffmpeg", tmp_path / "download.mp4") == [0]
+
+
+@pytest.mark.parametrize("bad", [None, "visible_discard", "hidden_visible", "corrupt"])
+def test_native_edit_list_only_ignores_negative_decode_preroll(monkeypatch, tmp_path, bad):
+    packets = [{"pts": -3000, "dts": -3000, "flags": "KD"},
+               {"pts": 0, "dts": 0, "flags": "__"}]
+    if bad == "visible_discard":
+        packets[1]["flags"] = "_D"
+    elif bad == "hidden_visible":
+        packets[0]["flags"] = "K_"
+    elif bad == "corrupt":
+        packets[0]["flags"] = "KDC"
+    payload = {"streams": [{"codec_name": "h264", "has_b_frames": 0, "time_base": "1/90000"}],
+               "packets": packets}
+    monkeypatch.setattr(extract.subprocess, "run", lambda *args, **kw:
+                        subprocess.CompletedProcess([], 0, json.dumps(payload), ""))
+    raw = extract._native_packet_times("ffprobe", tmp_path / "clip", None)
+    assert raw == ([-.033333, 0] if bad == "hidden_visible" else None)
+    assert extract._native_packet_times("ffprobe", tmp_path / "clip", None,
+                                       allow_preroll=True) == (None if bad else [0])

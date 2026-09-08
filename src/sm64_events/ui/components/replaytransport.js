@@ -1,10 +1,11 @@
 // One complete transport below the image for captured and downloaded recordings.
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { pictureInterval, useReviewMedia } from "../reviewmedia.js";
 import { stopShuttle } from "../replayshuttle.js";
+import { watchReviewCommands } from "../reviewcommands.js";
 
 const html = htm.bind(h);
 const stamp = seconds => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
@@ -19,6 +20,10 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
   const loop = controlledLoop === undefined ? localLoop : controlledLoop;
   const media = useReviewMedia(video, { clock, step: frameStep, loop });
   const interval = pictureInterval(media.picture, clock, frameStep, media.duration);
+  const commands = useRef(null);
+  commands.current = { range: loop, in: () => mark("start"), out: () => mark("end"), clear: clearLoop,
+    start: () => { if (video && loop) { stopShuttle(video); video.currentTime = loop.start; } } };
+  useEffect(() => video ? watchReviewCommands(video, () => commands.current) : undefined, [video]);
   const handlers = (direction) => stepHandlers ? stepHandlers(direction)
     : { onclick: () => onStep(direction) };
   const stepTitle = (direction) => canStep
@@ -28,15 +33,20 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
     if (onLoopChange) onLoopChange(next); else setLocalLoop(next);
   }
   function mark(name) {
-    if (!interval) return;
+    if (!interval || !reviewReady) return;
     const next = { start: loop?.start ?? marks.start, end: loop?.end ?? marks.end,
       [name]: interval[name] };
     if (next.start !== null && next.end !== null && next.end <= next.start) {
-      setError("B must be after A. Choose another picture."); return;
+      next[name === "start" ? "end" : "start"] = null;
+      changeLoop(null);
     }
     setError(null); setMarks(next);
     if (next.start !== null && next.end !== null)
-      changeLoop({ ...next, enabled: loop?.enabled ?? false });
+      changeLoop({ ...next, enabled: true });
+  }
+  function clearLoop() {
+    if (!reviewReady) return;
+    setMarks({ start: null, end: null }); changeLoop(null); setError(null);
   }
   async function fullscreen() {
     try {
@@ -86,15 +96,15 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
     <div class="replay-loop-row">
       ${media.shuttle && html`<output class="replay-shuttle-state" aria-live="polite">${media.shuttle}</output>`}
       <button disabled=${!interval || !reviewReady} onclick=${() => mark("start")}
-        title="Set A at the start of the displayed picture">Set A</button>
+        title="Set In at the start of the displayed picture (I)">Set In</button>
       <span class="replay-media-time">${(loop?.start ?? marks.start) == null ? "—" : stamp(loop?.start ?? marks.start)}</span>
       <button disabled=${!interval || !reviewReady} onclick=${() => mark("end")}
-        title="Set B at the end of the displayed picture">Set B</button>
+        title="Set Out at the end of the displayed picture (O)">Set Out</button>
       <span class="replay-media-time">${(loop?.end ?? marks.end) == null ? "—" : stamp(loop?.end ?? marks.end)}</span>
       <button class=${loop?.enabled ? "is-active" : ""} aria-pressed=${!!loop?.enabled}
         disabled=${!loop || !reviewReady} onclick=${() => changeLoop({ ...loop, enabled: !loop.enabled })}>Loop</button>
       <button disabled=${!reviewReady || (!loop && marks.start === null && marks.end === null)}
-        onclick=${() => { setMarks({ start: null, end: null }); changeLoop(null); setError(null); }}>Clear loop</button>
+        title="Remove In and Out (X)" onclick=${clearLoop}>Clear loop</button>
       ${note && html`<span class="replay-frame-note">${note}</span>`}
     </div>
     ${error && html`<p class="replay-control-error" role="status">${error}</p>`}
