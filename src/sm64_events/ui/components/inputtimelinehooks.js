@@ -4,6 +4,7 @@ import { slotAtTime, timeOfSlot } from "../frame.js";
 import { watchVideoPicture } from "../videopicture.js";
 import { templateOnAxis, templateReviewKey, timelineWindow } from "../timelinereview.js";
 import { stopShuttle } from "../replayshuttle.js";
+import { pauseReviewSource, reviewDuration, seekReviewSource } from "../reviewsource.js";
 import { lanesOf, curvePath, speedPeak, speedPath, stickReach, stickPath,
          mappedFrameAtTime, mappedTimeAtFrame, mappedLoopWindow } from "./inputtimelinemodel.js";
 
@@ -91,7 +92,7 @@ export function useTimelineReview(reviewState, onReviewState) {
 }
 
 function timelineDuration(video, clock) {
-  return Number.isFinite(video?.duration) ? video.duration : clock?.duration;
+  return Number.isFinite(reviewDuration(video)) ? reviewDuration(video) : clock?.duration;
 }
 
 export function useTimelineModel(data, review, onReviewState, video, frameMap, clock) {
@@ -135,8 +136,8 @@ export function useTimelineSeek({ video, clock, frameMap, boundedClock, total, d
   const seekSlot = useCallback((slot) => {
     stopShuttle(video);
     if (!Number.isInteger(slot) || slot < 0 || slot >= slotCount) return;
-    if (!video.paused) video.pause();
-    video.currentTime = timeOfSlot(slot, boundedClock);
+    pauseReviewSource(video);
+    seekReviewSource(video, timeOfSlot(slot, boundedClock));
   }, [video, slotCount, boundedClock]);
   const seek = useCallback((next) => {
     stopShuttle(video);
@@ -145,10 +146,10 @@ export function useTimelineSeek({ video, clock, frameMap, boundedClock, total, d
       // Seeking the video is how the timeline moves: the clock loop above
       // reads the new time back on the next frame, so the two cannot
       // disagree even for a frame.
-      if (!video.paused) video.pause();
+      pauseReviewSource(video);
       const mapped = mappedTimeAtFrame(clamped, frameMap, boundedClock, data.stretches);
       if (mapped !== null) {
-        video.currentTime = mapped;
+        seekReviewSource(video, mapped);
         return;
       }
       // An absent association cannot locate this input in the footage.
