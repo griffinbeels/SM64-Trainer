@@ -97,3 +97,31 @@ def test_an_explicit_scope_skips_fingerprinting_and_coverage(monkeypatch):
     flags = run_tests.pytest_args("focused", 0, ["tests/test_run_tests.py"])
     assert "--no-testmon" in flags and "--testmon-noselect" not in flags
     assert flags[flags.index("-n") + 1] == "0"
+
+
+def test_runner_and_children_ignore_a_foreign_editable_checkout(tmp_path):
+    import json
+    import os
+    import subprocess
+    from sm64_events.core.childproc import quiet_spawn_kwargs
+
+    foreign = tmp_path / "foreign" / "sm64_events"
+    foreign.mkdir(parents=True)
+    (foreign / "__init__.py").write_text("raise RuntimeError('wrong checkout')")
+    root = Path(run_tests.ROOT)
+    code = (
+        "import sys,subprocess,json; "
+        f"sys.path.insert(0,{str(root / 'tools')!r}); "
+        "import run_tests; import sm64_events.replay.ring as ring; "
+        "from sm64_events.core.childproc import quiet_spawn_kwargs; "
+        "child=subprocess.check_output([sys.executable,'-c',"
+        "'import sm64_events.replay.ring as r; print(r.__file__)'],text=True,**quiet_spawn_kwargs()); "
+        "print(json.dumps([ring.__file__,child.strip()]))"
+    )
+    result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
+                            env={**os.environ, "PYTHONPATH": str(foreign.parent)},
+                            capture_output=True, text=True, timeout=20,
+                            check=True, **quiet_spawn_kwargs())
+    paths = json.loads(result.stdout)
+    expected = (root / "src/sm64_events/replay/ring.py").resolve()
+    assert [Path(path).resolve() for path in paths] == [expected, expected]
