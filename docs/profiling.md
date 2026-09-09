@@ -122,6 +122,9 @@ different media. Unsupported long-task APIs and GPU counters remain null.
 Stages cover poll tick duration/interval, input read and emit, timeline assembly,
 capture slot read/decode/conversion, recorder callbacks, video/audio mux, extraction,
 frame probing, tail wait, picture association, input audit and total replay view.
+`replay.storage_maintenance` measures the complete periodic inventory and eviction
+pass, including waiting for its lock. It helps distinguish session-length-related
+filesystem work from capture and encoder work.
 These durations include nested work; do not sum them. The collector retains fixed
 histograms rather than an unbounded event log. It is disabled by default, needs no
 per-frame disk write, and retains only the most recent session. Calls finishing

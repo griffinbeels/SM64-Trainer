@@ -7,6 +7,7 @@ remain accounted and are retried, without escaping into the encoder callback.
 Saved files never enter this owner. Its optional root rejects external paths.
 """
 import logging
+import os
 import threading
 from collections import deque
 from contextlib import contextmanager, nullcontext
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from sm64_events.core.profiling import measured
 from sm64_events.replay.media import MediaRun
 
 log = logging.getLogger("sm64.replay")
@@ -77,6 +79,9 @@ class SegmentRing:
         self._free_bytes_fn = free_bytes_fn
         self._disk_margin = disk_margin_bytes
         self._segments: deque[SegmentInfo] = deque()
+        # Resolve once at admission. Re-resolving every retained path during
+        # each recount opens thousands of filesystem handles on Windows.
+        self._segment_paths: dict[Path, Path] = {}
         self._total_bytes = 0
         self._lock = threading.RLock()  # free-space probes may read total_bytes
         self._on_evict = on_evict
@@ -100,6 +105,7 @@ class SegmentRing:
         """Forget metadata after the recorder owner resets its scratch files."""
         with self._lock:
             self._segments.clear()
+            self._segment_paths.clear()
             self._temporary.clear()
             self._pending.clear()
             self._unmanaged.clear()
@@ -176,6 +182,7 @@ class SegmentRing:
                         self._drop_temp(group, delete)
             self._recount()
 
+    @measured("replay.storage_maintenance")
     def maintain(self) -> None:
         """Refresh growing files, retry failed unlinks and enforce pressure."""
         with self._lock:
@@ -191,15 +198,27 @@ class SegmentRing:
         mutable files can exceed a cap until eligible files become available.
         """
         found = {}
+        directories = [self._root]
         try:
-            for path in self._root.rglob("*"):
-                if path.is_symlink() or not path.resolve().is_relative_to(self._root):
+            while directories:
+                directory = directories.pop()
+                # Check directory identity at traversal, never descend through
+                # links/junctions. File metadata comes from this fresh scan;
+                # DirEntry reuses Windows' enumeration data without stat/open
+                # and two realpath calls per file. No entry survives this pass.
+                if directory.resolve() != directory:
                     continue
-                try:
-                    if path.is_file():
-                        found[path.resolve()] = path.stat().st_size
-                except FileNotFoundError:
-                    continue  # atomic publication/segment close moved it
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if entry.is_symlink() or entry.is_junction():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            directories.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            try:
+                                found[Path(entry.path)] = entry.stat(follow_symlinks=False).st_size
+                            except FileNotFoundError:
+                                continue  # atomic publication moved it
         except OSError:
             return  # retain prior accounting while the volume is unavailable
         self._unmanaged = found
@@ -207,14 +226,16 @@ class SegmentRing:
     def protected_paths(self) -> set[Path]:
         """Files currently leased; recorder cleanup must preserve these too."""
         with self._lock:
-            return ({s.path.resolve() for s in self._segments if self._pinned(s)}
+            return ({self._segment_paths[s.path] for s in self._segments if self._pinned(s)}
                     | {p for key, entry in self._temporary.items()
                        if self._temp_pins.get(key) for p in entry.paths})
 
     def prune_missing(self) -> None:
         """Reconcile after owner-only scratch cleanup, retaining leased files."""
         with self._lock:
-            self._segments = deque(s for s in self._segments if s.path.exists())
+            self._segments = deque(s for s in self._segments
+                                   if self._segment_paths[s.path].exists())
+            self._segment_paths = {s.path: self._segment_paths[s.path] for s in self._segments}
             for key, entry in list(self._temporary.items()):
                 if not any(p.exists() for p in entry.paths):
                     del self._temporary[key]
@@ -250,8 +271,9 @@ class SegmentRing:
 
     def add(self, seg: SegmentInfo) -> None:
         """Keep source order even when an old child's final CSV arrives late."""
-        self._path(seg.path)
+        resolved = self._path(seg.path)
         with self._lock:
+            self._segment_paths[seg.path] = resolved
             late = bool(self._segments and seg.utc_start < self._segments[-1].utc_start)
             self._segments.append(seg)
             if late:
@@ -280,12 +302,12 @@ class SegmentRing:
             log.debug("replay eviction deferred (file busy): %s", path)
         else:
             self._pending.pop(path, None)
-            self._unmanaged.pop(path.resolve(), None)
+            self._unmanaged.pop(path, None)
 
     def _drop_segment(self, seg):
         self._segments.remove(seg)
         self._clear_segments.discard(seg.path)
-        self._unlink(seg.path, seg.size_bytes)
+        self._unlink(self._segment_paths.pop(seg.path), seg.size_bytes)
         if self._on_evict is not None:
             try:
                 self._on_evict(seg)
@@ -299,9 +321,9 @@ class SegmentRing:
                 self._unlink(path, size)
 
     def _recount(self):
-        tracked = ({s.path.resolve() for s in self._segments}
+        tracked = (set(self._segment_paths.values())
                    | {p for entry in self._temporary.values() for p in entry.paths}
-                   | {p.resolve() for p in self._pending})
+                   | self._pending.keys())
         self._total_bytes = (sum(s.size_bytes for s in self._segments)
                              + sum(sum(e.paths.values()) for e in self._temporary.values())
                              + sum(self._pending.values())
@@ -349,6 +371,9 @@ class SegmentRing:
                                     margin_bytes=self._disk_margin)
         horizon = (self._now - timedelta(seconds=self._retention_s)
                    if self._now is not None and self._retention_s is not None else None)
+        if self._total_bytes <= cap and horizon is None and not self._clear_segments:
+            self.storage_pressure = self._total_bytes > floor_cap
+            return
         candidates = [(s.utc_start, s.utc_end, s) for s in self._segments if not self._pinned(s)]
         candidates += [(e.utc_start, e.utc_end, key) for key, e in self._temporary.items()
                        if not self._temp_pins.get(key)]

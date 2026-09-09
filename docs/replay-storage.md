@@ -18,6 +18,14 @@ identity mapping. Temporary-group leases also protect an output before it is
 registered, and HTTP range responses release them in a finally block. Idle
 segment discard uses the same owner. A failed Windows unlink remains accounted
 for and retried. Directory inventory runs at maintenance frequency, not per frame.
+Registered segment paths are resolved once at admission and retained until eviction
+or reset. Inventory uses a fresh `os.scandir` pass over regular directories, skips
+symlinks and junctions, and reads current file sizes from that pass. Growing encoder
+files, partial clips and SQLite/WAL files remain accounted; no directory entry is
+cached across passes. Recounts and lease releases reuse the registered identities.
+On Windows, directory enumeration already supplies regular-file metadata, avoiding
+the per-file opens made by repeated path resolution and stat calls.
+See [Python's directory-entry contract](https://docs.python.org/3/library/os.html#os.DirEntry).
 
 A valid manual PB command calls replay preservation off the event loop. Video
 failure is a separate outcome, displayed beside the row with a retry action;

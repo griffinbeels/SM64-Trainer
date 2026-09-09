@@ -21,6 +21,7 @@ not silently change one of those contracts.
 | Full BGR flip/alpha expansion | Accepted pictures only | `pixels.py` samples the canonical BGRA view first; rejected pictures skip full preparation. Preparation precedes ledger commitment so allocation failure leaves an identical retry eligible. |
 | Copy into a padded AVFrame, then rawvideo encoding | Removed | The packed BGRA buffer is already the rawvideo packet payload. The sink wraps it directly, preserving packet flags and the 90 kHz clock. The old padding workaround and reusable frame allocation are gone. |
 | NUT muxing, pipe transport and CPU-to-encoder upload | Yes | Preserve explicit video/audio timestamps. These remain costs to measure; the packet change does not remove the pipe or GPU upload. |
+| AudioFrame construction and PCM encoding before NUT | Removed | Process audio already supplies packed stereo s16le. Direct PCM packets preserve sample bytes, pre-origin trimming and microsecond timestamps; FFmpeg still performs the final AAC encode. |
 | Synthesized silence between normal PCM callbacks | Deferred on the picture feed | A 50 ms grace after real audio prevents speculative silence from occupying the next normal batch's timestamps. Truly quiet sources still get silence; legacy CFR pacing is unchanged. |
 | H264 encoding | Yes, hardware when its probe passes | Compression already runs during play. NVIDIA quality settings are unchanged; the hardware selection below also covers AMD and Intel. |
 | Re-encoding a native replay during extraction | No | Supported H264/AAC cuts copy compressed media with hidden pre-roll. Other sources retain the transcode fallback. |
@@ -148,3 +149,68 @@ Real NVENC/software identity and held-picture tests, the independent audio
 flash/click check, and browser picture/timer stepping passed for this change.
 Live smoothness, complete machine cost and physical flicker need live evidence;
 offline correctness does not substitute for that observation.
+
+## Storage and PCM measurements, 2026-09-09
+
+A long live session exposed a separate cost outside the graphics pipeline.
+At 1,600 retained files, the former inventory/recount implementation resolved
+4,804 paths per maintenance pass. On Windows those resolutions open filesystem
+handles. A 30-second Python stack capture attributed 42.2% of its 823 active
+samples to maintenance. That fraction describes sampled Python stacks, not
+whole-machine CPU; inclusive categories overlap.
+
+The [storage owner](replay-storage.md) now keeps each admitted segment's
+canonical identity and uses fresh directory enumeration metadata for inventory.
+Growing files remain freshly counted; leases, the free-space floor and eligible
+oldest-first eviction still apply. Four alternating before/after rounds on one
+CPU used the same real scratch files and state:
+
+| Operation | Previous median wall time | Current median wall time |
+| --- | ---: | ---: |
+| Maintenance, 100 files | 32.95 ms | 0.97 ms |
+| Maintenance, 1,600 files | 503.21 ms | 9.96 ms |
+| Lease release, 1,600 files | 127.47 ms | 0.44 ms |
+
+The 1,600-file maintenance reduction is about 98%. CPU time for that case
+fell from 504.69 to 9.38 ms; smaller candidate operations fell below the CPU
+timer's resolution and are not reported as zero cost. The regression test's
+path-resolution bound fails against the frozen previous implementation.
+`tests/test_replay_inventory.py` also covers mutable files, atomic publication,
+temporary scan failure, canonical identities across cwd changes, and exclusion
+of Windows junctions and symlinks. The local symlink case requires privileges
+unavailable in this run; the real junction check passed.
+
+A subsequent 30-second live observation on the storage candidate processed
+900 pictures and 3,000 PCM callbacks. The new `replay.storage_maintenance` span
+recorded 15 passes averaging 4.41 ms (maximum 6.65 ms), with no stage errors.
+The first-to-last health samples added 870 captured/input frames with no new
+input skips, edge mismatches, source drops or encoder backlog. Trainer CPU
+averaged 36.47% of one logical CPU, FFmpeg 18.69%, and Project64 23.37%.
+Session duration and other applications/tests differed from the earlier
+observation, so this is not a causal whole-machine comparison. Physical blink
+and perceived smoothness still require human observation.
+
+Direct PCM packets remove another redundant preparation step. At 48 kHz with
+480 stereo samples per callback, the isolated Python mux cost fell from a
+median 6.51 to 2.60 microseconds per callback. It excludes pipe backpressure,
+AAC encoding and live scheduling: roughly 0.04% of one core at 100 callbacks
+per second, much smaller than the storage gain. Independent NUT demux/decode
+comparisons retain every packet's metadata and bytes plus decoded audio samples
+and timestamps at 44.1, 48 and 96 kHz, including pre-origin trims, timestamp
+gaps, small callbacks and video interleaving (`tests/test_replay_pcm_packets.py`).
+The production PCM change then passed 66 focused packet, encoder, extraction,
+held-picture and browser checks. Software, NVENC and AMF passed the independent
+picture and flash/click witnesses; six QSV cases were skipped for unavailable
+hardware. The browser check decoded barcodes from the actual presented picture
+and checked its input-inspector time, with no page errors.
+
+An additional PyAV conversion trial was not adopted. At 1600×1200, the current
+NumPy expansion took 2.34 ms median wall time in a same-input offline comparison.
+Constructing a BGR AVFrame and reformatting it took 2.67 ms and returned padded,
+non-contiguous rows at unaligned widths. Borrowing the already-owned BGR array,
+reformatting and copying the vertically flipped output took 2.07 ms, but required
+another full-picture allocation. The latter's roughly 0.26 ms saving does not
+establish a lower overall resource cost. These four-round results include
+preparation and orientation but exclude capture, pipe and encoding. The current
+converter remains unchanged; the more substantial texture-transfer candidate
+still needs its separate ownership and timing proof.

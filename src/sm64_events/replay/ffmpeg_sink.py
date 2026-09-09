@@ -860,6 +860,8 @@ class FfmpegAvSink:
         samples = len(pcm) // 4
         if samples <= 0:
             return
+        if len(pcm) % 4:
+            raise ValueError("PCM must contain complete s16le stereo samples")
         relative = int(pts_us) - int(round(self._run_epoch * 1_000_000))
         if relative < 0:
             # The tap may have queued audio before the first picture. NUT
@@ -870,16 +872,18 @@ class FfmpegAvSink:
             if not pcm:
                 return
             relative += round(skip * 1_000_000 / self._cfg.audio_rate)
-        block = np.frombuffer(pcm, dtype=np.int16).reshape(1, -1)
-        chunk = av.AudioFrame.from_ndarray(block, format="s16", layout="stereo")
-        chunk.sample_rate = self._cfg.audio_rate
-        chunk.time_base = PICTURE_TIME_BASE
-        chunk.pts = relative
         with self._mux_lock:
             if self._mux is None:
                 raise OSError("no NUT mux open")
-            for packet in self._mux_audio.encode(chunk):
-                self._mux.mux(packet)
+            # The tap already supplied this stream's packed PCM format.
+            # AudioFrame + pcm_s16le encoding only copied the same bytes.
+            packet = av.Packet(pcm)
+            packet.stream = self._mux_audio
+            packet.time_base = PICTURE_TIME_BASE
+            packet.pts = packet.dts = relative
+            packet.duration = round((len(pcm) // 4) * 1_000_000 / self._cfg.audio_rate)
+            packet.is_keyframe = True
+            self._mux.mux(packet)
 
     def _audio_mux_loop(self) -> None:
         """The picture feed's audio thread: drain submitted PCM into the NUT
