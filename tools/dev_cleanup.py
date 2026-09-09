@@ -1,34 +1,18 @@
-"""Sweep orphaned dev processes left behind by finished Claude sessions.
+"""Report development server processes without changing their lifetime.
 
-WHY: sessions start throwaway `python -m http.server` harness servers (UI
-verification) and `python -m sm64_events.main` dev servers, and sometimes die
-or forget to kill them. A 2026-07-24 system audit found FIVE leaked
-http.servers plus a duplicate broadcast-only main server still running hours
-later, contributing to user-visible system lag (they poll, hold handles, and
-pile up across a working day). This tool makes "orphans never happen"
-enforceable: it runs from a SessionStart hook (see .claude/settings.json) and
-kills only processes that are PROVABLY dead weight.
+SessionStart is not authorization to stop a server. A socketless PID may be
+a venv launcher whose child owns the listener, a booting server, or a valid
+broadcast-only recorder. The former socket-based cleanup killed a launcher
+during live practice. Neither sockets nor command-line matching prove ownership.
 
-Kill criteria (deliberately conservative — a concurrent session's live server
-must never be touched):
-  * python process whose command line contains `-m http.server` or
-    `-m sm64_events.main` AND which holds NO listening TCP socket. A server
-    with no listening socket serves nobody: either its bind failed (port
-    already taken by a sibling) or it's wedged. Live servers always listen.
-
-Anything that DOES hold a socket is only reported (stdout), never killed —
-use --report to see the survivors and judge staleness yourself.
-
-Windows-only (matches this project's runtime); enumeration via PowerShell
-CIM + Get-NetTCPConnection because that needs no extra dependencies.
-
-Usage:
-    uv run python tools/dev_cleanup.py            # kill provable orphans, report the rest
-    uv run python tools/dev_cleanup.py --report   # report only, kill nothing
+This hook is always read-only, including its legacy --report invocation.
+An agent must clean up its own explicitly tracked test children separately;
+the human owns the running trainer and its launcher.
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
@@ -68,45 +52,24 @@ def _enumerate() -> tuple[list[dict], set[int]]:
     return procs, {int(p) for p in listening}
 
 
-def sweep(kill: bool = True) -> int:
+def sweep() -> int:
     procs, listening = _enumerate()
-    self_pid = None  # this tool runs under python too; never self-target
-    import os
     self_pid = os.getpid()
 
-    killed, kept = [], []
     for proc in procs:
         proc_pid = int(proc["pid"])
         cmd = proc.get("cmd") or ""
         if proc_pid == self_pid or not any(m in cmd for m in _TARGET_MARKERS):
             continue
-        if proc_pid in listening:
-            kept.append((proc_pid, cmd))
-            continue
-        if kill:
-            subprocess.run(["powershell.exe", "-NoProfile", "-Command",
-                            f"Stop-Process -Id {proc_pid} -Force -Confirm:$false"],
-                           capture_output=True, timeout=15,
-                           creationflags=_NO_WINDOW)
-        killed.append((proc_pid, cmd))
-
-    verb = "killed" if kill else "would kill"
-    for proc_pid, cmd in killed:
-        print(f"dev_cleanup: {verb} socketless orphan pid {proc_pid}: {cmd[:100]}")
-    for proc_pid, cmd in kept:
-        print(f"dev_cleanup: kept (listening) pid {proc_pid}: {cmd[:100]}")
-    if not killed and not kept:
-        # stay silent when there is nothing to say — this runs from a
-        # SessionStart hook and its stdout lands in session context
-        pass
+        state = "listening" if proc_pid in listening else "no listener on this PID"
+        print(f"dev_cleanup: observed ({state}) pid {proc_pid}: {cmd[:100]}")
     return 0
 
 
 def main() -> int:
-    kill = "--report" not in sys.argv
     try:
-        return sweep(kill=kill)
-    except Exception as exc:  # fail open: a cleanup tool must never block a session
+        return sweep()
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         print(f"dev_cleanup: skipped ({exc})", file=sys.stderr)
         return 0
 
