@@ -652,7 +652,7 @@ def entity_rank(ranks, ek, frames, version=None) -> dict | None:
             "calibration": curve["metadata"]}
 
 
-def ranks_share_ladder(ranks, ek, strat) -> bool:
+def ranks_share_ladder(ranks, ek, strat, version=None) -> bool:
     """Whether the ACTIVE strategy's ladder IS the entity's best-possible one.
 
     When it is, the strategy rank and the entity's own rank are not two
@@ -671,8 +671,8 @@ def ranks_share_ladder(ranks, ek, strat) -> bool:
     if ranks is None or not strat:
         return False
     from sm64_events.ranks.calibration import resolve_curve
-    curve = resolve_curve(ranks, ek)
-    ladder = ranks.ladder_cs(ek, strat)
+    curve = resolve_curve(ranks, ek, version)
+    ladder = ranks.ladder_cs(ek, strat, version)
     # Comparison must not validate or repair Strategy edits: legacy custom
     # cutoffs can cross. Only the obsolete, unbounded floor is irrelevant.
     ladder = {rank: cutoff for rank, cutoff in ladder.items() if rank != "Iron"}
@@ -1632,7 +1632,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "entity_rank": entity_rank(
                 service.ranks, ek, star_basis and star_basis["frames"],
                 version=star_basis and star_basis.get("version")),
-            "one_ladder": ranks_share_ladder(service.ranks, ek, star_strat),
+            "one_ladder": ranks_share_ladder(
+                service.ranks, ek, star_strat, star_basis and star_basis.get("version")),
             # armed_detail is a documented rule-11 ASYMMETRY, not its
             # absence: every star but the 100-coin one carries no such key
             # (test_star_sections_carry_no_arm_detail) because an ordinary
@@ -1888,7 +1889,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, seg_ek, seg_basis and seg_basis["frames"],
                 version=seg_basis and seg_basis.get("version")),
             "one_ladder": (grading_ek == seg_ek and
-                           ranks_share_ladder(service.ranks, seg_ek, seg_strat)),
+                           ranks_share_ladder(
+                               service.ranks, seg_ek, seg_strat,
+                               seg_basis and seg_basis.get("version"))),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),

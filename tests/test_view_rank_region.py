@@ -1,4 +1,5 @@
 """Practice grades actual regional averages and each attempt's original ROM."""
+import asyncio
 import json
 from dataclasses import replace
 
@@ -74,3 +75,51 @@ def test_pb_mode_keeps_the_selected_saved_row_including_a_deliberately_slower_pb
     saved = {"frames": 660, "game_version": "jp"}
     basis = _ranked_basis(ranks, KEY, "pb", saved, [attempt(1, 360, "us")], "Standard", "igt")
     assert basis == {"frames": 660, "version": "jp", "count": 1, "window": None}
+
+
+@pytest.mark.parametrize("kind", ["star", "segment"])
+@pytest.mark.parametrize("mode", ["pb", "avg10"])
+def test_distinct_original_rom_ladders_keep_both_practice_banners(tmp_path, ranks, kind, mode):
+    from test_views import make
+    from sm64_events.tracking.importing import ImportCandidate
+    from sm64_events.tracking.views import build_session_view
+
+    db, service = make(tmp_path)
+    ek = KEY
+    if kind == "segment":
+        segment_id = db.insert_segment_def(
+            "Regional manual segment", [], [], [], "2026-09-08T00:00:00Z",
+            default_strat="Standard")
+        asyncio.run(service._segments_changed())
+        ek = f"segment:{segment_id}"
+        data = ranks.to_json()
+        data["entities"][ek] = data["entities"].pop(KEY)
+        path = tmp_path / "segment-standards.json"
+        path.write_text(json.dumps(data))
+        ranks = RankStandards(path)
+        ranks.load()
+    service.ranks = ranks
+    ranks.grading_version = "us"
+    ranks.set_overall_threshold(ek, "Mario", 18.0, "jp")
+    result = asyncio.run(service.import_times("manual", [ImportCandidate(
+        ek, "Standard", 1950, "jp", "igt" if kind == "star" else "rta")]))
+    assert result["imported"] == 1
+    if kind == "star":
+        asyncio.run(service.set_strat(2, 4, "Standard"))
+    else:
+        asyncio.run(service.set_strat_segment(segment_id, "Standard"))
+    asyncio.run(service.set_rank_mode(mode))
+
+    sections = build_session_view(db, service, "igt")["stars" if kind == "star" else "segments"]
+    [section] = [s for s in sections if s["attempts"]]
+    assert section["rank"]["rank"] == "Mario"
+    assert section["entity_rank"]["rank"] != "Mario"
+    assert not section["one_ladder"]
+
+    # Switching the running ROM cannot remove a selector for the saved JP basis.
+    ranks.grading_version = "jp"
+    sections = build_session_view(db, service, "igt")["stars" if kind == "star" else "segments"]
+    [same_basis] = [s for s in sections if s["attempts"]]
+    assert same_basis["rank"] == section["rank"]
+    assert same_basis["entity_rank"] == section["entity_rank"]
+    assert not same_basis["one_ladder"]
