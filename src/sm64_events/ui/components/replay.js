@@ -9,6 +9,7 @@ import { holdRepeat } from "../holdrepeat.js";
 import { watchReplayKeys } from "../replaykeys.js";
 import { stopShuttle } from "../replayshuttle.js";
 import { playReview } from "../reviewcommands.js";
+import { attachReviewSource, pauseReviewSource } from "../reviewsource.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -63,7 +64,7 @@ function useReplayStepping(videoEl, state) {
       onPress: () => {
         const video = videoEl.current;
         if (!video || video.paused) return null;
-        return () => { video.play().catch(() => {}); };
+        return () => { playReview(video); };
       },
     });
   }
@@ -78,8 +79,8 @@ function useReplayStepping(videoEl, state) {
     if (!video) return undefined;
     return watchReplayKeys(video.closest(".attempt-drawer") || video.closest(".replay-player"), {
       step, toStart, video,
-      toggle: () => video.paused ? playReview(video) : video.pause(),
-      onPress: () => video.paused ? null : () => { video.play().catch(() => {}); },
+      toggle: () => video.paused ? playReview(video) : pauseReviewSource(video),
+      onPress: () => video.paused ? null : () => { playReview(video); },
     });
   }, [state]);
 
@@ -121,6 +122,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
   const [mediaVideo, setMediaVideo] = useState(null);
   const [saveError, setSaveError] = useState(null);
+  const [sourceError, setSourceError] = useState(null);
   const [saving, setSaving] = useState(false);
   const videoEl = useRef(null);
   // One programmatic play() per View-Replay click (= per component mount),
@@ -131,16 +133,19 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
   // (once) or from the player's own controls.
   const autoPlayed = useRef(false);
   const stopObserving = useRef(null);
+  const stopSource = useRef(null);
   const attachVideoEl = useCallback((el) => {
     if (videoEl.current === el) return;
     if (stopObserving.current) stopObserving.current();
+    stopSource.current?.();
     videoEl.current = el;
     setMediaVideo(el);
     stopObserving.current = el ? watchVideoPicture(el, () => {}) : null;
     if (onVideoEl) onVideoEl(el);
     if (!el) return;
     attachSharedVolume(el);
-  }, [onVideoEl]);
+    stopSource.current = attachReviewSource(el, state.review_media, state.clip_url, setSourceError, state.frame_times);
+  }, [onVideoEl, state]);
 
   // Seek after metadata arrives, before the one initial play(). Both the
   // initial position and Start use the same real-picture destination.
@@ -174,7 +179,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
     const v = videoEl.current;
     if (!v) return;
     if (v.paused) playReview(v);
-    else v.pause();
+    else pauseReviewSource(v);
   }
 
   if (state.phase === "loading")
@@ -218,6 +223,7 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
     <${ReplayActions} savedPath=${savedPath} saving=${saving} saveReplay=${saveReplay}
       revealSaved=${revealSaved} onCompare=${onCompare} />
     ${saveError && html`<p class="replay-control-error" role="status">${saveError}</p>`}
+    ${sourceError && html`<p class="replay-control-error" role="status">${sourceError}</p>`}
   </div>`;
 }
 

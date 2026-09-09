@@ -5,6 +5,7 @@ import { Icon } from "./icons.js";
 import { stopShuttle } from "../replayshuttle.js";
 import { watchReviewCommands } from "../reviewcommands.js";
 import { focusReplay } from "../replayfocus.js";
+import { seekReviewSource } from "../reviewsource.js";
 
 const html = htm.bind(h);
 const stamp = seconds => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
@@ -40,7 +41,7 @@ export function LoopEditor({ video, media, interval, loop, changeLoop, reviewRea
   const start = loop?.start ?? marks.start, end = loop?.end ?? marks.end;
   const commands = useRef(null);
   commands.current = { range: loop, in: () => mark("start"), out: () => mark("end"), clear: clearLoop,
-    start: () => { if (video && loop) { stopShuttle(video); video.currentTime = loop.start; } } };
+    start: () => { if (video && loop) { stopShuttle(video); seekReviewSource(video, loop.start); } } };
   useEffect(() => video ? watchReviewCommands(video, () => commands.current) : undefined, [video]);
   function mark(name) {
     if (!interval || !reviewReady) return;

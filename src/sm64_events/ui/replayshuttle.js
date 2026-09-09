@@ -1,5 +1,7 @@
 // HTML video cannot reliably play backwards. Reverse shuttle issues bounded
 // seeks; the existing presented-picture observer remains the timeline clock.
+import { playReview } from "./reviewcommands.js";
+import { pauseReviewSource, seekReviewSource } from "./reviewsource.js";
 export function stopShuttle(video) {
   video?.dispatchEvent(new Event("reviewshuttlestop"));
 }
@@ -27,15 +29,15 @@ export function replayShuttle(video) {
     announce();
     if (next > 0) {
       video.playbackRate = speed;
-      video.play().catch(stop);
+      playReview(video)?.catch(stop);
     } else {
-      video.pause(); last = performance.now();
+      pauseReviewSource(video); last = performance.now();
       timer = setInterval(() => {
         const now = performance.now();
         const elapsed = Math.min(.25, (now - last) / 1000);
         if (video.seeking) return;
         last = now;
-        video.currentTime = Math.max(0, video.currentTime - elapsed * speed);
+        seekReviewSource(video, Math.max(0, video.currentTime - elapsed * speed));
         if (video.currentTime <= 0) stop();
       }, 66);
     }
@@ -45,7 +47,7 @@ export function replayShuttle(video) {
   video?.addEventListener("play", played);
   video?.addEventListener("pause", paused);
   video?.addEventListener("reviewshuttlestop", stop);
-  return { run, stop, pause: () => { stop(); video?.pause(); },
+  return { run, stop, pause: () => { stop(); pauseReviewSource(video); },
     dispose: () => {
       stop(); video?.removeEventListener("play", played); video?.removeEventListener("pause", paused);
       video?.removeEventListener("reviewshuttlestop", stop);

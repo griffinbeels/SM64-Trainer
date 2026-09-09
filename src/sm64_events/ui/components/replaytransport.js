@@ -7,11 +7,12 @@ import { pictureInterval, useReviewMedia } from "../reviewmedia.js";
 import { stopShuttle } from "../replayshuttle.js";
 import { LoopEditor, PlaybackOptions } from "./replayoptions.js";
 import { focusReplay } from "../replayfocus.js";
+import { seekReviewSource } from "../reviewsource.js";
 
 const html = htm.bind(h);
 const stamp = seconds => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
 
-export function ReplayTransport({ video = null, clock = null, frameStep = null,
+export function ReplayTransport({ video, clock = null, frameStep = null,
     playing, onStart, onStep, onToggle, stepHandlers = null,
     startTitle = "Jump to the beginning", canStep = true, frameKind = "game", note = null,
     loop: controlledLoop, onLoopChange, reviewReady = true }) {
@@ -19,6 +20,8 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
   const [error, setError] = useState(null);
   const loop = controlledLoop === undefined ? localLoop : controlledLoop;
   const media = useReviewMedia(video, { clock, step: frameStep, loop });
+  // Replacing a source resets paused without necessarily emitting pause.
+  const isPlaying = video ? media.playing : playing;
   const interval = pictureInterval(media.picture, clock, frameStep, media.duration);
   const handlers = (direction) => stepHandlers ? stepHandlers(direction)
     : { onclick: () => onStep(direction) };
@@ -42,7 +45,7 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
       <input type="range" min="0" max=${media.duration || 1} step="any"
         value=${media.time} disabled=${!media.duration} aria-label="Seek recording"
         onpointerup=${() => focusReplay(video)}
-        oninput=${e => { if (video) { stopShuttle(video); video.currentTime = Number(e.currentTarget.value); } }} />
+        oninput=${e => { if (video) { stopShuttle(video); seekReviewSource(video, Number(e.currentTarget.value)); } }} />
       <span class="replay-media-time replay-time-pair">${stamp(media.time)} / ${stamp(media.duration)}</span>
     </div>
     <div class="replay-control-row"><div class="replay-transport">
@@ -53,8 +56,8 @@ export function ReplayTransport({ video = null, clock = null, frameStep = null,
       <${Icon} name="stepBack" size=${15} /> Back 1
     </button>
     <button class="primary-transport" onclick=${onToggle} title="Play or pause (Space)">
-      <${Icon} name=${playing ? "pause" : "play"} size=${16} />
-      ${playing ? "Pause" : "Play"}
+      <${Icon} name=${isPlaying ? "pause" : "play"} size=${16} />
+      ${isPlaying ? "Pause" : "Play"}
     </button>
     <button ...${handlers(1)} disabled=${!canStep} title=${stepTitle("forward")}>
       <${Icon} name="stepForward" size=${15} /> Forward 1
