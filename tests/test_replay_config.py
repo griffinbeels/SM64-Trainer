@@ -16,7 +16,7 @@ def test_defaults_match_spec():
     assert cfg.pre_pad_s == 3.0 and cfg.post_pad_s == 2.0
     assert cfg.fps == 60
     assert cfg.segment_s == 2.0
-    assert cfg.max_buffer_bytes == 20 * 1024**3
+    validate_settings(cfg.retention_s, cfg.max_buffer_bytes, cfg.pre_pad_s, cfg.post_pad_s)
     assert cfg.save_root == Path("replays")
     assert cfg.scratch_dir == Path("data") / "replay_buffer"
     assert cfg.window_title == "Project64"

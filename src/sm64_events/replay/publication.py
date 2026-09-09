@@ -12,14 +12,14 @@ import shutil
 import tempfile
 
 
-def atomic_json(path: Path, document: dict) -> None:
+def atomic_json(path: Path, document: dict, *, allow_nan: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
                                          suffix=".tmp", delete=False) as stream:
             temporary = Path(stream.name)
-            json.dump(document, stream, allow_nan=False)
+            json.dump(document, stream, allow_nan=allow_nan)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -62,16 +62,27 @@ def _finish(root: Path, pending: Path) -> Path:
     return destination
 
 
+def resume(root: Path, attempt_id: int) -> Path | None:
+    """Finish a complete staged save without requiring its scratch source."""
+    pending = root.resolve() / ".pending" / str(int(attempt_id))
+    if not (pending / "intent.json").is_file() or not (pending / "media.mp4").is_file():
+        return None
+    return _finish(root.resolve(), pending)
+
+
 def publish(root: Path, attempt_id: int, source: Path, destination: Path,
             metadata: dict, review: dict, *, reserve_bytes: int = 5 * 1024**3) -> Path:
     """Publish one serialized Save/PB. Retry/recovery resumes a staged copy."""
     root = root.resolve()
     destination = _destination(root, str(destination.resolve().relative_to(root)))
     pending = root / ".pending" / str(int(attempt_id))
-    if (pending / "intent.json").exists() and (pending / "media.mp4").exists():
-        return _finish(root, pending)
+    resumed = resume(root, attempt_id)
+    if resumed is not None:
+        return resumed
     pending.mkdir(parents=True, exist_ok=True)
-    atomic_json(pending / "metadata.json", metadata)
+    # Archival evidence may contain non-finite values from old sidecars. Keep
+    # those bytes interpretable; the service validates them before HTTP output.
+    atomic_json(pending / "metadata.json", metadata, allow_nan=True)
     atomic_json(pending / "review.json", {"version": 1, "state": review})
     atomic_json(pending / "intent.json", {"version": 1,
         "destination": str(destination.relative_to(root)), "media_bytes": source.stat().st_size})

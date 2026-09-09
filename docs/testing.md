@@ -1,5 +1,9 @@
 # Testing without occupying the whole computer
 
+For the local draft and wrap commands, see [local verification](local-verification.md).
+The shared `quick` lane runs pinned offline lint checks; `full` retains this
+document's integration runner and requires its rendered-test dependencies.
+
 Use the smallest check that can disprove the change, then stop when it passes.
 Run the full suite once for the integrated change, not after every edit, commit,
 review, and merge. Repeat it only if code, test inputs, dependencies, or the

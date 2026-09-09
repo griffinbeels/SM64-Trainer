@@ -576,6 +576,7 @@ await sleep(60);
 # it. It opens off the settings drawer's own "Setup" button (header.js), so
 # this walks the same door a person does: open Settings, then Setup.
 _SETUP_SETUP = _script("""
+if (document.querySelector('.setup-modal')) return;
 if (!document.querySelector('.settings-drawer')) {
   const settingsBtn = document.querySelector('.nav-item.settings-link')
     || document.querySelector('button[aria-label="Open settings"]');
@@ -584,12 +585,12 @@ if (!document.querySelector('.settings-drawer')) {
     await waitFor(() => !!document.querySelector('.settings-drawer'));
   }
 }
-if (!document.querySelector('.setup-platform-picks')) {
+if (!document.querySelector('.setup-modal')) {
   const setupBtn = Array.from(document.querySelectorAll('.settings-actions button'))
     .find((b) => b.textContent.trim() === 'Setup');
   if (setupBtn) {
     setupBtn.click();
-    await waitFor(() => !!document.querySelector('.setup-platform-picks'));
+    await waitFor(() => !!document.querySelector('.setup-modal'));
   }
 }
 """)

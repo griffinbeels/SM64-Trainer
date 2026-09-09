@@ -1,246 +1,204 @@
-// src/sm64_events/ui/components/setupmodal.js — the first-run setup screen.
-//
-// Two steps over one small API (GET|PUT|POST|DELETE /api/setup,
-// server/setup_api.py): which platform you practice on, then a checklist for
-// that platform. Only the emulator pane exists today -- console-support's own
-// N64 pane registers itself into SETUP_PANES later, which is why the pane is
-// looked up through a registry rather than an if/else here.
+// The installation wizard: local navigation, observed prerequisites, explicit writes.
 import { h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Modal } from "./modal.js";
 import { Icon } from "./icons.js";
 import { EMU, N64 } from "../platform.js";
+import { SetupSwap, useSetupAttention } from "./setupmotion.js";
+import { ConnectPage, EmuSetupPane, N64SetupPane, CompletionPage } from "./setuppages.js";
+import { SETUP_TITLES, ACKNOWLEDGE_MS, canAdvance, canReviewForward,
+         pagesFor, readResume, saveResume } from "../setupflow.js";
 
 const html = htm.bind(h);
-
-// How often the emulator pane re-checks the layer's state while the modal is
-// open, so a row flips from "todo" to "found" the moment he starts Project64
-// without needing to close and reopen the modal.
-const POLL_MS = 2000;
-
-function ChecklistRow({ status, title, children }) {
-  return html`<div class=${`setup-row setup-row-${status}`}>
-    <div class="setup-row-head">
-      <span class="setup-status-dot" aria-hidden="true"></span>
-      <span class="setup-row-title">${title}</span>
-    </div>
-    ${children != null && html`<div class="setup-row-body">${children}</div>`}
-  </div>`;
-}
-
-// The three lines a fresh install writes, and why -- named exactly (the DLL,
-// the registry setting, the ini) so the consent card states the whole action
-// rather than gesturing at "some files".
-function ConsentCard({ emu, installing, installError, onInstall }) {
-  const pluginDir = emu.pj64_dir ? `${emu.pj64_dir}\\Plugin` : "the Plugin folder";
-  const blockingReason = (emu.problems || [])[0] || null;
-  const reason = installError || blockingReason;
-  return html`<div class="setup-consent-card">
-    <p>Installing writes three things:</p>
-    <ul class="setup-writes">
-      <li>the file <code class="setup-name">sm64_trainer_gfx.dll</code> into
-        <code class="setup-path">${pluginDir}</code></li>
-      <li>Project64's <code class="setup-name">Graphics Dll</code> setting, so it loads that file</li>
-      <li>a small <code class="setup-name">sm64_trainer_gfx.ini</code> naming your current
-        plugin${emu.wrapped_name ? html`, <code class="setup-name">${emu.wrapped_name}</code>` : ""},
-        which keeps doing all the drawing</li>
-    </ul>
-    <p>Your recording's frames become game frames, so the input timeline is
-      exact on every frame instead of estimated. Remove it any time from this
-      row; Project64 must be closed to install or remove.</p>
-    ${reason && html`<p class="setup-disabled-reason">${reason}</p>`}
-  </div>`;
-}
-
-// THE EXACT STEPS, as the server orders them (core/capturelayer.py::_steps),
-// ticked live by the modal's poll: close Project64 -> install / the trainer
-// updates -> start Project64. A step that carries an action gets its button
-// here, enabled once the steps before it are done.
-function StepList({ steps, installing, onInstall }) {
-  if (!steps || !steps.length) return null;
-  let blocked = false;
-  return html`<ol class="setup-steps">
-    ${steps.map((step) => {
-      const enabled = !blocked && !step.done;
-      const row = html`<li key=${step.id}
-          class=${`setup-step ${step.done ? "is-done" : ""} ${enabled ? "is-next" : ""}`}>
-        <span class="setup-tick" aria-hidden="true">${step.done ? "✓" : "○"}</span>
-        <span class="setup-tick-label">${step.label}</span>
-        ${step.action === "install" && !step.done && html`<button type="button"
-            class="primary-button" disabled=${installing || !enabled}
-            onclick=${onInstall}>${installing ? "Installing…" : step.label}</button>`}
-      </li>`;
-      if (!step.done) blocked = true;
-      return row;
-    })}
-  </ol>`;
-}
-
-function CaptureLayerRow({ setup, refresh }) {
-  const emu = setup.emu;
-  const [installing, setInstalling] = useState(false);
-  const [installError, setInstallError] = useState(null);
-
-  async function install() {
-    setInstallError(null);
-    setInstalling(true);
-    try {
-      await send("POST", "/api/setup/capture-layer", { consent: true });
-    } catch (error) {
-      setInstallError(error.message || String(error));
-    }
-    setInstalling(false);
-    refresh();
-  }
-
-  async function remove() {
-    try { await send("DELETE", "/api/setup/capture-layer"); }
-    catch { /* the row re-reads state on the next refresh either way */ }
-    refresh();
-  }
-
-  // A problem on a loaded layer (no picture reaches it; a newer build is
-  // waiting) shows where the click lands -- "Active" alone read as fine
-  // while every picture was refused (2026-09-05).
-  const problems = emu.problems || [];
-  const stale = emu.wrapper_current === false;
-  const problemLines = problems.map((problem) =>
-    html`<p class="setup-row-detail setup-row-problem">${problem}</p>`);
-  const stepList = html`<${StepList} steps=${emu.steps} installing=${installing}
-      onInstall=${install} />`;
-  const updateButton = stale && html`<button type="button" class="primary-button"
-      disabled=${installing} onclick=${install}>${installing ? "Updating…" : "Update"}</button>`;
-  if (emu.state === "active") {
-    return html`<${ChecklistRow} status=${problems.length ? "warn" : "ok"}
-        title="Frame-exact capture">
-      <div class="setup-active-line">
-        <${Icon} name="check" size=${14} /><span>Active</span>
-        ${updateButton}
-        <button type="button" onclick=${remove}>Remove</button>
-      </div>
-      ${stepList}
-      ${problemLines}
-      ${installError && html`<p class="setup-disabled-reason">${installError}</p>`}
-    <//>`;
-  }
-  if (emu.state === "needs_restart") {
-    return html`<${ChecklistRow} status="warn" title="Frame-exact capture">
-      <p class="setup-row-detail">Installed. Project64 has not loaded it yet.</p>
-      ${stepList}
-      ${problemLines.slice(1)}
-      ${updateButton}
-      <button type="button" onclick=${remove}>Remove</button>
-      ${installError && html`<p class="setup-disabled-reason">${installError}</p>`}
-    <//>`;
-  }
-  if (emu.state === "regressed") {
-    return html`<${ChecklistRow} status="warn" title="Frame-exact capture">
-      <p class="setup-row-detail">${(emu.problems || [])[0]
-        || "Project64 now names a different plugin."}</p>
-      ${stepList}
-      ${installError && html`<p class="setup-disabled-reason">${installError}</p>`}
-    <//>`;
-  }
-  if (emu.state === "unavailable") {
-    return html`<${ChecklistRow} status="warn" title="Frame-exact capture">
-      <p class="setup-row-detail">${(emu.problems || [])[0]
-        || "Not available on this build."}</p>
-    <//>`;
-  }
-  return html`<${ChecklistRow} status="todo" title="Frame-exact capture">
-    ${stepList}
-    <${ConsentCard} emu=${emu} installing=${installing}
-        installError=${installError} onInstall=${install} />
-  <//>`;
-}
-
-export function EmuSetupPane({ setup, refresh }) {
-  const emu = setup.emu;
-  const [gameMode, setGameMode] = useState(null);
-  useEffect(() => {
-    send("GET", "/api/mode").then(setGameMode).catch(() => setGameMode(null));
-  }, []);
-
-  const detected = emu.pj64_running && gameMode
-    ? gameMode.effective.toUpperCase() : null;
-
-  return html`<div class="setup-checklist">
-    <${ChecklistRow} status=${emu.pj64_dir ? "ok" : "todo"} title="Project64">
-      ${emu.pj64_dir
-        ? html`<p class="setup-row-detail">Found at
-            <code class="setup-path">${emu.pj64_dir}</code></p>`
-        : html`<p class="setup-row-detail">Start Project64 once so the
-            trainer can find it.</p>`}
-    <//>
-    <${ChecklistRow} status=${detected ? "ok" : "todo"} title="Usamune ROM">
-      ${detected
-        ? html`<p class="setup-row-detail">Detected: ${detected}</p>`
-        : html`<p class="setup-row-detail">Not detected. Open the Usamune 1.93
-            US ROM in Project64.</p>`}
-    <//>
-    <${CaptureLayerRow} setup=${setup} refresh=${refresh} />
-  </div>`;
-}
-
-export function N64SetupPane() {
-  return html`<p class="setup-n64-note">N64 setup arrives with console support.</p>`;
-}
-
+export { EmuSetupPane, N64SetupPane };
 export const SETUP_PANES = { [EMU]: EmuSetupPane, [N64]: N64SetupPane };
 
-const PLATFORM_CHOICES = [
-  [EMU, "Emulator", "Project64 on this PC"],
-  [N64, "N64", "A real console, capture card"],
-];
+function initialState(initialPlatform, manual) {
+  const resume = readResume();
+  const platform = initialPlatform || resume?.platform || null;
+  return {platform, page: initialPlatform ? (platform === N64 ? "console" : "connect") : resume?.page || "platform"};
+}
 
-export function SetupModal({ onClose, initialPlatform, initialPane }) {
+function useSetupConnection(onFailure) {
   const [setup, setSetup] = useState(null);
-  const [platform, setPlatform] = useState(initialPlatform || initialPane || null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-
-  const refresh = () => getJSON("/api/setup").then(setSetup).catch(() => {});
-
-  useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, POLL_MS);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    // Nothing picked yet (no initialPlatform/initialPane) -- follow whatever
-    // the server already has on file, once it answers.
-    if (platform === null && setup) setPlatform(setup.platform);
-  }, [setup]);
-
-  async function choosePlatform(next) {
-    setError(null);
+  const [offline, setOffline] = useState(false);
+  const request = useRef(0);
+  const alive = useRef(true);
+  const mutating = useRef(false);
+  const release = () => { mutating.current = false; if (alive.current) setBusy(false); };
+  const accept = (value) => { setSetup(value); setOffline(false); };
+  async function refresh() {
+    if (mutating.current) return;
+    const number = ++request.current;
     try {
-      setSetup(await send("PUT", "/api/setup/platform", { platform: next }));
-      setPlatform(next);
-    } catch (submitError) {
-      setError(submitError.message || String(submitError));
+      const value = await getJSON("/api/setup");
+      if (alive.current && number === request.current) accept(value);
+    } catch {
+      if (alive.current && number === request.current) setOffline(true);
     }
   }
+  useEffect(() => {
+    alive.current = true;
+    let timer;
+    const poll = async () => {
+      await refresh();
+      if (alive.current) timer = setTimeout(poll, 1000);
+    };
+    poll();
+    return () => { alive.current = false; ++request.current; clearTimeout(timer); };
+  }, []);
 
-  const Pane = platform ? SETUP_PANES[platform] : null;
+  async function mutate(method, url, body, reload = false) {
+    if (mutating.current) return null;
+    mutating.current = true; ++request.current; setBusy(true); setError(null);
+    try {
+      let value = await send(method, url, body);
+      if (reload) value = await getJSON("/api/setup");
+      if (alive.current) accept(value);
+      return value;
+    } catch (failure) {
+      if (alive.current) {
+        onFailure();
+        setError(failure.message || "Couldn't complete that action. Try again.");
+      }
+      return null;
+    } finally {
+      release();
+    }
+  }
+  return {setup, busy, error, offline, alive, refresh, mutate, setError};
+}
 
-  return html`<${Modal} title="Set up practice" description="Practice on:"
-      icon="settings" size="large" onClose=${onClose}
-      footer=${html`<button type="button" onclick=${onClose}>Not now</button>`}>
-    <div class="setup-modal">
-      <div class="setup-platform-picks">
-        ${PLATFORM_CHOICES.map(([key, name, detail]) => html`<button
-            type="button" key=${key}
-            class=${`setup-platform-choice ${platform === key ? "is-selected" : ""}`}
-            onclick=${() => choosePlatform(key)}>
-          <span class="setup-platform-name">${name}</span>
-          <span class="setup-platform-detail">${detail}</span>
-        </button>`)}
-      </div>
-      ${error && html`<p class="setup-error">${error}</p>`}
-      ${Pane && setup && html`<${Pane} setup=${setup} refresh=${refresh} />`}
+function SetupContent({page, platform, setup, choose, finish, busy, refresh, install, remove, resume, manual}) {
+  const Pane = SETUP_PANES[platform];
+  return page === "platform" ? html`<div class="setup-platform-picks">
+      ${[[EMU, "Emulator", "Only Project64 v1.6 supported", "compare"],
+        [N64, "N64", "Requires capture card.", "more"]].map(([key, name, detail, icon]) => html`<button
+          type="button" key=${key} class=${`setup-platform-choice ${platform === key ? "is-selected" : ""}`}
+          onclick=${() => choose(key)}>
+        <${Icon} name=${icon} size=${34}/><span class="setup-platform-name">${name}</span>
+        <span class="setup-platform-detail">${detail}</span><span class="setup-choice-arrow" aria-hidden="true">
+          <${Icon} name="arrowRight" size=${22}/></span>
+      </button>`)}
+    </div>`
+    : page === "connect" ? html`<${ConnectPage} setup=${setup}/>`
+    : !setup ? html`<p role="status">Connecting to the trainer…</p>`
+    : page === "complete" ? html`<${CompletionPage} setup=${setup} onFinish=${finish} busy=${busy}/>`
+    : Pane ? html`<${Pane} setup=${setup} refresh=${refresh} installing=${busy}
+        onInstall=${install} onRemove=${remove} onResume=${resume} manual=${manual}
+        onEmulator=${() => choose(EMU)} onFinish=${finish} busy=${busy}/>` : null;
+}
+
+export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, manual = false }) {
+  const [initial] = useState(() => initialState(initialPlatform || initialPane, manual));
+  const [platform, setPlatform] = useState(initial.platform);
+  const [page, setPage] = useState(initial.page);
+  const [reached, setReached] = useState(() => pagesFor(initial.platform).slice(0,
+    Math.max(1, pagesFor(initial.platform).indexOf(initial.page) + 1)));
+  const [review, setReview] = useState(false);
+  const [direction, setDirection] = useState(1);
+  const attentive = useSetupAttention();
+  const root = useRef(null);
+  const initialized = useRef(false);
+  const {setup, busy, error, offline, alive, refresh, mutate, setError} = useSetupConnection(() => {
+    if (page === "complete") go("install", true, true);
+  });
+
+
+  useEffect(() => {
+    if (!setup || initialized.current) return;
+    initialized.current = true;
+    if (setup.emu.consented_at || setup.emu.wrapper_present) {
+      const next = setup.platform === N64 ? "console"
+        : setup.emu.target?.state === "ready" ? "install" : "connect";
+      setPlatform(setup.platform);
+      setPage(next);
+      setReached(next === "connect" ? ["platform", "connect"] : pagesFor(setup.platform));
+      setReview(manual && next !== "connect");
+    } else if (!initial.platform && setup.onboarding?.started) {
+      setPlatform(EMU); setPage("install"); setReached(["platform", "connect", "install"]);
+    }
+  }, [setup]);
+
+  function go(next, backwards = false, reviewing = false) {
+    setDirection(backwards ? -1 : 1);
+    setReview(reviewing);
+    setPage(next);
+    setReached(current => current.includes(next) ? current : [...current, next]);
+    setError(null);
+  }
+  function choose(next) {
+    setPlatform(next);
+    setReached(["platform", next === EMU ? "connect" : "console"]);
+    go(next === EMU ? "connect" : "console");
+  }
+
+  const advance = !offline && !busy && canAdvance(page, setup);
+  useEffect(() => {
+    if (!advance || review || !attentive) return;
+    const timer = setTimeout(() => go(page === "connect" ? "install" : "complete"), ACKNOWLEDGE_MS);
+    return () => clearTimeout(timer);
+  }, [page, advance, review, attentive]);
+
+  useEffect(() => {
+    if (platform) saveResume({platform, page});
+    root.current?.closest(".modal-body")?.scrollTo({top: 0, behavior: "instant"});
+    if (document.hasFocus()) {
+      const heading = root.current?.closest(".modal")?.querySelector(".modal-heading h2");
+      if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
+    }
+  }, [page, platform]);
+
+
+  const install = () => mutate("POST", "/api/setup/capture-layer", {consent: true});
+  const remove = () => mutate("DELETE", "/api/setup/capture-layer");
+  const resume = () => mutate("POST", "/api/pause", {paused: false}, true);
+  async function finish() {
+    const value = await mutate("POST", "/api/setup/complete", {platform});
+    if (!value || !alive.current) return;
+    saveResume(null);
+    if (onComplete) onComplete(value);
+    else onClose();
+  }
+
+  const pages = pagesFor(platform), index = pages.indexOf(page);
+  const back = index > 0;
+  const forward = review && canReviewForward(page, {platform, pages: reached}, setup) && !offline;
+  const stepComplete = canAdvance(page, setup) || forward;
+  const title = setupTitle(page, setup);
+
+
+  return html`<${Modal} title=${title} icon=${page === "complete" ? "check" : "practice"} size="large"
+      footer=${html`<div class="setup-footer">
+        <div class="setup-navigation">
+          <span>${back && html`<button type="button" class="setup-arrow" aria-label="Back" disabled=${busy}
+            onclick=${() => go(pages[index - 1], true, true)}><${Icon} name="arrowLeft" size=${22}/></button>`}</span>
+          <div class="setup-progress" aria-label=${`Step ${index + 1} of ${pages.length}`}>
+            <div class="setup-dots">${pages.map((key, at) => html`<span key=${key}
+              class=${`setup-dot ${at === index ? "is-current" : at < index ? "is-done" : ""}`}
+              aria-current=${at === index ? "step" : undefined}></span>`)}</div>
+            <span>Step ${index + 1} of ${pages.length}</span>
+          </div>
+          <span>${forward && html`<button type="button" class="setup-arrow setup-arrow-ready" aria-label="Forward" disabled=${busy}
+            onclick=${() => go(pages[index + 1], false, true)}><${Icon} name="arrowRight" size=${22}/></button>`}
+            ${!stepComplete && !["complete", "console"].includes(page) && html`<button type="button" class="setup-not-now"
+              disabled=${busy} onclick=${onClose}>Not now</button>`}</span>
+        </div>
+      </div>`}>
+    <div class="setup-modal" ref=${root} data-page=${page} aria-busy=${busy}>
+      <${SetupSwap} identity=${page} direction=${direction}><${SetupContent} page=${page} platform=${platform} setup=${setup} choose=${choose}
+        finish=${finish} busy=${busy} refresh=${refresh} install=${install} remove=${remove} resume=${resume} manual=${manual}/></${SetupSwap}>
+      ${offline && html`<p class="setup-error" role="alert">Connection interrupted. Retrying automatically…</p>`}
+      ${error && html`<p class="setup-error" role="alert">${error}</p>`}
     </div>
-  <//>`;
+  </${Modal}>`;
+}
+
+function setupTitle(page, setup) {
+  return page === "complete" && setup?.emu?.verification?.limited
+    ? "Setup complete" : SETUP_TITLES[page];
 }

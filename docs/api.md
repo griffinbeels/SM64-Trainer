@@ -505,20 +505,59 @@ addresses, so detection stays US while grading uses JP standards. `mode`
 
 ### Setup
 
-The first-run setup screen (`setupmodal.js`) — one small API over two things
-already persisted separately: which platform you practice on
-(`core/modes.py`, the same record `/api/mode` reads) and the capture layer's
-own state (`core/capturelayer.py` — whether the frame-exact wrapper plugin is
-installed into Project64). Mounted only when the server is given a capture
-layer object (`create_app(..., capture_layer=...)`); a broadcast-only second
-instance carries none of these routes.
+The installation wizard uses the capture layer for installation, a read-only
+runtime observer for readiness, and `onboarding.json` beside the mode settings
+for its versioned completion record. Routes are mounted only when
+`create_app(..., capture_layer=...)` is supplied. Production also injects
+`setup_observer`; a missing observer never reports a working setup.
 
 | Method | Path | Body | Description |
 |---|---|---|---|
-| `GET` | `/api/setup` | — | `{platform: "emu"\|"n64", emu: <LayerStatus>, n64: {available: false}}`. `emu` is the capture layer's full status (`pj64_dir`, `pj64_running`, `registry_graphics_dll`, `wrapper_present`, `wrapper_current`, `wrapper_selected`, `wrapped_name`, `layer_alive`, `gl_context`, `pictures_via` — `gl`, `readscreen` or null —, `consented_at`, `problems`, `state` — one of `not_installed\|needs_restart\|active\|regressed\|unavailable` — and `steps`: the exact ordered steps from this state to a live layer, each `{id, label, done, action}` with `action` `install` on the step that carries the Install / Re-install button; empty once the layer is live and current. The setup screen renders `steps` as its checklist and ticks them on its two-second poll, so close Project64 / the trainer updates / start Project64 are the onboarding itself, 2026-09-05). `n64` has nothing to report yet (console-support's own front-end). |
-| `PUT` | `/api/setup/platform` | `{"platform": "emu"\|"n64"}` | Persists the platform choice through `core/modes.py` (touches `mode` only — the stored game version is unchanged) and returns the `GET` payload. 422 on any other value. |
-| `POST` | `/api/setup/capture-layer` | `{"consent": true}` | `capture_layer.install(consent)`, then the `GET` payload. A refused install (`LayerRefused` — Project64 running, no folder known, `consent` false) is a 409 whose `detail` is the sentence the checklist shows where the click landed. |
-| `DELETE` | `/api/setup/capture-layer` | — | `capture_layer.uninstall()`, then the `GET` payload. Refusal is a 409 the same way. |
+| `GET` | `/api/setup` | — | Returns `{platform, emu, onboarding, n64: {available: false}}`. `emu` retains every `LayerStatus` field and adds the observations described below. |
+| `PUT` | `/api/setup/platform` | `{"platform": "emu"\|"n64"}` | Persists platform, preserving the stored grading version, and returns the setup payload. The wizard keeps its selection local until completion. Unknown platform: 422. |
+| `POST` | `/api/setup/capture-layer` | `{"consent": true}` | Installs with Project64 closed, marks onboarding started/incomplete, returns setup. Refusal or file-write failure: 409 with an actionable `detail`. |
+| `DELETE` | `/api/setup/capture-layer` | — | Restores the previous graphics selection with Project64 closed and clears completion. Returns setup; refusal or write failure: 409. |
+| `POST` | `/api/setup/complete` | `{"platform": "emu"\|"n64"}` | Rechecks applicable readiness, saves platform and completion, returns setup. Incomplete emulator setup: 409. N64 can finish with `limited: true`, without claiming console tracking. |
+
+Runtime fields in `emu`:
+
+- `installation_verified`: installed wrapper matches this build by SHA-256, is
+  selected in Project64, and has a wrapping configuration in its actual INI.
+  This does not require a local consent timestamp and does not imply live readiness.
+  A verified installation in supported Project64 suppresses automatic onboarding.
+- `target`: Project64 executable path, PID, file version, state and recovery message.
+  `build` identifies an exact known unversioned build by SHA-256; `version` stays
+  null when Windows version metadata is absent. Names alone never qualify a build.
+  Only verified v1.6 qualifies; multiple processes require closing extra copies.
+- `rom`: loaded cartridge header identity (`state`, `region`, `name`, `warning`).
+  States are missing, supported US Usamune v1.93u, JP Usamune, or unsupported.
+  The grading preference is never detection.
+- `checks`: plugin heartbeat from the target PID, recent pictures, input samples
+  and game progression. Fresh counter movement remains readable by multiple
+  clients for three seconds; a new source or counter reset must prove itself again.
+  Intentional recorder idle can use an existing positive delivered-picture count
+  from that source's original PID (`frame_source_health.plugin_pid` in replay
+  status). It does not require new pictures or controller activity while AFK.
+  Live heartbeat, ROM and game/input sampling remain required; active capture
+  stalls, stopped recording and desktop fallback do not receive this exception.
+- `verification`: `{step, message, ready, limited, installed, checks}`.
+  Installation is not readiness. US requires all checks; JP verifies the
+  available plugin/picture path, bypasses unimplemented tracking, and carries
+  a warning through completion.
+- `capture_note`, `tracking_note`, `paused`: current recovery information.
+  The wizard offers an explicit resume action through the existing pause API.
+
+The UI polls serially once per second, shows only the current page and revealed
+substep, and acknowledges discoveries before advancing. Back enters review mode;
+a reached page can be revisited only while its prerequisites remain valid.
+`Not now` suppresses automatic prompting for that browser session; local resume
+position is separate from the server's durable completion record.
+
+Project64 installation metadata lives at
+`%LOCALAPPDATA%/SM64Trainer/data/capture_layer.json` for source and packaged apps.
+Startup copies legacy checkout metadata only if this shared record is absent;
+it never replaces an existing shared record or moves practice data. Physical
+files, configuration and hash are rechecked rather than trusting the record.
 
 ## MARELO — the overall rating
 

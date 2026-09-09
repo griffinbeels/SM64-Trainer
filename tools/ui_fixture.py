@@ -26,6 +26,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timezone
 from pathlib import Path
 
@@ -101,35 +102,34 @@ class _OfflineMemory:
 
 
 class _FixtureCaptureLayer:
-    """A capture layer whose STATUS is fixed for the fixture's whole
-    lifetime -- a real install/uninstall needs a real Project64 and a real
-    registry, neither of which this offline fixture has. `install`/
-    `uninstall` are recorded (so a driven test can assert they were called)
-    and either succeed by returning the fixed status or refuse with a fixed
-    reason; nothing here simulates a state MACHINE. A test that wants a
-    different state asks `serve_ui(capture_layer_status={...})` for a fresh
-    fixture at that state, the same way every other fixture knob works."""
+    """An offline capture adapter, with no registry or process access.
 
-    def __init__(self, status: LayerStatus, refuse: str | None = None):
+    Status is fixed by default. A driven test can update the supplied overrides
+    dictionary to represent an external action such as closing Project64.
+    Install/remove calls are recorded; tests own their outcomes explicitly.
+    """
+
+    def __init__(self, status: LayerStatus, refuse: str | None = None, overrides=None):
         self._status = status
+        self._overrides = overrides if overrides is not None else {}
         self._refuse = refuse
         self.installs: list[bool] = []
         self.uninstalls = 0
 
     def status(self) -> LayerStatus:
-        return self._status
+        return replace(self._status, **self._overrides)
 
     def install(self, consent: bool) -> LayerStatus:
         self.installs.append(consent)
         if self._refuse or not consent:
             raise LayerRefused(self._refuse or "consent is required")
-        return self._status
+        return self.status()
 
     def uninstall(self) -> LayerStatus:
         self.uninstalls += 1
         if self._refuse:
             raise LayerRefused(self._refuse)
-        return self._status
+        return self.status()
 
 
 def _fixture_capture_layer_status(**overrides) -> LayerStatus:
@@ -1363,7 +1363,8 @@ def serve_ui(*args, **kwargs):
         yield base
 
 
-def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse, bundled_library):
+def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse,
+                     bundled_library, setup_observer):
     broadcaster = Broadcaster()
     # `ranks=` is NOT optional here, whatever the signature says. Omit it and
     # every rank builder short-circuits to empty -- /api/ranks/standards starts
@@ -1432,9 +1433,21 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
     # install/uninstall state machine.
     capture_layer = _FixtureCaptureLayer(
         _fixture_capture_layer_status(**(capture_layer_status or {})),
-        refuse=capture_layer_refuse)
+        refuse=capture_layer_refuse, overrides=capture_layer_status)
+    if setup_observer is None:
+        def setup_observer(layer):
+            return {
+                "target": {"state": "ready" if layer.pj64_dir else "missing",
+                           "path": layer.pj64_dir, "pid": 123 if layer.pj64_running else None,
+                           "message": "Open Project64 v1.6."},
+                "rom": {"state": "supported" if layer.pj64_running else "missing",
+                        "region": "us" if layer.pj64_running else None,
+                        "name": "SM64 USAMUNE v1.93u" if layer.pj64_running else None,
+                        "warning": None},
+                "checks": {key: layer.state == "active" for key in
+                           ("plugin", "pictures", "inputs", "game")}}
     app = create_app(poller, broadcaster, service=service, compare=compare,
-                     inputs=inputs, capture_layer=capture_layer,
+                     inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
                      adoptions_path=scratch_path
                      / "library_adoptions.json",
                      mode_path=scratch_path / "tracker_mode.json",
@@ -1627,6 +1640,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               pad_journal: int = 0,
               capture_layer_status: dict | None = None,
               capture_layer_refuse: str | None = None,
+              setup_observer=None,
               bundled_library: bool = True):
     """Yield the base URL of an offline instance; stop it on the way out.
 
@@ -1776,7 +1790,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     if pad_journal:
         _pad_journal(db_path, pad_journal)
     app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
-                                    capture_layer_status, capture_layer_refuse, bundled_library)
+                                    capture_layer_status, capture_layer_refuse, bundled_library, setup_observer)
 
     _fixture_replay_routes(app, database)
 

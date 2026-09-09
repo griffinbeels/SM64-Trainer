@@ -32,25 +32,21 @@ function rememberSetupPrompt() {
   try { sessionStorage.setItem(SETUP_NOT_NOW_KEY, "1"); } catch { /* private mode */ }
 }
 
-// Auto-open criteria: practicing on the emulator (or nothing chosen yet --
-// core/modes.py defaults there), the capture layer has never been touched,
-// and Project64 is at least findable (a folder we know, or it is running
-// right now) -- otherwise the modal would open onto a checklist with nothing
-// for him to act on yet. Never while the layer is already active.
-// His rule (2026-09-05, the first launch after the layer shipped): "If the
-// user hasn't installed / set up, it should trigger the screen. This should
-// trigger for existing users." So the screen opens whenever the layer is
-// not consented (or was and regressed) -- whether or not Project64 has been
-// seen yet: the Project64 row is itself the door for that. Only a build with
-// no layer to install, or the N64 platform, stays quiet.
+// First use also works before an emulator has been found. Resume an
+// unfinished installation; leave established working installations quiet.
+// Settings remains the manual entry for reviewing or changing setup.
 function shouldOfferSetup(setup) {
   if (!setup || setup.platform === N64) return false;
   const emu = setup.emu;
   if (!emu) return false;
+  // Existing matching installation is enough to skip onboarding, including
+  // a fresh worktree. Live readiness is a separate check in manual Setup.
+  if (emu.installation_verified && emu.target?.state === "ready") return false;
   // ...and for a layer this build has outgrown: the steps to update it are
   // the onboarding, so the screen carries them the moment the page opens.
-  const stale = !!emu.consented_at && emu.wrapper_present && emu.wrapper_current === false;
-  return emu.state === "not_installed" || emu.state === "regressed" || stale;
+  const stale = emu.wrapper_present && emu.wrapper_current === false;
+  return emu.state === "not_installed" || emu.state === "regressed" || stale
+    || (setup.onboarding?.started && !setup.onboarding.completed_at);
 }
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];
@@ -88,7 +84,9 @@ function RunScopeWarning({ t, pending, onDone }) {
   <//>`;
 }
 
-export function Header({ t, settingsOpen, closeSettings }) {
+// Existing settings shell exceeds these limits; onboarding keeps its new flow in SetupModal.
+// eslint-disable-next-line complexity, max-lines-per-function
+export function Header({ t, settingsOpen, closeSettings, setTab }) {
   // `undefined` = nothing pending. `null` is a real pick (Overall), which is
   // why this is not a boolean — the same distinction store.js draws for a
   // route intent.
@@ -112,19 +110,28 @@ export function Header({ t, settingsOpen, closeSettings }) {
   // The setup screen (setupmodal.js): a manual "Setup" entry, PLUS a once-
   // per-session auto-open the first time this page loads onto a fresh
   // capture layer -- see shouldOfferSetup's own comment for the criteria.
-  // Closing it for ANY reason ("Not now", Esc, the backdrop) remembers that
-  // for the rest of this browser session, same as a manual open never
-  // re-triggers it: only the criteria above decide whether it opens itself.
+  // Only explicit Not now or completion dismisses the wizard. Remember
+  // either outcome for this browser session; completion also persists.
   const [setupOpen, setSetupOpen] = useState(false);
+  const [setupManual, setSetupManual] = useState(false);
+  const [setupWarning, setSetupWarning] = useState(null);
   useEffect(() => {
-    if (seenSetupPrompt()) return;
     send("GET", "/api/setup").then((setup) => {
-      if (shouldOfferSetup(setup)) setSetupOpen(true);
+      setSetupWarning(setup.emu?.rom?.warning || (setup.onboarding?.limited
+        && setup.onboarding.platform === EMU ? "JP tracking isn't supported yet; support is planned for a later patch." : null));
+      if (!seenSetupPrompt() && shouldOfferSetup(setup)) { closeSettings(); setSetupOpen(true); }
     }).catch(() => {});
   }, []);
   const closeSetup = () => {
     setSetupOpen(false);
     rememberSetupPrompt();
+  };
+  const completeSetup = (setup) => {
+    setSetupWarning(setup.platform === EMU && setup.emu?.verification?.limited ? setup.emu.rom.warning : null);
+    closeSetup();
+    closeSettings();
+    setTab?.("Practice");
+    t.refresh();
   };
 
   useEffect(() => {
@@ -284,6 +291,7 @@ export function Header({ t, settingsOpen, closeSettings }) {
           { mode: e.target.value }).then(() => t.refresh())} empty="—" />
     </div>
 
+    ${setupWarning && html`<p class="setup-capability-note" role="status">${setupWarning}</p>`}
     ${settingsOpen && html`<div class="settings-backdrop" onclick=${closeSettings}>
       <aside class="settings-drawer" role="dialog" aria-modal="true"
           aria-label="Settings"
@@ -316,7 +324,7 @@ export function Header({ t, settingsOpen, closeSettings }) {
               <${Icon} name="shield" />
               ${reportBusy ? "Generating…" : "Debug report"}
             </button>
-            <button type="button" onclick=${() => setSetupOpen(true)}>
+            <button type="button" onclick=${() => { closeSettings(); setSetupManual(true); setSetupOpen(true); }}>
               <${Icon} name="settings" />Setup
             </button>
           </div>
@@ -495,6 +503,6 @@ export function Header({ t, settingsOpen, closeSettings }) {
          the card it is about is what stops a second surface growing its own
          copy of this question. */""}
     <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
-    ${setupOpen && html`<${SetupModal} onClose=${closeSetup} initialPane=${EMU} />`}
+    ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
   </header>`;
 }

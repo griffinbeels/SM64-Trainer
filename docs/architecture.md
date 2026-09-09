@@ -1403,7 +1403,15 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-06 for independent Scorecard goals: **54,703 lines,
+Latest reading, 2026-09-07 for installation onboarding: **55,045 lines,
+1,357 public names, 40.6 lines per public name, 64 pass-through (4.7%)**.
+The new forwarding name is `SetupRecord.complete`, which gives the persisted
+completion write its domain meaning. Setup observations, readiness, navigation
+and animation have separate owners; the pipeline is documented in
+[setup readiness](../.claude/rules/chain-setup-readiness.md). No onboarding
+module enters the oversized table. These figures measure the whole tree.
+
+Previous reading, 2026-09-06 for independent Scorecard goals: **54,703 lines,
 1,342 public names, 40.8 lines per public name, 63 pass-through (4.7%)**.
 No new forwarders. `server/scorecard_standards.py` chooses the canonical
 Library row for both the target and navigation; `server/scorecard_goals.py`

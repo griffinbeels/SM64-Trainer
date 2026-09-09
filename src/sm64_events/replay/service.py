@@ -25,7 +25,8 @@ from sm64_events.replay.association import association_problem, valid_picture_ti
 from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
 from sm64_events.replay.reviewstate import ReviewStateStore
-from sm64_events.replay.publication import publish as publish_saved, recover as recover_saved
+from sm64_events.replay.publication import (publish as publish_saved, recover as recover_saved,
+                                           resume as resume_saved)
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -352,12 +353,11 @@ class ReplayService:
     def _view(self, attempt_id: int) -> dict:
         """Return clip metadata, extracting and caching on first call.
 
-        Source order: scratch cache -> saved file -> ring extraction.
+        Source order: saved file -> scratch cache -> ring extraction.
         The scratch cache (clip + JSON sidecar both exist) dies with the
         buffer on restart — intentional; after that, a SAVED copy is the
-        only source that can outlive the session, and only when neither
-        exists do we cut from the ring. The saved fallback never shadows
-        a viable extraction: scratch survives any session the ring covers.
+        only source that can outlive the session. Only when neither source
+        exists do we cut from the ring; preserved bytes avoid another cut.
         """
         a = self._attempt(attempt_id)
         name = _CLIP_NAME.format(id=attempt_id)
@@ -751,9 +751,12 @@ class ReplayService:
 
     def review_state(self, attempt_id: int) -> dict:
         """Preferences are readable before the first cut, without extraction."""
+        return self.review_snapshot(attempt_id)[0]
+
+    def review_snapshot(self, attempt_id: int) -> tuple[dict, str]:
         with self._cut_lock(attempt_id):
             self._attempt(attempt_id)
-            return self._review_state.get(attempt_id, self.find_saved(attempt_id))
+            return self._review_state.snapshot(attempt_id, self.find_saved(attempt_id))
 
     @property
     def review_session_token(self) -> str:
@@ -797,7 +800,7 @@ class ReplayService:
         scratch cache and ring are gone.
         """
         a = self._attempt(attempt_id)
-        existing = self.find_saved(attempt_id)
+        existing = resume_saved(self.cfg.save_root, attempt_id) or self.find_saved(attempt_id)
         if existing is not None:
             m = self._saved_meta(existing)
             return {"path": str(existing), "truncated": m.get("truncated", False)}
@@ -820,7 +823,7 @@ class ReplayService:
         m = json.loads(clip.with_suffix(".json").read_text())
         # fps stamped at save time: the step buttons must match the clip's
         # actual encode rate even if cfg.fps changes in a future version.
-        publish_saved(self.cfg.save_root, attempt_id, clip, dest,
+        dest = publish_saved(self.cfg.save_root, attempt_id, clip, dest,
                       {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None))
         forget = getattr(self.recorder.ring, "forget_temp", None)
         if forget is not None:

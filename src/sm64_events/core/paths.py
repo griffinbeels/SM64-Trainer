@@ -1,7 +1,7 @@
 # src/sm64_events/core/paths.py
 """THE single source of truth for where runtime state lives.
 
-From source (dev/tests) every path is `Path(".")`-relative — byte-identical
+From source (dev/tests) practice data is `Path(".")`-relative — byte-identical
 to the historical layout (the project has always "run from the repo root").
 Frozen into a PyInstaller exe (``sys.frozen``) everything moves under
 ``%LOCALAPPDATA%\\SM64Trainer`` so a double-clicked exe needs no working
@@ -9,9 +9,13 @@ directory and a new release can replace the exe while the user keeps their
 history / PBs / saved replays. (Pre-1.0.2 the dir was ``sm64_tracker``;
 ``migrate_legacy_data_dir`` renames it on startup so data carries over.)
 
+Project64 installation metadata always uses the Windows-user directory because
+the installed plugin and registry selection are shared across checkouts.
+
 Every path the server or desktop shell persists to MUST come from here."""
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -71,10 +75,14 @@ def data_root() -> Path:
     as before. Frozen: ``%LOCALAPPDATA%\\SM64Trainer``.
     """
     if is_frozen():
-        base = os.environ.get("LOCALAPPDATA") or str(
-            Path.home() / "AppData" / "Local")
-        return Path(base) / APP_DIR_NAME
+        return user_data_root()
     return Path(".")
+
+
+def user_data_root() -> Path:
+    """Windows-user state shared by source checkouts and the installed app."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(base) / APP_DIR_NAME
 
 
 def migrate_legacy_data_dir() -> None:
@@ -171,9 +179,23 @@ def mode_settings_path() -> Path:
 
 
 def capture_layer_settings_path() -> Path:
-    # The capture layer's consent + what it installed (core/capturelayer.py):
-    # a JSON overlay like tracker_mode.json, so an undo needs no migration.
-    return data_root() / "data" / "capture_layer.json"
+    # Project64 and its registry selection are shared across worktrees.
+    # Only this installation record is shared; practice data stays local.
+    return user_data_root() / "data" / "capture_layer.json"
+
+
+def migrate_capture_layer_settings() -> None:
+    """Keep an existing checkout's install history without replacing shared state."""
+    source = data_root() / "data" / "capture_layer.json"
+    target = capture_layer_settings_path()
+    if source.resolve() == target.resolve() or not source.is_file():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with target.open("xb") as destination, source.open("rb") as original:
+            shutil.copyfileobj(original, destination)
+    except FileExistsError:
+        pass  # Another checkout's newer record is authoritative.
 
 
 def bundled_plugin_dll() -> Path | None:

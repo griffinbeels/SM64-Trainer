@@ -1,17 +1,60 @@
-"""The real `Registry`/`Processes` adapters for `capturelayer.py` -- split
-out once that module passed its ~300-line budget (round 32 item 95). Every
-test exercises `CaptureLayer` through the `FakeRegistry`/`FakeProcesses`
-pair instead; nothing here is unit-testable without a real Windows machine,
-so it stays a thin, deliberately dumb translation of the Win32 calls into
-the two Protocols `capturelayer.py` declares."""
+"""Windows discovery/registry adapters and Project64 compatibility evidence.
+
+Compatibility tests cover resource versions and exact known unversioned builds.
+Native API probes additionally check the actual executable without launching it.
+The installer itself uses the fake Registry/Processes protocols in its tests.
+"""
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import hashlib
 from pathlib import Path
 
 _MAX_PATH = 260
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+# LINK's unversioned Project64 1.6, distributed in Wermi's build v7:
+# https://wermi.neocities.org/emuguide/getting_emu/
+# Fingerprinted from the working installation reported in onboarding round 3.
+# VERSIONINFO is absent in this build. Names, folders and window titles are not
+# compatibility evidence; accept only these exact bytes when metadata is absent.
+_UNVERSIONED_16_BUILDS = {
+    "8d7d373d024206f7513721b320ef3359b885aa6ea73dc2c14b3a42f0c099be2b":
+        "LINK's Project64 1.6 (Wermi build v7)",
+}
+
+
+def _known_unversioned_build(path: Path) -> str | None:
+    try:
+        return _UNVERSIONED_16_BUILDS.get(hashlib.sha256(path.read_bytes()).hexdigest())
+    except OSError:
+        return None
+
+
+def executable_version(path: Path) -> str | None:
+    """Read the executable's version resource without launching it."""
+    version = ctypes.WinDLL("version", use_last_error=True)
+    version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    version.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+    version.VerQueryValueW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR,
+                                     ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+    size = version.GetFileVersionInfoSizeW(str(path), None)
+    if not size:
+        return None
+    data = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(str(path), 0, size, data):
+        return None
+    value = ctypes.c_void_p()
+    length = wintypes.UINT()
+    if not version.VerQueryValueW(data, "\\", ctypes.byref(value), ctypes.byref(length)):
+        return None
+    # VS_FIXEDFILEINFO's third and fourth DWORDs are the file version.
+    words = ctypes.cast(value, ctypes.POINTER(wintypes.DWORD))
+    if length.value < 16 or words[0] != 0xFEEF04BD:
+        return None
+    return f"{words[2] >> 16}.{words[2] & 0xFFFF}.{words[3] >> 16}.{words[3] & 0xFFFF}"
 
 
 class WinRegistry:
@@ -42,8 +85,39 @@ class WinProcesses:
     elevation is ever required."""
 
     def pj64_image_path(self) -> str | None:
+        images = self._images()
+        return images[0][1] if images else None
+
+    @staticmethod
+    def check_folder(folder: str) -> dict:
+        path = Path(folder) / "Project64.exe"
+        version = executable_version(path) if path.is_file() else None
+        build = _known_unversioned_build(path) if version is None else None
+        supported = bool(build) or (version is not None and version.split(".")[:2] == ["1", "6"])
+        return {"state": "ready" if supported else "unsupported", "pid": None,
+                "path": str(path), "version": version, "build": build,
+                "message": ("Project64 v1.6 found." if supported else
+                            "This Project64 build could not be verified as version 1.6.")}
+
+    def setup_target(self) -> dict:
+        images = self._images()
+        if not images:
+            return {"state": "missing", "pid": None, "message": "Open Project64 v1.6."}
+        if len(images) > 1:
+            return {"state": "multiple", "pid": None,
+                    "message": "More than one Project64 is open. Close the extra copies so we can find yours."}
+        pid, image_path = images[0]
+        target = self.check_folder(str(Path(image_path).parent))
+        return {**target, "pid": pid}
+
+    def _images(self) -> list:
         psapi = ctypes.WinDLL("psapi", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
 
         pid_slots = 1024
         while True:
@@ -52,12 +126,13 @@ class WinProcesses:
             ok = psapi.EnumProcesses(ctypes.byref(pids), ctypes.sizeof(pids),
                                       ctypes.byref(bytes_returned))
             if not ok:
-                return None
+                return []
             pid_count = bytes_returned.value // ctypes.sizeof(wintypes.DWORD)
             if pid_count < pid_slots:
                 break
             pid_slots *= 2   # the table was full; it may have truncated -- grow and re-read
 
+        images = []
         for pid in pids[:pid_count]:
             if pid == 0:
                 continue
@@ -69,8 +144,8 @@ class WinProcesses:
             finally:
                 kernel32.CloseHandle(handle)
             if image_path and Path(image_path).name.lower() == "project64.exe":
-                return image_path
-        return None
+                images.append((pid, image_path))
+        return images
 
     @staticmethod
     def _query_image_path(kernel32, handle) -> str | None:

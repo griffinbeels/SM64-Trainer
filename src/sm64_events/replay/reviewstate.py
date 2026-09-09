@@ -113,10 +113,14 @@ class ReviewStateStore:
         self._edits: dict[tuple[int, str], int] = {}
 
     def get(self, attempt_id: int, saved: Path | None) -> dict:
+        return self.snapshot(attempt_id, saved)[0]
+
+    def snapshot(self, attempt_id: int, saved: Path | None) -> tuple[dict, str]:
+        """Read preferences and their lifetime token under the same lock as clear."""
         with self._lock:
-            if attempt_id in self._temporary:
-                return copy.deepcopy(self._temporary[attempt_id])
-            return _read(saved) if saved is not None else empty_state()
+            state = (copy.deepcopy(self._temporary[attempt_id]) if attempt_id in self._temporary
+                     else _read(saved) if saved is not None else empty_state())
+            return state, self.session_token
 
     def put(self, attempt_id: int, saved: Path | None, state: dict,
             edit: str | None = None) -> dict:

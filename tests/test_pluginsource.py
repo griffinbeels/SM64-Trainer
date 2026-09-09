@@ -98,6 +98,7 @@ def test_decode_stamp_is_none_without_the_counter(layout):
 
 
 def test_the_source_delivers_owned_pixels_and_the_stamp(layout, stream):
+    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, plugin_pid=123)
     table = P.table_for(layout)
     memory = rdram_with(layout, frame=4242)
     picture = np.zeros((3, 4, 3), dtype=np.uint8)
@@ -120,6 +121,12 @@ def test_the_source_delivers_owned_pixels_and_the_stamp(layout, stream):
     for _ in range(F.SLOT_COUNT):
         stream.publish(np.zeros_like(picture), raw_table(memory, table))
     assert stream.header().want_frames == 0
+    assert stream.header().want_frames == 0                # released at stop
+    assert source.status()["delivered"] == 1
+    assert source.status()["plugin_pid"] == 123
+    # A later producer cannot inherit this source's delivery receipt.
+    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, plugin_pid=456)
+    assert source.status()["plugin_pid"] == 123
     stream.close()
     bgra = captured.as_bgra()
     assert bgra.shape == (3, 4, 4) and bgra.dtype == np.uint8
@@ -127,6 +134,7 @@ def test_the_source_delivers_owned_pixels_and_the_stamp(layout, stream):
     assert tuple(bgra[0, 0]) == (0, 0, 0, 255)
     assert ts_100ns == 200 * 10_000_000 // P.QPC_FREQUENCY
     assert stamp.frame == 4242 and stamp.pad.stick_x == 12
+
 
 
 def test_pictures_flow_answers_true_on_the_first_picture(layout, stream):

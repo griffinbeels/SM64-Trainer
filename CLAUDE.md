@@ -24,6 +24,7 @@ not in this map.
 | Need | Command / reference |
 | --- | --- |
 | Dependencies | `uv sync` |
+| Automatic draft checks / local wrap verification | `python tools/verify.py quick` / `python tools/verify.py full`; [setup and scope](docs/local-verification.md). Full includes the existing integration runner. |
 | Focused check while editing | `uv run python tools/run_tests.py tests/test_<module>.py` |
 | Python coverage selection | `uv run python tools/run_tests.py --changed` |
 | Full integration gate | `uv run python tools/run_tests.py` |
@@ -34,7 +35,7 @@ not in this map.
 | Per-ROM verification | `uv run python tools/sync_version.py --version us`; [runbook](docs/version-sync.md) |
 | Import correctness | `uv run python tools/scorecard_parity.py`; successive runners must produce `+0.00` on every corresponding Scorecard tile |
 | Inspect one UI surface at supported widths | `uv run python tools/contact_sheet.py <selector>`; read UI rules for state-specific fixtures |
-| Maintainability gate | `uv run python tools/lint_changed.py`; [gate rationale](docs/agent-maintainability.md) |
+| Legacy staged maintainability feedback | `uv run python tools/lint_changed.py`; [gate rationale](docs/agent-maintainability.md). Required verification uses the standalone commands above. |
 | API consumer | [docs/api.md](docs/api.md): `GET /state`, `GET /health`, `/ws/events` |
 | Cross-cutting domain evidence | [docs/architecture.md](docs/architecture.md) |
 | Older probe commands, incidents and rejected approaches | [archived guide](docs/history/agent-guide-2026-09-05.md), historical evidence only |

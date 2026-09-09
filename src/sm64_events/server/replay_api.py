@@ -52,8 +52,8 @@ def _review_routes(router, replay):
     @router.get("/attempts/{attempt_id}/replay/review-state")
     def review_state(attempt_id: int, response: Response):
         try:
-            state = replay.review_state(attempt_id)
-            response.headers["X-Replay-Review-Session"] = replay.review_session_token
+            state, token = replay.review_snapshot(attempt_id)
+            response.headers["X-Replay-Review-Session"] = token
             return state
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e) from e

@@ -26,6 +26,7 @@ export function Modal({ title, description, icon = "practice", size = "medium",
     const focusable = () => panel
       ? [...panel.querySelectorAll(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]')]
+          .filter(node => !node.closest('[inert]') && node.getClientRects().length)
       : [];
     if (panel && !panel.contains(document.activeElement))
       (panel.querySelector("[autofocus]") || focusable()[0] || panel).focus();
@@ -40,7 +41,7 @@ export function Modal({ title, description, icon = "practice", size = "medium",
       const items = focusable();
       if (!items.length) { keyEvent.preventDefault(); return; }
       const first = items[0], last = items[items.length - 1];
-      if (keyEvent.shiftKey && document.activeElement === first) {
+      if (keyEvent.shiftKey && (document.activeElement === first || !items.includes(document.activeElement))) {
         keyEvent.preventDefault(); last.focus();
       } else if (!keyEvent.shiftKey && document.activeElement === last) {
         keyEvent.preventDefault(); first.focus();

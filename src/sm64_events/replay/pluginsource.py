@@ -320,7 +320,9 @@ class PluginVideoSource:
         self._thread = None
         self._stop = threading.Event()
         self._idle_check = lambda: False
-        self._last_seq = stream.header().write_seq
+        header = stream.header()
+        self._last_seq = header.write_seq
+        self._plugin_pid = header.plugin_pid
         self._demand_lock = threading.Lock()
         self._accept_demand = False
         self._skipped = 0
@@ -436,6 +438,7 @@ class PluginVideoSource:
         _refresh_profile(self._stream, self._stop)
         header = self._stream.header()
         return {"delivered": self._delivered, "skipped": self._skipped,
+                "plugin_pid": self._plugin_pid,
                 "undecodable": self._undecodable,
                 "dropped_by_plugin": header.dropped,
                 "graphics_profile": self._stream.graphics_profile.snapshot(header.plugin_pid)}

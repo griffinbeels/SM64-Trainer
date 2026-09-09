@@ -200,7 +200,7 @@ def test_read_racing_save_never_loses_state_between_destination_lookup_and_read(
     service.update_review_state(42, STATE)
     get_started, finish_get = threading.Event(), threading.Event()
     writer_progress = queue.Queue()
-    original_get = service._review_state.get
+    original_get = service._review_state.snapshot
 
     class ObservedLock:
         """Keep real mutex behavior; report when the writer reaches contention."""
@@ -231,7 +231,7 @@ def test_read_racing_save_never_loses_state_between_destination_lookup_and_read(
         writer_progress.put("published")
         return result
 
-    monkeypatch.setattr(service._review_state, "get", paused_get)
+    monkeypatch.setattr(service._review_state, "snapshot", paused_get)
     with ThreadPoolExecutor(max_workers=2) as pool:
         reading = pool.submit(service.review_state, 42)
         assert get_started.wait(5)
@@ -243,3 +243,50 @@ def test_read_racing_save_never_loses_state_between_destination_lookup_and_read(
         assert reading.result(timeout=5) == STATE
         assert Path(saving.result(timeout=5)["path"]).exists()
     assert make_service(tmp_path, [attempt()]).review_state(42) == STATE
+
+
+def test_review_response_cannot_relabel_old_state_with_a_new_session(tmp_path, monkeypatch):
+    service = make_service(tmp_path, [attempt()])
+    service.update_review_state(42, STATE)
+    old_token = service.review_session_token
+    snapshot = service._review_state.snapshot
+    def rotate_after_snapshot(*args):
+        result = snapshot(*args)
+        service._review_state.clear()
+        return result
+    monkeypatch.setattr(service._review_state, "snapshot", rotate_after_snapshot)
+    client = client_for(service)
+    path = "/api/attempts/42/replay/review-state"
+    response = client.get(path)
+    assert response.json() == STATE
+    assert response.headers["X-Replay-Review-Session"] == old_token
+    assert old_token != service.review_session_token
+    edit = old_token + "/" + "a" * 32 + "/1"
+    assert client.put(path, json=response.json(), headers={"X-Replay-Review-Edit": edit}).status_code == 409
+
+
+def test_save_retry_finishes_staged_media_after_temporary_source_eviction(tmp_path, monkeypatch):
+    from sm64_events.replay import publication
+    service = make_service(tmp_path, [attempt()])
+    service.update_review_state(42, STATE)
+    replace = publication.os.replace
+    def fail_commit(source, destination):
+        if Path(destination).name.startswith("attempt_") and Path(destination).suffix == ".mp4":
+            raise OSError("injected publication interruption")
+        return replace(source, destination)
+    with monkeypatch.context() as patch:
+        patch.setattr(publication.os, "replace", fail_commit)
+        with pytest.raises(OSError, match="publication interruption"):
+            service.save(42)
+    staged = service.cfg.save_root / ".pending/42/media.mp4"
+    original = staged.read_bytes()
+    clip = service.clips_dir / "clip_attempt_42.mp4"
+    clip.unlink()
+    clip.with_suffix(".json").unlink()
+    def expired(*args):
+        pytest.fail("Retry must not re-extract complete staged media")
+    monkeypatch.setattr(service.extractor, "extract", expired)
+    saved = Path(service.save(42)["path"])
+    assert saved.read_bytes() == original
+    assert service.review_state(42) == STATE
+    assert not staged.exists()

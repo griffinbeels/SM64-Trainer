@@ -7,7 +7,7 @@ Play normally. It watches the emulator's memory and does the rest: every star
 grab timed to Usamune's own clock, every reset and death, your PBs, your
 ranks, and an instant video replay of the attempt you just finished.
 
-Nothing to configure, nothing to press. Open it and practise.
+Follow the guided setup once, then open it and practise.
 
 ---
 
@@ -20,8 +20,10 @@ Nothing to configure, nothing to press. Open it and practise.
    `%LOCALAPPDATA%\Programs\SM64Trainer`, puts an **SM64 Trainer** shortcut on
    your Desktop, and launches. **That shortcut is your launcher from now on** —
    it keeps working no matter how many updates land.
-3. **Start Project64 1.6** with Usamune v1.93u (US), **windowed**. The tracker
-   attaches on its own and starts recording your practice.
+3. **Follow the setup wizard.** Select Emulator, open Project64 1.6 so the
+   trainer can find it, close it to install Practice Replay, then reopen it
+   and load Usamune v1.93u (US), **windowed**. Setup checks the game, replay
+   pictures and inputs before **Ready to practice!** takes you to Practice.
 
 That's it — no Python, nothing else to install.
 
@@ -44,7 +46,8 @@ only the first manual download does.)
   is installed; it's preinstalled on 11.
 - **Project64 1.6** — other versions are not supported, the memory addresses
   are 1.6-specific.
-- **Usamune v1.93u (US)**. The **JP** version is not detected yet: the rank
+- **Usamune v1.93u (US)**. Setup recognizes **JP** and lets you finish the
+  available installation, with a warning that JP tracking is not supported yet. The rank
   standards already know both, and **Settings → Game → Game version**
   (Auto-detect / JP / US) picks which one grades you, live — but every memory
   address the trainer reads is kept per ROM version, and JP's are discovered
@@ -55,23 +58,26 @@ only the first manual download does.)
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
-**The setup screen and the capture layer.** The first time the trainer sees
-an emulator it opens a setup screen: pick **Emulator** (N64 setup arrives
-with console support) and walk a three-row checklist -- Project64 found, the
-Usamune ROM, and **frame-exact capture**. That last row asks your consent to
-install the **capture layer**: a small wrapper graphics plugin the trainer
-copies into Project64's `Plugin` folder, selects as the `Graphics Dll`, and
-points at the graphics plugin you already use through a one-line ini. It
-forwards everything to your plugin and, from inside the emulator, hands the
-trainer every presented picture together with the game's own frame counter
-and pad for that picture -- so a replay's input timeline is exact on every
-frame instead of inferred from a desktop recording. Install with Project64
-CLOSED (1.6 rewrites its settings on exit), then restart it; the row turns
-"active" when the layer is presenting. The trainer works without it (the
-desktop grab stays the fallback and the timeline says "frame-exact capture is
-off"), and **Remove** on the same row puts your original plugin name back.
-The screen reappears on its own only while an emulator is detected and the
-layer is not consented; open it any time from the header's **Setup**.
+**Setup and Practice Replay.** Each page shows the current action, with
+optional help for getting Project64, setting up your own Usamune ROM, and
+configuring the game/controller. Pages advance after a visible acknowledgment;
+Back lets you review earlier steps. **Not now** postpones unfinished setup
+for the current app session. Open it again from **Settings → Setup**.
+
+Already set up? The trainer compares the installed wrapper's SHA-256 hash with
+this build and checks its selected graphics configuration. A matching installation
+skips automatic onboarding, including in a fresh worktree. A stale or incomplete
+installation opens its repair step directly. Only Project64 installation metadata
+is shared across checkouts; your practice data stays in its existing location.
+
+Installing Practice Replay adds a **capture layer** to Project64's plugin
+folder and selects it as the `Graphics Dll`. The wrapper forwards drawing to
+your existing graphics plugin and supplies replay pictures stamped with the
+game's frame counter and inputs. Install while Project64 is closed; open
+Usamune once afterward to check it. **Manage Practice Replay → Remove Practice
+Replay** restores the previous graphics selection, also with Project64 closed.
+The trainer can still use desktop capture when you postpone installation.
+N64 setup currently explains that console tracking is in development.
 
 In an attempt's replay drawer, **Save as template** keeps a named example for
 future attempts. **Import inputs** accepts a text file or pasted document;

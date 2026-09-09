@@ -141,6 +141,9 @@ def assert_no_editing_controls_on_the_runner_page(page):
 def test_the_runner_page_draws_name_chips_and_breakdown_with_no_editing_controls(rank_page):
     name = click_a_runner_row(rank_page)
     assert_reads_as_the_runner_page(rank_page, name)
+    # The summary chips and breakdown use separate requests. A chip proves
+    # the page's identity, not that the table we are asserting has arrived.
+    rank_page.wait_for(".runner-page .rank-breakdown thead th", timeout_ms=8000)
     headers = rank_page.evaluate(HEADERS)
     assert "Their time" in headers and "Your time" in headers and "Gap" in headers, headers
     assert "Score (pts)" not in headers and "Gain (pts)" not in headers, headers

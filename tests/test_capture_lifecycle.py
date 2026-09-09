@@ -23,7 +23,7 @@ class Stream:
         self.graphics_profile = SimpleNamespace(refresh=lambda *_args: None)
 
     def header(self):
-        return SimpleNamespace(write_seq=self.seq, alive=1, initiated=True, dropped=0)
+        return SimpleNamespace(write_seq=self.seq, alive=1, initiated=True, dropped=0, plugin_pid=123)
 
     def set_want_frames(self, want):
         self.want = want
