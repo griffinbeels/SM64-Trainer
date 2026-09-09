@@ -3,10 +3,11 @@
 Family p95/p10 landmarks describe observed performance progression, not measured
 mechanical difficulty. Reversed landmarks share a geometric-time checkpoint.
 The default blends those milestones with one best time per Sheet participant.
-Every refresh refits the elite distribution and includes a new record at the
+Changed evidence refits the elite distribution and includes a new record at the
 frontier immediately; sparse provisional families have bounded wider influence.
 """
 import math
+from dataclasses import asdict
 
 from sm64_events.core.timefmt import cs_of_frame, frame_at_or_after
 from sm64_events.library.ladders import fit_ladder
@@ -14,6 +15,7 @@ from sm64_events.library.populations import collect_populations, quantile
 from sm64_events.ranks import scoring
 from sm64_events.ranks.curve_types import CompiledCurve
 from sm64_events.ranks.curves import compile_curve, score_evaluator, time_for_score
+from sm64_events.ranks.fit_cache import FitCache, frozen_inputs
 from sm64_events.ranks.policy import RankingPolicy
 
 OVERALL_MODEL_VERSION = 1
@@ -147,6 +149,7 @@ def _family_model(population, community, settings, families):
 
 
 MODEL_BUILDERS = {"community": _community_model, "family_milestones": _family_model}
+_FIT_CACHE = FitCache()
 
 
 def fit_overall(rows, *, policy=None, target_id="", version="us") -> CompiledCurve | None:
@@ -159,16 +162,36 @@ def fit_overall(rows, *, policy=None, target_id="", version="us") -> CompiledCur
     policy = policy or RankingPolicy()
     settings = policy.resolve(target_id, version=version, layer="overall")
     population = collect_populations(rows, settings=settings, target_id=target_id, version=version)
+    revision = policy.effective_revision(target_id, version=version)
+    builder = MODEL_BUILDERS[settings["model"]]
+    # Normalize and validate on EVERY call, including hits. The population owns
+    # all fitting inputs, including exclusions, source identities and estimates.
+    # Keep callable identities in the namespace so replaced/instrumented fitters
+    # cannot silently reuse results produced by another implementation.
+    namespace = (builder, score_evaluator, fit_ladder, compile_curve, _fit_population)
+    inputs = (asdict(population), settings, revision, OVERALL_MODEL_VERSION, DIVISION_SCORES)
+    try:
+        key = (*namespace, frozen_inputs(inputs))
+        hash(key)
+    except (TypeError, ValueError):
+        # Custom provenance remains supported without coercing its types/values.
+        return _fit_population(population, settings, builder, revision)
+    return _FIT_CACHE.get_or_compute(
+        key, lambda: _fit_population(population, settings, builder, revision))
+
+
+def _fit_population(population, settings, builder, policy_revision):
+    """Uncached numeric fit from the complete validated population."""
     times = list(population.best_by_runner.values()) or list(population.proxy_times)
     if not times:
         return None
     community = _community_curve(times, settings)
     families = _family_summaries(population, settings)
-    evaluate, details = MODEL_BUILDERS[settings["model"]](population, community, settings, families)
+    evaluate, details = builder(population, community, settings, families)
     nodes = _calibrate(evaluate, community, max(12000, max(times) * 3))
     metadata = {**population.metadata, "model": settings["model"],
                 "model_version": OVERALL_MODEL_VERSION,
-                "policy_revision": policy.effective_revision(target_id, version=version),
+                "policy_revision": policy_revision,
                 "family_count": len(families), "families": families, **details,
                 "single_family_community": len(families) <= 1,
                 "frontier": {"method": ("estimated_source_evidence" if population.metadata["estimated"]
