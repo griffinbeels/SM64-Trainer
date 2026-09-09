@@ -19,6 +19,12 @@ only a spec could justify, that is a bug in this file — fix it here.
 
 ## Data flow
 
+Opt-in performance diagnostics are documented in [profiling](profiling.md).
+Backend stages use bounded inclusive wall-time histograms; the native graphics
+sidecar has its own version and producer identity and does not change the picture
+stream ABI. Browser and system traces supply different evidence and must not be
+interpreted as substitutes for frame/audio/input correctness checks.
+
 ```
 Project64 1.6 process (Windows)
       │  ReadProcessMemory, ~60 Hz poll (game logic runs at 30 fps)
@@ -589,13 +595,15 @@ instantly. Three compounding causes, each fixed:
    recorder is idle (a stop-the-world pause is invisible when footage is
    discarded), with a 5-minute force backstop for never-idle sessions. The
    glitch mitigation is intact; the leak is closed.
-3. *Disk could fill, and a near-full volume thrashes everything.* The 20 GiB
+3. *Disk could fill, and a near-full volume thrashes everything.* The historical 20 GiB
    scratch cap with `retention_s=None` can be approached over long ACTIVE play
    (idle discards, so the ring only grows while recording). A full system disk
    squeezes the Windows pagefile → the same "out of memory / everything laggy"
    symptom as a RAM leak. Fix: `ring.effective_cap` gates the byte cap on
    actual free disk (5 GiB margin), so the buffer shrinks rather than filling
-   the volume regardless of the configured cap.
+   the volume regardless of the configured cap. The current lifecycle, leases,
+   all-temporary-file accounting and reduced new-install default are described
+   in [replay storage](replay-storage.md).
 
 **Memory observability is now mandatory, because we were blind.** Nothing
 sampled the process, so a true leak was indistinguishable from OS file-cache

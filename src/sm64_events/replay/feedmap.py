@@ -6,8 +6,10 @@ The encoder and extractor now retain their clock. Matching is an exact key
 lookup, with missing or colliding keys left unknown. No fitted offset exists.
 """
 from collections import Counter
+from sm64_events.core.profiling import measured
 
 
+@measured("replay.feed_map")
 def feed_map(frame_pts: list[int] | None, run_id: str | None,
              rows: list[dict], feeds: list[dict], row_value):
     """Return (values, repeats, stats), one value per decoded video slot.

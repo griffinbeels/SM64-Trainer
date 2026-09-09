@@ -35,7 +35,7 @@ class ReplayConfig:
     # `fps` stays the grab cadence and the CFR fallback's rate. False
     # restores the CFR feed; the in-process fallback writer ignores it.
     picture_feed: bool = True
-    max_buffer_bytes: int = 20 * 1024**3  # hard disk guard regardless of retention
+    max_buffer_bytes: int = 2 * 1024**3   # modest new default; persisted user limits win
     save_root: Path = field(default_factory=replays_root)
     scratch_dir: Path = field(default_factory=replay_scratch_dir)
     window_title: str = "Project64"       # substring match on the window title
@@ -74,6 +74,10 @@ class ReplayConfig:
 #   -spatial-aq 1          +21 % bitrate for +0.0003 SSIM               -> OFF
 VIDEO_CQ = 20              # NVENC constant-quality target (lower = better)
 VIDEO_CRF = 18             # libx264 equivalent (machines without NVENC)
+# Vendor scales are independent; these are explicit initial quality targets,
+# not a claim that QP/ICQ 18 is visually equivalent to NVENC CQ 20.
+AMF_QP = 18
+QSV_ICQ = 18
 RING_MAXRATE = "30M"       # ring: bounded so the disk cap stays predictable
 CLIP_MAXRATE = "60M"       # saved clip: one file on disk, quality wins
 
@@ -82,6 +86,8 @@ CLIP_MAXRATE = "60M"       # saved clip: one file on disk, quality wins
 # slower preset for the same quality target.
 _NVENC_PRESET = {"realtime": "p4", "offline": "p6"}
 _X264_PRESET = {"realtime": "ultrafast", "offline": "veryfast"}
+_AMF_QUALITY = {"realtime": "balanced", "offline": "quality"}
+_QSV_PRESET = {"realtime": "medium", "offline": "slow"}
 
 
 def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
@@ -98,6 +104,37 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
                 "-maxrate", maxrate, "-bufsize", maxrate]
     if codec == "libx264":
         return ["-preset", _X264_PRESET[stage], "-crf", str(VIDEO_CRF)]
+    if codec == "h264_amf":
+        return ["-usage", "transcoding", "-quality", _AMF_QUALITY[stage],
+                "-profile:v", "high", "-rc", "cqp",
+                "-qp_i", str(AMF_QP), "-qp_p", str(AMF_QP),
+                "-qp_b", str(AMF_QP), "-frame_skipping", "0"]
+    if codec == "h264_qsv":
+        return ["-preset", _QSV_PRESET[stage], "-profile:v", "high",
+                "-global_quality", str(QSV_ICQ), "-look_ahead", "0", "-b:v", "0"]
+    return []
+
+
+def forced_idr_args(codec: str) -> list[str]:
+    """Forced I pictures must be independent starts for the segment muxer."""
+    if codec == "h264_nvenc":
+        return ["-forced-idr", "1"]
+    if codec in ("h264_amf", "h264_qsv"):
+        return ["-forced_idr", "1"]
+    return []  # x264's closed GOP is already the default
+
+
+def raw_picture_args(codec: str) -> list[str]:
+    """Color signaling for the BGRA capture input, not decoded YUV clips.
+
+    AMF inherited RGB's full-range tag while its GPU produced limited-range
+    BT.709: RGB(40,100,220) decoded as (47,101,205) on Radeon driver
+    32.0.21045.5002. Setting frame properties fixes signaling without another
+    pixel conversion; plain output -color_range/-colorspace flags did not.
+    The startup probe verifies the result on the installed build/driver.
+    """
+    if codec == "h264_amf":
+        return ["-vf", "setparams=range=limited:colorspace=bt709"]
     return []
 
 

@@ -4,10 +4,10 @@ surface.
 
 Two video paths:
 - ffmpeg sink (PRIMARY when ffmpeg.exe is on PATH — main.py probes):
-  _on_frame becomes a lock-free reference swap into the sink; pacing,
-  encode and segmentation run in a child process (ffmpeg_sink.py
-  docstring carries why in-process encoding was structurally glitchy:
-  GIL co-tenancy).
+  _on_frame applies queue/ledger selection, prepares accepted plugin pixels,
+  and submits owned BGRA. The sink muxes explicit timestamps into NUT;
+  the child handles compression and segmentation. Legacy CFR remains an
+  explicit configuration fallback, not the plugin picture feed.
 - in-process fallback: the CFR-conform path below feeds SegmentWriter.
 
 Threading: capture callbacks arrive on library threads (the video
@@ -35,9 +35,11 @@ hosting that app's session. The chain is config wiring, not policy —
 main.py decides the factories (currently: per-process tap PRIMARY so only
 the game is recorded, device loopback as the fallback; see audio.py)."""
 import logging
+from sm64_events.core.profiling import measured
 import shutil
 import threading
 import time
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
@@ -50,7 +52,9 @@ from sm64_events.replay.clock import CaptureClock, qpc_100ns
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.encoder import SegmentWriter, pick_video_codec
 from sm64_events.replay.ledger import PictureLedger
+from sm64_events.replay.pixels import BgrPicture, as_bgra
 from sm64_events.replay.ring import SegmentRing
+from sm64_events.replay.scratch import OwnedScratch
 from sm64_events.replay.window import WindowInfo
 
 log = logging.getLogger("sm64.replay")
@@ -94,7 +98,8 @@ class ReplayRecorder:
                  codec: str | None = None,
                  video_sink_factory=None,
                  recorder_lock_factory=acquire_recorder_lock,
-                 release_capture: Callable[[], None] | None = None):
+                 release_capture: Callable[[], None] | None = None,
+                 scratch_protection: Callable[[], Iterable[Path]] | None = None):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
         # instance holding this lock actually captures; others run viewer-only.
@@ -103,6 +108,7 @@ class ReplayRecorder:
         self._release_capture = release_capture
         self._capture_lock = threading.RLock()  # serialize attach vs teardown
         self._scratch_ready = False
+        self._configure_scratch(cfg, scratch_protection)
         self._lock_warned = False    # log the viewer-only notice once
         self._window_finder = window_finder
         self._video_factory = video_factory
@@ -139,7 +145,9 @@ class ReplayRecorder:
         self.ring = SegmentRing(
             cfg.retention_s, cfg.max_buffer_bytes,
             free_bytes_fn=lambda: shutil.disk_usage(cfg.scratch_dir).free,
-            on_evict=self.ledger.discard_segment)
+            on_evict=self.ledger.discard_segment,
+            scratch_root=cfg.scratch_dir,
+            deletion_guard=self._scratch.deletion_guard)
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -177,12 +185,6 @@ class ReplayRecorder:
         self._idle = False
         self._idle_since = None   # utc datetime while idle (the discard rule)
         self._idle_dropped = 0
-        # Idle-discard unlinks that hit a Windows sharing violation (ffmpeg's
-        # own segment close, a clip cut, an indexer briefly holding the file).
-        # Deferred here and retried from the attach loop instead of
-        # tracebacking: path -> monotonic time of the first failed attempt.
-        self._deferred_discards: dict[Path, float] = {}
-        self._discard_lock = threading.Lock()
         self._session_paused = False  # manual pause: outranks the input tap
 
     # -- lifecycle -----------------------------------------------------------
@@ -198,8 +200,13 @@ class ReplayRecorder:
             target=self._attach_loop, name="replay-attach", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
-        """Signal attach loop to exit and tear down any active capture."""
+    def stop(self, *, cleanup: bool = True) -> None:
+        """End this session after capture closes; pending saves may retain it.
+
+        Services drain preservation first, or pass cleanup=False when it needs
+        source media for recovery. Window loss and pause never invoke cleanup.
+        """
+        self._cleanup_on_stop = cleanup
         self._stopping = True  # M2: block any in-flight _begin_capture from racing post-stop
         self._stop_event.set()
         self._request_capture_stop()
@@ -209,6 +216,8 @@ class ReplayRecorder:
                 log.warning("replay attach thread did not stop within timeout")
             self._thread = None
         self._teardown_capture()
+        if cleanup:
+            self.cleanup_scratch()
 
     # -- attach loop ---------------------------------------------------------
 
@@ -220,10 +229,17 @@ class ReplayRecorder:
 
     def _run_attach_loop(self) -> None:
         while not self._stop_event.is_set():
+            if self._rec_lock is not None and time.monotonic() >= self._next_storage_maintenance:
+                self._next_storage_maintenance = time.monotonic() + 1.0
+                self.ring.maintain()
+            if self.ring.storage_pressure and self._recording:
+                log.warning("replay capture paused: disk free-space floor cannot be restored")
+                self._teardown_capture(keep_owner=True)
             win = self._window_finder(self._cfg.window_title)
             self._window_found = win is not None
 
-            if win is not None and not self._recording:
+            if (win is not None and not self._recording
+                    and (not self.ring.storage_pressure or self._rec_lock is None)):
                 try:
                     self._begin_capture(win)
                 except Exception:
@@ -235,7 +251,6 @@ class ReplayRecorder:
                 log.info("window lost — tearing down capture")
                 self._teardown_capture()
 
-            self._flush_deferred_discards()
             self._maybe_idle_pause()
             self._stop_event.wait(self._cfg.attach_poll_s)
 
@@ -243,25 +258,104 @@ class ReplayRecorder:
 
     def _prepare_scratch(self) -> None:
         if self._scratch_ready:
-            if not self._picture_feed or (self._cfg.scratch_dir / self._ledger_name).exists():
+            if self._scratch.owns():
+                self._scratch.resume_deletion()
                 return
             # A different recorder owner reset shared scratch while we were
             # detached. Start a new owned lifetime instead of retaining ring
             # entries whose files and picture identities no longer exist.
             self._scratch_ready = False
         self.ledger.reset()
-        scratch = self._cfg.scratch_dir
         # The machine-wide lock is already held. A viewer-only boot must
         # neither remove the owner's footage nor run this recorder's own
         # fallback codec probe (main may already have supplied a codec).
-        shutil.rmtree(scratch, ignore_errors=True)
-        scratch.mkdir(parents=True, exist_ok=True)
+        self._scratch.prepare(self._protected_scratch())
         self.ring.reset()
-        with self._discard_lock:
-            self._deferred_discards.clear()
         if self._codec is None:
             self._codec = pick_video_codec()
         self._scratch_ready = True
+        self._scratch.resume_deletion()
+
+    def _configure_scratch(self, cfg, protection) -> None:
+        self._scratch = OwnedScratch(cfg.scratch_dir)
+        self.scratch_protection = protection
+        self._cleanup_on_stop = True
+        self._capture_closed = True
+        self._next_storage_maintenance = 0.0
+
+    def _protected_scratch(self) -> set[Path]:
+        protected = self.ring.protected_paths()
+        if protected:
+            # A source lease spans metadata projection as well as ffmpeg's
+            # file read. Detached extraction still needs its identity archive.
+            archive = self._cfg.scratch_dir / self._ledger_name
+            protected.update(Path(str(archive) + suffix)
+                             for suffix in ("", "-journal", "-wal", "-shm"))
+        if self.scratch_protection is not None:
+            protected.update(self.scratch_protection())
+        return protected
+
+    def cleanup_scratch(self) -> bool:
+        """Retry cleanup after stop, acquiring the lock and checking ownership.
+
+        Losing viewers and old recorders whose token was replaced write nothing.
+        The protection callback is also honored during startup crash recovery.
+        """
+        with self._capture_lock:
+            if self._recording or not self._capture_closed or not self._scratch.owns():
+                return False
+            held = self._rec_lock
+            if held is None:
+                held = self._recorder_lock_factory()
+                if held is None:
+                    return False
+            try:
+                cleaned = self._scratch.cleanup(self._protected_scratch())
+                if cleaned:
+                    self.ring.prune_missing()
+                return cleaned
+            except Exception:
+                log.exception("replay scratch cleanup deferred")
+                return False
+            finally:
+                if held is not self._rec_lock:
+                    held.close()
+
+    def reset_session_scratch(self) -> bool:
+        """Rotate owned temporary media while retaining machine ownership.
+
+        The service must drain/serialize extraction and preservation first:
+        those operations use the active picture ledger, which this replaces.
+        HTTP group leases may continue; their files are deleted on release.
+        A viewer or an old owner of replaced scratch cannot rotate it.
+        """
+        with self._capture_lock:
+            if self._stopping or not self._scratch.owns():
+                return False
+            if self._rec_lock is None:
+                self._rec_lock = self._recorder_lock_factory()
+                if self._rec_lock is None:
+                    return False
+                if not self._scratch.owns():  # ownership could change before acquisition
+                    self._release_recorder()
+                    return False
+            resume = self._recording
+            self._close_capture(keep_owner=True)
+            if not self._capture_closed:
+                return False
+            self._scratch.resume_deletion()
+            self.ring.clear()
+            self.ledger.reset()
+            self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
+            self._scratch.prepare(self._protected_scratch())
+            self.ring.prune_missing()
+            self._scratch_ready = True
+            self._window_lost.clear()
+            if resume and not self._stopping:
+                win = self._window_finder(self._cfg.window_title)
+                if win is not None:
+                    self._start_capture(win)
+            return True
 
     def _begin_capture(self, win: WindowInfo) -> None:
         with self._capture_lock:
@@ -297,6 +391,10 @@ class ReplayRecorder:
             self._lock_warned = False
 
         self._prepare_scratch()
+        self.ring.maintain()
+        if self.ring.storage_pressure:
+            return  # retain ownership, retry after maintenance sees free space
+        self._capture_closed = False
         # Only the picture feed retains source-PTS identities. Legacy CFR
         # observations stay in the bounded diagnostic cache; persisting
         # them would imply a retention join its media never supplied.
@@ -413,9 +511,9 @@ class ReplayRecorder:
             self._audio_source = audio
             self._audio_mode = audio_mode
 
-    def _teardown_capture(self) -> None:
+    def _teardown_capture(self, *, keep_owner: bool = False) -> None:
         with self._capture_lock:
-            self._close_capture()
+            self._close_capture(keep_owner=keep_owner)
 
     def _request_capture_stop(self) -> None:
         source = self._video_source
@@ -425,7 +523,7 @@ class ReplayRecorder:
             except Exception:
                 log.exception("capture demand revocation failed")
 
-    def _close_capture(self) -> None:
+    def _close_capture(self, *, keep_owner: bool = False) -> None:
         """Stop sources and close writer. Safe to call when already idle."""
         self._request_capture_stop()
         sink = self._video_sink
@@ -439,37 +537,56 @@ class ReplayRecorder:
             self._writer = None
             self._clock = None
 
+        closed = True
         for src in (video, audio):
             if src is not None:
                 try:
                     src.stop()
                 except Exception:
+                    closed = False
                     log.exception("error stopping source %r", src)
 
         if sink is not None:
             try:
                 sink.stop()  # sources are quiet before draining the encoder
             except Exception:
+                closed = False
                 log.exception("ffmpeg sink stop failed")
 
         if writer is not None:
             try:
                 writer.close()
             except Exception:
+                closed = False
                 log.exception("error closing writer")
 
         try:
             self.ledger.detach()
         except Exception:
+            closed = False
             log.exception("picture archive close failed at capture teardown")
 
         self._recording = False
+        # Once a close failed, an idempotent second teardown cannot prove that
+        # the old producer actually stopped. Retain scratch for recovery.
+        if any(item is not None for item in (video, audio, sink, writer)):
+            self._capture_closed = closed
         self._idle = False
         self._idle_since = None
+        if self._stopping and self._cleanup_on_stop and self._rec_lock is not None:
+            self.cleanup_scratch()
         # Release the machine-wide recorder lock so another instance can take
         # over recording (e.g. PJ64 closed here, or this instance is shutting
         # down). Re-acquired on the next _begin_capture if we capture again.
+        if not keep_owner:
+            self._release_recorder()
+        # _audio_mode intentionally kept as last-known value so status() can
+        # report which mode was active even after stop; cleared only on
+        # fresh _begin_capture (set to new mode) or explicit reset.
+
+    def _release_recorder(self) -> None:
         if self._rec_lock is not None:
+            self._scratch.pause_deletion()
             try:
                 if self._release_capture is not None:
                     self._release_capture()
@@ -481,9 +598,6 @@ class ReplayRecorder:
                 except Exception:
                     log.exception("recorder lock release failed")
                 self._rec_lock = None
-        # _audio_mode intentionally kept as last-known value so status() can
-        # report which mode was active even after stop; cleared only on
-        # fresh _begin_capture (set to new mode) or explicit reset.
 
     # -- idle gating (no player input -> discard footage, don't retain) -------
 
@@ -572,46 +686,10 @@ class ReplayRecorder:
         idle_since = self._idle_since
         if idle_since is not None and seg.utc_start >= idle_since:
             self._idle_dropped += 1
-            try:
-                seg.path.unlink(missing_ok=True)
-            except OSError:
-                # A sharing violation, not a defect: ffmpeg's segment close, a
-                # clip cut or an indexer still holds the file for a moment.
-                # Defer to the attach loop rather than tracebacking (the old
-                # ERROR here was reported as a bug in its own right,
-                # 2026-08-07); start()'s scratch wipe is the last resort.
-                with self._discard_lock:
-                    self._deferred_discards.setdefault(seg.path,
-                                                       time.monotonic())
-                log.debug("idle-discard deferred (file busy): %s", seg.path)
-            self.ledger.discard_segment(seg)
+            self.ring.discard(seg)
             return
         self.ring.add(seg)
         self.ledger.flush()
-
-    # Give a held file this long to come free before we stop retrying and
-    # leave it for the next start()'s scratch wipe.
-    DISCARD_GIVE_UP_S = 300.0
-
-    def _flush_deferred_discards(self) -> None:
-        """Retry idle-discard unlinks that hit a sharing violation. Runs once
-        per attach tick; the holder (ffmpeg, a clip cut) usually lets go
-        within a segment or two."""
-        with self._discard_lock:
-            pending = list(self._deferred_discards.items())
-        for path, first_failure in pending:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                if time.monotonic() - first_failure > self.DISCARD_GIVE_UP_S:
-                    log.warning(
-                        "idle-discard: %s still held %.0f s after the first "
-                        "attempt — leaving it for the next startup wipe",
-                        path, time.monotonic() - first_failure)
-                else:
-                    continue          # still busy — keep it queued
-            with self._discard_lock:
-                self._deferred_discards.pop(path, None)
 
     # -- frame callback (library thread) -------------------------------------
 
@@ -623,21 +701,29 @@ class ReplayRecorder:
         desktop camera, before the layer publishes) is recorded by TIME
         only: it names no frame, so the clip gets no map and the timeline
         says frame-exact capture is off rather than showing a guess."""
+        preparation = {"prepare": bgra.as_bgra} if isinstance(bgra, BgrPicture) else {}
         if stamp is not None and tag is not None:
-            return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras())
+            return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras(), **preparation)
         if capture_ts is not None:
-            return self.ledger.observe(bgra, capture_ts, None)
+            return self.ledger.observe(bgra, capture_ts, None, **preparation)
         return False
 
-    def _on_frame(self, bgra: np.ndarray, ts_100ns: int, stamp=None) -> None:
+    @measured("replay.on_frame", interval=True)
+    def _on_frame(self, bgra: np.ndarray | BgrPicture, ts_100ns: int, stamp=None) -> None:
+        if self.ring.storage_pressure:
+            self._grabs_skipped += 1
+            return
         # NO idle gate here: frames keep flowing so the sink's timeline and
         # `_latest` stay fresh; idle discard happens per completed segment
         # in _on_segment.
-        # ffmpeg-sink path: a lock-free reference swap, nothing else — the
-        # sink's feeder paces CFR and the child process encodes. The entire
-        # in-process CFR/dedup/encode machinery below is bypassed.
+        # The sink owns queued VFR delivery or the configured legacy CFR
+        # feeder. The in-process writer below is bypassed when it is present.
         sink = self._video_sink
         if sink is not None:
+            if not self._picture_feed:
+                # CFR submits every grab. Prepare before observing, including
+                # a folded grab, so allocation failure cannot alter its ledger.
+                bgra = as_bgra(bgra)
             # Tag the picture AT CAPTURE (round 32 items 17 + 30): the RAM
             # frame current right now (map v2's key) and this picture's own
             # composition time -- WGC's SystemRelativeTime through the run's
@@ -672,10 +758,10 @@ class ReplayRecorder:
                 # changed nothing feeds nothing. The tag's second field is
                 # the row's own ts, which the feed log keys on.
                 if new_picture:
-                    sink.submit(bgra, tag if tag is not None
+                    sink.submit(as_bgra(bgra), tag if tag is not None
                                 else (None, capture_ts))
                 return
-            sink.submit(bgra, tag)
+            sink.submit(as_bgra(bgra), tag)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
         # a single callback thread, so they need no lock — if that ever changes,
@@ -690,6 +776,9 @@ class ReplayRecorder:
         # Drop backwards/duplicate (encoder will also guard, but be explicit)
         if target <= self._last_index:
             return
+
+        # Legacy writer also receives owned BGRA, prepared before any fills.
+        bgra = as_bgra(bgra)
 
         # Fill small delivery gaps (WGC sends frames only on change) by
         # re-encoding the last frame; beyond one segment's worth, stop
@@ -734,7 +823,10 @@ class ReplayRecorder:
 
     # -- audio callback (library thread) -------------------------------------
 
+    @measured("replay.on_pcm", interval=True)
     def _on_pcm(self, pcm_s16: np.ndarray) -> None:
+        if self.ring.storage_pressure:
+            return
         # PRIMARY: hand raw interleaved s16le PCM to the AV sink's audio pipe;
         # ffmpeg wall-clock-stamps it and aresample-locks it to the video
         # master, so there is no count-based cursor to keep advancing and no
@@ -765,6 +857,7 @@ class ReplayRecorder:
             "buffer_start_utc": cov[0].isoformat() if cov else None,
             "buffer_end_utc": cov[1].isoformat() if cov else None,
             "disk_bytes": self.ring.total_bytes,
+            "storage_pressure": self.ring.storage_pressure,
             "retention_s": self.ring.retention_s,
             "max_buffer_bytes": self.ring.max_bytes,
             "idle": self._idle,

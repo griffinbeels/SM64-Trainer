@@ -4,6 +4,7 @@
 // boundary (the fix from replay.js: stepping 1/encode-fps only changed the
 // image every 2nd press). Used by the replay player and the compare sync layer.
 import { presentedVideoTime } from "./videopicture.js";
+import { pauseReviewSource, reviewDuration, seekReviewSource } from "./reviewsource.js";
 
 export function gameFrameOf(video, gameFps = 30) {
   return Math.floor((video.currentTime || 0) * gameFps + 1e-4);
@@ -70,6 +71,11 @@ export function timeOfSlot(slot, clock) {
   return start + (slot + 0.5) / fps;
 }
 
+function boundedVideoClock(video, clock) {
+  const duration = reviewDuration(video);
+  return { ...clock, duration: Number.isFinite(duration) ? duration : clock?.duration };
+}
+
 // A step lands INSIDE a frame, never on the clip's own edge. Seeking to
 // exactly `duration` is past the last frame's interval -- the element
 // reports itself ended and presents whatever it likes, and a panel reading
@@ -82,23 +88,22 @@ export function timeOfSlot(slot, clock) {
 export function stepGameFrame(video, dir, gameFps = 30,
                               frameMap = null, clock = null) {
   if (!video) return;
-  if (!video.paused) video.pause();
+  pauseReviewSource(video);
   const presented = presentedVideoTime(video);
   if (presented === null) return; // the decoder has not displayed a picture yet
-  const boundedClock = { ...clock, duration: Number.isFinite(video.duration)
-    ? video.duration : clock && clock.duration };
+  const boundedClock = boundedVideoClock(video, clock);
   const mapped = nextMappedTime(presented ?? (video.currentTime || 0), frameMap, boundedClock, dir);
   if (mapped !== null) {
-    video.currentTime = mapped;
+    seekReviewSource(video, mapped);
     return;
   }
   // A known picture sequence at its boundary stays put. A time-based
   // fallback here could jump to a different picture or into a capture gap.
-  if ((frameMap && frameMap.length) || (clock && clock.times && clock.times.length)) return;
+  if (frameMap?.length || clock?.times?.length) return;
   // Legacy video without a picture clock retains the 30 Hz controls.
   const n = gameFrameOf(video, gameFps);
-  video.currentTime = clampToFrames(
-    (n + dir + 0.5) / gameFps, video.duration || 0, gameFps);
+  seekReviewSource(video, clampToFrames(
+    (n + dir + 0.5) / gameFps, reviewDuration(video) || 0, gameFps));
 }
 
 // Walk encoded slots in capture order. Raw game counters can go backward
@@ -133,8 +138,8 @@ export function clampToFrames(seconds, duration, gameFps = 30) {
 
 export function jumpToStart(video, startSeconds = 0) {
   if (!video) return;
-  if (!video.paused) video.pause();
-  video.currentTime = Math.max(0, startSeconds);
+  pauseReviewSource(video);
+  seekReviewSource(video, Math.max(0, startSeconds));
 }
 
 // Navigation only: without a verified start picture the wall-clock anchor

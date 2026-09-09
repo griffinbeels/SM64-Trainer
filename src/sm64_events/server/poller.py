@@ -21,6 +21,7 @@ one (each tick worked for 3.4 ms and then slept a full interval), and no game
 frame went unobserved at any rate tried — 60, 120, 250 or 500.
 """
 import asyncio
+from sm64_events.core.profiling import measured
 import logging
 from datetime import datetime, timezone
 from time import perf_counter
@@ -173,6 +174,7 @@ class Poller:
     #: the tick reads the snapshot regardless, so a dead emulator detaches
     UNREADABLE_TICKS_BEFORE_READ = 125
 
+    @measured("poller.tick", interval=True)
     async def tick(self) -> None:
         if self.input_sampler is not None:
             due_for_a_snapshot = self._due_for_a_snapshot()

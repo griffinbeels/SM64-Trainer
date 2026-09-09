@@ -67,7 +67,7 @@ def held_capture(tmp_path, encoder):
     origin = time.time()
 
     def capture(number, stamp):
-        pixels = picture(number)
+        pixels = picture(number, size=(640, 480))
         assert ledger.observe(pixels, stamp, number + 100,
                               {"exact": True, "barcode": number})
         sink.submit(pixels, (number + 100, stamp))

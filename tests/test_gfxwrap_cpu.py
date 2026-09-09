@@ -5,7 +5,25 @@ from pathlib import Path
 
 import pytest
 
+from sm64_events.core.childproc import quiet_spawn_kwargs
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_native_profile_lease_and_duration_are_bounded(tmp_path):
+    spec = importlib.util.spec_from_file_location("profile_build", ROOT / "tools/build_plugin.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    vcvars = build.find_vcvars32()
+    if vcvars is None:
+        pytest.skip("MSVC unavailable for native profile contract check")
+    target = tmp_path / "profile_cpu.exe"
+    build._cl(vcvars, build.COMMON_FLAGS + [
+        str(ROOT / "plugin/gfxwrap/profile_cpu_test.c"),
+        f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "kernel32.lib"], tmp_path)
+    result = subprocess.run([str(target)], capture_output=True, text=True, timeout=10,
+                            **quiet_spawn_kwargs(), check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("restore_bug", [False, True])

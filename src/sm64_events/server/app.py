@@ -30,6 +30,7 @@ from sm64_events.core.version import __version__
 from sm64_events.server.api import create_api_router
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
+from sm64_events.server.profile_api import create_profile_router
 
 log = logging.getLogger("sm64.server")
 
@@ -275,39 +276,7 @@ async def _refresh_library_quietly(library, overrides, adoptions, service) -> No
              result.get("sheet_revision"))
 
 
-def create_app(poller: Poller, broadcaster: Broadcaster,
-               service=None, replay=None, updater=None, compare=None,
-               compilation=None, db_retry=None, debug_hooks: bool = False,
-               adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
-               setup_observer=None,
-               library_path=None, refresh_library_on_start=False,
-               library_bundled_path=None) -> FastAPI:
-    # `library_bundled_path` overrides the BUNDLED snapshot the library falls
-    # back to (None = the shipped one). Since round 33 every fitted star row
-    # in the library becomes a sheet-fitted rank standard at load, so a test
-    # that models a standards store holding ONLY what it puts there passes a
-    # path with no file here and gets an empty library.
-    # `refresh_library_on_start` (round 33, his ask: "automatically refresh
-    # the rank standards upon app startup... If we don't have internet or the
-    # process fails, we should fail silently") schedules ONE background
-    # download of the live sheet after the service starts; a newer sheet
-    # re-derives the sheet-fitted rank standards and absorbs the re-grade.
-    # Off by default so no test, fixture or broadcast-only instance ever
-    # reaches for Google; main.py turns it on for the real app.
-    # `library_path` overrides where the LOCAL sheet snapshot lives -- tests
-    # pass a scratch path so the library resolves to the BUNDLED snapshot;
-    # None (production) resolves to core.paths.sheet_library_path(). Same
-    # reason as `adoptions_path` one line up: the default is the REAL dev
-    # data dir, and a live "refresh" writes data/sheet_library.json.gz right
-    # where the import tests would read it -- his 2026-08-23 23:13 live
-    # import moved the sheet under two green tests exactly that way.
-    # `mode_path` overrides where the game version setting persists
-    # (server/mode_api.py) -- tests pass a scratch file; None (production)
-    # resolves to core.paths.mode_settings_path().
-    # `adoptions_path` overrides where the user's library->segment
-    # assignments live -- the UI fixture passes a scratch file so a render
-    # test clicking the link door can never write into the real data dir.
-    # None (production) resolves to core.paths.library_adoptions_path().
+def _create_monitor(poller, replay) -> PerfMonitor:
     # Observability for long-running sessions: samples self + CHILD (ffmpeg)
     # memory, handle/GDI/USER counts, system pressure, and a per-type heap
     # histogram on a cadence — logs an expanded line, fires one-shot per-class
@@ -315,18 +284,14 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # /health.memory. scratch_dir + ring gauges make replay churn visible too.
     def _perf_gauges() -> dict:
         g: dict = {}
-        try:
+        with suppress(Exception):
             g.update(poller.perf_stats())     # tick-compute latency trend
-        except Exception:
-            pass
         if replay is not None:
-            try:
+            with suppress(Exception):
                 st = replay.recorder.status()
                 g.update(ring_bytes=st.get("disk_bytes"), idle=st.get("idle"),
                          recording=st.get("recording"),
                          audio_mode=st.get("audio_mode"))
-            except Exception:
-                pass
         return g
 
     # Easy off-switch: SM64_PERFMON=0 (or off/false/no) disables all perf
@@ -338,47 +303,59 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     monitor = PerfMonitor(
         scratch_dir=replay.cfg.scratch_dir if replay is not None else None,
         gauges=_perf_gauges, enabled=_perfmon_on)
+    return monitor
 
+
+async def _start_app_service(service) -> None:
+    # Installed here (not main.py) so EVERY launch mode gets the
+    # bound — uvicorn installs its own handlers before lifespan
+    # startup, so chaining at this point always finds them.
+    install_force_exit_watchdog()
+    try:
+        pf = pidfile_path()
+        pf.parent.mkdir(parents=True, exist_ok=True)
+        pf.write_text(str(os.getpid()))
+    except Exception:
+        log.warning("could not write pidfile", exc_info=True)
+    asyncio.get_running_loop().set_exception_handler(
+        _quiet_connection_resets)
+    if service is not None:
+        try:
+            await service.start()
+        except Exception:
+            log.exception("tracker start failed - degrading to broadcast-only")
+            service.db = None
+            service.session_id = None
+
+
+def _start_app_replay(replay) -> None:
+    if replay is not None:
+        try:
+            replay.lifecycle_start()
+        except Exception:
+            log.exception("replay start failed - continuing without replay")
+        try:
+            # process-wide stop-the-world pauses (gen2 GC) hit the grab
+            # loop and the audio callback simultaneously - arm the
+            # watchdog + freeze the startup heap once everything is built.
+            # is_idle drives the manual gen-2 collector (runs while
+            # footage is discarded) so disabling auto-gen-2 can't leak.
+            from sm64_events.replay._gcwatch import arm
+            arm(is_idle=replay.recorder.is_idle)
+        except Exception:
+            log.exception("gc watchdog arm failed - continuing")
+
+
+def _create_lifespan(poller, service, replay, monitor, db_retry,
+                     refresh_library_on_start):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Installed here (not main.py) so EVERY launch mode gets the
-        # bound — uvicorn installs its own handlers before lifespan
-        # startup, so chaining at this point always finds them.
-        install_force_exit_watchdog()
-        try:
-            pf = pidfile_path()
-            pf.parent.mkdir(parents=True, exist_ok=True)
-            pf.write_text(str(os.getpid()))
-        except Exception:
-            log.warning("could not write pidfile", exc_info=True)
-        asyncio.get_running_loop().set_exception_handler(
-            _quiet_connection_resets)
-        if service is not None:
-            try:
-                await service.start()
-            except Exception:
-                log.exception("tracker start failed - degrading to broadcast-only")
-                service.db = None
-                service.session_id = None
+        await _start_app_service(service)
         reattach_task = None
         if service is not None and service.db is None and db_retry is not None:
             reattach_task = asyncio.create_task(
                 _db_reattach_loop(service, db_retry))
-        if replay is not None:
-            try:
-                replay.lifecycle_start()
-            except Exception:
-                log.exception("replay start failed - continuing without replay")
-            try:
-                # process-wide stop-the-world pauses (gen2 GC) hit the grab
-                # loop and the audio callback simultaneously - arm the
-                # watchdog + freeze the startup heap once everything is built.
-                # is_idle drives the manual gen-2 collector (runs while
-                # footage is discarded) so disabling auto-gen-2 can't leak.
-                from sm64_events.replay._gcwatch import arm
-                arm(is_idle=replay.recorder.is_idle)
-            except Exception:
-                log.exception("gc watchdog arm failed - continuing")
+        _start_app_replay(replay)
         task = asyncio.create_task(poller.run())
         task.add_done_callback(_log_poller_exit)
         mon_task = asyncio.create_task(monitor.run())
@@ -413,9 +390,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                 on_stop()
         with suppress(Exception):
             pidfile_path().unlink()
+    return lifespan
 
-    app = FastAPI(title="SM64 Event API", lifespan=lifespan)
 
+def _mount_ui_routes(app, broadcaster) -> None:
     @app.middleware("http")
     async def _ui_always_revalidate(request, call_next):
         """The UI contract is edit + refresh (no build, no restart). With
@@ -437,11 +415,44 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # source checkout, and it refuses itself when frozen.
     from sm64_events.server.tuning_api import create_tuning_router
     app.include_router(create_tuning_router())
+    app.include_router(create_profile_router())
     # The version-sync dashboard (/ui/sync.html). Mounted unconditionally like
     # the tuning router -- it needs only the broadcaster, so a second (broadcast-
     # only) instance can still show and record coverage.
     from sm64_events.server.sync_api import create_sync_router
     app.include_router(create_sync_router(broadcaster))
+
+
+def _create_library_adoptions(library, service, adoptions_path):
+    adoptions = None
+    standards = getattr(service, "ranks", None)
+    def live_segment_defs():
+        database = getattr(service, "db", None)
+        return database.segment_defs() if database is not None else []
+
+    def provision_sheet_entries(payload, explicit):
+        from sm64_events.library.practice_catalog import ensure_catalog
+        rows = ensure_catalog(payload, explicit, getattr(service, "db", None))
+        if hasattr(service, "_load_segment_defs"):
+            service._segment_defs = service._load_segment_defs()
+        return rows
+
+    if standards is not None and hasattr(standards, "apply_sheet_ladders"):
+        from sm64_events.core.paths import library_adoptions_path
+        from sm64_events.library.adoptions import Adoptions
+        qualified = {ek for ek in standards.graded_entities()
+                     if standards.exit_variants(ek)}
+        adoptions = Adoptions(adoptions_path or library_adoptions_path(),
+                              library, standards, qualified,
+                              segment_defs=live_segment_defs,
+                              provision=provision_sheet_entries)
+        adoptions.load()
+        service.on_segment_definitions_changed = adoptions._sync
+    return adoptions
+
+
+def _mount_library_routes(app, service, library_path, library_bundled_path,
+                          adoptions_path) -> None:
     # The Ultimate Sheet library. Mounted unconditionally and independent of
     # the tracker service: it is community reference data, so it is worth
     # having even in a broadcast-only second instance with no store of its own.
@@ -467,30 +478,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # Adoptions bind a library row to a segment the USER built, so they need
     # the standards store to merge into. Without one (a broadcast-only second
     # instance) the read routes still mount and the adopt routes do not.
-    adoptions = None
-    standards = getattr(service, "ranks", None)
-    def live_segment_defs():
-        database = getattr(service, "db", None)
-        return database.segment_defs() if database is not None else []
-
-    def provision_sheet_entries(payload, explicit):
-        from sm64_events.library.practice_catalog import ensure_catalog
-        rows = ensure_catalog(payload, explicit, getattr(service, "db", None))
-        if hasattr(service, "_load_segment_defs"):
-            service._segment_defs = service._load_segment_defs()
-        return rows
-
-    if standards is not None and hasattr(standards, "apply_sheet_ladders"):
-        from sm64_events.core.paths import library_adoptions_path
-        from sm64_events.library.adoptions import Adoptions
-        qualified = {ek for ek in standards.graded_entities()
-                     if standards.exit_variants(ek)}
-        adoptions = Adoptions(adoptions_path or library_adoptions_path(),
-                              library, standards, qualified,
-                              segment_defs=live_segment_defs,
-                              provision=provision_sheet_entries)
-        adoptions.load()
-        service.on_segment_definitions_changed = adoptions._sync
+    adoptions = _create_library_adoptions(library, service, adoptions_path)
+    if adoptions is not None:
         app.state.library_adoptions = adoptions
     app.state.library_overrides = library_overrides
     app.state.adoptions = adoptions
@@ -528,6 +517,12 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         segment_names=live_segment_names if service is not None else None,
         held_times=held_times, on_adopt=on_adopt,
         on_standards_changed=library_standards_changed))
+
+
+def _mount_service_routes(app, service, mode_path) -> None:
+    library = app.state.library
+    library_overrides = app.state.library_overrides
+    adoptions = app.state.adoptions
     if service is not None:
         app.include_router(create_api_router(service))
         from sm64_events.server.recording_api import create_recording_router
@@ -556,6 +551,10 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         app.include_router(create_scorecard_router(
             service, library=library, adoptions=adoptions,
             overrides=library_overrides))
+
+
+def _mount_optional_routes(app, replay, inputs, capture_layer, compare,
+                           compilation, updater, mode_path, setup_observer) -> None:
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
@@ -595,6 +594,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
 
         app.include_router(create_update_router(updater, _restart))
 
+
+def _mount_controls(app, poller, replay) -> None:
     @app.get("/", response_class=HTMLResponse)
     def index():
         return _UI_INDEX.read_text(encoding="utf-8")
@@ -660,6 +661,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                   or _fallback_restart)
         return {"restarting": True}
 
+
+def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
     @app.get("/health")
     def health():
         latest = poller.latest
@@ -714,6 +717,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
         out = diagnostics.write_report(diagnostics_dir(), report)
         return {"path": str(out), "size_bytes": out.stat().st_size}
 
+
+def _mount_events(app, poller, broadcaster, debug_hooks) -> None:
     @app.get("/state")
     def state():
         latest = poller.latest
@@ -743,4 +748,51 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                 timestamp_utc=datetime.now(timezone.utc), payload={}))
             return {"ok": True}
 
+
+def create_app(poller: Poller, broadcaster: Broadcaster,
+               service=None, replay=None, updater=None, compare=None,
+               compilation=None, db_retry=None, debug_hooks: bool = False,
+               adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
+               setup_observer=None,
+               library_path=None, refresh_library_on_start=False,
+               library_bundled_path=None) -> FastAPI:
+    # `library_bundled_path` overrides the BUNDLED snapshot the library falls
+    # back to (None = the shipped one). Since round 33 every fitted star row
+    # in the library becomes a sheet-fitted rank standard at load, so a test
+    # that models a standards store holding ONLY what it puts there passes a
+    # path with no file here and gets an empty library.
+    # `refresh_library_on_start` (round 33, his ask: "automatically refresh
+    # the rank standards upon app startup... If we don't have internet or the
+    # process fails, we should fail silently") schedules ONE background
+    # download of the live sheet after the service starts; a newer sheet
+    # re-derives the sheet-fitted rank standards and absorbs the re-grade.
+    # Off by default so no test, fixture or broadcast-only instance ever
+    # reaches for Google; main.py turns it on for the real app.
+    # `library_path` overrides where the LOCAL sheet snapshot lives -- tests
+    # pass a scratch path so the library resolves to the BUNDLED snapshot;
+    # None (production) resolves to core.paths.sheet_library_path(). Same
+    # reason as `adoptions_path` one line up: the default is the REAL dev
+    # data dir, and a live "refresh" writes data/sheet_library.json.gz right
+    # where the import tests would read it -- his 2026-08-23 23:13 live
+    # import moved the sheet under two green tests exactly that way.
+    # `mode_path` overrides where the game version setting persists
+    # (server/mode_api.py) -- tests pass a scratch file; None (production)
+    # resolves to core.paths.mode_settings_path().
+    # `adoptions_path` overrides where the user's library->segment
+    # assignments live -- the UI fixture passes a scratch file so a render
+    # test clicking the link door can never write into the real data dir.
+    # None (production) resolves to core.paths.library_adoptions_path().
+    monitor = _create_monitor(poller, replay)
+    lifespan = _create_lifespan(poller, service, replay, monitor, db_retry,
+                                refresh_library_on_start)
+    app = FastAPI(title="SM64 Event API", lifespan=lifespan)
+    _mount_ui_routes(app, broadcaster)
+    _mount_library_routes(app, service, library_path, library_bundled_path,
+                          adoptions_path)
+    _mount_service_routes(app, service, mode_path)
+    _mount_optional_routes(app, replay, inputs, capture_layer, compare,
+                           compilation, updater, mode_path, setup_observer)
+    _mount_controls(app, poller, replay)
+    _mount_diagnostics(app, poller, broadcaster, service, monitor)
+    _mount_events(app, poller, broadcaster, debug_hooks)
     return app

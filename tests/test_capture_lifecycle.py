@@ -20,6 +20,7 @@ class Stream:
         self.touches = 0
         self.seq = 0
         self.fail_wait = False
+        self.graphics_profile = SimpleNamespace(refresh=lambda *_args: None)
 
     def header(self):
         return SimpleNamespace(write_seq=self.seq, alive=1, initiated=True, dropped=0, plugin_pid=123)
@@ -109,8 +110,11 @@ def test_factory_failure_releases_mapping_before_lock_once(tmp_path):
     rec = recorder(tmp_path, events, fail)
     with pytest.raises(OSError):
         rec._begin_capture(WIN)
-    rec.stop()
     assert events == ["mapping created", "release mapping", "unlock"]
+    rec.stop()
+    # Shutdown reacquires ownership only to clean the failed startup scratch.
+    # The capture mapping still releases exactly once, before its original lock.
+    assert events == ["mapping created", "release mapping", "unlock", "unlock"]
     rec.ledger.reset()
 
 

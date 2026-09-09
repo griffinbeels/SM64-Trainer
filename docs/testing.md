@@ -134,3 +134,10 @@ runner policy caps requested configurations, so read the admitted budget in
 each log rather than treating the requested worker number as the actual one.
 Primary references: [xdist worker/scheduling options](https://pytest-xdist.readthedocs.io/en/stable/distribution.html)
 and [psutil affinity and process identity](https://psutil.readthedocs.io/stable/index.html).
+
+
+The shared runner pins its own imports and child `PYTHONPATH` to the selected
+checkout's `src` before importing project modules. This prevents a reused virtual
+environment's editable install from silently testing or serving another worktree.
+Direct one-off probes must set the same absolute source path and report module
+`__file__` when comparing candidates. A passing wrong-checkout run is not evidence.

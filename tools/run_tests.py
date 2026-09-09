@@ -14,18 +14,27 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from find_uilab import find_uilab
-from test_resources import TestResources
-from test_job import TestJob
-from sm64_events.core.childproc import quiet_spawn_kwargs
-
 ROOT = Path(__file__).resolve().parent.parent
+# A shared venv may have another worktree installed editable. Pin BOTH this
+# runner and its pytest/browser children to the checkout being measured.
+_SOURCE = str(ROOT / "src")
+sys.path.insert(0, _SOURCE)
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    [_SOURCE, *[p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+                if p and p != _SOURCE]])
+
+from find_uilab import find_uilab  # noqa: E402
+from test_resources import TestResources  # noqa: E402
+from test_job import TestJob  # noqa: E402
+from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
+
 STATE_PATH = ROOT / ".run_tests.json"
 # pytest exit codes that mean the run COMPLETED and the coverage map is whole:
 # 0 all passed, 1 some failed. 2 is an interruption, 3/4 are pytest's own

@@ -7,20 +7,26 @@ Error taxonomy matches server/api.py:
 Anything else (e.g. codec failure on a corrupt segment) is a genuine 500 —
 extract.py already guarantees no partial file survives those.
 """
+import asyncio
+from contextlib import contextmanager, nullcontext
+from sm64_events.replay.sessiongate import SessionGate
 import json
 import logging
 import re
-import shutil
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from sm64_events.core.timefmt import GAME_FPS, format_igt
+from sm64_events.core.profiling import measured
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.association import association_problem, valid_picture_times
 from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
+from sm64_events.replay.reviewstate import ReviewStateStore
+from sm64_events.replay.publication import (publish as publish_saved, recover as recover_saved,
+                                           resume as resume_saved)
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
@@ -175,6 +181,7 @@ class ReplayService:
         # (2026-09-02). The second caller waits, then finds the cached clip.
         self._cut_locks: dict[int, threading.Lock] = {}
         self._cut_locks_guard = threading.Lock()
+        self._review_state = ReviewStateStore()
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
@@ -183,6 +190,45 @@ class ReplayService:
         # what _span uses; update_settings replaces them.
         self.pre_pad_s = cfg.pre_pad_s
         self.post_pad_s = cfg.post_pad_s
+        self._save_guard = threading.Lock()
+        self._active_saves = 0
+        self._session_gate = SessionGate()
+        self._save_failures: dict[int, str] = {}
+        self._recovery_failures: list[str] = []
+        self.recorder.scratch_protection = self._protected_scratch
+
+    def _protected_scratch(self):
+        with self._save_guard:
+            return [self.cfg.scratch_dir] if self._active_saves else []
+
+    def _pin_clip(self, attempt_id: int):
+        pin = getattr(self.recorder.ring, "pin_temp", None)
+        return pin(f"attempt:{attempt_id}") if pin else nullcontext()
+
+    def _pin_span(self, start: datetime, end: datetime):
+        pin = getattr(self.recorder.ring, "pin", None)
+        return pin("video", start, end) if pin else nullcontext()
+
+    def _register_clip(self, attempt, clip: Path) -> None:
+        register = getattr(self.recorder.ring, "register_temp", None)
+        if register is not None:
+            start, end = self._span(attempt)
+            register(f"attempt:{attempt.id}", [clip, clip.with_suffix(".json")], start, end)
+
+    async def preserve_pb(self, attempt_id: int) -> dict:
+        """Await media preservation without occupying the game's event loop."""
+        try:
+            result = await asyncio.to_thread(self.save, attempt_id)
+            return {"status": "saved", **result}
+        except Exception as error:
+            message = str(error)
+            with self._save_guard:
+                self._save_failures[attempt_id] = message
+                # Diagnostic state is bounded; durable publication intents are separate.
+                if len(self._save_failures) > 32:
+                    self._save_failures.pop(next(iter(self._save_failures)))
+            log.exception("PB time saved, but replay %s could not be preserved", attempt_id)
+            return {"status": "failed", "message": message}
 
     def _cut_lock(self, attempt_id: int) -> threading.Lock:
         with self._cut_locks_guard:
@@ -191,7 +237,10 @@ class ReplayService:
     # -- queries -------------------------------------------------------------
 
     def status(self) -> dict:
-        return {"enabled": True, **self.recorder.status()}
+        with self._save_guard:
+            failures = dict(self._save_failures)
+        return {"enabled": True, **self.recorder.status(),
+                "save_failures": failures, "recovery_failures": self._recovery_failures}
 
     def settings(self) -> dict:
         """Storage limits + where the bytes are. saved_bytes walks save_root
@@ -294,20 +343,21 @@ class ReplayService:
             return {}
         return json.loads(meta.read_text())
 
+    @measured("replay.view")
     def view(self, attempt_id: int) -> dict:
         """Clip metadata, cutting at most once per attempt at a time."""
-        with self._cut_lock(attempt_id):
+        with self._session_gate.use(), self._cut_lock(attempt_id), self._pin_clip(attempt_id):
             return self._view(attempt_id)
 
+    @measured("replay.prepare_view")
     def _view(self, attempt_id: int) -> dict:
         """Return clip metadata, extracting and caching on first call.
 
-        Source order: scratch cache -> saved file -> ring extraction.
+        Source order: saved file -> scratch cache -> ring extraction.
         The scratch cache (clip + JSON sidecar both exist) dies with the
         buffer on restart — intentional; after that, a SAVED copy is the
-        only source that can outlive the session, and only when neither
-        exists do we cut from the ring. The saved fallback never shadows
-        a viable extraction: scratch survives any session the ring covers.
+        only source that can outlive the session. Only when neither source
+        exists do we cut from the ring; preserved bytes avoid another cut.
         """
         a = self._attempt(attempt_id)
         name = _CLIP_NAME.format(id=attempt_id)
@@ -315,16 +365,22 @@ class ReplayService:
         meta = clip.with_suffix(".json")
         saved = self.find_saved(attempt_id)
         extracted = False
-        if clip.exists() and meta.exists():
-            m = json.loads(meta.read_text())
-            url, source = f"/api/replay/clips/{name}", "buffer"
-        elif saved is not None:
+        if saved is not None:
             m = self._saved_meta(saved)
             url, source = f"/api/replay/saved/{attempt_id}", "saved"
+        elif clip.exists() and meta.exists():
+            m = json.loads(meta.read_text())
+            url, source = f"/api/replay/clips/{name}", "buffer"
         else:
             start, end = self._span(a)
-            self._wait_for_tail(end)
-            res = self.extractor.extract(self.recorder.ring, start, end, clip)
+            # Pin before waiting: pressure must not remove the beginning while
+            # the last segment is still closing. Mapping uses the same lease.
+            with self._pin_span(start, end):
+                self._wait_for_tail(end)
+                res = self.extractor.extract(self.recorder.ring, start, end, clip)
+                captured = {}
+                if res.start_utc is not None and res.duration_s and res.frame_times is not None:
+                    self._map_from_feeds(captured, res)
             m = {"duration_s": res.duration_s, "truncated": res.truncated}
             # The clip's own first video timestamp: a cut leaves its
             # sub-frame remainder on the first picture (5782: 0.011 s), and
@@ -358,7 +414,7 @@ class ReplayService:
                     # existed to recover an identity capture used to throw
                     # away, and the layer keeps it. Deleted 2026-09-05.
                     if res.frame_times is not None:
-                        self._map_from_feeds(m, res)
+                        m.update(captured)
             extracted = True
             url, source = f"/api/replay/clips/{name}", "buffer"
         media_path = saved if source == "saved" else clip
@@ -380,6 +436,7 @@ class ReplayService:
             evidence = {key: retained[key] for key in ("picture_rows", "feed_match")
                         if key in retained}
             meta.write_text(json.dumps({**m, **evidence}))
+            self._register_clip(a, clip)
         # fps = encoded rate (CFR); game_fps = SM64 logic rate — the
         # frame-step UI steps in GAME frames: each spans two encoded
         # frames, so stepping 1/fps changed the image only every 2nd press
@@ -485,6 +542,7 @@ class ReplayService:
                            .total_seconds() > self._COVERAGE_SLACK_S),
         }
 
+    @measured("replay.associate_pictures")
     def _map_from_feeds(self, meta: dict, res) -> None:
         """The frame map READ off the picture feed's log (item 38).
 
@@ -584,6 +642,7 @@ class ReplayService:
         meta["picture_igt"] = igts if any(igt is not None for igt in igts) else None
         self._audit_pad_stamps(meta, attempt)
 
+    @measured("replay.audit_inputs")
     def _audit_pad_stamps(self, meta: dict, attempt) -> None:
         """THE CLIP'S OWN CHECK, and the only one that ships: every exact
         row's copied pad against the input track's pad at that frame, as
@@ -677,6 +736,7 @@ class ReplayService:
                              - _parse_utc(start)).total_seconds())
         return wall + DISPLAY_LAG_FRAMES / GAME_FPS
 
+    @measured("replay.wait_for_tail")
     def _wait_for_tail(self, end_utc: datetime) -> None:
         """Bounded wait: a click right after the event can outrace the last
         segment's rotation (spec: post-padding race)."""
@@ -689,22 +749,62 @@ class ReplayService:
                 return
             time.sleep(0.25)
 
+    def review_state(self, attempt_id: int) -> dict:
+        """Preferences are readable before the first cut, without extraction."""
+        return self.review_snapshot(attempt_id)[0]
+
+    def review_snapshot(self, attempt_id: int) -> tuple[dict, str]:
+        with self._cut_lock(attempt_id):
+            self._attempt(attempt_id)
+            return self._review_state.snapshot(attempt_id, self.find_saved(attempt_id))
+
+    @property
+    def review_session_token(self) -> str:
+        return self._review_state.session_token
+
+    def update_review_state(self, attempt_id: int, state: dict,
+                            edit: str | None = None) -> dict:
+        # Resolve the saved destination under the same lock as publication:
+        # a PUT racing Save must not become temporary after promotion finishes.
+        with self._cut_lock(attempt_id):
+            self._attempt(attempt_id)
+            return self._review_state.put(attempt_id, self.find_saved(attempt_id), state, edit)
+
     def save(self, attempt_id: int) -> dict:
+        """Serialize extraction, publication, and review-state promotion."""
+        with self._session_gate.use():
+            return self._preserve(attempt_id)
+
+    def _preserve(self, attempt_id: int) -> dict:
+        with self._save_guard:
+            self._active_saves += 1
+        try:
+            with self._cut_lock(attempt_id), self._pin_clip(attempt_id):
+                result = self._save(attempt_id)
+                self._review_state.promote(attempt_id, Path(result["path"]))
+                with self._save_guard:
+                    self._save_failures.pop(attempt_id, None)
+                return result
+        finally:
+            with self._save_guard:
+                self._active_saves -= 1
+
+    def _save(self, attempt_id: int) -> dict:
         """Persist a clip to the permanent save tree (date/session/).
 
         Idempotent: an attempt that already has a saved file returns it
         as-is (re-saving with different pads = delete the file in Explorer
         first). Otherwise view() extracts the clip (cached when already
-        cut) and we copy it out with a metadata sidecar — the sidecar is
+        cut) and publish its immutable bytes with a metadata sidecar — the sidecar is
         what makes the clip self-describing in later sessions, after the
         scratch cache and ring are gone.
         """
         a = self._attempt(attempt_id)
-        existing = self.find_saved(attempt_id)
+        existing = resume_saved(self.cfg.save_root, attempt_id) or self.find_saved(attempt_id)
         if existing is not None:
             m = self._saved_meta(existing)
             return {"path": str(existing), "truncated": m.get("truncated", False)}
-        self.view(attempt_id)  # ensure clip exists (cached when already cut)
+        self._view(attempt_id)  # caller holds the cut lock
         clip = self.clips_dir / _CLIP_NAME.format(id=attempt_id)
         ended_local = _parse_utc(a.ended_utc).astimezone()  # folder by local date
         dest_dir = (self.cfg.save_root / ended_local.strftime("%Y-%m-%d")
@@ -720,12 +820,17 @@ class ReplayService:
             s_name = (star_name(a.course_id, a.star_id)
                       if a.star_id is not None and a.course_id is not None else "no-star")
         dest = dest_dir / slug_filename(a, c_name, s_name)
-        shutil.copy2(clip, dest)
         m = json.loads(clip.with_suffix(".json").read_text())
         # fps stamped at save time: the step buttons must match the clip's
         # actual encode rate even if cfg.fps changes in a future version.
-        dest.with_suffix(".json").write_text(
-            json.dumps({**m, "fps": self.cfg.fps}))
+        dest = publish_saved(self.cfg.save_root, attempt_id, clip, dest,
+                      {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None))
+        forget = getattr(self.recorder.ring, "forget_temp", None)
+        if forget is not None:
+            forget(f"attempt:{attempt_id}", delete=True)
+        else:
+            clip.unlink(missing_ok=True)
+            clip.with_suffix(".json").unlink(missing_ok=True)
         return {"path": str(dest), "truncated": m["truncated"]}
 
     def reveal(self, path_str: str) -> None:
@@ -748,8 +853,21 @@ class ReplayService:
             raise LookupError("no such clip")
         p = self.clips_dir / name
         if not p.exists():
-            raise LookupError("no such clip")
+            # A player already holding the temporary URL survives promotion.
+            saved = self.find_saved(int(name.removeprefix("clip_attempt_").removesuffix(".mp4")))
+            if saved is None:
+                raise LookupError("no such clip")
+            return saved
         return p
+
+    @contextmanager
+    def read_clip(self, name: str):
+        """Keep temporary bytes alive through the entire HTTP range response."""
+        if not _CLIP_RE.fullmatch(name):
+            raise LookupError("no such clip")
+        attempt_id = int(name.removeprefix("clip_attempt_").removesuffix(".mp4"))
+        with self._pin_clip(attempt_id):
+            yield self.clip_path(name)
 
     def saved_clip_path(self, attempt_id: int) -> Path:
         """Saved-clip path for serving. The id is the only input (an int
@@ -763,6 +881,14 @@ class ReplayService:
     # -- lifecycle (called from app lifespan) --------------------------------
 
     def lifecycle_start(self) -> None:
+        with self._session_gate.change():
+            self._start_session()
+
+    def _start_session(self) -> None:
+        self._review_state.clear()
+        self._recovery_failures = recover_saved(self.cfg.save_root)
+        for failure in self._recovery_failures:
+            log.error("%s", failure)
         # Start recorder first; it may wipe scratch_dir contents on init.
         # clips_dir is created after so a future recursive wipe doesn't
         # evict a directory we made first.
@@ -770,4 +896,17 @@ class ReplayService:
         self.clips_dir.mkdir(parents=True, exist_ok=True)
 
     def lifecycle_stop(self) -> None:
-        self.recorder.stop()
+        with self._session_gate.change(close=True):
+            try:
+                self.recorder.stop()
+            finally:
+                self._review_state.clear()
+
+    async def session_ended(self) -> None:
+        """A user session switch ends scratch retention; resets and pauses do not."""
+        await asyncio.to_thread(self._rotate_session)
+
+    def _rotate_session(self) -> None:
+        with self._session_gate.change():
+            self.recorder.reset_session_scratch()
+            self._review_state.clear()

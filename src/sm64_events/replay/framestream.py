@@ -47,6 +47,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sm64_events.replay.graphicsprofile import GraphicsProfile
+from sm64_events.core.profiling import measured
+
 NAME = "sm64_trainer_gfx_v1"
 EVENT_NAME = NAME + "_frame"
 MAGIC = b"SM64GFX1"
@@ -142,6 +145,7 @@ class FrameStream:
 
     def __init__(self, name: str = NAME):
         self.name = name
+        self.graphics_profile = GraphicsProfile(name)
         self._map = mmap.mmap(-1, TOTAL_BYTES, tagname=name)
         self._view = np.frombuffer(self._map, dtype=np.uint8)
         if bytes(self._map[H_MAGIC:H_MAGIC + 8]) != MAGIC:
@@ -287,6 +291,7 @@ class FrameStream:
                 slots.append(slot)
         return slots, skipped
 
+    @measured("capture.slot_read")
     def _read_slot(self, seq: int) -> Slot | None:
         base = self.slot_offset(seq)
         if self._u32(base + S_SEQ) != seq or self._u32(base + S_SEQ_END) != seq:
@@ -375,6 +380,7 @@ class FrameStream:
             H_WRAPPED_NAME_BYTES, b"\0")
 
     def close(self) -> None:
+        self.graphics_profile.close()
         self._view = None
         try:
             self._map.close()

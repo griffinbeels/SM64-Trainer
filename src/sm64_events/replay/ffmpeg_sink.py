@@ -24,6 +24,7 @@ frame chain rule for measured failures and tests/test_replay_picture_identity.py
 for independent pixel identities through the actual sink, segments and cut.
 """
 import ctypes
+from sm64_events.core.profiling import measured
 import ctypes.wintypes as wt
 import logging
 import os
@@ -41,7 +42,9 @@ import numpy as np
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.timefmt import GAME_FPS
-from sm64_events.replay.config import RING_MAXRATE, video_quality_args
+from sm64_events.replay.config import (
+    RING_MAXRATE, forced_idr_args, raw_picture_args, video_quality_args,
+)
 from sm64_events.replay.ring import SegmentInfo
 from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, MediaRun, picture_duration_filter
 
@@ -178,7 +181,7 @@ class AudioPacer:
     unit-testable without ffmpeg. `feed` writes real PCM; `tick` pads silence
     to realtime. Returns samples written so callers/tests can observe."""
 
-    def __init__(self, rate: int, now, write, write_at=None):
+    def __init__(self, rate: int, now, write, write_at=None, idle_grace_s=0.0):
         self._rate = rate
         self._now = now
         self._write = write
@@ -186,12 +189,17 @@ class AudioPacer:
         # itself (the picture feed's NUT stream); padding still goes
         # through `write`, which stamps it as ending now.
         self._write_at = write_at
+        self._idle_grace_s = idle_grace_s
+        self._last_real_at = None
         self._t0 = None
         self._delivered = 0
 
     def feed(self, real_pcm: bytes, ends_at: float | None = None) -> None:
+        if not real_pcm:
+            return
+        self._last_real_at = self._now()
         if self._t0 is None:
-            self._t0 = self._now()
+            self._t0 = self._last_real_at
         if ends_at is not None and self._write_at is not None:
             self._write_at(real_pcm, ends_at)
         else:
@@ -199,9 +207,14 @@ class AudioPacer:
         self._delivered += len(real_pcm) // 4  # 2ch * s16
 
     def tick(self) -> int:
+        now = self._now()
         if self._t0 is None:
-            self._t0 = self._now()
-        expected = int((self._now() - self._t0) * self._rate)
+            self._t0 = now
+        # A normal callback batch is not a silent gap. Speculative padding
+        # occupies its timestamps and pushes the next real PCM forward.
+        if self._last_real_at is not None and now - self._last_real_at < self._idle_grace_s:
+            return 0
+        expected = int((now - self._t0) * self._rate)
         pad = expected - self._delivered
         if pad > 0:
             self._write(b"\x00" * (pad * 4))
@@ -240,26 +253,6 @@ def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
         utc_start=anchor_utc + timedelta(seconds=start - origin_s),
         utc_end=anchor_utc + timedelta(seconds=end - origin_s),
         size_bytes=size, dims=dims, media_run=media_run)
-
-
-def fill_plane(plane, frame: np.ndarray) -> None:
-    """Copy a (H, W, 4) BGRA picture into an AVFrame plane. FFmpeg pads each
-    row of a plane to a 32-byte line size, so a width that is not a
-    multiple of 8 has a plane larger than the picture (1190 px: 4760 bytes
-    of pixels, a 4768-byte line) and `update` refuses the raw bytes -- which
-    made the sink respawn ffmpeg on EVERY picture while Project64's window
-    was 1190 wide during its start-up (2026-09-05: "got 2360960 bytes; need
-    2364928 bytes"), i.e. record nothing at that size. Such a picture is
-    laid out row by row into a buffer of the plane's own shape first."""
-    height, width = frame.shape[:2]
-    row_bytes = width * 4
-    line = plane.line_size
-    if line == row_bytes:
-        plane.update(frame if frame.flags["C_CONTIGUOUS"] else np.ascontiguousarray(frame))
-        return
-    rows = np.zeros((height, line), dtype=np.uint8)
-    rows[:, :row_bytes] = frame.reshape(height, row_bytes)
-    plane.update(rows)
 
 
 class _WriteAll:
@@ -309,7 +302,6 @@ class FfmpegAvSink:
         self._mux = None            # the NUT container over stdin (picture feed)
         self._mux_stream = None
         self._mux_audio = None
-        self._mux_frame = None      # one reusable AVFrame; planes updated in place
         self._mux_lock = threading.Lock()   # the feeder and the audio thread share it
         # The picture feed's stamps are seconds since THIS run's epoch (the
         # first picture): small numbers that never wrap MPEG-TS's 33-bit clock, on
@@ -469,6 +461,7 @@ class FfmpegAvSink:
             # with scene difficulty.
             "-c:v", self._codec,
             *video_quality_args(self._codec, "realtime", RING_MAXRATE),
+            *raw_picture_args(self._codec),
             # bf=0: B-frames shift a segment's start_time off frame 0, breaking
             # the pts contract the extractor cuts against.
             "-bf", "0",
@@ -478,10 +471,7 @@ class FfmpegAvSink:
             "-g", str(int((GAME_FPS if self._picture else fps) * seg_s)),
             *(["-force_key_frames", f"expr:gte(t,n_forced*{seg_s})"]
               if self._picture else []),
-            # forced-idr is an NVENC knob; x264 already emits IDR at every
-            # -g boundary (closed GOP is its default), which is all the
-            # segment muxer needs to cut on.
-            *(["-forced-idr", "1"] if self._codec == "h264_nvenc" else []),
+            *forced_idr_args(self._codec),
             # CFR locks every frame to the wall-clock grid; the picture
             # feed keeps each frame at the time it was written instead.
             # ... and keeps the INPUT's microsecond time base through the
@@ -733,6 +723,7 @@ class FfmpegAvSink:
             if htimer:
                 kernel32.CloseHandle(htimer)
 
+    @measured("replay.write_frame")
     def _write_frame(self, frame, tag) -> float | None:
         """One frame to ffmpeg's stdin, spawning or re-spawning the child
         as its size demands. Returns the write's duration in ms, or None
@@ -817,13 +808,11 @@ class FfmpegAvSink:
         audio.time_base = PICTURE_TIME_BASE
         audio.codec_context.time_base = PICTURE_TIME_BASE
         self._mux_audio = audio
-        self._mux_frame = av.VideoFrame(w, h, "bgra")
-        self._mux_frame.time_base = MEDIA_TIME_BASE
 
     def _close_mux(self) -> None:
         with self._mux_lock:
             mux, self._mux = self._mux, None
-            self._mux_stream = self._mux_audio = self._mux_frame = None
+            self._mux_stream = self._mux_audio = None
             if mux is None:
                 return
             try:
@@ -831,16 +820,20 @@ class FfmpegAvSink:
             except Exception:
                 log.debug("NUT mux close failed (child gone?)", exc_info=True)
 
+    @measured("replay.mux_picture")
     def _mux_picture(self, frame: np.ndarray, stamp: float) -> int:
-        """One picture into the NUT stream at wall time `stamp`. The
-        reusable AVFrame's plane is updated in place (one copy) and the
-        rawvideo 'encode' is the second; the mux write blocks on the
-        pipe's backpressure exactly as the raw write did."""
+        """Wrap the owned BGRA bytes as rawvideo, preserving the media clock.
+
+        Rawvideo encoding only copied these bytes through a padded AVFrame
+        and a second packet buffer. Packet retains the source buffer through
+        muxing; submit() already supplies contiguous pixels whose lifetime
+        includes queued writes and heartbeats. NUT/pipe backpressure remains.
+        """
+        import av
+
         with self._mux_lock:
             if self._mux is None:
                 raise OSError("no NUT mux open")
-            picture = self._mux_frame
-            fill_plane(picture.planes[0], frame)
             # Allocate the actual transport tick here, before encoding. Two
             # catch-up pictures can quantize to the same tick; a delayed grab
             # can even predate a heartbeat already written. FFmpeg must not
@@ -848,12 +841,16 @@ class FfmpegAvSink:
             # order and file its assigned PTS alongside its capture identity.
             pts = max(self._media_run.ticks_at(stamp),
                       self._last_video_pts + 1 if self._last_video_pts is not None else 0)
-            picture.pts = pts
-            for packet in self._mux_stream.encode(picture):
-                self._mux.mux(packet)
+            packet = av.Packet(memoryview(frame))
+            packet.stream = self._mux_stream
+            packet.time_base = MEDIA_TIME_BASE
+            packet.pts = packet.dts = pts
+            packet.is_keyframe = True
+            self._mux.mux(packet)
             self._last_video_pts = pts
             return pts
 
+    @measured("replay.mux_audio")
     def _mux_audio_chunk(self, pcm: bytes, pts_us: int) -> None:
         """One chunk of interleaved s16le stereo into the NUT stream at
         `pts_us` (its first sample's wall time, PICTURE_TIME_BASE). Raises
@@ -919,7 +916,7 @@ class FfmpegAvSink:
 
         pacer = AudioPacer(rate, _time.perf_counter,
                            write=lambda buf: _put_at(buf, _time.time()),
-                           write_at=_put_at)
+                           write_at=_put_at, idle_grace_s=0.05)
         while not self._stop.is_set():
             drained = False
             while True:
