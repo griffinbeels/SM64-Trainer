@@ -150,9 +150,11 @@ def test_fractional_nodes_and_off_grid_inverse_never_round_onto_a_missed_goal():
     {"Mario": 246, "Grandmaster": 246, "Master": 300},
     {"Mario": 246, "Grandmaster": 300, "Master": 300},
     {"Mario": 246, "Grandmaster": 246, "Bronze": 246},
+    {"Mario": 885, "Bronze": 940, "Iron": 2000},
 ])
 def test_legacy_matches_the_existing_real_implementation_exactly(ladder):
     curve = from_ladder(ladder)
+    assert "Iron" not in curve["ladder_cs"]
     for time in [0, 1, 245, 246, 247, 299, 300, 885, 886, 940, 1000, 10000]:
         assert score_for(curve, time) == scoring.score_for(ladder, time)
         assert progress_for_time(curve, time) == (scoring.progress_for_time(ladder, time) if ladder else None)

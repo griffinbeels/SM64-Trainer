@@ -642,7 +642,8 @@ def entity_rank(ranks, ek, frames, version=None) -> dict | None:
     if progress is None:
         return None
     legacy = (curve["interpolation"] == "legacy"
-              and curve["ladder_cs"] == scoring.best_ladder(ranks.ladders(ek, version)))
+              and curve["ladder_cs"] == curves.from_ladder(
+                  scoring.best_ladder(ranks.ladders(ek, version)))["ladder_cs"])
     ladder = curve["ladder_cs"]
     fastest_strat = _fastest_strategy(ranks, ek, ladder) if legacy else None
     return {**progress, "rank": progress["tier"], "score": round(progress["score"], 1),
@@ -672,7 +673,11 @@ def ranks_share_ladder(ranks, ek, strat) -> bool:
     from sm64_events.ranks.calibration import resolve_curve
     curve = resolve_curve(ranks, ek)
     ladder = ranks.ladder_cs(ek, strat)
-    return bool(ladder) and curve["interpolation"] == "legacy" and ladder == curve["ladder_cs"]
+    # Comparison must not validate or repair Strategy edits: legacy custom
+    # cutoffs can cross. Only the obsolete, unbounded floor is irrelevant.
+    ladder = {rank: cutoff for rank, cutoff in ladder.items() if rank != "Iron"}
+    return (bool(ladder) and curve["interpolation"] == "legacy"
+            and ladder == curve["ladder_cs"])
 
 
 def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,

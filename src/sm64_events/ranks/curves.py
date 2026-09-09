@@ -103,7 +103,14 @@ def compile_curve(nodes: Sequence[Sequence[float]], metadata: dict | None = None
 
 
 def from_ladder(ladder_cs: Mapping[str, int], metadata: dict | None = None) -> CompiledCurve:
-    """Wrap an existing manual ladder, preserving its exact legacy grading."""
+    """Wrap an existing manual ladder, preserving its exact legacy grading.
+
+    Older saved ladders can carry Iron, which legacy scoring ignores because
+    the floor is unbounded. Omit that obsolete cutoff from the wire value;
+    validation of incoming compiled curves and new pins stays strict.
+    """
+    if isinstance(ladder_cs, dict) and "Iron" in ladder_cs:
+        ladder_cs = {rank: cutoff for rank, cutoff in ladder_cs.items() if rank != "Iron"}
     ladder = _ladder(ladder_cs)
     return {"schema_version": 1, "interpolation": "legacy", "nodes": [],
             "ladder_cs": ladder, "metadata": _metadata(metadata)}

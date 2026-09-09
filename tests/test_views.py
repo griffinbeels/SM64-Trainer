@@ -2500,6 +2500,9 @@ def test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock(tmp_path)
     assert igt_view["rank"]["rank"] == "Diamond" and igt_view["rank"]["division"] == "V"
     assert rta_view["rank"]["rank"] == igt_view["rank"]["rank"]
     assert rta_view["rank"]["division"] == igt_view["rank"]["division"]
+    assert igt_view["one_ladder"] and rta_view["one_ladder"]
+    assert igt_view["entity_rank"]["fastest_strat"] == "fast"
+    assert not igt_view["entity_rank"]["fitted"]
 
     # I1 (final review, 2026-07-26): the ATTEMPT medals and progress-graph
     # dots must grade on the same ladder clock as the banner above, not the
@@ -2694,8 +2697,14 @@ def test_pipe_segment_grades_against_the_paired_star_ladder(tmp_path):
     # "any truthy rank") and that it is the PIPE cutoff, not e.g. silently
     # reusing the star's own attempt/basis.
     assert seg_sec["rank"]["rank"] == "Iron"
-    assert seg_sec["entity_rank"] is not None
+    # Strategy storage remains paired; Overall requires the full segment's
+    # own compatible standards instead of borrowing the star-grab curve.
+    assert seg_sec["entity_rank"] is None
     assert seg_sec["pipe_star_entity"] == "star:16:0"
+    svc.ranks.set_threshold(f"segment:{seg_id}", "Full route", "Mario", 80.0)
+    independent = seg_section(build_session_view(db, svc, clock="igt"), seg_id)
+    assert independent["entity_rank"]["rank"] == "Mario"
+    assert independent["rank"]["rank"] == "Iron"
 
 
 def test_pipe_segment_carries_the_paired_stars_own_display_names(tmp_path):
@@ -3091,3 +3100,18 @@ def test_with_no_strategy_selected_nothing_may_be_saved(tmp_path):
                if r["outcome"] == "success"]
     assert blocked and all(b == {"reason": "no_active_strat", "strat": None}
                            for b in blocked)
+
+
+def test_crossed_legacy_strategy_cutoffs_do_not_break_the_session_view(tmp_path):
+    from sm64_events.ranks.standards import RankStandards
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = RankStandards(tmp_path / "crossed.json")
+    svc.ranks.load()
+    svc.ranks.set_threshold("star:2:2", "fast", "Mario", 20.0)
+    svc.ranks.set_threshold("star:2:2", "fast", "Gold", 10.0)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    [section] = build_session_view(db, svc, clock="igt")["stars"]
+    assert not section["one_ladder"]
+    assert svc.ranks.ladder_cs("star:2:2", "fast") == {"Mario": 2000, "Gold": 1000}

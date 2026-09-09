@@ -124,6 +124,15 @@ activate; identical content can be a no-op, and older Sheet data is refused.
 Fitting or write failure retains the active generation and saved snapshot.
 Assignment transactions also restore saved assignment bytes on failure.
 
+Identical validated populations can reuse a completed Overall fit through the
+bounded process-local [fit cache](../src/sm64_events/ranks/fit_cache.py). Every
+call still resolves policy and normalizes observations. Changed runner evidence,
+estimates, family membership, target, region, policy, or provenance invalidates
+reuse; returned curves cannot mutate cached results. The cache never controls
+refresh activation or preserves old standards over new evidence. Exact equality
+and invalidation are covered by
+[test_overall_model_cache.py](../tests/test_overall_model_cache.py).
+
 GET readers pin one generation and standards state; the API exposes
 `X-Rank-Calibration`, while rank payloads carry `calibration_revision`. The board
 cache includes source content and the effective calibration revision. A Sheet
