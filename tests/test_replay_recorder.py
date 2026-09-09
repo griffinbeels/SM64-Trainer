@@ -1,5 +1,6 @@
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 
@@ -148,7 +149,9 @@ def test_idle_discard_defers_a_busy_file_instead_of_erroring(tmp_path, caplog):
     import logging
 
     video, audio = FakeVideoSource(), FakeAudioSource()
-    rec = make_recorder(tmp_path, video, audio)
+    rec = make_recorder(tmp_path, video, audio,
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
     scratch = tmp_path / "buf"
     scratch.mkdir(parents=True, exist_ok=True)
     seg_path = scratch / "av_00_000001.ts"
@@ -160,13 +163,14 @@ def test_idle_discard_defers_a_busy_file_instead_of_erroring(tmp_path, caplog):
     with caplog.at_level(logging.DEBUG, logger="sm64.replay"):
         with open(seg_path, "rb"):                # an open handle denies delete
             rec._on_segment(seg)
-            rec._flush_deferred_discards()        # still held — stays queued
+            rec.ring.maintain()                  # still held — stays queued
             assert seg_path.exists()
             assert not [r for r in caplog.records
                         if r.levelno >= logging.ERROR], \
                 "a busy file must not produce an ERROR"
-        rec._flush_deferred_discards()            # holder gone — cleaned up
+        rec.ring.maintain()                      # holder gone — cleaned up
     assert not seg_path.exists()
+    rec.stop()
 
 
 def test_viewer_only_when_another_instance_holds_recorder_lock(tmp_path):
@@ -204,7 +208,7 @@ def test_recorder_attaches_and_produces_segments(tmp_path):
     push_frames(video, 70)                      # > one 2 s segment
     audio.on_pcm(np.zeros((48000, 2), dtype=np.int16))
     assert wait_for(lambda: rec.ring.coverage("video") is not None)
-    rec.stop()
+    rec.stop(cleanup=False)  # inspect the final closed media before session cleanup
     st = rec.status()
     assert st["recording"] is False and st["window_found"] is True
     assert st["audio_mode"] == "process"
@@ -221,7 +225,7 @@ def test_cfr_fill_duplicates_dropped_frames(tmp_path):
     assert wait_for(lambda: video.on_frame is not None)
     push_frames(video, 10)                       # indices 0..9
     push_frames(video, 80, start_index=40)       # delivery gap: 10..39 filled
-    rec.stop()                                   # stop() closes partials
+    rec.stop(cleanup=False)                       # inspect final closed partials
     cov = rec.ring.coverage("video")
     # 120 contiguous indices = 4 s despite the 1 s delivery gap
     assert (cov[1] - cov[0]).total_seconds() == 4.0
@@ -327,7 +331,7 @@ def test_long_gap_becomes_coverage_hole_not_giant_fill(tmp_path):
     assert wait_for(lambda: video.on_frame is not None)
     push_frames(video, 60)                          # indices 0..59 (2 s)
     push_frames(video, 60, start_index=18060)       # ~10 min later (index 18060)
-    rec.stop()
+    rec.stop(cleanup=False)
     cov = rec.ring.coverage("video")
     # coverage span reflects true wall-clock of the late frames
     assert cov is not None
@@ -372,7 +376,8 @@ def test_startup_wipe_is_recursive_clips_cache_dies_with_buffer(tmp_path):
 
 
 def _seg(tmp_path, name, start, end):
-    p = tmp_path / name
+    p = tmp_path / "buf" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"x" * 10)
     return SegmentInfo(path=p, kind="video", utc_start=start, utc_end=end,
                        size_bytes=10)
@@ -383,10 +388,11 @@ def test_idle_gating_discards_segments_keeps_straddlers(tmp_path):
     left a hole at the clip start). While idle, only segments born ENTIRELY
     inside the idle window are dropped; straddlers carry the last active
     footage / the anchor lead-up and must be kept. Resume is instant."""
-    cfg = ReplayConfig(scratch_dir=tmp_path / "buf")
-    rec = ReplayRecorder(cfg=cfg, window_finder=lambda t: None,
-                         video_factory=None, audio_factory=None)
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
     assert rec.idle_after_s == 5.0          # default pads 3+2
+    overhead = rec.ring.total_bytes        # ownership marker is accounted too
     rec.set_idle_after(1.0)
     assert rec.idle_after_s == 3.0          # floor prevents thrash
 
@@ -398,7 +404,7 @@ def test_idle_gating_discards_segments_keeps_straddlers(tmp_path):
     assert rec.status()["idle"] is False
     rec._on_segment(_seg(tmp_path, "a.ts", now - timedelta(seconds=4),
                          now - timedelta(seconds=2)))
-    assert rec.ring.total_bytes == 10       # active: retained
+    assert rec.ring.total_bytes == overhead + 10  # active: retained
 
     rec._last_player_active = time.monotonic() - 1.0
     rec._maybe_idle_pause()
@@ -407,18 +413,19 @@ def test_idle_gating_discards_segments_keeps_straddlers(tmp_path):
     straddler = _seg(tmp_path, "b.ts", since - timedelta(seconds=1),
                      since + timedelta(seconds=1))
     rec._on_segment(straddler)
-    assert rec.ring.total_bytes == 20       # born before idle: kept
+    assert rec.ring.total_bytes == overhead + 20  # born before idle: kept
     inside = _seg(tmp_path, "c.ts", since + timedelta(seconds=1),
                   since + timedelta(seconds=3))
     rec._on_segment(inside)
-    assert rec.ring.total_bytes == 20       # born inside idle: dropped
+    assert rec.ring.total_bytes == overhead + 20  # born inside idle: dropped
     assert not inside.path.exists()         # disk freed, not just unlisted
 
     rec.set_player_active()                 # first input -> instant resume
     assert rec.status()["idle"] is False
     rec._on_segment(_seg(tmp_path, "d.ts", now + timedelta(seconds=5),
                          now + timedelta(seconds=7)))
-    assert rec.ring.total_bytes == 30       # post-resume: retained again
+    assert rec.ring.total_bytes == overhead + 30  # post-resume: retained again
+    rec.stop()
 
 
 def test_recorder_injects_idle_check_tracking_idle_state(tmp_path):
@@ -568,4 +575,274 @@ def test_a_stamped_picture_files_the_stamps_own_frame(tmp_path):
     row = rows[0]
     assert row["frame"] == 5150 and row["exact"] is True and row["igt_overall"] == 91
     assert row["pad"] == [3, -70, 0x8000] and row["vi_origin"] == 0x100000
+    rec.stop()
+
+
+def test_clean_stop_closes_encoder_before_removing_owned_scratch(tmp_path):
+    held = _FakeLock()
+    source_path = tmp_path / "buf" / "tail.ts"
+
+    class ClosingSink(FakeAvSink):
+        def stop(self):
+            assert not held.closed
+            source_path.write_bytes(b"final segment")
+            super().stop()
+
+    sink = ClosingSink()
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        recorder_lock_factory=lambda: held,
+                        video_sink_factory=lambda *args: sink)
+    rec._begin_capture(WIN)
+    saved = tmp_path / "saved.mp4"
+    saved.write_bytes(b"saved footage")
+    rec.stop()
+    assert sink.stopped and held.closed
+    assert not source_path.exists()
+    assert rec.ring.total_bytes == 0
+    assert saved.read_bytes() == b"saved footage"
+
+
+def test_pending_save_can_defer_cleanup_and_retry_after_stop(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
+    source = _seg(tmp_path, "pending.ts", T0, T0 + timedelta(seconds=2))
+    rec.ring.add(source)
+    rec.stop(cleanup=False)
+    assert source.path.exists()
+    assert rec.cleanup_scratch()
+    assert not source.path.exists() and rec.ring.coverage("video") is None
+
+
+def test_shutdown_cleanup_preserves_live_lease(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
+    source = _seg(tmp_path, "reading.ts", T0, T0 + timedelta(seconds=2))
+    rec.ring.add(source)
+    archive = rec._cfg.scratch_dir / rec._ledger_name
+    assert archive.exists()
+    with rec.ring.pin("video", source.utc_start, source.utc_end):
+        rec.stop()
+        assert source.path.read_bytes() == b"x" * 10
+        assert archive.exists()  # projection after ffmpeg still needs this evidence
+    assert rec.cleanup_scratch()
+    assert not source.path.exists() and not archive.exists()
+
+
+def test_viewer_stop_does_not_modify_any_scratch_bytes(tmp_path):
+    scratch = tmp_path / "buf"
+    scratch.mkdir()
+    paths = [scratch / ".session-owner", scratch / "active.ts"]
+    for path in paths:
+        path.write_bytes(b"foreign owner")
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        recorder_lock_factory=lambda: None)
+    rec._begin_capture(WIN)
+    rec.stop()
+    assert not rec.cleanup_scratch()
+    assert all(path.read_bytes() == b"foreign owner" for path in paths)
+
+
+def test_detached_old_owner_cannot_clean_new_owner_lifetime(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
+    rec._teardown_capture()  # emulator disconnect releases recorder lock, not session
+    assert rec._scratch.owns()
+    rec._scratch.marker.write_text("different owner", encoding="utf-8")
+    current = _seg(tmp_path, "other.ts", T0, T0 + timedelta(seconds=2))
+    rec.stop()
+    assert current.path.exists()
+    assert rec._scratch.marker.read_text() == "different owner"
+
+
+def test_disconnect_pause_and_reconnect_preserve_unsaved_session(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
+    source = _seg(tmp_path, "retained.ts", T0, T0 + timedelta(seconds=2))
+    rec.ring.add(source)
+    rec.set_session_paused(True)
+    rec.set_session_paused(False)
+    rec._teardown_capture()
+    assert source.path.exists()
+    rec._begin_capture(WIN)
+    assert source.path.exists() and rec.ring.coverage("video") is not None
+    rec.stop()
+    assert not source.path.exists()
+
+
+def test_startup_and_shutdown_honor_pending_source_protection(tmp_path):
+    scratch = tmp_path / "buf"
+    scratch.mkdir()
+    pending, ordinary = scratch / "pending.mp4", scratch / "old.ts"
+    pending.write_bytes(b"explicit save source")
+    ordinary.write_bytes(b"expired")
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec.scratch_protection = lambda: [pending]
+    rec._begin_capture(WIN)
+    assert pending.exists() and not ordinary.exists()
+    rec.stop()
+    assert pending.read_bytes() == b"explicit save source"
+    rec.scratch_protection = None
+    assert rec.cleanup_scratch() and not pending.exists()
+
+
+def test_failed_encoder_close_keeps_scratch_for_recovery(tmp_path):
+    class FailedClose(FakeAvSink):
+        def stop(self):
+            raise OSError("encoder still draining")
+
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FailedClose())
+    rec._begin_capture(WIN)
+    source = _seg(tmp_path, "tail.ts", T0, T0 + timedelta(seconds=2))
+    rec.stop()
+    assert source.path.exists()
+    assert not rec.cleanup_scratch()
+
+
+def test_free_floor_stops_encoder_with_owned_session_and_resumes_when_recovered(tmp_path):
+    free = [1000]
+    held = _FakeLock()
+    sinks = []
+
+    def factory(*args):
+        sink = FakeAvSink()
+        sinks.append(sink)
+        return sink
+
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=factory, recorder_lock_factory=lambda: held)
+    rec.ring._disk_margin = 100
+    rec.ring._free_bytes_fn = lambda: free[0]
+    rec.start()
+    try:
+        assert wait_for(lambda: rec.status()["recording"])
+        free[0] = 0
+        rec.ring.maintain()
+        assert wait_for(lambda: sinks[0].stopped and not rec.status()["recording"])
+        assert not held.closed and rec._scratch.owns()
+        assert rec.status()["storage_pressure"]
+        free[0] = 1000
+        assert wait_for(lambda: len(sinks) == 2 and rec.status()["recording"])
+        assert not rec.status()["storage_pressure"]
+    finally:
+        rec.stop()
+
+
+def test_restart_after_low_space_stop_rechecks_disk_before_capture(tmp_path):
+    free = [0]
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec.ring._disk_margin = 100
+    rec.ring._free_bytes_fn = lambda: free[0]
+    rec.start()
+    assert wait_for(lambda: rec.ring.storage_pressure)
+    rec.stop()
+    free[0] = 1000
+    rec.start()
+    try:
+        assert wait_for(lambda: rec.status()["recording"])
+    finally:
+        rec.stop()
+
+
+def test_session_rotation_preserves_http_reader_and_never_releases_owner_lock(tmp_path):
+    held = _FakeLock()
+    sinks = []
+
+    def factory(*args):
+        sink = FakeAvSink()
+        sinks.append(sink)
+        return sink
+
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        recorder_lock_factory=lambda: held, video_sink_factory=factory)
+    rec._begin_capture(WIN)
+    source = _seg(tmp_path, "previous.ts", T0, T0 + timedelta(seconds=2))
+    rec.ring.add(source)
+    previous_archive = rec._cfg.scratch_dir / rec._ledger_name
+    media = rec._cfg.scratch_dir / "clips" / "reading.mp4"
+    media.parent.mkdir()
+    media.write_bytes(b"http response bytes")
+    with rec.ring.pin_temp("http"):
+        rec.ring.register_temp("http", [media], source.utc_start, source.utc_end)
+        assert rec.reset_session_scratch()
+        assert not held.closed and sinks[0].stopped and sinks[1].started
+        assert rec.status()["recording"]
+        assert media.read_bytes() == b"http response bytes"
+        assert not source.path.exists() and not previous_archive.exists()
+        assert rec._cfg.scratch_dir.joinpath(rec._ledger_name).exists()
+    assert not media.exists()
+    rec.stop()
+
+
+def test_session_rotation_refuses_a_viewer_or_replaced_owner(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    assert not rec.reset_session_scratch()
+    rec._begin_capture(WIN)
+    rec._teardown_capture()
+    rec._scratch.marker.write_text("replacement", encoding="utf-8")
+    media = _seg(tmp_path, "replacement.ts", T0, T0 + timedelta(seconds=2))
+    assert not rec.reset_session_scratch()
+    assert media.path.exists() and rec._scratch.marker.read_text() == "replacement"
+
+
+def test_detached_lease_release_cannot_delete_replacement_owners_media(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
+    path = rec._cfg.scratch_dir / "clip.mp4"
+    path.write_bytes(b"previous owner")
+    with rec.ring.pin_temp("http"):
+        rec.ring.register_temp("http", [path], T0, T0 + timedelta(seconds=2))
+        rec.ring.forget_temp("http", delete=True)
+        rec._teardown_capture()
+        rec._scratch.marker.write_text("replacement", encoding="utf-8")
+        path.write_bytes(b"replacement owner's bytes")
+    rec.ring.set_limits(None, 0)
+    rec.ring.maintain()
+    rec.stop()
+    assert path.read_bytes() == b"replacement owner's bytes"
+
+
+def test_pending_unlink_cannot_resume_after_machine_ownership_released(tmp_path, monkeypatch):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
+    source = _seg(tmp_path, "busy.ts", T0, T0 + timedelta(seconds=2))
+    unlink = Path.unlink
+
+    def busy(path, *args, **kwargs):
+        if path == source.path:
+            raise PermissionError("sharing violation")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", busy)
+    rec.ring.discard(source)
+    assert source.path.exists()
+    rec._teardown_capture()
+    monkeypatch.setattr(Path, "unlink", unlink)
+    # Even before a replacement publishes its token, the old instance no
+    # longer owns the machine lock and must perform no deletions.
+    source.path.write_bytes(b"new owner preparing scratch")
+    rec.ring.maintain()
+    assert source.path.read_bytes() == b"new owner preparing scratch"
+
+
+def test_idle_arriving_tail_is_retained_until_source_lease_finishes(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._begin_capture(WIN)
+    rec._idle_since = T0
+    with rec.ring.pin("video", T0, T0 + timedelta(seconds=2)):
+        tail = _seg(tmp_path, "tail.ts", T0, T0 + timedelta(seconds=2))
+        rec._on_segment(tail)
+        assert tail.path.read_bytes() == b"x" * 10
+        assert rec.ring.covering("video", T0, tail.utc_end) == [tail]
+    assert not tail.path.exists()
     rec.stop()
