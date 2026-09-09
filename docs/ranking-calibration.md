@@ -89,6 +89,10 @@ new pins are rejected. Existing pins survive later refits; the resolver can
 adjust unpinned targets or expose a labeled legacy fallback when the saved pins
 cannot satisfy current whole-frame spacing. `DELETE /api/ranks/overall/{entity}`
 resets both regions; `?version=us` or `jp` resets only that region.
+Pin and reset edits persist a detached candidate before publishing its values
+and revision. A failed write leaves the previous pins and curves intact; readers
+already in progress keep their captured standards. Fault-injection coverage is
+in [test_overall_pin_persistence.py](../tests/test_overall_pin_persistence.py).
 
 Route aggregation currently remains equal contribution per required slot,
 best-K selection within choice groups, zero for unpracticed rankable slots, and
