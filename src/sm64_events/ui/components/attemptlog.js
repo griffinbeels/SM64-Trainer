@@ -23,6 +23,7 @@ import { StratPicker } from "./stratpicker.js";
 import { Icon } from "./icons.js";
 import { EmptyState } from "./emptystate.js";
 import { caveatOf, cardBadge } from "./marks.js";
+import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
 
 const html = htm.bind(h);
 
@@ -119,11 +120,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // Segment attempts are RTA-only (igt is null; the server rejects igt PB
   // saves with "segments are RTA-only") — force rta whatever the view clock.
   const isSeg = a.segment_id != null;
-  async function savePb() {
-    await send("POST", "/api/pb",
-      { attempt_id: a.id, timer_mode: isSeg ? "rta" : t.clock });
-    t.refresh();
-  }
+  const pbReplay = usePbReplay(a.id, isSeg ? "rta" : t.clock, t.refresh);
   async function undoPb() {
     await send("POST", "/api/pb/undo",
       { attempt_id: a.id, timer_mode: isSeg ? "rta" : t.clock });
@@ -211,28 +208,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
            with no entity, a row on another strategy, a card with no strategy
            picked -- draws nothing (the last two by his 2026-08-22 ruling:
            hide the button until the action is valid again). */""}
-      ${a.pb_action === "undo"
-        ? html` <button onclick=${undoPb}
-            title="delete this save — the previous PB on this strategy becomes current again">Undo PB</button>`
-        : a.pb_action === "save"
-        ? html` <button class=${pbBeat ? "pb-glow" : ""} onclick=${savePb}>
-            <${Icon} name="bookmark" size=${14} />
-            <span class="save-pb-wide">Save as PB</span>
-            <span class="save-pb-narrow">Save PB</span></button>`
-        : blockedPb
-          // Not a slow PB — a different quantity, which no leaderboard
-          // accepts (2026-08-02: "these fake PBs just shouldn't be allowed").
-          // Shown rather than hidden, and carrying the SAME badge a PB
-          // already saved with this problem wears, so the row explains itself
-          // instead of leaving a button that silently stopped working.
-        ? html` <button class="pb-blocked" disabled
-            title=${`Cannot be saved as a PB — ${blockedPb.sentence}`}
-            aria-label=${`Cannot be saved as a PB — ${blockedPb.sentence}`}>
-            <${Icon} name="bookmark" size=${14} />
-            <span class="save-pb-wide">Save as PB</span>
-            <span class="save-pb-narrow">Save PB</span>
-            ${cardBadge(blockedPb)}</button>`
-        : ""}
+      <${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay} undo=${undoPb} beat=${pbBeat} />
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`
         : html` <button class="icon-button" onclick=${clear}
@@ -248,7 +224,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
         targetLabel=${sec ? displayName(sec, (t.view.catalog || {}).courses || []).name : null}
         onCompare=${onCompare} onTemplateMarked=${t.refresh} /></td></tr>`
     : null;
-  return [row, expandedRow];
+  return [row, html`<${PbReplayNotice} state=${pbReplay} />`, expandedRow];
 }
 
 // Shared table component used by both StarSection and the unassigned block.

@@ -258,16 +258,16 @@ def test_view_fallback_tolerates_legacy_saved_file_without_sidecar(tmp_path):
     assert res["anchor_offset_s"] == 3.0 + DISPLAY_LAG_FRAMES / 30  # the pad, with no start_utc
 
 
-def test_view_prefers_scratch_cache_and_reports_saved_path(tmp_path):
-    # mid-session after a save: serve the scratch clip (same bytes) but
-    # report saved_path so the UI shows the Saved state across reloads
+def test_view_prefers_saved_media_without_a_redundant_scratch_copy(tmp_path):
     svc = make_service(tmp_path, [attempt()])
     saved_path = svc.save(42)["path"]
     res = svc.view(42)
-    assert res["clip_url"] == "/api/replay/clips/clip_attempt_42.mp4"
-    assert res["source"] == "buffer"
+    assert res["clip_url"] == "/api/replay/saved/42"
+    assert res["source"] == "saved"
     assert res["saved_path"] == saved_path
     assert len(svc.extractor.calls) == 1   # save()'s view extracted once
+    assert not (svc.clips_dir / "clip_attempt_42.mp4").exists()
+    assert svc.clip_path("clip_attempt_42.mp4") == Path(saved_path)
 
 
 def test_view_still_errors_when_no_saved_file_and_no_footage(tmp_path):

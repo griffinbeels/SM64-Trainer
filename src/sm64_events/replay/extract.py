@@ -23,6 +23,7 @@ way, for the same reason: ffmpeg would rescale the whole clip to the first
 segment's size and squash it if the aspect changed.
 """
 import os
+from contextlib import nullcontext
 from sm64_events.core.profiling import measured
 import math
 import json
@@ -260,6 +261,13 @@ class ClipExtractor:
     @measured("replay.extract")
     def extract(self, ring: SegmentRing, start: datetime, end: datetime,
                 out_path: Path) -> ClipResult:
+        """Retain source files for all consumers, including compilations."""
+        pin = getattr(ring, "pin", None)
+        with pin("video", start, end) if pin else nullcontext():
+            return self._extract(ring, start, end, out_path)
+
+    def _extract(self, ring: SegmentRing, start: datetime, end: datetime,
+                 out_path: Path) -> ClipResult:
         """Slice [start, end) from the ring into a browser-scrubbable MP4.
 
         Clamps to available coverage and to the contiguous run containing the

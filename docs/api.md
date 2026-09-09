@@ -332,8 +332,8 @@ endpoint — into `data/replay_buffer/` (scratch, wiped on
 startup). Video encoding runs in an `ffmpeg` subprocess when ffmpeg is on
 PATH — recommended; the in-process fallback encoder stutters under load
 (why: docs/architecture.md → Replay capture). Retention defaults to the
-whole session; a hard disk cap (default 20 GB) evicts oldest footage
-regardless. Both storage limits are adjustable live from the UI — click
+whole session; a temporary disk cap (new default 2 GiB) evicts oldest unsaved footage
+regardless. Existing stored limits remain unchanged. Both storage limits are adjustable live from the UI — click
 the recording dot in the header (shows usage as `rec · 38 min ·
 1.2/20 GB`); changes persist to `data/replay_settings.json` and apply
 immediately. Saved replays under `replays/` are kept forever and never
@@ -417,7 +417,7 @@ preferences remain in the replay's separate preference file across restarts.
 - `GET  /api/replay/available` — `{available: [attempt_id, …]}`: every attempt whose clip is still cuttable (in the ring buffer) or already saved; the Compare tab reads it to badge which runs can load a video
 - `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
 - `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
-- `POST /api/attempts/{id}/replay/save` — copy to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
+- `POST /api/attempts/{id}/replay/save` — atomically publish to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
 - `POST /api/compilation` — start a failure compilation for a star (`{"star":{"course_id":C,"star_id":S}}`) or segment (`{"segment_id":N}`), with `x_before`/`y_after` seconds around each failure. Returns `{job_id}`.
 - `GET /api/compilation/{job_id}` — poll job `{state, progress, message, result}`; `result` on done: `{path, clip_count, skipped, no_finale, finale_time}`. Output MP4 lives under the replays `compilations/` dir; open it via `POST /api/replay/reveal`.
 
@@ -431,6 +431,22 @@ discards new footage instead of retaining it — `idle: true` in status, an
 honest coverage hole — and resumes instantly on input, a savestate load /
 practice reset, or a level entry. The segment straddling the resume is
 kept, so a 0 s pre-pad clip still opens exactly at the attempt anchor.
+
+Marking a PB remains a user command. When replay capture is available,
+`POST /api/pb` also preserves its video off the event loop and includes
+`replay_save: {status: "saved", path, truncated}` or
+`{status: "failed", message}`. Media failure does not undo the valid PB time;
+the row offers Retry save replay through the existing replay-save endpoint.
+Undoing or superseding a PB does not delete its preserved video.
+
+Temporary ring segments, extracted clips, live partial files and the identity
+index share accounting. HTTP range reads, extraction and saves lease their
+files against eviction. `GET /api/replay/status` includes `storage_pressure`
+(recording paused because eviction cannot restore the free-space reserve),
+`save_failures` (bounded attempt-id/message map) and `recovery_failures`.
+Saved media is outside eviction. True session switches and shutdown discard
+unsaved media after active extraction/save operations finish; practice resets,
+pauses and closing a drawer do not. See [replay storage](replay-storage.md).
 
 ## Ranks & standards
 

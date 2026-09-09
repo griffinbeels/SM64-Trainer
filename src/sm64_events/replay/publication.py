@@ -1,0 +1,114 @@
+"""Crash-recoverable publication of explicitly preserved replay media.
+
+The MP4 filename is the public commit point. Metadata is installed first;
+incomplete copies never acquire that name. A same-volume hard link keeps the
+immutable recording bytes without another full file write. Recovery only
+touches validated destinations recorded beneath this save root.
+"""
+import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
+
+
+def atomic_json(path: Path, document: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(document, stream, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _destination(root: Path, relative: str) -> Path:
+    path = (root / relative).resolve()
+    if (not path.is_relative_to(root.resolve()) or path == root.resolve()
+            or path.suffix != ".mp4" or not path.name.startswith("attempt_")):
+        raise ValueError("invalid replay publication destination")
+    return path
+
+
+def _finish(root: Path, pending: Path) -> Path:
+    intent = json.loads((pending / "intent.json").read_text(encoding="utf-8"))
+    if intent.get("version") != 1:
+        raise ValueError("unknown replay publication version")
+    destination = _destination(root, intent["destination"])
+    staged = pending / "media.mp4"
+    # A valid public name exists only after both metadata files were installed.
+    if not destination.exists():
+        if not staged.is_file() or staged.stat().st_size != intent["media_bytes"]:
+            raise ValueError("replay publication has no complete staged media")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        for suffix, filename in ((".json", "metadata.json"), (".review.json", "review.json")):
+            source = pending / filename
+            target = destination.with_suffix(suffix)
+            if source.is_file():
+                os.replace(source, target)
+            elif not target.is_file():
+                raise ValueError("replay publication is missing metadata")
+        os.replace(staged, destination)
+    # All paths are explicit children of a validated pending directory.
+    for filename in ("media.mp4", "metadata.json", "review.json", "media.copying", "intent.json"):
+        (pending / filename).unlink(missing_ok=True)
+    pending.rmdir()
+    return destination
+
+
+def publish(root: Path, attempt_id: int, source: Path, destination: Path,
+            metadata: dict, review: dict, *, reserve_bytes: int = 5 * 1024**3) -> Path:
+    """Publish one serialized Save/PB. Retry/recovery resumes a staged copy."""
+    root = root.resolve()
+    destination = _destination(root, str(destination.resolve().relative_to(root)))
+    pending = root / ".pending" / str(int(attempt_id))
+    if (pending / "intent.json").exists() and (pending / "media.mp4").exists():
+        return _finish(root, pending)
+    pending.mkdir(parents=True, exist_ok=True)
+    atomic_json(pending / "metadata.json", metadata)
+    atomic_json(pending / "review.json", {"version": 1, "state": review})
+    atomic_json(pending / "intent.json", {"version": 1,
+        "destination": str(destination.relative_to(root)), "media_bytes": source.stat().st_size})
+    staged = pending / "media.mp4"
+    if not staged.exists():
+        try:
+            os.link(source, staged)
+        except OSError as error:
+            required = source.stat().st_size
+            if shutil.disk_usage(pending).free - required < reserve_bytes:
+                raise OSError("Not enough free storage to save this replay; free space and retry Save replay.") from error
+            copying = pending / "media.copying"
+            try:
+                shutil.copyfile(source, copying)
+                with copying.open("rb") as stream:
+                    os.fsync(stream.fileno())
+                os.replace(copying, staged)
+            finally:
+                copying.unlink(missing_ok=True)
+    return _finish(root, pending)
+
+
+def recover(root: Path) -> list[str]:
+    """Finish complete explicit saves before scratch cleanup; return failures."""
+    directory = root.resolve() / ".pending"
+    if not directory.exists():
+        return []
+    failures = []
+    for pending in directory.iterdir():
+        if not pending.is_dir() or not pending.name.isdecimal() or pending.is_symlink():
+            continue
+        if not (pending / "intent.json").is_file():
+            # An interrupted staging copy is not proof of complete metadata.
+            failures.append(f"Replay {pending.name} save was interrupted before publication; retry Save replay.")
+            continue
+        try:
+            _finish(root, pending)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            failures.append(f"Replay {pending.name}: {error}")
+    return failures

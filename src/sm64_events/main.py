@@ -204,6 +204,16 @@ def _game_version() -> str:
     return effective_version(load_mode_config(), detected=detected)
 
 
+def _replay_service(cfg, recorder, codec, tracker):
+    """Keep manual PB selection and its media preservation on one command."""
+    replay = ReplayService(cfg=cfg, recorder=recorder,
+                           extractor=ClipExtractor(cfg=cfg, codec=codec),
+                           tracker=tracker)
+    tracker.on_pb_saved = replay.preserve_pb
+    tracker.on_session_ended = replay.session_ended
+    return replay
+
+
 def build():
     global _instance_lock
     configure_logging()
@@ -417,10 +427,7 @@ def build():
             codec=codec,
             video_sink_factory=video_sink_factory,
             release_capture=release_capture)
-        replay = ReplayService(
-            cfg=replay_cfg, recorder=recorder,
-            extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
-            tracker=service)
+        replay = _replay_service(replay_cfg, recorder, codec, service)
     # Compare tab: import comparison videos (yt-dlp/copy -> ffmpeg normalize)
     # into the content cache, then serve them as plain clips. Only built when
     # ffmpeg is available (same binary the replay sink uses). Deliberately NOT

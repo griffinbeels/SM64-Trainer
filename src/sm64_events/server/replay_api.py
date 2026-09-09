@@ -9,6 +9,7 @@ runs sync endpoints in its threadpool — the event loop (poller, websockets)
 never blocks."""
 from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import FileResponse
+from fastapi.concurrency import contextmanager_in_threadpool
 from pydantic import BaseModel
 
 
@@ -29,6 +30,22 @@ def _http(e: Exception) -> HTTPException:
     if isinstance(e, ValueError):
         return HTTPException(409, str(e))
     return HTTPException(503, str(e))
+
+
+class ReplayClipResponse(Response):
+    """Release the disk lease on success, cancellation and failed sends."""
+
+    def __init__(self, replay, name: str):
+        super().__init__()
+        self.replay = replay
+        self.name = name
+
+    async def __call__(self, scope, receive, send):
+        try:
+            async with contextmanager_in_threadpool(self.replay.read_clip(self.name)) as path:
+                await FileResponse(path, media_type="video/mp4")(scope, receive, send)
+        except (LookupError, ValueError, RuntimeError) as error:
+            raise _http(error) from error
 
 
 def _review_routes(router, replay):
@@ -54,11 +71,7 @@ def _review_routes(router, replay):
 def _media_routes(router, replay):
     @router.get("/replay/clips/{name}")
     def clip(name: str):
-        try:
-            path = replay.clip_path(name)
-        except (LookupError, ValueError, RuntimeError) as e:
-            raise _http(e)
-        return FileResponse(path, media_type="video/mp4")  # native Range/206
+        return ReplayClipResponse(replay, name)
 
     # HEAD serves the progress-graph click's existence probe (auto-open the
     # player only when a saved file exists) — FastAPI does NOT add HEAD to

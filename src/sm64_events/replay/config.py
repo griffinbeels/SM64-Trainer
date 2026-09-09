@@ -35,7 +35,7 @@ class ReplayConfig:
     # `fps` stays the grab cadence and the CFR fallback's rate. False
     # restores the CFR feed; the in-process fallback writer ignores it.
     picture_feed: bool = True
-    max_buffer_bytes: int = 20 * 1024**3  # hard disk guard regardless of retention
+    max_buffer_bytes: int = 2 * 1024**3   # modest new default; persisted user limits win
     save_root: Path = field(default_factory=replays_root)
     scratch_dir: Path = field(default_factory=replay_scratch_dir)
     window_title: str = "Project64"       # substring match on the window title

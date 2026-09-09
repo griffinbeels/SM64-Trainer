@@ -170,12 +170,12 @@ def test_edit_racing_save_is_durable_after_publication(tmp_path, monkeypatch):
     service = make_service(tmp_path, [attempt()])
     service.update_review_state(42, STATE)
     copy_started, finish_copy, edit_started = (threading.Event() for _ in range(3))
-    copy = module.shutil.copy2
+    publish = module.publish_saved
 
-    def paused_copy(source, destination):
+    def paused_publish(*args, **kwargs):
         copy_started.set()
         assert finish_copy.wait(5)
-        return copy(source, destination)
+        return publish(*args, **kwargs)
 
     updated = {**STATE, "template_offsets": {KEY: 42}}
 
@@ -183,7 +183,7 @@ def test_edit_racing_save_is_durable_after_publication(tmp_path, monkeypatch):
         edit_started.set()
         return service.update_review_state(42, updated)
 
-    monkeypatch.setattr(module.shutil, "copy2", paused_copy)
+    monkeypatch.setattr(module, "publish_saved", paused_publish)
     with ThreadPoolExecutor(max_workers=2) as pool:
         save = pool.submit(service.save, 42)
         assert copy_started.wait(5)

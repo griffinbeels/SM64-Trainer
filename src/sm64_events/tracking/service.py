@@ -292,6 +292,11 @@ class TrackerService:
     #: and not a step in the timeline endpoint.
     on_attempt_settled = None
 
+    # Optional async media preservation after the user's validated PB command.
+    # The composition root owns recording; projection/replay never calls this.
+    on_pb_saved = None
+    on_session_ended = None
+
     async def publish(self, event: Event) -> int | None:
         """Broadcast, then journal and track. Returns the JOURNAL ID of the
         row written, or None when nothing was (a broadcast-only type, no live
@@ -1998,6 +2003,8 @@ class TrackerService:
                    "frames": frames, "attempt_id": attempt_id}
         await self.publish(Event(type="pb_saved", frame=0,
                                  timestamp_utc=_now(), payload=payload))
+        if self.on_pb_saved is not None:
+            payload = {**payload, "replay_save": await self.on_pb_saved(attempt_id)}
         return payload
 
     async def undo_pb(self, attempt_id: int, timer_mode: str) -> dict:
@@ -2324,6 +2331,8 @@ class TrackerService:
 
     async def new_session(self, label: str | None = None) -> int:
         db = self._require_db()
+        if self.on_session_ended is not None:
+            await self.on_session_ended()
         db.end_session(self.session_id, _iso(_now()))
         self.session_id = db.insert_session(_iso(_now()), label=label)
         await self.publish(Event(type="session_started", frame=0,
@@ -2339,6 +2348,8 @@ class TrackerService:
             raise LookupError(f"no session {session_id}")
         if session_id == self.session_id:
             return session_id
+        if self.on_session_ended is not None:
+            await self.on_session_ended()
         db.end_session(self.session_id, _iso(_now()))
         db.reopen_session(session_id)   # resumed session is active: no ended_utc
         self.session_id = session_id
