@@ -4,10 +4,11 @@ A missing/corrupt file loses to the bundled seed, then to empty."""
 import json
 import logging
 import math
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from pathlib import Path
+from threading import RLock
 
 from sm64_events.memory.addresses import star_name
 from sm64_events.ranks.classify import RANK_NAMES, resolve_cutoff_videos
@@ -196,6 +197,7 @@ class RankStandards:
         self._overall_cache = {}
         self._user_revision = "initial"
         self._legacy_overall = {}
+        self._overall_edit_lock = RLock()
         # The GRADING VERSION: what every ladder read that names no version
         # resolves on. "us" or "jp". main.py sets it from the game version
         # setting at boot and tracking/service.py::set_game_version on every
@@ -226,7 +228,8 @@ class RankStandards:
                 self._sheet[ek] = entity
 
     def load(self) -> None:
-        self._overall_cache.clear()
+        with self._overall_edit_lock:
+            self._overall_cache.clear()
         self._load_sheet()
         data = self._read_valid(self.path)
         seed = self._read_valid(self.seed_path)
@@ -267,15 +270,44 @@ class RankStandards:
             _log.warning("could not write %s", self.path)
 
     def save(self) -> None:
-        # A strategy edit must not quietly change a legacy Overall fallback,
-        # including after restart. Save its original basis only where needed.
-        for key, entity in self._data["entities"].items():
-            foundation = self._legacy_overall.get(key)
-            if foundation and self._foundation_of(entity) != foundation:
-                entity.setdefault("overall_foundation", deepcopy(foundation))
+        self._preserve_overall_foundations(self._data)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._data, indent=2))
         self._touch()
+
+    def _preserve_overall_foundations(self, data):
+        # A strategy edit must not quietly change a legacy Overall fallback,
+        # including after restart. Save its original basis only where needed.
+        for key, entity in data["entities"].items():
+            foundation = self._legacy_overall.get(key)
+            if foundation and self._foundation_of(entity) != foundation:
+                entity.setdefault("overall_foundation", deepcopy(foundation))
+
+    def _save_overall(self, candidate):
+        """Persist a detached pin edit before publishing any live state."""
+        from sm64_events.library.assignment_transaction import atomic_bytes
+        from sm64_events.ranks.calibration import fingerprint
+
+        self._preserve_overall_foundations(candidate)
+        revision = fingerprint(candidate)
+        atomic_bytes(self.path, json.dumps(candidate, indent=2).encode("utf-8"))
+        with self._overall_edit_lock:
+            self._data = candidate
+            self._user_revision = revision
+            self._overall_cache.clear()
+
+    @contextmanager
+    def _overall_edit(self):
+        """Validate against live state even when the caller holds an older read."""
+        lock = self.calibrations.update_lock if self.calibrations else self._overall_edit_lock
+        with lock:
+            token = self._read_user.set(None)
+            context = self.calibrations.pin(current=True) if self.calibrations else nullcontext()
+            try:
+                with context:
+                    yield
+            finally:
+                self._read_user.reset(token)
 
     @staticmethod
     def _foundation_of(entity):
@@ -299,21 +331,26 @@ class RankStandards:
     def _touch(self):
         from sm64_events.ranks.calibration import fingerprint
         self._user_revision = fingerprint(self._data)
-        self._overall_cache.clear()
+        with self._overall_edit_lock:
+            self._overall_cache.clear()
 
     @contextmanager
     def read_context(self):
         """Pin generated ranks, user overrides, and the grading ROM for one read."""
-        pinned = self._read_user.get()
-        state = pinned or (deepcopy(self._data), self._user_revision, self._grading_version,
-                           deepcopy(self._legacy_overall))
-        token = self._read_user.set(state)
-        context = self.calibrations.pin() if self.calibrations else nullcontext()
-        try:
-            with context:
+        with ExitStack() as contexts:
+            # Capture user state and the generated curve together, without
+            # waiting for an in-progress Sheet fit to release its update lock.
+            with self._overall_edit_lock:
+                pinned = self._read_user.get()
+                state = pinned or (deepcopy(self._data), self._user_revision, self._grading_version,
+                                   deepcopy(self._legacy_overall))
+                token = self._read_user.set(state)
+                if self.calibrations:
+                    contexts.enter_context(self.calibrations.pin())
+            try:
                 yield
-        finally:
-            self._read_user.reset(token)
+            finally:
+                self._read_user.reset(token)
 
     def _read_data(self):
         pinned = self._read_user.get()
@@ -360,9 +397,11 @@ class RankStandards:
         from sm64_events.ranks import curves, scoring
         version = self._resolve(version)
         cache_key = (self.calibration_revision, ek, version)
-        if self._overall_cache and next(iter(self._overall_cache))[0] != cache_key[0]:
-            self._overall_cache.clear()
-        if cache_key not in self._overall_cache:
+        with self._overall_edit_lock:
+            if self._overall_cache and next(iter(self._overall_cache))[0] != cache_key[0]:
+                self._overall_cache.clear()
+            curve = self._overall_cache.get(cache_key)
+        if curve is None:
             generation = self.calibrations.read if self.calibrations else None
             generated = generation.overall.get(ek, {}).get(version) if generation else None
             if generation is not None and ek in generation.overall and generated is None:
@@ -379,8 +418,9 @@ class RankStandards:
                 curve = curves.with_anchors(curve, {rank: int(round(value * 100))
                                                     for rank, value in pins.items()},
                                              preserve_unpinned=False)
-            self._overall_cache[cache_key] = curve
-        return deepcopy(self._overall_cache[cache_key])
+            with self._overall_edit_lock:
+                self._overall_cache[cache_key] = curve
+        return deepcopy(curve)
 
     def overall_overrides(self, ek, version=None):
         return dict(self._entity(ek).get("overall_overrides", {}).get(self._resolve(version), {}))
@@ -392,17 +432,22 @@ class RankStandards:
         if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0:
             raise ValueError("an Overall cutoff must be a positive finite time")
         version = self._resolve(version)
-        curves.with_anchors(self.overall_curve(ek, version), {rank: int(round(seconds * 100))})
-        self._ensure(ek).setdefault("overall_overrides", {}).setdefault(version, {})[rank] = float(seconds)
-        self.save()
+        with self._overall_edit():
+            curves.with_anchors(self.overall_curve(ek, version), {rank: int(round(seconds * 100))})
+            candidate = deepcopy(self._data)
+            entity = candidate["entities"].setdefault(ek, {"clock": _default_clock(ek), "strategies": {}})
+            entity.setdefault("overall_overrides", {}).setdefault(version, {})[rank] = float(seconds)
+            self._save_overall(candidate)
 
     def reset_overall(self, ek, version=None):
-        overrides = self._ensure(ek).get("overall_overrides", {})
-        if version is None:
-            self._ensure(ek).pop("overall_overrides", None)
-        else:
-            overrides.pop(self._resolve(version), None)
-        self.save()
+        with self._overall_edit():
+            candidate = deepcopy(self._data)
+            entity = candidate["entities"].setdefault(ek, {"clock": _default_clock(ek), "strategies": {}})
+            if version is None:
+                entity.pop("overall_overrides", None)
+            else:
+                entity.get("overall_overrides", {}).pop(self._resolve(version), None)
+            self._save_overall(candidate)
 
     # ---- reads ----
     def to_json(self) -> dict:
@@ -482,7 +527,8 @@ class RankStandards:
         self._sheet = {ek: layer.get("strategies", {}) for ek, layer in layers.items()}
         self._sheet_jp = {ek: layer.get("jp_strategies", {}) for ek, layer in layers.items()}
         self._sheet_estimates = {ek: layer.get("estimates", {}) for ek, layer in layers.items()}
-        self._overall_cache.clear()
+        with self._overall_edit_lock:
+            self._overall_cache.clear()
 
     def sheet_layers(self, mapping):
         """Prepare complete generated layers without changing any reader's revision."""
