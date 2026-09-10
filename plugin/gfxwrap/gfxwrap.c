@@ -87,6 +87,8 @@ static int64_t qpc_now(void) {
     return counter.QuadPart;
 }
 
+#include "profile.h"
+
 /* -- the ini beside this DLL: wrapped=<file>, stream=<name> -------------- */
 static void self_dir(wchar_t *out, size_t count) {
     out[0] = L'\0';
@@ -306,9 +308,11 @@ static void open_stream(void) {
     g_hdr->plugin_pid = GetCurrentProcessId();
     g_hdr->plugin_version = GFXWRAP_VERSION;
     if (g_wrapped_module) g_hdr->status |= STATUS_WRAPPED_LOADED;
+    profile_open(g_stream_name);
 }
 
 static void close_stream(void) {
+    profile_close();
     /* Leaving: say so in the header, so a reader does not wait on a
      * plugin that unloaded (or a process that died with this DLL's
      * detach still running) as if it were merely quiet. */
@@ -381,6 +385,7 @@ static void look_up_gl_entry_points(void) {
 
 static void read_front_buffer(void *pixels, unsigned width, unsigned height,
                               unsigned bottom_offset) {
+    int64_t measured = profile_mark();
     look_up_gl_entry_points();
     GLint read_buffer = GL_BACK, read_framebuffer = 0, pack_buffer = 0;
     GLint pack[4] = {4, 0, 0, 0};      /* alignment, row length, skip rows, skip pixels */
@@ -405,8 +410,12 @@ static void read_front_buffer(void *pixels, unsigned width, unsigned height,
     glPixelStorei(GL_PACK_SKIP_ROWS, 0);
     glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
     glReadBuffer(GL_FRONT);
+    profile_end_stage(PR_GL_SETUP, measured);
+    measured = profile_mark();
     glReadPixels(0, (GLint)bottom_offset, (GLsizei)width, (GLsizei)height,
                  GL_BGR_EXT, GL_UNSIGNED_BYTE, pixels);
+    profile_end_stage(PR_GL_READ, measured);
+    measured = profile_mark();
     glReadBuffer((GLenum)read_buffer);
     glPixelStorei(GL_PACK_ALIGNMENT, pack[0]);
     glPixelStorei(GL_PACK_ROW_LENGTH, pack[1]);
@@ -416,6 +425,7 @@ static void read_front_buffer(void *pixels, unsigned width, unsigned height,
     if (g_bind_framebuffer && read_framebuffer)
         g_bind_framebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
     while (glGetError() != GL_NO_ERROR) { /* leave no error of ours for the plugin to find */ }
+    profile_end_stage(PR_GL_RESTORE, measured);
 }
 
 /* -- the second capture point: the wrapped plugin's own ReadScreen ------- */
@@ -448,7 +458,9 @@ static BOOL read_screen_via_wrapped(void **out, unsigned *width, unsigned *heigh
     if (g_readscreen_retired || !g_wrapped.ReadScreen) return FALSE;
     void *buffer = NULL;
     long buffer_width = 0, buffer_height = 0;
+    int64_t measured = profile_mark();
     g_wrapped.ReadScreen(&buffer, &buffer_width, &buffer_height);
+    profile_end_stage(PR_READSCREEN, measured);
     if (!buffer) return FALSE;
     if (buffer_width <= 0 || buffer_height <= 0
             || buffer_width > (long)MAX_WIDTH || buffer_height > (long)MAX_HEIGHT) {
@@ -539,11 +551,14 @@ static void capture_if_presented(void) {
         if (length) memcpy(slot->table + index * TABLE_ENTRY_BYTES, g_pending.bytes[index], length);
     }
     if (wrapped_buffer) {
+        int64_t measured = profile_mark();
         copy_packed_rows(slot->pixels, stride, (const uint8_t *)wrapped_buffer, width, height);
         free_wrapped_buffer(wrapped_buffer);
+        profile_end_stage(PR_COPY, measured);
     } else {
         read_front_buffer(slot->pixels, width, height, bottom_offset);
     }
+    int64_t published = profile_mark();
     MemoryBarrier();
     slot->seq_end = seq;
     MemoryBarrier();
@@ -553,6 +568,7 @@ static void capture_if_presented(void) {
     g_hdr->format = FORMAT_BGR8_BOTTOM_UP;
     g_pending.lists_since = 0;
     if (g_event) SetEvent(g_event);
+    profile_end_stage(PR_PUBLISH, published);
 }
 
 /* -- the exported surface ----------------------------------------------- */
@@ -643,10 +659,16 @@ EXPORT void CALL ProcessDList(void) {
 }
 
 EXPORT void CALL UpdateScreen(void) {
+    int64_t began = profile_begin();
     HGLRC context_before = wglGetCurrentContext();
+    int64_t measured = profile_mark();
     if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
+    profile_end_stage(PR_WRAPPED_UPDATE, measured);
     note_context(&g_note_screen, context_before, wglGetCurrentContext());
+    measured = profile_mark();
     capture_if_presented();
+    profile_end_stage(PR_CAPTURE, measured);
+    profile_end(began);
 }
 
 EXPORT void CALL RomOpen(void) {

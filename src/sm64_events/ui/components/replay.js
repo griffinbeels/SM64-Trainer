@@ -7,6 +7,9 @@ import { clipClock, stepGameFrame, jumpToStart, attemptStartTime } from "../fram
 import { watchVideoPicture } from "../videopicture.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { watchReplayKeys } from "../replaykeys.js";
+import { stopShuttle } from "../replayshuttle.js";
+import { playReview } from "../reviewcommands.js";
+import { attachReviewSource, pauseReviewSource } from "../reviewsource.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -22,7 +25,8 @@ const html = htm.bind(h);
 // `onView` reports the clip's metadata the same way, because that clock
 // only lines up with the input track once the sibling knows where in the
 // clip the attempt's anchor sits (`anchor_offset_s`).
-export function ReplayPlayer({ attemptId, imported = false, onCompare, onVideoEl, onView }) {
+export function ReplayPlayer({ attemptId, imported = false, onCompare, onVideoEl, onView,
+    reviewState, onReviewState, beforeSave }) {
   const [url, setUrl] = useState(undefined);
   const [nativeUnavailable, setNativeUnavailable] = useState(imported);
   const [initialLink, setInitialLink] = useState(true);
@@ -30,9 +34,11 @@ export function ReplayPlayer({ attemptId, imported = false, onCompare, onVideoEl
     ${!nativeUnavailable
       ? html`<${NativeReplayPlayer} attemptId=${attemptId} onCompare=${onCompare}
           onVideoEl=${onVideoEl} onView=${onView}
+          reviewState=${reviewState} onReviewState=${onReviewState} beforeSave=${beforeSave}
           onUnavailable=${() => setNativeUnavailable(true)} />`
       : url ? html`<${ExternalVideo} key=${url} url=${url} autoplay=${initialLink}
-          replayActions onCompare=${onCompare} />`
+          replayActions onCompare=${onCompare}
+          reviewState=${reviewState} onReviewState=${onReviewState} />`
       : url === undefined ? html`<p class="replay-state meta">Loading recording…</p>`
       : html`<p class="replay-state meta">${imported ? "Add a public recording to watch this attempt."
           : "No captured replay available. Add a public recording below."}</p>`}
@@ -46,6 +52,7 @@ function useReplayStepping(videoEl, state) {
   // heartbeat copies and preserving the clip's actual timestamp intervals.
   // Only legacy clips without a picture clock use 30 Hz time stepping.
   function step(dir) {
+    stopShuttle(videoEl.current);
     stepGameFrame(videoEl.current, dir, state.game_fps || 30,
                   state.frame_map || null, clipClock(state));
   }
@@ -57,11 +64,12 @@ function useReplayStepping(videoEl, state) {
       onPress: () => {
         const video = videoEl.current;
         if (!video || video.paused) return null;
-        return () => { video.play().catch(() => {}); };
+        return () => { playReview(video); };
       },
     });
   }
   function toStart() {
+    stopShuttle(videoEl.current);
     jumpToStart(videoEl.current, attemptStartTime(state));
   }
   // Arrow keys use the same hold schedule as the buttons. The coordinator
@@ -70,53 +78,18 @@ function useReplayStepping(videoEl, state) {
     const video = videoEl.current;
     if (!video) return undefined;
     return watchReplayKeys(video.closest(".attempt-drawer") || video.closest(".replay-player"), {
-      step, toStart,
-      onPress: () => video.paused ? null : () => { video.play().catch(() => {}); },
+      step, toStart, video,
+      toggle: () => video.paused ? playReview(video) : pauseReviewSource(video),
+      onPress: () => video.paused ? null : () => { playReview(video); },
     });
   }, [state]);
 
   return { step, stepHold, toStart };
 }
 
-function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, onView }) {
+function useNativeReplayState(attemptId, onView, onUnavailable) {
   const [state, setState] = useState({ phase: "loading" });
   const [savedPath, setSavedPath] = useState(null);
-  const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
-  const videoEl = useRef(null);
-  // One programmatic play() per View-Replay click (= per component mount),
-  // NEVER on re-render: gameplay emits events (mario_acted, anchors...),
-  // each WS push re-renders this tree, and an inline ref re-fires every
-  // render — the old `autoplay` + play()-in-ref resumed paused videos the
-  // moment the user started playing in game. Playback may start ONLY here
-  // (once) or from the player's own controls.
-  const autoPlayed = useRef(false);
-  const stopObserving = useRef(null);
-  const attachVideoEl = useCallback((el) => {
-    if (videoEl.current === el) return;
-    if (stopObserving.current) stopObserving.current();
-    videoEl.current = el;
-    stopObserving.current = el ? watchVideoPicture(el, () => {}) : null;
-    if (onVideoEl) onVideoEl(el);
-    if (!el) return;
-    attachSharedVolume(el);
-  }, [onVideoEl]);
-
-  // Seek after metadata arrives, before the one initial play(). Both the
-  // initial position and Start use the same real-picture destination.
-  useEffect(() => {
-    const video = videoEl.current;
-    if (!video || state.phase !== "ready") return undefined;
-    const begin = () => {
-      if (autoPlayed.current) return;
-      autoPlayed.current = true;
-      jumpToStart(video, attemptStartTime(state));
-      video.play().catch(() => {});
-    };
-    if (video.readyState >= 1) begin();
-    else video.addEventListener("loadedmetadata", begin, { once: true });
-    return () => video.removeEventListener("loadedmetadata", begin);
-  }, [state]);
-
   useEffect(() => {
     let alive = true;
     send("POST", `/api/attempts/${attemptId}/replay`)
@@ -140,9 +113,64 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
     return () => { alive = false; };
   }, [attemptId]);
 
+  return { state, savedPath, setSavedPath };
+}
+
+function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, onView,
+    reviewState, onReviewState, beforeSave }) {
+  const { state, savedPath, setSavedPath } = useNativeReplayState(attemptId, onView, onUnavailable);
+  const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
+  const [mediaVideo, setMediaVideo] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const [sourceError, setSourceError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const videoEl = useRef(null);
+  // One programmatic play() per View-Replay click (= per component mount),
+  // NEVER on re-render: gameplay emits events (mario_acted, anchors...),
+  // each WS push re-renders this tree, and an inline ref re-fires every
+  // render — the old `autoplay` + play()-in-ref resumed paused videos the
+  // moment the user started playing in game. Playback may start ONLY here
+  // (once) or from the player's own controls.
+  const autoPlayed = useRef(false);
+  const stopObserving = useRef(null);
+  const stopSource = useRef(null);
+  const attachVideoEl = useCallback((el) => {
+    if (videoEl.current === el) return;
+    if (stopObserving.current) stopObserving.current();
+    stopSource.current?.();
+    videoEl.current = el;
+    setMediaVideo(el);
+    stopObserving.current = el ? watchVideoPicture(el, () => {}) : null;
+    if (onVideoEl) onVideoEl(el);
+    if (!el) return;
+    attachSharedVolume(el);
+    stopSource.current = attachReviewSource(el, state.review_media, state.clip_url, setSourceError, state.frame_times);
+  }, [onVideoEl, state]);
+
+  // Seek after metadata arrives, before the one initial play(). Both the
+  // initial position and Start use the same real-picture destination.
+  useEffect(() => {
+    const video = videoEl.current;
+    if (!video || state.phase !== "ready") return undefined;
+    const begin = () => {
+      if (autoPlayed.current) return;
+      autoPlayed.current = true;
+      jumpToStart(video, attemptStartTime(state));
+      video.play().catch(() => {});
+    };
+    if (video.readyState >= 1) begin();
+    else video.addEventListener("loadedmetadata", begin, { once: true });
+    return () => video.removeEventListener("loadedmetadata", begin);
+  }, [state]);
+
   async function saveReplay() {
-    const r = await send("POST", `/api/attempts/${attemptId}/replay/save`);
-    setSavedPath(r.path);
+    setSaving(true); setSaveError(null);
+    try {
+      await beforeSave?.();
+      const r = await send("POST", `/api/attempts/${attemptId}/replay/save`);
+      setSavedPath(r.path);
+    } catch (error) { setSaveError(String(error)); }
+    finally { setSaving(false); }
   }
 
   const { step, stepHold, toStart } = useReplayStepping(videoEl, state);
@@ -150,8 +178,8 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
   function togglePlay() {
     const v = videoEl.current;
     if (!v) return;
-    if (v.paused) v.play().catch(() => {});
-    else v.pause();
+    if (v.paused) playReview(v);
+    else pauseReviewSource(v);
   }
 
   if (state.phase === "loading")
@@ -179,26 +207,38 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
         <${Icon} name="save" size=${14} /> Playing saved replay
       </span>`}
     </div>
-    <video controls preload="auto" src=${state.clip_url}
+    <video preload="auto" src=${state.clip_url} aria-label="Attempt recording" tabindex="0"
+           onclick=${togglePlay}
            onplay=${() => setPlaying(true)}
            onpause=${() => setPlaying(false)}
            ref=${attachVideoEl}></video>
     <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
+      video=${mediaVideo} clock=${clipClock(state)}
+      loop=${reviewState === undefined ? undefined : reviewState?.loop ?? null}
+      reviewReady=${reviewState !== null}
+      onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
       startTitle="Jump to the attempt start (↓)"
       stepHandlers=${stepHold}
-      onToggle=${togglePlay} note=${`1 frame = 1/${state.game_fps || 30} s`} />
-    <div class="replay-actions">
-      <button onclick=${saveReplay} disabled=${savedPath !== null}>
+      onToggle=${togglePlay} note="← → Step · J K L Playback · I O Loop · X Clear · Shift+I Loop start" />
+    <${ReplayActions} savedPath=${savedPath} saving=${saving} saveReplay=${saveReplay}
+      revealSaved=${revealSaved} onCompare=${onCompare} />
+    ${saveError && html`<p class="replay-control-error" role="status">${saveError}</p>`}
+    ${sourceError && html`<p class="replay-control-error" role="status">${sourceError}</p>`}
+  </div>`;
+}
+
+function ReplayActions({ savedPath, saving, saveReplay, revealSaved, onCompare }) {
+  return html`<div class="replay-actions">
+      <button onclick=${saveReplay} disabled=${savedPath !== null || saving}>
         <${Icon} name=${savedPath ? "check" : "save"} size=${15} />
-        ${savedPath ? "Saved" : "Save replay"}</button>
+        ${savedPath ? "Saved" : saving ? "Saving…" : "Save replay"}</button>
       ${savedPath && html`<a href="#" class="replay-path" title="Show in Explorer"
             onclick=${revealSaved}><${Icon} name="sessions" size=${14} /> Show file</a>`}
       ${onCompare && html`<button onclick=${onCompare}
           title="Open this run in the Compare tab">
         <${Icon} name="compare" size=${15} /> Compare
       </button>`}
-    </div>
-  </div>`;
+    </div>`;
 }
 
 function fmtGB(bytes) {

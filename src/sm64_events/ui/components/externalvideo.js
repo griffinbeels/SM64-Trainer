@@ -1,6 +1,6 @@
 // One external recording player for the Library and attempt replay panel.
 import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { videoSource, youtubeEmbed } from "./librarymodel.js";
@@ -8,6 +8,10 @@ import { Icon } from "./icons.js";
 import { publicRecordingUrl } from "./recordinglink.js";
 import { ReplayTransport } from "./replaytransport.js";
 import { jumpToStart } from "../frame.js";
+import { watchReplayKeys } from "../replaykeys.js";
+import { stopShuttle } from "../replayshuttle.js";
+import { playReview } from "../reviewcommands.js";
+import { presentedVideoTime } from "../videopicture.js";
 
 const html = htm.bind(h);
 
@@ -70,42 +74,61 @@ function ProviderMedia({ url, label, source, startS }) {
   </div>`;
 }
 
-function CachedVideo({ media, label, startS, onError, replayActions, onCompare }) {
+function CachedVideo({ media, label, startS, onError, replayActions, onCompare,
+    reviewState, onReviewState }) {
   const videoRef = useRef(null);
   const initialSeek = useRef(false);
   const [playing, setPlaying] = useState(false);
-  const stepS = Number(media.frame_step_s);
-  const canStep = Number.isFinite(stepS) && stepS > 0;
+  const [mediaVideo, setMediaVideo] = useState(null);
+  const attach = useCallback(element => {
+    videoRef.current = element; setMediaVideo(element);
+    if (element) attachSharedVolume(element);
+  }, []);
+  const measuredStep = Number(media.frame_step_s);
+  // Keep missing timing stable across renders: NaN in effect dependencies
+  // re-registers the shortcuts and stops an active shuttle on each play event.
+  const stepS = Number.isFinite(measuredStep) && measuredStep > 0 ? measuredStep : null;
+  const canStep = stepS !== null;
   function step(direction) {
     const video = videoRef.current;
     if (!video || !canStep) return;
+    stopShuttle(video);
     video.pause();
-    video.currentTime = Math.max(0, Math.min(video.duration || Infinity,
-      (Math.floor(video.currentTime / stepS) + direction + 0.5) * stepS));
+    const presented = presentedVideoTime(video);
+    if (presented === null) return;
+    const last = Math.max(0, Math.ceil(video.duration / stepS) - 1);
+    const slot = Math.max(0, Math.min(last,
+      Math.floor((presented ?? video.currentTime) / stepS + 1e-8) + direction));
+    const start = slot * stepS;
+    video.currentTime = (start + Math.min(video.duration, start + stepS)) / 2;
   }
   function toStart() {
     const video = videoRef.current;
+    stopShuttle(video);
     jumpToStart(video, Math.min(startS ?? media.start_s ?? 0, video?.duration || Infinity));
   }
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) video.play().catch(() => {});
+    if (video.paused) playReview(video);
     else video.pause();
   }
+  useEffect(() => {
+    if (!mediaVideo) return undefined;
+    return watchReplayKeys(mediaVideo.closest(".attempt-drawer") || mediaVideo.closest(".replay-player"), {
+      step, toStart, toggle: togglePlay, video: mediaVideo,
+      onPress: () => mediaVideo.paused ? null : () => mediaVideo.play().catch(() => {}),
+    });
+  }, [mediaVideo, stepS, startS]);
   function saveReplay() {
     const link = document.createElement("a");
     link.href = media.clip_url; link.download = "recording.mp4";
     link.click();
   }
   return html`<div class="replay-player external-video-local">
-    <video class="library-example-thumb" src=${media.clip_url} title=${label}
-      controls preload="metadata" ref=${(element) => {
-        videoRef.current = element;
-        if (element && !element.dataset.sharedVolume) {
-          element.dataset.sharedVolume = "1"; attachSharedVolume(element);
-        }
-      }} onerror=${onError} onplay=${() => setPlaying(true)} onpause=${() => setPlaying(false)}
+    <video class="library-example-thumb" src=${media.clip_url} title=${label} tabindex="0" onclick=${togglePlay}
+      preload="metadata" ref=${attach}
+      onerror=${onError} onplay=${() => setPlaying(true)} onpause=${() => setPlaying(false)}
       onloadedmetadata=${() => {
         if (initialSeek.current) return;
         initialSeek.current = true;
@@ -114,7 +137,12 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare }
         video.play().catch(() => {});
       }} />
     <${ReplayTransport} playing=${playing} onStart=${toStart} onStep=${step}
-      onToggle=${togglePlay} canStep=${canStep} frameKind="encoded video" />
+      video=${mediaVideo} frameStep=${canStep ? stepS : null}
+      loop=${reviewState === undefined ? undefined : reviewState?.loop ?? null}
+      onLoopChange=${onReviewState ? loop => onReviewState({ loop }) : undefined}
+      reviewReady=${reviewState !== null}
+      onToggle=${togglePlay} canStep=${canStep} frameKind="encoded video"
+      note=${canStep ? "← → Step · J K L Playback · I O Loop · X Clear · Shift+I Loop start" : "J Reverse · K Pause · L Forward · Frame timing unavailable"} />
     ${replayActions && html`<div class="replay-actions">
       <button onclick=${saveReplay} title="Save a copy of this recording">
         <${Icon} name="save" size=${15} /> Save replay</button>
@@ -126,7 +154,7 @@ function CachedVideo({ media, label, startS, onError, replayActions, onCompare }
 }
 
 export function ExternalVideo({ url, label = "Public recording", autoplay = false, startS = null,
-                                closable = false, replayActions = false, onCompare }) {
+    closable = false, replayActions = false, onCompare, reviewState, onReviewState }) {
   const [media, setMedia] = useState(null);
   const [playing, setPlaying] = useState(autoplay);
   const [localFailed, setLocalFailed] = useState(false);
@@ -179,6 +207,7 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
     <${VideoBody} source=${source} playing=${playing} useLocal=${useLocal}
       url=${safeUrl} media=${media} label=${label} startS=${startS}
       replayActions=${replayActions} onCompare=${onCompare}
+      reviewState=${reviewState} onReviewState=${onReviewState}
       onPlay=${() => setPlaying(true)} onError=${() => setLocalFailed(true)} />
     <${VideoActions} url=${safeUrl} playing=${playing} media=${media}
       showOriginal=${!replayActions} localFailed=${localFailed}
@@ -190,7 +219,7 @@ export function ExternalVideo({ url, label = "Public recording", autoplay = fals
 }
 
 function VideoBody({ source, playing, useLocal, url, media, label, startS, onPlay, onError,
-                     replayActions, onCompare }) {
+                     replayActions, onCompare, reviewState, onReviewState }) {
   const image = source.kind === "image";
   return image ? html`<img class="library-example-thumb" src=${source.thumb} alt=${label} loading="lazy" />`
       : !playing ? html`<button class="library-example-thumb library-example-placeholder is-clickable"
@@ -202,7 +231,8 @@ function VideoBody({ source, playing, useLocal, url, media, label, startS, onPla
           onerror=${(event) => event.target.remove()} />`}
       </button>` : useLocal ? html`<${CachedVideo} key=${media.clip_url} media=${media}
         label=${label} startS=${startS} onError=${onError}
-        replayActions=${replayActions} onCompare=${onCompare} />`
+        replayActions=${replayActions} onCompare=${onCompare}
+        reviewState=${reviewState} onReviewState=${onReviewState} />`
       : !media ? html`<div class="library-example-thumb library-example-placeholder" role="status">
           Loading recording…</div>`
       : html`<${ProviderMedia} key=${url} url=${url} source=${source}

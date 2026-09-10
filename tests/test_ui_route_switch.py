@@ -80,6 +80,23 @@ def chrome_session(url: str):
         # Start the race with a loaded card in every client; its convergence
         # window below still measures the switches, not cold-start fetching.
         page.wait_for('.marelo-bar-body > .context-value:not(:text-is("…"))')
+        page.evaluate("""(() => {
+          const fetch = window.fetch;
+          window.routeMareloFetches = {count:0, active:0, mostAtOnce:0};
+          window.fetch = async (...args) => {
+            if (String(args[0]) !== '/api/marelo') return fetch(...args);
+            const probe = window.routeMareloFetches;
+            probe.count++; probe.active++;
+            probe.mostAtOnce = Math.max(probe.mostAtOnce, probe.active);
+            try {
+              const response = await fetch(...args);
+              // Keep a real response in flight across both the socket refresh
+              // and the scope-reconciliation effect, even on a fast fixture.
+              await new Promise(resolve => setTimeout(resolve, 300));
+              return response;
+            } finally { probe.active--; }
+          };
+        })()""")
         yield page
 
 # Two confusingly-similar names, matching the live report, plus two more so
@@ -199,3 +216,8 @@ def test_rapid_route_switching_converges_with_multiple_connected_clients(tmp_pat
                 f"{len(failures)}/{TRIALS} trial(s) left the header stuck "
                 "disagreeing with itself after rapid route switching with "
                 "multiple connected clients:\n" + "\n".join(failures))
+            for client in (page, gui_client, second_tab):
+                fetches = client.evaluate('window.routeMareloFetches')
+                assert fetches['count'] > 0, 'the route picks never refreshed MARELO'
+                assert fetches['mostAtOnce'] == 1, (
+                    f"MARELO refresh paths raced each other: {fetches}")

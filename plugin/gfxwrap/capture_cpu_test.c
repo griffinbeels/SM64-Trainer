@@ -24,6 +24,9 @@ static void bind_buffer(GLenum target, GLuint value) { (void)target; pack_buffer
 static void (*g_bind_framebuffer)(GLenum, GLuint)=bind_fbo;
 static void (*g_bind_buffer)(GLenum, GLuint)=bind_buffer;
 static void look_up_gl_entry_points(void) {}
+enum {PR_GL_SETUP, PR_GL_READ, PR_GL_RESTORE};
+static int64_t profile_mark(void) { return 0; }
+static void profile_end_stage(unsigned stage, int64_t began) { (void)stage; (void)began; }
 static void glGetIntegerv(GLenum name, GLint *value) {
     if (name==GL_READ_BUFFER) *value=selectors[bound_fbo];
     else if (name==GL_READ_FRAMEBUFFER_BINDING) *value=bound_fbo;

@@ -65,10 +65,11 @@ def test_saving_a_legacy_clip_preserves_its_bytes_and_does_not_validate_it(tmp_p
     service = make_service(tmp_path, [attempt()])
     path = cached_clip(service)
     path.with_suffix(".json").write_text(json.dumps(legacy_metadata()))
+    original = path.read_bytes()
     saved = Path(service.save(42)["path"])
-    assert saved.read_bytes() == path.read_bytes()
-    path.unlink()
-    path.with_suffix(".json").unlink()
+    assert saved.read_bytes() == original
+    assert not path.exists()
+    assert not path.with_suffix(".json").exists()
     view = service.view(42)
     assert view["source"] == "saved"
     assert_no_association(view)
@@ -87,8 +88,8 @@ def test_source_linked_association_survives_cached_and_saved_reads(tmp_path):
     assert {key: service.view(42)[key] for key in keys} == expected
     service.save(42)
     cached = service.clips_dir / "clip_attempt_42.mp4"
-    cached.unlink()
-    cached.with_suffix(".json").unlink()
+    assert not cached.exists()  # saving releases the temporary duplicate
+    assert not cached.with_suffix(".json").exists()
     assert {key: service.view(42)[key] for key in keys} == expected
 
 
@@ -170,8 +171,8 @@ def test_incompatible_source_metadata_cannot_validate_a_cached_map(tmp_path, cha
     json.dumps(view, allow_nan=False)
     service.save(42)
     cached = service.clips_dir / "clip_attempt_42.mp4"
-    cached.unlink()
-    cached.with_suffix(".json").unlink()
+    assert not cached.exists()  # saving releases the temporary duplicate
+    assert not cached.with_suffix(".json").exists()
     assert_no_association(service.view(42))
 
 

@@ -861,7 +861,17 @@ def test_the_wiki_mark_sits_beside_the_name_and_its_art_loads(library_page):
     actually paint: a 404'd asset renders as a broken-image glyph the DOM
     query cannot tell from art, so naturalWidth is the assertion, and the
     mark's own box must sit on the h3's row, not wrap under it."""
-    library_page.wait_for(".library-target-titleline .wiki-mark img", timeout_ms=10000)
+    # The element mounts before its native image request finishes. Preserve
+    # the same budget and still reject a completed but broken image below.
+    assert library_page.evaluate("""(async () => {
+      const deadline = performance.now() + 10000;
+      while (performance.now() < deadline) {
+        const img = document.querySelector('.library-target-titleline .wiki-mark img');
+        if (img?.complete) return true;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      return false;
+    })()"""), "the wiki image request did not finish"
     facts = library_page.evaluate("""
       (() => {
         const mark = document.querySelector('.library-target-titleline .wiki-mark');
@@ -1079,7 +1089,9 @@ def test_leaderboard_mode_inserts_and_marks_the_readers_own_pb_row(library_page)
       Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
         .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
     """)
-    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    # Community rows precede the separate personal strategies/PB response.
+    library_page.wait_for(".library-section.open .library-leaderboard-row.is-you",
+                          timeout_ms=10000)
     rows = _leaderboard_rows(library_page)
     you_rows = [r for r in rows if r["isYou"]]
     # the fixture's active strategy on this section carries a saved PB
@@ -1105,7 +1117,8 @@ def test_leaderboard_mode_never_filters_out_your_own_row(library_page):
       Array.from(document.querySelectorAll('.library-section.open .library-mode-seg'))
         .find((seg) => seg.textContent.trim() === 'Leaderboard').click()
     """)
-    library_page.wait_for(".library-section.open .library-leaderboard-row", timeout_ms=10000)
+    library_page.wait_for(".library-section.open .library-leaderboard-row.is-you",
+                          timeout_ms=10000)
     before = _leaderboard_rows(library_page)
     assert any(row["isYou"] for row in before), "no you-row on this section to begin with"
     target = next(row["name"] for row in before

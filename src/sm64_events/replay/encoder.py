@@ -25,8 +25,9 @@ PyAV 17 API notes (verified against av 17.1.0):
   through stream.codec_context.<attr>.
 - av.VideoFrame.from_ndarray(arr, format='bgra').reformat(format='yuv420p')
   works without extra width/height args.
-- pick_video_codec(): CodecContext.create('h264_nvenc', 'w') + .open() is the
-  right probe path; if avcodec_open2 fails we fall back to libx264. NOTE:
+- The no-FFmpeg pick_video_codec() uses CodecContext.create('h264_nvenc', 'w')
+  and .open(); failure falls back to libx264. With a child binary it delegates
+  to codecprobe, which tests that executable's hardware paths. NOTE:
   error 22 does NOT necessarily mean nvenc is unavailable — see the probe-size
   caveat in pick_video_codec()'s docstring.
 """
@@ -45,15 +46,20 @@ from sm64_events.replay.ring import SegmentInfo
 log = logging.getLogger("sm64.replay")
 
 
-def pick_video_codec() -> str:
-    """NVENC if the bundled ffmpeg + driver can actually encode (driver >= 570
-    gate per research) — probe with one real frame, not just codec presence.
+def pick_video_codec(ffmpeg: str | None = None) -> str:
+    """Probe the backend that will encode: child FFmpeg or in-process PyAV.
+
+    FFmpeg has its own build/driver capabilities, independent of PyAV's.
+    The legacy in-process writer supports NVENC and x264 only.
 
     Probe at 640x480 (the actual PJ64 window size), NOT a tiny frame: NVENC
     rejects dimensions below its minimum encode size with error 22 at
     avcodec_open2, so a 64x64 probe false-negatives to libx264 on machines
     where NVENC works fine (live-verified on this machine: 64x64 FAIL,
     256x256 OK, 640x480 OK)."""
+    if ffmpeg is not None:
+        from sm64_events.replay.codecprobe import pick_ffmpeg_codec
+        return pick_ffmpeg_codec(ffmpeg)
     try:
         ctx = av.CodecContext.create("h264_nvenc", "w")
         ctx.width, ctx.height = 640, 480

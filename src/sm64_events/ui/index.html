@@ -5148,6 +5148,93 @@
     width: 100%; max-width: 760px; aspect-ratio: 4 / 3;
     object-fit: contain; border: 1px solid #2d465e; border-radius: 7px; background: #02070c;
   }
+  .replay-controls { max-width: 760px; padding: .55rem 0; container-type: inline-size; }
+  .replay-seek-row { display: flex; align-items: center; gap: .7rem; }
+  .replay-seek-row input { flex: 1; min-width: 40px; padding: 0; margin: 0; border: 0; accent-color: var(--gold); }
+  .replay-media-time { font-variant-numeric: tabular-nums; font-size: .72rem; color: var(--muted); white-space: nowrap; }
+  .replay-control-row, .replay-playback-options, .replay-loop-row {
+    display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
+  }
+  .replay-control-row { justify-content: space-between; margin: .4rem 0; }
+  .replay-control-row .replay-transport { margin: 0; }
+  .replay-playback-options { min-width: 0; }
+  .replay-controls button, .replay-controls select { min-height: 34px; font-size: .72rem; }
+  .replay-speed { display: inline-flex; gap: .2rem; align-items: center; padding-left: .45rem;
+    border: 1px solid var(--border); border-radius: 6px; font-size: .72rem; background: #101e2f; }
+  .replay-speed select { width: auto; padding: .2rem .35rem; border: 0; background: #101e2f; }
+  .replay-sound { position: relative; }
+  .replay-mute { position: relative; min-width: 42px; }
+  .replay-mute-cross { position: absolute; right: 2px; color: #ff5757; stroke-width: 3; }
+  .replay-volume-popover { display: none; position: absolute; z-index: 6; right: 0; bottom: 100%;
+    padding: 14px 12px; background: #101e2f; border: 1px solid var(--border); border-radius: 6px; }
+  .replay-sound:hover .replay-volume-popover, .replay-sound:focus-within .replay-volume-popover { display: flex; }
+  .replay-volume { width: 80px; min-width: 0; padding: 0; margin: 0; border: 0; accent-color: var(--gold); }
+  .replay-loop-row { padding-top: .45rem; border-top: 1px solid var(--border-soft); }
+  .replay-loop-row .is-active { color: var(--gold); border-color: var(--gold); }
+  .replay-control-error { font-size: .75rem; color: var(--coral); }
+  .replay-player:fullscreen {
+    display: flex; flex-direction: column; align-items: center; padding: 12px;
+    background: #071321; overflow: auto;
+  }
+  .replay-player:fullscreen > video { flex: 1; min-height: 0; max-width: 100%; width: 100%; }
+  .replay-player:fullscreen .replay-controls { flex: none; width: 100%; max-width: 1000px; }
+  .replay-player:fullscreen .replay-actions { flex: none; }
+  .input-review-controls, .input-template-shift, .input-zoom-controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem;
+  }
+  .input-review-controls { justify-content: space-between; margin: .5rem 0; padding: .5rem 0; border-block: 1px solid var(--border-soft); }
+  .input-review-controls button { min-height: 34px; font-size: .72rem; padding-inline: .5rem; }
+  .input-template-drag { touch-action: none; cursor: ew-resize; color: var(--gold); }
+  .input-template-offset { color: var(--gold); font-size: .74rem; font-variant-numeric: tabular-nums; }
+  .input-zoom-range { font-size: .7rem; color: var(--muted); }
+  .timeline-scroll { position: relative; width: 100%; height: 18px; margin-top: 8px; background: #101d2c; border-radius: 6px; touch-action: none; overflow: hidden; }
+  .timeline-scroll-thumb { position: absolute; top: 2px; height: 14px; background: #6686a1; border-radius: 5px; cursor: ew-resize; }
+  .timeline-scroll:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .review-split { display: none; }
+  .attempt-drawer:fullscreen {
+    display: grid; grid-template-rows: minmax(0, var(--review-video-share, 60%)) 16px minmax(0, 1fr) auto;
+    width: 100%; height: 100%; box-sizing: border-box; padding: 12px; gap: 0;
+    background: #071321; overflow: hidden;
+  }
+  .attempt-drawer:fullscreen > .attempt-recording { min-height: 0; overflow: hidden; }
+  .attempt-drawer:fullscreen .attempt-recording .replay-player {
+    height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto auto; gap: 8px 24px; min-height: 0;
+  }
+  .attempt-drawer:fullscreen .replay-player > video {
+    grid-column: 1 / -1; grid-row: 1; min-height: 0; height: 100%; width: 100%; max-width: 100%; object-fit: contain;
+  }
+  .attempt-drawer:fullscreen .replay-controls { grid-column: 2; grid-row: 2; width: 100%; max-width: 1100px; }
+  .attempt-drawer:fullscreen .replay-actions { grid-column: 2; grid-row: 3; }
+  .attempt-drawer:fullscreen .review-readout.is-docked { grid-column: 1; grid-row: 2 / 4; align-self: center; max-height: 220px; overflow: auto; overscroll-behavior: contain; }
+  .attempt-drawer:fullscreen .review-readout .input-inspector { margin: 0; padding: 0; border: 0; }
+  .attempt-drawer:fullscreen .replay-status-row { grid-column: 1 / -1; grid-row: 1; align-self: start; justify-self: start; z-index: 1; }
+  .attempt-drawer:fullscreen .replay-status-row:empty { display: none; }
+  @container drawer (max-width: 1199px) {
+    .attempt-drawer:fullscreen .attempt-recording .replay-player { gap: 6px 12px; }
+    .attempt-drawer:fullscreen .review-readout .input-inspector { gap: .4rem; }
+    .attempt-drawer:fullscreen .review-readout .input-inspector-read { flex-basis: 100%; }
+    .attempt-drawer:fullscreen .review-readout svg { width: 64px; height: 64px; }
+  }
+  .attempt-drawer:fullscreen .attempt-recording > .external-video { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+  .attempt-drawer:fullscreen .external-video > .replay-player { flex: 1; height: auto; min-height: 0; }
+  .attempt-drawer:fullscreen .recording-link { display: none; }
+  .attempt-drawer:fullscreen > .attempt-drawer-inputs { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+  .attempt-drawer:fullscreen .review-split { display: flex; align-items: center; justify-content: center; cursor: ns-resize; touch-action: none; }
+  .review-split span { height: 4px; width: 90px; border-radius: 2px; background: var(--muted); }
+  .review-split:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+  .attempt-drawer:fullscreen:not(:has(.attempt-drawer-inputs)) { grid-template-rows: minmax(0, 1fr); }
+  .input-track-column { overflow: hidden; }
+  .input-lanes { touch-action: none; user-select: none; }
+  .input-selection-shade { position: absolute; inset-block: 0; pointer-events: none; background: #f5c32a33; border-inline: 2px solid var(--gold); z-index: 4; }
+  .input-loop-shade { position: absolute; inset-block: 0; pointer-events: none; background: rgba(123,166,255,.08); border-inline: 1px solid #7ba6ff; }
+  .review-latest-entry { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin: 0 0 12px; }
+  .review-latest-button { gap: .45rem; color: var(--gold); }
+  .review-latest-button kbd { color: var(--muted); border: 1px solid var(--border-soft); border-radius: 4px; padding: 0 .3rem; }
+  .review-latest-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal:has(.latest-review-surface) { width: min(100%,1000px); }
+  .latest-review-surface .replay-player > video { max-width: 100%; max-height: 55vh; }
+  .latest-review-surface .replay-controls { max-width: 100%; }
   /* ---- the input timeline -------------------------------------------------
      Lanes are HTML boxes at percentage widths, so they stretch with the drawer
      at any width with no aspect arithmetic. The one SVG (the stick) sets

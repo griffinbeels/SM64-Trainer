@@ -360,7 +360,13 @@ def test_unshifted_template_clips_without_losing_its_full_length(rig):
     assert payload["author"] == "friend"
     assert payload["runs"] == [run(0, 28, 0x8000, 0, 0)]
     assert payload["actions"][0]["length"] == 28
+    assert payload["source"]["frames"] == 40
+    assert payload["source"]["runs"] == [run(0, 40, 0x8000, 0, 0)]
+    assert payload["source"]["actions"][0]["length"] == 40
+    assert len(payload["source"]["revision"]) == 64
     assert service._template_payload(template, limit=0)["runs"] == []
+    shifted = service._template_payload(template, shift=20, limit=28)
+    assert shifted["source"] == payload["source"]
 
 
 def test_document_frame_numbers_are_already_an_axis(rig):
@@ -373,6 +379,22 @@ def test_document_frame_numbers_are_already_an_axis(rig):
     assert payload["frames"] == 12
     assert payload["runs"] == [run(8, 4, 0x8000, 0, 0)]
     assert payload["actions"][0]["start"] == 8
+    assert payload["source"]["runs"] == [run(5, 4, 0x8000, 0, 0)]
+    assert payload["source"]["actions"][0]["start"] == 5
+    assert payload["source"]["frames"] == 12
+
+
+def test_source_revision_tracks_document_content_not_view_bounds(rig):
+    from dataclasses import replace
+
+    service, templates, _attempt = rig
+    template = service.mark_template(7)
+    source = service._template_payload(template)["source"]
+    renamed = replace(template, name="renamed")
+    assert service._template_payload(renamed)["source"]["revision"] == source["revision"]
+    changed = replace(template, document=encode(frames([(0, 0x8000, 1, 0)]),
+                       target="star 24 1", strategy=None, version="us", origin="authored"))
+    assert service._template_payload(changed)["source"]["revision"] != source["revision"]
 
 
 def test_preview_and_import_bind_to_current_local_segment(rig):

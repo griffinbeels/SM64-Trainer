@@ -749,15 +749,34 @@ def test_the_save_button_flashes_saved_after_a_real_save(page):
     # tools/uilab_project.py). The first version of this test wrapped it in
     # try/catch and returned 'ok' unconditionally: green with the flash
     # mutated off, the exact vacuous-guard shape ui-core.md warns about.
-    verdict = page.evaluate(_ASYNC("""
+    verdict = page.evaluate(_ASYNC(r"""
 const saveBtn = Array.from(document.querySelectorAll('.builder-actions button'))
   .find((b) => b.textContent.includes('Save segment'));
-saveBtn.click();
-if (!await waitFor(() => saveBtn.textContent.includes('Saved'), 4000))
-  return 'never flashed: ' + saveBtn.textContent;
-if (!await waitFor(() => !saveBtn.textContent.includes('Saved'), 4000))
-  return 'stuck on: ' + saveBtn.textContent;
-return 'ok';
+if (!saveBtn || saveBtn.disabled) return 'Save is unavailable';
+const original = window.fetch;
+let savedResponse = null;
+window.fetch = async (url, options) => {
+  const response = await original(url, options);
+  if (/\/api\/segments\/\d+$/.test(String(url)) && options?.method === 'PUT') {
+    await response.clone().json();
+    savedResponse = {ok: response.ok, status: response.status};
+  }
+  return response;
+};
+try {
+  saveBtn.click();
+  // The flash promises confirmation after the PUT, which also recalibrates
+  // standards. Give that request its own bound; keep the flash deadlines.
+  if (!await waitFor(() => savedResponse !== null, 15000)) return 'PUT did not finish';
+  if (!savedResponse.ok) return 'PUT failed: ' + savedResponse.status;
+  if (!await waitFor(() => saveBtn.textContent.includes('Saved'), 4000))
+    return 'never flashed: ' + saveBtn.textContent;
+  if (!await waitFor(() => !saveBtn.textContent.includes('Saved'), 4000))
+    return 'stuck on: ' + saveBtn.textContent;
+  return 'ok';
+} finally {
+  window.fetch = original;
+}
 """))
     assert verdict == "ok", verdict
 
@@ -1365,19 +1384,39 @@ def test_the_frame_readout_can_reach_its_own_last_frame(page):
     equal itself. Seeking to the far right of the track must now land on
     n / n. Mutation proof: put the count back and this goes red."""
     reach(page, "input-timeline")
+    # A real click must complete: pointerdown now starts a possible drag, and
+    # a dispatched PointerEvent has no active pointer for setPointerCapture.
+    page.click('.input-lane.is-stick')
+    initial = page.evaluate("document.querySelector('.input-inspector-frame strong').textContent")
+    assert len(set(part.strip() for part in initial.split('/'))) == 2, initial
     page.evaluate(
         "(() => { const lanes = document.querySelector('.input-lanes');"
-        " const box = lanes.getBoundingClientRect();"
-        " lanes.dispatchEvent(new PointerEvent('pointerdown',"
-        "   {bubbles: true, clientX: box.right, clientY: box.top + 4}));"
-        " return true; })()")
-    page.wait_ms(200)
+        " const track = document.querySelector('.input-track-column');"
+        " const total = Number(document.querySelector('.input-timeline-head h4').dataset.total);"
+        " const hit = document.createElement('span'); hit.id = 'last-frame-hit';"
+        " const frameWidth = track.getBoundingClientRect().width / total;"
+        " hit.style.cssText = 'position:absolute;right:0;top:4px;height:8px;pointer-events:auto';"
+        " hit.style.width = frameWidth + 'px'; lanes.append(hit);"
+        " window.lastFrameGesture = [];"
+        " for (const name of ['pointerdown', 'pointerup']) lanes.addEventListener(name,"
+        "   event => lastFrameGesture.push([event.type,event.isTrusted]), {once:true});"
+        "})()")
+    # The uilab click seam targets elements, not coordinates. This empty hit
+    # target locates the final frame; the actual lane owns the trusted gesture.
+    try:
+        page.click('#last-frame-hit')
+    finally:
+        page.evaluate("document.querySelector('#last-frame-hit').remove()")
+    assert page.evaluate('lastFrameGesture') == [['pointerdown', True], ['pointerup', True]]
+    last = initial.split('/')[1].strip()
+    page.wait_for(f'.input-inspector-frame strong:text-is("{last} / {last}")')
     readout = page.evaluate(
         "document.querySelector('.input-inspector-frame strong').textContent")
     here, last = (part.strip() for part in readout.split("/"))
     assert here == last, (
         f"seeking to the end of the track reads {readout!r} -- the panel "
         "cannot reach its own last frame")
+    assert count(page, '.input-selection-shade') == 0
 
 
 def test_a_disagreeing_picture_reaches_the_timeline_header(page):

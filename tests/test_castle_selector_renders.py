@@ -58,7 +58,7 @@ def _page_errors(page):
 def test_the_castle_selector_renders_without_throwing(area):
     with serve_ui(castle_stage=area) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
-        page.wait_ms(2000)
+        page.wait_for('.stagebanner')
         assert not _page_errors(page), (
             f"the castle selector threw in area {area}: {_page_errors(page)}")
         # A render that throws leaves the LAST GOOD tree on screen, so "the
@@ -78,7 +78,7 @@ def test_the_page_still_responds_after_entering_the_castle():
     """
     with serve_ui(castle_stage=3) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
-        page.wait_ms(2000)
+        page.wait_for('.stagebanner')
         before = page.evaluate("document.body.innerHTML.length")
         page.evaluate(
             "(document.querySelector('.log-card-fold')"

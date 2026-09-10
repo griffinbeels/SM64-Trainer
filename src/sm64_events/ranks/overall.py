@@ -7,7 +7,6 @@ Changed evidence refits the elite distribution and includes a new record at the
 frontier immediately; sparse provisional families have bounded wider influence.
 """
 import math
-from dataclasses import asdict
 
 from sm64_events.core.timefmt import cs_of_frame, frame_at_or_after
 from sm64_events.library.ladders import fit_ladder
@@ -169,7 +168,12 @@ def fit_overall(rows, *, policy=None, target_id="", version="us") -> CompiledCur
     # Keep callable identities in the namespace so replaced/instrumented fitters
     # cannot silently reuse results produced by another implementation.
     namespace = (builder, score_evaluator, fit_ladder, compile_curve, _fit_population)
-    inputs = (asdict(population), settings, revision, OVERALL_MODEL_VERSION, DIVISION_SCORES)
+    # asdict recursively builds tuples from generators, including families;
+    # a retained heap snapshot can break that conversion on CPython. Expose
+    # every field directly, then let frozen_inputs detach and validate it.
+    population_inputs = {**vars(population),
+                         "families": tuple([vars(family) for family in population.families])}
+    inputs = (population_inputs, settings, revision, OVERALL_MODEL_VERSION, DIVISION_SCORES)
     try:
         key = (*namespace, frozen_inputs(inputs))
         hash(key)

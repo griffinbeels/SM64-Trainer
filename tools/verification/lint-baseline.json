@@ -368,8 +368,8 @@
     "0286980457cfffb74f2b0f84c9f9fefb1cafe2581e21f56ca2aad5b14ddcb665",
     "eada169a0594d36d34db4c5e202a23c973b6017773d1f097cd4b4e2c630ff30f",
     "57b832fcd4e1fb1e11a3b1a13c8a40607c047c34aa76cfd5c0db37c9ccda75b1",
-    "c1e098e0bddccb91d0a8da4d38c8ec9cb7a68428f8f6bff43e3724f6a36d648b",
-    "dbb98ec7c195ee034c4b50d8b34d5658faaa4da7c4911a46621590fbdfee714a",
+    "3f7256b4f9dfbf993856646fa3632a4ff3293869f6f9e5f49cae5428371e6128",
+    "b760a47fb055d0b1189d466184ea7ea6e95574dc3053664f2bc0d259cde30a25",
     "0ba3e38ba5fe8281c95b228dfdfd7018d46d2f1dcac59a88671bc0ccd2fef6f3",
     "8a536eb21422140c560e7bd0e4cd6ab75091b4d6159d590d756a796d26106fa3",
     "6762bd0e9d5048ce04b4d10e5b91daac4e41ec668467865c0af69ba4f7844f14",
@@ -390,7 +390,7 @@
     "083cec9ab228261f994b20bb184c138771ff11fb31206b7f0e45e886d5e826d0",
     "dfa68da561e87f9dab9071a47804ecdfce9404b5cdc6779144f39903e6a620e3",
     "7932a094c51f57920ae6f3c5ef6e8d119c8c1f910abf4cdfc7cfa664974a4659",
-    "de6e43e8116297e4ea3edc2a20b2be7612032cea47ffcbdafe51f6f4ec7274d0",
+    "f89fc416410c267fcafe7ad93fbafa67a2fc14c5a0b130472b50c210cf663de7",
     "e41c8354ec8748f61efe48fbcc3d613ebe71c587988813c2b3c9d6c9c9dbe093",
     "f0ea23f891421a66183ee9233217fe0b5844d8330ccfc64bd43817b3431b4aa4",
     "edeff90306f269e2315f15db5322553c081ee5f61c220a781fa4c4b9a2b86357",
@@ -434,7 +434,7 @@
     "b2af8eb78f846a5cfdc1264190ddd38ee8ebe0044dc83c10033f5a828841d913",
     "95d5da3760841b19f656d98d004257fff3d2c7ec4cbdcd9b6863417510aef538",
     "289ac2c8c296cd8927e335ee99884be42fd606ce3aa0fe9e7c70a3f76d241f81",
-    "5a8e64c589e3f6cf379da0fd72fb3c319eccf0720cda4aa54a2b385a3597f864",
+    "1a037c3abc02901bc4405ed43e8d42472b886388cbd0c7af672a05aaa3a7e105",
     "bcb7ff95775d0e1c757ad18aa4484ecf4a93cf85c1a93c5aa26746399738d0ab",
     "afff8f96f9b62d1aad606907b4be11b10d7d4990bf304105222c1df290120add",
     "b22884d66bb338c373c58dda59f4e58dd0c877d22782f3d0ee93bc6cfbd524b8",
@@ -2652,15 +2652,15 @@
     },
     {
       "path": "src/sm64_events/ui/components/attemptlog.js",
-      "line": 68,
+      "line": 69,
       "rule": "max-lines-per-function",
-      "message": "Function 'AttemptRow' has too many lines (121). Maximum allowed is 100."
+      "message": "Function 'AttemptRow' has too many lines (101). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/attemptlog.js",
-      "line": 68,
+      "line": 69,
       "rule": "complexity",
-      "message": "Function 'AttemptRow' has a complexity of 53. Maximum allowed is 15."
+      "message": "Function 'AttemptRow' has a complexity of 50. Maximum allowed is 15."
     },
     {
       "path": "src/sm64_events/ui/components/compare.js",
@@ -2784,9 +2784,9 @@
     },
     {
       "path": "src/sm64_events/ui/components/library.js",
-      "line": 192,
+      "line": 213,
       "rule": "max-lines-per-function",
-      "message": "Function 'Library' has too many lines (228). Maximum allowed is 100."
+      "message": "Function 'Library' has too many lines (225). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/library.js",
@@ -3048,9 +3048,9 @@
     },
     {
       "path": "src/sm64_events/ui/components/standards.js",
-      "line": 240,
+      "line": 241,
       "rule": "max-lines-per-function",
-      "message": "Function 'StandardsPanel' has too many lines (372). Maximum allowed is 100."
+      "message": "Function 'StandardsPanel' has too many lines (367). Maximum allowed is 100."
     },
     {
       "path": "src/sm64_events/ui/components/standards.js",

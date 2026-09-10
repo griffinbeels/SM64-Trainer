@@ -32,6 +32,8 @@ from collections import Counter
 from ctypes import wintypes
 from pathlib import Path
 
+from sm64_events.core.heap_observation import heap_snapshot
+
 log = logging.getLogger("sm64.procmem")
 
 _GiB = 1024 ** 3
@@ -420,15 +422,21 @@ def gc_summary() -> dict:
 
 def type_histogram(objs: list | None = None) -> dict[str, int]:
     """Map of qualified-type-name -> live instance count over the GC-tracked
-    heap (pass an already-fetched gc.get_objects() to share the one walk).
+    heap (pass a borrowed snapshot to share the one walk; its owner is
+    responsible for coordinating resource lifetime until that list is released).
     The FULL histogram (hundreds of types); callers persist only the top-N.
     Qualified names (module.qualname) disambiguate same-named classes."""
     if objs is None:
-        objs = gc.get_objects()
+        with heap_snapshot() as objects:
+            return type_histogram(objects)
     c: Counter = Counter()
-    for o in objs:
-        t = type(o)
-        c[f"{t.__module__}.{t.__qualname__}"] += 1
+    o = None
+    try:
+        for o in objs:
+            t = type(o)
+            c[f"{t.__module__}.{t.__qualname__}"] += 1
+    finally:
+        o = None  # A failed probe's traceback must not retain a resource.
     return dict(c)
 
 
@@ -450,10 +458,10 @@ def sample(scratch_dir: Path | None = None, *, count_objects: bool = False,
         snap["threads"] = thread_count()
         snap["system"] = system_memory()
     if count_objects or histogram:
-        objs = gc.get_objects()
-        snap["objects"] = len(objs)
-        if histogram:
-            snap["types"] = type_histogram(objs)
+        with heap_snapshot() as objs:
+            snap["objects"] = len(objs)
+            if histogram:
+                snap["types"] = type_histogram(objs)
     if children_of is not None or processes:
         pt = process_table(parent_pid=children_of, names=processes)  # ONE pass
         if children_of is not None:

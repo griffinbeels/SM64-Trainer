@@ -21,6 +21,8 @@ from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.ffmpeg_sink import PICTURE_HEARTBEAT_S, FfmpegAvSink
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.ring import SegmentRing
+from test_replay_picture_identity import encoder as encoder
+from ffmpeg_spawn_fixture import capture_spawn
 
 
 def _ffmpeg() -> str:
@@ -57,34 +59,7 @@ def test_the_feed_log_files_every_write_under_its_row_or_as_a_repeat():
 # -- the sink's arguments ----------------------------------------------------
 
 def _spawn_args(tmp_path, monkeypatch, cfg) -> list:
-    captured = {}
-
-    class _FakeProc:
-        def __init__(self):
-            import io
-            self.stdin = io.BytesIO()
-            self.stdout = io.BytesIO(b"")
-            self.stderr = io.BytesIO(b"")
-            self.pid = 4242
-        def poll(self):
-            return None
-        def wait(self, timeout=None):
-            return 0
-        def kill(self):
-            pass
-
-    def fake_popen(args, **kwargs):
-        captured["args"] = args
-        return _FakeProc()
-
-    monkeypatch.setattr("sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("sm64_events.replay.ffmpeg_sink._assign_kill_on_close",
-                        lambda p: None)
-    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg", codec="libx264")
-    sink._spawn(320, 240)
-    for thread in sink._readers:
-        thread.join(timeout=5)
-    return captured["args"]
+    return capture_spawn(monkeypatch, cfg, "libx264")["args"]
 
 
 def test_the_picture_feed_encodes_passthrough_with_time_forced_keyframes(tmp_path, monkeypatch):
@@ -348,18 +323,18 @@ def _filled_ledger(origin: float, count: int, first_frame: int = 100,
 # machinery the oracle borrows.
 
 
-def test_a_flash_and_a_click_at_one_instant_land_together_in_the_cut(tmp_path):
+def test_a_flash_and_a_click_at_one_instant_land_together_in_the_cut(tmp_path, encoder):
     """The A/V sync instrument this pipeline never had: at one wall-clock
     instant the picture goes white and the audio carries a click; after the
     ring is cut, the first white frame's time and the click's onset in the
     decoded audio must agree to within a picture. Both streams ride the
     picture feed's one NUT stream on the same clock, so this is the claim
     the design makes, measured."""
-    ff = _ffmpeg()
+    ff, codec = encoder
     cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
     ledger = PictureLedger()
     ring = SegmentRing(retention_s=None, max_bytes=10**9)
-    sink = FfmpegAvSink(cfg, ring.add, ffmpeg=ff, codec="libx264",
+    sink = FfmpegAvSink(cfg, ring.add, ffmpeg=ff, codec=codec,
                         on_fed=lambda tag, at, **clock: ledger.mark_fed(
                             tag[1] if tag is not None else None, at, **clock))
     sink.start()
@@ -367,7 +342,7 @@ def test_a_flash_and_a_click_at_one_instant_land_together_in_the_cut(tmp_path):
     sink.stop()
 
     coverage = ring.coverage("video")
-    result = ClipExtractor(cfg=cfg, codec="libx264", ffmpeg=ff).extract(
+    result = ClipExtractor(cfg=cfg, codec=codec, ffmpeg=ff).extract(
         ring, coverage[0] + timedelta(seconds=1.0),
         coverage[0] + timedelta(seconds=4.5), tmp_path / "sync.mp4")
     white_at = _first_white_picture_at(result.path)
@@ -375,6 +350,7 @@ def test_a_flash_and_a_click_at_one_instant_land_together_in_the_cut(tmp_path):
     click_at = _click_onset_at(result.path)
     assert click_at is not None, "the click never reached the cut"
     offset_ms = (click_at - white_at) * 1000
+    print(f"{codec}: independently decoded click minus flash = {offset_ms:+.3f} ms")
     assert abs(offset_ms) < 50, f"audio is {offset_ms:+.1f} ms from the picture"
 
 

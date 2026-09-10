@@ -371,7 +371,9 @@ def _endpoint(h0, h1, d0, d1):
 
 @lru_cache(maxsize=512)
 def _prepare(nodes):
-    points = tuple((frame_position(time), score) for time, score in nodes)
+    # Finish iteration before publishing a tuple; a concurrent heap snapshot
+    # may retain incomplete generator-built tuples (see ranks/fit_cache.py).
+    points = tuple([(frame_position(time), score) for time, score in nodes])
     x, y = zip(*points, strict=True)
     h = [b - a for a, b in zip(x, x[1:], strict=False)]
     if any(gap <= 0 for gap in h):
@@ -452,7 +454,7 @@ def score_evaluator(curve: CompiledCurve) -> Callable[[float], float | None]:
     """
     ladder, prepared = _validate(curve)
     bound_ladder = MappingProxyType(ladder)
-    bound_prepared = tuple(tuple(axis) for axis in prepared) if prepared is not None else None
+    bound_prepared = tuple([tuple(axis) for axis in prepared]) if prepared is not None else None
 
     def evaluate(time_cs):
         return _score_time(bound_ladder, bound_prepared, time_cs)

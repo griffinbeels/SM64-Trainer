@@ -99,14 +99,22 @@ def _groups(service, scope_id: str, excluded: set[str] | None = None):
     # cannot see them would omit every runner rated only there (measured:
     # 444 of the sheet's runners omitted from `overall`) while his own card
     # graded them. Excluded-only runners still correctly remain omitted.
-    ladders = marelo_bridge.entity_curves(service.ranks, service.ranks.graded_entities())
+    routes = service.db.routes()
+    courses = segment_courses(service.db)
+    candidates = scopes.entity_groups(
+        scope_id, rankable=service.ranks.graded_entities(), routes=routes,
+        segment_courses=courses)
+    if candidates is None:
+        raise HTTPException(404, f"unknown scope {scope_id!r}")
+    # Resolve only this scope's curves. A route switch used to copy the whole
+    # community's fitted curves even for an empty route. Membership still uses
+    # the same resolver, before and after removing unscoreable candidates.
+    keys = dict.fromkeys(key for group in candidates for key in group["candidates"])
+    ladders = marelo_bridge.entity_curves(service.ranks, keys)
     rankable = scopes.rankable_entities(
         ladders, service.rank_excluded() if excluded is None else excluded)
     groups = scopes.entity_groups(
-        scope_id, rankable=rankable, routes=service.db.routes(),
-        segment_courses=segment_courses(service.db))
-    if groups is None:
-        raise HTTPException(404, f"unknown scope {scope_id!r}")
+        scope_id, rankable=rankable, routes=routes, segment_courses=courses)
     return groups
 
 

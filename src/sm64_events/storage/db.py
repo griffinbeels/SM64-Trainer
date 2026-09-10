@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.events import Event
+from sm64_events.core.heap_observation import heap_lifetime_lock
 from sm64_events.tracking.projection import Attempt, journal_id
 
 MIGRATIONS = [
@@ -780,7 +781,9 @@ class Database:
         self._lock = threading.Lock()
         self._inputs = None
         self._input_templates = None
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        # A heap snapshot may retain temporary cursors. Reset this row-producing
+        # statement explicitly so its unconsumed result cannot block migrations.
+        self._conn.execute("PRAGMA journal_mode=WAL").close()
         self._migrate()
         self._repair_landmark_keys()
 
@@ -900,7 +903,11 @@ class Database:
                     raise
 
     def close(self) -> None:
-        self._conn.close()
+        # A cursor may still be materializing rows after execute() returns.
+        # Share the operation lock so shutdown cannot invalidate that read or
+        # leave SQLite's deferred close holding the file during fixture cleanup.
+        with heap_lifetime_lock, self._lock:
+            self._conn.close()
 
     # -- journal -----------------------------------------------------------
     def append_event(self, session_id: int, seq: int, event: Event) -> int:

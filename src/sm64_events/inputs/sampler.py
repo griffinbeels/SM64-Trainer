@@ -22,6 +22,7 @@ This class does no sleeping and owns no thread. `server/poller.py` drives it,
 so pacing, Windows timer resolution and shutdown all live in one place.
 """
 import logging
+from sm64_events.core.profiling import measured
 from datetime import datetime, timezone
 from uuid import uuid4
 import zlib
@@ -96,6 +97,7 @@ class InputSampler:
         """
         return dict(self._counts)
 
+    @measured("inputs.sample", interval=True)
     def sample(self) -> int | None:
         """One tick. Returns the frame counter read, or None if unusable."""
         try:
@@ -194,6 +196,7 @@ class InputSampler:
         self._source_id = f"poll:{uuid4().hex}"
         self._sequence = 0
 
+    @measured("inputs.emit")
     def _emit(self) -> None:
         if self._frame is None or self._latest is None:
             return

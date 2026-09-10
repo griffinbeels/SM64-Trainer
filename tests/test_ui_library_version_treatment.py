@@ -336,6 +336,46 @@ def test_both_regions_show_by_default_and_the_control_narrows(payload, fresh_pag
         "document.querySelectorAll('.library-example-version').length") == 0
 
 
+def test_a_late_auto_open_cannot_replace_the_explicitly_picked_target(payload, fresh_page):
+    candidate = _pick_jp_only_chip_approach(payload)
+    assert candidate
+    fresh_page.evaluate("""(() => {
+      const fetch = window.fetch;
+      window.libraryNavigation = {held: false, delivered: false};
+      window.fetch = async (...args) => {
+        const probe = window.libraryNavigation;
+        if (!String(args[0]).startsWith('/api/library/entity/') || probe.held)
+          return fetch(...args);
+        probe.held = true;
+        await new Promise(resolve => { window.releaseLibraryOpen = resolve; });
+        const response = await fetch(...args);
+        const json = response.json.bind(response);
+        response.json = async () => {
+          const body = await json();
+          probe.delivered = true;
+          return body;
+        };
+        return response;
+      };
+    })()""")
+    _navigate_to_section(fresh_page, candidate['group'], candidate['target_label'],
+                         candidate['approach_name'])
+    assert fresh_page.evaluate('window.libraryNavigation.held')
+    fresh_page.evaluate('window.releaseLibraryOpen()')
+    assert fresh_page.evaluate("""(async () => {
+      const deadline = performance.now() + 15000;
+      while (!window.libraryNavigation.delivered && performance.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      return window.libraryNavigation.delivered;
+    })()""")
+    names = fresh_page.evaluate("""Array.from(
+      document.querySelectorAll('.library-target .library-section-name'), el => el.textContent)
+    """)
+    assert candidate['approach_name'] in names, names
+
+
 def test_a_jp_only_ladder_wears_its_chip_beside_the_version_switch(payload, fresh_page):
     candidate = _pick_jp_only_chip_approach(payload)
     assert candidate, "no single-version-fitted (no ladder_jp) approach in the snapshot"

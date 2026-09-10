@@ -21,11 +21,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import socket
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
+import traceback
 from dataclasses import replace
 from datetime import UTC, datetime, timezone
 from pathlib import Path
@@ -172,8 +175,8 @@ def _fixture_ffmpeg_runner(cmd: list[str]) -> None:
 def snapshot_db(source: Path, destination: Path) -> Path:
     """Online-backup `source` to `destination` and return the destination."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as origin, \
-            sqlite3.connect(destination) as copy:
+    with contextlib.closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as origin, \
+            contextlib.closing(sqlite3.connect(destination)) as copy:
         origin.backup(copy)
     return destination
 
@@ -1363,6 +1366,297 @@ def serve_ui(*args, **kwargs):
         yield base
 
 
+def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse,
+                     bundled_library, setup_observer):
+    broadcaster = Broadcaster()
+    # `ranks=` is NOT optional here, whatever the signature says. Omit it and
+    # every rank builder short-circuits to empty -- /api/ranks/standards starts
+    # answering "rank standards unavailable", the rank banners never render,
+    # and the Active Target card measures SHORTER than it really is. The first
+    # sweep run made exactly that mistake and under-reported the one card it
+    # was built to measure (2026-07-28), which is the failure mode
+    # .claude/rules/ui-core.md warns reads as a broken builder.
+    # ALWAYS a scratch store, exactly like `adoptions_path` and `mode_path`
+    # below, and for the same reason: a driven test that EDITS a cutoff --
+    # through the panel's own PUT, or by clearing a strategy -- otherwise
+    # writes the worktree's real `data/rank_standards.json` and leaves it
+    # edited for every later run. `data/` is gitignored, so nothing reports it
+    # and nothing puts it back.
+    #
+    # The scratch file does not exist yet, which is the POINT: `RankStandards`
+    # seeds an absent store from the bundle, so every fixture reads the shipped
+    # community defaults rather than whatever this worktree happens to have
+    # been left holding.
+    #
+    # Measured 2026-08-21, which is why this is unconditional rather than a
+    # parameter a careful test remembers to pass: one new test cleared four of
+    # star:2:4's five strategies and did not restore them, and the next full
+    # suite came back with 6 failures and 4 errors across four unrelated files
+    # (the JP toggles, the Library's overall ladder, the rank-mode swap, the
+    # you-marker) -- every one of them a test that simply needed that star to
+    # still have its strategies, and not one of them able to name the cause.
+    # An opt-in would have to be remembered by whoever writes the NEXT such
+    # test, which is precisely the person who does not know yet.
+    ranks = RankStandards(
+        scratch_path / "rank_standards.json",
+        bundled_rank_standards(), bundled_sheet_ladders())
+    ranks.load()
+    service = TrackerService(database, broadcaster, ranks=ranks)
+    poller = Poller(_OfflineMemory(), [], service)
+    # Real CompareService over the SAME db/broadcaster/ranks the rest of the
+    # fixture already uses (`service` exposes `.db`/`.ranks`, exactly what
+    # CompareService's `tracker` param wants) -- only the network download
+    # and ffmpeg re-encode are faked. `title_probe` is stubbed too: the
+    # default hits YouTube's real oEmbed endpoint, and every import this
+    # fixture (or a caller) makes supplies a real `name`, never a bare URL,
+    # so the probe would never fire anyway -- stubbed defensively rather
+    # than relying on that staying true.
+    compare_importer = VideoImporter(
+        scratch_path, "ffmpeg",
+        downloader=_fixture_downloader, runner=_fixture_ffmpeg_runner)
+    compare = CompareService(compare_importer, service, broadcaster,
+                             scratch_path,
+                             title_probe=lambda url: None)
+    # `adoptions_path` into scratch: without it the link door's adopt/unadopt
+    # writes land in the REAL dev data dir (`data/library_adoptions.json`,
+    # cwd-relative from source) and leak state between test runs.
+    # `mode_path` into scratch for the same reason: a render test that flips
+    # the Game version setting must not write the REAL data dir's
+    # tracker_mode.json and leave the next dev server grading on JP.
+    # The inputs router, over the SAME db: without it the attempt drawer's
+    # timeline 404s and the sweep measures a page that says "could not read
+    # this attempt's inputs" -- a clean render of the wrong thing, which is
+    # the failure mode ui-core.md warns about.
+    from sm64_events.inputs.service import InputsService
+    inputs = InputsService(database.inputs, database.input_templates,
+                           database.attempts, events=database.events_between,
+                           landmark_names=database.landmark_names)
+    # The setup screen's own capture layer -- see _FixtureCaptureLayer's
+    # docstring for why this is a fixed status rather than a simulated
+    # install/uninstall state machine.
+    capture_layer = _FixtureCaptureLayer(
+        _fixture_capture_layer_status(**(capture_layer_status or {})),
+        refuse=capture_layer_refuse, overrides=capture_layer_status)
+    if setup_observer is None:
+        def setup_observer(layer):
+            return {
+                "target": {"state": "ready" if layer.pj64_dir else "missing",
+                           "path": layer.pj64_dir, "pid": 123 if layer.pj64_running else None,
+                           "message": "Open Project64 v1.6."},
+                "rom": {"state": "supported" if layer.pj64_running else "missing",
+                        "region": "us" if layer.pj64_running else None,
+                        "name": "SM64 USAMUNE v1.93u" if layer.pj64_running else None,
+                        "warning": None},
+                "checks": {key: layer.state == "active" for key in
+                           ("plugin", "pictures", "inputs", "game")}}
+    app = create_app(poller, broadcaster, service=service, compare=compare,
+                     inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
+                     adoptions_path=scratch_path
+                     / "library_adoptions.json",
+                     mode_path=scratch_path / "tracker_mode.json",
+                     # Scratch for the same reason as adoptions_path: the
+                     # default local sheet snapshot is the real dev data dir,
+                     # and a live refresh writes a newer snapshot there, so a
+                     # sweep would measure a page built from whatever the
+                     # sheet said last night rather than the bundled data.
+                     library_path=scratch_path
+                     / "sheet_library.json.gz",
+                     library_bundled_path=(None if bundled_library else
+                                           scratch_path
+                                           / "no-library.json.gz"))
+
+    return app, service
+
+
+def _fixture_replay_routes(app, database):
+    from fastapi import Header, HTTPException
+    # A CLIP'S FRAME MAP, without a clip (round 32 item 53). The timeline's
+    # buffers are the video's, so with no replay service the drawer draws
+    # the lead-less layout and the shaded band is unreachable by every
+    # sweep -- the "clean page nobody is looking at" trap again. This
+    # answers the drawer's own replay POST with a synthetic view whose
+    # `frame_map` carries three seconds of run-up and two of tail around
+    # the attempt, which is exactly what the real thing carries; the video
+    # URL 404s and the player shows its own empty state, which is honest.
+    # These optional services are deliberately absent in the offline fixture.
+    # Return their inactive state so a browser smoke check can treat every
+    # unexpected HTTP error as a failure, instead of filtering known 404s.
+    @app.get("/api/replay/status")
+    @app.get("/api/update/status")
+    def _fixture_inactive_status():
+        return None
+
+    # The real preference owner, isolated from saved media and live sessions.
+    from sm64_events.replay.reviewstate import ReviewStateStore
+    review_states = ReviewStateStore()
+
+    @app.get("/api/attempts/{attempt_id}/replay/review-state")
+    def _fixture_review_get(attempt_id: int):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(review_states.get(attempt_id, None),
+                            headers={"X-Replay-Review-Session": review_states.session_token})
+
+    @app.put("/api/attempts/{attempt_id}/replay/review-state")
+    def _fixture_review_put(attempt_id: int, body: dict,
+                            x_replay_review_edit: str | None = Header(default=None)):
+        try:
+            return review_states.put(attempt_id, None, body, edit=x_replay_review_edit)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.post("/api/attempts/{attempt_id}/replay")
+    def _fixture_replay_view(attempt_id: int):
+        rows = [a for a in database.attempts() if a.id == attempt_id]
+        if not rows or rows[0].anchor_frame is None:
+            return {"clip_url": None, "duration_s": 0, "fps": 60,
+                    "game_fps": 30, "frame_map": None, "source": "buffer",
+                    "anchor_offset_s": 0, "truncated": False,
+                    "saved_path": None}
+        attempt = rows[0]
+        close = attempt.anchor_frame + (attempt.rta_frames or 0)
+        first = (close - (attempt.igt_frames - 1)
+                 if attempt.igt_frames else attempt.anchor_frame)
+        pre, post = 90, 60                       # 3 s and 2 s at 30 fps
+        frame_map = []
+        for raw in range(first - pre, close + post):
+            frame_map.extend([raw, raw])          # 30 fps game, 60 fps video
+        # THE CLIP'S CHECK rides the view too: the timeline header shows how
+        # many of the capture layer's stamped pads the timeline holds, so the
+        # chip is reachable by the sweeps. One contradicted picture, so the
+        # "disagree" wording is the one that renders.
+        pictures = len(frame_map) // 2
+        # A capture-layer clip's stamps: the game's timer per slot, one
+        # frame ahead of the track's own count inside the attempt, None in
+        # the run-up and the tail -- so the inspector's stamped clock is
+        # reachable by the sweeps.
+        picture_igt = [raw - first + 1 if first <= raw < close else None
+                       for raw in frame_map]
+        return {"clip_url": None,
+                "duration_s": len(frame_map) / 60,
+                "fps": 60, "game_fps": 30, "frame_map": frame_map,
+                "picture_igt": picture_igt,
+                "source": "buffer", "anchor_offset_s": pre / 30,
+                "truncated": False, "saved_path": None,
+                "pad_stamp_agreement": {
+                    "pictures": pictures, "agree": pictures - 1,
+                    "rows": pictures + 40,
+                    "disagreements": [[pre * 2 + 40, first + 20,
+                                       [71, 0, 0], [70, 0, 0]]]}}
+
+
+
+def _seed_fixture_attempt(base, service, database, stage, target, arm_segment, seed_editor_fixtures, seed_subsections, target_segment):
+    # Segment FIRST, star SECOND: `_arm_segment`'s level_changed
+    # events cross real course boundaries (Grounds -> HMC -> BitDW),
+    # and `_dispatch` retires the ACTIVE STAR TARGET the moment such
+    # an event's course differs from the target's own -- a real
+    # product rule (projection.py caveat 12), not a fixture quirk.
+    # Arming before the star target exists means there is nothing yet
+    # for that rule to retire; nothing published afterwards is a
+    # level_changed event that could retire it either, so the star
+    # target set below survives untouched and coexists with the
+    # still-armed segment. Setting a star target itself only journals
+    # `target_set` -- it does not read or touch segment arm state.
+    # THE LEVEL ENTRIES the timeline's LEAD-IN is measured from
+    # (round 32 items 51-52), published BEFORE anything arms.
+    # A `level_changed` disarms a segment and can retire a target
+    # whatever level it names, so one published in play order beside
+    # each reset undid the seeding this file spends its length
+    # arranging (measured: 27 tests red across five files). Here,
+    # with nothing armed and nothing open yet, it disturbs nothing --
+    # and the journal only has to CARRY the entry for the timeline
+    # to find it, since the lead is resolved by frame and wall clock
+    # rather than by replay order. The frames are the ones
+    # `seed_practice` will anchor its attempts at, each far enough
+    # back to sit before the attempt's own first frame (the last
+    # attempt's igt outruns its rta, so its track already starts at
+    # 3567 -- 3500, not merely below its 4000 reset).
+    _seed_level_entries(service,
+                        (stage or (FIXTURE_COURSE, FIXTURE_LEVEL))[1])
+    if arm_segment is not None:
+        # Pad FIRST: each padding entity is a real course-crossing
+        # level_changed that would disarm `arm_segment`'s own
+        # still-armed instance if it ran after (see
+        # `_pad_log_with_more_entities`'s own docstring).
+        _pad_log_with_more_entities(service)
+        _arm_segment(base, service, segment_id=arm_segment)
+    if seed_editor_fixtures:
+        _seed_editor_fixtures(base)
+    if seed_subsections:
+        _seed_subsections(base)
+    course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
+    seed_practice(service, course_id=course, level=level,
+                  star_id=(target or (0, FIXTURE_STAR))[1],
+                  attempts=target is None,
+                  strat=FIXTURE_STRAT if target is None else None,
+                  moments=seed_subsections)
+    _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
+                 with_pb=target is None)
+    seed_inputs(database, service.session_id)
+    if target_segment is not None:
+        # AFTER _seed_target, not before: retiring the star target
+        # _seed_target just set is the whole point (see
+        # _target_segment's own docstring). Requires the segment to
+        # already be armed (arm_segment), or there is no `armed_
+        # detail` for the resulting card to carry.
+        _target_segment(base, target_segment)
+
+def _seed_fixture_stage(base, service, castle_stage, seed_castle_pieces, castle_piece_arms, bowser_stage, enter_level, seed_reds_run, arm_hundred_coin):
+    if castle_stage is not None:
+        # BEFORE the display stage: the pieces arm off real events
+        # that name the castle, and publishing the stage last leaves
+        # the banner showing the subarea the row is measured in.
+        if seed_castle_pieces:
+            _seed_castle_pieces(base, service, castle_stage,
+                               arm_piece=castle_piece_arms)
+        _publish_castle_stage(service, castle_stage)
+    if bowser_stage is not None:
+        # AFTER _seed_target, not instead of it: broadcast-only and
+        # retires nothing (see _publish_bowser_stage), so the star
+        # target set above survives untouched underneath a Bowser
+        # quick-select banner from a different course entirely.
+        _publish_bowser_stage(service, *bowser_stage)
+    if enter_level is not None:
+        _enter_level(service, enter_level)
+    if seed_reds_run:
+        _seed_reds_run(service, bowser_stage[0])
+    if arm_hundred_coin is not None:
+        _arm_hundred_coin_star(base, service, *arm_hundred_coin)
+
+def _fixture_server_thread(server):
+    errors = []
+
+    def run_server():
+        try:
+            server.run()
+        except BaseException as error:
+            # Preserve SystemExit from bind failure as well as ordinary errors.
+            errors.append(error)
+            logging.getLogger(__name__).exception("fixture server exited with an error")
+
+    return threading.Thread(target=run_server, daemon=True), errors
+
+
+def _fixture_thread_failure(server, thread, timeout, started_at, errors, phase):
+    elapsed = time.monotonic() - started_at
+    alive = thread.is_alive()
+    frame = sys._current_frames().get(thread.ident)
+    stack = "".join(traceback.format_stack(frame)[-12:]) if alive and frame else ""
+    cause = errors[0] if errors else None
+    return RuntimeError(
+        f"fixture server failed to {phase} after {elapsed:.2f}s "
+        f"(limit {timeout}s, port {server.config.port}, thread_alive={alive}, "
+        f"should_exit={server.should_exit}, cause={cause!r})\n{stack}")
+
+
+def _stop_fixture_server(server, thread, errors, timeout=15):
+    started_at = time.monotonic()
+    server.should_exit = True
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        raise _fixture_thread_failure(server, thread, timeout, started_at, errors, "stop")
+
+
 @contextlib.contextmanager
 def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               seed: bool = True, from_dev_db: bool = False,
@@ -1506,195 +1800,49 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     install/uninstall attempt fail with that sentence, for driving the 409
     path.
     """
-    scratch = None
-    if db_path is None:
-        scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-")
-        db_path = Path(scratch.name) / "fixture.db"
-        if from_dev_db and DEV_DB.exists():
-            snapshot_db(DEV_DB, db_path)
-    # Own tempdir regardless of `scratch` above (which is None whenever the
-    # caller passed an explicit `db_path`) -- the compare cache needs
-    # somewhere to write fixture clips into and must never touch a real
-    # user's `core/paths.compare_cache_dir()`.
-    compare_cache_scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-cache-")
-
-    database = Database(db_path)
-    if reconcile_full_corpus:
-        # Before the server starts: reconcile is a plain db-level operation
-        # (mirrors main.py's own startup call), and doing it early means every
-        # request the fixture makes afterwards already sees the full corpus.
-        seed_path = bundled_defaults_seed()
-        if seed_path is not None:
-            seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
-            problems = reconcile_defaults(database, seed_data)
-            if problems:
-                raise RuntimeError(
-                    f"fixture's reconcile_defaults skipped rows: {problems}")
-    if pad_journal:
-        _pad_journal(db_path, pad_journal)
-    broadcaster = Broadcaster()
-    # `ranks=` is NOT optional here, whatever the signature says. Omit it and
-    # every rank builder short-circuits to empty -- /api/ranks/standards starts
-    # answering "rank standards unavailable", the rank banners never render,
-    # and the Active Target card measures SHORTER than it really is. The first
-    # sweep run made exactly that mistake and under-reported the one card it
-    # was built to measure (2026-07-28), which is the failure mode
-    # .claude/rules/ui-core.md warns reads as a broken builder.
-    # ALWAYS a scratch store, exactly like `adoptions_path` and `mode_path`
-    # below, and for the same reason: a driven test that EDITS a cutoff --
-    # through the panel's own PUT, or by clearing a strategy -- otherwise
-    # writes the worktree's real `data/rank_standards.json` and leaves it
-    # edited for every later run. `data/` is gitignored, so nothing reports it
-    # and nothing puts it back.
-    #
-    # The scratch file does not exist yet, which is the POINT: `RankStandards`
-    # seeds an absent store from the bundle, so every fixture reads the shipped
-    # community defaults rather than whatever this worktree happens to have
-    # been left holding.
-    #
-    # Measured 2026-08-21, which is why this is unconditional rather than a
-    # parameter a careful test remembers to pass: one new test cleared four of
-    # star:2:4's five strategies and did not restore them, and the next full
-    # suite came back with 6 failures and 4 errors across four unrelated files
-    # (the JP toggles, the Library's overall ladder, the rank-mode swap, the
-    # you-marker) -- every one of them a test that simply needed that star to
-    # still have its strategies, and not one of them able to name the cause.
-    # An opt-in would have to be remembered by whoever writes the NEXT such
-    # test, which is precisely the person who does not know yet.
-    ranks = RankStandards(
-        Path(compare_cache_scratch.name) / "rank_standards.json",
-        bundled_rank_standards(), bundled_sheet_ladders())
-    ranks.load()
-    service = TrackerService(database, broadcaster, ranks=ranks)
-    poller = Poller(_OfflineMemory(), [], service)
-    # Real CompareService over the SAME db/broadcaster/ranks the rest of the
-    # fixture already uses (`service` exposes `.db`/`.ranks`, exactly what
-    # CompareService's `tracker` param wants) -- only the network download
-    # and ffmpeg re-encode are faked. `title_probe` is stubbed too: the
-    # default hits YouTube's real oEmbed endpoint, and every import this
-    # fixture (or a caller) makes supplies a real `name`, never a bare URL,
-    # so the probe would never fire anyway -- stubbed defensively rather
-    # than relying on that staying true.
-    compare_importer = VideoImporter(
-        Path(compare_cache_scratch.name), "ffmpeg",
-        downloader=_fixture_downloader, runner=_fixture_ffmpeg_runner)
-    compare = CompareService(compare_importer, service, broadcaster,
-                             Path(compare_cache_scratch.name),
-                             title_probe=lambda url: None)
-    # `adoptions_path` into scratch: without it the link door's adopt/unadopt
-    # writes land in the REAL dev data dir (`data/library_adoptions.json`,
-    # cwd-relative from source) and leak state between test runs.
-    # `mode_path` into scratch for the same reason: a render test that flips
-    # the Game version setting must not write the REAL data dir's
-    # tracker_mode.json and leave the next dev server grading on JP.
-    # The inputs router, over the SAME db: without it the attempt drawer's
-    # timeline 404s and the sweep measures a page that says "could not read
-    # this attempt's inputs" -- a clean render of the wrong thing, which is
-    # the failure mode ui-core.md warns about.
-    from sm64_events.inputs.service import InputsService
-    inputs = InputsService(database.inputs, database.input_templates,
-                           database.attempts, events=database.events_between,
-                           landmark_names=database.landmark_names)
-    # Offline setup observations: only a test can advance this environment.
-    capture_layer = _FixtureCaptureLayer(
-        _fixture_capture_layer_status(**(capture_layer_status or {})),
-        refuse=capture_layer_refuse, overrides=capture_layer_status)
-    if setup_observer is None:
-        def setup_observer(layer):
-            return {
-                "target": {"state": "ready" if layer.pj64_dir else "missing",
-                           "path": layer.pj64_dir, "pid": 123 if layer.pj64_running else None,
-                           "message": "Open Project64 v1.6."},
-                "rom": {"state": "supported" if layer.pj64_running else "missing",
-                        "region": "us" if layer.pj64_running else None,
-                        "name": "SM64 USAMUNE v1.93u" if layer.pj64_running else None,
-                        "warning": None},
-                "checks": {key: layer.state == "active" for key in
-                           ("plugin", "pictures", "inputs", "game")}}
-    app = create_app(poller, broadcaster, service=service, compare=compare,
-                     inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
-                     adoptions_path=Path(compare_cache_scratch.name)
-                     / "library_adoptions.json",
-                     mode_path=Path(compare_cache_scratch.name) / "tracker_mode.json",
-                     # Scratch for the same reason as adoptions_path: the
-                     # default local sheet snapshot is the real dev data dir,
-                     # and a live refresh writes a newer snapshot there, so a
-                     # sweep would measure a page built from whatever the
-                     # sheet said last night rather than the bundled data.
-                     library_path=Path(compare_cache_scratch.name)
-                     / "sheet_library.json.gz",
-                     library_bundled_path=(None if bundled_library else
-                                           Path(compare_cache_scratch.name)
-                                           / "no-library.json.gz"))
-
-    # A CLIP'S FRAME MAP, without a clip (round 32 item 53). The timeline's
-    # buffers are the video's, so with no replay service the drawer draws
-    # the lead-less layout and the shaded band is unreachable by every
-    # sweep -- the "clean page nobody is looking at" trap again. This
-    # answers the drawer's own replay POST with a synthetic view whose
-    # `frame_map` carries three seconds of run-up and two of tail around
-    # the attempt, which is exactly what the real thing carries; the video
-    # URL 404s and the player shows its own empty state, which is honest.
-    # These optional services are deliberately absent in the offline fixture.
-    # Return their inactive state so a browser smoke check can treat every
-    # unexpected HTTP error as a failure, instead of filtering known 404s.
-    @app.get("/api/replay/status")
-    @app.get("/api/update/status")
-    def _fixture_inactive_status():
-        return None
-
-    @app.post("/api/attempts/{attempt_id}/replay")
-    def _fixture_replay_view(attempt_id: int):
-        rows = [a for a in database.attempts() if a.id == attempt_id]
-        if not rows or rows[0].anchor_frame is None:
-            return {"clip_url": None, "duration_s": 0, "fps": 60,
-                    "game_fps": 30, "frame_map": None, "source": "buffer",
-                    "anchor_offset_s": 0, "truncated": False,
-                    "saved_path": None}
-        attempt = rows[0]
-        close = attempt.anchor_frame + (attempt.rta_frames or 0)
-        first = (close - (attempt.igt_frames - 1)
-                 if attempt.igt_frames else attempt.anchor_frame)
-        pre, post = 90, 60                       # 3 s and 2 s at 30 fps
-        frame_map = []
-        for raw in range(first - pre, close + post):
-            frame_map.extend([raw, raw])          # 30 fps game, 60 fps video
-        # THE CLIP'S CHECK rides the view too: the timeline header shows how
-        # many of the capture layer's stamped pads the timeline holds, so the
-        # chip is reachable by the sweeps. One contradicted picture, so the
-        # "disagree" wording is the one that renders.
-        pictures = len(frame_map) // 2
-        # A capture-layer clip's stamps: the game's timer per slot, one
-        # frame ahead of the track's own count inside the attempt, None in
-        # the run-up and the tail -- so the inspector's stamped clock is
-        # reachable by the sweeps.
-        picture_igt = [raw - first + 1 if first <= raw < close else None
-                       for raw in frame_map]
-        return {"clip_url": None,
-                "duration_s": len(frame_map) / 60,
-                "fps": 60, "game_fps": 30, "frame_map": frame_map,
-                "picture_igt": picture_igt,
-                "source": "buffer", "anchor_offset_s": pre / 30,
-                "truncated": False, "saved_path": None,
-                "pad_stamp_agreement": {
-                    "pictures": pictures, "agree": pictures - 1,
-                    "rows": pictures + 40,
-                    "disagreements": [[pre * 2 + 40, first + 20,
-                                       [71, 0, 0], [70, 0, 0]]]}}
-
-    port = _free_port()
-    server = uvicorn.Server(uvicorn.Config(
-        app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    scratch = compare_cache_scratch = database = thread = None
     try:
+        if db_path is None:
+            # A failed shutdown preserves evidence rather than unlinking files
+            # still owned by the server. Failures before start clean up below.
+            scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-", delete=False)
+            db_path = Path(scratch.name) / "fixture.db"
+            if from_dev_db and DEV_DB.exists():
+                snapshot_db(DEV_DB, db_path)
+        # The compare cache is always private, even with an explicit db_path.
+        compare_cache_scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-cache-", delete=False)
+        database = Database(db_path)
+        if reconcile_full_corpus:
+            # Reconcile before requests can observe this fresh fixture.
+            seed_path = bundled_defaults_seed()
+            if seed_path is not None:
+                seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
+                problems = reconcile_defaults(database, seed_data)
+                if problems:
+                    raise RuntimeError(
+                        f"fixture's reconcile_defaults skipped rows: {problems}")
+        if pad_journal:
+            _pad_journal(db_path, pad_journal)
+        app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
+                                        capture_layer_status, capture_layer_refuse, bundled_library, setup_observer)
+        _fixture_replay_routes(app, database)
+        port = _free_port()
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="warning",
+            # These offline servers need socket I/O only. Keep their shutdown
+            # independent of Windows IOCP cancellation draining; Playwright's
+            # subprocess-capable loop belongs to its separate driver thread.
+            loop="asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto"))
+        thread, startup_errors = _fixture_server_thread(server)
+        started_at = time.monotonic()
+        thread.start()
         deadline = time.monotonic() + timeout
         while not server.started and thread.is_alive() \
                 and time.monotonic() < deadline:
             time.sleep(0.02)
         if not server.started:
-            raise RuntimeError("fixture server failed to start within "
-                               f"{timeout}s (port {port})")
+            raise _fixture_thread_failure(server, thread, timeout, started_at, startup_errors, "start") \
+                from (startup_errors[0] if startup_errors else None)
         # AFTER startup, never before: publishing on a service whose app
         # lifespan has not run creates nothing at all — measured 2026-07-28,
         # three events in and `db.attempts()` still empty. tests/test_api.py
@@ -1702,88 +1850,18 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         # at construction time fails silently, which is the worst version.
         base = f"http://127.0.0.1:{port}"
         if seed:
-            # Segment FIRST, star SECOND: `_arm_segment`'s level_changed
-            # events cross real course boundaries (Grounds -> HMC -> BitDW),
-            # and `_dispatch` retires the ACTIVE STAR TARGET the moment such
-            # an event's course differs from the target's own -- a real
-            # product rule (projection.py caveat 12), not a fixture quirk.
-            # Arming before the star target exists means there is nothing yet
-            # for that rule to retire; nothing published afterwards is a
-            # level_changed event that could retire it either, so the star
-            # target set below survives untouched and coexists with the
-            # still-armed segment. Setting a star target itself only journals
-            # `target_set` -- it does not read or touch segment arm state.
-            # THE LEVEL ENTRIES the timeline's LEAD-IN is measured from
-            # (round 32 items 51-52), published BEFORE anything arms.
-            # A `level_changed` disarms a segment and can retire a target
-            # whatever level it names, so one published in play order beside
-            # each reset undid the seeding this file spends its length
-            # arranging (measured: 27 tests red across five files). Here,
-            # with nothing armed and nothing open yet, it disturbs nothing --
-            # and the journal only has to CARRY the entry for the timeline
-            # to find it, since the lead is resolved by frame and wall clock
-            # rather than by replay order. The frames are the ones
-            # `seed_practice` will anchor its attempts at, each far enough
-            # back to sit before the attempt's own first frame (the last
-            # attempt's igt outruns its rta, so its track already starts at
-            # 3567 -- 3500, not merely below its 4000 reset).
-            _seed_level_entries(service,
-                                (stage or (FIXTURE_COURSE, FIXTURE_LEVEL))[1])
-            if arm_segment is not None:
-                # Pad FIRST: each padding entity is a real course-crossing
-                # level_changed that would disarm `arm_segment`'s own
-                # still-armed instance if it ran after (see
-                # `_pad_log_with_more_entities`'s own docstring).
-                _pad_log_with_more_entities(service)
-                _arm_segment(base, service, segment_id=arm_segment)
-            if seed_editor_fixtures:
-                _seed_editor_fixtures(base)
-            if seed_subsections:
-                _seed_subsections(base)
-            course, level = stage or (FIXTURE_COURSE, FIXTURE_LEVEL)
-            seed_practice(service, course_id=course, level=level,
-                          star_id=(target or (0, FIXTURE_STAR))[1],
-                          attempts=target is None,
-                          strat=FIXTURE_STRAT if target is None else None,
-                          moments=seed_subsections)
-            _seed_target(base, *(target or (FIXTURE_COURSE, FIXTURE_STAR)),
-                         with_pb=target is None)
-            seed_inputs(database, service.session_id)
-            if target_segment is not None:
-                # AFTER _seed_target, not before: retiring the star target
-                # _seed_target just set is the whole point (see
-                # _target_segment's own docstring). Requires the segment to
-                # already be armed (arm_segment), or there is no `armed_
-                # detail` for the resulting card to carry.
-                _target_segment(base, target_segment)
-            if castle_stage is not None:
-                # BEFORE the display stage: the pieces arm off real events
-                # that name the castle, and publishing the stage last leaves
-                # the banner showing the subarea the row is measured in.
-                if seed_castle_pieces:
-                    _seed_castle_pieces(base, service, castle_stage,
-                                       arm_piece=castle_piece_arms)
-                _publish_castle_stage(service, castle_stage)
-            if bowser_stage is not None:
-                # AFTER _seed_target, not instead of it: broadcast-only and
-                # retires nothing (see _publish_bowser_stage), so the star
-                # target set above survives untouched underneath a Bowser
-                # quick-select banner from a different course entirely.
-                _publish_bowser_stage(service, *bowser_stage)
-            if enter_level is not None:
-                _enter_level(service, enter_level)
-            if seed_reds_run:
-                _seed_reds_run(service, bowser_stage[0])
-            if arm_hundred_coin is not None:
-                _arm_hundred_coin_star(base, service, *arm_hundred_coin)
+            _seed_fixture_attempt(base, service, database, stage, target, arm_segment, seed_editor_fixtures, seed_subsections, target_segment)
+            _seed_fixture_stage(base, service, castle_stage, seed_castle_pieces, castle_piece_arms, bowser_stage, enter_level, seed_reds_run, arm_hundred_coin)
         yield base, service
     finally:
-        server.should_exit = True
-        thread.join(timeout=15)
+        if thread is not None and thread.ident is not None:
+            _stop_fixture_server(server, thread, startup_errors)
         # Close the connection BEFORE removing the directory holding it.
         # Windows refuses to unlink an open file, so a leaked handle here is
         # not a warning -- it is a PermissionError that fails the caller.
-        database.close()
+        if database is not None:
+            database.close()
         if scratch is not None:
             scratch.cleanup()
-        compare_cache_scratch.cleanup()
+        if compare_cache_scratch is not None:
+            compare_cache_scratch.cleanup()

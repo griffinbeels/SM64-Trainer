@@ -204,6 +204,16 @@ def _game_version() -> str:
     return effective_version(load_mode_config(), detected=detected)
 
 
+def _replay_service(cfg, recorder, codec, tracker):
+    """Keep manual PB selection and its media preservation on one command."""
+    replay = ReplayService(cfg=cfg, recorder=recorder,
+                           extractor=ClipExtractor(cfg=cfg, codec=codec),
+                           tracker=tracker)
+    tracker.on_pb_saved = replay.preserve_pb
+    tracker.on_session_ended = replay.session_ended
+    return replay
+
+
 def build():
     global _instance_lock
     configure_logging()
@@ -307,7 +317,6 @@ def build():
 
     if replay_cfg.enabled:
         from sm64_events.replay.encoder import pick_video_codec
-        codec = pick_video_codec()
         # Per-process loopback is PRIMARY: a replay must carry the game and
         # nothing else — no Discord call, no music (user report 2026-07-30).
         # Device-wide loopback is the fallback for machines where the
@@ -341,6 +350,7 @@ def build():
             except Exception:
                 logging.getLogger("sm64.replay").exception(
                     "ffmpeg probe failed - using in-process encoder")
+        codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
         # THE CAPTURE LAYER (round 32 item 95): when the wrapper plugin inside
         # Project64 is presenting, every picture comes from it already stamped
         # with the game's own frame counter and pad (replay/pluginsource.py),
@@ -417,10 +427,7 @@ def build():
             codec=codec,
             video_sink_factory=video_sink_factory,
             release_capture=release_capture)
-        replay = ReplayService(
-            cfg=replay_cfg, recorder=recorder,
-            extractor=ClipExtractor(cfg=replay_cfg, codec=codec),
-            tracker=service)
+        replay = _replay_service(replay_cfg, recorder, codec, service)
     # Compare tab: import comparison videos (yt-dlp/copy -> ffmpeg normalize)
     # into the content cache, then serve them as plain clips. Only built when
     # ffmpeg is available (same binary the replay sink uses). Deliberately NOT

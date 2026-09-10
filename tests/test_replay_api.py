@@ -1,9 +1,11 @@
 from pathlib import Path
+from contextlib import contextmanager
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sm64_events.server.replay_api import create_replay_router
+from sm64_events.server.replay_api import ReplayClipResponse
 
 
 class FakeReplayService:
@@ -62,11 +64,44 @@ class FakeReplayService:
             p.write_bytes(b"\x00" * 2048)
         return p
 
+    @contextmanager
+    def read_clip(self, name):
+        yield self.clip_path(name)
+
 
 def make_client(tmp_path):
     app = FastAPI()
     app.include_router(create_replay_router(FakeReplayService(tmp_path)))
     return TestClient(app)
+
+
+def test_range_response_releases_lease_even_when_client_send_fails(tmp_path):
+    import asyncio
+    import pytest
+    from starlette.requests import ClientDisconnect
+
+    class LeasedReplay(FakeReplayService):
+        pinned = False
+
+        @contextmanager
+        def read_clip(self, name):
+            self.pinned = True
+            try:
+                yield self.clip_path(name)
+            finally:
+                self.pinned = False
+
+    replay = LeasedReplay(tmp_path)
+    response = ReplayClipResponse(replay, "clip_attempt_42.mp4")
+    async def receive():
+        return {"type": "http.disconnect"}
+    async def send(_message):
+        assert replay.pinned
+        raise ClientDisconnect()
+    scope = {"type": "http", "method": "GET", "headers": [(b"range", b"bytes=0-99")]}
+    with pytest.raises(ClientDisconnect):
+        asyncio.run(response(scope, receive, send))
+    assert replay.pinned is False
 
 
 def test_status(tmp_path):

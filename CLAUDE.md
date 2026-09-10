@@ -46,6 +46,10 @@ not in this map.
 - Never restart the live server. Griffin restarts it when ready; it may be
   serving another branch's work. Report when changes need a restart and leave
   it to him. This does not prevent starting/closing isolated UI test fixtures.
+- When asking Griffin to run or restart the server, include a clickable absolute
+  link to `run-test-server.bat` in the checkout containing the changes: that
+  specific worktree's launcher for worktree changes, or the primary checkout's
+  launcher for changes on main. Verify the linked file exists.
 - Do not start `python -m sm64_events.main` for UI checks while the user may
   be playing. One recorder operates machine-wide (`core/recorder_lock.py`);
   one server owns each database (`storage/instance_lock.py`), with second
@@ -61,6 +65,9 @@ not in this map.
   including stale client code; never write derived UI state back as game events.
 - Clean up only processes this task owns. End every server or harness started
   for this task in the same session, and verify its listener/children exited.
+- Session-start process inspection is report-only (`tools/dev_cleanup.py`).
+  A PID without a listener may be a live server's launcher or a recorder;
+  socket absence and command-line matching never authorize termination.
 
 ## Domain contracts
 

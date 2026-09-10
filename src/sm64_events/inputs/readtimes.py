@@ -27,37 +27,58 @@ def stamp_at(value: int) -> str:
 
 
 class ReadTimes:
-    """Spool compressed instants until the sampler chooses a final state.
+    """Retain exact instants until the sampler chooses a final state.
 
-    A changed state discards this history. A completed frame transfers its
-    compressed bytes to the chunk writer. Disk spill avoids a growing list
-    while the emulator holds one counter for hours; the temporary file closes
-    on both paths. Pending compression/RAM is bounded; the sealed output and
-    database necessarily grow with the evidence retained.
+    Short histories stay packed in a bounded buffer: a within-frame rewrite
+    then discards no compressor work, and a final state compresses once.
+    Long holds stream into the compressed spool as that buffer fills, keeping
+    pending RAM bounded even when the emulator holds one counter for hours.
+    Both paths retain the same zlib wire format and close the temporary file.
+    The sealed output and database necessarily grow with retained evidence.
     """
 
     RAM_BYTES = 64 * 1024
 
     def __init__(self):
         self._file = tempfile.SpooledTemporaryFile(max_size=self.RAM_BYTES)
-        self._compressor = zlib.compressobj()
+        self._compressor = None
+        self._pending = bytearray()
         self.lower = self.upper = None
 
     def add(self, stamp: str) -> None:
+        if self._file.closed:
+            raise ValueError("input observation history is closed")
         value = micros(stamp)
         self.lower = value if self.lower is None else min(self.lower, value)
         self.upper = value if self.upper is None else max(self.upper, value)
-        self._file.write(self._compressor.compress(_TIME.pack(value)))
+        self._pending.extend(_TIME.pack(value))
+        if len(self._pending) >= self.RAM_BYTES:
+            self._compress_pending()
+
+    def _compress_pending(self) -> None:
+        if self._compressor is None:
+            self._compressor = zlib.compressobj()
+        self._file.write(self._compressor.compress(self._pending))
+        self._pending.clear()
 
     def finish(self) -> tuple[bytes, str, str]:
         try:
-            self._file.write(self._compressor.flush())
-            self._file.seek(0)
-            return self._file.read(), stamp_at(self.lower), stamp_at(self.upper)
+            if self._file.closed:
+                raise ValueError("input observation history is closed")
+            if self._compressor is None:
+                blob = zlib.compress(self._pending)
+            else:
+                self._compress_pending()
+                self._file.write(self._compressor.flush())
+                self._file.seek(0)
+                blob = self._file.read()
+            return blob, stamp_at(self.lower), stamp_at(self.upper)
         finally:
             self.close()
 
     def close(self) -> None:
+        self._pending.clear()
+        self._compressor = None
         self._file.close()
 
 

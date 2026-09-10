@@ -7,9 +7,9 @@ that we can use to do any type of future analysis with (e.g., input
 timeline, or if we want to extract other information later, we should be
 able to extend the frame-by-frame information storage at any point)."
 
-The recorder photographs the emulator's window ~120 times a second, so one
-presented picture is grabbed several times. This module watches those
-grabs, notices each NEW picture by content, and records one row for it:
+Plugin capture supplies owned pictures and stamps; desktop fallback may grab
+one presented picture several times. This module watches those captures,
+notices each NEW picture by content, and records one row for it:
 the picture's own composition time, the RAM frame current at that moment,
 and every extra stamp registered. Extraction matches the encoded clip's
 frames to these rows through the FEED LOG (`replay/feedmap.py`), which is
@@ -35,6 +35,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from sm64_events.replay.picturearchive import PictureArchive
+from sm64_events.replay.pixels import sample_bytes
 
 log = logging.getLogger(__name__)
 
@@ -126,24 +127,30 @@ class PictureLedger:
             self._archive.close()
 
     def observe(self, bgra, capture_ts: float | None,
-                frame: int | None, extras: dict | None = None) -> bool:
+                frame: int | None, extras: dict | None = None, *,
+                prepare: Callable[[], object] | None = None) -> bool:
         """One grab off the capture thread. True = a NEW picture (row
         landed). `extras` are caller-computed per-grab stamps (the registry
         covers zero-arg probes; a stamp that needs THIS grab's own time --
         the frame-edge phase -- arrives here instead). Never raises: a
-        ledger bug must not cost the capture."""
+        ledger bug must not cost the capture. Optional encoder preparation
+        runs only for an accepted candidate, before any state or archive
+        changes, so failed preparation leaves an identical retry eligible."""
         try:
             if capture_ts is None:
                 return False           # a picture nobody can place in time
             shape = getattr(bgra, "shape", None)
-            sample = bgra[::SAMPLE_STRIDE, ::SAMPLE_STRIDE].tobytes()
+            sample = sample_bytes(bgra, SAMPLE_STRIDE)
             if shape == self._prev_shape and sample == self._prev_sample:
                 return False
+            folded = (self._rows
+                    and capture_ts - self._rows[-1][0] < MIN_ROW_GAP_S
+                    and frame == self._rows[-1][1])
+            if not folded and prepare is not None:
+                prepare()
             self._prev_shape = shape
             self._prev_sample = sample
-            if (self._rows
-                    and capture_ts - self._rows[-1][0] < MIN_ROW_GAP_S
-                    and frame == self._rows[-1][1]):
+            if folded:
                 # A torn grab settling shares its present's stamp. A row
                 # this close with a DIFFERENT stamp is a catch-up present
                 # after an emulator stall (measured on his lava clip:

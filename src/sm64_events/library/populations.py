@@ -164,10 +164,12 @@ def _group_families(rows, settings):
         left["population"] = _union([left["population"], right["population"]])
         left["rows"].update(right["rows"])
         left["provisional"] = left["provisional"] and right["provisional"]
-    return tuple(FamilyPopulation(
+    # Complete the families before tuple publication; heap monitoring can
+    # otherwise expose a tuple while CPython still needs to resize it.
+    return tuple([FamilyPopulation(
         group["id"], group["label"], tuple(sorted(group["rows"])), group["population"],
         group["provisional"], min(1., len(group["population"]) / settings["confidence_runners"]))
-        for group in groups)
+        for group in groups])
 
 
 def collect_populations(rows, *, settings, target_id="", version="us"):

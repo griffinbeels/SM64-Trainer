@@ -120,16 +120,20 @@ def test_db_reattach_upgrades_broadcast_only(tmp_path, monkeypatch):
     poller = Poller(OfflineMemory(), [StarGrabDetector()], svc)
     attempts_before_free = 3
     calls: list[int] = []
+    lock_free = threading.Event()
 
     def db_retry():
         calls.append(1)
-        if len(calls) < attempts_before_free:
+        if len(calls) < attempts_before_free or not lock_free.is_set():
             return None            # lock still held by the old process
         return Database(tmp_path / "t.db")
 
     app = create_app(poller, broadcaster, service=svc, db_retry=db_retry)
     with TestClient(app) as client:
         assert client.get("/health").json()["db"] == "error"
+        # Startup and HTTP scheduling may outlast three retry intervals.
+        # Release the simulated lock only after observing the degraded state.
+        lock_free.set()
         deadline = time.monotonic() + 5.0
         while (time.monotonic() < deadline
                and client.get("/health").json()["db"] != "ok"):

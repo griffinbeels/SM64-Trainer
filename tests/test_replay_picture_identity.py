@@ -20,11 +20,12 @@ from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.ring import SegmentRing
 
 
-def picture(number):
-    image = np.zeros((96, 320, 4), dtype=np.uint8)
+def picture(number, size=(320, 96)):
+    width, height = size
+    image = np.zeros((height, width, 4), dtype=np.uint8)
     image[:, :, 3] = 255
     for bit in range(8):
-        image[:, bit * 40:(bit + 1) * 40, :3] = 255 if number & (1 << bit) else 0
+        image[:, bit * width // 8:(bit + 1) * width // 8, :3] = 255 if number & (1 << bit) else 0
     return image
 
 
@@ -38,35 +39,30 @@ def read_pictures(path):
         result = []
         for frame in container.decode(stream):
             pixels = frame.to_ndarray(format="gray")
+            cell = frame.width // 8
             number = sum(1 << bit for bit in range(8)
-                         if pixels[40:56, bit * 40 + 12:bit * 40 + 28].mean() > 128)
+                         if pixels[40:56, bit * cell + cell//3:bit * cell + 2*cell//3].mean() > 128)
             result.append((float(frame.pts * frame.time_base), number))
         return result
 
 
-@pytest.fixture(scope="module", params=["libx264", "h264_nvenc"])
+@pytest.fixture(scope="module", params=["libx264", "h264_nvenc", "h264_amf", "h264_qsv"])
 def encoder(request):
     ff = bundled_ffmpeg() or shutil.which("ffmpeg")
     if not ff:
         pytest.skip("ffmpeg required")
     codec = request.param
     probe = subprocess.run(
-        [ff, "-v", "error", "-f", "lavfi", "-i", "color=size=320x96",
+        [ff, "-v", "error", "-f", "lavfi", "-i", "color=size=640x480",
          "-frames:v", "1", "-c:v", codec, "-f", "null", "-"],
-        capture_output=True, timeout=15, **quiet_spawn_kwargs())
+        capture_output=True, timeout=15, check=False, **quiet_spawn_kwargs())
     if probe.returncode:
         pytest.skip(f"{codec} unavailable: {probe.stderr.decode(errors='replace')[-300:]}")
     return ff, codec
 
 
-@pytest.mark.parametrize("schedule", ["regular", "queued_audio_and_catchup", "timestamp_collision"])
-def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, encoder, schedule):
-    ff, codec = encoder
-    config = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=1.0)
-    ring = SegmentRing(retention_s=None, max_bytes=10**8)
-    ledger = PictureLedger()
-    sink = FfmpegAvSink(config, ring.add, ffmpeg=ff, codec=codec,
-                        on_fed=lambda tag, at, **clock: ledger.mark_fed(tag[1] if tag else None, at, **clock))
+def record_picture_schedule(sink, ledger, schedule):
+    """Feed the independent identities through capture timing edge cases."""
     sink.start()
     if schedule == "queued_audio_and_catchup":
         # The audio tap can start before the first picture. Its first chunk
@@ -78,7 +74,13 @@ def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, 
         for number in range(120):
             if schedule == "queued_audio_and_catchup" and number == 45:
                 time.sleep(0.22)  # several real pictures then arrive in a burst
-            pixels, stamp = picture(number), time.time()
+            # A normal capture size: AMF rejects the 96px-high tiny browser
+            # fixture even though it works at gameplay dimensions.
+            pixels = picture(number, size=(640, 480))
+            # Model capture's high-resolution UTC clock. Windows time.time()
+            # can repeat during the catch-up burst, creating ambiguous row
+            # identities before the mapping under test even sees them.
+            stamp = origin + (time.perf_counter() - started)
             if schedule == "timestamp_collision" and number < 3:
                 stamp = origin + [0, 0.000001, 0.000012][number]
             assert ledger.observe(pixels, stamp, number, {"exact": True})
@@ -88,13 +90,32 @@ def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, 
                 time.sleep(delay)
     finally:
         sink.stop()
+
+
+@pytest.mark.parametrize("schedule", ["regular", "queued_audio_and_catchup", "timestamp_collision"])
+def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, encoder, schedule):
+    ff, codec = encoder
+    config = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=1.0)
+    ring = SegmentRing(retention_s=None, max_bytes=10**8)
+    ledger = PictureLedger()
+    sink = FfmpegAvSink(config, ring.add, ffmpeg=ff, codec=codec,
+                        on_fed=lambda tag, at, **clock: ledger.mark_fed(tag[1] if tag else None, at, **clock))
+    record_picture_schedule(sink, ledger, schedule)
     coverage = ring.coverage("video")
     segments = ring.covering("video", *coverage)
     original = [row for segment in segments for row in read_pictures(segment.path)]
+    source_pixels = {}
+    for segment in segments:
+        with av.open(str(segment.path)) as container:
+            source_pixels.update({round(frame.pts * frame.time_base * 90000): frame.to_ndarray(format="yuv420p").tobytes()
+                                  for frame in container.decode(video=0)})
     # Calibrate the pixel reader against the independent source identities.
     assert [number for _, number in original] == list(range(120)) + [119] * (len(original) - 120)
     rows = ledger.rows_between(0, 1e12)
     feeds = ledger.feeds_between(0, 1e12)
+    repeated_stamps = {stamp: count for stamp, count in Counter(row["ts"] for row in rows).items()
+                       if count > 1}
+    assert not repeated_stamps, f"Fixture assigned identical capture timestamps: {repeated_stamps}"
     assert [round(t * 90000) for t, _ in original] == [entry["pts"] for entry in feeds]
     if schedule == "timestamp_collision":
         assert [entry["pts"] for entry in feeds[:3]] == [0, 1, 2]
@@ -108,6 +129,9 @@ def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, 
         result = ClipExtractor(cfg=config, codec=codec, ffmpeg=ff).extract(
             ring, start, start + timedelta(seconds=1.0), tmp_path / f"cut-{phase}.mp4")
         decoded = read_pictures(result.path)
+        with av.open(str(result.path)) as container:
+            copied_pixels = [frame.to_ndarray(format="yuv420p").tobytes() for frame in container.decode(video=0)]
+        assert copied_pixels == [source_pixels[pts] for pts in result.source_pts], "native cuts must not re-encode pixels"
         mapped, _, stats = feed_map(result.source_pts, result.media_run.id,
                                     rows, feeds, lambda row: row["frame"])
         assert mapped is not None, stats

@@ -107,20 +107,23 @@ COUNT_VIEW_FETCHES = """
 
 def _sample_every_frame(page, getter, ms):
     """Record every DISTINCT value the <select> shows over the next `ms`,
-    read off the DOM on the page's own frame clock, with the ms since the
-    sampler was armed (the pick follows on the very next evaluate)."""
+    measured on the page's frame clock from the actual pick. Driver scheduling
+    between arming and the gesture must not count as the picker's latency."""
     page.evaluate(f"""
       (() => {{
-        window.__seen = [];
-        window.__armed = performance.now();
-        const until = window.__armed + {ms};
+        const sample = {{seen: [], started: null, duration: {ms}}};
+        window.__pickSample = sample;
+        window.__seen = sample.seen;
         (function loop() {{
+          if (window.__pickSample !== sample) return;
           const el = {getter};
           const value = el ? el.value : null;
-          const seen = window.__seen;
+          const seen = sample.seen;
           if (!seen.length || seen[seen.length - 1].value !== value)
-            seen.push({{value, at: Math.round(performance.now() - window.__armed)}});
-          if (performance.now() < until) requestAnimationFrame(loop);
+            seen.push({{value, at: sample.started === null ? 0
+              : Math.round(performance.now() - sample.started)}});
+          if (sample.started === null || performance.now() < sample.started + sample.duration)
+            requestAnimationFrame(loop);
         }})();
       }})()
     """)
@@ -130,6 +133,8 @@ def _pick(page, getter, value):
     page.evaluate(f"""
       (() => {{
         const el = {getter};
+        const sample = window.__pickSample;
+        if (sample && sample.started === null) sample.started = performance.now();
         el.value = {value!r};
         el.dispatchEvent(new Event('change', {{bubbles: true}}));
         return el.value;

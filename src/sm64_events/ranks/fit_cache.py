@@ -17,7 +17,10 @@ def frozen_inputs(value):
         return (kind, frozenset((frozen_inputs(key), frozen_inputs(item))
                                for key, item in value.items()))
     if kind in (list, tuple):
-        return (kind, tuple(frozen_inputs(item) for item in value))
+        # The resource monitor can retain gc.get_objects() while this runs.
+        # CPython cannot resize a generator-built tuple with that extra ref
+        # (python/cpython#59313). Publish the tuple from a completed list.
+        return (kind, tuple([frozen_inputs(item) for item in value]))
     if kind in (str, int, float, bool, type(None)):
         if kind is float:
             if not math.isfinite(value):

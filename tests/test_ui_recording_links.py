@@ -367,7 +367,12 @@ def test_cached_playback_probes_timing_only_after_download_click(page, frame_ste
     assert page.evaluate("document.querySelector('#recording-test video').src.startsWith('blob:')")
     assert page.evaluate("[...document.querySelectorAll('#recording-test .replay-transport button')].map(b => b.textContent.trim())") == ['Start', 'Back 1', 'Play', 'Forward 1']
     assert page.evaluate("document.querySelector('#recording-test .replay-transport button:nth-child(2)').disabled") == (frame_step is None)
-    assert page.evaluate("document.querySelector('#recording-test .replay-frame-note') === null")
+    assert page.evaluate("document.querySelector('#recording-test .replay-transport button:nth-child(4)').disabled") == (frame_step is None)
+    # The shared transport now retains shortcut help for every recording and
+    # explains unavailable frame timing beside the disabled step controls.
+    note = page.evaluate("document.querySelector('#recording-test .replay-frame-note').textContent")
+    assert ('Frame timing unavailable' in note) == (frame_step is None), note
+    assert ('← → Step' in note) == (frame_step is not None), note
     assert page.evaluate("document.querySelectorAll('#recording-test iframe').length") == 0
 
 

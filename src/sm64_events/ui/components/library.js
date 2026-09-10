@@ -30,6 +30,27 @@ import { RegionSwitch, primaryRegion } from "./versionswitch.js";
 
 const html = htm.bind(h);
 
+// Auto-open and both explicit navigation doors share one generation. A late
+// response must not undo a target pick, Back, or browsing a course/search.
+function useLibraryNavigation(setError, setEntry, setStage, autoOpened) {
+  const generation = useRef(0);
+  function invalidate() { autoOpened.current = true; generation.current += 1; }
+  function back() {
+    invalidate();
+    setStage("browse"); setEntry(null); setError(null);
+  }
+  function open(url, accept) {
+    const request = ++generation.current;
+    setError(null);
+    return getJSON(url)
+      .then((data) => { if (request === generation.current) accept(data); })
+      .catch((err) => {
+        if (request === generation.current) setError(err.message || String(err));
+      });
+  }
+  return { open, invalidate, back };
+}
+
 // "3 hours ago", off an ISO timestamp -- the header speaks human time, never
 // a raw revision stamp (round 1: "The text here for Sheet 2026-blah blah is
 // unsettling. I think we should just say 'Last refreshed: [time] ago'").
@@ -261,6 +282,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // one. Persistent-mount (see the module comment) is what makes "once" mean
   // "once per time the user opens this tab today", not "once per click".
   const autoOpenedRef = useRef(false);
+  const navigation = useLibraryNavigation(setEntryError, setEntry, setStage, autoOpenedRef);
 
   const iconFor = (entityKey) =>
     entityKey ? entityIconSrc(t, entityKey) : genericStarSrc();
@@ -286,9 +308,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // once at open time: `intent` is cleared right after this runs (below), so
   // capturing it into `entry` is the only way it survives past that clear.
   function openEntity(entityKey, focus = {}) {
-    setEntryError(null);
-    return getJSON(`/api/library/entity/${encodeURIComponent(entityKey)}`)
-      .then((data) => {
+    return navigation.open(`/api/library/entity/${encodeURIComponent(entityKey)}`,
+      (data) => {
         setEntry({ entityKey, rows: data.targets || [],
                    focusStrat: focus.strat || null, focusTier: focus.tier || null,
                    // Round 3 of task 0098: a standards-table time link lands
@@ -326,13 +347,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
                    // label always wins inside LibraryTarget.
                    fallbackLabel: entityLabel(t, entityKey) });
         setStage("target");
-      })
-      // FINAL REVIEW FIX (medium: two fetches fail into a permanent
-      // spinner). This had NO `.catch` at all -- a 404/500 opening a
-      // book-mark deep link was a click that silently did nothing, and
-      // `clearIntent()` had already run, so the tab landed on the browse
-      // grid with no message and nothing to retry.
-      .catch((err) => setEntryError(err.message || String(err)));
+      });
   }
 
   // The course grid hands back an entity key when a target has one, else its
@@ -346,18 +361,14 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
   // own `targets` array carries. One shape either door produces is what lets
   // librarytarget.js stay ignorant of which door it came through.
   function handlePick(value) {
+    autoOpenedRef.current = true;
     if (typeof value === "string") { openEntity(value); return; }
-    setEntryError(null);
-    getJSON(`/api/library/target/${value}`)
-      .then((row) => {
+    navigation.open(`/api/library/target/${value}`, (row) => {
         setEntry({ entityKey: null, rows: [row], focusStrat: null, focusTier: null,
                    fallbackLabel: null });
         setStage("target");
-      })
-      .catch((err) => setEntryError(err.message || String(err)));
+      });
   }
-
-  function backToBrowse() { setStage("browse"); setEntry(null); setEntryError(null); }
 
   // Round 5: after a link/unlink the open page re-reads its rows, so
   // `adopted` always comes from the server rather than a client-side guess.
@@ -576,7 +587,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
     <${StudyMessage} result=${studyResult} />
     ${stage === "target"
       ? html`<div class="library-target-page">
-          <button type="button" class="entity-back" onclick=${backToBrowse}>
+          <button type="button" class="entity-back" onclick=${navigation.back}>
             <${Icon} name="chevron" size=${15} /> Back
           </button>
           <${LibraryTarget} t=${t} targets=${entry ? entry.rows : []}
@@ -600,7 +611,8 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
             <p class="library-refresh-msg is-error">Could not load the library: ${indexError}</p>
             <button type="button" class="quiet-button" onclick=${loadIndex}>Retry</button>
           </div>`
-        : html`<${LibraryNav} index=${index} onPick=${handlePick} iconFor=${iconFor} />`}
+        : html`<${LibraryNav} index=${index} onPick=${handlePick} iconFor=${iconFor}
+            onBrowse=${navigation.invalidate} />`}
     ${showGrid
       ? html`<${LibraryGrid} items=${tray} onClose=${() => setShowGrid(false)} />`
       : null}

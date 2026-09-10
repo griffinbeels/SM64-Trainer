@@ -1,5 +1,6 @@
 """Reuse identical validated fits without freezing observations or leaking edits."""
 from copy import deepcopy
+import gc
 
 import pytest
 
@@ -9,10 +10,65 @@ from sm64_events.ranks.fit_cache import FitCache
 from sm64_events.ranks.policy import RankingPolicy
 
 
+def test_heap_observation_cannot_break_an_in_progress_cache_key(monkeypatch):
+    from sm64_events.ranks import fit_cache
+
+    original = fit_cache.frozen_inputs
+    source = [0, "observe-now", *range(20)]
+    expected = original(source)
+    held = []
+
+    def observed(value):
+        # Reproduce the monitor's strong references at a deterministic point
+        # in construction, without depending on thread scheduling. CPython
+        # rejects resizing a generator-built tuple retained by this snapshot.
+        if value == "observe-now":
+            held.append(gc.get_objects())
+        return original(value)
+
+    monkeypatch.setattr(fit_cache, "frozen_inputs", observed)
+    try:
+        assert original(source) == expected
+    finally:
+        held.clear()
+
+
 def rows():
     return [{"row_id": name, "name": name, "entries": [
         {"runner": f"{name}-{index}", "time_cs": start + index * 30}
         for index in range(12)]} for name, start in (("Slow", 1700), ("Fast", 1000))]
+
+
+def test_population_key_survives_heap_observation_during_field_access(monkeypatch, cache):
+    from sm64_events.library.populations import FamilyPopulation
+
+    expected = overall.fit_overall(rows())
+    collect = overall.collect_populations
+    get_attribute = FamilyPopulation.__getattribute__
+    armed = False
+    held = []
+
+    def collected(*args, **kwargs):
+        nonlocal armed
+        result = collect(*args, **kwargs)
+        armed = True
+        return result
+
+    def observed(family, name):
+        # Capture while the cache key reads a completed population. asdict
+        # creates another generator-built families tuple here; reading fields
+        # directly must still survive the same strong heap references.
+        if armed and name in ("id", "__dict__"):
+            held.append(gc.get_objects())
+        return get_attribute(family, name)
+
+    monkeypatch.setattr(overall, "collect_populations", collected)
+    monkeypatch.setattr(FamilyPopulation, "__getattribute__", observed)
+    try:
+        assert overall.fit_overall(rows()) == expected
+        assert held, "the probe never observed population field access"
+    finally:
+        held.clear()
 
 
 @pytest.fixture
