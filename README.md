@@ -101,7 +101,9 @@ hosted video sharing are future features.
 **Practice.** Every star grab, reset, death, level change, Bowser key and
 dustless trick is detected live. Each star and segment gets its own card:
 attempt history, PB, a timeline of what happened, and a completion-time graph
-you can click to jump straight to an attempt — or open its replay.
+you can click to jump straight to an attempt — or open its replay. The first
+success after moving to a different star or segment returns Practice to the
+top of the page; repeat successes leave your scroll position alone.
 
 **Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
