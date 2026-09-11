@@ -19,8 +19,9 @@
  * The plugin knows NO game address: the tracker writes {rdram_offset, length}
  * entries into the stream header (memory/layout.py stays the one source of
  * addresses) and this copies bytes. It reads the emulator's memory and the
- * GPU; it writes only its own mapping. Zero cost while the tracker does not
- * want frames beyond one comparison per call.
+ * GPU; it writes only its own mapping. Without a live capture request the
+ * callbacks forward, update liveness/diagnostic counters, and copy no RAM or
+ * pixels. GL is never queried on that path.
  *
  * Reading GL_FRONT after the wrapped plugin's swap is exactly what GLideN64's
  * own screenshot path does (windows_DisplayWindow.cpp::_readScreen), on the
@@ -87,8 +88,6 @@ static int64_t qpc_now(void) {
     return counter.QuadPart;
 }
 
-#include "profile.h"
-
 /* -- the ini beside this DLL: wrapped=<file>, stream=<name> -------------- */
 static void self_dir(wchar_t *out, size_t count) {
     out[0] = L'\0';
@@ -97,64 +96,23 @@ static void self_dir(wchar_t *out, size_t count) {
     if (slash) *(slash + 1) = L'\0';
 }
 
-/* One line per event, appended beside the DLL -- the setup screen cannot
- * see inside Project64, so a mapping that failed to open or a wrapped
- * plugin that failed to load leaves its reason here. */
-static void plugin_log(const char *message) {
-    wchar_t path[MAX_PATH];
-    self_dir(path, MAX_PATH);
-    wcsncat_s(path, MAX_PATH, L"sm64_trainer_gfx.log", _TRUNCATE);
-    FILE *log = _wfopen(path, L"a");
-    if (!log) return;
-    SYSTEMTIME now;
-    GetLocalTime(&now);
-    fprintf(log, "%04u-%02u-%02u %02u:%02u:%02u %s\n", now.wYear, now.wMonth, now.wDay,
-            now.wHour, now.wMinute, now.wSecond, message);
-    fclose(log);
-}
-
-/* -- where the GL context lives ------------------------------------------
- * The layer reads pixels on the thread that calls UpdateScreen. The first
- * Project64 it ran inside (2026-09-05: wermi's 1.6 v7 + GLideN64_LINK_4.2)
- * had no context current there and refused 30,000 pictures without a line
- * saying so. So each callback notes its thread and the context current
- * before and after the wrapped plugin ran, and logs the FIRST sighting of
- * each answer -- one line per change, never one per frame -- which is the
- * measurement that says where the context went. */
-typedef struct {
-    const char *name;
-    BOOL seen;
-    DWORD thread;
-    HGLRC before, after;
-} context_note_t;
-static context_note_t g_note_initiate = {"InitiateGFX"};
-static context_note_t g_note_rom_open = {"RomOpen"};
-static context_note_t g_note_list = {"ProcessDList"};
-static context_note_t g_note_screen = {"UpdateScreen"};
-
-static void note_context(context_note_t *note, HGLRC before, HGLRC after) {
-    DWORD thread = GetCurrentThreadId();
-    if (note->seen && note->thread == thread && note->before == before && note->after == after)
-        return;
-    note->seen = TRUE;
-    note->thread = thread;
-    note->before = before;
-    note->after = after;
-    char message[200];
-    snprintf(message, sizeof message,
-             "%s on thread %lu: GL context %p before the wrapped plugin, %p after",
-             note->name, (unsigned long)thread, (void *)before, (void *)after);
-    plugin_log(message);
-}
+#include "diagnostics.h"
+#include "profile.h"
 
 /* The refusal itself, once per flip: the header's counter says how many,
  * this line says why and on which thread. */
 static int g_context_state = -1;   /* -1 unknown, 0 refused, 1 reading */
+static BOOL g_context_reported;
+static uint32_t g_context_report_tick;
 
 static void note_capture_context(BOOL have_context) {
     int state = have_context ? 1 : 0;
     if (state == g_context_state) return;
     g_context_state = state;
+    uint32_t now = GetTickCount();
+    if (g_context_reported && (uint32_t)(now - g_context_report_tick) < 5000) return;
+    g_context_reported = TRUE;
+    g_context_report_tick = now;
     char message[160];
     if (have_context)
         snprintf(message, sizeof message, "GL context found on thread %lu; pictures flow",
@@ -173,6 +131,7 @@ static BOOL g_ini_read;
 static void read_ini(void) {
     if (g_ini_read) return;
     g_ini_read = TRUE;
+    strncpy_s(g_stream_name, sizeof g_stream_name, STREAM_NAME, _TRUNCATE);
     wchar_t path[MAX_PATH];
     self_dir(path, MAX_PATH);
     wcsncat_s(path, MAX_PATH, L"sm64_trainer_gfx.ini", _TRUNCATE);
@@ -206,7 +165,7 @@ static void ensure_wrapped(void) {
     wchar_t name[MAX_PATH];
     if (MultiByteToWideChar(CP_UTF8, 0, g_wrapped_name, -1, name, MAX_PATH) == 0) return;
     wchar_t path[MAX_PATH];
-    if (wcschr(name, L'\\') || wcschr(name, L':')) {
+    if (wcschr(name, L':') || name[0] == L'\\' || name[0] == L'/') {
         wcsncpy_s(path, MAX_PATH, name, _TRUNCATE);
     } else {
         self_dir(path, MAX_PATH);
@@ -219,7 +178,8 @@ static void ensure_wrapped(void) {
         plugin_log(message);
         return;
     }
-    if (g_wrapped_module == g_self) {
+    if (g_wrapped_module == g_self ||
+            GetProcAddress(g_wrapped_module, "SM64TrainerWrapperIdentity")) {
         /* The ini names THIS DLL (a copy, or an install that wrote the
          * wrapper's own name): forwarding would recurse until the stack
          * died. Stay unwrapped and say so through GetDllInfo. */
@@ -229,6 +189,22 @@ static void ensure_wrapped(void) {
         return;
     }
     RESOLVE_GFX_API(g_wrapped, g_wrapped_module);
+    /* A wrapper's own complete export table must not mask a broken wrapped
+     * plugin which Project64 would have rejected when loaded directly. */
+    const char *missing = NULL;
+#define REQUIRE_EXPORT(name) if (!g_wrapped.name && !missing) missing = #name
+    REQUIRE_EXPORT(GetDllInfo); REQUIRE_EXPORT(InitiateGFX); REQUIRE_EXPORT(CloseDLL);
+    REQUIRE_EXPORT(ChangeWindow); REQUIRE_EXPORT(DrawScreen); REQUIRE_EXPORT(MoveScreen);
+    REQUIRE_EXPORT(ProcessDList); REQUIRE_EXPORT(RomClosed); REQUIRE_EXPORT(RomOpen);
+    REQUIRE_EXPORT(UpdateScreen); REQUIRE_EXPORT(ViStatusChanged); REQUIRE_EXPORT(ViWidthChanged);
+#undef REQUIRE_EXPORT
+    if (missing) {
+        plugin_logf("wrapped_export_missing", "name=%s", missing);
+        FreeLibrary(g_wrapped_module); g_wrapped_module = NULL;
+        memset(&g_wrapped, 0, sizeof g_wrapped);
+        return;
+    }
+    log_module_path("wrapped_loaded", g_wrapped_module);
 }
 
 static void release_wrapped(void) {
@@ -236,6 +212,8 @@ static void release_wrapped(void) {
     g_wrapped_module = NULL;
     memset(&g_wrapped, 0, sizeof g_wrapped);
     g_loaded_once = FALSE;
+    g_ini_read = FALSE;
+    g_wrapped_name[0] = '\0';
 }
 
 /* How much of RDRAM is really there. GFX_INFO carries no size, and the
@@ -283,9 +261,9 @@ static void open_stream(void) {
         return;
     }
     BOOL existed = GetLastError() == ERROR_ALREADY_EXISTS;
-    void *view = MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    void *view = MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS, 0, 0, TOTAL_BYTES);
     if (!view) {
-        /* 75 MB must be contiguous in a 32-bit process; a fragmented
+        /* 150 MB must be contiguous in a 32-bit process; a fragmented
          * address space is the usual cause of this one. */
         char message[160];
         snprintf(message, sizeof message, "MapViewOfFile(%u bytes) failed: %lu", (unsigned)TOTAL_BYTES, GetLastError());
@@ -305,10 +283,13 @@ static void open_stream(void) {
     char event_name[160];
     snprintf(event_name, sizeof event_name, "%s%s", g_stream_name, STREAM_EVENT_SUFFIX);
     g_event = CreateEventA(NULL, FALSE, FALSE, event_name);
+    if (!g_event) plugin_logf("frame_event_failed", "error=%lu", GetLastError());
     g_hdr->plugin_pid = GetCurrentProcessId();
     g_hdr->plugin_version = GFXWRAP_VERSION;
     if (g_wrapped_module) g_hdr->status |= STATUS_WRAPPED_LOADED;
     profile_open(g_stream_name);
+    plugin_logf("stream_open", "name=%s bytes=%u existed=%d profile=%d",
+        g_stream_name, (unsigned)TOTAL_BYTES, existed, g_profile != NULL);
 }
 
 static void close_stream(void) {
@@ -328,18 +309,41 @@ static stream_slot_t *slot_at(unsigned index) {
     return (stream_slot_t *)(g_slots + (size_t)index * SLOT_BYTES);
 }
 
+/* Observe demand at BOTH capture points. Resuming between a display list and
+ * its VI must never attach an old stamp to the first new picture. */
+static int g_capture_state = -1;
+static BOOL g_capture_reported;
+static uint32_t g_capture_report_tick;
+static BOOL capture_requested(void) {
+    if (!g_hdr || !g_have_gfx) return FALSE;
+    uint32_t heartbeat = *(volatile uint32_t *)&g_hdr->tracker_alive;
+    uint32_t want = *(volatile uint32_t *)&g_hdr->want_frames;
+    uint32_t now = GetTickCount();
+    BOOL active = capture_lease_active(&g_capture_lease, heartbeat, want, now);
+    if ((int)active != g_capture_state) {
+        g_capture_state = active;
+        memset(&g_pending, 0, sizeof g_pending);
+        if (!g_capture_reported || (uint32_t)(now - g_capture_report_tick) >= 5000) {
+            g_capture_reported = TRUE;
+            g_capture_report_tick = now;
+            plugin_logf("capture_demand", "active=%d want=%u heartbeat=%u", active, want, heartbeat);
+        }
+    }
+    return active;
+}
+
 /* -- the two capture points --------------------------------------------- */
 static void stamp_pending(void) {
     if (!g_hdr || !g_have_gfx) return;
-    g_hdr->lists++;
     unsigned count = g_hdr->table_count;
     if (count > TABLE_ENTRIES) count = TABLE_ENTRIES;
     g_pending.count = count;
     g_pending.list_qpc = qpc_now();
     size_t limit = g_hdr->rdram_bytes;
+    if (limit > (8u << 20)) limit = 8u << 20; /* hardware maximum, never a game address */
     if (g_rdram_span && g_rdram_span < limit) {
         for (unsigned index = 0; index < count; index++) {
-            size_t end = (size_t)g_hdr->table[index].rdram_offset + g_hdr->table[index].length;
+            uint64_t end = (uint64_t)g_hdr->table[index].rdram_offset + g_hdr->table[index].length;
             if (end > g_rdram_span && end <= limit) { measure_rdram(); break; }
         }
         if (g_rdram_span && g_rdram_span < limit) limit = g_rdram_span;
@@ -375,12 +379,19 @@ typedef void (WINAPI *fn_bind_buffer)(GLenum, GLuint);
 static fn_bind_framebuffer g_bind_framebuffer;
 static fn_bind_buffer g_bind_buffer;
 static BOOL g_gl_entry_points_looked_up;
+static HGLRC g_gl_context;
+
+static PROC valid_gl_proc(const char *name) {
+    PROC address = wglGetProcAddress(name);
+    uintptr_t value = (uintptr_t)address;
+    return value <= 3 || value == UINTPTR_MAX ? NULL : address;
+}
 
 static void look_up_gl_entry_points(void) {
     if (g_gl_entry_points_looked_up) return;
     g_gl_entry_points_looked_up = TRUE;
-    g_bind_framebuffer = (fn_bind_framebuffer)wglGetProcAddress("glBindFramebuffer");
-    g_bind_buffer = (fn_bind_buffer)wglGetProcAddress("glBindBuffer");
+    g_bind_framebuffer = (fn_bind_framebuffer)valid_gl_proc("glBindFramebuffer");
+    g_bind_buffer = (fn_bind_buffer)valid_gl_proc("glBindBuffer");
 }
 
 static void read_front_buffer(void *pixels, unsigned width, unsigned height,
@@ -424,12 +435,14 @@ static void read_front_buffer(void *pixels, unsigned width, unsigned height,
     if (g_bind_buffer && pack_buffer) g_bind_buffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
     if (g_bind_framebuffer && read_framebuffer)
         g_bind_framebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
-    while (glGetError() != GL_NO_ERROR) { /* leave no error of ours for the plugin to find */ }
+    /* Do not drain glGetError: that consumes errors belonging to the renderer
+     * and an error-producing driver can make such a loop unbounded. */
     profile_end_stage(PR_GL_RESTORE, measured);
 }
 
 /* -- the second capture point: the wrapped plugin's own ReadScreen ------- */
 static BOOL g_readscreen_retired;      /* a returned block was not ours to free: never call it again */
+static BOOL g_readscreen_empty_noted, g_readscreen_size_noted;
 
 static BOOL process_heap_block(void *block) {
     __try {
@@ -441,7 +454,9 @@ static BOOL process_heap_block(void *block) {
 
 static void free_wrapped_buffer(void *block) {
     if (process_heap_block(block)) {
-        HeapFree(GetProcessHeap(), 0, block);
+        if (HeapFree(GetProcessHeap(), 0, block)) return;
+        g_readscreen_retired = TRUE;
+        plugin_logf("readscreen_free_failed", "error=%lu; path retired", GetLastError());
         return;
     }
     g_readscreen_retired = TRUE;
@@ -461,9 +476,19 @@ static BOOL read_screen_via_wrapped(void **out, unsigned *width, unsigned *heigh
     int64_t measured = profile_mark();
     g_wrapped.ReadScreen(&buffer, &buffer_width, &buffer_height);
     profile_end_stage(PR_READSCREEN, measured);
-    if (!buffer) return FALSE;
+    if (!buffer) {
+        /* Rate bounded by the outer callback diagnostics; one reason per run. */
+        if (!g_readscreen_empty_noted) {
+            g_readscreen_empty_noted = TRUE; plugin_logf("readscreen_empty", "no buffer returned");
+        }
+        return FALSE;
+    }
     if (buffer_width <= 0 || buffer_height <= 0
             || buffer_width > (long)MAX_WIDTH || buffer_height > (long)MAX_HEIGHT) {
+        if (!g_readscreen_size_noted) {
+            g_readscreen_size_noted = TRUE;
+            plugin_logf("readscreen_invalid_size", "width=%ld height=%ld", buffer_width, buffer_height);
+        }
         free_wrapped_buffer(buffer);
         return FALSE;
     }
@@ -483,17 +508,20 @@ static void copy_packed_rows(uint8_t *destination, unsigned stride, const uint8_
 
 static void capture_if_presented(void) {
     if (!g_hdr || !g_have_gfx) return;
-    g_hdr->alive++;
     /* No GPU/context/ReadScreen work after an abandoned reader's lease.
      * want_frames alone survives a killed server while PJ64 owns the map. */
-    int capture_wanted = capture_lease_active(&g_capture_lease,
-        *(volatile uint32_t *)&g_hdr->tracker_alive,
-        *(volatile uint32_t *)&g_hdr->want_frames, GetTickCount());
+    BOOL capture_wanted = capture_requested();
+    if (!g_gfx.VI_ORIGIN_REG) return;
     unsigned origin = *g_gfx.VI_ORIGIN_REG;
     if (origin == g_last_origin) return;
     g_last_origin = origin;
     if (!capture_wanted) return;
-    BOOL have_context = wglGetCurrentContext() != NULL;
+    HGLRC context = wglGetCurrentContext();
+    BOOL have_context = context != NULL;
+    if (g_gl_context != context) {
+        g_gl_context = context;
+        g_gl_entry_points_looked_up = FALSE;
+    }
     note_capture_context(have_context);
     unsigned width = 0, height = 0, bottom_offset = 0;
     void *wrapped_buffer = NULL;
@@ -575,7 +603,7 @@ static void capture_if_presented(void) {
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = instance;
-        DisableThreadLibraryCalls(instance);
+        /* /MT needs the CRT's thread attach/detach notifications. */
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
         /* A FreeLibrary (the plugin dialog enumerating, or a plugin change):
          * leave the header honest. On process exit (`reserved` set) the
@@ -610,30 +638,27 @@ EXPORT void CALL GetDllInfo(PLUGIN_INFO *info) {
 }
 
 EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
-    HGLRC context_before = wglGetCurrentContext();
+    diagnostics_start();
+    plugin_logf("init_begin", "wrapper_version=%u", GFXWRAP_VERSION);
+    log_module_path("wrapper_loaded", g_self);
+    close_stream(); /* a reused DLL gets a fresh lease/profile producer */
     ensure_wrapped();
     g_gfx = info;
-    g_have_gfx = TRUE;
+    g_have_gfx = FALSE;
     g_last_origin = 0xFFFFFFFFu;
+    g_capture_state = -1;
+    g_capture_reported = FALSE;
     memset(&g_pending, 0, sizeof g_pending);
     measure_rdram();
     g_gl_entry_points_looked_up = FALSE;      /* a new context: look them up again */
+    g_gl_context = NULL;
     g_context_state = -1;
+    g_context_reported = FALSE;
     g_readscreen_retired = FALSE;
-    open_stream();
-    if (g_hdr) {
-        /* A fresh attach starts from a clean status: bits a crashed
-         * previous session left behind must not read as this one's. */
-        g_hdr->status = (g_wrapped_module ? STATUS_WRAPPED_LOADED : 0) | STATUS_INITIATED;
-        g_hdr->dropped = 0;
-        if (g_wrapped.GetDllInfo) {
-            PLUGIN_INFO wrapped_info;
-            memset(&wrapped_info, 0, sizeof wrapped_info);
-            g_wrapped.GetDllInfo(&wrapped_info);
-            g_hdr->wrapped_version = wrapped_info.Version;
-            strncpy_s(g_hdr->wrapped_name, sizeof g_hdr->wrapped_name, g_wrapped_name, _TRUNCATE);
-        }
-    }
+    g_readscreen_empty_noted = g_readscreen_size_noted = FALSE;
+    callback_diagnostic_reset(&g_diagnostic_list);
+    callback_diagnostic_reset(&g_diagnostic_update);
+    callback_diagnostic_reset(&g_diagnostic_rdp);
     if (!g_wrapped.InitiateGFX) {
         char message[MAX_PATH + 200];
         snprintf(message, sizeof message,
@@ -644,70 +669,138 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
         plugin_log("InitiateGFX refused: no wrapped plugin");
         if (!GetEnvironmentVariableA("SM64_TRAINER_GFX_NO_DIALOGS", NULL, 0))   /* the test host sets it */
             MessageBoxA(g_gfx.hWnd, message, "SM64 Trainer capture layer", MB_OK | MB_ICONWARNING);
+        release_wrapped();
+        diagnostics_stop();
         return FALSE;
     }
+    int64_t begin = qpc_now();
     BOOL initiated = g_wrapped.InitiateGFX(info);
-    note_context(&g_note_initiate, context_before, wglGetCurrentContext());
+    plugin_logf("init_result", "success=%d wrapped_ms=%.3f", initiated,
+        g_diagnostic_frequency ? 1000.0 * (qpc_now() - begin) / g_diagnostic_frequency : 0.0);
+    if (!initiated) {
+        diagnostics_stop();
+        return FALSE;
+    }
+    g_have_gfx = TRUE;
+    open_stream();
+    if (g_hdr) {
+        /* A failed wrapped initialization must never advertise a producer. */
+        g_hdr->status = STATUS_WRAPPED_LOADED | STATUS_INITIATED;
+        g_hdr->dropped = 0;
+        if (g_wrapped.GetDllInfo) {
+            PLUGIN_INFO wrapped_info = {0};
+            g_wrapped.GetDllInfo(&wrapped_info);
+            g_hdr->wrapped_version = wrapped_info.Version;
+            strncpy_s(g_hdr->wrapped_name, sizeof g_hdr->wrapped_name, g_wrapped_name, _TRUNCATE);
+            plugin_logf("wrapped_info", "name=\"%.99s\" version=%04x bswapped=%d readscreen=%d",
+                wrapped_info.Name, wrapped_info.Version, wrapped_info.MemoryBswaped, g_wrapped.ReadScreen != NULL);
+        }
+    }
     return initiated;
 }
 
 EXPORT void CALL ProcessDList(void) {
-    HGLRC context_before = wglGetCurrentContext();
+    int64_t begin = qpc_now();
     if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
-    note_context(&g_note_list, context_before, wglGetCurrentContext());
-    stamp_pending();
+    int64_t forwarded = qpc_now();
+    if (g_hdr && g_have_gfx) g_hdr->lists++;
+    if (capture_requested()) stamp_pending();
+    callback_diagnostic_end(&g_diagnostic_list, begin, forwarded, qpc_now());
 }
 
 EXPORT void CALL UpdateScreen(void) {
+    int64_t begin = qpc_now();
     int64_t began = profile_begin();
-    HGLRC context_before = wglGetCurrentContext();
     int64_t measured = profile_mark();
     if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
+    int64_t forwarded = qpc_now();
     profile_end_stage(PR_WRAPPED_UPDATE, measured);
-    note_context(&g_note_screen, context_before, wglGetCurrentContext());
     measured = profile_mark();
+    if (g_hdr && g_have_gfx) g_hdr->alive++;
     capture_if_presented();
     profile_end_stage(PR_CAPTURE, measured);
     profile_end(began);
+    callback_diagnostic_end(&g_diagnostic_update, begin, forwarded, qpc_now());
 }
 
 EXPORT void CALL RomOpen(void) {
-    HGLRC context_before = wglGetCurrentContext();
+    plugin_logf("rom_open_begin", "initiated=%d", g_have_gfx);
     if (g_wrapped.RomOpen) g_wrapped.RomOpen();
-    note_context(&g_note_rom_open, context_before, wglGetCurrentContext());
     measure_rdram();                          /* the expansion pak is committed by now */
     g_last_origin = 0xFFFFFFFFu;
     memset(&g_pending, 0, sizeof g_pending);
-    if (g_hdr) g_hdr->status |= STATUS_ROM_OPEN;
+    g_gl_entry_points_looked_up = FALSE;
+    g_gl_context = NULL;
+    if (g_hdr && g_have_gfx) g_hdr->status |= STATUS_ROM_OPEN;
+    plugin_logf("rom_open_end", "rdram_span=%u", (unsigned)g_rdram_span);
 }
 
 EXPORT void CALL RomClosed(void) {
+    plugin_logf("rom_closed_begin", "lists=%u pictures=%u dropped=%u",
+        g_hdr ? g_hdr->lists : 0, g_hdr ? g_hdr->write_seq : 0, g_hdr ? g_hdr->dropped : 0);
     if (g_wrapped.RomClosed) g_wrapped.RomClosed();
     if (g_hdr) g_hdr->status &= ~(uint32_t)STATUS_ROM_OPEN;
+    memset(&g_pending, 0, sizeof g_pending);
+    plugin_logf("rom_closed_end", "");
 }
 
 EXPORT void CALL CloseDLL(void) {
+    plugin_logf("close_begin", "initiated=%d", g_have_gfx);
     if (g_wrapped.CloseDLL) g_wrapped.CloseDLL();
-    if (g_hdr) g_hdr->status &= ~(uint32_t)(STATUS_INITIATED | STATUS_ROM_OPEN);
     g_have_gfx = FALSE;
+    close_stream();
     release_wrapped();
+    plugin_logf("close_end", "");
+    diagnostics_stop();
 }
 
-EXPORT void CALL ProcessRDPList(void) { if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList(); }
-EXPORT void CALL ChangeWindow(void) { if (g_wrapped.ChangeWindow) g_wrapped.ChangeWindow(); }
+EXPORT void CALL ProcessRDPList(void) {
+    int64_t begin = qpc_now();
+    if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList();
+    int64_t end = qpc_now();
+    callback_diagnostic_end(&g_diagnostic_rdp, begin, end, end);
+}
+EXPORT void CALL ChangeWindow(void) {
+    plugin_logf("change_window_begin", "");
+    if (g_wrapped.ChangeWindow) g_wrapped.ChangeWindow();
+    g_gl_entry_points_looked_up = FALSE;
+    g_gl_context = NULL;
+    plugin_logf("change_window_end", "");
+}
 EXPORT void CALL DrawScreen(void) { if (g_wrapped.DrawScreen) g_wrapped.DrawScreen(); }
 EXPORT void CALL ShowCFB(void) { if (g_wrapped.ShowCFB) g_wrapped.ShowCFB(); }
 EXPORT void CALL ViStatusChanged(void) { if (g_wrapped.ViStatusChanged) g_wrapped.ViStatusChanged(); }
 EXPORT void CALL ViWidthChanged(void) { if (g_wrapped.ViWidthChanged) g_wrapped.ViWidthChanged(); }
 EXPORT void CALL MoveScreen(int x, int y) { if (g_wrapped.MoveScreen) g_wrapped.MoveScreen(x, y); }
 EXPORT void CALL CaptureScreen(char *directory) { if (g_wrapped.CaptureScreen) g_wrapped.CaptureScreen(directory); }
-EXPORT void CALL DllAbout(HWND parent) { ensure_wrapped(); if (g_wrapped.DllAbout) g_wrapped.DllAbout(parent); }
-EXPORT void CALL DllConfig(HWND parent) { ensure_wrapped(); if (g_wrapped.DllConfig) g_wrapped.DllConfig(parent); }
-EXPORT void CALL DllTest(HWND parent) { ensure_wrapped(); if (g_wrapped.DllTest) g_wrapped.DllTest(parent); }
+/* PJ64 can load a DLL only for its settings dialog, then FreeLibrary without
+ * CloseDLL. Balance loads here while still outside DllMain/loader lock. */
+EXPORT void CALL DllAbout(HWND parent) {
+    BOOL temporary = !g_wrapped_module;
+    ensure_wrapped(); if (g_wrapped.DllAbout) g_wrapped.DllAbout(parent);
+    if (temporary && !g_have_gfx) release_wrapped();
+}
+EXPORT void CALL DllConfig(HWND parent) {
+    BOOL temporary = !g_wrapped_module;
+    ensure_wrapped(); if (g_wrapped.DllConfig) g_wrapped.DllConfig(parent);
+    if (temporary && !g_have_gfx) release_wrapped();
+}
+EXPORT void CALL DllTest(HWND parent) {
+    BOOL temporary = !g_wrapped_module;
+    ensure_wrapped(); if (g_wrapped.DllTest) g_wrapped.DllTest(parent);
+    if (temporary && !g_have_gfx) release_wrapped();
+}
 EXPORT void CALL FBRead(unsigned int address) { if (g_wrapped.FBRead) g_wrapped.FBRead(address); }
 EXPORT void CALL FBWrite(unsigned int address, unsigned int size) { if (g_wrapped.FBWrite) g_wrapped.FBWrite(address, size); }
+EXPORT void CALL FBWList(void *entries, unsigned int size) {
+    if (g_wrapped.FBWList) g_wrapped.FBWList(entries, size);
+}
 EXPORT void CALL FBGetFrameBufferInfo(void *info) { if (g_wrapped.FBGetFrameBufferInfo) g_wrapped.FBGetFrameBufferInfo(info); }
 EXPORT void CALL ReadScreen(void **dest, long *width, long *height) {
     if (g_wrapped.ReadScreen) { g_wrapped.ReadScreen(dest, width, height); return; }
     *dest = NULL; *width = 0; *height = 0;
 }
+
+/* A copied wrapper is a different HMODULE; identity comparison alone cannot
+ * prevent recursively wrapping that copy. No host calls this marker. */
+EXPORT const char *CALL SM64TrainerWrapperIdentity(void) { return GFXWRAP_BUILD_ID; }

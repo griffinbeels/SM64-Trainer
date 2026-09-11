@@ -31,6 +31,7 @@ EXPORT void CALL GetDllInfo(PLUGIN_INFO *info) {
 }
 
 EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
+    if (GetEnvironmentVariableA("SM64_FAKE_INIT_FAIL", NULL, 0)) return FALSE;
     g_gfx = info;
     g_have_gfx = TRUE;
     return TRUE;
@@ -102,7 +103,9 @@ EXPORT void CALL ReadScreen(void **dest, long *width, long *height) {
     *dest = buffer; *width = client_width; *height = client_height;
 }
 
-EXPORT void CALL ProcessDList(void) {}
+EXPORT void CALL ProcessDList(void) {
+    if (GetEnvironmentVariableA("SM64_FAKE_DLIST_DELAY", NULL, 0)) Sleep(25);
+}
 EXPORT void CALL ProcessRDPList(void) {}
 EXPORT void CALL RomOpen(void) {}
 EXPORT void CALL RomClosed(void) {}

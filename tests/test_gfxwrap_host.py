@@ -11,6 +11,7 @@ SHIPPED DLL is driven too, so a stale committed binary fails here."""
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -95,7 +96,9 @@ def check_drive(host: Path, wrapper: Path, *flags, pictures_via=F.STATUS_GL_CONT
         # which capture point the pictures took: the layer's own GL_FRONT
         # read, or the wrapped plugin's ReadScreen when the calling thread
         # has no context (GLideN64_LINK_4.2's shape, measured 2026-09-05)
-        assert header.status & (F.STATUS_GL_CONTEXT | F.STATUS_READSCREEN) == pictures_via
+        captured_status = int(re.search(r"capture_status (\d+)", output)[1])
+        assert captured_status & (F.STATUS_GL_CONTEXT | F.STATUS_READSCREEN) == pictures_via
+        assert not header.status & (F.STATUS_GL_CONTEXT | F.STATUS_READSCREEN)
         # GL_CONTEXT is cleared at detach with INITIATED (a reader must not
         # wait on a gone plugin); the five captured slots prove it was there
         assert header.wrapped_name == "fake_gfx.dll"
@@ -169,6 +172,68 @@ def test_no_frames_are_captured_while_the_tracker_does_not_want_them(built):
         assert header.write_seq == 0 and header.lists == 3 and header.alive == 6
     finally:
         stream.close()
+
+
+def test_native_diagnostics_identify_forwarded_stalls_without_a_reader(built):
+    name = unique_name()
+    result = subprocess.run(
+        [str(built["host"]), "--drive", str(built["wrapper"]), "3",
+         "--stream", name, "--no-context", "--cpu-thread"],
+        capture_output=True, text=True, timeout=60,
+        env={**QUIET, "SM64_FAKE_DLIST_DELAY": "1"}, **quiet_spawn_kwargs(), check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = (built["dir"] / "sm64_trainer_gfx.log").read_text(encoding="utf-8")
+    activation = log.rsplit("event=init_begin", 1)[-1]
+    assert "event=wrapper_loaded path=" in activation
+    assert "event=wrapped_loaded path=" in activation
+    assert 'event=capture_demand active=0 want=0 heartbeat=0' in activation
+    stall = next(line for line in activation.splitlines()
+                 if "event=callback_stall callback=ProcessDList" in line)
+    assert re.search(r"pid=\d+ tid=\d+ build=\S+", stall)
+    assert float(re.search(r" wrapped_ms=([\d.]+)", stall)[1]) >= 20
+    assert float(re.search(r" extra_ms=([\d.]+)", stall)[1]) < 20
+    assert "event=close_end" in activation and "event=diagnostics_stop" in activation
+
+
+def test_repeated_native_sessions_refresh_the_profile_producer(built):
+    name = unique_name()
+    stream = F.FrameStream(name)
+    try:
+        stream.graphics_profile.refresh("repeated-native-session")
+        output = drive(built["host"], built["wrapper"], 2, name, "--no-context", "--sessions", "2")
+        assert output.count("capture_status") == 2
+        stats = stream.graphics_profile.snapshot(stream.header().plugin_pid)
+        assert stats is not None
+        assert stats["metrics"]["update_screen"]["count"] == 4
+        assert not stream.header().initiated
+    finally:
+        stream.close()
+
+
+def test_failed_wrapped_initialization_does_not_advertise_an_active_producer(built):
+    name = unique_name()
+    stream = F.FrameStream(name)
+    try:
+        result = subprocess.run(
+            [str(built["host"]), "--drive", str(built["wrapper"]), "1", "--stream", name, "--no-context"],
+            capture_output=True, text=True, timeout=60,
+            env={**QUIET, "SM64_FAKE_INIT_FAIL": "1"}, **quiet_spawn_kwargs(), check=False)
+        assert result.returncode == 5, result.stdout + result.stderr
+        assert not stream.header().initiated
+        log = (built["dir"] / "sm64_trainer_gfx.log").read_text(encoding="utf-8")
+        assert "event=init_result success=0" in log.rsplit("event=init_begin", 1)[-1]
+    finally:
+        stream.close()
+
+
+def test_a_renamed_copy_of_the_wrapper_is_rejected_before_recursive_initialization(built):
+    copy = built["dir"] / "renamed-wrapper.dll"
+    copy.write_bytes(built["wrapper"].read_bytes())
+    result = subprocess.run(
+        [str(built["host"]), "--drive", str(built["wrapper"]), "1",
+         "--stream", unique_name(), "--no-context", "--wrapped", copy.name],
+        capture_output=True, text=True, timeout=60, env=QUIET, **quiet_spawn_kwargs(), check=False)
+    assert result.returncode == 5, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("capture", [False, True])

@@ -10,6 +10,7 @@ EXPORTS
     FBGetFrameBufferInfo
     FBRead
     FBWrite
+    FBWList
     GetDllInfo
     InitiateGFX
     MoveScreen
@@ -19,6 +20,7 @@ EXPORTS
     RomClosed
     RomOpen
     ShowCFB
+    SM64TrainerWrapperIdentity
     UpdateScreen
     ViStatusChanged
     ViWidthChanged

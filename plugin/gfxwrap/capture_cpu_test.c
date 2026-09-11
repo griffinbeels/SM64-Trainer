@@ -18,7 +18,7 @@ enum {GL_BACK=1, GL_FRONT, GL_COLOR_ATTACHMENT0, GL_READ_BUFFER,
       GL_PACK_SKIP_PIXELS, GL_READ_FRAMEBUFFER, GL_READ_FRAMEBUFFER_BINDING,
       GL_PIXEL_PACK_BUFFER, GL_PIXEL_PACK_BUFFER_BINDING, GL_BGR_EXT,
       GL_UNSIGNED_BYTE, GL_NO_ERROR=0};
-static int bound_fbo, selectors[8], pack_buffer, pack[4], errors;
+static int bound_fbo, selectors[8], pack_buffer, pack[4], errors, error_queries;
 static void bind_fbo(GLenum target, GLuint value) { (void)target; bound_fbo=(int)value; }
 static void bind_buffer(GLenum target, GLuint value) { (void)target; pack_buffer=(int)value; }
 static void (*g_bind_framebuffer)(GLenum, GLuint)=bind_fbo;
@@ -47,7 +47,7 @@ static void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
     assert(pack[0]==4 && pack[1]==0 && pack[2]==0 && pack[3]==0);
     memset(pixels, 0x71, 12);
 }
-static GLenum glGetError(void) { return GL_NO_ERROR; }
+static GLenum glGetError(void) { error_queries++; return GL_NO_ERROR; }
 #include "readback_under_test.h"
 
 int main(void) {
@@ -73,6 +73,7 @@ int main(void) {
             bound_fbo=fbo; selectors[0]=selector; selectors[7]=GL_COLOR_ATTACHMENT0;
             pack_buffer=19; memcpy(pack, saved_pack, sizeof pack); errors=0;
             read_front_buffer(pixels, 4, 1, 2);
+            assert(error_queries == 0); /* renderer owns its pending error flags */
             assert(bound_fbo==fbo && selectors[0]==selector);
             assert(selectors[7]==GL_COLOR_ATTACHMENT0 && pack_buffer==19);
             assert(memcmp(pack, saved_pack, sizeof pack)==0 && errors==0);

@@ -50,6 +50,8 @@ static int print_layout(void) {
 static int g_no_context;   /* --no-context: the wrapped plugin creates its own, as inside PJ64 */
 static int g_cpu_thread;   /* --cpu-thread: plugin calls on a second thread, the window's thread pumps */
 static int g_commit_late;  /* --commit-late: the upper half of RDRAM is committed after InitiateGFX */
+static int g_sessions = 1;
+static const char *g_test_stream = STREAM_NAME;
 
 static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     WNDCLASSA klass;
@@ -199,7 +201,14 @@ static int drive_calls(drive_job_t *job) {
     memset(&plugin_info, 0, sizeof plugin_info);
     api.GetDllInfo(&plugin_info);
     printf("name %s\n", plugin_info.Name);
-    if (!api.InitiateGFX(gfx)) { fprintf(stderr, "InitiateGFX failed\n"); return 5; }
+    for (int session = 0; session < g_sessions; session++) {
+    if (!api.InitiateGFX(gfx)) {
+        fprintf(stderr, "InitiateGFX failed\n");
+        api.CloseDLL();
+        FreeLibrary(wrapper);
+        VirtualFree(rdram, 0, MEM_RELEASE);
+        return 5;
+    }
     if (g_commit_late) commit_the_rest(rdram);
     api.RomOpen();
     for (int frame = 0; frame < frames; frame++) {
@@ -220,8 +229,19 @@ static int drive_calls(drive_job_t *job) {
     }
     printf("host thread %lu: GL context %p after the run\n", (unsigned long)GetCurrentThreadId(),
            (void *)wglGetCurrentContext());
+    /* Capture path while the producer is active, before CloseDLL invalidates
+     * status and releases its mappings. */
+    HANDLE mapping = OpenFileMappingA(FILE_MAP_READ, FALSE, g_test_stream);
+    if (mapping) {
+        const stream_header_t *header = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, HEADER_BYTES);
+        if (header) { printf("capture_status %u\n", header->status); UnmapViewOfFile(header); }
+        CloseHandle(mapping);
+    }
     api.RomClosed();
     api.CloseDLL();
+    }
+    FreeLibrary(wrapper);
+    VirtualFree(rdram, 0, MEM_RELEASE);
     wglMakeCurrent(NULL, NULL);
     if (context) wglDeleteContext(context);
     ReleaseDC(window, device);
@@ -236,6 +256,7 @@ static DWORD WINAPI drive_thread(LPVOID parameter) {
 }
 
 static int drive(const char *wrapper_path, int frames, const char *stream_name) {
+    g_test_stream = stream_name ? stream_name : STREAM_NAME;
     write_ini(wrapper_path, stream_name);
     drive_job_t job;
     memset(&job, 0, sizeof job);
@@ -273,6 +294,7 @@ int main(int argc, char **argv) {
         if (strcmp(argv[index], "--stream") == 0) stream_name = argv[index + 1];
         if (strcmp(argv[index], "--wrapped") == 0) g_wrapped_name = argv[index + 1];
         if (strcmp(argv[index], "--rdram-mb") == 0) g_rdram_committed_mb = (unsigned)atoi(argv[index + 1]);
+        if (strcmp(argv[index], "--sessions") == 0) g_sessions = atoi(argv[index + 1]);
     }
     for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--dirty-gl") == 0) g_dirty_gl = 1;
