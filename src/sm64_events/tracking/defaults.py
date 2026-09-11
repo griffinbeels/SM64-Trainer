@@ -13,6 +13,7 @@ land. Reconcile never raises on seed CONTENT — callers log what came back.
 """
 from datetime import datetime, timezone
 
+from sm64_events.library.seed_targets import promote_catalog_target
 from sm64_events.tracking.routes import validate_route
 from sm64_events.tracking.segments import validate_definition
 
@@ -95,12 +96,8 @@ def _describe(row) -> str:
     return f"<{type(row).__name__}>"
 
 
-def reconcile_defaults(db, seed: dict) -> list[str]:
-    """Apply the bundled seed to the db. Returns human-readable problems for
-    rows that were SKIPPED; an empty list means a clean seed."""
-    problems: list[str] = []
-    if not isinstance(seed, dict):
-        return ["seed is not an object"]
+def _reconcile_segments(db, seed, problems):
+    """Resolve and refresh segment identities before route references."""
     seg_by_key = {s["seed_key"]: s for s in db.segment_defs()
                   if s.get("seed_key")}
     deleted_segments = deleted_seed_keys(db, "segments")
@@ -118,6 +115,10 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                 _forget_deletion(db, "segments", key)   # it is back; stand down
             elif existing is None and key in deleted_segments:
                 continue                                # he deleted it. Stay gone.
+            if existing is None:
+                managed, existing = promote_catalog_target(db, srow)
+                if managed and existing is None:
+                    continue
             if existing is None:
                 key_to_id[key] = db.insert_segment_def(
                     srow["name"], srow["start_triggers"], srow["end_triggers"],
@@ -156,6 +157,16 @@ def reconcile_defaults(db, seed: dict) -> list[str]:
                         clock_start=srow.get("clock_start", "trigger"))
         except _SEED_ERRORS as exc:
             problems.append(f"segment {key}: {exc}")
+    return key_to_id
+
+
+def reconcile_defaults(db, seed: dict) -> list[str]:
+    """Apply the bundled seed to the db. Returns human-readable problems for
+    rows that were SKIPPED; an empty list means a clean seed."""
+    problems: list[str] = []
+    if not isinstance(seed, dict):
+        return ["seed is not an object"]
+    key_to_id = _reconcile_segments(db, seed, problems)
     route_by_key = {r["seed_key"]: r for r in db.routes() if r.get("seed_key")}
     # Routes resurrect exactly the same way and were not reported only because
     # he deleted a segment first — one report, the whole class (his standing

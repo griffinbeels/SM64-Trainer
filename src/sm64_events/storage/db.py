@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.events import Event
+from sm64_events.core.heap_observation import heap_lifetime_lock
 from sm64_events.tracking.projection import Attempt, journal_id
 
 MIGRATIONS = [
@@ -733,6 +734,18 @@ MIGRATIONS = [
     """
     CREATE INDEX idx_events_wall ON events (wall_time_utc);
     """,
+    # v36 -- preserve the ROM an imported attempt was set on. Projection
+    # already reads this from time_imported, but the derived cache dropped it.
+    # Imports use the event's exact id (also for segments); never modulo-match
+    # a played segment or infer a ROM from the current setting. Repair only
+    # this missing field, retaining PBs, recordings and all attribution as-is.
+    """
+    ALTER TABLE attempts ADD COLUMN game_version TEXT;
+    UPDATE attempts SET game_version = (
+      SELECT json_extract(events.payload, '$.game_version') FROM events
+       WHERE events.id = attempts.id AND events.type = 'time_imported'
+    ) WHERE closed_by = 'time_imported';
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -742,7 +755,7 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
                  "segment_id", "timed_by", "closed_by", "timed_at",
-                 "platform")
+                 "platform", "game_version")
 
 
 class EventRow:
@@ -768,7 +781,9 @@ class Database:
         self._lock = threading.Lock()
         self._inputs = None
         self._input_templates = None
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        # A heap snapshot may retain temporary cursors. Reset this row-producing
+        # statement explicitly so its unconsumed result cannot block migrations.
+        self._conn.execute("PRAGMA journal_mode=WAL").close()
         self._migrate()
         self._repair_landmark_keys()
 
@@ -888,7 +903,11 @@ class Database:
                     raise
 
     def close(self) -> None:
-        self._conn.close()
+        # A cursor may still be materializing rows after execute() returns.
+        # Share the operation lock so shutdown cannot invalidate that read or
+        # leave SQLite's deferred close holding the file during fixture cleanup.
+        with heap_lifetime_lock, self._lock:
+            self._conn.close()
 
     # -- journal -----------------------------------------------------------
     def append_event(self, session_id: int, seq: int, event: Event) -> int:
@@ -1065,7 +1084,7 @@ class Database:
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
                 a.segment_id, a.timed_by, a.closed_by, a.timed_at,
-                a.platform)
+                a.platform, a.game_version)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock:

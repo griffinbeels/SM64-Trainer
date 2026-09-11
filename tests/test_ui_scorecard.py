@@ -2282,21 +2282,13 @@ def test_the_pasted_html_paints_each_timed_cell_by_the_machine_that_set_it(monke
     row wears the N64 fill, the chosen text colour and font, while every
     empty cell carries no style at all -- as Raisn's empty cells do. The
     style is the one he picked in Settings, read at copy time."""
-    from sm64_events.library.ladders import fit_payload
-    from sm64_events.library.store import LibraryStore, build_and_stamp
-
+    monkeypatch.setattr("sm64_events.server.import_api.fetch", _stub_workbook)
     monkeypatch.setattr("sm64_events.server.scorecard_api.fetch", _stub_workbook)
 
-    # The sheet door's refresh, replaced in the SERVER (the fixture runs
-    # in-process): the store takes the stub workbook's payload without the
-    # newer-than-what-we-have check (the stub's Log is older than the bundled
-    # snapshot) and without writing a snapshot anywhere.
-    def stub_refresh(self, fetch_fn, overrides=None, step=None):
-        self._payload = fit_payload(build_and_stamp(_stub_workbook(), overrides))
-        return {"applied": True}
-
-    monkeypatch.setattr(LibraryStore, "refresh", stub_refresh)
-    with serve_ui() as base:
+    # The stub workbook predates the bundle. Start empty so real refresh
+    # prepares and publishes it to the fixture's scratch snapshot; replacing
+    # private _payload alone leaves readers on the old active calibration.
+    with serve_ui(bundled_library=False) as base:
         style = {"emu_fill": "#4F7BE0", "n64_fill": "#AB3F14",
                  "font_color": "#FFFFFF", "font_family": "Roboto Mono"}
         request = urllib.request.Request(

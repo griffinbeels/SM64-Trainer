@@ -215,7 +215,7 @@ def test_real_snapshot_shape_matches_the_measured_expectations(tmp_path):
     # a zeroing regression would read "117/117" beside a runner who has one
     # real time. So the guard is: the single-entry runner's own AGGREGATED
     # coverage names exactly the one entity they ran, not the whole board.
-    times = runner_times(payload, {}, version="us")
+    times = runner_times(payload, {}, version="us", strict=True)
     single_entry_runners = [runner for runner, by_entity in times.items()
                             if len(by_entity) == 1]
     assert single_entry_runners, "no single-entry runner in the bundled seed"

@@ -10,6 +10,7 @@ from bisect import bisect_right
 
 from sm64_events.core.timefmt import attainable_cs, cs_of_frame, frame_at_or_after
 from sm64_events.library.ladder_estimates import estimate_times
+from sm64_events.library.populations import valid_time
 from sm64_events.library.strategy_signature import matching_profile
 from sm64_events.ranks.classify import RANK_NAMES
 
@@ -55,7 +56,7 @@ def make_attainable(raw, quantise=attainable_cs):
     return out
 
 
-def _elite_frame(times, fallback):
+def _elite_frame(times, fallback, settings=None):
     """First supported fast peak, or the calibrated elite percentile.
 
     A bounded window avoids joining a peak to its slower tail through single
@@ -63,6 +64,10 @@ def _elite_frame(times, fallback):
     is not a peak. Counts describe distinct players in each Sheet population.
     The observed lower median resists an isolated record beside a shared peak.
     """
+    settings = settings or {}
+    window = settings.get("peak_window_frames", PEAK_WINDOW_FRAMES)
+    minimum = settings.get("peak_min_entries", PEAK_MIN_ENTRIES)
+    density = settings.get("peak_density_ratio", PEAK_DENSITY_RATIO)
     frames = [frame_at_or_after(t) for t in times]
     elite = frame_at_or_after(round(fallback))
     for left, start in enumerate(frames):
@@ -70,17 +75,16 @@ def _elite_frame(times, fallback):
             break
         if left and start == frames[left - 1]:
             continue
-        right = bisect_right(frames, start + PEAK_WINDOW_FRAMES - 1)
+        right = bisect_right(frames, start + window - 1)
         count = right - left
-        following = bisect_right(frames, start + 2 * PEAK_WINDOW_FRAMES - 1) - right
+        following = bisect_right(frames, start + 2 * window - 1) - right
         peak = frames[(left + right - 1) // 2]
-        if (count >= PEAK_MIN_ENTRIES and
-                count >= PEAK_DENSITY_RATIO * following and peak <= elite):
+        if (count >= minimum and count >= density * following and peak <= elite):
             return peak
     return elite
 
 
-def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs):
+def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs, *, settings=None):
     """Eight tier cutoffs in seconds; 40 divisions plus the derived Capless five.
 
     Mario I starts at a supported fast peak, falling back to the elite quantile.
@@ -89,11 +93,12 @@ def fit_ladder(times_cs, percentiles=None, quantise=attainable_cs):
     on the intended elite target. Slower tiers follow empirical quantiles, with
     a minimum five-frame separation to leave a frame for every subdivision.
     """
-    times = sorted(int(t) for t in times_cs if t > 0)
+    times = sorted(max(1, int(t)) for t in times_cs if valid_time(t))
     if not times:
         return {}
-    raw = place_at_percentiles(times, percentiles or LADDER_PERCENTILES)
-    elite = _elite_frame(times, raw["Mario"])
+    settings = settings or {}
+    raw = place_at_percentiles(times, percentiles or settings.get("percentiles") or LADDER_PERCENTILES)
+    elite = _elite_frame(times, raw["Mario"], settings)
     metal = frame_at_or_after(round(raw["Grandmaster"]))
     step = max(1, math.ceil((metal - elite) / 9))
     raw["Mario"] = cs_of_frame(elite + 4 * step)
@@ -116,18 +121,26 @@ def row_times(item):
     entries = item["entries"]
     by_version = {}
     for entry in entries:
-        by_version.setdefault(entry.get("version"), []).append(entry["time_cs"])
+        if (isinstance(entry, dict) and valid_time(entry.get("time_cs"))
+                and entry.get("version") in (None, "us", "jp")):
+            by_version.setdefault(entry.get("version"), []).append(entry["time_cs"])
     for version in ("us", None, "jp"):
         if by_version.get(version):
             return sorted(by_version[version]), version
     return [], None
 
 
-def fit_payload(payload: dict) -> dict:
+def fit_payload(payload: dict, *, policy=None, identity_of=None) -> dict:
     """Fit every row from observations, its own anchor, or a named related row.
 
     Estimates never count as submissions or become another estimate's source.
-    Refitting clears their provenance as soon as real observations arrive."""
+    Refitting clears their provenance as soon as real observations arrive.
+    ``identity_of(target, item, kind)`` optionally supplies the stable target and
+    canonical strategy after placement; source identities remain the fallback.
+    """
+    from sm64_events.ranks.policy import RankingPolicy
+
+    policy = policy or RankingPolicy()
     populations = [(target, kind, item, *row_times(item))
                    for target in payload["targets"]
                    for kind in ("approaches", "subsections")
@@ -142,7 +155,15 @@ def fit_payload(payload: dict) -> dict:
                 target, kind, item, populations)
             if provenance:
                 item["ladder_estimate"] = provenance
-        ladder = fit_ladder(times)
+        if identity_of is not None:
+            target_id, strategy = identity_of(target, item, kind)
+        else:
+            target_id = item.get("target_id") or item.get("entity_key") or target.get("entity_key") or ""
+            strategy = item.get("matched_strategy") or item.get("name")
+        settings = policy.resolve(target_id, version=version or "us", strategy=strategy, layer="strategy")
+        ladder = fit_ladder(times, settings=settings)
+        item["ladder_policy_revision"] = policy.effective_revision(
+            target_id, version=version or "us", strategy=strategy, layer="strategy")
         item["matching_profile"] = matching_profile(times)
         if ladder:
             item["ladder"] = ladder
@@ -155,28 +176,34 @@ def fit_payload(payload: dict) -> dict:
             item.pop("ladder_version", None)
             missing += 1
         jp_times = sorted(e["time_cs"] for e in item["entries"]
-                          if e.get("version") == "jp")
+                          if isinstance(e, dict) and e.get("version") == "jp" and valid_time(e.get("time_cs")))
         item.pop("ladder_jp", None)
         item.pop("ladder_jp_samples", None)
         item.pop("ladder_jp_extended", None)
+        item.pop("ladder_jp_policy_revision", None)
         if version != "jp" and jp_times:
-            item["ladder_jp"] = fit_ladder(jp_times)
+            jp_settings = policy.resolve(target_id, version="jp", strategy=strategy, layer="strategy")
+            item["ladder_jp"] = fit_ladder(jp_times, settings=jp_settings)
+            item["ladder_jp_policy_revision"] = policy.effective_revision(
+                target_id, version="jp", strategy=strategy, layer="strategy")
             item["ladder_jp_samples"] = len(jp_times)
             item["ladder_jp_extended"] = round(item["ladder_jp"]["Bronze"] * 100) > attainable_cs(max(jp_times))
+    default_settings = policy.resolve("", layer="strategy")
     payload["ladder_model"] = {
         "version": LADDER_MODEL_VERSION,
-        "percentiles": dict(LADDER_PERCENTILES),
+        "percentiles": dict(default_settings["percentiles"]),
         "min_entries": MIN_ENTRIES,
         "mario_percentile_division": "I",
         "mario_anchor": "supported_fast_peak_or_percentile",
-        "peak_window_frames": PEAK_WINDOW_FRAMES,
-        "peak_min_entries": PEAK_MIN_ENTRIES,
-        "peak_density_ratio": PEAK_DENSITY_RATIO,
+        "peak_window_frames": default_settings["peak_window_frames"],
+        "peak_min_entries": default_settings["peak_min_entries"],
+        "peak_density_ratio": default_settings["peak_density_ratio"],
         "minimum_frames_per_division": 1,
         "source": "sheet",
         "fitted_rows": fitted,
         "estimated_rows": estimated,
         "rows_without_evidence": missing,
         "rows_too_thin": 0,
+        "policy_revision": policy.revision,
     }
     return payload

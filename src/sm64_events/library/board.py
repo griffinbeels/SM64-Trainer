@@ -12,17 +12,20 @@ in `server/ranks_api.py`, nothing else.
 `RatingsCache` is the one impure piece: it holds the current `RatedSheet`
 between requests, because rating 448 runners costs ~29ms
 (`ratings.rate_runners`) and a board fetch happens far more often than the
-things that change it. It rebuilds only when one of FOUR inputs moves: the
-library's sheet revision, the user's adoptions map, the grading version, and
-a fingerprint of the standards ladders. The last one is the trap:
+things that change it. It rebuilds when source content, the user's adoptions
+map, the grading version, or the effective calibration revision changes.
+Source content catches a corrected observation with an unchanged Sheet date.
+Legacy stores retain the serialized-standards fingerprint. The trap is:
 `ranks_store.to_json()["version"]` is the bundled SEED's version (a literal
 `1`, `ranks/standards.py::_seed_version`) and never moves -- not on a
 threshold edit, a JP overlay, a new strategy, or a reset. Keying on it would
 serve a stale board forever after any standards edit, and stale-but-plausible
-is the failure mode nobody reports. `_standards_fingerprint` hashes the whole
-vetted store instead, the same dict `set_threshold`/`create_strategy`/
-`clear_jp`/`reset_entity` all mutate -- proved in `tests/test_library_board.py`
-by editing one threshold and asserting the board's numbers change.
+is the failure mode nobody reports. `_standards_fingerprint` uses the effective
+calibration revision, or hashes the whole legacy store, the same dict
+`set_threshold`/`create_strategy`/`clear_jp`/`reset_entity` all mutate. Legacy
+fallback fixtures in `tests/test_library_board.py` verify that edits invalidate
+the cache. Generated Overall remains independent of personal Strategy edits;
+its scores move with calibration changes and separate Overall pins.
 
 The per-scope row memo below keys on the resolved groups as well as the
 scope id, so an exclusion toggle or a route edit -- neither of which moves
@@ -33,15 +36,17 @@ import json
 
 from sm64_events.library import ratings
 from sm64_events.ranks import scopes
+from sm64_events.ranks.calibration import observation_fingerprint
 from sm64_events.ranks.classify import display_cs
-from sm64_events.ranks.standards import entity_key
 from sm64_events.tracking import marelo as marelo_bridge
-from sm64_events.tracking.views import current_pbs_by_strat
 
 
 def _standards_fingerprint(ranks_store) -> str:
     """A hash that moves whenever the VETTED store changes -- see the module
     docstring for why `to_json()["version"]` cannot serve this instead."""
+    revision = getattr(ranks_store, "calibration_revision", None)
+    if revision is not None:
+        return revision
     return hashlib.sha256(
         json.dumps(ranks_store.to_json(), sort_keys=True).encode()).hexdigest()
 
@@ -81,11 +86,12 @@ class RatedSheet:
     three methods below. Per-scope board rows memoize on the instance, so
     the memo can never outlive the ratings it was computed from."""
 
-    def __init__(self, rated: ratings.RatedRunners, ranks_store):
+    def __init__(self, rated: ratings.RatedRunners, ranks_store, version=None):
         self.times = rated.times
         self.videos = rated.videos
         self.scores = rated.scores
         self._ranks_store = ranks_store
+        self._version = version
         self._rows_by_scope: dict[tuple, tuple[list[dict], int]] = {}
 
     def _scope_rows(self, scope_id: str, groups: list[dict]
@@ -171,7 +177,8 @@ class RatedSheet:
         runner_videos = self.videos.get(runner_name, {})
         agg = scopes.aggregate(runner_scores, groups)
         ladders = marelo_bridge.entity_ladders(
-            self._ranks_store, [entity["key"] for entity in agg["entities"]])
+            self._ranks_store, [entity["key"] for entity in agg["entities"]],
+            self._version)
         entities = []
         for entity in agg["entities"]:
             key = entity["key"]
@@ -215,40 +222,38 @@ class RatingsCache:
 
     def current(self, library, adoptions_rows: dict, ranks_store, *,
                 version: str) -> RatedSheet:
-        key = (library.revision, dict(adoptions_rows), version,
+        payload = library.payload
+        source_revision = getattr(library, "data_revision", None)
+        if source_revision is None:
+            source_revision = observation_fingerprint(payload)
+        key = (library.revision, source_revision, dict(adoptions_rows), version,
                _standards_fingerprint(ranks_store))
         if key != self._key or self._sheet is None:
-            rated = ratings.rate_runners(library.payload, ranks_store,
+            rated = ratings.rate_runners(payload, ranks_store,
                                          adoptions_rows, version=version)
-            self._sheet = RatedSheet(rated, ranks_store)
+            self._sheet = RatedSheet(rated, ranks_store, version)
             self._key = key
         return self._sheet
 
 
 def you_pb_by_entity(pb_rows, ranks_store, keys) -> dict[str, dict]:
-    """The user's own fastest PB per entity in `keys`: `{key: {time_cs,
+    """The user's highest-scoring PB per entity in `keys`: `{key: {time_cs,
     attempt_id}}` -- the DISPLAYED centiseconds behind
     `tracking.marelo.entity_scores`'s pb-mode score (which returns only the
     score) and the attempt that set it (the Rank tab's own ▶ plays its
     saved replay, round 1's fifth read). Same PB source
-    (`current_pbs_by_strat`) and the same clock filter that function
+    (`latest_pbs_by_strategy`) and the same clock filter that function
     applies (`row["timer_mode"] == ranks_store.clock_for(key)`).
 
-    MIN frames and MAX score always pick the same strategy here: every
-    strategy on one entity grades against that entity's SAME best-possible
-    ladder (`scoring.best_ladder`, pointwise across strategies), and
-    `scoring.progress_for_time` is monotone in time against a fixed ladder,
-    so the fastest raw time is always the highest-scoring one."""
-    wanted = set(keys)
-    best: dict[str, dict] = {}
-    for row in current_pbs_by_strat(list(pb_rows)).values():
-        key = entity_key(row["course_id"], row["star_id"], row["segment_id"])
-        if key not in wanted or row["timer_mode"] != ranks_store.clock_for(key):
-            continue
-        cs = display_cs(row["frames"])
-        if key not in best or cs < best[key]["time_cs"]:
-            best[key] = {"time_cs": cs, "attempt_id": row.get("attempt_id")}
-    return best
+    Imported PBs retain their original ROM curve. Across ROMs, the fastest
+    raw time need not be the highest score; choose the same score winner as
+    entity_scores so its time and replay describe the points shown."""
+    return {key: {"time_cs": display_cs(row["frames"]),
+                  "attempt_id": row.get("attempt_id"),
+                  "game_version": row.get("game_version"),
+                  "timer_mode": row["timer_mode"]}
+            for key, (row, _score) in
+            marelo_bridge.best_scored_pbs(ranks_store, keys, pb_rows).items()}
 
 
 def you_times_by_entity(pb_rows, ranks_store, keys) -> dict[str, int]:

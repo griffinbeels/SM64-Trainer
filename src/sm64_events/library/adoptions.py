@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from sm64_events.library.assignment_transaction import atomic_assignment, atomic_bytes
 
 _log = logging.getLogger("sm64.library")
 
@@ -38,10 +39,9 @@ def load(path) -> dict:
 def save(path, rows: dict, *, unlinked=()) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"version": 2, "rows": dict(sorted(rows.items())),
-                               "unlinked": sorted(unlinked)},
-                               indent=1, ensure_ascii=False),
-                    encoding="utf-8", newline="")
+    atomic_bytes(path, json.dumps({"version": 2, "rows": dict(sorted(rows.items())),
+                                  "unlinked": sorted(unlinked)},
+                                 indent=1, ensure_ascii=False).encode("utf-8"))
 
 
 def strategy_name(target_label: str, row_name: str, *, kind: str = "approach") -> str:
@@ -268,7 +268,7 @@ class Adoptions:
     unadopt actually remove a strategy."""
 
     def __init__(self, path, store, standards, qualified=(), segment_defs=None,
-                 provision=None):
+                 provision=None, policy=None):
         self.path = Path(path)
         self.store = store               # LibraryStore
         self.standards = standards       # RankStandards
@@ -278,7 +278,12 @@ class Adoptions:
         self.segment_defs = segment_defs
         self.provision = provision
         self._automatic = {}
+        self.policy = policy
+        if standards is not None and hasattr(store, "calibrations"):
+            standards.calibrations = store.calibrations
+            store.prepare_calibration = self._prepare_calibration
 
+    @atomic_assignment
     def load(self) -> None:
         self._rows = load(self.path)
         self._unlinked = {key for key in _read(self.path).get("unlinked", [])
@@ -291,12 +296,18 @@ class Adoptions:
         The reservation prevents downstream automatic placement from putting
         a deliberately unlinked row back. Consumers resolve through row_identity.
         """
+        generation = getattr(self.store, "calibrations", None)
+        if generation is not None and generation.read is not None:
+            return dict(generation.read.rows)
+        return self._resolved_rows(self.store.payload, self._automatic)
+
+    def _resolved_rows(self, payload, automatic):
         from sm64_events.library.placements import automatic_rows
         definitions = list(self.segment_defs()) if self.segment_defs else []
         existing = {f"segment:{d['id']}" for d in definitions}
-        generated = {key: entity for key, entity in self._automatic.items()
+        generated = {key: entity for key, entity in automatic.items()
                      if entity in existing}
-        return automatic_rows(self.store.payload,
+        return automatic_rows(payload,
                               {**generated, **dict.fromkeys(self._unlinked, ""),
                                **self._rows}, definitions)
 
@@ -309,11 +320,27 @@ class Adoptions:
         return library_ladders(self.store.payload, self.rows(), self.qualified)
 
     def _sync(self) -> None:
+        if self.standards is not None and hasattr(self.store, "recalibrate"):
+            self.store.recalibrate()
+            return
         if self.provision is not None:
             self._automatic = self.provision(self.store.payload, self._rows)
         if self.standards is not None:
             self.standards.apply_sheet_ladders(self.ladders())
 
+    def _prepare_calibration(self, payload):
+        from sm64_events.library.calibration import prepare
+        from sm64_events.ranks.policy import RankingPolicy
+        automatic = self.provision(payload, self._rows) if self.provision else {}
+        assignments = self._resolved_rows(payload, automatic)
+        definitions = list(self.segment_defs()) if self.segment_defs else []
+        policy = self.policy() if callable(self.policy) else self.policy
+        candidate = prepare(payload, assignments, definitions, self.standards,
+                            policy or RankingPolicy())
+        self._automatic = automatic
+        return candidate
+
+    @atomic_assignment
     def adopt(self, key: str, entity: str) -> dict:
         target, item, name = validate(self.store.payload, key, entity,
                                       self.qualified)
@@ -325,6 +352,7 @@ class Adoptions:
                 "strategy": name, "ladder": item["ladder"],
                 "target": target["label"]}
 
+    @atomic_assignment
     def unadopt(self, key: str) -> dict:
         removed = self.rows().get(key)
         self._rows.pop(key, None)
@@ -351,6 +379,7 @@ class Adoptions:
                     {"index": position, "label": target["label"]})
         return out
 
+    @atomic_assignment
     def adopt_target(self, index: int, entity: str) -> dict:
         """Assign EVERY laddered approach of one target to `entity` — round
         7: "If we link a segment, then it should automatically load ALL
@@ -390,6 +419,7 @@ class Adoptions:
         return {"adopted": adopted, "skipped": skipped,
                 "entity_key": entity, "target": target["label"]}
 
+    @atomic_assignment
     def unadopt_target(self, index: int) -> dict:
         """Remove every one of this target's own approach assignments —
         never a piece's, and never another target's rows on the same

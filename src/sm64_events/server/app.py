@@ -266,8 +266,6 @@ async def _refresh_library_quietly(library, overrides, adoptions, service) -> No
     if not result.get("applied"):
         log.info("library refresh at startup: %s", result.get("reason", "nothing newer"))
         return
-    if adoptions is not None:
-        adoptions.load()
     absorb_after_regrade(service)
     notify = getattr(service, "_rank_standards_changed", None)
     if notify is not None:
@@ -483,6 +481,8 @@ def _mount_library_routes(app, service, library_path, library_bundled_path,
         app.state.library_adoptions = adoptions
     app.state.library_overrides = library_overrides
     app.state.adoptions = adoptions
+    from sm64_events.server.rank_reading import install_calibration_reads
+    install_calibration_reads(app, getattr(service, "ranks", None), library)
     # The live segment list the auto-match pairs entity-less targets against
     # (round 6). Read per request so a segment built mid-session pairs on the
     # next page load; empty when the db is degraded rather than an error.

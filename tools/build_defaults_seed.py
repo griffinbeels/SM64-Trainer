@@ -25,6 +25,7 @@ import corpus_legacy        # noqa: E402
 import corpus_movements     # noqa: E402
 import corpus_routes_main   # noqa: E402
 import corpus_routes_stage  # noqa: E402
+import corpus_toad          # noqa: E402
 import corpus_vocab          # noqa: E402
 from corpus_vocab import (CASTLE_MOVEMENT, DEFAULT_MOVEMENT_MATCH_MODE,  # noqa: E402
                           ROUTE_SCOPED, STANDARD_STRAT)
@@ -74,6 +75,7 @@ def build() -> dict:
     # they're appended verbatim rather than expanded through _movement_row.
     segments += list(corpus_movements.REDS_TO_PIPE)
     segments += list(corpus_movements.HUNDRED_COIN_EXITS)
+    segments += list(corpus_toad.SEGMENTS)
     routes = list(corpus_routes_main.ROUTES) + list(corpus_routes_stage.ROUTES)
     return {"seed_version": SEED_VERSION, "segments": segments,
             "routes": routes,

@@ -64,9 +64,10 @@ function targetSub(target) {
  *          the same split PickerDialog draws between its own grid and its
  *          caller's `iconFor`.
  */
-export function LibraryNav({ index, onPick, iconFor }) {
+export function LibraryNav({ index, onPick, iconFor, onBrowse = () => {} }) {
   const [openGroupKey, setOpenGroupKey] = useState(null);
   const [query, setQuery] = useState("");
+  function browse(set, value) { onBrowse(); set(value); }
 
   if (!index)
     return html`<div class="library-courses"><p class="meta">Loading the library…</p></div>`;
@@ -87,10 +88,10 @@ export function LibraryNav({ index, onPick, iconFor }) {
     <input type="search" class="library-find-input" value=${query}
       placeholder="type to search for a strat…"
       aria-label="Search the library"
-      oninput=${(event) => setQuery(event.target.value)} />
+      oninput=${(event) => browse(setQuery, event.target.value)} />
     ${searching && html`<button type="button" class="library-find-clear"
         title="Clear the search" aria-label="Clear the search"
-        onclick=${() => setQuery("")}>✕</button>`}
+        onclick=${() => browse(setQuery, "")}>✕</button>`}
   </div>`;
 
   if (searching)
@@ -117,7 +118,7 @@ export function LibraryNav({ index, onPick, iconFor }) {
   if (openGroup)
     return html`<div class="library-group">
       ${searchBox}
-      <button type="button" class="entity-back" onclick=${() => setOpenGroupKey(null)}>
+      <button type="button" class="entity-back" onclick=${() => browse(setOpenGroupKey, null)}>
         <${Icon} name="chevron" size=${15} /> Back
       </button>
       <div class="entity-section-head"><b>${openGroup.group}</b></div>
@@ -141,7 +142,7 @@ export function LibraryNav({ index, onPick, iconFor }) {
         name=${group.group}
         sub=${`${group.targets.length} to browse`}
         title=${group.group}
-        onPick=${() => setOpenGroupKey(group.group)} />`)}
+        onPick=${() => browse(setOpenGroupKey, group.group)} />`)}
     </div>
   </div>`;
 }

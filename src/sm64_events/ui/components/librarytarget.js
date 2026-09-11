@@ -1564,15 +1564,15 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
          `onSaved` is awaited by the recorder, so a link refusal lands
          beside Save (where the click is) and the recorder stays open; the
          segment itself is already saved, and a second Save re-uses its id.
-         On success the fresh /api/segments fetch lands BEFORE the rows
-         reload, so the linked chip never flashes a raw `segment:<id>`. */""}
+         Fetch the saved name BEFORE linking: adoption also broadcasts a
+         standards refresh that can reload rows before onRelink runs. */""}
     ${recording && html`<${SegmentTimeline} t=${t} key=${recording.key}
         prefill=${{ name: recording.name, parents: recording.parents }}
         onCancel=${() => setRecording(null)}
         onSaved=${async (segmentId) => {
+          setSegments(await getJSON("/api/segments"));
           await recording.link(segmentId);
           setRecording(null);
-          setSegments(await getJSON("/api/segments"));
           await onRelink();
         }} />`}
   </div>`;

@@ -58,6 +58,34 @@ def test_report_uses_final_histogram_not_average_of_snapshots(tmp_path):
     assert report.compare(result, result)["comparable"]
 
 
+@pytest.mark.parametrize("has_stages,boundary", [(False, None), (True, None),
+                                              (True, "pending"), (True, "completed")])
+def test_report_cli_requires_complete_stage_observations(tmp_path, monkeypatch, capsys, has_stages, boundary):
+    meta, samples = capture_folder(tmp_path)
+    if not has_stages:
+        meta["final_profile"]["stages"] = {}
+    if boundary == "pending":
+        meta["final_profile"]["pending_calls"] = 1
+    if boundary == "completed":
+        meta["final_profile"]["counters"]["completed_outside_window"] = 1
+    valid = has_stages and boundary is None
+    (tmp_path / "capture.json").write_text(json.dumps(meta), encoding="utf-8")
+    (tmp_path / "samples.jsonl").write_text("\n".join(map(json.dumps, samples)), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["profile_report.py", str(tmp_path)])
+    if valid:
+        report.main()
+    else:
+        with pytest.raises(SystemExit) as stopped:
+            report.main()
+        assert stopped.value.code == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["valid"] is valid
+    assert result["stages"] == meta["final_profile"]["stages"]
+    expected = (["Stage calls crossed the capture boundary; durations are censored"]
+                if boundary else [] if has_stages else ["No instrumented stage observations"])
+    assert result["issues"] == expected
+
+
 @pytest.mark.parametrize("field", ["workload", "machine", "sampling", "version"])
 def test_comparison_rejects_configuration_changes(tmp_path, field):
     capture_folder(tmp_path)

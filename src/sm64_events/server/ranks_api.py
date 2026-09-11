@@ -7,14 +7,20 @@ directly instead (an unknown scope IS a 404, not a caught LookupError).
 `/leaderboard*` (Task 3 of spec 2026-08-20-ranked-leaderboard) is the same
 scope machinery pointed at the community sheet instead of the user alone --
 see `library/board.py`'s module docstring for the scoring/caching contract."""
-from fastapi import APIRouter, HTTPException
+from functools import partial
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from sm64_events.library import board
 from sm64_events.library.examples import example_clips, sheet_best
 from sm64_events.links import xcams_url
 from sm64_events.memory.addresses import COURSE_NAMES
-from sm64_events.ranks import classify, history, scopes, scoring
+from sm64_events.ranks import classify, scopes, scoring
+from sm64_events.ranks.calibration import resolve_curve
+from sm64_events.server.overall_api import create_overall_router
+from sm64_events.server.rank_reading import read_dependency
+from sm64_events.server.rank_history import build_history
+from sm64_events.server.rank_watermarks import absorb_regrade, acknowledge, celebration_for
 from sm64_events.tracking import marelo as marelo_bridge
 from sm64_events.tracking.views import entity_labels, segment_courses
 
@@ -61,6 +67,7 @@ class AckBody(BaseModel):
     that same 400 instead of being silently accepted."""
     scope: str | None = None
     key: int
+    calibration_revision: str | None = None
 
 
 def _active_scope(service) -> str:
@@ -92,15 +99,22 @@ def _groups(service, scope_id: str, excluded: set[str] | None = None):
     # cannot see them would omit every runner rated only there (measured:
     # 444 of the sheet's runners omitted from `overall`) while his own card
     # graded them. Excluded-only runners still correctly remain omitted.
-    ladders = {key: service.ranks.ladders(key)
-               for key in service.ranks.graded_entities()}
+    routes = service.db.routes()
+    courses = segment_courses(service.db)
+    candidates = scopes.entity_groups(
+        scope_id, rankable=service.ranks.graded_entities(), routes=routes,
+        segment_courses=courses)
+    if candidates is None:
+        raise HTTPException(404, f"unknown scope {scope_id!r}")
+    # Resolve only this scope's curves. A route switch used to copy the whole
+    # community's fitted curves even for an empty route. Membership still uses
+    # the same resolver, before and after removing unscoreable candidates.
+    keys = dict.fromkeys(key for group in candidates for key in group["candidates"])
+    ladders = marelo_bridge.entity_curves(service.ranks, keys)
     rankable = scopes.rankable_entities(
         ladders, service.rank_excluded() if excluded is None else excluded)
     groups = scopes.entity_groups(
-        scope_id, rankable=rankable, routes=service.db.routes(),
-        segment_courses=segment_courses(service.db))
-    if groups is None:
-        raise HTTPException(404, f"unknown scope {scope_id!r}")
+        scope_id, rankable=rankable, routes=routes, segment_courses=courses)
     return groups
 
 
@@ -210,6 +224,7 @@ def _score_scope(service, scope_id: str) -> dict:
         entity["label"] = labels[entity["key"]]
     out["scope_id"] = scope_id
     out["label"] = _scope_label(service, scope_id)
+    out["calibration_revision"] = service.ranks.calibration_revision
     return out
 
 
@@ -227,58 +242,12 @@ def absorb_after_regrade(service) -> None:
     LOWER has its watermark lowered too (what sync_watermark would do on the
     next build anyway), so a later real climb still celebrates from the
     right floor."""
-    if service.db is None or service.ranks is None:
-        return
-    watermarks = service.marelo_watermarks()
-    for scope_id in list(watermarks):
-        try:
-            scored = _score_scope(service, scope_id)
-        except (LookupError, ValueError):
-            continue                        # a scope that no longer resolves
-        if not scored["tier"]:
-            continue
-        watermarks[scope_id] = int(scoring.progression_key(scored["tier"],
-                                                           scored["division"]))
-    service.db.set_state("marelo_watermarks", watermarks)
+    absorb_regrade(service, _score_scope)
 
 
 def _build_marelo(service, scope_id: str) -> dict:
     out = _score_scope(service, scope_id)
-    out["celebration"] = None
-    if out["tier"]:
-        key = scoring.progression_key(out["tier"], out["division"])
-        service.sync_watermark(scope_id, key)          # follow a drop down
-        # ONLY the active scope may celebrate, and only when arriving here was
-        # not itself the thing that made it active (live report 2026-07-28:
-        # "Swapping between routes like that should never trigger any rank
-        # up"). Two rules, and each covers a hole the other cannot:
-        #
-        #   * `scope_id == active` stops the RANK TAB firing one. Browsing the
-        #     scope chips fetches /api/marelo?scope=<other>, which is looking
-        #     at a rating, not earning it.
-        #   * `note_active_scope` stops the SWITCH itself firing one. A
-        #     watermark could only ever be raised by ack_celebration -- i.e.
-        #     by a celebration having been SHOWN -- so every scope held a
-        #     rank-up it had never displayed and discharged it the moment the
-        #     user looked at that scope.
-        #
-        # Arriving ABSORBS instead: the rank a scope already holds is the new
-        # baseline. The cost, decided by the user rather than assumed: scopes
-        # overlap (one star feeds many routes), so a rank-up genuinely earned
-        # on a route you were not focused on is absorbed silently and never
-        # celebrated. The rank itself is still there to see.
-        active = _active_scope(service)
-        if scope_id == active:
-            if service.note_active_scope(active):
-                service.absorb_watermark(scope_id, key)
-            else:
-                out["celebration"] = scopes.celebration_delta(
-                    out["tier"], out["division"],
-                    service.marelo_watermarks().get(scope_id))
-        # A scope's FIRST rank is not a rank-up. Seeding it silently is what
-        # stops the first view of a scope celebrating the user's whole
-        # history at once. seed_watermark is a no-op once the key exists.
-        service.seed_watermark(scope_id, key)
+    out["celebration"] = celebration_for(service, scope_id, out, _active_scope(service))
     # There is NO per-entity celebration here any more (task 0012,
     # 2026-07-26). A star's or segment's own rank-up is performed live by the
     # rank banner climbing (ui/rankclimb.js) rather than held as a payload to
@@ -325,6 +294,26 @@ def _scope_label(service, scope_id: str) -> str:
     return scope_id
 
 
+def _read_library(reader, entity, *, library, adoptions, ranks, **kwargs):
+    if library is None or ranks is None:
+        return {}
+    rows = adoptions.rows() if adoptions is not None else {}
+    return reader(library.payload, rows, entity, ranks.has_jp_ladder, **kwargs)
+
+
+def _overall_fields(standards, entity, version, ladders):
+    curve = resolve_curve(standards, entity, version)
+    legacy = (curve["interpolation"] == "legacy"
+              and not standards.overall_overrides(entity, version)
+              and curve["ladder_cs"] == scoring.best_ladder(ladders))
+    return {"overall": {rank: cs / 100 for rank, cs in curve["ladder_cs"].items()},
+            "overall_curve": curve,
+            "overall_overrides": standards.overall_overrides(entity, version),
+            "calibration_revision": standards.calibration_revision,
+            "overall_owners": scoring.best_ladder_owners(ladders) if legacy else {},
+            "sole_overall_owner": scoring.sole_overall_owner(ladders) if legacy else None}
+
+
 def create_ranks_router(service, library=None, adoptions=None,
                         video_checks_path=None) -> APIRouter:
     """`library`/`adoptions` (the LibraryStore + Adoptions app.py already
@@ -334,15 +323,7 @@ def create_ranks_router(service, library=None, adoptions=None,
     overrides where the liveness verdicts load from (tests; production takes
     the bundled seed)."""
 
-    def _from_library(reader, entity: str, **kwargs) -> dict:
-        """One of `library/examples.py`'s two readers (`example_clips`,
-        `sheet_best`) over this instance's library, or {} when there is no
-        library or no standards to grade on (a broadcast-only instance)."""
-        if library is None or service.ranks is None:
-            return {}
-        rows = adoptions.rows() if adoptions is not None else {}
-        return reader(library.payload, rows, entity,
-                      service.ranks.has_jp_ladder, **kwargs)
+    _from_library = partial(_read_library, library=library, adoptions=adoptions, ranks=service.ranks)
 
     # Videos the liveness sweep (tools/check_videos.py) marked gone — round 2
     # of task 0098: a dead video must never be THE example a standard links
@@ -356,7 +337,8 @@ def create_ranks_router(service, library=None, adoptions=None,
     # module-level singleton would leak one test's cached board into an
     # unrelated test whose inputs merely look identical.
     board_cache = board.RatingsCache()
-    router = APIRouter(prefix="/api")
+    router = APIRouter(prefix="/api", dependencies=[Depends(read_dependency(service.ranks))])
+    router.include_router(create_overall_router(service, absorb_after_regrade))
 
     @router.get("/ranks/standards")
     def get_standards(entity: str | None = None, version: str | None = None):
@@ -374,7 +356,7 @@ def create_ranks_router(service, library=None, adoptions=None,
         ladders = service.ranks.ladders(entity, resolved)
         alive = lambda clips: [c for c in clips if c[1] not in dead_videos]
         extra_clips = {strat: alive(clips) for strat, clips
-                       in _from_library(example_clips, entity).items()}
+                       in _from_library(example_clips, entity, version=resolved).items()}
         return {"entity": entity, "clock": service.ranks.clock_for(entity),
                 "strategies": ladders,
                 "estimated_strategies": service.ranks.estimated_strategies(entity),
@@ -395,25 +377,9 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # file); a sheet-fitted JP ladder is not, and the editor's
                 # checkbox says so instead of offering a click that no-ops.
                 "clearable_jp_strategies": service.ranks.clearable_jp_strategies(entity),
-                # THE entity's own ladder -- the pointwise best across every
-                # strategy, which is what `views.entity_rank` grades against
-                # and therefore what "rank up OVERALL" actually costs. It has
-                # never been showable before: the entity's RANK had a banner
-                # from the beginning, its STANDARDS had no surface at all, so
-                # the only cutoffs anyone could read were per-strategy ones
-                # (user, 2026-08-10: "make it very clear what it takes for you
-                # to rank up overall, versus rank up per strategy"). Served in
-                # SECONDS like `strategies`, so one formatter reads both, and
-                # derived HERE rather than in the browser because a second
-                # pointwise-min in JS is the divergence this project has a
-                # rule against.
-                "overall": {rank: cs / 100 for rank, cs
-                            in scoring.best_ladder(ladders).items()},
-                "overall_owners": scoring.best_ladder_owners(ladders),
-                # The ONE strategy that sets every Overall cutoff, or null --
-                # the practice card prints why that strategy's ladder IS the
-                # Overall one (scoring.sole_overall_owner has the story).
-                "sole_overall_owner": scoring.sole_overall_owner(ladders),
+                # Full Overall curve and its display cutoffs. Strategy edits
+                # do not define these; both banners use the shared evaluator.
+                **_overall_fields(service.ranks, entity, resolved, ladders),
                 # Which of the names above (keys of "strategies") came off the
                 # Ultimate Sheet rather than community-vetted standards --
                 # ranks.is_fitted's own contract, exposed as a sibling LIST
@@ -455,7 +421,7 @@ def create_ranks_router(service, library=None, adoptions=None,
                 # Same liveness verdicts as `cutoff_videos` above, opposite
                 # consequence -- `sheet_best` says why.
                 "sheet_best": _from_library(sheet_best, entity,
-                                            dead_urls=dead_videos),
+                                            dead_urls=dead_videos, version=resolved),
                 "user_videos": service.ranks.user_videos(entity),
                 "seeded": service.ranks.seeded_strategies(entity),
                 # Grouping is resolved HERE, not in the browser: a 100-coin
@@ -576,30 +542,7 @@ def create_ranks_router(service, library=None, adoptions=None,
         scope_id = scope or _active_scope(service)
         groups = _groups(service, scope_id)
         mode = _rank_mode(service)
-        keys = [key for group in groups for key in group["candidates"]]
-        ladders = marelo_bridge.entity_ladders(service.ranks, keys)
-
-        def scorer(key, frames):
-            # `progress_for_time`, not `score_for`: it carries the ladder's
-            # displayed-centisecond boundary rule, and this chart has to end
-            # on the SAME number the card above it shows (see the comment
-            # below about sharing a source) -- a raw curve score would put
-            # its last point a hair under a division edge the card has
-            # already awarded.
-            ladder = ladders.get(key)
-            return None if ladder is None else scoring.progress_for_time(
-                ladder, classify.display_cs(frames))["score"]
-
-        # Same source as the RATING, mode for mode (tracking/marelo.py): the
-        # saved pbs in pb mode, every success in the averages. A chart drawn
-        # from a different source than the card above it ends on a different
-        # number, and _decimate always keeps the newest point.
-        feed = (marelo_bridge.pb_feed(service.db.pbs(), service.ranks.clock_for)
-                if classify.RANK_MODES[mode]["order"] is None
-                else marelo_bridge.successes_for(service.db.attempts(),
-                                                 service.ranks.clock_for))
-        return {"scope_id": scope_id,
-                "points": history.history_series(feed, groups, scorer, mode)}
+        return build_history(service, scope_id, groups, mode)
 
     @router.get("/marelo/exclusions")
     def marelo_exclusions():
@@ -631,7 +574,7 @@ def create_ranks_router(service, library=None, adoptions=None,
         if body.scope is None:
             raise HTTPException(400, "ack needs a scope")
         try:
-            await service.ack_celebration(body.scope, body.key)
+            await acknowledge(service, body.scope, body.key, body.calibration_revision, _score_scope)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
         return {"ok": True}

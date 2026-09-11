@@ -1202,8 +1202,8 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
       <div class="practice-card">
         <h3>Progress</h3>
         <${HistoryChart} points=${points} />
-        <p class="meta">Recomputed from your attempts against current standards —
-          editing this route or ignoring an entry rewrites the curve.</p>
+        <p class="meta">Past performances graded against current community standards.
+          Data refreshes, route edits, and excluded entries can change this chart.</p>
       </div>
       <div class="practice-card">
         <${Breakdown} key=${scopeId} t=${t} data=${data} routeOrder=${routeOrder}

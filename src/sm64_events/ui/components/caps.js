@@ -19,8 +19,10 @@
 // other tier by 8+ units. That guard doing its job on this file's OWN
 // worked example is the point, not a bug in the example.
 //
-// Import-free on purpose, so node can unit-test it — same reason ui/entities.js
-// is import-free and entityicons.js is the layer above it.
+// Preact/DOM-free so node can unit-test it. The numerical curve owns the
+// division order; this registry owns its cap art and display names.
+import { DIVISION_NUMERALS, DIVISIONS_PER_TIER } from "../timecurve.js";
+export { DIVISION_NUMERALS, DIVISIONS_PER_TIER };
 
 // Bronze/Toad darkened from pure white (addendum 2, 2026-07-25 -- the user's
 // call, reversing the earlier "leave it" ruling): a pure-white tier fed a
@@ -76,15 +78,9 @@ export const capGradient = (tier) => {
 // Roman is what scoring.py stores; Arabic is what every surface shows. A "III"
 // is three glyphs in a sign field ~14px wide and cannot be read there, so the
 // hat forced the decision and the text follows it (spec §Decisions 2).
-const DIGITS = { V: "5", IV: "4", III: "3", II: "2", I: "1" };
+const DIGITS = Object.fromEntries(DIVISION_NUMERALS.map((numeral, index) =>
+  [numeral, String(DIVISIONS_PER_TIER - index)]));
 export const divisionDigit = (numeral) => DIGITS[numeral] || "";
-
-// Bottom of a tier first, mirroring ranks/scoring.py::DIVISION_NUMERALS --
-// DIGITS' key order already WAS this list, implicitly, and naming it is what
-// lets rankPosition below stop being a second opinion about the order.
-// Pinned against the Python list by tests/test_ui_caps.py.
-export const DIVISION_NUMERALS = Object.keys(DIGITS);
-export const DIVISIONS_PER_TIER = DIVISION_NUMERALS.length;
 
 // The bottom of the ladder — what an entity that HAS standards but no time of
 // its own shows, instead of a bare "–" (user, 2026-07-30: "for every

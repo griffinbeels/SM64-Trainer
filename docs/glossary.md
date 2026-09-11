@@ -506,14 +506,31 @@ down to [[Iron]].
 
 ### Best-possible ladder
 
-The fastest [[standard]] at each [[rank]] across every [[strategy]] that has
-one. Grading against it answers "how close is this to the fastest this
-[[target]] can go", which mastering a slow [[strategy]] never moves.
+The legacy comparison taking the fastest [[standard]] at each [[rank]] across
+a [[target]]'s [[strategy]] [[ladder]]s. Generated [[entity rank]] uses the
+independent [[Overall curve]].
 
-- **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`)
-  → the Overall Rank Standards section on the [[library]] page for that
-  [[target]] (`src/sm64_events/ui/components/overallstandards.js`), which also
-  names the [[strategy]] that sets each [[rank]]
+- **Lives** — the legacy scorer (`src/sm64_events/ranks/scoring.py`)
+
+### Overall curve
+
+The score for an absolute time on one [[target]], derived from compatible
+[[sheet entry]] performances and families of [[strategy]] choices. Full nodes
+determine its [[rank]] and [[division]]; eight displayed [[standard]] values
+cannot reconstruct it. Changing a [[strategy]]'s [[standard]] does not change it.
+
+- **Lives** — `src/sm64_events/ranks/overall.py` and
+  `src/sm64_events/ranks/curves.py` → the Overall Rank Standards section
+- **Contract** — [living rank calibration](ranking-calibration.md)
+
+### Rank calibration
+
+One published set of [[sheet entry]] observations, local [[target]] mappings,
+[[strategy]] [[standard]] values and [[Overall curve]] values. Readers retain that set
+throughout a response while refresh prepares the next one.
+
+- **Lives** — `src/sm64_events/ranks/calibration.py` and
+  `src/sm64_events/library/calibration.py`
 
 ### Strategy rank
 
@@ -525,12 +542,11 @@ Your [[rank]] on the [[ladder]] of the [[strategy]] you are actually playing —
 
 ### Entity rank
 
-Your [[rank]] on the [[best-possible ladder]] — "how close is this to the
-fastest this [[target]] can go". When it agrees with your [[strategy rank]] the
-[[practice log]] draws one banner carrying both names instead of two.
+Your [[rank]] on the independent [[Overall curve]] for the actual [[target]],
+clock, and ROM of the time. It can differ from your [[strategy rank]].
 
-- **Lives** — the scorer (`src/sm64_events/ranks/scoring.py`)
-  → the right banner on the [[practice log]]
+- **Lives** — `src/sm64_events/ranks/curves.py`
+  → the Overall banner on the [[practice log]]
 
 ### MARELO
 
@@ -539,7 +555,7 @@ Your one overall rating across everything you practice, rather than one
 your [[rank]]s earn.
 
 - **Lives** — the MARELO bridge (`src/sm64_events/tracking/marelo.py`) and the
-  scorer (`src/sm64_events/ranks/scoring.py`) → the MARELO pill
+  aggregator (`src/sm64_events/ranks/scopes.py`) → the MARELO pill
 - **Not** — a [[rank]]. A [[rank]] grades ONE time on ONE [[ladder]]; MARELO
   grades your whole practice history at once.
 
@@ -1218,8 +1234,9 @@ The [[MARELO]] this project derives for a [[runner]] from their [[sheet
 entry]] times, on the exact same 0-100 curve your own [[MARELO]] grades on —
 what turns the [[Ultimate Sheet]] into a board you can climb against a
 [[runner]]'s best time on each [[target]], not just your own. A [[runner]]
-with no time on a [[target]] never grades as zero there; that [[target]] is
-simply absent from their rating, the same rule your own [[MARELO]] follows.
+with no time on a rankable [[target]] contributes zero in that [[scope]]
+slot. A [[target]] without a resolved [[Overall curve]] is absent from the
+denominator, the same rule your own [[MARELO]] follows.
 
 - **Lives** — the ratings bridge (`src/sm64_events/library/ratings.py`)
 - **Not** — your own [[MARELO]], which only ever grades your practice

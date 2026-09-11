@@ -84,6 +84,7 @@ def _post(base: str, path: str, payload: dict) -> dict:
 def chrome(url: str):
     with driver.get_driver().launch(headless=True) as page:
         page.goto(url)
+        page.wait_for('.starrow', timeout_ms=15000)
         yield page
 
 
@@ -103,7 +104,7 @@ def test_the_card_set_changes_only_while_the_row_is_invisible(tmp_path):
                 "(() => { const tab = [...document.querySelectorAll('button,a')]"
                 ".find(e => /Segments/i.test(e.textContent));"
                 " if (tab) tab.click(); return true; })()")
-            page.evaluate("new Promise(r => setTimeout(r, 300))")
+            page.wait_for('.segments-page', timeout_ms=15000)
             assert before != page.evaluate("document.body.innerHTML.length"), (
                 "control interaction did not change the DOM — the harness is "
                 "broken, not (necessarily) the feature")
@@ -111,7 +112,7 @@ def test_the_card_set_changes_only_while_the_row_is_invisible(tmp_path):
                 "(() => { const tab = [...document.querySelectorAll('button,a')]"
                 ".find(e => /Practice/i.test(e.textContent));"
                 " if (tab) tab.click(); return true; })()")
-            page.evaluate("new Promise(r => setTimeout(r, 400))")
+            page.wait_for('.starrow', timeout_ms=15000)
 
             raw = page.evaluate(_TRACE.replace("ROUTE_ID", str(route["id"])))
             trace = json.loads(raw)

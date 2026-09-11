@@ -290,8 +290,6 @@ def create_import_router(service, library=None, overrides=None,
             ladders from the new payload (`Adoptions.load`), then absorb the
             re-grade so no celebration fires for a rank he did not run for.
             Called on the event loop, where the standards are read."""
-            if adoptions is not None:
-                adoptions.load()
             absorb_after_regrade(service)
             await service._rank_standards_changed()
 

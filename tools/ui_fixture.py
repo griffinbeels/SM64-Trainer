@@ -21,11 +21,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import socket
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
+import traceback
 from dataclasses import replace
 from datetime import UTC, datetime, timezone
 from pathlib import Path
@@ -172,8 +175,8 @@ def _fixture_ffmpeg_runner(cmd: list[str]) -> None:
 def snapshot_db(source: Path, destination: Path) -> Path:
     """Online-backup `source` to `destination` and return the destination."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as origin, \
-            sqlite3.connect(destination) as copy:
+    with contextlib.closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as origin, \
+            contextlib.closing(sqlite3.connect(destination)) as copy:
         origin.backup(copy)
     return destination
 
@@ -1620,6 +1623,40 @@ def _seed_fixture_stage(base, service, castle_stage, seed_castle_pieces, castle_
     if arm_hundred_coin is not None:
         _arm_hundred_coin_star(base, service, *arm_hundred_coin)
 
+def _fixture_server_thread(server):
+    errors = []
+
+    def run_server():
+        try:
+            server.run()
+        except BaseException as error:
+            # Preserve SystemExit from bind failure as well as ordinary errors.
+            errors.append(error)
+            logging.getLogger(__name__).exception("fixture server exited with an error")
+
+    return threading.Thread(target=run_server, daemon=True), errors
+
+
+def _fixture_thread_failure(server, thread, timeout, started_at, errors, phase):
+    elapsed = time.monotonic() - started_at
+    alive = thread.is_alive()
+    frame = sys._current_frames().get(thread.ident)
+    stack = "".join(traceback.format_stack(frame)[-12:]) if alive and frame else ""
+    cause = errors[0] if errors else None
+    return RuntimeError(
+        f"fixture server failed to {phase} after {elapsed:.2f}s "
+        f"(limit {timeout}s, port {server.config.port}, thread_alive={alive}, "
+        f"should_exit={server.should_exit}, cause={cause!r})\n{stack}")
+
+
+def _stop_fixture_server(server, thread, errors, timeout=15):
+    started_at = time.monotonic()
+    server.should_exit = True
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        raise _fixture_thread_failure(server, thread, timeout, started_at, errors, "stop")
+
+
 @contextlib.contextmanager
 def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               seed: bool = True, from_dev_db: bool = False,
@@ -1763,50 +1800,49 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     install/uninstall attempt fail with that sentence, for driving the 409
     path.
     """
-    scratch = None
-    if db_path is None:
-        scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-")
-        db_path = Path(scratch.name) / "fixture.db"
-        if from_dev_db and DEV_DB.exists():
-            snapshot_db(DEV_DB, db_path)
-    # Own tempdir regardless of `scratch` above (which is None whenever the
-    # caller passed an explicit `db_path`) -- the compare cache needs
-    # somewhere to write fixture clips into and must never touch a real
-    # user's `core/paths.compare_cache_dir()`.
-    compare_cache_scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-cache-")
-
-    database = Database(db_path)
-    if reconcile_full_corpus:
-        # Before the server starts: reconcile is a plain db-level operation
-        # (mirrors main.py's own startup call), and doing it early means every
-        # request the fixture makes afterwards already sees the full corpus.
-        seed_path = bundled_defaults_seed()
-        if seed_path is not None:
-            seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
-            problems = reconcile_defaults(database, seed_data)
-            if problems:
-                raise RuntimeError(
-                    f"fixture's reconcile_defaults skipped rows: {problems}")
-    if pad_journal:
-        _pad_journal(db_path, pad_journal)
-    app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
-                                    capture_layer_status, capture_layer_refuse, bundled_library, setup_observer)
-
-    _fixture_replay_routes(app, database)
-
-    port = _free_port()
-    server = uvicorn.Server(uvicorn.Config(
-        app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    scratch = compare_cache_scratch = database = thread = None
     try:
+        if db_path is None:
+            # A failed shutdown preserves evidence rather than unlinking files
+            # still owned by the server. Failures before start clean up below.
+            scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-", delete=False)
+            db_path = Path(scratch.name) / "fixture.db"
+            if from_dev_db and DEV_DB.exists():
+                snapshot_db(DEV_DB, db_path)
+        # The compare cache is always private, even with an explicit db_path.
+        compare_cache_scratch = tempfile.TemporaryDirectory(prefix="sm64-fixture-cache-", delete=False)
+        database = Database(db_path)
+        if reconcile_full_corpus:
+            # Reconcile before requests can observe this fresh fixture.
+            seed_path = bundled_defaults_seed()
+            if seed_path is not None:
+                seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
+                problems = reconcile_defaults(database, seed_data)
+                if problems:
+                    raise RuntimeError(
+                        f"fixture's reconcile_defaults skipped rows: {problems}")
+        if pad_journal:
+            _pad_journal(db_path, pad_journal)
+        app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
+                                        capture_layer_status, capture_layer_refuse, bundled_library, setup_observer)
+        _fixture_replay_routes(app, database)
+        port = _free_port()
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="warning",
+            # These offline servers need socket I/O only. Keep their shutdown
+            # independent of Windows IOCP cancellation draining; Playwright's
+            # subprocess-capable loop belongs to its separate driver thread.
+            loop="asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto"))
+        thread, startup_errors = _fixture_server_thread(server)
+        started_at = time.monotonic()
+        thread.start()
         deadline = time.monotonic() + timeout
         while not server.started and thread.is_alive() \
                 and time.monotonic() < deadline:
             time.sleep(0.02)
         if not server.started:
-            raise RuntimeError("fixture server failed to start within "
-                               f"{timeout}s (port {port})")
+            raise _fixture_thread_failure(server, thread, timeout, started_at, startup_errors, "start") \
+                from (startup_errors[0] if startup_errors else None)
         # AFTER startup, never before: publishing on a service whose app
         # lifespan has not run creates nothing at all — measured 2026-07-28,
         # three events in and `db.attempts()` still empty. tests/test_api.py
@@ -1818,12 +1854,14 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             _seed_fixture_stage(base, service, castle_stage, seed_castle_pieces, castle_piece_arms, bowser_stage, enter_level, seed_reds_run, arm_hundred_coin)
         yield base, service
     finally:
-        server.should_exit = True
-        thread.join(timeout=15)
+        if thread is not None and thread.ident is not None:
+            _stop_fixture_server(server, thread, startup_errors)
         # Close the connection BEFORE removing the directory holding it.
         # Windows refuses to unlink an open file, so a leaked handle here is
         # not a warning -- it is a PermissionError that fails the caller.
-        database.close()
+        if database is not None:
+            database.close()
         if scratch is not None:
             scratch.cleanup()
-        compare_cache_scratch.cleanup()
+        if compare_cache_scratch is not None:
+            compare_cache_scratch.cleanup()

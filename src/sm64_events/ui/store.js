@@ -1,5 +1,5 @@
 // src/sm64_events/ui/store.js — session state + live WS subscription
-import { useEffect, useRef, useState, useCallback } from "preact/hooks";
+import { useEffect, useRef, useState, useCallback, useMemo } from "preact/hooks";
 import { getJSON, send } from "./api.js";
 import { coalesce } from "./coalesce.js";
 import { noteEvent, noteFetchDone, noteFetchStart } from "./latency.js";
@@ -150,9 +150,11 @@ export function useTracker() {
   // Ladders change less often than attempts. Their mounted readers refresh
   // together on configuration changes, including after a disconnected edit.
   const [standardsRev, setStandardsRev] = useState(0);
-  const refreshMarelo = useCallback(async () => {
+  // Socket refreshes and route reconciliation share this queue. Serializing
+  // only the socket's outer refresh still lets reconciliation race it.
+  const refreshMarelo = useMemo(() => coalesce(async () => {
     try { setMarelo(await getJSON("/api/marelo")); } catch (e) { console.error(e); }
-  }, []);
+  }), []);
   useEffect(() => { refreshMarelo(); }, [refreshMarelo]);
   // clearMareloCelebration: local-only clear so the overlay disappears the
   // instant it acks, without waiting on the next REFRESH_ON fetch to bring
