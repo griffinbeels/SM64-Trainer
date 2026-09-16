@@ -100,7 +100,7 @@ function InstallDetails({ emu }) {
     <p>Selects <code>SM64 Trainer v1.0</code> in Project64's <code>Graphics Dll</code> setting.
       ${previous
         ? html`Your current plugin, <code>${previous}</code>, stays in the folder and is selected again when you remove Practice Replay.`
-        : html`Removing Practice Replay selects your previous plugin again.`}</p>
+        : html`No previous graphics plugin is recorded, so removing Practice Replay keeps it selected until you pick another plugin in Project64.`}</p>
     <p>You can remove Practice Replay here in Settings any time. Project64 must be closed.</p>
   </${SetupDisclosure}>`;
 }

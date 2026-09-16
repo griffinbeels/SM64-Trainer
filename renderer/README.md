@@ -42,7 +42,7 @@ static CRT) and writes `src/sm64_events/data/plugin/GLideN64_SM64Trainer.dll`
 and nothing else. The DLL carries a build id
 (`SM64TrainerRendererIdentity`, a digest of the inputs above), which is how
 the setup screen decides whether an installed renderer is this build's and
-how `tests/test_renderer_build.py` checks the bundled file matches the tree.
+how `tests/test_bundled_natives.py` checks the bundled file matches the tree.
 
 ### The three prebuilt libraries
 

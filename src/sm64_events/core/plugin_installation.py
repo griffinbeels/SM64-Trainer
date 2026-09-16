@@ -12,7 +12,9 @@ import shutil
 from sm64_events.core.setup_files import restore_on_failure
 
 log = logging.getLogger("sm64.capturelayer")
-_BUILD = re.compile(rb"(?<![a-f0-9])[a-f0-9]{64}(?:-gpu-runtime|-control-only)?\x00")
+# Every shipped native id: wrapper, encoder helper, renderer (core/capturelayer.py
+# compares by the same ids; receipts record them for diagnostics).
+_BUILD = re.compile(rb"(?<![a-f0-9])[a-f0-9]{64}(?:-gpu-runtime|-gpu-encoder|-renderer)\x00")
 
 
 def sha256(path: Path) -> str:

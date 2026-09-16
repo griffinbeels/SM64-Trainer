@@ -228,8 +228,8 @@ def main() -> int:
     # The bundled wrapper is the GPU capture candidate built from THESE
     # sources: the setup screen compares the installed file with it, so a
     # stale bundle reads as "differs from this build" and asks him to
-    # reinstall an older DLL (round 48). tests/test_gfxwrap_host.py pins that
-    # the bundled build id matches the current sources.
+    # reinstall an older DLL (round 48). tests/test_bundled_natives.py pins that
+    # every bundled build id matches the current sources.
     work = Path(os.environ.get("TEMP", ".")) / "sm64_gfxwrap_build"
     built = build_wrapper(work, vcvars)
     SHIPPED.parent.mkdir(parents=True, exist_ok=True)

@@ -909,8 +909,8 @@ the [[setup screen]] (both DLLs into Project64's Plugin folder, an ini pointing
 the wrapper at the [[renderer]], the `Graphics Dll` setting) and undoes it from the
 same screen, selecting the plugin you had before; without it the [[recorder]]
 photographs the desktop as before. The [[setup screen]] decides "current" by the
-build id each DLL carries, never by bytes, so a rebuild of unchanged sources
-never asks for a reinstall. An app update refreshes the installed pair by
+build id each DLL carries (bytes only for a file without one), so a rebuild
+of unchanged sources never asks for a reinstall. An app update refreshes the installed pair by
 itself once you close Project64, under the consent already given; onboarding
 never reopens for it (his rule, 2026-09-16).
 

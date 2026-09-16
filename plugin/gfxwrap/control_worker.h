@@ -8,7 +8,7 @@
 #include "runtime_control.h"
 #endif
 #ifndef GFXWRAP_BUILD_ID
-#define GFXWRAP_BUILD_ID "unversioned-control-only"
+#define GFXWRAP_BUILD_ID "unversioned"
 #endif
 static volatile LONG g_control_running;
 static volatile LONG g_control_rom;

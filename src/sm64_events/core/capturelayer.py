@@ -227,7 +227,8 @@ def _problems(state: str, pj64_dir, running: bool, wrapper_selected: bool, regis
         problems.append("the capture layer's files or configuration are missing from Project64's "
                         "Plugin folder; re-install to restore them")
     elif state == NEEDS_RESTART:
-        problems.append("restart Project64 to load the capture layer")
+        problems.append(("restart" if running else "start")
+                        + " Project64 to load the capture layer")
     if state in (ACTIVE, NEEDS_RESTART) and wrapper_present and not layer_current:
         problems.append("the installed capture layer differs from this build; "
                         + _update_guidance(running, automatic))
@@ -262,6 +263,10 @@ class CaptureLayer:
         self.auto_refresh = auto_refresh
         self._activity = CounterWindow()
         self._activity_lock = threading.Lock()
+        # Install, the packaged refresh tick and Remove all copy the same
+        # files and rewrite the same overlay; one at a time, or one side's
+        # rollback snapshot can undo the other's finished copy.
+        self._install_lock = threading.RLock()
         self._refresh_stop = threading.Event()
         self._refresh_thread = None
 
@@ -471,6 +476,10 @@ class CaptureLayer:
         )
 
     def install(self, consent: bool) -> LayerStatus:
+        with self._install_lock:
+            return self._install(consent)
+
+    def _install(self, consent: bool) -> LayerStatus:
         if not consent:
             raise LayerRefused("consent is required before installing the capture layer")
         pj64_dir = self.locate()
@@ -568,6 +577,10 @@ class CaptureLayer:
             return False
 
     def refresh_if_stale(self) -> bool:
+        with self._install_lock:
+            return self._refresh_if_stale()
+
+    def _refresh_if_stale(self) -> bool:
         """Copy this build's DLL over a differing one when explicitly enabled.
 
         Source checkouts leave a shared, manually installed candidate alone.
@@ -644,6 +657,14 @@ class CaptureLayer:
                     log.exception("capture layer refresh failed")
 
     def uninstall(self) -> LayerStatus:
+        """Select the previous graphics plugin again. When none is known
+        (the registry named one of our own files when we installed), the
+        wrapper stays selected: it still draws the game, and the setup
+        page says so instead of promising a restore."""
+        with self._install_lock:
+            return self._uninstall()
+
+    def _uninstall(self) -> LayerStatus:
         if self._processes.pj64_image_path() is not None:
             raise LayerRefused("close Project64, then uninstall")
 
