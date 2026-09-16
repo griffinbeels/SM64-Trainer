@@ -87,3 +87,22 @@ def test_missing_empty_and_overwrite_refused(tmp_path, monkeypatch):
     fake_export(monkeypatch)
     with pytest.raises(FileExistsError):
         profile_etl.export(trace, tmp_path)
+
+
+def test_header_only_trace_is_not_complete_despite_zero_exit_and_zero_loss(tmp_path, monkeypatch):
+    trace = tmp_path / "header-only.etl"
+    trace.write_bytes(b"header")
+    fake_export(monkeypatch)
+
+    def run(command, **kwargs):
+        action = command[command.index("-a") + 1]
+        text = ("There is no sampled profile data in the trace" if action == "profile"
+                else "Events Lost: 0\nBuffers Lost: 0")
+        Path(command[command.index("-o") + 1]).write_text(text)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(profile_etl.subprocess, "run", run)
+    result = profile_etl.export(trace, tmp_path / "out", actions=["profile"])
+    assert result["loss"]["state"] == "reported_zero"
+    assert not result["complete"]
+    assert "no sampled profile data" in result["actions"][1]["error"]

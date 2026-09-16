@@ -140,7 +140,9 @@ def _fixture_capture_layer_status(**overrides) -> LayerStatus:
     fields = dict(pj64_dir="C:/Project64", pj64_running=True,
                  registry_graphics_dll="sm64_trainer_gfx.dll", wrapper_present=True,
                  wrapper_current=True, wrapper_selected=True,
-                 wrapped_name="GLideN64_LINK_4.2.dll", layer_alive=True, gl_context=True,
+                 wrapped_name="GLideN64_SM64Trainer.dll", layer_alive=True,
+                 renderer_present=True, renderer_current=True,
+                 previous_graphics_dll="GLideN64_LINK_4.2.dll",
                  consented_at="2026-09-05T00:00:00+00:00", problems=[], state="active")
     fields.update(overrides)
     return LayerStatus(**fields)

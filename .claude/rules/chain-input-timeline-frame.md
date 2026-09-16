@@ -5,10 +5,14 @@ paths:
   - "src/sm64_events/inputs/track.py"
   - "src/sm64_events/inputs/service.py"
   - "src/sm64_events/replay/recorder.py"
-  - "plugin/gfxwrap/gfxwrap.c"
+  - "plugin/gfxwrap/**"
   - "src/sm64_events/replay/pluginsource.py"
+  - "src/sm64_events/replay/sourcefactory.py"
+  - "src/sm64_events/replay/gpucapture*.py"
+  - "src/sm64_events/replay/gpumedia.py"
+  - "src/sm64_events/replay/channelencoder.py"
+  - "src/sm64_events/replay/packetmux.py"
   - "src/sm64_events/replay/pixels.py"
-  - "src/sm64_events/replay/framestream.py"
   - "src/sm64_events/replay/oracleread.py"
   - "src/sm64_events/replay/ledger.py"
   - "src/sm64_events/replay/picturearchive.py"
@@ -44,6 +48,7 @@ the one to fix.
 - **Sink:** the panel under the timeline (FRAME n / N, the stick box, the button chips) on the picture the `<video>` is presenting.
 - **Clock path:** `MediaRun` retains an encoder's first-picture origin and unique run ID. The sink assigns monotonic 90 kHz video PTS, preserves them through NUT/TS, and records each actual PTS with its captured row. The cut subtracts an explicit integer source tick; its `source_pts` restores that tick to each decoded slot. `feed_map` looks up `(run_id, source_pts)` exactly, without fitting a bias. `picture_rows` retains the matched occurrence, and `state_rows` resolves its state without crossing a counter reset. This proves media association only; the plugin's picture/state interpretation is a separate witness.
 - **Browser picture:** `ui/videopicture.js` retains the last delivered `requestVideoFrameCallback.mediaTime` for each video, starting before autoplay. Both stepping and the input inspector read it; a paused template refresh cannot replace it with the requested seek's `currentTime`. `picture_ids` preserves capture occurrences for ordered stepping and heartbeat skips. Unknown input slots clear the readout; raw counters alone cannot resolve overlapping input epochs.
+- **Picture state versus sampled track:** `replay/service.py` projects validated `state_rows` as `picture_states`. AttemptDrawer passes these through InputTimeline; with exact capture on, the button lanes and the stick/speed curves are drawn from those stamps (`stampedRuns` in `inputtimelinemodel.js`) and the inspector indexes the presented slot directly for pad/yaw/speed. The independently polled track only fills frames that have no picture, drawn hatched/dashed and labelled "polled, no picture" (the *polled fill*); the two sources can no longer disagree on one paused picture. The poll can never be authoritative for a picture: the stamp is copied inside the game's own display-list call after that frame's controller read, while the poll reads from another process at arbitrary phase. Missing slots remain unknown. The disagreement audit counts each captured occurrence once and can detect a stale poll, never a wrong stamp. A stamp whose controller bytes are not a pad (axes outside s8, button bits no controller sets) carries no pad, and a layout without a Mario address stamps no facing/speed. Tests: `test_replay_display_evidence.py`, `test_pluginsource.py`, `test_ui_replay_captured_pad.py`, `frontend/inputtimeline.test.js`.
 
 **There is exactly one map path, and it is a read.** A clip whose rows are not
 stamped carries `frame_map: None`, and the panel says "Frame-exact capture is
@@ -56,9 +61,30 @@ can't be relied on as a tool"* (2026-08-23).
 | 1 | the pad in RAM, per game frame | `InputFrame(stick_x, stick_y, buttons)` filed under the gGlobalTimer value read in the same poll | `src/sm64_events/inputs/sampler.py` | `uv run python tools/probe_inputs.py` (live) / `InputSampler.health()["edge_mismatches"]` | none — domain rule 6 forbids writing emulator memory | `edge_mismatches` > 0, or a `skips` count naming frames nobody read | a green health payload from a server attached to nothing |
 | 2 | the chunk store, then the track | the same capture occurrence (chunk IDs/session retained), trimmed to the attempt: the run ends the frame BEFORE the first dance action, `first = last - (igt - 1)` | `src/sm64_events/inputs/store.py`, `src/sm64_events/inputs/track.py` | `uv run python tools/inspect_timeline.py --attempt N --frames a-b` | append edited frames with `db.inputs.append` (the shape `tests/test_inputs_track.py` uses) | frame 0 landing before the reset was pressed (5534: the fall counted as the dance) | a track read from a sibling worktree's journal |
 | 3 | the timeline payload | `runs` on the capture axis (zero-based at the resolved span origin, retaining missing boundary samples as gaps), `lead_frames`, `attempt_frames`, `stretches` | `src/sm64_events/inputs/service.py` | `InputsService(...).timeline(id, span=(lo, hi))` offline, then `run_at(axis)` | none — pure over hop 2, so hop 2's injection reaches it unchanged | a run whose `stick_x` differs from hop 2's at the same raw frame | a payload built without the clip's span (the attempt alone; a different axis) |
-| 4 | the pictures, each STAMPED with the frame that drew it | the wrapper plugin copies the tracker's address table out of RDRAM at the ProcessDList that draws frame N, reads the picture at the VI whose VI_ORIGIN changed (GL_FRONT directly, else the wrapped plugin's own ReadScreen — GLideN64_LINK_4.2 renders on a thread of its own, so for him it is always the latter), and publishes (picture, stamp) into the frame stream. `PluginVideoSource` decodes the stamp with the sampler's own decoder; the recorder files the row `exact: true` with `frame`, `pad`, `mario`, `igt_overall`. A grab with NO stamp is recorded by time only and names no frame. The sink then writes each picture ONCE into a NUT stream at its composition time, files the write in the feed log, and ffmpeg encodes passthrough — one video frame per picture at its own time (VFR), audio in the same stream on the same clock | `plugin/gfxwrap/gfxwrap.c`, `src/sm64_events/replay/framestream.py`, `src/sm64_events/replay/pluginsource.py`, `src/sm64_events/replay/recorder.py`, `src/sm64_events/replay/ledger.py`, `src/sm64_events/replay/ffmpeg_sink.py` | `/api/replay/status` `frame_source` + `frame_source_health`; the sidecar's `picture_ledger` rows; `uv run python tools/score_oracle.py --attempt N`; `tests/test_gfxwrap_host.py` drives the plugin with no emulator | the host's `--drive` writes a known counter into fake RDRAM and a known colour into the picture: the stamp and the pixels must come back equal | rows without `exact`, or `plugin_inexact_rows` climbing (a present that saw zero or two display lists) | a probe reading the ring segment instead of the extracted clip (segments start at pts 1.4) |
+| 4 | the pictures, each STAMPED with the frame that drew it | the capture wrapper copies the tracker's address table out of RDRAM at the ProcessDList that draws frame N and hands that stamp to the trainer's renderer (LINK's GLideN64 v4.2 with the SourceV2/ContextV1 overlay); when the renderer finishes the picture it submits an owned GPU snapshot plus the immutable stamp to the delivery worker without waiting, and the isolated encoder returns a compressed packet carrying the same occurrence. The recorder files the row `exact: true` with `frame`, `pad`, `mario`, `igt_overall`; a refused picture (pool full, no swap, no stamp) is counted, never guessed. Without the installed layer the recorder photographs the desktop by time only and names no frame | `plugin/gfxwrap/gfxwrap.c`, `plugin/gfxwrap/link_source_api.cpp`, `src/sm64_events/replay/gpucapture.py`, `src/sm64_events/replay/gpucapture_session.py`, `src/sm64_events/replay/recorder.py`, `src/sm64_events/replay/ledger.py` | `/api/replay/status` `frame_source` + `frame_source_health`; the sidecar's `picture_ledger` rows; `uv run python tools/score_oracle.py --attempt N`; `tests/test_gpu_delivery.py` and `tests/test_wrapper_runtime.py` drive the native worker with no emulator | the delivery host's pressure scenarios omit and refuse pictures on purpose: every surviving row must still carry its own stamp | rows without `exact`, or `refused` climbing in the native `gpu_summary` log while the player was not idle | a probe reading the ring segment instead of the extracted clip (segments start at pts 1.4) |
 | 5 | the frame map: video slot -> captured state | `feed_map` retains the exact source-PTS capture occurrence in `picture_rows`; `_take_the_stamps` projects that SAME row into `frame_map`, `picture_igt`, and `state_rows`. No predecessor subtraction or raw-counter search. An inexact or missing capture stays unknown; legacy fitted maps remain unverified | `src/sm64_events/replay/feedmap.py`, `src/sm64_events/replay/service.py` | Independently decode a known video slot, compare its visible timer/pad with its matched capture row, then its served state; `tests/test_replay_captured_state.py` retains three live witnesses | Replace the state projection on a saved COPY and replay the same picture in the real drawer | matched capture row agrees with pixels but projected state differs | a green RAM-to-store audit without looking at pixels, or a fitted timestamp phase mistaken for capture identity |
 | 6 | browser presentation, step and input inspector | the delivered video slot and its own timer; an input only when its map resolves uniquely | `src/sm64_events/ui/frame.js`, `src/sm64_events/ui/videopicture.js`, `src/sm64_events/ui/components/inputtimeline.js` | `tests/test_ui_replay_picture_steps.py` decodes picture IDs from canvas after real drawer clicks; component tests cover missing slots and paused refresh | scratch replay response with known encoded pictures and slot identities | backward steps revisit an earlier epoch, tiny slots skip, or the timer changes on a paused refresh | only checking requested currentTime, or never asserting a known input before and after a missing slot |
+
+## The GPU route at hop 4
+
+This is the only shipped route (the raw ReadScreen/frame-stream path was
+deleted on 2026-09-16). `sourcefactory.py` selects
+`GpuCapture` and its paired sink under recorder ownership. The wrapper's bounded
+renderer command adapter retains the ProcessDList stamp through the original
+UpdateScreen. A dedicated worker transfers an owned GPU snapshot and the same
+selection sample/stamp; an isolated encoder returns compressed packets.
+`channelencoder.py` and `gpumedia.py` transfer each completed compressed packet
+and its exact source PTS/occurrence into the bounded `gpumediaworker.py` sink before
+returning native credits. The sink persists selected rows/feeds before publishing
+sample bytes and advances delivery receipts only after successful mux writes.
+AAC/database/disk work never runs on the credit-return path. They do not start
+the raw-picture encoder or infer frames from desktop timing. Failure remains
+explicit missing coverage; queued bytes alone are not a delivery receipt.
+
+Read [the runtime contract](../../docs/replay-gpu-runtime.md) and
+[the boundary contract](../../docs/replay-renderer-boundary.md). Component and
+connected-fixture witnesses do not certify real LINK gameplay's picture/input
+association. Preserve the independent oracle and original media PTS path.
 
 ## Counterfactual recipe
 
@@ -83,6 +109,19 @@ paused picture":
    hold.
 
 ## Failure catalogue
+
+- **2026-09-15 (round 48): two sources on one screen, and three ways a
+  stamp could lie.** The lanes drew the polled track while the inspector drew
+  the stamp, so a stale poll (his 100 Coins frame 3017: no successful poll in
+  the last ~15 ms of the window) showed an empty R lane under an inspector
+  chip that said R. Lanes now follow the stamps; the poll is a labelled fill.
+  Also fixed: a garbage controller block rendered as a wild stick with every
+  chip lit; a Mario-less layout stamped yaw 0 as a real bearing; and an origin
+  change without a swap (config dialog open) paired the previous front buffer
+  with the new stamp as `exact` (`SA_NO_SWAP` now omits it; the fake renderer
+  models the swap count). A source refusal is a counted missing picture, not a
+  dead run; the first picture after activation can now be exact because a
+  bootstrap observation acknowledges the stamp.
 
 - **2026-09-06: a tiny held-picture segment was misread as audio only.**
   The 1128-byte synthetic witness `tests/fixtures/replay_tiny_held.ts` contains

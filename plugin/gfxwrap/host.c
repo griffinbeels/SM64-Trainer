@@ -3,7 +3,6 @@
  * and the VI registers, loads the wrapper DLL (whose ini names fake_gfx.dll
  * and a test stream), and drives the Zilmar calls the way PJ64 does:
  *
- *   --layout                       print every stream constant as NAME VALUE
  *   --drive <wrapper.dll> <frames> [--stream <name>]
  *        per frame i: RDRAM[0..3] = 1000+i (little-endian), RDRAM[64..67] =
  *        0x11223300+i, RDRAM[128..130] = (i, 2i, 3i) as b,g,r; ProcessDList;
@@ -31,7 +30,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "zilmar.h"
-#include "stream.h"
+
+#define STREAM_NAME "sm64_trainer_gfx_v1"   /* the control page the wrapper publishes */
 
 #define RDRAM_BYTES (8u << 20)
 
@@ -40,18 +40,10 @@ static unsigned g_mi_intr;
 
 static void check_interrupts(void) {}
 
-static int print_layout(void) {
-#define PRINT_ONE(name) printf("%s %lld\n", #name, (long long)(name));
-    STREAM_LAYOUT(PRINT_ONE)
-#undef PRINT_ONE
-    return 0;
-}
-
 static int g_no_context;   /* --no-context: the wrapped plugin creates its own, as inside PJ64 */
 static int g_cpu_thread;   /* --cpu-thread: plugin calls on a second thread, the window's thread pumps */
 static int g_commit_late;  /* --commit-late: the upper half of RDRAM is committed after InitiateGFX */
 static int g_sessions = 1;
-static const char *g_test_stream = STREAM_NAME;
 
 static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     WNDCLASSA klass;
@@ -229,14 +221,6 @@ static int drive_calls(drive_job_t *job) {
     }
     printf("host thread %lu: GL context %p after the run\n", (unsigned long)GetCurrentThreadId(),
            (void *)wglGetCurrentContext());
-    /* Capture path while the producer is active, before CloseDLL invalidates
-     * status and releases its mappings. */
-    HANDLE mapping = OpenFileMappingA(FILE_MAP_READ, FALSE, g_test_stream);
-    if (mapping) {
-        const stream_header_t *header = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, HEADER_BYTES);
-        if (header) { printf("capture_status %u\n", header->status); UnmapViewOfFile(header); }
-        CloseHandle(mapping);
-    }
     api.RomClosed();
     api.CloseDLL();
     }
@@ -256,7 +240,6 @@ static DWORD WINAPI drive_thread(LPVOID parameter) {
 }
 
 static int drive(const char *wrapper_path, int frames, const char *stream_name) {
-    g_test_stream = stream_name ? stream_name : STREAM_NAME;
     write_ini(wrapper_path, stream_name);
     drive_job_t job;
     memset(&job, 0, sizeof job);
@@ -304,11 +287,10 @@ int main(int argc, char **argv) {
         if (strcmp(argv[index], "--cpu-thread") == 0) g_cpu_thread = 1;
     for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--commit-late") == 0) g_commit_late = 1;
-    if (argc >= 2 && strcmp(argv[1], "--layout") == 0) return print_layout();
     if (argc >= 3 && strcmp(argv[1], "--info") == 0) return info(argv[2]);
     if (argc >= 4 && strcmp(argv[1], "--drive") == 0)
         return drive(argv[2], atoi(argv[3]), stream_name);
-    fprintf(stderr, "usage: gfxwrap_host --layout | --info <dll> | --drive <dll> <frames> "
+    fprintf(stderr, "usage: gfxwrap_host --info <dll> | --drive <dll> <frames> "
                     "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl] [--no-context] [--cpu-thread] [--commit-late]\n");
     return 1;
 }

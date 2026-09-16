@@ -6,10 +6,30 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from contextlib import nullcontext
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import profile_capture as capture  # noqa: E402
 import profile_report as report  # noqa: E402
+
+
+def test_default_process_sampling_does_not_enumerate_system_threads(monkeypatch):
+    def forbidden():
+        pytest.fail("thread count queries can enumerate system process information on Windows")
+
+    process = SimpleNamespace(
+        pid=42, cpu_percent=lambda: 3.0, is_running=lambda: True,
+        oneshot=nullcontext, create_time=lambda: 123.0, name=lambda: "fixture",
+        io_counters=lambda: SimpleNamespace(read_bytes=5, write_bytes=6),
+        memory_info=lambda: SimpleNamespace(rss=7), num_threads=forbidden,
+    )
+    module = SimpleNamespace(Process=lambda pid: process, cpu_percent=lambda: 1.0,
+                             virtual_memory=lambda: SimpleNamespace(used=8), Error=OSError)
+    monkeypatch.setitem(sys.modules, "psutil", module)
+    sampled = capture.SystemSampler([42]).sample()
+    assert sampled["processes"] == [dict(pid=42, created=123.0, name="fixture",
+                                       cpu_percent=3.0, rss_bytes=7, threads=None,
+                                       read_bytes=5, write_bytes=6)]
 
 
 @pytest.mark.parametrize("url", ["https://localhost:8065", "http://example.com:8065",
@@ -112,8 +132,16 @@ def test_wpr_cleanup_can_only_target_owned_named_instance(tmp_path, monkeypatch)
     assert all(c[-2:] == ["-instancename", traces.instance] for c in mutations)
     assert all("-filemode" not in c for c in mutations)
     assert mutations[-1][1] == "-stop"
-    assert "GPU" in mutations[0]
-    assert traces.profiles == ["GeneralProfile", "GPU"]
+    assert len(traces.profiles) == 1 and traces.profiles[0].endswith("replay.wprp!Replay.Light")
+    assert traces.profiles[0] in mutations[0]
+    assert "GeneralProfile" not in mutations[0]
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(traces.profiles[0].split("!")[0])
+    collectors = tree.findall(".//SystemCollector") + tree.findall(".//EventCollector")
+    total_kib = sum(int(row.find("BufferSize").attrib["Value"])
+                    * int(row.find("Buffers").attrib["Value"]) for row in collectors)
+    assert total_kib <= 128 * 1024
+    assert traces.missing and "coverage" in traces.missing[0]
 
 
 def test_failed_wpr_start_never_cancels_another_capture(tmp_path, monkeypatch):

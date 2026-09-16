@@ -2,8 +2,11 @@
 paths:
   - "src/sm64_events/core/capturelayer.py"
   - "src/sm64_events/core/capturelayer_win.py"
+  - "src/sm64_events/core/plugin_installation.py"
+  - "tools/graphics_diagnostics.py"
   - "src/sm64_events/core/paths.py"
   - "src/sm64_events/core/setup_runtime.py"
+  - "src/sm64_events/core/setup_gpu.py"
   - "src/sm64_events/core/onboarding.py"
   - "src/sm64_events/server/setup_api.py"
   - "src/sm64_events/ui/setupflow.js"
@@ -28,10 +31,17 @@ paths:
   current source's original plugin PID substitutes for fresh picture delivery.
   Heartbeat, ROM, game and neutral input sampling must still be live. The receipt
   cannot qualify a stopped recorder, desktop fallback, or another plugin PID.
+  The GPU route has a separate typed observation: ControlV1 live PID/birth,
+  generation/token and actual non-repeat muxed-picture receipt/source epoch.
+  Active checks require moving lease acknowledgments and pictures. Deliberate
+  GPU idle revokes the lease and the native control worker sleeps, so its exact
+  positive receipt plus live matching control/ROM and fresh game/neutral-input
+  counters replaces the legacy heartbeat requirement. This exception also needs
+  game/input movement on the limited JP path; a live idle process is insufficient.
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
 |---|-----|-----------------------|--------|------------------|--------------------|------------------------------------------|--------------------------------------------|
-| 1 | Plugin installation and movement | wrapper files/selection, consent, plugin PID, recent heartbeat and picture sequence | `src/sm64_events/core/capturelayer.py` | GET /api/setup emu installation fields; `tests/test_capturelayer.py` | FakeRegistry, FakeProcesses and stream_header in that test | Missing/stale wrapper, wrong selection, or frozen stream | An unchanging fake heartbeat cannot earn active status |
+| 1 | Plugin installation and movement | renderer + wrapper files (compared with the bundle by build id), the ini naming the renderer, selection, consent, producer PID and captured-picture receipts | `src/sm64_events/core/capturelayer.py` | GET /api/setup emu installation fields; `tests/test_capturelayer.py` | FakeRegistry, FakeProcesses and a fake GPU observation in that test | Missing/stale renderer or wrapper, an ini wrapping another plugin, wrong selection, or a producer that stops acknowledging | An unchanging fake observation cannot earn active status |
 | 2 | Runtime observation | actual ROM identity and fresh counters belonging to the selected process | `src/sm64_events/core/setup_runtime.py` | GET /api/setup emu target, rom and checks; `tests/test_onboarding.py` | Runtime fakes in that test vary PID, ROM, counters and recorder source | PJ64 without ROM, wrong PID, desktop fallback or stalled counters remain incomplete | A first counter observation or missing observer stays unverified |
 | 3 | Applicable readiness | verification.step, ready and limited | `src/sm64_events/core/onboarding.py` | `tests/test_onboarding.py` readiness cases | Remove one check at a time from observation() | A missing US check prevents completion; JP excludes unsupported tracking only | Making every check false still reports ready, so the probe missed its subject |
 | 4 | API and durable outcome | fresh verdict plus separate onboarding record | `src/sm64_events/server/setup_api.py` | GET /api/setup and completion response; `tests/test_onboarding.py` | Inject the observer; POST completion through TestClient | Premature finish returns 409 with no completion record | A test reads an old localStorage value instead of the server record |
@@ -49,6 +59,23 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-09-13: a source server's two-second refresh replaced a manually copied
+  wrapper with its older bundled DLL before PJ64 reopened. Hash inequality did
+  not establish which build was newer. `CaptureLayer` defaults to manual updates;
+  only frozen composition opts into the packaged automatic refresh. Source builds
+  keep explicit Install and show a differing version without claiming it is newer.
+  `test_default_refresh_preserves_a_manually_replaced_wrapper` and the composition
+  source/frozen test protect that ownership. The real setup modal test exercises
+  manual replacement through the existing API. Packaged refresh also requires
+  consent and a last-install hash matching the current disk bytes; an external
+  replacement or unknown installation history offers explicit Install instead.
+  `plugin_installation.verified_copy` verifies bytes and rolls back failed copies
+  and caller settings. Its persisted receipt and log identify the server PID,
+  reason, source/destination and before/source/after hashes. The diagnostic's
+  `--expected-wrapper` compares candidate, bundle, disk and current PID/birth-bound
+  source build separately. Neither build labels nor hashes establish version
+  ordering. Older running applications retain their old updater code until closed.
 
 - 2026-09-07, hop 2: AFK revoked picture demand as designed, then setup rejected
   the stalled delivery counter despite a live plugin, ROM, inputs and game.
@@ -81,3 +108,12 @@ click; a declared transition or a settled screenshot alone cannot prove movement
   recognition now checks physical evidence; shared installation metadata preserves
   discovery while Project64 is closed. Tests vary the hash and missing INI, and
   migrate between two checkout roots without sharing their practice databases.
+
+- 2026-09-10, hop 1: the manually installed wrapper was active and delivering
+  pictures, but its source copy in the trainer build was absent. Setup's
+  unavailable state described the missing installer source, not a failed native
+  hook. Main now passes the bundle resolver into CaptureLayer, which resolves it
+  per operation; restoring or removing the file is recognized without caching
+  startup absence. Installation hashes remain required. The offline rendered
+  regression uses the real CaptureLayer/API, restores the source while the
+  modal is open, and verifies completion without touching emulator settings.
