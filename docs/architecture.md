@@ -77,6 +77,33 @@ marking a grab as a mistake (`attempt_cleared`) retroactively re-attributes
 every later failure to the previous valid practice target. Implemented in
 `tracking/projection.py`; semantics in its docstring.
 
+### Recovery boundaries
+
+`server/pollsupervisor.py` restarts an unexpectedly failed poll loop with fresh
+memory attachment and detectors. Normal PJ64 absence remains ordinary attach
+discovery. Both paths discard held detector edges across a disconnected source.
+The poller's shared async boundary serializes ticks, late database binding and
+storage repair; emulation callbacks do not participate in this lock.
+
+`tracking_gap` is a journal boundary for lost observations, not a game reset or
+a played failure. The projector abandons uncertain open attempts, segments and
+runs, preserving completed history. It never carries a star/warp edge across the
+gap. Journal failures retry that boundary, not the failed original event; derived
+write failures rebuild from committed journal rows without repeating historical
+completion broadcasts. Recovery uses capped backoff, including when Mario is idle.
+
+`server/inputruntime.py` binds the sampler, writer, replay input lookup and API
+when the database becomes available. Input writes roll back failed transactions
+and retry one bounded valid chunk with its original session ownership. Frames
+that cannot enter that buffer are counted as rejected, never manufactured or
+relabeled. A lasting disk failure therefore remains a visible data gap.
+
+Replay recovery retains source epochs and independently timestamped archives.
+When pre-roll crosses a reconnect, clip selection prefers the run covering the
+actual attempt; it never combines separate runs to disguise absent footage.
+See [GPU recovery and ownership](replay-gpu-runtime.md#startup-idle-and-failure)
+and [health diagnostics](api.md).
+
 **Broadcast-before-journal ordering** (liveness never gated on the db).
 `TrackerService.publish()` calls `broadcaster.publish()` first, then
 journals, then projects. A DB failure is caught, logged, and swallowed —
@@ -432,6 +459,11 @@ reader could act on.
   Needs one hunted+verified read (the usedObj offset). User-validated want.
 
 ## Replay capture (2026-06-11/12 live-audit marathon)
+
+The current SourceV2 renderer/worker/encoder architecture is documented in
+[Renderer GPU recording](replay-gpu-runtime.md). The dated pipeline below records
+the earlier desktop/segment design and the failures that motivated its clock
+contracts; it is not the current GPU capture route.
 
 Self-contained PJ64 window+audio recording into a disk segment ring
 (`replay/` zone; spec carries an outcome addendum — its original stack was

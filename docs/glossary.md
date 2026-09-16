@@ -746,6 +746,37 @@ a clip's picture rate follows the game's pictures instead of a fixed 60.
   second onto a wall-clock grid and stamped it at the encoder's read;
   that shape still serves clips cut before it and the in-process fallback.
 
+### Polled fill
+
+What the input lanes draw for a game [[frame]] that has no picture when exact
+capture is on: the independently polled pad sample for that [[frame]], hatched
+(bars) or dashed (stick and speed curves) and labelled "polled, no picture".
+Every [[frame]] that has a picture draws the picture's own [[picture ledger]]
+stamp instead, so the lanes and the inspector cannot disagree on one paused
+picture. Without exact capture the lanes draw the polled track and mark
+nothing. A [[refused picture]] therefore shows as a polled fill, never as the
+picture's own state.
+
+- **Lives** -- `src/sm64_events/ui/components/inputtimelinemodel.js` (the
+  merge of stamps and polled samples),
+  `src/sm64_events/ui/components/inputtimelinelanes.js` (the drawing).
+- **Not** -- the template's ghost bars, which are another player's [[run]].
+
+### Refused picture
+
+A picture the [[capture layer]] could not admit while recording: the [[renderer]]'s
+eight source slots or the [[snapshot]] pool were full (Python fell behind), or
+the record carried no usable stamp. The [[renderer]] never waits for it; the
+worker counts it (`refused` in the native `gpu_summary` log) and keeps
+recording. The replay holds the previous picture through that [[frame]], the
+lanes show its [[polled fill]], and the [[recorder]] files the next captured
+picture inexact. Before round 48 one refusal ended the recording [[run]].
+
+- **Lives** -- `plugin/gfxwrap/gpu_delivery.cpp` (the count),
+  `plugin/gfxwrap/stamp_adapter.cpp` (the refusal latch).
+- **Not** -- a same-origin or no-swap omission, which is a VI that showed
+  no new picture and is not counted.
+
 ### Media run
 
 One encoder child's identity and clock origin. The first submitted picture
@@ -858,45 +889,67 @@ list of contradicted pictures.
 
 ### Capture layer
 
-The wrapper graphics plugin the trainer installs into Project64 (2026-09-04,
+The graphics plugin pair the trainer installs into Project64 (2026-09-04,
 his ask: "redo our recording system so that the recording [[frame]]s ARE game
-[[frame]]s"). It forwards every call to the graphics plugin you already use;
-when the game submits a picture it copies the game's own memory -- the
-[[frame]] counter, the pad, Mario, the running IGT -- and when the plugin
-presents that picture it reads the picture off the GPU (itself, or through
-your plugin's own ReadScreen when your plugin draws on a thread of its own,
-as GLideN64_LINK_4.2 does) and hands both to the [[recorder]] through the
-[[frame stream]]. The [[recorder]] takes this camera as soon as a first
-picture arrives, in whichever order you opened the game and the trainer;
-a layer Project64 loaded that cannot read leaves the [[recorder]] on the
-desktop grab and says why on the [[setup screen]]. A clip made of these pictures
-carries no inference: each [[picture ledger]] row says `exact`, the
-[[frame map]] is the rows, and the [[pad reader]]
-only audit. The trainer installs it under your explicit consent on the
-[[setup screen]] (the file into Project64's Plugin folder, its `Graphics Dll`
-setting, a small ini naming your plugin) and undoes it from the same screen;
-without it the [[recorder]] photographs the desktop as before.
+[[frame]]s"): the wrapper Project64 selects (`SM64 Trainer v1.0`,
+`sm64_trainer_gfx.dll`) and the [[renderer]] it wraps. When the [[renderer]]
+finishes a picture the wrapper copies the game's own memory -- the [[frame]]
+counter, the pad, Mario, the running IGT -- and the [[renderer]] passes an owned
+GPU [[snapshot]] with that immutable stamp to a dedicated worker and the
+isolated [[encoder helper]]. The [[recorder]] retains exact source identity
+through shared media fragments without transferring full images through
+Python. A known GPU producer that cannot capture reports the failure; it does
+not silently switch to desktop timing. See [the current
+runtime](replay-gpu-runtime.md) for ownership and limits.
 
-- **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the plugin), built by
-  `tools/build_plugin.py` into `src/sm64_events/data/plugin/`;
-  `src/sm64_events/core/capturelayer.py` installs and undoes it;
-  `src/sm64_events/replay/pluginsource.py` is the [[recorder]]'s camera over
-  it
+The [[frame map]] reads captured identity rather than guessing it from cadence.
+Inexact or missing identity stays unknown; the [[oracle reader]] and [[pad reader]]
+independently audit real pixels. The trainer installs under explicit consent on
+the [[setup screen]] (both DLLs into Project64's Plugin folder, an ini pointing
+the wrapper at the [[renderer]], the `Graphics Dll` setting) and undoes it from the
+same screen, selecting the plugin you had before; without it the [[recorder]]
+photographs the desktop as before. The [[setup screen]] decides "current" by the
+build id each DLL carries, never by bytes, so a rebuild of unchanged sources
+never asks for a reinstall.
+
+- **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the wrapper), built by
+  `tools/build_plugin.py` into `src/sm64_events/data/plugin/` beside the
+  [[renderer]] and the [[encoder helper]]; `src/sm64_events/core/capturelayer.py`
+  installs and undoes it; `src/sm64_events/replay/sourcefactory.py` selects
+  the [[recorder]]'s camera; `src/sm64_events/replay/gpucapture.py` owns the
+  capture path
 - **Not** -- the desktop grab (`src/sm64_events/replay/video.py`): that
   photographs the window ~120 times a second and the trainer must then work
   out which [[frame]] each photograph shows.
 
-### Frame stream
+### Renderer
 
-The shared-memory ring the [[capture layer]] writes and the [[recorder]]
-reads: one slot per presented picture, the copied memory beside its pixels,
-and -- in the other direction -- the table of addresses the trainer asks the
-plugin to copy, so the plugin itself knows no game address. Both sides
-compute its size from the same constants and a test pins the C offsets
-against the Python ones.
+The trainer's build of LINK's GLideN64 v4.2 (`GLideN64_SM64Trainer.dll`,
+picker label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
+capture overlay that adds the SourceV2 export the [[capture layer]] reads. A
+stock GLideN64 has no such export, so a wrapper pointed at one captures
+nothing and every picture reads "input unavailable" (his report, 2026-09-15).
+GLideN64 is GPL-2.0; the About box credits its authors and links the
+published source. The renderer keeps GLideN64's own settings identity, so a
+user's existing GLideN64 settings carry over.
 
-- **Lives** -- `src/sm64_events/replay/framestream.py` (the trainer's side),
-  `plugin/gfxwrap/stream.h` (the plugin's)
+- **Lives** -- `tools/build_renderer.py` builds it from the pin in
+  `renderer/build-inputs.json` and the overlay in `plugin/gfxwrap/`
+  (`renderer/README.md` has the provenance and credits) into
+  `src/sm64_events/data/plugin/`
+- **Not** -- the graphics plugin the user had before; that one stays in the
+  folder untouched, and "Remove Practice Replay" selects it again
+
+### Encoder helper
+
+The 64-bit NVENC DLL (`SM64GpuEncoderV1.dll`) the server's isolated encoder
+process loads to turn the [[renderer]]'s GPU pictures into H.264 packets
+without copying pixels through Python. Built by `tools/build_plugin.py`
+beside the wrapper; it carries the same native build id with its own suffix.
+
+- **Lives** -- `plugin/gfxwrap/gpu_encoder_dll.cpp`,
+  `plugin/gfxwrap/gpu_bridge_encoder.cpp`; loaded by
+  `src/sm64_events/replay/gpucapture_session.py`
 
 ### Oracle reader
 

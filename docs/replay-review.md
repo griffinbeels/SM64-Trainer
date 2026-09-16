@@ -6,11 +6,15 @@ pause. Native recordings and downloaded videos share the playback controls.
 The seek bar shows current / total time on its right. Mouse seeking returns
 focus to review; keyboard focus still lets you adjust the slider normally.
 The speaker toggles mute, with a red X when muted. Hover or keyboard-focus the
-speaker to reveal volume. The speedometer and multiplier select playback speed.
+speaker to reveal volume. The speedometer selects 0.25×, 0.5×, 0.75×, 1×
+(default), 1.5×, 2×, 3× or 4×. Selecting a speed ends the current shuttle.
 
-- J shuttles backward; K pauses; L plays forward. Repeated J or L presses raise
-  the requested speed through 1×, 2×, 4× and 8×. Reverse uses silent, bounded
-  seeks because browser video does not reliably support negative playback rate.
+- J starts reverse at -1×; L starts forward at 1×. Repeated taps in the same
+  direction advance through magnitudes 1×, 1.5×, 2×, 3× and 4×, capped at 4×.
+  Switching direction starts at 1× again. K pauses and resets speed to 1×,
+  including after a manual speed choice. Holding J/L alone does not accelerate
+  through the ladder. Reverse uses silent, bounded seeks because browser video
+  does not reliably support negative playback rate.
 - Left/Right step captured pictures where timing is available. Clicking a step,
   Start, or a position stops the shuttle so it cannot overwrite that selection.
 - Drag across the input lanes to set and enable a loop, including both selected
@@ -19,7 +23,9 @@ speaker to reveal volume. The speedometer and multiplier select playback speed.
 - I sets In, O sets Out and X clears both markers. Completing both endpoints
   enables the loop. Play starts at In when outside the loop and continues from
   the current position when inside. Shift+I jumps to In without pausing playback.
-- Hold K and tap J/L to step one picture backward/forward.
+- Hold K and tap J/L to step one picture backward/forward. Holding the second
+  key uses the same delay and repeat schedule as holding Left/Right. Releasing
+  either chord key stops the steps and keeps playback paused.
 - Wheel over the input lanes to zoom around the pointer. The full-width bar
   below them shows the visible portion of the complete timeline; drag its thumb
   to pan. When focused, Left/Right pan and Home/End reach the two ends.
@@ -50,9 +56,20 @@ callbacks can seek, and retains bounds and media events with the failure.
 Do not shorten the interval to hide this or treat the loop as frame-exact.
 Browser frame callbacks are [best effort](https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback).
 
-## Extraction
+## Replay preparation
 
-Native H264 footage now copies its already-encoded video and audio into MP4.
+Normal capture now records shared encoded fragments. View builds native MP4
+headers and streams the existing bytes; it writes no per-attempt video file and
+runs no new encoder or packet probe. The selected interval and source-picture
+input association stay fixed for that URL. Optional future post-padding no
+longer delays View; the attempt's own tail must still be published. Save, marking
+a PB, and compilation export materialize the same native bytes. See
+[shared fragments and native replay views](replay-fragments.md) for the current
+pipeline, validation and measurement limits.
+
+### Earlier segment-extraction optimization (compatibility path)
+
+Native H264 footage on this path copies its already-encoded video and audio into MP4.
 The preceding keyframe stays in the file as decoder pre-roll, hidden by a
 90 kHz edit list, so the visible cut begins on the same picture without another
 video encode. Picture PTS, held intervals and source associations remain intact.
@@ -74,9 +91,9 @@ flash/click checks, and `tests/test_ui_replay_copy.py` for browser pre-roll hand
 The packet-copy mechanism is described in the
 [FFmpeg streamcopy documentation](https://ffmpeg.org/ffmpeg.html#Streamcopy).
 Use the
-[profiling guide](profiling.md) to measure complete extraction and review latency;
-the current service still waits for closed segments covering the post-attempt
-tail. It has no during-attempt final-MP4 preparation worker or progressive tail.
+[profiling guide](profiling.md) to measure complete extraction and review latency.
+The segment compatibility path waits for closed segments covering its requested
+tail. Normal fragment-backed capture and View use the preparation path above.
 
 ## Resource cost
 

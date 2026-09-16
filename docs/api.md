@@ -23,6 +23,28 @@ No recorder restart or capture-rate change occurs. See [profiling](profiling.md)
 | `POST /api/admin/restart` | Full-process relaunch — the one-click "Restart server" button; picks up edited backend code. `{"restarting": true}` |
 | `POST /api/diagnostics` | One-button debug report — capped tails of the server log, journal, UI log and perf samples, plus the `/health` payload, in ONE markdown file under the replays `diagnostics/` dir (newest 5 kept). Sections degrade individually: an unreadable source names its failure instead of failing the report. Open the file via `POST /api/replay/reveal`. `{"path", "size_bytes"}` |
 
+`GET /health` reports `polling: {state, error, last_error, failures, restarts,
+retry_in_s}`. The supervisor uses `starting`, `running`, `recovering`, and
+`resuming`; the unsupervised fallback also recognizes `failed` and `stopped`.
+A failed poll task restarts with fresh detectors after capped backoff. During
+recovery, `status` is `"error"`, `emulator_attached` is false, and `GET /state`
+returns `{"snapshot": null}` instead of an abandoned snapshot. A fresh memory
+observation restores polling readiness; this alone does not prove storage or
+recording health. Task failure logs include the full traceback.
+
+`tracking` reports `state` (`running`, `recovering`, or `unavailable`), error,
+failure/recovery counts and retry delay. `input_storage` reports pending frames,
+failed/rejected writes and retry delay, or `state: "unavailable"` before binding.
+Tracking/storage failures also make overall health an error. Database startup
+retries attach the input sampler and input API together; input endpoints return
+503 until that binding exists. See [recovery boundaries](architecture.md#recovery-boundaries).
+
+Input diagnostics include cumulative `invalid_samples` and `sink_failures`,
+`last_invalid_sample: {frame, stick_x, stick_y, observed_utc}` (or null), and
+`sink_error` (cleared by a successful write). Invalid raw axes are omitted,
+never clamped. `input_flush: {failures, error}` tracks the optional settlement
+flush separately: a flush failure cannot stop course detection or journaling.
+
 ## Auto-update (localhost only)
 
 The packaged exe self-updates from GitHub releases. All endpoints are inert
@@ -331,9 +353,11 @@ live and `system` when it fell back to capturing PJ64's whole output
 endpoint — into `data/replay_buffer/` (scratch, wiped on
 startup). Video encoding runs in an `ffmpeg` subprocess when ffmpeg is on
 PATH — recommended; the in-process fallback encoder stutters under load
-(why: docs/architecture.md → Replay capture). Retention defaults to the
-whole session; a temporary disk cap (new default 2 GiB) evicts oldest unsaved footage
-regardless. Existing stored limits remain unchanged. Both storage limits are adjustable live from the UI — click
+(why: docs/architecture.md → Replay capture). Unsaved replay retention defaults to
+the latest 10 completed attempts across courses, with the active attempt protected.
+A temporary disk cap (default 2 GiB) may evict older footage sooner; files in an
+active read/save remain leased. Existing stored byte/time limits remain unchanged.
+Attempt count, time window and disk cap are adjustable live from the UI — click
 the recording dot in the header (shows usage as `rec · 38 min ·
 1.2/20 GB`); changes persist to `data/replay_settings.json` and apply
 immediately. Saved replays under `replays/` are kept forever and never
@@ -349,6 +373,12 @@ PJ64 must run windowed (exclusive fullscreen cannot be captured).
 - `GET /api/attempts/{id}/replay/review-state` — per-replay review preferences: `{template_offsets, zoom, loop}`. Template keys are `<template ID>:<SHA-256 document revision>` and offsets are integer game frames. Zoom is an input-axis `{start, end}` range or null; loop is a media-seconds `{start, end, enabled}` range or null, with an exclusive end. Unsaved preferences last for the owning server session. Saving a replay promotes them to a separate `.review.json` file beside the MP4.
 - `PUT /api/attempts/{id}/replay/review-state` — replace review preferences; omitted fields reset to defaults. Later edits to saved replays write only the preference file. Invalid fields/ranges return 409, absent attempts 404. Up to 128 template offsets, ±1,000,000 frames; zoom within 0–1,000,000 frames and loops within 0–86,400 seconds.
 
+For paired GPU capture, replay status reports `recording: false` during preparation,
+unavailable capture and failure, even if a worker remains attached. The optional
+`publication_error` carries the source failure/wait reason. Writer queue counts,
+errors and peak timing are under `frame_source_health.publication`; see
+[GPU runtime diagnostics](replay-gpu-runtime.md#setup-and-diagnostics).
+
 Review-state GET includes `X-Replay-Review-Session`, a token for the owning server
 lifetime. Clients may send `X-Replay-Review-Edit: <session>/<client>/<sequence>`
 with PUT: session and client are 32 lowercase hexadecimal characters, sequence
@@ -357,8 +387,8 @@ client return current state without overwriting it. Expired tokens return 409;
 reload GET and discard drafts from the old session. The browser keeps only
 unacknowledged drafts in tab session storage and serializes writes. Saved
 preferences remain in the replay's separate preference file across restarts.
-- `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
-- `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
+- `GET  /api/replay/settings` — `{retention_attempts, retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
+- `PUT  /api/replay/settings` — body `{retention_attempts?, retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}`. Attempt count is an integer 1–1000 or null (no count limit); omitted count/pads keep current values. Both retention fields null keep the session. Persists and applies immediately; shrinking evicts eligible old footage. Bounds: 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s. Invalid bounds return 409; non-integer count returns 422. Saved/PB exports are exempt. Increasing retention cannot restore expired footage.
 - `POST /api/attempts/{id}/replay` — cut or reuse the attempt's clip. Returns
   `{clip_url, duration_s, truncated, fps, game_fps, source, anchor_offset_s,
   attempt_start_slot, input_span, frame_map, frame_map_source, input_alignment,
@@ -381,9 +411,9 @@ preferences remain in the replay's separate preference file across restarts.
   wall-clock anchor without claiming an input association.
   `picture_ids[k]` identifies the captured picture occurrence within this clip:
   heartbeat copies share an ID, separate visits to the same raw counter do not.
-  `picture_states[k]` is `{buttons, stick_x, stick_y, yaw}` from that validated
+  `picture_states[k]` is `{buttons, stick_x, stick_y, yaw, action, speed}` from that validated
   capture occurrence, or null when its pad is unavailable; the whole field is
-  null without a verified map. Yaw may be null independently. Mapped overlay
+  null without a verified map. Yaw, action and speed may each be null independently. Mapped overlay
   exports use this state with `frame_times` and `duration_s`, including holds.
   Null IDs remain individually selectable unknown pictures. Controls walk slots
   in order and seek inside their recorded intervals; they do not order raw
@@ -415,7 +445,7 @@ preferences remain in the replay's separate preference file across restarts.
   the plugin's picture/state convention or recover missing legacy identities.
   A saved clip without a sidecar has unknown duration and no truncation flag.
 - `GET  /api/replay/available` — `{available: [attempt_id, …]}`: every attempt whose clip is still cuttable (in the ring buffer) or already saved; the Compare tab reads it to badge which runs can load a video
-- `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
+- `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly). A fragment-backed clip carries an `ETag` naming its immutable descriptor and `Cache-Control: private, max-age=3600`, and honours a matching `If-Range`, so the browser resumes ranges instead of reopening a connection per seek.
 - `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
 - `POST /api/attempts/{id}/replay/save` — atomically publish to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
 - `POST /api/compilation` — start a failure compilation for a star (`{"star":{"course_id":C,"star_id":S}}`) or segment (`{"segment_id":N}`), with `x_before`/`y_after` seconds around each failure. Returns `{job_id}`.

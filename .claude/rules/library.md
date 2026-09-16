@@ -10,6 +10,23 @@ paths:
 
 # The Library — where to change what
 
+Startup refresh uses `library/background.py`: inspect only Log column A first,
+skip unchanged revisions, then build/fit/stamp/compress newer workbooks in one
+quiet, lower-priority process. This keeps the workbook build out of the capture
+interpreter. The parent validates and atomically installs the compressed result,
+rechecks revision under the store's apply lock, then runs existing adoption and
+regrade notifications. The child never opens app data. Source uses the base
+Python executable with this checkout on PYTHONPATH; frozen builds dispatch via
+`gui_entry.py` before desktop startup. Timeout/cancel reaps the owned build
+worker; the existing off-thread download retains its network timeout.
+`ranks_api.absorb_after_regrade` prepares membership/entity scores once per
+sweep and uses the original scope aggregation; it does not build display
+labels or replay links for a watermark update. With 22 saved scopes, the old
+display path repeated 95 segment reads and 66 route reads (~550 ms); the
+batch took ~16 ms on the same scratch catalogue. No cache survives the call.
+Tests: `test_regrade_batch.py`,
+`test_library_background.py`, `test_library_store.py`, `test_library_refresh.py`.
+
 Phase 1 of spec `2026-08-04-ultimate-sheet-library-design.md`, which is a LOCAL
 working file: anything load-bearing from it belongs here or in the glossary
 before it goes away. Fitting, refresh, adoption, Library browsing and runner profiles are built.

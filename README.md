@@ -71,11 +71,14 @@ installation opens its repair step directly. Only Project64 installation metadat
 is shared across checkouts; your practice data stays in its existing location.
 
 Installing Practice Replay adds a **capture layer** to Project64's plugin
-folder and selects it as the `Graphics Dll`. The wrapper forwards drawing to
-your existing graphics plugin and supplies replay pictures stamped with the
-game's frame counter and inputs. Install while Project64 is closed; open
-Usamune once afterward to check it. **Manage Practice Replay → Remove Practice
-Replay** restores the previous graphics selection, also with Project64 closed.
+folder and selects it as the `Graphics Dll`: the trainer's own renderer
+(`GLideN64_SM64Trainer.dll`, LINK's GLideN64 v4.2 with the capture hooks,
+GPL-2.0, credits in its About box) and the capture wrapper (`SM64 Trainer
+v1.0`) that loads it and supplies replay pictures stamped with the game's
+frame counter and inputs. Your existing graphics plugin stays in the folder
+untouched. Install while Project64 is closed; open Usamune once afterward to
+check it. **Manage Practice Replay → Remove Practice Replay** selects your
+previous graphics plugin again, also with Project64 closed.
 The trainer can still use desktop capture when you postpone installation.
 N64 setup currently explains that console tracking is in development.
 

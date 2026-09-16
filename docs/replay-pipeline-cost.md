@@ -1,5 +1,8 @@
 # Capture operations and their remaining cost
 
+Historical audit (2026-09) of the ReadScreen/frame-stream capture path. That path
+was deleted on 2026-09-16; the shipped path is [Renderer GPU recording](replay-gpu-runtime.md).
+
 The plugin supplies the picture and its copied game state together. The active
 path is GLideN64 ReadScreen → BGR shared ring → owned BGR → picture selection →
 accepted BGRA → timestamped NUT packets → FFmpeg → H264/AAC segments.
@@ -214,3 +217,48 @@ establish a lower overall resource cost. These four-round results include
 preparation and orientation but exclude capture, pipe and encoding. The current
 converter remains unchanged; the more substantial texture-transfer candidate
 still needs its separate ownership and timing proof.
+
+## Input lookup and a rejected extraction shortcut
+
+The timeline's delivered-picture path now locates the active moment with an
+upper-bound binary search over sorted markers. It preserves the last marker at
+a tied frame and the existing gap behavior. The 10,000-marker regression requires
+at most 14 marker reads, replacing a worst-case 10,000-read scan without another
+index allocation. Timeline geometry remains cached across playhead updates.
+This improves lookup scaling; no whole-browser CPU saving is inferred from it.
+
+A controlled six-round alternating benchmark on 2026-09-09 queried the same
+markers 20,000 times through the previous scan and the actual exported lookup.
+All returned results matched. Median batch wall times were:
+
+| Retained markers | Previous scan | Binary lookup |
+| --- | ---: | ---: |
+| 100 | 0.593 ms | 0.495 ms |
+| 1,000 | 3.673 ms | 0.756 ms |
+| 10,000 | 47.699 ms | 1.519 ms |
+
+These are lookup-only batch costs, not per-picture costs or a prediction of
+whole-browser CPU. The portable operation-count and tie/gap checks live in
+`tests/frontend/inputtimelineperformance.test.js`.
+
+An in-process PyAV packet-index trial was rejected despite a faster benchmark.
+On the saved 1'29"96 recording, it matched 2,809 packet PTS/DTS/flags and reduced
+the isolated median wall time from 123.21 to 63.28 ms across four alternating
+rounds. However, an added diagnostic-error witness failed: PyAV 17.1's default
+logging disables the errors that `Capture()` was supposed to inspect. Temporarily
+changing its process-wide callback during concurrent recording would need a
+different concurrency proof. The existing ffprobe/error-refusal path remains.
+The timing is evidence about a rejected candidate, not a shipped speedup.
+
+The default picture-feed recorder now eliminates repeated packet scans and
+per-attempt video copies through an index produced once during recording.
+[Shared fragments and native replay views](replay-fragments.md) describes the
+storage, native HTTP Range representation and industry precedent. View builds
+only the selected clip's headers and input association; Save/export writes the
+complete MP4 once. Capture conversion, codec quality, audio and source PTS are
+unchanged. Native service/API/browser fixtures passed with x264, NVENC and AMF,
+including exact source pictures and prior-extractor PCM. The short same-packet
+fixture measured 2.9-3.4 ms for full service View versus 125-134 ms for the old
+remux alone, with zero new video bytes written by View. These are single-sample
+offline stage measurements. No live resource-saving percentage or
+instant-first-picture guarantee is claimed.

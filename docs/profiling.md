@@ -5,6 +5,31 @@ the trainer, change the renderer, alter capture rates, or replace an active
 profile. Existing `perf_log.jsonl` remains a memory/resource monitor, not a CPU or
 GPU profiler. Capture tools run from the development environment.
 
+Routine resource monitoring runs every minute using OS memory/process/handle
+probes. It does not walk the Python heap, enumerate DXGI adapters or scan replay
+files. Those more expensive probes remain available with `SM64_PERFMON_DEEP=1`
+before launch; missing measurements stay null/unmeasured. `sampling.mode` and
+`sampling.collect_ms` identify the mode and collection/log-formatting cost
+(excluding the final file write). Application gauges read cached recorder
+scalars; slow probes and persistence run outside the polling event loop, with
+one owned sample at a time and completion awaited on shutdown.
+
+GPU capture status includes `frame_source_health.stage_timings`: fixed-size
+cold-start, tick, scheduling-gap and nested audio/adapter/media/report aggregates.
+Each peak includes monotonic and Unix start times. These inclusive durations
+must not be summed; a peak belongs to the current capture run and need not be
+the final tick before a failure. Unix peak time is derived from the run's initial
+wall/monotonic clock pair. Comparing it across a system clock adjustment needs
+care. There is no per-frame diagnostic file logging or emulator-thread timing
+work in this collector.
+
+Nested `mux_video`, `mux_audio` and `ledger_feed` stages distinguish packet mux,
+AAC work and picture-ledger publication. The independent media sink reports
+`frame_source_health.publication.max_feed_ms` and
+`max_feed_started_unix_s`, along with pending byte/block counts and errors. Its
+final snapshot is logged on retirement. An outer media-drain peak alone cannot
+identify disk I/O as its cause; compare these individual stages and timestamps.
+
 ## Capture a reproducible workload
 
 Find the actual server listener and confirm `/health`; do not assume the example
@@ -22,6 +47,12 @@ Use actual PIDs for Project64, the trainer, OBS, and browser as needed. Process
 CPU percent follows psutil: one fully occupied logical CPU is 100%, so a process
 can exceed 100%. System CPU percent spans the machine. Process identity includes
 creation time, preventing recycled PIDs from looking like the original process.
+Routine external samples leave process thread counts unmeasured. On Windows,
+psutil obtains that count through a system process-information query; repeating
+it for each PID made the observer expensive during R45. Use existing cached server
+health counts for context, and always inspect observer_ms before treating a capture
+as live performance evidence. This removes that query, not every possible source
+of observer overhead or protected-process fallback.
 The optional artifact arguments hash the actual plugin/build files under test.
 Outputs never overwrite an existing capture directory.
 
@@ -64,14 +95,17 @@ assuming an empty histogram means zero cost.
 
 Add `--wpr` to request a bounded memory-mode Windows Performance Recorder trace.
 WPR must be installed and may require elevation. The tool checks local named
-instance support, starts UUID-owned `GeneralProfile` and `GPU` profiles, and stops only that
+instance support, starts a UUID-owned `tools/profiles/replay.wprp` capture, and stops only that
 instance. A conflicting recording is not cancelled. `system.etl` opens in Windows
 Performance Analyzer (WPA); `doctor` checks availability on PATH but does not
 install software (it also checks the venv and standard Toolkit install directory).
 WPR includes system evidence that Python and browser timers
-cannot supply. Start with CPU scheduling/stacks, disk I/O and GPU activity.
-The installed `wpr -profiles` is queried first; if GPU is absent, the artifact
-explicitly records that gap and the report marks GPU trace coverage unavailable.
+cannot supply. The custom profile has a fixed 128 MiB buffer budget for CPU
+scheduling/stacks, DPC/ISR and requested graphics events. Built-in profiles scaled
+to several GB on the developer machine, so they are no longer the default.
+Requested graphics events are not proof of GPU coverage: inspect actual provider
+events. The process sampler separately records I/O counters. A zero-loss header
+with no sampled CPU data cannot pass the offline profile exporter.
 Native graphics CPU wall times remain a separate measurement from GPU events.
 
 For agent-readable offline summaries:
@@ -125,6 +159,14 @@ frame probing, tail wait, picture association, input audit and total replay view
 `replay.storage_maintenance` measures the complete periodic inventory and eviction
 pass, including waiting for its lock. It helps distinguish session-length-related
 filesystem work from capture and encoder work.
+`replay.probe_native_packets` isolates the packet-index subprocess and validation
+inside native extraction. It retains the existing malformed-media checks; adding
+this span does not enable an in-process packet-reader shortcut.
+`replay.fragment_publish` and `replay.fragment_select` measure indexing/writing
+each complete fragment and selecting published ranges in the opt-in archive.
+The default fragment recorder uses them. `replay.native_index` measures native
+MP4 header construction without payload reads. Selection excludes response file I/O
+and browser presentation; a small selection duration is not first-open latency.
 These durations include nested work; do not sum them. The collector retains fixed
 histograms rather than an unbounded event log. It is disabled by default, needs no
 per-frame disk write, and retains only the most recent session. Calls finishing
@@ -170,3 +212,106 @@ Primary references: [WPR command options](https://learn.microsoft.com/en-us/wind
 [Chrome Performance panel](https://developer.chrome.com/docs/devtools/performance).
 Named-instance syntax was also checked with the installed `wpr -help advanced`:
 `-instancename NAME` must be the final argument on every session command.
+
+
+## PJ64 and native plugin logs without a running trainer
+
+`uv run --group profiling python tools/graphics_diagnostics.py --output data/profiles/plugin-check`
+collects a read-only snapshot from the actual Project64 process, the existing
+capture header, and the last 64 KiB of each discovered PJ64/Plugin log (20-file
+cap, including `.log.1` rotation). It never creates a capture mapping, renews a
+reader lease, starts ETW, writes emulator memory, or changes plugin selection.
+Use `--seconds 10` for 4 Hz header samples (maximum 30 seconds). After PJ64 has
+closed, add `--pj64-dir "C:/path/to/Project64"` to retrieve its retained logs.
+The output directory must be new; existing reports are not overwritten.
+
+`sm64_trainer_gfx.log` is the wrapper log; `gliden64.log`, when present, belongs
+to the wrapped renderer. Missing logs/errors remain explicit in the report.
+Current-process startup records require the PID and timestamp to match the
+process lifetime. A loaded DLL may only have been enumerated in the plugin
+picker. A saved registry value does not prove which renderer the ROM activated.
+The wrapper's build ID is generated by `tools/build_plugin.py` from the native
+source bundle, so startup records can identify the candidate used for testing.
+The DLL file hash and build ID are different identities: one identifies binary
+bytes, the other the native source bundle.
+
+Before a plugin test, add `--expected-wrapper "C:/path/to/the/exact/candidate.dll"`.
+The `installation` report compares that candidate with this checkout's bundle
+and the installed DLLs. Override the bundle with `--bundled-wrapper` when needed.
+It separately compares the current ControlV1 source-build label with the candidate,
+requiring a matching PID, process birth and currently mapped wrapper. Missing or
+stale runtime evidence stays unknown even when disk bytes match. A build label
+does not include compiler flags/toolchain, and the collector does not hash mapped
+process memory. Preserve these separate results rather than calling file equality
+proof of successful capture. GPU capture normally has no legacy pixel-ring mapping.
+
+Installer copies log `capture layer installation committed` only after destination
+hash verification and successful settings/configuration writes. The JSON receipt
+includes the server PID, source/destination, reason and before/source/after hashes;
+the latest receipt is retained in the shared capture-layer settings. Failed copies
+restore previous files and record the result. Source servers never automatically
+replace DLLs. Packaged servers only refresh bytes matching their last successful
+installation receipt; manual changes or unknown history require explicit Install.
+This protects external replacements, not release-version ordering or copies made
+by older applications still running the old installer implementation.
+
+The native wrapper logs lifecycle events and callbacks taking at least 20 ms,
+or callback gaps of at least 50 ms, at most once per five seconds per callback.
+Each stall names total, wrapped-renderer and added-wrapper CPU wall time, plus
+cumulative maxima; quiet summaries appear once per minute. Gaps include pauses,
+and these measurements cannot time asynchronous rendering on the GPU.
+`dropped_records` reports lost diagnostics. A bounded, event-driven writer keeps
+file I/O off emulator callbacks and rotates the log at 1 MiB to `.log.1`.
+Logging works with the trainer closed and does not request capture. Abrupt
+process exit can lose queued records; absent records are not proof of fast work.
+
+The 2026-09-10 stutter review exposed a failed registry-only A/B: the registry
+read back the requested direct renderer while PJ64's picker still selected the
+wrapper. That run cannot exonerate the wrapper. The user's subsequent manual
+selection plus PJ64 restart reproduced smooth direct GLideN64 and repeated
+stutter with the wrapper. Keep that evidence distinct from callback timing:
+regular UpdateScreen calls do not certify smooth physical presentation.
+## Capture coordinator versus media sink
+
+The GPU runtime wrapper also emits `gpu_summary`, `gpu_summary_phase` and
+`gpu_summary_cadence` records every five seconds while capture is healthy. These
+are recent windows, separate from the cumulative `gpu_failure` diagnostics.
+Read a copied native log with `python tools/native_capture_report.py
+PATH_TO_LOG --output report.json`; this reader never contacts PJ64 or opens GPU
+objects. It retains at most 120 windows from the last 4 MiB. PID, epoch and QPC
+window identity prevent dropped headers from mixing measurements between windows.
+
+Phase durations measure delivery-worker wall time, including any driver waits.
+Source cadence comes from the existing immutable boundary timestamps; it is not
+physical display FPS. Missing phases remain unknown, and overlapping durations
+must not be summed as CPU time. `previous_logging_ms` measures the preceding
+summary callback's cost; `dropped_records` exposes the bounded logger's losses.
+The GPU route does not use the legacy callback profiler described above. Installing
+a new wrapper is necessary to obtain these records from an older live process.
+
+Newer summaries also contain `snapshot_bytes` and `bridge_bytes`: current logical
+texture payloads, not total VRAM or driver allocation. `sample_calls`,
+`sample_reuses` and `publish_busy` are cumulative within a capture epoch.
+Compare their deltas only within the same PID/epoch. Busy publication should
+increase reuse without resampling that immutable source image. The passive
+reader exposes these as `resources`; absent fields remain null, not zero.
+For a long-session test, retain an early and a late log copy before rotation
+overwrites the early windows. Stable logical bytes cannot exonerate driver-side
+memory growth, and source cadence cannot establish smooth display presentation.
+
+For the separated GPU sink, `frame_source_health.stage_timings.sink_prepare`
+measures cold codec/filter/format work before native picture admission. Compare
+`media_setup`, `adapter_pump`, `tick` and `between_ticks` against that value;
+`mux_audio`, `mux_video` and `ledger_feed` now execute on the downstream worker.
+Their wall times can overlap capture and must not be summed as single-thread CPU.
+
+`frame_source_health.publication.kind="media"` identifies the new sink. Its
+`pending_bytes`/`pending_blocks` include in-flight work; `peak_bytes`, `peak_blocks`
+and `oldest_ms` expose bounded queue pressure. `slowest_command` labels bind, row,
+PCM or video for the existing `max_feed_ms`/UTC peak fields. Those fields now
+measure whole sink commands, not just disk writes. Delivery counts advance after
+successful mux calls. Session failures log these statistics after retirement.
+
+`tests/test_gpu_cadence.py` supplies the autonomous actual-source/encoder negative
+control missing from the older command-driven GPU fixture. Its deliberate mux
+delay is a correctness/backpressure test, not a whole-machine performance score.

@@ -54,6 +54,12 @@ counts, respectively. The baseline retains its original entries and records the
 full source commit, reason and seven diagnostics in `adoptions`; none of the
 new verification implementation's findings were adopted.
 
+The replay scrub change received a separate review of the existing `useTracker`
+allowance: extracting serial pause polling reduces its measured length from 297
+to 290 lines and leaves its other logic unchanged. Only that fingerprint was
+replaced; the older, larger allowance was removed. The baseline records this
+reviewed decrease and does not permit new findings or a return to 297 lines.
+
 `--fix --files ...` only permits Ruff's F401 unused-import removal. Review imports
 used exclusively for registration side effects before requesting that fix; mark
 intentional imports explicitly. No ESLint automatic fixes are enabled in this
