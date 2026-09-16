@@ -198,18 +198,38 @@ def migrate_capture_layer_settings() -> None:
         pass  # Another checkout's newer record is authoritative.
 
 
-def bundled_plugin_dll() -> Path | None:
-    """The capture layer DLL (`sm64_trainer_gfx.dll`) shipped with this
-    build: beside a frozen exe under ``sys._MEIPASS/sm64_events/data/plugin``,
-    else the package's own data folder; None when this build carries none
-    (a clone that never built it), which the setup screen reports rather
-    than installing nothing."""
-    name = "sm64_trainer_gfx.dll"
+WRAPPER_DLL_NAME = "sm64_trainer_gfx.dll"
+RENDERER_DLL_NAME = "GLideN64_SM64Trainer.dll"
+ENCODER_DLL_NAME = "SM64GpuEncoderV1.dll"
+
+
+def bundled_plugin_file(name: str) -> Path | None:
+    """A native file shipped with this build under ``sm64_events/data/plugin``:
+    beside a frozen exe under ``sys._MEIPASS``, else the package's own data
+    folder; None when this build carries none (a clone that never built it),
+    which the setup screen reports rather than installing nothing."""
     if is_frozen():
         cand = Path(getattr(sys, "_MEIPASS", "")) / "sm64_events" / "data" / "plugin" / name
         return cand if cand.exists() else None
     cand = Path(__file__).resolve().parents[1] / "data" / "plugin" / name
     return cand if cand.exists() else None
+
+
+def bundled_plugin_dll() -> Path | None:
+    """THE CAPTURE LAYER's wrapper (`sm64_trainer_gfx.dll`), the plugin
+    Project64 selects."""
+    return bundled_plugin_file(WRAPPER_DLL_NAME)
+
+
+def bundled_renderer_dll() -> Path | None:
+    """THE RENDERER the wrapper wraps (LINK's GLideN64 v4.2 with the capture
+    overlay, built by tools/build_renderer.py). Installed beside the wrapper."""
+    return bundled_plugin_file(RENDERER_DLL_NAME)
+
+
+def bundled_encoder_dll() -> Path | None:
+    """The 64-bit NVENC helper the server's isolated encoder process loads."""
+    return bundled_plugin_file(ENCODER_DLL_NAME)
 
 
 def update_state_path() -> Path:

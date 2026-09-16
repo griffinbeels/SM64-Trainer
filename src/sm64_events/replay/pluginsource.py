@@ -1,22 +1,23 @@
-"""THE PLUGIN VIDEO SOURCE: pictures from the capture layer, each already
-stamped with the game's own memory (round 32 item 95).
+"""THE STAMP: the game's own memory beside every captured picture, and the
+desktop camera that waits for the capture layer (round 32 item 95).
 
-The recorder's other sources photograph the desktop and the recorder then
-asks the frame clock which game frame was current at that instant -- an
-inference every reader since 2026-08-21 has been repairing. This source
-reads the frame stream (`replay/framestream.py`) the capture layer writes
-from inside Project64: one slot per presented picture, and beside its
-pixels the bytes the layer copied out of RDRAM at the moment the game
-submitted that picture's display list. Decoding those bytes with the
+The capture layer copies the tracker's address table out of RDRAM at the
+moment the game submits a picture's display list; the delivery worker hands
+those bytes to Python beside the encoded picture. Decoding them with the
 sampler's own decoder (`inputs/frame.py::decode`, over a reader that
 un-swaps PJ64's words exactly as `memory/base.py` does) gives the picture's
 frame, pad, Mario and IGT -- one definition of a pad for the track and for
-the stamp.
+the stamp. `replay/gpuinput.py` calls `decode_stamp` for every GPU picture.
 
 The address table is written HERE, from the live layout: entry order is
 `TABLE_ORDER`, every entry word-aligned so a halfword (`usamune_overall`)
 sits inside a copied word. A layout with no controller address captures
 the counter alone; no entry is ever invented.
+
+The raw ReadScreen/frame-stream video source that once lived here was
+deleted on 2026-09-16 with the CPU capture path; the only camera besides
+the GPU route is the desktop grab below, which hands over the moment the
+GPU backend is discoverable.
 """
 from __future__ import annotations
 
@@ -24,79 +25,19 @@ import logging
 import threading
 from dataclasses import dataclass
 
-from sm64_events.core.profiling import measured, profile
-from sm64_events.inputs.frame import MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE, InputFrame, decode
+from sm64_events.core.profiling import measured
+from sm64_events.inputs.frame import (MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE, InputFrame, decode,
+                                      valid_raw_stick)
 from sm64_events.memory import addresses as A
 from sm64_events.memory.addresses import KSEG0_BASE
 from sm64_events.memory.base import RdramReader
-from sm64_events.replay import framestream as F
-from sm64_events.replay.clock import _FREQ as QPC_FREQUENCY
-from sm64_events.replay.pixels import BgrPicture
 
 log = logging.getLogger("sm64.replay")
 
 #: the table's entry order; the frame counter is entry 0 by contract
 TABLE_ORDER = ("global_timer", "player1_controller", "mario", "usamune_overall")
-#: how often the source re-reads the recorder's idle flag and the plugin's heartbeat
-IDLE_POLL_S = 1.0
-#: how long the reader waits on the event before checking stop / idle
-WAIT_S = 0.25
-#: how long the recorder waits for the layer's FIRST picture before it
-#: records through desktop capture instead (a game presents ~30 pictures/s,
-#: so a layer that can read at all answers inside a few of these)
-PICTURE_PROBE_S = 0.6
-#: how often the desktop camera looks for the layer's heartbeat
+#: how often the desktop camera asks whether the GPU backend is discoverable
 LAYER_WATCH_S = 1.0
-#: after the layer refused pictures, how long before it is asked again
-LAYER_RETRY_S = 15.0
-
-
-def _refresh_profile(stream: F.FrameStream, stop_event: threading.Event) -> None:
-    """Profiling must never make an otherwise working capture source fail."""
-    try:
-        stream.graphics_profile.refresh(
-            profile.session_id if profile.active() else None, stop_event)
-    except (OSError, ValueError):
-        log.debug("graphics profiling mapping unavailable", exc_info=True)
-
-
-def pictures_flow(stream: F.FrameStream, timeout_s: float = PICTURE_PROBE_S,
-                  stop_event: threading.Event | None = None) -> tuple:
-    """Whether the capture layer can hand over a picture RIGHT NOW: asks for
-    frames and waits for its write sequence to advance. `(True, None)` on
-    the first picture; `(False, reason)` otherwise, frames turned back off,
-    with the reason the header gives -- the first live session (2026-09-05)
-    had a layer whose heartbeat moved while every picture was refused (no
-    GL context on the emulation thread), and the recorder sat on it for an
-    hour recording nothing. A source that cannot deliver is never chosen;
-    the desktop grab is, with this reason beside it."""
-    import time
-    before = stream.header()
-    try:
-        if stop_event is not None and stop_event.is_set():
-            return False, "the picture probe was stopped"
-        stream.touch()
-        stream.set_want_frames(True)
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            if stop_event is not None and stop_event.is_set():
-                return False, "the picture probe was stopped"
-            stream.touch()
-            stream.wait(0.05)
-            if stream.header().write_seq != before.write_seq:
-                return True, None
-        after = stream.header()
-    finally:
-        # A probe owns demand only while probing. The selected source takes
-        # over in start(), including after a successful probe.
-        stream.set_want_frames(False)
-    if not after.initiated:
-        return False, "the capture layer is not initiated"
-    if after.dropped > before.dropped:
-        return False, (f"it refused {after.dropped - before.dropped} pictures in "
-                       f"{timeout_s:.1f} s: no OpenGL context on the emulation thread and "
-                       "nothing from the wrapped plugin's ReadScreen")
-    return False, f"it presented no new picture in {timeout_s:.1f} s"
 
 
 def _aligned(address: int, length: int) -> tuple:
@@ -149,6 +90,13 @@ class FrameStamp:
     list_qpc: int
     present_qpc: int
     lists_since: int
+    # A controller block the table carried but which is not a controller
+    # state (reset/loading memory): the row says so instead of a pad.
+    pad_invalid: bool = False
+    # Only a layout with a verified Mario address captured yaw/action/
+    # speed. Without it the row carries no `mario` at all: 0 degrees is a
+    # real bearing and a frame nobody recorded must not claim it.
+    mario_captured: bool = False
 
     def extras(self) -> dict:
         """The ledger row's fields (JSON-able)."""
@@ -163,12 +111,15 @@ class FrameStamp:
             out["igt_overall"] = self.igt_overall
         if self.pad is not None:
             out["pad"] = [self.pad.stick_x, self.pad.stick_y, self.pad.buttons]
-            out["mario"] = [self.pad.action, self.pad.yaw, round(self.pad.speed, 3)]
+            if self.mario_captured:
+                out["mario"] = [self.pad.action, self.pad.yaw, round(self.pad.speed, 3)]
+        elif self.pad_invalid:
+            out["pad_invalid"] = True
         return out
 
 
 @measured("capture.decode_stamp")
-def decode_stamp(slot: F.Slot, table: list, layout) -> FrameStamp | None:
+def decode_stamp(slot, table: list, layout) -> FrameStamp | None:
     """The stamp a slot carries, decoded; None when the counter is missing."""
     by_name = {}
     regions = []
@@ -184,37 +135,48 @@ def decode_stamp(slot: F.Slot, table: list, layout) -> FrameStamp | None:
     igt = (memory.read_u16(layout.usamune_overall)
            if "usamune_overall" in by_name else None)
     pad = None
+    pad_invalid = False
+    mario_captured = "mario" in by_name
     if "player1_controller" in by_name:
         block = memory.read_block(layout.player1_controller, A.CONTROLLER_SIZE)
         mario = (memory.read_block(layout.mario_struct + MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE)
-                 if "mario" in by_name else None)
+                 if mario_captured else None)
         pad = decode(block, mario)
+        # The same refusal the live sampler applies (sampler.py): sign-
+        # extended s8 axes and only real button bits. Anything else is
+        # readable memory that is not a controller state, never a pad.
+        if (not valid_raw_stick(pad.stick_x, pad.stick_y)
+                or pad.buttons & ~A.BUTTON_VALID_MASK
+                or pad.pressed & ~pad.buttons):
+            pad, pad_invalid = None, True
     return FrameStamp(frame=frame, igt_overall=igt, pad=pad, vi_origin=slot.vi_origin,
                       list_qpc=slot.list_qpc, present_qpc=slot.present_qpc,
-                      lists_since=slot.lists_since)
+                      lists_since=slot.lists_since, pad_invalid=pad_invalid,
+                      mario_captured=mario_captured and pad is not None)
+
 
 
 class DesktopUntilLayerPresents:
-    """The camera the recorder gets while the capture layer is installed but
-    not presenting: the desktop grab, with a watch on the frame stream.
+    """The camera the recorder gets while the capture layer is not (yet)
+    delivering: the desktop grab, with a watch on the GPU backend.
 
-    The moment the layer's heartbeat moves and a picture flows, this source
-    ENDS ITSELF the way a lost window does -- `on_stopped` -- so the
-    recorder's attach loop runs its factory again and gets the plugin
-    source. Whichever order he opened the game and the trainer in, and
-    whenever the ROM loads (his rule, 2026-09-05: "we need to be order
-    agnostic"). His first restart attached to Project64's window two seconds
-    before the ROM ran; the camera chosen then was never revisited, and the
-    layer sat presenting to nobody.
+    The moment `backend_ready()` says the wrapper's control page is
+    discoverable, this source ENDS ITSELF the way a lost window does --
+    `on_stopped` -- so the recorder's attach loop runs its factory again and
+    gets the GPU source. Whichever order he opened the game and the trainer
+    in, and whenever the ROM loads (his rule, 2026-09-05: "we need to be
+    order agnostic"). His first restart attached to Project64's window two
+    seconds before the ROM ran; the camera chosen then was never revisited,
+    and the layer sat presenting to nobody.
 
-    A layer that presents but refuses pictures is asked again every
-    LAYER_RETRY_S, the reason on `frame_source_note` meanwhile."""
+    `note` explains on `frame_source_note` why the desktop is recording (a
+    layer that is installed but refuses, or none at all)."""
 
     frame_source = "desktop"
 
-    def __init__(self, desktop, stream: F.FrameStream, note: str | None = None):
+    def __init__(self, desktop, note: str | None = None, *, backend_ready=None):
         self._desktop = desktop
-        self._stream = stream
+        self._backend_ready = backend_ready
         self.frame_source_note = note
         self.upgraded = False
         self._on_stopped = None
@@ -226,10 +188,7 @@ class DesktopUntilLayerPresents:
             self._desktop.set_idle_check(fn)
 
     def status(self) -> dict | None:
-        result = self._desktop.status() if hasattr(self._desktop, "status") else None
-        _refresh_profile(self._stream, self._stop)
-        measured = self._stream.graphics_profile.snapshot(self._stream.header().plugin_pid)
-        return {**(result or {}), "graphics_profile": measured}
+        return self._desktop.status() if hasattr(self._desktop, "status") else None
 
     def start(self, on_frame, on_stopped) -> None:
         self._on_stopped = on_stopped
@@ -245,11 +204,6 @@ class DesktopUntilLayerPresents:
 
     def request_stop(self) -> None:
         self._stop.set()
-        _refresh_profile(self._stream, self._stop)
-        try:
-            self._stream.set_want_frames(False)
-        except Exception:
-            log.debug("frame stream gone at stop", exc_info=True)
 
     def stop(self) -> None:
         self.request_stop()
@@ -258,187 +212,22 @@ class DesktopUntilLayerPresents:
                 and thread.ident is not None):
             thread.join(timeout=2.0)
         self._thread = None
-        try:
-            # whatever a probe left on; the plugin source sets it again
-            self._stream.set_want_frames(False)
-        except Exception:
-            log.debug("frame stream gone at stop", exc_info=True)
         self._desktop.stop()
 
     def _watch(self) -> None:
-        import time
-        next_probe = 0.0
-        last = self._stream.header().alive
         while not self._stop.wait(LAYER_WATCH_S):
-            _refresh_profile(self._stream, self._stop)
             try:
-                header = self._stream.header()
-            except Exception:
-                log.debug("frame stream unreadable in the layer watch", exc_info=True)
+                ready = self._backend_ready is not None and self._backend_ready()
+            except (OSError, RuntimeError, ValueError):
+                log.debug("GPU backend status unreadable in the layer watch", exc_info=True)
                 continue
-            alive = header.alive
-            moving = header.initiated and alive != last
-            last = alive
-            if not moving or time.monotonic() < next_probe:
-                continue
-            try:
-                flowing, reason = pictures_flow(self._stream, stop_event=self._stop)
-            except Exception:
-                log.exception("capture layer probe failed; staying on desktop capture")
-                next_probe = time.monotonic() + LAYER_RETRY_S
-                continue
-            if self._stop.is_set():
+            if ready:
+                if not self._stop.is_set():
+                    self._handover()
                 return
-            if flowing:
-                self.upgraded = True
-                log.info("capture layer started presenting; handing the recorder over to it")
-                if self._on_stopped is not None:
-                    self._on_stopped()
-                return
-            self.frame_source_note = f"the capture layer is loaded but {reason}"
-            log.warning("%s; staying on desktop capture, asking again in %.0f s",
-                        self.frame_source_note, LAYER_RETRY_S)
-            next_probe = time.monotonic() + LAYER_RETRY_S
 
-
-class PluginVideoSource:
-    """The recorder's `VideoSource` over the frame stream.
-
-    `on_frame(pixels, ts_100ns, stamp)`: an owned BgrPicture, its present
-    time in WGC's timebase (QPC in 100 ns -- the same clock the DWM source
-    stamps with, so the CaptureClock needs no second anchor), and the
-    decoded `FrameStamp`. Frames are asked for while the recorder is not
-    idle; the reader thread wakes on the plugin's event."""
-
-    frame_source = "plugin"
-
-    def __init__(self, stream: F.FrameStream, table: list, layout, fps: int = 60):
-        self._stream = stream
-        self._table = table
-        self._layout = layout
-        self._fps = fps
-        self._thread = None
-        self._stop = threading.Event()
-        self._idle_check = lambda: False
-        header = stream.header()
-        self._last_seq = header.write_seq
-        self._plugin_pid = header.plugin_pid
-        self._demand_lock = threading.Lock()
-        self._accept_demand = False
-        self._skipped = 0
-        self._undecodable = 0
-        self._delivered = 0
-
-    def set_idle_check(self, fn) -> None:
-        self._idle_check = fn
-
-    def refresh_demand(self) -> None:
-        """Apply the recorder's current idle state without waiting for a VI.
-
-        The stopped source never enables capture again, including a resume
-        notification racing its teardown.
-        """
-        with self._demand_lock:
-            if self._accept_demand:
-                self._stream.set_want_frames(not self._idle_check())
-
-    def start(self, on_frame, on_stopped) -> None:
-        try:
-            with self._demand_lock:
-                if self._thread is not None or self._stop.is_set():
-                    return
-                self._stream.touch()
-                self._accept_demand = True
-                self._stream.set_want_frames(not self._idle_check())
-                self._thread = threading.Thread(target=self._loop, args=(on_frame, on_stopped),
-                                                name="plugin-frames", daemon=True)
-                self._thread.start()
-        except BaseException:
-            self.request_stop()
-            self._thread = None
-            raise
-
-    def request_stop(self) -> None:
-        """Revoke capture immediately, before any joins or encoder draining."""
-        self._stop.set()
-        _refresh_profile(self._stream, self._stop)
-        try:
-            with self._demand_lock:
-                self._accept_demand = False
-                self._stream.set_want_frames(False)
-        except Exception:
-            log.debug("frame stream gone at stop", exc_info=True)
-
-    def stop(self) -> None:
-        self.request_stop()
-        if self._thread is not None:
-            if self._thread is not threading.current_thread():
-                self._thread.join(timeout=2.0)
-            self._thread = None
-
-    def _loop(self, on_frame, on_stopped) -> None:
-        try:
-            self._read_loop(on_frame)
-        except Exception:
-            log.exception("plugin frame reader failed; source ends")
-        finally:
-            self.request_stop()
-            try:
-                on_stopped()
-            except Exception:
-                log.exception("plugin source on_stopped failed")
-
-    def _read_loop(self, on_frame) -> None:
-        import time
-        last_alive = self._stream.header().alive
-        last_alive_check = time.monotonic()
-        while not self._stop.is_set():
-            self._stream.wait(WAIT_S)
-            if self._stop.is_set():
-                break
-            slots, skipped = self._stream.read_new(self._last_seq)
-            self._skipped += skipped
-            for slot in slots:
-                self._last_seq = slot.seq
-                try:
-                    stamp = decode_stamp(slot, self._table, self._layout)
-                except Exception:
-                    # A slot whose bytes do not decode (a table the layout
-                    # disagrees with) is counted, never fatal to the source.
-                    log.exception("plugin stamp did not decode; slot dropped")
-                    stamp = None
-                if stamp is None:
-                    self._undecodable += 1
-                    continue
-                ts_100ns = slot.present_qpc * 10_000_000 // QPC_FREQUENCY
-                try:
-                    on_frame(BgrPicture(slot.pixels), ts_100ns, stamp)
-                    self._delivered += 1
-                except Exception:
-                    log.exception("plugin frame callback failed; frame dropped")
-            now = time.monotonic()
-            if now - last_alive_check >= IDLE_POLL_S:
-                last_alive_check = now
-                _refresh_profile(self._stream, self._stop)
-                with self._demand_lock:
-                    if self._accept_demand:
-                        self._stream.touch()
-                alive = self._stream.header().alive
-                if alive == last_alive and (self._stream.header().initiated is False
-                                            or not self._stream.plugin_process_alive()):
-                    # The plugin closed (ROM closed, PJ64 exited) or its
-                    # process died with the header's bits still set: hand
-                    # the recorder back to its attach loop, like a lost
-                    # window.
-                    log.info("capture layer stopped presenting; source ends")
-                    break
-                last_alive = alive
-
-    def status(self) -> dict:
-        _refresh_profile(self._stream, self._stop)
-        header = self._stream.header()
-        return {"delivered": self._delivered, "skipped": self._skipped,
-                "plugin_pid": self._plugin_pid,
-                "undecodable": self._undecodable,
-                "dropped_by_plugin": header.dropped,
-                "graphics_profile": self._stream.graphics_profile.snapshot(header.plugin_pid)}
+    def _handover(self) -> None:
+        self.upgraded = True
+        log.info("capture backend ready; handing the recorder over to it")
+        if self._on_stopped is not None:
+            self._on_stopped()

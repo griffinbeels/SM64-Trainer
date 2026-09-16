@@ -42,8 +42,11 @@ class SetupRuntime:
 
     def __call__(self, layer) -> dict:
         with self._lock:
+            gpu = getattr(layer, "gpu_observation", None)
+            gpu_key = (gpu.identity, gpu.idle, gpu.alive, gpu.pictures) if gpu else None
             identity = (layer.pj64_running, layer.pj64_dir, layer.plugin_pid,
-                        layer.layer_alive, layer.consented_at)
+                        layer.layer_alive, layer.consented_at,
+                        gpu_key)
             if self.clock() < self._next_read and identity == self._cached_layer:
                 return self._cached
             result = self._observe(layer)
@@ -62,8 +65,10 @@ class SetupRuntime:
         sampler = getattr(self.poller, "input_sampler", None)
         inputs = sampler.health() if sampler else {}
         latest = getattr(self.poller, "latest", None)
+        gpu = getattr(layer, "gpu_observation", None)
         counters = self._window.observe(
-            (target.get("pid"), rom["name"], rom["region"], layer.plugin_pid),
+            (target.get("pid"), rom["name"], rom["region"], layer.plugin_pid,
+             gpu.identity if gpu else None),
             delivered=health.get("delivered"), inputs=inputs.get("frames"),
             game=latest.global_timer if latest else None)
         same_process = target.get("pid") is not None and target["pid"] == layer.plugin_pid
@@ -78,6 +83,19 @@ class SetupRuntime:
         captured = (recorder.get("recording") and recorder.get("frame_source") == "plugin"
                     and (counters["delivered"] or idle_receipt))
         pictures = (layer.pictures_flowing or captured) if rom["state"] == "jp" else captured
+        if gpu is not None:
+            # The GPU observer validates native control identity and counts only
+            # accepted captured pictures. Encoder repeats cannot refresh it.
+            captured = gpu.matches(recorder)
+            plugin = plugin and captured
+            if gpu.idle:
+                # Passive ControlV1 deliberately has no heartbeat timer. This
+                # exception needs actual game/input movement even for limited
+                # JP setup; a live process alone cannot prove a running game.
+                plugin = bool(plugin and counters["inputs"] and counters["game"]
+                              and not self.poller.paused
+                              and not getattr(self.poller, "hold_reason", None))
+            pictures = gpu.pictures and captured
         checks = {"plugin": bool(plugin), "pictures": bool(plugin and pictures),
                   "inputs": bool(counters["inputs"] and rom["state"] == "supported"),
                   "game": bool(counters["game"] and not self.poller.paused

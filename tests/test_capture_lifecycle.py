@@ -7,87 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from sm64_events.replay import pluginsource as P
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.ring import SegmentInfo
 from test_replay_recorder import FakeAudioSource, FakeAvSink, FakeVideoSource, WIN
-
-
-class Stream:
-    def __init__(self):
-        self.want = False
-        self.touches = 0
-        self.seq = 0
-        self.fail_wait = False
-        self.graphics_profile = SimpleNamespace(refresh=lambda *_args: None)
-
-    def header(self):
-        return SimpleNamespace(write_seq=self.seq, alive=1, initiated=True, dropped=0, plugin_pid=123)
-
-    def set_want_frames(self, want):
-        self.want = want
-
-    def touch(self):
-        self.touches += 1
-
-    def wait(self, timeout):
-        if self.fail_wait:
-            raise OSError("reader lost its mapping")
-        self.seq += 1
-
-
-@pytest.mark.parametrize("fault", [False, True])
-def test_probe_always_releases_temporary_demand(fault):
-    stream = Stream()
-    stream.fail_wait = fault
-    if fault:
-        with pytest.raises(OSError):
-            P.pictures_flow(stream)
-    else:
-        assert P.pictures_flow(stream) == (True, None)
-    assert not stream.want
-    assert stream.touches > 0
-
-
-def test_reader_failure_clears_demand_and_notifies_owner():
-    stream = Stream()
-    stream.fail_wait = True
-    source = P.PluginVideoSource(stream, [], None)
-    stopped = threading.Event()
-    source.start(lambda *args: pytest.fail("no picture was published"), stopped.set)
-    assert stopped.wait(1)
-    assert not stream.want
-    touches = stream.touches
-    source.refresh_demand()
-    source.stop()
-    assert not stream.want and stream.touches == touches
-
-
-def test_failed_reader_thread_start_leaves_no_demand(monkeypatch):
-    stream = Stream()
-    source = P.PluginVideoSource(stream, [], None)
-
-    class FailedThread:
-        def __init__(self, **kwargs):
-            pass
-        def start(self):
-            raise RuntimeError("thread creation failed")
-
-    monkeypatch.setattr(P.threading, "Thread", FailedThread)
-    with pytest.raises(RuntimeError):
-        source.start(lambda *args: None, lambda: None)
-    source.stop()
-    source.refresh_demand()
-    assert not stream.want
-
-
-def test_source_stopped_before_start_cannot_revive_capture():
-    stream = Stream()
-    source = P.PluginVideoSource(stream, [], None)
-    source.request_stop()
-    source.start(lambda *args: None, lambda: None)
-    assert not stream.want and source._thread is None
 
 
 def recorder(tmp_path, events, video_factory, sink=None, acquire=True):

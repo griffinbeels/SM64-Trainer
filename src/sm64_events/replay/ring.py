@@ -70,7 +70,7 @@ class SegmentRing:
                  free_bytes_fn=None,
                  disk_margin_bytes: int = _DISK_MARGIN_BYTES,
                  on_evict=None, scratch_root: Path | None = None,
-                 deletion_guard=None):
+                 deletion_guard=None, on_temp_evict=None):
         self._retention_s = retention_s
         self._max_bytes = max_bytes
         # free_bytes_fn() -> bytes free on the scratch volume (None = no disk
@@ -85,6 +85,8 @@ class SegmentRing:
         self._total_bytes = 0
         self._lock = threading.RLock()  # free-space probes may read total_bytes
         self._on_evict = on_evict
+        self._on_temp_evict = on_temp_evict
+        self.temporary_revision = 0
         self._root = scratch_root.resolve() if scratch_root is not None else None
         self._deletion_guard = deletion_guard or (lambda: nullcontext(True))
         self._temporary: dict[str, _Temporary] = {}
@@ -101,12 +103,18 @@ class SegmentRing:
     def total_bytes(self) -> int:
         return self._total_bytes
 
+    def temporary_groups(self) -> frozenset[str]:
+        """Published group identities; archive pruning needs no filesystem walk."""
+        with self._lock:
+            return frozenset(self._temporary)
+
     def reset(self) -> None:
         """Forget metadata after the recorder owner resets its scratch files."""
         with self._lock:
             self._segments.clear()
             self._segment_paths.clear()
             self._temporary.clear()
+            self.temporary_revision += 1
             self._pending.clear()
             self._unmanaged.clear()
             self._clear_segments.clear()
@@ -171,7 +179,7 @@ class SegmentRing:
     def forget_temp(self, group: str, delete: bool = False) -> None:
         """Forget a transferred group or delete it once its last lease ends."""
         with self._lock:
-            if self._temp_pins.get(group):
+            if self._temp_pinned(group):
                 self._forget[group] = delete or self._forget.get(group, False)
             else:
                 with self._deletion_guard() as allowed:
@@ -181,6 +189,23 @@ class SegmentRing:
                         self._forget.pop(group, None)
                         self._drop_temp(group, delete)
             self._recount()
+
+    def _temp_pinned(self, group):
+        if self._temp_pins.get(group):
+            return True
+        entry = self._temporary.get(group)
+        return bool(entry and group.startswith("fragments:") and any(
+            kind == "video" and entry.utc_end > start and entry.utc_start < end
+            for kind, start, end in self._span_pins.values()))
+
+    def expire_before(self, cutoff):
+        """Attempt-window expiry; archive owns GOP-aware fragment removal."""
+        with self._lock:
+            self._clear_segments.update(s.path for s in self._segments if s.utc_end < cutoff)
+            for group, entry in tuple(self._temporary.items()):
+                if not group.startswith("fragments:") and entry.utc_end < cutoff:
+                    self.forget_temp(group, delete=True)
+            self._evict()
 
     @measured("replay.storage_maintenance")
     def maintain(self) -> None:
@@ -228,7 +253,7 @@ class SegmentRing:
         with self._lock:
             return ({self._segment_paths[s.path] for s in self._segments if self._pinned(s)}
                     | {p for key, entry in self._temporary.items()
-                       if self._temp_pins.get(key) for p in entry.paths})
+                       if self._temp_pinned(key) for p in entry.paths})
 
     def prune_missing(self) -> None:
         """Reconcile after owner-only scratch cleanup, retaining leased files."""
@@ -297,10 +322,14 @@ class SegmentRing:
     def _unlink(self, path, size):
         try:
             path.unlink(missing_ok=True)
-        except OSError:
+        except OSError as error:
+            if path not in self._pending:
+                log.warning("replay deletion deferred: path=%s errno=%s winerror=%s error=%s",
+                            path, error.errno, getattr(error, "winerror", None), error)
             self._pending[path] = size
-            log.debug("replay eviction deferred (file busy): %s", path)
         else:
+            if path in self._pending:
+                log.info("replay deferred deletion recovered: %s", path)
             self._pending.pop(path, None)
             self._unmanaged.pop(path, None)
 
@@ -316,9 +345,13 @@ class SegmentRing:
 
     def _drop_temp(self, key, delete=True):
         entry = self._temporary.pop(key, None)
+        if entry is not None:
+            self.temporary_revision += 1
         if delete and entry is not None:
             for path, size in entry.paths.items():
                 self._unlink(path, size)
+            if self._on_temp_evict is not None:
+                self._on_temp_evict(key, entry.utc_start, entry.utc_end)
 
     def _recount(self):
         tracked = (set(self._segment_paths.values())
@@ -354,7 +387,7 @@ class SegmentRing:
         for path, size in list(self._pending.items()):
             self._unlink(path, size)
         for group, delete in list(self._forget.items()):
-            if not self._temp_pins.get(group):
+            if not self._temp_pinned(group):
                 self._drop_temp(group, delete)
                 del self._forget[group]
         self._refresh()
@@ -376,7 +409,7 @@ class SegmentRing:
             return
         candidates = [(s.utc_start, s.utc_end, s) for s in self._segments if not self._pinned(s)]
         candidates += [(e.utc_start, e.utc_end, key) for key, e in self._temporary.items()
-                       if not self._temp_pins.get(key)]
+                       if not self._temp_pinned(key)]
         for _, end, item in sorted(candidates, key=lambda row: row[0]):
             clearing = isinstance(item, SegmentInfo) and item.path in self._clear_segments
             if not clearing and self._total_bytes <= cap and (horizon is None or end > horizon):

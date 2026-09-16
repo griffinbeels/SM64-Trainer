@@ -76,8 +76,7 @@ def test_refresh_applies_the_humans_audit_corrections(tmp_path, monkeypatch):
 
     def fake_build(data, fetched_at, overrides=None):
         captured["overrides"] = overrides
-        # Deliberately OLDER than the real bundled snapshot, so refresh()
-        # returns before ever writing to the real (cwd-relative) local path.
+        # The test installs into its own empty scratch store below.
         return {"schema_version": SCHEMA_VERSION,
                 "sheet_revision": "2000-01-01T00:00:00", "fetched_at": fetched_at,
                 "runners": [], "ladder_model": {}, "targets": []}
@@ -86,10 +85,17 @@ def test_refresh_applies_the_humans_audit_corrections(tmp_path, monkeypatch):
     monkeypatch.setattr("sm64_events.library.ladders.fit_payload", lambda p: p)
     monkeypatch.setattr("sm64_events.server.library_api.fetch", lambda: b"stub")
 
-    with make_client() as client:
+    from sm64_events.tracking.service import TrackerService
+    broadcaster = Broadcaster()
+    service = TrackerService(None, broadcaster)
+    poller = Poller(OfflineMemory(), [StarGrabDetector()], service)
+    app = create_app(poller, broadcaster, service=service, debug_hooks=True)
+    with TestClient(app) as client:
+        client.app.state.library.path = tmp_path / "library.json.gz"
+        client.app.state.library._payload = None
         resp = client.post("/api/library/refresh")
     assert resp.status_code == 200
-    assert resp.json()["applied"] is False       # never wrote to a real path
+    assert resp.json()["applied"] is True       # wrote only the scratch path
     assert captured["overrides"] == written
 
 
@@ -139,9 +145,8 @@ def test_db_reattach_upgrades_broadcast_only(tmp_path, monkeypatch):
     assert len(calls) >= attempts_before_free
 
 
-def test_db_retry_exception_ends_loop_and_stays_degraded(tmp_path, monkeypatch):
-    """The retry exists ONLY for the lock race — a broken database must not
-    be re-tried in a hot loop forever."""
+def test_db_retry_exception_backs_off_and_stays_degraded(tmp_path, monkeypatch):
+    """A broken database stays visible while retries back off, not a hot loop."""
     import sm64_events.server.app as app_mod
     from sm64_events.tracking.service import TrackerService
 
@@ -159,7 +164,7 @@ def test_db_retry_exception_ends_loop_and_stays_degraded(tmp_path, monkeypatch):
     with TestClient(app) as client:
         time.sleep(0.2)
         assert client.get("/health").json()["db"] == "error"
-    assert len(calls) == 1
+    assert 2 <= len(calls) <= 5
 
 
 # -- force-exit watchdog (CTRL+C stall incidents 2026-06-12 / 2026-06-13) ----

@@ -97,6 +97,9 @@ class RunTracker:
         """route_id this tracker is armed for (whether or not a run is active), else None."""
         return self._armed["route_id"] if self._armed is not None else None
 
+    def oldest_open_utc(self) -> str | None:
+        return self._active["started_utc"] if self._active is not None else None
+
     def active_run_view(self) -> dict | None:
         if self._active is None:
             return None
@@ -121,21 +124,28 @@ class RunTracker:
     # -- feed ----------------------------------------------------------------
     def feed(self, ev, closed, ctx) -> list[RunRecord]:
         produced = []
-        if ev.type == "run_started":
-            if self._active is not None:
-                if ev.payload.get("void_active"):
-                    self._active = None  # route changed mid-run -> void, no record
-                else:
-                    produced.append(self._finalize("aborted", ev.wall_time_utc))
-            p = ev.payload
-            self._armed = {"route_id": p.get("route_id"),
-                           "route_name": p.get("route_name", ""),
-                           "route_steps": p.get("route_steps", []),
-                           "mode": p.get("mode", "forgiving"),
-                           "offset": int(p.get("start_offset_ms", 0)),
-                           "start_condition": p.get("start_condition",
-                                                    {"type": "reset_game"})}
+        if ev.type == "tracking_gap":
+            # The start condition may start a NEW run later; a missing
+            # interval cannot finish or abort the one we stopped observing.
             self._active = None
+            self.run_notices = []
+            return produced
+        self._feed_control(ev, ctx, produced)
+        if self._active is not None and not self._active["paused"] and closed:
+            for a in closed:
+                fin = self._apply(a, ev)
+                if fin is not None:
+                    produced.append(fin)
+                    break
+        for r in produced:
+            self._finished.append(r)
+        self._set_notices(produced)
+        return produced
+
+    def _feed_control(self, ev, ctx, produced: list[RunRecord]) -> None:
+        """Apply route controls before giving their active run any closures."""
+        if ev.type == "run_started":
+            self._arm_route(ev, produced)
         elif ev.type == "run_ended":
             if self._active is not None:
                 produced.append(self._finalize("aborted", ev.wall_time_utc))
@@ -155,24 +165,33 @@ class RunTracker:
                 produced.append(self._finalize("aborted", ev.wall_time_utc))
             # armed stays -> the next start-condition fire begins from step 0
         elif self._armed is not None:
-            if _cond_fires(self._armed["start_condition"], ev, ctx):
-                if self._active is not None:
-                    produced.append(self._finalize("aborted", ev.wall_time_utc))
-                self._begin(ev)
-            elif ev.type == "game_reset" and self._active is not None:
-                # hard reset that is NOT this route's start condition: the run is
-                # over (player bailed); they re-trigger the start condition to begin.
+            self._feed_start_condition(ev, ctx, produced)
+
+    def _arm_route(self, ev, produced: list[RunRecord]) -> None:
+        if self._active is not None:
+            if ev.payload.get("void_active"):
+                self._active = None  # route changed mid-run -> void, no record
+            else:
                 produced.append(self._finalize("aborted", ev.wall_time_utc))
-        if self._active is not None and not self._active["paused"] and closed:
-            for a in closed:
-                fin = self._apply(a, ev)
-                if fin is not None:
-                    produced.append(fin)
-                    break
-        for r in produced:
-            self._finished.append(r)
-        self._set_notices(produced)
-        return produced
+        p = ev.payload
+        self._armed = {"route_id": p.get("route_id"),
+                       "route_name": p.get("route_name", ""),
+                       "route_steps": p.get("route_steps", []),
+                       "mode": p.get("mode", "forgiving"),
+                       "offset": int(p.get("start_offset_ms", 0)),
+                       "start_condition": p.get("start_condition",
+                                                {"type": "reset_game"})}
+        self._active = None
+
+    def _feed_start_condition(self, ev, ctx, produced: list[RunRecord]) -> None:
+        if _cond_fires(self._armed["start_condition"], ev, ctx):
+            if self._active is not None:
+                produced.append(self._finalize("aborted", ev.wall_time_utc))
+            self._begin(ev)
+        elif ev.type == "game_reset" and self._active is not None:
+            # hard reset that is NOT this route's start condition: the run is
+            # over (player bailed); they re-trigger the start condition to begin.
+            produced.append(self._finalize("aborted", ev.wall_time_utc))
 
     # -- internals -----------------------------------------------------------
     def _begin(self, ev) -> None:

@@ -85,6 +85,11 @@ def _groups(service, scope_id: str, excluded: set[str] | None = None):
     WITHOUT the exclusion filter -- the second resolution
     `_append_excluded_rows` uses to recover excluded rows for display without
     letting them back into the aggregate."""
+    return _resolve_groups(scope_id, _group_inputs(service, excluded))
+
+
+def _group_inputs(service, excluded=None) -> dict:
+    """One current membership snapshot, reusable within a scope sweep."""
     if service.ranks is None or service.db is None:
         raise HTTPException(503, "rank standards unavailable")
     # EVERY graded entity, not the user's file alone: since round 33 the
@@ -96,9 +101,12 @@ def _groups(service, scope_id: str, excluded: set[str] | None = None):
                for key in service.ranks.graded_entities()}
     rankable = scopes.rankable_entities(
         ladders, service.rank_excluded() if excluded is None else excluded)
-    groups = scopes.entity_groups(
-        scope_id, rankable=rankable, routes=service.db.routes(),
-        segment_courses=segment_courses(service.db))
+    return {"rankable": rankable, "routes": service.db.routes(),
+            "segment_courses": segment_courses(service.db)}
+
+
+def _resolve_groups(scope_id, inputs):
+    groups = scopes.entity_groups(scope_id, **inputs)
     if groups is None:
         raise HTTPException(404, f"unknown scope {scope_id!r}")
     return groups
@@ -230,16 +238,53 @@ def absorb_after_regrade(service) -> None:
     if service.db is None or service.ranks is None:
         return
     watermarks = service.marelo_watermarks()
+    if not watermarks:
+        return
+    try:
+        aggregates = _regrade_aggregates(service, watermarks)
+    except (LookupError, ValueError):
+        # Keep the existing per-scope recovery for malformed legacy data.
+        aggregates = None
     for scope_id in list(watermarks):
         try:
-            scored = _score_scope(service, scope_id)
+            scored = (_score_scope(service, scope_id) if aggregates is None
+                      else aggregates.get(scope_id))
         except (LookupError, ValueError):
             continue                        # a scope that no longer resolves
-        if not scored["tier"]:
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            continue
+        if not scored or not scored["tier"]:
             continue
         watermarks[scope_id] = int(scoring.progression_key(scored["tier"],
                                                            scored["division"]))
     service.db.set_state("marelo_watermarks", watermarks)
+
+
+def _regrade_aggregates(service, scope_ids) -> dict:
+    """Reuse entity scores; regrading needs no labels, clips or UI decoration.
+
+    All data is local to this call. S scopes no longer re-read/re-score the
+    entire history and catalogue S times; each still uses its own ordered
+    groups and K-of-N aggregation through the original scoring functions.
+    """
+    inputs = _group_inputs(service)
+    groups = {}
+    for scope_id in scope_ids:
+        try:
+            groups[scope_id] = _resolve_groups(scope_id, inputs)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+    keys = dict.fromkeys(key for rows in groups.values()
+                         for group in rows for key in group["candidates"])
+    mode = _rank_mode(service)
+    is_pb = classify.RANK_MODES[mode]["order"] is None
+    scores = marelo_bridge.entity_scores(
+        [] if is_pb else service.db.attempts(), service.ranks, keys, mode,
+        service.db.pbs() if is_pb else [])
+    return {scope_id: scopes.aggregate(scores, rows) for scope_id, rows in groups.items()}
 
 
 def _build_marelo(service, scope_id: str) -> dict:

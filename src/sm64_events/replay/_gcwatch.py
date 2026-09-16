@@ -20,8 +20,8 @@ EVER running a manual gen-2 collection meant any cyclic object that survived
 into gen-2 was never reclaimed for the process lifetime — an unbounded leak
 across a long session (the exact "machine ran out of memory after hours"
 report on 2026-06-13). The fix is _Gen2Collector: it runs gc.collect(2)
-OPPORTUNISTICALLY WHILE THE RECORDER IS IDLE — footage is discarded then, so
-a stop-the-world pause costs nothing and never lands in a clip — with a
+OPPORTUNISTICALLY WHEN THE RECORDER ALLOWS IT — paired GPU automatic idle
+retains lead-in, so only actual capture retirement qualifies — with a
 long-interval force backstop so a never-idle session still bounds gen-2
 garbage (at one predictable, logged glitch every force_after_s). Any GC pause
 >10 ms still logs, so a regression stays visible in the capture log.
@@ -57,8 +57,8 @@ def _cb(phase: str, info: dict) -> None:
 
 def should_collect(idle: bool, secs_since_collect: float,
                    force_after_s: float) -> bool:
-    """Run a gen-2 collection now? Yes while idle (the pause is invisible —
-    discarded footage), or when it's been too long regardless (bounds gen-2
+    """Run a gen-2 collection now? Yes when capture permits, or when it has
+    been too long regardless (bounds gen-2
     garbage in a never-idle session). Pure — unit-tested."""
     return idle or secs_since_collect >= force_after_s
 
@@ -106,8 +106,8 @@ def arm(is_idle=None) -> None:
     heap, and (when is_idle is given) start the idle-time gen-2 collector.
     Call once, AFTER startup so freeze() captures the fully-built graph.
 
-    is_idle: zero-arg callable returning True while footage is discarded
-    (recorder.is_idle). Without it the collector is NOT started and gen-2
+    is_idle: zero-arg callable returning True when capture permits opportunistic
+    collection (recorder.can_collect). Without it the collector is NOT started and gen-2
     garbage would accumulate — callers that disable gen-2 MUST pass it."""
     global _collector
     if _cb not in gc.callbacks:

@@ -31,11 +31,11 @@ def test_view_projects_repeated_counters_and_excludes_unrepresented_audit_rows(t
     view = service.view(42)
 
     assert view["picture_states"] == [
-        {"stick_x": 1, "stick_y": 2, "buttons": 0x8000, "yaw": 10},
-        {"stick_x": 3, "stick_y": 4, "buttons": 0x4000, "yaw": 20},
+        {"stick_x": 1, "stick_y": 2, "buttons": 0x8000, "yaw": 10, "action": 0, "speed": 0},
+        {"stick_x": 3, "stick_y": 4, "buttons": 0x4000, "yaw": 20, "action": 0, "speed": 0},
         None,
-        {"stick_x": 5, "stick_y": 6, "buttons": 0x2000, "yaw": None},
-        {"stick_x": 5, "stick_y": 6, "buttons": 0x2000, "yaw": None},
+        {"stick_x": 5, "stick_y": 6, "buttons": 0x2000, "yaw": None, "action": None, "speed": None},
+        {"stick_x": 5, "stick_y": 6, "buttons": 0x2000, "yaw": None, "action": None, "speed": None},
     ]
     exported = plan_mapped_overlay(view)
     assert [exported.states[i] for i in exported.per_frame] == [
@@ -46,10 +46,11 @@ def test_view_projects_repeated_counters_and_excludes_unrepresented_audit_rows(t
     assert exported.duration_s == view["duration_s"]
     # The raw-only independent track cannot audit repeated occurrences. It
     # also cannot implicate a dropped/unknown capture as a displayed picture.
+    # One captured occurrence held through two video slots is ONE picture
+    # checked once, at the first slot that shows it.
     assert view["pad_stamp_agreement"] == {
-        "pictures": 2, "agree": 0, "rows": 5,
-        "disagreements": [[3, 102, [5, 6, 0], [5, 6, 0x2000]],
-                          [4, 102, [5, 6, 0], [5, 6, 0x2000]]],
+        "pictures": 1, "agree": 0, "rows": 5,
+        "disagreements": [[3, 102, [5, 6, 0], [5, 6, 0x2000]]],
     }
     assert sidecar.read_bytes() == original
 

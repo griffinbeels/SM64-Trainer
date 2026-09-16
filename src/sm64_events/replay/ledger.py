@@ -29,7 +29,10 @@ rides into the clip's sidecar as ``picture_ledger``, and is analysable
 long after the ring forgot the footage. A stamp that raises loses its
 field, never the row, never the capture thread.
 """
+from dataclasses import dataclass
+from copy import deepcopy
 import logging
+from typing import Literal
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -60,6 +63,18 @@ _ROWS_CEILING = 35                     # eviction sizing only, above real 30/s
 MIN_ROW_GAP_S = 0.020
 
 
+@dataclass(frozen=True, slots=True)
+class Selection:
+    """Explicit selector result; coalescing names the retained source picture.
+
+    A selected row is observed metadata, not proof of encoding/publication.
+    Failed sampling/preparation/archive work must never be counted as a duplicate.
+    """
+    kind: Literal["selected", "coalesced", "failed"]
+    source_id: str | None = None
+    reason: str = ""
+
+
 class PictureLedger:
     """One row per distinct captured picture; append on the capture thread,
     read snapshots anywhere (deque.append is atomic, readers copy)."""
@@ -78,8 +93,44 @@ class PictureLedger:
         # even when a later query starts after the last real picture.
         self._feeds: deque[dict] = deque(
             maxlen=int(retention_s * _ROWS_CEILING))
-        self._last_fed_row: tuple[str | None, float | None] = (None, None)
+        self._last_fed_row: tuple[str | None, float | None, str | None] = (None, None, None)
         self._archive: PictureArchive | None = None
+        self._on_row: Callable[[dict], object] | None = None
+
+    def selection_only(self, on_row: Callable[[dict], object]) -> "PictureLedger":
+        """Create a private selector that admits rows without storage I/O.
+
+        Stamp registrations are copied at wiring time. Their probes still run
+        on the selecting thread, once per selected candidate. The callback must
+        bound and copy the complete row synchronously or raise (returning False
+        also refuses it), before the selector commits its row or equality
+        baseline. Copying belongs after that callback's size/type validation.
+        """
+        if not callable(on_row):
+            raise TypeError("selected-row callback must be callable")
+        selector = PictureLedger()
+        selector._rows = deque(maxlen=350)
+        selector._feeds = deque(maxlen=350)
+        selector.stamps = dict(self.stamps)
+        selector._on_row = on_row
+        return selector
+
+    def accept_row(self, captured: dict) -> None:
+        """Persist an already-selected row without sampling or running probes.
+
+        The sink calls this before any feed referring to the captured source.
+        Copy nested values so its queued job cannot mutate retained metadata.
+        This does not advance this ledger's selection baseline.
+        """
+        row = deepcopy(captured)
+        capture_ts, frame = float(row.pop("ts")), row.pop("frame")
+        source_id = row.get("source_id")
+        if source_id is not None and (type(source_id) is not str
+                                     or not 0 < len(source_id) <= 160):
+            raise ValueError("invalid native capture ID")
+        if self._archive is not None:
+            self._archive.add_row({"ts": capture_ts, "frame": frame, **row})
+        self._rows.append((capture_ts, frame, row or None))
 
     def open_archive(self, path: Path) -> None:
         """Called by the recorder owner before capture, never at app build.
@@ -111,7 +162,15 @@ class PictureLedger:
         self._rows.clear()
         self._feeds.clear()
         self._prev_sample = self._prev_shape = None
-        self._last_fed_row = (None, None)
+        self._last_fed_row = (None, None, None)
+
+    def restart_selection(self) -> None:
+        """A fresh encoder run needs its own first picture, even if unchanged.
+
+        Historical rows/feeds and registered stamps remain available. Clearing
+        only equality while folding against the old run would still omit it.
+        """
+        self._prev_sample = self._prev_shape = None
 
     def discard_segment(self, seg) -> None:
         if self._archive is not None:
@@ -129,33 +188,42 @@ class PictureLedger:
     def observe(self, bgra, capture_ts: float | None,
                 frame: int | None, extras: dict | None = None, *,
                 prepare: Callable[[], object] | None = None) -> bool:
-        """One grab off the capture thread. True = a NEW picture (row
-        landed). `extras` are caller-computed per-grab stamps (the registry
-        covers zero-arg probes; a stamp that needs THIS grab's own time --
-        the frame-edge phase -- arrives here instead). Never raises: a
-        ledger bug must not cost the capture. Optional encoder preparation
-        runs only for an accepted candidate, before any state or archive
-        changes, so failed preparation leaves an identical retry eligible."""
+        """Compatibility API: true only when the single selector lands a row."""
+        return self.observe_result(bgra, capture_ts, frame, extras,
+                                   prepare=prepare).kind == "selected"
+
+    def observe_result(self, bgra, capture_ts: float | None,
+                       frame: int | None, extras: dict | None = None, *,
+                       prepare: Callable[[], object] | None = None) -> Selection:
+        """Observe one original-picture sample with an explicit outcome.
+
+        Existing equality/fold policy has one owner here. `prepare` only runs
+        for a selected candidate, before any ledger mutation; it must raise on
+        failure, not return a refusal flag. A native source_id is supplied in
+        extras with the captured stamp. Coalescing retains the preceding row's
+        source_id even when a folded sample becomes the comparison baseline.
+        """
+        stage = "sampling"
         try:
             if capture_ts is None:
-                return False           # a picture nobody can place in time
+                return Selection("failed", reason="missing_capture_time")
             shape = getattr(bgra, "shape", None)
             sample = sample_bytes(bgra, SAMPLE_STRIDE)
+            retained = ((self._rows[-1][2] or {}).get("source_id")
+                        if self._rows else None)
             if shape == self._prev_shape and sample == self._prev_sample:
-                return False
-            folded = (self._rows
+                return Selection("coalesced", retained, "equal_sample")
+            folded = (self._prev_sample is not None and self._rows
                     and capture_ts - self._rows[-1][0] < MIN_ROW_GAP_S
                     and frame == self._rows[-1][1])
-            if not folded and prepare is not None:
-                prepare()
-            self._prev_shape = shape
-            self._prev_sample = sample
             if folded:
-                # A torn grab settling shares its present's stamp. A row
-                # this close with a DIFFERENT stamp is a catch-up present
-                # after an emulator stall (measured on his lava clip:
-                # stamp advances of +3..+7) -- a real picture, kept.
-                return False
+                self._prev_shape = shape
+                self._prev_sample = sample
+                return Selection("coalesced", retained, "same_frame_fold")
+            if prepare is not None:
+                stage = "preparation"
+                prepare()
+            stage = "stamps"
             extras = dict(extras or {})
             for name, probe in self.stamps.items():
                 try:
@@ -165,19 +233,37 @@ class PictureLedger:
                         self._warned = True
                         log.exception("picture-ledger stamp %r failed; "
                                       "its field is dropped", name)
+            source_id = extras.get("source_id")
+            if source_id is not None and (type(source_id) is not str
+                                         or not 0 < len(source_id) <= 160):
+                return Selection("failed", reason="invalid_source_id")
+            row = (float(capture_ts), frame, extras or None)
+            if self._on_row is not None:
+                stage = "admission"
+                # The callback validates its budget before owning nested stamps.
+                # A refused callback cannot turn this picture into a duplicate
+                # on the next attempt, or replace the retained native source.
+                if self._on_row({"ts": row[0], "frame": frame, **extras}) is False:
+                    raise RuntimeError("selected row admission refused")
+            stage = "archive"
             if self._archive is not None:
-                self._archive.add_row({"ts": float(capture_ts), "frame": frame, **extras})
-            self._rows.append((float(capture_ts), frame, extras or None))
-            return True
+                self._archive.add_row({"ts": row[0], "frame": frame, **extras})
+            stage = "row"
+            self._rows.append(row)
+            # Commit the new comparison baseline only after the selected row
+            # succeeds. An archive failure is not a successfully retained image.
+            self._prev_shape = shape
+            self._prev_sample = sample
+            return Selection("selected", source_id)
         except Exception:
             if not self._warned:
                 self._warned = True
                 log.exception("picture ledger observe failed; capture "
                               "continues without it")
-            return False
+            return Selection("failed", reason=stage + "_failed")
 
     def mark_fed(self, row_ts: float | None, wrote_at: float,
-                 *, media_run=None, pts: int | None = None) -> None:
+                 *, media_run=None, pts: int | None = None, source_id: str | None = None) -> None:
         """File an accepted picture with its assigned media timestamp.
 
         row_ts=None repeats the preceding picture within this encoder run.
@@ -185,13 +271,19 @@ class PictureLedger:
         picture can be placed after an already-written heartbeat without
         losing the identity of the inputs it contains.
         """
+        if source_id is not None and (type(source_id) is not str or not 0 < len(source_id) <= 160):
+            raise ValueError("invalid native capture ID")
         run_id = media_run.id if media_run else None
         repeated = row_ts is None
         if repeated and self._last_fed_row[0] == run_id:
-            row_ts = self._last_fed_row[1]
-        self._last_fed_row = (run_id, row_ts)
+            row_ts, source_id = self._last_fed_row[1:]
+        elif repeated:
+            source_id = None
+        self._last_fed_row = (run_id, row_ts, source_id)
         feed = {"at": float(wrote_at), "ts": row_ts,
                 "run_id": run_id, "pts": pts, "repeat": repeated}
+        if source_id is not None:
+            feed["source_id"] = source_id
         if self._archive is not None:
             self._archive.add_feed(feed)
         self._feeds.append(feed)

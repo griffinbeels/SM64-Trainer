@@ -12,7 +12,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime
 
-from sm64_events.inputs.readtimes import iter_times, micros, utc_time
+from sm64_events.inputs.readtimes import contains_time, micros, utc_time
 
 _LENGTH = struct.Struct("<I")
 
@@ -45,10 +45,7 @@ class InputObservation:
         if self.history is None:
             return any(low <= micros(stamp) <= high
                        for stamp in (self.first_observed_utc, self.observed_utc))
-        found = False
-        for value in iter_times(self.history):
-            found |= low <= value <= high
-        return found
+        return contains_time(self.history, low, high)
 
 
 def _validate(observations: list[InputObservation], count: int) -> None:

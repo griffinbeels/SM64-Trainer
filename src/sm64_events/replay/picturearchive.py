@@ -19,6 +19,7 @@ class PictureArchive:
         self._lock = threading.RLock()
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._last_source: float | None = None
+        self._last_native_id: str | None = None
         self._db.executescript("""
             PRAGMA auto_vacuum=INCREMENTAL;
             PRAGMA cache_size=-2048;
@@ -30,19 +31,38 @@ class PictureArchive:
             CREATE INDEX IF NOT EXISTS feed_time ON feeds(at);
             CREATE INDEX IF NOT EXISTS feed_source ON feeds(ts);
             CREATE INDEX IF NOT EXISTS feed_run_pts ON feeds(run, pts);
-            CREATE TEMP TABLE removed_sources(ts REAL PRIMARY KEY);
+            CREATE TEMP TABLE removed_sources(ts REAL, native_id TEXT);
         """)
+        self._source_columns()
+
+    def _source_columns(self):
+        # Scratch from an earlier recorder may remain readable after detach.
+        # Migrate once, never scan historical metadata on each new picture.
+        for table in ("pictures", "feeds"):
+            columns = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
+            if "native_id" not in columns:
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN native_id TEXT")
+                self._db.execute(f"""UPDATE {table} SET native_id = json_extract(data, '$.source_id')
+                    WHERE json_type(data, '$.source_id') = 'text'
+                    AND length(json_extract(data, '$.source_id')) BETWEEN 1 AND 160""")
+        self._db.execute("CREATE INDEX IF NOT EXISTS picture_native ON pictures(native_id, ts)")
+        self._db.execute("CREATE INDEX IF NOT EXISTS feed_native ON feeds(native_id, ts)")
+
+    @staticmethod
+    def _native_id(value):
+        source = value.get("source_id")
+        return source if type(source) is str and 0 < len(source) <= 160 else None
 
     def add_row(self, row: dict) -> None:
         with self._lock:
-            self._db.execute("INSERT INTO pictures VALUES (?, ?)",
-                             (row["ts"], json.dumps(row, separators=(",", ":"))))
+            self._db.execute("INSERT INTO pictures(ts, data, native_id) VALUES (?, ?, ?)",
+                             (row["ts"], json.dumps(row, separators=(",", ":")), self._native_id(row)))
 
     def add_feed(self, feed: dict) -> None:
         with self._lock:
-            self._db.execute("INSERT INTO feeds VALUES (?, ?, ?, ?, ?)",
+            self._db.execute("INSERT INTO feeds(at, ts, run, pts, data, native_id) VALUES (?, ?, ?, ?, ?, ?)",
                              (feed["at"], feed["ts"], feed["run_id"], feed["pts"],
-                              json.dumps(feed, separators=(",", ":"))))
+                              json.dumps(feed, separators=(",", ":")), self._native_id(feed)))
             source = feed["ts"]
             if source is not None:
                 if self._last_source is not None and source > self._last_source:
@@ -50,9 +70,13 @@ class PictureArchive:
                     # them have no feed. Only sweep this newly consumed
                     # interval, never the entire retained session per frame.
                     self._db.execute("""DELETE FROM pictures WHERE ts >= ? AND ts < ?
-                        AND NOT EXISTS (SELECT 1 FROM feeds WHERE feeds.ts = pictures.ts)""",
+                        AND CASE WHEN pictures.native_id IS NULL THEN NOT EXISTS
+                            (SELECT 1 FROM feeds WHERE feeds.native_id IS NULL AND feeds.ts = pictures.ts)
+                        ELSE NOT EXISTS
+                            (SELECT 1 FROM feeds WHERE feeds.native_id = pictures.native_id) END""",
                                      (self._last_source, source))
                 self._last_source = source
+                self._last_native_id = self._native_id(feed)
 
     def rows_between(self, t0: float, t1: float) -> list[dict]:
         return self._query("SELECT data FROM pictures WHERE ts BETWEEN ? AND ? ORDER BY ts, rowid",
@@ -90,7 +114,7 @@ class PictureArchive:
                 PRAGMA cache_size=-2048;
                 PRAGMA synchronous=OFF;
                 PRAGMA journal_mode=TRUNCATE;
-                CREATE TEMP TABLE removed_sources(ts REAL PRIMARY KEY);
+                CREATE TEMP TABLE removed_sources(ts REAL, native_id TEXT);
             """)
 
     def discard_segment(self, seg) -> None:
@@ -117,16 +141,25 @@ class PictureArchive:
     def _discard_segment(self, seg) -> None:
         bounds = (seg.media_run.id, seg.media_run.ticks_at(seg.utc_start.timestamp()),
                   seg.media_run.ticks_at(seg.utc_end.timestamp()))
-        self._db.execute("""INSERT OR IGNORE INTO removed_sources
-            SELECT ts FROM feeds WHERE run = ? AND pts >= ? AND pts < ? AND ts IS NOT NULL""",
+        self._db.execute("""INSERT INTO removed_sources
+            SELECT DISTINCT ts, native_id FROM feeds WHERE run = ? AND pts >= ? AND pts < ? AND ts IS NOT NULL""",
                          bounds)
         self._db.execute("DELETE FROM feeds WHERE run = ? AND pts >= ? AND pts < ?", bounds)
         # A heartbeat may reference a picture composed long before its
         # retained segment. Also retain the last fed picture: the next
         # heartbeat has not been written yet. Newer pending rows survive.
-        self._db.execute("""DELETE FROM pictures WHERE ts IN (SELECT ts FROM removed_sources)
-            AND ts IS NOT ? AND NOT EXISTS
-            (SELECT 1 FROM feeds WHERE feeds.ts = pictures.ts)""", (self._last_source,))
+        self._db.execute("""DELETE FROM pictures WHERE rowid IN (
+                SELECT p.rowid FROM removed_sources AS r JOIN pictures AS p
+                ON p.native_id = r.native_id WHERE r.native_id IS NOT NULL
+                UNION
+                SELECT p.rowid FROM removed_sources AS r JOIN pictures AS p
+                ON p.native_id IS NULL AND p.ts = r.ts WHERE r.native_id IS NULL)
+            AND NOT (native_id IS ? AND (native_id IS NOT NULL OR ts IS ?))
+            AND CASE WHEN pictures.native_id IS NULL THEN NOT EXISTS
+                            (SELECT 1 FROM feeds WHERE feeds.native_id IS NULL AND feeds.ts = pictures.ts)
+                        ELSE NOT EXISTS
+                            (SELECT 1 FROM feeds WHERE feeds.native_id = pictures.native_id) END""",
+                         (self._last_native_id, self._last_source))
         self._db.execute("DELETE FROM removed_sources")
         self._commit()
 

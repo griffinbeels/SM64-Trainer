@@ -86,6 +86,7 @@ def test_attempts_replace_and_read(tmp_path):
                 cleared=False, cleared_reason=None)
     db.replace_attempts([a])
     assert db.attempts() == [a]
+    assert db.attempt(a.id) == a and db.attempt(a.id + 1) is None  # one row, no full load
     b = a.__class__(**{**a.__dict__, "outcome": "reset"})
     db.upsert_attempt(b)
     assert db.attempts()[0].outcome == "reset"

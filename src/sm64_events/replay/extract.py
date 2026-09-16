@@ -1,6 +1,10 @@
-"""Cut one scrub-ready MP4 out of the ring (single-mux architecture).
+"""Explicit fragment export and legacy segment-to-MP4 extraction.
 
-The ring holds combined audio+video MPEG-TS segments — the FfmpegAvSink
+Normal View uses native headers over shared fragments in service.py, without
+calling this extractor. Explicit compilation exports stream that same selection
+to one standalone file. The remaining implementation supports legacy sources:
+
+the segment ring holds combined audio+video MPEG-TS segments — the FfmpegAvSink
 encoded ONE continuous A/V stream on a single wall-clock and the segment muxer
 sliced it, so audio and video are already locked together inside every
 segment. Verified native H264 is copied into MP4 without another encode. The
@@ -23,7 +27,7 @@ way, for the same reason: ffmpeg would rescale the whole clip to the first
 segment's size and squash it if the aspect changed.
 """
 import os
-from contextlib import nullcontext
+from contextlib import nullcontext, closing
 from sm64_events.core.profiling import measured
 import math
 import json
@@ -117,6 +121,7 @@ def _native_packet_times(ffprobe: str, clip: Path,
     return [round(p["pts"] / MEDIA_HZ, 6) for p in packets if "D" not in p["flags"]] or None
 
 
+@measured("replay.probe_native_packets")
 def _native_packet_index(ffprobe: str, clip: Path,
                          input_format: str | None, *,
                          allow_preroll: bool = False) -> list[dict] | None:
@@ -246,7 +251,8 @@ def contiguous_run(segments, s: datetime):
 
 
 class ClipExtractor:
-    def __init__(self, cfg: ReplayConfig, codec: str, ffmpeg: str | None = None):
+    def __init__(self, cfg: ReplayConfig, codec: str, ffmpeg: str | None = None, fragments=None):
+        self.fragments = fragments
         self._cfg = cfg
         self._codec = codec
         self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
@@ -262,9 +268,29 @@ class ClipExtractor:
     def extract(self, ring: SegmentRing, start: datetime, end: datetime,
                 out_path: Path) -> ClipResult:
         """Retain source files for all consumers, including compilations."""
+        if self.fragments is not None and self.fragments.enabled:
+            return self._export_fragments(start, end, out_path)
         pin = getattr(ring, "pin", None)
         with pin("video", start, end) if pin else nullcontext():
             return self._extract(ring, start, end, out_path)
+
+    def _export_fragments(self, start, end, out_path):
+        """Explicit compilation export; View serves these bytes without a file."""
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        partial = out_path.with_suffix(".copying")
+        try:
+            with self.fragments.open(start, end) as (media, result, _):
+                with partial.open("wb") as target, closing(media.chunks()) as chunks:
+                    for chunk in chunks:
+                        target.write(chunk)
+                if partial.stat().st_size != media.size:
+                    raise OSError("incomplete fragment export")
+                os.replace(partial, out_path)
+                return ClipResult(path=out_path, **vars(result))
+        except LookupError as error:
+            raise ValueError(str(error)) from error
+        finally:
+            partial.unlink(missing_ok=True)
 
     def _extract(self, ring: SegmentRing, start: datetime, end: datetime,
                  out_path: Path) -> ClipResult:

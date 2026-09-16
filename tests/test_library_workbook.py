@@ -131,6 +131,36 @@ def test_log_revision_is_the_newest_entry():
     assert wb.log_revision(_sample()) == "2026-08-04T20:14:25"
 
 
+def test_revision_probe_reads_numeric_and_shared_values_without_formatting(monkeypatch):
+    import io
+    import zipfile
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(_sample())) as original, zipfile.ZipFile(output, "w") as edited:
+        for part in original.namelist():
+            data = original.read(part)
+            if part == "xl/worksheets/sheet2.xml":
+                data = (b'<worksheet><sheetData><row r="1"><c r="A1"><v>46230</v></c>'
+                        b'<c r="B1"><v>999999</v></c></row><row r="2">'
+                        b'<c r="A2" t="s"><v>0</v></c></row></sheetData></worksheet>')
+            if part != "xl/sharedStrings.xml":
+                edited.writestr(part, data)
+        edited.writestr("xl/sharedStrings.xml", '<sst><si><t>46238.84334791667</t></si></sst>')
+    reads = []
+    original_read = zipfile.ZipFile.read
+
+    def read(archive, name, *args, **kwargs):
+        reads.append(name)
+        return original_read(archive, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", read)
+    assert wb.log_revision(output.getvalue()) == "2026-08-04T20:14:25"
+    assert "xl/sharedStrings.xml" in reads
+    assert "xl/styles.xml" not in reads
+    assert "xl/worksheets/sheet1.xml" not in reads
+    assert not any("theme" in name or "worksheets/_rels" in name for name in reads)
+
+
 def _renamed_log_sample():
     """The workbook as it stands on 2026-08-20: the revision tab split into
     `Log (Main)` / `Log (Extensions)`."""

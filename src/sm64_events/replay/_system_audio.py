@@ -37,12 +37,16 @@ class AudioPump:
         self._dropped = 0
         self._overflows = 0
         self.last_loud_t = 0.0   # monotonic time of last non-silent packet
+        self._error = None
+        self._stopping = threading.Event()
         self._thread = threading.Thread(
             target=self._consume, name="audio-pump", daemon=True)
         self._thread.start()
 
     # -- callback side (real-time: no locks, no allocation beyond the copy) --
     def feed(self, in_data: bytes, status: int) -> None:
+        if self._stopping.is_set():
+            return
         if status:
             self._overflows += 1  # PortAudio flagged over/underflow
         try:
@@ -52,8 +56,24 @@ class AudioPump:
 
     # -- consumer side --------------------------------------------------------
     def _consume(self) -> None:
+        try:
+            self._consume_loop()
+        except Exception as exc:  # noqa: BLE001 - report failed consumer to its owning recorder.
+            self._error = f"audio delivery failed: {exc}"[:512]
+            self._stopping.set()
+            log.exception("audio pump stopped after delivery failure")
+
+    def check_health(self) -> None:
+        if self._error is not None:
+            raise RuntimeError(self._error)
+        if not self._thread.is_alive():
+            raise RuntimeError("audio pump is not running")
+
+    def _consume_loop(self) -> None:
         last_report = 0.0
         while True:
+            if self._stopping.is_set() and self._q.empty():
+                return
             raw = self._q.get()
             if raw is None:
                 return
@@ -70,6 +90,12 @@ class AudioPump:
                 self._overflows = self._dropped = 0
                 last_report = now
 
-    def stop(self) -> None:
-        self._q.put(None)
-        self._thread.join(timeout=5)
+    def stop(self, *, timeout=5) -> None:
+        self._stopping.set()
+        try:
+            self._q.put_nowait(None)
+        except queue.Full:
+            pass  # the consumer observes stopping after draining queued PCM
+        self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            raise RuntimeError("audio pump did not stop; consumer still owns PCM")

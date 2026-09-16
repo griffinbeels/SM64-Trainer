@@ -3005,6 +3005,10 @@ class SegmentEngine:
     def armed_ids(self) -> set[int]:
         return set(self._armed)
 
+    def oldest_open_utc(self):
+        return min((arm.started_utc for arm in (*self._armed.values(), *self._pending.values())),
+                   default=None)
+
     def armed_items(self) -> dict[int, _Arm]:
         """Currently-armed defs with their live `_Arm` (spec 2026-07-28-
         multi-step-segments): a COPY, like armed_ids() — a caller must never
@@ -3068,11 +3072,77 @@ class SegmentEngine:
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
         closed, notices = [], []
+        if ev.type == "tracking_gap":
+            self._capture_gap(ev, notices)
+            return closed, notices
         # Where every armed def stood BEFORE this event, so the one place at
         # the bottom of this method can tell the browser about any step that
         # moved. See `_progress_notices` for why it is a diff and not an
         # append at each of the four sites that can move a cursor.
         progress_before = {sid: arm.progress for sid, arm in self._armed.items()}
+        self._prepare_position(ev, notices)
+        self._prepare_capture_clock(ev)
+        self._settle_area_entries(ev, notices)
+        # Event-level echo classification — shapes (2a)/(2b)/(3)/(4)/(5) depend
+        # only on the event payload + _last_transition_frame, never on a
+        # per-def arm, so classify ONCE before the loop.  An echo anchor is
+        # involuntary — it must be INVISIBLE to the engine entirely: no
+        # closure, no continuation re-arm, no arm-phase arm/re-arm, for
+        # every def (live regression 2026-06-12: the lobby door's section
+        # reset matched LBLJ's attempt_anchor start trigger in the ARM phase
+        # and rebased start_frame to the door).  Extracted to _anchor_echo
+        # (spec 2026-07-23-default-routes-foundation) so the waypoint matcher
+        # (_feed_waypoint) reuses the SAME echo definition instead of a
+        # second copy drifting out of sync; full shape taxonomy in the
+        # module docstring and the method's own docstring.
+        anchor_is_echo = self._anchor_echo(ev)
+        for d in self._defs:
+            closed.extend(self._feed_definition(
+                Attempt, d, ev, ctx, notices, anchor_is_echo))
+        # THE GRAND STAR ENDS THE RUN, so nothing may still be running after
+        # it. Griffin, 2026-08-05, on the credits screen with "CCM -> BBH"
+        # still showing a live timer: "at the end of the game (i.e., after
+        # grabbing the final star and finishing the Bowser 3 segment), there
+        # should be absolutely no segments still running (the game is
+        # literally over)... It also seems to persist to new areas of the
+        # map?"
+        #
+        # `key_grabbed` with `which == "grand"` is the game's own end (level
+        # 34; the grand star never fires `star_collected`, which is why
+        # `key.py` stamps this instead -- see the trigger table above). It is
+        # already journalled, so this needs no new memory read and applies
+        # retroactively on replay like every other projection rule.
+        #
+        # LAST, deliberately: Bowser 3's own definition ENDS on this event, so
+        # running after the closures above is what lets it record its success
+        # and only then clears whatever else was left over.
+        #
+        # SILENT, via the same helper an off-route move uses: "a movement that
+        # never happened must not bank a failure" (`_cancel_topologically`).
+        # A movement interrupted by winning the game did not happen either,
+        # and banking failures here would be exactly the misattribution the
+        # untargeted-reset rule exists to stop (projection.py). Cancelled
+        # rather than hard-disarmed so the ordinary "return to the start and
+        # press reset" recovery still brings it back.
+        if ev.type == "key_grabbed" and ev.payload.get("which") == "grand":
+            for d in [d for d in self._defs if d.id in self._armed]:
+                self._cancel_topologically(d, ev, notices)
+        self._progress_notices(progress_before, ev.frame, notices)
+        return closed, notices
+
+    def _capture_gap(self, ev, notices) -> None:
+        # Capture loss proves no outcome. Forget every in-flight/parked
+        # arm and clock, while retaining historical success budgets.
+        for d in self._defs:
+            self._disarm(d, ev, notices)
+        self._pending.clear()
+        self._cancelled.clear()
+        self._last_transition_frame = self._last_area_edge_frame = None
+        self._last_igt_zero_frame = None
+        self._banked_before_zero = 0
+        self._settled_node = self._pending_move = None
+
+    def _prepare_position(self, ev, notices) -> None:
         # Drop spent deferred destination-subarea entries (_pending): once an
         # event at a LATER frame arrives, the entry frame's co-frame area_changed
         # burst is over. Arming/retraction already happened LIVE on those co-frame
@@ -3115,6 +3185,8 @@ class SegmentEngine:
         # processing so the echo guard below can test both echo shapes.
         if ev.type in ("level_changed", "area_changed"):
             self._last_transition_frame = ev.frame
+
+    def _prepare_capture_clock(self, ev) -> None:
         # Same discipline for Usamune's own clock origin: _close reads this to
         # decide whether a closing event's igt_frames measures the segment, so
         # it has to be current for the closures that run below on THIS event.
@@ -3166,6 +3238,8 @@ class SegmentEngine:
                         and 0 <= ev.frame - arm.start_frame
                         <= CLOCK_START_WINDOW_FRAMES):
                     self._armed[def_id] = replace(arm, clock_frame=ev.frame)
+
+    def _settle_area_entries(self, ev, notices) -> None:
         if ev.type == "area_changed":
             if _real_edge(ev):
                 self._last_area_edge_frame = ev.frame  # cross-area relocation
@@ -3203,239 +3277,209 @@ class SegmentEngine:
                 elif p.area != p.required_area and live is not None \
                         and live.start_frame == p.start_frame:
                     self._disarm(self._def_by_id[did], ev, notices)
-        # Event-level echo classification — shapes (2a)/(2b)/(3)/(4)/(5) depend
-        # only on the event payload + _last_transition_frame, never on a
-        # per-def arm, so classify ONCE before the loop.  An echo anchor is
-        # involuntary — it must be INVISIBLE to the engine entirely: no
-        # closure, no continuation re-arm, no arm-phase arm/re-arm, for
-        # every def (live regression 2026-06-12: the lobby door's section
-        # reset matched LBLJ's attempt_anchor start trigger in the ARM phase
-        # and rebased start_frame to the door).  Extracted to _anchor_echo
-        # (spec 2026-07-23-default-routes-foundation) so the waypoint matcher
-        # (_feed_waypoint) reuses the SAME echo definition instead of a
-        # second copy drifting out of sync; full shape taxonomy in the
-        # module docstring and the method's own docstring.
-        anchor_is_echo = self._anchor_echo(ev)
-        for d in self._defs:
-            arm = self._armed.get(d.id)
-            start_clause = self._first_match(d.start_triggers, ev, ctx)
-            starts = start_clause is not None
-            if arm is not None:
-                # Armed-branch dispatch (spec 2026-07-28-multi-step-segments).
-                # A loose def owns its own waypoint progression, so it takes
-                # _feed_loose whether or not it carries waypoints; a strict
-                # def splits on waypoints exactly as it did before.
-                if d.match_mode == "loose":
-                    handler = self._feed_loose
-                elif d.waypoints:
-                    handler = self._feed_waypoint
-                else:
-                    handler = self._feed_strict
-                closed.extend(handler(Attempt, d, arm, ev, ctx, notices,
-                                      anchor_is_echo, starts))
-            # arm / re-arm — guards re-evaluated every time (spec).
-            # Echo anchors are INVISIBLE here too: an involuntary door/load
-            # echo matching an attempt_anchor start trigger must neither arm
-            # an idle def nor rebase an armed one (live regression
-            # 2026-06-12: the lobby door's section-reset echo rebased LBLJ's
-            # start_frame/started_utc to the door, so replay and rta began
-            # at the door instead of the segment start).  The arm-frame
-            # check is the per-def belt for shape (1) — `arm` is the
-            # pre-closure value, unchanged for echoes.  REAL anchors already
-            # took the continuation re-arm in the closure phase above; for
-            # those the attempt_anchor replace here remains idempotent
-            # (identical _Arm values).  The spec's "re-arm on start trigger
-            # refire" applies to player actions only.
-            echo_invisible = ev.type in _ANCHOR_TYPES and (
-                anchor_is_echo
-                or (arm is not None and ev.frame == arm.start_frame))
-            # EXCEPTION — cross-area relocation arm (live report 2026-06-13): an
-            # anchor co-frame with a real area edge is a WARP LANDING in a new
-            # area. An IDLE destination segment must still arm there even though
-            # the landing spawns in ACT_WARP_DOOR_SPAWN (door-echo-classified) —
-            # else warping to the lobby never re-arms LBLJ. Scoped to idle defs
-            # so it never REBASES an armed one (the 2026-06-12 regression: only
-            # an already-armed def must be echo-protected from rebasing).
-            relocation_arm = (ev.type in _ANCHOR_TYPES
-                              and ev.frame == self._last_area_edge_frame
-                              and d.id not in self._armed)
-            # A waypoint-bearing def that is STILL ARMED owns its own
-            # progression via _feed_waypoint's `progress` counter (spec
-            # 2026-07-23-default-routes-foundation) — a start-clause refire
-            # (e.g. the "exit SL" waypoint doubling as SL->HMC's own start
-            # trigger) must not fall through to this generic re-arm and reset
-            # progress back to 0. Only gates while armed: once _feed_waypoint
-            # has disarmed the def (major-action cancel), a fresh start-clause
-            # match here re-arms normally, same as any other def.
-            # ARM-POSITION gate (live report 2026-07-27): a start trigger
-            # fired, but a Usamune menu warp can leave Mario somewhere the
-            # segment cannot be run from — see can_run_from's section comment.
-            # A game_reset is exempt: the projector keeps the pre-reset level
-            # until the next level_changed, so ctx.level names where the player
-            # WAS, not where the reset put them.
-            arm_position_possible = starts and (
-                ev.type == "game_reset"
-                or can_run_from(d, start_clause, ctx.level))
-            if starts and (not echo_invisible or relocation_arm) \
-                    and not (d.waypoints and d.id in self._armed) \
-                    and _route_allows(d, ctx) \
-                    and arm_position_possible \
-                    and all(GUARDS[g["type"]].check(g, ctx)
-                            for g in d.guards
-                            if GUARDS[g["type"]].phase == "arm"):
-                # A destination-subarea level trigger can't be confirmed yet
-                # (the castle lobby loads before the warp settles) — DEFER it
-                # into _pending keyed on the required interior area, to be
-                # resolved when the co-frame area_changed burst is over. The
-                # source subarea (from_subarea) is already in the lambda, so a
-                # plain match here arms immediately as before.
-                # A normal arm supersedes any remembered cancellation:
-                # the def is live again by its own start condition, so the
-                # resurrection memory would only be a stale second door.
-                self._cancelled.pop(d.id, None)
-                req = (start_clause.get("to_subarea")
-                       if ev.type == "level_changed" else None)
-                if req is not None:
-                    self._pending[d.id] = _Arm(
-                        jid=ev.id, start_frame=ev.frame,
-                        started_utc=ev.wall_time_utc, anchor_type=ev.type,
-                        session_id=ev.session_id, level=ctx.level,
-                        area=ctx.area, required_area=req,
-                        deadline_frame=self._deadline_for(d, ev))
-                else:
-                    fresh = d.id not in self._armed
-                    # A plain LOOSE def's own start trigger can genuinely
-                    # refire while it is still armed and mid-route (live
-                    # audit 2026-07-29: 13 refires in the user's real
-                    # session, restarting Bowser 2/1 movements that had gone
-                    # stale under an earlier abandoned exit). The restart is
-                    # the honest read — the start condition genuinely
-                    # happened again, so the fresh arm times the real
-                    # attempt, and the old in-flight arm's elapsed time was
-                    # never a completed attempt worth a row. But `fresh` is
-                    # False here (d.id was already armed), so this used to be
-                    # completely SILENT — no notice, no trace, same class of
-                    # defect as the anchor-relocation bug this def's docstring
-                    # describes, just structurally adjacent to _feed_loose
-                    # rather than inside it. Surface it with the ordinary
-                    # disarm+arm notice pair instead. `not d.waypoints` is
-                    # belt-and-suspenders here, not load-bearing: the outer
-                    # `not (d.waypoints and d.id in self._armed)` guard above
-                    # already makes `d.waypoints` false whenever `not fresh`
-                    # is true (a waypoint-bearing def that's already armed
-                    # never reaches this branch at all — see the AUTHORING
-                    # CAVEAT in _feed_waypoint's docstring), so this can never
-                    # widen to the waypoint case; it names the invariant for
-                    # a reader who doesn't want to re-derive it.
-                    loose_plain_refire = (not fresh and d.match_mode == "loose"
-                                          and not d.waypoints)
-                    if loose_plain_refire:
-                        self._disarm(d, ev, notices)  # visible: no row for
-                        # the discarded partial, same as every other no-row
-                        # disarm on this branch
-                    self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
-                                             started_utc=ev.wall_time_utc,
-                                             anchor_type=ev.type,
-                                             session_id=ev.session_id,
-                                             level=ctx.level, area=ctx.area,
-                                             deadline_frame=self._deadline_for(d, ev))
-                    if fresh or loose_plain_refire:
-                        notices.append({"event": "segment_armed",
-                                        "segment_id": d.id, "name": d.name,
-                                        "frame": ev.frame})
-            # RESURRECTION (Griffin's ruling 2026-08-01, from the measurement
-            # in tools/measure_topology_cancels.py): a REAL anchor at the
-            # position a topologically-cancelled arm stood in is the retry
-            # loop, not a new event. `_feed_loose` already reads an anchor at
-            # the arm position that way for a LIVE arm; this is the same
-            # reading for one the topological rules killed, and without it a
-            # movement whose start trigger cannot be re-fired without redoing
-            # a whole Bowser fight would simply become unpractisable after any
-            # detour. Runs AFTER the ordinary arm branch and is gated on the
-            # def still being idle, so it can never rebase a live arm.
-            remembered = self._cancelled.get(d.id)
-            if remembered is not None:
-                cancelled_arm, expires = remembered
-                if ev.frame >= expires:
-                    del self._cancelled[d.id]   # see _cancelled: no clock, no bound
-                elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
-                      and not _at_arm_position(cancelled_arm, ctx)):
-                    # FORFEIT (Griffin, 2026-08-01): a real reset SOMEWHERE
-                    # ELSE ends the retry, permanently — "if... in the middle
-                    # of lobby -> wf, I decided to reset to bitdw, I think
-                    # that's a genuine kill of the segment, because we've now
-                    # gone out of order in a way that doesn't make sense for
-                    # practicing... until I get back to Bowser 1 and trigger
-                    # it from the beginning again". Without this the memory
-                    # would survive the relocation and the NEXT reset back at
-                    # the start would resurrect a run he had abandoned twice
-                    # over. Mirrors _feed_strict's existing reading of an
-                    # anchor away from the arm position as a relocation.
-                    del self._cancelled[d.id]
-                elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
-                      and d.id not in self._armed
-                      and _at_arm_position(cancelled_arm, ctx)):
-                    del self._cancelled[d.id]
-                    self._armed[d.id] = _Arm(
-                        jid=ev.id, start_frame=ev.frame,
-                        started_utc=ev.wall_time_utc, anchor_type=ev.type,
-                        session_id=ev.session_id,
-                        level=(ctx.level if ctx.level is not None
-                               else cancelled_arm.level),
-                        area=(ctx.area if ctx.area is not None
-                              else cancelled_arm.area),
-                        deadline_frame=self._deadline_for(d, ev))
-                    notices.append({"event": "segment_armed",
-                                    "segment_id": d.id, "name": d.name,
-                                    "frame": ev.frame})
-            # THE 100-COIN GRAB IS PROOF (task 0110, 2026-09-01). His savestate
-            # loop loads a state mid-course, grabs the 100-coin star and the
-            # exit star, and reloads: no level_enter, no anchor, so nothing
-            # above ever arms this family and every exit grab recorded as a
-            # plain exit star -- eleven times in one TTC session (journal
-            # 2026-08-28, ids 4126-4265). His ruling: "during a run if we
-            # ever get a 100 coins star, then now we're doing 100 coins".
-            # Runs AFTER the armed branch on purpose: a re-grab of the star
-            # while armed past it is a major action there (silent cancel),
-            # and this re-arms at the newer grab in the same tick -- the run
-            # he finishes is the latest one. Kept out of `start_triggers`
-            # so `arms_ambiently`/`hooks_on_arm`/the origin readers see the
-            # definition exactly as before.
-            if (ev.type == "star_collected" and d.id not in self._armed
-                    and d.id in self._hundred_coin):
-                closed.extend(self._hundred_coin_proof_arm(
-                    Attempt, d, ev, ctx, notices,
-                    was_armed=arm is not None))
-        # THE GRAND STAR ENDS THE RUN, so nothing may still be running after
-        # it. Griffin, 2026-08-05, on the credits screen with "CCM -> BBH"
-        # still showing a live timer: "at the end of the game (i.e., after
-        # grabbing the final star and finishing the Bowser 3 segment), there
-        # should be absolutely no segments still running (the game is
-        # literally over)... It also seems to persist to new areas of the
-        # map?"
-        #
-        # `key_grabbed` with `which == "grand"` is the game's own end (level
-        # 34; the grand star never fires `star_collected`, which is why
-        # `key.py` stamps this instead -- see the trigger table above). It is
-        # already journalled, so this needs no new memory read and applies
-        # retroactively on replay like every other projection rule.
-        #
-        # LAST, deliberately: Bowser 3's own definition ENDS on this event, so
-        # running after the closures above is what lets it record its success
-        # and only then clears whatever else was left over.
-        #
-        # SILENT, via the same helper an off-route move uses: "a movement that
-        # never happened must not bank a failure" (`_cancel_topologically`).
-        # A movement interrupted by winning the game did not happen either,
-        # and banking failures here would be exactly the misattribution the
-        # untargeted-reset rule exists to stop (projection.py). Cancelled
-        # rather than hard-disarmed so the ordinary "return to the start and
-        # press reset" recovery still brings it back.
-        if ev.type == "key_grabbed" and ev.payload.get("which") == "grand":
-            for d in [d for d in self._defs if d.id in self._armed]:
-                self._cancel_topologically(d, ev, notices)
-        self._progress_notices(progress_before, ev.frame, notices)
-        return closed, notices
+
+    def _feed_definition(self, Attempt, d, ev, ctx, notices, anchor_is_echo):
+        closed = []
+        arm = self._armed.get(d.id)
+        start_clause = self._first_match(d.start_triggers, ev, ctx)
+        starts = start_clause is not None
+        if arm is not None:
+            # Armed-branch dispatch (spec 2026-07-28-multi-step-segments).
+            # A loose def owns its own waypoint progression, so it takes
+            # _feed_loose whether or not it carries waypoints; a strict
+            # def splits on waypoints exactly as it did before.
+            if d.match_mode == "loose":
+                handler = self._feed_loose
+            elif d.waypoints:
+                handler = self._feed_waypoint
+            else:
+                handler = self._feed_strict
+            closed.extend(handler(Attempt, d, arm, ev, ctx, notices,
+                                  anchor_is_echo, starts))
+        self._arm_on_start(d, arm, start_clause, ev, ctx, notices, anchor_is_echo)
+        self._restore_cancelled_arm(d, ev, ctx, notices, anchor_is_echo)
+        # THE 100-COIN GRAB IS PROOF (task 0110, 2026-09-01). His savestate
+        # loop loads a state mid-course, grabs the 100-coin star and the
+        # exit star, and reloads: no level_enter, no anchor, so nothing
+        # above ever arms this family and every exit grab recorded as a
+        # plain exit star -- eleven times in one TTC session (journal
+        # 2026-08-28, ids 4126-4265). His ruling: "during a run if we
+        # ever get a 100 coins star, then now we're doing 100 coins".
+        # Runs AFTER the armed branch on purpose: a re-grab of the star
+        # while armed past it is a major action there (silent cancel),
+        # and this re-arms at the newer grab in the same tick -- the run
+        # he finishes is the latest one. Kept out of `start_triggers`
+        # so `arms_ambiently`/`hooks_on_arm`/the origin readers see the
+        # definition exactly as before.
+        if (ev.type == "star_collected" and d.id not in self._armed
+                and d.id in self._hundred_coin):
+            closed.extend(self._hundred_coin_proof_arm(
+                Attempt, d, ev, ctx, notices,
+                was_armed=arm is not None))
+        return closed
+
+    def _arm_on_start(self, d, arm, start_clause, ev, ctx, notices, anchor_is_echo) -> None:
+        starts = start_clause is not None
+        # arm / re-arm — guards re-evaluated every time (spec).
+        # Echo anchors are INVISIBLE here too: an involuntary door/load
+        # echo matching an attempt_anchor start trigger must neither arm
+        # an idle def nor rebase an armed one (live regression
+        # 2026-06-12: the lobby door's section-reset echo rebased LBLJ's
+        # start_frame/started_utc to the door, so replay and rta began
+        # at the door instead of the segment start).  The arm-frame
+        # check is the per-def belt for shape (1) — `arm` is the
+        # pre-closure value, unchanged for echoes.  REAL anchors already
+        # took the continuation re-arm in the closure phase above; for
+        # those the attempt_anchor replace here remains idempotent
+        # (identical _Arm values).  The spec's "re-arm on start trigger
+        # refire" applies to player actions only.
+        echo_invisible = ev.type in _ANCHOR_TYPES and (
+            anchor_is_echo
+            or (arm is not None and ev.frame == arm.start_frame))
+        # EXCEPTION — cross-area relocation arm (live report 2026-06-13): an
+        # anchor co-frame with a real area edge is a WARP LANDING in a new
+        # area. An IDLE destination segment must still arm there even though
+        # the landing spawns in ACT_WARP_DOOR_SPAWN (door-echo-classified) —
+        # else warping to the lobby never re-arms LBLJ. Scoped to idle defs
+        # so it never REBASES an armed one (the 2026-06-12 regression: only
+        # an already-armed def must be echo-protected from rebasing).
+        relocation_arm = (ev.type in _ANCHOR_TYPES
+                          and ev.frame == self._last_area_edge_frame
+                          and d.id not in self._armed)
+        # A waypoint-bearing def that is STILL ARMED owns its own
+        # progression via _feed_waypoint's `progress` counter (spec
+        # 2026-07-23-default-routes-foundation) — a start-clause refire
+        # (e.g. the "exit SL" waypoint doubling as SL->HMC's own start
+        # trigger) must not fall through to this generic re-arm and reset
+        # progress back to 0. Only gates while armed: once _feed_waypoint
+        # has disarmed the def (major-action cancel), a fresh start-clause
+        # match here re-arms normally, same as any other def.
+        # ARM-POSITION gate (live report 2026-07-27): a start trigger
+        # fired, but a Usamune menu warp can leave Mario somewhere the
+        # segment cannot be run from — see can_run_from's section comment.
+        # A game_reset is exempt: the projector keeps the pre-reset level
+        # until the next level_changed, so ctx.level names where the player
+        # WAS, not where the reset put them.
+        arm_position_possible = starts and (
+            ev.type == "game_reset"
+            or can_run_from(d, start_clause, ctx.level))
+        if starts and (not echo_invisible or relocation_arm) \
+                and not (d.waypoints and d.id in self._armed) \
+                and _route_allows(d, ctx) \
+                and arm_position_possible \
+                and all(GUARDS[g["type"]].check(g, ctx)
+                        for g in d.guards
+                        if GUARDS[g["type"]].phase == "arm"):
+            self._arm_from_clause(d, start_clause, ev, ctx, notices)
+
+    def _arm_from_clause(self, d, start_clause, ev, ctx, notices) -> None:
+        # A destination-subarea level trigger can't be confirmed yet
+        # (the castle lobby loads before the warp settles) — DEFER it
+        # into _pending keyed on the required interior area, to be
+        # resolved when the co-frame area_changed burst is over. The
+        # source subarea (from_subarea) is already in the lambda, so a
+        # plain match here arms immediately as before.
+        # A normal arm supersedes any remembered cancellation:
+        # the def is live again by its own start condition, so the
+        # resurrection memory would only be a stale second door.
+        self._cancelled.pop(d.id, None)
+        req = (start_clause.get("to_subarea")
+               if ev.type == "level_changed" else None)
+        if req is not None:
+            self._pending[d.id] = _Arm(
+                jid=ev.id, start_frame=ev.frame,
+                started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                session_id=ev.session_id, level=ctx.level,
+                area=ctx.area, required_area=req,
+                deadline_frame=self._deadline_for(d, ev))
+        else:
+            fresh = d.id not in self._armed
+            # A plain LOOSE def's own start trigger can genuinely
+            # refire while it is still armed and mid-route (live
+            # audit 2026-07-29: 13 refires in the user's real
+            # session, restarting Bowser 2/1 movements that had gone
+            # stale under an earlier abandoned exit). The restart is
+            # the honest read — the start condition genuinely
+            # happened again, so the fresh arm times the real
+            # attempt, and the old in-flight arm's elapsed time was
+            # never a completed attempt worth a row. But `fresh` is
+            # False here (d.id was already armed), so this used to be
+            # completely SILENT — no notice, no trace, same class of
+            # defect as the anchor-relocation bug this def's docstring
+            # describes, just structurally adjacent to _feed_loose
+            # rather than inside it. Surface it with the ordinary
+            # disarm+arm notice pair instead. `not d.waypoints` is
+            # belt-and-suspenders here, not load-bearing: the outer
+            # `not (d.waypoints and d.id in self._armed)` guard above
+            # already makes `d.waypoints` false whenever `not fresh`
+            # is true (a waypoint-bearing def that's already armed
+            # never reaches this branch at all — see the AUTHORING
+            # CAVEAT in _feed_waypoint's docstring), so this can never
+            # widen to the waypoint case; it names the invariant for
+            # a reader who doesn't want to re-derive it.
+            loose_plain_refire = (not fresh and d.match_mode == "loose"
+                                  and not d.waypoints)
+            if loose_plain_refire:
+                self._disarm(d, ev, notices)  # visible: no row for
+                # the discarded partial, same as every other no-row
+                # disarm on this branch
+            self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
+                                     started_utc=ev.wall_time_utc,
+                                     anchor_type=ev.type,
+                                     session_id=ev.session_id,
+                                     level=ctx.level, area=ctx.area,
+                                     deadline_frame=self._deadline_for(d, ev))
+            if fresh or loose_plain_refire:
+                notices.append({"event": "segment_armed",
+                                "segment_id": d.id, "name": d.name,
+                                "frame": ev.frame})
+
+    def _restore_cancelled_arm(self, d, ev, ctx, notices, anchor_is_echo) -> None:
+        # RESURRECTION (Griffin's ruling 2026-08-01, from the measurement
+        # in tools/measure_topology_cancels.py): a REAL anchor at the
+        # position a topologically-cancelled arm stood in is the retry
+        # loop, not a new event. `_feed_loose` already reads an anchor at
+        # the arm position that way for a LIVE arm; this is the same
+        # reading for one the topological rules killed, and without it a
+        # movement whose start trigger cannot be re-fired without redoing
+        # a whole Bowser fight would simply become unpractisable after any
+        # detour. Runs AFTER the ordinary arm branch and is gated on the
+        # def still being idle, so it can never rebase a live arm.
+        remembered = self._cancelled.get(d.id)
+        if remembered is not None:
+            cancelled_arm, expires = remembered
+            if ev.frame >= expires:
+                del self._cancelled[d.id]   # see _cancelled: no clock, no bound
+            elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
+                  and not _at_arm_position(cancelled_arm, ctx)):
+                # FORFEIT (Griffin, 2026-08-01): a real reset SOMEWHERE
+                # ELSE ends the retry, permanently — "if... in the middle
+                # of lobby -> wf, I decided to reset to bitdw, I think
+                # that's a genuine kill of the segment, because we've now
+                # gone out of order in a way that doesn't make sense for
+                # practicing... until I get back to Bowser 1 and trigger
+                # it from the beginning again". Without this the memory
+                # would survive the relocation and the NEXT reset back at
+                # the start would resurrect a run he had abandoned twice
+                # over. Mirrors _feed_strict's existing reading of an
+                # anchor away from the arm position as a relocation.
+                del self._cancelled[d.id]
+            elif (ev.type in _ANCHOR_TYPES and not anchor_is_echo
+                  and d.id not in self._armed
+                  and _at_arm_position(cancelled_arm, ctx)):
+                del self._cancelled[d.id]
+                self._armed[d.id] = _Arm(
+                    jid=ev.id, start_frame=ev.frame,
+                    started_utc=ev.wall_time_utc, anchor_type=ev.type,
+                    session_id=ev.session_id,
+                    level=(ctx.level if ctx.level is not None
+                           else cancelled_arm.level),
+                    area=(ctx.area if ctx.area is not None
+                          else cancelled_arm.area),
+                    deadline_frame=self._deadline_for(d, ev))
+                notices.append({"event": "segment_armed",
+                                "segment_id": d.id, "name": d.name,
+                                "frame": ev.frame})
 
     def _progress_notices(self, before: dict, frame: int,
                           notices: list) -> None:

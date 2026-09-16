@@ -24,11 +24,22 @@ def _isolate_machine(monkeypatch, tmp_path):
 
     class Layer:
         def __init__(self, **kwargs):
-            self.header = kwargs["stream_header"]
+            self.header = None
+            self.auto_refresh = kwargs["auto_refresh"]
+            self.refresh_calls = 0
+            self.refresh_threads = 0
             layers.append(self)
 
         def refresh_if_stale(self):
+            self.refresh_calls += 1
             return False
+
+        def start_refresh(self, logger=None):
+            # Mirrors CaptureLayer.start_refresh: the named daemon thread is
+            # what isolated_start intercepts and counts.
+            if self.auto_refresh:
+                threading.Thread(target=self.refresh_loop, name="capture-layer-refresh",
+                                 daemon=True).start()
 
         def refresh_loop(self, *args, **kwargs):
             forbidden()
@@ -38,12 +49,12 @@ def _isolate_machine(monkeypatch, tmp_path):
     def isolated_start(thread):
         if thread.name == "capture-layer-refresh":
             assert isinstance(thread._target.__self__, Layer)
+            thread._target.__self__.refresh_threads += 1
             return  # no unowned refresh daemon survives build()
         return start(thread)
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("sm64_events.memory.pj64.Pj64Memory.attach", forbidden)
-    monkeypatch.setattr("sm64_events.replay.framestream.FrameStream", forbidden)
     monkeypatch.setattr("sm64_events.core.capturelayer.CaptureLayer", Layer)
     monkeypatch.setattr("sm64_events.core.capturelayer.WinRegistry", lambda: SimpleNamespace())
     monkeypatch.setattr("sm64_events.core.capturelayer.WinProcesses", lambda: SimpleNamespace())
@@ -59,6 +70,19 @@ def _isolate_machine(monkeypatch, tmp_path):
 
     monkeypatch.setattr(subprocess, "run", version_probe)
     return layers
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_only_packaged_builds_automatically_refresh_the_shared_plugin(
+        monkeypatch, _isolate_machine, frozen):
+    from sm64_events.main import _build_capture_layer
+
+    monkeypatch.setattr("sm64_events.core.paths.is_frozen", lambda: frozen)
+    layer, _ = _build_capture_layer(None, None)
+    assert layer.auto_refresh is frozen
+    assert layer.refresh_calls == int(frozen)
+    assert layer.refresh_threads == int(frozen)
+    assert _isolate_machine == [layer]
 
 
 def test_detector_order_is_load_bearing():
@@ -330,112 +354,6 @@ def test_build_wires_replay_endpoints(monkeypatch):
     paths = {r.path for r in app.routes}
     assert "/api/replay/status" in paths
     assert "/api/replay/clips/{name}" in paths
-
-
-def test_only_the_recorder_owner_can_open_or_reconfigure_the_frame_stream(
-        monkeypatch, _isolate_machine):
-    from threading import Event
-    from types import SimpleNamespace
-    from test_replay_recorder import FakeAudioSource, FakeAvSink, FakeVideoSource, WIN
-
-    main_mod = _stubbed_main(monkeypatch)
-    writes, streams, recorders = [], [], []
-    held = False
-    read_entered, read_finish, close_entered = Event(), Event(), Event()
-
-    class Lease:
-        def close(self):
-            nonlocal held
-            assert streams[-1].closed  # close mapping before another owner wins
-            held = False
-
-    def acquire():
-        nonlocal held
-        if held:
-            return None
-        held = True
-        return Lease()
-
-    class Stream:
-        def __init__(self):
-            assert held
-            self.closed = False
-            self.block_header = False
-            streams.append(self)
-
-        def set_table(self, entries, **kwargs):
-            assert held
-            writes.append(entries)
-
-        def header(self):
-            assert not self.closed
-            if self.block_header:
-                read_entered.set()
-                assert read_finish.wait(5)
-                assert not self.closed
-            return SimpleNamespace(initiated=False)
-
-        def set_want_frames(self, on):
-            assert held and not on
-
-        def close(self):
-            close_entered.set()
-            self.closed = True
-
-    real_recorder = main_mod.ReplayRecorder
-
-    def recorder(**kwargs):
-        kwargs.update(recorder_lock_factory=acquire,
-                      audio_factory=lambda pid: FakeAudioSource(),
-                      video_sink_factory=lambda *args: FakeAvSink())
-        result = real_recorder(**kwargs)
-        recorders.append(result)
-        return result
-
-    monkeypatch.setattr(main_mod, "ReplayRecorder", recorder)
-    monkeypatch.setattr("sm64_events.replay.framestream.FrameStream", Stream)
-    monkeypatch.setattr("sm64_events.replay.pluginsource.table_for",
-                        lambda layout: [("global_timer", 4 * (len(recorders) + 1), 4)])
-    monkeypatch.setattr("sm64_events.replay.pluginsource.DesktopUntilLayerPresents",
-                        lambda *args, **kwargs: FakeVideoSource())
-    monkeypatch.setattr(main_mod, "DwmSurfaceVideoSource", lambda *a, **kw: FakeVideoSource())
-    main_mod.build()
-    main_mod.build()
-    assert streams == [] and writes == []
-    first, second = recorders
-    try:
-        first._begin_capture(WIN)
-        assert writes == [[(4, 4)]]
-        second._begin_capture(WIN)
-        second._teardown_capture()
-        assert len(streams) == 1 and not streams[0].closed
-        assert writes == [[(4, 4)]]
-        # Pause a real status read inside header() while teardown races it.
-        # The mapping must remain open until that read returns.
-        streams[0].block_header = True
-        _close_during_status_read(_isolate_machine[0].header, first._teardown_capture,
-                                  read_entered, read_finish, close_entered)
-        assert _isolate_machine[0].header() is None
-        second._begin_capture(WIN)
-        assert writes == [[(4, 4)], [(8, 4)]]
-    finally:
-        first.stop()
-        second.stop()
-
-
-def _close_during_status_read(header, teardown, read_entered, read_finish, close_entered):
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        reading = pool.submit(header)
-        assert read_entered.wait(5)
-        closing = pool.submit(teardown)
-        try:
-            assert not close_entered.wait(0.1)
-        finally:
-            read_finish.set()
-        assert reading.result(timeout=5).initiated is False
-        closing.result(timeout=5)
 
 
 def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):

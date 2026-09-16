@@ -439,8 +439,8 @@ def sample(scratch_dir: Path | None = None, *, count_objects: bool = False,
     """One observability snapshot. Cheap by default (RSS + GC). Opt-in adds:
     `resources` (private bytes, handle/GDI/USER counts, threads, system memory
     — all O(1) syscalls); `count_objects`/`histogram` (a gc.get_objects() heap
-    walk — the only O(heap) cost, so the periodic monitor sets it, on-demand
-    /health does not); `children_of` (child-process memory snapshot); `gpu`
+    walk — only deliberate deep diagnostics enable it); `children_of`
+    (child-process memory snapshot); `gpu`
     (DXGI VRAM usage of THIS process); `processes` (iterable of exe names to
     measure, e.g. PJ64); `scratch_dir` (flat dir size)."""
     snap: dict = {"rss_bytes": rss_bytes(), "gc": gc_summary()}

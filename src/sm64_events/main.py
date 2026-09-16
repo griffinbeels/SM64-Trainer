@@ -4,7 +4,6 @@ import json
 import logging
 import shutil
 import sys
-from threading import RLock
 
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
@@ -34,9 +33,6 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
-from sm64_events.inputs.sampler import InputSampler
-from sm64_events.inputs.service import InputsService
-from sm64_events.inputs.store import ChunkWriter
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
@@ -207,54 +203,39 @@ def _game_version() -> str:
 def _replay_service(cfg, recorder, codec, tracker):
     """Keep manual PB selection and its media preservation on one command."""
     replay = ReplayService(cfg=cfg, recorder=recorder,
-                           extractor=ClipExtractor(cfg=cfg, codec=codec),
+                           extractor=ClipExtractor(cfg=cfg, codec=codec, fragments=getattr(recorder, "fragments", None)),
                            tracker=tracker)
     tracker.on_pb_saved = replay.preserve_pb
     tracker.on_session_ended = replay.session_ended
     return replay
 
 
-def build():
+def _build_tracker(broadcaster):
     global _instance_lock
-    configure_logging()
-    migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
-    # Capture threads contend with encode/server threads for the GIL; the
-    # default 5 ms switch interval adds whole-frame latency spikes at 60 fps.
-    sys.setswitchinterval(0.002)
-    memory = Pj64Memory()
-    version = _game_version()
-    layout = layout_for(version)
-    reader = reader_for(memory, version)
-    if isinstance(reader, UnreadyReader):
-        logging.getLogger("sm64.tracker").error(
-            "game version %s: %s", version, reader.reason)
-    else:
-        logging.getLogger("sm64.tracker").info(
-            "game version %s: %d/%d addresses in the layout", version,
-            len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
-    broadcaster = Broadcaster()
     db_file = db_path()
     db_file.parent.mkdir(parents=True, exist_ok=True)
     lock = acquire_instance_lock(instance_lock_path())
-    db_retry = None
+    db = None
+    def db_retry():
+        """Retain our writer lock across transient opens; never steal another's."""
+        nonlocal lock, db
+        global _instance_lock
+        if db is not None:
+            return db  # service.start may fail after a successful open
+        if lock is None:
+            lock = acquire_instance_lock(instance_lock_path())
+        if lock is None:
+            return None
+        _instance_lock = lock
+        db = Database(db_file)
+        return db
+
     if lock is None:
         logging.getLogger("sm64.tracker").error(
             "another tracker instance owns %s - running broadcast-only "
             "(events will NOT be recorded twice)", db_file)
         db = None
 
-        def db_retry():
-            """Self-heal probe for server/app.py's reattach loop. The usual
-            cause of a held lock is a restart handoff racing the old
-            process's exit — the handoff's wait_lock_free bounds that wait,
-            and this closes the gap if it still loses. None while the lock
-            is held elsewhere; raising (a broken db) ends the retry."""
-            global _instance_lock
-            retry_lock = acquire_instance_lock(instance_lock_path())
-            if retry_lock is None:
-                return None
-            _instance_lock = retry_lock
-            return Database(db_file)
     else:
         _instance_lock = lock
         try:
@@ -299,135 +280,106 @@ def build():
     # a later PUT /api/mode would leave it (server/mode_api.py).
     from sm64_events.server.mode_api import apply_persisted_mode
     apply_persisted_mode(service)
-    # User-set storage limits (UI panel) overlay the code defaults.
-    replay_cfg = apply_settings_file(ReplayConfig())
-    # A saved clip's attempt survives the startup prune (tracking/prune.py).
-    # Wired off the CONFIG, not off the ReplayService below, so it still holds
-    # when replay is disabled this run -- the clips he saved are on disk either
-    # way, and their filenames are the only index to them.
-    service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
-    replay = None
-    frame_stream = None
-    stream_lock = RLock()
+    return service, db, db_retry
 
-    def stream_header():
-        # Status polling shares the mapping lifetime with capture teardown.
-        with stream_lock:
-            return frame_stream.header() if frame_stream is not None else None
 
-    if replay_cfg.enabled:
-        from sm64_events.replay.encoder import pick_video_codec
-        # Per-process loopback is PRIMARY: a replay must carry the game and
-        # nothing else — no Discord call, no music (user report 2026-07-30).
-        # Device-wide loopback is the fallback for machines where the
-        # per-process tap can't start; it records everything sharing PJ64's
-        # output endpoint, so it is a degradation, and status()'s audio_mode
-        # is what says which one is live. Both take the pid: the fallback
-        # needs it to target PJ64's OWN endpoint (per-app routing, 2026-06-11).
-        # Video ENCODING lives in an ffmpeg.exe subprocess when available:
-        # in-process PyAV encoding shared the GIL with capture threads and
-        # the audio pump — every remaining replay glitch class traced to
-        # that coupling (scattered missed slots, rare 100-200 ms gaps,
-        # correlated audio hiccups). Fallback: the in-process writer.
-        import shutil as _shutil
-        import subprocess as _sp
-        video_sink_factory = None
-        _ffmpeg = bundled_ffmpeg() or _shutil.which("ffmpeg")
-        if _ffmpeg:
-            try:
-                from sm64_events.core.childproc import quiet_spawn_kwargs
-                _sp.run([_ffmpeg, "-version"], capture_output=True,
-                        timeout=10, check=True, **quiet_spawn_kwargs())
-                from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
-                # codec: the recorder passes pick_video_codec()'s answer, so
-                # the sink encodes with what THIS machine has (hardcoded
-                # nvenc flashed a non-NVIDIA user's cursor, 2026-08-07).
-                video_sink_factory = (
-                    lambda cfg, on_seg, codec, _f=_ffmpeg: FfmpegAvSink(
-                        cfg, on_seg, ffmpeg=_f, codec=codec))
-                logging.getLogger("sm64.replay").info(
-                    "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
-            except Exception:
-                logging.getLogger("sm64.replay").exception(
-                    "ffmpeg probe failed - using in-process encoder")
-        codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
-        # THE CAPTURE LAYER (round 32 item 95): when the wrapper plugin inside
-        # Project64 is presenting, every picture comes from it already stamped
-        # with the game's own frame counter and pad (replay/pluginsource.py),
-        # and the desktop grab is not used. Opening the mapping and writing
-        # its address table are recorder-owner operations: even creating an
-        # otherwise idle mapping can change the plugin's shared state.
-        from sm64_events.memory.addresses import RDRAM_FULL_SIZE
-        from sm64_events.replay.framestream import FrameStream
-        from sm64_events.replay.pluginsource import PluginVideoSource, table_for
-        stamp_table = table_for(layout)
 
-        def release_capture():
-            nonlocal frame_stream
-            with stream_lock:
-                owned, frame_stream = frame_stream, None
-                if owned is not None:
-                    try:
-                        owned.set_want_frames(False)
-                    finally:
-                        owned.close()
+def _build_replay(replay_cfg, layout, service):
+    if not replay_cfg.enabled:
+        return None, None, lambda: None
+    from sm64_events.replay.encoder import pick_video_codec
+    # Per-process loopback is PRIMARY: a replay must carry the game and
+    # nothing else — no Discord call, no music (user report 2026-07-30).
+    # Device-wide loopback is the fallback for machines where the
+    # per-process tap can't start; it records everything sharing PJ64's
+    # output endpoint, so it is a degradation, and status()'s audio_mode
+    # is what says which one is live. Both take the pid: the fallback
+    # needs it to target PJ64's OWN endpoint (per-app routing, 2026-06-11).
+    # Video ENCODING lives in an ffmpeg.exe subprocess when available:
+    # in-process PyAV encoding shared the GIL with capture threads and
+    # the audio pump — every remaining replay glitch class traced to
+    # that coupling (scattered missed slots, rare 100-200 ms gaps,
+    # correlated audio hiccups). Fallback: the in-process writer.
+    import shutil as _shutil
+    import subprocess as _sp
+    video_sink_factory = None
+    _ffmpeg = bundled_ffmpeg() or _shutil.which("ffmpeg")
+    if _ffmpeg:
+        try:
+            from sm64_events.core.childproc import quiet_spawn_kwargs
+            _sp.run([_ffmpeg, "-version"], capture_output=True,
+                    timeout=10, check=True, **quiet_spawn_kwargs())
+            from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
+            # codec: the recorder passes pick_video_codec()'s answer, so
+            # the sink encodes with what THIS machine has (hardcoded
+            # nvenc flashed a non-NVIDIA user's cursor, 2026-08-07).
+            video_sink_factory = (
+                lambda cfg, on_seg, codec, _f=_ffmpeg: FfmpegAvSink(
+                    cfg, on_seg, ffmpeg=_f, codec=codec))
+            logging.getLogger("sm64.replay").info(
+                "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
+        except Exception:
+            logging.getLogger("sm64.replay").exception(
+                "ffmpeg probe failed - using in-process encoder")
+    codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
+    from sm64_events.replay.sourcefactory import SourceFactory
+    sources = SourceFactory(layout, replay_cfg, DwmSurfaceVideoSource)
 
-        def video_factory(win):
-            nonlocal frame_stream
-            # ReplayRecorder calls this only after acquiring the machine-wide
-            # capture lock. A viewer-only server must make zero mapping writes.
-            try:
-                with stream_lock:
-                    frame_stream = FrameStream()
-                    frame_stream.set_table(
-                        [(offset, length) for _name, offset, length in stamp_table],
-                        rdram_bytes=RDRAM_FULL_SIZE)
-            except Exception:
-                release_capture()
-                logging.getLogger("sm64.replay").exception(
-                    "frame stream unavailable; desktop capture only")
-                return DwmSurfaceVideoSource(win, fps=replay_cfg.fps)
-            import time as _time
-            from sm64_events.replay.pluginsource import DesktopUntilLayerPresents, pictures_flow
-            fallback_note = None
-            before = frame_stream.header()
-            _time.sleep(0.2)
-            after = frame_stream.header()
-            if after.initiated and after.alive != before.alive:
-                # The heartbeat moving says the layer is loaded; only a
-                # picture says it can READ. His first live session
-                # (2026-09-05) had the first without the second and the
-                # recorder held an empty ring for an hour.
-                flowing, reason = pictures_flow(frame_stream)
-                if flowing:
-                    logging.getLogger("sm64.replay").info(
-                        "capture layer live (wrapping %s): frames come stamped "
-                        "from inside Project64", after.wrapped_name or "?")
-                    return PluginVideoSource(frame_stream, stamp_table, layout,
-                                             fps=replay_cfg.fps)
-                fallback_note = f"the capture layer is loaded but {reason}"
-                logging.getLogger("sm64.replay").warning(
-                    "%s; recording through desktop capture instead", fallback_note)
-            # The desktop grab, watching for the layer: the attach usually
-            # lands before the ROM runs (his restart: two seconds before),
-            # and whichever order he opens things in, the layer takes over
-            # the moment it presents.
-            return DesktopUntilLayerPresents(
-                DwmSurfaceVideoSource(win, fps=replay_cfg.fps), frame_stream,
-                note=fallback_note)
+    recorder = ReplayRecorder(
+        cfg=replay_cfg,
+        window_finder=find_window,
+        video_factory=sources.create,
+        audio_factory=lambda pid: ProcessAudioSource(
+            pid=pid, rate=replay_cfg.audio_rate),
+        fallback_audio_factory=lambda pid: SystemAudioSource(
+            rate=replay_cfg.audio_rate, pid=pid),
+        codec=codec,
+        video_sink_factory=video_sink_factory,
+        release_capture=sources.release)
+    replay = _replay_service(replay_cfg, recorder, codec, service)
+    return replay, codec
 
-        recorder = ReplayRecorder(
-            cfg=replay_cfg,
-            window_finder=find_window,
-            video_factory=video_factory,
-            audio_factory=lambda pid: ProcessAudioSource(
-                pid=pid, rate=replay_cfg.audio_rate),
-            fallback_audio_factory=lambda pid: SystemAudioSource(
-                rate=replay_cfg.audio_rate, pid=pid),
-            codec=codec,
-            video_sink_factory=video_sink_factory,
-            release_capture=release_capture)
-        replay = _replay_service(replay_cfg, recorder, codec, service)
+
+def _build_capture_layer(poller, replay):
+    # THE CAPTURE LAYER's installer (item 95): the setup screen's door to
+    # installing the wrapper plugin under consent. Built on the real
+    # registry and process list; its heartbeat comes from the frame stream
+    # when replay opened one, so "active" means the plugin is presenting.
+    from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
+    from sm64_events.core.setup_gpu import GpuSetupProbe
+    from sm64_events.core.paths import (bundled_plugin_dll, bundled_renderer_dll, capture_layer_settings_path,
+                                        is_frozen, migrate_capture_layer_settings)
+    migrate_capture_layer_settings()
+    capture_layer = CaptureLayer(
+        registry=WinRegistry(), processes=WinProcesses(),
+        settings_path=capture_layer_settings_path(),
+        dll_source=bundled_plugin_dll,
+        renderer_source=bundled_renderer_dll,
+        gpu_observation=GpuSetupProbe(lambda: replay.recorder.status() if replay else {}),
+        auto_refresh=is_frozen())
+    from sm64_events.core.setup_runtime import SetupRuntime
+    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
+    # Source checkouts can carry older DLLs than the user's active candidate.
+    # Only an explicit Install may replace that shared file from a worktree.
+    if not capture_layer.auto_refresh:
+        return capture_layer, setup_observer
+    try:
+        # A packaged build carrying a different layer refreshes the installed DLL
+        # while Project64 is closed -- the packaged-release update path,
+        # under the consent already given; a running PJ64 holds its DLL and
+        # the setup screen says so instead. Check at boot and at the refresh
+        # loop's configured interval, independent of which app opens first.
+        if capture_layer.refresh_if_stale():
+            logging.getLogger("sm64.replay").info(
+                "capture layer refreshed to this build's DLL (Project64 was closed)")
+        capture_layer.start_refresh(logging.getLogger("sm64.replay"))
+    except Exception:
+        logging.getLogger("sm64.replay").exception("capture layer refresh failed")
+    return capture_layer, setup_observer
+
+
+
+def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
     # Compare tab: import comparison videos (yt-dlp/copy -> ffmpeg normalize)
     # into the content cache, then serve them as plain clips. Only built when
     # ffmpeg is available (same binary the replay sink uses). Deliberately NOT
@@ -452,116 +404,67 @@ def build():
             builder=CompilationBuilder(extractor=replay.extractor, codec=codec,
                                        fps=replay_cfg.fps),
             out_dir=compilations_dir())
+    return compare, compilation
+
+
+def build():
+    configure_logging()
+    migrate_legacy_data_dir()   # rename the legacy data dir before any data path is read
+    # Capture threads contend with encode/server threads for the GIL; the
+    # default 5 ms switch interval adds whole-frame latency spikes at 60 fps.
+    sys.setswitchinterval(0.002)
+    memory = Pj64Memory()
+    version = _game_version()
+    layout = layout_for(version)
+    reader = reader_for(memory, version)
+    if isinstance(reader, UnreadyReader):
+        logging.getLogger("sm64.tracker").error(
+            "game version %s: %s", version, reader.reason)
+    else:
+        logging.getLogger("sm64.tracker").info(
+            "game version %s: %d/%d addresses in the layout", version,
+            len(LAYOUT_ROWS) - len(layout.missing()), len(LAYOUT_ROWS))
+    broadcaster = Broadcaster()
+    service, _db, db_retry = _build_tracker(broadcaster)
+    # User-set storage limits (UI panel) overlay the code defaults.
+    replay_cfg = apply_settings_file(ReplayConfig())
+    # A saved clip's attempt survives the startup prune (tracking/prune.py).
+    # Wired off the CONFIG, not off the ReplayService below, so it still holds
+    # when replay is disabled this run -- the clips he saved are on disk either
+    # way, and their filenames are the only index to them.
+    service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
+    replay, codec = _build_replay(replay_cfg, layout, service)
+    compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)
     # NO target gate. This passed `target_active=lambda: service.target is not
     # None` (task 0087) until 2026-08-06, which made the recorder blind exactly
     # when it is used — see `build_detectors`' docstring and moment.py's.
-    detectors = build_detectors(version=version)
-    # An ordinal means "the Nth since this attempt opened", so the counter
-    # restarts when one does. The service sees every event and the detectors
-    # see only snapshots, so this is the one place that can join them. BOTH
-    # moment detectors count ordinals; a boundary that reset only one would
-    # leave "the 2nd switch press" counting across attempts.
-    _moment_reset = next(
-        d for d in detectors if isinstance(d, MomentDetector)).reset
-    _caused_reset = next(
-        d for d in detectors if isinstance(d, CausedMomentDetector)).reset
+    def detector_stream():
+        detectors = build_detectors(version=version)
+        moments = [d for d in detectors
+                   if isinstance(d, (MomentDetector, CausedMomentDetector))]
 
-    def _reset_moment_ordinals():
-        _moment_reset()
-        _caused_reset()
+        def reset_ordinals():
+            for detector in moments:
+                detector.reset()
 
-    service.on_attempt_boundary = _reset_moment_ordinals
-    if replay is not None:
-        # Poll-thread tap (emits no events): tells the recorder the player
-        # is providing input so the buffer pauses while idle (activity.py).
-        from sm64_events.replay.activity import ActivityTap
-        detectors.append(ActivityTap(replay.recorder))
-    # service IS the event sink; on_frame is its deferred-judgement heartbeat,
-    # so a topological cancel reaches the screen on the next game frame rather
-    # than whenever the next event happens to be journaled.
-    # Controller capture needs a place to write (a broadcast-only boot has no
-    # db) and a controller address (a version whose sync run has not found
-    # one captures nothing, and the poller falls back to its snapshot rate).
-    # The writer reads the session id lazily because the tracker has not
-    # opened one yet at this point.
-    input_writer = None
-    input_sampler = None
-    if db is not None and layout.player1_controller is not None:
-        input_writer = ChunkWriter(db.inputs, lambda: service.session_id)
-        input_sampler = InputSampler(memory, layout, input_writer.add,
-                                     session_id=lambda: service.session_id,
-                                     on_activity=(replay.recorder.set_player_active
-                                                  if replay is not None else None))
-    poller = Poller(memory, detectors, service, on_frame=service.settle_frame,
-                    reader=reader, input_sampler=input_sampler)
+        # Rebind to the new instances after recovery, not the retired chain.
+        service.on_attempt_boundary = reset_ordinals
+        if replay is not None:
+            from sm64_events.replay.activity import ActivityTap
+            detectors.append(ActivityTap(replay.recorder))
+        return detectors
+
+    from sm64_events.server.inputruntime import InputRuntime
+    inputs = InputRuntime(service, memory, layout, replay)
+    poller = Poller(memory, detector_stream(), service, on_frame=service.settle_frame,
+                    reader=reader, detector_factory=detector_stream,
+                    on_gap=service.capture_gap)
+    inputs.bind(poller)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
-    if input_writer is not None:
-        def close_inputs():
-            input_sampler.flush()
-            input_writer.close()
-        poller.on_stop = close_inputs
-        # A finished attempt's track must be READABLE the moment it
-        # finishes, not up to ten seconds later when the buffer fills.
-        service.on_attempt_settled = input_writer.close
-    if replay is not None and db is not None:
-        # THE CAPTURE LAYER's own audit (item 95): the pad the plugin copied
-        # beside each picture against the track's pad at that frame -- no
-        # pixels involved. Wired here because it needs the input track,
-        # which the replay zone must not reach into. It is the ONLY hook
-        # this service takes now: the footage aligner, the pad reader, the
-        # clock join, the map quantiser, the digit refit, the anchor store
-        # and the ledger mapper were seven generations of GUESSING which
-        # game frame a picture shows, and the capture layer is told.
-        from sm64_events.inputs.track import track_for_attempt
-
-        def _track_pads(attempt):
-            track = track_for_attempt(db.inputs, attempt)
-            return {number: (frame.stick_x, frame.stick_y, frame.buttons)
-                    for number, frame in track} if track else {}
-
-        replay.track_pads = _track_pads
-    # Reading back what was captured needs no controller address, so the
-    # timeline and the templates are wired on every layout that has a db.
-    inputs = None
-    if db is not None:
-        inputs = InputsService(db.inputs, db.input_templates, db.attempts,
-                               version=layout.version,
-                               events=db.events_between,
-                               landmark_names=db.landmark_names)
-    # THE CAPTURE LAYER's installer (item 95): the setup screen's door to
-    # installing the wrapper plugin under consent. Built on the real
-    # registry and process list; its heartbeat comes from the frame stream
-    # when replay opened one, so "active" means the plugin is presenting.
-    from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
-    from sm64_events.core.paths import (bundled_plugin_dll, capture_layer_settings_path,
-                                        migrate_capture_layer_settings)
-    migrate_capture_layer_settings()
-    capture_layer = CaptureLayer(
-        registry=WinRegistry(), processes=WinProcesses(),
-        settings_path=capture_layer_settings_path(),
-        dll_source=bundled_plugin_dll(),
-        stream_header=stream_header)
-    from sm64_events.core.setup_runtime import SetupRuntime
-    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
-    try:
-        # A build carrying a newer layer than the one installed refreshes it
-        # while Project64 is closed -- the update path for every plugin fix,
-        # under the consent already given; a running PJ64 holds its DLL and
-        # the setup screen says so instead. At boot, and then every ten
-        # seconds, so the order he opens things in never matters.
-        if capture_layer.refresh_if_stale():
-            logging.getLogger("sm64.replay").info(
-                "capture layer refreshed to this build's DLL (Project64 was closed)")
-        import threading as _threading
-        _threading.Thread(target=capture_layer.refresh_loop,
-                          args=(_threading.Event(),),
-                          kwargs={"log": logging.getLogger("sm64.replay")},
-                          name="capture-layer-refresh", daemon=True).start()
-    except Exception:
-        logging.getLogger("sm64.replay").exception("capture layer refresh failed")
+    capture_layer, setup_observer = _build_capture_layer(poller, replay)
     return create_app(poller, broadcaster, service=service, replay=replay,
-                      inputs=inputs,
+                      inputs=inputs.get_service, on_db_attached=inputs.attach,
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry, capture_layer=capture_layer,
                       setup_observer=setup_observer,

@@ -19,6 +19,10 @@ because its shape is not what the readers expect."""
 import gzip
 import json
 import logging
+import shutil
+import tempfile
+import os
+import threading
 from pathlib import Path
 
 from sm64_events.library.build import SCHEMA_VERSION
@@ -127,6 +131,7 @@ class LibraryStore:
                 f"({self.path}); pass a copy as `path`, or omit `path` to read "
                 f"the bundled one without ever writing it")
         self._payload = None
+        self._apply_lock = threading.RLock()
         self._source = None   # "local" | "bundled" | None (nothing loaded)
 
     # ---- load ----
@@ -283,20 +288,44 @@ class LibraryStore:
         if step:
             step(0.05, "Downloading the current sheet…")
         data = fetch_fn()
+        if _usable(self._payload):
+            from sm64_events.library.workbook import log_revision
+            skipped = self.skip_revision(log_revision(data))
+            if skipped is not None:
+                return skipped
         return self.absorb(build_and_stamp(data, overrides, step=step))
 
-    def absorb(self, fresh: dict) -> dict:
+    def skip_revision(self, revision: str | None) -> dict | None:
+        """Cheap pre-build check; absorb still rechecks after concurrent work."""
+        fresh = {"schema_version": SCHEMA_VERSION, "sheet_revision": revision}
+        if self._payload is not None and newer(self._payload, fresh) is self._payload:
+            return self._unchanged(revision)
+        return None
+
+    def _unchanged(self, revision) -> dict:
+        return {"applied": False, "sheet_revision": self.revision,
+                "fetched_revision": revision,
+                "reason": "the live sheet is not newer than what we have"}
+
+    def absorb(self, fresh: dict, *, prepared_snapshot=None) -> dict:
         """Keep an already-built payload if it is NEWER than what we hold --
         the tail of `refresh`, on its own so a caller that already has the
         bytes (the column export, round 33) can refresh the library without
         a second download."""
+        # A manual refresh can finish while startup's isolated build runs.
+        # Revision decision, file installation and memory swap are one apply.
+        with self._apply_lock:
+            return self._absorb(fresh, prepared_snapshot)
+
+    def _absorb(self, fresh: dict, prepared_snapshot) -> dict:
         current = self._payload
         if current is not None and newer(current, fresh) is current:
-            return {"applied": False, "sheet_revision": self.revision,
-                    "fetched_revision": fresh.get("sheet_revision"),
-                    "reason": "the live sheet is not newer than what we have"}
+            return self._unchanged(fresh.get("sheet_revision"))
         if self.path:
-            write_snapshot(self.path, fresh)
+            if prepared_snapshot is None:
+                write_snapshot(self.path, fresh)
+            else:
+                _install_prepared(self.path, prepared_snapshot)
         self._payload = fresh
         # "local" only means something once written -- a pathless store (no
         # embedder passes one; create_app always does) never persists this
@@ -306,3 +335,20 @@ class LibraryStore:
         return {"applied": True, "sheet_revision": fresh.get("sheet_revision"),
                 "fetched_revision": fresh.get("sheet_revision"),
                 "targets": len(fresh["targets"])}
+
+
+def _install_prepared(path: Path, prepared: Path) -> None:
+    """Install the worker's already-compressed snapshot without rebuilding it.
+
+    The caller has decoded/validated that same file. Stage beside the owned
+    destination so failure preserves the previous snapshot, even across disks.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    os.close(fd)
+    pending = Path(name)
+    try:
+        shutil.copyfile(prepared, pending)
+        os.replace(pending, path)
+    finally:
+        pending.unlink(missing_ok=True)

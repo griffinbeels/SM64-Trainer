@@ -80,7 +80,24 @@ def _log_poller_exit(task: asyncio.Task) -> None:
         return
     exc = task.exception()
     if exc is not None:
-        log.critical("poll loop died: %r", exc)
+        log.critical("poll loop died: %r", exc,
+                     exc_info=(type(exc), exc, exc.__traceback__))
+    else:
+        log.critical("poll loop stopped unexpectedly")
+
+
+def _polling_state(app) -> dict:
+    supervisor = getattr(app.state, "poll_supervisor", None)
+    if supervisor is not None:
+        return supervisor.health()
+    task = getattr(app.state, "poll_task", None)
+    if task is None:
+        return {"state": "starting", "error": None}
+    if not task.done():
+        return {"state": "running", "error": None}
+    error = None if task.cancelled() else task.exception()
+    return {"state": "failed" if error is not None else "stopped",
+            "error": f"{type(error).__name__}: {error}"[:512] if error is not None else None}
 
 
 # Self-heal for a lost instance-lock race (post-update incident 2026-07-23):
@@ -91,25 +108,30 @@ def _log_poller_exit(task: asyncio.Task) -> None:
 _DB_RETRY_INTERVAL_S = 2.0
 
 
-async def _db_reattach_loop(service, db_retry) -> None:
+async def _db_reattach_loop(service, db_retry, on_attached=None, poller=None) -> None:
     """Poll db_retry until it returns a Database (None = lock still held
-    elsewhere), then attach it to the service. Any exception ends the loop:
-    the retry exists ONLY for the lock race — a broken database must not be
-    re-opened in a loop forever."""
+    elsewhere). Failed opens retry slowly; never replace or delete a broken DB."""
+    delay = _DB_RETRY_INTERVAL_S
+    candidate = None
+    attached = False
     while True:
-        await asyncio.sleep(_DB_RETRY_INTERVAL_S)
+        await asyncio.sleep(delay)
         try:
-            db = db_retry()
+            if candidate is None:
+                candidate = db_retry()
+            if candidate is None:
+                continue
+            from contextlib import nullcontext
+            async with (poller.stream_boundary() if poller else nullcontext()):
+                if not attached:
+                    await service.attach_db(candidate)
+                    attached = True
+                if on_attached is not None:
+                    on_attached(candidate)
         except Exception:
-            log.exception("db reattach failed - staying broadcast-only")
-            return
-        if db is None:
+            log.exception("database recovery failed; retrying in %.1f s", delay)
+            delay = min(30.0, delay * 2)
             continue
-        try:
-            await service.attach_db(db)
-        except Exception:
-            log.exception("db attach failed - staying broadcast-only")
-            return
         log.warning("instance lock freed - database attached, tracking "
                     "enabled (was broadcast-only; compare/compilation were "
                     "mounted at boot and answer normally from here)")
@@ -255,11 +277,11 @@ async def _refresh_library_quietly(library, overrides, adoptions, service) -> No
     renamed tab -- is one log line and nothing else changes, per his rule:
     "fail silently and just not update automatically (other than including
     a mention in the logs)"."""
-    from fastapi.concurrency import run_in_threadpool
+    from sm64_events.library.background import refresh_at_startup
     from sm64_events.library.source import fetch
     from sm64_events.server.ranks_api import absorb_after_regrade
     try:
-        result = await run_in_threadpool(library.refresh, fetch, overrides)
+        result = await refresh_at_startup(library, fetch, overrides)
     except Exception as err:                            # noqa: BLE001
         log.info("library refresh at startup skipped: %r", err)
         return
@@ -288,16 +310,12 @@ def _create_monitor(poller, replay) -> PerfMonitor:
             g.update(poller.perf_stats())     # tick-compute latency trend
         if replay is not None:
             with suppress(Exception):
-                st = replay.recorder.status()
-                g.update(ring_bytes=st.get("disk_bytes"), idle=st.get("idle"),
-                         recording=st.get("recording"),
-                         audio_mode=st.get("audio_mode"))
+                g.update(replay.recorder.perf_gauges())
         return g
 
     # Easy off-switch: SM64_PERFMON=0 (or off/false/no) disables all perf
-    # sampling — no 60 s heap walk / process+GPU probes / perf_log. Default on
-    # (we're still hunting the over-hours leak). Toggle it to A/B-test whether
-    # the instrumentation contributes to any capture/audio hitch.
+    # sampling. Normal monitoring uses cheap resource probes; explicit
+    # SM64_PERFMON_DEEP=1 also enables heap/DXGI/scratch leak diagnostics.
     _perfmon_on = os.environ.get("SM64_PERFMON", "1").strip().lower() \
         not in ("0", "off", "false", "no")
     monitor = PerfMonitor(
@@ -331,33 +349,38 @@ async def _start_app_service(service) -> None:
 def _start_app_replay(replay) -> None:
     if replay is not None:
         try:
-            replay.lifecycle_start()
-        except Exception:
-            log.exception("replay start failed - continuing without replay")
-        try:
             # process-wide stop-the-world pauses (gen2 GC) hit the grab
             # loop and the audio callback simultaneously - arm the
             # watchdog + freeze the startup heap once everything is built.
-            # is_idle drives the manual gen-2 collector (runs while
-            # footage is discarded) so disabling auto-gen-2 can't leak.
+            # Do the initial full collection BEFORE capture starts. Retained
+            # automatic-idle lead-in is not free time for later collections.
             from sm64_events.replay._gcwatch import arm
-            arm(is_idle=replay.recorder.is_idle)
+            arm(is_idle=replay.recorder.can_collect)
         except Exception:
             log.exception("gc watchdog arm failed - continuing")
+        try:
+            replay.lifecycle_start()
+        except Exception:
+            log.exception("replay start failed - continuing without replay")
 
 
 def _create_lifespan(poller, service, replay, monitor, db_retry,
-                     refresh_library_on_start):
+                     refresh_library_on_start, on_db_attached=None, capture_layer=None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await _start_app_service(service)
         reattach_task = None
         if service is not None and service.db is None and db_retry is not None:
             reattach_task = asyncio.create_task(
-                _db_reattach_loop(service, db_retry))
+                _db_reattach_loop(service, db_retry, on_db_attached, poller))
         _start_app_replay(replay)
-        task = asyncio.create_task(poller.run())
+        from sm64_events.server.pollsupervisor import PollSupervisor, maintain_components
+        supervisor = PollSupervisor(poller)
+        app.state.poll_supervisor = supervisor
+        task = asyncio.create_task(supervisor.run(), name="poll-supervisor")
+        app.state.poll_task = task
         task.add_done_callback(_log_poller_exit)
+        recovery_task = asyncio.create_task(maintain_components(service, poller))
         mon_task = asyncio.create_task(monitor.run())
         refresh_task = None
         if refresh_library_on_start and service is not None and service.db is not None:
@@ -376,11 +399,16 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
         mon_task.cancel()
         with suppress(asyncio.CancelledError):
             await mon_task
+        recovery_task.cancel()
+        await asyncio.gather(recovery_task, return_exceptions=True)
+        if capture_layer is not None:
+            await _close_capture_layer(capture_layer)
         if replay is not None:
             await _stop_replay_bounded(replay)
         task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        # The terminal exception has already been logged by the callback.
+        # A failed poller must not skip input/handle cleanup during shutdown.
+        await asyncio.gather(task, return_exceptions=True)
         # The poll loop is stopped, so whatever input it buffered will never
         # be flushed by another tick. Write it now or lose the last seconds
         # of every session.
@@ -391,6 +419,21 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
         with suppress(Exception):
             pidfile_path().unlink()
     return lifespan
+
+
+async def _close_capture_layer(layer):
+    close = getattr(layer, "close", None)
+    if close is None:
+        return
+    for attempt in range(3):
+        try:
+            await asyncio.to_thread(close)
+            return
+        except Exception:
+            if attempt == 2:
+                log.exception("capture-layer shutdown cleanup remains pending")
+            else:
+                await asyncio.sleep(0.05)
 
 
 def _mount_ui_routes(app, broadcaster) -> None:
@@ -666,16 +709,24 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
     @app.get("/health")
     def health():
         latest = poller.latest
+        polling = _polling_state(app)
+        unavailable = polling["state"] in ("failed", "stopped", "recovering", "resuming")
+        tracking = service.tracking_health() if hasattr(service, "tracking_health") else None
+        input_storage = (poller.input_storage_health()
+                         if hasattr(poller, "input_storage_health") else None)
+        storage_unavailable = tracking is not None and tracking["state"] != "running"
         return {
-            "status": "ok",
-            "emulator_attached": poller.memory.attached,
+            "status": "error" if (unavailable or storage_unavailable
+                                   or (input_storage or {}).get("error")) else "ok",
+            "polling": polling,
+            "emulator_attached": poller.memory.attached and not unavailable,
             # A version whose layout is unverified holds the poller: nothing
             # is read until the sync run fills it (core/snapshot.py).
             "held": getattr(poller, "hold_reason", None),
             "clients": broadcaster.client_count,
             "last_frame": latest.global_timer if latest else None,
             "db": ("absent" if service is None
-                   else "error" if service.db is None else "ok"),
+                   else "error" if service.db is None or storage_unavailable else "ok"),
             "session_id": service.session_id if service is not None else None,
             "memory": monitor.latest,
             # The pad sampler's own counters. `edge_mismatches` is the one
@@ -685,6 +736,11 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
             # the live capture check has no number to check.
             "inputs": (poller.input_sampler.health()
                        if getattr(poller, "input_sampler", None) else None),
+            "input_flush": {
+                "failures": getattr(service, "input_flush_failures", 0),
+                "error": getattr(service, "input_flush_error", None)},
+            "input_storage": input_storage,
+            "tracking": tracking,
             # Map v4's counter, or why not yet: "0x..." once hunted, "hunting"
             # while the background sweep runs, "idle" between attempts, None
             # with no hunter wired. Added after its first live check had to
@@ -722,7 +778,8 @@ def _mount_events(app, poller, broadcaster, debug_hooks) -> None:
     @app.get("/state")
     def state():
         latest = poller.latest
-        if latest is None:
+        if latest is None or _polling_state(app)["state"] in (
+                "failed", "stopped", "recovering", "resuming"):
             return {"snapshot": None}
         d = asdict(latest)
         d["wall_time_utc"] = latest.wall_time_utc.isoformat().replace("+00:00", "Z")
@@ -753,7 +810,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
                adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
-               setup_observer=None,
+               setup_observer=None, on_db_attached=None,
                library_path=None, refresh_library_on_start=False,
                library_bundled_path=None) -> FastAPI:
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
@@ -784,7 +841,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # None (production) resolves to core.paths.library_adoptions_path().
     monitor = _create_monitor(poller, replay)
     lifespan = _create_lifespan(poller, service, replay, monitor, db_retry,
-                                refresh_library_on_start)
+                                refresh_library_on_start, on_db_attached, capture_layer)
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
     _mount_ui_routes(app, broadcaster)
     _mount_library_routes(app, service, library_path, library_bundled_path,

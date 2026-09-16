@@ -25,10 +25,11 @@ import logging
 from sm64_events.core.profiling import measured
 from datetime import datetime, timezone
 from uuid import uuid4
+from time import monotonic
 import zlib
 
 from sm64_events.inputs.frame import (MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE,
-                                      InputFrame, decode)
+                                      InputFrame, decode, valid_raw_stick)
 from sm64_events.inputs.observation import InputObservation
 from sm64_events.inputs.readtimes import ReadTimes
 from sm64_events.memory import addresses as A
@@ -71,7 +72,12 @@ class InputSampler:
         self._frame: int | None = None
         self._latest: InputFrame | None = None
         self._previous_buttons = 0
+        self._last_invalid_sample = None
+        self._invalid_log_at = float("-inf")
+        self._sink_log_at = float("-inf")
+        self._last_sink_error = None
         self._counts = {"samples": 0, "straddles": 0, "frames": 0,
+                        "invalid_samples": 0, "sink_failures": 0,
                         "history_failures": 0,
                         "edge_checks": 0, "edge_mismatches": 0,
                         "skips": 0, "skipped_frames": 0, "worst_skip": 0}
@@ -95,7 +101,8 @@ class InputSampler:
         counters are what turn "why did that happen" into a number instead
         of a theory.
         """
-        return dict(self._counts)
+        return {**self._counts, "last_invalid_sample": self._last_invalid_sample,
+                "sink_error": self._last_sink_error}
 
     @measured("inputs.sample", interval=True)
     def sample(self) -> int | None:
@@ -127,21 +134,13 @@ class InputSampler:
         # block on disk, but that cannot move this observation into the future.
         observed_utc = self._clock()
         latest = decode(block, mario)
-        # Menu/reset input can leave Mario's action passive. Wake capture
-        # from this already-read pad, before waiting to seal/store its frame.
-        # A held input in a frozen game must not keep the recorder awake.
-        active_pad_changed = (self._latest is None
-            or (latest.buttons, latest.stick_x, latest.stick_y) !=
-               (self._latest.buttons, self._latest.stick_x, self._latest.stick_y))
-        if (self._on_activity is not None
-                and (before != self._frame or active_pad_changed)
-                and (latest.buttons or latest.stick_x or latest.stick_y)):
-            try:
-                self._on_activity()
-            except Exception:
-                # Replay availability cannot stop memory polling or lose
-                # this coherent input sample.
-                log.exception("input activity notification failed")
+        if not valid_raw_stick(latest.stick_x, latest.stick_y):
+            self._invalid_input(before, latest, observed_utc)
+            self.flush()  # end the valid stretch; no invented/clamped sample
+            # The counter sandwich is still coherent. Keep pacing course
+            # detection even while the controller block is being reset.
+            return before
+        self._notify_activity(before, latest)
         owner = self._session_id() if self._session_id is not None else None
         unchanged = (before == self._frame and owner == self._owner
                      and latest == self._latest)
@@ -177,6 +176,30 @@ class InputSampler:
             self._close_history()
         self._observed_utc = observed_utc
         return before
+
+    def _invalid_input(self, number, latest, observed_utc) -> None:
+        self._counts["invalid_samples"] += 1
+        self._last_invalid_sample = {
+            "frame": number, "stick_x": latest.stick_x,
+            "stick_y": latest.stick_y, "observed_utc": observed_utc}
+        now = monotonic()
+        if now - self._invalid_log_at >= 30.0:
+            self._invalid_log_at = now
+            log.warning("invalid controller sample omitted: %s", self._last_invalid_sample)
+
+    def _notify_activity(self, number, latest) -> None:
+        # Wake from the already-read valid pad before waiting for frame
+        # storage. Held input in a frozen game must not keep capture awake.
+        changed = (self._latest is None
+            or (latest.buttons, latest.stick_x, latest.stick_y) !=
+               (self._latest.buttons, self._latest.stick_x, self._latest.stick_y))
+        if (self._on_activity is not None
+                and (number != self._frame or changed)
+                and (latest.buttons or latest.stick_x or latest.stick_y)):
+            try:
+                self._on_activity()
+            except Exception:
+                log.exception("input activity notification failed")
 
     def flush(self) -> None:
         """End this observed stretch, preserving its pending frame.
@@ -231,10 +254,17 @@ class InputSampler:
                 # observation's owner remains the one that actually read it.
                 self._sink(frame, latest, session_id=self._owner,
                            observation=observation)
-        except Exception:
+            self._last_sink_error = None
+        except Exception as error:
             # The sink writes to disk. A failed write is not a reason to stop
             # reading the pad, and must not take the poll loop down with it.
-            log.exception("input sink failed on frame %d", frame)
+            self._counts["sink_failures"] += 1
+            message = f"{type(error).__name__}: {error}"[:512]
+            now = monotonic()
+            if message != self._last_sink_error or now - self._sink_log_at >= 30.0:
+                self._sink_log_at = now
+                log.exception("input sink failed on frame %d", frame)
+            self._last_sink_error = message
 
     def _history_failed(self, error: Exception) -> None:
         self._counts["history_failures"] += 1

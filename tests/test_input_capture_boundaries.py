@@ -1,8 +1,6 @@
 """An observation before a pause/detach must not become a later occurrence."""
 import asyncio
-import ast
 from contextlib import closing
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -56,18 +54,13 @@ def test_equal_counter_after_capture_break_keeps_both_inputs(tmp_path, boundary)
 
 
 def test_composed_shutdown_emits_pending_input_before_closing_its_writer():
-    # Execute the real wiring block without running build(), which also
-    # probes the live emulator and opens its machine-wide frame mapping.
-    source = Path(__file__).resolve().parents[1] / "src/sm64_events/main.py"
-    tree = ast.parse(source.read_text(encoding="utf-8"))
-    block, = [node for node in ast.walk(tree) if isinstance(node, ast.If)
-              and ast.unparse(node.test) == "input_writer is not None"]
+    from sm64_events.server.inputruntime import InputRuntime
     calls = []
     poller = SimpleNamespace()
-    namespace = {"input_sampler": SimpleNamespace(flush=lambda: calls.append("sampler")),
-                 "input_writer": SimpleNamespace(close=lambda: calls.append("writer")),
-                 "poller": poller, "service": SimpleNamespace()}
-    exec(compile(ast.Module(body=[block], type_ignores=[]), str(source), "exec"), namespace)
+    runtime = InputRuntime(SimpleNamespace(db=None), None, US)
+    runtime.bind(poller)
+    runtime.sampler = SimpleNamespace(flush=lambda: calls.append("sampler"))
+    runtime.writer = SimpleNamespace(close=lambda: calls.append("writer"))
     poller.on_stop()
     assert calls == ["sampler", "writer"]
 

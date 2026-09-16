@@ -187,7 +187,7 @@ class CompilationService:
         try:
             ring = self.replay.recorder.ring
             plan = plan_compilation(
-                list(self.tracker.db.attempts()), ring.coverage("video"),
+                list(self.tracker.db.attempts()), self.replay.buffer_coverage(),
                 self.replay.saved_attempt_ids(), identity, x_before, y_after,
                 self.replay.pre_pad_s, self.replay.post_pad_s)
             if not plan.specs:

@@ -127,6 +127,43 @@ def test_clip_serving_supports_range(tmp_path):
     assert c.get("/api/replay/clips/evil.txt").status_code == 404
 
 
+def test_native_media_advertises_its_descriptor_as_a_cache_validator(tmp_path):
+    """A fragment-backed clip's bytes never change for a descriptor, so the
+    browser may keep fetched ranges and resume them with If-Range; a stale
+    or unknown validator still gets the whole entity (round 48)."""
+    from sm64_events.replay.virtualmp4 import VirtualMp4
+
+    class Media(VirtualMp4):
+        def __init__(self):
+            self.size = 2048
+            self.identity = "run-A:1500:9000"
+
+        def chunks(self, start=0, end=None):
+            data = bytes(range(256)) * 8
+            yield data[start:end]  # a generator, closable like the real byte iterator
+
+    class NativeReplay(FakeReplayService):
+        @contextmanager
+        def read_clip(self, name):
+            yield Media()
+
+    app = FastAPI()
+    app.include_router(create_replay_router(NativeReplay(tmp_path)))
+    c = TestClient(app)
+    url = "/api/replay/clips/clip_attempt_42.mp4"
+    part = c.get(url, headers={"Range": "bytes=0-99"})
+    assert part.status_code == 206 and part.headers["etag"] == '"run-A:1500:9000"'
+    assert part.headers["cache-control"] == "private, max-age=3600"
+    resumed = c.get(url, headers={"Range": "bytes=100-199", "If-Range": '"run-A:1500:9000"'})
+    assert resumed.status_code == 206 and resumed.content == (bytes(range(256)) * 8)[100:200]
+    stale = c.get(url, headers={"Range": "bytes=100-199", "If-Range": '"run-A:1:2"'})
+    assert stale.status_code == 200 and len(stale.content) == 2048
+    # A plain file is served by FileResponse with its own validators; the
+    # descriptor cache policy applies only to fragment-backed media.
+    plain = make_client(tmp_path).get(url, headers={"Range": "bytes=0-99"})
+    assert plain.status_code == 206 and plain.headers.get("cache-control") != "private, max-age=3600"
+
+
 def test_saved_replay_serving_supports_range_and_404(tmp_path):
     c = make_client(tmp_path)
     r = c.get("/api/replay/saved/42", headers={"Range": "bytes=0-99"})

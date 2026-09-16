@@ -733,6 +733,13 @@ MIGRATIONS = [
     """
     CREATE INDEX idx_events_wall ON events (wall_time_utc);
     """,
+    # v36 -- chunks by their END, for the overlap query a replay open runs
+    # (`chunks_between`: ended_utc >= span start AND started_utc <= span
+    # end). The old query wrapped both columns in julianday(), which no
+    # index can serve, so every open scanned every chunk ever stored.
+    """
+    CREATE INDEX IF NOT EXISTS idx_input_chunks_ended ON input_chunks (ended_utc, started_utc);
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -761,6 +768,9 @@ def _iso(dt) -> str:
 
 
 class Database:
+    # Write scopes hold the lock THROUGH commit/rollback. The connection
+    # context rolls back a failed statement/commit before another caller can
+    # accidentally commit that caller's unfinished work on this connection.
     def __init__(self, path: str | Path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -768,9 +778,20 @@ class Database:
         self._lock = threading.Lock()
         self._inputs = None
         self._input_templates = None
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._migrate()
-        self._repair_landmark_keys()
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            # WAL is durable across a crash at NORMAL: only a power loss can
+            # lose the last transactions. FULL fsynced every commit on the
+            # poll loop's thread (chunk flushes, journal rows), which is the
+            # thread that reads the game at 250 Hz.
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._migrate()
+            self._repair_landmark_keys()
+        except Exception:
+            # Retrying an unavailable database must not leak a connection
+            # (or its file lock) on each failed initialization.
+            self._conn.close()
+            raise
 
     def _repair_landmark_keys(self) -> None:
         """Pointer-form landmark keys -> symbol keys (storage/rekey.py), once
@@ -792,7 +813,7 @@ class Database:
         rows changed per table. Idempotent."""
         from sm64_events.storage.rekey import rekey_text
         counts = {"events": 0, "landmark_names": 0, "segment_defs": 0}
-        with self._lock:
+        with self._lock, self._conn:
             rows = self._conn.execute(
                 "SELECT id, payload FROM events"
                 " WHERE payload LIKE '%landmark%' OR payload LIKE '%kind:8%'"
@@ -892,7 +913,7 @@ class Database:
 
     # -- journal -----------------------------------------------------------
     def append_event(self, session_id: int, seq: int, event: Event) -> int:
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO events (session_id, seq, type, frame, wall_time_utc, payload)"
                 " VALUES (?,?,?,?,?,?)",
@@ -915,7 +936,7 @@ class Database:
         never overwrite it at the next corpus refresh -- the same contract
         segment_defs and routes have carried since 2026-07-23.
         """
-        with self._lock:
+        with self._lock, self._conn:
             if not name.strip():
                 self._conn.execute("DELETE FROM landmark_names WHERE key=?", (key,))
             else:
@@ -929,7 +950,7 @@ class Database:
 
     def seed_landmark_name(self, key: str, name: str, seed_key: str) -> None:
         """A SHIPPED name. Refreshes an untouched row, never a row he edited."""
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO landmark_names (key, name, seed_key, seed_dirty, updated_utc)"
                 " VALUES (?,?,?,0,?)"
@@ -940,7 +961,7 @@ class Database:
             self._conn.commit()
 
     def delete_events(self, ids: list[int]) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.executemany("DELETE FROM events WHERE id=?",
                                    [(i,) for i in ids])
             self._conn.commit()
@@ -975,7 +996,7 @@ class Database:
 
     # -- sessions ----------------------------------------------------------
     def insert_session(self, started_utc: str, label: str | None = None) -> int:
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO sessions (started_utc, label) VALUES (?,?)",
                 (started_utc, label))
@@ -983,13 +1004,13 @@ class Database:
             return cur.lastrowid
 
     def end_session(self, session_id: int, ended_utc: str) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("UPDATE sessions SET ended_utc=? WHERE id=?",
                                (ended_utc, session_id))
             self._conn.commit()
 
     def reopen_session(self, session_id: int) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("UPDATE sessions SET ended_utc=NULL WHERE id=?",
                                (session_id,))
             self._conn.commit()
@@ -1016,7 +1037,7 @@ class Database:
         2026-07-27). This used to read "PB rows survive… a dangling attempt_id
         is informational only", which was true of the row and false of what
         the row does."""
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("DELETE FROM events WHERE session_id=?",
                                (session_id,))
             # Its captured input goes with it: a chunk outliving its session
@@ -1045,7 +1066,7 @@ class Database:
         handed to a future session.
 
         Reads the `attempts` CACHE, so callers must have projected first."""
-        with self._lock:
+        with self._lock, self._conn:
             doomed = [r["id"] for r in self._conn.execute(
                 "SELECT id FROM sessions WHERE id<>?"
                 " AND id NOT IN (SELECT DISTINCT session_id FROM attempts)",
@@ -1068,7 +1089,7 @@ class Database:
                 a.platform)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("DELETE FROM attempts")
             self._conn.executemany(
                 f"INSERT INTO attempts ({','.join(_ATTEMPT_COLS)})"
@@ -1077,12 +1098,22 @@ class Database:
             self._conn.commit()
 
     def upsert_attempt(self, a: Attempt) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute(
                 f"INSERT OR REPLACE INTO attempts ({','.join(_ATTEMPT_COLS)})"
                 f" VALUES ({','.join('?' * len(_ATTEMPT_COLS))})",
                 self._attempt_params(a))
             self._conn.commit()
+
+    def attempt(self, attempt_id: int) -> Attempt | None:
+        """One attempt by id, or None. `id` is the INTEGER PRIMARY KEY, so
+        this is one row; a replay open used to load and sort every attempt
+        three times to find it (round 48)."""
+        with self._lock:
+            r = self._conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone()
+        if r is None:
+            return None
+        return Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS}, "cleared": bool(r["cleared"])})
 
     def attempts(self) -> list[Attempt]:
         # Chronological by JOURNAL id, not the raw `id` column (spec
@@ -1136,7 +1167,7 @@ class Database:
                            match_mode: str = "strict",
                            parents: list | None = None,
                            clock_start: str = "trigger") -> int:
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO segment_defs (name, enabled, start_triggers,"
                 " end_triggers, waypoints, guards, category, seed_key,"
@@ -1168,7 +1199,7 @@ class Database:
                 sets.append(f"{k}=?"); vals.append(conv(fields[k]))
         if not sets:
             return
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 f"UPDATE segment_defs SET {','.join(sets)} WHERE id=?",
                 (*vals, def_id))
@@ -1179,7 +1210,7 @@ class Database:
     def delete_segment_def(self, def_id: int) -> None:
         # attempts cache rows are NOT touched — callers must re-project
         # (mirrors delete_session)
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute("DELETE FROM segment_defs WHERE id=?",
                                      (def_id,))
             self._conn.execute("DELETE FROM pbs WHERE segment_id=?",
@@ -1206,7 +1237,7 @@ class Database:
                      category: str | None = None,
                      seed_key: str | None = None) -> int:
         sc = start_condition if start_condition is not None else {"type": "reset_game"}
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO routes (name, steps, start_condition, category,"
                 " seed_key, created_utc, updated_utc) VALUES (?,?,?,?,?,?,?)",
@@ -1228,7 +1259,7 @@ class Database:
                 sets.append(f"{k}=?"); vals.append(conv(fields[k]))
         if not sets:
             return
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 f"UPDATE routes SET {','.join(sets)} WHERE id=?",
                 (*vals, route_id))
@@ -1241,13 +1272,13 @@ class Database:
         0 = pristine/reset). `table` is 'segment_defs' or 'routes'."""
         if table not in ("segment_defs", "routes"):
             raise ValueError(f"bad table {table!r}")
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute(f"UPDATE {table} SET seed_dirty=? WHERE id=?",
                                (dirty, row_id))
             self._conn.commit()
 
     def delete_route(self, route_id: int) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute("DELETE FROM routes WHERE id=?",
                                      (route_id,))
             self._conn.commit()
@@ -1276,7 +1307,7 @@ class Database:
     def insert_comparison(self, entity_key: str, strat: str, name: str,
                           source_kind: str, source_ref: str, cache_name: str,
                           created_utc: str, last_used_utc: str) -> int:
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO comparisons (entity_key, strat, name, source_kind,"
                 " source_ref, cache_name, created_utc, last_used_utc)"
@@ -1297,7 +1328,7 @@ class Database:
                 sets.append(f"{k}=?"); vals.append(fields[k])
         if not sets:
             return
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 f"UPDATE comparisons SET {','.join(sets)} WHERE id=?",
                 (*vals, comp_id))
@@ -1306,7 +1337,7 @@ class Database:
             raise LookupError(f"comparison {comp_id} not found")
 
     def delete_comparison(self, comp_id: int) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute("DELETE FROM comparisons WHERE id=?",
                                      (comp_id,))
             self._conn.commit()
@@ -1333,7 +1364,7 @@ class Database:
                 json.dumps(r["splits"]))
 
     def insert_run(self, r: dict) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute(
                 f"INSERT OR REPLACE INTO runs ({','.join(self._RUN_COLS)})"
                 f" VALUES ({','.join('?' * len(self._RUN_COLS))})",
@@ -1343,7 +1374,7 @@ class Database:
     upsert_run = insert_run   # same INSERT OR REPLACE (id is stable)
 
     def replace_runs(self, runs: list) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("DELETE FROM runs")
             self._conn.executemany(
                 f"INSERT INTO runs ({','.join(self._RUN_COLS)})"
@@ -1416,7 +1447,7 @@ class Database:
         personal best he brought rather than set here (see migration v28).
         `game_version` is the ROM that set it; None means "grade on the running
         version", which is what every row written before v28 does."""
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO pbs (course_id, star_id, segment_id, strat_tag,"
                 " timer_mode, frames, attempt_id, saved_utc, imported_from,"
@@ -1491,7 +1522,7 @@ class Database:
             return dict(row) if row else None
 
     def delete_pb(self, pb_id: int) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("DELETE FROM pbs WHERE id=?", (pb_id,))
             self._conn.commit()
 
@@ -1523,7 +1554,7 @@ class Database:
         The service validates the URL. Revision comparison and write share
         the database lock so concurrent editors cannot both win a stale undo.
         """
-        with self._lock:
+        with self._lock, self._conn:
             current = self._recording_link_unlocked(attempt_id)
             if expected_revision is not None and expected_revision != current["revision"]:
                 raise ValueError("The recording link changed. Reload it before saving.")
@@ -1537,7 +1568,7 @@ class Database:
 
     def backfill_recording_link(self, attempt_id: int, url: str) -> bool:
         """Fill an untouched import once; automatic work never undoes edits."""
-        with self._lock:
+        with self._lock, self._conn:
             try:
                 current = self._recording_link_unlocked(attempt_id)
             except LookupError:
@@ -1558,7 +1589,7 @@ class Database:
         absent from projection can still be restored, so absence from the
         attempts cache alone is insufficient. journal_id handles segment IDs.
         """
-        with self._lock:
+        with self._lock, self._conn:
             ids = [row[0] for row in self._conn.execute(
                 "SELECT attempt_id FROM attempt_recordings").fetchall()]
             gone = [aid for aid in ids if self._conn.execute(
@@ -1577,7 +1608,7 @@ class Database:
         for `source`, replacing that source's earlier hold of the same row
         and ROM. Another source's hold of the row survives underneath, so
         undoing the later import uncovers it (latest-row-wins, as pbs)."""
-        with self._lock:
+        with self._lock, self._conn:
             for cell in cells:
                 self._conn.execute(
                     "DELETE FROM held_times WHERE source=? AND row_key=?"
@@ -1616,7 +1647,7 @@ class Database:
         """Erase held cells -- one source's (an undo), or every source's
         hold of the given rows (a link that just landed them). Returns
         how many went."""
-        with self._lock:
+        with self._lock, self._conn:
             gone = 0
             if source is not None:
                 gone += self._conn.execute(
@@ -1655,7 +1686,7 @@ class Database:
         if not types:
             return 0
         placeholders = ",".join("?" * len(types))
-        with self._lock:
+        with self._lock, self._conn:
             cursor = self._conn.execute(
                 f"DELETE FROM events WHERE type IN ({placeholders})", types)
             deleted = cursor.rowcount
@@ -1698,7 +1729,7 @@ class Database:
         reused and this can never take a live row. `attempt_id IS NULL` rows
         are left alone: they were never tied to an attempt to begin with.
         """
-        with self._lock:
+        with self._lock, self._conn:
             cursor = self._conn.execute(
                 "DELETE FROM pbs WHERE attempt_id IS NOT NULL"
                 " AND attempt_id NOT IN (SELECT id FROM attempts)")
@@ -1708,7 +1739,7 @@ class Database:
     def delete_pbs_for_attempts(self, attempt_ids: list[int]) -> None:
         """Session-scoped wipes: drop pb rows saved from the wiped attempts
         so the previous PB (latest remaining row) restores automatically."""
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.executemany("DELETE FROM pbs WHERE attempt_id=?",
                                    [(i,) for i in attempt_ids])
             self._conn.commit()
@@ -1724,7 +1755,7 @@ class Database:
         the alternative, replaying the whole journal to move one column, cost
         0.7-1.0 s of blocked event loop over his 18k-event journal
         (2026-09-01) and grows with it."""
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("UPDATE attempts SET strat_tag=? WHERE id=?",
                                (strat_tag, attempt_id))
             self._conn.commit()
@@ -1738,20 +1769,20 @@ class Database:
         does — without this the star's PB for the OLD strategy stays a time
         that was not achieved with it. Keyed on attempt_id, so re-picking the
         original strategy retags the row back."""
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("UPDATE pbs SET strat_tag=? WHERE attempt_id=?",
                                (strat_tag, attempt_id))
             self._conn.commit()
 
     def delete_pbs_for_star(self, course_id: int, star_id: int) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute(
                 "DELETE FROM pbs WHERE course_id=? AND star_id=?"
                 " AND segment_id IS NULL", (course_id, star_id))
             self._conn.commit()
 
     def delete_pbs_for_segment(self, segment_id: int) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("DELETE FROM pbs WHERE segment_id=?",
                                (segment_id,))
             self._conn.commit()
@@ -1761,7 +1792,7 @@ class Database:
         every session row except the active one (it stays open and keeps
         receiving events). Segment definitions and ui_state survive — they
         are user configuration, not history. Callers must re-project."""
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute("DELETE FROM events")
             self._conn.execute("DELETE FROM pbs")
             self._conn.execute("DELETE FROM input_chunks")
@@ -1803,7 +1834,7 @@ class Database:
             return json.loads(row["value"]) if row else default
 
     def set_state(self, key: str, value) -> None:
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute(
                 "INSERT OR REPLACE INTO ui_state (key, value) VALUES (?,?)",
                 (key, json.dumps(value)))

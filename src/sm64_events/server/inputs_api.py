@@ -77,9 +77,20 @@ def _download(text: str, filename: str) -> PlainTextResponse:
 
 
 def create_inputs_router(inputs) -> APIRouter:
-    """`inputs` is the `InputsService`; its `.templates` is the store."""
+    """Resolve the service per request, including after a database-less boot."""
     router = APIRouter(prefix="/api")
-    templates = inputs.templates
+    def current():
+        try:
+            return inputs() if callable(inputs) else inputs
+        except Exception as error:
+            raise _http(error) from error
+
+    _mount_attempt_inputs(router, current)
+    _mount_templates(router, current)
+    return router
+
+
+def _mount_attempt_inputs(router, current):
 
     @router.get("/attempts/{attempt_id}/inputs")
     def timeline(attempt_id: int, from_frame: int | None = None,
@@ -89,7 +100,7 @@ def create_inputs_router(inputs) -> APIRouter:
         span = (None if from_frame is None or to_frame is None
                 else (from_frame, to_frame))
         try:
-            return inputs.timeline(attempt_id, span=span)
+            return current().timeline(attempt_id, span=span)
         except Exception as error:
             raise _http(error) from error
 
@@ -97,7 +108,7 @@ def create_inputs_router(inputs) -> APIRouter:
                 response_class=PlainTextResponse)
     def document(attempt_id: int):
         try:
-            return _download(inputs.document(attempt_id), f"attempt-{attempt_id}.inputs.txt")
+            return _download(current().document(attempt_id), f"attempt-{attempt_id}.inputs.txt")
         except Exception as error:
             raise _http(error) from error
 
@@ -105,7 +116,7 @@ def create_inputs_router(inputs) -> APIRouter:
     def mark(attempt_id: int, body: MarkBody):
         """Make this attempt the template for its target and strategy."""
         try:
-            template = inputs.mark_template(attempt_id, body.name)
+            template = current().mark_template(attempt_id, body.name)
         except Exception as error:
             raise _http(error) from error
         return _template_summary(template)
@@ -114,14 +125,14 @@ def create_inputs_router(inputs) -> APIRouter:
     async def preview(attempt_id: int, request: Request):
         body = await _document_body(request, PreviewBody)
         try:
-            return await run_in_threadpool(inputs.preview_template, attempt_id, body.document)
+            return await run_in_threadpool(current().preview_template, attempt_id, body.document)
         except Exception as error:
             raise _http(error) from error
 
     @router.post("/attempts/{attempt_id}/inputs/template/select")
     def select(attempt_id: int, body: SelectBody):
         try:
-            template = inputs.select_template(attempt_id, body.template_id)
+            template = current().select_template(attempt_id, body.template_id)
         except Exception as error:
             raise _http(error) from error
         return _template_summary(template)
@@ -131,22 +142,24 @@ def create_inputs_router(inputs) -> APIRouter:
         body = await _document_body(request, AttemptImportBody)
         try:
             template = await run_in_threadpool(
-                inputs.import_template, attempt_id, body.document, body.name)
+                current().import_template, attempt_id, body.document, body.name)
         except Exception as error:
             raise _http(error) from error
         return _template_summary(template)
 
+
+def _mount_templates(router, current):
     @router.get("/inputs/templates")
     def list_templates(kind: str | None = None, entity_key: str | None = None):
-        rows = (templates.list_for(kind, entity_key)
-                if kind and entity_key else templates.all())
+        rows = (current().templates.list_for(kind, entity_key)
+                if kind and entity_key else current().templates.all())
         return {"templates": [_template_summary(row) for row in rows]}
 
     @router.get("/inputs/templates/{template_id}/document",
                 response_class=PlainTextResponse)
     def template_document(template_id: int):
         try:
-            return _download(templates.get(template_id).export_document(),
+            return _download(current().templates.get(template_id).export_document(),
                              f"template-{template_id}.inputs.txt")
         except Exception as error:
             raise _http(error) from error
@@ -161,7 +174,7 @@ def create_inputs_router(inputs) -> APIRouter:
         """
         body = await _document_body(request, ImportBody)
         try:
-            template = await run_in_threadpool(templates.save,
+            template = await run_in_threadpool(current().templates.save,
                 kind=body.kind, entity_key=body.entity_key,
                 strat_tag=body.strat_tag, name=body.name,
                 origin=f"import:{body.name}", document=body.document)
@@ -172,7 +185,7 @@ def create_inputs_router(inputs) -> APIRouter:
     @router.post("/inputs/templates/{template_id}/activate")
     def activate(template_id: int):
         try:
-            template = templates.activate(template_id)
+            template = current().templates.activate(template_id)
         except Exception as error:
             raise _http(error) from error
         return {"id": template.id, "active": template.active}
@@ -180,9 +193,7 @@ def create_inputs_router(inputs) -> APIRouter:
     @router.delete("/inputs/templates/{template_id}")
     def delete(template_id: int):
         try:
-            templates.delete(template_id)
+            current().templates.delete(template_id)
         except Exception as error:
             raise _http(error) from error
         return {"deleted": template_id}
-
-    return router

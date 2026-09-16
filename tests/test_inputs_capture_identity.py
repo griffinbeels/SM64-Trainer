@@ -149,16 +149,18 @@ def test_pending_sampler_frame_keeps_its_owner_across_session_change(db, initial
     writer = ChunkWriter(db.inputs, lambda: service.session_id, clock=lambda: AT)
     memory = ScriptedMemory([(100, A.buttons, 0, 80, 0),
                              (next_counter, B.buttons, 0, -80, 0)])
-    # Evaluate the actual composition-root constructor, so omitting ownership
-    # wiring in main fails the same pending-frame scenario as a broken sampler.
-    source = Path(__file__).resolve().parents[1] / "src/sm64_events/main.py"
+    # Evaluate the actual composition-root constructor (the sampler is built
+    # in server/inputruntime.py since the input runtime moved there), so
+    # omitting ownership wiring fails the same pending-frame scenario as a
+    # broken sampler.
+    source = Path(__file__).resolve().parents[1] / "src/sm64_events/server/inputruntime.py"
     calls = [node for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
              and node.func.id == "InputSampler"]
     [call] = calls
+    runtime = SimpleNamespace(memory=memory, layout=US, tracker=service, replay=None)
     sampler = eval(compile(ast.Expression(call), str(source), "eval"),
-                   {"InputSampler": InputSampler, "memory": memory, "layout": US,
-                    "input_writer": writer, "service": service, "replay": None})
+                   {"InputSampler": InputSampler, "self": runtime, "writer": writer})
     sampler.sample()
     service.session_id = second
     sampler.sample()

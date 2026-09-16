@@ -14,11 +14,13 @@ truth; clear/restore re-run the full projection because their effect is
 retroactive. With db=None the service degrades to broadcast-only.
 Tracking failures are isolated inside publish() so the poll loop never
 dies (spec §9)."""
+import asyncio
 import dataclasses
 import json
 import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
+from time import monotonic
 
 from sm64_events.core.events import Event
 from sm64_events.core.landmark import landmark_group
@@ -156,6 +158,16 @@ class TrackerService:
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
+        self._tracking_lock = asyncio.Lock()
+        self._tracking_dirty = False
+        self._tracking_error = None
+        self._tracking_phase = None
+        self._tracking_failures = self._tracking_recoveries = 0
+        self._tracking_dropped = 0
+        self._tracking_retry_at = 0.0
+        self._tracking_retry_delay = 0.25
+        self._pending_gap = None
+        self._gap_seq = None
         # Zero-arg callable -> attempt ids with a saved replay clip, which the
         # startup prune must never delete (tracking/prune.py). Injected by
         # main.py because the clips live on the REPLAY side and the dependency
@@ -210,6 +222,7 @@ class TrackerService:
         view — the page un-sticks without a reload (live incident
         2026-07-23: post-update GUI stuck on 'loading…')."""
         self.db = db
+        self._tracking_retry_at = 0.0  # a newly attached connection gets a fresh attempt
         self._segment_defs = self._load_segment_defs()
         self._landmark_names_cache = None
         self._projector = Projector(segments=self._segment_defs,
@@ -291,11 +304,24 @@ class TrackerService:
     #: HTTP handler calling it could, which is why this is an event callback
     #: and not a step in the timeline endpoint.
     on_attempt_settled = None
+    input_flush_failures = 0
+    input_flush_error = None
 
     # Optional async media preservation after the user's validated PB command.
     # The composition root owns recording; projection/replay never calls this.
     on_pb_saved = None
     on_session_ended = None
+    on_replay_history = None  # bounded metadata only; file expiry runs on recorder maintenance
+
+    def _update_replay_history(self, completed=(), *, replace=False):
+        if self.on_replay_history is not None:
+            try:
+                current = [a for a in completed if a.session_id == self.session_id
+                           and a.timed_by != "imported"]
+                options = {"replace": True} if replace else {}
+                self.on_replay_history(current, self._projector.oldest_open_utc(), **options)
+            except Exception:
+                log.exception("replay history update failed; retaining existing footage")
 
     async def publish(self, event: Event) -> int | None:
         """Broadcast, then journal and track. Returns the JOURNAL ID of the
@@ -330,7 +356,19 @@ class TrackerService:
         if (event.type in ("attempt_completed", "practice_reset",
                            "state_loaded")
                 and self.on_attempt_settled is not None):
-            self.on_attempt_settled()
+            try:
+                self.on_attempt_settled()
+                self.input_flush_error = None
+            except Exception as error:
+                # Input persistence is optional to course/attempt tracking.
+                # Keep the original event reaching the journal even if its
+                # input tail cannot be made readable. Health retains failure.
+                self.input_flush_failures += 1
+                message = f"{type(error).__name__}: {error}"[:512]
+                if self.input_flush_error != message:
+                    log.exception("attempt input flush failed on %s frame %d; "
+                                  "continuing event tracking", event.type, event.frame)
+                self.input_flush_error = message
         if event.type == "stage_changed":
             # Live presentation signal: cache for the session view's initial
             # load and NEVER journal it (recomputable from curr_level; a
@@ -342,12 +380,104 @@ class TrackerService:
             return
         if self.db is None or self.session_id is None:
             return
+        async with self._tracking_lock:
+            if self._tracking_dirty:
+                await self._recover_tracking_locked()
+                if self._pending_gap is not None:
+                    # Nothing may be journaled AFTER an unrecorded interval
+                    # until its gap boundary has been committed first.
+                    self._tracking_dropped += 1
+                    return None
+            try:
+                return await self._track(event, seq)
+            except Exception as error:  # noqa: BLE001 -- journal failure stays observable and marks a gap
+                self._queue_capture_gap("journal write failed", event.timestamp_utc)
+                self._tracking_dropped += 1
+                self._tracking_failed(error, "journal")
+                return None
+
+    def tracking_health(self) -> dict:
+        """Persistence/projection liveness, independent of the poll task."""
+        unavailable = self.db is None or self.session_id is None
+        return {"state": "unavailable" if unavailable else
+                         "recovering" if self._tracking_dirty else "running",
+                "error": self._tracking_error, "phase": self._tracking_phase,
+                "failures": self._tracking_failures,
+                "recoveries": self._tracking_recoveries,
+                "dropped_events": self._tracking_dropped,
+                "gap_pending": self._pending_gap is not None,
+                "retry_in_s": max(0.0, self._tracking_retry_at - monotonic())}
+
+    def _queue_capture_gap(self, reason, timestamp) -> None:
+        self._current_stage = {"course_id": None, "level": None,
+                               "area": None, "mode": None}
+        if self._pending_gap is None:
+            self._pending_gap = Event(type="tracking_gap", frame=0,
+                                      timestamp_utc=timestamp,
+                                      payload={"reason": str(reason)[:512]})
+            self._gap_seq = None
+        self._tracking_dirty = True
+        # Stop live projections immediately even if the disk is unavailable.
+        # The same boundary is replayed once its journal append succeeds.
+        gap = self._pending_gap
+        self._projector.feed(EventRow(id=0, session_id=self.session_id, seq=0,
+            type=gap.type, frame=gap.frame, wall_time_utc=_iso(gap.timestamp_utc),
+            payload=gap.payload))
+
+    def _tracking_failed(self, error, phase) -> None:
+        self._tracking_dirty = True
+        self._tracking_phase = phase
+        self._tracking_failures += 1
+        self._tracking_error = f"{type(error).__name__}: {error}"[:512]
+        self._tracking_retry_at = monotonic() + self._tracking_retry_delay
+        self._tracking_retry_delay = min(10.0, self._tracking_retry_delay * 2)
+        log.error("tracking %s failed; recovery pending", phase,
+                  exc_info=(type(error), error, error.__traceback__))
+
+    async def capture_gap(self, reason: str) -> bool:
+        """Record capture loss without inventing a game outcome or retrying events."""
+        async with self._tracking_lock:
+            self._queue_capture_gap(reason, _now())
+            return await self._recover_tracking_locked()
+
+    async def recover_tracking(self) -> bool:
+        """One paced recovery attempt; safe to call on a lifecycle heartbeat."""
+        if not self._tracking_dirty:
+            return True
+        if monotonic() < self._tracking_retry_at:
+            return False
+        async with self._tracking_lock:
+            return await self._recover_tracking_locked()
+
+    async def _recover_tracking_locked(self) -> bool:
+        if not self._tracking_dirty:
+            return True
+        if (self.db is None or self.session_id is None
+                or monotonic() < self._tracking_retry_at):
+            return False
         try:
-            return await self._track(event, seq)
-        except Exception:
-            log.exception("tracking pipeline failed for %s; event broadcast only",
-                          event.type)
-            return None
+            if self._pending_gap is not None:
+                gap = self._pending_gap
+                if self._gap_seq is None:
+                    # Never resend a partially delivered notification if a
+                    # broadcaster itself fails. Zero means no returned seq.
+                    self._gap_seq = 0
+                    self._gap_seq = await self.broadcaster.publish(gap)
+                self.db.append_event(self.session_id, self._gap_seq, gap)
+                self._pending_gap = self._gap_seq = None
+            # Rebuild ONLY committed journal rows, with invalidation notices.
+            # Re-publishing the original event would duplicate its side effects.
+            await self._reproject()
+        except Exception as error:  # noqa: BLE001 -- bounded retry retains original failure evidence
+            self._tracking_failed(error, "recovery")
+            return False
+        self._tracking_dirty = False
+        self._tracking_error = self._tracking_phase = None
+        self._tracking_retry_at = 0.0
+        self._tracking_retry_delay = 0.25
+        self._tracking_recoveries += 1
+        self._update_replay_history()
+        return True
 
     async def _track(self, event: Event, seq: int) -> int:
         """Journal the event, feed the projector, persist what closed.
@@ -357,6 +487,16 @@ class TrackerService:
                        type=event.type, frame=event.frame,
                        wall_time_utc=_iso(event.timestamp_utc),
                        payload=event.payload)
+        if self._tracking_dirty:
+            return jid  # retain real events while derived persistence recovers
+        try:
+            await self._project_event(event, row)
+        except Exception as error:  # noqa: BLE001 -- journal is committed; repair derived state only
+            self._tracking_failed(error, "projection")
+        return jid
+
+    async def _project_event(self, event: Event, row: EventRow) -> int:
+        jid = row.id
         if event.type == "star_time_corrected":
             # Usamune revised a time we already showed him (projection.py
             # caveat 19). The correction is a compensating event like a clear
@@ -431,12 +571,14 @@ class TrackerService:
                 return jid
         for attempt in closed:
             self.db.upsert_attempt(attempt)
+            self._update_replay_history([attempt])
             # The derived event's journal row carries the CURRENT session_id,
             # which for a cross-session abandon differs from the attempt's own
             # session_id — the payload's session_id is authoritative.
             await self.publish(self._attempt_completed_event(attempt, event))
             if self._projector is not proj:
                 return jid
+        self._update_replay_history()
         if self._projector.target != target_before:
             await self.publish(Event(
                 type="target_changed", frame=event.frame,
@@ -454,7 +596,7 @@ class TrackerService:
 
         Broadcast-only, never journaled: these are the same ephemeral arm/disarm
         notices `_track` drains, and the projector re-derives them on replay."""
-        if self.db is None:
+        if self.db is None or self._tracking_dirty:
             return
         proj = self._projector
         target_before = proj.target
@@ -1925,6 +2067,7 @@ class TrackerService:
         db.delete_orphaned_recordings()
         db.replace_runs([r.as_row() for r in projector.finished_runs()])
         self._persisted_runs = [r.id for r in projector.finished_runs()]
+        self._update_replay_history(attempts, replace=True)
         # replay re-derives armed state silently; the UI badge must not lie
         # after a definition edit — broadcast the armed-set diff (broadcast-
         # only, like all notices: never journaled).
