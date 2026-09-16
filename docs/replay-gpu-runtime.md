@@ -27,6 +27,15 @@ to name the renderer, selects the wrapper, and remembers the plugin it
 replaced (`previous_graphics_dll`) for Remove. The wrapper's About box
 credits GLideN64's authors and links the published source (GPL-2.0).
 
+Updates: when the user clicks Update in the app, the new build restarts and
+`CaptureLayer.refresh_if_stale` (at boot and every two seconds) copies the
+new renderer and wrapper over the installed ones as soon as Project64 is
+closed, keeps the ini pointing at the renderer, and records the new hashes.
+It refreshes only an install the trainer made itself (the installed wrapper
+hash matches its receipt); a wrapper someone else copied in is left alone
+and the setup screen asks. The status field `automatic_update` tells the UI
+which case it is, and onboarding never reopens for an automatic update.
+
 ## Owners and data flow
 
 `SourceFactory` is called only after `ReplayRecorder` acquires the machine-wide

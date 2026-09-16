@@ -382,6 +382,7 @@ def test_default_refresh_preserves_a_manually_replaced_wrapper(
     restarted = CaptureLayer(registry, processes, settings_path, dll_source,
                              renderer_source=renderer_for(dll_source))
     assert restarted.refresh_if_stale() is False
+    assert restarted.status().automatic_update is False   # so onboarding may ask
     assert installed.read_bytes() == b"manually installed candidate from another checkout"
     status = restarted.status()
     assert [s["id"] for s in status.steps] == ["close", "install", "start"]
@@ -405,6 +406,9 @@ def test_a_newer_build_refreshes_the_installed_dll_only_while_project64_is_close
     assert status.wrapper_current is False
     assert any("differs from this build" in problem and "close Project64" in problem
                for problem in status.problems)
+    # ...and the UI is told the trainer owns the update, so onboarding
+    # stays shut (his rule, 2026-09-16).
+    assert status.automatic_update is True
     assert layer.refresh_if_stale() is False           # PJ64 holds the file
     assert installed.read_bytes() == b"the real capture layer bytes"
 
@@ -662,3 +666,21 @@ def test_undo_never_selects_one_of_our_own_files(pj64_dir, dll_source, settings_
     assert json.loads(settings_path.read_text())["previous_graphics_dll"] is None
     layer.uninstall()
     assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == WRAPPER_DLL   # nothing known to restore
+
+
+def test_build_identity_is_read_once_per_file_version(tmp_path, monkeypatch):
+    """The refresh loop asks every two seconds and the setup screen polls;
+    the renderer is 12 MB. One scan per (size, mtime), never per call."""
+    from pathlib import Path as _Path
+    from sm64_events.core.capturelayer import _build_identity
+    dll = tmp_path / "GLideN64_SM64Trainer.dll"
+    dll.write_bytes(b"MZ " + b"a" * 64 + b"-renderer")
+    assert _build_identity(dll) == b"a" * 64 + b"-renderer"
+    reads = []
+    real = _Path.read_bytes
+    monkeypatch.setattr(_Path, "read_bytes", lambda self: (reads.append(self), real(self))[1])
+    assert _build_identity(dll) == b"a" * 64 + b"-renderer"
+    assert reads == []
+    dll.write_bytes(b"MZ " + b"b" * 64 + b"-renderer" + b" longer")
+    assert _build_identity(dll) == b"b" * 64 + b"-renderer"
+    assert reads == [dll]

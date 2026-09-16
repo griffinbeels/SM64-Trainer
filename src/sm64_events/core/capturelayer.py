@@ -18,7 +18,12 @@ folder). Installing the layer is four writes and nothing else:
    it replaced (``previous_graphics_dll`` in the overlay) for undo.
 
 Undo is step 4 in reverse; the files stay (harmless, and a reinstall is
-instant). Both refuse while Project64 runs: PJ64 1.6 rewrites its registry
+instant). An app update never re-onboards: a packaged build refreshes the
+installed pair by itself (``refresh_if_stale`` at boot and every two
+seconds) as soon as Project64 is closed, under the consent already given,
+and the setup screen stays shut while that is pending (his rule,
+2026-09-16: "No additional onboarding past the original onboarding").
+Both refuse while Project64 runs: PJ64 1.6 rewrites its registry
 values on exit, so a change made under it can be undone by its own
 shutdown, and a running emulator has the old DLL loaded anyway.
 
@@ -123,6 +128,10 @@ class LayerStatus:
     renderer_present: bool = False     # GLideN64_SM64Trainer.dll sits in the Plugin folder
     renderer_current: bool = False     # ...and is the one shipped with this build
     previous_graphics_dll: str | None = None   # what undo selects again
+    #: this build refreshes the installed pair by itself once Project64 is
+    #: closed (packaged build, our own earlier install); the UI must not
+    #: reopen onboarding for a stale layer it will update anyway
+    automatic_update: bool = False
     # Internal typed evidence; the public setup response retains its old shape.
     gpu_observation: GpuSetupEvidence | None = field(default=None, repr=False)
 
@@ -162,11 +171,20 @@ def _now_iso() -> str:
 _BUILD_ID = re.compile(rb"[0-9a-f]{64}-[a-z][a-z-]*")
 
 
+_identity_cache: dict = {}
+
+
 def _build_identity(path: Path) -> bytes | None:
-    """The wrapper's embedded build id: a digest of the native sources it
-    was compiled from, plus its mode suffix. None for a file without one."""
-    ids = set(_BUILD_ID.findall(path.read_bytes()))
-    return ids.pop() if len(ids) == 1 else None
+    """A native file's embedded build id: a digest of the sources it was
+    compiled from, plus its role suffix. None for a file without one.
+    Cached by (path, size, mtime): the refresh loop and the setup screen's
+    polling would otherwise scan the 12 MB renderer every two seconds."""
+    stat = path.stat()
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    if key not in _identity_cache:
+        ids = set(_BUILD_ID.findall(path.read_bytes()))
+        _identity_cache[key] = ids.pop() if len(ids) == 1 else None
+    return _identity_cache[key]
 
 
 def _files_match(path_a: Path, path_b: Path) -> bool:
@@ -448,6 +466,7 @@ class CaptureLayer:
             renderer_present=renderer_present,
             renderer_current=renderer_current,
             previous_graphics_dll=self._previous_graphics_dll(overlay, wrapped_name),
+            automatic_update=automatic,
             gpu_observation=gpu,
         )
 
