@@ -8,8 +8,10 @@ import statistics
 from pathlib import Path
 
 
-def distribution(values: list[float]) -> dict | None:
-    values = sorted(value for value in values if math.isfinite(value))
+def distribution(values: list[float | None]) -> dict | None:
+    # None is a counter the capture deliberately did not read (per-process
+    # threads cost a system-wide query on Windows): missing, never zero.
+    values = sorted(value for value in values if value is not None and math.isfinite(value))
     if not values:
         return None
     return {"count": len(values), "mean": statistics.fmean(values),

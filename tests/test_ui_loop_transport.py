@@ -50,13 +50,18 @@ def test_real_forward_shuttle_keeps_rate_across_eos(bounded_page, tmp_path):
       video.addEventListener('ended', () => window.wraps.push({
         time: video.currentTime, rate: video.playbackRate, shuttle: video.dataset.reviewShuttle}));
     }""")
+    ladder = page.evaluate("import('/ui/replayshuttle.js').then(m => m.REPLAY_SPEEDS.filter(r => r >= 1))")
     for _ in range(4):
         page.keyboard.press("l")
     page.wait_for_function("window.wraps.length >= 3")
     result = video.evaluate("video => ({wraps:window.wraps,rate:video.playbackRate,shuttle:video.dataset.reviewShuttle})")
     (tmp_path / "shuttle-eos.json").write_text(json.dumps(result), encoding="utf-8")
-    assert result["rate"] == 8, result
-    assert result["shuttle"] == "Forward 8×", result
+    # Four presses climb four steps of the shared ladder, and every wrap
+    # through EOS keeps that rate rather than dropping back to 1x.
+    expected = ladder[min(3, len(ladder) - 1)]
+    assert expected > 1 and result["rate"] == expected, result
+    assert all(wrap["rate"] == expected for wrap in result["wraps"]), result
+    assert result["shuttle"] == f"Forward {expected:g}×", result
     page.keyboard.press("k")
     page.wait_for_timeout(150)
     assert video.evaluate("video => video.paused && video.playbackRate === 1")

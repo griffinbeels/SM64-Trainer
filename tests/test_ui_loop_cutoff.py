@@ -74,7 +74,13 @@ def test_bounded_source_loop_probe(tmp_path, rate, gop):
               handle = video.requestVideoFrameCallback(read);
               video.playbackRate = rate;
               await video.play();
-              await new Promise(resolve => setTimeout(resolve, 1000 / rate + 300));
+              // At least the original window, then until two wraps are seen: a
+              // fixed wall-clock window under-counts at 8x on a loaded machine
+              // (one wrap observed during the full gate, and on main).
+              const wraps = () => frames.slice(1).filter((b, i) => b.time < frames[i].time).length;
+              const minimum = performance.now() + 1000 / rate + 300, deadline = minimum + 3000;
+              while ((performance.now() < minimum || wraps() < 2) && performance.now() < deadline)
+                await new Promise(resolve => setTimeout(resolve, 50));
               const result = {frames, paused:video.paused, time:video.currentTime, duration:video.duration,
                 source:video.currentSrc.slice(0,80), notice:document.querySelector('.replay-control-error')?.textContent,
                 bounded:(await import('/ui/reviewsource.js')).hasBoundedReview(video)};

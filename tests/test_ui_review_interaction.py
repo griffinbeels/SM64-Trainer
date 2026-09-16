@@ -13,10 +13,13 @@ def check_playback(page, video):
     assert video.evaluate("v => !v.paused")
     video.click()
     assert video.evaluate("v => v.paused")
+    # The forward shuttle climbs the shared speed ladder (replayshuttle.js
+    # owns it; replaykeys.test.js pins the steps), read here, not restated.
+    ladder = page.evaluate("import('/ui/replayshuttle.js').then(m => m.REPLAY_SPEEDS.filter(r => r >= 1))")
     page.keyboard.press("l")
-    assert video.evaluate("v => v.playbackRate") == 1
+    assert video.evaluate("v => v.playbackRate") == ladder[0] == 1
     page.keyboard.press("l")
-    assert video.evaluate("v => v.playbackRate") == 2
+    assert video.evaluate("v => v.playbackRate") == ladder[1]
     page.keyboard.press("k")
     assert video.evaluate("v => v.paused")
     video.evaluate("v => { v.currentTime=.35; }")

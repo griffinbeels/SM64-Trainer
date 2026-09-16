@@ -405,7 +405,7 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
     """Exercise source rediscovery through the real installer and API, offline."""
     import ui_fixture
     from types import SimpleNamespace
-    from sm64_events.core.capturelayer import CaptureLayer, WRAPPER_DLL, WRAPPER_INI
+    from sm64_events.core.capturelayer import CaptureLayer, RENDERER_DLL, WRAPPER_DLL, WRAPPER_INI
 
     folder = tmp_path / "PJ64"
     plugin = folder / "Plugin"
@@ -413,11 +413,15 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
     source = tmp_path / WRAPPER_DLL
     expected = b"matching offline wrapper"
     (plugin / WRAPPER_DLL).write_bytes(expected)
-    (plugin / WRAPPER_INI).write_text("wrapped=renderer.dll")
+    renderer = tmp_path / RENDERER_DLL
+    renderer.write_bytes(b"matching offline renderer")
+    (plugin / RENDERER_DLL).write_bytes(renderer.read_bytes())
+    (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_DLL}")
     registry = SimpleNamespace(get=lambda key, name: WRAPPER_DLL if name == "Graphics Dll" else None)
     processes = SimpleNamespace(pj64_image_path=lambda: str(folder / "Project64.exe"))
     layer = CaptureLayer(registry, processes, tmp_path / "capture.json",
-                         lambda: source if source.is_file() else None)
+                         lambda: source if source.is_file() else None,
+                         renderer_source=renderer)
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
     observed = dict(target=dict(state="ready", pid=123),
                     rom=dict(state="supported", region="us", name="SM64 USAMUNE v1.93u"),
@@ -437,13 +441,23 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
         assert page.problems() == []
 
 
+def _installed_renderer(tmp_path, plugin):
+    """The bundled renderer, installed beside the wrapper with the ini naming it."""
+    from sm64_events.core.capturelayer import RENDERER_DLL, WRAPPER_INI
+    renderer = tmp_path / RENDERER_DLL
+    renderer.write_bytes(b"this checkout's bundled renderer")
+    (plugin / RENDERER_DLL).write_bytes(renderer.read_bytes())
+    (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_DLL}")
+    return renderer
+
+
 @pytest.mark.parametrize("auto_refresh", [False, True])
 def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, monkeypatch, auto_refresh):
     """Source and packaged servers preserve external copies until explicit Install."""
     import ui_fixture
     from test_capturelayer import FakeProcesses, FakeRegistry, write_overlay
     from sm64_events.core.capturelayer import (
-        CaptureLayer, GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY, WRAPPER_DLL, WRAPPER_INI,
+        CaptureLayer, GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY, RENDERER_DLL, WRAPPER_DLL, WRAPPER_INI,
     )
 
     folder = tmp_path / "Project64 with a manually staged capture layer"
@@ -454,15 +468,16 @@ def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, mon
     source.write_bytes(bundled)
     installed_dll = plugin / WRAPPER_DLL
     installed_dll.write_bytes(staged)
-    (plugin / WRAPPER_INI).write_text("wrapped=renderer.dll")
+    renderer = _installed_renderer(tmp_path, plugin)
     registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): WRAPPER_DLL})
     processes = FakeProcesses(str(folder / "Project64.exe"))
     settings = tmp_path / "capture.json"
     # Prior installation consent must not authorize a source checkout to replace
     # a different candidate automatically when the emulator closes.
     write_overlay(settings, consented_at="2026-09-01T00:00:00Z",
-                  pj64_dir=str(folder), wrapped="renderer.dll", installed_sha256="0" * 64)
-    layer = CaptureLayer(registry, processes, settings, source, auto_refresh=auto_refresh)
+                  pj64_dir=str(folder), wrapped=RENDERER_DLL, installed_sha256="0" * 64)
+    layer = CaptureLayer(registry, processes, settings, source, renderer_source=renderer,
+                         auto_refresh=auto_refresh)
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
     observed = dict(target=dict(state="ready", pid=123),
                     rom=dict(MISSING_ROM), checks={})
@@ -493,7 +508,7 @@ def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, mon
         page.click(button)
         wait_step(page, "reopen")
         assert installed_dll.read_bytes() == bundled
-        assert (plugin / WRAPPER_INI).read_text().strip() == "wrapped=renderer.dll"
+        assert (plugin / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_DLL}"
         state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
         assert state["installation_verified"] and state["wrapper_current"]
         assert state["verification"]["step"] == "reopen"

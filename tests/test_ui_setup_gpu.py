@@ -23,7 +23,7 @@ from uilab.driver import get_driver
 import ui_fixture
 from ui_fixture import serve_ui
 from uilab_project import _SETUP_SETUP
-from sm64_events.core.capturelayer import CaptureLayer, WRAPPER_DLL, WRAPPER_INI
+from sm64_events.core.capturelayer import CaptureLayer, RENDERER_DLL, WRAPPER_DLL, WRAPPER_INI
 from sm64_events.core.setup_gpu import GpuSetupProbe
 from sm64_events.replay import capturecontrol as C
 from test_onboarding import runtime
@@ -47,12 +47,15 @@ class GpuFacts:
         bundle = directory / WRAPPER_DLL
         bundle.write_bytes(b"matching offline GPU wrapper")
         (plugin / WRAPPER_DLL).write_bytes(bundle.read_bytes())
-        (plugin / WRAPPER_INI).write_text("wrapped=renderer-source-v2.dll")
+        renderer = directory / RENDERER_DLL
+        renderer.write_bytes(b"matching offline GPU renderer")
+        (plugin / RENDERER_DLL).write_bytes(renderer.read_bytes())
+        (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_DLL}")
         registry = SimpleNamespace(get=lambda key, name: WRAPPER_DLL if name == "Graphics Dll" else None)
         processes = SimpleNamespace(pj64_image_path=lambda: str(plugin.parent / "Project64.exe"))
         gpu = GpuSetupProbe(lambda: self.recorder, self.read_control, clock=lambda: self.now[0])
         self.layer = CaptureLayer(registry, processes, directory / "capture.json", bundle,
-                                  gpu_observation=gpu)
+                                  renderer_source=renderer, gpu_observation=gpu)
 
     @staticmethod
     def forbid_stream():
