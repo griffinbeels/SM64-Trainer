@@ -63,7 +63,9 @@ def check_compact_controls(page, video, tmp_path):
     # Keyboard users still get a focused, adjustable seek slider.
     seek.focus()
     page.keyboard.press("Home")
-    assert video.evaluate("v => v.currentTime") == 0
+    # A slider seek is queued to the next presented picture (reviewseek.js);
+    # read its outcome, not the instant after the key.
+    page.wait_for_function("document.querySelector('.attempt-drawer video').currentTime === 0", timeout=3000)
     assert seek.evaluate("e => e.matches(':focus-visible')")
     pair = page.locator(".replay-time-pair")
     assert pair.inner_text().endswith(" / 0:04.00")
@@ -75,7 +77,7 @@ def check_compact_controls(page, video, tmp_path):
     assert page.get_by_label("Volume", exact=True).is_visible()
     mute.click()
     assert video.evaluate("v => v.muted")
-    assert page.locator(".replay-mute-cross").is_visible()
+    page.locator(".replay-mute-cross").wait_for(state="visible", timeout=3000)
     page.get_by_role("button", name="Unmute", exact=True).click()
     assert not video.evaluate("v => v.muted")
     page.get_by_label("Playback speed").select_option("2")

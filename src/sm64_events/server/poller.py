@@ -342,8 +342,10 @@ class Poller:
         detected, sampled or journalled for it (his ruling, 2026-09-16).
         Only a POSITIVE identification refuses; a header that cannot be
         read serves as before, so a failed scan never stops practice."""
-        read = getattr(self.memory, "rom_header", None)
-        identity = identify_rom(read() if callable(read) else None)
+        # A backend that can read the cartridge declares it on its class (a
+        # forwarding proxy answers every name and proves nothing).
+        read = getattr(type(self.memory), "rom_header", None)
+        identity = identify_rom(read(self.memory) if callable(read) else None)
         if identity["state"] == "missing":
             self.practice_rom = None
             return True
