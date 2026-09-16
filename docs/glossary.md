@@ -1769,8 +1769,9 @@ what ships.
 
 The loop reading the emulator sixty times a second: take a [[snapshot]], hand
 consecutive pairs to every [[detector]], publish whatever they emit. It
-serves only a [[practice ROM]], identified when it attaches and again at every
-boot.
+serves only a [[practice ROM]]: it reads the cartridge header when it attaches,
+whenever the game timer goes back and at least once a second, so swapping ROMs
+in Project64 needs no restart.
 
 - **Lives** — the poll loop (`src/sm64_events/server/poller.py`)
 

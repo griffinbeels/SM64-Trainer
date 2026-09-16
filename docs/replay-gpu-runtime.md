@@ -34,9 +34,22 @@ forwards straight to the renderer with no stamp adapter or per-call timing,
 the control page reports `rom_baseline` with `rom_open` false so no lease can
 activate capture, and the renderer overlay observes nothing and leaves
 GLideN64's raw GL function table untouched. The server mirrors it: the poller
-refuses a positively identified non-practice ROM (at attach and at each boot)
-and the recorder's capture gate records nothing while it does. The idle
-control, delivery and log threads created at InitiateGFX stay asleep.
+refuses a positively identified non-practice ROM and the recorder's capture
+gate records nothing while it does. The idle control, delivery and log
+threads created at InitiateGFX stay asleep.
+
+Swapping ROMs needs no restart of either side. Project64 1.6 copies the new
+cartridge's header into the buffer `GFX_INFO.HEADER` points at before every
+RomOpen (`Cpu.cpp` StartEmulation and Machine_LoadState, which also calls
+RomClosed/RomOpen around a state load), so the wrapper classifies each open
+afresh. RDRAM is neither cleared nor released between ROMs, so the server
+cannot see a swap in game memory: the poller reads the header before the
+detectors whenever the timer goes back and at least every
+`PRACTICE_ROM_CHECK_S`, and re-offers a refused cartridge every
+`PRACTICE_ROM_RETRY_S`. `Pj64Memory.rom_header` remembers where it found the
+image, because Allocate_ROM releases the old image before allocating the next:
+a steady check is one 0x40-byte read (`tests/test_pj64_rom_header.py` drives
+that against a real process; `tests/test_poller.py` drives the whole swap cycle).
 
 Updates: when the user clicks Update in the app, the new build restarts and
 `CaptureLayer.refresh_if_stale` (at boot and every two seconds) copies the

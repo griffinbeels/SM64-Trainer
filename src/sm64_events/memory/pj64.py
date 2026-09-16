@@ -7,6 +7,7 @@ is the RDRAM. Read-only access; never writes to the emulator.
 """
 import ctypes
 import logging
+import time
 from collections.abc import Callable, Iterator
 from ctypes import wintypes
 
@@ -64,9 +65,22 @@ def looks_like_rdram(read_u32: Callable[[int], int]) -> bool:
 
 
 class Pj64Memory(RdramReader):
+    #: In a process that has never shown a cartridge, how long rom_header()
+    #: answers None after a scan found none, rather than walking the process
+    #: again at the poller's identification rate. A process that HAS shown
+    #: one is mid-swap when a scan misses, and is scanned every time.
+    ROM_SCAN_RETRY_S = 5.0
+
     def __init__(self):
         self._pm: pymem.Pymem | None = None
         self._rdram_base: int | None = None
+        # (pid, address) of the ROM image the last scan found; the pid whose
+        # process has shown one; (pid, when) of the last scan that found none.
+        # Kept across detach: the image outlives an attach, and a pid names
+        # the process it belongs to.
+        self._rom_at: tuple[int, int] | None = None
+        self._rom_seen_pid: int | None = None
+        self._rom_missed: tuple[int, float] | None = None
 
     @property
     def attached(self) -> bool:
@@ -100,9 +114,40 @@ class Pj64Memory(RdramReader):
         ROM placed at an offset inside its allocation is still found. Scanned
         only when asked -- attach() does not need it -- and read-only like
         everything else here.
+
+        The poller asks about once a second, to notice a ROM swap, so where
+        the image was found is remembered and read first: one 0x40-byte read
+        instead of a walk over every large region. Project64 1.6 releases the
+        old image BEFORE it allocates the next (Memory.cpp Allocate_ROM), so
+        only one image ever exists: a remembered address that no longer holds
+        a header was released, and the whole process is scanned again.
         """
         if self._pm is None:
             return None
+        from sm64_events.memory.version_probe import HEADER_SIZE, normalise_header
+        pid = self._pm.process_id
+        if self._rom_at is not None and self._rom_at[0] == pid:
+            try:
+                head = self._pm.read_bytes(self._rom_at[1], HEADER_SIZE)
+            except pymem.exception.PymemError:
+                head = None
+            if head is not None and normalise_header(head) is not None:
+                return head
+            self._rom_at = None
+        if (self._rom_seen_pid != pid and self._rom_missed is not None
+                and self._rom_missed[0] == pid
+                and time.monotonic() - self._rom_missed[1] < self.ROM_SCAN_RETRY_S):
+            return None
+        found = self._scan_for_rom()
+        if found is None:
+            self._rom_missed = (pid, time.monotonic())
+            return None
+        self._rom_at, self._rom_seen_pid, self._rom_missed = (pid, found[0]), pid, None
+        return found[1]
+
+    def _scan_for_rom(self) -> tuple[int, bytes] | None:
+        """(address, header) of the first cartridge image in any region large
+        enough to hold one, or None."""
         from sm64_events.memory.version_probe import (HEADER_SIZE,
                                                       ROM_MAGIC_BE,
                                                       ROM_MAGIC_WORD_SWAPPED,
@@ -120,7 +165,7 @@ class Pj64Memory(RdramReader):
                         while at != -1:
                             head = block[at:at + HEADER_SIZE]
                             if len(head) == HEADER_SIZE and normalise_header(head) is not None:
-                                return head
+                                return base + offset + at, head
                             at = block.find(magic, at + 1)
         except pymem.exception.PymemError:
             return None

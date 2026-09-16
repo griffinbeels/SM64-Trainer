@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from sm64_events.core.profiling import measured
 import logging
 from datetime import datetime, timezone
-from time import perf_counter
+from time import monotonic, perf_counter
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
@@ -57,7 +57,15 @@ class Poller:
     SNAPSHOT_HZ = 60         # without one: the old loop, every tick a read
     ATTACH_RETRY_S = 2.0
     LAYOUT_RETRY_S = 5.0
-    PRACTICE_ROM_RETRY_S = 5.0
+    #: How often a refused cartridge is looked at again, and the longest a
+    #: served one goes without being identified. Swapping ROMs in Project64
+    #: is a common move (vanilla for a real run, Usamune to practise), and
+    #: nothing in RDRAM says it happened: 1.6 neither clears nor releases
+    #: RDRAM between ROMs, so the old game's memory stays readable and
+    #: plausible until the new one boots (Cpu.cpp CloseCpu, Memory.cpp
+    #: Allocate_ROM). A header read is one small cached read (memory/pj64.py).
+    PRACTICE_ROM_RETRY_S = 2.0
+    PRACTICE_ROM_CHECK_S = 1.0
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
@@ -71,6 +79,7 @@ class Poller:
         #: True/False. The recorder's capture gate reads it (main.py).
         self.practice_rom: bool | None = None
         self._rom_name: str | None = None
+        self._rom_identified_at = float("-inf")
         self.on_gap = on_gap
         self._tick_lock = asyncio.Lock()
         self.broadcaster = broadcaster
@@ -340,15 +349,17 @@ class Poller:
         """Identify the cartridge before serving it. Vanilla SM64, another
         hack or another game is a real run, not practice: nothing is read,
         detected, sampled or journalled for it (his ruling, 2026-09-16).
-        Only a POSITIVE identification refuses; a header that cannot be
-        read serves as before, so a failed scan never stops practice."""
+        Only a POSITIVE identification refuses. A header that cannot be read
+        keeps the last identification, and with none it serves, so a failed
+        scan never stops practice and a momentary miss mid-swap (the old
+        image released, the new one not yet read) never serves a real run."""
         # A backend that can read the cartridge declares it on its class (a
         # forwarding proxy answers every name and proves nothing).
         read = getattr(type(self.memory), "rom_header", None)
         identity = identify_rom(read(self.memory) if callable(read) else None)
+        self._rom_identified_at = monotonic()
         if identity["state"] == "missing":
-            self.practice_rom = None
-            return True
+            return self.practice_rom is not False
         practice = is_practice_rom(identity)
         if (practice, identity["name"]) != (self.practice_rom, self._rom_name):
             log.info("loaded ROM %r: %s", identity["name"],
@@ -358,12 +369,16 @@ class Poller:
         return practice
 
     async def _left_practice_rom(self, curr) -> bool:
-        """A boot (the timer falling back into the boot range) is where a new
-        cartridge starts without the emulator ever becoming unreadable, so
-        the ROM is identified again there; leaving practice detaches like a
-        lost emulator."""
-        if (self._last_timer is None or self._last_timer < BOOT_TIMER_MAX
-                or curr.global_timer >= BOOT_TIMER_MAX or self._serves_loaded_rom()):
+        """Is the served cartridge still a practice ROM? A new one starts
+        without the emulator ever becoming unreadable, so the header is read
+        again whenever the timer moves backward (a boot, a reset, a state
+        load: every SM64 ROM starts its timer at zero) and at least every
+        PRACTICE_ROM_CHECK_S (a game whose RAM says nothing). Both run before
+        the detectors, so the new cartridge's first frame is never served.
+        Leaving practice detaches like a lost emulator."""
+        went_back = self._last_timer is not None and curr.global_timer < self._last_timer
+        due = monotonic() - self._rom_identified_at >= self.PRACTICE_ROM_CHECK_S
+        if not (went_back or due) or self._serves_loaded_rom():
             return False
         self._break_input_capture()
         self.memory.detach()
