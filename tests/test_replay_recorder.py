@@ -846,3 +846,25 @@ def test_idle_arriving_tail_is_retained_until_source_lease_finishes(tmp_path):
         assert rec.ring.covering("video", T0, tail.utc_end) == [tail]
     assert not tail.path.exists()
     rec.stop()
+
+
+def test_capture_waits_for_a_practice_rom_and_stops_when_one_leaves(tmp_path):
+    """His ruling, 2026-09-16: a real run on another ROM records nothing --
+    no video source, no audio. main.py gates on the poller's practice ROM."""
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    rec = make_recorder(tmp_path, video, audio)
+    practice = [False]
+    rec.set_capture_gate(lambda: practice[0])
+    rec.start()
+    try:
+        time.sleep(0.1)
+        assert video.on_frame is None and rec.status()["capture_gated"] is True
+        assert rec.status()["recording"] is False
+        practice[0] = True
+        assert wait_for(lambda: video.on_frame is not None)
+        assert wait_for(lambda: rec.status()["capture_gated"] is False)
+        practice[0] = False
+        assert wait_for(lambda: video.stopped)
+        assert wait_for(lambda: rec.status()["recording"] is False)
+    finally:
+        rec.stop()

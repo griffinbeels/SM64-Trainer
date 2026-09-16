@@ -12,6 +12,7 @@
 #endif
 static volatile LONG g_control_running;
 static volatile LONG g_control_rom;
+static volatile LONG g_control_baseline;
 static volatile LONG g_control_epoch;
 static volatile LONG g_control_desired;
 /* Created at initialization, closed only at final DLL detach after the worker
@@ -48,6 +49,7 @@ static void control_publish(control_page_t *page, uint32_t state, uint32_t reaso
     page->ack_token = request ? request->token : 0;
     page->ack_heartbeat = request ? request->heartbeat : 0;
     page->rom_open = (uint32_t)InterlockedCompareExchange(&g_control_rom, 0, 0);
+    page->rom_baseline = (uint32_t)InterlockedCompareExchange(&g_control_baseline, 0, 0);
     #ifdef GFXWRAP_GPU_RUNTIME
     page->capabilities = CONTROL_CAP_PASSIVE | rc_capabilities();
     #endif
@@ -236,6 +238,7 @@ static void control_start(const char *stream_name) {
      * reconciling the new session; immediate CloseDLL/InitiateGFX loses nothing.
      * Stream name is fixed for this loaded DLL, as configured at startup. */
     InterlockedExchange(&g_control_rom, 0);
+    InterlockedExchange(&g_control_baseline, 0);
     LONG epoch = InterlockedIncrement(&g_control_epoch);
     if (!epoch) epoch = InterlockedIncrement(&g_control_epoch);
     InterlockedExchange(&g_control_desired, epoch);
@@ -268,12 +271,17 @@ static void control_stop(void) {
     #endif
     InterlockedExchange(&g_control_desired, 0);
     InterlockedExchange(&g_control_rom, 0);
+    InterlockedExchange(&g_control_baseline, 0);
     if (g_control_signal) SetEvent(g_control_signal);
 }
-static void control_rom(BOOL opened) {
+/* `opened`: a practice ROM is open, so capture may be admitted. `baseline`:
+ * another ROM is open and the wrapper forwards as the plain renderer. A
+ * baseline ROM never reaches rc_rom, so no lease can activate capture. */
+static void control_rom(BOOL opened, BOOL baseline) {
     #ifdef GFXWRAP_GPU_RUNTIME
     rc_rom(opened);
     #endif
+    InterlockedExchange(&g_control_baseline, baseline);
     InterlockedExchange(&g_control_rom, opened);
     if (g_control_signal) SetEvent(g_control_signal);
 }

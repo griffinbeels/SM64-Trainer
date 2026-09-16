@@ -38,7 +38,10 @@ typedef struct {
     char magic[8];
     uint32_t version, bytes, seq, producer_pid, generation, state;
     uint32_t reason, ack_token, ack_heartbeat, capabilities;
-    uint32_t rom_open, producer_created_lo, producer_created_hi, reserved[17];
+    /* rom_open: a PRACTICE ROM is open (practice_rom.h), so capture may be
+     * requested. rom_baseline: some other ROM is open and the plugin is
+     * running as the baseline renderer; the trainer stays idle. */
+    uint32_t rom_open, producer_created_lo, producer_created_hi, rom_baseline, reserved[16];
     control_request_t request;
     uint8_t reserved_client[256 - 128 - sizeof(control_request_t)];
     char build_id[80];

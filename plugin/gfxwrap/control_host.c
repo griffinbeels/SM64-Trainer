@@ -3,7 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include "zilmar.h"
+#include "practice_rom_fixture.h"
 static unsigned char ram[256];
+static unsigned char header[0x40];
 static DWORD reg;
 int main(int argc, char **argv) {
     if (argc != 2) return 2;
@@ -13,7 +15,9 @@ int main(int argc, char **argv) {
     RESOLVE_GFX_API(api, module);
     GFX_INFO info = {0};
     info.MemoryBswaped = TRUE;
-    info.RDRAM = info.DMEM = info.IMEM = info.HEADER = ram;
+    info.RDRAM = info.DMEM = info.IMEM = ram;
+    PRACTICE_FIXTURE_USAMUNE(header);
+    info.HEADER = header;
     info.VI_ORIGIN_REG = info.VI_STATUS_REG = info.VI_WIDTH_REG = &reg;
     BOOL opened = api.InitiateGFX(info);
     if (!opened) return 4;
@@ -27,6 +31,11 @@ int main(int argc, char **argv) {
             api.CloseDLL();
             opened = api.InitiateGFX(info);
             if (!opened) return 5;
+        } else if (!strncmp(command, "vanilla", 7)) {
+            /* A real run: Project64 opens vanilla SM64 on the same plugin. */
+            api.RomClosed(); PRACTICE_FIXTURE_VANILLA(header); api.RomOpen();
+        } else if (!strncmp(command, "usamune", 7)) {
+            api.RomClosed(); PRACTICE_FIXTURE_USAMUNE(header); api.RomOpen();
         } else if (!strncmp(command, "close", 5)) {
             api.CloseDLL(); opened = FALSE;
         } else if (!strncmp(command, "fail-reinit", 11)) {

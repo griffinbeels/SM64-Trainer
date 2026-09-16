@@ -6,7 +6,7 @@
 #include "control_worker.h"
 int __cdecl gr_host_validate(unsigned,unsigned long long,unsigned,unsigned);
 int main(int argc,char **argv){
-    if(argc!=2)return 2;control_start(argv[1]);control_rom(TRUE);puts("ready");fflush(stdout);
+    if(argc!=2)return 2;control_start(argv[1]);control_rom(TRUE, FALSE);puts("ready");fflush(stdout);
     char line[160];
     while(fgets(line,sizeof line,stdin)){
         if(!strncmp(line,"quit",4))break;

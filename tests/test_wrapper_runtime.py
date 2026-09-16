@@ -233,3 +233,32 @@ def test_gpu_build_refuses_incomplete_runtime(tmp_path):
     build.SOURCE = tmp_path
     with pytest.raises(RuntimeError, match="GPU runtime implementation is incomplete"):
         build._runtime_objects(None, tmp_path, tmp_path / "identity.h")
+
+
+def test_a_real_run_on_vanilla_sm64_runs_the_plain_renderer(start):
+    """His ruling, 2026-09-16: on vanilla SM64 -- or any ROM that is not a
+    practice ROM -- the plugin functions identically to the baseline renderer.
+    Every frame forwards, the control page says baseline, and even a live
+    capture request is never admitted. Reopening Usamune captures again."""
+    child, control, _, _ = start()
+    assert command(child, "romclose") == "ok"
+    assert command(child, "cart vanilla") == "ok"
+    assert command(child, "romopen") == "ok"
+    status = eventual(control.status, lambda s: s.baseline_rom)
+    assert not status.rom_open
+    lists, vi = map(int, command(child, "frame 1 1").split())
+    with R.GpuRequest.acquire(control, TABLE, LIMITS):
+        assert tuple(map(int, command(child, "frame 2 1").split())) == (lists + 2, vi + 1)
+        time.sleep(0.3)
+        assert control.status().state == C.PASSIVE
+        assert command(child, "stats").split()[0] == "0"   # no request reached delivery
+        assert record(child)[0] == 0                       # and no picture was staged
+    assert command(child, "romclose") == "ok"
+    assert command(child, "cart usamune") == "ok"
+    assert command(child, "romopen") == "ok"
+    status = eventual(control.status, lambda s: s.rom_open)
+    assert not status.baseline_rom
+    with R.GpuRequest.acquire(control, TABLE, LIMITS):
+        eventual(control.status, lambda s: s.state == 4)
+        command(child, "frame 1 1")
+        assert record(child)[0] == 1

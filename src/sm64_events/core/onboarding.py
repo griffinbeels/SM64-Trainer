@@ -35,6 +35,20 @@ def identify_rom(raw: bytes | None) -> dict:
             "warning": JP_WARNING if state == "jp" else None}
 
 
+#: The cartridges the trainer practises on. Any other ROM -- vanilla SM64,
+#: another hack, another game -- runs with the practice tooling off: the
+#: poller does not serve it, the recorder does not capture, and the graphics
+#: plugin behaves as plain GLideN64 (his ruling, 2026-09-16). The native
+#: mirror is plugin/gfxwrap/practice_rom.h; tests/test_practice_rom.py
+#: compares the two over the same headers.
+PRACTICE_ROM_STATES = frozenset({"supported", "jp"})
+
+
+def is_practice_rom(identity: dict) -> bool:
+    """True for an `identify_rom` result the practice tooling runs on."""
+    return identity.get("state") in PRACTICE_ROM_STATES
+
+
 class CounterWindow:
     """Recent movement survives repeated readers, but not a new source.
 

@@ -1,6 +1,7 @@
 /* Drives actual wrapper exports and control watchdog; CPU-only child fixture. */
 #include "zilmar.h"
 #include "renderer_boundary.h"
+#include "practice_rom_fixture.h"
 #include <stdio.h>
 #include <string.h>
 int main(int argc,char**argv){if(argc!=2)return 2;
@@ -10,6 +11,7 @@ int main(int argc,char**argv){if(argc!=2)return 2;
  auto requests=reinterpret_cast<unsigned(__cdecl*)()>(GetProcAddress(module,"TestRequests"));
  auto gate=reinterpret_cast<unsigned(__cdecl*)()>(GetProcAddress(module,"TestGate"));
  unsigned vi=0;GFX_INFO info{};info.MemoryBswaped=TRUE;info.VI_ORIGIN_REG=&vi;
+ unsigned char header[0x40]{};PRACTICE_FIXTURE_USAMUNE(header);info.HEADER=header;
  info.RDRAM=static_cast<unsigned char*>(VirtualAlloc(nullptr,4096,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE));
  if(!info.RDRAM)return 5;
  const BOOL ok=api.InitiateGFX(info);if(ok)api.RomOpen();printf("ready %d\n",ok);fflush(stdout);
@@ -30,6 +32,9 @@ int main(int argc,char**argv){if(argc!=2)return 2;
    printf("%d\n",diagnostic?diagnostic():0);
   }
   else if(!strncmp(line,"romclose",8)){api.RomClosed();opened=false;puts("ok");}
+  // The cartridge the NEXT romopen sees: a real run opens vanilla SM64.
+  else if(!strncmp(line,"cart vanilla",12)){PRACTICE_FIXTURE_VANILLA(header);puts("ok");}
+  else if(!strncmp(line,"cart usamune",12)){PRACTICE_FIXTURE_USAMUNE(header);puts("ok");}
   else if(!strncmp(line,"romopen",7)){api.RomOpen();opened=true;puts("ok");}
   else if(!strncmp(line,"close",5)){api.CloseDLL();opened=false;puts("ok");}
   else if(!strncmp(line,"reinit",6)){if(opened)api.RomClosed();api.CloseDLL();const BOOL again=api.InitiateGFX(info);

@@ -25,7 +25,14 @@
  *
  * A wrapped renderer without the SourceV2 export (a stock GLideN64) is
  * forwarded to but never captured: the runtime refuses to configure and the
- * control page says so. That is why the setup screen installs OUR renderer. */
+ * control page says so. That is why the setup screen installs OUR renderer.
+ *
+ * ONLY ON A PRACTICE ROM (practice_rom.h). RomOpen reads the cartridge header;
+ * for vanilla SM64, another SM64 hack or another game every callback forwards
+ * straight to the renderer -- no stamp adapter, no per-call timing, no lease
+ * admitted -- and the control page reports `rom_baseline` so the trainer stays
+ * idle. A real speedrun on the same plugin costs what plain GLideN64 costs
+ * (his ruling, 2026-09-16). */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +41,7 @@
 #include "stamp_adapter.h"
 #include "gpu_delivery_diagnostics.h"
 #include "control_worker.h"
+#include "practice_rom.h"
 
 #define EXPORT __declspec(dllexport)
 #define CALL __cdecl
@@ -54,6 +62,9 @@ static BOOL g_loaded_once;
 static GFX_INFO g_gfx;
 static BOOL g_have_gfx;
 static BOOL g_runtime_ready;
+/* The open ROM is a practice ROM. Written by RomOpen/RomClosed on the
+ * emulation thread, the same thread every frame callback runs on. */
+static BOOL g_practice_rom;
 
 static int64_t qpc_now(void) {
     LARGE_INTEGER counter;
@@ -192,6 +203,12 @@ static BOOL copy_guarded(void *destination, const void *source, size_t length) {
 
 #include "gpu_delivery_log.h"
 
+static BOOL loaded_rom_is_practice(void) {
+    unsigned char header[PRACTICE_ROM_HEADER_BYTES];
+    if (!g_gfx.HEADER || !copy_guarded(header, g_gfx.HEADER, sizeof header)) return FALSE;
+    return practice_rom(header) ? TRUE : FALSE;
+}
+
 static uint32_t __cdecl runtime_vi(void *unused) {
     (void)unused;
     __try { return g_gfx.VI_ORIGIN_REG ? *g_gfx.VI_ORIGIN_REG : UINT32_MAX; }
@@ -235,7 +252,7 @@ EXPORT void CALL GetDllInfo(PLUGIN_INFO *info) {
 }
 
 EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
-    wr_suspend(); g_runtime_ready = FALSE; sa_reset();
+    wr_suspend(); g_runtime_ready = FALSE; g_practice_rom = FALSE; sa_reset();
     control_stop(); /* a failed reinitialization cannot retain an old session */
     diagnostics_start();
     plugin_logf("init_begin", "wrapper_version=%u", GFXWRAP_VERSION);
@@ -284,6 +301,7 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
 }
 
 EXPORT void CALL ProcessDList(void) {
+    if (!g_practice_rom) { if (g_wrapped.ProcessDList) g_wrapped.ProcessDList(); return; }
     /* The only witness on the thread that matters: two QPC reads per
      * call (~50 ns) and a bounded off-thread log. The adapter wraps the
      * original call, so wrapped_ms here includes the stamp copy. */
@@ -295,6 +313,7 @@ EXPORT void CALL ProcessDList(void) {
 }
 
 EXPORT void CALL UpdateScreen(void) {
+    if (!g_practice_rom) { if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen(); return; }
     int64_t begin = qpc_now();
     if (g_runtime_ready) sa_update_screen();
     else if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
@@ -304,15 +323,19 @@ EXPORT void CALL UpdateScreen(void) {
 
 EXPORT void CALL RomOpen(void) {
     sa_reset();
-    plugin_logf("rom_open_begin", "initiated=%d", g_have_gfx);
+    /* Decided before the renderer opens the ROM, so no frame of a baseline
+     * ROM ever reaches the stamp adapter. */
+    g_practice_rom = g_have_gfx && loaded_rom_is_practice();
+    plugin_logf("rom_open_begin", "initiated=%d practice_rom=%d", g_have_gfx, g_practice_rom);
     if (g_wrapped.RomOpen) g_wrapped.RomOpen();
     measure_rdram();                          /* the expansion pak is committed by now */
-    control_rom(TRUE);
+    control_rom(g_practice_rom, !g_practice_rom);
     plugin_logf("rom_open_end", "rdram_span=%u", (unsigned)g_rdram_span);
 }
 
 EXPORT void CALL RomClosed(void) {
-    control_rom(FALSE);
+    control_rom(FALSE, FALSE);
+    g_practice_rom = FALSE;
     sa_reset();
     plugin_logf("rom_closed_begin", "");
     if (g_wrapped.RomClosed) g_wrapped.RomClosed();
@@ -320,7 +343,7 @@ EXPORT void CALL RomClosed(void) {
 }
 
 EXPORT void CALL CloseDLL(void) {
-    wr_suspend(); g_runtime_ready = FALSE; sa_reset();
+    wr_suspend(); g_runtime_ready = FALSE; g_practice_rom = FALSE; sa_reset();
     control_stop();
     plugin_logf("close_begin", "initiated=%d", g_have_gfx);
     if (g_wrapped.CloseDLL) g_wrapped.CloseDLL();
@@ -331,6 +354,7 @@ EXPORT void CALL CloseDLL(void) {
 }
 
 EXPORT void CALL ProcessRDPList(void) {
+    if (!g_practice_rom) { if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList(); return; }
     int64_t begin = qpc_now();
     if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList();
     int64_t end = qpc_now();

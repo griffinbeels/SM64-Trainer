@@ -68,6 +68,22 @@ def test_real_link_dispatch(tmp_path, source_build, mutation):
         assert "LINK source witness passed:" in result.stdout
 
 
+def test_vanilla_cartridge_leaves_link_dispatch_untouched(tmp_path, source_build):
+    """A real run on vanilla SM64 uses the same renderer DLL: the overlay must
+    observe nothing, keep GLideN64's raw GL function table and offer no
+    capture source (his ruling, 2026-09-16)."""
+    source, gl, build, vcvars, flags = source_build
+    target = tmp_path / "link_baseline.exe"
+    build._cl(vcvars, flags + [str(gl / "GLFunctions.cpp"), str(gl / "opengl_CachedFunctions.cpp"),
+        str(gl / "opengl_Parameters.cpp"), str(gl / "context_lifetime.cpp"), str(gl / "link_dispatch.cpp"),
+        str(ROOT / "plugin/gfxwrap/link_dispatch_host.cpp"), f"/Fe:{target}", f"/Fo{tmp_path}\\",
+        "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *build.LIBS], tmp_path)
+    result = subprocess.run([str(target), "baseline_rom"], capture_output=True, text=True, timeout=15,
+                            cwd=tmp_path, **quiet_spawn_kwargs(), check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LINK baseline witness passed" in result.stdout
+
+
 def test_modified_link_windows_compiles(tmp_path, source_build):
     source, gl, build, vcvars, flags = source_build
     # Compile the actual modified lifecycle unit. Whole DLL linking still needs Qt.

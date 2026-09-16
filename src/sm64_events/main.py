@@ -460,6 +460,10 @@ def build():
                     reader=reader, detector_factory=detector_stream,
                     on_gap=service.capture_gap)
     inputs.bind(poller)
+    if replay is not None:
+        # A real run on vanilla SM64, another hack or another game records
+        # nothing; unknown (no header read yet) keeps the old behaviour.
+        replay.recorder.set_capture_gate(lambda: poller.practice_rom is not False)
     updater = UpdateService(current_version=__version__)
     updater.startup_maintenance(bootstrap_path=_bootstrap_cleanup_arg())
     capture_layer, setup_observer = _build_capture_layer(poller, replay)

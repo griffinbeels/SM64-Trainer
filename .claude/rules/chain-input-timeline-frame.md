@@ -68,7 +68,9 @@ can't be relied on as a tool"* (2026-08-23).
 ## The GPU route at hop 4
 
 This is the only shipped route (the raw ReadScreen/frame-stream path was
-deleted on 2026-09-16). `sourcefactory.py` selects
+deleted on 2026-09-16), and it runs only on a practice ROM: on any other
+cartridge the wrapper forwards without stamps, the poller serves nothing and
+the recorder captures nothing (`plugin/gfxwrap/practice_rom.h`). `sourcefactory.py` selects
 `GpuCapture` and its paired sink under recorder ownership. The wrapper's bounded
 renderer command adapter retains the ProcessDList stamp through the original
 UpdateScreen. A dedicated worker transfers an owned GPU snapshot and the same

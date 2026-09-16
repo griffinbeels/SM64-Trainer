@@ -1,10 +1,18 @@
 /* Compiled ONLY with the pinned source overlay, never the binary wrapper.
  * Observes real dispatch calls, including cached function pointers. No per-call
  * GL queries, allocations, locks, events, I/O or capture work. Raw void GL calls
- * do not prove success: this is a nominal-state candidate, not source admission. */
+ * do not prove success: this is a nominal-state candidate, not source admission.
+ *
+ * ONLY ON A PRACTICE ROM (practice_rom.h, read from the header GLideN64 itself
+ * parses in RSP_Init). For any other cartridge ContextCreated observes nothing,
+ * InstallDispatch leaves GLideN64's raw function table untouched, and the
+ * remaining aliases below are a pass-through call with one flag test: the
+ * renderer is the baseline LINK GLideN64 (his ruling, 2026-09-16). */
 #define REPLAY_GL_DISPATCH_IMPLEMENTATION
 #include "GLFunctions.h"
 #include "link_dispatch.h"
+#include "N64.h"
+#include "practice_rom.h"
 #include <limits>
 #include <cstdio>
 
@@ -20,6 +28,7 @@ unsigned unit_limit = 0;
 unsigned drawable_width = 0, drawable_height = 0;
 GLuint read_framebuffer = 0;
 bool nominal = false, double_buffer = false;
+bool practice = false; // the context belongs to a practice ROM
 bool capture_open = false;
 bool anchor_attempted = false, anchor_published = false; // renderer thread only
 GLenum saved_error = GL_NO_ERROR;
@@ -87,7 +96,7 @@ void ContextLost() {
     }
     anchor_attempted = anchor_published = false;
 #endif
-    nominal = false; identity = {}; dispatch_generation = 0; state.lost();
+    nominal = false; practice = false; identity = {}; dispatch_generation = 0; state.lost();
     drawable_width = drawable_height = 0;
     capture_open = false; saved_error = GL_NO_ERROR;
     source_format = RB_SOURCE_UNKNOWN;
@@ -119,6 +128,8 @@ bool DrawableExtent(unsigned *width, unsigned *height) {
 }
 void ContextCreated(HGLRC context, HDC drawable, bool buffered) {
     ContextLost();
+    practice = HEADER && practice_rom(HEADER);
+    if (!practice) return; // no queries, no state, never a capture source
     if (!context || !drawable || context != wglGetCurrentContext() || drawable != wglGetCurrentDC()
             || generation == (std::numeric_limits<uint32_t>::max)()) return;
     GLint units = 0;
@@ -150,6 +161,7 @@ bool EnsureAnchor() {
 }
 #endif
 void InstallDispatch() {
+    if (!practice) return; // baseline ROM: GLideN64's own raw dispatch, untouched
     // Upstream must have resolved fresh raw addresses. Reject accidental repeated
     // installation rather than capturing ourselves and recursively dispatching.
     if (g_glBindFramebuffer == &BindFramebuffer || g_glDeleteFramebuffers == &DeleteFramebuffers

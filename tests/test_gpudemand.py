@@ -223,3 +223,18 @@ def test_failed_renewal_ends_request_without_reacquiring():
     assert d.done.wait(1)
     assert d.snapshot.reason == "capture_lease_lost" and f.requests == 1
     d.close()
+
+
+def test_a_real_run_on_another_rom_never_requests_capture():
+    """Vanilla SM64 on the same plugin: the wrapper reports `baseline_rom` and
+    never `rom_open`, so the demand waits idle and says why (2026-09-16)."""
+    f = Fixture(rom=False)
+    f.change(baseline_rom=True)
+    d = f.demand()
+    d.start()
+    try:
+        eventual(lambda: d.snapshot.state, lambda s: s == "baseline_rom")
+        time.sleep(0.05)
+        assert f.requests == 0 and d.identity is None
+    finally:
+        d.close()

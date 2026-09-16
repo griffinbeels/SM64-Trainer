@@ -79,6 +79,9 @@ frame counter and inputs. Your existing graphics plugin stays in the folder
 untouched. Install while Project64 is closed; open Usamune once afterward to
 check it. **Manage Practice Replay → Remove Practice Replay** selects your
 previous graphics plugin again, also with Project64 closed.
+Practice tooling runs only on the Usamune practice ROM. Load vanilla SM64,
+another hack or another game for a real run and the same plugin draws as
+plain GLideN64, while the trainer neither tracks nor records.
 The trainer can still use desktop capture when you postpone installation.
 N64 setup currently explains that console tracking is in development.
 

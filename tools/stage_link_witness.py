@@ -152,7 +152,8 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
     shutil.copytree(source, output)
     for relative, data in edited.items():
         (output / relative).write_bytes(data)
-    for name in ["link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h", "source_format.h"]:
+    for name in ["link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h", "source_format.h",
+                 "practice_rom.h"]:
         shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     if context_lifetime:
         for name in ["context_lifetime.h", "context_lifetime.cpp"]:

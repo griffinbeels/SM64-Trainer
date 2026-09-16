@@ -27,6 +27,17 @@ to name the renderer, selects the wrapper, and remembers the plugin it
 replaced (`previous_graphics_dll`) for Remove. The wrapper's About box
 credits GLideN64's authors and links the published source (GPL-2.0).
 
+Practice ROM gate: at RomOpen the wrapper reads the cartridge header
+(`plugin/gfxwrap/practice_rom.h`, mirrored by `core/onboarding.py::is_practice_rom`
+and compared in `tests/test_practice_rom.py`). On any other ROM every callback
+forwards straight to the renderer with no stamp adapter or per-call timing,
+the control page reports `rom_baseline` with `rom_open` false so no lease can
+activate capture, and the renderer overlay observes nothing and leaves
+GLideN64's raw GL function table untouched. The server mirrors it: the poller
+refuses a positively identified non-practice ROM (at attach and at each boot)
+and the recorder's capture gate records nothing while it does. The idle
+control, delivery and log threads created at InitiateGFX stay asleep.
+
 Updates: when the user clicks Update in the app, the new build restarts and
 `CaptureLayer.refresh_if_stale` (at boot and every two seconds) copies the
 new renderer and wrapper over the installed ones as soon as Project64 is

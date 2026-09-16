@@ -267,3 +267,88 @@ def test_a_dead_emulator_detaches_even_though_the_sampler_never_sees_a_frame():
     asyncio.run(p.tick())
     assert mem.detached is True
     assert [e.type for e in b.events] == ["emulator_disconnected"]
+
+
+def rom_header(name: bytes, country: bytes = b"E") -> bytes:
+    """A cartridge header as Project64 1.6 stores it (word-swapped)."""
+    header = bytearray(0x40)
+    header[0:4] = b"\x80\x37\x12\x40"
+    header[0x20:0x34] = name.ljust(20, b" ")
+    header[0x3E] = country[0]
+    return b"".join(bytes(header[at:at + 4])[::-1] for at in range(0, 0x40, 4))
+
+
+class CartridgeMemory(StubMemory):
+    """Attachable memory whose loaded cartridge the test chooses."""
+    def __init__(self, header):
+        super().__init__()
+        self.header, self.attached, self.attaches = header, False, 0
+
+    def attach(self):
+        self.attaches += 1
+        self.attached = True
+        return True
+
+    def detach(self):
+        super().detach()
+        self.attached = False
+
+    def rom_header(self):
+        return self.header
+
+
+async def run_for(poller, seconds):
+    task = asyncio.create_task(poller.run())
+    await asyncio.sleep(seconds)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+def test_a_real_run_on_another_rom_is_never_served():
+    """His ruling, 2026-09-16: vanilla SM64 is a real run, not practice. The
+    poller identifies the cartridge at attach and refuses it: no reads, no
+    detectors, no events; the recorder's gate reads `practice_rom`."""
+    b = RecordingBroadcaster()
+
+    class NoReads:
+        def read(self):
+            raise AssertionError("a vanilla cartridge must not be read")
+
+    memory = CartridgeMemory(rom_header(b"SUPER MARIO 64"))
+    p = Poller(memory, [EchoDetector()], b, reader=NoReads())
+    p.PRACTICE_ROM_RETRY_S = 0.01
+    asyncio.run(run_for(p, 0.1))
+    assert p.practice_rom is False and not memory.attached and memory.attaches >= 2
+    assert b.events == []
+
+
+def test_the_practice_rom_is_served_and_an_unreadable_header_still_is():
+    for header, expected in [(rom_header(b"SM64 USAMUNE v1.93u"), True), (None, None)]:
+        p = Poller(CartridgeMemory(header), [EchoDetector()], RecordingBroadcaster(),
+                   reader=ScriptedReader([snap(5)] * 50))
+        assert p._serves_loaded_rom() is True
+        assert p.practice_rom is expected
+
+
+def test_switching_to_another_rom_at_boot_stops_serving():
+    """A new cartridge boots without the emulator ever becoming unreadable, so
+    the timer falling back into the boot range re-identifies the ROM."""
+    b, gaps = RecordingBroadcaster(), []
+
+    async def on_gap(reason):
+        gaps.append(reason)
+
+    memory = CartridgeMemory(rom_header(b"SM64 USAMUNE v1.93u"))
+    memory.attached = True
+    p = Poller(memory, [EchoDetector()], b, reader=ScriptedReader([snap(900), snap(901), snap(3)]),
+               on_gap=on_gap)
+    asyncio.run(p.tick())
+    asyncio.run(p.tick())
+    assert len(b.events) == 1
+    memory.header = rom_header(b"SUPER MARIO 64")
+    asyncio.run(p.tick())            # boot: timer 901 -> 3
+    assert p.practice_rom is False and not memory.attached
+    assert gaps == ["not a practice ROM"] and len(b.events) == 1

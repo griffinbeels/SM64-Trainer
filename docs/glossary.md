@@ -958,6 +958,23 @@ user's existing GLideN64 settings carry over.
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
 
+### Practice ROM
+
+The cartridge the practice tooling works on: Usamune v1.93u (US) or a JP
+Usamune ROM. Any other cartridge -- vanilla SM64, another hack, another game
+-- is for a real speedrun: the [[capture layer]] forwards every call so the
+[[renderer]] draws as plain GLideN64, the [[poller]] serves nothing and the
+[[recorder]] captures nothing (his ruling, 2026-09-16: "when we play on the
+vanilla rom, it should function identically to the baseline graphics plugin
+we forked from"). The [[capture layer]] reads the cartridge header itself, so
+the rule holds with no trainer open.
+
+- **Lives** -- the rule in `src/sm64_events/core/onboarding.py` and its native
+  mirror `plugin/gfxwrap/practice_rom.h`, which `tests/test_practice_rom.py`
+  compares over the same headers
+- **Not** -- the [[game version]] setting (US or JP), which picks addresses and
+  grading, not whether the tooling is on
+
 ### Encoder helper
 
 The 64-bit NVENC DLL (`SM64GpuEncoderV1.dll`) the server's isolated encoder
@@ -1751,7 +1768,9 @@ what ships.
 ### Poller
 
 The loop reading the emulator sixty times a second: take a [[snapshot]], hand
-consecutive pairs to every [[detector]], publish whatever they emit.
+consecutive pairs to every [[detector]], publish whatever they emit. It
+serves only a [[practice ROM]], identified when it attaches and again at every
+boot.
 
 - **Lives** — the poll loop (`src/sm64_events/server/poller.py`)
 

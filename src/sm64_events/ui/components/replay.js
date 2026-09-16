@@ -265,9 +265,10 @@ export function RecordingDot() {
     {onError: () => setSt(null)}), [tick]);
   if (st === null) return null;
   const cls = st.recording ? "ok" : "bad";
+  // Off on purpose during a real run on another ROM, not failing.
   const label = st.recording
     ? `rec${st.idle ? " (idle)" : ""} · ${fmtSpan(st)} · ${fmtGB(st.disk_bytes)}/${fmtGB(st.max_buffer_bytes)} GB`
-    : "no capture";
+    : st.capture_gated ? "replay off · not Usamune" : "no capture";
   return html`<span class="recording-control">
     <button class=${`dot recording-button ${cls}`}
           title="replay buffer (${st.encoder} · audio ${st.audio_mode}) — click for storage limits"

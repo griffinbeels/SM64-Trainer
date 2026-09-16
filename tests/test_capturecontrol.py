@@ -263,3 +263,15 @@ def test_owner_process_death_revokes_demand_before_lease_expiry(native):
         finally:
             if child.poll() is None:
                 child.communicate("\n", timeout=5)
+
+
+def test_a_vanilla_cartridge_is_reported_as_baseline_never_as_open(native):
+    """The trainer reads `rom_open` to decide whether to ask for capture; a
+    real run on vanilla SM64 must never look open, and must say why."""
+    with running(native) as (process, control, _):
+        eventually(control.status, lambda s: s.rom_open and not s.baseline_rom)
+        command(process, "vanilla")
+        status = eventually(control.status, lambda s: s.baseline_rom)
+        assert not status.rom_open and status.state == C.PASSIVE
+        command(process, "usamune")
+        eventually(control.status, lambda s: s.rom_open and not s.baseline_rom)

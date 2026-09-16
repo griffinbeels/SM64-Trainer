@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "zilmar.h"
+#include "practice_rom_fixture.h"
 
 #define STREAM_NAME "sm64_trainer_gfx_v1"   /* the control page the wrapper publishes */
 
@@ -90,6 +91,8 @@ static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
 static const char *g_wrapped_name = "fake_gfx.dll";   /* --wrapped overrides */
 static unsigned g_rdram_committed_mb = 8;             /* --rdram-mb overrides */
 static int g_dirty_gl;                                /* --dirty-gl: the fake leaves GL state bound */
+static int g_vanilla_rom;                             /* --vanilla: open vanilla SM64, not Usamune */
+static unsigned char g_header[0x40];
 
 static void write_ini(const char *wrapper_path, const char *stream_name) {
     char path[MAX_PATH];
@@ -178,7 +181,9 @@ static int drive_calls(drive_job_t *job) {
     gfx.hWnd = window;
     gfx.MemoryBswaped = TRUE;
     gfx.RDRAM = rdram;
-    gfx.DMEM = rdram; gfx.IMEM = rdram; gfx.HEADER = rdram;
+    gfx.DMEM = rdram; gfx.IMEM = rdram;
+    if (g_vanilla_rom) PRACTICE_FIXTURE_VANILLA(g_header); else PRACTICE_FIXTURE_USAMUNE(g_header);
+    gfx.HEADER = g_header;
     gfx.MI_INTR_REG = &g_mi_intr;
     gfx.VI_ORIGIN_REG = &g_vi_origin;
     gfx.VI_STATUS_REG = &g_vi_status;
@@ -282,6 +287,8 @@ int main(int argc, char **argv) {
     for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--dirty-gl") == 0) g_dirty_gl = 1;
     for (int index = 1; index < argc; index++)
+        if (strcmp(argv[index], "--vanilla") == 0) g_vanilla_rom = 1;
+    for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--no-context") == 0) g_no_context = 1;
     for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--cpu-thread") == 0) g_cpu_thread = 1;
@@ -291,6 +298,6 @@ int main(int argc, char **argv) {
     if (argc >= 4 && strcmp(argv[1], "--drive") == 0)
         return drive(argv[2], atoi(argv[3]), stream_name);
     fprintf(stderr, "usage: gfxwrap_host --info <dll> | --drive <dll> <frames> "
-                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl] [--no-context] [--cpu-thread] [--commit-late]\n");
+                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl] [--vanilla] [--no-context] [--cpu-thread] [--commit-late]\n");
     return 1;
 }

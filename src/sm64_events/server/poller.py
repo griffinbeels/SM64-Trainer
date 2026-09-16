@@ -32,6 +32,7 @@ from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.memory import addresses as A
 from sm64_events.detectors.anchors import BOOT_TIMER_MAX
+from sm64_events.core.onboarding import identify_rom, is_practice_rom
 from sm64_events.memory.base import MemoryReadError
 
 log = logging.getLogger("sm64.poller")
@@ -56,6 +57,7 @@ class Poller:
     SNAPSHOT_HZ = 60         # without one: the old loop, every tick a read
     ATTACH_RETRY_S = 2.0
     LAYOUT_RETRY_S = 5.0
+    PRACTICE_ROM_RETRY_S = 5.0
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
@@ -64,6 +66,11 @@ class Poller:
         self.memory = memory
         self.detectors = list(detectors)
         self.detector_factory = detector_factory
+        #: Whether the cartridge Project64 has open is a practice ROM: None
+        #: until a header is read (or when the backend has none), then
+        #: True/False. The recorder's capture gate reads it (main.py).
+        self.practice_rom: bool | None = None
+        self._rom_name: str | None = None
         self.on_gap = on_gap
         self._tick_lock = asyncio.Lock()
         self.broadcaster = broadcaster
@@ -272,6 +279,8 @@ class Poller:
         # (Residual edge: if reattach lands AFTER boot, timer >= BOOT_TIMER_MAX,
         # so a slow reattach can still miss it — acceptable; F1 reattach observed
         # in the boot range.)
+        if await self._left_practice_rom(curr):
+            return
         if (self._prev is None and self._last_timer is not None
                 and self._last_timer >= BOOT_TIMER_MAX
                 and curr.global_timer < BOOT_TIMER_MAX):
@@ -327,6 +336,42 @@ class Poller:
         if self.on_gap is not None:
             await self.on_gap(f"detector {failed} failed")
 
+    def _serves_loaded_rom(self) -> bool:
+        """Identify the cartridge before serving it. Vanilla SM64, another
+        hack or another game is a real run, not practice: nothing is read,
+        detected, sampled or journalled for it (his ruling, 2026-09-16).
+        Only a POSITIVE identification refuses; a header that cannot be
+        read serves as before, so a failed scan never stops practice."""
+        read = getattr(self.memory, "rom_header", None)
+        identity = identify_rom(read() if callable(read) else None)
+        if identity["state"] == "missing":
+            self.practice_rom = None
+            return True
+        practice = is_practice_rom(identity)
+        if (practice, identity["name"]) != (self.practice_rom, self._rom_name):
+            log.info("loaded ROM %r: %s", identity["name"],
+                     "practice tooling on" if practice else
+                     "not a practice ROM; tracking and replay stay off")
+        self.practice_rom, self._rom_name = practice, identity["name"]
+        return practice
+
+    async def _left_practice_rom(self, curr) -> bool:
+        """A boot (the timer falling back into the boot range) is where a new
+        cartridge starts without the emulator ever becoming unreadable, so
+        the ROM is identified again there; leaving practice detaches like a
+        lost emulator."""
+        if (self._last_timer is None or self._last_timer < BOOT_TIMER_MAX
+                or curr.global_timer >= BOOT_TIMER_MAX or self._serves_loaded_rom()):
+            return False
+        self._break_input_capture()
+        self.memory.detach()
+        self._prev = None
+        self.latest = None
+        self._reset_detectors()
+        if self.on_gap is not None:
+            await self.on_gap("not a practice ROM")
+        return True
+
     def _record_tick_ms(self, dt_ms: float) -> None:
         self._tick_count += 1
         if dt_ms > self._tick_ms_max:
@@ -367,6 +412,10 @@ class Poller:
             if not self.memory.attached:
                 if not self.memory.attach():
                     await asyncio.sleep(self.ATTACH_RETRY_S)
+                    continue
+                if not self._serves_loaded_rom():
+                    self.memory.detach()
+                    await asyncio.sleep(self.PRACTICE_ROM_RETRY_S)
                     continue
                 if not self._probe():
                     await asyncio.sleep(self.LAYOUT_RETRY_S)

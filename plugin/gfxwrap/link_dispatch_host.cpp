@@ -1,8 +1,13 @@
 /* Executes the actual pinned LINK GL loader and caches on a hidden real context. */
 #include "GLFunctions.h"
 #include "opengl_CachedFunctions.h"
+#include "N64.h"
+#include "practice_rom_fixture.h"
 #include <stdio.h>
 #include <cstring>
+// GLideN64's own ROM header pointer (N64.cpp is not part of this host).
+unsigned char cartridge[0x40];
+u8 *HEADER = cartridge;
 unsigned logged=0;
 void LOG(unsigned short, const char*, ...) { ++logged; } // fixture sink; upstream checked() stays intact
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"link witness line %d: %s\n",__LINE__,#x); ExitProcess(1); } } while(0)
@@ -23,6 +28,8 @@ void check_bindings(GLuint read, GLuint texture, GLenum selector) {
 }
 int main(int argc, char **argv) {
     const bool unsupported=argc==2 && std::strcmp(argv[1],"format_unsupported")==0;
+    const bool baseline=argc==2 && std::strcmp(argv[1],"baseline_rom")==0;
+    if (baseline) PRACTICE_FIXTURE_VANILLA(cartridge); else PRACTICE_FIXTURE_USAMUNE(cartridge);
     WNDCLASSW cls{}; cls.lpfnWndProc=DefWindowProcW; cls.hInstance=GetModuleHandleW(nullptr); cls.lpszClassName=L"LinkWitnessHidden";
     CHECK(RegisterClassW(&cls));
     HWND window=CreateWindowW(cls.lpszClassName,L"",WS_POPUP,0,0,64,64,nullptr,nullptr,cls.hInstance,nullptr);
@@ -55,6 +62,25 @@ int main(int argc, char **argv) {
     CHECK(wglMakeCurrent(nullptr,nullptr) && wglDeleteContext(bootstrap) && wglMakeCurrent(dc,context));
     CHECK(DescribePixelFormat(dc,pf,sizeof(pfd),&pfd));
     replay_gl::ContextCreated(context,dc,(pfd.dwFlags&PFD_DOUBLEBUFFER)!=0);
+    if (baseline) {
+        // Vanilla SM64: nothing observed, GLideN64's raw dispatch untouched.
+        CHECK(replay_gl::DrawableCommitted(window,true));
+        unsigned w=0,h=0; CHECK(!replay_gl::DrawableExtent(&w,&h));
+        initGLFunctions();
+        CHECK(g_glBindFramebuffer==reinterpret_cast<PFNGLBINDFRAMEBUFFERPROC>(wglGetProcAddress("glBindFramebuffer")));
+        CHECK(g_glActiveTexture==reinterpret_cast<PFNGLACTIVETEXTUREPROC>(wglGetProcAddress("glActiveTexture")));
+        renderer::Identity none{}; snapshot::RestoreBindings unused{};
+        CHECK(!replay_gl::CandidateBindings(&none,&unused));
+        CHECK(replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN && !replay_gl::BeginCapture());
+#ifdef SM64_REPLAY_CONTEXT_LIFETIME
+        CHECK(!replay_gl::EnsureAnchor());
+#endif
+        glBindTexture(GL_TEXTURE_2D,0); CHECK(glGetError()==GL_NO_ERROR);
+        replay_gl::ContextLost(); CHECK(wglMakeCurrent(nullptr,nullptr)); CHECK(wglDeleteContext(context));
+        CHECK(ReleaseDC(window,dc) && DestroyWindow(window));
+        printf("LINK baseline witness passed: vanilla cartridge, raw dispatch, no source\n");
+        return 0;
+    }
     CHECK(replay_gl::DrawableCommitted(window,true));
     unsigned width=0,height=0;
     CHECK(replay_gl::DrawableExtent(&width,&height) && width==64 && height==64);

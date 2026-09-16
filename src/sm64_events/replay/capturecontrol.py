@@ -29,7 +29,7 @@ NO_BACKEND, OWNER_GONE, LEASE_EXPIRED, PROTOCOL_ERROR = range(1, 5)
 FRESH_REQUEST = 7  # CONTROL_FRESH_REQUEST in plugin/gfxwrap/control.h.
 _U32 = struct.Struct("<I")
 _REQUEST = struct.Struct("<8I")
-_STATUS = struct.Struct("<8s13I")
+_STATUS = struct.Struct("<8s14I")
 
 
 def _kernel():
@@ -89,6 +89,10 @@ class CaptureStatus:
     producer_created_lo: int
     producer_created_hi: int
     build_id: str
+    #: Project64 has a ROM open that is not a practice ROM: the plugin runs
+    #: as the baseline renderer and no capture can be requested
+    #: (plugin/gfxwrap/practice_rom.h). `rom_open` stays False meanwhile.
+    baseline_rom: bool = False
 
 
 class CaptureControl:
@@ -128,7 +132,8 @@ class CaptureControl:
                 continue
             if values[:3] != (MAGIC, VERSION, PAGE_BYTES):
                 raise RuntimeError("capture control protocol is not ready or supported")
-            status = CaptureStatus(*values[4:11], bool(values[11]), *values[12:], build_id)
+            status = CaptureStatus(*values[4:11], bool(values[11]), *values[12:14], build_id,
+                                   bool(values[14]))
             if _process_creation(self._k, status.producer_pid) != (
                     status.producer_created_lo, status.producer_created_hi):
                 from dataclasses import replace

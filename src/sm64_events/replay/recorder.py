@@ -89,6 +89,10 @@ def _sink_has_room(sink) -> bool:
 
 
 class ReplayRecorder:
+    # Capture gate (set_capture_gate): no gate until main.py installs one.
+    _capture_gate: Callable[[], bool] | None = None
+    _capture_gated = False
+
     def __init__(self, cfg: ReplayConfig,
                  window_finder: Callable[[str], WindowInfo | None],
                  video_factory: Callable[[WindowInfo], VideoSource],
@@ -285,6 +289,7 @@ class ReplayRecorder:
                 self._teardown_capture(keep_owner=True)
             win = self._window_finder(self._cfg.window_title)
             self._window_found = win is not None
+            win = self._gated(win)
 
             identity = (win.pid, win.hwnd) if win is not None else None
             if (self._window_lost.is_set()
@@ -737,6 +742,23 @@ class ReplayRecorder:
             else:
                 self._rec_lock = None
 
+    def set_capture_gate(self, allowed: Callable[[], bool] | None) -> None:
+        """Capture only while `allowed()` holds: main.py passes the poller's
+        practice ROM state, so a real run on another ROM records nothing --
+        no GPU request, no desktop grab, no audio (his ruling, 2026-09-16)."""
+        self._capture_gate = allowed
+
+    def _gated(self, win):
+        gated = self._capture_gate is not None and not self._capture_gate()
+        if gated and not self._capture_gated:
+            log.info("replay capture off: the loaded ROM is not a practice ROM")
+        self._capture_gated = gated
+        if not gated:
+            return win
+        if self._recording:
+            self._teardown_capture(keep_owner=True)
+        return None
+
     # -- automatic idle retention and explicit capture pause -----------------
 
     def set_idle_after(self, window_s: float) -> None:
@@ -1046,6 +1068,8 @@ class ReplayRecorder:
             "retention_s": self.ring.retention_s,
             "max_buffer_bytes": self.ring.max_bytes,
             "idle": self._idle,
+            # True while the loaded ROM is not a practice ROM (a real run).
+            "capture_gated": self._capture_gated,
             # A degraded capture is a NUMBER, not a thinner-looking clip:
             # grabs the sink had no budget for (so the ledger never recorded
             # them either) and how deep its queue is right now.

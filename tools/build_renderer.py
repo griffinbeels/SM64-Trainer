@@ -40,7 +40,7 @@ SHIPPED_RENDERER = REPO / "src" / "sm64_events" / "data" / "plugin" / "GLideN64_
 LABEL = "LINK v4.2 [SM64 Trainer]"
 OVERLAY_SOURCES = (
     "link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h",
-    "source_format.h", "context_lifetime.h", "context_lifetime.cpp",
+    "source_format.h", "practice_rom.h", "context_lifetime.h", "context_lifetime.cpp",
     "renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp",
 )
 OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp")

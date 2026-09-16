@@ -192,7 +192,9 @@ class GpuDemand:
                 if status.rom_open:
                     admitted = True
                     return control
-                self._publish(state="waiting_rom", native_state=status.state)
+                # A non-practice ROM is a real run: stay idle and say why.
+                self._publish(state="baseline_rom" if status.baseline_rom else "waiting_rom",
+                              native_state=status.state)
             except (FileNotFoundError, BlockingIOError):
                 self._publish(state="discovering")
             except CleanupPending as exc:
