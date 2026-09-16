@@ -2,7 +2,7 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
-import { stopShuttle } from "../replayshuttle.js";
+import { REPLAY_SPEEDS, setReplaySpeed, stopShuttle } from "../replayshuttle.js";
 import { watchReviewCommands } from "../reviewcommands.js";
 import { focusReplay } from "../replayfocus.js";
 import { seekReviewSource } from "../reviewsource.js";
@@ -15,8 +15,8 @@ export function PlaybackOptions({ video, media, fullscreen }) {
   return html`<div class="replay-playback-options">
       <label class="replay-speed" title="Playback speed"><${Icon} name="speed" size=${20} />
         <select value=${media.rate} aria-label="Playback speed"
-        onchange=${e => { if (video) video.playbackRate = Number(e.currentTarget.value); focusReplay(video); }}>
-        ${[.1, .25, .5, .75, 1, 1.5, 2, 4, 8].map(rate => html`<option value=${rate}>${rate}×</option>`)}
+        onchange=${e => { setReplaySpeed(video, Number(e.currentTarget.value)); focusReplay(video); }}>
+        ${REPLAY_SPEEDS.map(rate => html`<option value=${rate}>${rate}×</option>`)}
       </select></label>
       <div class="replay-sound">
       <button class="replay-mute" title=${media.muted ? "Unmute" : "Mute"} aria-label=${media.muted ? "Unmute" : "Mute"}

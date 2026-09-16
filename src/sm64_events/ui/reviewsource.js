@@ -1,5 +1,7 @@
 // Experimental opt-in, same-clock fragmented media. Out is enforced by the decoder's
 // admitted samples, before native presentation; timers cannot veto a picture.
+import { appendReviewStream } from "./reviewstream.js";
+import { cancelReviewSeek, flushReviewSeek, queueReviewSeek } from "./reviewseek.js";
 const sources = new WeakMap();
 
 export function hasBoundedReview(video) {
@@ -20,17 +22,34 @@ export function reviewPictureTime(video, time) {
 }
 
 export function seekReviewSource(video, time) {
+  cancelReviewSeek(video);
+  applySeek(video, time);
+}
+
+function applySeek(video, time) {
   const source = sources.get(video);
   if (source) source.seek(time);
   else video.currentTime = time;
 }
 
+export function scrubReviewSource(video, time) {
+  queueReviewSeek(video, time, target => applySeek(video, target));
+}
+
 export function pauseReviewSource(video) {
   sources.get(video)?.pause();
+  // At EOS the element is already paused, so pause() emits no new event.
+  // Explicit K/step/click intent must still cancel a queued loop restart.
+  video?.dispatchEvent(new Event("reviewpause"));
   video?.pause();
 }
 
+export function reviewSourceContinuing(video) {
+  return sources.get(video)?.continuing ?? false;
+}
+
 export function prepareReviewPlayback(video) {
+  flushReviewSeek(video);
   sources.get(video)?.play();
 }
 
@@ -60,17 +79,11 @@ function pictureClock(times, scale) {
   return clock;
 }
 
-async function appendPictures(mediaSource, source, data, end) {
-  const buffer = mediaSource.addSourceBuffer(source.mime_type);
-  buffer.timestampOffset = source.timestamp_offset_s;
-  // Keep decoder preroll from zero: appendWindowStart could discard the GOP
-  // needed by In. Out is the next picture's exact encoded tick, exclusive.
-  buffer.appendWindowEnd = Math.round(end * source.video_timescale) / source.video_timescale;
-  await new Promise((resolve, reject) => {
-    buffer.addEventListener("updateend", resolve, { once: true });
-    buffer.addEventListener("error", () => reject(new Error("Fragment decode failed.")), { once: true });
-    buffer.appendBuffer(data);
-  });
+function containsTime(buffer, time) {
+  const ranges = buffer.buffered;
+  for (let i = 0; i < ranges.length; i++)
+    if (ranges.start(i) <= time && ranges.end(i) > time) return true;
+  return false;
 }
 
 export function attachReviewSource(video, source, fallback, onError, times) {
@@ -82,16 +95,9 @@ export function attachReviewSource(video, source, fallback, onError, times) {
   if (!pictureTimes) return () => {};
   let loop = null, end = source.visible_end_s, generation = 0, disposed = false;
   let objectUrl = null, resume = !video.paused, pending = false, position = video.currentTime || 0;
-  const request = new AbortController();
-  const bytes = fetch(source.url, { signal: request.signal }).then(response => {
-    if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
-    return response.arrayBuffer();
-  });
-  // The request can finish before SourceOpen. Keep its rejection handled until
-  // that generation consumes it, including after an unmount.
-  bytes.catch(() => {});
-  const played = () => { resume = true; };
-  const paused = () => { if (!pending) resume = false; };
+  let request = null;
+  const played = () => { if (!video.paused) resume = true; };
+  const paused = () => { if (!pending && !video.ended) resume = false; };
   video.addEventListener("play", played);
   video.addEventListener("pause", paused);
   const release = () => {
@@ -100,12 +106,17 @@ export function attachReviewSource(video, source, fallback, onError, times) {
   };
   const rebuild = (destination) => {
     const ticket = ++generation;
+    request?.abort();
+    const currentRequest = new AbortController();
+    request = currentRequest;
     position = destination; pending = true;
     release();
     const currentSource = new MediaSource();
     objectUrl = URL.createObjectURL(currentSource);
     const failed = error => {
       if (disposed || ticket !== generation) return;
+      if (!pending) position = video.currentTime;
+      currentRequest.abort();
       sources.delete(video); release();
       pending = false;
       video.src = fallback;
@@ -118,17 +129,27 @@ export function attachReviewSource(video, source, fallback, onError, times) {
       onError?.(`Exact loop media is unavailable. Playing the original recording. ${error.message}`);
     };
     currentSource.addEventListener("sourceopen", async () => {
+      if (disposed || ticket !== generation || currentRequest.signal.aborted) return;
       try {
-        const data = await bytes;
-        if (disposed || ticket !== generation) return;
-        await appendPictures(currentSource, source, data, end);
+        const positionWhenReady = (buffer) => {
+          if (disposed || ticket !== generation || !pending) return;
+          const target = Math.max(source.visible_start_s, position);
+          if (containsTime(buffer, target)) {
+            pending = false;
+            video.currentTime = target;
+            if (resume) video.play().catch(() => {});
+          }
+        };
+        await appendReviewStream(currentSource, source, end, currentRequest.signal, positionWhenReady);
         if (disposed || ticket !== generation) return;
         // A finalized tail is seekable immediately; buffered coverage alone
         // does not make Chromium settle a seek near an unfinished MSE tail.
         finishSource(currentSource, end);
-        pending = false;
-        video.currentTime = Math.max(source.visible_start_s, position);
-        if (resume) video.play().catch(() => {});
+        if (pending) {
+          pending = false;
+          video.currentTime = Math.max(source.visible_start_s, position);
+          if (resume) video.play().catch(() => {});
+        }
       } catch (error) { failed(error); }
     }, { once: true });
     video.src = objectUrl;
@@ -136,6 +157,7 @@ export function attachReviewSource(video, source, fallback, onError, times) {
   const rangeEnd = () => loop?.enabled ? Math.min(source.visible_end_s, loop.end) : source.visible_end_s;
   const controller = {
     duration: source.visible_end_s,
+    get continuing() { return resume && (pending || video.ended); },
     pictureTime: time => pictureTimes.get(Math.round(time * source.video_timescale)) ?? null,
     pause: () => { resume = false; },
     setLoop(next) {
@@ -165,8 +187,8 @@ export function attachReviewSource(video, source, fallback, onError, times) {
   sources.set(video, controller);
   rebuild(video.currentTime || source.visible_start_s);
   return () => {
-    disposed = true; generation++; request.abort();
-    sources.delete(video); release();
+    disposed = true; generation++; request?.abort();
+    cancelReviewSeek(video); sources.delete(video); release();
     video.removeEventListener("play", played);
     video.removeEventListener("pause", paused);
   };

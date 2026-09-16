@@ -1,13 +1,14 @@
 // One complete transport below the image for captured and downloaded recordings.
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { pictureInterval, useReviewMedia } from "../reviewmedia.js";
 import { stopShuttle } from "../replayshuttle.js";
 import { LoopEditor, PlaybackOptions } from "./replayoptions.js";
 import { focusReplay } from "../replayfocus.js";
-import { seekReviewSource } from "../reviewsource.js";
+import { scrubReviewSource } from "../reviewsource.js";
+import { cancelReviewSeek } from "../reviewseek.js";
 
 const html = htm.bind(h);
 const stamp = seconds => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
@@ -20,6 +21,7 @@ export function ReplayTransport({ video, clock = null, frameStep = null,
   const [error, setError] = useState(null);
   const loop = controlledLoop === undefined ? localLoop : controlledLoop;
   const media = useReviewMedia(video, { clock, step: frameStep, loop });
+  useEffect(() => () => cancelReviewSeek(video), [video]);
   // Replacing a source resets paused without necessarily emitting pause.
   const isPlaying = video ? media.playing : playing;
   const interval = pictureInterval(media.picture, clock, frameStep, media.duration);
@@ -45,7 +47,7 @@ export function ReplayTransport({ video, clock = null, frameStep = null,
       <input type="range" min="0" max=${media.duration || 1} step="any"
         value=${media.time} disabled=${!media.duration} aria-label="Seek recording"
         onpointerup=${() => focusReplay(video)}
-        oninput=${e => { if (video) { stopShuttle(video); seekReviewSource(video, Number(e.currentTarget.value)); } }} />
+        oninput=${e => { if (video) { stopShuttle(video); scrubReviewSource(video, Number(e.currentTarget.value)); } }} />
       <span class="replay-media-time replay-time-pair">${stamp(media.time)} / ${stamp(media.duration)}</span>
     </div>
     <div class="replay-control-row"><div class="replay-transport">

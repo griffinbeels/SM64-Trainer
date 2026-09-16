@@ -84,11 +84,11 @@ function ButtonLanes({ lanes, templateLanes, overlayVisible, view, seek, lead })
                 style=${spanInWindow(bar.start, bar.length, view)}
                 title=${`Template — ${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)`} />`)}
         ${(mine ? mine.bars : []).filter((bar) => spanInWindow(bar.start, bar.length, view)).map((bar) => html`
-          <button class="input-bar" key=${bar.start}
+          <button class=${`input-bar ${bar.polled ? "is-polled" : ""}`} key=${bar.start}
                   style=${spanInWindow(bar.start, bar.length, view)}
                   onclick=${(event) => { event.stopPropagation(); seek(Math.max(view.start, bar.start)); }}
-                  title=${`${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)`}
-                  aria-label=${`${name} held from ${spanLabel(bar.start, bar.length, lead)}, ${bar.length} frames`} />`)}
+                  title=${`${name} ${spanLabel(bar.start, bar.length, lead)} (${bar.length}f)${bar.polled ? " — polled, no picture" : ""}`}
+                  aria-label=${`${name} held from ${spanLabel(bar.start, bar.length, lead)}, ${bar.length} frames${bar.polled ? ", polled with no picture" : ""}`} />`)}
       </div>
     </div>`;
   };
@@ -120,6 +120,11 @@ function StaticLanes({ data, template, lanes, templateLanes, curves, overlayVisi
                     d=${curves.template.x} />
               <path class="stick-line is-y is-template" vector-effect="non-scaling-stroke"
                     d=${curves.template.y} />`}
+            ${curves.polled && html`
+              <path class="stick-line is-x is-polled" vector-effect="non-scaling-stroke"
+                    d=${curves.polled.x} />
+              <path class="stick-line is-y is-polled" vector-effect="non-scaling-stroke"
+                    d=${curves.polled.y} />`}
             <path class="stick-line is-x" vector-effect="non-scaling-stroke"
                   d=${curves.mine.x} />
             <path class="stick-line is-y" vector-effect="non-scaling-stroke"
@@ -140,6 +145,9 @@ function StaticLanes({ data, template, lanes, templateLanes, curves, overlayVisi
             ${template && overlayVisible("speed") && html`
               <path class="speed-line is-template" vector-effect="non-scaling-stroke"
                     d=${curves.template.speed} />`}
+            ${curves.polled && html`
+              <path class="speed-line is-polled" vector-effect="non-scaling-stroke"
+                    d=${curves.polled.speed} />`}
             <path class="speed-line" vector-effect="non-scaling-stroke"
                   d=${curves.mine.speed} />
           </svg>

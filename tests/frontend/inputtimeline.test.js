@@ -7,7 +7,7 @@ import { InputTimeline, mappedLoopWindow } from "../../src/sm64_events/ui/compon
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alignment = null, inputSpan = undefined,
-                          data = {}, agreement = null, review = undefined, reviewLoading = false }) {
+                          data = {}, agreement = null, states = null, review = undefined, reviewLoading = false }) {
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({
     attempt_id: 42, fps: 30, frames: 3, attempt_frames: 3, stretches,
     buttons: [[32768,"A"], [16384,"B"]], stick_max: 84, dead_zone: 8,
@@ -27,6 +27,7 @@ async function timeline({ map, times, igts = null, stretches = [[0,100,3]], alig
   let props = {attemptId:42, video,
     frameMap: map, pictureIgt: igts, inputAlignment: alignment, inputSpan,
     padAgreement: agreement,
+    pictureStates: states,
     frameMapSource: map ? "plugin" : null, clock:{times}};
   let view;
   if (review !== undefined || reviewLoading) {
@@ -62,6 +63,54 @@ function clickTimeline(view, x) {
 test("the captured span prevents an old held picture from stretching the track", async () => {
   await timeline({map:[10,10,100,101,102], times:[0,2,2.1,2.2,2.3], inputSpan:[100,102]});
   expect(fetch).toHaveBeenCalledWith("/api/attempts/42/inputs?from_frame=100&to_frame=102");
+});
+
+test("presented capture wins over stale poller data without hiding unknown slots", async () => {
+  const view = await timeline({map:[100,100,100], times:[0,.1,.2],
+    states:[{stick_x:1,stick_y:1,buttons:16384,yaw:100,speed:32.1},
+      {stick_x:-2,stick_y:3,buttons:32768,yaw:200,speed:12},null]});
+  await view.present(0);
+  expect(view.container.querySelector('.controller-buttons[aria-label="Holding B"]')).not.toBeNull();
+  expect(view.container.querySelector('.controller-panel .stick-values').textContent).toBe("U1R1");
+  view.video.currentTime = .201;
+  await view.refreshClock();
+  expect(view.container.querySelector('.controller-panel .stick-values').textContent).toBe("U1R1");
+  await view.present(1);
+  expect(view.container.querySelector('.controller-panel .stick-values').textContent).toBe("U3L2");
+  await view.present(2);
+  expect(view.container.querySelector('.controller-panel .stick-values').textContent).toContain("not captured");
+  expect(view.container.querySelector('.controller-buttons').textContent).toContain("not captured");
+});
+
+test("lanes draw the picture's own pad, and the poll only fills frames with no picture", async () => {
+  // The poll missed B on frame 1 (it filed A there); the picture of frame 1
+  // carries B. Frame 2 has no picture at all. Frame 0's picture agrees.
+  const view = await timeline({map:[100,101], times:[0,.1],
+    states:[{stick_x:40,stick_y:80,buttons:32768,yaw:0,speed:5},
+            {stick_x:-40,stick_y:80,buttons:16384,yaw:100,speed:6}],
+    data:{runs:[
+      {start:0, length:1, buttons:32768, stick_x:40, stick_y:80, yaw:0, speed:5},
+      {start:1, length:1, buttons:32768, stick_x:40, stick_y:80, yaw:0, speed:5},
+      {start:2, length:1, buttons:32768, stick_x:60, stick_y:80, yaw:200, speed:7},
+    ]}});
+  const bars = Array.from(view.container.querySelectorAll("button.input-bar"))
+    .map((el) => [el.getAttribute("aria-label").replace(/ from \S+,/, ","),
+                  el.style.left, el.classList.contains("is-polled")]);
+  // A: frame 0 from the stamp, frame 2 polled (no picture). B: frame 1 from the stamp.
+  expect(bars).toEqual([
+    ["A held, 1 frames", "0%", false],
+    ["A held, 1 frames, polled with no picture", "66.66666666666666%", true],
+    ["B held, 1 frames", "33.33333333333333%", false],
+  ]);
+  expect(view.container.querySelector(".stick-line.is-polled")).not.toBeNull();
+  expect(view.container.querySelector(".speed-line.is-polled")).not.toBeNull();
+});
+
+test("without exact capture the lanes are the polled track and nothing is marked polled", async () => {
+  const view = await timeline({map:null, times:[0,.1,.2]});
+  expect(view.container.querySelectorAll("button.input-bar").length).toBe(3);
+  expect(view.container.querySelector(".input-bar.is-polled")).toBeNull();
+  expect(view.container.querySelector(".stick-line.is-polled")).toBeNull();
 });
 
 const exampleTemplate = () => ({

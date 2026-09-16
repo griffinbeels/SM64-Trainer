@@ -38,12 +38,15 @@ export function actionAt(spans, frame) {
 // the world when the playhead sits here. Markers are sorted by frame.
 export function momentAt(markers, frame) {
   if (frame == null) return null;
-  let found = null;
-  for (const marker of markers || []) {
-    if (marker.frame > frame) break;
-    found = marker;
+  let low = 0, high = markers?.length || 0;
+  // Upper bound retains the last marker on tied frames. Reading the inspector
+  // visits O(log markers), even near the end of a long practice attempt.
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (markers[mid].frame > frame) high = mid;
+    else low = mid + 1;
   }
-  return found;
+  return low ? markers[low - 1] : null;
 }
 
 // The buttons SM64 play is made of. These lanes ALWAYS draw, pressed or
@@ -60,11 +63,68 @@ export function lanesOf(runs, table) {
     for (const run of runs) {
       if (!(run.buttons & bit)) continue;
       const last = bars[bars.length - 1];
-      if (last && last.start + last.length === run.start) last.length += run.length;
-      else bars.push({ start: run.start, length: run.length });
+      // A polled fill and a stamped hold stay two bars: the lane must show
+      // where the picture's own state ends and the poller's guess begins.
+      if (last && last.start + last.length === run.start && !!last.polled === !!run.polled) {
+        last.length += run.length;
+      } else {
+        bars.push(run.polled ? { start: run.start, length: run.length, polled: true }
+                            : { start: run.start, length: run.length });
+      }
     }
     return { bit, name, bars };
   }).filter((lane) => lane.bars.length > 0 || CORE_BUTTONS.includes(lane.name));
+}
+
+// THE LANES FOLLOW THE PICTURES. With exact capture on, every picture
+// carries the pad the game read for the frame it drew (the stamp copied
+// inside ProcessDList). The independently polled track can miss a late
+// pad change inside the same game frame, so on a frame that has a picture
+// the lanes draw the stamp and never the poll; the two cannot disagree on
+// screen (his 100 Coins frame 3017: the R lane empty under a playhead
+// whose inspector said R). Frames with no picture keep the polled sample,
+// marked `polled` so they draw as a fill rather than as fact. Frames with
+// neither stay holes. Runs collapse whenever the drawn state repeats.
+function stampedStates(frameMap, pictureStates, stretches, total) {
+  const stamped = new Map();
+  const count = Math.min(frameMap.length, pictureStates.length);
+  for (let slot = 0; slot < count; slot += 1) {
+    const raw = frameMap[slot];
+    const state = pictureStates[slot];
+    if (raw == null || !state) continue;
+    const axis = trackFrameOf(raw, stretches);
+    if (axis === null || axis < 0 || axis >= total || stamped.has(axis)) continue;
+    stamped.set(axis, state);
+  }
+  return stamped;
+}
+
+function drawnRun(axis, state, polled) {
+  return { start: axis, length: 1, buttons: state.buttons, stick_x: state.stick_x,
+           stick_y: state.stick_y, yaw: state.yaw ?? 0, speed: state.speed ?? 0, polled };
+}
+
+function sameDrawn(run, next) {
+  return run.polled === next.polled && run.buttons === next.buttons
+    && run.stick_x === next.stick_x && run.stick_y === next.stick_y
+    && run.yaw === next.yaw && run.speed === next.speed;
+}
+
+export function stampedRuns(runs, frameMap, pictureStates, stretches, total) {
+  if (!Array.isArray(frameMap) || !Array.isArray(pictureStates) || !total) return runs;
+  const stamped = stampedStates(frameMap, pictureStates, stretches, total);
+  if (!stamped.size) return runs;
+  const merged = [];
+  for (let axis = 0; axis < total; axis += 1) {
+    const state = stamped.get(axis);
+    const polled = state ? null : frameAt(runs, axis);
+    if (!state && !polled) continue;
+    const next = state ? drawnRun(axis, state, false) : drawnRun(axis, polled, true);
+    const last = merged[merged.length - 1];
+    if (last && last.start + last.length === axis && sameDrawn(last, next)) last.length += 1;
+    else merged.push(next);
+  }
+  return merged;
 }
 
 // A step line: one value held across each run, drawn as a horizontal segment

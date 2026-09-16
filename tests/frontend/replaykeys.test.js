@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
 import { watchReplayKeys } from "../../src/sm64_events/ui/replaykeys.js";
-import { stopShuttle } from "../../src/sm64_events/ui/replayshuttle.js";
+import { setReplaySpeed, stopShuttle } from "../../src/sm64_events/ui/replayshuttle.js";
 import { watchReviewCommands, playReview } from "../../src/sm64_events/ui/reviewcommands.js";
 
 const stops = [];
@@ -86,7 +86,7 @@ test("JKL shuttles only the active video, contains repeats and leaves fields alo
   root.dispatchEvent(new Event("pointerdown", {bubbles:true}));
   key("keydown", video, { key: "l" });
   key("keydown", video, { key: "l" });
-  expect(video.playbackRate).toBe(2);
+  expect(video.playbackRate).toBe(1.5);
   key("keydown", input, { key: "k" });
   expect(video.pause).not.toHaveBeenCalled();
   key("keydown", video, { key: "k" });
@@ -132,4 +132,99 @@ test("K chords step, loop commands share transport ownership, play respects the 
   for (const [position, expected] of [[0, 2], [3, 3], [4, 2]]) {
     video.currentTime = position; playReview(video); expect(video.currentTime).toBe(expected);
   }
+});
+
+
+function mediaPlayer() {
+  const root = document.createElement("div"), video = document.createElement("video");
+  root.append(video); document.body.append(root);
+  Object.defineProperty(video, "duration", { value: 100 });
+  video.currentTime = 50;
+  video.play = vi.fn().mockResolvedValue(); video.pause = vi.fn();
+  const step = vi.fn();
+  stops.push(watchReplayKeys(root, { video, step, toStart: vi.fn() }));
+  root.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+  return { root, video, step };
+}
+
+function tap(video, letter) {
+  key("keydown", video, { key: letter }); key("keyup", video, { key: letter });
+}
+
+test.each([.25, .75, 3])("JKL uses the exact shuttle ladder from manual %sx", rate => {
+  vi.useFakeTimers();
+  const { video } = mediaPlayer();
+  video.playbackRate = rate;
+  for (const [letter, name] of [["j", "Reverse"], ["l", "Forward"], ["j", "Reverse"]]) {
+    for (const speed of [1, 1.5, 2, 3, 4, 4]) {
+      tap(video, letter);
+      expect(video.dataset.reviewShuttle).toBe(`${name} ${speed}×`);
+      key("keydown", video, { key: letter, repeat: true });
+      expect(video.dataset.reviewShuttle).toBe(`${name} ${speed}×`);
+    }
+  }
+  tap(video, "k");
+  expect(video.playbackRate).toBe(1);
+  expect(video.dataset.reviewShuttle).toBe("");
+  const position = video.currentTime;
+  vi.advanceTimersByTime(1000);
+  expect(video.currentTime).toBe(position);
+  tap(video, "l");
+  expect(video.playbackRate).toBe(1);
+});
+
+test.each([.25, 4])("K resets a manual %sx rate even without a shuttle", rate => {
+  const { video } = mediaPlayer();
+  video.playbackRate = rate;
+  tap(video, "k");
+  expect(video.playbackRate).toBe(1);
+  expect(video.pause).toHaveBeenCalledTimes(1);
+});
+
+test.each([["j", "ArrowLeft", -1], ["l", "ArrowRight", 1]])(
+  "held K+%s uses the arrow hold schedule and stops on either release", (letter, arrow, direction) => {
+    vi.useFakeTimers();
+    const { video, step } = mediaPlayer();
+    const counts = [];
+    for (const chord of [false, true]) {
+      step.mockClear();
+      if (chord) key("keydown", video, { key: "k" });
+      key("keydown", video, { key: chord ? letter : arrow });
+      expect(step).toHaveBeenCalledExactlyOnceWith(direction);
+      const trace = [step.mock.calls.length];
+      for (const elapsed of [249, 1, 66, 198]) {
+        vi.advanceTimersByTime(elapsed); trace.push(step.mock.calls.length);
+      }
+      counts.push(trace);
+      key("keyup", video, { key: chord ? letter : arrow });
+      vi.advanceTimersByTime(1000);
+      expect(step).toHaveBeenCalledTimes(trace.at(-1));
+      if (chord) key("keyup", video, { key: "k" });
+    }
+    expect(counts[1]).toEqual(counts[0]);
+    expect(counts[0].at(-1)).toBeGreaterThan(1);
+    key("keydown", video, { key: "k" });
+    key("keydown", video, { key: letter });
+    vi.advanceTimersByTime(400);
+    key("keyup", video, { key: "k" });
+    const count = step.mock.calls.length;
+    vi.advanceTimersByTime(500);
+    expect(step).toHaveBeenCalledTimes(count);
+    expect(video.play).not.toHaveBeenCalled();
+    key("keyup", video, { key: letter });
+  });
+
+
+test("manual speed selection cancels reverse and starts the next shuttle at one", () => {
+  vi.useFakeTimers();
+  const { video } = mediaPlayer();
+  tap(video, "j"); tap(video, "j");
+  setReplaySpeed(video, .5);
+  const position = video.currentTime;
+  vi.advanceTimersByTime(1000);
+  expect(video.currentTime).toBe(position);
+  expect(video.playbackRate).toBe(.5);
+  expect(video.dataset.reviewShuttle).toBe("");
+  tap(video, "j");
+  expect(video.dataset.reviewShuttle).toBe("Reverse 1×");
 });

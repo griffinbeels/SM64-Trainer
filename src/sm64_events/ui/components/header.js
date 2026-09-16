@@ -44,7 +44,7 @@ function shouldOfferSetup(setup) {
   if (emu.installation_verified && emu.target?.state === "ready") return false;
   // ...and for a layer this build has outgrown: the steps to update it are
   // the onboarding, so the screen carries them the moment the page opens.
-  const stale = emu.wrapper_present && emu.wrapper_current === false;
+  const stale = emu.wrapper_present && (emu.wrapper_current === false || emu.renderer_current === false);
   return emu.state === "not_installed" || emu.state === "regressed" || stale
     || (setup.onboarding?.started && !setup.onboarding.completed_at);
 }

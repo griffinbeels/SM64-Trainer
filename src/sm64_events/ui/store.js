@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { getJSON, send } from "./api.js";
 import { coalesce } from "./coalesce.js";
+import { pollJSON } from "./pollstate.js";
 import { noteEvent, noteFetchDone, noteFetchStart } from "./latency.js";
 import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 
@@ -320,14 +321,7 @@ export function useTracker() {
   const [pauseState, setPauseState] = useState({ paused: false, reason: null });
   const reasonRef = useRef(null);
   useEffect(() => { reasonRef.current = pauseState.reason; }, [pauseState]);
-  useEffect(() => {
-    let alive = true;
-    const poll = () => getJSON("/api/pause")
-      .then((r) => alive && setPauseState(r)).catch(() => {});
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
+  useEffect(() => pollJSON("/api/pause", setPauseState), []);
   // The button drives only the MANUAL layer: pausing while afk escalates
   // to manual (movement no longer resumes); resume exists only for manual.
   const togglePause = useCallback(async () => {

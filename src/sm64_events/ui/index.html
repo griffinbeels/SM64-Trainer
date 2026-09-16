@@ -5337,6 +5337,11 @@
     cursor: default; z-index: 0;
   }
   .input-lane-track .input-bar:not(.is-template) { z-index: 1; }
+  /* A frame with no picture keeps the poller's sample, drawn as a fill: the
+     lane says where the picture's own state ends and a guess begins. */
+  .input-bar.is-polled { opacity: .45; background-image: repeating-linear-gradient(
+      135deg, transparent 0 3px, rgba(0, 0, 0, .35) 3px 5px); }
+  .stick-line.is-polled, .speed-line.is-polled { opacity: .45; stroke-dasharray: 2 2; }
   .stick-axis { stroke: #1d2c3b; stroke-width: 1; }
   .stick-line { fill: none; stroke-width: 1.6; }
   .stick-line.is-x { stroke: #6fb1e0; }
@@ -5662,6 +5667,10 @@
     border-bottom: 1px solid var(--border-soft);
   }
   .replay-setting-row:last-child { border-bottom: 0; }
+  .replay-setting-row.replay-retention-row { grid-template-columns: minmax(0, 1fr); gap: .5rem; }
+  .replay-retention-row .retention-options {
+    width: 100%; justify-self: stretch; justify-content: flex-start; flex-wrap: wrap;
+  }
   .replay-setting-row > span:first-child { display: grid; gap: .08rem; }
   .replay-setting-row small { color: var(--muted); font-size: .63rem; }
   .replay-setting-controls {

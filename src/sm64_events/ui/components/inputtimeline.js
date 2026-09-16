@@ -35,9 +35,10 @@ export { frameAt, actionAt, momentAt, CORE_BUTTONS, lanesOf, contiguousRuns,
 
 const html = htm.bind(h);
 
-export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
+export function InputTimeline({ attemptId, video,
                                 frameMap = null, clock = null, inputSpan,
                                 pictureIgt = null,
+                                pictureStates,
                                 padAgreement = null,
                                 frameMapSource = null,
                                 inputAlignment = null,
@@ -48,7 +49,8 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
   const data = state.phase === "ready" ? state.data : null;
   const { frame, presentedSlot, setFrame } = useTimelinePicture(video, data, frameMap, clock);
   const { review, reviewLoading, updateReview } = useTimelineReview(reviewState, onReviewState);
-  const model = useTimelineModel(data, review, onReviewState, video, frameMap, clock);
+  const model = useTimelineModel(data, review, onReviewState, video, frameMap, clock,
+                                 pictureStates, frameMapSource);
   const { total, templateKey, view, boundedClock } = model;
   const [overlayVisible, toggleOverlay] = useOverlayRows();
   // Both pointer gestures and the playhead measure the track column, excluding labels.
@@ -72,14 +74,15 @@ export function InputTimeline({ attemptId, video, anchorOffsetS = 0,
     seekSlot=${seekSlot} slotCount=${slotCount} frame=${frame} review=${review}
     reviewLoading=${reviewLoading} updateReview=${updateReview} shiftTemplate=${shiftTemplate}
     overlayVisible=${overlayVisible} toggleOverlay=${toggleOverlay} staticLanes=${staticLanes}
-    video=${video} pictureIgt=${pictureIgt} presentedSlot=${presentedSlot} tools=${tools} compact=${compact}
+    video=${video} pictureIgt=${pictureIgt} pictureStates=${pictureStates}
+    presentedSlot=${presentedSlot} tools=${tools} compact=${compact}
     checkOpen=${checkOpen} setCheckOpen=${setCheckOpen} setupOpen=${setupOpen} setSetupOpen=${setSetupOpen} />`;
 }
 
 function TimelineContent({ data, model, selection, trackColumn, state, retry, padAgreement,
                            frameMapSource, inputAlignment, seek, seekSlot, slotCount, frame, review,
                            reviewLoading, updateReview, shiftTemplate, overlayVisible, toggleOverlay,
-                           staticLanes, video, pictureIgt, presentedSlot, tools, compact,
+                           staticLanes, video, pictureIgt, pictureStates, presentedSlot, tools, compact,
                            checkOpen, setCheckOpen, setupOpen, setSetupOpen }) {
   const { total, lead, templateKey, offset, template, view, loopWindow } = model;
   const { selectedRange, selectionError, beginSelection, moveSelection, finishSelection } = selection;
@@ -109,7 +112,8 @@ function TimelineContent({ data, model, selection, trackColumn, state, retry, pa
     ${selectionError && html`<p class="replay-control-error" role="status">${selectionError}</p>`}
     <${ReviewReadout}>
       <${TimelineInspector} data=${data} template=${template} frame=${frame} lead=${lead}
-        total=${total} video=${video} pictureIgt=${pictureIgt} presentedSlot=${presentedSlot} />
+        total=${total} video=${video} pictureIgt=${pictureIgt}
+        pictureStates=${pictureStates} presentedSlot=${presentedSlot} />
       ${typeof tools === "function" ? tools(data) : tools}
     </${ReviewReadout}>
     <${TimelineSetup} open=${setupOpen} onClose=${() => setSetupOpen(false)} />

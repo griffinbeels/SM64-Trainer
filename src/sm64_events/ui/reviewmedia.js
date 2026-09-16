@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { slotAtTime } from "./frame.js";
 import { presentedVideoTime, watchVideoPicture } from "./videopicture.js";
-import { hasBoundedReview, reviewDuration, setReviewSourceLoop } from "./reviewsource.js";
+import { hasBoundedReview, reviewDuration, reviewSourceContinuing, setReviewSourceLoop } from "./reviewsource.js";
 
 export function pictureInterval(time, clock, step, duration) {
   if (!Number.isFinite(time) || !Number.isFinite(duration) || duration <= 0) return null;
@@ -34,6 +34,12 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
     if (!video) return undefined;
     setReviewSourceLoop(video, loop);
     let timer = null;
+    let requestedPlay = !video.paused || reviewSourceContinuing(video);
+    const played = () => { if (!video.paused) requestedPlay = true; };
+    const paused = () => {
+      if (!video.ended && !reviewSourceContinuing(video)) requestedPlay = false;
+    };
+    const pauseRequested = () => { requestedPlay = false; clearTimeout(timer); };
     const update = () => setMedia({ time: video.currentTime || 0,
       picture: presentedVideoTime(video),
       duration: Number.isFinite(reviewDuration(video)) ? reviewDuration(video) : 0,
@@ -47,7 +53,7 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
         video.currentTime = loopSeekTime(range, sourceClock, sourceStep, video.duration);
         return;
       }
-      if (hasBoundedReview(video)) return; // Its native duration is exactly Out.
+      if (hasBoundedReview(video)) return; // Decoder admission bounds Out.
       timer = setTimeout(() => {
         if (video.paused || !latest.current.loop?.enabled) return;
         // Media time can stop while the element still reports !paused.
@@ -62,13 +68,16 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
     const seeking = () => { clearTimeout(timer); update(); };
     const ended = () => {
       const range = latest.current.loop;
-      if (!range?.enabled) return;
+      if (!range?.enabled || !requestedPlay) return;
       video.currentTime = loopSeekTime(range, latest.current.clock, latest.current.step, video.duration);
       video.play().catch(() => {});
     };
     const events = ["loadedmetadata", "durationchange", "timeupdate", "play", "pause",
       "ratechange", "volumechange", "seeked", "playing", "reviewshuttlechange"];
     events.forEach(name => video.addEventListener(name, changed));
+    video.addEventListener("play", played);
+    video.addEventListener("pause", paused);
+    video.addEventListener("reviewpause", pauseRequested);
     video.addEventListener("seeking", seeking);
     video.addEventListener("waiting", seeking);
     video.addEventListener("ended", ended);
@@ -77,6 +86,9 @@ export function useReviewMedia(video, { clock, step, loop } = {}) {
     return () => {
       clearTimeout(timer); stop();
       events.forEach(name => video.removeEventListener(name, changed));
+      video.removeEventListener("play", played);
+      video.removeEventListener("pause", paused);
+      video.removeEventListener("reviewpause", pauseRequested);
       video.removeEventListener("seeking", seeking);
       video.removeEventListener("waiting", seeking);
       video.removeEventListener("ended", ended);

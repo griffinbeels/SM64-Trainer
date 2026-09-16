@@ -397,3 +397,103 @@ def test_symbols_are_centered_and_footer_survives_text_growth(tmp_path, width):
         wait_page(page, "platform")
         assert all(max(c["dx"], c["dy"]) < .75 for c in symbol_centers(page))
         assert page.problems() == []
+
+
+def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
+    """Exercise source rediscovery through the real installer and API, offline."""
+    import ui_fixture
+    from types import SimpleNamespace
+    from sm64_events.core.capturelayer import CaptureLayer, WRAPPER_DLL, WRAPPER_INI
+
+    folder = tmp_path / "PJ64"
+    plugin = folder / "Plugin"
+    plugin.mkdir(parents=True)
+    source = tmp_path / WRAPPER_DLL
+    expected = b"matching offline wrapper"
+    (plugin / WRAPPER_DLL).write_bytes(expected)
+    (plugin / WRAPPER_INI).write_text("wrapped=renderer.dll")
+    registry = SimpleNamespace(get=lambda key, name: WRAPPER_DLL if name == "Graphics Dll" else None)
+    processes = SimpleNamespace(pj64_image_path=lambda: str(folder / "Project64.exe"))
+    layer = CaptureLayer(registry, processes, tmp_path / "capture.json",
+                         lambda: source if source.is_file() else None)
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    observed = dict(target=dict(state="ready", pid=123),
+                    rom=dict(state="supported", region="us", name="SM64 USAMUNE v1.93u"),
+                    checks=dict(plugin=True, pictures=True, inputs=True, game=True))
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "install")
+        wait_step(page, "unavailable")
+        assert "Practice Replay unavailable" in body(page)
+        assert not layer.status().steps  # no fictitious update instructions
+        (tmp_path / "missing-bundle.png").write_bytes(page.screenshot())
+        source.write_bytes(expected)
+        wait_page(page, "complete")
+        assert "Practice Replay unavailable" not in body(page)
+        assert page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]["installation_verified"]
+        (tmp_path / "restored-bundle.png").write_bytes(page.screenshot())
+        assert page.problems() == []
+
+
+@pytest.mark.parametrize("auto_refresh", [False, True])
+def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, monkeypatch, auto_refresh):
+    """Source and packaged servers preserve external copies until explicit Install."""
+    import ui_fixture
+    from test_capturelayer import FakeProcesses, FakeRegistry, write_overlay
+    from sm64_events.core.capturelayer import (
+        CaptureLayer, GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY, WRAPPER_DLL, WRAPPER_INI,
+    )
+
+    folder = tmp_path / "Project64 with a manually staged capture layer"
+    plugin = folder / "Plugin"
+    plugin.mkdir(parents=True)
+    source = tmp_path / WRAPPER_DLL
+    bundled, staged = b"this checkout's bundled wrapper", b"manually staged candidate wrapper"
+    source.write_bytes(bundled)
+    installed_dll = plugin / WRAPPER_DLL
+    installed_dll.write_bytes(staged)
+    (plugin / WRAPPER_INI).write_text("wrapped=renderer.dll")
+    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): WRAPPER_DLL})
+    processes = FakeProcesses(str(folder / "Project64.exe"))
+    settings = tmp_path / "capture.json"
+    # Prior installation consent must not authorize a source checkout to replace
+    # a different candidate automatically when the emulator closes.
+    write_overlay(settings, consented_at="2026-09-01T00:00:00Z",
+                  pj64_dir=str(folder), wrapped="renderer.dll", installed_sha256="0" * 64)
+    layer = CaptureLayer(registry, processes, settings, source, auto_refresh=auto_refresh)
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    observed = dict(target=dict(state="ready", pid=123),
+                    rom=dict(MISSING_ROM), checks={})
+
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "install")
+        wait_step(page, "close")
+        assert page.count(f"{CURRENT} .setup-install-action") == 0
+
+        processes.image_path = None
+        observed["target"] = dict(state="ready", pid=None)
+        assert layer.refresh_if_stale() is False
+        assert installed_dll.read_bytes() == staged
+        wait_step(page, "install")
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["wrapper_present"] and not state["wrapper_current"]
+        assert not state["installation_verified"]
+        action = next(step for step in state["steps"] if step["id"] == "install")
+        assert action["action"] == "install" and not action["done"]
+        assert "this build" in action["label"]
+        button = f"{CURRENT} .setup-install-action button"
+        page.wait_for(button)
+        assert page.evaluate(f"!document.querySelector({button!r}).disabled")
+        assert installed_dll.read_bytes() == staged
+        (tmp_path / "source-mismatch-explicit-install.png").write_bytes(page.screenshot())
+
+        page.click(button)
+        wait_step(page, "reopen")
+        assert installed_dll.read_bytes() == bundled
+        assert (plugin / WRAPPER_INI).read_text().strip() == "wrapped=renderer.dll"
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["installation_verified"] and state["wrapper_current"]
+        assert state["verification"]["step"] == "reopen"
+        (tmp_path / "source-build-explicitly-installed.png").write_bytes(page.screenshot())
+        assert page.problems() == []

@@ -1,7 +1,15 @@
 // HTML video cannot reliably play backwards. Reverse shuttle issues bounded
 // seeks; the existing presented-picture observer remains the timeline clock.
 import { playReview } from "./reviewcommands.js";
-import { pauseReviewSource, seekReviewSource } from "./reviewsource.js";
+import { pauseReviewSource, reviewSourceContinuing, seekReviewSource } from "./reviewsource.js";
+export const REPLAY_SPEEDS = [.25, .5, .75, 1, 1.5, 2, 3, 4];
+const SHUTTLE_SPEEDS = REPLAY_SPEEDS.filter(rate => rate >= 1);
+
+export function setReplaySpeed(video, rate) {
+  stopShuttle(video);
+  if (video) video.playbackRate = rate;
+}
+
 export function stopShuttle(video) {
   video?.dispatchEvent(new Event("reviewshuttlestop"));
 }
@@ -22,16 +30,19 @@ export function replayShuttle(video) {
   }
   function run(next) {
     if (!video || !Number.isFinite(video.duration)) return;
-    const nextSpeed = direction === next ? Math.min(8, speed * 2) : 1;
+    const nextSpeed = direction === next
+      ? SHUTTLE_SPEEDS[Math.min(SHUTTLE_SPEEDS.length - 1, SHUTTLE_SPEEDS.indexOf(speed) + 1)] : 1;
     if (!direction) originalRate = video.playbackRate;
+    // Finish the previous mode before publishing the new reverse intent.
+    if (next < 0) pauseReviewSource(video);
     if (timer !== null) clearInterval(timer);
     timer = null; direction = next; speed = nextSpeed;
+    video.playbackRate = speed;
     announce();
     if (next > 0) {
-      video.playbackRate = speed;
       playReview(video)?.catch(stop);
     } else {
-      pauseReviewSource(video); last = performance.now();
+      last = performance.now();
       timer = setInterval(() => {
         const now = performance.now();
         const elapsed = Math.min(.25, (now - last) / 1000);
@@ -43,13 +54,23 @@ export function replayShuttle(video) {
     }
   }
   const played = () => { if (direction < 0 && !video.paused) stop(); };
-  const paused = () => { if (direction > 0 && video.paused) stop(); };
+  const paused = () => {
+    // A decoder boundary or source rebuild is not a request to leave shuttle.
+    // Explicit pause still stops immediately, even when already at EOS.
+    if (direction > 0 && video.paused && !video.ended && !reviewSourceContinuing(video)) stop();
+  };
   video?.addEventListener("play", played);
   video?.addEventListener("pause", paused);
+  video?.addEventListener("reviewpause", stop);
   video?.addEventListener("reviewshuttlestop", stop);
-  return { run, stop, pause: () => { stop(); pauseReviewSource(video); },
+  return { run, stop, pause: () => {
+    stop();
+    if (video) video.playbackRate = 1;
+    pauseReviewSource(video);
+  },
     dispose: () => {
       stop(); video?.removeEventListener("play", played); video?.removeEventListener("pause", paused);
+      video?.removeEventListener("reviewpause", stop);
       video?.removeEventListener("reviewshuttlestop", stop);
     } };
 }
