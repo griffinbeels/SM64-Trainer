@@ -269,12 +269,10 @@ ROUTES.append(route(
         star(8, 1, "SSL — Shining Atop the Pyramid"),
         segment("seg:ssl->lll", "→ LLL"),
         star(7, 2, "LLL — 8-Coin Puzzle with 15 Pieces"),
-        # The Toad star is grabbed DURING the walk to HMC ("get this before
-        # entering HMC"), so its step precedes the movement's — the movement
-        # completes on entering HMC (spec §5.1).
-        star(0, 0, "HMC Toad"),
         segment("seg:lll->hmc", "→ HMC"),
         star(6, 4, "HMC — A-Maze-Ing Emergency Exit"),
+        star(0, 0, "HMC Toad"),
+        segment("seg:hmc-toad-result", "HMC Toad → re-enter HMC"),
         star(6, 5, "HMC — Watch for Rolling Rocks"),
         *_16_TAIL,
     ]))
@@ -303,10 +301,10 @@ ROUTES.append(route(
         segment("seg:ssl->lll", "→ LLL"),
         star(7, 2, "LLL — 8-Coin Puzzle with 15 Pieces"),
         segment("seg:lll->hmc", "→ HMC"),
-        # Emergency Exit EXITS the course, so the Toad star is grabbed between
-        # HMC stars and needs no movement step of its own.
+        # The grab completes before the full Toad segment's HMC entrance.
         star(6, 4, "HMC — A-Maze-Ing Emergency Exit"),
         star(0, 0, "HMC Toad"),
+        segment("seg:hmc-toad-result", "HMC Toad → re-enter HMC"),
         star(6, 0, "HMC — Swimming Beast in the Cavern"),
         star(6, 5, "HMC — Watch for Rolling Rocks"),
         *_16_TAIL,
@@ -331,9 +329,10 @@ ROUTES.append(route(
         star(8, 1, "SSL — Shining Atop the Pyramid"),
         segment("seg:ssl->lll", "→ LLL"),
         star(7, 2, "LLL — 8-Coin Puzzle with 15 Pieces"),
-        star(0, 0, "HMC Toad"),
         segment("seg:lll->hmc", "→ HMC"),
         star(6, 4, "HMC — A-Maze-Ing Emergency Exit"),
+        star(0, 0, "HMC Toad"),
+        segment("seg:hmc-toad-result", "HMC Toad → re-enter HMC"),
         star(6, 5, "HMC — Watch for Rolling Rocks"),
         *_16_TAIL,
     ]))
@@ -361,6 +360,7 @@ ROUTES.append(route(
         segment("seg:lll->hmc", "→ HMC"),
         star(6, 4, "HMC — A-Maze-Ing Emergency Exit"),
         star(0, 0, "HMC Toad"),
+        segment("seg:hmc-toad-result", "HMC Toad → re-enter HMC"),
         star(6, 5, "HMC — Watch for Rolling Rocks"),
         star(6, 0, "HMC — Swimming Beast in the Cavern"),
         *_16_TAIL,

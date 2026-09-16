@@ -568,8 +568,12 @@ if (!document.querySelector('.runner-page')) {
     .find((candidate) => !candidate.classList.contains('is-you'));
   if (row) row.click();
 }
-await waitFor(() => !!document.querySelector('.runner-page'));
-await sleep(60);
+// Scope chips and the selected rating come from independent requests.
+// The story is ready only when its actual breakdown has mounted too.
+if (!await waitFor(() => !!document.querySelector('.runner-page .scope-chip')
+  && !!document.querySelector('.runner-page .rank-breakdown th'), 15000))
+  throw new Error('Runner summary and breakdown did not load: '
+    + (document.querySelector('.runner-page')?.textContent || 'runner page absent'));
 """)
 
 # The setup screen (setupmodal.js) -- a modal, so no plain page load reaches

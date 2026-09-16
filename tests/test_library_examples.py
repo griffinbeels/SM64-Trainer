@@ -12,6 +12,19 @@ from sm64_events.library.examples import example_clips, sheet_best
 NO_JP = lambda entity, strat: False
 
 
+def test_best_and_clips_follow_the_selected_region_with_canonical_sheet_tags():
+    payload = _payload()
+    payload["targets"][0]["approaches"][0]["entries"] = [
+        _entry(1350, "https://v/jp", "jp"),
+        _entry(1390, "https://v/us", "us"),
+        _entry(1450, "https://v/shared")]
+    split = lambda entity, strat: True
+    for version, best in (("us", 1390), ("jp", 1350)):
+        assert sheet_best(payload, {}, "star:2:4", split, version=version)["TJ Owlless"]["time_cs"] == best
+        assert example_clips(payload, {}, "star:2:4", split, version=version)["TJ Owlless"] == [
+            [best, f"https://v/{version}"], [1450, "https://v/shared"]]
+
+
 def _entry(cs, video=None, version=None):
     return {"runner": "r", "time_cs": cs, "video": video, "version": version}
 

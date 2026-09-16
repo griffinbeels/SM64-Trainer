@@ -601,6 +601,9 @@ class TriggerType:
     # only the three rows whose card voice is a verb phrase ("Enter the pipe")
     # where the track wants the thing itself ("Pipe").
     chip_label: str | None = None
+    # Dispatch hint for idle definitions only. None keeps future/unannotated
+    # triggers eligible for every event; active definitions always receive it.
+    event_types: tuple[str, ...] | None = None
 
 
 def _real_edge(ev) -> bool:
@@ -662,7 +665,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and ev.payload["to"] == p["to"]
                 and (p.get("from") is None or ev.payload["from"] == p["from"])
                 and (p.get("from_subarea") is None
-                     or ev.payload.get("from_area") == p["from_subarea"])),
+                     or ev.payload.get("from_area") == p["from_subarea"]),
+                event_types=("level_changed",)),
     TriggerType("level_exit", "You exit level", "Exit",
                 {"from": {"kind": "level", "required": True,
                           "flow": _SOURCE_FLOW},
@@ -679,7 +683,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and ev.payload["from"] == p["from"]
                 and (p.get("to") is None or ev.payload["to"] == p["to"])
                 and (p.get("from_subarea") is None
-                     or ev.payload.get("from_area") == p["from_subarea"])),
+                     or ev.payload.get("from_area") == p["from_subarea"]),
+                event_types=("level_changed",)),
     # "enter area" is the castle-region condition (live-confirmed semantics
     # 2026-06-12): the region dropdown offers only the castle hubs
     # (CASTLE_REGION_LEVELS), and the subarea is OPTIONAL — "Any" / a single-
@@ -720,7 +725,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("area") is None or ev.payload["to"] == p["area"])
                 and (p.get("from") is None
                      or (ev.payload["from"] == p["from"]
-                         and not ev.payload.get("from_transient", False)))),
+                         and not ev.payload.get("from_transient", False))),
+                event_types=("area_changed",)),
     # Two conditions read the SAME journal event and mean different things,
     # and the difference is one sentence: `warp_entered` names where you ARE,
     # `entrance_touched` names where the entrance LEADS. Splitting them is a
@@ -735,7 +741,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 "in {level}",
                 lambda p, ev, ctx: ev.type == "warp_entered"
                 and ev.payload["level"] == p["level"],
-                chip_label="Pipe"),
+                chip_label="Pipe", event_types=("warp_entered",)),
     # The ENTRANCE TOUCH: the frame Mario collides with the painting, portal,
     # hole or pipe that leads INTO a course -- 77 frames before it loads (23
     # at a pipe). ONE control, because the entrance's own level is derived
@@ -757,7 +763,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and ev.payload.get("to") is not None
                 and ev.payload["to"] == p["to"],
                 card_template="the {to} entrance",
-                chip_label="Entrance"),
+                chip_label="Entrance", event_types=("warp_entered",)),
     TriggerType("key_grabbed", "You grab a Bowser key / grand star",
                 "Grab the key",
                 # key_grabbed claims all three fight-ending grabs: the Bowser
@@ -770,7 +776,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 lambda p, ev, ctx: ev.type == "key_grabbed"
                 and (p.get("level") is None
                      or ev.payload["level"] == p["level"]),
-                chip_label="Key"),
+                chip_label="Key", event_types=("key_grabbed",)),
     TriggerType("star_grabbed", "You grab a star", "Grab",
                 {"course": {"kind": "course", "required": False},
                  "star": {"kind": "star", "required": False}},
@@ -788,7 +794,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 # the sentence present even when the clause names a course
                 # but no specific star ("Grab a star in <course>").
                 card_template="{star} in {course}",
-                card_fallbacks={"star": "a star"}),
+                card_fallbacks={"star": "a star"},
+                event_types=("star_collected",)),
     # THE SUBSECTION TRIGGER, and the only one in this registry that fires
     # without Mario going anywhere -- every other type is a place change or a
     # collection, which is why the journal was empty inside a course and a
@@ -851,7 +858,7 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 # moment clause names a place so node_short_label normally
                 # answers first, and this is the fallback for one that does
                 # not pin a level.
-                chip_label="Moment"),
+                chip_label="Moment", event_types=("moment_reached",)),
     # A spawn can pin its SUBAREA and its SPAWN POINT (round 20 item 3):
     # "I need to be able to start a segment when the player spawns into the
     # SUBAREA, and be able to annotate it as such... ideally we would be
@@ -876,7 +883,8 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 and (p.get("area") is None
                      or ev.payload.get("area") == p["area"])
                 and (p.get("spawn_node") is None
-                     or ev.payload.get("spawn_node") == p["spawn_node"])),
+                     or ev.payload.get("spawn_node") == p["spawn_node"]),
+                event_types=("spawned",)),
     TriggerType("attempt_anchor", "Practice reset / savestate load",
                 "Reset or reload",
                 {"level": {"kind": "level", "required": True},
@@ -896,11 +904,13 @@ TRIGGERS: dict[str, TriggerType] = {t.key: t for t in [
                 lambda p, ev, ctx: ev.type in ("practice_reset",
                                                "state_loaded")
                 and ctx.level == p["level"]
-                and (p.get("area") is None or ctx.area == p["area"])),
+                and (p.get("area") is None or ctx.area == p["area"]),
+                event_types=("practice_reset", "state_loaded")),
     TriggerType("reset_game", "The game resets (F1 / console reset)",
                 "Reset the game",
                 {}, "on F1 or console reset",
-                lambda p, ev, ctx: ev.type == "game_reset"),
+                lambda p, ev, ctx: ev.type == "game_reset",
+                event_types=("game_reset",)),
 ]}
 
 
@@ -1524,7 +1534,7 @@ def fires_from(trig: dict, level: int) -> bool:
 def _exit_landing_is_impossible(start_clause: dict, level: int) -> bool:
     """A course exit lands in the castle — did this one land somewhere else?
 
-    52 of the 53 seeded `level_exit` clauses omit `to`, so the DEFINITION says
+    52 of the 54 seeded `level_exit` clauses omit `to`, so the DEFINITION says
     nothing about where the player ends up and the emulator decides. The world
     is hub-and-spoke: leaving anything but a castle level (6/16/26) puts Mario
     in one, so an arm on such a clause that lands elsewhere is a menu warp and
@@ -1599,8 +1609,8 @@ def can_run_from(d, start_clause: dict, level: int | None) -> bool:
 #
 # NB this is NOT arm_level's mapping: a level_exit ARMS at its destination but
 # ORIGINATES at its source. "SSL -> LLL" is filed under SSL because that is
-# what the rule keys on (52 of the 53 seeded exits omit `to`; the one that
-# carries it, MIPS Clip, is still filed by its source, which is the point).
+# what the rule keys on (52 of the 54 seeded exits omit `to`; MIPS Clip and
+# HMC Toad result-start carry it and are still filed by their source).
 _ORIGIN_PARAMS: dict[str, tuple[str, str | None]] = {
     "level_exit": ("from", "from_subarea"),
     "level_enter": ("to", "to_subarea"),
@@ -2926,6 +2936,8 @@ class SegmentEngine:
             hc = hundred_coin_entity(d.start_triggers, d.waypoints)
             if hc is not None:
                 self._hundred_coin[d.id] = (hc, _hundred_coin_waypoint(d, hc))
+        self._def_order = {d.id: i for i, d in enumerate(self._defs)}
+        self._event_defs, self._any_event_defs = self._index_start_events()
         # Deferred destination-subarea entries (see _Arm.required_area): a
         # level edge into Castle Inside matched the level+from, but the
         # destination interior area only settles a poll later (the lobby loads
@@ -3068,6 +3080,36 @@ class SegmentEngine:
         self._flush_move(_FrameOnly(frame), notices)
         return notices
 
+    def _index_start_events(self):
+        """Resolve idle candidates once, preserving the registry's fallback."""
+        by_event, any_event = {}, {}
+        for d in self._defs:
+            for clause in d.start_triggers:
+                event_types = TRIGGERS[clause["type"]].event_types
+                if event_types is None:
+                    any_event[d.id] = d
+                else:
+                    for kind in event_types:
+                        by_event.setdefault(kind, {})[d.id] = d
+            # A hundred-coin grab can arm this family without a start match.
+            if d.id in self._hundred_coin:
+                by_event.setdefault("star_collected", {})[d.id] = d
+        for kind, candidates in by_event.items():
+            ids = candidates.keys() | any_event.keys()
+            by_event[kind] = {sid: self._def_by_id[sid]
+                              for sid in sorted(ids, key=self._def_order.__getitem__)}
+        return by_event, any_event
+
+    def _feed_defs(self, kind):
+        candidates = self._event_defs.get(kind, self._any_event_defs)
+        if not self._armed and not self._cancelled:
+            return candidates.values()
+        # Timeouts, retry memory and active waypoint/clock handling still run
+        # on EVERY event. Global move/pending housekeeping runs before this.
+        ids = candidates.keys() | self._armed.keys() | self._cancelled.keys()
+        return [self._def_by_id[sid]
+                for sid in sorted(ids, key=self._def_order.__getitem__)]
+
     def feed(self, ev, ctx: MatchContext):
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
@@ -3096,7 +3138,7 @@ class SegmentEngine:
         # second copy drifting out of sync; full shape taxonomy in the
         # module docstring and the method's own docstring.
         anchor_is_echo = self._anchor_echo(ev)
-        for d in self._defs:
+        for d in self._feed_defs(ev.type):
             closed.extend(self._feed_definition(
                 Attempt, d, ev, ctx, notices, anchor_is_echo))
         # THE GRAND STAR ENDS THE RUN, so nothing may still be running after

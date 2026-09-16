@@ -379,6 +379,9 @@ class Attempt:
                                # lives in ONE place (modes.platform_of).
 
 
+    game_version: str | None = None  # Imported times retain their source ROM.
+
+
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
 
 # AFK rule (spec 2026-06-11): a reset/load arriving after >=5 s of pause (the
@@ -2345,6 +2348,7 @@ class Projector:
             segment_id=segment_id,
             timed_by="imported", closed_by=IMPORT_EVENT,
             timed_at=None if segment_id is not None else "xcam",
+            game_version=payload.get("game_version"),
             platform=platform_from_payload(payload)))
 
     def _auto_ignored(self, a: Attempt) -> Attempt:

@@ -749,15 +749,34 @@ def test_the_save_button_flashes_saved_after_a_real_save(page):
     # tools/uilab_project.py). The first version of this test wrapped it in
     # try/catch and returned 'ok' unconditionally: green with the flash
     # mutated off, the exact vacuous-guard shape ui-core.md warns about.
-    verdict = page.evaluate(_ASYNC("""
+    verdict = page.evaluate(_ASYNC(r"""
 const saveBtn = Array.from(document.querySelectorAll('.builder-actions button'))
   .find((b) => b.textContent.includes('Save segment'));
-saveBtn.click();
-if (!await waitFor(() => saveBtn.textContent.includes('Saved'), 4000))
-  return 'never flashed: ' + saveBtn.textContent;
-if (!await waitFor(() => !saveBtn.textContent.includes('Saved'), 4000))
-  return 'stuck on: ' + saveBtn.textContent;
-return 'ok';
+if (!saveBtn || saveBtn.disabled) return 'Save is unavailable';
+const original = window.fetch;
+let savedResponse = null;
+window.fetch = async (url, options) => {
+  const response = await original(url, options);
+  if (/\/api\/segments\/\d+$/.test(String(url)) && options?.method === 'PUT') {
+    await response.clone().json();
+    savedResponse = {ok: response.ok, status: response.status};
+  }
+  return response;
+};
+try {
+  saveBtn.click();
+  // The flash promises confirmation after the PUT, which also recalibrates
+  // standards. Give that request its own bound; keep the flash deadlines.
+  if (!await waitFor(() => savedResponse !== null, 15000)) return 'PUT did not finish';
+  if (!savedResponse.ok) return 'PUT failed: ' + savedResponse.status;
+  if (!await waitFor(() => saveBtn.textContent.includes('Saved'), 4000))
+    return 'never flashed: ' + saveBtn.textContent;
+  if (!await waitFor(() => !saveBtn.textContent.includes('Saved'), 4000))
+    return 'stuck on: ' + saveBtn.textContent;
+  return 'ok';
+} finally {
+  window.fetch = original;
+}
 """))
     assert verdict == "ok", verdict
 

@@ -1,18 +1,17 @@
 // src/sm64_events/ui/components/librarymodel.js
 //
-// Pure rules for the Library page. Import-free of Preact/the DOM ON PURPOSE:
-// node drives these in tests/test_library_model_js.py without a browser,
-// which is what pins section order, band order, the grid math and the trim
-// mapping. `format.js` and `caps.js` are the two exceptions -- both are
-// themselves Preact-free (node imports each directly in tests), so pulling in
-// `fmtSeconds` and the division registry costs nothing this file exists to
-// avoid. `fmtSeconds` buys `trayToImport` the SAME time notation the rest of
-// this page already shows; `DIVISION_NUMERALS`/`DIVISIONS_PER_TIER` keep the
-// subdivision vocabulary ONE door (caps.js owns it for every rank surface).
+// Pure Library presentation rules, independent of Preact/the DOM so Node
+// can drive their real behavior. Formatting, cap vocabulary and numerical
+// curves come from their shared modules. timecurve.js owns score anchors and
+// division order; caps.js re-exports that order beside its display names.
 
 import { fmtSeconds } from "../format.js";
 import { DIVISION_NUMERALS, DIVISIONS_PER_TIER } from "./caps.js";
-import { framePosition, displayPosition, scoreAt, positionAt } from "../timecurve.js";
+import {
+  framePosition, displayPosition, scoreAt, positionAt, SCORE_ANCHORS,
+  curveTimeForScore, curveProgress,
+} from "../timecurve.js";
+export { SCORE_ANCHORS };
 
 // Slowest -> fastest, Library-only vocabulary: the Library bands times
 // against a fitted or vetted LADDER (library/ladders.py::fit_payload,
@@ -140,9 +139,6 @@ export function bandFor(ladder, timeCs) {
 // drives ranks/scoring.py and this file over the same real ladders and times
 // and asserts identical (tier, division) for every pair. Never restate the
 // curve in a test; the parity run IS the guard.
-export const SCORE_ANCHORS = { Mario: 95, Grandmaster: 90, Master: 80,
-                               Diamond: 70, Platinum: 60, Gold: 45,
-                               Silver: 25, Bronze: 10 };
 const TOP_SCORE = 100;
 const TIERS_HARDEST_FIRST = [...RANKS].reverse();
 
@@ -275,6 +271,59 @@ export function ladderBands(ladder) {
     }
   }
   return bands;
+}
+
+// Only an older payload without a compiled curve takes the legacy adapter.
+// An unsupported or malformed compiled curve must fail visibly, never be
+// replaced by the tier cutoffs (which discard its interior division nodes).
+export function overallCurveOf(payload) {
+  if (payload.overall_curve != null) return payload.overall_curve;
+  return { schema_version: 1, interpolation: "legacy", nodes: [],
+    ladder_cs: ladderCsOf(payload.overall || {}),
+    metadata: { source: "legacy_payload" } };
+}
+
+function curveDivisionShells(curve, tier, defined) {
+  const [low, high] = tierBandRange(tier, defined);
+  const width = (high - low) / DIVISIONS_PER_TIER;
+  return DIVISION_NUMERALS.map((numeral, index) => {
+    const slowCs = curveTimeForScore(curve, low + index * width);
+    const nextScore = low + (index + 1) * width;
+    const nextCs = curveTimeForScore(curve, nextScore);
+    // Adjacent ranges share no time. On compiled curves the exclusive end
+    // advances one attainable game frame, not one invented centisecond.
+    const fastCs = nextCs == null ? null : nextScore === TOP_SCORE ? nextCs
+      : displayPosition(framePosition(nextCs) + 1);
+    return { numeral, slowCs, fastCs,
+      empty: slowCs != null && fastCs != null && fastCs > slowCs, entries: [] };
+  });
+}
+
+/** Full-curve Overall bands, preserving the legacy table's exact ranges. */
+export function curveBands(curve) {
+  curveTimeForScore(curve, TOP_SCORE); // Validate even an empty legacy curve.
+  if (curve.interpolation === "legacy") {
+    const seconds = Object.fromEntries(Object.entries(curve.ladder_cs)
+      .map(([tier, value]) => [tier, value / 100]));
+    return ladderBands(seconds);
+  }
+  const defined = definedTiers(curve.ladder_cs);
+  return ["Iron", ...RANKS].map((tier) => {
+    const divisions = curveDivisionShells(curve, tier, defined);
+    return { tier, cutoffCs: divisions[0].slowCs,
+      fastCs: divisions[divisions.length - 1].fastCs, divisions, entries: [] };
+  });
+}
+
+/** The personal marker uses the same compiled progress as the backend. */
+export function curveStandingOn(curve, pbCs) {
+  if (pbCs == null) {
+    if (curveTimeForScore(curve, TOP_SCORE) == null && !Object.keys(curve.ladder_cs).length) return null;
+    return { rank: "Iron", division: DIVISION_NUMERALS[0], score: null,
+      next_tier: "Iron", next_division: DIVISION_NUMERALS[1] };
+  }
+  const progress = curveProgress(curve, pbCs);
+  return progress ? { ...progress, rank: progress.tier } : null;
 }
 
 // The two bracket LABELS, here rather than beside either renderer: the

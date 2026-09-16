@@ -1865,7 +1865,7 @@ def test_reclassified_attempt_regrades_its_medal(tmp_path):
 
 
 def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
-    """84 seeded segments must NOT become 84 practice cards.
+    """The full seeded corpus must not become a page full of practice cards.
 
     Segment sections are scoped to segments with activity (plus the target and
     anything armed), so shipping the route corpus leaves a fresh install's
@@ -1882,7 +1882,7 @@ def test_the_seeded_corpus_does_not_bloat_the_session_view(tmp_path):
     db, svc = make(tmp_path)
     seed_data = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed_data) == []
-    assert len(db.segment_defs()) == 84
+    assert len(db.segment_defs()) == len(seed_data["segments"])
 
     view = build_session_view(db, svc, clock="igt")
     assert view["segments"] == []
@@ -2500,6 +2500,9 @@ def test_a_star_section_grades_on_its_ladders_clock_not_the_view_clock(tmp_path)
     assert igt_view["rank"]["rank"] == "Diamond" and igt_view["rank"]["division"] == "V"
     assert rta_view["rank"]["rank"] == igt_view["rank"]["rank"]
     assert rta_view["rank"]["division"] == igt_view["rank"]["division"]
+    assert igt_view["one_ladder"] and rta_view["one_ladder"]
+    assert igt_view["entity_rank"]["fastest_strat"] == "fast"
+    assert not igt_view["entity_rank"]["fitted"]
 
     # I1 (final review, 2026-07-26): the ATTEMPT medals and progress-graph
     # dots must grade on the same ladder clock as the banner above, not the
@@ -2694,8 +2697,14 @@ def test_pipe_segment_grades_against_the_paired_star_ladder(tmp_path):
     # "any truthy rank") and that it is the PIPE cutoff, not e.g. silently
     # reusing the star's own attempt/basis.
     assert seg_sec["rank"]["rank"] == "Iron"
-    assert seg_sec["entity_rank"] is not None
+    # Strategy storage remains paired; Overall requires the full segment's
+    # own compatible standards instead of borrowing the star-grab curve.
+    assert seg_sec["entity_rank"] is None
     assert seg_sec["pipe_star_entity"] == "star:16:0"
+    svc.ranks.set_threshold(f"segment:{seg_id}", "Full route", "Mario", 80.0)
+    independent = seg_section(build_session_view(db, svc, clock="igt"), seg_id)
+    assert independent["entity_rank"]["rank"] == "Mario"
+    assert independent["rank"]["rank"] == "Iron"
 
 
 def test_pipe_segment_carries_the_paired_stars_own_display_names(tmp_path):
@@ -2863,7 +2872,7 @@ def test_route_candidate_ranks_the_reds_pipe_segment_against_the_star_ladder(tmp
 
 
 def _service_with_corpus(tmp_path):
-    """A fresh service with the SHIPPED 84-def corpus reconciled -- unlike
+    """A fresh service with the SHIPPED corpus reconciled -- unlike
     `_make_with_def`'s hand-built reds->pipe stand-in above, this exercises
     the REAL seg:reds->pipe:bitdw definition `reds_pipe_segments` pairs by
     seed_key prefix, which is what the star section's own `parents` stamp
@@ -3091,3 +3100,18 @@ def test_with_no_strategy_selected_nothing_may_be_saved(tmp_path):
                if r["outcome"] == "success"]
     assert blocked and all(b == {"reason": "no_active_strat", "strat": None}
                            for b in blocked)
+
+
+def test_crossed_legacy_strategy_cutoffs_do_not_break_the_session_view(tmp_path):
+    from sm64_events.ranks.standards import RankStandards
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = RankStandards(tmp_path / "crossed.json")
+    svc.ranks.load()
+    svc.ranks.set_threshold("star:2:2", "fast", "Mario", 20.0)
+    svc.ranks.set_threshold("star:2:2", "fast", "Gold", 10.0)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    [section] = build_session_view(db, svc, clock="igt")["stars"]
+    assert not section["one_ladder"]
+    assert svc.ranks.ladder_cs("star:2:2", "fast") == {"Mario": 2000, "Gold": 1000}

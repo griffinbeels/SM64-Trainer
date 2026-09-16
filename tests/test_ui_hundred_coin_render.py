@@ -278,7 +278,19 @@ def test_the_standards_cells_print_the_usamune_notation(hundred_coin_page):
             f"{text!r} is not the Usamune notation")
 
 
-def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_coin_page):
+@pytest.mark.parametrize("delay_earlier_save", [False, True])
+def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(
+        delay_earlier_save):
+    # Each ordering case gets a fresh temporary standards store. Closing a
+    # browser cannot interrupt a queued restoration or contaminate another case.
+    with serve_ui(stage=(CCM, CCM_LEVEL), target=(CCM, HUNDRED_COIN)) as base:
+        with _page(f"{base}/ui/index.html") as page:
+            page.wait_for(".log-list-card", timeout_ms=20000)
+            _open_the_standards_panel(page)
+            _exercise_cutoff_editor(page, delay_earlier_save)
+
+
+def _exercise_cutoff_editor(hundred_coin_page, delay_earlier_save):
     """User, 2026-08-03: "we just have a format with entry boxes like
     {x}'{y}"{z}... People generally communicate in terms of XX'YY"ZZ when
     talking about times, not 105 seconds."
@@ -288,6 +300,26 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
     typed come back as the same time" — a broken join writes a wrong community
     standard and nothing downstream would flag it.
     """
+    if delay_earlier_save:
+        # Make the second blur reach the real server after the third unless
+        # the editor orders its writes. Merely checking the first appearance
+        # of the right text misses a late request overwriting that success.
+        hundred_coin_page.evaluate("""(() => {
+          const fetch = window.fetch;
+          window.cutoffSaves = {started: [], completed: []};
+          window.fetch = async (...args) => {
+            if (!String(args[0]).startsWith('/api/ranks/standards/')
+                || args[1]?.method !== 'PUT') return fetch(...args);
+            const probe = window.cutoffSaves;
+            const seconds = JSON.parse(args[1].body).seconds;
+            probe.started.push(seconds);
+            if (probe.started.length === 2)
+              await new Promise(resolve => setTimeout(resolve, 500));
+            const response = await fetch(...args);
+            probe.completed.push(seconds);
+            return response;
+          };
+        })()""")
     hundred_coin_page.evaluate("""
       (() => { const b = document.querySelector(".standards-toggle");
                if (b && b.getAttribute("aria-expanded") !== "true") b.click(); })()
@@ -330,16 +362,6 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
         .querySelectorAll("input")).map((i) => i.value)
     """) != ["", "", ""]
 
-    # What this cell held before, so it can be put back: the store is the
-    # worktree's real data/rank_standards.json, and an unrestored edit leaks
-    # into every later run and every screenshot taken for review.
-    before = hundred_coin_page.evaluate("""
-      (() => {
-        const boxes = document.querySelectorAll(
-          ".stdtable .timefields")[0].querySelectorAll("input");
-        return [...boxes].map((b) => b.value);
-      })()
-    """)
     hundred_coin_page.evaluate("""
       (() => {
         const boxes = document.querySelectorAll(
@@ -352,6 +374,13 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
         set(boxes[0], "1"); set(boxes[1], "21"); set(boxes[2], "32");
       })()
     """)
+    if delay_earlier_save:
+        assert hundred_coin_page.evaluate("""(async () => {
+          const deadline = performance.now() + 10000;
+          while (window.cutoffSaves.completed.length < 3 && performance.now() < deadline)
+            await new Promise(resolve => setTimeout(resolve, 20));
+          return window.cutoffSaves.completed.length === 3;
+        })()"""), hundred_coin_page.evaluate("window.cutoffSaves")
     hundred_coin_page.evaluate("""
       (() => { const b = Array.from(document.querySelectorAll(".stdtools button"))
                  .find((x) => x.textContent.includes("Done editing"));
@@ -373,29 +402,12 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(hundred_co
         if printed == "1'21\"32":
             break
         hundred_coin_page.wait_ms(50)
-    assert printed == "1'21\"32", printed
-
-    # Put it back through the same editor, so the next run (and the next
-    # screenshot) sees the seeded cutoffs rather than this test's.
-    hundred_coin_page.evaluate("""
-      (() => { const b = Array.from(document.querySelectorAll(".stdtools button"))
-                 .find((x) => x.textContent.includes("Edit"));
-               if (b) b.click(); })()
-    """)
-    hundred_coin_page.wait_for(".stdtable .timefields", timeout_ms=10000)
-    hundred_coin_page.evaluate("""
-      (() => {
-        const boxes = document.querySelectorAll(
-          ".stdtable .timefields")[0].querySelectorAll("input");
-        const set = (el, v) => {
-          el.value = v;
-          el.dispatchEvent(new Event("input", {bubbles: true}));
-          el.dispatchEvent(new Event("blur", {bubbles: true}));
-        };
-        set(boxes[0], %s); set(boxes[1], %s); set(boxes[2], %s);
-      })()
-    """ % tuple(repr(v) for v in before))
-
+    assert printed == "1'21\"32", (printed, hundred_coin_page.evaluate(
+        "window.cutoffSaves || null"))
+    if delay_earlier_save:
+        submitted = hundred_coin_page.evaluate("window.cutoffSaves.started")
+        assert submitted[1] != submitted[2], (
+            "the delayed write must differ from the final edit", submitted)
 
 def _cs(text):
     """`1'21"32` / `23"00` -> centiseconds. Local to this test: the app never

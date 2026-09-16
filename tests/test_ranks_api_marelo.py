@@ -11,6 +11,7 @@ from urllib.parse import quote
 import pytest
 
 from sm64_events.core.events import Event
+from sm64_events.library.build import SCHEMA_VERSION
 from sm64_events.ranks import classify, scoring
 from test_ranks_api import make_client as _make_client
 
@@ -508,14 +509,14 @@ def _omission_population():
                     "entries": [{"runner": runner, "time_cs": 1500,
                                  "version": None, "video": None}]}],
                 "subsections": []}
-    return {"sheet_revision": "controlled-omission-population",
+    return {"schema_version": SCHEMA_VERSION, "sheet_revision": "2026-08-05T09:15:18",
             "runners": ["Included", "Excluded only", "Unrated", "Roster only"],
             "targets": [target("Star", "star:9:2", None, "Included"),
                         target("Excluded movement", None, "castle_movement", "Excluded only"),
                         target("Unplaced route", None, "route", "Unrated")]}
 
 
-def test_overall_counts_excluded_only_runners_and_include_restores_them(tmp_path, monkeypatch):
+def test_overall_counts_excluded_only_runners_and_include_restores_them(tmp_path):
     """The board counts rated runners outside scope, never the whole roster.
 
     The same cached ratings must respond when the exclusion control changes
@@ -525,9 +526,8 @@ def test_overall_counts_excluded_only_runners_and_include_restores_them(tmp_path
     test_client, service = make_client(tmp_path, bundled_library=False)
     with test_client:
         library = test_client.app.state.library
-        monkeypatch.setattr(library, "_payload", _omission_population())
+        assert library.absorb(_omission_population())["applied"]
         adoptions = test_client.app.state.library_adoptions
-        adoptions.load()
         target = library.payload["targets"][1]
         entity = adoptions.rows()[row_key(target, "Excluded movement", ["1"])]
         assert entity in service.rank_excluded()

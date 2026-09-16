@@ -106,9 +106,15 @@ def test_a_bowser_row_lands_on_this_databases_row_for_the_movement(tmp_path):
             old["name"], old["start_triggers"], old["end_triggers"],
             old["guards"], "2026-08-23T00:00:00Z", seed_key="seg:bitfs-pipe")
         assert fresh_id != old["id"]
+        # Direct database fixture edits need the same reload/recalibration
+        # notification the definition-editing service sends in production.
+        import asyncio
+        asyncio.run(_svc._segments_changed())
 
-        payload = client.post("/api/import/sheet", json={
-            "runner": "DentoriousRed", "refresh": False}).json()
+        response = client.post("/api/import/sheet", json={
+            "runner": "DentoriousRed", "refresh": False})
+        assert response.status_code == 200, response.text
+        payload = response.json()
         assert not any(row["reason"] == "segments" for row in payload["rejected"])
         landed = db.current_pb(None, None, "rta", segment_id=fresh_id,
                                strat_tag="Zero Cycle")

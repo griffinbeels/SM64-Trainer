@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.events import Event
+from sm64_events.core.heap_observation import heap_lifetime_lock
 from sm64_events.tracking.projection import Attempt, journal_id
 
 MIGRATIONS = [
@@ -733,7 +734,19 @@ MIGRATIONS = [
     """
     CREATE INDEX idx_events_wall ON events (wall_time_utc);
     """,
-    # v36 -- chunks by their END, for the overlap query a replay open runs
+    # v36 -- preserve the ROM an imported attempt was set on. Projection
+    # already reads this from time_imported, but the derived cache dropped it.
+    # Imports use the event's exact id (also for segments); never modulo-match
+    # a played segment or infer a ROM from the current setting. Repair only
+    # this missing field, retaining PBs, recordings and all attribution as-is.
+    """
+    ALTER TABLE attempts ADD COLUMN game_version TEXT;
+    UPDATE attempts SET game_version = (
+      SELECT json_extract(events.payload, '$.game_version') FROM events
+       WHERE events.id = attempts.id AND events.type = 'time_imported'
+    ) WHERE closed_by = 'time_imported';
+    """,
+    # v37 -- chunks by their END, for the overlap query a replay open runs
     # (`chunks_between`: ended_utc >= span start AND started_utc <= span
     # end). The old query wrapped both columns in julianday(), which no
     # index can serve, so every open scanned every chunk ever stored.
@@ -749,7 +762,7 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
                  "segment_id", "timed_by", "closed_by", "timed_at",
-                 "platform")
+                 "platform", "game_version")
 
 
 class EventRow:
@@ -779,12 +792,15 @@ class Database:
         self._inputs = None
         self._input_templates = None
         try:
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            # A heap snapshot may retain temporary cursors. Reset each
+            # row-producing pragma explicitly so its unconsumed result cannot
+            # block migrations.
+            self._conn.execute("PRAGMA journal_mode=WAL").close()
             # WAL is durable across a crash at NORMAL: only a power loss can
             # lose the last transactions. FULL fsynced every commit on the
             # poll loop's thread (chunk flushes, journal rows), which is the
             # thread that reads the game at 250 Hz.
-            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL").close()
             self._migrate()
             self._repair_landmark_keys()
         except Exception:
@@ -890,6 +906,13 @@ class Database:
                 if not has_recordings:
                     version += 1
                     steps.append((version, MIGRATIONS[30]))
+            elif version == 36 and has_inputs and not any(
+                    row[1] == "game_version"
+                    for row in self._conn.execute("PRAGMA table_info(attempts)")):
+                # The replay-review branch used v36 for idx_input_chunks_ended
+                # before main's v36 (the imported attempt's ROM) landed. The
+                # index is v37 now (IF NOT EXISTS); give that history main's v36.
+                steps.append((36, MIGRATIONS[35]))
             steps.extend(enumerate(MIGRATIONS[version:], start=version + 1))
             for i, script in steps:
                 # One transaction per entry: a mid-migration crash rolls back
@@ -909,7 +932,11 @@ class Database:
                     raise
 
     def close(self) -> None:
-        self._conn.close()
+        # A cursor may still be materializing rows after execute() returns.
+        # Share the operation lock so shutdown cannot invalidate that read or
+        # leave SQLite's deferred close holding the file during fixture cleanup.
+        with heap_lifetime_lock, self._lock:
+            self._conn.close()
 
     # -- journal -----------------------------------------------------------
     def append_event(self, session_id: int, seq: int, event: Event) -> int:
@@ -1086,7 +1113,7 @@ class Database:
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
                 a.segment_id, a.timed_by, a.closed_by, a.timed_at,
-                a.platform)
+                a.platform, a.game_version)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock, self._conn:

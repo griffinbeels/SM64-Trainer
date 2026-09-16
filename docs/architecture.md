@@ -918,51 +918,35 @@ caveat a HISTORICAL state rather than one that can still be created. Measured
 on the dev journal before shipping: 44 of 251 pb rows carried no strat_tag, 3
 of them the CURRENT pb for their entity.
 
-### The best-possible ladder is often exactly one strategy's (measured)
+### Independent Strategy and Overall calibration
 
-`scoring.best_ladder` is a pointwise minimum across a target's strategies, so
-where one strategy is fastest at EVERY rank the entity's own ladder comes out
-identical to it, cutoff for cutoff — and `views.ranks_share_ladder` then reports
-one measure, so the practice card draws a single banner with no Strategy/Overall
-choice.
+Generated Overall grades absolute time using compatible community performances
+and strategy-family milestones. Strategy cutoff edits do not redefine Overall.
+The pointwise minimum remains a labeled legacy fallback and comparison baseline.
+Full compiled nodes determine scores and attainable division goals.
 
-**This is common, not a corner.** Measured against the bundled seed
-(`scoring.best_ladder_owners` over every entity carrying two or more
-strategies): **76 entities have a single strategy owning every cutoff of their
-best-possible ladder.** LLL's 8-Coin Puzzle (`star:7:2`) is one — Standard runs
-0.33s ahead of 3x LJ and 0.70s ahead of Beginner at every single rank.
-
-The consequence for a reader is that "Overall" can look punishingly strict while
-being arithmetically correct, because ranking up overall costs exactly what
-ranking up on the best strategy costs. That is what he reported ("WAYYY too
-strict"), and it needed an explanation rather than a change: the standards panel
-now says which strategy sets the whole ladder when one does. **Mastering a slow
-strategy still maxes that strategy's rank without moving the star's** — the
-design decision this whole shape comes from, recorded in `ranks/scoring.py`.
+[Living rank calibration](ranking-calibration.md) owns the population/clock
+rules, tuning recipe, atomic refresh, cache revision and persistence contracts.
+Its regression references include the clock-exclusion failure: rejecting a
+real-time row must record explicit absence, or a Strategy fallback can
+accidentally grade it on IGT.
 
 ## MARELO — the overall rating (2026-07-24/25)
 
-One rating derived from practice history, on top of the per-cutoff standards
-above. (Design spec is a local working note, 2026-07-24, and design-time —
+One rating derived from saved practice performances through target Overall
+curves. (Design spec is a local working note, 2026-07-24, and design-time —
 where it and this disagree, THIS is current.) Per-module "where to
 change what" lives in `.claude/rules/ranks.md` (scoring/scopes/history),
 `.claude/rules/server.md` (endpoints) and `.claude/rules/ui-ranks.md` +
 `ui-climb.md` (surfaces) —
 this section is the cross-cutting model those three assume.
 
-**One time, three questions.** The same run grades three ways, because three
-different things are being asked. Two sit side by side on a practice card: the
-STRATEGY rank grades the time against the active strategy's own ladder ("how
-well do I run this strat"), the ENTITY rank grades it against the entity's
-**best-possible ladder** — the pointwise minimum across every strategy that has
-standards (`scoring.best_ladder`) — ("how close is this to the fastest this star
-can be"). Mastering a slow strat therefore maxes that strat's rank but not the
-star's, which was the whole point of the design. When the two grade identically
-the UI shows ONE banner labelled with both names; it decides that by comparing
-the RENDERED fields, never by "is the active strat the fastest" (see
-`.claude/rules/ui.md`).
+Strategy rank grades the selected strategy's ladder. Entity rank grades the
+independent Overall curve for the actual target, clock and original ROM.
+MARELO aggregates those entity scores through current scope groups. Strategy
+mastery and target progression can therefore differ.
 
-The third is `views.py::build_entity_ranks` (spec
+The target picker also uses `views.py::build_entity_ranks` (spec
 `2026-07-25-target-picker-strategy-step`): the **best-scoring strategy's own**
 rank, which is what the target picker's grid cells wear. At pick time no
 strategy has been chosen yet, so neither of the other two is the right question
@@ -1075,7 +1059,7 @@ different rating.
 
 **MARELO = mastery × coverage.** Mastery is the mean 0–100 score over the
 entities you've practiced; coverage is practiced/total slots. The load-bearing
-distinction is **ABSENT vs ZERO**: an entity with no ladder never enters
+distinction is **ABSENT vs ZERO**: an entity with no resolved curve never enters
 `rankable_entities` at all (so it can't drag a rating), while a rankable but
 unpracticed one is a real zero in the denominator. `practiced` is counted by a
 key's PRESENCE in the scores map, never truthiness, so a genuine 0.0 still
@@ -1087,7 +1071,9 @@ as quests rather than floor entries.
 successes chronologically, re-aggregating after each one, so a scope's curve
 follows CURRENT standards and CURRENT route membership by construction (a seed
 bump or a route edit reshapes the past — the UI says so rather than hiding it).
-Pure: the caller injects the scorer.
+The caller injects original ROM/clock context; saved PBs use latest-save
+semantics and average modes retain separate context buckets. See the
+[history contract](ranking-calibration.md#compiled-curve-and-refresh-contract).
 
 **Celebrations ride watermarks, three distinct ops.** `ack` RAISES (UI-driven
 only, once the celebration has actually been shown), `sync` LOWERS on every GET
@@ -1103,22 +1089,19 @@ the chip row can poll safely.
 |---|---|
 | A new **scope kind** | `scopes.entity_groups` (resolve the id → groups) + `scopes.scope_list` (so the picker offers it). Scoring, history, chips, chart and breakdown all follow for free — they only ever see groups. |
 | A new **rank surface** | Read `/api/marelo` (or `_score_scope` server-side). Never recompute tier/division/fill/next in JS; if the payload lacks a field, add it in `_score_scope` where the ladders are in hand. |
-| A change to **the curve or the anchors** | `ranks/scoring.py` only — then mirror `SCORE_ANCHORS`/`DIVISIONS_PER_TIER`/`DIVISION_NUMERALS` into `ui/components/rankpage.js` (pinned by `tests/test_ui_rank_chart.py`) and re-run `tests/test_ranks_scoring_seed.py`, which is what proves score and medal still agree. |
+| A change to **Overall fitting or its parameters** | Follow [living rank calibration](ranking-calibration.md): `ranks/policy.py` validates settings, `ranks/overall.py` fits evidence, and `ranks/curves.py` / `ui/timecurve.js` evaluate full nodes. Strategy/legacy scoring remains in `ranks/scoring.py`. |
 | A **tier colour** | `ui/components/caps.js::CAP` — the single authority (pinned by `tests/test_ui_caps.py`). The old `ranks/standards.py::RANK_COLORS` Python copy was deleted (2026-07-25): it had no runtime consumer, existing only to be mirrored, and the mirror is what made a tier swap a three-edit job across two languages. Every `Hat` icon (medal-style and division-bearing alike — one component replaced both `Medal` and `Crest`, Task 4, 2026-07-25), gridline, rank-up dot, ladder band and card wash reads its colour from `caps.js`. |
 | **Keeping an entity out of a rating** | `POST /api/marelo/exclude` (reversible; excluded rows stay in the payload as inert display rows). Entities with no standards are excluded by construction, not by flag. |
 
 ### Runner ratings — the same curve, a different source (2026-08-20/21)
 
-`library/ratings.py` derives `{runner: {entity: score}}` for the Ultimate
-Sheet's 448 runners, and `library/board.py` aggregates and ranks it. **No new
-scoring math exists**: a runner's time goes through the identical pair the
-user's own PB does — `scoring.best_ladder(ranks_store.ladders(key, version))`
-then `scoring.progress_for_time(ladder, cs)["score"]` — because a rating you
-cannot compare against your own is not worth computing. Never the raw
-`score_for`; that reserve is what stops the two disagreeing by up to half a
-centisecond at a division edge.
+`library/ratings.py` derives per-runner entity scores and `library/board.py`
+aggregates them. Both local and community Overall use `resolve_curve` followed
+by `curves.progress_for_time`. Community scoring uses strict actual-ROM
+eligibility and canonical scoring placement. Broad Library visibility remains
+a separate display rule.
 
-Four facts that took measuring, each with its number:
+Consumer contracts:
 
 * **A runner's entity time is the MINIMUM across every approach and target that
   maps to it, and a SUBSECTION never inherits its target's entity.** A
@@ -1131,20 +1114,17 @@ Four facts that took measuring, each with its number:
   two apart — `marelo` folds them identically through `total += score or 0.0`,
   so a test asserting a *rating* cannot guard this rule and a test asserting
   *coverage* can.
-* **The sheet's times share the standards ladder's clock** (measured
-  2026-08-21). Ratio of each entity's best sheet time to its ladder's Mario
-  cutoff: median **0.983** across 106 `igt` entities and **0.983** across 6
-  `rta` ones, the `rta` group the tighter of the two. A different clock would
-  put a systematic offset on one group; there is none. So the runner path
-  correctly applies no `clock_for` filter — the user's PB path filters because a
-  PB row can be *saved* under either timer mode, and a sheet entry carries no
-  timer mode at all.
-* **One entity is distorted by the sheet's own convention.** `star:15:1`
-  (Rainbow Ride) is labelled "(PAUSE TIME INCLUDED)" on all three approaches
-  while its ladder is not — best 35.23s against a 10.00s Mario cutoff, ratio
-  3.523 against that 0.983 median. Every runner scores near the floor there for
-  a reason that is not skill. Left in deliberately: silently dropping an entity
-  is worse than a known distortion, and it is 1 slot of 117.
+* **Clock compatibility precedes scoring.** Explicit real-time rows cannot
+  supply IGT star scores. Bowser reds star-grab and full pipe rows resolve to
+  separate Overall targets; legacy Strategy storage remains paired with the
+  star. The fitter and board share `placements.scoring_identity`.
+* **ROM comes from the observation.** `populations.eligible_entries` supplies
+  strict region/validity filtering. Excluded evidence cannot return through a
+  legacy fallback.
+
+The figures below describe the earlier measured corpus. The current
+[comparison tool](ranking-calibration.md#compare-before-changing-shipped-tuning)
+reports actual portfolios and coverage for each calibration.
 
 Coverage is scope-dependent and Overall is the sparse one: 6 of 448 runners have
 no mapped time at all, but per course the median runner is absent from **167**,

@@ -2959,6 +2959,88 @@
       "guards": [],
       "category": "100 Coin Exit",
       "match_mode": "strict"
+    },
+    {
+      "seed_key": "seg:hmc-toad-result",
+      "name": "HMC result - Enter HMC (Toad)",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "level_exit",
+          "from": 7,
+          "to": 6
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 0,
+            "star": 0
+          }
+        ]
+      ],
+      "end_triggers": [
+        {
+          "type": "entrance_touched",
+          "to": 7
+        }
+      ],
+      "guards": [
+        {
+          "type": "in_active_route"
+        }
+      ],
+      "category": "Toad Segment",
+      "default_strat": "Standard",
+      "match_mode": "strict",
+      "clock_start": "move",
+      "sheet_target": {
+        "section": "★ HMC",
+        "label": "HMC result - Enter HMC (Toad)"
+      }
+    },
+    {
+      "seed_key": "seg:hmc-toad-door",
+      "name": "HMC door - Enter HMC (Toad)",
+      "enabled": true,
+      "start_triggers": [
+        {
+          "type": "moment_reached",
+          "kind": "door_open",
+          "level": 6,
+          "area": 3,
+          "landmark": "6:3:bhvDoor:1126,-1074,-2661"
+        }
+      ],
+      "waypoints": [
+        [
+          {
+            "type": "star_grabbed",
+            "course": 0,
+            "star": 0
+          }
+        ]
+      ],
+      "end_triggers": [
+        {
+          "type": "entrance_touched",
+          "to": 7
+        }
+      ],
+      "guards": [
+        {
+          "type": "in_active_route"
+        }
+      ],
+      "category": "Toad Segment",
+      "default_strat": "Standard",
+      "match_mode": "strict",
+      "clock_start": "move",
+      "sheet_target": {
+        "section": "★ HMC",
+        "label": "HMC door - Enter HMC (Toad)"
+      }
     }
   ],
   "routes": [
@@ -3157,6 +3239,27 @@
           ]
         },
         {
+          "label": "→ HMC",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "segment",
+              "seed_key": "seg:lll->hmc"
+            }
+          ]
+        },
+        {
+          "label": "HMC — A-Maze-Ing Emergency Exit",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "star",
+              "course": 6,
+              "star": 4
+            }
+          ]
+        },
+        {
           "label": "HMC Toad",
           "need": 1,
           "candidates": [
@@ -3168,24 +3271,19 @@
           ]
         },
         {
-          "label": "→ HMC",
+          "label": "HMC Toad → re-enter HMC",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:lll->hmc"
+              "seed_key": "seg:hmc-toad-result"
             }
           ]
         },
         {
-          "label": "HMC — 2 stars",
-          "need": 2,
+          "label": "HMC — Watch for Rolling Rocks",
+          "need": 1,
           "candidates": [
-            {
-              "type": "star",
-              "course": 6,
-              "star": 4
-            },
             {
               "type": "star",
               "course": 6,
@@ -3502,6 +3600,16 @@
           ]
         },
         {
+          "label": "HMC Toad → re-enter HMC",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "segment",
+              "seed_key": "seg:hmc-toad-result"
+            }
+          ]
+        },
+        {
           "label": "HMC — 2 stars",
           "need": 2,
           "candidates": [
@@ -3789,6 +3897,27 @@
           ]
         },
         {
+          "label": "→ HMC",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "segment",
+              "seed_key": "seg:lll->hmc"
+            }
+          ]
+        },
+        {
+          "label": "HMC — A-Maze-Ing Emergency Exit",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "star",
+              "course": 6,
+              "star": 4
+            }
+          ]
+        },
+        {
           "label": "HMC Toad",
           "need": 1,
           "candidates": [
@@ -3800,24 +3929,19 @@
           ]
         },
         {
-          "label": "→ HMC",
+          "label": "HMC Toad → re-enter HMC",
           "need": 1,
           "candidates": [
             {
               "type": "segment",
-              "seed_key": "seg:lll->hmc"
+              "seed_key": "seg:hmc-toad-result"
             }
           ]
         },
         {
-          "label": "HMC — 2 stars",
-          "need": 2,
+          "label": "HMC — Watch for Rolling Rocks",
+          "need": 1,
           "candidates": [
-            {
-              "type": "star",
-              "course": 6,
-              "star": 4
-            },
             {
               "type": "star",
               "course": 6,
@@ -4109,6 +4233,16 @@
               "type": "star",
               "course": 0,
               "star": 0
+            }
+          ]
+        },
+        {
+          "label": "HMC Toad → re-enter HMC",
+          "need": 1,
+          "candidates": [
+            {
+              "type": "segment",
+              "seed_key": "seg:hmc-toad-result"
             }
           ]
         },

@@ -14,10 +14,11 @@ import { h } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Disclose } from "./collapsible.js";
 import htm from "htm";
-import { getJSON, send } from "../api.js";
+import { getJSON } from "../api.js";
 import { fmtIgtShort, fmtSeconds } from "../format.js";
 import { nounOfKey } from "../entitysection.js";
 import { TimeFields } from "./timefields.js";
+import { useStandardWrites } from "../standardwrites.js";
 import { ceilingOf, slowestFirst } from "../ladderorder.js";
 import { RANK_NAMES, rankColor } from "./ranks.js";
 import { capName, capGradient, divisionDigit, DIVISION_NUMERALS } from "./caps.js";
@@ -263,8 +264,10 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
     const request = ++requestRef.current;
     const qs = shownVersion ? `&version=${enc(shownVersion)}` : "";
     const next = await getJSON(`/api/ranks/standards?entity=${enc(entity)}${qs}`);
-    if (request === requestRef.current) setData(next);
+    if (request === requestRef.current && !writes.pending.current) setData(next);
   }
+  const writes = useStandardWrites(entity, load, onChanged, requestRef);
+  const { put } = writes;
   // When opened by default (or when the card remounts for a new entity while
   // open), fetch on mount — toggle() only loads on a user click, so an
   // open-by-default panel would otherwise sit on "Loading standards…" forever.
@@ -313,11 +316,6 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
   // otherwise show empty cells forever (its data is fetched out-of-band,
   // not via the session view). Old data stays visible until replaced.
   function toggle() { const n = !open; setOpen(n); if (n) load(); }
-  async function put(strat, rank, seconds, version = "us") {
-    const qs = version === "jp" ? "?version=jp" : "";
-    await send("PUT", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}${qs}`, { seconds });
-    await load(); onChanged && onChanged();
-  }
   // Ticking "JP differs" only opens the local JP sub-column (jpOpen) — no
   // write happens until a JP time actually commits through the second
   // TimeFields. Unticking a strategy that already HAS server-side JP times
@@ -330,7 +328,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
       setJpOpen((prev) => new Set(prev).add(strat));
       return;
     }
-    if ((data.clearable_jp_strategies || []).includes(strat)) {
+    if ((data.clearable_jp_strategies || []).includes(strat) || writes.hasJpWrite(strat)) {
       if (!window.confirm("Clear this strategy's JP times? US times stay.")) {
         // The native checkbox already flipped itself unchecked before this
         // handler ran; a fresh Set (same contents) forces a re-render so
@@ -338,9 +336,8 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         setJpOpen((prev) => new Set(prev));
         return;
       }
-      await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(strat)}/jp`);
+      await writes.clearJp(strat);
       setJpOpen((prev) => { const next = new Set(prev); next.delete(strat); return next; });
-      await load(); onChanged && onChanged();
       return;
     }
     setJpOpen((prev) => { const next = new Set(prev); next.delete(strat); return next; });
@@ -355,9 +352,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
         + `standards. Past attempts keep their recorded times; re-creating the same `
         + `name restores them.`;
     if (!window.confirm(msg)) return;
-    const qs = isSeeded(s) ? "" : "?purge=true";
-    await send("DELETE", `/api/ranks/standards/${enc(entity)}/${enc(s)}${qs}`);
-    await load(); onChanged && onChanged();
+    await writes.clearStrategy(s, !isSeeded(s));
   }
   function editVideo(strat, rank) {
     setVideoEdit({ strat, rank, url: userVid(strat, rank) || "", saving: false, error: null });
@@ -368,16 +363,16 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
     const path = `/api/ranks/standards/${enc(entity)}/${enc(strat)}/${enc(rank)}/video`;
     setVideoEdit({ ...videoEdit, saving: true, error: null });
     try {
-    await send(url ? "PUT" : "DELETE", path, url ? { url } : undefined);
-      await load(); onChanged && onChanged(); setVideoEdit(null);
+      await writes.mutate(url ? "PUT" : "DELETE", path, url ? { url } : undefined);
+      setVideoEdit(null);
     } catch (e) {
       setVideoEdit({ ...videoEdit, saving: false, error: String(e) });
     }
   }
   async function reset() {
     if (!window.confirm("Reset this entity to community defaults?")) return;
-    await send("POST", `/api/ranks/standards/${enc(entity)}/reset`);
-    await load(); setEditing(false); onChanged && onChanged();
+    await writes.reset();
+    setEditing(false);
   }
   // per-(strat,rank) video accessors (resolved auto+override vs raw user override)
   const cutoffVid = (s, rank) =>
@@ -571,6 +566,7 @@ export function StandardsPanel({ entity, activeStrat, strategies, onChanged,
       <${Icon} name="chevron" size=${16} className="standards-chevron" />
     </button>
     <${Disclose} open=${open} className="stdpanel-disclose">
+    ${writes.message}
     ${!data ? html`<div class="stdbody"><div class="inline-state loading">
       <${Icon} name="updates" size=${16} /> Loading standards…
     </div></div>` : null}

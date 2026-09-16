@@ -139,7 +139,7 @@ def test_prepared_install_failure_preserves_disk_and_memory(tmp_path, monkeypatc
     monkeypatch.setattr(module.shutil, "copyfile", failed_copy)
     with pytest.raises(OSError, match="disk full"):
         store.absorb(fresh, prepared_snapshot=prepared)
-    assert store.payload is previous
+    assert store.payload == previous   # absorb keeps a detached copy
     assert store.path.read_bytes() == before
     assert not list(tmp_path.glob(".library.gz.*"))
 

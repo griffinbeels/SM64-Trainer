@@ -1,39 +1,18 @@
-"""The Ultimate Sheet's 448 community runners, rated the same way MARELO
-rates the user -- the twin of `tracking/marelo.py::entity_scores` for a
-community sheet instead of a practice log. This is what turns the sheet from
-a table of times into a leaderboard the user can climb: the same 0..100 curve,
-the same ladders, the same coverage penalty.
+"""Community runners graded on the same Overall curves as local MARELO.
 
-**Never grade against a sheet row's own fitted ladder**
-(`item["ladder"]`/`item["ladder_jp"]`, `library/ladders.py::fit_payload`). A
-fitted ladder is percentiles measured off that ROW's own community
-distribution, not the vetted Daily Star cutoffs MARELO grades the user on --
-on the shipped snapshot the two curves differ on every matched approach, so a
-runner scored on the sheet's own curve would look like a MARELO number and
-would not BE one; it could never be compared to the user's. Every score here
-therefore comes from the STANDARDS ladder,
-`scoring.best_ladder(ranks_store.ladders(entity_key, version))` fed to
-`scoring.progress_for_time(...)["score"]` -- exactly the pair
-`tracking/marelo.py`'s two score paths already use for the user's own
-attempts, over a different input. NEVER the raw `scoring.score_for`:
-`tests/test_single_source.py`'s "turning a TIME into a rank" row reserves
-that call for scoring.py itself, because it disagrees with
-`progress_for_time` by up to half a centisecond at a division edge -- the
-exact gap that once printed "0.00s to rank up" (2026-07-29). A runner sitting
-on that edge deserves the same rounding rule the user's own banner gets.
+Ratings use compatible clocks and each entry's actual ROM, with unannotated
+entries eligible for both. Library display visibility remains a separate,
+broader reading. Every score goes through the resolved compiled curve and
+its displayed-time progress rule; row-specific strategy ladders and the
+curve's derived tier cutoffs cannot reconstruct Overall scoring.
 
-Absent, never zero, same rule `marelo.py`'s own docstring states: a runner
-with no time on an entity -- or one whose entity has no standards ladder at
-all -- is OMITTED from the returned map. `ranks/scopes.py::aggregate` supplies
-the coverage penalty (0 to the numerator, 1 to the denominator) for whatever
-is missing; writing a 0.0 here would double it.
-
-Pure: no db, no file I/O, no network, same discipline `ranks/scopes.py`
-already holds to, so pytest drives this module directly."""
+Missing times and unrankable entities are absent from scores. The scope alone
+supplies their coverage penalty. This module performs no I/O.
+"""
 from dataclasses import dataclass
 
-from sm64_events.library.sheet import entry_version
-from sm64_events.ranks import scoring
+from sm64_events.ranks import curves
+from sm64_events.ranks.calibration import resolve_curve
 
 
 def _visible_entries(item: dict, version: str) -> list[dict]:
@@ -59,7 +38,8 @@ def _visible_entries(item: dict, version: str) -> list[dict]:
             if not entry.get("version") or entry["version"] == version]
 
 
-def _entries_set_on(item: dict, version: str) -> list[dict]:
+def _entries_set_on(item: dict, version: str,
+                    unannotated_region: str = "both") -> list[dict]:
     """The reading a runner GOAL takes (round 34, 2026-09-05): an entry
     counts for `version` when its own row claims that ROM, or claims none at
     all -- `sheet.entry_version`, the exact door `library/import_runner.py`
@@ -72,8 +52,8 @@ def _entries_set_on(item: dict, version: str) -> list[dict]:
     Offering that as a GOAL read as a gap against the runner's own import --
     the parity walk found it under `regions=["jp"]`, YOU with no row and the
     goal holding a US-tagged time."""
-    return [entry for entry in item.get("entries") or []
-            if entry_version(entry) in (None, version)]
+    from sm64_events.library.populations import eligible_entries
+    return eligible_entries(item, version, unannotated_region)
 
 
 def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
@@ -106,11 +86,14 @@ def _row_entity(target: dict, item: dict, kind: str, adopted_rows: dict
 
 
 def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us",
-                 strict: bool = False) -> dict[str, dict[str, dict]]:
+                 strict: bool = False, clock_of=None,
+                 unannotated_region_of=None) -> dict[str, dict[str, dict]]:
     """{runner: {entity_key: the sheet entry that set their best time}}.
     `strict` reads each row by the ROM its entries were SET on
     (`_entries_set_on`) rather than by what the Library shows in that mode
-    (`_visible_entries`); the Scorecard's runner goal is its one caller.
+    (`_visible_entries`). Scoring callers also pass `clock_of` to exclude
+    explicitly real-time rows from an entity measured on IGT, and
+    `unannotated_region_of(key)` to share the effective curve's region policy.
 
     A runner's time for an entity is the MINIMUM `time_cs` over every
     approach and subsection, on every target, that maps to it -- several
@@ -118,17 +101,31 @@ def best_entries(payload: dict, adopted_rows: dict, *, version: str = "us",
     different way (`library/store.py::LibraryStore.for_entity`). The whole
     entry is kept, not just the number, because the [[Runner page]] plays
     that entry's video beside the time (round 1, third read)."""
+    from sm64_events.library.placements import scoring_identity
+    from sm64_events.library.populations import runner_identity
+
     best: dict[str, dict[str, dict]] = {}
     for target in payload["targets"]:
         for kind in ("approaches", "subsections"):
             for item in target[kind]:
-                entity_key = _row_entity(target, item, kind, adopted_rows)
+                if strict:
+                    identity = scoring_identity(
+                        target, item, "approach" if kind == "approaches" else "subsection",
+                        adopted_rows, clock_of)
+                    entity_key = identity[0] if identity else None
+                else:
+                    entity_key = _row_entity(target, item, kind, adopted_rows)
                 if not entity_key:
                     continue
-                visible = (_entries_set_on(item, version) if strict
+                unannotated = (unannotated_region_of(entity_key)
+                               if unannotated_region_of else "both")
+                visible = (_entries_set_on(item, version, unannotated) if strict
                            else _visible_entries(item, version))
                 for entry in visible:
-                    runner = entry.get("runner")
+                    if strict:
+                        runner = runner_identity(entry)
+                    else:
+                        runner = entry.get("runner")
                     if not runner:
                         continue
                     by_entity = best.setdefault(runner, {})
@@ -166,23 +163,29 @@ def rate_runners(payload: dict, ranks_store, adopted_rows: dict, *,
     entity with no ladder in `ranks_store` (a target the sheet reaches that
     carries no rank standards) is omitted the same as an entity the runner
     never ran."""
-    best = best_entries(payload, adopted_rows, version=version)
+    resolved = {}
+
+    def unannotated_region_of(entity_key):
+        if entity_key not in resolved:
+            resolved[entity_key] = resolve_curve(ranks_store, entity_key, version)
+        return resolved[entity_key]["metadata"].get("unannotated_region", "both")
+
+    clock_of = getattr(ranks_store, "clock_for", lambda key: "igt")
+    assignments = getattr(ranks_store, "scoring_rows", None)
+    if assignments is None:
+        assignments = adopted_rows
+    best = best_entries(payload, assignments, version=version, strict=True,
+                        clock_of=clock_of, unannotated_region_of=unannotated_region_of)
     times = {runner: {key: entry["time_cs"] for key, entry in by_entity.items()}
              for runner, by_entity in best.items()}
     videos = {runner: {key: entry.get("video") or None for key, entry in by_entity.items()}
               for runner, by_entity in best.items()}
-    entity_keys = {entity_key for by_entity in times.values()
-                   for entity_key in by_entity}
-    ladders = {entity_key: scoring.best_ladder(ranks_store.ladders(entity_key, version))
-               for entity_key in entity_keys}
     scores: dict[str, dict[str, float]] = {}
     for runner, by_entity in times.items():
         runner_scores_map = {}
         for entity_key, time_cs in by_entity.items():
-            ladder = ladders.get(entity_key)
-            if not ladder:
-                continue
-            score = scoring.progress_for_time(ladder, time_cs)["score"]
+            progress = curves.progress_for_time(resolved[entity_key], time_cs)
+            score = progress["score"] if progress is not None else None
             if score is not None:
                 runner_scores_map[entity_key] = score
         if runner_scores_map:

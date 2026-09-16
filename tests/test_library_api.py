@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sm64_events.core.paths import bundled_sheet_library
+from sm64_events.library.build import SCHEMA_VERSION
 from sm64_events.library.store import LibraryStore
 from sm64_events.server.library_api import create_library_router
 
@@ -119,14 +120,14 @@ def test_target_rows_carry_their_adoption_state(tmp_path):
                              "video": None, "version": None, "platform": None}]}
 
     store = LibraryStore()
-    store._payload = {
-        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+    assert store.absorb({
+        "schema_version": SCHEMA_VERSION, "sheet_revision": "2026-08-05T09:15:18",
         "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
             {"entity_key": None, "group": "Castle Movements (Lobby)",
              "section": "★ BoB", "label": "Lobby door (L) - BoB door",
              "version": None, "miss_reason": "castle_movement",
              "approaches": [item("Lobby door (L) - BoB door")],
-             "subsections": [item("First stretch")]}]}
+             "subsections": [item("First stretch")]}]})["applied"]
     standards = RankStandards(tmp_path / "rank_standards.json")
     standards.load()
     adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
@@ -170,8 +171,8 @@ def test_an_entity_less_target_carries_its_name_matched_segment(tmp_path):
     from sm64_events.ranks.standards import RankStandards
 
     store = LibraryStore()
-    store._payload = {
-        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+    assert store.absorb({
+        "schema_version": SCHEMA_VERSION, "sheet_revision": "2026-08-05T09:15:18",
         "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
             {"entity_key": None, "group": "Castle Movements (Lobby)",
              "section": "★ Misc", "label": "Lakitu skip",
@@ -180,7 +181,7 @@ def test_an_entity_less_target_carries_its_name_matched_segment(tmp_path):
             {"entity_key": "star:1:0", "group": "1. Bob-omb Battlefield",
              "section": "★ BoB", "label": "Big Bob-omb on the Summit",
              "version": None, "miss_reason": None,
-             "approaches": [], "subsections": []}]}
+             "approaches": [], "subsections": []}]})["applied"]
     standards = RankStandards(tmp_path / "rank_standards.json")
     standards.load()
     adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
@@ -227,8 +228,8 @@ def test_the_entity_door_follows_a_link(tmp_path):
                 "ladder_samples": 40, "entries": []}
 
     store = LibraryStore()
-    store._payload = {
-        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+    assert store.absorb({
+        "schema_version": SCHEMA_VERSION, "sheet_revision": "2026-08-05T09:15:18",
         "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
             {"entity_key": "star:2:0", "group": "2. Whomp's Fortress",
              "section": "★ WF", "label": "Chip off Whomp's Block",
@@ -243,7 +244,7 @@ def test_the_entity_door_follows_a_link(tmp_path):
             {"entity_key": None, "group": "Castle Movements (Misc)",
              "section": "★ Misc", "label": "Lakitu skip",
              "version": None, "miss_reason": "castle_movement",
-             "approaches": [], "subsections": []}]}
+             "approaches": [], "subsections": []}]})["applied"]
     standards = RankStandards(tmp_path / "rank_standards.json")
     standards.load()
     adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
@@ -291,8 +292,8 @@ def test_adopt_target_route_links_the_batch_and_names_refusals(tmp_path):
     from sm64_events.ranks.standards import RankStandards
 
     store = LibraryStore()
-    store._payload = {
-        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+    assert store.absorb({
+        "schema_version": SCHEMA_VERSION, "sheet_revision": "2026-08-05T09:15:18",
         "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
             {"entity_key": None, "group": "Castle Movements (Lobby)",
              "section": "★ BoB", "label": "Lobby door (L) - BoB door",
@@ -303,7 +304,7 @@ def test_adopt_target_route_links_the_batch_and_names_refusals(tmp_path):
                   "ideal_cs": None, "fill_rate": 0.2,
                   "ladder": {"Mario": 2.76, "Gold": 3.10},
                   "ladder_samples": 40, "entries": []}],
-             "subsections": []}]}
+             "subsections": []}]})["applied"]
     standards = RankStandards(tmp_path / "rank_standards.json")
     standards.load()
     adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
@@ -339,20 +340,20 @@ def test_rows_carry_their_held_cells_and_a_link_hands_the_row_to_on_adopt(tmp_pa
         return {"name": name, "ids": ["1"], "entries": [], "ladder": {"Bronze": 900}}
 
     store = LibraryStore()
-    store._payload = {
-        "schema_version": 1, "sheet_revision": "2026-08-05T09:15:18",
+    assert store.absorb({
+        "schema_version": SCHEMA_VERSION, "sheet_revision": "2026-08-05T09:15:18",
         "fetched_at": "x", "runners": [], "ladder_model": {}, "targets": [
             {"entity_key": None, "group": "Castle Movements (Lobby)",
              "section": "★ BoB", "label": "Lobby door (L) - BoB door",
              "version": None, "miss_reason": "castle_movement",
              "approaches": [item("Lobby door (L) - BoB door")],
-             "subsections": [item("First stretch")]}]}
+             "subsections": [item("First stretch")]}]})["applied"]
     standards = RankStandards(tmp_path / "rank_standards.json")
     standards.load()
     adoptions = ad.Adoptions(tmp_path / "library_adoptions.json", store, standards)
     adoptions.load()
     from sm64_events.library.audit import row_key
-    target = store._payload["targets"][0]
+    target = store.payload["targets"][0]
     piece_key = row_key(target, "First stretch", ["1"])
     cells = [{"row_key": piece_key, "game_version": "jp", "time_cs": 1613},
              {"row_key": piece_key, "game_version": "us", "time_cs": 1700}]

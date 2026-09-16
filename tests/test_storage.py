@@ -1317,3 +1317,26 @@ def test_held_times_are_kept_per_source_and_released_by_undo_or_by_row(tmp_path)
     session = db.insert_session("2026-09-04T00:00:03Z")
     db.wipe_all_history(session)
     assert db.held_times() == []
+
+
+def test_a_replay_review_database_gains_mains_v36_after_its_own_index(tmp_path):
+    """The replay-review branch shipped its chunk index as v36 while main's v36
+    added the imported attempt's ROM. A database from that branch reports 36
+    but lacks the column; opening it applies main's v36 and then the index as
+    v37 (IF NOT EXISTS), so neither history loses a migration."""
+    import sqlite3
+
+    path = tmp_path / "branch.db"
+    connection = sqlite3.connect(path)
+    for script in MIGRATIONS[:35]:
+        connection.executescript(script)
+    connection.executescript(MIGRATIONS[36])
+    connection.execute("PRAGMA user_version = 36")
+    connection.commit()
+    connection.close()
+    db = Database(path)
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 37
+    columns = {row[1] for row in db._conn.execute("PRAGMA table_info(attempts)")}
+    assert "game_version" in columns
+    assert db._conn.execute(
+        "SELECT name FROM sqlite_master WHERE name='idx_input_chunks_ended'").fetchone()

@@ -181,6 +181,7 @@ def test_template_refresh_failure_keeps_library_and_can_retry(page):
     assert page.count('.input-lanes') == 1
     page.evaluate('window.restoreInputFetch()')
     button(page, "Retry", ".input-timeline")
+    page.wait_for('.input-timeline:has(.input-lanes):not(:has([role=alert]))')
     assert page.count('.input-timeline [role=alert]') == 0
     assert page.count('.input-template-manager') == 1
 

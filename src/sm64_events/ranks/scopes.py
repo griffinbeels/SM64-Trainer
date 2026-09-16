@@ -15,6 +15,7 @@ scores ZERO. Pure: no db, no I/O."""
 from typing import Iterable
 
 from sm64_events.ranks import scoring
+from sm64_events.ranks.curve_types import CompiledCurve
 
 _UNPRACTICED_TARGET = scoring.SCORE_ANCHORS["Gold"]
 # The tier name _UNPRACTICED_TARGET encodes -- derived from the same
@@ -44,7 +45,11 @@ RANKED_SEGMENT_CATEGORIES = frozenset({"Bowser Fights", "100 Coin Exit"})
 # them dimmed: "these should not be ignored in any route, because those are
 # just the Bowser Course entries (i.e., No Reds). These are actually very
 # important and should be part of the default ranking."
-RANKED_SEGMENT_SEED_KEYS = frozenset({"seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe"})
+RANKED_SEGMENT_SEED_KEYS = frozenset({
+    "seg:bitdw-pipe", "seg:bitfs-pipe", "seg:bits-pipe",
+    # Full Toad routes have Sheet standards; the pickup-only star stays separate.
+    "seg:hmc-toad-result", "seg:hmc-toad-door",
+})
 
 
 def ranks_by_default(definition: dict) -> bool:
@@ -83,21 +88,20 @@ def effective_excluded(default: set[str], included: Iterable[str],
     return (set(default) - set(included)) | set(excluded)
 
 
-def rankable_entities(ladders_by_entity: dict[str, dict[str, dict[str, float]]],
+def rankable_entities(ladders_by_entity: dict[str, CompiledCurve | dict],
                        excluded: Iterable[str] = ()) -> list[str]:
-    """Entity keys with at least one ladder, minus the user's exclusions.
-    `ladders_by_entity` is {entity_key: {strat: {rank: seconds}}}.
+    """Entity keys with an Overall curve, minus the user's exclusions.
+    Pass resolved curves; legacy {entity: {strat: {rank: seconds}}} maps remain
+    supported for callers that have not migrated to compiled curves.
 
-    "Has a ladder" means `scoring.best_ladder` is non-empty, not merely that
-    the strategies dict is non-empty: `create_strategy` writes `{strat: {}}`
-    when a strategy is named purely to tag attempts (the ordinary
-    practice-card flow), which has no cutoffs at all. Admitting that entity
-    would hold a permanent, unscoreable denominator slot -- no ladder means
-    ABSENT, and every scoring path (tracking/marelo.py) already requires
-    `best_ladder` non-empty, so this is the same bar, just applied earlier."""
+    A compiled curve needs nodes or legacy cutoffs. In the legacy shape,
+    `create_strategy` can write `{strat: {}}` solely to tag attempts; that
+    empty ladder must not hold an unscoreable denominator slot."""
     excluded_keys = set(excluded or ())
-    return [entity_key for entity_key, ladders in ladders_by_entity.items()
-            if scoring.best_ladder(ladders) and entity_key not in excluded_keys]
+    return [entity_key for entity_key, value in ladders_by_entity.items()
+            if entity_key not in excluded_keys and
+            (bool(value.get("nodes") or value.get("ladder_cs"))
+             if "schema_version" in value else bool(scoring.best_ladder(value)))]
 
 
 def candidate_key(candidate: dict) -> str | None:

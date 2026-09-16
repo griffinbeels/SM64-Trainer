@@ -22,6 +22,7 @@ from sm64_events.replay.ffmpeg_sink import PICTURE_HEARTBEAT_S, FfmpegAvSink
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.ring import SegmentRing
 from test_replay_picture_identity import encoder as encoder
+from ffmpeg_spawn_fixture import capture_spawn
 
 
 def _ffmpeg() -> str:
@@ -58,34 +59,7 @@ def test_the_feed_log_files_every_write_under_its_row_or_as_a_repeat():
 # -- the sink's arguments ----------------------------------------------------
 
 def _spawn_args(tmp_path, monkeypatch, cfg) -> list:
-    captured = {}
-
-    class _FakeProc:
-        def __init__(self):
-            import io
-            self.stdin = io.BytesIO()
-            self.stdout = io.BytesIO(b"")
-            self.stderr = io.BytesIO(b"")
-            self.pid = 4242
-        def poll(self):
-            return None
-        def wait(self, timeout=None):
-            return 0
-        def kill(self):
-            pass
-
-    def fake_popen(args, **kwargs):
-        captured["args"] = args
-        return _FakeProc()
-
-    monkeypatch.setattr("sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("sm64_events.replay.ffmpeg_sink._assign_kill_on_close",
-                        lambda p: None)
-    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg", codec="libx264")
-    sink._spawn(320, 240)
-    for thread in sink._readers:
-        thread.join(timeout=5)
-    return captured["args"]
+    return capture_spawn(monkeypatch, cfg, "libx264")["args"]
 
 
 def test_the_picture_feed_encodes_passthrough_with_time_forced_keyframes(tmp_path, monkeypatch):

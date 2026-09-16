@@ -14,6 +14,7 @@ import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
 import { comparator, useGraphPick, SORT_OPTIONS } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
 import { orderedSections, playedEntityKeys, PracticeLog } from "./practicelog.js";
+import { practiceSuccessSnapshot, usePracticeScroll } from "../practicescroll.js";
 
 const html = htm.bind(h);
 
@@ -52,6 +53,20 @@ function useFreshAttemptIds(t) {
   return freshIds;
 }
 
+function usePracticeLogPreferences(initialSort) {
+  const [sort, setSortState] = useState(initialSort);
+  const [hideResets, setHideResetsState] = useState(
+    localStorage.getItem("sm64.hideResets") === "1");
+  return {
+    sort, hideResets,
+    setSort: (v) => { localStorage.setItem("sm64.sort", v); setSortState(v); },
+    setHideResets: (v) => {
+      localStorage.setItem("sm64.hideResets", v ? "1" : "0");
+      setHideResetsState(v);
+    },
+  };
+}
+
 export function Practice({ t, openCompare, openLibrary }) {
   // Records what this page actually PAINTS — the selector's cells and every
   // practice-log card — so a report about a cell that "was just there a
@@ -62,18 +77,8 @@ export function Practice({ t, openCompare, openLibrary }) {
   const pageRef = useRef(null);
   useUiLog(pageRef);
   const stored = localStorage.getItem("sm64.sort");
-  const [sort, setSortState] = useState(
+  const ui = usePracticeLogPreferences(
     SORT_OPTIONS.some(([k]) => k === stored) ? stored : "newest");
-  const [hideResets, setHideResetsState] = useState(
-    localStorage.getItem("sm64.hideResets") === "1");
-  const ui = {
-    sort, hideResets,
-    setSort: (v) => { localStorage.setItem("sm64.sort", v); setSortState(v); },
-    setHideResets: (v) => {
-      localStorage.setItem("sm64.hideResets", v ? "1" : "0");
-      setHideResetsState(v);
-    },
-  };
   const freshIds = useFreshAttemptIds(t);
   const [openTargetPicker, targetPickerDialog] = useTargetPicker(t);
   // NO ROUTE VIEW IS FETCHED HERE ANY MORE. The route-focus card this fed is
@@ -131,7 +136,8 @@ export function Practice({ t, openCompare, openLibrary }) {
     target: (t.view && t.view.target) || null, stage: t.stage,
     armedOrder: t.armedOrder, lastPinnedSeg: t.lastPinnedSeg,
     newestAttemptId: newestJournalId(t.view),
-    playedKeys: playedEntityKeys(t.view) });
+    playedKeys: playedEntityKeys(t.view),
+    practiceSuccess: practiceSuccessSnapshot(t.view) });
   const v = t.view && { ...t.view, target: frozen.target };
 
   // `held` is `t` with the frozen SELECTION swapped in (and `view` carrying
@@ -324,6 +330,7 @@ export function Practice({ t, openCompare, openLibrary }) {
     newestAttemptId: frozen.newestAttemptId,
   });
   const focusKey = resolveFocus(manualFocus, live);
+  usePracticeScroll(frozen.practiceSuccess, live.activeKey);
   const focusedSec = v
     ? orderedSections(v).find((sec) => entityKey(sec) === focusKey) || null
     : null;

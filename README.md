@@ -104,7 +104,9 @@ hosted video sharing are future features.
 **Practice.** Every star grab, reset, death, level change, Bowser key and
 dustless trick is detected live. Each star and segment gets its own card:
 attempt history, PB, a timeline of what happened, and a completion-time graph
-you can click to jump straight to an attempt — or open its replay.
+you can click to jump straight to an attempt — or open its replay. The first
+success after moving to a different star or segment returns Practice to the
+top of the page; repeat successes leave your scroll position alone.
 
 **Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
@@ -147,6 +149,12 @@ average.
 Overall, a single course, or any route. It has its own tab with a ladder, a
 history chart, and a per-entity breakdown of where your next rank is coming
 from.
+
+**Living Overall ranks.** Each star or segment blends progression through
+compatible strategies with the community's submitted best times. Valid Sheet
+refreshes update Strategy standards, Overall ranks, and MARELO automatically;
+saved times stay unchanged. Strategy and Overall cutoffs have separate edits.
+See [ranking calibration and tuning](docs/ranking-calibration.md).
 
 **Routes.** Build an ordered route of stars and segments — including
 "complete K of N" group steps — and see per-step and cumulative success rates.

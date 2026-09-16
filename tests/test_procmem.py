@@ -5,6 +5,9 @@ platform-tolerant; the pure helpers (assess_growth, top_type_growth,
 resource_alarms) are exact everywhere — they carry the leak-attribution logic."""
 import gc
 import os
+import weakref
+
+import pytest
 
 from sm64_events.core.procmem import (assess_growth, child_memory,
                                       dir_size_bytes, gc_summary, gpu_memory,
@@ -59,6 +62,58 @@ def test_type_histogram_counts_a_known_object():
     hist = type_histogram()
     name = f"{_Marker.__module__}.{_Marker.__qualname__}"
     assert hist[name] == 7
+
+
+def test_sample_releases_heap_references_before_blocking_probes(monkeypatch):
+    from sm64_events.core import procmem
+
+    class Marker:
+        pass
+
+    witnesses = []
+
+    def snapshot():
+        marker = Marker()
+        witnesses.append(weakref.ref(marker))
+        return [marker]
+
+    def processes(**_kwargs):
+        assert witnesses and witnesses[0]() is None
+        return {}
+
+    monkeypatch.setattr(procmem.gc, "get_objects", snapshot)
+    monkeypatch.setattr(procmem, "process_table", processes)
+    result = procmem.sample(histogram=True, children_of=os.getpid())
+    assert result["objects"] == 1
+    assert sum(result["types"].values()) == 1
+
+
+def test_failed_histogram_releases_snapshot_even_while_traceback_is_retained(monkeypatch):
+    from sm64_events.core import procmem
+    from sm64_events.core.heap_observation import heap_lifetime_lock
+
+    class Marker:
+        pass
+
+    witnesses = []
+
+    def snapshot():
+        marker = Marker()
+        witnesses.append(weakref.ref(marker))
+        return [marker]
+
+    def failed_histogram(objects):
+        assert objects
+        raise ValueError("injected histogram failure")
+
+    monkeypatch.setattr(procmem.gc, "get_objects", snapshot)
+    monkeypatch.setattr(procmem, "type_histogram", failed_histogram)
+    with pytest.raises(ValueError, match="injected histogram failure") as caught:
+        procmem.sample(histogram=True)
+    assert caught.value.__traceback__ is not None
+    assert witnesses[0]() is None, "the failed observer's traceback retains the resource"
+    assert heap_lifetime_lock.acquire(blocking=False), "the failed observer left shutdown blocked"
+    heap_lifetime_lock.release()
 
 
 def test_dir_size_tolerates_missing_dir(tmp_path):

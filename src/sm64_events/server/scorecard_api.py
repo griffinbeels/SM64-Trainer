@@ -863,8 +863,6 @@ def create_scorecard_router(service, library=None, adoptions=None,
             # absorbed so no celebration fires for a rank he did not run
             # for (`import_api.py::finish` does the same after a landing).
             async def on_loop():
-                if adoptions is not None:
-                    adoptions.load()
                 absorb_after_regrade(service)
                 await service._rank_standards_changed()
             asyncio.run_coroutine_threadsafe(on_loop(), loop).result(timeout=30)

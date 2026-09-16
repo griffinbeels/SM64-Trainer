@@ -15,6 +15,7 @@ import pytest
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.ffmpeg_sink import FfmpegAvSink, parse_segment_csv
+from ffmpeg_spawn_fixture import capture_spawn
 
 T0 = datetime(2026, 6, 12, 1, 0, 0, tzinfo=timezone.utc)
 
@@ -33,29 +34,9 @@ def test_spawn_args_pin_av_single_mux_contract(tmp_path, monkeypatch):
     single-clock sync model (see ffmpeg_sink docstring / the drift memory):
     wallclock BEFORE each input, cfr video, aresample=async audio, both
     streams mapped into A+V segments."""
-    captured = {}
-
-    class _FakeProc:
-        def __init__(self):
-            self.stdin = io.BytesIO()
-            self.stdout = io.BytesIO()
-            self.stderr = io.BytesIO()
-
-    def fake_popen(args, **kwargs):
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return _FakeProc()
-
-    monkeypatch.setattr(
-        "sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
-    monkeypatch.setattr(
-        "sm64_events.replay.ffmpeg_sink._assign_kill_on_close", lambda p: None)
     cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0,
                        picture_feed=False)
-    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg")
-    sink._spawn(320, 240)
-    for t in sink._readers:
-        t.join(timeout=5)
+    captured = capture_spawn(monkeypatch, cfg)
     a = captured["args"]
 
     # Background spawn: no console window AND no busy-cursor feedback. The
@@ -107,27 +88,8 @@ def test_spawn_args_follow_the_picked_codec(tmp_path, monkeypatch, codec, qualit
     recorder. Hardcoding h264_nvenc here was the flashing-mouse bug
     (2026-08-07): on a machine without an NVIDIA encoder the child died at
     birth and the respawn loop never ended."""
-    captured = {}
-
-    class _FakeProc:
-        def __init__(self):
-            self.stdin = io.BytesIO()
-            self.stdout = io.BytesIO()
-            self.stderr = io.BytesIO()
-
-    def fake_popen(args, **kwargs):
-        captured["args"] = args
-        return _FakeProc()
-
-    monkeypatch.setattr(
-        "sm64_events.replay.ffmpeg_sink.subprocess.Popen", fake_popen)
-    monkeypatch.setattr(
-        "sm64_events.replay.ffmpeg_sink._assign_kill_on_close", lambda p: None)
     cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, segment_s=2.0)
-    sink = FfmpegAvSink(cfg, lambda s: None, ffmpeg="ffmpeg", codec=codec)
-    sink._spawn(320, 240)
-    for t in sink._readers:
-        t.join(timeout=5)
+    captured = capture_spawn(monkeypatch, cfg, codec)
     a = captured["args"]
     assert a[a.index("-c:v") + 1] == codec
     assert quality_flag in a

@@ -39,7 +39,9 @@ def test_regrade_matches_individual_scopes_and_reads_history_once(
             {"need": 1, "candidates": [{"type": "star", "course": 9, "star": 2}]}],
             "2026-09-14T00:00:00Z")
         ids = ["overall", "course:9", "course:8", "course:99", f"route:{route}"]
-        expected = dict.fromkeys(ids, 77)
+        # rank_watermarks._absorb: a graded scope takes its key, an ungraded
+        # scope loses its watermark, a scope that no longer resolves keeps it.
+        expected = {}
         independent = {}
         for scope in ids:
             score = ranks_api._score_scope(service, scope)
@@ -51,9 +53,9 @@ def test_regrade_matches_individual_scopes_and_reads_history_once(
             # Full numeric identity, not only a rank/division bucket.
             assert {k: v for k, v in aggregate.items() if k != "entities"} == {
                 k: independent[scope][k] for k in aggregate if k != "entities"}
-        assert expected["course:9"] != 77, "fixture must exercise a real grade"
+        assert "course:9" in expected, "fixture must exercise a real grade"
         expected["route:999999"] = 77  # a deleted route must not abort startup
-        service.db.set_state("marelo_watermarks", dict.fromkeys(expected, 77))
+        service.db.set_state("marelo_watermarks", dict.fromkeys([*ids, "route:999999"], 77))
 
         calls = dict.fromkeys(("attempts", "pbs", "routes", "segment_defs"), 0)
         for name in calls:

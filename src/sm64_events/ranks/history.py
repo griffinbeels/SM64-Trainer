@@ -25,15 +25,22 @@ from sm64_events.ranks.classify import RANK_MODES, average_frames
 
 def history_series(successes: list[dict], groups: list[dict],
                    entity_scorer: Callable[[str, int], float | None],
-                   mode: str, max_points: int = 300) -> list[dict]:
+                   mode: str, max_points: int = 300, *,
+                   context_scorer: Callable[[str, int, dict], float | None] | None = None
+                   ) -> list[dict]:
     """[{utc, marelo, tier, division, practiced}] in chronological order.
 
     `successes` is [{utc, key, strat, frames}] already in order; anything whose
-    key is not in `groups` is ignored, so callers may pass the whole journal."""
+    key is not in `groups` is ignored, so callers may pass the whole journal.
+    Optional `game_version` and `timer_mode` preserve each performance's identity.
+    `context_scorer(key, frames, event)` receives the last event in the basis's
+    own ROM/clock bucket. When omitted, the original two-argument scorer runs.
+    Unknown historical ROMs remain None and use the caller's current setting."""
     members = {candidate_key for group in groups
                for candidate_key in group["candidates"]}
     mode_def = RANK_MODES.get(mode) or RANK_MODES["pb"]
-    frames_by_strat: dict[tuple[str, str], list[int]] = {}
+    frames_by_strat: dict[tuple, list[int]] = {}
+    context_by_strat: dict[tuple, dict] = {}
     scores: dict[str, float] = {}
     points: list[dict] = []
 
@@ -41,21 +48,27 @@ def history_series(successes: list[dict], groups: list[dict],
         entity_key = success["key"]
         if entity_key not in members or success["frames"] is None:
             continue
-        frames_by_strat.setdefault(
-            (entity_key, success["strat"] or ""), []).append(success["frames"])
+        slot = (entity_key, success["strat"] or "", success.get("game_version"),
+                success.get("timer_mode"))
+        frames_by_strat.setdefault(slot, []).append(success["frames"])
+        context_by_strat[slot] = success
         best_score = None
-        for (candidate_key, _strategy_name), frames in frames_by_strat.items():
-            if candidate_key != entity_key:
+        for candidate_slot, frames in frames_by_strat.items():
+            if candidate_slot[0] != entity_key:
                 continue
             basis = _basis(frames, mode_def)
             if basis is None:
                 continue
-            score = entity_scorer(entity_key, basis)
+            score = (context_scorer(entity_key, basis, context_by_strat[candidate_slot])
+                     if context_scorer is not None else entity_scorer(entity_key, basis))
             if score is not None and (best_score is None or score > best_score):
                 best_score = score
         if best_score is None:
-            continue
-        scores[entity_key] = best_score
+            if entity_key not in scores:
+                continue
+            scores.pop(entity_key)
+        else:
+            scores[entity_key] = best_score
         rolled = scopes.aggregate(scores, groups)
         points.append({"utc": success["utc"], "marelo": rolled["marelo"],
                        "tier": rolled["tier"], "division": rolled["division"],

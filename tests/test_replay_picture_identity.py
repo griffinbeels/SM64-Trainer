@@ -76,7 +76,11 @@ def record_picture_schedule(sink, ledger, schedule):
                 time.sleep(0.22)  # several real pictures then arrive in a burst
             # A normal capture size: AMF rejects the 96px-high tiny browser
             # fixture even though it works at gameplay dimensions.
-            pixels, stamp = picture(number, size=(640, 480)), time.time()
+            pixels = picture(number, size=(640, 480))
+            # Model capture's high-resolution UTC clock. Windows time.time()
+            # can repeat during the catch-up burst, creating ambiguous row
+            # identities before the mapping under test even sees them.
+            stamp = origin + (time.perf_counter() - started)
             if schedule == "timestamp_collision" and number < 3:
                 stamp = origin + [0, 0.000001, 0.000012][number]
             assert ledger.observe(pixels, stamp, number, {"exact": True})
@@ -109,6 +113,9 @@ def test_cut_map_names_the_picture_instead_of_only_matching_a_cadence(tmp_path, 
     assert [number for _, number in original] == list(range(120)) + [119] * (len(original) - 120)
     rows = ledger.rows_between(0, 1e12)
     feeds = ledger.feeds_between(0, 1e12)
+    repeated_stamps = {stamp: count for stamp, count in Counter(row["ts"] for row in rows).items()
+                       if count > 1}
+    assert not repeated_stamps, f"Fixture assigned identical capture timestamps: {repeated_stamps}"
     assert [round(t * 90000) for t, _ in original] == [entry["pts"] for entry in feeds]
     if schedule == "timestamp_collision":
         assert [entry["pts"] for entry in feeds[:3]] == [0, 1, 2]

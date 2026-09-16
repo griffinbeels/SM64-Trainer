@@ -239,13 +239,13 @@ def test_fresh_install_seeds_the_converted_corpus(tmp_path):
     seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
     assert reconcile_defaults(db, seed) == []
     rows = db.segment_defs()
-    assert len(rows) == 84
+    assert len(rows) == 86
     loose = [r for r in rows if r["match_mode"] == "loose"]
     strict = [r for r in rows if r["match_mode"] == "strict"]
     exclusive = [r for r in rows if r["match_mode"] == "exclusive"]
     # 0 loose since 2026-08-02: every movement flipped to strict with the
     # path cursor, so the 56 movements joined the 25 already-strict rows.
-    assert len(loose) == 0 and len(strict) == 81 and len(exclusive) == 3
+    assert len(loose) == 0 and len(strict) == 83 and len(exclusive) == 3
 
 
 def test_reconcile_carries_match_mode_on_insert_and_refresh(tmp_path):

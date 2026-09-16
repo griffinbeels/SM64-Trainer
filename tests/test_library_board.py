@@ -221,7 +221,7 @@ def test_scope_rows_memoize_on_the_sheet_and_die_with_it():
 # -- you_times_by_entity --------------------------------------------------
 
 def test_you_times_picks_the_fastest_row_on_the_right_clock():
-    ranks = FakeRanks({}, clock="igt")
+    ranks = FakeRanks(RANKS_DATA, clock="igt")
     pb_rows = [
         {"course_id": 1, "star_id": 0, "segment_id": None, "strat_tag": "A",
          "timer_mode": "igt", "frames": 1500, "id": 1},

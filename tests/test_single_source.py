@@ -42,7 +42,7 @@ belong to, and are deliberately NOT duplicated here:
   * `tests/test_ui_picker_parity.py` — domain vocabulary reaches a control
     through EntityPicker, never a hand-rolled <select>.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -87,13 +87,10 @@ def shipped_python() -> tuple[Path, ...]:
 
 def library_zone() -> tuple[Path, ...]:
     """The library module tree and the API that serves it -- everywhere a
-    sheet entry's time could plausibly be graded. Narrower than
-    `python_sources()` on purpose: `scoring.best_ladder` is legitimately
-    called from `tracking/marelo.py`, `ranks/scopes.py`, `tracking/views.py`
-    and `server/ranks_api.py` to grade a USER's own attempts, which has
-    nothing to do with a sheet entry and would be permanent false positives
-    at repo scope. Nothing in this zone calls either ingredient today, so the
-    row starts with zero existing owners to add."""
+    sheet entry's time could plausibly be graded. ratings.py resolves a full
+    Overall curve and applies its displayed-time progress rule. Other rank
+    consumers have their own entry points outside this community-only zone;
+    no Library reader may reconstruct Overall from strategy cutoffs."""
     return tuple(sorted([*(SRC / "library").rglob("*.py"),
                          SRC / "server" / "library_api.py"]))
 
@@ -288,7 +285,8 @@ INVARIANTS = (
     ),
     SingleSource(
         concept="turning a TIME into a rank",
-        owners=frozenset({"scoring.py"}),
+        owners=frozenset({"src/sm64_events/ranks/scoring.py",
+                          "src/sm64_events/ranks/curves.py"}),
         # A BARE identifier, not `score_for(`: `code_only` tokenizes and joins
         # with newlines, so a name and its opening paren are never adjacent in
         # the scanned text and a token carrying one matches nothing, forever.
@@ -296,9 +294,11 @@ INVARIANTS = (
         # function is not swept up by it.
         tokens=("score_for",),
         files=python_sources(),
-        why="`score_for` is the raw curve and answers with a SCORE against an "
+        why="ranks/scoring.py owns legacy scoring; ranks/curves.py is the sole "
+            "compiled runtime and delegates legacy curves to that owner. "
+            "`score_for` is the raw curve and answers with a SCORE against an "
             "exact band edge. A production caller holding a real time wants "
-            "`scoring.progress_for_time`, which additionally applies the "
+            "the resolved curve's `progress_for_time`, which additionally applies the "
             "ladder's displayed-centisecond boundary rule -- the one that "
             "stopped a banner reading '0.00s to rank up' (2026-07-29). The "
             "two disagree by at most half a centisecond, and that is exactly "
@@ -311,6 +311,18 @@ INVARIANTS = (
             "II/Diamond V split docs/architecture.md records. `score_for` "
             "stays exported -- the invariant test and the curve's own tests "
             "grade with it deliberately, and tests are not scanned here.",
+    ),
+    SingleSource(
+        concept="binding a raw compiled scorer for pure fitting",
+        owners=frozenset({"src/sm64_events/ranks/curves.py",
+                          "src/sm64_events/ranks/overall.py"}),
+        tokens=("score_evaluator",),
+        files=python_sources(),
+        why="The compiled runtime exposes a detached scorer so Overall's fit "
+            "can search thousands of candidate frame boundaries without "
+            "revalidating the curve each time. This fitting primitive must "
+            "not become a second way to grade saved or community times; "
+            "those readers use the resolved curve's progress_for_time.",
     ),
     SingleSource(
         concept="where a rank progress bar's empty is",
@@ -460,13 +472,13 @@ INVARIANTS = (
     ),
     SingleSource(
         concept="a sheet entry's time graded against a standards ladder",
-        owners=frozenset({"ratings.py"}),
-        tokens=("best_ladder", "progress_for_time"),
+        owners=frozenset({"src/sm64_events/library/ratings.py"}),
+        tokens=("resolve_curve", "progress_for_time"),
         files=library_zone(),
         why="library/ratings.py -- the runner-rating twin of "
             "tracking/marelo.py::entity_scores -- grades a community "
-            "runner's sheet time on `scoring.best_ladder(ranks_store."
-            "ladders(...))` fed to `scoring.progress_for_time`, never the "
+            "runner's sheet time on `resolve_curve(ranks_store, entity, version)` "
+            "fed to `curves.progress_for_time`, never the "
             "library's own fitted `item['ladder']` (task-2 brief, "
             "2026-08-20): the fitted and vetted-standards ladders differ on "
             "every matched approach in the shipped snapshot, so grading on "
@@ -539,11 +551,16 @@ INVARIANTS = (
 )
 
 
+def _owner_matches(path: Path, owners: frozenset[str]) -> bool:
+    """Existing basename owners remain supported; new owners can name exact paths."""
+    return path.name in owners or path.relative_to(REPO).as_posix() in owners
+
+
 def offenders(invariant: SingleSource) -> dict[str, list[str]]:
     """Files outside the owner set that name any of the ingredients."""
     found = {}
     for path in invariant.files:
-        if path.name in invariant.owners:
+        if _owner_matches(path, invariant.owners):
             continue
         body = code_only(path)
         named = [token for token in invariant.tokens if token in body]
@@ -576,7 +593,7 @@ def test_every_ingredient_can_actually_match_code():
     quoted string literals (`'"tierskip"'`) — a paren belongs to nobody."""
     for invariant in INVARIANTS:
         owned = [path for path in invariant.files
-                 if path.name in invariant.owners]
+                 if _owner_matches(path, invariant.owners)]
         assert owned, (
             f"{invariant.concept}: none of {sorted(invariant.owners)} is in "
             "the scanned file set, so the row exempts a file that is not "
@@ -629,10 +646,49 @@ def test_every_invariant_actually_covers_files():
         # The owner has to be inside the scanned set, or `owners` is excluding
         # a file that was never going to be scanned and the rule is narrower
         # than it reads.
-        names = {path.name for path in invariant.files}
+        names = {name for path in invariant.files
+                 for name in (path.name, path.relative_to(REPO).as_posix())}
         assert invariant.owners <= names, (
             f"{invariant.concept} exempts {sorted(invariant.owners - names)}, "
             "which its own file set never scans")
+
+
+def test_library_never_reconstructs_overall_from_strategy_ladders():
+    """Even the rating owner must preserve the full resolved curve nodes."""
+    found = [path.relative_to(REPO).as_posix() for path in library_zone()
+             if "best_ladder" in code_only(path)]
+    assert not found, f"{found} rebuilds Overall from strategy cutoffs; use resolve_curve"
+
+
+@pytest.mark.parametrize("concept,relative,source", [
+    ("turning a TIME into a rank", "tracking/marelo.py", "score_for(curve, time)"),
+    ("turning a TIME into a rank", "library/curves.py", "score_for(curve, time)"),
+    ("binding a raw compiled scorer for pure fitting", "library/ratings.py", "score_evaluator(curve)"),
+    ("a sheet entry's time graded against a standards ladder", "library/board.py", "resolve_curve(ranks, entity)"),
+    ("a sheet entry's time graded against a standards ladder", "server/ratings.py", "resolve_curve(ranks, entity)"),
+])
+def test_rank_owner_guards_reject_duplicate_paths(monkeypatch, concept, relative, source):
+    invariant = next(item for item in INVARIANTS if item.concept == concept)
+    path = SRC / relative
+    invariant = replace(invariant, files=(path,))
+    scan = code_only
+    monkeypatch.setitem(globals(), "code_only", lambda current: scan(current, source))
+    with pytest.raises(AssertionError, match="build their own"):
+        test_only_the_owner_may_derive_it(invariant)
+    monkeypatch.setitem(globals(), "code_only", lambda current: scan(current, "# " + source))
+    test_only_the_owner_may_derive_it(invariant)
+
+
+@pytest.mark.parametrize("relative", ["library/ratings.py", "library/board.py"])
+def test_old_sheet_envelope_is_rejected_even_in_rating_owner(monkeypatch, relative):
+    path = SRC / relative
+    scan = code_only
+    monkeypatch.setitem(globals(), "library_zone", lambda: (path,))
+    monkeypatch.setitem(globals(), "code_only", lambda current: scan(current, "best_ladder(ranks.ladders(entity))"))
+    with pytest.raises(AssertionError, match="rebuilds Overall"):
+        test_library_never_reconstructs_overall_from_strategy_ladders()
+    monkeypatch.setitem(globals(), "code_only", lambda current: scan(current, "resolve_curve(ranks, entity)"))
+    test_library_never_reconstructs_overall_from_strategy_ladders()
 
 
 import re

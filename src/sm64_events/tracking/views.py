@@ -50,6 +50,7 @@ from sm64_events.memory.addresses import (COURSE_BY_LEVEL, COURSE_NAMES,
                                           course_name, star_count, star_name)
 from sm64_events.ranks import classify
 from sm64_events.ranks import scoring
+from sm64_events.ranks.calibration import calibrated_view
 from sm64_events.ranks.standards import entity_key
 from sm64_events.stats.registry import (DEFAULT_STAT_MENU, REGISTRY,
                                         compute_stat, selection_id,
@@ -427,7 +428,7 @@ def _attempt_rank(a, frames, ranks, ek=None) -> dict | None:
     if ranks is None or frames is None or a.outcome != "success" or not a.strat_tag:
         return None
     ek = ek or entity_key(a.course_id, a.star_id, a.segment_id)
-    ladder = ranks.ladder_cs(ek, a.strat_tag)
+    ladder = ranks.ladder_cs(ek, a.strat_tag, getattr(a, "game_version", None))
     if not ladder:
         return None
     progress = _graded_progress(ladder, classify.display_cs(frames))
@@ -457,7 +458,7 @@ def valid_frames(history, strat, clock) -> list[int]:
     return out
 
 
-def grading_basis(mode, pb, history, strat, clock) -> dict | None:
+def grading_basis(mode, pb, history, strat, clock, *, score_basis=None) -> dict | None:
     """THE one 'which time does this rank grade?' resolver. Returns
     {"frames", "count", "window", "version"} or None when nothing is gradeable.
     'pb' mode wraps the saved per-strategy PB row (count 1) — byte-for-byte
@@ -468,23 +469,47 @@ def grading_basis(mode, pb, history, strat, clock) -> dict | None:
     basis so every surface reading one time reaches the same ladder. In pb mode
     it is the row's own `game_version`; an IMPORTED time carries it and a
     played one is NULL, which resolves to the running version exactly as
-    everything did before imports existed. Avg modes are always None: an
-    average is over ATTEMPTS, and an attempt stores no version.
-
-    Public because MARELO grades the same basis (tracking/marelo.py): there is
-    exactly ONE answer to "which of my times counts", and it lives here."""
+    everything did before imports existed. Averages use separate original-ROM
+    windows. score_basis chooses the strongest regional performance for this
+    surface; without a scorer, the fastest regional average is returned.
+    """
     mode_def = classify.RANK_MODES.get(mode) or classify.RANK_MODES["pb"]
     if mode_def["order"] is None:
         return ({"frames": pb["frames"], "count": 1, "window": None,
                  "version": pb.get("game_version")}
                 if pb else None)
-    averaged = classify.average_frames(valid_frames(history, strat, clock),
-                                       mode_def["window"], mode_def["order"])
-    if averaged is None:
-        return None
-    mean_frames, count = averaged
-    return {"frames": mean_frames, "count": count,
-            "window": mode_def["window"], "version": None}
+    regions = {}
+    for attempt in history:
+        regions.setdefault(getattr(attempt, "game_version", None), []).append(attempt)
+    bases = []
+    for version, attempts in regions.items():
+        averaged = classify.average_frames(valid_frames(attempts, strat, clock),
+                                           mode_def["window"], mode_def["order"])
+        if averaged is not None:
+            bases.append({"frames": averaged[0], "count": averaged[1],
+                          "window": mode_def["window"], "version": version})
+    def quality(basis):
+        score = score_basis(basis) if score_basis else -basis["frames"]
+        return (score if score is not None else float("-inf"),
+                -basis["frames"], basis["version"] or "")
+    return max(bases, key=quality) if bases else None
+
+
+def _ranked_basis(ranks, ek, mode, pb, history, strat, clock, *, overall=False):
+    """Choose a real regional basis; a section shares it between both banners."""
+    def quality(basis):
+        if ranks is None:
+            return None
+        time = classify.display_cs(basis["frames"])
+        if overall:
+            from sm64_events.ranks.calibration import resolve_curve
+            from sm64_events.ranks.curves import progress_for_time
+            progress = progress_for_time(resolve_curve(ranks, ek, basis["version"]), time)
+        else:
+            ladder = ranks.ladder_cs(ek, strat, basis["version"])
+            progress = _graded_progress(ladder, time) if ladder else None
+        return progress["score"] if progress else None
+    return grading_basis(mode, pb, history, strat, clock, score_basis=quality)
 
 
 def _strat_rank(ranks, ek, strat, basis) -> dict | None:
@@ -598,59 +623,36 @@ def _ladder_is_fitted(ranks, ek, best_ladder_cs: dict) -> bool:
 
 
 def entity_rank(ranks, ek, frames, version=None) -> dict | None:
-    """The star/segment's OWN rank: the time graded against the entity's
-    best-possible ladder (pointwise best across every strategy) rather than
-    the active strategy's. THE number MARELO aggregates.
+    """Grade this absolute time on the target's independent Overall curve.
 
-    This is why a mastered slow strategy reads Mario on one banner and
-    honestly less on the other: the strategy banner asks 'how well do I run
-    THIS strat', this one asks 'how close is this to the fastest this star
-    can be'. None when the entity has no standards or there is no time to
-    grade (the banner is simply not rendered — no sentinel wording, unlike
-    `_section_banner`; keeping this a plain None/dict contract, not a
-    sentinel one, was a deliberate choice on 2026-07-25 round 2 rather than
-    inventing wording nobody asked for).
-
-    Shape deliberately mirrors `_section_banner`'s graded output — SAME
-    fields (`_graded_progress`), so the UI renders both through the SAME
-    ui/components/ranks.js RankBanner, side by side, with different data.
-    Spec 2026-07-25 round 3: the user asked for the two banners to be
-    genuinely interchangeable — same gradient, same bar, same `next:` line
-    with its time delta — after round 2 still left this one looking like a
-    lesser chip beside a full banner ("it feels like it's just a visual
-    error"). Also carries `fastest_strat` (_fastest_strategy) — the strategy
-    that actually sets this best-possible ladder — so the UI can explain a
-    low entity rank next to a high strategy rank ("Iron I · fastest here is
-    Sign Clip") instead of leaving the two numbers to look like a
-    contradiction (live user report 2026-07-25).
-
-    `fitted` is NOT fastest_strat's own is_fitted -- `best_ladder` is a
-    POINTWISE minimum, so a different strategy can own an easier tier than
-    the one that wins the hardest tier `_fastest_strategy` identifies (its
-    own hardest-tier-first narrowing stops at the first uniquely-identified
-    strategy and never claims to speak for every tier). `_ladder_is_fitted`
-    asks every strategy that actually SETS a tier, not just the one strategy
-    named as "fastest" -- measured against the bundled seeds, 8 of 117
-    entities have a vetted fastest_strat while a fitted strategy alone still
-    sets one of the easier tiers a run is graded against there, which
-    fastest_strat's own is_fitted silently missed."""
+    MARELO aggregates the same score. The returned banner fields match the
+    Strategy banner; missing standards/time returns None. Legacy attribution
+    applies only while its effective curve still equals the strategy envelope.
+    """
     if ranks is None or frames is None:
         return None
     # `version` is the ROM that set THIS time (None = the running one). It
     # matters most here of anywhere: this is the number MARELO aggregates, so
     # a JP time landing on a US best-possible ladder would inflate the rating
     # for the whole corpus rather than one banner.
-    ladder = scoring.best_ladder(ranks.ladders(ek, version))
-    if not ladder:
+    from sm64_events.ranks import curves
+    from sm64_events.ranks.calibration import resolve_curve
+    curve = resolve_curve(ranks, ek, version)
+    progress = curves.progress_for_time(curve, classify.display_cs(frames))
+    if progress is None:
         return None
-    progress = _graded_progress(ladder, classify.display_cs(frames))
-    fastest_strat = _fastest_strategy(ranks, ek, ladder)
-    return {**progress, "score": round(progress["score"], 1),
+    legacy = (curve["interpolation"] == "legacy"
+              and curve["ladder_cs"] == curves.from_ladder(
+                  scoring.best_ladder(ranks.ladders(ek, version)))["ladder_cs"])
+    ladder = curve["ladder_cs"]
+    fastest_strat = _fastest_strategy(ranks, ek, ladder) if legacy else None
+    return {**progress, "rank": progress["tier"], "score": round(progress["score"], 1),
             "fastest_strat": fastest_strat,
-            "fitted": _ladder_is_fitted(ranks, ek, ladder)}
+            "fitted": _ladder_is_fitted(ranks, ek, ladder) if legacy else True,
+            "calibration": curve["metadata"]}
 
 
-def ranks_share_ladder(ranks, ek, strat) -> bool:
+def ranks_share_ladder(ranks, ek, strat, version=None) -> bool:
     """Whether the ACTIVE strategy's ladder IS the entity's best-possible one.
 
     When it is, the strategy rank and the entity's own rank are not two
@@ -668,8 +670,14 @@ def ranks_share_ladder(ranks, ek, strat) -> bool:
     """
     if ranks is None or not strat:
         return False
-    ladder = ranks.ladder_cs(ek, strat)
-    return bool(ladder) and ladder == scoring.best_ladder(ranks.ladders(ek))
+    from sm64_events.ranks.calibration import resolve_curve
+    curve = resolve_curve(ranks, ek, version)
+    ladder = ranks.ladder_cs(ek, strat, version)
+    # Comparison must not validate or repair Strategy edits: legacy custom
+    # cutoffs can cross. Only the obsolete, unbounded floor is irrelevant.
+    ladder = {rank: cutoff for rank, cutoff in ladder.items() if rank != "Iron"}
+    return (bool(ladder) and curve["interpolation"] == "legacy"
+            and ladder == curve["ladder_cs"])
 
 
 def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
@@ -695,8 +703,8 @@ def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
     for strat in (strategies if strategies is not None else ranks.strategies(ek)):
         if strat in deleted:
             continue
-        basis = grading_basis(
-            rank_mode, pbs_by_strat.get((*pb_key_prefix, clock, strat)),
+        basis = _ranked_basis(
+            ranks, ek, rank_mode, pbs_by_strat.get((*pb_key_prefix, clock, strat)),
             history, strat, clock)
         if basis is None:
             continue
@@ -881,10 +889,10 @@ def build_entity_strategies(db, service, ek: str) -> dict:
         pb_row = pbs_by_strat.get((*pb_key_prefix, clock, name))
         rank = division = score = None
         if ranks is not None:
-            ladder = ranks.ladder_cs(ek, name)
-            if ladder:
-                basis = grading_basis(rank_mode, pb_row, history, name, clock)
-                if basis is not None:
+            basis = _ranked_basis(ranks, ek, rank_mode, pb_row, history, name, clock)
+            if basis is not None:
+                ladder = ranks.ladder_cs(ek, name, basis["version"])
+                if ladder:
                     graded = _graded_progress(ladder,
                                               classify.display_cs(basis["frames"]))
                     rank, division = graded["rank"], graded["division"]
@@ -1244,6 +1252,7 @@ def _armed_detail_for(d, seg_id: int, armed_arms: dict) -> dict | None:
             "steps": card_step_labels(d)}
 
 
+@calibrated_view
 def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
     all_attempts = db.attempts()
     session_attempts = [a for a in all_attempts
@@ -1538,9 +1547,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                     if star_id == 6 else None)
         star_strat = active.for_star(course_id, star_id)
         rank_clock = service.ranks.clock_for(ek) if service.ranks else clock
-        star_basis = grading_basis(
-            rank_mode, pbs_by_strat.get((course_id, star_id, rank_clock, star_strat)),
-            history, star_strat, rank_clock)
+        star_basis = _ranked_basis(
+            service.ranks, ek, rank_mode, pbs_by_strat.get((course_id, star_id, rank_clock, star_strat)),
+            history, star_strat, rank_clock, overall=True)
         # The entity's CURRENT (strategy-blind) PB on the ladder's own clock —
         # the exact row `_current_pbs` keeps and the display tag shows. A PB
         # here with no strat_tag can never be found by current_pbs_by_strat
@@ -1623,7 +1632,8 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "entity_rank": entity_rank(
                 service.ranks, ek, star_basis and star_basis["frames"],
                 version=star_basis and star_basis.get("version")),
-            "one_ladder": ranks_share_ladder(service.ranks, ek, star_strat),
+            "one_ladder": ranks_share_ladder(
+                service.ranks, ek, star_strat, star_basis and star_basis.get("version")),
             # armed_detail is a documented rule-11 ASYMMETRY, not its
             # absence: every star but the 100-coin one carries no such key
             # (test_star_sections_carry_no_arm_detail) because an ordinary
@@ -1683,9 +1693,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
         grading_ek = pipe_star_ek or seg_ek
         seg_strat = active.for_segment(seg_id)
         seg_rank_clock = service.ranks.clock_for(seg_ek) if service.ranks else "rta"
-        seg_basis = grading_basis(
-            rank_mode, pbs_by_strat.get(("segment", seg_id, seg_rank_clock, seg_strat)),
-            history, seg_strat, seg_rank_clock)
+        seg_basis = _ranked_basis(
+            service.ranks, seg_ek, rank_mode, pbs_by_strat.get(("segment", seg_id, seg_rank_clock, seg_strat)),
+            history, seg_strat, seg_rank_clock, overall=True)
         # Same untagged-PB check as the star loop above, keyed off the
         # SEGMENT's own identity (PBs are genuinely this segment's own times,
         # even when grading_ek borrows a paired star's ladder).
@@ -1876,9 +1886,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 service.ranks, grading_ek, seg_strat, seg_basis, rank_mode,
                 pb_untagged=seg_pb_untagged),
             "entity_rank": entity_rank(
-                service.ranks, grading_ek, seg_basis and seg_basis["frames"],
+                service.ranks, seg_ek, seg_basis and seg_basis["frames"],
                 version=seg_basis and seg_basis.get("version")),
-            "one_ladder": ranks_share_ladder(service.ranks, grading_ek, seg_strat),
+            "one_ladder": (grading_ek == seg_ek and
+                           ranks_share_ladder(
+                               service.ranks, seg_ek, seg_strat,
+                               seg_basis and seg_basis.get("version"))),
         })
     seg_sections.sort(
         key=lambda s: last_id.get(("segment", s["segment_id"]), -1),
@@ -1927,9 +1940,9 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             if (live_strat := active.for_star(c, s))
             and (rank := _strat_rank(
                 service.ranks, entity_key(c, s), live_strat,
-                grading_basis(
-                    rank_mode, pbs_by_strat.get((c, s, "igt", live_strat)),
-                    attempts_by_star.get((c, s), []), live_strat, "igt")))},
+                _ranked_basis(
+                    service.ranks, entity_key(c, s), rank_mode, pbs_by_strat.get((c, s, "igt", live_strat)),
+                    attempts_by_star.get((c, s), []), live_strat, "igt", overall=True)))},
         # Parallel to rank_by_star, and keyed over a DIFFERENT set on purpose:
         # rank_by_star lists stars with an active strategy, while the most
         # important caveat is precisely "this PB has no strategy at all". So
@@ -2001,10 +2014,10 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                  service.ranks,
                  reds_pipe_grading_ek.get(d.id, entity_key(None, None, d.id)),
                  seg_strat,
-                 grading_basis(
-                     rank_mode,
+                 _ranked_basis(
+                     service.ranks, entity_key(None, None, d.id), rank_mode,
                      pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
-                     attempts_by_seg.get(d.id, []), seg_strat, "rta")),
+                     attempts_by_seg.get(d.id, []), seg_strat, "rta", overall=True)),
              # Rule 11: the same mark the star cells get, from the same
              # derivation, off this segment's own strategy-blind current PB.
              "caveat": (lambda row: caveat_for(
@@ -2053,6 +2066,7 @@ def _resolve_cands(cands, seg_names):
     return out
 
 
+@calibrated_view
 def build_run_view(db, service) -> dict:
     """Live run state for the run panel: the active run (resolved step names +
     elapsed + per-step PB-cumulative and gold-duration for ±/gold) plus the
@@ -2168,7 +2182,7 @@ def _candidate_rank(db, service, c, mode, by_star, by_seg,
         pb = (db.current_pb(c["course"], c["star"], "igt", strat_tag=strat)
               if strat else None)
     return _strat_rank(service.ranks, grading_ek, strat,
-                       grading_basis(mode, pb, history, strat, clock))
+                       _ranked_basis(service.ranks, grading_ek, mode, pb, history, strat, clock))
 
 
 def build_route_view(db, service, route_id: int) -> dict:

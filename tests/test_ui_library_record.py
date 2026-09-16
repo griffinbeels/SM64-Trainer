@@ -179,8 +179,28 @@ def test_the_record_door_records_names_parents_and_links_in_one_save(library_pag
       })()
     """, note="Save enabled")
     library_page.evaluate("""
-      Array.from(document.querySelectorAll('.modal .builder-actions button'))
-        .find((b) => b.textContent.includes('Save segment')).click()
+      (() => {
+        // Hold the name-list response so a standards WebSocket refresh can
+        // overtake it. A linked row must never publish its raw segment key.
+        const fetch = window.fetch;
+        window.fetch = async (...args) => {
+          const response = await fetch(...args);
+          if (new URL(String(args[0]), location.href).pathname === '/api/segments'
+              && (!args[1]?.method || args[1].method === 'GET'))
+            await new Promise((done) => setTimeout(done, 800));
+          return response;
+        };
+        window.recordLinkLabels = [];
+        const observer = new MutationObserver(() => {
+          document.querySelectorAll('.library-pieces .library-link-state.is-linked')
+            .forEach((chip) => window.recordLinkLabels.push(chip.textContent));
+        });
+        observer.observe(document.querySelector('.library-target'),
+          {subtree: true, childList: true, characterData: true});
+        window.stopRecordLinkTrace = () => { observer.disconnect(); window.fetch = fetch; };
+        Array.from(document.querySelectorAll('.modal .builder-actions button'))
+          .find((b) => b.textContent.includes('Save segment')).click();
+      })()
     """)
     _wait_until(library_page,
                 "!document.querySelector('.record-picks')",
@@ -196,6 +216,9 @@ def test_the_record_door_records_names_parents_and_links_in_one_save(library_pag
     """, note="linked chip")
     assert piece_name in linked_text, (
         f"the linked chip must name the auto-named segment: {linked_text!r}")
+    labels = library_page.evaluate(
+        "(() => { window.stopRecordLinkTrace(); return window.recordLinkLabels; })()")
+    assert labels and all("segment:" not in label for label in labels), labels
 
     # The server-side half: the minted segment carries the star as its
     # parent -- the recording IS a subsection, not a loose segment that

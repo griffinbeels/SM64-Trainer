@@ -1,0 +1,433 @@
+{
+  "schema_version": 1,
+  "layers": {
+    "strategy": {
+      "defaults": {
+        "model": "empirical",
+        "percentiles": {
+          "Mario": 6.7,
+          "Grandmaster": 21.7,
+          "Master": 45.0,
+          "Diamond": 65.2,
+          "Platinum": 80.4,
+          "Gold": 89.3,
+          "Silver": 94.0,
+          "Bronze": 100.0
+        },
+        "peak_window_frames": 3,
+        "peak_min_entries": 3,
+        "peak_density_ratio": 2
+      },
+      "patches": []
+    },
+    "overall": {
+      "defaults": {
+        "model": "family_milestones",
+        "milestone_weight": 0.75,
+        "slow_quantile": 0.95,
+        "fast_quantile": 0.1,
+        "overlap_ratio": 0.7,
+        "confidence_runners": 8,
+        "unannotated_region": "both",
+        "community_fit": {
+          "percentiles": {
+            "Mario": 6.7,
+            "Grandmaster": 21.7,
+            "Master": 45.0,
+            "Diamond": 65.2,
+            "Platinum": 80.4,
+            "Gold": 89.3,
+            "Silver": 94.0,
+            "Bronze": 100.0
+          },
+          "peak_window_frames": 3,
+          "peak_min_entries": 3,
+          "peak_density_ratio": 2
+        },
+        "families": []
+      },
+      "patches": [
+        {
+          "target_id": "star:1:5",
+          "parameters": {
+            "families": [
+              {
+                "id": "bomb-clip",
+                "label": "Bomb clip",
+                "rows": [
+                  "Behind Chain Chomp's Gate"
+                ]
+              },
+              {
+                "id": "backflip-clip-slide-variant",
+                "label": "Backflip clip + slide variant",
+                "rows": [
+                  "Backflip clip",
+                  "Slide + Backflip clip"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:2:5",
+          "parameters": {
+            "families": [
+              {
+                "id": "sockfolder",
+                "label": "Sockfolder",
+                "rows": [
+                  "Blast Away the Wall"
+                ]
+              },
+              {
+                "id": "texture",
+                "label": "Texture",
+                "rows": [
+                  "Texture setup"
+                ]
+              },
+              {
+                "id": "salt-og",
+                "label": "Salt / OG",
+                "rows": [
+                  "Salt setup",
+                  "No setup (OG)"
+                ]
+              },
+              {
+                "id": "longjump",
+                "label": "Longjump",
+                "rows": [
+                  "Longjump"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:2:2",
+          "parameters": {
+            "families": [
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "Shoot into the Wild Blue"
+                ]
+              },
+              {
+                "id": "single-jump-variants",
+                "label": "Single jump variants",
+                "rows": [
+                  "Single jump ending",
+                  "Single jump ending, no speedkick"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:2:0",
+          "parameters": {
+            "families": [
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "Chip off Whomp's Block"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:2:1",
+          "parameters": {
+            "families": [
+              {
+                "id": "triple-jump",
+                "label": "Triple jump",
+                "rows": [
+                  "To the Top of the Fortress"
+                ]
+              },
+              {
+                "id": "double-jump",
+                "label": "Double jump",
+                "rows": [
+                  "Double jump -> Ledgegrab"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:2:4",
+          "parameters": {
+            "families": [
+              {
+                "id": "owl",
+                "label": "Owl",
+                "rows": [
+                  "Owl strat w/o speed preservation"
+                ]
+              },
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "Fall onto the Caged Island"
+                ]
+              },
+              {
+                "id": "dj-owlless-variants",
+                "label": "DJ Owlless variants",
+                "rows": [
+                  "Double jump owlless",
+                  "Double jump owlless w/ stairs fence clip"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:4:5",
+          "parameters": {
+            "families": [
+              {
+                "id": "backflip-wall-kick",
+                "label": "Backflip wall kick",
+                "rows": [
+                  "Wall Kicks Will Work"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:4:1",
+          "parameters": {
+            "families": [
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "Li'l Penguin Lost"
+                ]
+              },
+              {
+                "id": "pingu-trick",
+                "label": "Pingu trick",
+                "rows": [
+                  "Pingu trick"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:16:0",
+          "parameters": {
+            "families": [
+              {
+                "id": "shigeru-star-grab",
+                "label": "Shigeru star grab",
+                "rows": [
+                  "Bowser Courses||Bowser in the Dark World Red Coins||jp||Red coin star Xcam||1|2",
+                  "Bowser Courses||Bowser in the Dark World Red Coins||jp||Red coin star Xcam||3|4"
+                ]
+              },
+              {
+                "id": "xiah-star-grab",
+                "label": "Xiah star grab",
+                "rows": [
+                  "Bowser Courses||Bowser in the Dark World Red Coins||jp||Red coin star Xcam||4|6"
+                ]
+              },
+              {
+                "id": "tsukishima-star-grab",
+                "label": "Tsukishima star grab",
+                "rows": [
+                  "Bowser Courses||Bowser in the Dark World Red Coins||jp||Red coin star Xcam||7|8"
+                ]
+              },
+              {
+                "id": "salt-flip-star-grab",
+                "label": "Salt flip star grab",
+                "rows": [
+                  "Bowser Courses||Bowser in the Dark World Red Coins||jp||Red coin star Xcam||10|9"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:8:0",
+          "parameters": {
+            "families": [
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "In the Talons of the Big Bird"
+                ]
+              },
+              {
+                "id": "pillar-speed-variants",
+                "label": "Pillar / speed variants",
+                "rows": [
+                  "Walk up the left side of the pillar",
+                  "Speed single jump -> Dive",
+                  "Speed single jump x2"
+                ]
+              },
+              {
+                "id": "flyguyless",
+                "label": "Flyguyless",
+                "rows": [
+                  "Flyguyless"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:8:1",
+          "parameters": {
+            "families": [
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "Shining atop the Pyramid"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:7:2",
+          "parameters": {
+            "families": [
+              {
+                "id": "burn",
+                "label": "Burn",
+                "rows": [
+                  "Burn strat"
+                ]
+              },
+              {
+                "id": "three-longjumps",
+                "label": "Three longjumps",
+                "rows": [
+                  "LJ x3 strat"
+                ]
+              },
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "8-Coin Puzzle with 15 Pieces"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:6:4",
+          "parameters": {
+            "families": [
+              {
+                "id": "right-left-side",
+                "label": "Right / left side",
+                "rows": [
+                  "A-Maze-ing Emergency Exit",
+                  "Left side TJ"
+                ]
+              },
+              {
+                "id": "single-star-strategy",
+                "label": "Single-star strategy",
+                "rows": [
+                  "Singlestar strat"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "seg:hmc-toad-result",
+          "parameters": {
+            "families": [
+              {
+                "id": "result-toad-hmc-entry",
+                "label": "Result → Toad → HMC entry",
+                "rows": [
+                  "HMC result - Enter HMC (Toad)"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:6:5",
+          "parameters": {
+            "families": [
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "Watch for Rolling Rocks"
+                ]
+              },
+              {
+                "id": "c-up-slide-variants",
+                "label": "C-up slide variants",
+                "rows": [
+                  "C-Up slide strat",
+                  "C-Up slide start (Right side)"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "target_id": "star:9:0",
+          "parameters": {
+            "families": [
+              {
+                "id": "back-sub",
+                "label": "Back sub",
+                "rows": [
+                  "Back sub"
+                ]
+              },
+              {
+                "id": "standard",
+                "label": "Standard",
+                "rows": [
+                  "Board Bowser's Sub"
+                ]
+              },
+              {
+                "id": "chip-clip-front-sub",
+                "label": "Chip clip + front sub",
+                "rows": [
+                  "Chip clip w/ punch + Front sub"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "route": {
+      "defaults": {
+        "model": "required_slots",
+        "weights": {}
+      },
+      "patches": []
+    }
+  }
+}

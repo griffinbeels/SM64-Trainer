@@ -48,10 +48,14 @@ def test_real_worker_preserves_build_output_and_is_the_owned_process(tmp_path, m
     assert persisted == direct == store.payload
 
 
-def test_unchanged_sheet_does_not_start_a_worker_or_build(tmp_path, monkeypatch):
+def test_an_older_sheet_does_not_start_a_worker_or_build(tmp_path, monkeypatch):
+    """Only an OLDER Sheet skips the build. A same-date Sheet still builds in
+    the worker, because main's absorb applies corrected same-date data by
+    content (library/store.py::absorb); it then applies nothing when unchanged."""
     data = _fresh_workbook()
     store = LibraryStore(tmp_path / "not-written.json.gz")
     store._payload = build_and_stamp(data)
+    store._payload["sheet_revision"] = "2999-01-01T00:00:00"   # we already hold a newer Sheet
 
     def unexpected(*_args, **_kwargs):
         pytest.fail("unchanged workbook reached expensive work")
