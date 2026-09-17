@@ -83,6 +83,10 @@ packages = ["src/sm64_events"]
 # sit here without anyone declaring bankruptcy.
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
+# Collect only the tree. data/, replays/ and logs/ are local runtime state; probe
+# scripts a sibling feature left in the main checkout's data/console-training
+# turned the integration gate red there with 48 collection errors (2026-09-17).
+addopts = ["--ignore=data", "--ignore=replays", "--ignore=logs"]
 markers = [
     "spread: each case of this test is its own worker group under pytest-xdist loadgroup instead of staying with its file (tests/conftest.py::pytest_collection_modifyitems)",
 ]
