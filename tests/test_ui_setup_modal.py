@@ -148,6 +148,45 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
         assert page.problems() == []
 
 
+_UNFOCUSED = ("(() => { Object.defineProperty(document, 'hasFocus', {configurable: true, value: () => false});"
+              " window.dispatchEvent(new Event('blur')); return true; })()")
+_VISIBILITY = ("(() => {{ Object.defineProperty(document, 'visibilityState', {{configurable: true, get: () => {state!r}}});"
+               " document.dispatchEvent(new Event('visibilitychange')); return true; }})()")
+
+
+def test_confirmed_setup_continues_while_visible_and_waits_while_hidden(tmp_path):
+    """His report, 2026-09-17: the wizard sat on Setup checked instead of
+    continuing. He plays in Project64, so the trainer is on screen without
+    focus; the confirmation must still continue. A hidden trainer waits, so
+    the completion is never spent where nobody can see it."""
+    layer, observed = scenario()
+    connect(layer, observed)
+    with serve_ui(capture_layer_status=layer, setup_observer=lambda _: observed) as url, get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "platform")
+        page.click(".setup-platform-choice:first-child")
+        wait_page(page, "install")
+        wait_step(page, "close")
+        layer["pj64_running"] = False
+        wait_step(page, "install")
+        installed(layer)
+        click_text(page, "Install Practice Replay")
+        wait_step(page, "reopen")
+        layer["pj64_running"] = True  # he goes back to Project64: the trainer loses focus
+        observed["rom"] = dict(state="supported", region="us", name="SM64 USAMUNE v1.93u", warning=None)
+        wait_step(page, "verify")
+        assert page.evaluate(_UNFOCUSED)
+        assert page.evaluate(_VISIBILITY.format(state="hidden"))
+        observed["checks"] = dict(plugin=True, pictures=True, inputs=True, game=True)
+        wait_step(page, "ready")
+        page.wait_ms(2500)
+        assert page.count('.setup-modal[data-page="install"]') == 1  # hidden: waits
+        assert page.evaluate(_VISIBILITY.format(state="visible"))  # on screen, still unfocused
+        wait_page(page, "complete")
+        (tmp_path / "continued-while-unfocused.png").write_bytes(page.screenshot())
+        assert page.problems() == []
+
+
 def test_jp_finishes_available_setup_and_keeps_warning(tmp_path):
     layer, observed = scenario()
     connect(layer, observed)

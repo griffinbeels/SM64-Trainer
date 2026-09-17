@@ -56,6 +56,14 @@ click; a declared transition or a settled screenshot alone cannot prove movement
 
 ## Failure catalogue
 
+- 2026-09-17, hop 5: "Looks like it stalls on the 'setup checked' screen. It
+  should automatically continue once we've successfully confirmed the setup."
+  Readiness was true on the server; the wizard waited for `document.hasFocus()`
+  before its one-second acknowledgment, and he plays in Project64 with the
+  trainer beside it, so the trainer never had focus. Headless tests always have
+  focus, so none saw it. `useSetupAttention` now waits only while the page is
+  hidden; `test_confirmed_setup_continues_while_visible_and_waits_while_hidden`
+  fails on the focus rule.
 - 2026-09-15, hop 1: "this candidate doesn't have any stuttering as far as I
   can tell", yet every picture read "Input unavailable". Project64's graphics
   plugin pointed at the renderer DLL directly, so the wrapper never loaded (its
