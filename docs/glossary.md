@@ -781,7 +781,7 @@ picture's own state.
 ### Refused picture
 
 A picture the [[capture layer]] could not admit while recording: the [[renderer]]'s
-eight source slots or the [[snapshot]] pool were full (Python fell behind), or
+eight source slots or its GPU copy pool were full (Python fell behind), or
 the record carried no usable stamp. The [[renderer]] never waits for it; the
 worker counts it (`refused` in the native `gpu_summary` log) and keeps
 recording. The replay holds the previous picture through that [[frame]], the
@@ -911,7 +911,7 @@ his ask: "redo our recording system so that the recording [[frame]]s ARE game
 `sm64_trainer_gfx.dll`) and the [[renderer]] it wraps. When the [[renderer]]
 finishes a picture the wrapper copies the game's own memory -- the [[frame]]
 counter, the pad, Mario, the running IGT -- and the [[renderer]] passes an owned
-GPU [[snapshot]] with that immutable stamp to a dedicated worker and the
+GPU copy of the picture with that immutable stamp to a dedicated worker and the
 isolated [[encoder helper]]. The [[recorder]] retains exact source identity
 through shared media fragments without transferring full images through
 Python. A known GPU producer that cannot capture reports the failure; it does
@@ -946,7 +946,8 @@ The trainer's build of LINK's GLideN64 v4.2 (`GLideN64_SM64Trainer.dll`,
 picker label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
 capture overlay that adds the SourceV2 export the [[capture layer]] reads. A
 stock GLideN64 has no such export, so a wrapper pointed at one captures
-nothing and every picture reads "input unavailable" (his report, 2026-09-15).
+nothing. (His 2026-09-15 "input unavailable" report had a different cause:
+Project64 selected the renderer directly, so the wrapper never loaded.)
 GLideN64 is GPL-2.0; the About box credits its authors and links the
 published source. The renderer keeps GLideN64's own settings identity, so a
 user's existing GLideN64 settings carry over.

@@ -167,71 +167,18 @@ def test_closed_emulator_clears_rom_identity_even_if_poller_has_old_data():
     assert probe(replace(installed(), pj64_running=False))["rom"]["state"] == "missing"
 
 
-@pytest.mark.parametrize("already_idle", [False, True])
-def test_setup_verifies_while_afk_without_new_recorded_pictures(already_idle):
-    probe, now, target, inputs, recorder, memory, poller = runtime()
+def test_idle_without_a_gpu_observation_needs_fresh_pictures():
+    """Only the GPU observation carries an idle picture receipt
+    (tests/test_setup_gpu.py); without one, a stalled delivery count fails
+    even when the source's health names this very process."""
+    probe, now, _, inputs, recorder, _, poller = runtime()
+    recorder["idle"] = True
     recorder["frame_source_health"]["plugin_pid"] = 123
-    recorder["idle"] = already_idle
     probe(installed())
     now[0] = 1
-    inputs["frames"] += 30  # Neutral pad samples still arrive each game frame.
-    poller.latest.global_timer += 30
-    if not already_idle:
-        recorder["frame_source_health"]["delivered"] += 30
-    assert readiness(installed(), probe(installed()))["ready"]
-    recorder["idle"] = True
-    for tick in (5, 60, 600):
-        now[0] = tick
-        inputs["frames"] += 30
-        poller.latest.global_timer += 30
-        assert readiness(installed(), probe(installed()))["ready"]
-    recorder["idle"] = False  # A real active stall must still fail.
-    now[0] += 1
-    assert not readiness(installed(), probe(installed()))["ready"]
-
-
-def test_jp_afk_picture_receipt_preserves_the_tracking_limitation():
-    probe, now, target, inputs, recorder, memory, poller = runtime()
-    jp = bytearray(LIVE_USAMUNE_BE)
-    jp[0x3E] = ord("J")
-    memory.raw = bytes(jp)
-    recorder.update(idle=True)
-    recorder["frame_source_health"]["plugin_pid"] = 123
-    verdict = readiness(installed(), probe(installed()))
-    assert verdict["ready"] and verdict["limited"]
-    assert not verdict["checks"]["game"] and not verdict["checks"]["inputs"]
-
-
-@pytest.mark.parametrize("fault", ["no_pictures", "wrong_source_pid", "stopped", "desktop",
-                                  "dead_plugin", "wrong_target", "no_rom", "paused", "stale_inputs"])
-def test_afk_does_not_hide_missing_setup_evidence(fault):
-    probe, now, target, inputs, recorder, memory, poller = runtime()
-    recorder.update(idle=True)
-    recorder["frame_source_health"]["plugin_pid"] = 123
-    layer = installed()
-    probe(layer)
-    now[0] = 10
     inputs["frames"] += 30
     poller.latest.global_timer += 30
-    if fault == "no_pictures":
-        recorder["frame_source_health"]["delivered"] = 0
-    elif fault == "wrong_source_pid":
-        recorder["frame_source_health"]["plugin_pid"] = 999
-    elif fault == "stopped":
-        recorder["recording"] = False
-    elif fault == "desktop":
-        recorder["frame_source"] = "desktop"
-    elif fault == "dead_plugin":
-        layer = replace(layer, layer_alive=False)
-    elif fault == "wrong_target":
-        target["pid"] = 999
-    elif fault == "no_rom":
-        memory.raw = None
-    elif fault == "paused":
-        poller.paused = True
-    elif fault == "stale_inputs":
-        inputs["frames"] -= 30
-    assert not readiness(layer, probe(layer))["ready"]
+    assert not probe(installed())["checks"]["pictures"]
 
 
 def test_completion_endpoint_rechecks_and_preserves_a_failed_attempt(tmp_path):

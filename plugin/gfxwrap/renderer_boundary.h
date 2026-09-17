@@ -1,4 +1,5 @@
-/* Internal staged capture contract, not the final shared-memory ABI. */
+/* The renderer-side capture boundary behind SourceV2. link_source_api.h pins
+ * these record/surface layouts as the SourceV2 ABI. */
 #pragma once
 #include <windows.h>
 #include <stdint.h>
@@ -40,9 +41,9 @@ typedef struct {
 } rb_surface;
 
 enum rb_outcome { RB_OBSERVED = 1, RB_RETIRED, RB_NOT_OBSERVED, RB_SURFACE_FAILED };
-enum rb_install_result { RB_INSTALLED = 1, RB_ALREADY_INSTALLED, RB_UNSUPPORTED,
-    RB_FOREIGN_SLOT, RB_PIN_FAILED, RB_PROTECTION_FAILED, RB_BOUND_TO_OTHER,
-    RB_LIFECYCLE_REFUSED };
+/* rb_bind_source results; the numbers are stable. */
+enum rb_install_result { RB_INSTALLED = 1, RB_ALREADY_INSTALLED = 2, RB_PIN_FAILED = 5,
+    RB_BOUND_TO_OTHER = 7, RB_LIFECYCLE_REFUSED = 8 };
 
 enum rb_image_ownership { RB_IMAGE_NONE, RB_IMAGE_SUBMITTED, RB_IMAGE_QUARANTINED };
 typedef struct { uint64_t serial; uint32_t slot, epoch, ownership, status; } rb_image;
@@ -55,12 +56,13 @@ typedef struct {
 } rb_record;
 
 typedef struct { uint64_t occurrence; uint32_t slot; } rb_ticket;
+/* installed and observer_ready are equal: a bound source always observes. */
 typedef struct { uint32_t offered, refused_full, refused_busy, observed, retired,
     unobserved, surface_failed, installed, observer_ready; } rb_stats;
 
 typedef int (__cdecl *rb_capture_image)(const rb_record *, rb_image *);
 typedef int (__cdecl *rb_image_completed)(const rb_image *);
-/* Configure once before install/ROM startup; function lifetimes match adapter.
+/* Configure once before rb_bind_source/ROM startup; the callbacks stay resident.
  * Image callbacks may submit GPU work, never wait. Release guard runs only on
  * the single consumer and must report actual worker-use completion. */
 RB_API int rb_configure_images(rb_capture_image, rb_image_completed);
@@ -69,15 +71,14 @@ RB_API int rb_configure_images(rb_capture_image, rb_image_completed);
  * One background activation owner may race lifecycle/disarm; cancellation
  * invalidates delayed activation and renderer completions without a join. No
  * caller may use this as a replacement for LINK's original synchronization. */
-/* Source-owned alternative: no binary inspection or vtable mutation. Bind once
- * pre-ROM; the source and callbacks must stay resident. Ordinary rendering is
- * always forwarded, including a refused/stale capture request. */
+/* Bind once pre-ROM; this module and the surface provider are pinned for the
+ * process lifetime. The renderer's UpdateScreen command brackets its original
+ * work with rb_source_begin/rb_source_end, and ordinary rendering is always
+ * forwarded, including a refused/stale capture request. */
 typedef int (__cdecl *rb_source_surface)(rb_surface *);
 RB_API int rb_bind_source(rb_source_surface);
 RB_API rb_ticket rb_source_begin(rb_ticket);
 RB_API void rb_source_end(rb_ticket);
-RB_API int rb_install_link(HMODULE wrapped, HMODULE wrapper);
-RB_API int rb_validate_link(HMODULE wrapped);
 RB_API void rb_rom_open(void);
 RB_API void rb_rom_closed(void);
 RB_API void rb_close(void);
@@ -97,17 +98,12 @@ RB_API int rb_release(rb_ticket ticket);
 RB_API rb_stats rb_get_stats(void);
 
 #ifdef RB_TEST_HOST
-/* Compiled out of deliverable builds. Real C++ vtable, real production thunk;
- * only binary identity and module-pinning preflight are replaced by the host. */
-typedef int (*rb_test_surface)(rb_surface *out);
+/* Compiled out of deliverable builds: pause the claim, activation and take
+ * paths inside their race windows. */
 typedef void (*rb_test_probe)(void);
-RB_API void rb_test_fail_protect(unsigned call);
-RB_API int rb_install_test_pinned(void **slot, void *expected, rb_test_surface surface,
-                            HMODULE wrapped, HMODULE wrapper);
 RB_API void rb_test_set_activation_probe(rb_test_probe probe);
 RB_API void rb_test_set_take_probe(rb_test_probe probe);
 RB_API void rb_test_set_claim_probe(rb_test_probe probe);
-RB_API int rb_install_test(void **slot, void *expected, rb_test_surface surface);
 #endif
 #ifdef __cplusplus
 }

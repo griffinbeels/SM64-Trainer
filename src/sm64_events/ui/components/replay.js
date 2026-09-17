@@ -10,7 +10,7 @@ import { holdRepeat } from "../holdrepeat.js";
 import { watchReplayKeys } from "../replaykeys.js";
 import { stopShuttle } from "../replayshuttle.js";
 import { playReview } from "../reviewcommands.js";
-import { attachReviewSource, pauseReviewSource } from "../reviewsource.js";
+import { pauseReviewSource } from "../reviewsource.js";
 import { Icon } from "./icons.js";
 import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
@@ -23,9 +23,9 @@ const html = htm.bind(h);
 // `onVideoEl` reports the <video> element upward so a sibling can follow
 // the SAME clock -- the input timeline does. Mirrors VideoStage's own
 // `onEl` rather than inventing a second way to hand an element out.
-// `onView` reports the clip's metadata the same way, because that clock
-// only lines up with the input track once the sibling knows where in the
-// clip the attempt's anchor sits (`anchor_offset_s`).
+// `onView` reports the replay payload the same way: the sibling follows
+// that clock through the clip's own frame map and picture times
+// (`frame_map`, `frame_times`), never a fixed offset into the clip.
 export function ReplayPlayer({ attemptId, imported = false, onCompare, onVideoEl, onView,
     reviewState, onReviewState, beforeSave }) {
   const [url, setUrl] = useState(undefined);
@@ -123,7 +123,6 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
   const [playing, setPlaying] = useState(false); // event-driven (onplay/onpause)
   const [mediaVideo, setMediaVideo] = useState(null);
   const [saveError, setSaveError] = useState(null);
-  const [sourceError, setSourceError] = useState(null);
   const [saving, setSaving] = useState(false);
   const videoEl = useRef(null);
   // One programmatic play() per View-Replay click (= per component mount),
@@ -134,18 +133,17 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
   // (once) or from the player's own controls.
   const autoPlayed = useRef(false);
   const stopObserving = useRef(null);
-  const stopSource = useRef(null);
+  // `state` stays a dependency: a new replay payload (another attempt in the
+  // same player) re-attaches the element, restarting its observers.
   const attachVideoEl = useCallback((el) => {
     if (videoEl.current === el) return;
     if (stopObserving.current) stopObserving.current();
-    stopSource.current?.();
     videoEl.current = el;
     setMediaVideo(el);
     stopObserving.current = el ? watchVideoPicture(el, () => {}) : null;
     if (onVideoEl) onVideoEl(el);
     if (!el) return;
     attachSharedVolume(el);
-    stopSource.current = attachReviewSource(el, state.review_media, state.clip_url, setSourceError, state.frame_times);
   }, [onVideoEl, state]);
 
   // Seek after metadata arrives, before the one initial play(). Both the
@@ -224,7 +222,6 @@ function NativeReplayPlayer({ attemptId, onCompare, onUnavailable, onVideoEl, on
     <${ReplayActions} savedPath=${savedPath} saving=${saving} saveReplay=${saveReplay}
       revealSaved=${revealSaved} onCompare=${onCompare} />
     ${saveError && html`<p class="replay-control-error" role="status">${saveError}</p>`}
-    ${sourceError && html`<p class="replay-control-error" role="status">${sourceError}</p>`}
   </div>`;
 }
 
@@ -297,7 +294,7 @@ function RetentionControls({mode, setMode, attempts, setAttempts, mins, setMins,
               min="1" max=${mode === "attempts" ? "1000" : "1440"}
               value=${mode === "attempts" ? attempts : mins}
               aria-label=${mode === "attempts" ? "Attempts to retain" : "Minutes to retain"}
-              disabled=${mode === "session" || !ready}
+              disabled=${mode === "session"}
               oninput=${(e) => mode === "attempts" ? setAttempts(e.target.value) : setMins(e.target.value)} />
             <span>${mode === "attempts" ? "attempts" : "min"}</span>
           </label>
@@ -328,10 +325,11 @@ function PaddingControls({preS, setPreS, postS, setPostS}) {
 // Unsaved replay history: attempt/time windows plus the shared disk cap.
 function BufferSettings({ st, refresh, close }) {
   const [info, setInfo] = useState(null);
+  // Retention placeholders: its controls and Apply wait for the settings GET,
+  // which replaces all three before either can show or send them.
   const [mode, setMode] = useState("attempts");
   const [attempts, setAttempts] = useState(10);
-  const [mins, setMins] = useState(
-    st.retention_s != null ? Math.round(st.retention_s / 60) : 10);
+  const [mins, setMins] = useState(10);
   const [capGb, setCapGb] = useState(Math.round(st.max_buffer_bytes / 1024 ** 3));
   const [preS, setPreS] = useState(null);   // loaded with the settings GET
   const [postS, setPostS] = useState(null);
@@ -363,9 +361,10 @@ function BufferSettings({ st, refresh, close }) {
       retention_s: mode === "minutes" ? m * 60 : null,
       retention_attempts: mode === "attempts" ? count : null,
       max_buffer_bytes: Math.round(cap * 1024 ** 3),
+      // Apply is enabled only after the settings GET has filled both pads.
+      pre_pad_s: Number(preS),
+      post_pad_s: Number(postS),
     };
-    if (preS !== null) body.pre_pad_s = Number(preS);   // omitted = unchanged
-    if (postS !== null) body.post_pad_s = Number(postS);
     try {
       await send("PUT", "/api/replay/settings", body);
       setMsg("saved ✓ (applies immediately)");

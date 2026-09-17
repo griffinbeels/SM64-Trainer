@@ -1,10 +1,9 @@
 # LINK renderer state observation
 
 The SourceV2/ContextV1 overlay supplies the renderer boundary and state witness
-used by the connected [GPU runtime](replay-gpu-runtime.md). The paired renderer
-and wrapper are an installation candidate. The earlier passive source build
-passed human picture/smoothness/audio checks; connected capture still needs live
-LINK pixel, input, audio and pacing verification.
+used by the [GPU runtime](replay-gpu-runtime.md). The shipped renderer and
+wrapper were accepted live on 2026-09-16 (picture, smoothness, audio and the
+input timeline).
 
 ## Source and build
 
@@ -12,21 +11,12 @@ Pinned source: [Luna-Project64/GLideN64 d0d1010](https://github.com/Luna-Project
 `tools/stage_link_witness.py --source <extracted archive> --out <new .iteration directory>`
 verifies the whole archive tree and patch targets, refuses linked entries, and
 stages a separate copy. It never edits the baseline, builds or installs a DLL.
-The overlay is opt-in with `SM64_REPLAY_GL_WITNESS`; compile `link_dispatch.cpp`
-with the modified source. The ordinary wrapper build does not include it.
-
-The full Release|Win32 baseline and source-interface renderer now build with
-MSVC v145, Windows SDK10.0.26100.0 and local static x86 /MT Qt5.15.2. Historical
-LINK Qt tooling was not fully pinned, so this is a recorded dependency adaptation,
-not a byte reproduction of the user's installed stock DLL. Qt uses its native
-Windows font backend to preserve LINK's bundled FreeType2.5.3 for renderer text.
-Modern uic needs -p because its generated guards collide with handwritten UI
-header guards. Generated forwarding-header paths use existing Windows short paths.
-Generate Revision.h from the pinned LINK commit, not the surrounding trainer repo.
-Keep N64PluginsDir empty and disable pre/post-build events: upstream includes an
-installation copy. These are development dependencies, not user setup steps.
-All required PJ64 exports and public API queries pass isolated x86 load checks;
-actual rendering/pacing remains a human gate before capture activation.
+`tools/build_renderer.py` stages the overlay (including context lifetime) and
+always defines `SM64_REPLAY_GL_WITNESS`, `SM64_REPLAY_SOURCE` and
+`SM64_REPLAY_CONTEXT_LIFETIME`; the wrapper build does not include it. The
+toolchain, the prebuilt static Qt libraries and why the build is a dependency
+adaptation rather than a byte reproduction of LINK's stock DLL are recorded once
+in [the renderer build](../renderer/README.md).
 
 ## Explicit source command API
 
@@ -105,8 +95,8 @@ observation must fail. A separate compile check builds the modified Windows
 lifecycle translation unit; no live PJ64, server or installed DLL is touched.
 
 The combined [capture-chain tests](replay-renderer-boundary.md) separately prove
-GPU ticket/metadata custody. These two witnesses do not yet prove the entire
-LINK-to-encoder-to-input-timeline chain.
+GPU ticket/metadata custody. The whole LINK-to-encoder-to-input-timeline chain
+was accepted live on 2026-09-16; these witnesses guard its parts.
 
 ## SourceV2 capture connection
 
@@ -130,4 +120,4 @@ drawables, generations and dimensions before copy. It preserves the crop and
 occurrence/QPC, and returns image custody only after actual worker completion.
 A real hidden FRONT-buffer witness preserves pixels across source overwrite and
 captures a retained image without another swap. Its platform descriptor is a
-fixture: this is not yet actual LINK gameplay/input/A-V integration evidence.
+fixture; live integration evidence is the 2026-09-16 acceptance.

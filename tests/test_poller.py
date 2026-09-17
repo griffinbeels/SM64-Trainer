@@ -245,8 +245,6 @@ class UnreadableSampler:
         return None
     def flush(self):
         pass
-    def clock_pair(self):
-        return None
 
 
 def test_a_dead_emulator_detaches_even_though_the_sampler_never_sees_a_frame():

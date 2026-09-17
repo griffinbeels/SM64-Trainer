@@ -1,6 +1,6 @@
 # GPU delivery bridge
 
-The fixed two-slot `plugin/gfxwrap/gpu_bridge` component is connected through
+The fixed two-slot `plugin/gfxwrap/gpu_bridge.cpp` component ships in
 the [GPU runtime](replay-gpu-runtime.md). It accepts an owned GL snapshot on a dedicated
 worker, transfers pixels on the GPU into an ordinary WGL-interoperable D3D11
 texture, then into a separate keyed shared texture. The separate x64 witness
@@ -32,10 +32,9 @@ not measured driver/NVENC VRAM usage.
 The original raw bridge witness preserved GL row order. The connected worker
 now applies the exact transfer convention below, including odd-height cropping:
 retain rows 1..H-1 before flipping an odd-height source, not rows 0..H-2.
-Existing FFmpeg conversion remains the color reference, not just its codec
-preset label. Source state, leases, media and input identity are separate
-connected-runtime responsibilities; this component alone cannot certify them.
-Live pacing and AMD/Intel routes remain unverified.
+Source state, leases, media and input identity are separate runtime
+responsibilities; this component alone cannot certify them. Live pacing was
+accepted on 2026-09-16 on an RTX 5090; there is no AMD or Intel GPU route.
 
 Run the actual hardware witness explicitly in the worktree:
 
@@ -44,7 +43,9 @@ $env:SM64_TEST_GPU_BRIDGE='1'
 .venv/Scripts/python.exe tools/run_tests.py tests/test_gpu_bridge.py
 ```
 
-Without the flag it explicitly skips. Positive small/full-size paths and an
+`tests/test_gpu_cadence.py` and `tests/test_gpu_fidelity.py` use the same flag;
+`tests/test_gpu_selection.py` (the selection sample in `gpu_selection.cpp`) uses
+`SM64_TEST_GPU_SELECTION=1`. Without its flag each test explicitly skips. Positive small/full-size paths and an
 omitted-copy negative control use hidden x86/x64 child processes only. No live
 server, PJ64 process, installed plugin or graphics setting is modified.
 
@@ -55,8 +56,8 @@ API references: [WGL interop2](https://registry.khronos.org/OpenGL/extensions/NV
 ## Exact worker transfer convention
 
 The worker now uses one prepared shader draw to combine top-down orientation,
-floor-even top-left cropping and opaque alpha, matching pixels.py plus the
-existing sink crop. Odd source height drops native GL row0; odd width drops the
+floor-even top-left cropping and opaque alpha, the same orientation and even
+crop the recorder's selection and encoder have always used. Odd source height drops native GL row0; odd width drops the
 rightmost column. No CPU image conversion is used. The dedicated worker owns
 its GL state and initializes shader/VAO/sampler/FBO resources once. Its normal
 shutdown unbinds/deletes them; a fault retains the bounded quarantined pool.

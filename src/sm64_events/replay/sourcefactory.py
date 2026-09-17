@@ -10,7 +10,6 @@ not matter.
 """
 
 import logging
-from threading import RLock
 
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.replay.gpucapture import discover
@@ -21,19 +20,9 @@ log = logging.getLogger("sm64.replay")
 
 class SourceFactory:
     def __init__(self, layout, cfg, desktop_factory):
-        from sm64_events.replay.pluginsource import table_for
-
         self.layout, self.cfg = layout, cfg
         self.desktop_factory = desktop_factory
-        self.table = table_for(layout)
-        self.lock = RLock()
         self.retry_gate = RetryGate()
-
-    def release(self):
-        """Nothing of the factory's outlives a source: the GPU source owns its
-        own control lease and channel cleanup (`replay/gpudemand.py`), and the
-        desktop camera owns its window. Kept as the recorder's release hook."""
-        return None
 
     def _desktop(self, win):
         return self.desktop_factory(win, fps=self.cfg.fps)
@@ -51,11 +40,11 @@ class SourceFactory:
             win.pid, self.layout, nominal_rate=GAME_FPS, retry_gate=self.retry_gate
         )
 
-    def _waiting_desktop(self, win, note=None):
+    def _waiting_desktop(self, win):
         from sm64_events.replay.pluginsource import DesktopUntilLayerPresents
 
         return DesktopUntilLayerPresents(
             self._desktop(win),
-            note=note or "the capture layer is not delivering; recording the desktop by time",
+            note="the capture layer is not delivering; recording the desktop by time",
             backend_ready=lambda: self._gpu(win) is not None,
         )

@@ -7,6 +7,19 @@ and takes finished frames from it through the SourceV2 export the overlay
 adds. A stock GLideN64 has no such export, so the wrapper alone captures
 nothing.
 
+## Why a source build of this renderer
+
+LINK's GLideN64 v4.2 is the renderer the Project64 1.6 install it targets
+already ran (original DLL SHA-256 `49f384e8c62f61ff8555d5055654df7f0cdbe81497cd85e685e3a508d7dffe83`),
+so picture, smoothness and settings stay as players know them. Stock GLideN64
+offers only a synchronous CPU `ReadScreen`, which makes emulation wait, and an
+earlier adapter that patched that exact binary depended on its bytes and
+private offsets. Building from the pinned source lets the overlay take a GPU
+copy of each finished frame with its input stamp and never make the game wait.
+The rebuilt baseline passed a side-by-side check against the stock DLL ("same
+picture, smoothness and clean audio"). Full rationale:
+[`docs/replay-gpu-runtime.md`](../docs/replay-gpu-runtime.md).
+
 ## Credit
 
 The renderer is [LINK's GLideN64 v4.2](https://github.com/Luna-Project64/GLideN64),
@@ -23,7 +36,7 @@ so this modified build is too. The complete corresponding source is:
   `build-inputs.json`;
 - the overlay in `plugin/gfxwrap/` (`link_dispatch.*`, `renderer_boundary.*`,
   `link_source_api.*`, `context_lifetime.*`, `renderer_gl_state.h`,
-  `gl_snapshot.h`, `source_format.h`) and the edits
+  `gl_snapshot.h`, `source_format.h`, `practice_rom.h`) and the edits
   `tools/stage_link_witness.py` makes to the upstream files;
 - the project adaptations and build steps in `tools/build_renderer.py`.
 

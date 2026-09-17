@@ -6,13 +6,18 @@ import zlib
 import pytest
 
 from sm64_events.inputs.observation import InputObservation, decode_observations, encode_observations
-from sm64_events.inputs.readtimes import ReadTimes, iter_times, micros, stamp_at
+from sm64_events.inputs.readtimes import ReadTimes, contains_time, micros, stamp_at
 from sm64_events.inputs.sampler import InputSampler
 from sm64_events.memory.layout import US
 from test_inputs_sampler import ScriptedMemory
 
 
 AT = "2026-08-20T21:00:00Z"
+
+
+def decoded(blob):
+    """Reference decoder: the whole zlib stream as little-endian int64 instants."""
+    return [value for value, in struct.iter_unpack("<q", zlib.decompress(blob))]
 
 
 def test_long_hold_spills_preserves_every_instant_and_closes_its_file(monkeypatch):
@@ -28,7 +33,7 @@ def test_long_hold_spills_preserves_every_instant_and_closes_its_file(monkeypatc
     assert file._rolled  # actual tempfile switched from RAM to a disk file
     blob, lower, upper = history.finish()
     assert file.closed
-    assert list(iter_times(blob)) == expected
+    assert decoded(blob) == expected
     assert (micros(lower), micros(upper)) == (min(expected), max(expected))
     # Variable history is separately framed from the bounded identity JSON.
     observation = InputObservation("poll:long", 0, stamp_at(expected[-1]),
@@ -39,9 +44,12 @@ def test_long_hold_spills_preserves_every_instant_and_closes_its_file(monkeypatc
 
 
 def test_many_identical_instants_stream_across_decompression_blocks():
-    # Expansion exceeds both compressed input and the fixed output block.
-    packed = struct.pack("<q", micros(AT))
-    assert sum(1 for _ in iter_times(zlib.compress(packed * 50_000))) == 50_000
+    # Expansion exceeds both compressed input and the fixed output block; only
+    # the final instant differs, so a match proves the last block was read.
+    blob = zlib.compress(struct.pack("<q", micros(AT)) * 49_999
+                         + struct.pack("<q", micros(AT) + 2))
+    assert contains_time(blob, micros(AT) + 2, micros(AT) + 2)
+    assert not contains_time(blob, micros(AT) + 1, micros(AT) + 1)
 
 
 @pytest.mark.parametrize("bad", [b"garbage", zlib.compress(b"x"),
@@ -49,7 +57,7 @@ def test_many_identical_instants_stream_across_decompression_blocks():
                                  zlib.compress(b"12345678") + b"trailing"])
 def test_malformed_histories_do_not_supply_membership(bad):
     with pytest.raises(ValueError, match="observation"):
-        list(iter_times(bad))
+        contains_time(bad, 0, 2**62)
 
 
 def test_a_rewrite_closes_and_discards_its_stale_history():

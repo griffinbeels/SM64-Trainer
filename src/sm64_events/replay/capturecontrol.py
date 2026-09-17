@@ -1,9 +1,10 @@
 """Small, independently discoverable native capture control channel.
 
-Discovery does not create a pixel ring or request recording. Only the recorder
-owner may acquire a lease. The stage-one native candidate advertises passive
-support and explicitly refuses pixel capture until its boundary is proven.
-This module intentionally does not fall back to desktop-frame inference.
+Discovery only reads the control page; it neither requests recording nor
+creates capture resources. Only the recorder owner may acquire a lease. A
+producer advertises CAP_GPU only when its GPU backend can capture; a lease
+without one reads UNAVAILABLE/NO_BACKEND. This module never falls back to
+desktop-frame inference.
 """
 from __future__ import annotations
 
@@ -275,15 +276,6 @@ class CaptureLease:
 
     def renew(self):
         return self._command(True)
-
-    def transfer(self) -> CaptureLease:
-        """Move ownership from acquisition to the selected source with no disable."""
-        if not self._owned:
-            raise RuntimeError("capture lease already transferred or closed")
-        successor = CaptureLease(self.control, self.producer_pid, self.generation, self.token)
-        self._owned = False
-        self.control._lease = successor
-        return successor
 
     def close(self):
         self._command(False)

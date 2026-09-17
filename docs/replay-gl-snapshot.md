@@ -1,8 +1,8 @@
 # GPU snapshot ownership
 
 `plugin/gfxwrap/gl_snapshot.cpp` is an owned-texture component, tested
-with real x86 OpenGL contexts and connected to the [GPU runtime](replay-gpu-runtime.md).
-The installation candidate still needs live gameplay verification.
+with real x86 OpenGL contexts and shipped in the [GPU runtime](replay-gpu-runtime.md)
+(accepted live 2026-09-16).
 The [renderer boundary](replay-renderer-boundary.md) can retain these GPU tickets
 in the isolated combined capture host.
 
@@ -49,8 +49,6 @@ other renderer paths also prevent assuming a fixed post-UpdateScreen state.
 The connected source tracks actual state mutation/context recreation inside
 the renderer; upstream game textures omit
 later composition/OSD and cannot silently replace the presented image.
-The `SNAPSHOT_QUERY_BINDINGS` compile-time counterfactual restores the earlier
-query-based prototype for measurement only; it must never select a product path.
 
 The worker checks producer completion with zero timeout and rebinds the shared
 texture before use. It keeps the slot BORROWED while reading, copying or encoding

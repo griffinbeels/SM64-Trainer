@@ -249,7 +249,7 @@ def test_build_wires_the_pad_stamp_audit_into_replay(monkeypatch):
     main_mod.build()
 
     replay = captured.get("replay")
-    assert replay is not None, "the enabled replay branch was not composed"
+    assert replay is not None, "the replay service was not composed"
     assert replay.track_pads is not None, (
         "the pad-stamp audit was built but never wired into ReplayService")
 

@@ -172,7 +172,7 @@ static void log_module_path(const char *event, HMODULE module) {
 typedef struct {
     const char *name;
     uint64_t calls, slow_calls;
-    int64_t previous, last_report, last_stall_report, max_total, max_wrapped, max_extra, max_gap;
+    int64_t previous, last_report, last_stall_report, max_total, max_gap;
 } callback_diagnostic_t;
 static callback_diagnostic_t g_diagnostic_list = {"ProcessDList"};
 static callback_diagnostic_t g_diagnostic_update = {"UpdateScreen"};
@@ -184,16 +184,14 @@ static void callback_diagnostic_reset(callback_diagnostic_t *note) {
     note->name = name;
 }
 
-static void callback_diagnostic_end(callback_diagnostic_t *note, int64_t begin,
-                                     int64_t forwarded, int64_t end) {
+/* total spans the whole forwarded callback, including any stamp adapter work. */
+static void callback_diagnostic_end(callback_diagnostic_t *note, int64_t begin, int64_t end) {
     if (!g_diagnostic_frequency) return;
     int64_t gap = note->previous ? begin - note->previous : 0;
     note->previous = begin;
-    int64_t wrapped = forwarded - begin, extra = end - forwarded, total = end - begin;
+    int64_t total = end - begin;
     note->calls++;
     if (total > note->max_total) note->max_total = total;
-    if (wrapped > note->max_wrapped) note->max_wrapped = wrapped;
-    if (extra > note->max_extra) note->max_extra = extra;
     if (gap > note->max_gap) note->max_gap = gap;
     BOOL slow = total >= g_diagnostic_frequency / 50 || gap >= g_diagnostic_frequency / 20;
     if (slow) note->slow_calls++;
@@ -204,15 +202,11 @@ static void callback_diagnostic_end(callback_diagnostic_t *note, int64_t begin,
     if (!slow && !note->last_report) { note->last_report = end; return; }
     if (!slow && since_report < g_diagnostic_frequency * 60) return;
     plugin_logf(slow ? "callback_stall" : "callback_summary",
-        "callback=%s calls=%llu slow_calls=%llu total_ms=%.3f wrapped_ms=%.3f "
-        "extra_ms=%.3f gap_ms=%.3f max_total_ms=%.3f max_wrapped_ms=%.3f "
-        "max_extra_ms=%.3f max_gap_ms=%.3f dropped_records=%ld",
+        "callback=%s calls=%llu slow_calls=%llu total_ms=%.3f gap_ms=%.3f "
+        "max_total_ms=%.3f max_gap_ms=%.3f dropped_records=%ld",
         note->name, (unsigned long long)note->calls, (unsigned long long)note->slow_calls,
-        1000.0 * total / g_diagnostic_frequency, 1000.0 * wrapped / g_diagnostic_frequency,
-        1000.0 * extra / g_diagnostic_frequency, 1000.0 * gap / g_diagnostic_frequency,
+        1000.0 * total / g_diagnostic_frequency, 1000.0 * gap / g_diagnostic_frequency,
         1000.0 * note->max_total / g_diagnostic_frequency,
-        1000.0 * note->max_wrapped / g_diagnostic_frequency,
-        1000.0 * note->max_extra / g_diagnostic_frequency,
         1000.0 * note->max_gap / g_diagnostic_frequency, (long)g_log_dropped);
     note->last_report = end;
     if (slow) note->last_stall_report = end;

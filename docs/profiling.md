@@ -196,15 +196,9 @@ Keep browser captures beside the matching backend session; the Python comparison
 report does not merge browser artifacts. Trace buffer saturation or known event
 loss marks a browser capture incomplete. A navigation failure still attempts to
 stop the owned trace; existing unrelated traces are never ended.
-Native graphics profile histograms, when the instrumented plugin
-supports them, are retained separately from backend stages. Their CPU wall times
-include GPU waits; VI-call intervals are not displayed FPS or GPU engine timing.
-
-The instrumented wrapper must be built from `plugin/gfxwrap` and packaged using
-`tools/build_plugin.py`. Updating the bundle alone does not update the DLL loaded
-by Project64. The existing capture setup flow owns installation when the emulator
-can safely be closed; never overwrite its loaded plugin or restart a live recording
-to obtain a profile. Older wrappers report native profiling as unavailable.
+Native timing comes from the shipped wrapper's own log (below); there is no
+separate instrumented build. Never overwrite Project64's loaded plugin or restart
+a live recording to obtain a profile.
 
 Primary references: [WPR command options](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/wpr-command-line-options),
 [Windows Performance Toolkit](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/),
@@ -217,11 +211,11 @@ Named-instance syntax was also checked with the installed `wpr -help advanced`:
 ## PJ64 and native plugin logs without a running trainer
 
 `uv run --group profiling python tools/graphics_diagnostics.py --output data/profiles/plugin-check`
-collects a read-only snapshot from the actual Project64 process, the existing
-capture header, and the last 64 KiB of each discovered PJ64/Plugin log (20-file
+collects a read-only snapshot from the actual Project64 process, the wrapper's
+control page, and the last 64 KiB of each discovered PJ64/Plugin log (20-file
 cap, including `.log.1` rotation). It never creates a capture mapping, renews a
 reader lease, starts ETW, writes emulator memory, or changes plugin selection.
-Use `--seconds 10` for 4 Hz header samples (maximum 30 seconds). After PJ64 has
+Use `--seconds 10` for 4 Hz control-page samples (maximum 30 seconds). After PJ64 has
 closed, add `--pj64-dir "C:/path/to/Project64"` to retrieve its retained logs.
 The output directory must be new; existing reports are not overwritten.
 
@@ -243,7 +237,7 @@ requiring a matching PID, process birth and currently mapped wrapper. Missing or
 stale runtime evidence stays unknown even when disk bytes match. A build label
 does not include compiler flags/toolchain, and the collector does not hash mapped
 process memory. Preserve these separate results rather than calling file equality
-proof of successful capture. GPU capture normally has no legacy pixel-ring mapping.
+proof of successful capture.
 
 Installer copies log `capture layer installation committed` only after destination
 hash verification and successful settings/configuration writes. The JSON receipt
@@ -257,8 +251,9 @@ by older applications still running the old installer implementation.
 
 The native wrapper logs lifecycle events and callbacks taking at least 20 ms,
 or callback gaps of at least 50 ms, at most once per five seconds per callback.
-Each stall names total, wrapped-renderer and added-wrapper CPU wall time, plus
-cumulative maxima; quiet summaries appear once per minute. Gaps include pauses,
+Each stall names its total CPU wall time (`total_ms`), the gap since the previous
+call and their cumulative maxima; quiet summaries appear once per minute. These
+records run on the practice ROM only; any other cartridge forwards untimed. Gaps include pauses,
 and these measurements cannot time asynchronous rendering on the GPU.
 `dropped_records` reports lost diagnostics. A bounded, event-driven writer keeps
 file I/O off emulator callbacks and rotates the log at 1 MiB to `.log.1`.
@@ -286,8 +281,8 @@ Source cadence comes from the existing immutable boundary timestamps; it is not
 physical display FPS. Missing phases remain unknown, and overlapping durations
 must not be summed as CPU time. `previous_logging_ms` measures the preceding
 summary callback's cost; `dropped_records` exposes the bounded logger's losses.
-The GPU route does not use the legacy callback profiler described above. Installing
-a new wrapper is necessary to obtain these records from an older live process.
+Installing a new wrapper is necessary to obtain these records from an older live
+process.
 
 Newer summaries also contain `snapshot_bytes` and `bridge_bytes`: current logical
 texture payloads, not total VRAM or driver allocation. `sample_calls`,

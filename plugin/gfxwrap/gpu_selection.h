@@ -1,4 +1,5 @@
-/* Worker-only original-image selection sample. Experimental, not a source ABI. */
+/* Worker-only original-image selection sample. A process-local C++ interface,
+ * not a source ABI. */
 #pragma once
 #include <windows.h>
 #include <GL/gl.h>

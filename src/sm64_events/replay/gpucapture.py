@@ -74,7 +74,6 @@ class GpuCapture:
         self._pending_cleanup = None  # (closer, kind) retained after the bounded backoff
         self._idle_check = lambda: False
         self._pause_check = lambda: False
-        self._productive = False
         self._sessions_started = 0
         self._status = {"kind": "gpu", "state": "ready", "pending": 0}
         self.error = None
@@ -174,10 +173,7 @@ class GpuCapture:
                 self.cleanup_error = exc
             self.error = str(exc)[:512]
             if self.retry_gate is not None:
-                self.retry_gate.failed(
-                    self.producer_identity, self.error,
-                    productive=self._productive and self.cleanup_error is None,
-                )
+                self.retry_gate.failed(self.producer_identity, self.error)
             log.exception("GPU recording stopped")
         finally:
             self.end_audio(self._pcm)
@@ -261,7 +257,6 @@ class GpuCapture:
     def _new_demand(self, factory):
         self._timings = None
         self._demand = factory(self.expected_pid, table_for(self.layout), self.settings.request())
-        self._productive = False
         self._sessions_started += 1
         self._status = {"kind": "gpu", "state": "preparing", "pending": 0}
         return self._demand
@@ -298,8 +293,6 @@ class GpuCapture:
         self._timings = session.timings
         status = session.adapter.status(refresh=False)
         identity = session.demand.identity
-        if session.media.mux.video_count and session.frontier is not None:
-            self._productive = True
         self._status = dict(
             kind="gpu",
             state=session.state,

@@ -208,27 +208,6 @@ export function spanLabel(start, length, lead = 0) {
     : `${timeLabel(start)}–${timeLabel(start + length - 1)}`;
 }
 
-// THE clock mapping, in both directions. `anchorOffsetS` is how far into
-// the clip the attempt's anchor sits: the clip is cut a few seconds BEFORE
-// the anchor (the replay pre-pad) while the track starts AT it. Without it
-// every input landed three seconds early (his first live run, 2026-08-22:
-// "the input reader shows a totally different angle and shows me pressing
-// A/B"). Pure and exported so tests/test_ui_input_clock.py can drive them.
-//
-// This arithmetic is the FALLBACK. A clip whose sidecar carries a
-// `frame_map` uses the mapped pair below instead: the capture duplicates
-// and skips single game frames (round 32 items 16/24 -- his counter read
-// 26, 27, 27, 29, ...), so no offset can be right on every frame, and his
-// ruling was "we need 100% accuracy". The map says, per video frame, which
-// game frame its picture shows; the arithmetic remains for clips cut
-// before the frame clock existed.
-export const frameAtTime = (seconds, anchorOffsetS, fps, frames) => {
-  const raw = Math.floor((seconds - anchorOffsetS) * fps + 1e-4);
-  return Math.max(0, Math.min(Math.max(frames - 1, 0), raw));
-};
-export const timeAtFrame = (frame, anchorOffsetS, fps) =>
-  anchorOffsetS + (frame + 0.5) / fps;
-
 // A raw game frame <-> the track's zero-based axis, through the payload's
 // `stretches` ([axis_start, raw_start, length] per ascending stretch of the
 // counter -- the server's own restart rule, shipped rather than re-derived).

@@ -56,7 +56,7 @@ class RetryGate:
             self._saw_closed = not status.rom_open
         return identity
 
-    def failed(self, identity, reason, *, productive=False):
+    def failed(self, identity, reason):
         with self._lock:
             if identity != self._identity:
                 return  # A retired producer cannot spend its successor's budget.

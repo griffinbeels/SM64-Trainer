@@ -1,4 +1,4 @@
-"""Read-only GPU setup evidence, separate from legacy pixel-stream headers.
+"""Read-only GPU setup evidence from the capture control page and recorder receipt.
 
 ControlV1 acknowledges the recorder lease, not rendered frames. Active capture
 requires recent acknowledgement AND actual selected-picture receipt movement.
@@ -93,7 +93,7 @@ class GpuSetupProbe:
             if control is None or not control.capabilities & CAP_GPU:
                 self._control.observe(None, alive=None)
                 self._pictures.observe(None, pictures=None)
-                # A GPU source cannot borrow an old legacy ring's healthy bits.
+                # A GPU source without a readable control page proves nothing.
                 return (GpuSetupEvidence(None, None, None, False, False, False)
                         if health.get("kind") == "gpu" else None)
             return self._observe(control, recorder)

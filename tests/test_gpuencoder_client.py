@@ -377,7 +377,7 @@ def test_uncertainty_refuses_all_teardown_even_if_native_would_close(operation):
             c.poll()
     f.mode = "ok"
     before = len(f.calls)
-    for action in (c.close, c.finish, c.poll, c.retained):
+    for action in (c.close, c.poll, c.retained):
         with pytest.raises(EncoderFailure) as err:
             action()
         assert err.value.worker_disposal_required

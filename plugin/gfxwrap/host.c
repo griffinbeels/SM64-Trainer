@@ -1,38 +1,27 @@
 /* THE TEST HOST for the capture layer: stands in for Project64 without an
- * emulator. It creates a tiny window with a GL context, fakes 8 MB of RDRAM
- * and the VI registers, loads the wrapper DLL (whose ini names fake_gfx.dll
- * and a test stream), and drives the Zilmar calls the way PJ64 does:
+ * emulator. It creates a tiny window, fakes 8 MB of RDRAM, the VI registers
+ * and a practice-ROM header, loads the wrapper DLL (whose ini names
+ * fake_gfx.dll and a test stream), and drives the Zilmar calls the way PJ64
+ * does, with no host GL context:
  *
  *   --drive <wrapper.dll> <frames> [--stream <name>]
- *        per frame i: RDRAM[0..3] = 1000+i (little-endian), RDRAM[64..67] =
- *        0x11223300+i, RDRAM[128..130] = (i, 2i, 3i) as b,g,r; ProcessDList;
- *        VI_ORIGIN = 0x100000+i; UpdateScreen; then ONE extra UpdateScreen
- *        with the origin unchanged (must capture nothing).
+ *        per frame i: ProcessDList; VI_ORIGIN = 0x100000+i; UpdateScreen.
  *        --cpu-thread: the window's thread pumps messages while a second
  *        thread makes every plugin call (Project64 1.6's shape); a wrapped
  *        plugin that renders on its own thread deadlocks without it.
- *        --no-context: no host GL context at all, so the wrapped plugin
- *        makes its own or the wrapper has to read through ReadScreen.
  *        --wrapped <dll>: drive a REAL plugin (an absolute path is used as
  *        is) -- how GLideN64_LINK_4.2 was measured on 2026-09-05.
- *        --commit-late: only the lower 4 MB of RDRAM exist at InitiateGFX;
- *        the rest is committed before RomOpen, as PJ64 does for the
- *        expansion pak.
  *   --info <wrapper.dll>           print GetDllInfo's name and version
  *
  * The window is a tool window shown without activation at the top-left of
- * the screen for the run's duration (a hidden window has no front buffer to
- * read), layered at alpha 1 and click-through so it is never seen and never
- * takes focus. Exit code 0 on success. */
+ * the screen for the run's duration, layered at alpha 1 and click-through so
+ * it is never seen and never takes focus. Exit code 0 on success. */
 #include <windows.h>
-#include <GL/gl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "zilmar.h"
 #include "practice_rom_fixture.h"
-
-#define STREAM_NAME "sm64_trainer_gfx_v1"   /* the control page the wrapper publishes */
 
 #define RDRAM_BYTES (8u << 20)
 
@@ -41,12 +30,9 @@ static unsigned g_mi_intr;
 
 static void check_interrupts(void) {}
 
-static int g_no_context;   /* --no-context: the wrapped plugin creates its own, as inside PJ64 */
 static int g_cpu_thread;   /* --cpu-thread: plugin calls on a second thread, the window's thread pumps */
-static int g_commit_late;  /* --commit-late: the upper half of RDRAM is committed after InitiateGFX */
-static int g_sessions = 1;
 
-static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
+static HWND make_window(void) {
     WNDCLASSA klass;
     memset(&klass, 0, sizeof klass);
     klass.lpfnWndProc = DefWindowProcA;
@@ -54,44 +40,21 @@ static HWND make_gl_window(HDC *device_out, HGLRC *context_out) {
     klass.lpszClassName = "sm64_gfxwrap_host";
     klass.style = CS_OWNDC;
     RegisterClassA(&klass);
-    /* Layered at alpha 1 and click-through: the window must exist and be
-     * composed for GL_FRONT to hold a picture, but it must not be SEEN --
-     * the suite drives this host dozens of times and he found "a rainbow
-     * square in the corner of my screen" (2026-09-05). */
+    /* Layered at alpha 1 and click-through: a wrapped plugin gets a real
+     * window, but it must not be SEEN -- the suite drives this host dozens
+     * of times and he found "a rainbow square in the corner of my screen"
+     * (2026-09-05). */
     HWND window = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED
                                   | WS_EX_TRANSPARENT, klass.lpszClassName,
                                   "gfxwrap host", WS_POPUP, 0, 0, 64, 48,
                                   NULL, NULL, klass.hInstance, NULL);
     if (!window) return NULL;
     SetLayeredWindowAttributes(window, 0, 1, LWA_ALPHA);
-    HDC device = GetDC(window);
-    if (g_no_context) {
-        ShowWindow(window, SW_SHOWNOACTIVATE);
-        *device_out = device;
-        *context_out = NULL;
-        return window;
-    }
-    PIXELFORMATDESCRIPTOR descriptor;
-    memset(&descriptor, 0, sizeof descriptor);
-    descriptor.nSize = sizeof descriptor;
-    descriptor.nVersion = 1;
-    descriptor.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-    descriptor.iPixelType = PFD_TYPE_RGBA;
-    descriptor.cColorBits = 24;
-    int format = ChoosePixelFormat(device, &descriptor);
-    if (!format || !SetPixelFormat(device, format, &descriptor)) return NULL;
-    HGLRC context = wglCreateContext(device);
-    if (!context) return NULL;
     ShowWindow(window, SW_SHOWNOACTIVATE);
-    *device_out = device;
-    *context_out = context;
     return window;
 }
 
 static const char *g_wrapped_name = "fake_gfx.dll";   /* --wrapped overrides */
-static unsigned g_rdram_committed_mb = 8;             /* --rdram-mb overrides */
-static int g_dirty_gl;                                /* --dirty-gl: the fake leaves GL state bound */
-static int g_vanilla_rom;                             /* --vanilla: open vanilla SM64, not Usamune */
 static unsigned char g_header[0x40];
 
 static void write_ini(const char *wrapper_path, const char *stream_name) {
@@ -107,28 +70,6 @@ static void write_ini(const char *wrapper_path, const char *stream_name) {
     fprintf(ini, "wrapped=%s\n", g_wrapped_name);
     if (stream_name) fprintf(ini, "stream=%s\n", stream_name);
     fclose(ini);
-}
-
-/* Fake RDRAM the way an emulator with a smaller configuration would hold
- * it: 8 MB of address space RESERVED, only the first --rdram-mb committed,
- * so a stamp entry above the commit faults like a real overrun would. */
-static unsigned char *allocate_rdram(void) {
-    unsigned char *base = VirtualAlloc(NULL, RDRAM_BYTES, MEM_RESERVE, PAGE_NOACCESS);
-    if (!base) return NULL;
-    size_t committed = (size_t)g_rdram_committed_mb << 20;
-    if (committed > RDRAM_BYTES) committed = RDRAM_BYTES;
-    if (g_commit_late && committed > (RDRAM_BYTES / 2)) committed = RDRAM_BYTES / 2;
-    if (!VirtualAlloc(base, committed, MEM_COMMIT, PAGE_READWRITE)) return NULL;
-    return base;
-}
-
-/* PJ64's shape: the expansion pak's half is committed once the ROM is
- * loaded, after the plugin's InitiateGFX has already run. */
-static void commit_the_rest(unsigned char *base) {
-    size_t committed = (size_t)g_rdram_committed_mb << 20;
-    if (committed > RDRAM_BYTES) committed = RDRAM_BYTES;
-    if (committed <= RDRAM_BYTES / 2) return;
-    VirtualAlloc(base + RDRAM_BYTES / 2, committed - RDRAM_BYTES / 2, MEM_COMMIT, PAGE_READWRITE);
 }
 
 static int info(const char *wrapper_path) {
@@ -149,18 +90,12 @@ typedef struct {
     const char *wrapper_path;
     int frames;
     HWND window;
-    HDC device;
-    HGLRC context;
     int result;
 } drive_job_t;
 
 static int drive_calls(drive_job_t *job) {
     const char *wrapper_path = job->wrapper_path;
     int frames = job->frames;
-    HWND window = job->window;
-    HDC device = job->device;
-    HGLRC context = job->context;
-    if (context && !wglMakeCurrent(device, context)) { fprintf(stderr, "wglMakeCurrent failed\n"); return 2; }
     HMODULE wrapper = LoadLibraryExA(wrapper_path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!wrapper) { fprintf(stderr, "LoadLibrary failed: %lu\n", GetLastError()); return 2; }
     gfx_api_t api;
@@ -174,15 +109,15 @@ static int drive_calls(drive_job_t *job) {
             return 4;
         }
     }
-    unsigned char *rdram = allocate_rdram();
+    unsigned char *rdram = VirtualAlloc(NULL, RDRAM_BYTES, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!rdram) { fprintf(stderr, "no fake RDRAM\n"); return 2; }
     GFX_INFO gfx;
     memset(&gfx, 0, sizeof gfx);
-    gfx.hWnd = window;
+    gfx.hWnd = job->window;
     gfx.MemoryBswaped = TRUE;
     gfx.RDRAM = rdram;
     gfx.DMEM = rdram; gfx.IMEM = rdram;
-    if (g_vanilla_rom) PRACTICE_FIXTURE_VANILLA(g_header); else PRACTICE_FIXTURE_USAMUNE(g_header);
+    PRACTICE_FIXTURE_USAMUNE(g_header);
     gfx.HEADER = g_header;
     gfx.MI_INTR_REG = &g_mi_intr;
     gfx.VI_ORIGIN_REG = &g_vi_origin;
@@ -198,7 +133,6 @@ static int drive_calls(drive_job_t *job) {
     memset(&plugin_info, 0, sizeof plugin_info);
     api.GetDllInfo(&plugin_info);
     printf("name %s\n", plugin_info.Name);
-    for (int session = 0; session < g_sessions; session++) {
     if (!api.InitiateGFX(gfx)) {
         fprintf(stderr, "InitiateGFX failed\n");
         api.CloseDLL();
@@ -206,21 +140,11 @@ static int drive_calls(drive_job_t *job) {
         VirtualFree(rdram, 0, MEM_RELEASE);
         return 5;
     }
-    if (g_commit_late) commit_the_rest(rdram);
     api.RomOpen();
     for (int frame = 0; frame < frames; frame++) {
-        unsigned counter = 1000u + (unsigned)frame;
-        unsigned pad = 0x11223300u + (unsigned)frame;
-        memcpy(rdram + 0, &counter, 4);
-        memcpy(rdram + 64, &pad, 4);
-        rdram[128] = (unsigned char)frame;
-        rdram[129] = (unsigned char)(2 * frame);
-        rdram[130] = (unsigned char)(3 * frame);
-        rdram[131] = (unsigned char)g_dirty_gl;
         api.ProcessDList();
         g_vi_origin = 0x100000u + (unsigned)frame;
         api.UpdateScreen();
-        api.UpdateScreen();              /* the same origin again: no capture */
         MSG message;
         while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) DispatchMessageA(&message);
     }
@@ -228,12 +152,8 @@ static int drive_calls(drive_job_t *job) {
            (void *)wglGetCurrentContext());
     api.RomClosed();
     api.CloseDLL();
-    }
     FreeLibrary(wrapper);
     VirtualFree(rdram, 0, MEM_RELEASE);
-    wglMakeCurrent(NULL, NULL);
-    if (context) wglDeleteContext(context);
-    ReleaseDC(window, device);
     printf("drove %d frames\n", frames);
     return 0;
 }
@@ -250,8 +170,8 @@ static int drive(const char *wrapper_path, int frames, const char *stream_name) 
     memset(&job, 0, sizeof job);
     job.wrapper_path = wrapper_path;
     job.frames = frames;
-    job.window = make_gl_window(&job.device, &job.context);
-    if (!job.window) { fprintf(stderr, "no GL window\n"); return 2; }
+    job.window = make_window();
+    if (!job.window) { fprintf(stderr, "no window\n"); return 2; }
     if (!g_cpu_thread) {
         int result = drive_calls(&job);
         DestroyWindow(job.window);
@@ -281,23 +201,13 @@ int main(int argc, char **argv) {
     for (int index = 1; index + 1 < argc; index++) {
         if (strcmp(argv[index], "--stream") == 0) stream_name = argv[index + 1];
         if (strcmp(argv[index], "--wrapped") == 0) g_wrapped_name = argv[index + 1];
-        if (strcmp(argv[index], "--rdram-mb") == 0) g_rdram_committed_mb = (unsigned)atoi(argv[index + 1]);
-        if (strcmp(argv[index], "--sessions") == 0) g_sessions = atoi(argv[index + 1]);
     }
     for (int index = 1; index < argc; index++)
-        if (strcmp(argv[index], "--dirty-gl") == 0) g_dirty_gl = 1;
-    for (int index = 1; index < argc; index++)
-        if (strcmp(argv[index], "--vanilla") == 0) g_vanilla_rom = 1;
-    for (int index = 1; index < argc; index++)
-        if (strcmp(argv[index], "--no-context") == 0) g_no_context = 1;
-    for (int index = 1; index < argc; index++)
         if (strcmp(argv[index], "--cpu-thread") == 0) g_cpu_thread = 1;
-    for (int index = 1; index < argc; index++)
-        if (strcmp(argv[index], "--commit-late") == 0) g_commit_late = 1;
     if (argc >= 3 && strcmp(argv[1], "--info") == 0) return info(argv[2]);
     if (argc >= 4 && strcmp(argv[1], "--drive") == 0)
         return drive(argv[2], atoi(argv[3]), stream_name);
     fprintf(stderr, "usage: gfxwrap_host --info <dll> | --drive <dll> <frames> "
-                    "[--stream <name>] [--wrapped <dll>] [--rdram-mb <n>] [--dirty-gl] [--vanilla] [--no-context] [--cpu-thread] [--commit-late]\n");
+                    "[--stream <name>] [--wrapped <dll>] [--cpu-thread]\n");
     return 1;
 }

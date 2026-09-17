@@ -79,7 +79,6 @@ extern "C" void __cdecl TestPause(HANDLE a,HANDLE b){entered=a;resume=b;}
         "/link",
         "/MANIFEST:EMBED",
         "/MANIFESTUAC:level='asInvoker'",
-        "bcrypt.lib",
         *build.LIBS,
     ]
     module = work / "stamp_source.dll"

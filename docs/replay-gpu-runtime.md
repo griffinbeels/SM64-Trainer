@@ -8,6 +8,55 @@ recorder photographs the desktop with no stamps. Griffin accepted the
 round-48 build live on 2026-09-16: "No lag. No stuttering. Replay is
 smooth. Input timeline matches."
 
+Component contracts live beside this page:
+[renderer boundary](replay-renderer-boundary.md) (SourceV2 surface and stats),
+[GL snapshot](replay-gl-snapshot.md), [LINK state](replay-link-state.md),
+[GPU bridge](replay-gpu-bridge.md), [capture control](replay-capture-control.md)
+(the control page and lease) and [the renderer build](../renderer/README.md).
+
+## Why it is built this way
+
+- **The picture is taken inside the renderer.** Window or desktop capture
+  (Windows Graphics Capture, desktop duplication) stamps a picture with wall
+  time but cannot say which N64 frame it shows, and does not promise every
+  picture; a `SwapBuffers` hook sees swaps, not game frames (a frame can
+  present none, several, or hold the last picture). Only the renderer knows,
+  as `ProcessDList` ends, which game frame and which input it just drew, so
+  the stamp and the picture are taken together there.
+- **The renderer is a source build of LINK's GLideN64 v4.2.** It is the
+  renderer his Project64 1.6 install already ran, so picture, smoothness and
+  settings stay as he knows them. Stock GLideN64 offers only a synchronous CPU
+  `ReadScreen`, and an earlier binary adapter depended on exact bytes and
+  private offsets of one DLL. The rebuilt baseline passed his A/B (round 30):
+  "same picture, smoothness and clean audio".
+- **The game never waits for capture.** Unaffected emulation is his highest
+  acceptance priority (round 21). The emulation thread already waits on
+  renderer commands, so any capture wait would block the game; fixed pools
+  refuse instead, and a refused picture is a counted gap, never a stall.
+- **Passive until asked.** His requirement (round 22): with the server off the
+  plugin behaves as LINK does, and capture turns on without switching plugins
+  or restarting Project64. A lease with a deadline covers a hung owner; PID
+  plus process birth time covers a crashed one or a reused PID.
+- **Encoding happens in a separate 64-bit process.** Project64 and the plugin
+  are 32-bit, 32-bit CUDA is unavailable on RTX 50-series cards, and NVENC has
+  no OpenGL input on Windows. Pictures therefore cross from GL into a D3D11
+  shared texture that a 64-bit helper encodes. The helper lives in its own
+  kill-on-close job so a stuck driver call can be ended without restarting the
+  server.
+- **Only small things reach Python.** Selection samples, stamps and compressed
+  packets; media persistence runs on its own sink thread. Capture credits held
+  across AAC, SQLite or a slow timer drained the source pool (rounds 37, 48).
+- **One capture route.** His decision, 2026-09-16: "Delete the CPU path." That
+  route carried the synchronous `ReadScreen` barrier. The desktop grab remains
+  only for a machine or moment without the layer, and says so.
+- **The practice ROM is decided natively.** A real run must see plain GLideN64
+  even with no trainer open, so the wrapper reads the cartridge header itself
+  (below).
+- **The stride-8 selection sample stays.** It matches the accepted duplicate
+  and settling decisions, and picture identity is preserved. A change confined
+  inside one 8x8 cell can hold the previous picture; removing the sample needs
+  renderer-certified picture identity (rounds 39, 48).
+
 ## Shipped files and how they are built
 
 | File | Role | Built by | Build id suffix |
@@ -65,7 +114,7 @@ which case it is, and onboarding never reopens for an automatic update.
 `SourceFactory` is called only after `ReplayRecorder` acquires the machine-wide
 recorder lock. GPU discovery reads the small control page. The paired
 `GpuCapture`/`GpuSink` shares one capture coordinator and one bounded media sink;
-it does not start the legacy raw picture sink as a second encoder. Existing recordings and fragment readers keep
+it starts no second encoder. Existing recordings and fragment readers keep
 their existing format and exact source-key lookup.
 
 ```mermaid
@@ -109,8 +158,9 @@ the original single-context renderer: the never-current shared GL anchor the
 worker leases is published on the renderer thread at the first admitted
 capture surface (`EnsureAnchor`), once per context, never at ROM open. A
 direct or server-off session therefore creates no extra driver context
-(round 48; the R47 anchor on/off pair is the live discriminator for the
-reported passive stutter).
+(round 48). The cost moves to the first captured frame after a server
+attaches. Whether this or the same day's driver update ended the passive
+stutter is not isolated (see [what failed](#what-failed-and-why)).
 
 The media worker's tick is a high-resolution waitable timer plus the native
 producer's own event (`tickwait.py`): a `threading.Event.wait(0.004)` sleeps
@@ -132,8 +182,8 @@ The paired GPU sink is bound before audio startup, but GPU demand starts only
 after primary/fallback audio initialization finishes. This keeps cold audio
 setup outside the active native queue and lease deadlines. Early PCM is dropped
 before the media handoff exists; the first source offer still owns the origin.
-Stop/pause during setup is reconciled before video demand. Raw sinks retain
-their existing video-before-audio startup order.
+Stop/pause during setup is reconciled before video demand. The desktop grab's
+sink keeps its video-before-audio startup order.
 
 Preparation publishes the fresh request identity and BOOTSTRAP state before
 acceptance returns. Channel names and shared resources become available while
@@ -170,8 +220,9 @@ passive setup observer. Permanent release failures remain explicit pending
 cleanup; tests do not claim that a stuck driver can be safely force-released.
 `/api/replay/status` exposes `recovery` and `audio_health`, including error and
 retry timing. A failed audio worker restarts after its old callbacks stop;
-timestamped sinks retain their original video clock. The legacy sample-count
-writer closes its run at an audio gap instead of shifting subsequent samples.
+timestamped sinks retain their original video clock. The in-process writer
+used only without an ffmpeg binary closes its run at an audio gap instead of
+shifting subsequent samples.
 
 Python cleanup does not prove that the native worker has finished retiring its
 source transactions and GPU ownership. A new request arriving during that drain
@@ -294,14 +345,14 @@ full-image copy or extra encoder is introduced. Capacity, excessive age and sink
 errors end the affected recording explicitly rather than dropping pictures or
 growing memory indefinitely. Shutdown joins the sink after native helper
 retirement. An unfinished sink retains archive and ledger ownership; a joined
-publication failure does not masquerade as surviving GPU ownership. The earlier
-`gpupublication.py` byte-only writer remains available to standalone callers.
+publication failure does not masquerade as surviving GPU ownership.
 
 The autonomous `test_gpu_cadence.py` fixture runs the actual native stamp adapter,
 source pool, GPU bridge and NVIDIA encoder while the producer advances without
-waiting for Python. A deliberate350ms mux stall reproduces source10022 in the
-synchronous control; the separated sink keeps all60 pictures with zero refusals,
-exact independently decoded picture/source-PTS joins and unchanged decoded audio.
+waiting for Python. A deliberate 350 ms mux stall fills the source pool in the
+synchronous control (counted refusals); the separated sink keeps all 60 pictures
+with zero refusals, exact independently decoded picture/source-PTS joins and
+unchanged decoded audio.
 This closes a hole in older GPU tests whose stubbed frontier could never report
 source refusals. It does not certify untested live resolutions or long-session
 driver/scheduler behavior. Current live startup remains a separate acceptance test.
@@ -401,10 +452,9 @@ terminal reason: channel reasons use tag0x10000000, delivery/control reasons
 tag0x20000000. These tags change no wire layout or capture operation.
 
 Use `tools/graphics_diagnostics.py --seconds 0 --output <new-folder>` to preserve
-read-only loaded paths and ControlV1 build identity. The wrapper-side
-`sm64_trainer_gfx.log` now starts for GPU builds as well as legacy builds.
-Older GPU wrappers inherited the passive-test logger exclusion, so an existing
-log can belong to an earlier build. Verify its PID/build/time before attribution.
+read-only loaded paths and ControlV1 build identity. The wrapper writes
+`sm64_trainer_gfx.log` beside itself; an existing log can belong to an earlier
+build, so verify its PID/build/time before attribution.
 Never restart the user's applications to collect diagnostics.
 
 The current native encoder is NVIDIA NVENC. No CUDA Toolkit installation is
@@ -412,3 +462,59 @@ required. Other GPU encoders and frozen-app helper dispatch remain unqualified;
 an unsupported GPU path must fail explicitly rather than run blocking capture
 on the emulation thread. The portable extension seam is the encoded packet and
 exact custody contract, not a second timing model.
+
+## What failed and why
+
+Diagnosed dead ends, so a future change does not repeat them. Hop-level
+entries live in the chain catalogues:
+[input timeline](../.claude/rules/chain-input-timeline-frame.md),
+[replay readiness](../.claude/rules/chain-replay-readiness.md) and
+[setup readiness](../.claude/rules/chain-setup-readiness.md).
+
+- **CPU `ReadScreen` capture lagged the game (rounds 14-17).** Lag worsened
+  with seconds of crackling and pitch distortion. LINK's `ReadScreen` runs one
+  synchronous command on the renderer thread and emulation waits for it; there
+  is no asynchronous export. Calling it from a worker still waits on the
+  renderer handoff, and CUDA after readback keeps the GPU-CPU-GPU round trip.
+  Replaced by the in-renderer GPU snapshot and delivery worker; deleted
+  2026-09-16.
+- **Passive stutter with the wrapper installed (rounds 13-16, 45-48): cured,
+  cause never isolated.** "Super laggy right now" (round 45); "Still stutters
+  with direct R31" (round 47). It continued with the server closed and stopped
+  when Project64 closed. Round 48 moved the shared GL anchor from ROM open to
+  the first captured frame (`EnsureAnchor`), and the same day the NVIDIA driver
+  was updated to 32.0.16.1692; the next build was accepted: "No lag. No
+  stuttering." The anchor on/off pair was never run, so which change cured it
+  is unknown. Ruled out along the way: the round-14 inactive-callback changes
+  (GL probing, callback file I/O), the `ReadScreen` barrier (cannot explain a
+  stutter with the server closed), storage maintenance (a 2 s cadence, not
+  every few frames), the five-minute GC (38-84 ms) and helper accounting. If it
+  returns, run the anchor on/off pair on the current driver first.
+- **Source refusal 10022 (rounds 32-48).** "I noticed a bunch of errors when
+  starting the server" (round 32), and a PB saved with no footage. The causes
+  were layered: capture credits held across cold media setup, AAC and SQLite
+  (round 37); a `threading.Event.wait(0.004)` tick that sleeps 15.5 ms and
+  drained the eight-slot pool (round 48); and one refusal ending the whole run.
+  Fixed by the separate media sink, `tickwait.py`, and counting a refusal as a
+  missing picture. Rejected: a bigger pool (masks stalls, costs GPU memory);
+  moving only disk publication (round 36, AAC and SQLite stayed on the credit
+  path and it failed live); a fully native mux (rewrites clocks that were
+  already exact); retries or log suppression (the refusal is a symptom).
+- **No footage after a settings change (round 48).** View answered "No
+  published replay footage is available yet" while recording read true.
+  `pending_bytes` had been raised to 9 MiB, above the native request cap of
+  slots times packet bytes (8 MiB), so every GPU request was refused. The caps
+  are now shared in `gpurequest.validate_limits` and a test packs the shipped
+  `GpuSettings`.
+- **Unbounded cleanup retries (2026-09-15 full gate).** A test worker looped
+  for nine hours logging a pending lease cleanup every 30 s. Both cleanup loops
+  (`GpuDemand._retire`, `GpuCapture._retry_cleanup`) now have retry budgets and
+  keep the owner.
+- **An opt-in GPU witness broke silently (round 48, found 2026-09-16).**
+  Round 48 made the stamp adapter omit an origin change with no swap
+  (`SA_NO_SWAP`). The fake renderer in `gpu_cadence_host.cpp` never counted
+  swaps, so every picture after the first was omitted, and its blocking control
+  still expected a refusal to end the run. The configured gate skips the GPU
+  witnesses (they need `SM64_TEST_GPU_BRIDGE=1` or `SM64_TEST_GPU_SELECTION=1`),
+  so nothing went red. After any native contract change, run them with their
+  flags on this machine's NVIDIA GPU.

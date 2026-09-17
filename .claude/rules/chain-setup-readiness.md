@@ -27,16 +27,12 @@ paths:
 - **One clock:** server monotonic time bounds fresh evidence to three seconds;
   the browser separately acknowledges progress for about one second. Neither
   polling frequency nor persisted completion can establish current readiness.
-  During intentional recorder idle, a positive decoded-picture receipt from the
-  current source's original plugin PID substitutes for fresh picture delivery.
-  Heartbeat, ROM, game and neutral input sampling must still be live. The receipt
-  cannot qualify a stopped recorder, desktop fallback, or another plugin PID.
-  The GPU route has a separate typed observation: ControlV1 live PID/birth,
+  Pictures come from the GPU route's typed observation: ControlV1 live PID/birth,
   generation/token and actual non-repeat muxed-picture receipt/source epoch.
   Active checks require moving lease acknowledgments and pictures. Deliberate
   GPU idle revokes the lease and the native control worker sleeps, so its exact
   positive receipt plus live matching control/ROM and fresh game/neutral-input
-  counters replaces the legacy heartbeat requirement. This exception also needs
+  counters stands in for fresh pictures. This exception also needs
   game/input movement on the limited JP path; a live idle process is insufficient.
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
@@ -60,6 +56,18 @@ click; a declared transition or a settled screenshot alone cannot prove movement
 
 ## Failure catalogue
 
+- 2026-09-15, hop 1: "this candidate doesn't have any stuttering as far as I
+  can tell", yet every picture read "Input unavailable". Project64's graphics
+  plugin pointed at the renderer DLL directly, so the wrapper never loaded (its
+  build wrote no log line) and the recorder photographed the desktop: 1313
+  rows, 0 exact. The setup screen now installs the pair and selects the
+  wrapper, which names the renderer in `sm64_trainer_gfx.ini`.
+- 2026-09-15, hop 1: a rebuilt candidate read "differs from this build".
+  Setup compared bytes and link timestamps differ between builds; a plain
+  64-hex pattern also matched the renderer's decimal tables, and scanning the
+  renderer cost 178 ms every 2 s. Setup compares the embedded build id with its
+  role suffix, cached per file stat (`capturelayer._files_match`).
+
 - 2026-09-13: a source server's two-second refresh replaced a manually copied
   wrapper with its older bundled DLL before PJ64 reopened. Hash inequality did
   not establish which build was newer. `CaptureLayer` defaults to manual updates;
@@ -82,10 +90,9 @@ click; a declared transition or a settled screenshot alone cannot prove movement
   `/api/replay/status` showed idle=true, recording=true and 3348 delivered;
   `/api/setup` had only pictures=false. Setup now accepts the source's PID-bound
   delivered-picture receipt during intentional idle, including first opening
-  Setup while already AFK. Active stalls still fail. `test_onboarding.py` tests
-  both entrances plus broken evidence; `test_pluginsource.py` binds the receipt
-  to the original producer; the browser test uses the real SetupRuntime and
-  checks both AFK success and subsequent heartbeat failure.
+  Setup while already AFK. Active stalls still fail. Since the CPU path's
+  deletion the receipt is the GPU observation's: `test_setup_gpu.py` covers
+  the idle receipt against nine missing-evidence faults and the JP limitation.
 
 - 2026-09-07, hop 2: Project64 was found but rejected while both playing and idle.
   Wermi v7's LINK executable has no Windows VERSIONINFO resource; requiring that

@@ -263,8 +263,7 @@ def test_each_failed_capture_owner_is_retained_off_route_until_real_close(
         peer.stop(cleanup=False)
 
 
-@pytest.mark.parametrize("boundary", ["mapping", "lease"])
-def test_failed_ownership_release_never_allows_competing_recorder(tmp_path, boundary):
+def test_failed_ownership_release_never_allows_competing_recorder(tmp_path):
     rec, _, _, _, held, _, _, _ = make(tmp_path / "owner")
     peer, peer_video, _, _, peer_held, _, _, _ = make(tmp_path / "peer")
     peer._recorder_lock_factory = lambda: peer_held if held.closed else None
@@ -274,13 +273,9 @@ def test_failed_ownership_release_never_allows_competing_recorder(tmp_path, boun
     def guarded():
         if not allowed[0]:
             raise RuntimeError("ownership release failed")
-        if boundary == "lease":
-            original_close()
+        original_close()
 
-    if boundary == "mapping":
-        rec._release_capture = guarded
-    else:
-        held.close = guarded
+    held.close = guarded
     try:
         rec._begin_capture(WIN)
         rec._teardown_capture()

@@ -1,5 +1,5 @@
 /* Raw RGB byte-transfer contract; these names do not request gamma conversion.
- * Alpha is outside the old BGR readback contract and must not affect RGB. */
+ * Alpha is unspecified and must not affect RGB. */
 #pragma once
 enum rb_source_format {
     RB_SOURCE_UNKNOWN = 0,

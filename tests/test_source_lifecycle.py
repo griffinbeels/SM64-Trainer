@@ -104,7 +104,6 @@ def test_late_gpu_arrival_reuses_desktop_watcher_without_legacy_pixels(monkeypat
         assert isinstance(factory.create(NS(pid=77)), G.GpuCapture)
     finally:
         source.stop()
-        factory.release()
 
 
 @pytest.mark.parametrize("changes, lifecycle", [

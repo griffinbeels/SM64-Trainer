@@ -33,7 +33,7 @@ def test_source_occurrence_order(tmp_path, mutation):
     flags = [f for f in build.COMMON_FLAGS if not f.startswith("/std:")]
     build._cl(vcvars, flags + ["/std:c++17", "/EHsc", "/DRB_TEST_HOST", f"/I{native}", str(source),
         str(native / "source_order_host.cpp"), f"/Fe:{exe}", f"/Fo{tmp_path}\\",
-        "/link", "bcrypt.lib", *build.LIBS], tmp_path)
+        "/link", *build.LIBS], tmp_path)
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10,
                             cwd=tmp_path, **quiet_spawn_kwargs(), check=False)
     if mutation:

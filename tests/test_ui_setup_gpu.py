@@ -57,10 +57,6 @@ class GpuFacts:
         self.layer = CaptureLayer(registry, processes, directory / "capture.json", bundle,
                                   renderer_source=renderer, gpu_observation=gpu)
 
-    @staticmethod
-    def forbid_stream():
-        pytest.fail("GPU setup attempted a legacy FrameStreamHeader read")
-
     def read_control(self):
         # Each external poll observes four more seconds of the chosen fixture
         # phase. Idle checks therefore cannot borrow active picture freshness.

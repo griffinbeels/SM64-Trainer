@@ -68,7 +68,7 @@ class Selection:
     """Explicit selector result; coalescing names the retained source picture.
 
     A selected row is observed metadata, not proof of encoding/publication.
-    Failed sampling/preparation/archive work must never be counted as a duplicate.
+    Failed sampling/admission/archive work must never be counted as a duplicate.
     """
     kind: Literal["selected", "coalesced", "failed"]
     source_id: str | None = None
@@ -186,22 +186,18 @@ class PictureLedger:
             self._archive.close()
 
     def observe(self, bgra, capture_ts: float | None,
-                frame: int | None, extras: dict | None = None, *,
-                prepare: Callable[[], object] | None = None) -> bool:
+                frame: int | None, extras: dict | None = None) -> bool:
         """Compatibility API: true only when the single selector lands a row."""
-        return self.observe_result(bgra, capture_ts, frame, extras,
-                                   prepare=prepare).kind == "selected"
+        return self.observe_result(bgra, capture_ts, frame, extras).kind == "selected"
 
     def observe_result(self, bgra, capture_ts: float | None,
-                       frame: int | None, extras: dict | None = None, *,
-                       prepare: Callable[[], object] | None = None) -> Selection:
+                       frame: int | None, extras: dict | None = None) -> Selection:
         """Observe one original-picture sample with an explicit outcome.
 
-        Existing equality/fold policy has one owner here. `prepare` only runs
-        for a selected candidate, before any ledger mutation; it must raise on
-        failure, not return a refusal flag. A native source_id is supplied in
-        extras with the captured stamp. Coalescing retains the preceding row's
-        source_id even when a folded sample becomes the comparison baseline.
+        Existing equality/fold policy has one owner here. A native source_id
+        is supplied in extras with the captured stamp. Coalescing retains the
+        preceding row's source_id even when a folded sample becomes the
+        comparison baseline.
         """
         stage = "sampling"
         try:
@@ -220,9 +216,6 @@ class PictureLedger:
                 self._prev_shape = shape
                 self._prev_sample = sample
                 return Selection("coalesced", retained, "same_frame_fold")
-            if prepare is not None:
-                stage = "preparation"
-                prepare()
             stage = "stamps"
             extras = dict(extras or {})
             for name, probe in self.stamps.items():

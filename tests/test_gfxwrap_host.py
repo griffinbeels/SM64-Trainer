@@ -71,7 +71,7 @@ def test_a_renderer_without_the_capture_export_is_forwarded_to_and_never_capture
     """The fake is a stock plugin: the runtime refuses to configure, every
     call still reaches it, and the session closes cleanly. PJ64 1.6's shape
     (window thread pumping, plugin calls on a second thread) included."""
-    output = drive(built["host"], built["wrapper"], 5, unique_name(), "--no-context", "--cpu-thread")
+    output = drive(built["host"], built["wrapper"], 5, unique_name(), "--cpu-thread")
     assert "drove 5 frames" in output
     log = (built["dir"] / "sm64_trainer_gfx.log").read_text(encoding="utf-8")
     activation = log.rsplit("event=init_begin", 1)[-1]
@@ -83,7 +83,7 @@ def test_native_diagnostics_identify_forwarded_stalls_without_a_reader(built):
     name = unique_name()
     result = subprocess.run(
         [str(built["host"]), "--drive", str(built["wrapper"]), "3",
-         "--stream", name, "--no-context", "--cpu-thread"],
+         "--stream", name, "--cpu-thread"],
         capture_output=True, text=True, timeout=60,
         env={**QUIET, "SM64_FAKE_DLIST_DELAY": "1"}, **quiet_spawn_kwargs(), check=False)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -95,14 +95,15 @@ def test_native_diagnostics_identify_forwarded_stalls_without_a_reader(built):
                  if "event=callback_stall callback=ProcessDList" in line)
     assert re.search(r"pid=\d+ tid=\d+ build=\S+", stall)
     assert f"build={build_plugin.wrapper_build_id()}" in stall
-    assert float(re.search(r" wrapped_ms=([\d.]+)", stall)[1]) >= 20
-    assert float(re.search(r" extra_ms=([\d.]+)", stall)[1]) < 20
+    # The first slow call is reported at once, with this callback's own count.
+    assert " calls=1 slow_calls=1 " in stall
+    assert float(re.search(r" total_ms=([\d.]+)", stall)[1]) >= 20
     assert "event=close_end" in activation and "event=diagnostics_stop" in activation
 
 
 def test_failed_wrapped_initialization_is_reported_not_advertised(built):
     result = subprocess.run(
-        [str(built["host"]), "--drive", str(built["wrapper"]), "1", "--stream", unique_name(), "--no-context"],
+        [str(built["host"]), "--drive", str(built["wrapper"]), "1", "--stream", unique_name()],
         capture_output=True, text=True, timeout=60,
         env={**QUIET, "SM64_FAKE_INIT_FAIL": "1"}, **quiet_spawn_kwargs(), check=False)
     assert result.returncode == 5, result.stdout + result.stderr
@@ -115,7 +116,7 @@ def test_a_renamed_copy_of_the_wrapper_is_rejected_before_recursive_initializati
     copy.write_bytes(built["wrapper"].read_bytes())
     result = subprocess.run(
         [str(built["host"]), "--drive", str(built["wrapper"]), "1",
-         "--stream", unique_name(), "--no-context", "--wrapped", copy.name],
+         "--stream", unique_name(), "--wrapped", copy.name],
         capture_output=True, text=True, timeout=60, env=QUIET, **quiet_spawn_kwargs(), check=False)
     assert result.returncode == 5, result.stdout + result.stderr
 

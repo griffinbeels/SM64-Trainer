@@ -1,8 +1,8 @@
 """Read bounded PJ64/plugin logs and existing capture status; never enable capture.
 
 Run with the profiling dependency group. Works while PJ64 is playing or after it
-closes with --pj64-dir. --seconds 0 is a snapshot; 1..30 samples existing header
-counters at 4 Hz. No registry writes, graphics calls, tracing or app restarts.
+closes with --pj64-dir. --seconds 0 is a snapshot; 1..30 samples the control
+page's counters at 4 Hz. No registry writes, graphics calls, tracing or app restarts.
 """
 from __future__ import annotations
 

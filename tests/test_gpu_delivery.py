@@ -46,7 +46,7 @@ def _build_host(out, *, lose_busy=False, resample_busy=False):
     files += [native / name for name in ("source_snapshot.cpp", "gl_snapshot.cpp", "gpu_selection.cpp", "renderer_boundary.cpp", "context_lifetime.cpp", "runtime_control.cpp", "runtime_delivery.cpp", "gpu_request.cpp")]
     exe = out / "delivery.exe"
     build._cl(vc, flags + ["/std:c++17", "/EHsc", "/DGD_TEST_HOST", f"/I{SOURCE}", f"/I{native}",
-        *map(str, files), f"/Fe:{exe}", f"/Fo{out}\\", "/link", *build.LIBS, "d3d11.lib", "dxgi.lib", "bcrypt.lib"], out)
+        *map(str, files), f"/Fe:{exe}", f"/Fo{out}\\", "/link", *build.LIBS, "d3d11.lib", "dxgi.lib"], out)
     return exe
 
 

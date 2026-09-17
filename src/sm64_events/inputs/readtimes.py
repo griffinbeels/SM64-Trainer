@@ -84,13 +84,6 @@ class ReadTimes:
         self._file.close()
 
 
-def iter_times(blob: bytes):
-    """Stream exact microseconds; never inflate a long hold into a Python list."""
-    for raw in _time_blocks(blob):
-        for value, in struct.iter_unpack("<q", raw):
-            yield value
-
-
 def contains_time(blob: bytes, low: int, high: int) -> bool:
     """Search exact instants in bounded blocks, validating even after a match.
 

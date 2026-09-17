@@ -242,7 +242,7 @@ Result Pool::copy(unsigned index,GLuint source,unsigned width,unsigned height) {
     if(FAILED(device_->GetDeviceRemovedReason())) return fault(ERROR_DEVICE_NOT_CONNECTED);
     const HRESULT release=s.mutex->ReleaseSync(1);
     if(FAILED(release)) return fault(DWORD(release));
-    ++copies_;return Result::copied;
+    return Result::copied;
 }
 KeyReturn Pool::key0_returned(unsigned index, bool reclaim_unconsumed) {
     if (!worker() || index >= slots || !slot_[index].mutex) return KeyReturn::invalid;

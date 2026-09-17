@@ -1,4 +1,4 @@
-/* Experimental worker-only GL -> D3D11 bridge. Not a production capture ABI. */
+/* The delivery worker's GL -> D3D11 bridge (a process-local C++ interface). */
 #pragma once
 #include <windows.h>
 #include <GL/gl.h>
@@ -37,8 +37,8 @@ using DxLock = BOOL(WINAPI *)(HANDLE,GLint,HANDLE*);
 class Pool {
 public:
     // width/height are ORIGINAL bottom-up RGBA8 snapshot dimensions. Output is
-    // floor-even top-left crop of the top-down picture, matching the old BGRA
-    // sink. Odd height drops native row0; odd width drops the rightmost column.
+    // the floor-even top-left crop of the top-down picture. Odd height drops
+    // native row0; odd width drops the rightmost column.
     bool prepare(unsigned width,unsigned height,const wchar_t *prefix,uint64_t byte_budget);
     Result copy(unsigned slot,GLuint source,unsigned width,unsigned height);
     // Zero-time actual keyed custody probe. Stop-only reclaim additionally
@@ -47,7 +47,6 @@ public:
     bool quarantined() const { return poisoned_; }
     bool shutdown(); // worker, only after consumer has returned both keys
     const Config& config() const { return config_; }
-    unsigned copies() const { return copies_; }
     unsigned locks() const { return locks_; }
     uint64_t logical_bytes() const { return bytes_; }
     DWORD error() const { return error_; }
@@ -81,7 +80,7 @@ private:
     unsigned source_width_=0,source_height_=0;
     bool prepare_transfer();
     uint64_t bytes_=0;
-    unsigned copies_=0,locks_=0;
+    unsigned locks_=0;
     bool enabled_=false,poisoned_=false;
     bool worker() const;
     Result fault(DWORD error);

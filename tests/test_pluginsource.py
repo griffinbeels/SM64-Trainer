@@ -1,11 +1,10 @@
 """The stamp: a picture's copied RDRAM bytes decode through the sampler's own
-decoder, the address table is word-aligned from the live layout, owned pixels
-prepare top-down BGRA, and the desktop camera hands over to the GPU route."""
+decoder, the address table is word-aligned from the live layout, and the
+desktop camera hands over to the GPU route."""
 import threading
 import time
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from sm64_events.inputs.frame import MARIO_BLOCK_OFF
@@ -13,7 +12,6 @@ from sm64_events.memory import addresses as A
 from sm64_events.memory.buffer import BufferMemory
 from sm64_events.memory.layout import layout_for
 from sm64_events.replay import pluginsource as P
-from sm64_events.replay.pixels import to_bgra_top_down
 
 #: the native table entry size (plugin/gfxwrap/stamp_adapter.h keeps 128-byte entries)
 TABLE_ENTRY_BYTES = 128
@@ -62,17 +60,6 @@ def test_table_for_is_word_aligned_and_covers_the_halfword(layout):
         assert offset % 4 == 0 and length % 4 == 0 and 0 < length <= TABLE_ENTRY_BYTES
     igt = dict((name, (offset, length)) for name, offset, length in table)["usamune_overall"]
     assert igt[0] <= layout.usamune_overall - A.KSEG0_BASE < igt[0] + igt[1]
-
-
-@pytest.mark.parametrize("width", [1, 7, 1190, 1600])
-def test_capture_conversion_keeps_every_channel_row_and_owns_its_pixels(width):
-    source = np.random.default_rng(82).integers(0, 256, (9, width + 3, 3), dtype=np.uint8)
-    cropped = source[:, :width]  # padded rows, including non-aligned widths
-    expected = np.concatenate((cropped[::-1], np.full((9, width, 1), 255, dtype=np.uint8)), axis=2)
-    actual = to_bgra_top_down(cropped)
-    source.fill(0)  # a later producer write cannot change a retained heartbeat
-    assert actual.flags.c_contiguous
-    np.testing.assert_array_equal(actual, expected)
 
 
 def test_decode_stamp_reads_the_frame_the_pad_mario_and_the_igt(layout):

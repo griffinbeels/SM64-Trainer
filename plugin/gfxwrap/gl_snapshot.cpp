@@ -3,7 +3,7 @@
 
 namespace snapshot {
 namespace {
-constexpr GLenum read_framebuffer = 0x8CA8, read_framebuffer_binding = 0x8CAA;
+constexpr GLenum read_framebuffer = 0x8CA8;
 constexpr GLenum sync_complete = 0x9117, already_signaled = 0x911A;
 constexpr GLenum condition_satisfied = 0x911C, wait_failed = 0x911D;
 constexpr GLint rgba8 = 0x8058;
@@ -137,16 +137,7 @@ Result Pool::submit(unsigned expected_epoch, const Source &src, RestoreBindings 
 #ifdef SNAPSHOT_TEST_HOST
         if (submission_probe) submission_probe(0);
 #endif
-#ifdef SNAPSHOT_QUERY_BINDINGS
-        // Counterfactual benchmark ONLY: restores the query-based prototype.
-        GLint previous = 0;
-        glGetIntegerv(read_framebuffer_binding, &previous); bindings.read_framebuffer=GLuint(previous);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous); bindings.texture_2d=GLuint(previous);
         gl.bind_framebuffer(read_framebuffer, src.framebuffer);
-        glGetIntegerv(GL_READ_BUFFER, &previous); bindings.source_read_buffer=GLenum(previous);
-#else
-        gl.bind_framebuffer(read_framebuffer, src.framebuffer);
-#endif
         glReadBuffer(src.read_buffer);
         // First attachment propagates worker-created shared-object storage/state.
         // Worker later READS only; all subsequent image writes remain on producer.

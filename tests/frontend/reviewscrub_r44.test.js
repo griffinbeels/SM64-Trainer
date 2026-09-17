@@ -1,8 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { attachReviewSource, scrubReviewSource, seekReviewSource, setReviewSourceLoop,
+import { scrubReviewSource, seekReviewSource,
   prepareReviewPlayback } from "../../src/sm64_events/ui/reviewsource.js";
 import { cancelReviewSeek } from "../../src/sm64_events/ui/reviewseek.js";
-import { appendReviewStream } from "../../src/sm64_events/ui/reviewstream.js";
 import { pollJSON } from "../../src/sm64_events/ui/pollstate.js";
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -62,44 +61,6 @@ test("an immediate step supersedes a queued drag, Play flushes it, and disposal 
   cancelReviewSeek(video);
   await vi.advanceTimersByTimeAsync(1000);
   expect(video.writes).toEqual([2, 3]);
-});
-
-test("an obsolete sourceopen cannot start a media request", async () => {
-  const opened = [];
-  vi.stubGlobal("MediaSource", class extends EventTarget {
-    static isTypeSupported() { return true; }
-    constructor() { super(); opened.push(this); }
-  });
-  vi.stubGlobal("URL", { createObjectURL: () => "blob:review", revokeObjectURL: vi.fn() });
-  vi.stubGlobal("fetch", vi.fn());
-  const video = decoder(); video.paused = true;
-  const stop = attachReviewSource(video, { url: "/review.mp4", mime_type: "video/mp4",
-    timestamp_offset_s: 0, video_timescale: 90000, visible_start_s: 0, visible_end_s: 4 },
-  "/original.mp4", vi.fn(), [0, 1, 2, 3]);
-  setReviewSourceLoop(video, { start: 1, end: 2, enabled: true });
-  expect(opened).toHaveLength(2);
-  opened[0].dispatchEvent(new Event("sourceopen"));
-  await Promise.resolve();
-  expect(fetch).not.toHaveBeenCalled();
-  stop();
-});
-
-test("an aborted or late media response never creates a decoder buffer", async () => {
-  const source = { url: "/review.mp4" }, addSourceBuffer = vi.fn();
-  const early = new AbortController(); early.abort();
-  vi.stubGlobal("fetch", vi.fn());
-  await expect(appendReviewStream({addSourceBuffer}, source, 4, early.signal, vi.fn()))
-    .rejects.toMatchObject({name: "AbortError"});
-  expect(fetch).not.toHaveBeenCalled();
-  const late = new AbortController(), cancel = vi.fn();
-  let respond;
-  vi.stubGlobal("fetch", vi.fn(() => new Promise(resolve => { respond = resolve; })));
-  const loading = appendReviewStream({addSourceBuffer}, source, 4, late.signal, vi.fn());
-  const failed = expect(loading).rejects.toMatchObject({name: "AbortError"});
-  late.abort(); respond(new Response(new ReadableStream({cancel})));
-  await failed;
-  expect(cancel).toHaveBeenCalledTimes(1);
-  expect(addSourceBuffer).not.toHaveBeenCalled();
 });
 
 test("pause observations stay serial through timeout and reject a stale response after disposal", async () => {

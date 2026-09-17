@@ -47,7 +47,7 @@ def binaries(tmp_path_factory):
     wrapper = build.build_wrapper(work, vcvars)
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
     flags += ["/std:c++17", "/EHsc", f"/I{source}"]
-    link = ["/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", "bcrypt.lib", *build.LIBS]
+    link = ["/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *build.LIBS]
     for name, extra in [("original", []), ("unsupported", ["/DWR_UNSUPPORTED"])]:
         build._cl(vcvars, flags + extra + ["/LD", str(source / "wrapper_runtime_original.cpp"),
             str(source / "renderer_boundary.cpp"), f"/Fe:{work / (name + '.dll')}", f"/Fo{work}\\", *link], work)

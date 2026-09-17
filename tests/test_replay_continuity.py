@@ -64,7 +64,10 @@ def test_automatic_idle_keeps_run_and_reset_before_movement_preserves_demand(tmp
 
 
 @pytest.mark.parametrize("productive,cleanup", [(False, True), (True, True), (True, False)])
-def test_prompt_recovery_requires_productive_media_and_proved_cleanup(productive, cleanup):
+def test_a_runtime_fault_waits_out_the_cooldown_however_much_media_it_produced(productive, cleanup):
+    """docs/replay-gpu-runtime.md: a short productive prefix or capability
+    refresh does not waive the delay. Proved cleanup decides only what the
+    failure reports."""
     now = [0.0]
     gate = RetryGate(clock=lambda: now[0], cooldown=10)
     key = gate.observe(producer())
@@ -98,16 +101,16 @@ def test_prompt_recovery_requires_productive_media_and_proved_cleanup(productive
     gate.wait = lambda owner, identity: True
     owner._run()
     assert closed.is_set() and owner.error
-    # Productive media and proved cleanup decide what the failure REPORTS
-    # (cleanup_error), never whether the gate cools down: a fault always
-    # waits its turn (tests/test_replay_auto_recovery.py owns the back-off).
     assert isinstance(owner.cleanup_error, GpuCleanupError) == (not cleanup)
     assert gate.blocked(key) and "repeated failures" not in gate.blocked(key)
-    # Prompt recovery cannot turn two failures into unlimited GPU restarts:
-    # the second failure doubles the cooldown (tests/test_gpu_retry.py owns
+    now[0] = 9.99
+    assert gate.blocked(key), "packets written before the fault cannot shorten the cooldown"
+    now[0] = 10
+    assert gate.blocked(key) is None
+    # The second failure doubles the cooldown (tests/test_gpu_retry.py owns
     # the back-off contract) and names the repetition.
-    gate.failed(key, "second fault", productive=True)
-    now[0] = 15
+    gate.failed(key, "second fault")
+    now[0] = 25
     assert "repeated failures" in gate.blocked(key)
 
 

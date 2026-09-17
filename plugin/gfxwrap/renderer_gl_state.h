@@ -16,13 +16,13 @@ public:
         identity_ = identity;
         const bool valid = identity.context && identity.read_drawable && identity.context_generation
             && identity.drawable_generation && identity.owner_thread;
-        read_ = draw_ = unit_ = 0; default_read_ = double_buffered ? GL_BACK : GL_FRONT;
-        read_known_ = draw_known_ = unit_known_ = default_known_ = valid;
+        read_ = unit_ = 0; default_read_ = double_buffered ? GL_BACK : GL_FRONT;
+        read_known_ = unit_known_ = default_known_ = valid;
         known_textures_ = valid ? ~0u : 0;
         for (auto &texture : textures_) texture = 0;
     }
-    void lost() { identity_ = {}; read_known_ = draw_known_ = false;
-                  unit_known_ = default_known_ = false; known_textures_ = 0; }
+    void lost() { identity_ = {}; read_known_ = unit_known_ = default_known_ = false;
+                  known_textures_ = 0; }
     // Same context/drawable, storage resized: GL binding state survives. The
     // source generation changes without claiming a freshly initialized context.
     void drawable_changed(uint32_t generation) {
@@ -31,7 +31,6 @@ public:
     }
     void bind_framebuffer(GLenum target, GLuint name) {
         if (target == 0x8D40 || target == 0x8CA8) { read_ = name; read_known_ = true; }
-        if (target == 0x8D40 || target == 0x8CA9) { draw_ = name; draw_known_ = true; }
     }
     void read_buffer(GLenum mode) {
         // Selectors belong to FBOs. Other FBO selectors never overwrite default.
@@ -57,13 +56,10 @@ public:
     }
     void delete_framebuffers(GLsizei count, const GLuint *names) {
         if (count < 0 || unsigned(count) > deletion_limit || (count && !names)) {
-            read_known_ = draw_known_ = false; return;
+            read_known_ = false; return;
         }
-        for (GLsizei n = 0; n < count; ++n) {
-            if (!names[n]) continue;
-            if (read_known_ && read_ == names[n]) read_ = 0;
-            if (draw_known_ && draw_ == names[n]) draw_ = 0;
-        }
+        for (GLsizei n = 0; n < count; ++n)
+            if (names[n] && read_known_ && read_ == names[n]) read_ = 0;
     }
     void named_read_buffer(GLuint framebuffer, GLenum mode) {
         if (!framebuffer) { default_read_ = mode; default_known_ = true; }
@@ -82,14 +78,14 @@ public:
         return true;
     }
     // Any unobserved mutation/error invalidates the witness until reconstructed.
-    void unknown() { read_known_ = draw_known_ = unit_known_ = default_known_ = false;
+    void unknown() { read_known_ = unit_known_ = default_known_ = false;
                      known_textures_ = 0; }
 private:
     Identity identity_{};
     uint32_t known_textures_ = 0;
-    GLuint read_ = 0, draw_ = 0, textures_[texture_units]{};
+    GLuint read_ = 0, textures_[texture_units]{};
     GLenum default_read_ = GL_NONE;
     unsigned unit_ = 0;
-    bool read_known_ = false, draw_known_ = false, unit_known_ = false, default_known_ = false;
+    bool read_known_ = false, unit_known_ = false, default_known_ = false;
 };
 } // namespace renderer

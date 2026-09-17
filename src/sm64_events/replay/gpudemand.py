@@ -24,7 +24,6 @@ class DemandSnapshot:
     state: str = "new"
     reason: str = ""
     identity: RequestIdentity | None = None
-    native_state: int | None = None
     renewals: int = 0
     cleanup_error: str = ""
     lifecycle: bool = False
@@ -193,8 +192,7 @@ class GpuDemand:
                     admitted = True
                     return control
                 # A non-practice ROM is a real run: stay idle and say why.
-                self._publish(state="baseline_rom" if status.baseline_rom else "waiting_rom",
-                              native_state=status.state)
+                self._publish(state="baseline_rom" if status.baseline_rom else "waiting_rom")
             except (FileNotFoundError, BlockingIOError):
                 self._publish(state="discovering")
             except CleanupPending as exc:
@@ -251,10 +249,7 @@ class GpuDemand:
                     if active and status.state != C.ACTIVE:
                         raise DemandFailure("native_capture_restarted")
                     active |= status.state == C.ACTIVE
-                    self._publish(
-                        state="active" if active else "preparing",
-                        native_state=status.state,
-                    )
+                    self._publish(state="active" if active else "preparing")
                 elif acknowledged:
                     raise DemandFailure("native_request_replaced")
             if now - last_renew >= self._renew:

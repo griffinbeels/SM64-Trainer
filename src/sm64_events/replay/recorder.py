@@ -2,12 +2,13 @@
 capture sources -> video sink / SegmentWriter -> SegmentRing, status
 surface.
 
-Two video paths:
+The GPU route (replay/gpucapture.py) feeds its own paired sink and never
+calls _on_frame. The desktop grab has two video paths:
 - ffmpeg sink (PRIMARY when ffmpeg.exe is on PATH — main.py probes):
-  _on_frame applies queue/ledger selection, prepares accepted plugin pixels,
-  and submits owned BGRA. The sink muxes explicit timestamps into NUT;
-  the child handles compression and segmentation. Legacy CFR remains an
-  explicit configuration fallback, not the plugin picture feed.
+  _on_frame applies queue/ledger selection and submits the grab's BGRA.
+  The sink muxes explicit timestamps into NUT; the child handles
+  compression and segmentation. Legacy CFR remains an explicit
+  configuration fallback, not the picture feed.
 - in-process fallback: the CFR-conform path below feeds SegmentWriter.
 
 Threading: capture callbacks arrive on library threads (the video
@@ -53,7 +54,6 @@ from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.encoder import SegmentWriter, pick_video_codec
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.fragmentmedia import FragmentMedia
-from sm64_events.replay.pixels import BgrPicture, as_bgra
 from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.scratch import OwnedScratch
 from sm64_events.replay.window import WindowInfo
@@ -65,11 +65,10 @@ _IDLE_FLOOR_S = 3.0
 
 
 class VideoSource(Protocol):
-    """A camera. `on_frame(bgra, ts_100ns)` for a desktop grab the recorder
-    must place in game time itself; the capture layer's source
-    (replay/pluginsource.py) calls `on_frame(bgra, ts_100ns, stamp)` with the
-    game's own frame counter and pad for that picture, and carries
-    `frame_source = "plugin"` so status can say which camera is live."""
+    """A camera. The desktop grab calls `on_frame(bgra, ts_100ns)` and the
+    recorder places each grab in time itself. The GPU route
+    (replay/gpucapture.py) ignores `on_frame`, feeds its own sink, and
+    carries `frame_source = "plugin"` so status can say which camera is live."""
     def start(self, on_frame: Callable[..., None],
               on_stopped: Callable[[], None]) -> None: ...
     def stop(self) -> None: ...
@@ -102,14 +101,12 @@ class ReplayRecorder:
                  codec: str | None = None,
                  video_sink_factory=None,
                  recorder_lock_factory=acquire_recorder_lock,
-                 release_capture: Callable[[], None] | None = None,
                  scratch_protection: Callable[[], Iterable[Path]] | None = None):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
         # instance holding this lock actually captures; others run viewer-only.
         self._recorder_lock_factory = recorder_lock_factory
         self._rec_lock = None        # held handle while WE are the recorder
-        self._release_capture = release_capture
         self._capture_lock = threading.RLock()  # serialize attach vs teardown
         self._scratch_ready = False
         self._configure_scratch(cfg, scratch_protection)
@@ -732,8 +729,6 @@ class ReplayRecorder:
         if self._rec_lock is not None:
             self._scratch.pause_deletion()
             try:
-                if self._release_capture is not None:
-                    self._release_capture()
                 self._rec_lock.close()
             except Exception:
                 self._capture_closed = False
@@ -874,23 +869,16 @@ class ReplayRecorder:
 
     # -- frame callback (library thread) -------------------------------------
 
-    def _observe_picture(self, bgra, tag, capture_ts, stamp) -> bool:
-        """One grab into the picture ledger. A picture from THE CAPTURE
-        LAYER carries its own stamp -- the game frame the plugin read
-        inside Project64 at the display list that drew it -- and that row
-        is what the frame map is made of. A grab with no stamp (the
-        desktop camera, before the layer publishes) is recorded by TIME
-        only: it names no frame, so the clip gets no map and the timeline
+    def _observe_picture(self, bgra, capture_ts) -> bool:
+        """One desktop grab into the picture ledger, recorded by TIME only:
+        a grab names no game frame, so the clip gets no map and the timeline
         says frame-exact capture is off rather than showing a guess."""
-        preparation = {"prepare": bgra.as_bgra} if isinstance(bgra, BgrPicture) else {}
-        if stamp is not None and tag is not None:
-            return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras(), **preparation)
         if capture_ts is not None:
-            return self.ledger.observe(bgra, capture_ts, None, **preparation)
+            return self.ledger.observe(bgra, capture_ts, None)
         return False
 
     @measured("replay.on_frame", interval=True)
-    def _on_frame(self, bgra: np.ndarray | BgrPicture, ts_100ns: int, stamp=None) -> None:
+    def _on_frame(self, bgra: np.ndarray, ts_100ns: int) -> None:
         if self.ring.storage_pressure:
             self._grabs_skipped += 1
             return
@@ -901,25 +889,11 @@ class ReplayRecorder:
         # feeder. The in-process writer below is bypassed when it is present.
         sink = self._video_sink
         if sink is not None:
-            if not self._picture_feed:
-                # CFR submits every grab. Prepare before observing, including
-                # a folded grab, so allocation failure cannot alter its ledger.
-                bgra = as_bgra(bgra)
-            # Tag the picture AT CAPTURE (round 32 items 17 + 30): the RAM
-            # frame current right now (map v2's key) and this picture's own
-            # composition time -- WGC's SystemRelativeTime through the run's
-            # CaptureClock, not the moment this callback happened to run --
-            # which is what the frame map's present series keys on (v4).
-            # A picture from the CAPTURE LAYER (item 95) arrives with its
-            # own stamp -- the frame the game submitted it as, read inside
-            # the emulator -- so the frame clock is not consulted for it:
-            # the tag's frame IS the stamp's, and the row says `exact`.
-            tag = None
+            # Time the grab AT CAPTURE: its own composition time through the
+            # run's CaptureClock, not the moment this callback happened to run.
             clock = self._clock
             capture_ts = (clock.utc_of(ts_100ns).timestamp()
                           if clock is not None else None)
-            if stamp is not None and capture_ts is not None:
-                tag = (stamp.frame, capture_ts)
             if self._picture_feed and not _sink_has_room(sink):
                 # LOCKSTEP (item 88): no budget to encode this picture, so it
                 # is not recorded as captured either. The ledger keeps its
@@ -933,16 +907,15 @@ class ReplayRecorder:
             # The picture ledger notices each NEW picture among the grabs
             # (item 40) -- before submit so the sample reads the buffer this
             # callback was handed. observe() never raises.
-            new_picture = self._observe_picture(bgra, tag, capture_ts, stamp)
+            new_picture = self._observe_picture(bgra, capture_ts)
             if self._picture_feed:
                 # ONE frame per DISTINCT picture (item 38): a grab that
                 # changed nothing feeds nothing. The tag's second field is
                 # the row's own ts, which the feed log keys on.
                 if new_picture:
-                    sink.submit(as_bgra(bgra), tag if tag is not None
-                                else (None, capture_ts))
+                    sink.submit(bgra, (None, capture_ts))
                 return
-            sink.submit(as_bgra(bgra), tag)
+            sink.submit(bgra, None)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
         # a single callback thread, so they need no lock — if that ever changes,
@@ -957,9 +930,6 @@ class ReplayRecorder:
         # Drop backwards/duplicate (encoder will also guard, but be explicit)
         if target <= self._last_index:
             return
-
-        # Legacy writer also receives owned BGRA, prepared before any fills.
-        bgra = as_bgra(bgra)
 
         # Fill small delivery gaps (WGC sends frames only on change) by
         # re-encoding the last frame; beyond one segment's worth, stop

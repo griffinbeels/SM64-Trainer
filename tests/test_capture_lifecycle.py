@@ -21,23 +21,21 @@ def recorder(tmp_path, events, video_factory, sink=None, acquire=True):
         ReplayConfig(scratch_dir=tmp_path / "buffer"), lambda _: WIN,
         video_factory, lambda _: FakeAudioSource(), codec="libx264",
         video_sink_factory=lambda *args: sink or FakeAvSink(),
-        recorder_lock_factory=lambda: Lock() if acquire else None,
-        release_capture=lambda: events.append("release mapping"))
+        recorder_lock_factory=lambda: Lock() if acquire else None)
 
 
-def test_factory_failure_releases_mapping_before_lock_once(tmp_path):
+def test_factory_failure_releases_ownership_once(tmp_path):
     events = []
     def fail(_):
-        events.append("mapping created")
-        raise OSError("factory failed after acquiring mapping")
+        events.append("factory")
+        raise OSError("factory failed")
     rec = recorder(tmp_path, events, fail)
     with pytest.raises(OSError):
         rec._begin_capture(WIN)
-    assert events == ["mapping created", "release mapping", "unlock"]
+    assert events == ["factory", "unlock"]
     rec.stop()
     # Shutdown reacquires ownership only to clean the failed startup scratch.
-    # The capture mapping still releases exactly once, before its original lock.
-    assert events == ["mapping created", "release mapping", "unlock", "unlock"]
+    assert events == ["factory", "unlock", "unlock"]
     rec.ledger.reset()
 
 
@@ -52,7 +50,7 @@ def test_failed_source_start_is_stopped_before_releasing_ownership(tmp_path):
     rec = recorder(tmp_path, events, lambda _: Partial())
     with pytest.raises(RuntimeError):
         rec._begin_capture(WIN)
-    assert events == ["demand enabled", "source stopped", "release mapping", "unlock"]
+    assert events == ["demand enabled", "source stopped", "unlock"]
     rec.ledger.reset()
 
 
@@ -106,12 +104,12 @@ def test_demand_stops_before_blocking_encoder_drain(tmp_path):
     try:
         assert draining.wait(1)
         assert "demand disabled" in events and "source stopped" in events
-        assert "release mapping" not in events
+        assert "unlock" not in events
     finally:
         drained.set()
         stopping.join(2)
     assert not stopping.is_alive()
-    assert events[-2:] == ["release mapping", "unlock"]
+    assert events[-1] == "unlock"
     rec.ledger.reset()
 
 
@@ -137,7 +135,7 @@ def test_stop_during_factory_cannot_start_a_late_source(tmp_path):
     stopping.join(2)
     assert not starting.is_alive() and not stopping.is_alive()
     assert video.on_frame is None and video.stopped
-    assert events == ["release mapping", "unlock"]
+    assert events == ["unlock"]
     rec.ledger.reset()
 
 

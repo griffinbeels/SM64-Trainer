@@ -23,7 +23,6 @@ def instrument(control):
 
 def report_fixture(a):
     owner = object.__new__(GpuCapture)
-    owner._productive = False
     session = NS(
         adapter=a, timings=None, state="recording",
         demand=NS(identity=NS(producer_pid=1, producer_birth=2,

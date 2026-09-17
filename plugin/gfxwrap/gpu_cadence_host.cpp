@@ -12,7 +12,9 @@ Window *producer=nullptr;
 source_context::Registry registry;
 rs_api source{};
 uint64_t updates=0;
-unsigned marker=0, origin=0;
+// swaps: the real renderer swaps exactly when the origin moves, and the stamp
+// adapter omits an origin change with no swap (SA_NO_SWAP), so the fake must count.
+unsigned marker=0, origin=0, swaps=0;
 bool fresh_picture=true, swap_presentation=false;
 HANDLE render_request=nullptr, render_done=nullptr;
 rs_request render_command{};
@@ -22,7 +24,7 @@ int source_surface(rb_surface *s) {
     s->context=reinterpret_cast<uintptr_t>(producer->rc);
     s->read_drawable=reinterpret_cast<uintptr_t>(producer->dc);
     s->renderer_thread=GetCurrentThreadId();s->context_generation=s->drawable_generation=1;
-    s->restore_read_buffer=GL_BACK;s->source_format=RB_SOURCE_RGB8_LINEAR;s->post_vi_origin=origin;
+    s->restore_read_buffer=GL_BACK;s->source_format=RB_SOURCE_RGB8_LINEAR;s->post_vi_origin=origin;s->swap_count=swaps;
     LARGE_INTEGER qpc{};QueryPerformanceCounter(&qpc);s->boundary_qpc=qpc.QuadPart;return 1;
 }
 void render_update(const rs_request *request) {
@@ -34,7 +36,7 @@ void render_update(const rs_request *request) {
         glClearColor((marker%251)/250.f,((marker*7+marker/251*31)%251)/250.f,((marker*17)%251)/250.f,1.f);
         glClear(GL_COLOR_BUFFER_BIT);glDrawBuffer(GL_BACK);
         if(swap_presentation)CHECK(SwapBuffers(producer->dc));
-        ++origin;
+        ++origin;++swaps;
     }
     rb_source_end(ticket);
 }

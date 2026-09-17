@@ -1,6 +1,5 @@
 // The picture Chromium actually presented, shared by every reader of a video.
 // A seek request/currentTime is not evidence that that picture was displayed.
-import { reviewPictureTime } from "./reviewsource.js";
 const pictures = new WeakMap();
 
 // undefined = no observer; null = observed, but no picture has been delivered.
@@ -24,7 +23,7 @@ export function watchVideoPicture(video, listener) {
     if (state.source !== source) state.time = null;
     state.source = source;
     const presented = (_now, meta) => {
-      state.time = reviewPictureTime(video, meta.mediaTime);
+      state.time = meta.mediaTime;
       state.handle = video.requestVideoFrameCallback(presented);
       notify();
     };

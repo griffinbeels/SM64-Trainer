@@ -61,7 +61,7 @@ extern "C" unsigned __cdecl Completed(){return completions;}
 #pragma comment(linker,"/EXPORT:Captured=_Captured")
 #pragma comment(linker,"/EXPORT:Completed=_Completed")
 """)
-    link = ["/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", "bcrypt.lib", *build.LIBS]
+    link = ["/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *build.LIBS]
     build._cl(vcvars, flags + ["/LD", str(NATIVE / "link_source_api.cpp"),
         str(NATIVE / "renderer_boundary.cpp"), str(work / "platform.cpp"),
         f"/Fe:{work / 'source_api.dll'}", f"/Fo{work}\\", *link], work)

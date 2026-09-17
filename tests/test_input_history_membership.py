@@ -6,7 +6,7 @@ import zlib
 import pytest
 
 from sm64_events.inputs.observation import InputObservation
-from sm64_events.inputs.readtimes import contains_time, iter_times, micros, stamp_at
+from sm64_events.inputs.readtimes import contains_time, micros, stamp_at
 
 
 AT = "2026-09-14T00:00:00Z"
@@ -27,7 +27,7 @@ def test_membership_preserves_exact_instants_gaps_and_clock_reversals(size):
                       (base + 1, base + 1), (base - 2, base + 2),
                       (base - 10**9, base + 10**9)]:
         assert contains_time(blob, low, high) == any(low <= v <= high for v in values)
-    assert list(iter_times(blob)) == values
+    assert [value for value, in struct.iter_unpack("<q", zlib.decompress(blob))] == values
     assert blob == original
 
 

@@ -1,40 +1,33 @@
-"""Real keyboard intent survives decoder-bounded replay loop boundaries."""
+"""Real keyboard intent survives a replay loop restarting at the clip's end."""
 import json
 
 import pytest
 from playwright.sync_api import sync_playwright
 
-from test_ui_loop_cutoff import fragment_packets
 from test_ui_replay_picture_steps import PROJECT, STORY
 from test_ui_review_selection import selection_media
 
 
 @pytest.fixture
-def bounded_page(tmp_path):
-    original = tmp_path / "source.mp4"
-    bounded = tmp_path / "bounded.mp4"
-    replay = selection_media(original, gop=30)
-    mime = fragment_packets(original, bounded)
-    replay["review_media"] = {"url": "/bounded.mp4", "mime_type": mime,
-                              "video_timescale": 90000, "timestamp_offset_s": 0,
-                              "visible_start_s": 0, "visible_end_s": 4}
+def looping_page(tmp_path):
+    replay = selection_media(tmp_path / "source.mp4", gop=30)
     with PROJECT.open() as url, sync_playwright() as play:
         browser = play.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={"width": 1500, "height": 1100})
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
-            page.route("**/bounded.mp4", lambda route: route.fulfill(
-                content_type="video/mp4", body=bounded.read_bytes()))
             page.route("**/api/attempts/*/replay", lambda route: route.fulfill(json=replay))
+            # Out is the 4 s clip's own end, so every wrap passes through the
+            # element's end of stream and its `ended` restart.
             page.route("**/api/attempts/*/replay/review-state", lambda route: route.fulfill(json={
-                "loop": {"start": .3, "end": .6, "enabled": True},
+                "loop": {"start": 3.7, "end": 4, "enabled": True},
                 "zoom": None, "template_offsets": {}}))
             page.goto(url)
             page.wait_for_selector(PROJECT.ready_selector)
             page.evaluate(STORY.setup)
             page.wait_for_selector(".input-inspector")
-            page.wait_for_function("document.querySelector('.attempt-drawer video').duration < .601")
+            page.wait_for_function("document.querySelector('.attempt-drawer video').duration > 3.99")
             video = page.locator(".attempt-drawer video")
             video.focus()
             page.keyboard.press("k")
@@ -43,8 +36,8 @@ def bounded_page(tmp_path):
             browser.close()
 
 
-def test_real_forward_shuttle_keeps_rate_across_eos(bounded_page, tmp_path):
-    page, video, errors = bounded_page
+def test_real_forward_shuttle_keeps_rate_across_eos(looping_page, tmp_path):
+    page, video, errors = looping_page
     video.evaluate("""video => {
       window.wraps = [];
       video.addEventListener('ended', () => window.wraps.push({
@@ -68,8 +61,8 @@ def test_real_forward_shuttle_keeps_rate_across_eos(bounded_page, tmp_path):
     assert errors == []
 
 
-def test_k_at_decoder_end_cancels_queued_loop_restart(bounded_page, tmp_path):
-    page, video, errors = bounded_page
+def test_k_at_decoder_end_cancels_queued_loop_restart(looping_page, tmp_path):
+    page, video, errors = looping_page
     # Native pause precedes ended. Deliver the actual K binding at that boundary,
     # when video.pause() alone is a no-op because the element is already paused.
     video.evaluate("""video => {

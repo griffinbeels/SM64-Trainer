@@ -1,5 +1,7 @@
-/* Stage-one candidate: no backend is admitted. All IPC, owner checks and
- * lease clocks run on this worker, never on a forwarded graphics call.
+/* The control page's worker. A live lease is handed to the GPU runtime
+ * (rc_demand); a build without GFXWRAP_GPU_RUNTIME admits no backend.
+ * All IPC, owner checks and lease clocks run on this worker, never on a
+ * forwarded graphics call.
  * The worker pins its DLL and owns its handles. CloseDLL only sets a flag;
  * it never joins a worker under the renderer or loader dependency chain. */
 #pragma once
@@ -163,8 +165,8 @@ restart:
                     expired = TRUE;
                 } else {
                     live_lease = TRUE;
-                    /* Explicit capability refusal, never fake recording.
-                     * Stage two must prove the picture boundary first. */
+                    /* Explicit capability refusal until the runtime admits
+                     * the lease below; never fake recording. */
                     state = CONTROL_UNAVAILABLE;
                     reason = CONTROL_NO_BACKEND;
                 }

@@ -44,8 +44,6 @@ class ChannelEncoder:
         self._helper_status = None
         self.started = False
         self.opened = False
-        self.closing = False
-        self.encoder_closed = False
         self.fault = None
         self.failure_custody = None
         self.frontier = None
@@ -319,7 +317,7 @@ class ChannelEncoder:
         if (
             code not in (0, 9, 10)
             or (op in ("Open", "Repeat") and code != 0)
-            or (op in ("Poll", "Close") and code == 9)
+            or (op == "Poll" and code == 9)
         ):
             raise RuntimeError("unexpected helper operation result")
         self._retained = metadata["retained"]
@@ -341,12 +339,10 @@ class ChannelEncoder:
             self.opened = True
         elif op in ("Submit", "Repeat") and code == 0:
             self._packet(item, metadata, reply.payload)
-        elif op == "Close" and code == 0:
-            self.encoder_closed = True
         self._custody(metadata["key_returns"])
 
     def _dispatch(self):
-        if self._inflight or not self.opened or self.encoder_closed:
+        if self._inflight or not self.opened:
             return
         if self._queue:
             item = self._queue[0]
@@ -385,8 +381,6 @@ class ChannelEncoder:
                 return
         if any(item.admitted for item in self._slots.values()):
             self._enqueue(dict(op="Poll"))
-        elif self.closing and not self._pending:
-            self._enqueue(dict(op="Close"))
 
     def pump(self, *, now):
         self._check()
@@ -406,7 +400,7 @@ class ChannelEncoder:
             if self._offers and now - self._offers[0][1] > self.max_age:
                 raise RuntimeError("unresolved source offer age deadline")
             self._reply()
-            if self.opened and not self.closing and not self.encoder_closed:
+            if self.opened:
                 if not self._offers:
                     offers = self.channel.offers()
                     if len(offers) > 8:
@@ -432,7 +426,6 @@ class ChannelEncoder:
         self._check()
         if (
             not self.opened
-            or self.closing
             or self._offers
             or self._pending
             or self._inflight
@@ -459,17 +452,6 @@ class ChannelEncoder:
             self.abort(str(exc))
             raise
 
-    def close_encoder(self):
-        self._check()
-        if not self.started:
-            self.abort("close before encoder Open admission")
-            return False
-        if self._offers or self._queue:
-            return False
-        self.closing = True
-        self._dispatch()
-        return True
-
     def _custody_status(self):
         """Only owned scalars: safe to latch before abort clears these queues."""
         return dict(pending=len(self._pending), offers=len(self._offers),
@@ -493,8 +475,6 @@ class ChannelEncoder:
         )
         return dict(
             opened=self.opened,
-            closing=self.closing,
-            encoder_closed=self.encoder_closed,
             **self._custody_status(),
             failure_custody=None if self.failure_custody is None else dict(self.failure_custody),
             fault=self.fault,

@@ -9,11 +9,12 @@ from test_ui_replay_picture_steps import tiny_video, PROJECT, STORY, get_driver
 
 
 def test_review_component_contracts():
-    run_frontend("reviewmedia.test.js", "reviewstate.test.js", "latestreview.test.js", "replaykeys.test.js", "replayfocus.test.js", "reviewstream.test.js")
+    # replaykeys.test.js runs from test_ui_replay_shortcuts.py.
+    run_frontend("reviewmedia.test.js", "reviewstate.test.js", "latestreview.test.js", "replayfocus.test.js")
 
 
 @pytest.fixture
-def review_page(tmp_path, request):
+def review_page(tmp_path):
     path = tmp_path / "review.mp4"
     times, numbers = tiny_video(path)
     # Match frame_times_of's six-decimal wire format. Extra fixture precision
@@ -24,15 +25,6 @@ def review_page(tmp_path, request):
               "frame_map_source": "plugin", "duration_s": times[-1] + 1/30,
               "fps": 30, "game_fps": 30, "anchor_offset_s": .1,
               "attempt_start_slot": 3, "source": "buffer", "truncated": False}
-    if getattr(request, "param", False):
-        from test_ui_loop_cutoff import fragment_packets
-
-        fragmented = tmp_path / "fragmented.mp4"
-        mime = fragment_packets(path, fragmented)
-        replay["review_media"] = {
-            "url": "data:video/mp4;base64," + base64.b64encode(fragmented.read_bytes()).decode(),
-            "mime_type": mime, "video_timescale": 90000, "timestamp_offset_s": 0,
-            "visible_start_s": 0, "visible_end_s": replay["duration_s"]}
     run = {"start": 0, "length": 8, "buttons": 32768, "stick_x": 0,
            "stick_y": 0, "yaw": 0, "speed": 0}
     inputs = {"fps": 30, "frames": 8, "attempt_frames": 8, "lead_frames": 0,
@@ -66,7 +58,6 @@ def review_page(tmp_path, request):
               callback(now,meta);
             });
           };
-          document.addEventListener('ended', event => window.boundaryObserver?.(event.target), true);
         })()""".replace("REPLAY",json.dumps(replay)).replace("INPUTS",json.dumps(inputs)))
         page.evaluate(STORY.setup)
         page.wait_for(".attempt-drawer .input-inspector")
@@ -107,7 +98,6 @@ def test_native_loop_never_presents_a_picture_beyond_out(review_page, tmp_path):
         return Array.from({length:8},(_,bit)=>
           ctx.getImageData(bit*40+20,48,1,1).data[0]>128 ? 1<<bit : 0).reduce((a,b)=>a+b,0);
       };
-      window.loopPixels=pixels;
       const read=(_now,meta)=>{
         if(seen.has(meta.presentedFrames))return;
         seen.add(meta.presentedFrames);
@@ -124,34 +114,6 @@ def test_native_loop_never_presents_a_picture_beyond_out(review_page, tmp_path):
     (tmp_path / "loop-events.json").write_text(json.dumps(page.evaluate("window.loopEvents")))
     assert sum(frame["number"] == 3 for frame in loop_frames) >= 2, loop_frames
     assert all(frame["number"] in (3,4) for frame in loop_frames), loop_frames
-
-
-@pytest.mark.parametrize("review_page", [True], indirect=True)
-@pytest.mark.xfail(strict=False, reason=(
-    "Known defect, deferred observation 'loop-boundary' (chain-replay-readiness.md failure "
-    "catalogue): native timer-based loop playback presents a picture beyond Out before the "
-    "JavaScript callback seeks back. Fails on main too. Timing-dependent, so it can XPASS; "
-    "the observation tracks the fix and this mark goes with it."))
-def test_bounded_vfr_retains_final_hold_and_excludes_next_picture(review_page, tmp_path):
-    page = review_page
-    page.wait_for(".attempt-drawer video")
-    page.evaluate("""window.rawBoundaries=[];
-      window.boundaryObserver=video=>window.rawBoundaries.push({time:video.currentTime,wall:performance.now(),
-        number:window.loopPixels?.(),rate:video.playbackRate,seeking:video.seeking});
-    """)
-    test_native_loop_never_presents_a_picture_beyond_out(page, tmp_path)
-    boundaries = page.evaluate("window.rawBoundaries")
-    (tmp_path / "raw-boundaries.json").write_text(json.dumps(boundaries))
-    frames = json.loads((tmp_path / "loop-pictures.json").read_text())
-    assert len(boundaries) >= 2, boundaries
-    # EOS must reach the true exclusive Out, retaining the last allowed hold.
-    # Stopping on the last picture's START (.200011) would be almost .1 s early.
-    for boundary in boundaries:
-        assert boundary["time"] == pytest.approx(.3, abs=.000002)
-        before = [frame for frame in frames if frame["wall"] < boundary["wall"]]
-        assert before and before[-1]["number"] == 4, (boundary, before)
-    assert page.evaluate("document.querySelector('.attempt-drawer video').currentSrc.startsWith('blob:')")
-    assert page.problems() == []
 
 
 def test_drawer_review_controls_and_reopening(review_page, tmp_path):

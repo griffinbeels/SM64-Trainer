@@ -304,12 +304,11 @@ EXPORT void CALL ProcessDList(void) {
     if (!g_practice_rom) { if (g_wrapped.ProcessDList) g_wrapped.ProcessDList(); return; }
     /* The only witness on the thread that matters: two QPC reads per
      * call (~50 ns) and a bounded off-thread log. The adapter wraps the
-     * original call, so wrapped_ms here includes the stamp copy. */
+     * original call, so total_ms here includes the stamp copy. */
     int64_t begin = qpc_now();
     if (g_runtime_ready) sa_process_dlist();
     else if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
-    int64_t end = qpc_now();
-    callback_diagnostic_end(&g_diagnostic_list, begin, end, end);
+    callback_diagnostic_end(&g_diagnostic_list, begin, qpc_now());
 }
 
 EXPORT void CALL UpdateScreen(void) {
@@ -317,8 +316,7 @@ EXPORT void CALL UpdateScreen(void) {
     int64_t begin = qpc_now();
     if (g_runtime_ready) sa_update_screen();
     else if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
-    int64_t end = qpc_now();
-    callback_diagnostic_end(&g_diagnostic_update, begin, end, end);
+    callback_diagnostic_end(&g_diagnostic_update, begin, qpc_now());
 }
 
 EXPORT void CALL RomOpen(void) {
@@ -357,8 +355,7 @@ EXPORT void CALL ProcessRDPList(void) {
     if (!g_practice_rom) { if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList(); return; }
     int64_t begin = qpc_now();
     if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList();
-    int64_t end = qpc_now();
-    callback_diagnostic_end(&g_diagnostic_rdp, begin, end, end);
+    callback_diagnostic_end(&g_diagnostic_rdp, begin, qpc_now());
 }
 EXPORT void CALL ChangeWindow(void) {
     plugin_logf("change_window_begin", "");

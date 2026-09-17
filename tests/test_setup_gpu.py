@@ -123,7 +123,7 @@ def test_readonly_discovery_never_requests_lease(monkeypatch):
     assert calls == ["open", "status", "close"]
 
 
-def test_missing_control_clears_window_and_legacy_remains_legacy():
+def test_missing_control_clears_window_and_a_non_gpu_source_has_no_observation():
     probe, now, control, recorder, receipt = fixture()
     probe()
     advance(now, control, receipt)
@@ -133,7 +133,7 @@ def test_missing_control_clears_window_and_legacy_remains_legacy():
     assert not probe().pictures
     control[0] = good
     assert not probe().pictures
-    recorder["frame_source_health"] = {"delivered": 10, "plugin_pid": 123}
+    recorder["frame_source_health"] = {"delivered": 10}
     control[0] = None
     assert probe() is None
 
@@ -184,6 +184,70 @@ def test_gpu_runtime_requires_game_inputs_and_survives_only_intentional_idle():
     assert readiness(layer(), observe(layer()))["ready"]
     runtime_now[0] = now[0] = 604
     assert not readiness(layer(), observe(layer()))["ready"]
+
+
+def idle_gpu_runtime():
+    """A GPU capture deliberately idle (lease revoked, control PASSIVE) with a
+    positive receipt, observed through the real SetupRuntime."""
+    gpu, gpu_now, control, gpu_recorder, receipt = fixture()
+    observe, now, target, inputs, recorder, memory, poller = runtime()
+    gpu_recorder["idle"] = True
+    control[0] = replace(control[0], state=C.PASSIVE)
+    recorder.clear()
+    recorder.update(gpu_recorder)
+
+    def recorders(**values):
+        recorder.update(values)
+        gpu_recorder.update(values)
+
+    return gpu, gpu_now, receipt, observe, now, target, inputs, memory, poller, recorders
+
+
+@pytest.mark.parametrize("fault", [None, "no_pictures", "other_producer", "stopped", "desktop",
+                                   "dead_plugin", "wrong_target", "no_rom", "paused",
+                                   "stale_inputs"])
+def test_gpu_idle_receipt_does_not_hide_missing_setup_evidence(fault):
+    gpu, gpu_now, receipt, observe, now, target, inputs, memory, poller, recorders = idle_gpu_runtime()
+    layer = installed()
+    observe(replace(layer, gpu_observation=gpu()))
+    now[0] = gpu_now[0] = 10
+    inputs["frames"] += 30  # Neutral pad samples still arrive each game frame.
+    poller.latest.global_timer += 30
+    if fault == "no_pictures":
+        receipt["delivered"] = 0
+    elif fault == "other_producer":
+        receipt["producer_pid"] = 999
+    elif fault == "stopped":
+        recorders(recording=False)
+    elif fault == "desktop":
+        recorders(frame_source="desktop")
+    elif fault == "dead_plugin":
+        layer = replace(layer, layer_alive=False)
+    elif fault == "wrong_target":
+        target["pid"] = 999
+    elif fault == "no_rom":
+        memory.raw = None
+    elif fault == "paused":
+        poller.paused = True
+    elif fault == "stale_inputs":
+        inputs["frames"] -= 30
+    layer = replace(layer, gpu_observation=gpu())
+    assert readiness(layer, observe(layer))["ready"] is (fault is None)
+
+
+def test_gpu_idle_receipt_on_jp_preserves_the_tracking_limitation():
+    gpu, gpu_now, _, observe, now, _, inputs, memory, poller, _ = idle_gpu_runtime()
+    jp = bytearray(memory.raw)
+    jp[0x3E] = ord("J")
+    memory.raw = bytes(jp)
+    observe(replace(installed(), gpu_observation=gpu()))
+    now[0] = gpu_now[0] = 10
+    inputs["frames"] += 30
+    poller.latest.global_timer += 30
+    layer = replace(installed(), gpu_observation=gpu())
+    verdict = readiness(layer, observe(layer))
+    assert verdict["ready"] and verdict["limited"]
+    assert not verdict["checks"]["game"] and not verdict["checks"]["inputs"]
 
 
 def test_runtime_rejects_receipt_replaced_after_layer_read():

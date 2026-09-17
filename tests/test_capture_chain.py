@@ -42,10 +42,10 @@ def compile_host(tmp_path, native_build, mutation=None):
     (tmp_path / "gl_snapshot.cpp").write_bytes(snapshot.encode())
     target = tmp_path / "capture_chain_host.exe"
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
-    build._cl(vcvars, flags + ["/std:c++17", "/EHsc", "/DRB_TEST_HOST",
+    build._cl(vcvars, flags + ["/std:c++17", "/EHsc",
         str(tmp_path / "renderer_boundary.cpp"), str(tmp_path / "gl_snapshot.cpp"),
         str(source / "capture_chain_host.cpp"), f"/I{source}", f"/Fe:{target}",
-        f"/Fo{tmp_path}\\", "/link", "bcrypt.lib", *build.LIBS], tmp_path)
+        f"/Fo{tmp_path}\\", "/link", *build.LIBS], tmp_path)
     return target
 
 

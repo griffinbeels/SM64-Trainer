@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
 import { watchReplayKeys } from "../../src/sm64_events/ui/replaykeys.js";
-import { setReplaySpeed, stopShuttle } from "../../src/sm64_events/ui/replayshuttle.js";
+import { REPLAY_SPEEDS, setReplaySpeed, stopShuttle } from "../../src/sm64_events/ui/replayshuttle.js";
 import { watchReviewCommands, playReview } from "../../src/sm64_events/ui/reviewcommands.js";
+
+// The shipped ladder is a preference; tests read its forward rungs, never restate them.
+const SHUTTLE = REPLAY_SPEEDS.filter(rate => rate >= 1);
 
 const stops = [];
 afterEach(() => {
@@ -86,7 +89,7 @@ test("JKL shuttles only the active video, contains repeats and leaves fields alo
   root.dispatchEvent(new Event("pointerdown", {bubbles:true}));
   key("keydown", video, { key: "l" });
   key("keydown", video, { key: "l" });
-  expect(video.playbackRate).toBe(1.5);
+  expect(video.playbackRate).toBe(SHUTTLE[1]);
   key("keydown", input, { key: "k" });
   expect(video.pause).not.toHaveBeenCalled();
   key("keydown", video, { key: "k" });
@@ -151,12 +154,21 @@ function tap(video, letter) {
   key("keydown", video, { key: letter }); key("keyup", video, { key: letter });
 }
 
+test("the shipped shuttle ladder is climbable from its 1x start", () => {
+  // Shuttle always starts at 1x and climbs by index, so 1x must be the first
+  // forward rung and the rungs must strictly ascend.
+  expect(SHUTTLE[0]).toBe(1);
+  expect(SHUTTLE.length).toBeGreaterThan(1);
+  SHUTTLE.slice(1).forEach((rate, i) => expect(rate).toBeGreaterThan(SHUTTLE[i]));
+});
+
 test.each([.25, .75, 3])("JKL uses the exact shuttle ladder from manual %sx", rate => {
   vi.useFakeTimers();
   const { video } = mediaPlayer();
   video.playbackRate = rate;
+  // One tap per rung, then one more: the top rung holds.
   for (const [letter, name] of [["j", "Reverse"], ["l", "Forward"], ["j", "Reverse"]]) {
-    for (const speed of [1, 1.5, 2, 3, 4, 4]) {
+    for (const speed of [...SHUTTLE, SHUTTLE.at(-1)]) {
       tap(video, letter);
       expect(video.dataset.reviewShuttle).toBe(`${name} ${speed}×`);
       key("keydown", video, { key: letter, repeat: true });

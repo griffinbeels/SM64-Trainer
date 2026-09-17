@@ -399,24 +399,11 @@ def test_exact_native_witness_pts_durations_and_keyflags_are_preserved(make):
     assert not q.seal(1010)  # A delivered end cannot be retimed afterward.
 
 
-def test_existing_selector_needs_precrop_original_sample_and_distinct_retained_baseline():
+def test_existing_selector_keeps_a_folded_sample_distinct_from_its_retained_row():
     import numpy as np
-    from sm64_events.replay.pixels import BgrPicture, sample_bytes
+    from sm64_events.replay.pixels import sample_bytes
     from sm64_events.replay.ledger import SAMPLE_STRIDE
 
-    bottom_up = np.zeros((17, 17, 3), np.uint8)
-    bottom_up[:, :, 0] = np.arange(17, dtype=np.uint8)[:, None]
-    bottom_up[:, :, 1] = np.arange(17, dtype=np.uint8)[None, :]
-    picture = BgrPicture(bottom_up)
-    sample = picture.sample_bytes(SAMPLE_STRIDE)
-    assert len(sample) == 3 * 3 * 4 and picture.shape == (17, 17, 4)
-    assert sample != sample_bytes(picture.as_bgra()[:16, :16], SAMPLE_STRIDE)
-    expected = np.empty((3, 3, 4), np.uint8)
-    expected[:, :, 0] = np.array([16, 8, 0], np.uint8)[:, None]
-    expected[:, :, 1] = np.array([0, 8, 16], np.uint8)[None, :]
-    expected[:, :, 2] = 0
-    expected[:, :, 3] = 255
-    assert sample == expected.tobytes()
     ledger = PictureLedger()
     a = np.zeros((8, 8, 4), np.uint8)
     b = np.full_like(a, 99)

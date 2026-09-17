@@ -322,19 +322,6 @@ class EncoderClient:
             self._raise(result, "GPU key completion failed; inspect custody status")
         return result
 
-    def finish(self):
-        self._check_owner()
-        self._check_custody()
-        if self.closed:
-            return Result.OK
-        self._finishing = True
-        result = self._call("Finish", self._token)
-        if result not in (Result.OK, Result.PENDING):
-            self._raise(
-                result, "encoder finish failed; worker disposal may be required"
-            )
-        return result
-
     def close(self):
         self._check_owner()
         self._check_custody()

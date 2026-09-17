@@ -1,4 +1,4 @@
-"""Continuing-producer contract for the experimental fragmented replay path.
+"""Continuing-producer contract for fragmented replay publication, the default output.
 
 The tail is withheld from stdin, not merely from the HTTP consumer. No emulator,
 device, live recorder, codec selection policy or production output is changed.

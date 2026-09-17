@@ -41,9 +41,24 @@ claim from a cache hit. Score all retained cases, including resets and successes
 
 ## Failure catalogue
 
-- Native timer-based loop playback can deliver a picture beyond Out before a
-  JavaScript callback seeks back. The opt-in fragmented-media experiment bounds
-  admitted pictures; production audio and timestamp-offset gates remain open.
+- 2026-09-07 onward, hop 6, OPEN: "The post-attempt wait and strict loop cutoff
+  still need work." (round 4). The frame callback runs after a picture is
+  already submitted, so a timer seek cannot stop a picture past Out. Rejected:
+  `VTTCue.pauseOnExit` (still showed the extra picture), an early timer cutoff
+  (truncates the selected audio), shortening the interval or weakening the
+  test. An MSE player bounded with `appendWindowEnd` admitted no extra picture
+  but lost the final hold; it never shipped and was removed 2026-09-16
+  ([notes](../../docs/history/replay-mse-experiment-2026-09.md)). Untried: a
+  bounded native [In, Out) subclip.
+  `test_native_loop_never_presents_a_picture_beyond_out` stays
+  `xfail(strict=False)` until this closes.
+- 2026-09-12, hop 2: "the first Into the Wild Blue sample i saved was marked
+  as "started mid attempt," and indeed the video was missing the beginning of
+  the clip." The first GPU run ended because a normal channel stop (CLOSED 3/0)
+  counted as a failure while cold audio setup overlapped GPU start, so the next
+  run began 0.955 s after the attempt anchor. Audio now starts before GPU
+  demand and cancellation is typed. Never shift timestamps or the notice to
+  cover such a gap.
 
 ## Capture continuity before attempt completion
 

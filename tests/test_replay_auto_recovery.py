@@ -30,7 +30,7 @@ def test_transient_gpu_failures_keep_retrying_same_producer_with_capped_backoff(
     gate = RetryGate(clock=lambda: now[0], cooldown=1, max_cooldown=4)
     key = gate.observe(producer())
     for delay in (1, 2, 4, 4, 4, 4):
-        gate.failed(key, "transient helper failure", productive=True)
+        gate.failed(key, "transient helper failure")
         assert gate.observe(producer()) == key
         assert gate.blocked(key)
         now[0] += delay - 0.01

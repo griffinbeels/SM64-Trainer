@@ -191,19 +191,6 @@ def test_failed_wpr_start_never_cancels_another_capture(tmp_path, monkeypatch):
                for call in calls if "-cancel" in call or "-stop" in call)
 
 
-def test_graphics_generation_change_is_not_merged_into_one_histogram(tmp_path):
-    _meta, samples = capture_folder(tmp_path)
-    for i, sample in enumerate(samples):
-        sample["replay"] = {"frame_source_health": {"graphics_profile": {
-            "version": 1, "plugin_pid": 12, "generation": str(i), "metrics": {
-                "gl_read_pixels": {"count": 1, "mean_ms": 7, "max_ms": 7}}}}}
-    (tmp_path / "samples.jsonl").write_text("\n".join(map(json.dumps, samples)), encoding="utf-8")
-    result = report.summarize(tmp_path)
-    assert not result["valid"]
-    assert result["graphics"]["metrics"]["gl_read_pixels"]["count"] == 1
-    assert "Native graphics profile generation changed" in result["issues"]
-
-
 def test_replay_loss_reset_and_backlog_remain_visible(tmp_path):
     _meta, samples = capture_folder(tmp_path)
     samples[0]["replay"] = {"grabs_skipped": 9, "encode_backlog": 3}
@@ -213,7 +200,6 @@ def test_replay_loss_reset_and_backlog_remain_visible(tmp_path):
     assert not result["valid"]
     assert result["replay"]["counters"]["grabs_skipped"]["delta"] is None
     assert result["replay"]["gauges"]["encode_backlog"]["max"] == 12
-    assert result["coverage"]["native_graphics"] is False
 
 
 def test_backend_histogram_definition_must_match(tmp_path):

@@ -285,8 +285,6 @@ def _build_tracker(broadcaster):
 
 
 def _build_replay(replay_cfg, layout, service):
-    if not replay_cfg.enabled:
-        return None, None, lambda: None
     from sm64_events.replay.encoder import pick_video_codec
     # Per-process loopback is PRIMARY: a replay must carry the game and
     # nothing else — no Discord call, no music (user report 2026-07-30).
@@ -334,8 +332,7 @@ def _build_replay(replay_cfg, layout, service):
         fallback_audio_factory=lambda pid: SystemAudioSource(
             rate=replay_cfg.audio_rate, pid=pid),
         codec=codec,
-        video_sink_factory=video_sink_factory,
-        release_capture=sources.release)
+        video_sink_factory=video_sink_factory)
     replay = _replay_service(replay_cfg, recorder, codec, service)
     return replay, codec
 
@@ -343,8 +340,9 @@ def _build_replay(replay_cfg, layout, service):
 def _build_capture_layer(poller, replay):
     # THE CAPTURE LAYER's installer (item 95): the setup screen's door to
     # installing the wrapper plugin under consent. Built on the real
-    # registry and process list; its heartbeat comes from the frame stream
-    # when replay opened one, so "active" means the plugin is presenting.
+    # registry and process list; its liveness is the GPU route's control page
+    # and capture receipt (core/setup_gpu.py), so "active" means the plugin
+    # is presenting.
     from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
     from sm64_events.core.setup_gpu import GpuSetupProbe
     from sm64_events.core.paths import (bundled_plugin_dll, bundled_renderer_dll, capture_layer_settings_path,
@@ -429,9 +427,9 @@ def build():
     # User-set storage limits (UI panel) overlay the code defaults.
     replay_cfg = apply_settings_file(ReplayConfig())
     # A saved clip's attempt survives the startup prune (tracking/prune.py).
-    # Wired off the CONFIG, not off the ReplayService below, so it still holds
-    # when replay is disabled this run -- the clips he saved are on disk either
-    # way, and their filenames are the only index to them.
+    # Wired off the CONFIG, not off the ReplayService below: the clips he saved
+    # are on disk whatever the recorder does, and their filenames are the only
+    # index to them.
     service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
     replay, codec = _build_replay(replay_cfg, layout, service)
     compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)

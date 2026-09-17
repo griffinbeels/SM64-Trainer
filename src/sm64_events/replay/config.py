@@ -15,7 +15,6 @@ from sm64_events.core.paths import (replay_scratch_dir, replay_settings_path,
 
 @dataclass(frozen=True)
 class ReplayConfig:
-    enabled: bool = True
     retention_s: float | None = None      # None = no additional age limit
     retention_attempts: int | None = 10    # completed attempts; saves live separately
     pre_pad_s: float = 3.0                # before the attempt anchor

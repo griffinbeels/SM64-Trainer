@@ -80,7 +80,7 @@ def command(process, text):
     assert process.stdout.readline().strip() == "ok"
 
 
-def test_discovery_is_small_and_passive_and_unavailable_is_truthful(native):
+def test_discovery_is_small_and_passive_and_unavailable_is_truthful(native, monkeypatch):
     with pytest.raises(FileNotFoundError):
         C.CaptureControl("absent_" + uuid.uuid4().hex)
     with running(native) as (process, control, name):
@@ -89,10 +89,25 @@ def test_discovery_is_small_and_passive_and_unavailable_is_truthful(native):
         assert status.producer_pid == process.pid
         assert status.build_id.endswith("-gpu-runtime")
         assert control._wake is None and control._mutex is None
-        bulk = control._k.OpenFileMappingW(4, False, name)
-        if bulk:
-            control._k.CloseHandle(bulk)
-        assert not bulk, "passive candidate must not allocate the 149MB image ring"
+        opened, kernel = [], C._kernel
+
+        class Recording:
+            """The real kernel32 bindings, noting every mapping discovery opens."""
+            def __init__(self):
+                self._inner = kernel()
+
+            def __getattr__(self, attribute):
+                return getattr(self._inner, attribute)
+
+            def OpenFileMappingW(self, access, inherit, mapping):
+                opened.append(mapping)
+                return self._inner.OpenFileMappingW(access, inherit, mapping)
+
+        monkeypatch.setattr(C, "_kernel", Recording)
+        with C.CaptureControl(name) as observer:
+            assert observer.status().producer_pid == process.pid
+        monkeypatch.undo()
+        assert opened == [name + C.SUFFIX], "discovery opens the control page and nothing else"
         lease = control.acquire()
         status = eventually(control.status, lambda s: s.ack_token == lease.token)
         assert (status.state, status.reason) == (C.UNAVAILABLE, C.NO_BACKEND)
@@ -100,15 +115,13 @@ def test_discovery_is_small_and_passive_and_unavailable_is_truthful(native):
         eventually(control.status, lambda s: s.state == C.PASSIVE)
 
 
-def test_transfer_and_stale_cleanup_cannot_disable_new_owner(native):
+def test_stale_cleanup_cannot_disable_new_owner(native):
     with running(native) as (_, control, _):
-        acquired = control.acquire()
-        selected = acquired.transfer()
-        acquired.close()
-        assert selected.renew()
+        stale = control.acquire()
+        assert stale.renew()
         assert control._request()[7] == 1
         replacement = control.acquire()
-        selected.close()
+        stale.close()
         assert control._request()[1] == replacement.token
         assert control._request()[7] == 1
 

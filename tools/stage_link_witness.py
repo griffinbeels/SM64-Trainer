@@ -2,9 +2,10 @@
 
 The output is confined to this checkout's .iteration directory or a scratch
 folder under the system temp directory (tools/build_renderer.py stages
-there, builds, and removes it). Source remains unchanged. Compile with
-SM64_REPLAY_GL_WITNESS and add link_dispatch.cpp; the shipped renderer is the
---boundary --context-lifetime staging built by tools/build_renderer.py.
+there, builds, and removes it). Source remains unchanged. The shipped
+renderer is the --boundary --context-lifetime staging, compiled with the
+overlay defines and modules named in tools/build_renderer.py; the opt-in
+source witnesses read a staging named by SM64_LINK_WITNESS_SOURCE.
 """
 from __future__ import annotations
 
@@ -161,7 +162,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
     if boundary:
         for name in ["renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp"]:
             shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
-    print(f"Staged experimental state witness: {output}; pinned LINK {PIN}")
+    print(f"Staged the capture overlay: {output}; pinned LINK {PIN}")
 
 
 def main() -> None:

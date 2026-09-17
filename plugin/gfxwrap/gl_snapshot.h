@@ -1,4 +1,5 @@
-/* Experimental owned-texture transport; not a PJ64/backend selection ABI. */
+/* Owned-texture GPU snapshots of the renderer's picture. A process-local C++
+ * interface, not a shared ABI. */
 #pragma once
 #include <windows.h>
 #include <GL/gl.h>

@@ -49,7 +49,7 @@ def test_actual_source_command(tmp_path, source_build, mutation):
     build._cl(vcvars, flags + ["/DRSPTHREAD", str(ROOT / "plugin/gfxwrap/renderer_boundary.cpp"),
         str(ROOT / "plugin/gfxwrap/renderer_source_host.cpp"), f"/I{tmp_path}",
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF", "/MANIFEST:EMBED",
-        "/MANIFESTUAC:level='asInvoker'", "bcrypt.lib", *build.LIBS], tmp_path)
+        "/MANIFESTUAC:level='asInvoker'", *build.LIBS], tmp_path)
     result = subprocess.run([str(target)], capture_output=True, text=True, timeout=15,
                             cwd=tmp_path, **quiet_spawn_kwargs(), check=False)
     (tmp_path / "witness.txt").write_bytes((result.stdout + result.stderr).encode())

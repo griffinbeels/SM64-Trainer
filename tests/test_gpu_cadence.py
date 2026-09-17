@@ -82,7 +82,7 @@ def cadence_host(tmp_path_factory):
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
     build._cl(vc, flags + ["/std:c++17", "/EHsc", f"/I{NATIVE}",
         *map(str, sources), f"/Fe:{target}", f"/Fo{out}\\", "/link",
-        "/EXPORT:SM64ReplaySourceV2", *build.LIBS, "d3d11.lib", "dxgi.lib", "bcrypt.lib"], out)
+        "/EXPORT:SM64ReplaySourceV2", *build.LIBS, "d3d11.lib", "dxgi.lib"], out)
     assert fingerprints() == before, "native inputs changed while the fixture compiled"
     (out / "build_identity.json").write_text(json.dumps(dict(
         source_files=before, host_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
@@ -263,7 +263,9 @@ class Pipeline:
         assert fields[:3] == ["stream", "done", str(self.frames * self.vi_per_picture)] and fields[4] == "0", evidence
         if self.delay_s and not self.isolated:
             assert int(fields[3]) > 0, "blocking control did not reach actual source capacity"
-            assert "10022" in evidence["native_status"] and evidence["terminal"], evidence
+            # Since round 48 a refusal is a counted missing picture, never a run
+            # failure (docs/replay-gpu-runtime.md): the stall shows as refusals.
+            assert evidence["terminal"] is None, evidence
             return None
         assert fields[3:5] == ["0", "0"] and evidence["terminal"] is None, evidence
         assert self.media.seal(self.adapter.frontier) and self.media.finish(audio_drained=True)

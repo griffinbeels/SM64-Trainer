@@ -1,7 +1,7 @@
 // HTML video cannot reliably play backwards. Reverse shuttle issues bounded
 // seeks; the existing presented-picture observer remains the timeline clock.
 import { playReview } from "./reviewcommands.js";
-import { pauseReviewSource, reviewSourceContinuing, seekReviewSource } from "./reviewsource.js";
+import { pauseReviewSource, seekReviewSource } from "./reviewsource.js";
 export const REPLAY_SPEEDS = [.25, .5, .75, 1, 1.5, 2, 3, 4];
 const SHUTTLE_SPEEDS = REPLAY_SPEEDS.filter(rate => rate >= 1);
 
@@ -55,9 +55,9 @@ export function replayShuttle(video) {
   }
   const played = () => { if (direction < 0 && !video.paused) stop(); };
   const paused = () => {
-    // A decoder boundary or source rebuild is not a request to leave shuttle.
-    // Explicit pause still stops immediately, even when already at EOS.
-    if (direction > 0 && video.paused && !video.ended && !reviewSourceContinuing(video)) stop();
+    // Reaching the end (where a loop restarts) is not a request to leave
+    // shuttle. Explicit pause still stops immediately, even when already at EOS.
+    if (direction > 0 && video.paused && !video.ended) stop();
   };
   video?.addEventListener("play", played);
   video?.addEventListener("pause", paused);

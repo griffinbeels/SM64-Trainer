@@ -741,14 +741,6 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor) -> None:
                 "error": getattr(service, "input_flush_error", None)},
             "input_storage": input_storage,
             "tracking": tracking,
-            # Map v4's counter, or why not yet: "0x..." once hunted, "hunting"
-            # while the background sweep runs, "idle" between attempts, None
-            # with no hunter wired. Added after its first live check had to
-            # grep a silent log to learn the hunt was still mid-sweep
-            # (2026-08-25) -- the answer belongs on the surface checks read.
-            "present_counter": (poller.present_hunter.state()
-                                if getattr(poller, "present_hunter", None)
-                                else None),
         }
 
     @app.post("/api/diagnostics")

@@ -12,7 +12,7 @@ import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay.ledger import PictureLedger, SAMPLE_STRIDE
-from sm64_events.replay.pixels import BgrPicture
+from sm64_events.replay.pixels import SampledPicture
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / "tools/build_plugin.py").is_file())
 SOURCE = ROOT / "plugin/gfxwrap"
@@ -71,21 +71,6 @@ def build():
     return module, vc
 
 
-class GpuSample(BgrPicture):
-    """Test adapter for the existing sample_bytes dispatch; no policy rewrite."""
-    def __init__(self, width, height, sample):
-        self.dimensions = (height, width, 4)
-        self.data = sample
-    @property
-    def shape(self):
-        return self.dimensions
-    def sample_bytes(self, stride):
-        assert stride == SAMPLE_STRIDE == 8
-        return self.data
-    def as_bgra(self):
-        raise AssertionError("the GPU sample must not materialize a full CPU image")
-
-
 def full_frame_oracle(frame):
     # Independent oracle: full original image is flipped BEFORE the existing
     # selector samples it. No shader coordinates or GPU sample bytes are reused.
@@ -96,15 +81,14 @@ def full_frame_oracle(frame):
 
 def selector_proof(width, height, frames, chunks):
     cpu = PictureLedger(); gpu = PictureLedger()
-    selected_cpu, selected_gpu, prepared_cpu, prepared_gpu = [], [], [], []
+    assert SAMPLE_STRIDE == 8
+    selected_cpu, selected_gpu = [], []
     for i, (frame, chunk) in enumerate(zip(frames, chunks, strict=True)):
         full = full_frame_oracle(frame)
-        source = GpuSample(width, height, chunk)
+        source = SampledPicture(width, height, chunk, SAMPLE_STRIDE)
         extras = {"occurrence": i+1, "pad": {"x": i, "buttons": ["A"] if i % 2 else ["B"]}}
-        a = cpu.observe(full, 1000+TIMES[i], COUNTERS[i], extras,
-                        prepare=lambda i=i: prepared_cpu.append(i))
-        b = gpu.observe(source, 1000+TIMES[i], COUNTERS[i], extras,
-                        prepare=lambda i=i: prepared_gpu.append(i))
+        a = cpu.observe(full, 1000+TIMES[i], COUNTERS[i], extras)
+        b = gpu.observe(source, 1000+TIMES[i], COUNTERS[i], extras)
         selected_cpu.append(a); selected_gpu.append(b)
         assert a == b
         assert list(cpu._rows) == list(gpu._rows)
@@ -114,12 +98,12 @@ def selector_proof(width, height, frames, chunks):
             # Folded candidate changes comparison but still retains picture 3.
             assert not b and gpu._rows[-1][2]["occurrence"] == 4
             assert gpu._prev_sample == chunk
-            assert prepared_gpu == [0, 3]
+            assert [n for n, selected in enumerate(selected_gpu) if selected] == [0, 3]
         if i == 5:
             assert COUNTERS[i] != gpu._rows[-1][1] and not b
     expected = [0, 3, 6, 7] + ([9] if width % 2 else [])
     assert [i for i, selected in enumerate(selected_cpu) if selected] == expected
-    assert prepared_cpu == prepared_gpu == expected
+    assert selected_cpu == selected_gpu
     return {"selected_occurrences": [i+1 for i in expected], "rows": list(gpu._rows),
             "decision_sequence": selected_gpu, "folded_baseline_kept_old_picture": True}
 
@@ -154,10 +138,6 @@ def test_real_gpu_selection(tmp_path, fixtures, build, mode):
             per = len(references[0])
             assert f"bytes={per} pictures=11 reads=11 readback_bytes={per*11}" in result.stdout
             chunks = [actual[i*per:(i+1)*per] for i in range(len(frames))]
-            # Check the existing lazy BGR input representation independently, too.
-            for frame, chunk in zip(frames, chunks, strict=True):
-                bgr = np.ascontiguousarray(frame[:, :, [2, 1, 0]])
-                assert BgrPicture(bgr).sample_bytes(8) == chunk
             detail.update(selector_proof(width, height, frames, chunks))
             detail["mismatches"] = 0
         else:

@@ -30,7 +30,7 @@ import { TimelineStatus, TimelineHeader, TemplateNote, OverlayControls, Timeline
 import { TimelineInspector } from "./inputtimelineinspector.js";
 
 export { frameAt, actionAt, momentAt, CORE_BUTTONS, lanesOf, contiguousRuns,
-         frameAtTime, timeAtFrame, trackFrameOf, gameFrameOf, mappedFrameAtTime,
+         trackFrameOf, gameFrameOf, mappedFrameAtTime,
          mappedTimeAtFrame, mappedLoopWindow, loopFromFrames, inspectorClock } from "./inputtimelinemodel.js";
 
 const html = htm.bind(h);

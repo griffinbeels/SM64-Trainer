@@ -3,27 +3,18 @@ import hashlib
 import json
 from pathlib import Path
 
-import pytest
 from playwright.sync_api import sync_playwright
 
-from test_ui_loop_cutoff import fragment_packets
 from test_ui_replay_picture_steps import PROJECT, STORY
 from test_ui_review_selection import selection_media
 
 
-@pytest.mark.parametrize(("mode", "width"), [("native", 1500), ("mse", 850)])
-def test_drag_flood_settles_and_continues_playing(tmp_path, mode, width):
+def test_drag_flood_settles_and_continues_playing(tmp_path):
+    width = 1500
     original = tmp_path / "scrub-source.mp4"
     replay = selection_media(original, gop=30)
     replay["clip_url"] = "/scrub-source.mp4"
     media = {"/scrub-source.mp4": original.read_bytes()}
-    if mode == "mse":
-        fragmented = tmp_path / "scrub-fragments.mp4"
-        mime = fragment_packets(original, fragmented)
-        media["/scrub-fragments.mp4"] = fragmented.read_bytes()
-        replay["review_media"] = {"url": "/scrub-fragments.mp4", "mime_type": mime,
-                                  "video_timescale": 90000, "timestamp_offset_s": 0,
-                                  "visible_start_s": 0, "visible_end_s": 4}
     inputs = {"frames": 120, "attempt_frames": 120, "lead_frames": 0, "fps": 30,
               "stretches": [[0, 1000, 120]], "buttons": [[32768, "A"]], "stick_max": 84,
               "dead_zone": 8, "angle_units": 65536, "actions": [], "markers": [],
@@ -47,10 +38,9 @@ def test_drag_flood_settles_and_continues_playing(tmp_path, mode, width):
             video.evaluate("video => video.pause()")
             page.wait_for_function("document.querySelector('.attempt-drawer video').readyState >= 2")
             page.wait_for_function("document.querySelector('input[aria-label=\"Seek recording\"]').max === '4'")
-            assert video.evaluate("v => v.currentSrc.startsWith('blob:')") == (mode == "mse")
             burst, expected = _exercise_scrubber(page, video)
             evidence = page.evaluate("window.scrubEvidence")
-            evidence.update({"mode": mode, "viewport_width": width, "burst_writes": burst,
+            evidence.update({"viewport_width": width, "burst_writes": burst,
                              "requests": requests, "responses": statuses, "errors": errors,
                              "source_sha256": source_hashes, "pointer_final_picture": expected})
             (tmp_path / "scrub-evidence.json").write_bytes(json.dumps(evidence, indent=2).encode())

@@ -1,4 +1,5 @@
-/* Process-local x86 wrapper transaction seam. No pixel-ring mapping or GL. */
+/* The wrapper's ProcessDList/UpdateScreen stamp transaction over SourceV2.
+ * Process-local x86; no GL. */
 #pragma once
 #include "link_source_api.h"
 #define SA_VERSION 1u

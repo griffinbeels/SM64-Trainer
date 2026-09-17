@@ -4,7 +4,7 @@ import { slotAtTime, timeOfSlot } from "../frame.js";
 import { watchVideoPicture } from "../videopicture.js";
 import { templateOnAxis, templateReviewKey, timelineWindow } from "../timelinereview.js";
 import { stopShuttle } from "../replayshuttle.js";
-import { pauseReviewSource, reviewDuration, seekReviewSource } from "../reviewsource.js";
+import { pauseReviewSource, seekReviewSource } from "../reviewsource.js";
 import { lanesOf, curvePath, speedPeak, speedPath, stickReach, stickPath, stampedRuns,
          mappedFrameAtTime, mappedTimeAtFrame, mappedLoopWindow } from "./inputtimelinemodel.js";
 
@@ -92,7 +92,7 @@ export function useTimelineReview(reviewState, onReviewState) {
 }
 
 function timelineDuration(video, clock) {
-  return Number.isFinite(reviewDuration(video)) ? reviewDuration(video) : clock?.duration;
+  return Number.isFinite(video?.duration) ? video.duration : clock?.duration;
 }
 
 export function useTimelineModel(data, review, onReviewState, video, frameMap, clock,

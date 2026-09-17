@@ -43,7 +43,7 @@ def test_full_and_tiny_match_existing_policy_and_keep_original_source(dimensions
         "native:epoch:4",
         "native:epoch:6",
     ]
-    prepared_old, prepared_full, prepared_gpu = [], [], []
+    selected = []
     for i, (pixels, ts, counter) in enumerate(
         zip(arrays, times, counters, strict=True)
     ):
@@ -52,20 +52,12 @@ def test_full_and_tiny_match_existing_policy_and_keep_original_source(dimensions
             "pad": [i, -i, 0x8000],
             "exact": True,
         }
-        legacy = old.observe(
-            pixels, ts, counter, extras, prepare=lambda i=i: prepared_old.append(i)
-        )
-        a = full.observe_result(
-            pixels, ts, counter, extras, prepare=lambda i=i: prepared_full.append(i)
-        )
-        b = gpu.observe_result(
-            tiny(pixels),
-            ts,
-            counter,
-            extras,
-            prepare=lambda i=i: prepared_gpu.append(i),
-        )
+        legacy = old.observe(pixels, ts, counter, extras)
+        a = full.observe_result(pixels, ts, counter, extras)
+        b = gpu.observe_result(tiny(pixels), ts, counter, extras)
         assert legacy == (a.kind == "selected") == (b.kind == "selected")
+        if legacy:
+            selected.append(i)
         assert a == b and b.kind == wanted[i] and b.source_id == retained[i]
         assert state(old) == state(full) == state(gpu)
         if i == 1:
@@ -74,27 +66,7 @@ def test_full_and_tiny_match_existing_policy_and_keep_original_source(dimensions
             assert gpu._rows[-1][2]["source_id"] == "native:epoch:1"
         if i == 2:
             assert b.reason == "equal_sample" and counter != gpu._rows[-1][1]
-    assert prepared_old == prepared_full == prepared_gpu == [0, 3, 5]
-
-
-@pytest.mark.parametrize("as_tiny", [False, True])
-def test_failed_preparation_preserves_previous_baseline_and_retry(as_tiny):
-    ledger = L.PictureLedger()
-    a, b = frame(1), frame(2)
-    value = lambda image: tiny(image) if as_tiny else image
-    assert ledger.observe(value(a), 1000, 10, {"source_id": "native:A"})
-    before = state(ledger)
-    prepare = Mock(side_effect=[MemoryError("bounded native admission refused"), None])
-    failed = ledger.observe_result(
-        value(b), 1000.04, 11, {"source_id": "native:B"}, prepare=prepare
-    )
-    assert failed == L.Selection("failed", reason="preparation_failed")
-    assert state(ledger) == before
-    accepted = ledger.observe_result(
-        value(b), 1000.08, 11, {"source_id": "native:retry"}, prepare=prepare
-    )
-    assert accepted == L.Selection("selected", "native:retry")
-    assert prepare.call_count == 2 and len(ledger._rows) == 2
+    assert selected == [0, 3, 5]
 
 
 @pytest.mark.parametrize("as_tiny", [False, True])
@@ -131,7 +103,7 @@ def test_real_sqlite_rejection_is_failed_not_duplicate_and_retry_still_works(
         ledger.detach()
 
 
-def test_sampling_error_and_missing_clock_are_explicit_and_do_not_prepare():
+def test_sampling_error_and_missing_clock_are_explicit():
     class BadPixels:
         shape = (17, 17, 4)
 
@@ -139,15 +111,14 @@ def test_sampling_error_and_missing_clock_are_explicit_and_do_not_prepare():
             raise MemoryError("sample unavailable")
 
     ledger = L.PictureLedger()
-    prepare = Mock()
-    assert ledger.observe_result(BadPixels(), None, 10, prepare=prepare) == L.Selection(
+    assert ledger.observe_result(BadPixels(), None, 10) == L.Selection(
         "failed", reason="missing_capture_time"
     )
-    assert ledger.observe_result(BadPixels(), 1000, 10, prepare=prepare) == L.Selection(
+    assert ledger.observe_result(BadPixels(), 1000, 10) == L.Selection(
         "failed", reason="sampling_failed"
     )
-    assert not prepare.called and state(ledger) == ([], None, None)
-    assert not ledger.observe(BadPixels(), None, 10, prepare=prepare)
+    assert state(ledger) == ([], None, None)
+    assert not ledger.observe(BadPixels(), None, 10)
 
 
 def test_probe_and_extras_behavior_is_unchanged_across_selection_and_coalescing():
@@ -192,8 +163,6 @@ def test_original_shape_and_exact_immutable_bytes_without_full_image_accessor():
     assert picture.shape == (481, 641, 4) and len(picture.sample) == 19764
     assert P.sample_bytes(picture, 8) is picture.sample
     assert not hasattr(picture, "as_bgra")
-    with pytest.raises(TypeError, match="no full CPU image"):
-        P.as_bgra(picture)
     with pytest.raises(ValueError, match="stride"):
         picture.sample_bytes(4)
     with pytest.raises(ValueError, match="immutable"):

@@ -36,7 +36,7 @@ def hosts(tmp_path_factory):
     )]
     build._cl(vc, flags + ["/std:c++17", "/EHsc", f"/I{SOURCE}",
               *map(str, sources), f"/Fe:{target}", f"/Fo{out}\\",
-              "/link", *build.LIBS, "d3d11.lib", "dxgi.lib", "bcrypt.lib"], out)
+              "/link", *build.LIBS, "d3d11.lib", "dxgi.lib"], out)
     return target
 
 

@@ -45,11 +45,15 @@ int image_completed(const rb_image *image) {
     return capture_pool.completed({image->serial,image->slot});
 }
 struct Command { virtual bool run() = 0; };
+// The overlay's UpdateScreen command shape: begin, the original work, end.
 struct DrawCommand : Command {
-    unsigned marker;
-    explicit DrawCommand(unsigned n):marker(n){}
+    rb_ticket request; unsigned marker;
+    DrawCommand(rb_ticket ticket, unsigned n):request(ticket),marker(n){}
     __declspec(noinline) bool run() override {
-        ++original_calls; rendered_marker=marker; draw(marker); return (marker&1)!=0;
+        const auto capture=rb_source_begin(request);
+        ++original_calls; rendered_marker=marker; draw(marker);
+        rb_source_end(capture);
+        return (marker&1)!=0;
     }
 };
 __declspec(noinline) bool invoke(Command *command) { return command->run(); }
@@ -61,7 +65,7 @@ const rb_record *perform(unsigned marker, unsigned raw_counter, uint32_t expecte
     std::memcpy(stamp.bytes,payload,sizeof(payload));
     const auto ticket=rb_stage(&stamp); CHECK(ticket.occurrence);
     std::memset(stamp.bytes,0xCC,sizeof(stamp.bytes)); // external RAM advances after offer
-    DrawCommand command(marker); const auto before=original_calls;
+    DrawCommand command(ticket,marker); const auto before=original_calls;
     CHECK(invoke(&command)==bool(marker&1)); CHECK(original_calls==before+1);
     rb_finish(ticket);
     const auto record=rb_take(); CHECK(record && record->outcome==expected_outcome);
@@ -162,14 +166,13 @@ int main(int argc,char **argv) {
         CHECK(capture_pool.prepare(api,producer.rc,cw,ch,4,768)); });
     capture_generation=capture_pool.generation();
     CHECK(rb_configure_images(image_capture,image_completed));
-    DrawCommand prototype(1); auto vtable=*reinterpret_cast<void ***>(&prototype);
-    CHECK(rb_install_test(vtable,vtable[0],surface)==RB_INSTALLED);
+    CHECK(rb_bind_source(surface)==RB_INSTALLED);
     CHECK(!rb_configure_images(image_capture,image_completed));
     rb_rom_open(); CHECK(rb_activate());
 
     const rb_record *records[4]{};
     for(unsigned i=0;i<4;++i) records[i]=perform(31+i,100+(i%2));
-    DrawCommand overwrite(240); CHECK(invoke(&overwrite)==false);
+    DrawCommand overwrite({0,0},240); CHECK(invoke(&overwrite)==false);
     CHECK(original_calls==5);
     const auto extra=perform(90,100,RB_SURFACE_FAILED); // GPU full, original still rendered
     CHECK(extra->image.ownership==RB_IMAGE_NONE && rb_release(id(extra)));

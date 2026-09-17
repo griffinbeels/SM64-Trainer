@@ -175,10 +175,12 @@ it happens — and save the ones worth keeping, forever. Audio is captured from
 Project64 alone, so a Discord call, music or a video playing in the background
 never ends up in a clip you upload.
 
-Replay encoding checks for compatible NVIDIA, AMD or Intel hardware at startup,
-with CPU encoding as fallback. Hardware must pass a picture/timestamp check
-before it is selected. See [capture performance and GPU support](docs/replay-pipeline-cost.md)
-for the verification status and remaining transfer costs.
+Frame-exact replay, where every picture carries the input that drew it, needs
+an NVIDIA GPU: the trainer's graphics plugin captures inside Project64 and an
+NVENC encoder records the pictures ([how it works](docs/replay-gpu-runtime.md)).
+Until the plugin is set up, replays record the Project64 window without that
+input match, using NVIDIA, AMD or Intel hardware encoding when a startup check
+passes and the CPU otherwise.
 
 Mark an attempt as a PB to save its replay automatically. PB selection stays
 manual. Unsaved footage shares a modest storage budget and is discarded when

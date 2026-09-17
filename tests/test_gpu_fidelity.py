@@ -1,4 +1,4 @@
-"""Actual GPU delivery compared with the existing bottom-up BGR materialization."""
+"""Actual GPU delivery compared with an independent bottom-up BGR reference."""
 import importlib.util
 import os
 import subprocess
@@ -8,12 +8,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.replay.pixels import to_bgra_top_down
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "plugin/gfxwrap"
 pytestmark = pytest.mark.skipif(os.environ.get("SM64_TEST_GPU_BRIDGE") != "1",
     reason="explicit same-adapter NVIDIA hardware witness: set SM64_TEST_GPU_BRIDGE=1")
+
+
+def to_bgra_top_down(bottom_up):
+    """Reference materialization: rows flipped top-down, opaque alpha appended."""
+    height, width = bottom_up.shape[:2]
+    return np.concatenate((bottom_up[::-1], np.full((height, width, 1), 255, np.uint8)), axis=2)
 
 
 def bgr_fixture(width, height):

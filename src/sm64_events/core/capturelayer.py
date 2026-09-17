@@ -47,7 +47,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
-from sm64_events.core.onboarding import CounterWindow
 from sm64_events.core.setup_gpu import GpuSetupEvidence
 from sm64_events.core.plugin_installation import sha256 as _sha256, verified_copy
 
@@ -68,7 +67,7 @@ USE_DEFAULT_PLUGIN_DIR_VALUE = "Use Default Plugin Dir"
 # `LayerStatus.state`
 NOT_INSTALLED = "not_installed"   # nothing of ours in PJ64 (consent not given, or undone)
 NEEDS_RESTART = "needs_restart"   # installed and selected; PJ64 has not loaded it yet
-ACTIVE = "active"                 # the frame stream's heartbeat is advancing
+ACTIVE = "active"                 # the GPU route's control page is live (core/setup_gpu.py)
 REGRESSED = "regressed"           # we installed it, but the registry names another plugin now
 UNAVAILABLE = "unavailable"       # no PJ64 folder known / no DLL shipped with this build
 
@@ -261,8 +260,6 @@ class CaptureLayer:
         # A worktree's bundled bytes may be older than a manually installed
         # candidate. Hash inequality proves difference, never update ordering.
         self.auto_refresh = auto_refresh
-        self._activity = CounterWindow()
-        self._activity_lock = threading.Lock()
         # Install, the packaged refresh tick and Remove all copy the same
         # files and rewrite the same overlay; one at a time, or one side's
         # rollback snapshot can undo the other's finished copy.

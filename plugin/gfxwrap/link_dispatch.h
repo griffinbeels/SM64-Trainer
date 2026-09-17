@@ -1,4 +1,4 @@
-/* Experimental source-owned LINK state observation and bounded error gateway.
+/* The overlay's source-owned LINK GL state observation and bounded error gateway.
  * Include after upstream GLFunctions.h declarations. Renderer thread only. */
 #pragma once
 #include "renderer_gl_state.h"

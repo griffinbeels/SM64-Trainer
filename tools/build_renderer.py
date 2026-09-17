@@ -45,7 +45,7 @@ OVERLAY_SOURCES = (
 )
 OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp")
 DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;"
-RECIPE_VERSION = "1"
+RECIPE_VERSION = "2"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -161,14 +161,11 @@ def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: st
     extra = b"".join(b'    <ClCompile Include="..\\..\\src\\Graphics\\OpenGLContext\\' + name.encode() + b'" />\r\n'
                      for name in OVERLAY_MODULES)
     data = data.replace(anchor, extra + anchor)
-    for old, new, count in (
-        (b"<PreprocessorDefinitions>UNICODE;_USRDLL;",
-         b"<LanguageStandard>stdcpp17</LanguageStandard>\r\n      <PreprocessorDefinitions>" + DEFINES.encode() + b"UNICODE;_USRDLL;", 1),
-        (b"<AdditionalDependencies>opengl32.lib;", b"<AdditionalDependencies>bcrypt.lib;opengl32.lib;", 1),
-    ):
-        if data.count(old) != count:
-            raise ValueError(f"GLideN64.vcxproj anchor count changed: {old[:40]!r}")
-        data = data.replace(old, new)
+    old = b"<PreprocessorDefinitions>UNICODE;_USRDLL;"
+    if data.count(old) != 1:
+        raise ValueError(f"GLideN64.vcxproj anchor count changed: {old[:40]!r}")
+    data = data.replace(old, b"<LanguageStandard>stdcpp17</LanguageStandard>\r\n      <PreprocessorDefinitions>"
+                        + DEFINES.encode() + b"UNICODE;_USRDLL;")
     project.write_bytes(data)
     # No pre/post-build hooks: the upstream project rewrites Revision.h from
     # git and copies the DLL into emulator folders. Neither belongs here.

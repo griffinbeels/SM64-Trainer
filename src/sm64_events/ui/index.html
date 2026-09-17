@@ -5545,10 +5545,11 @@
   .input-screen-check-row .frame { font-weight: 600; color: #f0c877; }
   .input-screen-check-row .axis { color: #8fa3b8; }
 
-  /* A nudge, not a warning -- every source here is a real, working map, this
-     one just built from less direct evidence than the wrapper plugin's own
-     frame stream. Sits beneath the header's title/screen-check line rather
-     than beside it: at 850px the chip already wraps its own line. */
+  /* A nudge, not a warning -- the replay still plays; its inputs are just not
+     tied to the GPU capture layer's stamped pictures (capture off, or an
+     alignment that could not be verified). Sits beneath the header's
+     title/screen-check line rather than beside it: at 850px the chip already
+     wraps its own line. */
   .input-frame-map-note {
     display: flex; align-items: center; gap: .4rem; margin: .25rem 0 0;
     font-size: .72rem; color: #8fa3b8;
