@@ -309,20 +309,29 @@ def test_existing_install_rechecks_unresolved_emulator_before_step_three(tmp_pat
 
 
 def test_afk_recording_pause_keeps_setup_checked(tmp_path):
-    from dataclasses import asdict
+    """AFK revokes GPU demand (control PASSIVE, recorder idle): the GPU
+    observation's receipt keeps Setup checked while game and input movement
+    continue, and a dead layer still sends it back to checking."""
+    from dataclasses import asdict, replace
+    from sm64_events.replay import capturecontrol as C
     from test_onboarding import runtime, installed as runtime_layer
+    from test_setup_gpu import fixture
 
+    gpu, gpu_now, control, gpu_recorder, receipt = fixture()
     probe, now, target, inputs, recorder, memory, poller = runtime()
-    recorder["frame_source_health"]["plugin_pid"] = 123
+    recorder.clear()
+    recorder.update(gpu_recorder)
     layer = asdict(runtime_layer())
 
     def observe(status):
         now[0] += 5  # Every poll exceeds the picture freshness window.
+        gpu_now[0] = now[0]
         inputs["frames"] += 150
         poller.latest.global_timer += 150
         if not recorder.get("idle"):
-            recorder["frame_source_health"]["delivered"] += 150
-        return probe(status)
+            control[0] = replace(control[0], ack_heartbeat=control[0].ack_heartbeat + 1)
+            receipt["delivered"] += 150
+        return probe(replace(status, gpu_observation=gpu()))
 
     with serve_ui(capture_layer_status=layer, setup_observer=observe) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
@@ -330,7 +339,8 @@ def test_afk_recording_pause_keeps_setup_checked(tmp_path):
         page.evaluate(_SETUP_SETUP)
         wait_page(page, "install")
         wait_step(page, "ready")
-        recorder["idle"] = True
+        recorder["idle"] = gpu_recorder["idle"] = True
+        control[0] = replace(control[0], state=C.PASSIVE)
         page.wait_ms(4500)
         assert 'data-substep="ready"' in page.evaluate("document.querySelector('.setup-install').outerHTML")
         assert "Setup checked" in body(page)
