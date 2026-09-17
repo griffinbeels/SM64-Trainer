@@ -1,32 +1,25 @@
-"""The plugin video source: a slot's stamp bytes decode through the
-sampler's own decoder, owned pixels prepare top-down BGRA in WGC's timebase,
-and the recorder files the stamp's frame without asking the frame clock."""
-import os
+"""The stamp: a picture's copied RDRAM bytes decode through the sampler's own
+decoder, the address table is word-aligned from the live layout, and the
+desktop camera hands over to the GPU route."""
 import threading
 import time
+from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from sm64_events.inputs.frame import MARIO_BLOCK_OFF
 from sm64_events.memory import addresses as A
 from sm64_events.memory.buffer import BufferMemory
 from sm64_events.memory.layout import layout_for
-from sm64_events.replay import framestream as F
 from sm64_events.replay import pluginsource as P
-from sm64_events.replay.pixels import BgrPicture, to_bgra_top_down
+
+#: the native table entry size (plugin/gfxwrap/stamp_adapter.h keeps 128-byte entries)
+TABLE_ENTRY_BYTES = 128
 
 
 @pytest.fixture
 def layout():
     return layout_for("us")
-
-
-@pytest.fixture
-def stream():
-    opened = F.FrameStream(f"sm64_trainer_gfx_test_{os.getpid()}_{np.random.randint(1 << 30)}")
-    yield opened
-    opened.close()
 
 
 def rdram_with(layout, frame: int, stick=(12, -34), buttons=0x8000, igt=77,
@@ -53,34 +46,26 @@ def raw_table(memory: BufferMemory, table: list) -> list:
     return [memory._read_raw(offset, length) for _name, offset, length in table]
 
 
+def slot_with(table_bytes, *, lists_since=1, vi_origin=0x100000, list_qpc=5, present_qpc=9):
+    """A delivered picture's stamp record, as `decode_stamp` reads it."""
+    return SimpleNamespace(table=tuple(table_bytes), lists_since=lists_since, vi_origin=vi_origin,
+                           list_qpc=list_qpc, present_qpc=present_qpc)
+
+
 def test_table_for_is_word_aligned_and_covers_the_halfword(layout):
     table = P.table_for(layout)
     names = [name for name, _offset, _length in table]
     assert names == list(P.TABLE_ORDER)
     for _name, offset, length in table:
-        assert offset % 4 == 0 and length % 4 == 0 and 0 < length <= F.TABLE_ENTRY_BYTES
+        assert offset % 4 == 0 and length % 4 == 0 and 0 < length <= TABLE_ENTRY_BYTES
     igt = dict((name, (offset, length)) for name, offset, length in table)["usamune_overall"]
     assert igt[0] <= layout.usamune_overall - A.KSEG0_BASE < igt[0] + igt[1]
-
-
-@pytest.mark.parametrize("width", [1, 7, 1190, 1600])
-def test_capture_conversion_keeps_every_channel_row_and_owns_its_pixels(width):
-    source = np.random.default_rng(82).integers(0, 256, (9, width + 3, 3), dtype=np.uint8)
-    cropped = source[:, :width]  # padded rows, including non-aligned widths
-    expected = np.concatenate((cropped[::-1], np.full((9, width, 1), 255, dtype=np.uint8)), axis=2)
-    actual = to_bgra_top_down(cropped)
-    source.fill(0)  # a later producer write cannot change a retained heartbeat
-    assert actual.flags.c_contiguous
-    np.testing.assert_array_equal(actual, expected)
 
 
 def test_decode_stamp_reads_the_frame_the_pad_mario_and_the_igt(layout):
     table = P.table_for(layout)
     memory = rdram_with(layout, frame=1234)
-    slot = F.Slot(seq=1, list_qpc=5, present_qpc=9, vi_origin=0x100000, width=2, height=2,
-                  stride=8, lists_since=1, table=tuple(raw_table(memory, table)),
-                  pixels=np.zeros((2, 2, 3), dtype=np.uint8))
-    stamp = P.decode_stamp(slot, table, layout)
+    stamp = P.decode_stamp(slot_with(raw_table(memory, table)), table, layout)
     assert stamp.frame == 1234 and stamp.igt_overall == 77
     assert (stamp.pad.stick_x, stamp.pad.stick_y, stamp.pad.buttons) == (12, -34, 0x8000)
     assert stamp.pad.action == 0x04000440 and stamp.pad.yaw == -1234
@@ -91,91 +76,10 @@ def test_decode_stamp_reads_the_frame_the_pad_mario_and_the_igt(layout):
 
 
 def test_decode_stamp_is_none_without_the_counter(layout):
-    slot = F.Slot(seq=1, list_qpc=0, present_qpc=0, vi_origin=0, width=1, height=1,
-                  stride=4, lists_since=1, table=(b"",) * 16,
-                  pixels=np.zeros((1, 1, 3), dtype=np.uint8))
-    assert P.decode_stamp(slot, P.table_for(layout), layout) is None
-
-
-def test_the_source_delivers_owned_pixels_and_the_stamp(layout, stream):
-    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, plugin_pid=123)
-    table = P.table_for(layout)
-    memory = rdram_with(layout, frame=4242)
-    picture = np.zeros((3, 4, 3), dtype=np.uint8)
-    picture[0, :] = (255, 0, 0)                  # the BOTTOM row, as GL stores it
-    source = P.PluginVideoSource(stream, table, layout)
-    got = []
-    stopped = threading.Event()
-    source.start(lambda bgra, ts, stamp: got.append((bgra, ts, stamp)), stopped.set)
-    assert stream.header().want_frames == 1
-    stream.publish(picture, raw_table(memory, table), list_qpc=100, present_qpc=200)
-    deadline = time.monotonic() + 3
-    while not got and time.monotonic() < deadline:
-        time.sleep(0.01)
-    source.stop()
-    assert len(got) == 1
-    captured, ts_100ns, stamp = got[0]
-    assert isinstance(captured, BgrPicture)
-    assert source.status()["delivered"] == 1
-    # Overwrite the ring and close its mapping before preparing the picture.
-    for _ in range(F.SLOT_COUNT):
-        stream.publish(np.zeros_like(picture), raw_table(memory, table))
-    assert stream.header().want_frames == 0
-    assert stream.header().want_frames == 0                # released at stop
-    assert source.status()["delivered"] == 1
-    assert source.status()["plugin_pid"] == 123
-    # A later producer cannot inherit this source's delivery receipt.
-    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, plugin_pid=456)
-    assert source.status()["plugin_pid"] == 123
-    stream.close()
-    bgra = captured.as_bgra()
-    assert bgra.shape == (3, 4, 4) and bgra.dtype == np.uint8
-    assert tuple(bgra[2, 0]) == (255, 0, 0, 255)     # the last row now: top-down
-    assert tuple(bgra[0, 0]) == (0, 0, 0, 255)
-    assert ts_100ns == 200 * 10_000_000 // P.QPC_FREQUENCY
-    assert stamp.frame == 4242 and stamp.pad.stick_x == 12
-
-
-
-def test_pictures_flow_answers_true_on_the_first_picture(layout, stream):
-    table = P.table_for(layout)
-    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED)
-
-    def present_soon():
-        time.sleep(0.1)
-        assert stream.header().want_frames == 1      # the probe asked
-        stream.publish(np.zeros((2, 2, 3), dtype=np.uint8), raw_table(rdram_with(layout, 7), table))
-
-    threading.Thread(target=present_soon, daemon=True).start()
-    assert P.pictures_flow(stream, timeout_s=2.0) == (True, None)
-
-
-def test_pictures_flow_names_a_layer_that_refuses_every_picture(layout, stream):
-    """The first live session's shape: the heartbeat moves, `dropped` climbs,
-    no slot is ever written. The probe says why and turns frames back off,
-    so the recorder can take the desktop grab instead of an empty ring."""
-    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, dropped=10)
-
-    def refuse_soon():
-        time.sleep(0.1)
-        stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, dropped=25)
-
-    threading.Thread(target=refuse_soon, daemon=True).start()
-    flowing, reason = P.pictures_flow(stream, timeout_s=0.5)
-    assert flowing is False
-    assert "refused 15 pictures" in reason and "ReadScreen" in reason
-    assert stream.header().want_frames == 0
-
-
-def test_pictures_flow_names_a_layer_that_presents_nothing(layout, stream):
-    stream.set_plugin_fields(F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED, dropped=0)
-    flowing, reason = P.pictures_flow(stream, timeout_s=0.2)
-    assert flowing is False and "no new picture" in reason
+    assert P.decode_stamp(slot_with((b"",) * 16), P.table_for(layout), layout) is None
 
 
 class FakeDesktop:
-    """A desktop camera that only records what the recorder asked of it."""
-
     def __init__(self):
         self.started = self.stopped = False
         self.idle_check = None
@@ -193,117 +97,88 @@ class FakeDesktop:
         return {"grabs": 0}
 
 
-def _heartbeat(stream, stop, status, dropped_per_beat=0):
-    """A stand-in plugin: the heartbeat moves 60/s; optionally it refuses."""
-    alive = dropped = 0
-    while not stop.is_set():
-        alive += 1
-        dropped += dropped_per_beat
-        stream.set_plugin_fields(status, alive=alive, dropped=dropped)
-        time.sleep(1 / 60)
-
-
-def test_the_desktop_camera_hands_over_when_the_layer_starts_presenting(layout, stream):
+def test_the_desktop_camera_hands_over_when_the_gpu_route_becomes_discoverable(monkeypatch):
     """Whichever order the game and the trainer were opened in: the desktop
-    source watches the heartbeat, and once a picture flows it ends itself
-    like a lost window, so the recorder's next attach gets the plugin."""
-    table = P.table_for(layout)
+    source asks whether the wrapper's control page is discoverable, and once
+    it is, it ends itself like a lost window, so the recorder's next attach
+    gets the GPU source."""
+    monkeypatch.setattr(P, "LAYER_WATCH_S", 0.01)
     desktop = FakeDesktop()
-    source = P.DesktopUntilLayerPresents(desktop, stream)
+    ready = threading.Event()
+    source = P.DesktopUntilLayerPresents(desktop, note="not set up", backend_ready=ready.is_set)
     stopped = threading.Event()
     source.set_idle_check(lambda: False)
     source.start(lambda *args: None, stopped.set)
     assert desktop.started and desktop.idle_check is not None
-    assert not stopped.wait(0.3)                 # nothing presenting yet: no handover
-    stop_beat = threading.Event()
-    status = F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED
-
-    def present():
-        while not stop_beat.is_set():
-            if stream.header().want_frames:
-                stream.publish(np.zeros((2, 2, 3), dtype=np.uint8),
-                               raw_table(rdram_with(layout, 9), table))
-            time.sleep(0.02)
-
-    threading.Thread(target=_heartbeat, args=(stream, stop_beat, status), daemon=True).start()
-    threading.Thread(target=present, daemon=True).start()
+    assert source.frame_source == "desktop" and source.frame_source_note == "not set up"
+    assert not stopped.wait(0.1)                 # nothing discoverable yet: no handover
+    assert source.status() == {"grabs": 0}
+    ready.set()
     try:
-        assert stopped.wait(4.0), "the desktop camera never handed over"
+        assert stopped.wait(2.0), "the desktop camera never handed over"
         assert source.upgraded is True
     finally:
-        stop_beat.set()
-        source.stop()
-    assert desktop.stopped and stream.header().want_frames == 0
-
-
-def test_the_desktop_camera_stays_when_the_layer_refuses_pictures(layout, stream):
-    desktop = FakeDesktop()
-    source = P.DesktopUntilLayerPresents(desktop, stream)
-    stopped = threading.Event()
-    source.start(lambda *args: None, stopped.set)
-    stop_beat = threading.Event()
-    status = F.STATUS_INITIATED | F.STATUS_WRAPPED_LOADED
-    threading.Thread(target=_heartbeat, args=(stream, stop_beat, status, 1), daemon=True).start()
-    try:
-        deadline = time.monotonic() + 4.0
-        while source.frame_source_note is None and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert source.frame_source_note is not None, "the refusal was never noted"
-        assert "refused" in source.frame_source_note
-        assert not stopped.is_set() and source.upgraded is False
-        assert source.status() == {"grabs": 0, "graphics_profile": None}
-    finally:
-        stop_beat.set()
         source.stop()
     assert desktop.stopped
 
 
-def test_idle_turns_the_frames_off(layout, stream):
-    source = P.PluginVideoSource(stream, P.table_for(layout), layout)
-    source.set_idle_check(lambda: True)
-    source.start(lambda *args: None, lambda: None)
-    assert stream.header().want_frames == 0
-    source.stop()
+def test_the_desktop_camera_survives_an_unreadable_backend_probe(monkeypatch):
+    monkeypatch.setattr(P, "LAYER_WATCH_S", 0.01)
+    calls = []
 
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise OSError("control page unreadable")
+        return True
 
-def test_recorder_resume_changes_plugin_demand_before_liveness_poll(tmp_path, layout, stream):
-    from test_replay_recorder import make_recorder, FakeAudioSource
-
-    source = P.PluginVideoSource(stream, P.table_for(layout), layout)
-    rec = make_recorder(tmp_path, source, FakeAudioSource())
-    source.set_idle_check(rec.is_idle)
-    rec._video_source = source
-    got = threading.Event()
-    source.start(lambda *args: got.set(), lambda: None)
+    source = P.DesktopUntilLayerPresents(FakeDesktop(), backend_ready=flaky)
+    stopped = threading.Event()
+    source.start(lambda *args: None, stopped.set)
     try:
-        rec._set_idle(True)
-        assert stream.header().want_frames == 0
-        rec.set_player_active()
-        # This must be true synchronously, before any wait/next heartbeat.
-        assert stream.header().want_frames == 1
-        table = P.table_for(layout)
-        stream.publish(np.zeros((2, 2, 3), dtype=np.uint8),
-                       raw_table(rdram_with(layout, 8770), table))
-        assert got.wait(0.5), "first resumed picture was not delivered"
-        rec.set_session_paused(True)
-        rec.set_player_active()
-        assert stream.header().want_frames == 0
-        rec.set_session_paused(False)
-        assert stream.header().want_frames == 1
+        assert stopped.wait(2.0) and len(calls) >= 3
     finally:
         source.stop()
-    rec._set_idle(True)
-    rec.set_player_active()
-    assert stream.header().want_frames == 0  # late resume cannot revive a stopped source
+    deadline = time.monotonic() + 1.0
+    while source._thread is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert source._thread is None
 
 
 def test_a_present_with_two_lists_or_none_is_not_called_exact(layout):
     table = P.table_for(layout)
     memory = rdram_with(layout, frame=77)
-    def slot_with(lists_since):
-        return F.Slot(seq=1, list_qpc=1, present_qpc=2, vi_origin=1, width=1, height=1,
-                      stride=4, lists_since=lists_since, table=tuple(raw_table(memory, table)),
-                      pixels=np.zeros((1, 1, 3), dtype=np.uint8))
-    assert P.decode_stamp(slot_with(1), table, layout).extras()["exact"] is True
-    assert P.decode_stamp(slot_with(2), table, layout).extras()["exact"] is False
-    assert P.decode_stamp(slot_with(0), table, layout).extras()["exact"] is False
+    def stamp(lists_since):
+        return P.decode_stamp(slot_with(raw_table(memory, table), lists_since=lists_since), table, layout)
+    assert stamp(1).extras()["exact"] is True
+    assert stamp(2).extras()["exact"] is False
+    assert stamp(0).extras()["exact"] is False
+
+
+def test_a_stamp_whose_controller_bytes_are_not_a_pad_carries_no_pad(layout):
+    """Reset/loading memory can hold a stable counter beside axes that are
+    not sign-extended s8 values and button bits nobody can press. The live
+    sampler refuses that block; the stamp must not turn it into a pad."""
+    table = P.table_for(layout)
+    def stamp_with(stick, buttons):
+        memory = rdram_with(layout, frame=500, stick=stick, buttons=buttons)
+        return P.decode_stamp(slot_with(raw_table(memory, table)), table, layout)
+    wild = stamp_with((32767, -32768), 0xFFFF)
+    assert wild.frame == 500 and wild.pad is None and wild.pad_invalid is True
+    extras = wild.extras()
+    assert "pad" not in extras and "mario" not in extras and extras["pad_invalid"] is True
+    bad_bits = stamp_with((12, -34), 0x00C0)          # the two bits no controller sets
+    assert bad_bits.pad is None and "pad" not in bad_bits.extras()
+    real = stamp_with((-128, 127), 0xFF3F)            # every real bit, extreme real axes
+    assert real.pad is not None and real.extras()["pad"] == [-128, 127, 0xFF3F]
+
+
+def test_a_layout_without_mario_stamps_no_facing_or_speed(layout):
+    """0 degrees is a real bearing: a table with no Mario entry must not
+    claim yaw 0 / action 0 / speed 0 for every picture."""
+    table = [entry for entry in P.table_for(layout) if entry[0] != "mario"]
+    memory = rdram_with(layout, frame=42)
+    stamp = P.decode_stamp(slot_with(raw_table(memory, table)), table, layout)
+    assert stamp.pad is not None and stamp.mario_captured is False
+    extras = stamp.extras()
+    assert extras["pad"] == [12, -34, 0x8000] and "mario" not in extras

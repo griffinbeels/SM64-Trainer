@@ -4,9 +4,10 @@ The picture feed muxes rawvideo and PCM into one NUT input. A MediaRun retains
 its first-picture UTC origin and unique encoder identity; video is assigned
 monotonic 90 kHz PTS before encoding, audio retains its capture timing on a
 microsecond clock. Audio samples before the run origin are trimmed so NUT
-cannot shift both streams. FFmpeg preserves those timestamps through the TS
-segment muxer (copyts, mpegts_copyts, disabled negative-timestamp adjustment).
-Each segment carries its own run, including a late final segment after restart.
+cannot shift both streams. The recorder selects fragmented MP4 output with
+unchanged source ticks; each run owns an indexed archive. Standalone sinks without
+a fragment consumer retain MPEG-TS segments (copyts, mpegts_copyts, disabled
+negative-timestamp adjustment), including late segments from a previous run.
 
 Every accepted video write records the actual assigned source PTS and captured
 row in the feed log. The extractor cuts on that same clock and the frame map
@@ -43,10 +44,13 @@ import numpy as np
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.replay.config import (
-    RING_MAXRATE, forced_idr_args, raw_picture_args, video_quality_args,
+    AUDIO_RESAMPLE_OPTIONS, RING_MAXRATE, forced_idr_args, fragment_mux_options,
+    raw_picture_args, video_quality_args,
 )
 from sm64_events.replay.ring import SegmentInfo
-from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, MediaRun, picture_duration_filter
+from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, MediaRun, next_picture_pts, picture_duration_filter
+from sm64_events.replay.pcmclock import trim_to_origin
+from sm64_events.replay.audiopacing import AudioPacer, AudioPlacement
 
 log = logging.getLogger("sm64.replay")
 
@@ -164,69 +168,6 @@ def _assign_kill_on_close(proc) -> int | None:
         return None
 
 
-class AudioPacer:
-    """Keep ffmpeg's audio pipe fed CONTINUOUSLY AT REALTIME by draining real
-    PCM and padding silence up to the wall-clock-expected sample count.
-
-    Both ffmpeg inputs are wall-clock-stamped, so the input scheduler reads
-    whichever stream is behind in wall time and BLOCKS on it. If the audio pipe
-    falls behind — which it does whenever the game is quiet (WASAPI loopback
-    delivers no packets) — ffmpeg waits for audio and stops draining the VIDEO
-    stdin, collapsing the captured frame rate (live: 16.9 fed/s, ffmpeg
-    duplicating >10000 frames → choppy ~17 fps). Holding audio at realtime
-    keeps the scheduler from ever waiting on it; padded silence is stamped at
-    its write wall-clock and aresample reconciles it.
-
-    Pure logic — clock and writer are injected so the no-starve invariant is
-    unit-testable without ffmpeg. `feed` writes real PCM; `tick` pads silence
-    to realtime. Returns samples written so callers/tests can observe."""
-
-    def __init__(self, rate: int, now, write, write_at=None, idle_grace_s=0.0):
-        self._rate = rate
-        self._now = now
-        self._write = write
-        # Optional: (real_pcm, ends_at) for a writer that stamps chunks
-        # itself (the picture feed's NUT stream); padding still goes
-        # through `write`, which stamps it as ending now.
-        self._write_at = write_at
-        self._idle_grace_s = idle_grace_s
-        self._last_real_at = None
-        self._t0 = None
-        self._delivered = 0
-
-    def feed(self, real_pcm: bytes, ends_at: float | None = None) -> None:
-        if not real_pcm:
-            return
-        self._last_real_at = self._now()
-        if self._t0 is None:
-            self._t0 = self._last_real_at
-        if ends_at is not None and self._write_at is not None:
-            self._write_at(real_pcm, ends_at)
-        else:
-            self._write(real_pcm)
-        self._delivered += len(real_pcm) // 4  # 2ch * s16
-
-    def tick(self) -> int:
-        now = self._now()
-        if self._t0 is None:
-            self._t0 = now
-        # A normal callback batch is not a silent gap. Speculative padding
-        # occupies its timestamps and pushes the next real PCM forward.
-        if self._last_real_at is not None and now - self._last_real_at < self._idle_grace_s:
-            return 0
-        expected = int((now - self._t0) * self._rate)
-        pad = expected - self._delivered
-        if pad > 0:
-            self._write(b"\x00" * (pad * 4))
-            self._delivered += pad
-            return pad
-        return 0
-
-    @property
-    def delivered(self) -> int:
-        return self._delivered
-
-
 def parse_segment_csv(line: str, anchor_utc: datetime, origin_s: float,
                       scratch: Path,
                       dims: tuple[int, int] | None = None,
@@ -291,12 +232,20 @@ class FfmpegAvSink:
     _HEALTHY_CHILD_S = 5.0
 
     def __init__(self, cfg, on_segment, ffmpeg: str = "ffmpeg",
-                 codec: str = "h264_nvenc", on_fed=None):
+                 codec: str = "h264_nvenc", on_fed=None, fragment_factory=None):
         self._cfg = cfg
         # The picture feed (item 38): submit() queues each new picture and
         # the feeder writes it once; otherwise the latest grab is re-sent
         # at fps onto the CFR grid (the pre-2026-09-02 shape).
         self._picture = bool(getattr(cfg, "picture_feed", False))
+        # The recorder configures one fragment consumer per encoder run.
+        # No tee/second encoder or parallel TS recording. Standalone legacy
+        # callers without a consumer retain their segment-output contract.
+        if fragment_factory is not None and not self._picture:
+            raise ValueError("fragment publication requires the picture feed")
+        self._fragment_factory = fragment_factory
+        self._publication_failed = None
+        self.publication_error = None
         self._queue: deque = deque()
         self._queued_bytes = 0
         self._mux = None            # the NUT container over stdin (picture feed)
@@ -341,7 +290,7 @@ class FfmpegAvSink:
         self._restarts = 0
         self._fail_streak = 0
         self._spawned_at_mono = 0.0
-        self._jobs: list[int] = []
+        self._jobs: list[tuple[int, object]] = []  # (job handle, its child)
         # audio named-pipe transport
         self._audio_q: queue.Queue = queue.Queue(maxsize=256)
         self._audio_dropped = 0
@@ -398,6 +347,13 @@ class FfmpegAvSink:
             self._audio_dropped += 1
 
     # -- lifecycle -------------------------------------------------------------
+    def publish_fragments(self, factory):
+        """Choose shared fragment storage before starting the picture feeder."""
+        if not self._picture:
+            return False
+        self._fragment_factory = factory
+        return True
+
     def start(self) -> None:
         self._stop.clear()
         self._feeder = threading.Thread(
@@ -486,7 +442,60 @@ class FfmpegAvSink:
             *(["-bsf:v", picture_duration_filter()] if self._picture else []),
             # audio: AAC, async-resampled to LOCK to the master (kills drift)
             "-c:a", "aac", "-b:a", "160k", "-ar", str(rate),
-            "-af", "aresample=async=1:first_pts=0:min_hard_comp=0.1",
+            "-af", f"aresample={AUDIO_RESAMPLE_OPTIONS}",
+            *self._output_args(seg_s, pattern),
+        ]
+        self._proc = subprocess.Popen(
+            args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, bufsize=0, **quiet_spawn_kwargs())
+        self._spawned_at_mono = time.monotonic()
+        if self._picture:
+            self._media_run = MediaRun.starting_at(
+                time.time() if first_stamp is None else first_stamp)
+            self._run_epoch = self._media_run.origin_ts
+            self._last_video_pts = None
+            self._anchor_utc = datetime.fromtimestamp(self._run_epoch, timezone.utc)
+            self._open_mux(w, h)
+        # A job handle must outlive its child (closing it kills the child).
+        # Children that already exited release theirs now, so a respawn
+        # loop cannot accumulate one handle per spawn for the session.
+        kept = []
+        for old_job, old_proc in self._jobs:
+            if old_proc.poll() is None:
+                kept.append((old_job, old_proc))
+            else:
+                _k32.CloseHandle(old_job)
+        self._jobs = kept
+        job = _assign_kill_on_close(self._proc)
+        if job is not None:
+            self._jobs.append((job, self._proc))
+        self._dims = (w, h)
+        self._seg_n_base += 1
+        self._audio_thread = threading.Thread(
+            target=(self._audio_mux_loop if self._picture else self._audio_writer_loop),
+            name="ffmpeg-audio", daemon=True)
+        self._audio_thread.start()
+        # Bind readers to this child's dimensions and clock, including after
+        # a resize. A later child owns a fresh initialization/archive boundary.
+        output_reader = self._fragment_loop if self._fragment_factory is not None else self._segment_list_loop
+        for target, name, extra in (
+                (output_reader, "ffmpeg-media", ((w, h), self._media_run)),
+                (self._stderr_loop, "ffmpeg-stderr", ())):
+            t = threading.Thread(target=target, args=(self._proc, *extra),
+                                 name=name, daemon=True)
+            t.start()
+            self._readers.append(t)
+        log.info("ffmpeg AV sink: spawned %dx%d@%d %s + audio %s (run %d)",
+                 w, h, fps, self._codec,
+                 "in the picture feed" if self._picture else "pipe",
+                 self._seg_n_base)
+
+    def _output_args(self, seg_s, pattern):
+        if self._fragment_factory is not None:
+            options = [arg for key, value in fragment_mux_options().items()
+                       for arg in (f"-{key}", value)]
+            return ["-f", "mp4", *options, "pipe:1"]
+        return [
             # combined A+V MPEG-TS segments
             "-f", "segment", "-segment_time", str(seg_s),
             "-segment_format", "mpegts",
@@ -503,44 +512,31 @@ class FfmpegAvSink:
             "-segment_list_flags", "+live",
             pattern,
         ]
-        self._proc = subprocess.Popen(
-            args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, bufsize=0, **quiet_spawn_kwargs())
-        self._spawned_at_mono = time.monotonic()
-        if self._picture:
-            self._media_run = MediaRun.starting_at(
-                time.time() if first_stamp is None else first_stamp)
-            self._run_epoch = self._media_run.origin_ts
-            self._last_video_pts = None
-            self._anchor_utc = datetime.fromtimestamp(self._run_epoch, timezone.utc)
-            self._open_mux(w, h)
-        job = _assign_kill_on_close(self._proc)
-        if job is not None:
-            self._jobs.append(job)
-        self._dims = (w, h)
-        self._seg_n_base += 1
-        # audio thread: into the NUT stream (picture feed), or connect the
-        # named pipe (ffmpeg is the client) and drain into it (CFR)
-        self._audio_thread = threading.Thread(
-            target=(self._audio_mux_loop if self._picture
-                    else self._audio_writer_loop),
-            name="ffmpeg-audio", daemon=True)
-        self._audio_thread.start()
-        # Each reader belongs to ONE child, so it stamps THAT child's frame
-        # size onto its segments — a later resize respawns ffmpeg and its
-        # reader with the new size, and the extractor can tell the two apart.
-        for target, name, extra in (
-                (self._segment_list_loop, "ffmpeg-segments",
-                 ((w, h), self._media_run)),
-                (self._stderr_loop, "ffmpeg-stderr", ())):
-            t = threading.Thread(target=target, args=(self._proc, *extra),
-                                 name=name, daemon=True)
-            t.start()
-            self._readers.append(t)
-        log.info("ffmpeg AV sink: spawned %dx%d@%d %s + audio %s (run %d)",
-                 w, h, fps, self._codec,
-                 "in the picture feed" if self._picture else "pipe",
-                 self._seg_n_base)
+
+    def _fragment_loop(self, proc, dims, media_run):
+        consumer, error = None, None
+        try:
+            consumer = self._fragment_factory(media_run, dims)
+            while data := os.read(proc.stdout.fileno(), 64 * 1024):
+                consumer.feed(data)
+                if self._proc is proc:
+                    self.publication_error = None
+        except Exception as failure:
+            error = str(failure)
+            if self._proc is proc:
+                self._publication_failed = proc
+                self.publication_error = error
+            log.exception("fragment publication failed")
+            # A failed consumer must not deadlock the raw capture/audio pipe.
+            # Its error is retained; no unavailable media is declared usable.
+            try:
+                while os.read(proc.stdout.fileno(), 64 * 1024):
+                    pass
+            except OSError:
+                pass
+        finally:
+            if consumer is not None:
+                consumer.finish(error)
 
     def _respawn_delay(self) -> float:
         """How long to wait before replacing a dead child. A child that died
@@ -745,6 +741,8 @@ class FfmpegAvSink:
         # stamped now. Pictures queued through a spawn keep their true
         # times this way instead of the burst's.
         try:
+            if self._publication_failed is not None and self._proc is self._publication_failed:
+                raise OSError("encoded replay publication failed")
             if self._proc is None or (w, h) != self._dims:
                 if self._proc is not None:
                     log.info("ffmpeg AV sink: dims %s -> %s, restarting",
@@ -753,6 +751,7 @@ class FfmpegAvSink:
                     self._teardown_audio_pipe()
                     self._stop_proc()
                 self._anchor_utc = None
+                self._publication_failed = None
                 self._spawn(w, h, first_stamp=wrote_at)
             if self._picture:
                 pts = self._mux_picture(frame, wrote_at)
@@ -839,8 +838,7 @@ class FfmpegAvSink:
             # can even predate a heartbeat already written. FFmpeg must not
             # resolve those collisions invisibly. Keep every picture in feed
             # order and file its assigned PTS alongside its capture identity.
-            pts = max(self._media_run.ticks_at(stamp),
-                      self._last_video_pts + 1 if self._last_video_pts is not None else 0)
+            pts = next_picture_pts(self._media_run, stamp, self._last_video_pts)
             packet = av.Packet(memoryview(frame))
             packet.stream = self._mux_stream
             packet.time_base = MEDIA_TIME_BASE
@@ -857,29 +855,22 @@ class FfmpegAvSink:
         when the child is gone, like a pipe write."""
         import av
 
-        samples = len(pcm) // 4
-        if samples <= 0:
+        placed = trim_to_origin(pcm, pts_us, self._run_epoch, self._cfg.audio_rate)
+        if placed is None:
             return
-        relative = int(pts_us) - int(round(self._run_epoch * 1_000_000))
-        if relative < 0:
-            # The tap may have queued audio before the first picture. NUT
-            # shifts *both* streams when it sees a negative packet. Trim only
-            # samples outside this run so video PTS zero remains picture zero.
-            skip = min(samples, (-relative * self._cfg.audio_rate + 999_999) // 1_000_000)
-            pcm = pcm[skip * 4:]
-            if not pcm:
-                return
-            relative += round(skip * 1_000_000 / self._cfg.audio_rate)
-        block = np.frombuffer(pcm, dtype=np.int16).reshape(1, -1)
-        chunk = av.AudioFrame.from_ndarray(block, format="s16", layout="stereo")
-        chunk.sample_rate = self._cfg.audio_rate
-        chunk.time_base = PICTURE_TIME_BASE
-        chunk.pts = relative
+        pcm, relative = placed
         with self._mux_lock:
             if self._mux is None:
                 raise OSError("no NUT mux open")
-            for packet in self._mux_audio.encode(chunk):
-                self._mux.mux(packet)
+            # The tap already supplied this stream's packed PCM format.
+            # AudioFrame + pcm_s16le encoding only copied the same bytes.
+            packet = av.Packet(pcm)
+            packet.stream = self._mux_audio
+            packet.time_base = PICTURE_TIME_BASE
+            packet.pts = packet.dts = relative
+            packet.duration = round((len(pcm) // 4) * 1_000_000 / self._cfg.audio_rate)
+            packet.is_keyframe = True
+            self._mux.mux(packet)
 
     def _audio_mux_loop(self) -> None:
         """The picture feed's audio thread: drain submitted PCM into the NUT
@@ -891,28 +882,16 @@ class FfmpegAvSink:
 
         broken = [False]
         rate = self._cfg.audio_rate
-        next_pts = [None]           # us: where the next sample must start
+        placement = AudioPlacement(rate, self._mux_audio_chunk)
 
         def _put_at(buf: bytes, ends_at: float) -> None:
-            """Stamp a chunk by the wall time it ended at, never earlier
-            than the previous chunk's end: a real chunk that arrived late
-            is nudged forward by the few ms it overlaps, and aresample's
-            async mode absorbs that; a wall clock keeps the stream from
-            drifting the way a pure sample count did (the drift memory)."""
-            samples = len(buf) // 4
-            if samples <= 0:
-                return
-            wanted = int(round((ends_at - samples / rate) * 1_000_000))
-            pts = wanted if next_pts[0] is None else max(wanted, next_pts[0])
             try:
-                self._mux_audio_chunk(buf, pts)
+                placement.put_at(buf, ends_at)
             except Exception:
                 if not broken[0]:
                     log.warning("audio mux failed: the child is gone -- the "
                                 "audio feed stops here", exc_info=True)
                 broken[0] = True
-                return
-            next_pts[0] = pts + int(round(samples * 1_000_000 / rate))
 
         pacer = AudioPacer(rate, _time.perf_counter,
                            write=lambda buf: _put_at(buf, _time.time()),

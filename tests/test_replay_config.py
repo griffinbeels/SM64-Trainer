@@ -11,7 +11,6 @@ from sm64_events.replay.config import (CLIP_MAXRATE, RING_MAXRATE,
 
 def test_defaults_match_spec():
     cfg = ReplayConfig()
-    assert cfg.enabled is True
     assert cfg.retention_s is None            # None = whole session (spec default)
     assert cfg.pre_pad_s == 3.0 and cfg.post_pad_s == 2.0
     assert cfg.fps == 60

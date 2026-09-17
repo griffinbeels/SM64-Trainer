@@ -255,20 +255,39 @@ def read_sheet(data: bytes, sheet_name: str) -> dict:
             link = (_formula_recording(formula.group(2)) if formula.group(2)
                     else shared_recordings.get(_shared_formula_id(formula.group(1))))
 
-        inline = re.search(r"<is>.*?<t[^>]*>(.*?)</t>", body, re.S)
-        cached = re.search(r"<v>(.*?)</v>", body, re.S)
-        if inline:
-            value = _unescape(inline.group(1))
-        elif cached and 't="s"' in attrs:
-            index = int(cached.group(1))
-            value = shared[index] if index < len(shared) else ""
-        elif cached:
-            value = _unescape(cached.group(1))
-        else:
-            value = ""
+        value = _cell_value(attrs, body, shared)
         out[(row, _col_index(letters))] = Cell(row, _col_index(letters), value,
                                                bold, rgb, link, fill)
     return out
+
+
+def _cell_value(attrs: str, body: str, shared: list[str]) -> str:
+    """Value decoding shared by formatted cells and the revision-only read."""
+    inline = re.search(r"<is>.*?<t[^>]*>(.*?)</t>", body, re.S)
+    cached = re.search(r"<v>(.*?)</v>", body, re.S)
+    if inline:
+        return _unescape(inline.group(1))
+    if cached and 't="s"' in attrs:
+        index = int(cached.group(1))
+        return shared[index] if index < len(shared) else ""
+    return _unescape(cached.group(1)) if cached else ""
+
+
+def _revision_values(data: bytes):
+    """Only column A values; never parse fonts, fills, links or other tabs."""
+    name = _first_present(data, LOG_TABS)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        xml = archive.read(_sheet_part(archive, name)).decode("utf-8")
+        shared = None
+        for match in _CELL.finditer(xml):
+            if match.group(1) != "A":
+                continue
+            attrs, body = match.group(3), match.group(4) or ""
+            if shared is None and 't="s"' in attrs:
+                shared_xml = _read_optional(archive, "xl/sharedStrings.xml") or ""
+                shared = [_unescape(re.sub(r"<[^>]+>", "", si))
+                          for si in re.findall(r"<si>(.*?)</si>", shared_xml, re.S)]
+            yield _cell_value(attrs, body, shared or [])
 
 
 def log_revision(data: bytes) -> str:
@@ -286,11 +305,9 @@ def log_revision(data: bytes) -> str:
     one. Order is preference: the historical name first so an older workbook
     still reads, then the split form."""
     serials = []
-    for (_, col), cell in read_sheet(data, _first_present(data, LOG_TABS)).items():
-        if col != 1:
-            continue
+    for value in _revision_values(data):
         try:
-            serials.append(float(cell.value))
+            serials.append(float(value))
         except ValueError:
             continue
     if not serials:

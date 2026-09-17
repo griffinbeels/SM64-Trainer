@@ -19,6 +19,9 @@ class FakeReplay:
         self.pre_pad_s = 3.0
         self.post_pad_s = 2.0
 
+    def buffer_coverage(self):
+        return self.recorder.ring.coverage("video")
+
     def saved_attempt_ids(self):
         return set()
 

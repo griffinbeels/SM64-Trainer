@@ -87,6 +87,8 @@ def export_action(exe: str, trace: Path, output: Path, action: str,
             row["error"] = f"xperf returned {result.returncode}; inspect {log.name}"
         elif not report.is_file() or report.stat().st_size == 0:
             row["error"] = "xperf produced no report; unavailable is not zero activity"
+        elif action == "profile" and "no sampled profile data" in excerpt(report).lower():
+            row["error"] = "Trace contains no sampled profile data; successful export is not CPU coverage"
     except (OSError, subprocess.TimeoutExpired) as exc:
         row["error"] = str(exc)
     row["log_excerpt"] = excerpt(log)[:4000]

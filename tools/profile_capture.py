@@ -116,7 +116,10 @@ class SystemSampler:
                     processes.append({"pid": process.pid, "created": process.create_time(),
                                       "name": process.name(), "cpu_percent": process.cpu_percent(),
                                       "rss_bytes": process.memory_info().rss,
-                                      "threads": process.num_threads(),
+                                      # On Windows this enters psutil's system-wide
+                                      # process-information query for every PID.
+                                      # Keep routine counters cheap; missing is not zero.
+                                      "threads": None,
                                       "read_bytes": io.read_bytes, "write_bytes": io.write_bytes})
             except psutil.Error as exc:
                 processes.append({"pid": process.pid, "error": type(exc).__name__})
@@ -163,13 +166,13 @@ class ExternalTraces:
             exe = tool_path("wpr")
             if not exe or "-instancename" not in command([exe, "-help", "advanced"]):
                 raise RuntimeError("WPR with named instance support is required")
-            available = {line.split()[0] for line in command([exe, "-profiles"]).splitlines() if line.split()}
-            self.profiles = ["GeneralProfile"]
-            if "GPU" in available:
-                self.profiles.append("GPU")
-            else:
-                self.missing.append("WPR GPU profile unavailable; no GPU activity trace requested")
-            # Memory mode is bounded; filemode can fill the disk. Name is always last.
+            # Built-in profiles scale buffers with host RAM (several GB on this
+            # machine). Keep the diagnostic observer itself within 128 MiB.
+            profile = Path(__file__).resolve().parent / "profiles" / "replay.wprp"
+            if not profile.is_file():
+                raise FileNotFoundError(f"Bounded WPR profile unavailable: {profile}")
+            self.profiles = [str(profile) + "!Replay.Light"]
+            self.missing.append("GPU events requested; actual provider coverage requires inspection of the trace")
             self.wpr = exe
             (self.output / "wpr-owner.json").write_text(json.dumps({
                 "instance": self.instance,
@@ -232,7 +235,8 @@ def validate_capture(args) -> tuple[str, dict]:
             "machine": {"host": platform.node(), "platform": platform.platform(),
                         "cpu_count": os.cpu_count()},
             "sampling": {"seconds": args.seconds, "interval": args.interval,
-                         "wpr": args.wpr, "python_stacks": args.py_spy_pid is not None},
+                         "wpr": args.wpr, "python_stacks": args.py_spy_pid is not None,
+                         "process_threads": False},
             "artifacts": {str(path): digest(path) for path in args.artifact},
             "recorder_config": {key: replay.get(key) for key in ("encoder", "audio_mode", "frame_source", "retention_s", "max_buffer_bytes")},
             "health": health, "doctor": doctor(), "complete": False, "errors": []}

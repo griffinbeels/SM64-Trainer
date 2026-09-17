@@ -82,7 +82,17 @@ def _rank_mode(service) -> str:
     return mode if mode in classify.RANK_MODES else classify.DEFAULT_RANK_MODE
 
 
-def _groups(service, scope_id: str, excluded: set[str] | None = None):
+def _group_inputs(service) -> dict:
+    """One membership snapshot -- routes, segment courses and every graded
+    entity -- that a sweep over several scopes resolves against once."""
+    if service.ranks is None or service.db is None:
+        raise HTTPException(503, "rank standards unavailable")
+    return {"routes": service.db.routes(), "courses": segment_courses(service.db),
+            "graded": service.ranks.graded_entities()}
+
+
+def _groups(service, scope_id: str, excluded: set[str] | None = None, *,
+            inputs: dict | None = None):
     """Resolve a scope or 404. Segment->course comes from each definition's
     start levels, the same source the stage banner uses.
 
@@ -91,18 +101,17 @@ def _groups(service, scope_id: str, excluded: set[str] | None = None):
     (service.rank_excluded()). Passing an EMPTY set resolves scope membership
     WITHOUT the exclusion filter -- the second resolution
     `_append_excluded_rows` uses to recover excluded rows for display without
-    letting them back into the aggregate."""
-    if service.ranks is None or service.db is None:
-        raise HTTPException(503, "rank standards unavailable")
+    letting them back into the aggregate. `inputs` is a sweep's shared
+    `_group_inputs` snapshot; a single request resolves its own."""
+    inputs = _group_inputs(service) if inputs is None else inputs
     # EVERY graded entity, not the user's file alone: since round 33 the
     # sheet-fitted layer grades stars the file never names, and a scope that
     # cannot see them would omit every runner rated only there (measured:
     # 444 of the sheet's runners omitted from `overall`) while his own card
     # graded them. Excluded-only runners still correctly remain omitted.
-    routes = service.db.routes()
-    courses = segment_courses(service.db)
+    routes, courses = inputs["routes"], inputs["courses"]
     candidates = scopes.entity_groups(
-        scope_id, rankable=service.ranks.graded_entities(), routes=routes,
+        scope_id, rankable=inputs["graded"], routes=routes,
         segment_courses=courses)
     if candidates is None:
         raise HTTPException(404, f"unknown scope {scope_id!r}")
@@ -241,8 +250,68 @@ def absorb_after_regrade(service) -> None:
     every flip up would fire it again. Both directions: a scope re-graded
     LOWER has its watermark lowered too (what sync_watermark would do on the
     next build anyway), so a later real climb still celebrates from the
-    right floor."""
-    absorb_regrade(service, _score_scope)
+    right floor.
+
+    One sweep: every watermarked scope shares one membership snapshot and
+    one read of the history, instead of re-reading and re-scoring the
+    whole history once per scope (tests/test_regrade_batch.py)."""
+    if service.db is None or service.ranks is None or not service.marelo_watermarks():
+        return
+    absorb_regrade(service, _sweep_scorer())
+
+
+def _sweep_scorer():
+    """A `score_scope` for `absorb_regrade` that aggregates every watermarked
+    scope on its first call. A scope that no longer resolves (a deleted
+    route) raises LookupError, so the sweep keeps its watermark instead of
+    aborting startup; malformed legacy data falls back to per-scope scoring."""
+    batch = None
+
+    def score(service, scope_id):
+        nonlocal batch
+        if batch is None:
+            try:
+                batch = _regrade_aggregates(service, list(service.marelo_watermarks()))
+            except (LookupError, ValueError):
+                batch = False
+        if batch is False:
+            try:
+                return _score_scope(service, scope_id)
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                raise LookupError(f"unknown scope {scope_id!r}") from error
+        if scope_id not in batch:
+            raise LookupError(f"unknown scope {scope_id!r}")
+        return batch[scope_id]
+
+    return score
+
+
+def _regrade_aggregates(service, scope_ids) -> dict:
+    """Scope-level grades only: regrading needs no labels, clips or entity
+    decoration. Each scope keeps its own ordered groups and K-of-N
+    aggregation through the same scoring functions `_score_scope` uses."""
+    inputs = _group_inputs(service)
+    excluded = service.rank_excluded()
+    groups = {}
+    for scope_id in scope_ids:
+        try:
+            groups[scope_id] = _groups(service, scope_id, excluded, inputs=inputs)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+    keys = dict.fromkeys(key for rows in groups.values()
+                         for group in rows for key in group["candidates"])
+    mode = _rank_mode(service)
+    is_pb = classify.RANK_MODES[mode]["order"] is None
+    scores = marelo_bridge.entity_scores(
+        [] if is_pb else service.db.attempts(), service.ranks, keys, mode,
+        service.db.pbs() if is_pb else [])
+    revision = service.ranks.calibration_revision
+    return {scope_id: {**scopes.aggregate(scores, rows), "scope_id": scope_id,
+                       "calibration_revision": revision}
+            for scope_id, rows in groups.items()}
 
 
 def _build_marelo(service, scope_id: str) -> dict:

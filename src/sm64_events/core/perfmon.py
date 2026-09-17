@@ -35,6 +35,34 @@ _USE_DEFAULT = object()  # sentinel: resolve _DEFAULT_LOG at call time, so tests
                          # human's session data the analyzer reads.
 
 
+def _mib_reading(value) -> str:
+    return "unmeasured" if value is None else f"{value / _MiB:.0f} MiB"
+
+
+async def _off_loop(operation, *args):
+    """Cancellation drains this owned job before lifespan teardown proceeds."""
+    import asyncio
+    task = asyncio.create_task(asyncio.to_thread(operation, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as cancelled:
+        # Further cancellation requests must not cancel the asyncio wrapper:
+        # a cancelled wrapper cannot establish that its OS thread has stopped.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                log.exception("perfmon worker failed during shutdown")
+                raise cancelled from None
+        try:
+            task.result()
+        except Exception:
+            log.exception("perfmon worker failed during shutdown")
+        raise
+
+
 def perf_record(snap: dict, gauges: dict, *, uptime_s: float, t_utc: str,
                 top_growers: list[dict], top_n_types: int = 30) -> dict:
     """Build the JSON-serialisable line persisted per sample. Trims the full
@@ -100,8 +128,9 @@ def write_perf_record(path: Path, record: dict, *,
 class PerfMonitor:
     """Samples every `interval_s`: logs an expanded `mem:` line + a top-growers
     line, fires each resource alarm once, and appends a perf_log.jsonl record.
-    `latest` (trimmed) backs /health. Runs as an asyncio task — no extra
-    thread. Supersedes the RSS-only MemoryMonitor."""
+    `latest` (trimmed) backs /health. Slow probes/persistence run on a worker;
+    application gauges stay on the event loop that owns them. Heap, DXGI and
+    scratch scans are opt-in (SM64_PERFMON_DEEP=1), never routine play work."""
 
     def __init__(self, scratch_dir: Path | None = None,
                  interval_s: float = 60.0,
@@ -110,11 +139,13 @@ class PerfMonitor:
                  self_pid: int | None = None,
                  max_log_bytes: int = 50 * 1024 * 1024,
                  watch_processes=("Project64.exe",),
-                 enabled: bool = True):
+                 enabled: bool = True, deep: bool | None = None):
         self._enabled = enabled    # SM64_PERFMON=0 -> run() is a no-op (zero
                                    # per-60s cost: no heap walk, no probes, no
                                    # log line) for audio-sensitive sessions
         self._scratch_dir = scratch_dir
+        self._deep = (os.environ.get("SM64_PERFMON_DEEP") == "1"
+                      if deep is None else deep)
         self._interval_s = interval_s
         # exe names whose memory we sample alongside ours — PJ64 is NOT our
         # child, so a PJ64 leak (suspected from the 69-min capture's +5 GiB
@@ -148,21 +179,24 @@ class PerfMonitor:
         return self._logpath()
 
     def _collect(self) -> dict:
-        """One full sample (heap walk + resources + children + GPU + watched
-        processes + scratch)."""
-        return sample(self._scratch_dir, count_objects=True, resources=True,
-                      children_of=self._pid, histogram=True, gpu=True,
+        """Routine sampling does not grow with heap size or retained files."""
+        return sample(self._scratch_dir if self._deep else None,
+                      count_objects=self._deep, resources=True,
+                      children_of=self._pid, histogram=self._deep, gpu=self._deep,
                       processes=self._watch)
 
-    def _tick(self) -> dict:
-        """Sample, log, alarm, persist. Returns the record (testable without
-        the async loop)."""
-        snap = self._collect()
+    def _read_gauges(self) -> dict:
         try:
-            gvals = self._gauges() if self._gauges is not None else {}
+            return self._gauges() if self._gauges is not None else {}
         except Exception:
             log.exception("perfmon gauges failed")
-            gvals = {}
+            return {}
+
+    def _tick(self, gauges=None) -> dict:
+        """Collect and persist; run() supplies gauges read on their owner loop."""
+        started = time.monotonic()
+        snap = self._collect()
+        gvals = self._read_gauges() if gauges is None else gauges
 
         if not self._baseline:
             self._baseline = snap
@@ -176,16 +210,16 @@ class PerfMonitor:
         pj64 = sum(p.get("rss_bytes", 0)
                    for p in (snap.get("processes") or {}).values())
         log.info(
-            "mem: rss=%.0f MiB priv=%.0f MiB obj=%d thr=%d handles=%s gdi=%s "
-            "user=%s child=%.0f MiB(%d) gpu=%.0f MiB pj64=%.0f MiB "
-            "sys_load=%s%% scratch=%.0f MiB",
+            "mem: rss=%.0f MiB priv=%.0f MiB obj=%s thr=%d handles=%s gdi=%s "
+            "user=%s child=%.0f MiB(%d) gpu=%s pj64=%.0f MiB "
+            "sys_load=%s%% scratch=%s",
             snap.get("rss_bytes", 0) / _MiB, snap.get("private_bytes", 0) / _MiB,
-            snap.get("objects", -1), snap.get("threads", -1),
+            snap.get("objects", "unmeasured"), snap.get("threads", -1),
             snap.get("handles", "?"), snap.get("gdi_objects", "?"),
             snap.get("user_objects", "?"), child.get("rss_bytes", 0) / _MiB,
-            child.get("count", 0), gpu.get("local_usage_bytes", 0) / _MiB,
+            child.get("count", 0), _mib_reading(gpu.get("local_usage_bytes")),
             pj64 / _MiB, sysd.get("load_pct", "?"),
-            snap.get("scratch_bytes", 0) / _MiB)
+            _mib_reading(snap.get("scratch_bytes")))
         if growers:
             log.info("mem growers vs baseline: %s", ", ".join(
                 f"{g['type']} +{g['delta']}" for g in growers[:6]))
@@ -198,6 +232,8 @@ class PerfMonitor:
         record = perf_record(
             snap, gvals, uptime_s=time.monotonic() - self._t0,
             t_utc=datetime.now(timezone.utc).isoformat(), top_growers=growers)
+        record["sampling"] = {"mode": "deep" if self._deep else "light",
+                              "collect_ms": round((time.monotonic() - started) * 1000, 3)}
         path = self._logpath()
         if path is not None:
             write_perf_record(path, record, max_bytes=self._max_log_bytes)
@@ -212,10 +248,12 @@ class PerfMonitor:
             log.info("perf monitor DISABLED (SM64_PERFMON=0) — no sampling, "
                      "no perf_log.jsonl, zero overhead")
             return
-        start_new_session_log(self._logpath())  # one run = one clean log
+        await _off_loop(start_new_session_log, self._logpath())
         while True:
             try:
-                self._tick()
+                # Only one sample can run at a time. The next iteration waits
+                # for completion; a slow disk cannot build a queue of probes.
+                await _off_loop(self._tick, self._read_gauges())
             except Exception:
                 log.exception("perfmon tick failed (continuing)")
             await asyncio.sleep(self._interval_s)

@@ -4,6 +4,8 @@ import tempfile
 import zlib
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
+
 _TIME = struct.Struct("<q")
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _BLOCK_BYTES = 64 * 1024
@@ -82,8 +84,30 @@ class ReadTimes:
         self._file.close()
 
 
-def iter_times(blob: bytes):
-    """Stream exact microseconds; never inflate a long hold into a Python list."""
+def contains_time(blob: bytes, low: int, high: int) -> bool:
+    """Search exact instants in bounded blocks, validating even after a match.
+
+    A paused frame can retain millions of polls. Comparing its packed integers
+    avoids a Python iteration for each poll without filling gaps or assuming
+    that UTC always advances. Exhaust the stream so a malformed tail cannot
+    turn a valid prefix into accepted observation evidence.
+    """
+    found = False
+    for raw in _time_blocks(blob):
+        if not found:
+            if len(raw) <= 1024:
+                # Ordinary moving frames have only a handful of final reads;
+                # avoid array dispatch for those small observations.
+                found = any(low <= value <= high
+                            for value, in struct.iter_unpack("<q", raw))
+            else:
+                values = np.frombuffer(raw, dtype="<i8")
+                found = bool(np.any((values >= low) & (values <= high)))
+    return found
+
+
+def _time_blocks(blob: bytes):
+    """Yield complete packed instants with bounded decompression memory."""
     reader = zlib.decompressobj()
     remainder = b""
     try:
@@ -91,13 +115,16 @@ def iter_times(blob: bytes):
             pending = blob[offset:offset + _BLOCK_BYTES]
             while pending:
                 raw = remainder + reader.decompress(pending, _BLOCK_BYTES)
+                if reader.unused_data:
+                    # After bounded decompression reaches EOF, trailing bytes
+                    # can also remain in unconsumed_tail. Reject them before
+                    # feeding that unchanged tail forever.
+                    raise ValueError("trailing input observation times")
                 stop = len(raw) - len(raw) % _TIME.size
-                for value, in struct.iter_unpack("<q", raw[:stop]):
-                    yield value
+                if stop:
+                    yield raw[:stop]
                 remainder = raw[stop:]
                 pending = reader.unconsumed_tail
-            if reader.unused_data:
-                raise ValueError("trailing input observation times")
         if not reader.eof or remainder:
             raise ValueError("incomplete input observation times")
     except zlib.error as error:

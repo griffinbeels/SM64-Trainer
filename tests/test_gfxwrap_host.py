@@ -1,16 +1,17 @@
-"""THE CAPTURE LAYER end to end, without Project64: the 32-bit test host
+"""THE CAPTURE LAYER's wrapper without Project64: the 32-bit test host
 (plugin/gfxwrap/host.c) stands in for the emulator, loads the wrapper DLL
 against a fake wrapped plugin, fakes RDRAM and the VI registers, and drives
-ProcessDList / UpdateScreen the way PJ64 does; this side opens the same
-frame stream, asks for frames, and checks every slot: the stamp bytes copied
-from the fake RDRAM, the presented picture's colour, the origin, and that a
-VI whose origin did not change captured nothing.
+ProcessDList / UpdateScreen the way PJ64 does. The fake has no SourceV2
+export, so this proves the wrapper's plugin surface -- exports, label, the
+recursion guards, failed initialization, the bounded diagnostics -- not
+capture; capture is driven by tests/test_wrapper_runtime.py (composition)
+and tests/test_gpu_delivery.py (the delivery worker).
 
-Skipped (not failed) on a machine without the x86 MSVC toolchain; the
-SHIPPED DLL is driven too, so a stale committed binary fails here."""
+Skipped (not failed) on a machine without the x86 MSVC toolchain."""
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,9 +24,7 @@ sys.path.insert(0, str(REPO / "tools"))
 
 import build_plugin  # noqa: E402
 
-from sm64_events.core.paths import bundled_plugin_dll  # noqa: E402
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
-from sm64_events.replay import framestream as F  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not build_plugin.toolchain_available(),
                                 reason="no x86 MSVC toolchain (vcvars32.bat)")
@@ -56,155 +55,70 @@ def unique_name() -> str:
     return f"sm64_trainer_gfx_test_{os.getpid()}_{np.random.randint(1 << 30)}"
 
 
-def test_layout_matches_the_python_side(built):
-    printed = subprocess.run([str(built["host"]), "--layout"], capture_output=True,
-                             text=True, creationflags=_NO_WINDOW, check=True).stdout
-    c_side = {}
-    for line in printed.splitlines():
-        name, value = line.split()
-        c_side[name] = int(value)
-    shared = set(c_side) & set(F.LAYOUT)
-    assert len(shared) >= 50, sorted(shared)
-    mismatched = {name: (c_side[name], F.LAYOUT[name]) for name in shared
-                  if c_side[name] != F.LAYOUT[name]}
-    assert mismatched == {}
-
-
-def test_the_wrapper_exports_everything_pj64_16_requires_and_names_the_wrapped_plugin(built):
+def test_the_wrapper_exports_everything_pj64_16_requires_and_shows_the_product_label(built):
     info = subprocess.run([str(built["host"]), "--info", str(built["wrapper"])],
                           capture_output=True, text=True, creationflags=_NO_WINDOW,
                           check=True).stdout
     # The dialog is answered from the ini alone (loading the wrapped plugin
-    # inside PJ64's enumerate-every-DLL pass would leak a reference per pass)
-    assert "fake_gfx.dll +SM64 Trainer" in info
+    # inside PJ64's enumerate-every-DLL pass would leak a reference per pass);
+    # the label is the product name, never the renderer's (his decision,
+    # 2026-09-16: "Final name is SM64 Trainer v1.0").
+    assert "name SM64 Trainer v1.0\n" in info
     assert "version 0x0103" in info and "bswaped 1" in info
 
 
-def check_drive(host: Path, wrapper: Path, *flags, pictures_via=F.STATUS_GL_CONTEXT):
+def test_a_renderer_without_the_capture_export_is_forwarded_to_and_never_captured(built):
+    """The fake is a stock plugin: the runtime refuses to configure, every
+    call still reaches it, and the session closes cleanly. PJ64 1.6's shape
+    (window thread pumping, plugin calls on a second thread) included."""
+    output = drive(built["host"], built["wrapper"], 5, unique_name(), "--cpu-thread")
+    assert "drove 5 frames" in output
+    log = (built["dir"] / "sm64_trainer_gfx.log").read_text(encoding="utf-8")
+    activation = log.rsplit("event=init_begin", 1)[-1]
+    assert "event=wrapped_info " in activation and "runtime=0" in activation
+    assert "event=rom_open_end" in activation and "event=close_end" in activation
+
+
+def test_native_diagnostics_identify_forwarded_stalls_without_a_reader(built):
     name = unique_name()
-    stream = F.FrameStream(name)
-    try:
-        stream.set_table([(0, 4), (64, 4)], rdram_bytes=8 << 20)
-        stream.touch()  # v2 capture requires a live reader lease
-        stream.set_want_frames(True)
-        output = drive(host, wrapper, 5, name, *flags)
-        assert "drove 5 frames" in output
-        header = stream.header()
-        assert header.initiated is False           # CloseDLL cleared it
-        assert header.status & F.STATUS_WRAPPED_LOADED
-        # which capture point the pictures took: the layer's own GL_FRONT
-        # read, or the wrapped plugin's ReadScreen when the calling thread
-        # has no context (GLideN64_LINK_4.2's shape, measured 2026-09-05)
-        assert header.status & (F.STATUS_GL_CONTEXT | F.STATUS_READSCREEN) == pictures_via
-        # GL_CONTEXT is cleared at detach with INITIATED (a reader must not
-        # wait on a gone plugin); the five captured slots prove it was there
-        assert header.wrapped_name == "fake_gfx.dll"
-        assert header.wrapped_version == 0x0103
-        assert header.plugin_version == F.LAYOUT["GFXWRAP_VERSION"] if "GFXWRAP_VERSION" in F.LAYOUT else True
-        assert header.lists == 5
-        assert header.alive == 10                  # two UpdateScreen calls per frame
-        assert header.write_seq == 5               # ...and one capture per origin change
-        assert header.dropped == 0
-        slots, skipped = stream.read_new(0)
-        assert skipped == 0                         # six slots hold all five
-        assert [slot.seq for slot in slots] == [1, 2, 3, 4, 5]
-        for slot in slots:
-            frame = slot.seq - 1
-            assert slot.table[0] == (1000 + frame).to_bytes(4, "little")
-            assert slot.table[1] == (0x11223300 + frame).to_bytes(4, "little")
-            assert slot.table[2] == b""
-            assert slot.vi_origin == 0x100000 + frame
-            assert slot.lists_since == 1
-            assert slot.present_qpc >= slot.list_qpc > 0
-            assert (slot.width, slot.height) == (64, 48)
-            centre = slot.pixels[24, 32]
-            assert tuple(int(channel) for channel in centre) == (frame, 2 * frame, 3 * frame), \
-                f"slot {slot.seq}: centre pixel {centre.tolist()}"
-    finally:
-        stream.close()
+    result = subprocess.run(
+        [str(built["host"]), "--drive", str(built["wrapper"]), "3",
+         "--stream", name, "--cpu-thread"],
+        capture_output=True, text=True, timeout=60,
+        env={**QUIET, "SM64_FAKE_DLIST_DELAY": "1"}, **quiet_spawn_kwargs(), check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = (built["dir"] / "sm64_trainer_gfx.log").read_text(encoding="utf-8")
+    activation = log.rsplit("event=init_begin", 1)[-1]
+    assert "event=wrapper_loaded path=" in activation
+    assert "event=wrapped_loaded path=" in activation
+    stall = next(line for line in activation.splitlines()
+                 if "event=callback_stall callback=ProcessDList" in line)
+    assert re.search(r"pid=\d+ tid=\d+ build=\S+", stall)
+    assert f"build={build_plugin.wrapper_build_id()}" in stall
+    # The first slow call is reported at once, with this callback's own count.
+    assert " calls=1 slow_calls=1 " in stall
+    assert float(re.search(r" total_ms=([\d.]+)", stall)[1]) >= 20
+    assert "event=close_end" in activation and "event=diagnostics_stop" in activation
 
 
-def test_five_frames_through_a_fresh_build(built):
-    check_drive(built["host"], built["wrapper"])
+def test_failed_wrapped_initialization_is_reported_not_advertised(built):
+    result = subprocess.run(
+        [str(built["host"]), "--drive", str(built["wrapper"]), "1", "--stream", unique_name()],
+        capture_output=True, text=True, timeout=60,
+        env={**QUIET, "SM64_FAKE_INIT_FAIL": "1"}, **quiet_spawn_kwargs(), check=False)
+    assert result.returncode == 5, result.stdout + result.stderr
+    log = (built["dir"] / "sm64_trainer_gfx.log").read_text(encoding="utf-8")
+    assert "event=init_result success=0" in log.rsplit("event=init_begin", 1)[-1]
 
 
-def test_the_same_frames_when_the_emulator_calls_from_its_own_cpu_thread(built):
-    """PJ64 1.6's shape: the window's thread pumps messages while a second
-    thread makes every plugin call. The layer keeps no per-thread state, so
-    the pictures and stamps are the same."""
-    check_drive(built["host"], built["wrapper"], "--cpu-thread")
-
-
-def test_pictures_come_through_the_wrapped_plugins_readscreen_when_the_thread_has_no_context(built):
-    """His GLideN64 (LINK 4.2) runs every GL call on a render thread of its
-    own, so the emulation thread never holds a context -- the first live
-    session refused 30,000 pictures that way. The second capture point asks
-    the wrapped plugin's own ReadScreen: the fake answers without a context,
-    from a malloc the layer frees through the process heap, and every slot
-    still carries the right colour, stamp and origin, nothing dropped."""
-    check_drive(built["host"], built["wrapper"], "--no-context", "--cpu-thread",
-                pictures_via=F.STATUS_READSCREEN)
-
-
-def test_the_shipped_dll_behaves_like_the_source(built):
-    shipped = bundled_plugin_dll()
-    assert shipped is not None, "src/sm64_events/data/plugin/sm64_trainer_gfx.dll is not built"
-    # the wrapper loads its ini and the fake from ITS OWN folder, so the
-    # shipped DLL is driven from a copy beside the fake plugin
-    copy = built["dir"] / "shipped" / "sm64_trainer_gfx.dll"
-    copy.parent.mkdir(exist_ok=True)
-    copy.write_bytes(shipped.read_bytes())
-    (copy.parent / "fake_gfx.dll").write_bytes(built["fake"].read_bytes())
-    check_drive(built["host"], copy)
-
-
-def test_no_frames_are_captured_while_the_tracker_does_not_want_them(built):
-    name = unique_name()
-    stream = F.FrameStream(name)
-    try:
-        stream.set_table([(0, 4)], rdram_bytes=8 << 20)
-        stream.set_want_frames(False)
-        drive(built["host"], built["wrapper"], 3, name)
-        header = stream.header()
-        assert header.write_seq == 0 and header.lists == 3 and header.alive == 6
-    finally:
-        stream.close()
-
-
-@pytest.mark.parametrize("capture", [False, True])
-def test_optional_native_profile_preserves_demand_and_identifies_slow_readscreen(built, capture):
-    """Real C timers must see an injected delay in the actual wrapped call."""
-    name = unique_name()
-    stream = F.FrameStream(name)
-    try:
-        stream.set_table([(0, 4)], rdram_bytes=8 << 20)
-        stream.touch()
-        stream.set_want_frames(capture)
-        stream.graphics_profile.refresh("native-profile-sensitivity")
-        result = subprocess.run(
-            [str(built["host"]), "--drive", str(built["wrapper"]), "3",
-             "--stream", name, "--no-context", "--cpu-thread"],
-            capture_output=True, text=True, timeout=60,
-            env={**QUIET, "SM64_FAKE_READSCREEN_DELAY": "1"},
-            **quiet_spawn_kwargs(), check=False)
-        assert result.returncode == 0, result.stdout + result.stderr
-        stats = stream.graphics_profile.snapshot(stream.header().plugin_pid)
-        assert stats is not None
-        metrics = stats["metrics"]
-        assert metrics["update_screen"]["count"] == 6
-        assert metrics["vi_call_interval"]["count"] == 5
-        assert metrics["wrapped_read_screen"]["count"] == (3 if capture else 0)
-        assert stream.header().write_seq == (3 if capture else 0)
-        if capture:
-            assert metrics["wrapped_read_screen"]["max_ms"] >= 20
-            assert metrics["wrapped_update_screen"]["total_ms"] < metrics["wrapped_read_screen"]["total_ms"]
-            slots, skipped = stream.read_new(0)
-            assert not skipped
-            for index, slot in enumerate(slots):
-                assert slot.table[0] == (1000 + index).to_bytes(4, "little")
-                assert tuple(slot.pixels[24, 32]) == (index, 2 * index, 3 * index)
-    finally:
-        stream.close()
+def test_a_renamed_copy_of_the_wrapper_is_rejected_before_recursive_initialization(built):
+    copy = built["dir"] / "renamed-wrapper.dll"
+    copy.write_bytes(built["wrapper"].read_bytes())
+    result = subprocess.run(
+        [str(built["host"]), "--drive", str(built["wrapper"]), "1",
+         "--stream", unique_name(), "--wrapped", copy.name],
+        capture_output=True, text=True, timeout=60, env=QUIET, **quiet_spawn_kwargs(), check=False)
+    assert result.returncode == 5, result.stdout + result.stderr
 
 
 def test_an_ini_naming_the_wrapper_itself_leaves_it_unwrapped_instead_of_recursing(built):
@@ -222,103 +136,3 @@ def test_an_ini_naming_the_wrapper_itself_leaves_it_unwrapped_instead_of_recursi
     assert "InitiateGFX failed" in result.stderr
     log = built["wrapper"].parent / "sm64_trainer_gfx.log"
     assert log.exists() and "names the capture layer itself" in log.read_text()
-
-
-def test_a_stamp_entry_past_the_committed_rdram_is_dropped_not_a_crash(built):
-    """The tracker claims 8 MB (the expansion pak); a 4 MB configuration has
-    nothing committed above it. The host reserves 8 MB and commits 4, the
-    table asks for a word at 6 MB: the plugin must survive every frame and
-    hand back an EMPTY entry there while the low entry still arrives."""
-    name = unique_name()
-    stream = F.FrameStream(name)
-    try:
-        stream.set_table([(0, 4), (6 << 20, 4)], rdram_bytes=8 << 20)
-        stream.touch()
-        stream.set_want_frames(True)
-        drive(built["host"], built["wrapper"], 3, name, "--rdram-mb", "4")
-        slots, _ = stream.read_new(0)
-        assert [slot.seq for slot in slots] == [1, 2, 3]
-        for slot in slots:
-            assert slot.table[0] == (1000 + slot.seq - 1).to_bytes(4, "little")
-            assert slot.table[1] == b""
-    finally:
-        stream.close()
-
-
-def test_an_entry_committed_after_initiate_is_copied_once_the_rom_opens(built):
-    """His first three plugin clips carried no IGT: the RDRAM span was
-    measured once at InitiateGFX, before PJ64 committed the expansion pak,
-    so `usamune_overall` (above 4 MB) was refused all session. The host
-    commits the upper half after InitiateGFX; the entry at 6 MB must copy."""
-    name = unique_name()
-    stream = F.FrameStream(name)
-    try:
-        stream.set_table([(0, 4), (6 << 20, 4)], rdram_bytes=8 << 20)
-        stream.touch()
-        stream.set_want_frames(True)
-        drive(built["host"], built["wrapper"], 3, name, "--commit-late")
-        slots, _ = stream.read_new(0)
-        assert [slot.seq for slot in slots] == [1, 2, 3]
-        for slot in slots:
-            assert len(slot.table[0]) == 4
-            assert len(slot.table[1]) == 4, "the late-committed entry was refused"
-    finally:
-        stream.close()
-
-
-def test_gl_state_the_wrapped_plugin_leaves_bound_does_not_redirect_the_capture(built):
-    """Review finding 5's guard: the fake leaves a framebuffer object, a
-    pixel-pack buffer and odd pack parameters bound after every present;
-    every slot must still hold the window's own clear colour."""
-    name = unique_name()
-    stream = F.FrameStream(name)
-    try:
-        stream.set_table([(0, 4)], rdram_bytes=8 << 20)
-        stream.set_want_frames(True)
-        stream.touch()
-        drive(built["host"], built["wrapper"], 5, name, "--dirty-gl")
-        slots, _ = stream.read_new(0)
-        assert [slot.seq for slot in slots] == [1, 2, 3, 4, 5]
-        for slot in slots:
-            frame = slot.seq - 1
-            centre = slot.pixels[24, 32]
-            assert tuple(int(channel) for channel in centre) == (frame, 2 * frame, 3 * frame)
-    finally:
-        stream.close()
-
-
-def test_the_source_stops_within_seconds_when_the_emulator_dies(built):
-    """Review finding 10: a plugin that dies with its header bits set must
-    not park the recorder. The host is killed mid-drive; the source's
-    on_stopped fires within a few seconds."""
-    import threading
-    import time
-
-    from sm64_events.memory.layout import layout_for
-    from sm64_events.replay.pluginsource import PluginVideoSource, table_for
-
-    name = unique_name()
-    stream = F.FrameStream(name)
-    layout = layout_for("us")
-    table = table_for(layout)                       # the host's fake RDRAM is 8 MB of zeros
-    stream.set_table([(offset, length) for _n, offset, length in table], rdram_bytes=8 << 20)
-    stopped = threading.Event()
-    delivered = []
-    source = PluginVideoSource(stream, table, layout)
-    source.start(lambda bgra, ts, stamp: delivered.append(stamp.frame), stopped.set)
-    host = subprocess.Popen([str(built["host"]), "--drive", str(built["wrapper"]), "100000",
-                             "--stream", name], env=QUIET, creationflags=_NO_WINDOW,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        deadline = time.monotonic() + 15
-        while not delivered and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert delivered, "no frame arrived from the host"
-        host.kill()
-        host.wait(timeout=10)
-        assert stopped.wait(timeout=4.0), "the source kept waiting on a dead plugin"
-    finally:
-        if host.poll() is None:
-            host.kill()
-        source.stop()
-        stream.close()

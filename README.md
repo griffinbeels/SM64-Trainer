@@ -71,11 +71,17 @@ installation opens its repair step directly. Only Project64 installation metadat
 is shared across checkouts; your practice data stays in its existing location.
 
 Installing Practice Replay adds a **capture layer** to Project64's plugin
-folder and selects it as the `Graphics Dll`. The wrapper forwards drawing to
-your existing graphics plugin and supplies replay pictures stamped with the
-game's frame counter and inputs. Install while Project64 is closed; open
-Usamune once afterward to check it. **Manage Practice Replay → Remove Practice
-Replay** restores the previous graphics selection, also with Project64 closed.
+folder and selects it as the `Graphics Dll`: the trainer's own renderer
+(`GLideN64_SM64Trainer.dll`, LINK's GLideN64 v4.2 with the capture hooks,
+GPL-2.0, credits in its About box) and the capture wrapper (`SM64 Trainer
+v1.0`) that loads it and supplies replay pictures stamped with the game's
+frame counter and inputs. Your existing graphics plugin stays in the folder
+untouched. Install while Project64 is closed; open Usamune once afterward to
+check it. **Manage Practice Replay → Remove Practice Replay** selects your
+previous graphics plugin again, also with Project64 closed.
+Practice tooling runs only on the Usamune practice ROM. Load vanilla SM64,
+another hack or another game for a real run and the same plugin draws as
+plain GLideN64, while the trainer neither tracks nor records.
 The trainer can still use desktop capture when you postpone installation.
 N64 setup currently explains that console tracking is in development.
 
@@ -169,10 +175,12 @@ it happens — and save the ones worth keeping, forever. Audio is captured from
 Project64 alone, so a Discord call, music or a video playing in the background
 never ends up in a clip you upload.
 
-Replay encoding checks for compatible NVIDIA, AMD or Intel hardware at startup,
-with CPU encoding as fallback. Hardware must pass a picture/timestamp check
-before it is selected. See [capture performance and GPU support](docs/replay-pipeline-cost.md)
-for the verification status and remaining transfer costs.
+Frame-exact replay, where every picture carries the input that drew it, needs
+an NVIDIA GPU: the trainer's graphics plugin captures inside Project64 and an
+NVENC encoder records the pictures ([how it works](docs/replay-gpu-runtime.md)).
+Until the plugin is set up, replays record the Project64 window without that
+input match, using NVIDIA, AMD or Intel hardware encoding when a startup check
+passes and the CPU otherwise.
 
 Mark an attempt as a PB to save its replay automatically. PB selection stays
 manual. Unsaved footage shares a modest storage budget and is discarded when

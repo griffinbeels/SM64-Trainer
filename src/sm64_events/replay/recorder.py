@@ -2,12 +2,13 @@
 capture sources -> video sink / SegmentWriter -> SegmentRing, status
 surface.
 
-Two video paths:
+The GPU route (replay/gpucapture.py) feeds its own paired sink and never
+calls _on_frame. The desktop grab has two video paths:
 - ffmpeg sink (PRIMARY when ffmpeg.exe is on PATH — main.py probes):
-  _on_frame applies queue/ledger selection, prepares accepted plugin pixels,
-  and submits owned BGRA. The sink muxes explicit timestamps into NUT;
-  the child handles compression and segmentation. Legacy CFR remains an
-  explicit configuration fallback, not the plugin picture feed.
+  _on_frame applies queue/ledger selection and submits the grab's BGRA.
+  The sink muxes explicit timestamps into NUT; the child handles
+  compression and segmentation. Legacy CFR remains an explicit
+  configuration fallback, not the picture feed.
 - in-process fallback: the CFR-conform path below feeds SegmentWriter.
 
 Threading: capture callbacks arrive on library threads (the video
@@ -52,24 +53,22 @@ from sm64_events.replay.clock import CaptureClock, qpc_100ns
 from sm64_events.replay.config import ReplayConfig
 from sm64_events.replay.encoder import SegmentWriter, pick_video_codec
 from sm64_events.replay.ledger import PictureLedger
-from sm64_events.replay.pixels import BgrPicture, as_bgra
+from sm64_events.replay.fragmentmedia import FragmentMedia
 from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.scratch import OwnedScratch
 from sm64_events.replay.window import WindowInfo
 
 log = logging.getLogger("sm64.replay")
 
-# Minimum idle threshold even when the padding window is tiny: prevents
-# pause/resume thrash (each cycle restarts the ffmpeg child).
+# Minimum inactivity threshold avoids rapid retention-mode changes at tiny pads.
 _IDLE_FLOOR_S = 3.0
 
 
 class VideoSource(Protocol):
-    """A camera. `on_frame(bgra, ts_100ns)` for a desktop grab the recorder
-    must place in game time itself; the capture layer's source
-    (replay/pluginsource.py) calls `on_frame(bgra, ts_100ns, stamp)` with the
-    game's own frame counter and pad for that picture, and carries
-    `frame_source = "plugin"` so status can say which camera is live."""
+    """A camera. The desktop grab calls `on_frame(bgra, ts_100ns)` and the
+    recorder places each grab in time itself. The GPU route
+    (replay/gpucapture.py) ignores `on_frame`, feeds its own sink, and
+    carries `frame_source = "plugin"` so status can say which camera is live."""
     def start(self, on_frame: Callable[..., None],
               on_stopped: Callable[[], None]) -> None: ...
     def stop(self) -> None: ...
@@ -89,6 +88,10 @@ def _sink_has_room(sink) -> bool:
 
 
 class ReplayRecorder:
+    # Capture gate (set_capture_gate): no gate until main.py installs one.
+    _capture_gate: Callable[[], bool] | None = None
+    _capture_gated = False
+
     def __init__(self, cfg: ReplayConfig,
                  window_finder: Callable[[str], WindowInfo | None],
                  video_factory: Callable[[WindowInfo], VideoSource],
@@ -98,14 +101,12 @@ class ReplayRecorder:
                  codec: str | None = None,
                  video_sink_factory=None,
                  recorder_lock_factory=acquire_recorder_lock,
-                 release_capture: Callable[[], None] | None = None,
                  scratch_protection: Callable[[], Iterable[Path]] | None = None):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
         # instance holding this lock actually captures; others run viewer-only.
         self._recorder_lock_factory = recorder_lock_factory
         self._rec_lock = None        # held handle while WE are the recorder
-        self._release_capture = release_capture
         self._capture_lock = threading.RLock()  # serialize attach vs teardown
         self._scratch_ready = False
         self._configure_scratch(cfg, scratch_protection)
@@ -147,13 +148,17 @@ class ReplayRecorder:
             free_bytes_fn=lambda: shutil.disk_usage(cfg.scratch_dir).free,
             on_evict=self.ledger.discard_segment,
             scratch_root=cfg.scratch_dir,
-            deletion_guard=self._scratch.deletion_guard)
+            deletion_guard=self._scratch.deletion_guard,
+            on_temp_evict=lambda *args: self.fragments.evicted(*args))
+        self.fragments = FragmentMedia(cfg.scratch_dir, self.ring, self.ledger,
+            idle_window=self._fragment_idle_window, discard=self._fragment_paused)
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._window_lost = threading.Event()
         self._thread: threading.Thread | None = None
         self._stopping: bool = False  # M2: prevents zombie _begin_capture post-stop
+        self._configure_recovery()
 
         # protected by _lock
         self._writer: SegmentWriter | None = None
@@ -172,12 +177,12 @@ class ReplayRecorder:
         # status fields (written under _lock or from attach thread only)
         self._recording: bool = False
         self._window_found: bool = False
+        self._capture_window: tuple[int, int] | None = None
         self._audio_mode: str = "none"
 
-        # idle gating: no player input for idle_after_s -> completed
-        # segments are DISCARDED instead of retained (_on_segment); the
-        # encoder keeps running so the timeline never breaks. First active
-        # tick resumes instantly. These are plain attrs flipped from the
+        # Automatic idle changes retention, not the paired capture lifetime.
+        # Shared fragments retain bounded pre-roll; legacy segments use their
+        # existing discard gate. These are plain attrs flipped from the
         # poll thread (resume) and attach thread (pause) — ref/bool/float
         # swaps are atomic in CPython, and both transitions are idempotent.
         self.set_idle_after(cfg.pre_pad_s + cfg.post_pad_s)
@@ -186,8 +191,20 @@ class ReplayRecorder:
         self._idle_since = None   # utc datetime while idle (the discard rule)
         self._idle_dropped = 0
         self._session_paused = False  # manual pause: outranks the input tap
+        self._session_paused_since = None
 
     # -- lifecycle -----------------------------------------------------------
+
+    def _configure_recovery(self) -> None:
+        self.maintain_history = lambda: None
+        self._capture_cleanup_failed = False
+        self._recovery_failures = 0
+        self._recovery_error = None
+        self._recovery_retry_at = 0.0
+        self._audio_error = None
+        self._audio_failures = 0
+        self._audio_retry_at = 0.0
+        self._audio_started_at = 0.0
 
     def start(self) -> None:
         """Start attach retries; only the recorder owner may reset scratch."""
@@ -214,6 +231,8 @@ class ReplayRecorder:
             self._thread.join(timeout=10)
             if self._thread.is_alive():
                 log.warning("replay attach thread did not stop within timeout")
+                self._recovery_error = "replay attach worker still owns cleanup"
+                return  # Keep its identity; start() cannot create a second owner.
             self._thread = None
         self._teardown_capture()
         if cleanup:
@@ -223,35 +242,72 @@ class ReplayRecorder:
 
     def _attach_loop(self) -> None:
         try:
-            self._run_attach_loop()
+            while not self._stop_event.is_set():
+                try:
+                    self._run_attach_loop()
+                except Exception as exc:
+                    # Discovery/maintenance can fail independently of capture.
+                    # Partial startup already retains and closes its own owners.
+                    delay = self._recovery_delay(str(exc))
+                    log.exception("replay attach failed; retrying in %.1fs", delay)
+                    self._stop_event.wait(delay)
         finally:
             self._teardown_capture()
 
+    def _recovery_delay(self, error):
+        self._recovery_failures = min(self._recovery_failures + 1, 32)
+        delay = min(30.0, 2 ** min(self._recovery_failures - 1, 5))
+        self._recovery_error = str(error)[:512]
+        self._recovery_retry_at = time.monotonic() + delay
+        return delay
+
     def _run_attach_loop(self) -> None:
         while not self._stop_event.is_set():
+            if self._capture_cleanup_failed:
+                # Retry the retained objects, not their constructors. The
+                # machine lease and scratch stay owned until each close passes.
+                self._teardown_capture()
+                if self._capture_cleanup_failed:
+                    delay = self._recovery_delay(self._recovery_error or "capture cleanup pending")
+                    self._stop_event.wait(delay)
+                    continue
             if self._rec_lock is not None and time.monotonic() >= self._next_storage_maintenance:
                 self._next_storage_maintenance = time.monotonic() + 1.0
-                self.ring.maintain()
+                with self._capture_lock:
+                    self.ring.maintain()
+                    self.fragments.maintain()
+                    self.maintain_history()
+                    # The GPU path never rotates a legacy segment, so its
+                    # picture rows sat in one open SQLite transaction until
+                    # the first eviction (round 48). Commit them here.
+                    self.ledger.flush()
             if self.ring.storage_pressure and self._recording:
                 log.warning("replay capture paused: disk free-space floor cannot be restored")
                 self._teardown_capture(keep_owner=True)
             win = self._window_finder(self._cfg.window_title)
             self._window_found = win is not None
+            win = self._gated(win)
+
+            identity = (win.pid, win.hwnd) if win is not None else None
+            if (self._window_lost.is_set()
+                    or (self._recording and identity != self._capture_window)):
+                # A fast process restart can replace the window before the old
+                # video source notices. Audio is process-bound: replace BOTH.
+                log.info("capture source ended or window changed; reconnecting")
+                self._teardown_capture()
 
             if (win is not None and not self._recording
                     and (not self.ring.storage_pressure or self._rec_lock is None)):
-                try:
-                    self._begin_capture(win)
-                except Exception:
-                    log.exception("begin_capture failed — will retry")
-                    self._teardown_capture()
+                self._begin_capture(win)
 
-            if self._window_lost.is_set():
-                self._window_lost.clear()
-                log.info("window lost — tearing down capture")
-                self._teardown_capture()
+            if self._recording:
+                self._maybe_recover_audio(win)
 
             self._maybe_idle_pause()
+            if not self._capture_cleanup_failed:
+                self._recovery_failures = 0
+                self._recovery_error = None
+                self._recovery_retry_at = 0.0
             self._stop_event.wait(self._cfg.attach_poll_s)
 
     # -- capture setup / teardown --------------------------------------------
@@ -265,6 +321,7 @@ class ReplayRecorder:
             # detached. Start a new owned lifetime instead of retaining ring
             # entries whose files and picture identities no longer exist.
             self._scratch_ready = False
+        self.fragments.reset()
         self.ledger.reset()
         # The machine-wide lock is already held. A viewer-only boot must
         # neither remove the owner's footage nor run this recorder's own
@@ -345,6 +402,7 @@ class ReplayRecorder:
                 return False
             self._scratch.resume_deletion()
             self.ring.clear()
+            self.fragments.reset()
             self.ledger.reset()
             self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
             self._scratch.prepare(self._protected_scratch())
@@ -370,7 +428,7 @@ class ReplayRecorder:
     def _start_capture(self, win: WindowInfo) -> None:
         # M2: bail immediately if stop() already ran — prevents a zombie begin
         # from racing ahead and resurrecting recording state post-stop.
-        if self._stopping:
+        if self._stopping or self._capture_cleanup_failed:
             return
 
         # Machine-wide single-recorder guard: if another tracker instance (a
@@ -408,12 +466,24 @@ class ReplayRecorder:
             self._last_frame = None
             self._last_index = -1
 
+        # Resolve capture first: GPU source owns a compressed-packet sink and
+        # must not also start the raw-picture FFmpeg pipeline.
+        video = self._video_factory(win)
+        with self._lock:
+            self._video_source = video
+        make_sink = getattr(video, "create_sink", None)
+
         # PRIMARY: one ffmpeg muxes video+audio on a single wall-clock (the AV
         # sink owns the timeline + audio sync). FALLBACK (no ffmpeg binary):
         # the in-process SegmentWriter — video plus the legacy count-based
         # audio sidecar, the only path that still has the old two-clock
         # behaviour, reached solely when no ffmpeg is present.
-        if self._video_sink_factory is not None:
+        if make_sink is not None:
+            self._video_sink = make_sink(self._cfg, clock, self.ledger,
+                                         self.fragments.create)
+            self.fragments.enabled = True
+            self._video_sink.start()
+        elif self._video_sink_factory is not None:
             # codec is supplied by main or picked on first owned capture:
             # the sink must encode with what THIS machine has, not with the
             # nvenc it used to hardcode — a non-NVIDIA machine's child died at
@@ -421,6 +491,8 @@ class ReplayRecorder:
             self._video_sink = self._video_sink_factory(self._cfg,
                                                         self._on_segment,
                                                         self._codec)
+            publish = getattr(self._video_sink, "publish_fragments", None)
+            self.fragments.enabled = bool(publish and publish(self.fragments.create))
             self._video_sink.on_fed = self._on_fed
             self._video_sink.start()
         else:
@@ -432,84 +504,147 @@ class ReplayRecorder:
         # Start video — on_stopped signals window loss back to attach loop.
         # Publish before start: it may enable capture then fail, or overlap
         # stop(). Teardown must own even that partially started source.
-        video = self._video_factory(win)
-        with self._lock:
-            self._video_source = video
         if self._stopping:
             return
         self._frame_source = getattr(video, "frame_source", "desktop")
         self._frame_source_note = getattr(video, "frame_source_note", None)
-        # Idle throttle: while the recorder is idle (AFK / manual pause) the
-        # capture source drops to a trickle grab rate — every segment is
-        # discarded anyway, so the dominant cost (the per-grab ~8 MB surface
-        # read+copy, ~2 GB/s at full rate) is pure waste. The ffmpeg feeder is
-        # untouched, so resume stays seamless (no child respawn hole).
+        # The paired source records through automatic idle. Explicit pause is
+        # a separate stop signal; legacy cameras keep their throttle policy.
         if hasattr(video, "set_idle_check"):
             video.set_idle_check(self.is_idle)
-        video.start(self._on_frame, self._window_lost.set)
-        if self._stopping:
+        if hasattr(video, "set_pause_check"):
+            video.set_pause_check(lambda: self._session_paused)
+        if not self._start_sources(win, clock, video, paired=make_sink is not None):
             return
-
-        self._start_audio(win, clock)
         self._last_player_active = time.monotonic()  # fresh grace period
         # Startup can overlap a pause/unpause before the source is published.
         # Reconcile its actual demand after publication, including resume.
         self._set_idle(self._session_paused)
+        self._capture_window = (win.pid, win.hwnd)
         self._recording = True
         log.info("capture started — window=%r audio=%s codec=%s",
                  win.title, self._audio_mode, self._codec)
 
-    def _start_audio(self, win: WindowInfo, clock: CaptureClock) -> None:
+    def _start_sources(self, win, clock, video, *, paired: bool) -> bool:
+        if paired:
+            # Cold audio initialization can block. Finish it before GPU demand
+            # starts its bounded handshake; the paired sink discards PCM until
+            # its media run opens. Source timestamps still own the media origin.
+            self._start_audio(win, clock)
+            if self._stopping:
+                return False
+            self._set_idle(self._session_paused)
+        video.start(self._on_frame, lambda: self._source_stopped(video))
+        if self._stopping:
+            return False
+
+        if not paired:
+            self._start_audio(win, clock)  # preserve the raw sink's legacy order
+        return not self._stopping
+
+    def _start_audio(self, win: WindowInfo, clock: CaptureClock, *, initializing=True) -> None:
+        started_at = time.monotonic()
         # Fallback-writer only: set its audio t0 BEFORE wiring any audio
         # callback so a PCM packet arriving between audio.start() and
         # start_audio() doesn't hit write_audio()'s "start_audio() not called"
         # guard. The AV sink needs none of this — ffmpeg stamps audio itself
         # by wall-clock, so there is no separate audio origin to reconcile (the
         # whole point: one clock, no two-stream A/V drift).
-        if self._writer is not None:
+        if initializing and self._writer is not None:
             with self._lock:
                 audio_t0 = clock.utc_of(qpc_100ns())
                 self._writer.start_audio(t0_utc=audio_t0)
             log.info("AV-SYNC audio_t0=%s (in-process fallback)",
                      audio_t0.isoformat())
 
-        # Audio fallback chain
-        audio: AudioSource | None = None
-        audio_mode = "none"
-        try:
-            audio = self._audio_factory(win.pid)
-            audio.start(self._on_pcm)
-            audio_mode = audio.mode
-        except Exception:
-            log.exception("primary audio source failed")
-            if audio is not None:
-                try:
-                    audio.stop()
-                except Exception:
-                    log.exception("partially started audio source stop failed")
-            if self._fallback_audio_factory is not None:
-                try:
-                    audio = self._fallback_audio_factory(win.pid)
-                    audio.start(self._on_pcm)
-                    audio_mode = audio.mode
-                except Exception:
-                    log.exception("fallback audio source also failed — video-only")
-                    if audio is not None:
-                        try:
-                            audio.stop()
-                        except Exception:
-                            log.exception("partially started fallback audio stop failed")
-                    audio = None
-                    audio_mode = "none"
-            else:
-                audio = None
-                audio_mode = "none"
-
-        # C1 continued: assign _audio_source immediately after its start()
-        # succeeds so teardown can reclaim it if anything after this raises.
+        # Own even a partially started source. A fallback is safe only after
+        # stop() succeeds; otherwise teardown must retain and retry that source.
         with self._lock:
-            self._audio_source = audio
+            if self._audio_source is not None:
+                raise RuntimeError("audio source is still owned")
+        audio_mode = "none"
+        for label, factory in (("primary", self._audio_factory),
+                               ("fallback", self._fallback_audio_factory)):
+            if self._stopping or factory is None:
+                break
+            audio = None
+            try:
+                audio = factory(win.pid)
+                with self._lock:
+                    self._audio_source = audio
+                audio.start(self._on_pcm)
+                audio_mode = audio.mode
+            except Exception as exc:
+                self._audio_error = f"{label} audio source failed: {exc}"[:512]
+                log.exception("%s audio source failed", label)
+                if audio is not None:
+                    try:
+                        audio.stop()
+                    except Exception as exc:
+                        raise RuntimeError(f"{label} audio cleanup failed; source remains owned") from exc
+                    with self._lock:
+                        self._audio_source = None
+            else:
+                break
+
+        with self._lock:
             self._audio_mode = audio_mode
+        if audio_mode == "none" and not self._stopping:
+            self._schedule_audio_retry(self._audio_error or "audio source unavailable")
+        elif audio_mode != "none":
+            self._audio_error = None
+            self._audio_retry_at = 0.0
+            self._audio_started_at = time.monotonic()
+        log.info("audio initialization finished: pid=%d mode=%s elapsed_s=%.3f",
+                 win.pid, audio_mode, time.monotonic() - started_at)
+
+    def _schedule_audio_retry(self, error) -> None:
+        self._audio_failures = min(self._audio_failures + 1, 32)
+        delay = min(30.0, 2 ** min(self._audio_failures - 1, 5))
+        self._audio_error = str(error)[:512]
+        self._audio_retry_at = time.monotonic() + delay
+        log.warning("%s; audio retry in %.1fs", self._audio_error, delay)
+
+    def _maybe_recover_audio(self, win) -> None:
+        # Discovery owns restart. Audio/device callbacks never block to heal a
+        # worker, and a replacement cannot overlap failed source disposal.
+        with self._capture_lock:
+            if (self._stopping or not self._recording or win is None
+                    or time.monotonic() < self._audio_retry_at):
+                return
+            audio = self._audio_source
+            if audio is not None:
+                check = getattr(audio, "check_health", None)
+                if check is None:
+                    return  # Third-party/injected legacy sources retain their contract.
+                try:
+                    check()
+                except Exception as exc:  # noqa: BLE001 - arbitrary source health callbacks report through owned recovery.
+                    self._schedule_audio_retry(exc)
+                    self._audio_mode = "none"
+                    try:
+                        audio.stop()
+                    except Exception:
+                        self._teardown_capture()  # Retains any owner that cannot close.
+                        raise
+                    with self._lock:
+                        self._audio_source = None
+                    return
+                if time.monotonic() - self._audio_started_at >= 10.0:
+                    self._audio_failures = 0
+                return
+            if self._writer is not None:
+                # The legacy count-based PCM writer cannot represent a live
+                # audio gap. Retire its run instead of shifting old samples.
+                self._teardown_capture()
+                return
+            self._start_audio(win, self._clock, initializing=False)
+
+    def _source_stopped(self, source: VideoSource) -> None:
+        with self._lock:
+            # Old source callbacks may arrive after a replacement has started.
+            if self._video_source is source:
+                self._window_lost.set()
 
     def _teardown_capture(self, *, keep_owner: bool = False) -> None:
         with self._capture_lock:
@@ -526,51 +661,43 @@ class ReplayRecorder:
     def _close_capture(self, *, keep_owner: bool = False) -> None:
         """Stop sources and close writer. Safe to call when already idle."""
         self._request_capture_stop()
-        sink = self._video_sink
-        self._video_sink = None
+        # Failed owners are separate from active callback routes. The fixed
+        # five keys retain actual objects for a later, explicit close attempt.
+        owners = dict(getattr(self, "_capture_retained", {}))
         with self._lock:
-            video = self._video_source
-            audio = self._audio_source
-            writer = self._writer
+            for name, owner in (("video", self._video_source), ("audio", self._audio_source),
+                                ("sink", self._video_sink), ("writer", self._writer),
+                                ("ledger", self.ledger)):
+                if owner is not None:
+                    owners[name] = owner
+            self._capture_retained = owners
             self._video_source = None
-            self._audio_source = None
+            self._window_lost.clear()
+            self._capture_window = None
             self._writer = None
             self._clock = None
 
-        closed = True
-        for src in (video, audio):
-            if src is not None:
-                try:
-                    src.stop()
-                except Exception:
-                    closed = False
-                    log.exception("error stopping source %r", src)
+        self._close_capture_owner(owners, "video", "stop")
+        self._close_capture_owner(owners, "audio", "stop")
+        if "audio" not in owners:
+            with self._lock:
+                self._audio_source = None
 
-        if sink is not None:
-            try:
-                sink.stop()  # sources are quiet before draining the encoder
-            except Exception:
-                closed = False
-                log.exception("ffmpeg sink stop failed")
+        # Stop-time PCM can reach the old sink until the source close attempts
+        # finish. Later callbacks must never feed a retained, failed output.
+        self._video_sink = None
+        self._close_capture_owner(owners, "sink", "stop")
+        self._close_capture_owner(owners, "writer", "close")
+        # An unjoined source/sink can still be filing captured rows or feeds.
+        # Detach takes SQLite's lock and would both defeat bounded teardown and
+        # close a database that the retained worker still owns. Keep dependencies
+        # until every producer proves it has finished.
+        if not any(name != "ledger" for name in owners):
+            self._close_capture_owner(owners, "ledger", "detach")
 
-        if writer is not None:
-            try:
-                writer.close()
-            except Exception:
-                closed = False
-                log.exception("error closing writer")
-
-        try:
-            self.ledger.detach()
-        except Exception:
-            closed = False
-            log.exception("picture archive close failed at capture teardown")
-
+        self._capture_closed = not owners
+        self._capture_cleanup_failed = not self._capture_closed
         self._recording = False
-        # Once a close failed, an idempotent second teardown cannot prove that
-        # the old producer actually stopped. Retain scratch for recovery.
-        if any(item is not None for item in (video, audio, sink, writer)):
-            self._capture_closed = closed
         self._idle = False
         self._idle_since = None
         if self._stopping and self._cleanup_on_stop and self._rec_lock is not None:
@@ -578,28 +705,56 @@ class ReplayRecorder:
         # Release the machine-wide recorder lock so another instance can take
         # over recording (e.g. PJ64 closed here, or this instance is shutting
         # down). Re-acquired on the next _begin_capture if we capture again.
-        if not keep_owner:
+        # Keep the machine lease until every retained owner proves quiet.
+        if not keep_owner and self._capture_closed:
             self._release_recorder()
         # _audio_mode intentionally kept as last-known value so status() can
         # report which mode was active even after stop; cleared only on
         # fresh _begin_capture (set to new mode) or explicit reset.
 
+    def _close_capture_owner(self, owners, name: str, method: str) -> None:
+        owner = owners.get(name)
+        if owner is None:
+            return
+        try:
+            getattr(owner, method)()
+        except Exception as exc:
+            self._recovery_error = f"capture {name} cleanup pending: {exc}"[:512]
+            log.exception("capture %s cleanup failed; owner retained", name)
+        else:
+            del owners[name]
+
+
     def _release_recorder(self) -> None:
         if self._rec_lock is not None:
             self._scratch.pause_deletion()
             try:
-                if self._release_capture is not None:
-                    self._release_capture()
+                self._rec_lock.close()
             except Exception:
-                log.exception("capture mapping release failed")
-            finally:
-                try:
-                    self._rec_lock.close()
-                except Exception:
-                    log.exception("recorder lock release failed")
+                self._capture_closed = False
+                self._capture_cleanup_failed = True
+                log.exception("capture ownership release failed; machine lease retained")
+            else:
                 self._rec_lock = None
 
-    # -- idle gating (no player input -> discard footage, don't retain) -------
+    def set_capture_gate(self, allowed: Callable[[], bool] | None) -> None:
+        """Capture only while `allowed()` holds: main.py passes the poller's
+        practice ROM state, so a real run on another ROM records nothing --
+        no GPU request, no desktop grab, no audio (his ruling, 2026-09-16)."""
+        self._capture_gate = allowed
+
+    def _gated(self, win):
+        gated = self._capture_gate is not None and not self._capture_gate()
+        if gated and not self._capture_gated:
+            log.info("replay capture off: the loaded ROM is not a practice ROM")
+        self._capture_gated = gated
+        if not gated:
+            return win
+        if self._recording:
+            self._teardown_capture(keep_owner=True)
+        return None
+
+    # -- automatic idle retention and explicit capture pause -----------------
 
     def set_idle_after(self, window_s: float) -> None:
         """The idle threshold tracks the user's padding window (pre+post):
@@ -610,10 +765,9 @@ class ReplayRecorder:
 
     def set_player_active(self) -> None:
         """Poll-thread tap (replay/activity.py): called on every tick where
-        the player is providing input. Resume happens HERE, instantly — the
-        next attempt's pre-pad starts at the first input. Pause lives in
-        the attach loop (2 s cadence; a couple of extra recorded idle
-        seconds is harmless)."""
+        the player is providing input. Preserve the already-recorded idle
+        tail here; starting a fresh recorder at this point loses the anchor.
+        Automatic idle detection runs in the attach loop (2 s cadence)."""
         if self._session_paused:
             return  # manual session pause outranks the input signal
         self._last_player_active = time.monotonic()
@@ -621,28 +775,50 @@ class ReplayRecorder:
             self._set_idle(False)
 
     def set_session_paused(self, paused: bool) -> None:
-        """Manual session pause (POST /api/pause via server/app.py): rides
-        the idle-discard machinery — the encoder timeline stays unbroken,
-        completed segments are dropped, the buffer gains nothing. Unlike
-        auto-idle, resume is NOT input-driven (the poller pauses too, so
-        the activity tap goes silent); unpausing restores recording
-        immediately and refreshes the activity clock so auto-idle doesn't
-        instantly re-trigger."""
+        """Explicit pause retires paired GPU capture, even if already idle.
+
+        It outranks input-driven resume. Unpause prepares a new GPU run and
+        refreshes the activity clock; automatic inactivity never does that.
+        """
+        if paused and not self._session_paused:
+            self._session_paused_since = datetime.now(timezone.utc)
+        elif not paused:
+            self._session_paused_since = None
         self._session_paused = paused
         if paused:
-            if not self._idle:
-                self._set_idle(True)
+            self._set_idle(True)
         else:
             self._last_player_active = time.monotonic()
-            if self._idle:
-                self._set_idle(False)
+            self._set_idle(False)
+
+    def _fragment_idle_window(self):
+        """One immutable retention snapshot; reading it never blocks polling."""
+        since = self._idle_since
+        return (since, self._cfg.pre_pad_s) if since is not None and not self._session_paused else None
+
+    def _fragment_paused(self, start):
+        # Legacy sinks keep producing while paused. Drop only extents born
+        # after the explicit pause, never the preceding automatic-idle tail.
+        since = self._session_paused_since
+        return since is not None and start >= since
 
     def is_idle(self) -> bool:
-        """True while footage is being discarded — auto-idle (AFK) OR manual
-        session pause (both set _idle). The capture source reads this to
-        throttle its grab rate; the gen-2 GC collector reads it to pick a
-        free moment to run (a stop-the-world pause is invisible while idle)."""
+        """Automatic inactivity or explicit pause; not proof capture stopped."""
         return self._idle
+
+    def can_collect(self) -> bool:
+        """Do not treat retained GPU lead-in as disposable GC time."""
+        if getattr(self, "_capture_retained", None):
+            return False
+        source = self._video_source
+        if source is None and not self._capture_closed:
+            return False
+        retired = getattr(source, "capture_retired", None)
+        if retired is not None:
+            return bool(retired())
+        if self._recording and self.fragments.enabled and not self._session_paused:
+            return False  # Legacy fragment sinks retain the same idle lead-in.
+        return not self._recording or self._idle
 
     def _maybe_idle_pause(self) -> None:
         if (self._recording and not self._idle
@@ -653,10 +829,10 @@ class ReplayRecorder:
     def _set_idle(self, idle: bool) -> None:
         self._idle = idle
         if idle:
-            self._idle_since = datetime.now(timezone.utc)
-            log.info("replay idle: no player input for %.0f s — new "
-                     "segments will be discarded until input",
-                     self.idle_after_s)
+            if self._idle_since is None:
+                self._idle_since = datetime.now(timezone.utc)
+            log.info("replay %s: %s", "paused" if self._session_paused else "idle",
+                     "capture pause requested" if self._session_paused else "retaining rolling lead-in")
         else:
             self._idle_since = None
             log.info("replay idle: input detected — buffer resumes "
@@ -693,23 +869,16 @@ class ReplayRecorder:
 
     # -- frame callback (library thread) -------------------------------------
 
-    def _observe_picture(self, bgra, tag, capture_ts, stamp) -> bool:
-        """One grab into the picture ledger. A picture from THE CAPTURE
-        LAYER carries its own stamp -- the game frame the plugin read
-        inside Project64 at the display list that drew it -- and that row
-        is what the frame map is made of. A grab with no stamp (the
-        desktop camera, before the layer publishes) is recorded by TIME
-        only: it names no frame, so the clip gets no map and the timeline
+    def _observe_picture(self, bgra, capture_ts) -> bool:
+        """One desktop grab into the picture ledger, recorded by TIME only:
+        a grab names no game frame, so the clip gets no map and the timeline
         says frame-exact capture is off rather than showing a guess."""
-        preparation = {"prepare": bgra.as_bgra} if isinstance(bgra, BgrPicture) else {}
-        if stamp is not None and tag is not None:
-            return self.ledger.observe(bgra, tag[1], tag[0], stamp.extras(), **preparation)
         if capture_ts is not None:
-            return self.ledger.observe(bgra, capture_ts, None, **preparation)
+            return self.ledger.observe(bgra, capture_ts, None)
         return False
 
     @measured("replay.on_frame", interval=True)
-    def _on_frame(self, bgra: np.ndarray | BgrPicture, ts_100ns: int, stamp=None) -> None:
+    def _on_frame(self, bgra: np.ndarray, ts_100ns: int) -> None:
         if self.ring.storage_pressure:
             self._grabs_skipped += 1
             return
@@ -720,25 +889,11 @@ class ReplayRecorder:
         # feeder. The in-process writer below is bypassed when it is present.
         sink = self._video_sink
         if sink is not None:
-            if not self._picture_feed:
-                # CFR submits every grab. Prepare before observing, including
-                # a folded grab, so allocation failure cannot alter its ledger.
-                bgra = as_bgra(bgra)
-            # Tag the picture AT CAPTURE (round 32 items 17 + 30): the RAM
-            # frame current right now (map v2's key) and this picture's own
-            # composition time -- WGC's SystemRelativeTime through the run's
-            # CaptureClock, not the moment this callback happened to run --
-            # which is what the frame map's present series keys on (v4).
-            # A picture from the CAPTURE LAYER (item 95) arrives with its
-            # own stamp -- the frame the game submitted it as, read inside
-            # the emulator -- so the frame clock is not consulted for it:
-            # the tag's frame IS the stamp's, and the row says `exact`.
-            tag = None
+            # Time the grab AT CAPTURE: its own composition time through the
+            # run's CaptureClock, not the moment this callback happened to run.
             clock = self._clock
             capture_ts = (clock.utc_of(ts_100ns).timestamp()
                           if clock is not None else None)
-            if stamp is not None and capture_ts is not None:
-                tag = (stamp.frame, capture_ts)
             if self._picture_feed and not _sink_has_room(sink):
                 # LOCKSTEP (item 88): no budget to encode this picture, so it
                 # is not recorded as captured either. The ledger keeps its
@@ -752,16 +907,15 @@ class ReplayRecorder:
             # The picture ledger notices each NEW picture among the grabs
             # (item 40) -- before submit so the sample reads the buffer this
             # callback was handed. observe() never raises.
-            new_picture = self._observe_picture(bgra, tag, capture_ts, stamp)
+            new_picture = self._observe_picture(bgra, capture_ts)
             if self._picture_feed:
                 # ONE frame per DISTINCT picture (item 38): a grab that
                 # changed nothing feeds nothing. The tag's second field is
                 # the row's own ts, which the feed log keys on.
                 if new_picture:
-                    sink.submit(as_bgra(bgra), tag if tag is not None
-                                else (None, capture_ts))
+                    sink.submit(bgra, (None, capture_ts))
                 return
-            sink.submit(as_bgra(bgra), tag)
+            sink.submit(bgra, None)
             return
         # M1: _last_frame and _last_index are written here only; WGC guarantees
         # a single callback thread, so they need no lock — if that ever changes,
@@ -776,9 +930,6 @@ class ReplayRecorder:
         # Drop backwards/duplicate (encoder will also guard, but be explicit)
         if target <= self._last_index:
             return
-
-        # Legacy writer also receives owned BGRA, prepared before any fills.
-        bgra = as_bgra(bgra)
 
         # Fill small delivery gaps (WGC sends frames only on change) by
         # re-encoding the last frame; beyond one segment's worth, stop
@@ -844,16 +995,42 @@ class ReplayRecorder:
 
     # -- status --------------------------------------------------------------
 
+    def perf_gauges(self) -> dict:
+        """Cached scalars only: never wait on media/storage from the poller loop.
+
+        Values are individually atomic, eventually consistent diagnostics;
+        the ordinary status API owns detailed locked coverage queries.
+        """
+        return {"ring_bytes": self.ring.total_bytes, "idle": self._idle,
+                "recording": self._recording_active(), "audio_mode": self._audio_mode}
+
+    def _recording_active(self):
+        return (self._recording and not self._stopping
+                and getattr(self._video_source, "recording_active", True))
+
     def status(self) -> dict:
         # M3: reads of _recording/_window_found/_audio_mode/_codec are unlocked;
         # CPython attribute reads are atomic, so these are stale-but-never-torn —
         # acceptable for a polling status surface.
-        cov = self.ring.coverage("video")
+        cov = self.fragments.coverage() if self.fragments.enabled else self.ring.coverage("video")
         return {
-            "recording": self._recording,
+            "recording": self._recording_active(),
             "window_found": self._window_found,
             "audio_mode": self._audio_mode,
+            "audio_health": {"error": self._audio_error,
+                             "retry_in_s": max(0.0, self._audio_retry_at - time.monotonic()),
+                             "failures": self._audio_failures},
+            "recovery": {
+                "state": ("cleanup_pending" if self._capture_cleanup_failed else
+                          "retrying" if self._recovery_error else "ready"),
+                "error": self._recovery_error,
+                "attempts": self._recovery_failures,
+                "retry_in_s": max(0.0, self._recovery_retry_at - time.monotonic()),
+                "attach_alive": self._thread is not None and self._thread.is_alive(),
+            },
             "encoder": self._codec,
+            "storage_backend": "fragments" if self.fragments.enabled else "segments",
+            "publication_error": getattr(self._video_sink, "publication_error", None),
             "buffer_start_utc": cov[0].isoformat() if cov else None,
             "buffer_end_utc": cov[1].isoformat() if cov else None,
             "disk_bytes": self.ring.total_bytes,
@@ -861,6 +1038,8 @@ class ReplayRecorder:
             "retention_s": self.ring.retention_s,
             "max_buffer_bytes": self.ring.max_bytes,
             "idle": self._idle,
+            # True while the loaded ROM is not a practice ROM (a real run).
+            "capture_gated": self._capture_gated,
             # A degraded capture is a NUMBER, not a thinner-looking clip:
             # grabs the sink had no budget for (so the ledger never recorded
             # them either) and how deep its queue is right now.

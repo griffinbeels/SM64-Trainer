@@ -484,7 +484,9 @@ def time_corrections(events) -> dict[int, dict]:
     out: dict[int, dict] = {}
     last_grab = None
     for ev in events:
-        if ev.type == "star_collected":
+        if ev.type == "tracking_gap":
+            last_grab = None
+        elif ev.type == "star_collected":
             last_grab = ev
         elif ev.type == "star_time_corrected" and last_grab is not None:
             if all(ev.payload.get(k) == last_grab.payload.get(k)
@@ -538,7 +540,9 @@ def warp_destinations(events) -> dict[int, int]:
     out: dict[int, int] = {}
     pending: list = []
     for ev in events:
-        if ev.type == "warp_entered":
+        if ev.type == "tracking_gap":
+            pending.clear()
+        elif ev.type == "warp_entered":
             if "to" not in ev.payload:
                 pending.append(ev)
         elif ev.type == "level_changed":
@@ -1005,7 +1009,16 @@ class Projector:
     def active_run_view(self):
         return self._runs.active_run_view()
 
+    def oldest_open_utc(self):
+        """Earliest live span that replay retention must not cut through."""
+        starts = (self._open.wall_time_utc if self._open else None,
+                  self._segments.oldest_open_utc(), self._runs.oldest_open_utc())
+        return min((start for start in starts if start is not None), default=None)
+
     def feed(self, ev) -> list[Attempt]:
+        if ev.type == "tracking_gap":
+            self._capture_gap(ev)
+            return []
         if ev.type == IMPORT_EVENT:
             # A time he BROUGHT rather than played (tracking/importing.py).
             # Returned before anything below runs, deliberately: it is a
@@ -1013,6 +1026,53 @@ class Projector:
             # close the run he has open, move the target, touch strategy
             # memory or count as a grab — nothing happened in the game.
             return [self._imported_attempt(ev)]
+        ev = self._corrected_event(ev)
+        prev_level = self._level  # _dispatch may move it (level_changed)
+        self._pending_target_retire = None   # transient, one event only
+        self._pending_grab_take = None       # transient, one event only
+        closed = self._dispatch(ev)
+        self._remember_event(ev, closed)
+        ctx = self._match_context(prev_level)
+        seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
+        self._retire_pending_target()
+        head_popped, hidden_exit_ids = self._apply_segment_closures(ev, seg_closed, closed)
+        self._suspend_star_for_segment()
+        self._queue_new_hooks()
+        self._settle_segment_target(ev, head_popped)
+        # Run engine sees the same event + the attempts just closed (star AND
+        # segment successes/failures); it owns the run lifecycle independently.
+        # ctx is the same MatchContext already built for the segment engine.
+        # Every physical closure reaches the run tracker, a hidden exit-star
+        # row included (`hidden_exit_ids`); only what is RECORDED omits it.
+        self._runs.feed(ev, closed, ctx)
+        self.run_notices = self._runs.run_notices
+        if ev.type in BOUNDARY_EVENT_TYPES:
+            self._rollouts_total = self._rollouts_dustless = 0
+            self._jumps_total = self._jumps_dustless = 0
+        if hidden_exit_ids:
+            return [row for row in closed if row.id not in hidden_exit_ids]
+        return closed
+
+    def _capture_gap(self, ev) -> None:
+        # An observed loss of tracking is neither a game reset nor a
+        # played failure. Keep history/preferences; drop uncertain spans.
+        self._open = None
+        self._open_acted = self._open_castle = False
+        self._open_carried_igt = 0
+        self._rollouts_total = self._rollouts_dustless = 0
+        self._jumps_total = self._jumps_dustless = 0
+        self._level = self._area = self._num_stars = None
+        self._last_star_grabbed = self._last_star_attempted = None
+        self.target = self._picked_target = self._suspended_star = None
+        self._target_hooked = False
+        self._target_queue.clear()
+        self._hook_level = self._hook_area = self._hook_alive_frame = None
+        self._pending_target_retire = self._pending_grab_take = None
+        _, self.segment_notices = self._segments.feed(ev, None)
+        self._runs.feed(ev, [], None)
+        self.run_notices = []
+
+    def _corrected_event(self, ev):
         # Usamune's late correction, folded into the grab it revises before
         # anyone reads it (caveat 19). Here rather than at the three payload
         # readers downstream, so no reader can be the one that forgets.
@@ -1029,17 +1089,9 @@ class Projector:
             recovered = self._warp_destinations.get(ev.id)
             if recovered is not None:
                 ev = _CorrectedRow(ev, {**ev.payload, "to": recovered})
-        prev_level = self._level  # _dispatch may move it (level_changed)
-        self._pending_target_retire = None   # transient, one event only
-        self._pending_grab_take = None       # transient, one event only
-        # Snapshotted BEFORE _dispatch (which runs _close_by_grab for a
-        # star_collected event) so the grab-steals-the-target restore below
-        # can tell "this segment was already my pinned, running focus" from
-        # "I just now grabbed a star with nothing else going on" — see that
-        # restore's own comment for the bug it exists for.
-        target_before = self.target
-        armed_before = self.armed_segment_ids()
-        closed = self._dispatch(ev)
+        return ev
+
+    def _remember_event(self, ev, closed) -> None:
         for a in closed:
             if a.segment_id is None and a.course_id is not None:
                 self._last_star_attempted = (a.course_id, a.star_id)
@@ -1067,6 +1119,8 @@ class Projector:
             ids = ev.payload.get("segment_ids") or []
             self._route_segments = frozenset(ids) if ids else None
             self._active_route_id = ev.payload.get("route_id")
+
+    def _match_context(self, prev_level) -> MatchContext:
         # A segment target (set via target_set or a segment success) is ALSO
         # in-route by definition — practicing a segment directly must arm it
         # even when no route_selected has fired (or a different route is
@@ -1074,7 +1128,7 @@ class Projector:
         # target.
         target_seg = (self.target[1] if self.target
                       and self.target[0] == "segment" else None)
-        ctx = MatchContext(level=self._level, prev_level=prev_level,
+        return MatchContext(level=self._level, prev_level=prev_level,
                            num_stars=self._num_stars, area=self._area,
                            last_star_grabbed=self._last_star_grabbed,
                            last_star_attempted=self._last_star_attempted,
@@ -1082,7 +1136,8 @@ class Projector:
                            target_segment=target_seg,
                            landmark_names=(self._landmark_names()
                                            if self._landmark_names else None))
-        seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
+
+    def _retire_pending_target(self) -> None:
         # The origin rule's verdict, applied now that the matcher has had this
         # event (see _dispatch's level_changed branch for the whole argument).
         # Still armed = has not deviated = keeps the pick; disarmed on this
@@ -1096,6 +1151,8 @@ class Projector:
                 and self._pending_target_retire not in self.armed_segment_ids()):
             self.target = None
         self._pending_target_retire = None
+
+    def _apply_segment_closures(self, ev, seg_closed, closed):
         # Whose slot is it before this event finishes anything? The auto-follow
         # below reads these; the reasoning is at its own branch.
         held_pick = (self.target[1] if self.target
@@ -1157,76 +1214,7 @@ class Projector:
                 # caveat 15's star-side bookkeeping above), so nothing to
                 # update on the way out.
                 continue
-            if hc is not None:
-                # A segment's own igt_frames is always None -- segments are
-                # RTA-only by design (views.py: "segments have no igt
-                # clock"). A reattributed attempt IS a star now, and stars
-                # display/grade on IGT (his clock: Usamune IGT) -- without
-                # this it renders with no time at all and cannot be graded
-                # (live report: WF exit-star grab closed BOTH this attempt
-                # and the ordinary star_id 3 one on the SAME event, and only
-                # the star_id 3 row carried the real igt_frames the game
-                # reported). The closing event's own payload is the
-                # authoritative source -- exactly what _close_by_grab/
-                # _close_by_death already read for an ordinary star, never a
-                # value derived from rta_frames (a frame-delta, not the
-                # Usamune IGT this project's own rule requires). Not every
-                # closing event type carries the key (game_reset closures
-                # pass igt_frames=None even on the star side, caveat
-                # unaffected) -- .get() falls through to None exactly as the
-                # star path already does for those.
-                # `timed_by` follows the time it describes, and this row's time
-                # just changed source: a star displays/grades on igt_frames, so
-                # whatever _close decided about the discarded rta_frames says
-                # nothing about it. Reset rather than inherited -- a delta-timed
-                # segment closure that reattributes here would otherwise carry a
-                # "not comparable" mark onto a number that IS Usamune's IGT.
-                # `timed_at` follows the same reasoning as `timed_by` right
-                # above: this row IS a star now and its time came out of the
-                # closing event's payload, so it takes that event's own
-                # answer about WHICH MOMENT -- and None whenever the closure
-                # was not a star grab, where the question does not arise.
-                a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None,
-                            igt_frames=ev.payload.get("igt_frames"),
-                            timed_by="igt",
-                            timed_at=(ev.payload.get("igt_timed_at")
-                                      if ev.type == "star_collected" else None),
-                            platform=platform_from_payload(ev.payload))
-                # WHICH EXIT STAR ended the run is a fact the closing event
-                # carries, and it decides which of the 100-coin star's ladders
-                # this time is graded against (spec 2026-08-03-hundred-coin-
-                # exit-variants). The sub-strategy inside that variant stays
-                # the user's, so the resolver moves variant and keeps the leaf.
-                # A FAILED run has no exit star and therefore no answer — it
-                # keeps whatever was remembered, which for an unlabelled
-                # historical row means it stays unlabelled and prunable.
-                remembered = self.strat_by_star.get(hc)
-                derived = None
-                if self._hundred_coin_strat is not None:
-                    derived = self._hundred_coin_strat(
-                        hc,                       # the ENTITY, not its parts
-                        (ev.payload.get("star_id")
-                         if ev.type == "star_collected" else None),
-                        remembered)
-                a = replace(a,
-                            strat_tag=self._strat_overrides.get(
-                                a.id, derived if derived is not None
-                                else remembered),
-                            cleared=a.id in self._cleared,
-                            cleared_reason=self._cleared.get(a.id))
-                # The card follows the run: the variant you actually ended on
-                # becomes the selected one, so the next attempt starts where
-                # this one finished rather than on the ladder you did not run.
-                if derived is not None and not a.cleared:
-                    self.strat_by_star[hc] = derived
-            else:
-                # same first-event-id cleared keying as _build (caveat 2/11)
-                a = replace(a,
-                            strat_tag=self._strat_overrides.get(
-                                a.id, self.strat_by_segment.get(a.segment_id)),
-                            cleared=a.id in self._cleared,
-                            cleared_reason=self._cleared.get(a.id))
-            a = self._auto_ignored(a)
+            a = self._stamp_segment_attempt(ev, a, hc)
             if (hc is not None and a.outcome == "success"
                     and ev.type == "star_collected"
                     and ev.payload.get("star_id") != hc[1]):
@@ -1261,63 +1249,145 @@ class Projector:
                 self._last_star_attempted = hc
                 if a.outcome == "success":
                     self._last_star_grabbed = hc
-            if a.outcome == "success" and not a.cleared:
-                # A segment that COMPLETES by entering a star stage (the
-                # closing event is a level_changed into a course-bearing level)
-                # drops us into that stage with NO star picked yet, so there is
-                # no active focus at all — clear the target rather than follow
-                # onto the just-finished segment (MIPS ends by entering DDD;
-                # LBLJ by entering BITDW — 2026-06-12). Completions that do NOT
-                # enter a stage (a star grab, a mid-course end, an exit to the
-                # hub) still auto-follow onto the segment — or, for a
-                # reattributed HUNDRED_COIN_EXIT closure, onto the star it now
-                # IS, exactly as a plain star grab auto-follows.
-                entered_stage = (ev.type == "level_changed"
-                                 and course_for_level(ev.payload["to"]) is not None)
-                # A convenience default may FILL an empty hand; it may not take
-                # something out of one (his rule, and the one `handIsEmpty`
-                # already states on the client). One event can close SEVERAL
-                # attempts — the DDD portal touch closes MIPS Clip and
-                # HMC -> DDD together — and this assignment used to run once
-                # per closure, so whichever happened to close LAST took the
-                # slot away from the segment he had picked and was practising:
-                # *"It seems like we somehow deselect MIPS and then trigger a
-                # different split?? All i know is that MIPs should remain
-                # selected because that's what I'm practicing!"* (2026-08-05,
-                # measured by replaying his journal — target moved
-                # `MIPS Clip` -> `HMC -> DDD` on the touch).
-                #
-                # ROUND 19 generalizes that from "his pick wins when it also
-                # closed" to "a held segment head is NEVER stolen by a
-                # neighbouring closure" — FIFO: whatever hooked first keeps
-                # the slot. Only the head's OWN completion moves it: a
-                # picked head keeps the retry loop (or clears into the stage
-                # it just entered, as always), a hooked one pops for the
-                # next detection in line (at the hold check below).
-                if held_pick is not None:
-                    if raw_segment_id == held_pick:
-                        if head_was_hooked:
-                            head_popped = True
-                        elif entered_stage:
-                            self.target = None
-                else:
-                    # An empty hand — or a star target, which the auto-follow
-                    # has always moved — fills exactly as before the queue.
-                    # A SUBSECTION's success follows onto its PARENT, never
-                    # onto itself (round 21: "the main star that they're a
-                    # part of should be the priority", and item 1's "swap to
-                    # the correct list... showing a different star + its
-                    # subsections") — the completed piece's family takes the
-                    # row with the STAR active, and the piece's entry still
-                    # records underneath it.
-                    self._target_hooked = False
-                    if hc is not None:
-                        self.target = None if entered_stage else ("star", *hc)
-                    else:
-                        self.target = (None if entered_stage
-                                       else self._follow_target(a.segment_id))
-                self._suspended_star = None  # finished a segment: moved on (caveat 13)
+            head_popped = self._follow_segment_completion(
+                ev, a, hc, raw_segment_id, held_pick, head_was_hooked) or head_popped
             closed.append(a)
+        return head_popped, hidden_exit_ids
+
+    def _stamp_segment_attempt(self, ev, a, hc) -> Attempt:
+        if hc is not None:
+            # A segment's own igt_frames is always None -- segments are
+            # RTA-only by design (views.py: "segments have no igt
+            # clock"). A reattributed attempt IS a star now, and stars
+            # display/grade on IGT (his clock: Usamune IGT) -- without
+            # this it renders with no time at all and cannot be graded
+            # (live report: WF exit-star grab closed BOTH this attempt
+            # and the ordinary star_id 3 one on the SAME event, and only
+            # the star_id 3 row carried the real igt_frames the game
+            # reported). The closing event's own payload is the
+            # authoritative source -- exactly what _close_by_grab/
+            # _close_by_death already read for an ordinary star, never a
+            # value derived from rta_frames (a frame-delta, not the
+            # Usamune IGT this project's own rule requires). Not every
+            # closing event type carries the key (game_reset closures
+            # pass igt_frames=None even on the star side, caveat
+            # unaffected) -- .get() falls through to None exactly as the
+            # star path already does for those.
+            # `timed_by` follows the time it describes, and this row's time
+            # just changed source: a star displays/grades on igt_frames, so
+            # whatever _close decided about the discarded rta_frames says
+            # nothing about it. Reset rather than inherited -- a delta-timed
+            # segment closure that reattributes here would otherwise carry a
+            # "not comparable" mark onto a number that IS Usamune's IGT.
+            # `timed_at` follows the same reasoning as `timed_by` right
+            # above: this row IS a star now and its time came out of the
+            # closing event's payload, so it takes that event's own
+            # answer about WHICH MOMENT -- and None whenever the closure
+            # was not a star grab, where the question does not arise.
+            a = replace(a, course_id=hc[0], star_id=hc[1], segment_id=None,
+                        igt_frames=ev.payload.get("igt_frames"),
+                        timed_by="igt",
+                        timed_at=(ev.payload.get("igt_timed_at")
+                                  if ev.type == "star_collected" else None),
+                        platform=platform_from_payload(ev.payload))
+            # WHICH EXIT STAR ended the run is a fact the closing event
+            # carries, and it decides which of the 100-coin star's ladders
+            # this time is graded against (spec 2026-08-03-hundred-coin-
+            # exit-variants). The sub-strategy inside that variant stays
+            # the user's, so the resolver moves variant and keeps the leaf.
+            # A FAILED run has no exit star and therefore no answer — it
+            # keeps whatever was remembered, which for an unlabelled
+            # historical row means it stays unlabelled and prunable.
+            remembered = self.strat_by_star.get(hc)
+            derived = None
+            if self._hundred_coin_strat is not None:
+                derived = self._hundred_coin_strat(
+                    hc,                       # the ENTITY, not its parts
+                    (ev.payload.get("star_id")
+                     if ev.type == "star_collected" else None),
+                    remembered)
+            a = replace(a,
+                        strat_tag=self._strat_overrides.get(
+                            a.id, derived if derived is not None
+                            else remembered),
+                        cleared=a.id in self._cleared,
+                        cleared_reason=self._cleared.get(a.id))
+            # The card follows the run: the variant you actually ended on
+            # becomes the selected one, so the next attempt starts where
+            # this one finished rather than on the ladder you did not run.
+            if derived is not None and not a.cleared:
+                self.strat_by_star[hc] = derived
+        else:
+            # same first-event-id cleared keying as _build (caveat 2/11)
+            a = replace(a,
+                        strat_tag=self._strat_overrides.get(
+                            a.id, self.strat_by_segment.get(a.segment_id)),
+                        cleared=a.id in self._cleared,
+                        cleared_reason=self._cleared.get(a.id))
+        a = self._auto_ignored(a)
+        return a
+
+    def _follow_segment_completion(self, ev, a, hc, raw_segment_id, held_pick, head_was_hooked) -> bool:
+        head_popped = False
+        if a.outcome == "success" and not a.cleared:
+            # A segment that COMPLETES by entering a star stage (the
+            # closing event is a level_changed into a course-bearing level)
+            # drops us into that stage with NO star picked yet, so there is
+            # no active focus at all — clear the target rather than follow
+            # onto the just-finished segment (MIPS ends by entering DDD;
+            # LBLJ by entering BITDW — 2026-06-12). Completions that do NOT
+            # enter a stage (a star grab, a mid-course end, an exit to the
+            # hub) still auto-follow onto the segment — or, for a
+            # reattributed HUNDRED_COIN_EXIT closure, onto the star it now
+            # IS, exactly as a plain star grab auto-follows.
+            entered_stage = (ev.type == "level_changed"
+                             and course_for_level(ev.payload["to"]) is not None)
+            # A convenience default may FILL an empty hand; it may not take
+            # something out of one (his rule, and the one `handIsEmpty`
+            # already states on the client). One event can close SEVERAL
+            # attempts — the DDD portal touch closes MIPS Clip and
+            # HMC -> DDD together — and this assignment used to run once
+            # per closure, so whichever happened to close LAST took the
+            # slot away from the segment he had picked and was practising:
+            # *"It seems like we somehow deselect MIPS and then trigger a
+            # different split?? All i know is that MIPs should remain
+            # selected because that's what I'm practicing!"* (2026-08-05,
+            # measured by replaying his journal — target moved
+            # `MIPS Clip` -> `HMC -> DDD` on the touch).
+            #
+            # ROUND 19 generalizes that from "his pick wins when it also
+            # closed" to "a held segment head is NEVER stolen by a
+            # neighbouring closure" — FIFO: whatever hooked first keeps
+            # the slot. Only the head's OWN completion moves it: a
+            # picked head keeps the retry loop (or clears into the stage
+            # it just entered, as always), a hooked one pops for the
+            # next detection in line (at the hold check below).
+            if held_pick is not None:
+                if raw_segment_id == held_pick:
+                    if head_was_hooked:
+                        head_popped = True
+                    elif entered_stage:
+                        self.target = None
+            else:
+                # An empty hand — or a star target, which the auto-follow
+                # has always moved — fills exactly as before the queue.
+                # A SUBSECTION's success follows onto its PARENT, never
+                # onto itself (round 21: "the main star that they're a
+                # part of should be the priority", and item 1's "swap to
+                # the correct list... showing a different star + its
+                # subsections") — the completed piece's family takes the
+                # row with the STAR active, and the piece's entry still
+                # records underneath it.
+                self._target_hooked = False
+                if hc is not None:
+                    self.target = None if entered_stage else ("star", *hc)
+                else:
+                    self.target = (None if entered_stage
+                                   else self._follow_target(a.segment_id))
+            self._suspended_star = None  # finished a segment: moved on (caveat 13)
+        return head_popped
+
+    def _suspend_star_for_segment(self) -> None:
         # Caveat 18's grab-steals-the-target restore USED to sit here, and
         # is gone because the steal it undid can no longer happen: since
         # 2026-08-01 `_close_by_grab` simply does not move a SEGMENT
@@ -1358,6 +1428,8 @@ class Projector:
                         for n in self.segment_notices):
             self._suspended_star = self.target[1:]  # resume on re-entry (caveat 13)
             self.target = None
+
+    def _queue_new_hooks(self) -> None:
         # THE TARGET QUEUE (round 19). Every DELIBERATE arm this event
         # produced lines up (segments.hooks_on_arm — a presence arm like
         # LBLJ's castle entry or a pipe family's course entry never does);
@@ -1411,6 +1483,8 @@ class Projector:
             hooking.append(sid)
         if len(hooking) == 1:
             self._target_queue.append(hooking[0])
+
+    def _settle_segment_target(self, ev, head_popped) -> None:
         self._hold_hooked_head(ev, head_popped)
         armed_now = self._segments.armed_ids()
         # The grab's deferred claim (see _close_by_grab): the hooked head it
@@ -1431,19 +1505,6 @@ class Projector:
                 and self._target_queue:
             self.target = None
             self._promote_or_neutral(ev.frame)
-        # Run engine sees the same event + the attempts just closed (star AND
-        # segment successes/failures); it owns the run lifecycle independently.
-        # ctx is the same MatchContext already built for the segment engine.
-        # Every physical closure reaches the run tracker, a hidden exit-star
-        # row included (`hidden_exit_ids`); only what is RECORDED omits it.
-        self._runs.feed(ev, closed, ctx)
-        self.run_notices = self._runs.run_notices
-        if ev.type in BOUNDARY_EVENT_TYPES:
-            self._rollouts_total = self._rollouts_dustless = 0
-            self._jumps_total = self._jumps_dustless = 0
-        if hidden_exit_ids:
-            return [row for row in closed if row.id not in hidden_exit_ids]
-        return closed
 
     def _dispatch(self, ev) -> list[Attempt]:
         if ev.type in ANCHOR_EVENT_TYPES:

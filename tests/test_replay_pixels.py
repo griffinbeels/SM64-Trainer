@@ -1,38 +1,14 @@
-"""Deferred plugin preparation must preserve the eager recorder's output."""
+"""The desktop grab's BGRA reaches the picture ledger and the sinks as handed
+over: recorded by time only, one row per distinct picture, in lockstep with
+the encoder's budget."""
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
 
-from sm64_events.replay import pixels as P
 from sm64_events.replay.clock import CaptureClock
-from sm64_events.replay.ledger import SAMPLE_STRIDE
 from test_replay_recorder import T0, FakeAvSink, make_recorder
-
-
-def eager(raw):
-    """Independent reference for the old callback's full BGRA picture."""
-    return np.concatenate((raw[::-1], np.full((*raw.shape[:2], 1), 255,
-                                            dtype=np.uint8)), axis=2)
-
-
-@pytest.mark.parametrize("height", [9, 10, 16, 17])
-@pytest.mark.parametrize("width", [1, 7, 17, 1190])
-def test_deferred_sample_matches_full_bgra_before_odd_edge_crop(height, width):
-    padded = np.random.default_rng(81).integers(0, 256, (height, width + 3, 3),
-                                              dtype=np.uint8)
-    raw = padded[:, :width]
-    captured = P.BgrPicture(raw)
-    expected = eager(raw)
-    assert captured.shape == expected.shape
-    assert captured.sample_bytes(SAMPLE_STRIDE) == expected[::SAMPLE_STRIDE, ::SAMPLE_STRIDE].tobytes()
-    actual = captured.as_bgra()
-    assert actual.flags.c_contiguous
-    np.testing.assert_array_equal(actual, expected)
-    padded.fill(0)
-    assert captured.as_bgra() is actual
-    np.testing.assert_array_equal(actual, expected)
 
 
 def recorder(tmp_path, *, picture_feed=True):
@@ -45,135 +21,57 @@ def recorder(tmp_path, *, picture_feed=True):
     return rec, sink
 
 
-def stamp(frame):
-    return SimpleNamespace(frame=frame, extras=lambda: {
-        "exact": True, "pad": [12, -34, 0x8000], "igt_overall": frame % 50})
+def grab(value):
+    return np.full((17, 17, 4), value, dtype=np.uint8)
 
 
 def rows(rec):
     return rec.ledger.rows_between(0, 1e12)
 
 
-def test_recorder_eager_and_deferred_match_across_rejects_resets_and_sources(tmp_path, monkeypatch):
-    baseline, old_sink = recorder(tmp_path / "old")
-    candidate, new_sink = recorder(tmp_path / "new")
-    raw_a = np.random.default_rng(6).integers(0, 256, (17, 17, 3), dtype=np.uint8)
-    raw_b, raw_c = raw_a ^ 7, raw_a ^ 31
-    alpha_changed = eager(raw_c)
-    alpha_changed[:, :, 3] = 127
-    # Clock ticks, game counter, pixels, capacity, stamped. Includes same-stamp
-    # folds, retry after queue refusal, counter reset, no stamp and source swap.
-    schedule = [
-        (0, 100, raw_a, True, True),
-        (330000, 101, raw_a, True, True),
-        (400000, 100, raw_b, False, True),
-        (50000, 100, raw_b, True, True),
-        (500000, 101, raw_b, True, True),
-        (510000, 102, raw_c, True, True),
-        (520000, 1, raw_a, True, True),
-        (860000, 2, raw_a, True, True),
-        (1200000, 3, raw_c, True, False),
-        (1540000, 4, eager(raw_c), True, False),
-        (1880000, 5, alpha_changed, True, False),
-        (2220000, 6, raw_c, True, True),
-        (2560000, 7, raw_c[:10, :7], True, True),
-    ]
-    convert = Mock(wraps=P.to_bgra_top_down)
-    monkeypatch.setattr(P, "to_bgra_top_down", convert)
-    accepted = []
-    for ticks, counter, raw, room, stamped in schedule:
-        old_sink.has_room = new_sink.has_room = lambda available=room: available
-        legacy = raw if raw.shape[2] == 4 else eager(raw)
-        deferred = raw if raw.shape[2] == 4 else P.BgrPicture(raw)
-        own_stamp = stamp(counter) if stamped else None
-        old_count, new_count = len(old_sink.frames), len(new_sink.frames)
-        before_converts = convert.call_count
-        baseline._on_frame(legacy, ticks, own_stamp)
-        candidate._on_frame(deferred, ticks, own_stamp)
-        added = len(old_sink.frames) - old_count
-        assert len(new_sink.frames) - new_count == added
-        accepted.append(bool(added))
-        assert convert.call_count - before_converts == (added if raw.shape[2] == 3 else 0)
-        if added:
-            np.testing.assert_array_equal(new_sink.frames[-1], old_sink.frames[-1])
-            assert new_sink.frames[-1].flags.c_contiguous
-            # Feed association must be unchanged, independently of conversion.
-            for rec, sink in [(baseline, old_sink), (candidate, new_sink)]:
-                rec._on_fed(sink.tags[-1], T0.timestamp() + ticks / 1e7, pts=ticks)
-        assert rows(candidate) == rows(baseline)
-    assert accepted == [True, False, False, False, False, True, True,
-                        False, True, False, True, True, True]
-    assert new_sink.tags == old_sink.tags
-    assert candidate.ledger.feeds_between(0, 1e12) == baseline.ledger.feeds_between(0, 1e12)
-    assert candidate._grabs_skipped == baseline._grabs_skipped == 1
-
-
-def test_failed_preparation_leaves_no_archive_row_and_allows_retry(tmp_path, monkeypatch):
+def test_picture_feed_files_distinct_grabs_by_time_and_waits_for_encoder_room(tmp_path):
     rec, sink = recorder(tmp_path)
-    rec.ledger.open_archive(tmp_path / "pictures.sqlite")
-    raw = np.zeros((17, 17, 3), dtype=np.uint8)
-    convert = Mock(side_effect=[MemoryError("allocation refused"), eager(raw)])
-    monkeypatch.setattr(P, "to_bgra_top_down", convert)
-    try:
-        rec._on_frame(P.BgrPicture(raw), 0, stamp(100))
-        assert rows(rec) == [] and sink.frames == []
-        rec._on_frame(P.BgrPicture(raw), 330000, stamp(100))
-        assert len(rows(rec)) == len(sink.frames) == 1
-        assert rows(rec)[0]["ts"] == T0.timestamp() + .033
-        assert convert.call_count == 2
-    finally:
-        rec.ledger.detach()
+    a, b = grab(1), grab(2)
+    # An unchanged grab feeds nothing; a grab with no encoder budget is
+    # neither recorded nor encoded, so the same picture lands on the retry.
+    for ticks, picture, room in [(0, a, True), (330000, a, True),
+                                 (660000, b, False), (990000, b, True)]:
+        sink.has_room = lambda available=room: available
+        rec._on_frame(picture, ticks)
+    recorded = rows(rec)
+    assert [row["frame"] for row in recorded] == [None, None]
+    assert recorded[0]["ts"] == pytest.approx(T0.timestamp())
+    assert recorded[1]["ts"] == pytest.approx(T0.timestamp() + .099)
+    assert len(sink.frames) == 2 and sink.frames[0] is a and sink.frames[1] is b
+    assert sink.tags == [(None, row["ts"]) for row in recorded]
+    assert rec._grabs_skipped == 1
 
 
-def test_missing_clock_does_not_prepare_or_record_picture(tmp_path, monkeypatch):
+def test_a_grab_without_a_capture_clock_is_neither_recorded_nor_encoded(tmp_path):
     rec, sink = recorder(tmp_path)
     rec._clock = None
-    convert = Mock(side_effect=AssertionError("unplaceable picture converted"))
-    monkeypatch.setattr(P, "to_bgra_top_down", convert)
-    rec._on_frame(P.BgrPicture(np.zeros((17, 17, 3), dtype=np.uint8)), 0, stamp(10))
-    assert not convert.called and rows(rec) == [] and sink.frames == []
+    rec._on_frame(grab(10), 0)
+    assert rows(rec) == [] and sink.frames == []
 
 
-def test_cfr_sink_receives_bgra_even_when_ledger_rejects(tmp_path, monkeypatch):
+def test_cfr_sink_receives_every_grab_while_the_ledger_keeps_one_row_per_picture(tmp_path):
     rec, sink = recorder(tmp_path, picture_feed=False)
-    raw = np.zeros((17, 17, 3), dtype=np.uint8)
-    convert = Mock(wraps=P.to_bgra_top_down)
-    monkeypatch.setattr(P, "to_bgra_top_down", convert)
+    picture = grab(0)
     for ticks in [0, 330000]:
-        rec._on_frame(P.BgrPicture(raw), ticks, stamp(1))
-    assert len(sink.frames) == convert.call_count == 2
+        rec._on_frame(picture, ticks)
+    assert len(sink.frames) == 2 and all(frame is picture for frame in sink.frames)
+    assert sink.tags == [None, None]
     assert len(rows(rec)) == 1
-    for frame in sink.frames:
-        np.testing.assert_array_equal(frame, eager(raw))
 
 
-def test_in_process_writer_retains_bgra_for_gap_fill_and_skips_duplicate_ticks(tmp_path, monkeypatch):
+def test_in_process_writer_fills_gaps_with_the_last_grab_and_skips_duplicate_ticks(tmp_path):
     rec, _ = recorder(tmp_path)
     rec._video_sink = None
     rec._writer = SimpleNamespace(write_video=Mock())
-    raw = np.zeros((17, 17, 3), dtype=np.uint8)
-    convert = Mock(wraps=P.to_bgra_top_down)
-    monkeypatch.setattr(P, "to_bgra_top_down", convert)
-    for ticks in [0, 0, 1000000]:
-        rec._on_frame(P.BgrPicture(raw), ticks, stamp(1))
+    first, second = grab(0), grab(255)
+    for picture, ticks in [(first, 0), (second, 0), (second, 1000000)]:
+        rec._on_frame(picture, ticks)
     calls = rec._writer.write_video.call_args_list
     assert [call.args[1] for call in calls] == [0, 1, 2, 3]
-    assert convert.call_count == 2
-    for call in calls:
-        np.testing.assert_array_equal(call.args[0], eager(raw))
-    assert calls[0].args[0] is calls[1].args[0] is calls[2].args[0]
-    assert rec._last_frame is calls[-1].args[0]
-
-
-def test_cfr_allocation_failure_cannot_commit_a_folded_sample(tmp_path, monkeypatch):
-    rec, sink = recorder(tmp_path, picture_feed=False)
-    first = np.zeros((17, 17, 3), dtype=np.uint8)
-    second = first ^ 255
-    convert = Mock(side_effect=[eager(first), MemoryError("allocation refused"), eager(second)])
-    monkeypatch.setattr(P, "to_bgra_top_down", convert)
-    rec._on_frame(P.BgrPicture(first), 0, stamp(100))
-    with pytest.raises(MemoryError):
-        rec._on_frame(P.BgrPicture(second), 50000, stamp(100))
-    rec._on_frame(P.BgrPicture(second), 330000, stamp(101))
-    assert [row["frame"] for row in rows(rec)] == [100, 101]
-    assert len(sink.frames) == 2
+    assert all(call.args[0] is first for call in calls[:3])
+    assert calls[3].args[0] is second and rec._last_frame is second

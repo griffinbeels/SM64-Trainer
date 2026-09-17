@@ -114,3 +114,45 @@ def test_detach_releases_file_handle_but_keeps_existing_footage_queryable(tmp_pa
     assert ledger.feeds_between(1000, 1010) == []
     assert not path.exists()
     ledger.reset()
+
+
+def test_native_identity_pruning_distinguishes_equal_timestamps(tmp_path):
+    ledger = PictureLedger()
+    path = tmp_path / 'native.sqlite3'
+    ledger.open_archive(path)
+    a, b = MediaRun('a', 1000), MediaRun('b', 1000)
+    for serial, run in [(1, a), (2, b)]:
+        source_id = f'producer:epoch:{serial}'
+        assert ledger.observe(np.full((1, 1, 4), serial, np.uint8), 1005, serial,
+                              {'source_id': source_id})
+        ledger.mark_fed(1005, 1005, media_run=run, pts=run.ticks_at(1005), source_id=source_id)
+    ledger.discard_segment(segment(tmp_path, a, 1000, 1010))
+    assert [row['source_id'] for row in ledger.rows_between(1005, 1005)] == ['producer:epoch:2']
+    ledger.mark_fed(None, 1020, media_run=b, pts=b.ticks_at(1020))
+    ledger.discard_segment(segment(tmp_path, b, 1000, 1010))
+    assert ledger.rows_between(1005, 1005)[0]['source_id'] == 'producer:epoch:2'
+    picture(ledger, b, 1030, 3)
+    ledger.discard_segment(segment(tmp_path, b, 1010, 1025))
+    assert ledger.rows_between(1005, 1005) == []
+    ledger.reset()
+
+
+def test_old_scratch_schema_is_migrated_without_erasing_identity(tmp_path):
+    import json
+    import sqlite3
+    from sm64_events.replay.picturearchive import PictureArchive
+    path = tmp_path / 'old.sqlite3'
+    with sqlite3.connect(path) as db:
+        db.executescript('CREATE TABLE pictures(ts REAL, data TEXT NOT NULL);'
+                         'CREATE TABLE feeds(at REAL, ts REAL, run TEXT, pts INTEGER, data TEXT NOT NULL);')
+        row = {'ts': 1000, 'frame': 4, 'source_id': 'producer:old:4'}
+        feed = {'at': 1000, 'ts': 1000, 'run_id': 'old', 'pts': 0, 'source_id': 'producer:old:4'}
+        db.execute('INSERT INTO pictures VALUES (?, ?)', (1000, json.dumps(row)))
+        db.execute('INSERT INTO feeds VALUES (?, ?, ?, ?, ?)', (1000, 1000, 'old', 0, json.dumps(feed)))
+    archive = PictureArchive(path)
+    assert archive.rows_between(999, 1001) == [row]
+    assert archive.feeds_between(999, 1001) == [feed]
+    assert archive._db.execute('SELECT native_id FROM pictures').fetchone() == ('producer:old:4',)
+    archive.discard_segment(segment(tmp_path, MediaRun('old', 1000), 1000, 1001))
+    assert archive.rows_between(999, 1001) == []
+    archive.close()

@@ -8,8 +8,10 @@ import statistics
 from pathlib import Path
 
 
-def distribution(values: list[float]) -> dict | None:
-    values = sorted(value for value in values if math.isfinite(value))
+def distribution(values: list[float | None]) -> dict | None:
+    # None is a counter the capture deliberately did not read (per-process
+    # threads cost a system-wide query on Windows): missing, never zero.
+    values = sorted(value for value in values if value is not None and math.isfinite(value))
     if not values:
         return None
     return {"count": len(values), "mean": statistics.fmean(values),
@@ -21,25 +23,6 @@ def counter_delta(values: list[float]) -> dict:
     resets = sum(b < a for a, b in zip(values, values[1:], strict=False))
     return {"delta": values[-1] - values[0] if len(values) > 1 and not resets else None,
             "resets": resets, "samples": len(values)}
-
-
-def graphics_summary(samples: list[dict], issues: list[str]) -> dict | None:
-    graphics = [s.get("replay", {}).get("frame_source_health", {}).get("graphics_profile")
-                for s in samples if isinstance(s.get("replay", {}).get("frame_source_health"), dict)]
-    available = [g for g in graphics if isinstance(g, dict)]
-    if not available:
-        return None
-    identities = {(g.get("plugin_pid"), g.get("generation"), g.get("producer_instance")) for g in available}
-    if len(identities) != 1:
-        issues.append("Native graphics profile generation changed")
-    final = available[-1]
-    for name in final.get("metrics", {}):
-        for field in ("count", "total_ms"):
-            values = [g.get("metrics", {}).get(name, {}).get(field) for g in available]
-            numeric = [value for value in values if isinstance(value, (int, float))]
-            if counter_delta(numeric)["resets"]:
-                issues.append(f"Native graphics stage {name} reset ({field})")
-    return final
 
 
 def profile_summary(meta: dict, samples: list[dict], issues: list[str]) -> tuple[dict, dict]:
@@ -137,7 +120,7 @@ def process_metrics(samples: list[dict], issues: list[str]) -> dict:
 def replay_metrics(samples: list[dict], issues: list[str]) -> dict:
     statuses = [sample.get("replay", {}) for sample in samples]
     counters = {}
-    for key in ("grabs_skipped", "delivered", "skipped", "undecodable", "dropped_by_plugin"):
+    for key in ("grabs_skipped", "delivered"):
         values = [status.get(key) if key == "grabs_skipped" else
                   (status.get("frame_source_health") or {}).get(key) for status in statuses]
         numeric = [value for value in values if isinstance(value, (int, float))]
@@ -174,16 +157,14 @@ def summarize(folder: Path) -> dict:
     stages, counters = profile_summary(meta, samples, issues)
     metrics = system_metrics(meta, samples, issues)
     processes = process_metrics(samples, issues)
-    graphics = graphics_summary(samples, issues)
     replay = replay_metrics(samples, issues)
     inputs = input_metrics(samples, issues)
     final = meta.get("final_profile", {})
     return {"metadata": meta, "valid": not issues, "issues": sorted(set(issues)),
             "metrics": metrics, "stages": stages, "counters": counters,
-            "processes": processes, "graphics": graphics, "gpu": None, "replay": replay, "inputs": inputs,
+            "processes": processes, "gpu": None, "replay": replay, "inputs": inputs,
             "histogram_definition": {key: final.get(key) for key in ("quantile_method", "buckets_ms")},
-            "coverage": {"native_graphics": graphics is not None,
-                         "input_counters": any(value is not None for value in inputs.values()),
+            "coverage": {"input_counters": any(value is not None for value in inputs.values()),
                          "wpr_gpu": "GPU" in meta.get("external_traces", {}).get("wpr_profiles", [])},
             "limitations": ["System sampling does not measure display frame time or GPU engine utilization.",
                             "Stage quantiles describe final cumulative histogram bounds; they are not averaged sample percentiles.",
@@ -200,8 +181,6 @@ def compare(before: dict, after: dict) -> dict:
         issues.append("Mismatched stage coverage")
     if set(before["counters"]) != set(after["counters"]):
         issues.append("Mismatched counter coverage")
-    if bool(before.get("graphics")) != bool(after.get("graphics")):
-        issues.append("Mismatched native graphics coverage")
     if before.get("histogram_definition") != after.get("histogram_definition"):
         issues.append("Mismatched backend histogram definition")
     if before.get("coverage") != after.get("coverage"):
@@ -229,12 +208,6 @@ def measurement_changes(before: dict, after: dict) -> dict:
                 if isinstance(old.get(key), (int, float)) and isinstance(new.get(key), (int, float)):
                     changes[f"{group}.{name}.{key}"] = {
                         "before": old[key], "after": new[key], "difference": new[key] - old[key]}
-    for name, old in (before.get("graphics") or {}).get("metrics", {}).items():
-        new = (after.get("graphics") or {}).get("metrics", {}).get(name, {})
-        for key in ("count", "mean_ms", "max_ms", "p50_upper_ms", "p95_upper_ms", "p99_upper_ms"):
-            if isinstance(old.get(key), (int, float)) and isinstance(new.get(key), (int, float)):
-                changes[f"graphics.{name}.{key}"] = {
-                    "before": old[key], "after": new[key], "difference": new[key] - old[key]}
     changes.update(replay_changes(before.get("replay", {}), after.get("replay", {})))
     for name, old in before.get("inputs", {}).items():
         new = after.get("inputs", {}).get(name)

@@ -148,6 +148,45 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
         assert page.problems() == []
 
 
+_UNFOCUSED = ("(() => { Object.defineProperty(document, 'hasFocus', {configurable: true, value: () => false});"
+              " window.dispatchEvent(new Event('blur')); return true; })()")
+_VISIBILITY = ("(() => {{ Object.defineProperty(document, 'visibilityState', {{configurable: true, get: () => {state!r}}});"
+               " document.dispatchEvent(new Event('visibilitychange')); return true; }})()")
+
+
+def test_confirmed_setup_continues_while_visible_and_waits_while_hidden(tmp_path):
+    """His report, 2026-09-17: the wizard sat on Setup checked instead of
+    continuing. He plays in Project64, so the trainer is on screen without
+    focus; the confirmation must still continue. A hidden trainer waits, so
+    the completion is never spent where nobody can see it."""
+    layer, observed = scenario()
+    connect(layer, observed)
+    with serve_ui(capture_layer_status=layer, setup_observer=lambda _: observed) as url, get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "platform")
+        page.click(".setup-platform-choice:first-child")
+        wait_page(page, "install")
+        wait_step(page, "close")
+        layer["pj64_running"] = False
+        wait_step(page, "install")
+        installed(layer)
+        click_text(page, "Install Practice Replay")
+        wait_step(page, "reopen")
+        layer["pj64_running"] = True  # he goes back to Project64: the trainer loses focus
+        observed["rom"] = dict(state="supported", region="us", name="SM64 USAMUNE v1.93u", warning=None)
+        wait_step(page, "verify")
+        assert page.evaluate(_UNFOCUSED)
+        assert page.evaluate(_VISIBILITY.format(state="hidden"))
+        observed["checks"] = dict(plugin=True, pictures=True, inputs=True, game=True)
+        wait_step(page, "ready")
+        page.wait_ms(2500)
+        assert page.count('.setup-modal[data-page="install"]') == 1  # hidden: waits
+        assert page.evaluate(_VISIBILITY.format(state="visible"))  # on screen, still unfocused
+        wait_page(page, "complete")
+        (tmp_path / "continued-while-unfocused.png").write_bytes(page.screenshot())
+        assert page.problems() == []
+
+
 def test_jp_finishes_available_setup_and_keeps_warning(tmp_path):
     layer, observed = scenario()
     connect(layer, observed)
@@ -309,20 +348,29 @@ def test_existing_install_rechecks_unresolved_emulator_before_step_three(tmp_pat
 
 
 def test_afk_recording_pause_keeps_setup_checked(tmp_path):
-    from dataclasses import asdict
+    """AFK revokes GPU demand (control PASSIVE, recorder idle): the GPU
+    observation's receipt keeps Setup checked while game and input movement
+    continue, and a dead layer still sends it back to checking."""
+    from dataclasses import asdict, replace
+    from sm64_events.replay import capturecontrol as C
     from test_onboarding import runtime, installed as runtime_layer
+    from test_setup_gpu import fixture
 
+    gpu, gpu_now, control, gpu_recorder, receipt = fixture()
     probe, now, target, inputs, recorder, memory, poller = runtime()
-    recorder["frame_source_health"]["plugin_pid"] = 123
+    recorder.clear()
+    recorder.update(gpu_recorder)
     layer = asdict(runtime_layer())
 
     def observe(status):
         now[0] += 5  # Every poll exceeds the picture freshness window.
+        gpu_now[0] = now[0]
         inputs["frames"] += 150
         poller.latest.global_timer += 150
         if not recorder.get("idle"):
-            recorder["frame_source_health"]["delivered"] += 150
-        return probe(status)
+            control[0] = replace(control[0], ack_heartbeat=control[0].ack_heartbeat + 1)
+            receipt["delivered"] += 150
+        return probe(replace(status, gpu_observation=gpu()))
 
     with serve_ui(capture_layer_status=layer, setup_observer=observe) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
@@ -330,7 +378,8 @@ def test_afk_recording_pause_keeps_setup_checked(tmp_path):
         page.evaluate(_SETUP_SETUP)
         wait_page(page, "install")
         wait_step(page, "ready")
-        recorder["idle"] = True
+        recorder["idle"] = gpu_recorder["idle"] = True
+        control[0] = replace(control[0], state=C.PASSIVE)
         page.wait_ms(4500)
         assert 'data-substep="ready"' in page.evaluate("document.querySelector('.setup-install').outerHTML")
         assert "Setup checked" in body(page)
@@ -398,4 +447,119 @@ def test_symbols_are_centered_and_footer_survives_text_growth(tmp_path, width):
         page.click('.setup-arrow[aria-label="Back"]')
         wait_page(page, "platform")
         assert all(max(c["dx"], c["dy"]) < .75 for c in symbol_centers(page))
+        assert page.problems() == []
+
+
+def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
+    """Exercise source rediscovery through the real installer and API, offline."""
+    import ui_fixture
+    from types import SimpleNamespace
+    from sm64_events.core.capturelayer import CaptureLayer, RENDERER_DLL, WRAPPER_DLL, WRAPPER_INI
+
+    folder = tmp_path / "PJ64"
+    plugin = folder / "Plugin"
+    plugin.mkdir(parents=True)
+    source = tmp_path / WRAPPER_DLL
+    expected = b"matching offline wrapper"
+    (plugin / WRAPPER_DLL).write_bytes(expected)
+    renderer = tmp_path / RENDERER_DLL
+    renderer.write_bytes(b"matching offline renderer")
+    (plugin / RENDERER_DLL).write_bytes(renderer.read_bytes())
+    (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_DLL}")
+    registry = SimpleNamespace(get=lambda key, name: WRAPPER_DLL if name == "Graphics Dll" else None)
+    processes = SimpleNamespace(pj64_image_path=lambda: str(folder / "Project64.exe"))
+    layer = CaptureLayer(registry, processes, tmp_path / "capture.json",
+                         lambda: source if source.is_file() else None,
+                         renderer_source=renderer)
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    observed = dict(target=dict(state="ready", pid=123),
+                    rom=dict(state="supported", region="us", name="SM64 USAMUNE v1.93u"),
+                    checks=dict(plugin=True, pictures=True, inputs=True, game=True))
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch() as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "install")
+        wait_step(page, "unavailable")
+        assert "Practice Replay unavailable" in body(page)
+        assert not layer.status().steps  # no fictitious update instructions
+        (tmp_path / "missing-bundle.png").write_bytes(page.screenshot())
+        source.write_bytes(expected)
+        wait_page(page, "complete")
+        assert "Practice Replay unavailable" not in body(page)
+        assert page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]["installation_verified"]
+        (tmp_path / "restored-bundle.png").write_bytes(page.screenshot())
+        assert page.problems() == []
+
+
+def _installed_renderer(tmp_path, plugin):
+    """The bundled renderer, installed beside the wrapper with the ini naming it."""
+    from sm64_events.core.capturelayer import RENDERER_DLL, WRAPPER_INI
+    renderer = tmp_path / RENDERER_DLL
+    renderer.write_bytes(b"this checkout's bundled renderer")
+    (plugin / RENDERER_DLL).write_bytes(renderer.read_bytes())
+    (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_DLL}")
+    return renderer
+
+
+@pytest.mark.parametrize("auto_refresh", [False, True])
+def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, monkeypatch, auto_refresh):
+    """Source and packaged servers preserve external copies until explicit Install."""
+    import ui_fixture
+    from test_capturelayer import FakeProcesses, FakeRegistry, write_overlay
+    from sm64_events.core.capturelayer import (
+        CaptureLayer, GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY, RENDERER_DLL, WRAPPER_DLL, WRAPPER_INI,
+    )
+
+    folder = tmp_path / "Project64 with a manually staged capture layer"
+    plugin = folder / "Plugin"
+    plugin.mkdir(parents=True)
+    source = tmp_path / WRAPPER_DLL
+    bundled, staged = b"this checkout's bundled wrapper", b"manually staged candidate wrapper"
+    source.write_bytes(bundled)
+    installed_dll = plugin / WRAPPER_DLL
+    installed_dll.write_bytes(staged)
+    renderer = _installed_renderer(tmp_path, plugin)
+    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): WRAPPER_DLL})
+    processes = FakeProcesses(str(folder / "Project64.exe"))
+    settings = tmp_path / "capture.json"
+    # Prior installation consent must not authorize a source checkout to replace
+    # a different candidate automatically when the emulator closes.
+    write_overlay(settings, consented_at="2026-09-01T00:00:00Z",
+                  pj64_dir=str(folder), wrapped=RENDERER_DLL, installed_sha256="0" * 64)
+    layer = CaptureLayer(registry, processes, settings, source, renderer_source=renderer,
+                         auto_refresh=auto_refresh)
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    observed = dict(target=dict(state="ready", pid=123),
+                    rom=dict(MISSING_ROM), checks={})
+
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "install")
+        wait_step(page, "close")
+        assert page.count(f"{CURRENT} .setup-install-action") == 0
+
+        processes.image_path = None
+        observed["target"] = dict(state="ready", pid=None)
+        assert layer.refresh_if_stale() is False
+        assert installed_dll.read_bytes() == staged
+        wait_step(page, "install")
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["wrapper_present"] and not state["wrapper_current"]
+        assert not state["installation_verified"]
+        action = next(step for step in state["steps"] if step["id"] == "install")
+        assert action["action"] == "install" and not action["done"]
+        assert "this build" in action["label"]
+        button = f"{CURRENT} .setup-install-action button"
+        page.wait_for(button)
+        assert page.evaluate(f"!document.querySelector({button!r}).disabled")
+        assert installed_dll.read_bytes() == staged
+        (tmp_path / "source-mismatch-explicit-install.png").write_bytes(page.screenshot())
+
+        page.click(button)
+        wait_step(page, "reopen")
+        assert installed_dll.read_bytes() == bundled
+        assert (plugin / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_DLL}"
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["installation_verified"] and state["wrapper_current"]
+        assert state["verification"]["step"] == "reopen"
+        (tmp_path / "source-build-explicitly-installed.png").write_bytes(page.screenshot())
         assert page.problems() == []

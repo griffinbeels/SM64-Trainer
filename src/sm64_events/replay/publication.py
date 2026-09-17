@@ -70,7 +70,7 @@ def resume(root: Path, attempt_id: int) -> Path | None:
     return _finish(root.resolve(), pending)
 
 
-def publish(root: Path, attempt_id: int, source: Path, destination: Path,
+def publish(root: Path, attempt_id: int, source, destination: Path,
             metadata: dict, review: dict, *, reserve_bytes: int = 5 * 1024**3) -> Path:
     """Publish one serialized Save/PB. Retry/recovery resumes a staged copy."""
     root = root.resolve()
@@ -85,19 +85,29 @@ def publish(root: Path, attempt_id: int, source: Path, destination: Path,
     atomic_json(pending / "metadata.json", metadata, allow_nan=True)
     atomic_json(pending / "review.json", {"version": 1, "state": review})
     atomic_json(pending / "intent.json", {"version": 1,
-        "destination": str(destination.relative_to(root)), "media_bytes": source.stat().st_size})
+        "destination": str(destination.relative_to(root)), "media_bytes": source.stat().st_size if isinstance(source, Path) else source.size})
     staged = pending / "media.mp4"
     if not staged.exists():
         try:
+            if not isinstance(source, Path):
+                raise OSError("fragment selection requires one permanent media write")
             os.link(source, staged)
         except OSError as error:
-            required = source.stat().st_size
+            required = source.stat().st_size if isinstance(source, Path) else source.size
             if shutil.disk_usage(pending).free - required < reserve_bytes:
                 raise OSError("Not enough free storage to save this replay; free space and retry Save replay.") from error
             copying = pending / "media.copying"
             try:
-                shutil.copyfile(source, copying)
-                with copying.open("rb") as stream:
+                if isinstance(source, Path):
+                    shutil.copyfile(source, copying)
+                else:
+                    from contextlib import closing
+                    with copying.open("wb") as target, closing(source.chunks()) as chunks:
+                        for chunk in chunks:
+                            target.write(chunk)
+                    if copying.stat().st_size != required:
+                        raise OSError("incomplete replay media publication")
+                with copying.open("r+b") as stream:
                     os.fsync(stream.fileno())
                 os.replace(copying, staged)
             finally:

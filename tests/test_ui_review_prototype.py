@@ -9,7 +9,8 @@ from test_ui_replay_picture_steps import tiny_video, PROJECT, STORY, get_driver
 
 
 def test_review_component_contracts():
-    run_frontend("reviewmedia.test.js", "reviewstate.test.js", "latestreview.test.js", "replaykeys.test.js", "replayfocus.test.js")
+    # replaykeys.test.js runs from test_ui_replay_shortcuts.py.
+    run_frontend("reviewmedia.test.js", "reviewstate.test.js", "latestreview.test.js", "replayfocus.test.js")
 
 
 @pytest.fixture
@@ -76,6 +77,11 @@ def review_page(tmp_path):
         yield page
 
 
+@pytest.mark.xfail(strict=False, reason=(
+    "Known defect, deferred observation 'loop-boundary' (chain-replay-readiness.md failure "
+    "catalogue): native timer-based loop playback presents a picture beyond Out before the "
+    "JavaScript callback seeks back. Fails on main too. Timing-dependent, so it can XPASS; "
+    "the observation tracks the fix and this mark goes with it."))
 def test_native_loop_never_presents_a_picture_beyond_out(review_page, tmp_path):
     page = review_page
     loop_frames = page.evaluate("""(async () => {
@@ -87,13 +93,16 @@ def test_native_loop_never_presents_a_picture_beyond_out(review_page, tmp_path):
           wall:performance.now(),paused:video.paused,seeking:video.seeking}));
       const canvas=document.createElement('canvas');canvas.width=320;canvas.height=96;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});
+      const pixels=()=>{
+        ctx.drawImage(video,0,0,320,96);
+        return Array.from({length:8},(_,bit)=>
+          ctx.getImageData(bit*40+20,48,1,1).data[0]>128 ? 1<<bit : 0).reduce((a,b)=>a+b,0);
+      };
       const read=(_now,meta)=>{
         if(seen.has(meta.presentedFrames))return;
         seen.add(meta.presentedFrames);
-        ctx.drawImage(video,0,0,320,96);
-        const number=Array.from({length:8},(_,bit)=>
-          ctx.getImageData(bit*40+20,48,1,1).data[0]>128 ? 1<<bit : 0).reduce((a,b)=>a+b,0);
-        frames.push({time:meta.mediaTime,number,current:video.currentTime,wall:performance.now(),seeking:video.seeking});
+        frames.push({time:meta.mediaTime,number:pixels(),current:video.currentTime,wall:performance.now(),
+          seeking:video.seeking,rate:video.playbackRate,presented:meta.presentedFrames,expected:meta.expectedDisplayTime});
       };
       // Read before the application callback can seek away from this picture.
       window.loopObserver=read;

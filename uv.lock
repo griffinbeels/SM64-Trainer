@@ -1323,7 +1323,7 @@ profiling = [
 
 [package.metadata]
 requires-dist = [
-    { name = "av", specifier = ">=14" },
+    { name = "av", specifier = ">=17.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12.2.0" },

@@ -90,11 +90,17 @@ function RomHelp() {
 }
 
 function InstallDetails({ emu }) {
+  const previous = emu.previous_graphics_dll;
   return html`<${SetupDisclosure} label="What does this install change?">
-    <p>Adds <code>sm64_trainer_gfx.dll</code> and <code>sm64_trainer_gfx.ini</code> to:</p>
+    <p>Adds three files to:</p>
     <code class="setup-path">${emu.plugin_dir || `${emu.pj64_dir}\\Plugin`}</code>
-    <p>Selects the wrapper in Project64's <code>Graphics Dll</code> setting. Your current plugin,
-      <code>${emu.wrapped_name || "the selected graphics plugin"}</code>, keeps drawing the game.</p>
+    <p><code>GLideN64_SM64Trainer.dll</code> is the trainer's build of LINK's GLideN64 v4.2 with the
+      capture hooks; <code>sm64_trainer_gfx.dll</code> and its <code>.ini</code> are the capture layer
+      Project64 loads. Nothing else is changed or tuned.</p>
+    <p>Selects <code>SM64 Trainer v1.0</code> in Project64's <code>Graphics Dll</code> setting.${" "}
+      ${previous
+        ? html`Your current plugin, <code>${previous}</code>, stays in the folder and is selected again when you remove Practice Replay.`
+        : html`No previous graphics plugin is recorded, so removing Practice Replay keeps it selected until you pick another plugin in Project64.`}</p>
     <p>You can remove Practice Replay here in Settings any time. Project64 must be closed.</p>
   </${SetupDisclosure}>`;
 }
@@ -172,7 +178,7 @@ function EmuStepStatus({shown, completing, emu, installing, onInstall}) {
       <${SetupStatus} done=${done} title=${completing ? acknowledgment : title}
         detail=${completing ? null : shown === "verify" ? emu.verification?.message : detail}>
         ${shown === "install" && !completing && html`<div class="setup-install-action">
-          <p>Keeps your current graphics plugin. You can remove it later in Settings.</p>
+          <p>Adds the trainer's graphics plugin to Project64. You can remove it later in Settings.</p>
           <button class="primary-button" type="button" disabled=${installing}
               onclick=${onInstall}>${installing ? "Installing…" : "Install Practice Replay"}</button>
         </div>`}

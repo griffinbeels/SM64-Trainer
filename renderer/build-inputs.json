@@ -1,0 +1,15 @@
+{
+  "upstream": {
+    "project": "LINK's GLideN64 v4.2 (Luna-Project64 fork of GLideN64)",
+    "url": "https://codeload.github.com/Luna-Project64/GLideN64/zip/d0d101054421dd74c6c398919112c7adfd8265e3",
+    "commit": "d0d101054421dd74c6c398919112c7adfd8265e3",
+    "archive_sha256": "cf074c84891a759a74d8b345d84818177293b0a973cae5abbc51aa86c7287a81",
+    "tree_sha256": "d566bb90ac34a8017d9a2ea745ea667060f6d75d4d801a0e0cda215da6c16e20",
+    "license": "GPL-2.0"
+  },
+  "prebuilt_libraries": {
+    "GLideNUI.lib": "7595f40fec88b169cee0ff3d5f105b9502d8f9e5bcce245d444d7151bd9c3b38",
+    "libGLideNHQ.lib": "637a6429e01a384e496e0f0e67829ecffe88240b06976ef03ba3c1b393c3263d",
+    "osal.lib": "89ad6c9b8e6a1e5a36aeb56c549f9f9867ef5dd6de5329c6ebbc5ee213e1b7f9"
+  }
+}

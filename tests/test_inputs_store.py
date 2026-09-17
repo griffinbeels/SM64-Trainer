@@ -217,3 +217,29 @@ def test_wiping_all_history_wipes_the_captured_input_too(tmp_path):
     db.inputs.append(session, [(100, InputFrame(0x8000, 0, 0, 0))], AT, AT)
     db.wipe_all_history(keep_session_id=session)
     assert db.inputs.frames_between(AT, LATER) == []
+
+
+def test_the_chunk_lookup_is_an_index_search_not_a_table_scan(store):
+    """Every replay open runs this query four times; julianday() on the
+    columns made it scan every chunk ever stored (round 48: 14.9 ms for
+    three rows, growing with every hour of play)."""
+    _db, inputs, session = store
+    inputs.append(session, frames([(100, 0x8000, 10, 20)]), AT, LATER)
+    plan = " ".join(row[3] for row in inputs._conn.execute(
+        "EXPLAIN QUERY PLAN SELECT id FROM input_chunks INDEXED BY idx_input_chunks_ended"
+        " WHERE ended_utc >= ? AND started_utc <= ? ORDER BY id", (AT, LATER)))
+    assert "SEARCH" in plan and "idx_input_chunks_ended" in plan and "SCAN" not in plan
+
+
+def test_chunk_bounds_are_stored_in_one_spelling_so_text_order_is_time_order(store):
+    """A whole-second stamp spells without microseconds in isoformat(); the
+    stored row and the query bound must agree or a chunk ending exactly on
+    the span start is missed by the text comparison."""
+    _db, inputs, session = store
+    inputs.append(session, frames([(7, 0x8000, 1, 1)]),
+                  "2026-08-20T21:00:00Z", "2026-08-20T21:00:05+00:00")
+    row = inputs._conn.execute("SELECT started_utc, ended_utc FROM input_chunks").fetchone()
+    assert row[0] == "2026-08-20T21:00:00.000000+00:00"
+    assert row[1] == "2026-08-20T21:00:05.000000+00:00"
+    assert inputs.frames_between("2026-08-20T21:00:05+00:00",
+                                 "2026-08-20T21:00:09+00:00") == frames([(7, 0x8000, 1, 1)])

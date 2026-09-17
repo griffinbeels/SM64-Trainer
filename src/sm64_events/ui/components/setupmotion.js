@@ -68,19 +68,18 @@ export function useDisclosedStep(actual) {
   return { shown, completing };
 }
 
+// Whether the wizard is on screen, so a confirmation is never spent unseen.
+// Visibility, not focus: he plays in Project64 with the trainer beside it, so
+// the trainer rarely has focus, and waiting for focus left the wizard sitting
+// on "Setup checked" (his report, 2026-09-17). A minimized or background tab
+// reads hidden and still waits.
 export function useSetupAttention() {
-  const active = () => document.visibilityState !== "hidden" && document.hasFocus();
+  const active = () => document.visibilityState !== "hidden";
   const [attentive, setAttentive] = useState(active);
   useEffect(() => {
     const refresh = () => setAttentive(active());
     document.addEventListener("visibilitychange", refresh);
-    window.addEventListener("focus", refresh);
-    window.addEventListener("blur", refresh);
-    return () => {
-      document.removeEventListener("visibilitychange", refresh);
-      window.removeEventListener("focus", refresh);
-      window.removeEventListener("blur", refresh);
-    };
+    return () => document.removeEventListener("visibilitychange", refresh);
   }, []);
   return attentive;
 }

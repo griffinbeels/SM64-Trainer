@@ -33,7 +33,7 @@ def run(expression: str):
         else None
 
 
-VIDEO = ("{currentTime: %s, duration: %s, paused: true, pause() {}}")
+VIDEO = ("Object.assign(new EventTarget(), {currentTime: %s, duration: %s, paused: true, pause() {}})")
 CFR = "{fps: 60, start: 0, times: null}"
 
 
@@ -230,8 +230,8 @@ def test_real_step_keeps_vfr_intervals_and_stays_put_at_both_ends():
     got = run("""(() => {
       const map = [10,11,12,13];
       const clock = {times: [0,1/90000,2/90000,.05]};
-      const v = {currentTime: timeOfSlot(0, clock), duration: .0501,
-        paused: true, pause() {}};
+      const v = Object.assign(new EventTarget(), {currentTime: timeOfSlot(0, clock), duration: .0501,
+        paused: true, pause() {}});
       const out = [];
       for (const dir of [-1,1,1,1,1,-1,-1,-1,-1]) {
         stepGameFrame(v, dir, 30, map, clock);
@@ -245,7 +245,7 @@ def test_real_step_keeps_vfr_intervals_and_stays_put_at_both_ends():
 def test_unstamped_vfr_video_steps_its_recorded_pictures():
     got = run("""(() => {
       const clock = {times: [.01,.02,.2]};
-      const v = {currentTime: .015, duration: .3, paused: true, pause() {}};
+      const v = Object.assign(new EventTarget(), {currentTime: .015, duration: .3, paused: true, pause() {}});
       return [1,1,-1].map((dir) => {
         stepGameFrame(v, dir, 30, null, clock);
         return slotAtTime(v.currentTime, clock);

@@ -507,20 +507,8 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     item 38: the sink is fed ONE frame per row -- the three identical grabs
     reach it once, and every write lands in the ledger's feed log.
 
-    Driven with STAMPED pictures because that is the only path that ships:
-    a grab with no stamp names no game frame at all now (the frame clock
-    that used to guess one was deleted 2026-09-05), so it is recorded by
-    time and the clip carries no map."""
-    from sm64_events.inputs.frame import InputFrame
-    from sm64_events.replay.pluginsource import FrameStamp
-
-    def stamp_at(frame):
-        return FrameStamp(frame=frame, igt_overall=73,
-                          pad=InputFrame(buttons=0, pressed=0,
-                                         stick_x=0, stick_y=0),
-                          vi_origin=0x100000, list_qpc=1, present_qpc=2,
-                          lists_since=1)
-
+    A desktop grab names no game frame (the frame clock that used to guess
+    one was deleted 2026-09-05), so every row is filed by time alone."""
     video, audio = FakeVideoSource(), SystemFakeAudioSource()
     sink = FakeAvSink()
     rec = make_recorder(tmp_path, video, audio,
@@ -529,13 +517,12 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     assert wait_for(lambda: video.on_frame is not None)
     same = np.zeros((480, 640, 4), dtype=np.uint8)
     for tick in range(3):                    # the same zeros picture, thrice
-        video.on_frame(same, int(tick / 30 * 1e7), stamp_at(4242))
+        video.on_frame(same, int(tick / 30 * 1e7))
     changed = np.full((480, 640, 4), 200, dtype=np.uint8)
-    video.on_frame(changed, int(3 / 30 * 1e7), stamp_at(4245))
+    video.on_frame(changed, int(3 / 30 * 1e7))
     assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 2)
     rows = rec.ledger.rows_between(0.0, 1e12)
-    assert [row["frame"] for row in rows] == [4242, 4245]
-    assert [row["igt_overall"] for row in rows] == [73, 73]
+    assert [row["frame"] for row in rows] == [None, None]
     assert rows[1]["ts"] - rows[0]["ts"] > 0
     time.sleep(0.05)
     assert len(sink.frames) == 2, "one fed frame per distinct picture"
@@ -545,36 +532,6 @@ def test_the_picture_ledger_rides_the_capture_path(tmp_path):
     assert rec.ledger.feeds_between(0.0, 1e12) == [
         {"at": rows[0]["ts"] + 0.004, "ts": rows[0]["ts"],
          "run_id": None, "pts": None, "repeat": False}]
-    rec.stop()
-
-
-def test_a_stamped_picture_files_the_stamps_own_frame(tmp_path):
-    """Item 95: a picture from the capture layer arrives with the game's own
-    frame counter; the recorder tags it with that frame, and the ledger row
-    says `exact` and carries the pad and the IGT. This is the ONLY way a
-    row gets a frame now -- the frame clock that used to derive one for a
-    desktop grab was deleted 2026-09-05."""
-    from sm64_events.inputs.frame import InputFrame
-    from sm64_events.replay.pluginsource import FrameStamp
-
-    video, audio = FakeVideoSource(), SystemFakeAudioSource()
-    sink = FakeAvSink()
-    rec = make_recorder(tmp_path, video, audio,
-                        video_sink_factory=lambda cfg, on_seg, codec: sink)
-    rec.start()
-    assert wait_for(lambda: video.on_frame is not None)
-    stamp = FrameStamp(frame=5150, igt_overall=91,
-                       pad=InputFrame(buttons=0x8000, pressed=0x8000, stick_x=3, stick_y=-70),
-                       vi_origin=0x100000, list_qpc=1, present_qpc=2, lists_since=1)
-    video.on_frame(np.full((480, 640, 4), 7, dtype=np.uint8), int(1 / 30 * 1e7), stamp)
-    assert wait_for(lambda: len(getattr(sink, "tags", [])) >= 1)
-    frame_tag, capture_ts = sink.tags[0]
-    assert frame_tag == 5150 and abs(capture_ts - (T0.timestamp() + 1 / 30)) < 1e-5
-    rows = rec.ledger.rows_between(T0.timestamp() - 1, T0.timestamp() + 1)
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["frame"] == 5150 and row["exact"] is True and row["igt_overall"] == 91
-    assert row["pad"] == [3, -70, 0x8000] and row["vi_origin"] == 0x100000
     rec.stop()
 
 
@@ -846,3 +803,25 @@ def test_idle_arriving_tail_is_retained_until_source_lease_finishes(tmp_path):
         assert rec.ring.covering("video", T0, tail.utc_end) == [tail]
     assert not tail.path.exists()
     rec.stop()
+
+
+def test_capture_waits_for_a_practice_rom_and_stops_when_one_leaves(tmp_path):
+    """His ruling, 2026-09-16: a real run on another ROM records nothing --
+    no video source, no audio. main.py gates on the poller's practice ROM."""
+    video, audio = FakeVideoSource(), FakeAudioSource()
+    rec = make_recorder(tmp_path, video, audio)
+    practice = [False]
+    rec.set_capture_gate(lambda: practice[0])
+    rec.start()
+    try:
+        time.sleep(0.1)
+        assert video.on_frame is None and rec.status()["capture_gated"] is True
+        assert rec.status()["recording"] is False
+        practice[0] = True
+        assert wait_for(lambda: video.on_frame is not None)
+        assert wait_for(lambda: rec.status()["capture_gated"] is False)
+        practice[0] = False
+        assert wait_for(lambda: video.stopped)
+        assert wait_for(lambda: rec.status()["recording"] is False)
+    finally:
+        rec.stop()

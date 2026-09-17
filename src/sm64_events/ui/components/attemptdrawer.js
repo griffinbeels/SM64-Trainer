@@ -27,10 +27,6 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
   useLayoutEffect(() => watchReplayFocus(root.current), [attemptId]);
   const review = useReviewState(attemptId);
   const [video, setVideo] = useState(null);
-  // Where the attempt's anchor sits inside the clip (the replay pre-pad,
-  // measured from the clip's own first frame by the server). The timeline
-  // shifts by it so clip time and track frame are one axis.
-  const [anchorOffsetS, setAnchorOffsetS] = useState(0);
   // The clip's own frame map (which game frame each video frame shows) and
   // its encode rate -- the timeline follows only the retained association.
   const [clipClock, setClipClock] = useState({ frameMap: null,
@@ -52,10 +48,10 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
         onVideoEl=${setVideo}
         onView=${(view) => {
           if (view) {
-            setAnchorOffsetS(view.anchor_offset_s || 0);
             setClipClock({ frameMap: view.frame_map || null,
                            inputSpan: view.input_span,
                            pictureIgt: view.picture_igt || null,
+                           pictureStates: view.picture_states || null,
                            clock: buildClipClock(view),
                            padAgreement: view.pad_stamp_agreement || null,
                            frameMapSource: view.frame_map_source || null,
@@ -66,10 +62,10 @@ export function AttemptDrawer({ attemptId, imported = false, onCompare, onTempla
     ${!imported && html`<${ReviewSplit} /><div class="attempt-drawer-inputs">
       ${replaySettled
         ? html`<${InputTimeline} attemptId=${attemptId} video=${video}
-              anchorOffsetS=${anchorOffsetS}
               frameMap=${clipClock.frameMap} clock=${clipClock.clock}
               inputSpan=${clipClock.inputSpan}
               pictureIgt=${clipClock.pictureIgt}
+              pictureStates=${clipClock.pictureStates}
               padAgreement=${clipClock.padAgreement}
               frameMapSource=${clipClock.frameMapSource}
               inputAlignment=${clipClock.inputAlignment}

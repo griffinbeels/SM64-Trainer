@@ -5,13 +5,18 @@ import zlib
 
 import pytest
 
-from sm64_events.inputs.readtimes import ReadTimes, iter_times, micros, stamp_at
+from sm64_events.inputs.readtimes import ReadTimes, micros, stamp_at
 from sm64_events.inputs.sampler import InputSampler
 from sm64_events.memory.layout import US
 from test_inputs_sampler import ScriptedMemory
 
 
 AT = "2026-09-08T12:34:56Z"
+
+
+def decoded(blob):
+    """Reference decoder: the whole zlib stream as little-endian int64 instants."""
+    return [value for value, in struct.iter_unpack("<q", zlib.decompress(blob))]
 
 
 @pytest.mark.parametrize("budget,count", [(1024, 1), (1024, 8), (1024, 127),
@@ -32,7 +37,7 @@ def test_buffer_and_spill_keep_the_original_streamed_bytes(monkeypatch, budget, 
         assert len(history._pending) < budget
     blob, lower, upper = history.finish()
     assert blob == expected
-    assert list(iter_times(blob)) == values
+    assert decoded(blob) == values
     assert (micros(lower), micros(upper)) == (min(values), max(values))
     assert history._file.closed
 
@@ -107,6 +112,6 @@ def test_real_compression_failure_loses_only_its_state_and_closes(monkeypatch, f
     assert sampler.sample() == 101
     sampler.flush()
     assert [number for number, _ in observations] == [101]
-    assert list(iter_times(observations[0][1].history)) == [micros(AT)]
+    assert decoded(observations[0][1].history) == [micros(AT)]
     assert all(history._file.closed for history in made)
     assert sampler.health()["history_failures"] == 1

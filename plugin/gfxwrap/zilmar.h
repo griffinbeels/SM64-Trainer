@@ -70,6 +70,7 @@ typedef void (__cdecl *fn_move)(int, int);
 typedef void (__cdecl *fn_capture)(char *);
 typedef void (__cdecl *fn_fbread)(unsigned int);
 typedef void (__cdecl *fn_fbwrite)(unsigned int, unsigned int);
+typedef void (__cdecl *fn_fbwlist)(void *, unsigned int);
 typedef void (__cdecl *fn_fbinfo)(void *);
 typedef void (__cdecl *fn_readscreen)(void **, long *, long *);
 
@@ -83,6 +84,7 @@ typedef struct {
     fn_capture CaptureScreen;
     fn_fbread FBRead;
     fn_fbwrite FBWrite;
+    fn_fbwlist FBWList;
     fn_fbinfo FBGetFrameBufferInfo;
     fn_readscreen ReadScreen;
 } gfx_api_t;
@@ -108,6 +110,7 @@ typedef struct {
     (api).CaptureScreen = (fn_capture)GetProcAddress((module), "CaptureScreen"); \
     (api).FBRead = (fn_fbread)GetProcAddress((module), "FBRead"); \
     (api).FBWrite = (fn_fbwrite)GetProcAddress((module), "FBWrite"); \
+    (api).FBWList = (fn_fbwlist)GetProcAddress((module), "FBWList"); \
     (api).FBGetFrameBufferInfo = (fn_fbinfo)GetProcAddress((module), "FBGetFrameBufferInfo"); \
     (api).ReadScreen = (fn_readscreen)GetProcAddress((module), "ReadScreen"); \
 } while (0)

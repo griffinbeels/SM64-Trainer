@@ -3,18 +3,16 @@ import { watchVideoPicture, presentedVideoTime } from "../../src/sm64_events/ui/
 import { stepGameFrame } from "../../src/sm64_events/ui/frame.js";
 
 function player() {
-  const callbacks = new Map(), events = new Map();
+  const callbacks = new Map();
   let handle = 0;
-  return {currentTime:.25, duration:.4, paused:true, src:"one.mp4", pause() {},
+  return Object.assign(new EventTarget(), {currentTime:.25, duration:.4, paused:true, src:"one.mp4", pause() {},
     requestVideoFrameCallback(fn) { callbacks.set(++handle,fn); return handle; },
     cancelVideoFrameCallback(id) { callbacks.delete(id); },
-    addEventListener(type,fn) { events.set(type,fn); },
-    removeEventListener(type) { events.delete(type); },
     present(time) {
       const pending = [...callbacks.values()]; callbacks.clear();
       pending.forEach(fn => fn(0,{mediaTime:time}));
-    }, empty() { events.get("emptied")(); }, pending: () => callbacks.size,
-  };
+    }, empty() { this.dispatchEvent(new Event("emptied")); }, pending: () => callbacks.size,
+  });
 }
 
 test("late subscribers and refreshes keep the presented time, not the requested seek", () => {

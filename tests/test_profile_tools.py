@@ -6,10 +6,30 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from contextlib import nullcontext
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import profile_capture as capture  # noqa: E402
 import profile_report as report  # noqa: E402
+
+
+def test_default_process_sampling_does_not_enumerate_system_threads(monkeypatch):
+    def forbidden():
+        pytest.fail("thread count queries can enumerate system process information on Windows")
+
+    process = SimpleNamespace(
+        pid=42, cpu_percent=lambda: 3.0, is_running=lambda: True,
+        oneshot=nullcontext, create_time=lambda: 123.0, name=lambda: "fixture",
+        io_counters=lambda: SimpleNamespace(read_bytes=5, write_bytes=6),
+        memory_info=lambda: SimpleNamespace(rss=7), num_threads=forbidden,
+    )
+    module = SimpleNamespace(Process=lambda pid: process, cpu_percent=lambda: 1.0,
+                             virtual_memory=lambda: SimpleNamespace(used=8), Error=OSError)
+    monkeypatch.setitem(sys.modules, "psutil", module)
+    sampled = capture.SystemSampler([42]).sample()
+    assert sampled["processes"] == [dict(pid=42, created=123.0, name="fixture",
+                                       cpu_percent=3.0, rss_bytes=7, threads=None,
+                                       read_bytes=5, write_bytes=6)]
 
 
 @pytest.mark.parametrize("url", ["https://localhost:8065", "http://example.com:8065",
@@ -140,8 +160,16 @@ def test_wpr_cleanup_can_only_target_owned_named_instance(tmp_path, monkeypatch)
     assert all(c[-2:] == ["-instancename", traces.instance] for c in mutations)
     assert all("-filemode" not in c for c in mutations)
     assert mutations[-1][1] == "-stop"
-    assert "GPU" in mutations[0]
-    assert traces.profiles == ["GeneralProfile", "GPU"]
+    assert len(traces.profiles) == 1 and traces.profiles[0].endswith("replay.wprp!Replay.Light")
+    assert traces.profiles[0] in mutations[0]
+    assert "GeneralProfile" not in mutations[0]
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(traces.profiles[0].split("!")[0])
+    collectors = tree.findall(".//SystemCollector") + tree.findall(".//EventCollector")
+    total_kib = sum(int(row.find("BufferSize").attrib["Value"])
+                    * int(row.find("Buffers").attrib["Value"]) for row in collectors)
+    assert total_kib <= 128 * 1024
+    assert traces.missing and "coverage" in traces.missing[0]
 
 
 def test_failed_wpr_start_never_cancels_another_capture(tmp_path, monkeypatch):
@@ -163,19 +191,6 @@ def test_failed_wpr_start_never_cancels_another_capture(tmp_path, monkeypatch):
                for call in calls if "-cancel" in call or "-stop" in call)
 
 
-def test_graphics_generation_change_is_not_merged_into_one_histogram(tmp_path):
-    _meta, samples = capture_folder(tmp_path)
-    for i, sample in enumerate(samples):
-        sample["replay"] = {"frame_source_health": {"graphics_profile": {
-            "version": 1, "plugin_pid": 12, "generation": str(i), "metrics": {
-                "gl_read_pixels": {"count": 1, "mean_ms": 7, "max_ms": 7}}}}}
-    (tmp_path / "samples.jsonl").write_text("\n".join(map(json.dumps, samples)), encoding="utf-8")
-    result = report.summarize(tmp_path)
-    assert not result["valid"]
-    assert result["graphics"]["metrics"]["gl_read_pixels"]["count"] == 1
-    assert "Native graphics profile generation changed" in result["issues"]
-
-
 def test_replay_loss_reset_and_backlog_remain_visible(tmp_path):
     _meta, samples = capture_folder(tmp_path)
     samples[0]["replay"] = {"grabs_skipped": 9, "encode_backlog": 3}
@@ -185,7 +200,6 @@ def test_replay_loss_reset_and_backlog_remain_visible(tmp_path):
     assert not result["valid"]
     assert result["replay"]["counters"]["grabs_skipped"]["delta"] is None
     assert result["replay"]["gauges"]["encode_backlog"]["max"] == 12
-    assert result["coverage"]["native_graphics"] is False
 
 
 def test_backend_histogram_definition_must_match(tmp_path):

@@ -4,8 +4,8 @@ import { slotAtTime, timeOfSlot } from "../frame.js";
 import { watchVideoPicture } from "../videopicture.js";
 import { templateOnAxis, templateReviewKey, timelineWindow } from "../timelinereview.js";
 import { stopShuttle } from "../replayshuttle.js";
-import { pauseReviewSource, reviewDuration, seekReviewSource } from "../reviewsource.js";
-import { lanesOf, curvePath, speedPeak, speedPath, stickReach, stickPath,
+import { pauseReviewSource, seekReviewSource } from "../reviewsource.js";
+import { lanesOf, curvePath, speedPeak, speedPath, stickReach, stickPath, stampedRuns,
          mappedFrameAtTime, mappedTimeAtFrame, mappedLoopWindow } from "./inputtimelinemodel.js";
 
 export function useTimelineData(attemptId, inputSpan, frameMap) {
@@ -92,10 +92,11 @@ export function useTimelineReview(reviewState, onReviewState) {
 }
 
 function timelineDuration(video, clock) {
-  return Number.isFinite(reviewDuration(video)) ? reviewDuration(video) : clock?.duration;
+  return Number.isFinite(video?.duration) ? video.duration : clock?.duration;
 }
 
-export function useTimelineModel(data, review, onReviewState, video, frameMap, clock) {
+export function useTimelineModel(data, review, onReviewState, video, frameMap, clock,
+                                 pictureStates = null, frameMapSource = null) {
   const duration = timelineDuration(video, clock);
   const boundedClock = useMemo(() => ({ ...clock, duration }), [clock, duration]);
   const total = data?.frames || 1;
@@ -106,8 +107,16 @@ export function useTimelineModel(data, review, onReviewState, video, frameMap, c
   const offset = Number.isInteger(savedOffset) ? savedOffset : 0;
   const template = useMemo(() => templateOnAxis(data?.template, lead, offset), [data, lead, offset]);
   const view = useMemo(() => timelineWindow(review.zoom, total), [review.zoom, total]);
+  // What the lanes draw: the pictures' own stamps wherever a picture exists
+  // (exact capture), the polled sample only where none does. Without exact
+  // capture the polled track is all there is.
+  const drawn = useMemo(() => {
+    if (!data) return [];
+    if (frameMapSource !== "plugin" || !Array.isArray(pictureStates)) return data.runs;
+    return stampedRuns(data.runs, frameMap, pictureStates, data.stretches, total);
+  }, [data, frameMap, pictureStates, frameMapSource, total]);
   const lanes = useMemo(
-    () => (data ? lanesOf(data.runs, data.buttons) : []), [data]);
+    () => (data ? lanesOf(drawn, data.buttons) : []), [data, drawn]);
   const templateLanes = useMemo(
     () => (template ? lanesOf(template.runs, data.buttons) : []), [data, template]);
   // A delivered picture only moves the inspector/playhead. Generating paths
@@ -115,15 +124,19 @@ export function useTimelineModel(data, review, onReviewState, video, frameMap, c
   const curves = useMemo(() => {
     if (!data) return {};
     const ghostRuns = template?.runs || [];
-    const peak = speedPeak(data.runs, ghostRuns);
-    const reach = stickReach(data.stick_max, data.runs, ghostRuns);
+    const peak = speedPeak(drawn, ghostRuns);
+    const reach = stickReach(data.stick_max, drawn, ghostRuns);
     const paths = (runs) => ({
       x: curvePath(runs, (group) => stickPath(group, "x", reach)),
       y: curvePath(runs, (group) => stickPath(group, "y", reach)),
       speed: curvePath(runs, (group) => speedPath(group, peak)),
     });
-    return { mine: paths(data.runs), template: paths(ghostRuns) };
-  }, [data, template]);
+    // Polled fills draw as their own dashed segments so a stretch with no
+    // picture never reads as the picture's own stick or speed.
+    const polled = drawn.filter((run) => run.polled);
+    return { mine: paths(drawn.filter((run) => !run.polled)), template: paths(ghostRuns),
+             polled: polled.length ? paths(polled) : null };
+  }, [data, drawn, template]);
   const loopWindow = useMemo(() => data ? mappedLoopWindow(review.loop, frameMap,
     boundedClock,
     data.stretches, total) : null, [review.loop, frameMap, boundedClock, data, total]);

@@ -459,7 +459,6 @@
     "86ab9964acad0c5eb7d1fd69c557f2d87db8abfb66adb0c8b76b040fd5db0205",
     "26b9b96f8326854d8cd50ae409f6239c0b559a35a5b624d66b3302a7416b99e6",
     "67ebed2192842a68a3bbe6f5142d0b75a5a2f1c6f88661cb08e7de1f51ec38f4",
-    "d46c9b762cf3edc2e0034fdc2ec4311cf06b5c2d341ef5bf507b8ccc9d19caaf",
     "7a7a09677a0ee11d7c966c2ae65bfb42d21cb4192285fd53f67c16cdf98aa4f9",
     "60cfd23f48fe20ed01130fb11ce3119bface711a5f2118d5fef4f88b226b4430",
     "38134ba26cdb89d7c7b5c26abdcafbc3d3002070c0d0a459b3006fc8745239b2",
@@ -475,7 +474,8 @@
     "fb4b21c49d76528b61fd318b21e7f284cd37aa6f4b2ed3fa75c9b6312e9539f0",
     "edaf9fbfcd19f04f66469c8879f87f73b8339bde88ae3b847f08f99abad56016",
     "562a1b10558a7cfca29820f097a37d27e538557d0fe010f712c57d002b4618ae",
-    "8949fc3443494399828bb22d86879b8606203f28ad449ae8d5a479220293df73"
+    "8949fc3443494399828bb22d86879b8606203f28ad449ae8d5a479220293df73",
+    "a988e70ea11adf2480a2e70a19c391f343127c45c395098d48d814777120c692"
   ],
   "findings": [
     {
@@ -3431,6 +3431,22 @@
           "message": "Too many statements (120 > 50)"
         }
       ]
+    },
+    {
+      "findings": [
+        {
+          "message": "Function 'useTracker' has too many lines (290). Maximum allowed is 100.",
+          "allowance": "a988e70ea11adf2480a2e70a19c391f343127c45c395098d48d814777120c692",
+          "rule": "max-lines-per-function",
+          "replaces_allowance": "d46c9b762cf3edc2e0034fdc2ec4311cf06b5c2d341ef5bf507b8ccc9d19caaf",
+          "path": "src/sm64_events/ui/store.js",
+          "line": 49
+        }
+      ],
+      "reason": "Replace one existing useTracker length allowance after extracting serial abortable pause polling. Diagnostic decreases from 297 to 290; remaining function content is unchanged. Previous allowance removed, so no increase to 297 is permitted. No other findings adopted.",
+      "source_commit": "6387622a08ef11430aca450fbe32a2cf99646b70",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "r42_startup_workload independent read-only review"
     }
   ]
 }

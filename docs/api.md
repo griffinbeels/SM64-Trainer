@@ -18,10 +18,32 @@ No recorder restart or capture-rate change occurs. See [profiling](profiling.md)
 | Endpoint | Description |
 |---|---|
 | `POST /api/uilog` `{surface, ...}` → `{recorded}` | **What the browser just PAINTED**, not an event. `surface` is `selector` (the quick-select row's cells, each `{name, active}`) or `target` (every objective card on the page, in DOM order). The server stamps the wall clock and the live game frame; `tools/what_happened.py` interleaves the result with the journal, which is what makes "the cell vanished BEFORE the level change" a readable fact. Always 200 — a body it does not recognise is dropped with `{"recorded": false}`, because an instrument that can make its subject throw is worse than none. |
-| `GET /health` | Liveness: `{status, emulator_attached, held, clients, last_frame, db, session_id, memory, inputs, present_counter}`. `present_counter` is map v4's counter state — the found address as hex, `"hunting"` while the background sweep runs, `"idle"` between attempts, null with no hunter wired — so "did the hunt land" is one GET, never a log grep. `inputs` is the pad sampler's counters (`samples, straddles, frames, edge_checks, edge_mismatches, skips, skipped_frames, worst_skip`) or null on a layout with no controller row; `edge_mismatches` must read 0 after play — the game's own buttonPressed confirming every frame number the capture assigned. The `skip` trio counts the other failure, the one a person sees as "No capture on this frame": the counter advancing by more than one between observed samples, so nobody read the frames in between and their input is gone (the game keeps no history to recover it from). It needs the poll loop to stall past a whole game frame, since eight samples land inside one at 250 Hz; measured over his journal 2026-08-31 at 84 frames of 93,958, 0.089%. A counter restart is not a skip. `held` is null normally; it is the reason string when the chosen game version's memory layout is not verified yet (JP before its sync run) — the poller then reads NOTHING and stays detached rather than reading US addresses off a JP ROM, and the string names the command that fills the layout (`tools/sync_version.py --version jp`) and the dashboard that shows what is missing (`/ui/sync.html`). |
+| `GET /health` | Liveness: `{status, emulator_attached, held, clients, last_frame, db, session_id, memory, inputs}`. `inputs` is the pad sampler's counters (`samples, straddles, frames, edge_checks, edge_mismatches, skips, skipped_frames, worst_skip`) or null on a layout with no controller row; `edge_mismatches` must read 0 after play — the game's own buttonPressed confirming every frame number the capture assigned. The `skip` trio counts the other failure, the one a person sees as "No capture on this frame": the counter advancing by more than one between observed samples, so nobody read the frames in between and their input is gone (the game keeps no history to recover it from). It needs the poll loop to stall past a whole game frame, since eight samples land inside one at 250 Hz; measured over his journal 2026-08-31 at 84 frames of 93,958, 0.089%. A counter restart is not a skip. `held` is null normally; it is the reason string when the chosen game version's memory layout is not verified yet (JP before its sync run) — the poller then reads NOTHING and stays detached rather than reading US addresses off a JP ROM, and the string names the command that fills the layout (`tools/sync_version.py --version jp`) and the dashboard that shows what is missing (`/ui/sync.html`). |
 | `POST /api/admin/shutdown` | Graceful shutdown — the desktop "close the other instance" takeover path. `{"shutting_down": true}` |
 | `POST /api/admin/restart` | Full-process relaunch — the one-click "Restart server" button; picks up edited backend code. `{"restarting": true}` |
 | `POST /api/diagnostics` | One-button debug report — capped tails of the server log, journal, UI log and perf samples, plus the `/health` payload, in ONE markdown file under the replays `diagnostics/` dir (newest 5 kept). Sections degrade individually: an unreadable source names its failure instead of failing the report. Open the file via `POST /api/replay/reveal`. `{"path", "size_bytes"}` |
+
+`GET /health` reports `polling: {state, error, last_error, failures, restarts,
+retry_in_s}`. The supervisor uses `starting`, `running`, `recovering`, and
+`resuming`; the unsupervised fallback also recognizes `failed` and `stopped`.
+A failed poll task restarts with fresh detectors after capped backoff. During
+recovery, `status` is `"error"`, `emulator_attached` is false, and `GET /state`
+returns `{"snapshot": null}` instead of an abandoned snapshot. A fresh memory
+observation restores polling readiness; this alone does not prove storage or
+recording health. Task failure logs include the full traceback.
+
+`tracking` reports `state` (`running`, `recovering`, or `unavailable`), error,
+failure/recovery counts and retry delay. `input_storage` reports pending frames,
+failed/rejected writes and retry delay, or `state: "unavailable"` before binding.
+Tracking/storage failures also make overall health an error. Database startup
+retries attach the input sampler and input API together; input endpoints return
+503 until that binding exists. See [recovery boundaries](architecture.md#recovery-boundaries).
+
+Input diagnostics include cumulative `invalid_samples` and `sink_failures`,
+`last_invalid_sample: {frame, stick_x, stick_y, observed_utc}` (or null), and
+`sink_error` (cleared by a successful write). Invalid raw axes are omitted,
+never clamped. `input_flush: {failures, error}` tracks the optional settlement
+flush separately: a flush failure cannot stop course detection or journaling.
 
 ## Auto-update (localhost only)
 
@@ -331,9 +353,11 @@ live and `system` when it fell back to capturing PJ64's whole output
 endpoint — into `data/replay_buffer/` (scratch, wiped on
 startup). Video encoding runs in an `ffmpeg` subprocess when ffmpeg is on
 PATH — recommended; the in-process fallback encoder stutters under load
-(why: docs/architecture.md → Replay capture). Retention defaults to the
-whole session; a temporary disk cap (new default 2 GiB) evicts oldest unsaved footage
-regardless. Existing stored limits remain unchanged. Both storage limits are adjustable live from the UI — click
+(why: docs/architecture.md → Replay capture). Unsaved replay retention defaults to
+the latest 10 completed attempts across courses, with the active attempt protected.
+A temporary disk cap (default 2 GiB) may evict older footage sooner; files in an
+active read/save remain leased. Existing stored byte/time limits remain unchanged.
+Attempt count, time window and disk cap are adjustable live from the UI — click
 the recording dot in the header (shows usage as `rec · 38 min ·
 1.2/20 GB`); changes persist to `data/replay_settings.json` and apply
 immediately. Saved replays under `replays/` are kept forever and never
@@ -345,9 +369,15 @@ attempt id in the filename is the only link — rename the `attempt_NNNN_`
 prefix and the tracker no longer finds it (reorganizing folders is fine).
 PJ64 must run windowed (exclusive fullscreen cannot be captured).
 
-- `GET  /api/replay/status` — `{enabled, recording, idle, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes, grabs_skipped, encode_backlog, frame_source, frame_source_note, frame_source_health}`. `frame_source` is which camera is live: `plugin` (the capture layer inside Project64, every picture stamped by the game) or `desktop` (the window grab); `frame_source_note` is null unless the layer is installed and the recorder fell back to the desktop anyway, when it says why (it refused every picture; it presented none); `frame_source_health` is the live source's own counters (`delivered`, `skipped`, `undecodable`, `dropped_by_plugin` for the plugin). The last two say whether a capture was DEGRADED, which a thinner clip otherwise hides: `encode_backlog` is how many captured pictures are waiting for the encoder right now, and `grabs_skipped` counts grabs the sink had no budget for. A skipped grab never reaches the picture ledger either — captured and encoded move in LOCKSTEP (item 88, his rule 2026-09-02: "We should always be encoding frames we captured"), so every ledger row became a video frame and the clip's map can never describe a frame the video does not hold. A loaded machine therefore yields a SPARSER clip, never a wrong one, and `grabs_skipped` is how you know it was loaded.
+- `GET  /api/replay/status` — `{enabled, recording, idle, window_found, audio_mode, encoder, buffer_start_utc, buffer_end_utc, disk_bytes, retention_s, max_buffer_bytes, grabs_skipped, encode_backlog, frame_source, frame_source_note, frame_source_health, capture_gated}`. `frame_source` is which camera is live: `plugin` (GPU capture inside Project64, every picture stamped by the game) or `desktop` (the window grab); `frame_source_note` is null unless the recorder is photographing the desktop while it waits for the capture layer, when it says why; `frame_source_health` is the live source's own state (for GPU capture `kind: "gpu"` with queue/byte counts and publication, described in [the runtime doc](replay-gpu-runtime.md#setup-and-diagnostics)). `capture_gated` is true while the loaded cartridge is not a practice ROM, so nothing records. `encode_backlog` and `grabs_skipped` say whether a desktop capture was DEGRADED, which a thinner clip otherwise hides: `encode_backlog` is how many captured pictures are waiting for the encoder right now, and `grabs_skipped` counts grabs the sink had no budget for. A skipped grab never reaches the picture ledger either — captured and encoded move in LOCKSTEP (item 88, his rule 2026-09-02: "We should always be encoding frames we captured"), so every ledger row became a video frame and the clip's map can never describe a frame the video does not hold. A loaded machine therefore yields a SPARSER clip, never a wrong one, and `grabs_skipped` is how you know it was loaded.
 - `GET /api/attempts/{id}/replay/review-state` — per-replay review preferences: `{template_offsets, zoom, loop}`. Template keys are `<template ID>:<SHA-256 document revision>` and offsets are integer game frames. Zoom is an input-axis `{start, end}` range or null; loop is a media-seconds `{start, end, enabled}` range or null, with an exclusive end. Unsaved preferences last for the owning server session. Saving a replay promotes them to a separate `.review.json` file beside the MP4.
 - `PUT /api/attempts/{id}/replay/review-state` — replace review preferences; omitted fields reset to defaults. Later edits to saved replays write only the preference file. Invalid fields/ranges return 409, absent attempts 404. Up to 128 template offsets, ±1,000,000 frames; zoom within 0–1,000,000 frames and loops within 0–86,400 seconds.
+
+For paired GPU capture, replay status reports `recording: false` during preparation,
+unavailable capture and failure, even if a worker remains attached. The optional
+`publication_error` carries the source failure/wait reason. Writer queue counts,
+errors and peak timing are under `frame_source_health.publication`; see
+[GPU runtime diagnostics](replay-gpu-runtime.md#setup-and-diagnostics).
 
 Review-state GET includes `X-Replay-Review-Session`, a token for the owning server
 lifetime. Clients may send `X-Replay-Review-Edit: <session>/<client>/<sequence>`
@@ -357,8 +387,8 @@ client return current state without overwriting it. Expired tokens return 409;
 reload GET and discard drafts from the old session. The browser keeps only
 unacknowledged drafts in tab session storage and serializes writes. Saved
 preferences remain in the replay's separate preference file across restarts.
-- `GET  /api/replay/settings` — `{retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
-- `PUT  /api/replay/settings` — body `{retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}` (null retention = whole session; omitted pads = unchanged); persists + applies immediately (shrinking evicts oldest footage now); 409 outside 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s
+- `GET  /api/replay/settings` — `{retention_attempts, retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`
+- `PUT  /api/replay/settings` — body `{retention_attempts?, retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}`. Attempt count is an integer 1–1000 or null (no count limit); omitted count/pads keep current values. Both retention fields null keep the session. Persists and applies immediately; shrinking evicts eligible old footage. Bounds: 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s. Invalid bounds return 409; non-integer count returns 422. Saved/PB exports are exempt. Increasing retention cannot restore expired footage.
 - `POST /api/attempts/{id}/replay` — cut or reuse the attempt's clip. Returns
   `{clip_url, duration_s, truncated, fps, game_fps, source, anchor_offset_s,
   attempt_start_slot, input_span, frame_map, frame_map_source, input_alignment,
@@ -381,9 +411,9 @@ preferences remain in the replay's separate preference file across restarts.
   wall-clock anchor without claiming an input association.
   `picture_ids[k]` identifies the captured picture occurrence within this clip:
   heartbeat copies share an ID, separate visits to the same raw counter do not.
-  `picture_states[k]` is `{buttons, stick_x, stick_y, yaw}` from that validated
+  `picture_states[k]` is `{buttons, stick_x, stick_y, yaw, action, speed}` from that validated
   capture occurrence, or null when its pad is unavailable; the whole field is
-  null without a verified map. Yaw may be null independently. Mapped overlay
+  null without a verified map. Yaw, action and speed may each be null independently. Mapped overlay
   exports use this state with `frame_times` and `duration_s`, including holds.
   Null IDs remain individually selectable unknown pictures. Controls walk slots
   in order and seek inside their recorded intervals; they do not order raw
@@ -415,7 +445,7 @@ preferences remain in the replay's separate preference file across restarts.
   the plugin's picture/state convention or recover missing legacy identities.
   A saved clip without a sidecar has unknown duration and no truncation flag.
 - `GET  /api/replay/available` — `{available: [attempt_id, …]}`: every attempt whose clip is still cuttable (in the ring buffer) or already saved; the Compare tab reads it to badge which runs can load a video
-- `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly)
+- `GET  /api/replay/clips/{name}` — the MP4 (supports HTTP Range; scrubs smoothly). A fragment-backed clip carries an `ETag` naming its immutable descriptor and `Cache-Control: private, max-age=3600`, and honours a matching `If-Range`, so the browser resumes ranges instead of reopening a connection per seek.
 - `GET  /api/replay/saved/{attempt_id}` — a SAVED attempt's MP4 (same Range support); 404 when that attempt has no saved file
 - `POST /api/attempts/{id}/replay/save` — atomically publish to `replays/<YYYY-MM-DD>/session_<N>/<slug>.mp4` plus a `.json` metadata sidecar → `{path, truncated}`. Idempotent: an already-saved attempt returns its existing file (delete it in Explorer first to re-save with new padding)
 - `POST /api/compilation` — start a failure compilation for a star (`{"star":{"course_id":C,"star_id":S}}`) or segment (`{"segment_id":N}`), with `x_before`/`y_after` seconds around each failure. Returns `{job_id}`.
@@ -523,7 +553,8 @@ for its versioned completion record. Routes are mounted only when
 
 Runtime fields in `emu`:
 
-- `installation_verified`: installed wrapper matches this build by SHA-256, is
+- `installation_verified`: installed wrapper and renderer match this build by
+  embedded build id, the wrapper is
   selected in Project64, and has a wrapping configuration in its actual INI.
   This does not require a local consent timestamp and does not imply live readiness.
   A verified installation in supported Project64 suppresses automatic onboarding.
@@ -534,14 +565,13 @@ Runtime fields in `emu`:
 - `rom`: loaded cartridge header identity (`state`, `region`, `name`, `warning`).
   States are missing, supported US Usamune v1.93u, JP Usamune, or unsupported.
   The grading preference is never detection.
-- `checks`: plugin heartbeat from the target PID, recent pictures, input samples
-  and game progression. Fresh counter movement remains readable by multiple
+- `checks`: the capture layer alive in the target PID, captured pictures, input
+  samples and game progression. Fresh counter movement remains readable by multiple
   clients for three seconds; a new source or counter reset must prove itself again.
-  Intentional recorder idle can use an existing positive delivered-picture count
-  from that source's original PID (`frame_source_health.plugin_pid` in replay
-  status). It does not require new pictures or controller activity while AFK.
-  Live heartbeat, ROM and game/input sampling remain required; active capture
-  stalls, stopped recording and desktop fallback do not receive this exception.
+  Pictures come from the GPU observation, which binds the control page's PID and
+  birth to pictures the mux actually accepted. During intentional recorder idle
+  that receipt stands without new pictures, but live game and input movement are
+  still required; stopped recording and the desktop grab never qualify.
 - `verification`: `{step, message, ready, limited, installed, checks}`.
   Installation is not readiness. US requires all checks; JP verifies the
   available plugin/picture path, bypasses unimplemented tracking, and carries

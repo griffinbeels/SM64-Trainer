@@ -1,6 +1,6 @@
 """All replay tunables in one place (spec: Config section).
 
-The two STORAGE limits (retention_s, max_buffer_bytes) are additionally
+The attempt/time retention limits and max_buffer_bytes are additionally
 user-adjustable from the UI (recording-dot panel): they persist in a tiny
 JSON overlay file (settings_path) so changes survive restarts without a db
 migration. Everything else stays code-level on purpose."""
@@ -15,8 +15,8 @@ from sm64_events.core.paths import (replay_scratch_dir, replay_settings_path,
 
 @dataclass(frozen=True)
 class ReplayConfig:
-    enabled: bool = True
-    retention_s: float | None = None      # None = keep the whole session
+    retention_s: float | None = None      # None = no additional age limit
+    retention_attempts: int | None = 10    # completed attempts; saves live separately
     pre_pad_s: float = 3.0                # before the attempt anchor
     post_pad_s: float = 2.0               # after the closing event
     fps: int = 60                         # PJ64 presents per N64 VI (~59.94 Hz,
@@ -141,6 +141,7 @@ def raw_picture_args(codec: str) -> list[str]:
 # -- user-adjustable storage limits (UI: recording-dot panel) -----------------
 
 SETTINGS_LIMITS = {
+    "retention_attempts": (1, 1000),
     "retention_s": (60.0, 86400.0),          # 1 min .. 24 h (None = whole session)
     "max_buffer_bytes": (1024**3, 1024**4),  # 1 GiB .. 1 TiB
     "pre_pad_s": (0.0, 10.0),                # clip lead-in before the anchor
@@ -150,10 +151,14 @@ SETTINGS_LIMITS = {
 
 def validate_settings(retention_s: float | None, max_buffer_bytes: int,
                       pre_pad_s: float | None = None,
-                      post_pad_s: float | None = None) -> None:
+                      post_pad_s: float | None = None,
+                      retention_attempts: int | None = None) -> None:
     """ValueError on out-of-range values (the API maps it to 409).
     Pads are validated only when provided (None = caller keeps current)."""
     lo, hi = SETTINGS_LIMITS["retention_s"]
+    if retention_attempts is not None and (isinstance(retention_attempts, bool)
+            or not isinstance(retention_attempts, int) or not 1 <= retention_attempts <= 1000):
+        raise ValueError("retention_attempts must be null or an integer from 1 to 1000")
     if retention_s is not None and not (lo <= float(retention_s) <= hi):
         raise ValueError(
             f"retention_s must be null or {lo:.0f}..{hi:.0f} seconds")
@@ -170,10 +175,11 @@ def validate_settings(retention_s: float | None, max_buffer_bytes: int,
 
 def save_settings(path: Path, retention_s: float | None,
                   max_buffer_bytes: int, pre_pad_s: float,
-                  post_pad_s: float) -> None:
+                  post_pad_s: float, retention_attempts: int | None = 10) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(
-        {"retention_s": retention_s, "max_buffer_bytes": int(max_buffer_bytes),
+        {"retention_s": retention_s, "retention_attempts": retention_attempts,
+         "max_buffer_bytes": int(max_buffer_bytes),
          "pre_pad_s": float(pre_pad_s), "post_pad_s": float(post_pad_s)},
         indent=2))
 
@@ -194,11 +200,27 @@ def apply_settings_file(cfg: ReplayConfig) -> ReplayConfig:
     cap = raw.get("max_buffer_bytes", cfg.max_buffer_bytes)
     pre = raw.get("pre_pad_s", cfg.pre_pad_s)
     post = raw.get("post_pad_s", cfg.post_pad_s)
+    attempts = raw.get("retention_attempts", cfg.retention_attempts)
     try:
-        validate_settings(retention, cap, pre, post)
+        validate_settings(retention, cap, pre, post, attempts)
     except ValueError as e:
         logging.getLogger("sm64.replay").warning(
             "ignoring invalid %s: %s", cfg.settings_path, e)
         return cfg
-    return replace(cfg, retention_s=retention, max_buffer_bytes=int(cap),
+    return replace(cfg, retention_s=retention, retention_attempts=attempts, max_buffer_bytes=int(cap),
                    pre_pad_s=float(pre), post_pad_s=float(post))
+
+
+AUDIO_RESAMPLE_OPTIONS = "async=1:first_pts=0:min_hard_comp=0.1"
+
+
+def fragment_mux_options() -> dict[str, str]:
+    """Same source-clock fragmented MP4 policy for raw and encoded feeds."""
+    return {
+        "movflags": "delay_moov+default_base_moof+frag_keyframe",
+        "frag_duration": "100000",
+        "movie_timescale": "90000",
+        "video_track_timescale": "90000",
+        "avoid_negative_ts": "disabled",
+        "flush_packets": "1",
+    }

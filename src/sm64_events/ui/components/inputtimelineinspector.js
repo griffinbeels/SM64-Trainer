@@ -51,9 +51,25 @@ function InspectorRead({ data, frame, here, nowDoing, thereDoing, lastMoment, le
   `;
 }
 
-export function TimelineInspector({ data, template, frame, lead, total, video, pictureIgt, presentedSlot }) {
-  const here = frameAt(data.runs, frame);
-  const nowDoing = actionAt(data.actions, frame);
+function inspectorInput(data, frame, video, pictureStates, presentedSlot) {
+  // The poller can miss a late pad change in this game frame. Read the state
+  // retained with the actual presented picture, in O(1), even across repeated
+  // raw counters. An unknown slot is not permission to borrow a track sample.
+  if (video && Array.isArray(pictureStates)) {
+    return Number.isInteger(presentedSlot) ? pictureStates[presentedSlot] ?? null : null;
+  }
+  return frameAt(data.runs, frame);
+}
+
+function inspectorAction(data, frame, video, pictureStates, here) {
+  const action = actionAt(data.actions, frame);
+  return video && Array.isArray(pictureStates) && action?.action !== here?.action ? null : action;
+}
+
+export function TimelineInspector({ data, template, frame, lead, total, video, pictureIgt,
+                                    pictureStates, presentedSlot }) {
+  const here = inspectorInput(data, frame, video, pictureStates, presentedSlot);
+  const nowDoing = inspectorAction(data, frame, video, pictureStates, here);
   const markers = data.markers || [];
   const lastMoment = momentAt(markers, frame);
   const there = template ? frameAt(template.runs, frame) : null;
@@ -66,7 +82,7 @@ export function TimelineInspector({ data, template, frame, lead, total, video, p
           label=${template ? "Stick" : "Pressing"}
           templateFrame=${template ? there : undefined} />
       <${FacingDial} yaw=${here ? here.yaw : null}
-          angleUnits=${data.angle_units} speed=${here ? here.speed : 0}
+          angleUnits=${data.angle_units} speed=${here?.speed ?? null}
           templateYaw=${template ? (there ? there.yaw : null) : undefined}
           templateSpeed=${there ? there.speed : null}
           label="Mario faces" />

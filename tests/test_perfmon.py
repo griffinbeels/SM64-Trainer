@@ -75,7 +75,8 @@ def test_tick_samples_persists_and_sets_baseline(tmp_path):
     mon = PerfMonitor(scratch_dir=tmp_path, perf_log_path=path,
                       gauges=lambda: {"ring_bytes": 42}, interval_s=0.0)
     rec = mon._tick()
-    assert rec["rss_mib"] >= 0 and rec["objects"] > 0
+    assert rec["rss_mib"] >= 0 and rec["objects"] is None
+    assert rec["sampling"]["mode"] == "light"
     assert rec["gauges"] == {"ring_bytes": 42}
     assert "rss_mib" in mon.latest and "top_types" not in mon.latest  # trimmed
     assert mon._baseline                         # first sample captured
@@ -93,3 +94,136 @@ def test_tick_swallows_gauge_failure(tmp_path):
                       gauges=_boom)
     rec = mon._tick()                            # must not raise
     assert rec["gauges"] == {}
+
+
+def test_light_monitor_never_walks_heap_disk_or_gpu(monkeypatch, tmp_path, caplog):
+    from sm64_events.core import procmem
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("expensive probe during routine sampling")
+
+    monkeypatch.setattr(procmem.gc, "get_objects", forbidden)
+    monkeypatch.setattr(procmem, "gpu_memory", forbidden)
+    monkeypatch.setattr(procmem, "dir_size_bytes", forbidden)
+    with caplog.at_level("INFO", logger="sm64.procmem"):
+        record = PerfMonitor(scratch_dir=tmp_path, perf_log_path=None, deep=False)._tick()
+    assert record["objects"] is None and record["gpu"] is None
+    assert record["scratch_mib"] is None and record["top_types"] == {}
+    assert record["system"] is not None
+    assert "gpu=unmeasured" in caplog.text and "scratch=unmeasured" in caplog.text
+
+
+def test_deep_monitor_remains_available(monkeypatch, tmp_path):
+    monkeypatch.setenv("SM64_PERFMON_DEEP", "1")
+    record = PerfMonitor(scratch_dir=tmp_path, perf_log_path=None)._tick()
+    assert record["objects"] > 0 and record["top_types"]
+    assert record["sampling"]["mode"] == "deep"
+
+
+def test_slow_probe_does_not_block_event_loop_and_gauges_stay_on_owner(monkeypatch):
+    import asyncio
+    import threading
+    from sm64_events.core import perfmon
+
+    entered, release = threading.Event(), threading.Event()
+    owner = threading.get_ident()
+
+    def collect():
+        assert threading.get_ident() != owner
+        entered.set()
+        assert release.wait(2)
+        return {}
+
+    def gauges():
+        assert threading.get_ident() == owner
+        return {"owner": True}
+
+    monitor = PerfMonitor(perf_log_path=None, gauges=gauges)
+    monkeypatch.setattr(monitor, "_collect", collect)
+    monkeypatch.setattr(perfmon, "start_new_session_log", lambda _: None)
+
+    async def run():
+        task = asyncio.create_task(monitor.run())
+        try:
+            for _ in range(100):
+                if entered.is_set():
+                    break
+                await asyncio.sleep(.005)
+            assert entered.is_set()
+            release.set()
+            for _ in range(100):
+                if monitor.latest:
+                    break
+                await asyncio.sleep(.005)
+            assert monitor.latest["gauges"] == {"owner": True}
+        finally:
+            release.set()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(run())
+
+
+def test_cancel_waits_for_its_inflight_sample(monkeypatch):
+    import asyncio
+    import threading
+    import pytest
+
+    entered, release = threading.Event(), threading.Event()
+    monitor = PerfMonitor(perf_log_path=None)
+
+    def collect():
+        entered.set()
+        assert release.wait(2)
+        return {}
+
+    monkeypatch.setattr(monitor, "_collect", collect)
+
+    async def run():
+        task = asyncio.create_task(monitor.run())
+        try:
+            for _ in range(100):
+                if entered.is_set():
+                    break
+                await asyncio.sleep(.005)
+            assert entered.is_set()
+            task.cancel()
+            await asyncio.sleep(.01)
+            assert not task.done() and not monitor.latest
+            task.cancel()
+            await asyncio.sleep(.01)
+            assert not task.done() and not monitor.latest
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert monitor.latest
+
+    asyncio.run(run())
+
+
+def test_real_recorder_gauges_do_not_enter_full_status_or_storage(monkeypatch, tmp_path):
+    from test_replay_recorder import make_recorder, FakeVideoSource, FakeAudioSource
+    from sm64_events.server.app import _create_monitor
+    from types import SimpleNamespace
+
+    class Poller:
+        def perf_stats(self):
+            return {"ticks": 17}
+
+    class Replay:
+        recorder = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource())
+        cfg = SimpleNamespace(scratch_dir=tmp_path)
+
+    def forbidden(*args):
+        raise AssertionError("gauge entered storage")
+
+    monkeypatch.setattr(Replay.recorder, "status", forbidden)
+    monkeypatch.setattr(Replay.recorder.fragments, "coverage", forbidden)
+    Replay.recorder._audio_mode = "process"
+    monitor = _create_monitor(Poller(), Replay())
+    assert monitor._read_gauges() == {"ticks": 17, "ring_bytes": 0, "idle": False,
+                                       "recording": False, "audio_mode": "process"}

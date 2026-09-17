@@ -27,7 +27,7 @@ def _status(state="not_installed", **overrides) -> LayerStatus:
     fields = dict(pj64_dir=None, pj64_running=False, registry_graphics_dll=None,
                  wrapper_present=False, wrapper_current=False,
                  wrapper_selected=False, wrapped_name=None, layer_alive=False,
-                 gl_context=False, consented_at=None, problems=[], state=state)
+                 consented_at=None, problems=[], state=state)
     fields.update(overrides)
     return LayerStatus(**fields)
 

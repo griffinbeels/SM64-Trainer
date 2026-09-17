@@ -4,7 +4,7 @@
 // boundary (the fix from replay.js: stepping 1/encode-fps only changed the
 // image every 2nd press). Used by the replay player and the compare sync layer.
 import { presentedVideoTime } from "./videopicture.js";
-import { pauseReviewSource, reviewDuration, seekReviewSource } from "./reviewsource.js";
+import { pauseReviewSource, seekReviewSource } from "./reviewsource.js";
 
 export function gameFrameOf(video, gameFps = 30) {
   return Math.floor((video.currentTime || 0) * gameFps + 1e-4);
@@ -72,7 +72,7 @@ export function timeOfSlot(slot, clock) {
 }
 
 function boundedVideoClock(video, clock) {
-  const duration = reviewDuration(video);
+  const duration = video.duration;
   return { ...clock, duration: Number.isFinite(duration) ? duration : clock?.duration };
 }
 
@@ -103,7 +103,7 @@ export function stepGameFrame(video, dir, gameFps = 30,
   // Legacy video without a picture clock retains the 30 Hz controls.
   const n = gameFrameOf(video, gameFps);
   seekReviewSource(video, clampToFrames(
-    (n + dir + 0.5) / gameFps, reviewDuration(video) || 0, gameFps));
+    (n + dir + 0.5) / gameFps, video.duration || 0, gameFps));
 }
 
 // Walk encoded slots in capture order. Raw game counters can go backward

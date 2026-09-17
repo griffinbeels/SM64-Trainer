@@ -8,10 +8,11 @@ Anything else (e.g. codec failure on a corrupt segment) is a genuine 500 —
 extract.py already guarantees no partial file survives those.
 """
 import asyncio
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, ExitStack
 from sm64_events.replay.sessiongate import SessionGate
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -30,6 +31,7 @@ from sm64_events.replay.publication import (publish as publish_saved, recover as
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
+from sm64_events.replay.attemptretention import AttemptHistory
 
 log = logging.getLogger("sm64.replay")
 
@@ -94,10 +96,13 @@ def _picture_states(meta: dict) -> list | None:
                 or not all(type(value) is int for value in pad)):
             states.append(None)
             continue
-        yaw = (mario[1] if isinstance(mario, (list, tuple)) and len(mario) == 3
-               and type(mario[1]) is int else None)
+        valid_mario = isinstance(mario, (list, tuple)) and len(mario) == 3
+        yaw = mario[1] if valid_mario and type(mario[1]) is int else None
+        action = mario[0] if valid_mario and type(mario[0]) is int else None
+        speed = (mario[2] if valid_mario and type(mario[2]) in (int, float)
+                 and math.isfinite(mario[2]) else None)
         states.append({"stick_x": pad[0], "stick_y": pad[1],
-                       "buttons": pad[2], "yaw": yaw})
+                       "buttons": pad[2], "yaw": yaw, "action": action, "speed": speed})
     return states
 
 
@@ -179,7 +184,7 @@ class ReplayService:
         # his 100-coin replay came back black, its H.264 stream shredded,
         # after the LBLJ autodetect re-opened the drawer mid-extraction
         # (2026-09-02). The second caller waits, then finds the cached clip.
-        self._cut_locks: dict[int, threading.Lock] = {}
+        self._cut_locks: dict[int, tuple[threading.Lock, int]] = {}
         self._cut_locks_guard = threading.Lock()
         self._review_state = ReviewStateStore()
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
@@ -193,13 +198,68 @@ class ReplayService:
         self._save_guard = threading.Lock()
         self._active_saves = 0
         self._session_gate = SessionGate()
+        self._descriptors: dict[str, tuple[int, dict | None]] = {}  # sidecar name -> (mtime, descriptor)
         self._save_failures: dict[int, str] = {}
         self._recovery_failures: list[str] = []
         self.recorder.scratch_protection = self._protected_scratch
+        self.history = AttemptHistory(cfg.retention_attempts)
+        if self.tracker is not None:
+            self.tracker.on_replay_history = self.history.observe
+        self.recorder.maintain_history = self._maintain_history
+
+    def _maintain_history(self):
+        cutoff = self.history.cutoff(self.pre_pad_s)
+        if cutoff is not None:
+            # Delete only whole eligible files; active readers/save spans lease them.
+            self.recorder.ring.expire_before(cutoff)
+            if self.fragments is not None:
+                self.fragments.expire_before(cutoff)
 
     def _protected_scratch(self):
         with self._save_guard:
             return [self.cfg.scratch_dir] if self._active_saves else []
+
+    @property
+    def fragments(self):
+        source = getattr(self.recorder, "fragments", None)
+        return source if source is not None and source.enabled else None
+
+    def buffer_coverage(self):
+        return self.fragments.coverage() if self.fragments else self.recorder.ring.coverage("video")
+
+    def _fragment_meta(self, attempt, clip, leases=None):
+        meta_path = clip.with_suffix(".json")
+        cached = json.loads(meta_path.read_text()) if meta_path.exists() else None
+        source = self.fragments
+        if cached and cached.get("fragment_source"):
+            with ExitStack() as local:
+                (leases or local).enter_context(source.read(cached["fragment_source"]))
+                return cached, False
+        start, end = self._span(attempt)
+        # Wait only for the attempted action itself, never future post-padding.
+        required = _parse_utc(attempt.ended_utc)
+        deadline = time.monotonic() + self.cfg.extract_wait_s
+        while time.monotonic() < deadline:
+            coverage = source.coverage()
+            if coverage and coverage[1] >= required:
+                break
+            time.sleep(0.02)
+        with ExitStack() as local:
+            try:
+                _, result, descriptor = (leases or local).enter_context(source.open(
+                    start, end, required_span=(_parse_utc(attempt.started_utc), required)))
+            except ValueError as missing:
+                # Say WHY nothing is playable. A recording flag alone hid a
+                # dead GPU request and a desktop fallback behind "no footage
+                # yet" (his report, 2026-09-16).
+                raise ValueError(f"{missing} ({self._footage_note()})") from missing
+            meta = {"duration_s": result.duration_s, "truncated": result.truncated,
+                    "start_utc": result.start_utc.isoformat(), "video_start_s": result.video_start_s,
+                    "frame_times": [round(t, 6) for t in result.frame_times], "encode": "picture_feed",
+                    "fragment_source": descriptor}
+            self._map_from_feeds(meta, result)
+        self.clips_dir.mkdir(parents=True, exist_ok=True)
+        return meta, True
 
     def _pin_clip(self, attempt_id: int):
         pin = getattr(self.recorder.ring, "pin_temp", None)
@@ -230,9 +290,23 @@ class ReplayService:
             log.exception("PB time saved, but replay %s could not be preserved", attempt_id)
             return {"status": "failed", "message": message}
 
-    def _cut_lock(self, attempt_id: int) -> threading.Lock:
+    @contextmanager
+    def _cut_lock(self, attempt_id: int):
+        """Serialize one attempt while retaining only active callers and waiters."""
         with self._cut_locks_guard:
-            return self._cut_locks.setdefault(attempt_id, threading.Lock())
+            entry = self._cut_locks.get(attempt_id)
+            lock, users = entry if entry is not None else (threading.Lock(), 0)
+            self._cut_locks[attempt_id] = lock, users + 1
+        try:
+            with lock:
+                yield
+        finally:
+            with self._cut_locks_guard:
+                _, users = self._cut_locks[attempt_id]
+                if users == 1:
+                    del self._cut_locks[attempt_id]
+                else:
+                    self._cut_locks[attempt_id] = lock, users - 1
 
     # -- queries -------------------------------------------------------------
 
@@ -240,6 +314,7 @@ class ReplayService:
         with self._save_guard:
             failures = dict(self._save_failures)
         return {"enabled": True, **self.recorder.status(),
+                "retention_attempts": self.history.count,
                 "save_failures": failures, "recovery_failures": self._recovery_failures}
 
     def settings(self) -> dict:
@@ -250,6 +325,7 @@ class ReplayService:
         saved = (sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
                  if root.exists() else 0)
         return {"retention_s": self.recorder.ring.retention_s,
+                "retention_attempts": self.history.count,
                 "max_buffer_bytes": self.recorder.ring.max_bytes,
                 "pre_pad_s": self.pre_pad_s,
                 "post_pad_s": self.post_pad_s,
@@ -259,25 +335,36 @@ class ReplayService:
     def update_settings(self, retention_s: float | None,
                         max_buffer_bytes: int,
                         pre_pad_s: float | None = None,
-                        post_pad_s: float | None = None) -> dict:
+                        post_pad_s: float | None = None,
+                        retention_attempts="unchanged") -> dict:
         """Validate -> persist -> apply live (ring evicts immediately; pads
         affect the next view(); the recorder's idle threshold follows the
         padding window). None pads = keep current. Persist before apply so
         a write failure can't leave limits applied but not durable."""
         pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
         post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
-        validate_settings(retention_s, max_buffer_bytes, pre, post)
+        count = self.history.count if retention_attempts == "unchanged" else retention_attempts
+        validate_settings(retention_s, max_buffer_bytes, pre, post, count)
         save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
-                      pre, post)
+                      pre, post, count)
         self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
+        self.history.configure(count)
         self.pre_pad_s, self.post_pad_s = pre, post
         self.recorder.set_idle_after(pre + post)
+        self._maintain_history()
         return self.settings()
 
     def _attempt(self, attempt_id: int):
-        if self.tracker.db is None:
+        db = self.tracker.db
+        if db is None:
             raise RuntimeError("database unavailable")
-        for a in self.tracker.db.attempts():
+        single = getattr(db, "attempt", None)
+        if callable(single):
+            found = single(attempt_id)
+            if found is None:
+                raise LookupError(f"no attempt {attempt_id}")
+            return found
+        for a in db.attempts():  # test doubles that only know the list
             if a.id == attempt_id:
                 return a
         raise LookupError(f"no attempt {attempt_id}")
@@ -318,17 +405,20 @@ class ReplayService:
         if self.tracker.db is None:
             return []
         saved_ids = self.saved_attempt_ids()
-        cov = self.recorder.ring.coverage("video")
+        cov = self.buffer_coverage()
         buf_start, buf_end = cov if cov else (None, None)
         out: list[int] = []
         for a in self.tracker.db.attempts():
+            if a.id not in saved_ids and not self.history.allows(a.id):
+                continue
             if (a.id in saved_ids
                     or (self.clips_dir / _CLIP_NAME.format(id=a.id)).exists()):
                 out.append(a.id)
                 continue
             if (buf_start is not None and a.started_utc and a.ended_utc
                     and buf_start <= _parse_utc(a.started_utc)
-                    and _parse_utc(a.ended_utc) <= buf_end):
+                    and _parse_utc(a.ended_utc) <= buf_end
+                    and (not self.fragments or self.fragments.covers(_parse_utc(a.started_utc), _parse_utc(a.ended_utc)))):
                 out.append(a.id)
         return out
 
@@ -350,7 +440,7 @@ class ReplayService:
             return self._view(attempt_id)
 
     @measured("replay.prepare_view")
-    def _view(self, attempt_id: int) -> dict:
+    def _view(self, attempt_id: int, leases=None) -> dict:
         """Return clip metadata, extracting and caching on first call.
 
         Source order: saved file -> scratch cache -> ring extraction.
@@ -364,12 +454,17 @@ class ReplayService:
         clip = self.clips_dir / name
         meta = clip.with_suffix(".json")
         saved = self.find_saved(attempt_id)
+        if saved is None and not self.history.allows(attempt_id):
+            raise LookupError("Replay expired from the recent-attempt window")
         extracted = False
         if saved is not None:
             m = self._saved_meta(saved)
             url, source = f"/api/replay/saved/{attempt_id}", "saved"
         elif clip.exists() and meta.exists():
             m = json.loads(meta.read_text())
+            url, source = f"/api/replay/clips/{name}", "buffer"
+        elif self.fragments is not None:
+            m, extracted = self._fragment_meta(a, clip, leases)
             url, source = f"/api/replay/clips/{name}", "buffer"
         else:
             start, end = self._span(a)
@@ -677,9 +772,14 @@ class ReplayService:
         for index in slots:
             if index is not None:
                 occurrences.setdefault(rows[index].get("frame"), set()).add(index)
+        # One captured occurrence is one picture, however many video slots
+        # hold it (a heartbeat repeats the same row). Count and compare it
+        # once, at the first slot that shows it.
+        checked = set()
         for slot, index in enumerate(slots):
-            if index is None:
+            if index is None or index in checked:
                 continue
+            checked.add(index)
             row = rows[index]
             stamped = row.get("pad")
             frame = row.get("frame")
@@ -790,6 +890,11 @@ class ReplayService:
                 self._active_saves -= 1
 
     def _save(self, attempt_id: int) -> dict:
+        # Hold the exact GOP/AAC dependencies from selection through publication.
+        with ExitStack() as leases:
+            return self._save_owned(attempt_id, leases)
+
+    def _save_owned(self, attempt_id: int, leases) -> dict:
         """Persist a clip to the permanent save tree (date/session/).
 
         Idempotent: an attempt that already has a saved file returns it
@@ -804,7 +909,7 @@ class ReplayService:
         if existing is not None:
             m = self._saved_meta(existing)
             return {"path": str(existing), "truncated": m.get("truncated", False)}
-        self._view(attempt_id)  # caller holds the cut lock
+        self._view(attempt_id, leases)  # caller holds the cut lock
         clip = self.clips_dir / _CLIP_NAME.format(id=attempt_id)
         ended_local = _parse_utc(a.ended_utc).astimezone()  # folder by local date
         dest_dir = (self.cfg.save_root / ended_local.strftime("%Y-%m-%d")
@@ -823,8 +928,9 @@ class ReplayService:
         m = json.loads(clip.with_suffix(".json").read_text())
         # fps stamped at save time: the step buttons must match the clip's
         # actual encode rate even if cfg.fps changes in a future version.
-        dest = publish_saved(self.cfg.save_root, attempt_id, clip, dest,
-                      {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None))
+        with self.read_clip(clip.name) as media:
+            dest = publish_saved(self.cfg.save_root, attempt_id, media, dest,
+                          {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None))
         forget = getattr(self.recorder.ring, "forget_temp", None)
         if forget is not None:
             forget(f"attempt:{attempt_id}", delete=True)
@@ -867,7 +973,45 @@ class ReplayService:
             raise LookupError("no such clip")
         attempt_id = int(name.removeprefix("clip_attempt_").removesuffix(".mp4"))
         with self._pin_clip(attempt_id):
+            clip = self.clips_dir / name
+            meta = clip.with_suffix(".json")
+            if not clip.exists() and self.fragments is not None and meta.exists():
+                descriptor = self._fragment_descriptor(name, meta)
+                if descriptor is not None:
+                    with self.fragments.read(descriptor) as media:
+                        yield media
+                    return
             yield self.clip_path(name)
+
+    def _footage_note(self) -> str:
+        """The recorder's actual state, for an error that would otherwise only
+        say that nothing is playable."""
+        try:
+            st = self.recorder.status()
+        except Exception:  # noqa: BLE001 - a diagnostic must not raise over the error it explains
+            return "recorder status unavailable"
+        parts = [f"recording={'on' if st.get('recording') else 'off'}",
+                 f"source={st.get('frame_source')}"]
+        if st.get("publication_error"):
+            parts.append(f"publication error: {st['publication_error']}")
+        recovery = st.get("recovery") or {}
+        if recovery.get("error"):
+            parts.append(f"capture recovery: {recovery['error']}")
+        return ", ".join(parts)
+
+    def _fragment_descriptor(self, name: str, meta: Path):
+        """The sidecar's fragment descriptor, parsed once per sidecar version.
+        Every Range request (each seek) came through here and re-parsed a
+        sidecar carrying one dict per picture (round 48)."""
+        stamp = meta.stat().st_mtime_ns
+        cached = self._descriptors.get(name)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        descriptor = json.loads(meta.read_text()).get("fragment_source")
+        if len(self._descriptors) >= 64:
+            self._descriptors.pop(next(iter(self._descriptors)))
+        self._descriptors[name] = (stamp, descriptor)
+        return descriptor
 
     def saved_clip_path(self, attempt_id: int) -> Path:
         """Saved-clip path for serving. The id is the only input (an int
@@ -885,6 +1029,7 @@ class ReplayService:
             self._start_session()
 
     def _start_session(self) -> None:
+        self.history.clear()
         self._review_state.clear()
         self._recovery_failures = recover_saved(self.cfg.save_root)
         for failure in self._recovery_failures:
@@ -909,4 +1054,5 @@ class ReplayService:
     def _rotate_session(self) -> None:
         with self._session_gate.change():
             self.recorder.reset_session_scratch()
+            self.history.clear()
             self._review_state.clear()

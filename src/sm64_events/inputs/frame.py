@@ -97,6 +97,16 @@ def dead_zone(raw: int) -> float:
     return 0.0
 
 
+def valid_raw_stick(x: int, y: int) -> bool:
+    """The controller stores sign-extended s8 axes in s16 RAM fields.
+
+    Reset/loading memory can be readable with a stable timer while these
+    fields are not a controller state. Never clamp that data into an input.
+    """
+    return (isinstance(x, int) and isinstance(y, int)
+            and -128 <= x <= 127 and -128 <= y <= 127)
+
+
 def fits_controller(block: bytes) -> ControllerFit | None:
     """The whole struct, decoded and checked AGAINST ITSELF, or None.
 
@@ -112,7 +122,7 @@ def fits_controller(block: bytes) -> ControllerFit | None:
         block, A.CONTROLLER_STICK_X_OFF)
     buttons, pressed = _BUTTONS.unpack_from(block,
                                             A.CONTROLLER_BUTTON_DOWN_OFF)
-    if not (-128 <= raw_x <= 127 and -128 <= raw_y <= 127):
+    if not valid_raw_stick(raw_x, raw_y):
         return None
     if buttons & ~A.BUTTON_VALID_MASK or pressed & ~buttons:
         return None

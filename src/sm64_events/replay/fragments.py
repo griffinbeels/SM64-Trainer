@@ -10,8 +10,9 @@ validation or an index: a complete box pair alone does not prove decoder-safe
 random access, sample duration, A/V sync, codec compatibility or valid truns.
 The producer must use the tested FFmpeg mux topology, and independently index
 source PTS/DTS and random-access dependencies before exposing review media.
-No recorder/service uses this module yet; saved/export MP4 remains unchanged.
-See docs/replay-fragments.md for evidence and the pending producer contract.
+The opt-in FfmpegAvSink fragment consumer uses this through FragmentArchive;
+the application's recorder/service default and saved/export MP4 stay unchanged.
+See docs/replay-fragments.md for evidence and remaining integration gates.
 """
 from dataclasses import dataclass
 import struct

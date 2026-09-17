@@ -21,16 +21,18 @@ one (each tick worked for 3.4 ms and then slept a full interval), and no game
 frame went unobserved at any rate tried — 60, 120, 250 or 500.
 """
 import asyncio
+from contextlib import asynccontextmanager
 from sm64_events.core.profiling import measured
 import logging
 from datetime import datetime, timezone
-from time import perf_counter
+from time import monotonic, perf_counter
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot, SnapshotReader
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.memory import addresses as A
 from sm64_events.detectors.anchors import BOOT_TIMER_MAX
+from sm64_events.core.onboarding import identify_rom, is_practice_rom
 from sm64_events.memory.base import MemoryReadError
 
 log = logging.getLogger("sm64.poller")
@@ -53,12 +55,33 @@ def _plausible(snap: GameSnapshot) -> bool:
 class Poller:
     SAMPLING_HZ = 250        # with a pad to catch after the game's rewrite
     SNAPSHOT_HZ = 60         # without one: the old loop, every tick a read
+    ATTACH_RETRY_S = 2.0
+    LAYOUT_RETRY_S = 5.0
+    #: How often a refused cartridge is looked at again, and the longest a
+    #: served one goes without being identified. Swapping ROMs in Project64
+    #: is a common move (vanilla for a real run, Usamune to practise), and
+    #: nothing in RDRAM says it happened: 1.6 neither clears nor releases
+    #: RDRAM between ROMs, so the old game's memory stays readable and
+    #: plausible until the new one boots (Cpu.cpp CloseCpu, Memory.cpp
+    #: Allocate_ROM). A header read is one small cached read (memory/pj64.py).
+    PRACTICE_ROM_RETRY_S = 2.0
+    PRACTICE_ROM_CHECK_S = 1.0
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
+                 detector_factory=None, on_gap=None,
 ):
         self.memory = memory
         self.detectors = list(detectors)
+        self.detector_factory = detector_factory
+        #: Whether the cartridge Project64 has open is a practice ROM: None
+        #: until a header is read (or when the backend has none), then
+        #: True/False. The recorder's capture gate reads it (main.py).
+        self.practice_rom: bool | None = None
+        self._rom_name: str | None = None
+        self._rom_identified_at = float("-inf")
+        self.on_gap = on_gap
+        self._tick_lock = asyncio.Lock()
         self.broadcaster = broadcaster
         # The rate follows the sampler. Without one there is nothing to do
         # between game frames and every tick reads the whole snapshot -- so
@@ -138,10 +161,46 @@ class Poller:
         log.info("session %s", "paused" if paused else "resumed")
 
     def _break_input_capture(self) -> None:
-        if self.input_sampler is not None:
-            self.input_sampler.flush()
-        self._frame_now = self._snapshot_frame = None
-        self._ticks_in_frame = self._unreadable_ticks = 0
+        try:
+            if self.input_sampler is not None:
+                self.input_sampler.flush()
+        finally:
+            self._frame_now = self._snapshot_frame = None
+            self._ticks_in_frame = self._unreadable_ticks = 0
+
+    async def prepare_recovery(self, reason: str) -> None:
+        """Discard uncertain detector state; valid buffered input keeps its owner."""
+        async with self.stream_boundary():
+            if self.on_gap is not None:
+                await self.on_gap(reason)
+            self.memory.detach()
+
+    def _reset_detectors(self):
+        if self.detector_factory is not None:
+            self.detectors = list(self.detector_factory())
+
+    def bind_sampler(self, sampler) -> None:
+        """Late store attachment needs the same capture cadence as a normal boot."""
+        self._break_input_capture()
+        self.input_sampler = sampler
+        hz = self.SAMPLING_HZ if sampler is not None else self.SNAPSHOT_HZ
+        self.interval = 1.0 / hz
+        self._settle_ticks = max(1, round(A.CONTROLLER_SETTLE_PHASE * hz / GAME_FPS))
+
+    @asynccontextmanager
+    async def stream_boundary(self):
+        """Finish in-flight publishing before changing the session owning input.
+
+        This only suspends this server's polling; it never pauses emulation.
+        The next pair establishes fresh detector state under the new owner.
+        """
+        async with self._tick_lock:
+            try:
+                self._break_input_capture()
+                yield
+            finally:
+                self._prev = self.latest = None
+                self._reset_detectors()
 
     def _due_for_a_snapshot(self) -> bool:
         """Sample the pad, and say whether this tick should read the game.
@@ -176,6 +235,10 @@ class Poller:
 
     @measured("poller.tick", interval=True)
     async def tick(self) -> None:
+        async with self._tick_lock:
+            await self._tick()
+
+    async def _tick(self) -> None:
         if self.input_sampler is not None:
             due_for_a_snapshot = self._due_for_a_snapshot()
             if (not due_for_a_snapshot
@@ -196,6 +259,9 @@ class Poller:
             self.memory.detach()
             self._prev = None
             self.latest = None
+            self._reset_detectors()
+            if self.on_gap is not None:
+                await self.on_gap("emulator disconnected")
             await self.broadcaster.publish(_lifecycle_event("emulator_disconnected"))
             return
         if not _plausible(curr):
@@ -205,6 +271,9 @@ class Poller:
             self.memory.detach()
             self._prev = None
             self.latest = None
+            self._reset_detectors()
+            if self.on_gap is not None:
+                await self.on_gap("implausible memory snapshot")
             return
         # Reset-across-reattach synthesis (live gate 2026-06-15): an F1 console
         # reset makes RDRAM briefly implausible/unreadable, so the poller
@@ -219,6 +288,8 @@ class Poller:
         # (Residual edge: if reattach lands AFTER boot, timer >= BOOT_TIMER_MAX,
         # so a slow reattach can still miss it — acceptable; F1 reattach observed
         # in the boot range.)
+        if await self._left_practice_rom(curr):
+            return
         if (self._prev is None and self._last_timer is not None
                 and self._last_timer >= BOOT_TIMER_MAX
                 and curr.global_timer < BOOT_TIMER_MAX):
@@ -228,15 +299,7 @@ class Poller:
         if self._prev is not None:
             # Time the synchronous detector COMPUTE only (not the awaited
             # broadcast I/O): collect, measure, then publish.
-            t0 = perf_counter()
-            out: list[Event] = []
-            for detector in self.detectors:
-                try:
-                    out.extend(detector.process(self._prev, curr))
-                except Exception:
-                    log.exception("detector %s failed; skipped this tick",
-                                  type(detector).__name__)
-            self._record_tick_ms((perf_counter() - t0) * 1000)
+            out, failed = self._run_detectors(curr)
             for event in out:
                 await self.broadcaster.publish(event)
             # AFTER this tick's events: an event on this frame may record the
@@ -244,9 +307,87 @@ class Poller:
             # the order the whole engine keeps.
             if self.on_frame is not None:
                 await self.on_frame(curr.global_timer)
+            if failed is not None:
+                await self._restart_detectors(curr, failed)
+                return
         self._prev = curr
         self.latest = curr
         self._last_timer = curr.global_timer
+
+    def _run_detectors(self, curr) -> tuple[list, str | None]:
+        """Every detector sees this pair; the name of the one that failed, if any.
+        Times the synchronous compute only, not the awaited broadcast."""
+        t0 = perf_counter()
+        out: list[Event] = []
+        failed = None
+        for detector in self.detectors:
+            try:
+                out.extend(detector.process(self._prev, curr))
+            except Exception:
+                # Never let it escape: an escaped exception ended the poll task
+                # while /health kept answering ok over stale state
+                # (course-detection-poll-crash, 2026-09). The other detectors'
+                # events on this pair still publish.
+                log.exception("detector %s failed; restarting detector state",
+                              type(detector).__name__)
+                failed = type(detector).__name__
+        self._record_tick_ms((perf_counter() - t0) * 1000)
+        return out, failed
+
+    async def _restart_detectors(self, curr, failed: str) -> None:
+        """A detector may have mutated its pending state before failing: fresh
+        detectors, the next pair primes them, and the gap hook hears why,
+        rather than retrying that state at 30 Hz."""
+        self._reset_detectors()
+        self.latest = curr
+        self._last_timer = curr.global_timer
+        self._prev = None
+        if self.on_gap is not None:
+            await self.on_gap(f"detector {failed} failed")
+
+    def _serves_loaded_rom(self) -> bool:
+        """Identify the cartridge before serving it. Vanilla SM64, another
+        hack or another game is a real run, not practice: nothing is read,
+        detected, sampled or journalled for it (his ruling, 2026-09-16).
+        Only a POSITIVE identification refuses. A header that cannot be read
+        keeps the last identification, and with none it serves, so a failed
+        scan never stops practice and a momentary miss mid-swap (the old
+        image released, the new one not yet read) never serves a real run."""
+        # A backend that can read the cartridge declares it on its class (a
+        # forwarding proxy answers every name and proves nothing).
+        read = getattr(type(self.memory), "rom_header", None)
+        identity = identify_rom(read(self.memory) if callable(read) else None)
+        self._rom_identified_at = monotonic()
+        if identity["state"] == "missing":
+            return self.practice_rom is not False
+        practice = is_practice_rom(identity)
+        if (practice, identity["name"]) != (self.practice_rom, self._rom_name):
+            log.info("loaded ROM %r: %s", identity["name"],
+                     "practice tooling on" if practice else
+                     "not a practice ROM; tracking and replay stay off")
+        self.practice_rom, self._rom_name = practice, identity["name"]
+        return practice
+
+    async def _left_practice_rom(self, curr) -> bool:
+        """Is the served cartridge still a practice ROM? A new one starts
+        without the emulator ever becoming unreadable, so the header is read
+        again whenever the timer moves backward (a boot, a reset, a state
+        load: every SM64 ROM starts its timer at zero) and at least every
+        PRACTICE_ROM_CHECK_S (a game whose RAM says nothing). Both run before
+        the detectors, so the new cartridge's first frame is never served.
+        Leaving practice detaches like a lost emulator."""
+        went_back = self._last_timer is not None and curr.global_timer < self._last_timer
+        due = monotonic() - self._rom_identified_at >= self.PRACTICE_ROM_CHECK_S
+        if not (went_back or due) or self._serves_loaded_rom():
+            return False
+        self._break_input_capture()
+        self.memory.detach()
+        self._prev = None
+        self.latest = None
+        self._reset_detectors()
+        if self.on_gap is not None:
+            await self.on_gap("not a practice ROM")
+        return True
 
     def _record_tick_ms(self, dt_ms: float) -> None:
         self._tick_count += 1
@@ -287,10 +428,14 @@ class Poller:
                 continue
             if not self.memory.attached:
                 if not self.memory.attach():
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(self.ATTACH_RETRY_S)
+                    continue
+                if not self._serves_loaded_rom():
+                    self.memory.detach()
+                    await asyncio.sleep(self.PRACTICE_ROM_RETRY_S)
                     continue
                 if not self._probe():
-                    await asyncio.sleep(5.0)
+                    await asyncio.sleep(self.LAYOUT_RETRY_S)
                     continue
                 await self.broadcaster.publish(_lifecycle_event("emulator_connected"))
             await self.tick()

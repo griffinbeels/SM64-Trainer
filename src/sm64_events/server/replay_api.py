@@ -10,7 +10,10 @@ never blocks."""
 from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.concurrency import contextmanager_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
+
+from sm64_events.replay.virtualmp4 import VirtualMp4
+from sm64_events.server.replay_range import serve_media
 
 
 class RevealBody(BaseModel):
@@ -18,6 +21,7 @@ class RevealBody(BaseModel):
 
 
 class SettingsBody(BaseModel):
+    retention_attempts: StrictInt | None = None
     retention_s: float | None = None   # null/omitted = keep the whole session
     max_buffer_bytes: int
     pre_pad_s: float | None = None     # omitted = keep current
@@ -43,7 +47,10 @@ class ReplayClipResponse(Response):
     async def __call__(self, scope, receive, send):
         try:
             async with contextmanager_in_threadpool(self.replay.read_clip(self.name)) as path:
-                await FileResponse(path, media_type="video/mp4")(scope, receive, send)
+                if isinstance(path, VirtualMp4):
+                    await serve_media(path, scope, receive, send)
+                else:
+                    await FileResponse(path, media_type="video/mp4")(scope, receive, send)
         except (LookupError, ValueError, RuntimeError) as error:
             raise _http(error) from error
 
@@ -69,7 +76,7 @@ def _review_routes(router, replay):
 
 
 def _media_routes(router, replay):
-    @router.get("/replay/clips/{name}")
+    @router.api_route("/replay/clips/{name}", methods=["GET", "HEAD"])
     def clip(name: str):
         return ReplayClipResponse(replay, name)
 
@@ -109,9 +116,11 @@ def create_replay_router(replay) -> APIRouter:
     @router.put("/replay/settings")
     def put_settings(body: SettingsBody):
         try:
+            options = ({"retention_attempts": body.retention_attempts}
+                       if "retention_attempts" in body.model_fields_set else {})
             return replay.update_settings(body.retention_s,
                                           body.max_buffer_bytes,
-                                          body.pre_pad_s, body.post_pad_s)
+                                          body.pre_pad_s, body.post_pad_s, **options)
         except (LookupError, ValueError, RuntimeError) as e:
             raise _http(e)
 

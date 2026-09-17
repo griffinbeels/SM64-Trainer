@@ -42,3 +42,13 @@ class MediaRun:
         # Quantize capture microseconds using FFmpeg's AV_ROUND_NEAR_INF rule.
         micros = self.microseconds_at(stamp)
         return (micros * 9 + 50) // 100
+
+
+def next_picture_pts(run: MediaRun, stamp: float, last_pts: int | None) -> int:
+    """Assign the next transport tick before encoding, preserving feed order.
+
+    Distinct captured pictures can quantize to the same tick. Record this actual
+    assigned tick with the occurrence; never let an encoder retime it invisibly.
+    The caller commits last_pts only after the owning stage accepts the picture.
+    """
+    return max(run.ticks_at(stamp), last_pts + 1 if last_pts is not None else 0)

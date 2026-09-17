@@ -44,6 +44,7 @@ import time
 import numpy as np
 
 from sm64_events.replay._system_audio import AudioPump
+from sm64_events.replay.audiostop import stop_process_tap
 
 log = logging.getLogger("sm64.replay")
 
@@ -181,6 +182,8 @@ class DeafStreamWatchdog:
         self._deaf_after_s = deaf_after_s
         self._check_every_s = check_every_s
         self._grace_t = 0.0
+        self._error = None
+        self._reopen_error = None
         self._stop_evt = threading.Event()
         self._thread = threading.Thread(
             target=self._watch, name="audio-watchdog", daemon=True)
@@ -189,7 +192,23 @@ class DeafStreamWatchdog:
         self._thread.start()
 
     def _watch(self) -> None:
-        while not self._stop_evt.wait(self._check_every_s):
+        try:
+            self._watch_loop()
+        except Exception as exc:  # noqa: BLE001 - the recorder supervises this worker too.
+            self._error = f"audio watchdog failed: {exc}"[:512]
+            log.exception("audio watchdog stopped")
+
+    def check_health(self) -> None:
+        if self._error is not None:
+            raise RuntimeError(self._error)
+        if self._reopen_error is not None:
+            raise RuntimeError(self._reopen_error)
+        if not self._thread.is_alive():
+            raise RuntimeError("audio watchdog is not running")
+
+    def _watch_loop(self) -> None:
+        delay, failures = self._check_every_s, 0
+        while not self._stop_evt.wait(delay):
             heard = time.monotonic() - max(self._heard_at(), self._grace_t)
             if heard < self._deaf_after_s or self._pid is None:
                 continue
@@ -202,13 +221,20 @@ class DeafStreamWatchdog:
             try:
                 self._reopen()
                 self._grace_t = time.monotonic()
-            except Exception:
-                log.exception("%s reopen failed — will retry", self._label)
+                self._reopen_error = None
+                delay, failures = self._check_every_s, 0
+            except Exception as exc:
+                self._reopen_error = f"{self._label} reopen failed: {exc}"[:512]
+                failures = min(failures + 1, 16)
+                delay = min(30.0, self._check_every_s * 2 ** failures)
+                log.exception("%s reopen failed; retrying in %.1fs", self._label, delay)
 
     def stop(self) -> None:
         self._stop_evt.set()
         if self._thread.is_alive():
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                raise RuntimeError("audio watchdog did not stop; source may still reopen")
 
 
 class ProcessAudioSource:
@@ -258,10 +284,7 @@ class ProcessAudioSource:
 
     def _close_tap(self) -> None:
         if self._tap is not None:
-            try:
-                self._tap.stop()
-            except Exception:
-                log.exception("proctap stop failed")
+            stop_process_tap(self._tap)
             self._tap = None
 
     def start(self, on_pcm) -> None:
@@ -269,11 +292,9 @@ class ProcessAudioSource:
         try:
             self._open_tap()
         except Exception:
-            # The recorder only stop()s sources whose start() succeeded —
-            # release everything ourselves on partial failure.
-            self._pump.stop()
-            self._pump = None
-            self._close_tap()
+            # Retain any resource whose cleanup fails so owned teardown can
+            # retry it; a logged-and-forgotten tap could overlap fallback.
+            self.stop()
             raise
         self._watchdog = DeafStreamWatchdog(
             self._pid, lambda: self._pump.last_loud_t,
@@ -283,6 +304,16 @@ class ProcessAudioSource:
     def _reopen(self) -> None:
         self._close_tap()
         self._open_tap()
+
+    def check_health(self) -> None:
+        _check_workers(self._pump, self._watchdog)
+        # The proctap reader can die before reaching our pump (conversion or
+        # native read). Its actual thread is also the disposal contract.
+        tap = self._tap
+        if tap is not None and hasattr(tap, "_thread"):
+            reader = tap._thread
+            if reader is None or not reader.is_alive():
+                raise RuntimeError("process-audio reader is not running")
 
     def stop(self) -> None:
         if self._watchdog is not None:
@@ -351,17 +382,11 @@ class SystemAudioSource:
 
     def _close_stream(self) -> None:
         if self._stream is not None:
-            try:
-                self._stream.stop_stream()
-                self._stream.close()
-            except Exception:
-                log.exception("loopback stream close failed")
+            self._stream.stop_stream()
+            self._stream.close()
             self._stream = None
         if self._pa is not None:
-            try:
-                self._pa.terminate()
-            except Exception:
-                pass
+            self._pa.terminate()
             self._pa = None
 
     def start(self, on_pcm) -> None:
@@ -372,11 +397,7 @@ class SystemAudioSource:
         try:
             self._open_stream()
         except Exception:
-            # The recorder only stop()s sources whose start() succeeded —
-            # release everything ourselves on partial failure.
-            self._pump.stop()
-            self._pump = None
-            self._close_stream()
+            self.stop()
             raise
         self._watchdog = DeafStreamWatchdog(
             self._pid, lambda: self._pump.last_loud_t,
@@ -387,6 +408,12 @@ class SystemAudioSource:
         self._close_stream()
         self._open_stream()
 
+    def check_health(self) -> None:
+        _check_workers(self._pump, self._watchdog)
+        stream = self._stream
+        if stream is not None and not stream.is_active():
+            raise RuntimeError("audio loopback stream is not running")
+
     def stop(self) -> None:
         if self._watchdog is not None:
             self._watchdog.stop()
@@ -395,3 +422,10 @@ class SystemAudioSource:
         if self._pump is not None:
             self._pump.stop()
             self._pump = None
+
+
+def _check_workers(pump, watchdog) -> None:
+    if pump is None or watchdog is None:
+        raise RuntimeError("audio workers are not started")
+    pump.check_health()
+    watchdog.check_health()

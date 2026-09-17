@@ -23,9 +23,10 @@ the clip ring.
 """
 import struct
 from datetime import datetime, timezone
+from time import monotonic
 from typing import NamedTuple
 
-from sm64_events.inputs.frame import InputFrame
+from sm64_events.inputs.frame import InputFrame, valid_raw_stick
 from sm64_events.inputs.observation import (InputObservation, decode_observations,
                                            encode_observations, utc_time)
 from sm64_events.inputs.runs import collapse, same_state
@@ -119,13 +120,14 @@ class InputStore:
             moments = [stamp for o in observations
                        for stamp in (o.lower_utc, o.upper_utc)]
             started_utc, ended_utc = min(moments), max(moments)
-        with self._lock:
+        with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO input_chunks (session_id, start_frame, end_frame,"
                 " started_utc, ended_utc, runs, format)"
                 " VALUES (?,?,?,?,?,?,?)",
-                (session_id, frames[0][0], frames[-1][0], started_utc,
-                 ended_utc, blob, chunk_format))
+                (session_id, frames[0][0], frames[-1][0],
+                 _canonical_utc(utc_time(started_utc)),
+                 _canonical_utc(utc_time(ended_utc)), blob, chunk_format))
             self._conn.commit()
 
     def frames_between(self, started_utc: str,
@@ -144,21 +146,32 @@ class InputStore:
         """
         owner = " AND session_id = ?" if session_id is not None else ""
         start, end = utc_time(started_utc), utc_time(ended_utc)
-        params = (ended_utc, started_utc)
+        # Rows are written by `_now`/isoformat in one canonical spelling
+        # (microseconds, +00:00), so the same spelling of the bounds compares
+        # correctly as text and the (ended_utc, started_utc) index answers
+        # the range. `julianday()` on the columns defeated every index and
+        # scanned the whole table on each replay open (round 48: 14.9 ms
+        # for 3 rows, growing ~0.5 ms per hour of play forever).
+        params = (_canonical_utc(start), _canonical_utc(end))  # ended >= start, started <= end
         if session_id is not None:
             params += (session_id,)
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, session_id, started_utc, ended_utc, runs, format FROM input_chunks"
-                " WHERE julianday(started_utc) <= julianday(?)"
-                " AND julianday(ended_utc) >= julianday(?)"
+                " INDEXED BY idx_input_chunks_ended"
+                " WHERE ended_utc >= ? AND started_utc <= ?"
                 + owner + " ORDER BY id", params
             ).fetchall()
-        # SQLite's date functions round to milliseconds. Use them only to
-        # select candidates, then apply exact microsecond overlap in Python.
+        # Text order only selects candidates; exact microsecond overlap in
+        # Python decides.
         return [_chunk(row) for row in rows
                 if utc_time(row["started_utc"]) <= end
                 and utc_time(row["ended_utc"]) >= start]
+
+
+def _canonical_utc(moment) -> str:
+    """The one spelling `input_chunks` rows use, so text order is time order."""
+    return moment.isoformat(timespec="microseconds")
 
 
 def _chunk(row) -> InputChunk:
@@ -188,7 +201,7 @@ class ChunkWriter:
 
     FLUSH_FRAMES = 300
 
-    def __init__(self, store: InputStore, session_id, clock=_now):
+    def __init__(self, store: InputStore, session_id, clock=_now, *, retry_clock=monotonic):
         """`session_id` is an int or a CALLABLE returning one.
 
         The composition root builds this before the tracker has opened a
@@ -204,6 +217,22 @@ class ChunkWriter:
         self._started: str | None = None
         self._buffer_session: int | None = None
         self._observations: list[InputObservation] = []
+        self._retry_clock = retry_clock
+        self._retry_at = 0.0
+        self._retry_delay = 0.25
+        self._write_error: str | None = None
+        self._write_failures = 0
+        self._rejected_frames = 0
+
+    def health(self) -> dict:
+        return {"pending_frames": len(self._buffer), "failures": self._write_failures,
+                "rejected_frames": self._rejected_frames, "error": self._write_error,
+                "retry_in_s": max(0.0, self._retry_at - self._retry_clock())}
+
+    def retry(self) -> None:
+        """Retry a failed chunk when due, including while gameplay is paused."""
+        if self._write_error is not None and self._retry_clock() >= self._retry_at:
+            self.close()
 
     def _session(self) -> int | None:
         return (self._session_id() if callable(self._session_id)
@@ -211,6 +240,15 @@ class ChunkWriter:
 
     def add(self, number: int, frame: InputFrame, *, session_id=_CURRENT_SESSION,
             observation: InputObservation | None = None) -> None:
+        if not valid_raw_stick(frame.stick_x, frame.stick_y):
+            raise ValueError(f"invalid raw stick on frame {number}: "
+                             f"{frame.stick_x}, {frame.stick_y}")
+        if self._write_error is not None:
+            try:
+                self.close()
+            except Exception:
+                self._rejected_frames += 1
+                raise
         # The sampler supplies the owner observed with the pending frame.
         # Direct callers capture ownership here, never later during close().
         session = self._session() if session_id is _CURRENT_SESSION else session_id
@@ -223,6 +261,10 @@ class ChunkWriter:
             self.close()
         if session is None:
             return
+        # Failed writes retain the valid chunk for a later retry. Do not
+        # keep growing that buffer on every new frame while storage is down.
+        if len(self._buffer) >= self.FLUSH_FRAMES:
+            self.close()
         if not self._buffer:
             self._started = observation.observed_utc if observation else self._clock()
             self._buffer_session = session
@@ -235,15 +277,27 @@ class ChunkWriter:
     def close(self) -> None:
         if not self._buffer:
             return
+        if self._retry_clock() < self._retry_at:
+            raise OSError(self._write_error or "input storage retry deferred")
         session = self._buffer_session
-        if session is not None:
-            if self._observations:
-                self._store.append(session, self._buffer, self._started,
-                                   self._observations[-1].observed_utc,
-                                   observations=self._observations)
-            else:
-                self._store.append(session, self._buffer,
-                                   self._started, self._clock())
+        try:
+            if session is not None:
+                if self._observations:
+                    self._store.append(session, self._buffer, self._started,
+                                       self._observations[-1].observed_utc,
+                                       observations=self._observations)
+                else:
+                    self._store.append(session, self._buffer,
+                                       self._started, self._clock())
+        except Exception as error:
+            self._write_failures += 1
+            self._write_error = f"{type(error).__name__}: {error}"[:512]
+            self._retry_at = self._retry_clock() + self._retry_delay
+            self._retry_delay = min(10.0, self._retry_delay * 2)
+            raise
+        self._write_error = None
+        self._retry_at = 0.0
+        self._retry_delay = 0.25
         self._buffer = []
         self._started = None
         self._buffer_session = None

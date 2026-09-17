@@ -1,11 +1,11 @@
 @echo off
 REM ============================================================
-REM  Run a TEST server from the latest committed `main`.
+REM  Run a TEST server from this checkout.
 REM
 REM  Starts the SM64 Trainer server FROM SOURCE on a DIFFERENT
 REM  port (default 8066) than the packaged trainer exe (8064),
 REM  so you can run this alongside the real trainer to test
-REM  main's committed changes live without a port collision.
+REM  this checkout's changes live without a port collision.
 REM
 REM  Usage:
 REM    run-test-server.bat            ->  http://127.0.0.1:8066
@@ -28,27 +28,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM --- update to the latest committed main (non-fatal) ---
-REM  Name the branch in the warning: this checkout is sometimes parked on a
-REM  feature branch by a parallel session, and the old wording ("could not
-REM  fast-forward") read like a git problem while the real message is "you
-REM  are NOT testing main" — which silently cost a live test run (2026-07-24).
+REM --- update main only; preserve a worktree's reviewed candidate ---
 for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD') do set "SM64_BRANCH=%%B"
-echo Fetching the latest committed main...
-git pull --ff-only
-if errorlevel 1 (
-  echo.
-  if /i not "%SM64_BRANCH%"=="main" (
-    echo WARNING: this checkout is on branch '%SM64_BRANCH%', NOT main.
-    echo          The test server below runs THAT branch's code — anything
-    echo          merged to main since is not included. Switch with
-    echo          'git checkout main' if you meant to test main.
-  ) else (
+if /i "%SM64_BRANCH%"=="main" (
+  echo Fetching the latest committed main...
+  git pull --ff-only
+  if errorlevel 1 (
     echo WARNING: could not fast-forward ^(uncommitted local changes or a
     echo          diverged branch^). Running the CURRENT checkout instead of
     echo          the very latest main.
   )
-  echo.
+) else (
+  echo Running branch '%SM64_BRANCH%' from this checkout; skipping git pull.
 )
 
 REM --- say WHICH CODE this is, every run, success or not ---
@@ -63,10 +54,16 @@ for /f "delims=" %%C in ('git log -1 --format^="%%h %%ad %%s" --date^=short') do
 REM --- make sure dependencies match the lockfile ---
 echo Syncing dependencies...
 uv sync
+if errorlevel 1 (
+  echo ERROR: dependency sync failed. The test server was not started.
+  pause
+  exit /b 1
+)
 
 echo.
 echo ============================================================
-echo   SM64 Trainer  --  TEST server (from source, main)
+echo   SM64 Trainer  --  TEST server (from this source checkout)
+echo   Folder: %CD%
 echo   Code:   %SM64_BRANCH% @ %SM64_HEAD%
 echo   URL:    http://127.0.0.1:%SM64_PORT%
 echo           (hard-refresh with CTRL+SHIFT+R -- the browser caches ui/)

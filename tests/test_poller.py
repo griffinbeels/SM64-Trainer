@@ -245,8 +245,6 @@ class UnreadableSampler:
         return None
     def flush(self):
         pass
-    def clock_pair(self):
-        return None
 
 
 def test_a_dead_emulator_detaches_even_though_the_sampler_never_sees_a_frame():
@@ -267,3 +265,186 @@ def test_a_dead_emulator_detaches_even_though_the_sampler_never_sees_a_frame():
     asyncio.run(p.tick())
     assert mem.detached is True
     assert [e.type for e in b.events] == ["emulator_disconnected"]
+
+
+def rom_header(name: bytes, country: bytes = b"E") -> bytes:
+    """A cartridge header as Project64 1.6 stores it (word-swapped)."""
+    header = bytearray(0x40)
+    header[0:4] = b"\x80\x37\x12\x40"
+    header[0x20:0x34] = name.ljust(20, b" ")
+    header[0x3E] = country[0]
+    return b"".join(bytes(header[at:at + 4])[::-1] for at in range(0, 0x40, 4))
+
+
+class CartridgeMemory(StubMemory):
+    """Attachable memory whose loaded cartridge the test chooses."""
+    def __init__(self, header):
+        super().__init__()
+        self.header, self.attached, self.attaches = header, False, 0
+
+    def attach(self):
+        self.attaches += 1
+        self.attached = True
+        return True
+
+    def detach(self):
+        super().detach()
+        self.attached = False
+
+    def rom_header(self):
+        return self.header
+
+
+async def run_for(poller, seconds):
+    task = asyncio.create_task(poller.run())
+    await asyncio.sleep(seconds)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+def test_a_real_run_on_another_rom_is_never_served():
+    """His ruling, 2026-09-16: vanilla SM64 is a real run, not practice. The
+    poller identifies the cartridge at attach and refuses it: no reads, no
+    detectors, no events; the recorder's gate reads `practice_rom`."""
+    b = RecordingBroadcaster()
+
+    class NoReads:
+        def read(self):
+            raise AssertionError("a vanilla cartridge must not be read")
+
+    memory = CartridgeMemory(rom_header(b"SUPER MARIO 64"))
+    p = Poller(memory, [EchoDetector()], b, reader=NoReads())
+    p.PRACTICE_ROM_RETRY_S = 0.01
+    asyncio.run(run_for(p, 0.1))
+    assert p.practice_rom is False and not memory.attached and memory.attaches >= 2
+    assert b.events == []
+
+
+def test_the_practice_rom_is_served_and_an_unreadable_header_still_is():
+    for header, expected in [(rom_header(b"SM64 USAMUNE v1.93u"), True), (None, None)]:
+        p = Poller(CartridgeMemory(header), [EchoDetector()], RecordingBroadcaster(),
+                   reader=ScriptedReader([snap(5)] * 50))
+        assert p._serves_loaded_rom() is True
+        assert p.practice_rom is expected
+
+
+def test_an_unreadable_header_keeps_the_last_identification():
+    """Mid-swap Project64 has released the old image and not yet read the new
+    one. A miss there must neither serve a refused real run nor stop practice."""
+    memory = CartridgeMemory(rom_header(b"SUPER MARIO 64"))
+    p = Poller(memory, [EchoDetector()], RecordingBroadcaster(), reader=ScriptedReader([]))
+    assert p._serves_loaded_rom() is False
+    memory.header = None
+    assert p._serves_loaded_rom() is False and p.practice_rom is False
+    memory.header = rom_header(b"SM64 USAMUNE v1.93u")
+    assert p._serves_loaded_rom() is True
+    memory.header = None
+    assert p._serves_loaded_rom() is True and p.practice_rom is True
+
+
+class BootingCartridge(CartridgeMemory):
+    """Project64 with a cartridge the test swaps mid-session: each read is one
+    game frame, and `insert` is closing one ROM and opening another."""
+    def __init__(self, name):
+        super().__init__(rom_header(name))
+        self.timer = 0
+
+    def insert(self, name, *, boots=True):
+        self.header = rom_header(name)
+        if boots:
+            self.timer = 0           # every SM64 ROM starts gGlobalTimer at 0
+
+    def read(self):
+        self.timer += 1
+        return snap(self.timer)
+
+
+def test_swapping_roms_in_one_session_needs_no_restart():
+    """His ask, 2026-09-16: vanilla (plain renderer) -> close -> Usamune
+    (trainer) -> close -> vanilla, "without having to restart the server".
+    Project64 1.6 neither clears nor releases RDRAM between ROMs, so nothing
+    but the header says a swap happened; it is read before the detectors
+    whenever the timer goes back and at least every PRACTICE_ROM_CHECK_S."""
+    b, gaps, served = RecordingBroadcaster(), [], []
+    memory = BootingCartridge(b"SUPER MARIO 64")
+    memory.timer = 5000
+
+    class Witness:
+        def process(self, prev, curr):
+            served.append(memory.header)
+            return []
+
+    async def on_gap(reason):
+        gaps.append(reason)
+
+    async def until(condition):
+        for _ in range(400):
+            if condition():
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError("the poller never got there")
+
+    usamune, vanilla = rom_header(b"SM64 USAMUNE v1.93u"), rom_header(b"SUPER MARIO 64")
+
+    async def session():
+        p = Poller(memory, [Witness()], b, reader=memory, hz=200, on_gap=on_gap)
+        p.PRACTICE_ROM_RETRY_S = 0.01
+        task = asyncio.create_task(p.run())
+        try:
+            await until(lambda: p.practice_rom is False and memory.attaches >= 2)
+            assert b.events == [] and served == []
+
+            memory.insert(b"SM64 USAMUNE v1.93u")
+            await until(lambda: len(served) >= 5)
+            assert p.practice_rom is True
+            assert [e.type for e in b.events] == ["emulator_connected"]
+
+            # Back to vanilla within Usamune's first seconds: its timer never
+            # left the boot range, and the swap is still caught at once.
+            assert memory.timer < 120
+            memory.insert(b"SUPER MARIO 64")
+            await until(lambda: p.practice_rom is False)
+            assert gaps == ["not a practice ROM"]
+            assert vanilla not in served
+
+            memory.insert(b"SM64 USAMUNE v1.93u")
+            await until(lambda: served.count(usamune) >= 10 and p.practice_rom)
+            assert [e.type for e in b.events].count("emulator_connected") == 2
+
+            # Another game says nothing through RAM: no timer drop at all.
+            p.PRACTICE_ROM_CHECK_S = 0.05
+            memory.insert(b"ZELDA MAJORA'S MASK", boots=False)
+            await until(lambda: p.practice_rom is False)
+            assert gaps == ["not a practice ROM"] * 2
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(session())
+
+
+def test_switching_to_another_rom_at_boot_stops_serving():
+    """A new cartridge boots without the emulator ever becoming unreadable, so
+    the timer falling back into the boot range re-identifies the ROM."""
+    b, gaps = RecordingBroadcaster(), []
+
+    async def on_gap(reason):
+        gaps.append(reason)
+
+    memory = CartridgeMemory(rom_header(b"SM64 USAMUNE v1.93u"))
+    memory.attached = True
+    p = Poller(memory, [EchoDetector()], b, reader=ScriptedReader([snap(900), snap(901), snap(3)]),
+               on_gap=on_gap)
+    asyncio.run(p.tick())
+    asyncio.run(p.tick())
+    assert len(b.events) == 1
+    memory.header = rom_header(b"SUPER MARIO 64")
+    asyncio.run(p.tick())            # boot: timer 901 -> 3
+    assert p.practice_rom is False and not memory.attached
+    assert gaps == ["not a practice ROM"] and len(b.events) == 1

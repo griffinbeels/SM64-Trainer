@@ -123,6 +123,62 @@ def test_writing_an_unchanged_snapshot_produces_identical_bytes(tmp_path):
     assert path.read_bytes() == first
 
 
+def test_prepared_install_failure_preserves_disk_and_memory(tmp_path, monkeypatch):
+    from sm64_events.library import store as module
+    store = LibraryStore(tmp_path / "library.gz")
+    previous, fresh = _snapshot("2020-01-01"), _snapshot("2026-01-01")
+    store.absorb(previous)
+    before = store.path.read_bytes()
+    prepared = tmp_path / "prepared.gz"
+    write_snapshot(prepared, fresh)
+
+    def failed_copy(_source, destination):
+        destination.write_bytes(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(module.shutil, "copyfile", failed_copy)
+    with pytest.raises(OSError, match="disk full"):
+        store.absorb(fresh, prepared_snapshot=prepared)
+    assert store.payload == previous   # absorb keeps a detached copy
+    assert store.path.read_bytes() == before
+    assert not list(tmp_path.glob(".library.gz.*"))
+
+
+def test_concurrent_refresh_cannot_overwrite_a_newer_snapshot(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from sm64_events.library import store as module
+    store = LibraryStore(tmp_path / "library.gz")
+    older, newer_payload = _snapshot("2025-01-01"), _snapshot("2026-01-01")
+    prepared = tmp_path / "prepared.gz"
+    write_snapshot(prepared, older)
+    entered, release, newer_started = Event(), Event(), Event()
+    original_install = module._install_prepared
+
+    def install(path, source):
+        entered.set()
+        assert release.wait(5)
+        original_install(path, source)
+
+    def apply_newer():
+        newer_started.set()
+        return store.absorb(newer_payload)
+
+    monkeypatch.setattr(module, "_install_prepared", install)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending_older = pool.submit(store.absorb, older, prepared_snapshot=prepared)
+        try:
+            assert entered.wait(5)
+            pending_newer = pool.submit(apply_newer)
+            assert newer_started.wait(5)
+            assert not pending_newer.done()
+        finally:
+            release.set()
+        assert pending_older.result()["applied"]
+        assert pending_newer.result()["applied"]
+    assert store.payload == read_snapshot(store.path) == newer_payload
+
+
 def _fetch_returning(payload):
     """A fetch whose parse we stub, since a real one needs the workbook."""
     def fake_fetch():
@@ -133,6 +189,8 @@ def _fetch_returning(payload):
 def test_a_refresh_that_lands_on_an_older_sheet_is_not_applied(tmp_path, monkeypatch):
     store = LibraryStore(tmp_path / "local.json.gz", None)
     store._payload = _snapshot("2026-08-05T09:15:18", "current")
+    monkeypatch.setattr("sm64_events.library.workbook.log_revision",
+                        lambda _data: "2026-01-01T00:00:00")
     monkeypatch.setattr("sm64_events.library.build.build",
                         lambda data, fetched_at, overrides=None:
                         _snapshot("2026-01-01T00:00:00", "older"))
@@ -147,6 +205,8 @@ def test_a_refresh_that_lands_on_a_newer_sheet_is_kept(tmp_path, monkeypatch):
     path = tmp_path / "local.json.gz"
     store = LibraryStore(path, None)
     store._payload = _snapshot("2026-01-01T00:00:00", "current")
+    monkeypatch.setattr("sm64_events.library.workbook.log_revision",
+                        lambda _data: "2026-08-05T09:15:18")
     monkeypatch.setattr("sm64_events.library.build.build",
                         lambda data, fetched_at, overrides=None:
                         _snapshot("2026-08-05T09:15:18", "fresher"))
@@ -228,6 +288,8 @@ def test_an_applied_refresh_is_the_only_persistent_confirmation_offered(tmp_path
     path = tmp_path / "local.json.gz"
     store = LibraryStore(path, None)
     store._payload = _snapshot("2026-01-01T00:00:00", "current")
+    monkeypatch.setattr("sm64_events.library.workbook.log_revision",
+                        lambda _data: "2026-08-05T09:15:18")
     monkeypatch.setattr("sm64_events.library.build.build",
                         lambda data, fetched_at, overrides=None:
                         _snapshot("2026-08-05T09:15:18", "fresher"))

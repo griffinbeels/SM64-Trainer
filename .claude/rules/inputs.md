@@ -101,6 +101,17 @@ snapshot's byte swap came out (`git log --grep="byte-swapping"`).
 
 ## The traps
 
+**Reset garbage can survive a coherent counter sandwich.** On 2026-09-13,
+signed-byte packing of an out-of-range raw stick value poisoned a pending
+chunk; settlement retried the flush outside the sampler's exception guard and
+killed course polling while HTTP/video stayed alive. `valid_raw_stick` applies
+the existing s8 contract at sampler and writer admission, without clamping.
+Invalid input ends the observed stretch but still returns the coherent timer
+for course pacing. `TrackerService.publish` isolates its optional input flush
+before journaling; storage failure keeps at most one full chunk. Regression:
+`tests/test_inputs_recovery.py`. `/health.polling` distinguishes a dead task
+from a running server; the abandoned `/state` snapshot is withheld.
+
 **An all-zero block IS a self-consistent controller.** The razor cannot reject
 one, so a run of zeroes passes every check while nothing is moving — which is
 exactly the false positive the first address hunt returned, and it survived 200

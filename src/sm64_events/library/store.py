@@ -20,6 +20,7 @@ import gzip
 import json
 import logging
 import os
+import shutil
 import tempfile
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -338,14 +339,41 @@ class LibraryStore:
         if step:
             step(0.05, "Downloading the current sheet…")
         data = fetch_fn()
+        if _usable(self._payload):
+            from sm64_events.library.workbook import log_revision
+            skipped = self.skip_revision(log_revision(data))
+            if skipped is not None:
+                return skipped
         return self.absorb(build_and_stamp(data, overrides, step=step))
 
-    def absorb(self, fresh: dict) -> dict:
+    def skip_revision(self, revision: str | None) -> dict | None:
+        """Cheap pre-build check for the startup worker (library/background.py):
+        an OLDER Sheet is never built. A same-date Sheet still builds, because
+        `absorb` detects same-date corrections by content; `absorb` rechecks
+        the date under the update lock after any concurrent apply."""
+        current = self._current_payload()
+        if current is None or not _usable(current):
+            return None
+        probe = {"schema_version": SCHEMA_VERSION, "sheet_revision": revision, "targets": []}
+        try:
+            older = _validated_revision(probe) < _validated_revision(current)
+        except ValueError:
+            return None  # the full path reports an unusable revision
+        if not older:
+            return None
+        return self._update_result(False, current, {"sheet_revision": revision},
+                                   "the live sheet is older than what we have")
+
+    def absorb(self, fresh: dict, *, prepared_snapshot=None) -> dict:
         """Prepare, save, then publish a complete calibration under one lock.
 
         The Sheet timestamp protects against rollback; observation content
         detects same-date corrections. A pinned request never supplies the
         update baseline and keeps reading its old complete generation.
+
+        `prepared_snapshot` is the startup worker's compressed file of exactly
+        `fresh`. It replaces re-serialising only when no calibration changed
+        the payload (calibration refits ladders, so its bytes would be stale).
         """
         with self.calibrations.update_lock:
             payload = deepcopy(fresh)
@@ -358,7 +386,8 @@ class LibraryStore:
                 payload = candidate.payload
             if self._unchanged(payload, candidate):
                 return self._update_result(False, current, payload, "observations and calibration are unchanged")
-            self._activate(payload, candidate)
+            self._activate(payload, candidate,
+                           prepared_snapshot if candidate is None else None)
             return self._update_result(True, payload, payload)
 
     def recalibrate(self) -> dict:
@@ -400,9 +429,12 @@ class LibraryStore:
         return (candidate is None and current is not None
                 and observation_fingerprint(payload) == observation_fingerprint(current))
 
-    def _activate(self, payload, candidate):
+    def _activate(self, payload, candidate, prepared_snapshot=None):
         if self.path:
-            write_snapshot(self.path, payload)
+            if prepared_snapshot is None:
+                write_snapshot(self.path, payload)
+            else:
+                _install_prepared(self.path, prepared_snapshot)
         if candidate is not None:
             self.calibrations.publish(candidate)
         self._payload = payload
@@ -420,3 +452,20 @@ class LibraryStore:
         elif payload is not None:
             result["targets"] = len(payload["targets"])
         return result
+
+
+def _install_prepared(path: Path, prepared: Path) -> None:
+    """Install the worker's already-compressed snapshot without rebuilding it.
+
+    The caller has decoded/validated that same file. Stage beside the owned
+    destination so failure preserves the previous snapshot, even across disks.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    os.close(fd)
+    pending = Path(name)
+    try:
+        shutil.copyfile(prepared, pending)
+        os.replace(pending, path)
+    finally:
+        pending.unlink(missing_ok=True)

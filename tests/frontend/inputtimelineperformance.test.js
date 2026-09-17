@@ -3,8 +3,25 @@ import { afterEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { h } from "preact";
 import { InputTimeline } from "../../src/sm64_events/ui/components/inputtimeline.js";
+import { momentAt } from "../../src/sm64_events/ui/components/inputtimelinemodel.js";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+test("marker lookup retains duplicate/gap boundaries with logarithmic reads", () => {
+  let reads = 0;
+  const markers = Array.from({length:10000}, (_, index) => ({
+    get frame() { reads++; return Math.floor(index / 2) * 3; }, index,
+  }));
+  for (const [frame, expected] of [[-1,null],[0,1],[1,1],[3,3],[14996,9997],[14997,9999],[20000,9999]]) {
+    reads = 0;
+    const found = momentAt(markers, frame);
+    expect(found?.index ?? null).toBe(expected);
+    expect(reads).toBeLessThanOrEqual(14);
+  }
+  expect(momentAt(markers, null)).toBeNull();
+  expect(momentAt([], 0)).toBeNull();
+  expect(momentAt(null, 0)).toBeNull();
+});
 
 async function longTimeline() {
   const markerLabel = vi.fn((frame) => `Moment ${frame}`);

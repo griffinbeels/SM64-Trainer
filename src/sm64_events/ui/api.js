@@ -15,8 +15,8 @@ async function httpError(url, r) {
   err.status = r.status;
   return err;
 }
-export async function getJSON(url) {
-  const r = await fetch(url);
+export async function getJSON(url, options) {
+  const r = await fetch(url, options);
   if (!r.ok) throw await httpError(url, r);
   return r.json();
 }

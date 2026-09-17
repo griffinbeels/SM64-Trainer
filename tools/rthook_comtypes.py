@@ -6,7 +6,10 @@ import os
 import sys
 import tempfile
 
-if getattr(sys, "frozen", False):
+# This hook runs before gui_entry. The workbook worker never uses audio/COM;
+# importing it here would add a cache directory and unrelated startup work.
+if (getattr(sys, "frozen", False)
+        and sys.argv[1:2] != ["--library-refresh-worker"]):
     gen = tempfile.mkdtemp(prefix="ctgen_")
     os.environ.setdefault("COMTYPES_GEN_DIR", gen)
     try:
