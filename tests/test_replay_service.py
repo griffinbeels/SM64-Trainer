@@ -502,9 +502,10 @@ def test_save_segment_attempt_filename_contains_segment_name_and_rta(tmp_path):
                         extractor=FakeExtractor(),
                         tracker=FakeTrackerWithSegments([a]))
     res = svc.save(10_000_000_005)
-    name = Path(res["path"]).name
-    assert "lblj" in name
-    assert "-rta" in name
+    # The WHOLE name, so the service's own name resolution is pinned: the
+    # segment's name stands in for the course, the empty star part leaves no
+    # double underscore, and 85 frames at 30 fps print as an RTA time.
+    assert Path(res["path"]).name == "attempt_10000000005_lblj_0m02s83-rta.mp4"
 
 
 def test_a_short_lead_in_is_not_a_warning_but_a_late_start_is(tmp_path):

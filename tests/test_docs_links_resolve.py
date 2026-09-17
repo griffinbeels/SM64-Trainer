@@ -39,8 +39,6 @@ import re
 import subprocess
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[1]
 
 # Directories that are gitignored on purpose and must never be cited as a
@@ -104,16 +102,24 @@ def citations(path: str) -> list[str]:
     return named
 
 
-@pytest.mark.parametrize("path", tracked_text_files())
-def test_no_tracked_file_cites_a_private_working_directory(path):
-    if path in EXEMPT:
-        pytest.skip(f"exempt: {EXEMPT[path]}")
-    named = citations(path)
-    assert not named, (
-        f"{path} cites {named}, which is gitignored — the link is dead in "
-        "every clone but the author's. State the FACT and name a tracked file "
-        "that carries it (a module docstring, a test, docs/architecture.md). "
-        "Do not re-track the private file.")
+def test_no_tracked_file_cites_a_private_working_directory():
+    """One test over every tracked text file, reporting ALL the offenders.
+
+    This used to parametrize over ~1200 files for one substring check each:
+    1200 collected cases, 1200 lines of report, and a first failure that said
+    nothing about the other thirty-nine. The debt this guard found came in
+    waves (40 citations across 16 files, 2026-08-20) and a wave is what the
+    person fixing it needs to see at once."""
+    found = ((path, citations(path)) for path in tracked_text_files()
+             if path not in EXEMPT)
+    offenders = {path: named for path, named in found if named}
+    assert not offenders, (
+        "these tracked files cite a gitignored working directory — the link "
+        "is dead in every clone but the author's:\n"
+        + "\n".join(f"  {path}: {named}" for path, named in offenders.items())
+        + "\nState the FACT and name a tracked file that carries it (a module "
+        "docstring, a test, docs/architecture.md). Do not re-track the "
+        "private file.")
 
 
 def test_exemptions_all_point_at_files_that_exist():

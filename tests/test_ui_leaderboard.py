@@ -11,6 +11,7 @@ un-omitted. Seeding a fresh scenario for this test would only recreate what
 already renders.
 """
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -205,9 +206,54 @@ def test_excluding_an_entity_narrows_the_board_like_your_own_tab(page):
 
 
 def test_the_omitted_count_is_stated_not_a_footnote(page):
-    text = page.evaluate(
-        "document.querySelector('.leaderboard-omitted').textContent")
-    assert text.strip(), "the omitted line rendered empty"
+    """`board.py`'s ruling: a board that hides most of the sheet without a
+    count reads as "this is everyone". So the line must carry the API's OWN
+    `omitted` number -- read back from a second fetch of the SAME scope the
+    board drew, not from the sentence itself -- and it must read as part of
+    the board's preamble: the same type size as the basis line beside it, and
+    above the rows rather than under them. `assert text.strip()` proved only
+    that the paragraph was not empty, which a wording that dropped the number
+    entirely would also satisfy.
+
+    NOT asserted: that it is no smaller than body text. The line ships as
+    `.meta` (`font-size: .85em`, index.html) exactly like its basis sibling,
+    so a body-size floor would go red on the shipped page -- "stated, not a
+    footnote" is about being a sentence in the reading, not about ems."""
+    served = page.evaluate("""
+      (async () => {
+        const scopes = await (await fetch('/api/marelo/scopes')).json();
+        const board = await (await fetch('/api/leaderboard?scope='
+          + encodeURIComponent(scopes.active))).json();
+        return board.omitted;
+      })()
+    """)
+    shape = page.evaluate("""
+      (() => {
+        const note = document.querySelector('.leaderboard-omitted');
+        const basis = document.querySelector('.leaderboard-basis');
+        const body = document.querySelector('.leaderboard-body');
+        return {text: note.textContent,
+                size: getComputedStyle(note).fontSize,
+                basisSize: getComputedStyle(basis).fontSize,
+                aboveTheRows: !!(note.compareDocumentPosition(body)
+                                 & Node.DOCUMENT_POSITION_FOLLOWING)};
+      })()
+    """)
+    printed = [int(match) for match in re.findall(r"\d+", shape["text"])]
+    if served:
+        assert served in printed, (
+            f"the board leaves {served} runners off and the line reads "
+            f"{shape['text']!r}")
+    else:
+        assert not printed, (
+            f"nothing is omitted, so the line must state that rather than "
+            f"print a count: {shape['text']!r}")
+    assert shape["size"] == shape["basisSize"], (
+        f"the omitted line is set at {shape['size']} beside a basis line at "
+        f"{shape['basisSize']} -- it has been shrunk into a footnote")
+    assert shape["aboveTheRows"], (
+        "the omitted line sits after the rows -- it belongs in the preamble, "
+        "where it is read before the board is taken for everyone")
 
 
 def test_jump_to_you_scrolls_the_board_toward_your_row(page):

@@ -9,13 +9,20 @@ from sm64_events.replay.config import (CLIP_MAXRATE, RING_MAXRATE,
                                        video_quality_args)
 
 
-def test_defaults_match_spec():
+def test_defaults_wire_paths_and_stay_coherent():
+    """Where the ring lives, which window it captures and at what audio rate
+    are wiring other modules read back; they belong here.
+
+    The TUNING knobs do not. `pre_pad_s` and `post_pad_s` are his to change in
+    the replay settings (``save_settings`` writes exactly those, with
+    ``retention_s`` and the cap), and `fps`/`segment_s` are shipped defaults --
+    pinning a shipped default's contents turns a preference change into a red
+    build (CLAUDE.md domain contract 7). What IS checked is that the shipped
+    set is coherent: `validate_settings` accepts it and the rates are usable."""
     cfg = ReplayConfig()
     assert cfg.retention_s is None            # None = whole session (spec default)
-    assert cfg.pre_pad_s == 3.0 and cfg.post_pad_s == 2.0
-    assert cfg.fps == 60
-    assert cfg.segment_s == 2.0
     validate_settings(cfg.retention_s, cfg.max_buffer_bytes, cfg.pre_pad_s, cfg.post_pad_s)
+    assert cfg.fps > 0 and cfg.segment_s > 0
     assert cfg.save_root == Path("replays")
     assert cfg.scratch_dir == Path("data") / "replay_buffer"
     assert cfg.window_title == "Project64"

@@ -109,7 +109,6 @@ def test_save_import_switch_export_remove_and_persist_overlay(page, tmp_path):
     page.set_input_files('.input-template-manager input[type=file]', str(path))
     page.wait_ms(150)
     page.wait_for('.input-import-preview')
-    assert page.count('.input-import-preview'), page.evaluate("document.querySelector('.input-template-manager').textContent")
     assert "visiting player" in page.evaluate("document.querySelector('.input-import-preview').textContent")
     assert "10 frames" in page.evaluate("document.querySelector('.input-import-preview').textContent")
     button(page, "Import and use template", ".input-template-manager")
@@ -182,7 +181,6 @@ def test_template_refresh_failure_keeps_library_and_can_retry(page):
     page.evaluate('window.restoreInputFetch()')
     button(page, "Retry", ".input-timeline")
     page.wait_for('.input-timeline:has(.input-lanes):not(:has([role=alert]))')
-    assert page.count('.input-timeline [role=alert]') == 0
     assert page.count('.input-template-manager') == 1
 
 

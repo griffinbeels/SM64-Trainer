@@ -48,9 +48,14 @@ def _practice_target(base, service, label):
     return entity
 
 
-@pytest.mark.parametrize("width", [850, 1500])
 @pytest.mark.parametrize("label", ["Lakitu skip", "JRB door - Enter JRB"])
-def test_every_tier_and_division_is_visible_in_both_pages(width, label, tmp_path):
+def test_every_tier_and_division_is_visible_in_both_pages(label, tmp_path):
+    # ONE width. Every claim below is TEXT -- the nine tier names, the five
+    # subdivision rows per tier, no empty cell, 45 library divisions -- and
+    # none of it reads geometry, so a second viewport bought a second live
+    # server and a second browser launch for the same strings. Layout at
+    # narrow widths is the responsive sweep's job.
+    width = 1500
     with serve_ui_live() as (base, _service):
         entity = _practice_target(base, _service, label)
         card = f'.log-card[data-feed-key="{entity}"]'

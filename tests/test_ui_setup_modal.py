@@ -380,7 +380,15 @@ def test_afk_recording_pause_keeps_setup_checked(tmp_path):
         wait_step(page, "ready")
         recorder["idle"] = gpu_recorder["idle"] = True
         control[0] = replace(control[0], state=C.PASSIVE)
-        page.wait_ms(4500)
+        # No 4500ms leg here any more. Standing in the AFK state past the
+        # picture-freshness window is
+        # test_ui_setup_gpu.py::test_gpu_setup_active_idle_and_invalidated_evidence's
+        # claim, asserted there against the receipt and heartbeat that must
+        # NOT move; this test owns the rendered wizard, and its own
+        # assertions below (the ready copy, the forward arrow, three glow
+        # samples half a second apart, then the dead layer) already span
+        # several of `observe`'s polls -- each of which advances the clock by
+        # more than that window.
         assert 'data-substep="ready"' in page.evaluate("document.querySelector('.setup-install').outerHTML")
         assert "Setup checked" in body(page)
         assert page.count('.setup-not-now') == 0

@@ -3,8 +3,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
 from frontend_runner import run_frontend
 from sm64_events.core.events import Event
 
@@ -48,8 +46,12 @@ def _segment_success(page, service, frame, level=19, course=17):
     page.wait_ms(2300)
 
 
-@pytest.mark.parametrize("width", [1400, 850])
-def test_success_on_different_entity_scrolls_viewport(width):
+def test_success_on_different_entity_scrolls_viewport():
+    # ONE width: every assertion here is `window.scrollY`, which the hook
+    # drives off WHICH entity succeeded, not off the layout -- the narrow
+    # case ran the same branches for a second live server and a second
+    # browser launch.
+    width = 1400
     missing = find_uilab()
     assert missing is None, missing
     from uilab.driver import get_driver

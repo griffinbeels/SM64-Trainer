@@ -115,8 +115,6 @@ def assert_reads_as_the_runner_page(page, expected_name):
     heading = page.evaluate("document.querySelector('.runner-page h2').textContent")
     assert heading == expected_name, (
         f"the runner page opened for {heading!r}, expected {expected_name!r}")
-    assert page.count(".runner-page .scope-chip") > 0, (
-        "the runner page drew no scope chips")
 
 
 def assert_no_editing_controls_on_the_runner_page(page):

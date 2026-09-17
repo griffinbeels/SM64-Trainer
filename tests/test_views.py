@@ -1154,7 +1154,6 @@ def test_session_view_carries_active_route_after_select_route(tmp_path):
     view = build_session_view(db, svc, clock="igt")
     assert view["active_route"]["id"] == rid
     assert view["active_route"]["name"] == "R"
-    assert isinstance(view["active_route"]["segment_ids"], list)
     assert view["active_route"]["segment_ids"] == [lblj]
 
 
@@ -2636,7 +2635,7 @@ def _run_reds_pipe_sequence(svc, star_id=0, course_id=16, level=17,
     asyncio.run(svc.publish(ev("warp_entered", close_frame, {"level": level})))
 
 
-def testreds_pipe_segments_pairs_by_seed_key_prefix_and_level():
+def test_reds_pipe_segments_pair_by_seed_key_prefix_and_level():
     """Pure unit test of the resolver (views.reds_pipe_segments): matches a
     seg:reds->pipe:* row to its course via start_levels/COURSE_BY_LEVEL, and
     -- mutation-proved -- a row at the SAME level with a DIFFERENT seed_key

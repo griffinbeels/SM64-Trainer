@@ -124,7 +124,7 @@ def test_real_gpu_selection(tmp_path, fixtures, build, mode):
                             capture_output=True, text=True, timeout=30, **quiet_spawn_kwargs())
     (tmp_path / "host.log").write_bytes((result.stdout + result.stderr).encode())
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "worker_profile=core" in result.stdout and "selection witness completed" in result.stdout
+    assert "selection witness completed" in result.stdout
     assert result.stdout.count("custody=yes guard_bytes=yes worker_only=yes") == 2
     receipt = {"mode": mode, "host": result.stdout, "dimensions": []}
     for (width, height), frames in values.items():

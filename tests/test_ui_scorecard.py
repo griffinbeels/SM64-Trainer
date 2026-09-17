@@ -24,6 +24,7 @@ SCORECARDGOAL_JS = (UI / "scorecardgoal.js").as_uri()
 # reordering cannot leave this file quietly asserting the old world.
 from sm64_events.memory.addresses import COURSE_NAMES  # noqa: E402
 from sm64_events.ranks.scorecard import BOWSER_LABEL, SECRET_LABEL  # noqa: E402
+from source_scan import strip_comments  # noqa: E402
 
 CARD_ORDER = [COURSE_NAMES[course_id] for course_id in range(1, 16)] \
     + [SECRET_LABEL, BOWSER_LABEL]
@@ -1452,28 +1453,6 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
             f"wear a flag: n={marelo['n']}")
 
 
-def test_there_is_no_caps_toggle_and_no_cap_on_any_line():
-    """Round 23 (his call): "Let's remove the 'Show rank caps' button. Not
-    going to use it ever. Should just get rid of it." Gone with it: the
-    per-line cap draw and the server grading behind it -- a control with no
-    door is dead code here, not a hidden feature."""
-    with serve_ui() as base:
-        _put_division_goal(base, "Bronze", "V")
-
-        with get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
-            page.goto(f"{base}/ui/index.html")
-            page.wait_for(".log-list-card")
-            page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
-            page.wait_ms(200)
-            counts = page.evaluate(
-                "({ toggles: document.querySelectorAll('.rank-page "
-                ".scorecard-caps-toggle').length,"
-                "   caps: document.querySelectorAll('.rank-page "
-                ".scorecard-card .score-line-cap').length })")
-        assert counts == {"toggles": 0, "caps": 0}, counts
-
-
 def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
     """Round 20's placement, his words as geometry: "We should fill columns
     top to bottom, then left to right... [BOB] [BBH] [DDD] [THI] / [WF] [HMC]
@@ -2157,6 +2136,27 @@ def test_the_css_declares_a_track_rule_for_every_count_the_component_picks():
         assert f'.score-cards[data-cols="{count}"]' in css, (
             f"columnCountFor can pick {count} columns and the CSS has no "
             f"rule for it")
+
+
+def test_the_deleted_caps_control_stays_deleted():
+    """Round 23 (his call): "Let's remove the 'Show rank caps' button. Not
+    going to use it ever. Should just get rid of it." Gone with it: the
+    per-line cap draw and the server grading behind it.
+
+    A SOURCE scan, beside the CSS scan above, because the rendered version of
+    this test counted `.scorecard-caps-toggle`/`.score-line-cap` on the real
+    page -- two classes that exist nowhere in `ui/`, so it could only ever
+    count zero, and it spent a live server and a browser launch doing it. Its
+    reach is honestly narrower than the name suggests: it catches the revert
+    (the deleted code coming back under its own names), not a cap control
+    rewritten from scratch under new ones. Comments stripped, so the sentence
+    above may keep naming what it forbids."""
+    for name in ("scorecard-caps-toggle", "score-line-cap"):
+        for source in (UI / "components" / "scorecard.js", UI / "index.html"):
+            assert name not in strip_comments(
+                source.read_text(encoding="utf-8")), (
+                f"{name} is back in {source.name} -- round 23 deleted the "
+                f"rank-caps control, and a control with no door is dead code")
 
 
 def test_a_completed_attempt_does_not_blank_the_card_he_is_reading():

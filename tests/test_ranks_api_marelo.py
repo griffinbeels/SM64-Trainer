@@ -388,10 +388,6 @@ def test_excluded_entitys_next_rank_reads_the_same_as_unpracticed(client):
 # looked at that scope. Measured on the live db: 3 of 7 watermarked scopes
 # fired on sight, two of them tier crossings (the full-screen takeover).
 
-def _service_of(test_client):
-    return test_client.app.state.service if hasattr(test_client, "app") else None
-
-
 def test_switching_the_active_scope_absorbs_instead_of_celebrating(tmp_path):
     test_client, service = make_client(tmp_path)
     with test_client:
@@ -409,25 +405,34 @@ def test_switching_the_active_scope_absorbs_instead_of_celebrating(tmp_path):
 
 
 def test_staying_on_a_scope_still_celebrates_a_real_rise(tmp_path):
-    test_client, service = make_client(tmp_path)
+    """The direction the absorb rule must never swallow: a rank earned while
+    the scope stays active still fires.
+
+    It seeds a graded PB first, and that is the point. The bare fixture grades
+    Iron V -- the FLOOR, progression key 0 -- so there is nothing below it to
+    rise from, and this test skipped on every machine and every run from the
+    day it was written until 2026-09-17. A skip that can never lift is a hole:
+    the "never celebrate" half is asserted four times over, and nothing proved
+    the other half still worked."""
+    test_client, service = make_client(tmp_path, bundled_library=False)
     with test_client:
+        asyncio.run(service.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
+        asyncio.run(service.publish(_ev("star_collected", 1315,
+                                        {"course_id": 8, "star_id": 2, "igt_frames": 315})))
+        for rank, seconds in (("Mario", 10.0), ("Gold", 20.0), ("Silver", 30.0)):
+            test_client.put(f"/api/ranks/standards/star:8:2/Standard/{rank}",
+                            json={"seconds": seconds})
+        asyncio.run(service.set_strat(8, 2, "Standard"))
+        service.db._conn.execute("UPDATE attempts SET strat_tag='Standard' WHERE course_id=8")
+        service.db._conn.commit()
+        star_aid = next(a.id for a in service.db.attempts() if a.course_id == 8)
+        asyncio.run(service.save_pb(star_aid, "igt"))
+
         body = test_client.get("/api/marelo").json()      # arrive, absorbing
-        if body["tier"] is None:
-            pytest.skip("seeded fixture has no rankable overall score")
-        # Now drop the watermark as a genuine rank-up would leave it, WITHOUT
-        # changing the active scope: this is the earned case, not navigation.
-        # One step BELOW the real rank, derived rather than hardcoded to 0 --
-        # the seeded fixture grades Iron V, whose progression key IS 0, so a
-        # literal 0 is not a drop at all and the assertion passed for the
-        # wrong reason. Iron V is also the FLOOR, so there is nothing below it
-        # to rise from and this direction is unprovable on this fixture:
-        # skipped honestly rather than asserted vacuously. The direction IS
-        # covered, against the real dev db, by the reproduction recorded in
-        # the docstring above (3 of 7 scopes fired before the fix, 0 after,
-        # and a scope with a genuine rise still fires while it stays active).
         current = scoring.progression_key(body["tier"], body["division"])
-        if current == 0:
-            pytest.skip("seeded fixture grades the floor rank; no rise to make")
+        assert current > 0, body                          # above the floor, so a rise exists
+        # Drop the watermark as a genuine rank-up leaves it, WITHOUT changing
+        # the active scope: this is the earned case, not navigation.
         service.db.set_state("marelo_watermarks", {"overall": current - 1})
         again = test_client.get("/api/marelo").json()
         assert again["celebration"] is not None

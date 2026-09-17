@@ -1,5 +1,4 @@
 """Real independent watchdog against a threaded blocked delivery facade, no GPU."""
-import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -9,46 +8,14 @@ import uuid
 
 import pytest
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.replay import capturecontrol as C
+from sm64_events.replay import gpurequest as R
 
 ROOT = Path(__file__).resolve().parents[1]
-REQUEST = ROOT.parent / "runtime-control"
-if not REQUEST.is_dir():
-    REQUEST = ROOT
-PROJECT = ROOT if (ROOT / "pyproject.toml").is_file() else ROOT.parents[3]
-
-
-def load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-C = load("supervisor_control", REQUEST / "src/sm64_events/replay/capturecontrol.py")
-R = load("supervisor_request", REQUEST / "src/sm64_events/replay/gpurequest.py")
 LIMITS = R.RequestLimits(8, 128 << 20, 8 << 20, 16 << 20, 8, 1 << 20,
                         4 << 20, 1 << 20, 256, 2000, 3000)
 TABLE = [("timer", 0x1234, 4), ("controller", 0x2340, 16)]
 ACTIVE = 4
-
-
-@pytest.fixture(scope="module")
-def exe(tmp_path_factory):
-    work = tmp_path_factory.mktemp("supervisor")
-    build = load("supervisor_build", ROOT / "tools/build_plugin.py")
-    vcvars = build.find_vcvars32()
-    assert vcvars
-    native = ROOT / "plugin/gfxwrap"
-    cpp = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
-    names = ["gpu_request", "runtime_control", "runtime_delivery", "runtime_supervisor_fake"]
-    build._cl(vcvars, cpp + ["/std:c++17", "/EHsc", "/c", f"/I{native}",
-        *(str(native / f"{name}.cpp") for name in names), f"/Fo{work}\\"], work)
-    target = work / "runtime_supervisor.exe"
-    build._cl(vcvars, build.COMMON_FLAGS + [f"/I{native}",
-        str(native / "runtime_supervisor_host.c"), *(str(work / f"{name}.obj") for name in names),
-        f"/Fo{work}\\", f"/Fe:{target}", "/link", *build.LIBS], work)
-    return target
 
 
 def eventual(call, predicate=lambda value: bool(value), timeout=4):
@@ -75,9 +42,9 @@ def stats(child):
 
 
 @pytest.fixture
-def session(exe):
+def session(runtime_supervisor_exe):
     name = "sm64_supervisor_test_" + uuid.uuid4().hex
-    child = subprocess.Popen([str(exe), name], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    child = subprocess.Popen([str(runtime_supervisor_exe), name], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, **quiet_spawn_kwargs())
     control = None
     try:
@@ -185,7 +152,7 @@ def test_owner_death_revokes_blocked_worker_before_lease_timeout(session):
         "print(q.lease.token,flush=True);sys.stdin.readline()")
     owner = subprocess.Popen([sys.executable, "-c", script, control.name.removesuffix(C.SUFFIX)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={**os.environ, "PYTHONPATH": str(PROJECT / "src")}, **quiet_spawn_kwargs())
+        env={**os.environ, "PYTHONPATH": str(ROOT / "src")}, **quiet_spawn_kwargs())
     try:
         token = int(owner.stdout.readline())
         eventual(control.status, lambda value: value.ack_token == token)

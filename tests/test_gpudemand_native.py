@@ -1,6 +1,4 @@
 """Independent Python renew/revoke thread against actual native control IPC."""
-import importlib.util
-from pathlib import Path
 import subprocess
 import time
 import uuid
@@ -11,28 +9,6 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay import capturecontrol as C
 from test_gpudemand import D, R, LIMITS, TABLE, eventual
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(scope="module")
-def native(tmp_path_factory):
-    work = tmp_path_factory.mktemp("demand_native")
-    spec = importlib.util.spec_from_file_location("demand_build", ROOT / "tools/build_plugin.py")
-    build = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(build)
-    vcvars = build.find_vcvars32()
-    assert vcvars
-    native = ROOT / "plugin/gfxwrap"
-    flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
-    names = ["gpu_request", "runtime_control", "runtime_delivery", "runtime_supervisor_fake"]
-    build._cl(vcvars, flags + ["/std:c++17", "/EHsc", "/c", f"/I{native}",
-        *(str(native / f"{name}.cpp") for name in names), f"/Fo{work}\\"], work)
-    target = work / "demand_native.exe"
-    build._cl(vcvars, build.COMMON_FLAGS + [f"/I{native}",
-        str(native / "runtime_supervisor_host.c"), *(str(work / f"{name}.obj") for name in names),
-        f"/Fo{work}\\", f"/Fe:{target}", "/link", *build.LIBS], work)
-    return target
-
 
 def command(child, value):
     child.stdin.write(value + "\n")
@@ -41,9 +17,9 @@ def command(child, value):
 
 
 @pytest.fixture
-def session(native):
+def session(runtime_supervisor_exe):
     name = "sm64_demand_test_" + uuid.uuid4().hex
-    child = subprocess.Popen([str(native), name], stdin=subprocess.PIPE,
+    child = subprocess.Popen([str(runtime_supervisor_exe), name], stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **quiet_spawn_kwargs())
     control = demand = None
     try:

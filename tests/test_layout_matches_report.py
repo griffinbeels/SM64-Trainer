@@ -6,6 +6,10 @@ BOTH directions: a value the report verified that the layout still lacks, and
 a shipped value the report says failed. A missing report file skips — the
 runner has not been pointed at that version yet — and every field the report
 does not mention is left alone.
+
+BOTH versions skip today, on every machine: `data/version_sync/` has never
+been committed (checked 2026-09-17). This guard only starts guarding once a
+sync run's report is committed, which takes the emulator and the ROM.
 """
 import pytest
 

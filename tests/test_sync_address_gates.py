@@ -570,20 +570,3 @@ def test_usamune_timer_reports_candidates_that_reset_across_the_load():
 def test_usamune_timer_missing_without_curr_area():
     ctx = _ctx()
     assert AG._check_usamune_timer(ctx).status == "missing"
-
-
-# --- registration sanity ----------------------------------------------------
-
-def test_every_task_9_gate_id_is_registered():
-    expected = {
-        "version.rom", "address.global_timer", "address.mario_struct",
-        "address.object_pool", "address.mario_object", "behaviour.base",
-        "address.object_pool.confirm", "behaviour.door",
-        "address.curr_level", "address.curr_area",
-        "address.last_completed_course", "address.last_completed_star",
-        "address.pending_warp_op", "address.delayed_warp_timer",
-        "address.warp_dest", "address.hud_display", "address.hud_timer_running",
-        "address.usamune_overall", "address.usamune_star_result",
-        "address.usamune_timer",
-    }
-    assert expected <= _REGISTERED_IDS

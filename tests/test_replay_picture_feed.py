@@ -300,21 +300,6 @@ class _FeedExtractor:
                           video_start_s=times[0], frame_times=times)
 
 
-def _filled_ledger(origin: float, count: int, first_frame: int = 100,
-                   latency: float = 0.004) -> PictureLedger:
-    ledger = PictureLedger()
-    picture = np.zeros((8, 8, 4), np.uint8)
-    for index in range(count):
-        picture = picture.copy()
-        picture[0, 0, 0] = index % 256
-        picture[0, 1, 0] = (index // 256) % 256
-        ts = origin + index / 30
-        assert ledger.observe(picture, ts, first_frame + index,
-                              {"exact": True, "igt_overall": 20 + index})
-        ledger.mark_fed(ts, ts + latency)
-    return ledger
-
-
 # The pad reader's hand-off, the CLOCK join and the heartbeat-repeat flag
 # were pinned here. All three belonged to DERIVING a frame map; the capture
 # layer stamps it, so `_take_the_stamps` is the whole of extraction now and

@@ -283,7 +283,8 @@ def test_every_seeded_segment_validates():
 
 
 def test_every_movement_is_route_scoped():
-    assert len(MOVEMENTS) == 56          # 55 + seg:bowser2->bits (Task 20)
+    """Every movement in the built seed stays route-scoped. That the build
+    carries every authored row is tests/test_corpus_movements.py's job."""
     for row in MOVEMENTS:
         assert row["guards"] == [{"type": "in_active_route"}], row["seed_key"]
 

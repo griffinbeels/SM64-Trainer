@@ -42,14 +42,10 @@ def page():
         yield opened
 
 
-def test_the_page_has_collapse_toggles_at_all(page):
-    """Control. Everything below is vacuous if the app renders none."""
-    assert page.count(".card-collapse") > 0, (
-        "no collapse controls rendered — the collapsed story would be a no-op "
-        "that passes")
-
-
 def test_the_collapsed_story_reaches_a_shorter_page(page):
+    """Also the control this file used to spend a second test on: with no
+    `.card-collapse` rendered at all, the setup collapses nothing, the two
+    height sums are equal, and this fails with the message below naming it."""
     open_heights = _heights(page)
     page.evaluate(_BY_NAME["page-collapsed"].setup)
     page.wait_ms(500)

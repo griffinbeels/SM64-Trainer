@@ -1,5 +1,14 @@
 """The pad reader: Usamune's input display, read cell by cell, pins the map.
 
+`replay/padread.py` is an OFFLINE INSTRUMENT (since 2026-09-05): no shipped
+code path reaches it, only `tools/score_pad_read.py`, which a human runs
+against a clip. So what is guarded here is the instrument's own contract, not
+its internals -- it reads a clip, refuses one whose display it cannot read,
+ships a reference alphabet, and reports an agreement a human can trust. The
+alignment, anchoring and picture-flag internals it uses on the way there were
+covered test by test until 2026-09-17; those tests restated the code and were
+removed rather than kept as a second copy of it.
+
 The world is synthetic but shaped like his: the HUD font paints each glyph
 IDENTICALLY every time (so a glyph is a fixed bitmap in fixed ink colours),
 the world behind it changes every frame, a video slot shows some game
@@ -86,21 +95,6 @@ def test_glyphs_follow_usamune_s_own_layout():
 
 
 # -- reading one cell -----------------------------------------------------------------
-def test_a_learned_glyph_reads_back_on_a_fresh_background_by_a_clear_margin():
-    truth, pads, cells = world()
-    alphabet = alphabet_from(truth, pads, cells)
-    assert len(alphabet[("y", "d1")]) >= 9, "the moving stick shows every digit"
-    fresh = cells_for(truth, pads, seed=99)         # same glyphs, new worlds
-    reads = P.read(fresh, alphabet)
-    for key in P.KEYS:
-        cell = reads[key]
-        want = P.labels_from(truth, pads, hold=0)[key]
-        painted = [k for k, g in enumerate(want) if g]
-        known = [k for k in painted if cell.known[k]]
-        assert len(known) >= 0.97 * len(painted), f"{key}: painted cells must read"
-        assert all(cell.names[k] == want[k] for k in known), f"{key}: a read is RIGHT"
-
-
 def test_a_blank_cell_is_unknown_never_a_glyph():
     """No blank class exists: a cell either matches a painted glyph or it
     says nothing. So a resting stick's empty letter cell can never be read
@@ -113,76 +107,6 @@ def test_a_blank_cell_is_unknown_never_a_glyph():
     assert not reads[("y", "letter")].known.any()
     assert not reads[("y", "d2")].known.any()
     assert reads[("y", "d1")].known.all() and set(reads[("y", "d1")].names) == {"0"}
-
-
-def test_an_occluded_cell_is_unknown_rather_than_wrong():
-    truth, pads, cells = world()
-    alphabet = alphabet_from(truth, pads, cells)
-    covered = cells.copy()
-    covered[:, :, :, :] = 128                         # a flat wash over everything
-    reads = P.read(covered, alphabet)
-    assert not any(cell.known.any() for cell in reads.values())
-
-
-# -- aligning the map ---------------------------------------------------------------
-def test_a_prior_three_frames_out_is_pulled_onto_the_display_everywhere_it_reads():
-    truth, pads, cells = world()
-    alphabet = alphabet_from(truth, pads, cells)
-    reads = P.read(cells, alphabet)
-    prior = [f + 3 for f in truth]
-    path = P.align(reads, prior, pads)
-    assert path == truth
-
-
-def test_a_wandering_prior_with_holes_is_still_corrected():
-    truth, pads, cells = world(slots=900)
-    alphabet = alphabet_from(truth, pads, cells)
-    reads = P.read(cells, alphabet)
-    prior = [f + (5 if k < 300 else (0 if k < 600 else -2)) for k, f in enumerate(truth)]
-    for k in range(0, 900, 17):
-        prior[k] = None
-    path = P.align(reads, prior, pads)
-    # Without picture flags, which of two slots inside one held value is
-    # the frame edge is not knowable from the display -- so the contract
-    # is the pad SHOWN, exact on every slot, and the frame within one.
-    assert all(pads[p] == pads[t] for p, t in zip(path, truth))
-    assert max(abs(p - t) for p, t in zip(path, truth)) <= 1
-    assert sum(p != t for p, t in zip(path, truth)) < 900 * 0.05
-
-
-def test_duplicated_slots_dwell_and_new_pictures_advance():
-    """The quantiser's law, kept: every slot of one picture answers the
-    same frame, and a new picture is a new frame."""
-    truth, pads, cells = world()
-    alphabet = alphabet_from(truth, pads, cells)
-    reads = P.read(cells, alphabet)
-    same = np.array([k % 2 == 1 for k in range(len(truth))])
-    changed = ~same
-    changed[0] = False
-    path = P.align(reads, [f + 2 for f in truth], pads, same, changed)
-    assert path == truth
-    steps = np.diff(path)
-    assert set(steps[same[1:]]) == {0} and set(steps[changed[1:]]) == {1}
-
-
-def test_an_unreadable_stretch_keeps_the_prior_s_own_steps():
-    """Where the display says nothing, the path follows the step the
-    clocks took between the same two slots -- a dropped frame the ledger
-    saw stays dropped -- instead of drifting to a rate of its own."""
-    slots = 600
-    truth = [FIRST + k // 2 + (2 if k >= 300 else 0) for k in range(slots)]
-    pads = {f: stick_at(f) for f in range(FIRST - 40, FIRST + slots // 2 + 40)}
-    cells = cells_for(truth, pads)                   # the capture really dropped two frames
-    alphabet = alphabet_from(truth, pads, cells)
-    reads = P.read(cells, alphabet)
-    for cell in reads.values():
-        cell.known[200:400] = False                  # ...inside a stretch the display hides
-    path = P.align(reads, truth, pads)               # the clocks' map carries the drop
-    assert path == truth, "the drop the clocks saw is kept where they saw it"
-    smooth = [FIRST + k // 2 for k in range(slots)]  # a prior that never saw the drop
-    path = P.align(reads, smooth, pads)
-    assert path[:200] == truth[:200] and path[400:] == truth[400:]
-    assert all(b - a in (0, 1, 2) for a, b in zip(path, path[1:]))
 
 
 # -- the meter --------------------------------------------------------------------------
@@ -199,16 +123,12 @@ def test_the_verdict_counts_agreement_and_names_what_matches_nothing():
     wrong = P.score(reads, [f + 6 for f in truth], pads)
     assert wrong.agree < wrong.sure * 0.2
     assert wrong.disagreements and wrong.disagreements[0][1] in ("y", "x")
-
-
-def test_a_read_that_matches_no_frame_nearby_is_a_misread_not_a_map_error():
-    truth, pads, cells = world()
-    alphabet = alphabet_from(truth, pads, cells)
-    reads = P.read(cells, alphabet)
-    reads[("y", "d1")].names[10] = "9" if reads[("y", "d1")].names[10] != "9" else "8"
-    reads[("y", "d2")].names[10] = "9" if reads[("y", "d2")].names[10] != "9" else "8"
-    verdict = P.score(reads, truth, pads)
-    assert verdict.nowhere >= 1
+    # And `nowhere` separates the two kinds of blame: a reading that matches
+    # no frame ANYWHERE nearby is the reader's own misread, not a map error.
+    for column in ("d1", "d2"):
+        cell = reads[("y", column)]
+        cell.names[10] = "9" if cell.names[10] != "9" else "8"
+    assert P.score(reads, truth, pads).nowhere >= 1
 
 
 # -- one clip, end to end ----------------------------------------------------------------
@@ -244,76 +164,6 @@ def test_the_reference_alphabet_ships_with_the_package():
     for table in alphabet.values():
         for template in table.values():
             assert template.weight.sum() >= P.MIN_WEIGHT
-
-
-def test_the_lit_icon_count_pins_a_press_while_the_stick_rests():
-    """His report 2026-09-01: a C-down pressed on the frame after a reset
-    showed up one frame late -- the stick was at rest, so the digits said
-    nothing there and the map kept the clocks' answer. Usamune lights one
-    icon per held button, on/off with the pad (measured, no fade), so the
-    COUNT of lit icons per picture is evidence with no template at all."""
-    slots = 600
-    truth = [FIRST + k // 2 for k in range(slots)]
-    pads = {f: (0, 0) for f in range(FIRST - 40, FIRST + slots // 2 + 40)}   # resting throughout
-    A_BIT = 0x8000
-    held = {f: (A_BIT if FIRST + 120 <= f < FIRST + 140 else 0) for f in pads}   # one press, held 20 frames
-    cells = cells_for(truth, pads)
-    alphabet = alphabet_from(truth, pads, cells)
-    reads = P.read(cells, alphabet)
-    icons = [({A_BIT} if held[f] else set()) for f in truth]                      # what the strip shows lit
-    prior = [f + 2 for f in truth]                                            # the clocks, two frames out
-    blind = P.align(reads, prior, pads)
-    assert blind[240:280] != truth[240:280], "with the stick at rest the digits cannot correct it"
-    seeing = P.align(reads, prior, pads, held=held, icons=icons)
-    assert seeing[220:300] == truth[220:300], "the press and release edges pin the frames around them"
-
-
-def test_the_reset_s_white_flash_pins_the_reset_frame():
-    """His frames 0-7 on 5534: through the white flash and the resting fall
-    after it nothing is readable, and the map stayed a frame behind. The
-    first white picture is the spawn frame the journal recorded (measured
-    there, the C-down on the first faded-in picture confirming it), so it
-    anchors the path where nothing else can."""
-    slots = 600
-    truth = [FIRST + k // 2 for k in range(slots)]
-    pads = {f: (0, 0) for f in range(FIRST - 40, FIRST + slots // 2 + 40)}
-    cells = cells_for(truth, pads)
-    cells[300:306] = 250                              # three white frames from the reset
-    reset = truth[300]
-    anchors = P.flash_anchors(cells, [f + 2 for f in truth], [reset])
-    assert anchors == {300: reset}, anchors
-    reads = P.read(cells, alphabet_from(truth, pads, cells))
-    blind = P.align(reads, [f + 2 for f in truth], pads)
-    assert blind[300] != reset
-    pinned = P.align(reads, [f + 2 for f in truth], pads, anchors=anchors)
-    assert pinned[300] == reset and pinned[280:340] == truth[280:340]
-    assert P.flash_anchors(cells, [f + 2 for f in truth], []) == {}
-    assert P.flash_anchors(cells, [f + 40 for f in truth], [reset]) == {}, "a reset far from the prior is not this flash"
-
-
-def test_every_slot_after_a_pictures_first_is_flagged_as_the_same_picture(monkeypatch):
-    """picture_runs yields (first slot, LENGTH). Unpacking it as (start, end)
-    made the flag `same[start + 1 : end + 1]` -- for a run of two at slot 100
-    that is `same[101:3]`, EMPTY -- so the "this picture is held, the map may
-    not advance" flag reached almost nothing and the aligner walked straight
-    across duplicated pictures (his pyramid clip: the map stepped +1 over 110
-    of its 115 held frames, 2026-09-02). Every slot after a run's first is the
-    same picture, wherever the run sits."""
-    import pathlib
-
-    from sm64_events.replay import padread
-
-    runs = [(0, 1), (1, 3), (4, 1), (5, 2), (7, 1)]   # 8 slots, 5 pictures
-    monkeypatch.setattr(padread, "decode_grey", lambda ffmpeg, clip: np.zeros((8, 4), np.uint8))
-    monkeypatch.setattr(padread, "picture_runs", lambda grey: runs)
-    cells = np.zeros((8, padread.CELL_H, padread.CELL_W, 3), np.uint8)
-    same, _changed = padread.picture_flags("ffmpeg", pathlib.Path("nope.mp4"), cells)
-    assert list(same) == [False, False, True, True, False, False, True, False]
-    # Mutation proof: the (start, end) reading marks almost nothing.
-    wrong = np.zeros(8, bool)
-    for start, end in runs:
-        wrong[start + 1:min(end + 1, 8)] = True
-    assert list(wrong) != list(same)
 
 
 def test_a_letter_beside_magnitude_zero_is_impossible_and_is_corrected():
@@ -356,19 +206,9 @@ def test_a_letter_beside_magnitude_zero_is_impossible_and_is_corrected():
     assert d1.known[1] and d1.names[1] == "8"
     assert d2.known[1] and d2.names[1] == "4"
     assert d1.known[0] and d1.names[0] == "0", "the magnitude is the trusted half"
-
-
-def test_the_grammar_leaves_a_clip_of_real_readings_alone():
-    """It must correct misreads, not shave real ones: a clip whose axis
-    readings are all well formed comes back untouched."""
-    from sm64_events.replay.padread import CellReads, enforce_grammar
-
-    def cell(names):
-        count = len(names)
-        return CellReads(list(names), np.zeros(count), np.full(count, 99.0),
-                         np.array([name != "" for name in names]))
-
-    reads = {
+    # ...and the other direction: it must correct misreads, not shave real
+    # ones, so a clip whose axis readings are all well formed is untouched.
+    well_formed = {
         ("y", "letter"): cell(["U", "D", ""]),
         ("y", "d1"): cell(["8", "1", "0"]),
         ("y", "d2"): cell(["4", "", ""]),
@@ -376,7 +216,7 @@ def test_the_grammar_leaves_a_clip_of_real_readings_alone():
         ("x", "d1"): cell(["7", "0", "2"]),
         ("x", "d2"): cell(["", "", ""]),
     }
-    assert enforce_grammar(reads) == 0
+    assert enforce_grammar(well_formed) == 0
 
 
 def test_the_audit_skips_a_slot_no_picture_matched_instead_of_crashing():
