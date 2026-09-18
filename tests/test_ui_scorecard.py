@@ -663,7 +663,7 @@ def test_blurring_an_empty_goal_draft_cancels_edit_mode():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
 
             # Automatic mode supplies a time; clear the draft explicitly.
             _open_goal_editor(page, row_label, tile_label)
@@ -690,7 +690,7 @@ def test_blurring_an_unparseable_goal_draft_shows_the_hint():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
 
             _open_goal_editor(page, row_label, tile_label)
             _type_into_goal_editor(page, "not a time")
@@ -721,7 +721,7 @@ def test_editing_a_goal_time_recomputes_the_tile_and_row_sum_before_saving():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
 
             # A generous, easily-beaten goal (5 minutes) so the edited tile
             # grades GOOD regardless of which real PB the fixture happened
@@ -752,7 +752,7 @@ def test_saving_a_custom_goal_persists_it_and_lists_it_first_in_the_picker():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
 
             _expand_row_and_edit_goal(page, row_label, tile_label, "5'00\"00")
             page.wait_for(".rank-page .scorecard-card .scorecard-savebar")
@@ -845,6 +845,15 @@ def _stub_workbook():
 # other clipboard method alone and proves the shim actually installed by
 # returning `true` rather than letting a missing `navigator.clipboard`
 # fail silently.
+# The Rank page is the heaviest render in the suite: it scores every
+# entity in scope before a card exists. uilab's 10s default expires on it
+# under a 16-worker run (two of five whole-suite runs, 2026-09-17, while
+# this file passes 58/58 alone), so use the 15s bound the other rank-page
+# tests already pass. A bound, not a timing assertion: the test still
+# fails if the card never arrives.
+RANK_WAIT_MS = 15000
+
+
 def _wait_until(page, expression, timeout_ms=15000, step_ms=100):
     """Poll a JS predicate. uilab's own `wait_for` takes a SELECTOR, and what
     round 26's polled copy needs to wait on is a value on `window` -- a fixed
@@ -1348,7 +1357,7 @@ def test_a_typed_goal_snaps_onto_the_displayable_set_in_the_cell():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
 
             _expand_row_and_edit_goal(page, row_label, tile_label, "51\"01")
             page.wait_ms(150)
@@ -1401,7 +1410,7 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.evaluate(
                 "(() => {"
                 "  const select = document.querySelector('.rank-page "
@@ -1411,7 +1420,7 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
                 "})()")
             # Changing scope clears the old cards while its payload loads.
             # This gesture is ready when the new route's two cards arrive.
-            deadline = time.monotonic() + 8
+            deadline = time.monotonic() + RANK_WAIT_MS / 1000
             while page.count(".rank-page .scorecard-card .score-card") != 2 and time.monotonic() < deadline:
                 page.wait_ms(25)
             assert page.count(".rank-page .scorecard-card .score-card") == 2
@@ -1424,7 +1433,7 @@ def test_the_row_x_removes_that_row_and_ignores_it_in_ranking():
                 ".score-row-remove')[0].click()")
             # Cards live inside responsive column wrappers. Wait on their
             # total count, independent of how those columns are arranged.
-            deadline = time.monotonic() + 8
+            deadline = time.monotonic() + RANK_WAIT_MS / 1000
             while page.count(".rank-page .scorecard-card .score-card") != 1 and time.monotonic() < deadline:
                 page.wait_ms(25)
 
@@ -1473,7 +1482,7 @@ def test_the_cards_sit_in_four_aligned_columns_reading_down_in_course_order():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.wait_ms(200)
 
             columns = page.evaluate(
@@ -1539,7 +1548,7 @@ def test_every_card_labels_its_columns_and_keeps_them_in_register():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.wait_ms(200)
 
             cards = page.evaluate(
@@ -1583,7 +1592,7 @@ def test_a_full_monitor_keeps_four_columns_and_centres_bowser():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.wait_ms(400)  # the ResizeObserver's rebucket lands post-mount
 
             state = page.evaluate(
@@ -1653,7 +1662,7 @@ def test_every_line_is_a_door_to_that_stars_library_page():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.wait_ms(200)
 
             line_count = page.count(
@@ -1940,7 +1949,7 @@ def test_a_single_goal_draws_no_legend_and_no_dots():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.wait_ms(300)
             counts = page.evaluate(
                 "({ pills: document.querySelectorAll('.rank-page "
@@ -2189,7 +2198,7 @@ def test_a_completed_attempt_does_not_blank_the_card_he_is_reading():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.wait_ms(300)
 
             # Sample the card's own row count on a timer, so a blank that
@@ -2257,7 +2266,7 @@ def test_the_scorecard_sits_between_the_scope_rank_card_and_progress():
             page.goto(f"{base}/ui/index.html")
             page.wait_for(".log-list-card")
             page.evaluate(_OPEN_RANK_TAB)
-            page.wait_for(".rank-page .scorecard-card .score-card")
+            page.wait_for(".rank-page .scorecard-card .score-card", timeout_ms=RANK_WAIT_MS)
             page.wait_ms(300)
             order = page.evaluate(
                 "Array.from(document.querySelector('.rank-page').children)"

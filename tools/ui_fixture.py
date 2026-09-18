@@ -1348,10 +1348,21 @@ def _pad_journal(db_path: Path, count: int) -> None:
         conn.commit()
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+def _bound_socket() -> socket.socket:
+    """A listening socket to HAND to uvicorn, not a port number to hope for.
+
+    The old version bound port 0, read the number and closed the socket, then
+    passed the number to `uvicorn.Config`, which bound it again later. Between
+    those two binds the port belongs to nobody: on a 16-worker run another
+    worker's fixture is handed the same just-released port and one of the two
+    servers dies with `[WinError 10048] only one usage of each socket address`
+    (measured 2026-09-17: two browser tests in one full run, a different pair
+    each time -- the "one browser test flakes per run" folklore). Owning the
+    socket for the whole fixture closes the window entirely.
+    """
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    return listener
 
 
 @contextlib.contextmanager
@@ -1625,12 +1636,13 @@ def _seed_fixture_stage(base, service, castle_stage, seed_castle_pieces, castle_
     if arm_hundred_coin is not None:
         _arm_hundred_coin_star(base, service, *arm_hundred_coin)
 
-def _fixture_server_thread(server):
+def _fixture_server_thread(server, sockets=None):
+    """`sockets` is the already-bound listener; uvicorn must not bind again."""
     errors = []
 
     def run_server():
         try:
-            server.run()
+            server.run(sockets=sockets)
         except BaseException as error:
             # Preserve SystemExit from bind failure as well as ordinary errors.
             errors.append(error)
@@ -1802,7 +1814,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     install/uninstall attempt fail with that sentence, for driving the 409
     path.
     """
-    scratch = compare_cache_scratch = database = thread = None
+    scratch = compare_cache_scratch = database = thread = listener = None
     try:
         if db_path is None:
             # A failed shutdown preserves evidence rather than unlinking files
@@ -1828,14 +1840,15 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
                                         capture_layer_status, capture_layer_refuse, bundled_library, setup_observer)
         _fixture_replay_routes(app, database)
-        port = _free_port()
+        listener = _bound_socket()
+        port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(
             app, host="127.0.0.1", port=port, log_level="warning",
             # These offline servers need socket I/O only. Keep their shutdown
             # independent of Windows IOCP cancellation draining; Playwright's
             # subprocess-capable loop belongs to its separate driver thread.
             loop="asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto"))
-        thread, startup_errors = _fixture_server_thread(server)
+        thread, startup_errors = _fixture_server_thread(server, [listener])
         started_at = time.monotonic()
         thread.start()
         deadline = time.monotonic() + timeout
@@ -1858,6 +1871,10 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     finally:
         if thread is not None and thread.ident is not None:
             _stop_fixture_server(server, thread, startup_errors)
+        if listener is not None:
+            # uvicorn closes a socket it was handed; this covers the paths
+            # where it never got that far. socket.close() is idempotent.
+            listener.close()
         # Close the connection BEFORE removing the directory holding it.
         # Windows refuses to unlink an open file, so a leaked handle here is
         # not a warning -- it is a PermissionError that fails the caller.
