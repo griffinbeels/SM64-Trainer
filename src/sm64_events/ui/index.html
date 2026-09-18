@@ -8403,6 +8403,134 @@
   }
   .score-detail-input.is-invalid { border-color: var(--coral); }
   .score-detail-hint { font-size: .66rem; color: var(--coral); }
+
+  /* ===================================================================
+     The Ghost Overlay row (ui/components/ghostswitch.js)
+     ===================================================================
+     One row under the ACTIVE practice card's head, outside the fold, so it
+     is reachable whether or not the card's attempts are open -- a card only
+     auto-opens once it has recorded something, and the switch has to work
+     before the first attempt of a session.
+
+     No new visual language: the switch borrows the gold the card's own
+     `.log-card-active` border already uses for "this is what you are
+     practising", the step buttons are `.quiet-button`-shaped chips, and the
+     separator is the card's own `--border-soft`. Its 160ms ease is the SAME
+     transition `.log-card` declares for its selected/active states rather
+     than a second feel constant nobody tuned -- which is also why this
+     control gets no tuning inspector of its own.
+
+     Appended at the end of the stylesheet with the Scorecard block above it,
+     per the standing rule about converted blocks losing the cascade when
+     they sit where an older rule used to. */
+  .ghost-row {
+    display: flex; flex-direction: column; gap: .4rem;
+    padding: .45rem var(--log-head-pad-x, 14px) .55rem;
+    border-top: 1px solid var(--border-soft);
+  }
+  .ghost-row-head {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    row-gap: .3rem;
+  }
+  /* The switch itself. A full text reset, so it states its own `min-height`
+     and `display` -- the global `button` rule's 34px would otherwise set the
+     row's height from an invisible box (tests/test_ui_button_flex.py). */
+  .ghost-switch {
+    appearance: none; background: none; border: none; padding: 0;
+    margin: 0; font: inherit; cursor: pointer;
+    min-height: 0; display: inline-flex; align-items: center;
+    justify-content: flex-start; flex: 0 0 auto;
+  }
+  .ghost-switch-track {
+    width: 34px; height: 20px; border-radius: 999px;
+    background: rgba(9,22,36,.9); border: 1px solid var(--border);
+    display: block; position: relative;
+    transition: background 160ms ease, border-color 160ms ease;
+  }
+  .ghost-switch-knob {
+    position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--muted);
+    transition: transform 160ms ease, background 160ms ease;
+  }
+  .ghost-switch[aria-checked="true"] .ghost-switch-track {
+    background: color-mix(in srgb, var(--gold) 34%, rgba(9,22,36,.9));
+    border-color: var(--gold-soft);
+  }
+  .ghost-switch[aria-checked="true"] .ghost-switch-knob {
+    background: var(--gold-soft); transform: translateX(14px);
+  }
+  .ghost-switch:hover:not(:disabled) .ghost-switch-track { border-color: var(--gold-soft); }
+  .ghost-switch:focus-visible { outline: none; }
+  .ghost-switch:focus-visible .ghost-switch-track {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  /* A switch that cannot be flipped stays READABLE -- both emphasised and
+     de-emphasised content must be legible -- and the sentence beside it is
+     what says why, never a hover. */
+  .ghost-switch:disabled { cursor: default; }
+  .ghost-switch:disabled .ghost-switch-track { opacity: .65; }
+  .ghost-label {
+    font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+    color: var(--text); white-space: nowrap;
+  }
+  /* Dimmed, but NOT down to the reason's own colour: a name that matches the
+     sentence beside it stops reading as the control's name. */
+  .ghost-row:has(.ghost-switch:disabled) .ghost-label {
+    color: color-mix(in srgb, var(--text) 55%, var(--muted));
+  }
+  .ghost-why {
+    font-size: .68rem; color: var(--muted); line-height: 1.35;
+    flex: 1 1 18rem; min-width: 0;
+  }
+  .ghost-tune {
+    display: flex; align-items: center; gap: .5rem 1rem; flex-wrap: wrap;
+  }
+  .ghost-field { display: flex; align-items: center; gap: .35rem; }
+  /* The one fallback this row keeps instead of a breakpoint: if a longer
+     readout ever arrives, the timing group wraps within itself rather than
+     pushing the whole line past the card. */
+  .ghost-timing { flex-wrap: wrap; }
+  .ghost-field-name {
+    font-size: .66rem; color: var(--muted-2); text-transform: uppercase;
+    letter-spacing: .05em; white-space: nowrap;
+  }
+  .ghost-field-value {
+    font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* A fixed lane, so stepping the timing does not shuffle the two buttons
+     sideways under the pointer that is pressing one of them. */
+  .ghost-nudge-value { min-width: 6.5rem; text-align: center; }
+  .ghost-opacity {
+    width: 120px; min-width: 0; margin: 0; padding: 0; border: 0;
+    accent-color: var(--gold);
+  }
+  .ghost-step, .ghost-reset {
+    min-height: 24px; padding: 0 .5rem; border-radius: 5px;
+    border: 1px solid var(--border-soft); background: rgba(9,22,36,.6);
+    color: var(--muted); font: inherit; font-size: .68rem; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: border-color 160ms ease, color 160ms ease;
+  }
+  .ghost-step:hover, .ghost-reset:hover {
+    border-color: var(--gold-soft); color: var(--text);
+  }
+  .ghost-step:focus-visible, .ghost-reset:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  /* NO WIDTH RULE, and that is measured rather than assumed. The tuning line
+     is its own flex row under the switch and its content is 461px wide
+     (slider 120px + the two step buttons + the fixed timing lane), while the
+     card's pane at the supported 850px floor gives the row 695px. So it fits
+     at every supported width and a breakpoint here would only stack a line
+     that had room. A first version gated on `@container (max-width: 760px)`;
+     that threshold sat between the 850 and 900 probe points, and
+     `.claude/rules/ui-core.md` requires a new container threshold below
+     ~1180px to have its WINDOW equivalent added to the sweep matrix -- which
+     would change what every other surface is measured at, to stack a row
+     that did not need it. `flex-wrap: wrap` is the fallback if a longer
+     readout ever arrives. */
 </style></head>
 <body>
 <div id="app"></div>
