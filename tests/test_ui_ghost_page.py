@@ -1,31 +1,45 @@
-"""The overlay page in a real browser, driving a real <video>.
+"""The overlay page in a real browser, over the real clock socket.
 
 `tests/test_ui_ghost_follower.py` owns the NUMBERS -- what the rule decides and
 how many game frames it is out by. This file owns the half a trace cannot
 answer: that the page resolves its clip, that its module graph loads in a
-browser at all, and that a decision reaches an actual HTMLVideoElement (a seek
-lands, play runs, hold pauses). The invisible-feature rule in
-`.claude/rules/ui-core.md` is exactly this gap -- unit tests plus `node --check`
-once shipped a feature that rendered nothing.
+browser at all, that the clock survives the wire, and that a decision reaches
+an actual HTMLVideoElement (a seek lands, play runs, hold pauses). The
+invisible-feature rule in `.claude/rules/ui-core.md` is exactly this gap --
+unit tests plus `node --check` once shipped a feature that rendered nothing.
 
-The clock arrives by `postMessage`, which is the page's second real input and
-not a test hook: it is how the parent window pushes the nudge, and how the
-graphics plugin would publish the picture it is drawing if the memory poll ever
-proves too slow (the brainstorm's A+ escalation).
+THE FIXTURE MOUNTS THE REAL ROUTER. An earlier version hand-rolled the
+WebSocket handshake inside `http.server`; Chromium refused it as "Incorrect
+'Sec-WebSocket-Accept' header value" with an accept value checked by hand
+against the RFC and byte-identical for a raw client (measured 2026-09-18). A
+test that hand-rolls a protocol is a second implementation to debug, and this
+one was answering a question nobody asked -- so it runs `create_ghost_clock_router`
+under uvicorn instead, which makes the run an end-to-end proof of I2 and I3
+together: a snapshot goes in at the poll side, and the video moves.
+
+Both of the page's own inputs are exercised: the clock over the socket, and
+`postMessage` for the nudge and for a clock sample (the door the companion
+window uses, and the one the graphics plugin would use if the memory poll ever
+proves too slow -- the brainstorm's A+ escalation).
 """
-import base64
 import json
 import shutil
+import socket
 import subprocess
 import sys
 import threading
-from functools import partial
-from hashlib import sha1
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 import pytest
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.server.ghost_clock import (GhostClockFeed,
+                                            create_ghost_clock_router)
 
 REPO = Path(__file__).resolve().parents[1]
 UI = REPO / "src" / "sm64_events" / "ui"
@@ -46,11 +60,22 @@ pytestmark = pytest.mark.skipif(
 CLIP_SECONDS = 20
 CLIP_FPS = 30
 # A constant-rate stand-in for a template: one picture per game frame, the
-# counter running from zero. The follower's own VFR/offset cases are scored in
-# the trace harness; what this file needs is a clip a browser will really play.
+# counter running from zero. The follower's own VFR and offset-cut cases are
+# scored in the trace harness; what this file needs is a clip a browser will
+# really play.
 VIEW = {"frame_times": None, "picture_igt": list(range(CLIP_SECONDS * CLIP_FPS)),
         "duration_s": float(CLIP_SECONDS), "video_start_s": 0.0,
         "fps": CLIP_FPS, "game_fps": 30, "encode": "cfr"}
+
+UNAVAILABLE = {
+    "available": False, "reason": "template_has_no_attempt",
+    "reason_text": "this template was typed in, so it has no footage",
+    "template_id": 3, "attempt_id": None, "media_url": None,
+    "view": None, "exactness": None}
+AVAILABLE = {
+    "available": True, "reason": None, "reason_text": None,
+    "template_id": 3, "attempt_id": 35076, "media_url": "/media/ghost.mp4",
+    "view": VIEW, "exactness": "frame_map"}
 
 
 def _build_clip(path: Path) -> None:
@@ -62,162 +87,90 @@ def _build_clip(path: Path) -> None:
         check=True, capture_output=True, timeout=180)
 
 
-class _Handler(BaseHTTPRequestHandler):
-    """Serves the real `ui/` off disk plus the one endpoint the page calls.
-
-    Range support is not optional: Chromium will not seek inside a video the
-    server answers with a flat 200, and the whole page is seeks.
-    """
-
-    def __init__(self, *args, clip: Path, available: bool, **kwargs):
-        self.clip = clip
-        self.available = available
-        super().__init__(*args, **kwargs)
-
-    def log_message(self, *args):
-        pass
-
-    def _json(self, payload: dict) -> None:
-        body = json.dumps(payload).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _media(self) -> None:
-        data = self.clip.read_bytes()
-        start, end = 0, len(data) - 1
-        header = self.headers.get("Range")
-        if header and header.startswith("bytes="):
-            first, _, last = header[6:].partition("-")
-            start = int(first or 0)
-            end = int(last) if last else end
-        chunk = data[start:end + 1]
-        self.send_response(206 if header else 200)
-        self.send_header("Content-Type", "video/mp4")
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Length", str(len(chunk)))
-        if header:
-            self.send_header("Content-Range",
-                             f"bytes {start}-{end}/{len(data)}")
-        self.end_headers()
-        self.wfile.write(chunk)
-
-    def _accept_websocket(self) -> None:
-        """Answer the clock socket's handshake and then hold it open.
-
-        The page opens `/ws/ghost-clock` for real, so a fixture that 404s it
-        would leave a failed-connection error in the console and a retry timer
-        running -- indistinguishable, in `page.problems()`, from the page being
-        broken. This never SENDS: the trace arrives by postMessage, which is
-        the same door the companion window uses.
-        """
-        key = self.headers.get("Sec-WebSocket-Key", "")
-        digest = base64.b64encode(sha1(
-            (key + "258EAFA5-E914-47DA-95CA-5AB0DC85B11F").encode()).digest())
-        self.send_response(101)
-        self.send_header("Upgrade", "websocket")
-        self.send_header("Connection", "Upgrade")
-        self.send_header("Sec-WebSocket-Accept", digest.decode())
-        self.end_headers()
-        self.connection.settimeout(1.0)
-        while not self.server._closing:
-            try:
-                if not self.connection.recv(1024):
-                    return
-            except OSError:
-                continue
-
-    def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler's own spelling
-        path = unquote(urlparse(self.path).path)
-        if path == "/ws/ghost-clock":
-            return self._accept_websocket()
-        if path == "/media/ghost.mp4":
-            return self._media()
-        if path == "/api/ghost/source":
-            if not self.available:
-                return self._json({
-                    "available": False, "reason": "template_has_no_attempt",
-                    "reason_text": "this template was typed in, so it has no footage",
-                    "template_id": 3, "attempt_id": None, "media_url": None,
-                    "view": None, "exactness": None})
-            return self._json({
-                "available": True, "reason": None, "reason_text": None,
-                "template_id": 3, "attempt_id": 35076,
-                "media_url": "/media/ghost.mp4", "view": VIEW,
-                "exactness": "frame_map"})
-        if path.startswith("/ui/"):
-            target = UI / path[len("/ui/"):]
-            if target.is_file():
-                body = target.read_bytes()
-                kind = ("text/html" if target.suffix == ".html"
-                        else "text/javascript" if target.suffix == ".js"
-                        else "application/octet-stream")
-                self.send_response(200)
-                self.send_header("Content-Type", f"{kind}; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-        # A miss returning {} is indistinguishable from a component that draws
-        # nothing (ui-core.md). Say so out loud.
-        print("GHOST FIXTURE MISS", path)
-        self.send_response(404)
-        self.end_headers()
+def _snapshot(igt: int, timer: int, level: int, area: int) -> GameSnapshot:
+    """The shape the poll loop hands the feed, so the wire format under test
+    is the real one rather than a dict shaped like it."""
+    return GameSnapshot(
+        wall_time_utc=datetime.now(timezone.utc), global_timer=timer,
+        mario_action=0, mario_action_timer=0, num_stars=0,
+        last_completed_course=0, last_completed_star=0,
+        igt_overall=igt, curr_level=level, curr_area=area)
 
 
-class _Server:
-    """One server for both fixtures; `available` is swapped between the two
-    navigations so the page is asked the same question twice."""
+class _Fixture:
+    """The page's server: the real clock router, a source payload, the clip,
+    and one door for the test to push a snapshot in at the poll side."""
 
     def __init__(self, clip: Path):
-        self.clip = clip
-        self.httpd = ThreadingHTTPServer(
-            ("127.0.0.1", 0), partial(_Handler, clip=clip, available=True))
-        # Held sockets poll this so the server can actually be torn down.
-        self.httpd._closing = False
-        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.available = True
+        self.feed = GhostClockFeed()
+        app = FastAPI()
+        app.include_router(create_ghost_clock_router(self.feed))
 
-    def set_available(self, available: bool) -> None:
-        self.httpd.RequestHandlerClass = partial(
-            _Handler, clip=self.clip, available=available)
+        @app.get("/api/ghost/source")
+        def source():
+            return AVAILABLE if self.available else UNAVAILABLE
+
+        @app.post("/test/clock")
+        def clock(igt: int, global_timer: int, level: int = 8, area: int = 1):
+            self.feed.note(_snapshot(igt, global_timer, level, area))
+            return {"ok": True}
+
+        @app.get("/media/ghost.mp4")
+        def media():
+            # FileResponse answers Range requests, which is not optional:
+            # Chromium will not seek inside a video served as a flat 200, and
+            # the whole page is seeks.
+            return FileResponse(clip, media_type="video/mp4")
+
+        app.mount("/ui", StaticFiles(directory=str(UI)), name="ui")
+        self.server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=0, log_level="warning"))
+        self.thread = threading.Thread(target=self.server.run, daemon=True)
+        self.url = ""
 
     def __enter__(self):
         self.thread.start()
+        deadline = threading.Event()
+        for _ in range(200):
+            if self.server.started and self.server.servers:
+                break
+            deadline.wait(0.05)
+        assert self.server.started, "the fixture server never came up"
+        host, port = self.server.servers[0].sockets[0].getsockname()[:2]
+        self.url = f"http://{host}:{port}"
+        # It answers before the test asks anything of the page.
+        with socket.create_connection((host, port), timeout=5):
+            pass
         return self
 
     def __exit__(self, *exc):
-        self.httpd._closing = True
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        self.thread.join(timeout=5)
+        self.server.should_exit = True
+        self.thread.join(timeout=10)
 
 
-# Push a clock from INSIDE the page at the game's own rate, and read the
-# status from inside it too.
+# Run a clock trace from INSIDE the page, at the game's own rate, through the
+# real socket -- and read the page's own status back at the end of it.
 #
-# Both halves matter. Driving 120 messages one CDP round trip at a time would
-# measure the harness rather than the page; and READING the status over a
-# round trip after the trace ends would race the follower's own starvation
-# hold -- it stops after `starveMs` without a sample, exactly as it must when
-# the emulator is paused, so a late read reports the hold instead of the play
-# it was asked about. The page samples itself 25 ms after the last message.
+# Both halves matter. Driving 120 samples one CDP round trip at a time would
+# measure the harness rather than the page; and READING the status over a round
+# trip afterwards would race the follower's own starvation hold, which stops
+# the ghost after `starveMs` without a sample exactly as it must when the
+# emulator is paused. So the page samples itself 25 ms after the last one.
 _TRACE = """(() => {
   const igts = %s;
   window.__done = false; window.__result = null;
   let k = 0;
   const id = setInterval(() => {
-    window.postMessage({type: 'ghost-clock', igt: igts[k],
-                        global_timer: 9000 + k, level: 8, area: 1}, '*');
+    fetch(`/test/clock?igt=${igts[k]}&global_timer=${9000 + k}`,
+          {method: 'POST'});
     k += 1;
     if (k >= igts.length) {
       clearInterval(id);
       setTimeout(() => {
         window.__result = window.ghostStatus();
         window.__done = true;
-      }, 25);
+      }, 120);
     }
   }, 33);
   return true;
@@ -227,7 +180,7 @@ _TRACE = """(() => {
 def _trace(page, igts: list) -> dict:
     """Run one clock trace and answer with what the page was doing at its end."""
     page.evaluate(_TRACE % json.dumps(igts))
-    for _ in range(len(igts) * 2 + 60):
+    for _ in range(len(igts) * 2 + 80):
         if page.evaluate("window.__done === true"):
             break
         page.wait_ms(50)
@@ -236,14 +189,21 @@ def _trace(page, igts: list) -> dict:
     return result
 
 
+def _post_message(page, body: str) -> None:
+    page.evaluate(f"(() => {{ window.postMessage({body}, '*'); return true; }})()")
+    page.wait_ms(200)
+
+
 def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
     clip = tmp_path / "ghost.mp4"
     _build_clip(clip)
 
-    with _Server(clip) as server, get_driver().launch() as page:
+    with _Fixture(clip) as fixture, get_driver().launch() as page:
+        url = f"{fixture.url}/ui/ghost/index.html?kind=star&entity_key=LLL-1"
+
         # 1. Nothing to show says so, and paints nothing.
-        server.set_available(False)
-        page.goto(f"{server.url}/ui/ghost/index.html?kind=star&entity_key=LLL-1")
+        fixture.available = False
+        page.goto(url)
         page.wait_for('body[data-ghost="unavailable"]')
         assert page.evaluate("document.body.dataset.reason") == "template_has_no_attempt"
         assert page.evaluate(
@@ -251,8 +211,8 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         ) == "hidden"
 
         # 2. A real template: the page resolves it and opens the clip.
-        server.set_available(True)
-        page.goto(f"{server.url}/ui/ghost/index.html?kind=star&entity_key=LLL-1")
+        fixture.available = True
+        page.goto(url)
         page.wait_for('body[data-ghost="ready"]')
         assert page.evaluate("window.ghostStatus().template.pictures") == 600
         assert page.evaluate("document.getElementById('ghost').muted") is True
@@ -265,15 +225,24 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert box["w"] == page.evaluate("window.innerWidth")
         assert box["h"] == page.evaluate("window.innerHeight")
 
-        # 3. Steady play: the element really runs, on the picture the rule
-        #    names. The tolerance is 2 rather than the trace harness's 1
-        #    because this one includes a decoder: `shown_igt` reads the
-        #    picture Chromium PRESENTED, which trails the element's own time.
+        # 3. Steady play over the real socket: the element runs, on the
+        #    picture the rule names.
+        #
+        #    The error read is the DECISION's own `drift` -- how far out the
+        #    picture on screen was at the moment the follower last decided.
+        #    Comparing `shown_igt` against `target_igt` after the fact reported
+        #    4 frames on a page that was fine: the status is captured 120 ms
+        #    after the last sample and the video keeps PLAYING through it,
+        #    exactly as it should, so the reading was the video's progress and
+        #    not the follower's error (measured 2026-09-18). The tolerance is 2
+        #    rather than the trace harness's 1 because this one includes a
+        #    decoder and a wire.
         playing = _trace(page, list(range(0, 121)))
         assert playing["samples"] >= 100, playing
         assert playing["paused"] is False, playing
-        assert playing["shown_igt"] is not None, playing
-        assert abs(playing["shown_igt"] - playing["target_igt"]) <= 2, playing
+        assert playing["decision"]["drift"] is not None, playing
+        assert abs(playing["decision"]["drift"]) <= 2, playing
+        assert fixture.feed.listeners == 1
 
         # 4. The timer stalls: the element pauses, with no pause detector.
         stalled = _trace(page, [120] * 20)
@@ -287,14 +256,28 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert reset["paused"] is True, reset
         assert reset["shown_igt"] == 0, reset
 
-        # 6. His timing hotkey, over the same channel the window will use.
-        page.evaluate(
-            "(() => { window.postMessage({type: 'ghost-nudge',"
-            " nudge_frames: 45}, '*'); return true; })()")
-        page.wait_ms(200)
+        # 6. His timing hotkey, over the channel the companion window uses.
+        _post_message(page, "{type: 'ghost-nudge', nudge_frames: 45}")
         nudged = _trace(page, list(range(100, 131)))
         assert nudged["nudge_frames"] == 45, nudged
         assert nudged["target_igt"] == nudged["sample"]["igt"] + 45, nudged
-        assert abs(nudged["shown_igt"] - nudged["target_igt"]) <= 2, nudged
+        assert nudged["decision"]["target"] == nudged["sample"]["igt"] + 45, nudged
+        assert abs(nudged["decision"]["drift"]) <= 2, nudged
 
-        assert page.problems() == []
+        # 7. The same clock, pushed by the parent instead of the server --
+        #    the escalation path, proved rather than assumed.
+        _post_message(
+            page, "{type: 'ghost-clock', igt: 300, global_timer: 50000,"
+                  " level: 8, area: 1}")
+        pushed = page.evaluate("window.ghostStatus()")
+        assert pushed["sample"]["igt"] == 300, pushed
+        assert pushed["target_igt"] == 345, pushed
+
+        # `problems()` DRAINS, so it is asked once and the answer kept --
+        # asking twice (once for the assertion, once for its message) reports
+        # a clean page under the failure it just swallowed.
+        problems = page.problems()
+        assert problems == [], problems
+
+    assert fixture.feed.listeners == 0
+    assert fixture.feed.running is False

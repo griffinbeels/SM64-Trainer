@@ -137,19 +137,25 @@ export function createFollower(view, options = {}) {
   let nudge = options.nudgeFrames || 0;
   let lastIgt = null;
   let lastSampleMs = null;
-  let retarget = true;      // the first sample always places the ghost
+  //: why the next sample must PLACE the ghost rather than play it on: a
+  //: reason string, or null when the follower is simply following. It holds
+  //: the reason rather than a flag so a placement can say what caused it,
+  //: which is the first thing a live diagnosis asks.
+  let retarget = "first_sample";
 
   const away = (sample) =>
     expect && (sample.level !== expect.level
                || (expect.area != null && sample.area !== expect.area));
 
-  // WHY the ghost is being placed rather than played. Only the first two are
-  // the follower's own doing; the rest are things the player did to the game.
+  // WHY the ghost is being placed rather than played. What the GAME did wins
+  // over the follower's own bookkeeping: a counter that just returned to zero
+  // is a reset whatever else was pending, and saying otherwise would send a
+  // live diagnosis to the wrong half of the system.
   const placement = (moved, target, asked) => {
     if (moved === null) return "first_sample";
-    if (asked) return "nudge";
-    if (moved > 0) return "load_forward";
-    return target <= template.firstIgt ? "reset" : "load_back";
+    if (moved < 0) return target <= template.firstIgt ? "reset" : "load_back";
+    if (moved > cfg.jumpFrames) return "load_forward";
+    return asked || "nudge";
   };
 
   // The counter is running normally: hold where it stopped, resync a drift
@@ -174,11 +180,23 @@ export function createFollower(view, options = {}) {
     return { action: "play", rate, time, reason: "playing" };
   };
 
+  // Every decision carries the target it was aimed at and the DRIFT it saw:
+  // how many game frames the picture on screen was from the picture the rule
+  // named, at the moment of deciding. Measuring that afterwards from outside
+  // reads the video's own progress since, not the follower's error.
   const decide = (sample, videoTime) => {
+    const decision = choose(sample, videoTime);
+    if (!template.ok || away(sample)) return decision;
+    const target = sample.igt + nudge;
+    return { ...decision, target,
+             drift: template.igtAtTime(videoTime) - target };
+  };
+
+  const choose = (sample, videoTime) => {
     if (!template.ok) return HOLD(template.reason);
     if (away(sample)) {
       // Coming back is a jump, whatever the counter did while away.
-      retarget = true;
+      retarget = "elsewhere";
       lastIgt = sample.igt;
       return HOLD("elsewhere");
     }
@@ -187,7 +205,7 @@ export function createFollower(view, options = {}) {
     const moved = lastIgt === null ? null : sample.igt - lastIgt;
     const asked = retarget;
     lastIgt = sample.igt;
-    retarget = false;
+    retarget = null;
 
     if (asked || moved === null || moved < 0 || moved > cfg.jumpFrames) {
       // Hold after placing it: the next sample says whether the clock is
@@ -208,7 +226,7 @@ export function createFollower(view, options = {}) {
       const next = Math.round(Number(frames) || 0);
       if (next === nudge) return nudge;
       nudge = next;
-      retarget = true;      // a deliberate gesture snaps, it does not drift in
+      retarget = "nudge";   // a deliberate gesture snaps, it does not drift in
       return nudge;
     },
     sample(clock, videoTime, nowMs) {
@@ -219,7 +237,7 @@ export function createFollower(view, options = {}) {
      *  gone. Either way the ghost must stop rather than run on wall time. */
     idle(videoTime, nowMs) {
       if (lastSampleMs === null || nowMs - lastSampleMs < cfg.starveMs) return null;
-      retarget = true;
+      retarget = "no_clock";
       return HOLD("no_clock");
     },
   };
