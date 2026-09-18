@@ -33,6 +33,7 @@ from sm64_events.detectors.spawn import SpawnDetector
 from sm64_events.detectors.stage import StageChangeDetector
 from sm64_events.detectors.star_grab import StarGrabDetector
 from sm64_events.detectors.warp import WarpDetector
+from sm64_events.ghost.session import GhostSession
 from sm64_events.memory.layout import LAYOUT_ROWS, layout_for
 from sm64_events.memory.pj64 import Pj64Memory
 from sm64_events.replay.audio import ProcessAudioSource, SystemAudioSource
@@ -45,6 +46,7 @@ from sm64_events.replay.video import DwmSurfaceVideoSource
 from sm64_events.replay.window import find_window
 from sm64_events.server.app import create_app
 from sm64_events.server.broadcaster import Broadcaster
+from sm64_events.server.ghost_clock import GhostClockFeed
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
 from sm64_events.storage.instance_lock import acquire_instance_lock
@@ -454,10 +456,17 @@ def build():
 
     from sm64_events.server.inputruntime import InputRuntime
     inputs = InputRuntime(service, memory, layout, replay)
+    # The ghost overlay follows the game's own clock, so the feed takes each
+    # accepted reading straight off the poll loop -- publish-and-forget, one
+    # set test when no overlay is open (server/ghost_clock.py).
+    ghost_clock = GhostClockFeed()
     poller = Poller(memory, detector_stream(), service, on_frame=service.settle_frame,
                     reader=reader, detector_factory=detector_stream,
-                    on_gap=service.capture_gap)
+                    on_gap=service.capture_gap, on_snapshot=ghost_clock.note)
     inputs.bind(poller)
+    # One ghost for the app: the switch, its window, and the target it follows.
+    ghost = GhostSession(tracker=service, inputs=inputs.get_service,
+                         replay=replay, broadcaster=broadcaster)
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
         # nothing; unknown (no header read yet) keeps the old behaviour.
@@ -469,7 +478,8 @@ def build():
                       inputs=inputs.get_service, on_db_attached=inputs.attach,
                       updater=updater, compare=compare, compilation=compilation,
                       db_retry=db_retry, capture_layer=capture_layer,
-                      setup_observer=setup_observer,
+                      setup_observer=setup_observer, ghost=ghost,
+                      ghost_clock=ghost_clock,
                       refresh_library_on_start=True)
 
 

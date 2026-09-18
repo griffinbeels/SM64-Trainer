@@ -363,10 +363,13 @@ def _start_app_replay(replay) -> None:
 
 
 def _create_lifespan(poller, service, replay, monitor, db_retry,
-                     refresh_library_on_start, on_db_attached=None, capture_layer=None):
+                     refresh_library_on_start, on_db_attached=None, capture_layer=None,
+                     ghost=None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await _start_app_service(service)
+        if ghost is not None:
+            await ghost.start()
         reattach_task = None
         if service is not None and service.db is None and db_retry is not None:
             reattach_task = asyncio.create_task(
@@ -386,6 +389,8 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
                 _refresh_library_quietly(app.state.library, app.state.library_overrides,
                                          app.state.adoptions, service))
         yield
+        if ghost is not None:
+            await ghost.stop()          # no overlay window outlives the server
         if refresh_task is not None:
             refresh_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -804,7 +809,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
                setup_observer=None, on_db_attached=None,
                library_path=None, refresh_library_on_start=False,
-               library_bundled_path=None) -> FastAPI:
+               library_bundled_path=None, ghost=None, ghost_clock=None) -> FastAPI:
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
     # back to (None = the shipped one). Since round 33 every fitted star row
     # in the library becomes a sheet-fitted rank standard at load, so a test
@@ -833,7 +838,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     # None (production) resolves to core.paths.library_adoptions_path().
     monitor = _create_monitor(poller, replay)
     lifespan = _create_lifespan(poller, service, replay, monitor, db_retry,
-                                refresh_library_on_start, on_db_attached, capture_layer)
+                                refresh_library_on_start, on_db_attached, capture_layer,
+                                ghost)
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
     _mount_ui_routes(app, broadcaster)
     _mount_library_routes(app, service, library_path, library_bundled_path,
@@ -841,6 +847,9 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     _mount_service_routes(app, service, mode_path)
     _mount_optional_routes(app, replay, inputs, capture_layer, compare,
                            compilation, updater, mode_path, setup_observer)
+    from sm64_events.server.ghost_api import mount_ghost_routes
+    mount_ghost_routes(app, inputs=inputs, replay=replay, session=ghost,
+                       clock=ghost_clock)
     _mount_controls(app, poller, replay)
     _mount_diagnostics(app, poller, broadcaster, service, monitor)
     _mount_events(app, poller, broadcaster, debug_hooks)
