@@ -69,7 +69,7 @@ class Poller:
 
     def __init__(self, memory, detectors, broadcaster, hz: int | None = None,
                  reader=None, on_frame=None, input_sampler=None,
-                 detector_factory=None, on_gap=None,
+                 detector_factory=None, on_gap=None, on_snapshot=None,
 ):
         self.memory = memory
         self.detectors = list(detectors)
@@ -122,6 +122,11 @@ class Poller:
         # `broadcaster`, which is sometimes a plain Broadcaster: this poller's
         # sink contract is publish(), and a clock consumer is a second concern.
         self.on_frame = on_frame
+        # Called synchronously with each accepted reading, never awaited --
+        # the ghost overlay follows this clock (server/ghost_clock.py) and
+        # nothing on this path may wait for a browser. With no overlay open
+        # the feed's own early return makes this one set test.
+        self.on_snapshot = on_snapshot
         self.interval = 1.0 / hz
         self.reader = reader or SnapshotReader(memory)
         # Set when the reader can never read (core/snapshot.py::UnreadyReader
@@ -313,6 +318,8 @@ class Poller:
         self._prev = curr
         self.latest = curr
         self._last_timer = curr.global_timer
+        if self.on_snapshot is not None:
+            self.on_snapshot(curr)
 
     def _run_detectors(self, curr) -> tuple[list, str | None]:
         """Every detector sees this pair; the name of the one that failed, if any.
