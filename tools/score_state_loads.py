@@ -449,7 +449,7 @@ def main() -> int:
 
     roots = args.roots or default_roots()
     scratch = Path(tempfile.mkdtemp(prefix="score-state-loads-"))
-    dense_totals = sparse_totals = Counter()
+    dense_totals, sparse_totals = Counter(), Counter()
     dense_findings: list[Finding] = []
     sparse_findings: list[Finding] = []
     try:
