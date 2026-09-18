@@ -111,6 +111,36 @@ gets admission/affinity but the runner is required for this crash-containment
 backstop. There is no machine-wide deletion of browser profiles or orphaned
 processes: absence of a live parent does not establish ownership.
 
+## What makes a test worth keeping
+
+These tests exist to stop an agent changing behaviour nobody asked it to
+change. Griffin, 2026-09-17: *"make sure that we are not over-testing certain
+behaviors / that everything we have is genuinely valuable for preventing
+agentic drift. That's the purpose of the tests."* A test earns its place by
+answering all four:
+
+1. **What change turns it red?** Name it. If you cannot, it is decoration.
+2. **Is it the only thing that catches that change?** If a sibling fails
+   identically, one of them is redundant; keep the one that reads better.
+3. **Does it pin a decision or an accident?** "The time comes from the Usamune
+   clock" is a decision. A pixel height or a shipped default's contents is
+   where we happen to be this week -- see contract 7 in CLAUDE.md.
+4. **Does it fail only when the behaviour is wrong?** A test that goes red for
+   load, a port collision or a missing tool teaches everyone to ignore red.
+
+Two failure shapes that look like coverage and are not, both found in the
+2026-09-17 audit:
+
+- **A test that cannot fail.** `test_ranks_api_marelo`'s two celebration tests
+  ran against a fixture that grades the FLOOR rank, so every celebration path
+  returned before deciding anything. They now seed a graded star first, and
+  each was proved by mutation.
+- **A skip that can never lift.** Both of those skipped on every machine since
+  the day they were written. A whole-suite run now FAILS on a skip whose
+  reason is not in `tests/skip_inventory.py`; a narrowed run may skip freely.
+  Add a row there only for something this machine genuinely cannot run, with
+  what would lift it -- never to silence a guard that should be firing.
+
 ## Evidence and test deletion policy
 
 The September 1–2 measurements already answered the 32-worker question after
