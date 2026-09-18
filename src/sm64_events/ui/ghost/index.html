@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghost overlay</title>
+<!--
+  The ghost overlay's own page: one muted video, no chrome at all, sized to
+  whatever window it is put in. The companion window (the ghost/window package)
+  points a frameless, click-through, never-focused window at this URL and glues
+  it to Project64's picture; opening the same URL in an ordinary browser tab is
+  how you look at it without a window manager in the way.
+
+  Deliberately NOT part of the app shell: it must paint a video and nothing
+  else, and the design system's background, cards and fonts would all be
+  something to see through. Everything it draws is below.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  /* Full-bleed, and `contain` rather than `fill`: the clip follows the
+     renderer's own picture size, which is not standardised, so stretching it
+     to a window of another aspect would put the ghost's Mario somewhere the
+     player's never goes. Letterbox bars are black on black. */
+  #ghost {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; background: #000; pointer-events: none;
+  }
+  /* Nothing to show yet, or nothing to show at all: paint nothing. A
+     chrome-less overlay has no room to explain itself, so the reason lives on
+     the body's data attributes and in ghostStatus() instead. */
+  body:not([data-ghost="ready"]) #ghost { visibility: hidden; }
+</style>
+</head>
+<body data-ghost="loading">
+<video id="ghost" muted playsinline preload="auto" disablepictureinpicture></video>
+<script type="module">
+// THE GHOST IS A FUNCTION OF THE CLOCK. This file is only the wiring: resolve
+// which clip to show, open the clock, and hand every sample to the follower,
+// which owns every decision. See ./follower.js for the rule itself.
+import { createFollower } from "./follower.js";
+import { presentedVideoTime, watchVideoPicture } from "../videopicture.js";
+
+const params = new URLSearchParams(location.search);
+const video = document.getElementById("ghost");
+// `decision` is the last thing a CLOCK SAMPLE decided and `holding` is the
+// separate question of whether any clock is arriving at all. Folding the two
+// together would let a quiet second overwrite why the ghost is where it is,
+// which is the one thing a live diagnosis needs to read back.
+const status = { state: "loading", reason: null, reason_text: null,
+                 samples: 0, decision: null, sample: null, template: null,
+                 holding: null };
+let follower = null;
+
+function mark(state, reason = null, reasonText = null) {
+  Object.assign(status, { state, reason, reason_text: reasonText });
+  document.body.dataset.ghost = state;
+  if (reason) document.body.dataset.reason = reason;
+  else delete document.body.dataset.reason;
+}
+
+// WHAT IS ON SCREEN, not what was asked for. `requestVideoFrameCallback` hands
+// back the picture Chromium actually presented; a seek's own `currentTime` is
+// a request. Correcting against the presented picture is also what keeps the
+// element running one frame ahead of the screen, which is where it belongs.
+const videoTime = () => {
+  const presented = presentedVideoTime(video);
+  return presented == null ? (video.currentTime || 0) : presented;
+};
+
+function apply(decision) {
+  if (decision.action === "seek" && decision.time != null)
+    video.currentTime = decision.time;
+  if (decision.rate > 0) {
+    if (Math.abs(video.playbackRate - decision.rate) > 0.005)
+      video.playbackRate = decision.rate;
+    if (video.paused) video.play().catch(() => {});
+  } else if (!video.paused) {
+    video.pause();
+  }
+}
+
+function onSample(sample) {
+  if (!follower) return;
+  status.samples += 1;
+  status.sample = sample;
+  status.holding = null;
+  status.decision = follower.sample(sample, videoTime(), performance.now());
+  apply(status.decision);
+}
+
+function setNudge(frames) {
+  if (!follower) return;
+  follower.setNudge(frames);
+}
+
+// The clock. One tiny message per game snapshot, and only while this socket is
+// open -- see server/ghost_clock.py. A dropped connection retries: the overlay
+// outlives a server restart, and the follower holds meanwhile because no
+// sample is arriving.
+function openClock() {
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  const connect = () => {
+    const socket = new WebSocket(`${scheme}//${location.host}/ws/ghost-clock`);
+    socket.onmessage = (event) => {
+      try { onSample(JSON.parse(event.data)); } catch { /* not our message */ }
+    };
+    socket.onerror = () => socket.close();
+    socket.onclose = () => setTimeout(connect, 1000);
+  };
+  connect();
+}
+
+// The parent window can push the same two things the page owns: the nudge (his
+// timing hotkey) and -- if the socket ever proves too slow to feel locked --
+// the clock itself, which is the escalation the brainstorm calls A+: the
+// graphics plugin publishes the picture it is drawing and the window follows
+// that instead of the memory poll. Same message, another source.
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || typeof data !== "object") return;
+  if (data.type === "ghost-nudge") setNudge(data.nudge_frames);
+  else if (data.type === "ghost-clock") onSample(data);
+});
+
+// The page's whole readable surface. A chrome-less overlay cannot show what it
+// is doing, so this is how the window that owns it, a test, or a live
+// diagnosis asks.
+window.ghostStatus = () => ({
+  ...status,
+  nudge_frames: follower ? follower.nudge : null,
+  video_time: videoTime(),
+  paused: video.paused,
+  playback_rate: video.playbackRate,
+  shown_igt: follower && follower.template.ok
+    ? follower.template.igtAtTime(videoTime()) : null,
+  target_igt: follower && status.sample
+    ? status.sample.igt + follower.nudge : null,
+});
+
+async function start() {
+  const query = new URLSearchParams();
+  for (const key of ["kind", "entity_key", "strat"]) {
+    const value = params.get(key);
+    if (value) query.set(key, value);
+  }
+  let source;
+  try {
+    source = await (await fetch(`/api/ghost/source?${query}`)).json();
+  } catch (error) {
+    mark("error", "source_unreachable", String(error));
+    return;
+  }
+  if (!source || !source.available) {
+    mark("unavailable", (source && source.reason) || "no_template",
+         (source && source.reason_text) || null);
+    return;
+  }
+  follower = createFollower(source.view, {
+    nudgeFrames: Number(params.get("nudge")) || 0,
+    // Where the template was recorded, if the source knows. A counter running
+    // in another course names a picture in this one, so the ghost holds
+    // instead of showing a confident lie. Dormant until the source payload
+    // carries `level`; nothing else here has to change when it does.
+    expect: source.level != null
+      ? { level: source.level, area: source.area == null ? null : source.area }
+      : null,
+  });
+  status.template = { ok: follower.template.ok, reason: follower.template.reason,
+                      pictures: follower.template.pictures || 0 };
+  if (!follower.template.ok) {
+    mark("unavailable", follower.template.reason);
+    return;
+  }
+  // READY means a picture can be shown, not that a URL was assigned. Seeking
+  // an element that has not loaded its metadata is a request the browser may
+  // still be holding, and the first thing every clock sample does is seek.
+  video.addEventListener("error", () => mark("error", "media_unplayable"));
+  video.addEventListener("loadedmetadata", () => {
+    if (status.state === "ready") return;
+    mark("ready");
+    openClock();
+    const tick = () => {
+      const idle = follower.idle(videoTime(), performance.now());
+      if (idle) { status.holding = idle.reason; apply(idle); }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  watchVideoPicture(video, () => {});
+  video.src = source.media_url;
+}
+
+start();
+</script>
+</body>
+</html>

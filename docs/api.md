@@ -911,6 +911,31 @@ Deleting the file resets all history.
 | `tools/watch_timer.py` | Characterize a candidate address across game scenarios |
 | `tools/dedupe_journal.py` | Scan for double-journaled events from concurrent-instance incidents (read-only); `--fix` deletes duplicates and re-projects (server must be stopped first) |
 
+## Ghost overlay — the clock feed and the overlay page
+
+The ghost overlay shows your own best attempt inside the game picture. It is
+not a video that plays: every game frame it shows the template picture whose
+game timer equals your live timer plus your nudge. Pausing, the Usamune menu,
+a reset and a save-state load all move that timer, so all four are the same
+rule and none of them has a detector.
+
+| Surface | Purpose |
+|---|---|
+| `WS /ws/ghost-clock` | The live attempt's clock. While at least one client is connected the server pushes one message per game snapshot: `{global_timer, igt, level, area}` — `igt` is Usamune's counter exactly as sampled, the same number every template picture is stamped with. The socket carries nothing upstream. Its cost on the poll loop is one set-membership test when nobody is connected, and a burst collapses to its NEWEST sample rather than queueing, because a clock consumer wants where the game IS (`server/ghost_clock.py`). |
+| `/ui/ghost/index.html?kind=&entity_key=&strat=&nudge=` | The overlay page: one full-bleed muted `<video>` and no chrome at all, so it works in an ordinary browser tab and inside the companion window alike. It resolves its clip through `GET /api/ghost/source`, then slaves the element to the clock feed. `nudge` seeds the timing offset in game frames. |
+
+The page takes two things by `postMessage` from whatever window hosts it:
+`{type: "ghost-nudge", nudge_frames}` (his timing hotkey) and
+`{type: "ghost-clock", global_timer, igt, level, area}` — the same message the
+socket carries, from another source, which is how the graphics plugin could
+publish the picture it is drawing if the memory poll ever proves too slow.
+`window.ghostStatus()` reads back what the page is doing: its state and reason,
+the last decision and why, the nudge, and the template picture currently on
+screen against the one the rule asked for.
+
+The decision rule itself is `ui/ghost/follower.js`, a pure module scored over
+clock traces in `tests/test_ui_ghost_follower.py`.
+
 ## Behavior notes
 
 - If a Usamune timer reset races the star touch (reset within ~1 s of the
