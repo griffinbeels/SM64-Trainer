@@ -13,12 +13,14 @@ not a test hook: it is how the parent window pushes the nudge, and how the
 graphics plugin would publish the picture it is drawing if the memory poll ever
 proves too slow (the brainstorm's A+ escalation).
 """
+import base64
 import json
 import shutil
 import subprocess
 import sys
 import threading
 from functools import partial
+from hashlib import sha1
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -102,8 +104,35 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(chunk)
 
+    def _accept_websocket(self) -> None:
+        """Answer the clock socket's handshake and then hold it open.
+
+        The page opens `/ws/ghost-clock` for real, so a fixture that 404s it
+        would leave a failed-connection error in the console and a retry timer
+        running -- indistinguishable, in `page.problems()`, from the page being
+        broken. This never SENDS: the trace arrives by postMessage, which is
+        the same door the companion window uses.
+        """
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        digest = base64.b64encode(sha1(
+            (key + "258EAFA5-E914-47DA-95CA-5AB0DC85B11F").encode()).digest())
+        self.send_response(101)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", digest.decode())
+        self.end_headers()
+        self.connection.settimeout(1.0)
+        while not self.server._closing:
+            try:
+                if not self.connection.recv(1024):
+                    return
+            except OSError:
+                continue
+
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler's own spelling
         path = unquote(urlparse(self.path).path)
+        if path == "/ws/ghost-clock":
+            return self._accept_websocket()
         if path == "/media/ghost.mp4":
             return self._media()
         if path == "/api/ghost/source":
@@ -146,6 +175,8 @@ class _Server:
         self.clip = clip
         self.httpd = ThreadingHTTPServer(
             ("127.0.0.1", 0), partial(_Handler, clip=clip, available=True))
+        # Held sockets poll this so the server can actually be torn down.
+        self.httpd._closing = False
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
@@ -158,6 +189,7 @@ class _Server:
         return self
 
     def __exit__(self, *exc):
+        self.httpd._closing = True
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=5)
