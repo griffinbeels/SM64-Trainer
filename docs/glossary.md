@@ -776,7 +776,7 @@ picture's own state.
 - **Lives** -- `src/sm64_events/ui/components/inputtimelinemodel.js` (the
   merge of stamps and polled samples),
   `src/sm64_events/ui/components/inputtimelinelanes.js` (the drawing).
-- **Not** -- the template's ghost bars, which are another player's [[run]].
+- **Not** -- the template's own bars, which are another player's [[run]].
 
 ### Refused picture
 
@@ -1031,6 +1031,73 @@ delete the one you do not want instead of cropping it.
 
 - **Lives** — the overlay planner (`src/sm64_events/inputs/overlay.py`)
   → `tools/export_overlay.py`
+
+### Ghost
+
+The [[attempt]] you are racing: the footage behind your active
+[[template track]], drawn see-through over the game picture while you play.
+It is not a video that plays by itself — every [[frame]] it shows the template
+picture whose [[in-game time]] matches your own plus the [[nudge]], so a pause,
+the Usamune menu and a save-state load all move it the same way. The practice
+card's switch calls it Ghost Overlay.
+
+- **Lives** — the one thing that joins the switch, the [[ghost window]] and the
+  [[target]] (`src/sm64_events/ghost/session.py`)
+- **Not** — the [[overlay layer]], which writes a video file you take into an
+  editor.
+
+### Ghost source
+
+Where a [[ghost]]'s footage comes from, and how exact its timing is. There is
+one kind today: the saved recording of the [[attempt]] you marked your active
+[[template track]] from, which carries a [[frame map]] and therefore says
+exactly which game [[frame]] each of its pictures shows. A [[template track]]
+that came from a
+file, or one whose recording nobody saved, has no source — and every "no"
+carries the one sentence the switch shows in its place.
+
+- **Lives** — `src/sm64_events/ghost/source.py`, one function per kind of
+  source
+
+### Ghost window
+
+The see-through window the trainer draws a [[ghost]] in: no border, no taskbar
+button, never taking focus, the mouse passing straight through to the game.
+It sits on the Project64 picture and follows it, hides when the emulator goes
+away or small, and ends when the trainer does.
+
+- **Lives** — `src/sm64_events/ghost/window/`, a child process of its own
+  because the window toolkit wants a main thread
+
+### Ghost clock
+
+The live [[attempt]]'s timer, pushed to whatever follows it: Usamune's own
+counter exactly as the poll loop reads it, beside the emulator's [[frame]]
+counter, which keeps moving while the game pauses. With nothing listening it
+costs the poll loop one test and never touches the [[snapshot]].
+
+- **Lives** — `src/sm64_events/server/ghost_clock.py` → the /ws/ghost-clock
+  socket
+
+### Ghost follower
+
+The rule that turns a [[ghost clock]] reading into a picture: show the template
+picture whose [[in-game time]] equals the live one plus the [[nudge]]. Steady
+play moves the footage at game speed and corrects; a stalled timer holds; a
+jump either way seeks.
+
+- **Lives** — `src/sm64_events/ui/ghost/follower.js`, drawn by
+  `src/sm64_events/ui/ghost/index.html`
+
+### Nudge
+
+How far ahead or behind the [[ghost]] plays, counted in game [[frame]]s.
+Positive shows you where you should be next; negative shows what you just did.
+It belongs to the one thing you are practising, so it goes back to zero as soon
+as the [[target]] changes.
+
+- **Lives** — `src/sm64_events/ghost/session.py` holds it; the
+  [[ghost follower]] applies it
 
 ### Input document
 

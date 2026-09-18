@@ -1,0 +1,531 @@
+"""One ghost session for the app: enabled + a target that has a ghost = a
+visible overlay showing that target's footage.
+
+Everything here runs against a FAKE window controller. An agent may not put a
+window on his screen, so what is proved is the decision — when the overlay
+runs, when it is merely hidden, when it is ended, and what it is told to show.
+What only a human can see is listed in the report.
+"""
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
+from sm64_events.ghost.session import (
+    DEFAULT_OPACITY,
+    MAX_START_ATTEMPTS,
+    NUDGE_LIMIT_FRAMES,
+    GhostSession,
+    follower_url,
+)
+from sm64_events.inputs.templates import TemplateStore
+from sm64_events.storage.db import Database
+
+from tests.ghost_fixture import FakeReplay, a_document, a_view
+
+PORT = 8099
+
+
+class FakeController:
+    """The overlay window's parent-side API, with nothing behind it.
+
+    Mirrors `ghost/window/controller.py`: a value set while stopped is
+    remembered and carried into the next start, and `stop()` returns only once
+    the child is gone.
+    """
+
+    def __init__(self, *, url, opacity=DEFAULT_OPACITY, visible=False, **_kw):
+        self.url = url
+        self.opacity = opacity
+        self.visible = bool(visible)
+        self.alive = False
+        self.starts = 0
+        self.stops = 0
+        self.urls = [url]
+        #: set by a test to make the child die the moment it is started
+        self.dies_on_start = False
+
+    def start(self):
+        self.starts += 1
+        self.alive = not self.dies_on_start
+
+    def stop(self):
+        self.stops += 1
+        self.alive = False
+
+    def is_running(self):
+        return self.alive
+
+    def set_url(self, url):
+        self.url = url
+        self.urls.append(url)
+
+    def set_opacity(self, value):
+        self.opacity = float(value)
+
+    def set_visible(self, value):
+        self.visible = bool(value)
+
+
+class FakeTracker:
+    """The two doors the session reads the practice target through, plus the
+    database the preference is kept in."""
+
+    def __init__(self, db=None, target=None, strat_tag=None):
+        self.db = db
+        self.target = target
+        self.strat_tag = strat_tag
+
+
+class FakeBroadcaster:
+    def __init__(self):
+        self.events = []
+
+    async def publish(self, event):
+        self.events.append(event)
+        return len(self.events)
+
+
+def a_store(tmp_path, name="t.db") -> TemplateStore:
+    db = Database(tmp_path / name)
+    return TemplateStore(db._conn, db._lock)
+
+
+def mark(store, *, kind="star", entity_key="24-1", strat="10 coin",
+         attempt_id=7):
+    return store.save(kind=kind, entity_key=entity_key, strat_tag=strat,
+                      name="the good one", origin=f"attempt:{attempt_id}",
+                      document=a_document())
+
+
+def a_session(tmp_path, *, target=("star", 24, 1), strat="10 coin",
+              saved=(7,), views=None, db=None, store=None, replay=None,
+              controllers=None):
+    """A session over real template storage, a fake replay service and a fake
+    window. Returns (session, controllers, tracker, store)."""
+    store = a_store(tmp_path) if store is None else store
+    if replay is None:
+        replay = FakeReplay(saved=saved,
+                            views=views or {7: a_view(7)})
+    made = [] if controllers is None else controllers
+    tracker = FakeTracker(db=db, target=target, strat_tag=strat)
+
+    def factory(**kwargs):
+        controller = FakeController(**kwargs)
+        made.append(controller)
+        return controller
+
+    session = GhostSession(tracker=tracker, inputs=SimpleNamespace(templates=store),
+                           replay=replay, broadcaster=FakeBroadcaster(),
+                           port=PORT, controller_factory=factory)
+    return session, made, tracker, store
+
+
+def drive(session, *, resolve=True):
+    """Run one refresh on a private loop, the way tests/test_ghost_clock.py
+    drives the feed."""
+    return asyncio.run(session.refresh(resolve=resolve))
+
+
+# -- what the payload says ---------------------------------------------------
+
+def test_a_session_with_no_target_opens_nothing_and_says_why(tmp_path):
+    session, controllers, _tracker, _store = a_session(tmp_path, target=None)
+    body = drive(session)
+    assert body["target"] is None
+    assert body["source"]["available"] is False
+    assert body["source"]["reason"] == "no_target"
+    assert body["source"]["reason_text"]
+    assert body["window"] == {"running": False, "visible": False}
+    assert controllers == []
+
+
+def test_the_payload_carries_exactly_the_frozen_shape(tmp_path):
+    session, _controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    body = drive(session)
+    assert set(body) == {"enabled", "opacity", "nudge_frames", "target",
+                         "source", "window"}
+    assert set(body["target"]) == {"kind", "entity_key", "strat"}
+    # The I1 answer WITHOUT the two keys only the overlay page needs.
+    assert set(body["source"]) == {"available", "reason", "reason_text",
+                                   "template_id", "attempt_id", "exactness"}
+    assert set(body["window"]) == {"running", "visible"}
+    assert body["target"] == {"kind": "star", "entity_key": "24-1",
+                              "strat": "10 coin"}
+    assert body["enabled"] is False and body["opacity"] == DEFAULT_OPACITY
+
+
+def test_a_segment_target_resolves_through_the_same_door(tmp_path):
+    """Rule 11 parity: stars and segments alike, even though the prototype
+    only plays stars."""
+    session, controllers, _tracker, store = a_session(
+        tmp_path, target=("segment", 31), strat=None)
+    mark(store, kind="segment", entity_key="31", strat=None)
+    asyncio.run(session.update(enabled=True))
+    body = session.payload()
+    assert body["target"] == {"kind": "segment", "entity_key": "31",
+                              "strat": None}
+    assert body["source"]["available"] is True
+    assert body["window"] == {"running": True, "visible": True}
+    assert "kind=segment" in controllers[0].url
+    assert "entity_key=31" in controllers[0].url
+
+
+# -- the window ---------------------------------------------------------------
+
+def test_enabling_over_an_available_ghost_shows_the_follower_page(tmp_path):
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    body = asyncio.run(session.update(enabled=True))
+    assert body["enabled"] is True
+    assert body["window"] == {"running": True, "visible": True}
+    assert len(controllers) == 1
+    window = controllers[0]
+    assert window.starts == 1 and window.visible is True
+    assert window.url == follower_url(body["target"], 0, PORT)
+    assert window.url.startswith(f"http://127.0.0.1:{PORT}/ui/ghost/index.html?")
+    assert "nudge=0" in window.url
+
+
+def test_the_url_is_this_servers_own_port(tmp_path, monkeypatch):
+    """The overlay is served by the same app it is watching, so the port is
+    `core/paths.py::server_port()` and never a guess."""
+    monkeypatch.setattr("sm64_events.core.paths.server_port", lambda: 8123)
+    session, controllers, _tracker, store = a_session(tmp_path)
+    session._port = None                    # resolve it the production way
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    assert controllers[0].url.startswith("http://127.0.0.1:8123/ui/ghost/")
+
+
+def test_a_target_with_no_ghost_hides_the_window_and_keeps_the_child(tmp_path):
+    """An ordinary flip HIDES. Killing the child on every target change would
+    make coming back cost a process start and a page load."""
+    session, controllers, tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    tracker.target = ("star", 15, 3)        # nothing marked for this one
+    body = drive(session)
+    assert body["source"]["reason"] == "no_template"
+    assert body["source"]["reason_text"]
+    assert body["window"] == {"running": True, "visible": False}
+    assert len(controllers) == 1 and controllers[0].stops == 0
+
+
+def test_the_window_comes_back_when_the_target_has_a_ghost_again(tmp_path):
+    session, controllers, tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    tracker.target = ("star", 15, 3)
+    drive(session)
+    tracker.target = ("star", 24, 1)
+    body = drive(session)
+    assert body["window"] == {"running": True, "visible": True}
+    assert controllers[0].starts == 1       # the same child, shown again
+
+
+def test_disabling_ends_the_child_process(tmp_path):
+    """Off means off: he asked for no ghost, so nothing of it is left
+    running."""
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    body = asyncio.run(session.update(enabled=False))
+    assert body["window"] == {"running": False, "visible": False}
+    assert controllers[0].stops == 1
+    # and enabling again starts a fresh one rather than reviving the old
+    asyncio.run(session.update(enabled=True))
+    assert len(controllers) == 2 and controllers[1].is_running()
+
+
+def test_stopping_the_session_leaves_no_child_behind(tmp_path):
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+
+    async def run():
+        await session.start()
+        await session.update(enabled=True)
+        await session.stop()
+
+    asyncio.run(run())
+    assert controllers[0].stops == 1 and not controllers[0].is_running()
+    assert session.payload()["window"] == {"running": False, "visible": False}
+
+
+def test_the_server_lifespan_starts_and_stops_the_session():
+    """The session's own `stop()` is unreachable unless the app calls it, and
+    every unit below here passes unwired — the same shape as the poller's frame
+    heartbeat. So this drives the REAL lifespan."""
+    from fastapi.testclient import TestClient
+
+    from sm64_events.detectors.star_grab import StarGrabDetector
+    from sm64_events.server.app import create_app
+    from sm64_events.server.broadcaster import Broadcaster
+    from sm64_events.server.poller import Poller
+
+    class Recording:
+        def __init__(self):
+            self.calls = []
+
+        async def start(self):
+            self.calls.append("start")
+
+        async def stop(self):
+            self.calls.append("stop")
+
+    class Offline:
+        attached = False
+
+        def attach(self):
+            return False
+
+        def detach(self):
+            pass
+
+    session = Recording()
+    broadcaster = Broadcaster()
+    poller = Poller(Offline(), [StarGrabDetector()], broadcaster)
+    with TestClient(create_app(poller, broadcaster, ghost=session)):
+        assert session.calls == ["start"]
+    assert session.calls == ["start", "stop"]
+
+
+def test_a_crashed_child_is_reported_and_started_again(tmp_path):
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    controllers[0].alive = False             # the child died on its own
+    body = drive(session, resolve=False)
+    assert body["window"] == {"running": True, "visible": True}
+    assert controllers[0].starts == 2        # restarted, same controller
+
+
+def test_a_child_that_will_not_stay_up_stops_being_restarted(tmp_path):
+    """A crash loop must not spawn a process twice a second forever."""
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    controllers[0].dies_on_start = True
+    controllers[0].alive = False
+    for _ in range(10):
+        drive(session, resolve=False)
+    assert controllers[0].starts == MAX_START_ATTEMPTS
+    assert session.payload()["window"] == {"running": False, "visible": False}
+
+
+def test_the_opacity_reaches_the_running_window(tmp_path):
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    asyncio.run(session.update(opacity=0.25))
+    assert controllers[0].opacity == 0.25
+
+
+# -- the nudge ----------------------------------------------------------------
+
+def test_the_nudge_rides_the_page_url(tmp_path):
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    asyncio.run(session.update(nudge_frames=-12))
+    assert session.payload()["nudge_frames"] == -12
+    assert "nudge=-12" in controllers[0].url
+
+
+def test_a_target_change_resets_the_nudge_and_swaps_the_url(tmp_path):
+    """His timing offset is about ONE thing he is practising. Carrying it onto
+    the next star would put the next ghost silently out of step."""
+    session, controllers, tracker, store = a_session(tmp_path)
+    mark(store)
+    mark(store, entity_key="15-3", strat=None, attempt_id=7)
+    asyncio.run(session.update(enabled=True))
+    asyncio.run(session.update(nudge_frames=30))
+    tracker.target, tracker.strat_tag = ("star", 15, 3), None
+    body = drive(session)
+    assert body["nudge_frames"] == 0
+    assert "entity_key=15-3" in controllers[0].url
+    assert "nudge=0" in controllers[0].url
+
+
+def test_a_strategy_change_alone_counts_as_a_new_target(tmp_path):
+    session, _controllers, tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True, nudge_frames=9))
+    tracker.strat_tag = "backflip"
+    assert drive(session)["nudge_frames"] == 0
+
+
+# -- what a bad value does ----------------------------------------------------
+
+@pytest.mark.parametrize("changes", [
+    {"opacity": 1.5}, {"opacity": -0.1}, {"opacity": "half"},
+    {"nudge_frames": NUDGE_LIMIT_FRAMES + 1},
+    {"nudge_frames": -NUDGE_LIMIT_FRAMES - 1},
+    {"nudge_frames": 1.5}, {"enabled": "yes"},
+])
+def test_an_out_of_range_value_is_refused_with_a_readable_sentence(tmp_path, changes):
+    session, _controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    with pytest.raises(ValueError) as refusal:
+        asyncio.run(session.update(**changes))
+    sentence = str(refusal.value)
+    assert sentence.endswith(".") and sentence[0].isupper()
+    assert "Traceback" not in sentence
+
+
+def test_a_refused_value_changes_nothing(tmp_path):
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True, opacity=0.4))
+    with pytest.raises(ValueError):
+        asyncio.run(session.update(opacity=9.0))
+    assert session.payload()["opacity"] == 0.4
+    assert controllers[0].opacity == 0.4
+
+
+# -- persistence --------------------------------------------------------------
+
+class FakeStateDb:
+    def __init__(self, state=None):
+        self.state = dict(state or {})
+
+    def get_state(self, key, default):
+        return self.state.get(key, default)
+
+    def set_state(self, key, value):
+        self.state[key] = value
+
+
+def test_enabled_and_opacity_survive_a_restart(tmp_path):
+    db = FakeStateDb()
+    store = a_store(tmp_path)
+    mark(store)
+    session, _controllers, _tracker, _store = a_session(tmp_path, db=db, store=store)
+    asyncio.run(session.update(enabled=True, opacity=0.8))
+    assert db.state == {"ghost_enabled": True, "ghost_opacity": 0.8}
+
+    again, controllers, _tracker, _store = a_session(tmp_path, db=db, store=store)
+    body = drive(again)
+    assert body["enabled"] is True and body["opacity"] == 0.8
+    assert controllers[0].opacity == 0.8 and controllers[0].visible is True
+
+
+def test_the_nudge_is_not_persisted(tmp_path):
+    db = FakeStateDb()
+    store = a_store(tmp_path)
+    mark(store)
+    session, _c, _t, _s = a_session(tmp_path, db=db, store=store)
+    asyncio.run(session.update(enabled=True, nudge_frames=44))
+    assert "ghost_nudge_frames" not in db.state
+    again, _c2, _t2, _s2 = a_session(tmp_path, db=db, store=store)
+    assert drive(again)["nudge_frames"] == 0
+
+
+def test_a_nonsense_stored_preference_never_breaks_the_session(tmp_path):
+    db = FakeStateDb({"ghost_enabled": "sure", "ghost_opacity": 12})
+    store = a_store(tmp_path)
+    mark(store)
+    session, _controllers, _tracker, _store = a_session(tmp_path, db=db, store=store)
+    body = drive(session)
+    assert body["enabled"] is True          # truthy, coerced
+    assert 0.0 <= body["opacity"] <= 1.0
+
+
+def test_a_boot_with_no_database_still_answers(tmp_path):
+    """A db-less boot (the instance-lock race) must not make the practice
+    card's switch unreachable — it says why instead."""
+    session, controllers, _tracker, _store = a_session(tmp_path, db=None)
+    body = drive(session)
+    assert body["enabled"] is False
+    assert body["source"]["available"] is False
+    assert controllers == []
+
+
+# -- the broadcast ------------------------------------------------------------
+
+def test_every_change_broadcasts_the_whole_shape_once(tmp_path):
+    session, _controllers, tracker, store = a_session(tmp_path)
+    mark(store)
+    bus = session._broadcaster
+
+    async def run():
+        await session.start()
+        assert bus.events == []             # the first read is not a change
+        await session.update(enabled=True)
+        assert [e.type for e in bus.events] == ["ghost_changed"]
+        assert bus.events[0].payload == session.payload()
+        await session.refresh()             # nothing moved
+        assert len(bus.events) == 1
+        tracker.target = ("star", 15, 3)    # a target change is a change
+        await session.refresh()
+        assert len(bus.events) == 2
+        await session.stop()
+
+    asyncio.run(run())
+
+
+def test_the_session_publishes_where_nothing_is_journaled(tmp_path):
+    """`ghost_changed` is broadcast-only. It goes out on the Broadcaster, which
+    has no journal behind it, rather than through `TrackerService.publish`,
+    which WRITES every type not named in its BROADCAST_ONLY set."""
+    session, _controllers, tracker, store = a_session(tmp_path)
+    mark(store)
+
+    def journal(*_args, **_kwargs):
+        raise AssertionError("ghost_changed must never reach the journal")
+
+    tracker.publish = journal
+    asyncio.run(session.update(enabled=True))
+    assert [e.type for e in session._broadcaster.events] == ["ghost_changed"]
+
+
+# -- the watcher --------------------------------------------------------------
+
+def test_the_watcher_follows_the_target_without_anybody_asking(tmp_path):
+    """The overlay has to follow what he is practising whether or not a
+    browser tab is open, so the session runs its own slow watch."""
+    session, controllers, tracker, store = a_session(tmp_path)
+    session._period_s = 0.01
+    mark(store)
+    mark(store, entity_key="15-3", strat=None)
+
+    async def run():
+        await session.start()
+        await session.update(enabled=True)
+        tracker.target, tracker.strat_tag = ("star", 15, 3), None
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if "entity_key=15-3" in controllers[0].url:
+                break
+        await session.stop()
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+
+    asyncio.run(run())
+    assert "entity_key=15-3" in controllers[0].url
+    assert controllers[0].stops == 1
+
+
+def test_the_watcher_survives_a_failing_cycle(tmp_path):
+    session, _controllers, tracker, store = a_session(tmp_path)
+    session._period_s = 0.01
+    mark(store)
+
+    class Exploding:
+        @property
+        def target(self):
+            raise RuntimeError("the projector is mid-recovery")
+
+        strat_tag = None
+        db = None
+
+    async def run():
+        await session.start()
+        session._tracker = Exploding()
+        await asyncio.sleep(0.05)
+        running = session._task is not None and not session._task.done()
+        session._tracker = tracker
+        await session.stop()
+        return running
+
+    assert asyncio.run(run()) is True

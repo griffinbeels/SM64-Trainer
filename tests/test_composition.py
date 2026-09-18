@@ -393,6 +393,78 @@ def test_build_joins_the_boundary_hook_to_the_moment_detector(monkeypatch):
     caused._counts["switch_press"] = 2
     hook()
     assert moment._counts == {} and caused._counts == {}
+def test_build_hands_every_snapshot_to_the_ghost_clock(monkeypatch):
+    """The overlay follows the game's own timer, and the only place that timer
+    is read is the poll loop. Unwired, `GhostClockFeed` passes every one of its
+    own tests and the overlay simply never moves — the same shape as the frame
+    heartbeat above."""
+    from sm64_events.server.ghost_clock import GhostClockFeed
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_poller = main_mod.Poller
+
+    def spy(memory, detectors, sink, **kw):
+        captured.update(kw)
+        return real_poller(memory, detectors, sink, **kw)
+
+    monkeypatch.setattr(main_mod, "Poller", spy)
+    main_mod.build()
+    note = captured.get("on_snapshot")
+    assert note is not None, "the poller was built with no snapshot hook"
+    assert note.__func__ is GhostClockFeed.note
+    assert isinstance(note.__self__, GhostClockFeed)
+
+
+def test_build_mounts_every_ghost_door(monkeypatch):
+    """The switch, the source lookup and the clock socket. A door that was
+    never mounted 404s forever and reads exactly like a missing feature."""
+    main_mod = _stubbed_main(monkeypatch)
+    app = main_mod.build()
+    paths = {r.path for r in app.routes}
+    assert {"/api/ghost", "/api/ghost/source", "/ws/ghost-clock"} <= paths
+
+
+def test_build_gives_the_app_the_session_that_owns_the_window(monkeypatch):
+    from sm64_events.ghost.session import GhostSession
+    main_mod = _stubbed_main(monkeypatch)
+    captured = {}
+    real_create = main_mod.create_app
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_create(*args, **kwargs)
+
+    monkeypatch.setattr(main_mod, "create_app", spy)
+    main_mod.build()
+    assert isinstance(captured.get("ghost"), GhostSession)
+    assert captured.get("ghost_clock") is not None
+
+
+def test_the_frozen_entry_point_opens_the_overlay_window(monkeypatch):
+    """A PyInstaller build has no `-m`: the overlay child re-enters through
+    THIS exe, so the packaged entry point has to recognise the controller's own
+    flag. From source it works already, which is exactly why nothing else would
+    catch this going missing."""
+    import importlib.util
+    import sys
+
+    from sm64_events.ghost.window import GHOST_WINDOW_FLAG
+
+    entry = Path(sm64_events.__file__).resolve().parents[2] / "gui_entry.py"
+    spec = importlib.util.spec_from_file_location("ghost_gui_dispatch", entry)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    received = []
+    monkeypatch.setattr(sys, "argv",
+                        ["SM64Trainer.exe", GHOST_WINDOW_FLAG, "--url",
+                         "http://127.0.0.1:8065/ui/ghost/index.html"])
+    monkeypatch.setattr("sm64_events.ghost.window.child.main",
+                        lambda argv: received.append(argv) or 0)
+    monkeypatch.setitem(sys.modules, "sm64_events.desktop.app", None)
+    assert module.main() == 0
+    assert received == [["--url", "http://127.0.0.1:8065/ui/ghost/index.html"]]
+
+
 def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     """A boot that loses the instance-lock race (the reload-handoff race,
     live 2026-07-30 and 2026-08-06) must still mount the compare and

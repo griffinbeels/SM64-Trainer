@@ -921,6 +921,9 @@ rule and none of them has a detector.
 
 | Surface | Purpose |
 |---|---|
+| `GET /api/ghost` | The whole ghost in one read: `{enabled, opacity, nudge_frames, target, source, window}`. `target` is `{kind, entity_key, strat}` or null — the practice target, read through the tracker's own door, stars and segments alike. `source` is the `/api/ghost/source` answer without `view` and `media_url`, so a disabled switch always has a sentence to show. `window` is `{running, visible}`. Re-resolved on every read: a cached `available` would leave the switch enabled over a template that has just been deleted. |
+| `PUT /api/ghost` | Any of `{enabled, opacity, nudge_frames}`; answers the same shape. `opacity` is 0..1, `nudge_frames` is a whole number of game frames within ±600 (about twenty seconds either way). A value it cannot take is a 422 whose `detail` is ONE sentence a player can read, and nothing in the request is applied. `enabled` and `opacity` persist across restarts; `nudge_frames` resets to 0 whenever the target changes, because the offset belongs to the thing being practised. |
+| `ghost_changed` (broadcast) | The same shape, whenever any of it moves — another tab flipping the switch, the target changing, the overlay window dying. Broadcast-only, like the segment notices: it is published on the Broadcaster and never through the tracker, so there is no journal row behind it. |
 | `WS /ws/ghost-clock` | The live attempt's clock. While at least one client is connected the server pushes one message per game snapshot: `{global_timer, igt, level, area}` — `igt` is Usamune's counter exactly as sampled, the same number every template picture is stamped with. The socket carries nothing upstream. Its cost on the poll loop is one set-membership test when nobody is connected, and a burst collapses to its NEWEST sample rather than queueing, because a clock consumer wants where the game IS (`server/ghost_clock.py`). |
 | `/ui/ghost/index.html?kind=&entity_key=&strat=&nudge=` | The overlay page: one full-bleed muted `<video>` and no chrome at all, so it works in an ordinary browser tab and inside the companion window alike. It resolves its clip through `GET /api/ghost/source`, then slaves the element to the clock feed. `nudge` seeds the timing offset in game frames. |
 
@@ -935,6 +938,17 @@ screen against the one the rule asked for.
 
 The decision rule itself is `ui/ghost/follower.js`, a pure module scored over
 clock traces in `tests/test_ui_ghost_follower.py`.
+
+One session owns all of it (`ghost/session.py`), built in `main.py` and started
+and stopped by the server app's lifespan. While the switch is on AND the
+current target has an available source, the overlay window runs, is visible,
+and shows the follower page on this server's own port; anything else hides it
+and `source.reason_text` says why. Walking to another star HIDES the window and
+keeps the child process, so coming back costs nothing; turning the switch off,
+or stopping the server, ENDS the child. The session re-reads the world twice a
+second rather than waiting to be asked, because marking a template, saving a
+recording, the database arriving after a db-less boot and the overlay child
+dying all change the answer and none of them is a target change.
 
 ## Behavior notes
 

@@ -123,3 +123,68 @@ def test_the_service_is_resolved_per_request(db):
 
 def _raise():
     raise RuntimeError("database unavailable")
+
+
+# -- the session doors: GET / PUT /api/ghost ---------------------------------
+
+class FakeSession:
+    """The two calls the routes make, and nothing else."""
+
+    def __init__(self):
+        self.state = {"enabled": False, "opacity": 0.5, "nudge_frames": 0,
+                      "target": None, "source": {"available": False},
+                      "window": {"running": False, "visible": False}}
+        self.refreshes = 0
+
+    async def refresh(self):
+        self.refreshes += 1
+        return dict(self.state)
+
+    async def update(self, changes):
+        from sm64_events.ghost.session import validate_changes
+        self.state.update(validate_changes(changes))
+        return dict(self.state)
+
+
+def session_client(session) -> TestClient:
+    app = FastAPI()
+    app.include_router(create_ghost_router(None, None, session=session))
+    return TestClient(app)
+
+
+def test_reading_the_ghost_answers_the_whole_shape_freshly_resolved():
+    """A cached `available` is what would leave the switch enabled over a
+    template he has just deleted, so the read re-resolves."""
+    session = FakeSession()
+    body = session_client(session).get("/api/ghost").json()
+    assert set(body) == {"enabled", "opacity", "nudge_frames", "target",
+                         "source", "window"}
+    assert session.refreshes == 1
+
+
+def test_setting_the_ghost_answers_the_same_shape():
+    body = session_client(FakeSession()).put(
+        "/api/ghost", json={"enabled": True, "opacity": 0.25}).json()
+    assert body["enabled"] is True and body["opacity"] == 0.25
+    assert set(body) >= {"target", "source", "window"}
+
+
+@pytest.mark.parametrize("body,word", [
+    ({"opacity": 4}, "see-through"),
+    ({"nudge_frames": 10_000}, "nudged"),
+    ({"enabled": "on"}, "on or off"),
+    ({"opactiy": 0.5}, "no setting called"),
+])
+def test_a_value_it_cannot_take_is_422_with_one_readable_sentence(body, word):
+    response = session_client(FakeSession()).put("/api/ghost", json=body)
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, str) and word in detail
+
+
+def test_without_a_session_the_doors_answer_503_rather_than_404():
+    """A 404 reads to the practice card exactly like a feature that does not
+    exist; 503 says "not in this window" and can be shown."""
+    unmanned = session_client(None)
+    assert unmanned.get("/api/ghost").status_code == 503
+    assert unmanned.put("/api/ghost", json={"enabled": True}).status_code == 503
