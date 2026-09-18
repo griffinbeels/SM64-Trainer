@@ -42,6 +42,7 @@ import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
+import { GhostSwitch } from "./ghostswitch.js";
 
 const html = htm.bind(h);
 
@@ -676,7 +677,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div>
+    </div><${GhostSwitch} t=${t} entityKey=${ek} active=${active} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}
