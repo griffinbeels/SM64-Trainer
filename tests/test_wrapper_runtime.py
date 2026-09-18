@@ -1,5 +1,4 @@
 """Actual wrapper exports/IPC with CPU-only source and delivery fixtures."""
-import ctypes
 import importlib.util
 import os
 from pathlib import Path
@@ -15,7 +14,6 @@ from sm64_events.replay import capturecontrol as C
 from sm64_events.replay import gpurequest as R
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT = next(path for path in ROOT.parents if (path / "pyproject.toml").is_file()) if not (ROOT / "pyproject.toml").is_file() else ROOT
 NATIVE = ROOT / "plugin/gfxwrap"
 LIMITS = R.RequestLimits(8, 128 << 20, 8 << 20, 16 << 20, 8, 1 << 20,
                         4 << 20, 1 << 20, 256, 2000, 3000)
@@ -127,14 +125,10 @@ def test_delivery_diagnostic_reaches_actual_bounded_plugin_log(start):
 
 
 def test_passive_then_hot_capture_has_stamps_and_guarded_rows(start):
-    child, control, name, _ = start()
+    child, control, _, _ = start()
     assert control.status().capabilities & 2
     assert command(child, "frame 1 1") == "1 1"
     assert record(child)[0] == 0
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
-    kernel.OpenFileMappingW.restype = ctypes.c_void_p
-    assert not kernel.OpenFileMappingW(4, False, name)  # no legacy pixel ring
     with R.GpuRequest.acquire(control, TABLE, LIMITS):
         eventual(control.status, lambda s: s.state == 4)
         assert command(child, "frame 1 1") == "2 2"

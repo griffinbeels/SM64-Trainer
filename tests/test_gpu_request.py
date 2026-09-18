@@ -120,7 +120,7 @@ def check(child, control, token, *, generation=None):
     return child.stdout.readline().strip() == "1"
 
 
-def test_request_exists_before_actual_enable_and_keeps_old_pixel_ring_absent(
+def test_request_exists_before_enable_and_dies_with_its_generation_and_owner(
     session, monkeypatch
 ):
     child, control = session

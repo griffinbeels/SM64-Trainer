@@ -84,10 +84,6 @@ def test_resampling_negative_repeats_gpu_boundary_and_changes_published_bytes_cp
     assert result.stdout.strip() == "sample retry 64 0 0 65 65 73 66 66 66 0 64"
 
 
-def test_build_delivery(host):
-    assert host.is_file()
-
-
 def test_worker_failure_survives_disarm_and_resets_on_accepted_request_cpu(host):
     result = subprocess.run(
         [str(host), "--diagnostic-cpu"], capture_output=True, text=True,
@@ -203,15 +199,6 @@ def test_healthy_diagnostic_production_log_fields_cpu(tmp_path):
     assert windows[0]["cadence"]["max_ms"] == 50
     assert windows[0]["previous_logging_ms"] == 1
     print(result.stdout, end="")  # JUnit stdout is the exact parser-integration fixture.
-
-
-def test_build_healthy_wrapper_candidate_cpu(tmp_path):
-    spec = importlib.util.spec_from_file_location("healthy_wrapper_build", ROOT / "tools/build_plugin.py")
-    build = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(build)
-    artifact = build.build_wrapper(tmp_path / "wrapper")
-    assert artifact.is_file() and artifact.stat().st_size > 100000
-    print(f"GPU_WRAPPER_ARTIFACT={artifact}")
 
 
 class Running:

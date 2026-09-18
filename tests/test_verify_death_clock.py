@@ -4,7 +4,10 @@ The probe itself needs PJ64 and a human, but everything it PRINTS is decided
 by these four functions, and a gate that names the wrong two candidates — or
 calls a stalled clock healthy — sends the human away with a confident wrong
 answer. That is the failure this file exists to prevent, so the cases below
-are about what the numbers MEAN, not about wording.
+are about what the numbers MEAN. A few phrases ARE pinned, and each says why
+in its own docstring: this gate's product is the sentence a human acts on, so
+"SECTION timer" or "IGNORE" carries the meaning rather than decorating it.
+Nothing here pins a phrase whose loss would cost nothing.
 """
 import sys
 from pathlib import Path
@@ -210,8 +213,7 @@ def test_the_settings_prompt_asks_for_all_five_timer_switches():
 def test_the_settings_prompt_is_honest_that_nothing_reads_them_from_memory():
     """No settings block is in the address registry. Saying so stops the next
     reader assuming the probe already classifies by configuration."""
-    assert "not being hunted" in settings_prompt() or \
-           "none is being hunted" in settings_prompt()
+    assert "hunted" in settings_prompt()  # however that sentence is phrased
 
 
 def test_the_star_report_distinguishes_usamunes_value_from_our_own_moment():

@@ -16,6 +16,18 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
+def _primary_checkout() -> Path:
+    """The checkout every worktree of this repo shares, or this one."""
+    import subprocess
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return REPO
+    return Path(common).parent if common else REPO
+
+
 def find_uilab() -> str | None:
     """Put uilab on sys.path and return None, or return a message explaining why not.
 
@@ -29,22 +41,20 @@ def find_uilab() -> str | None:
     So resolve by PATH, which no sync can undo: an installed copy if one is
     there, else `UILAB_PATH`, else a sibling checkout.
 
-    "Sibling" is computed from the REPO, not from this file's directory,
-    because this project's rule is that every branch is a git worktree under
-    `.claude/worktrees/<slug>` — two levels deeper, where the sibling is
-    `.claude/worktrees/uilab` and does not exist. Resolving from the file alone
-    made the gate skip in every worktree while passing in the primary checkout
-    (measured 2026-07-28).
+    "Sibling" is computed from the PRIMARY checkout, not from this file's
+    directory: every branch is a git worktree, so the worktree's own sibling is
+    not where uilab lives. GIT owns that identity -- `--git-common-dir` names
+    the primary checkout's `.git` whatever the layout is -- and a hard-coded
+    folder depth does not. The `.claude/worktrees/<slug>` rule resolved
+    (2026-07-28), while every `.codex/<slug>` worktree skipped the whole
+    rendered gate and the run still exited 0 (measured 2026-09-17, the same
+    resolution `tools/verify_full.py` already used).
     """
     import importlib.util
 
     if importlib.util.find_spec("uilab") is not None:
         return None
-    repo = REPO
-    for parent in repo.parents:
-        if parent.name == "worktrees" and parent.parent.name == ".claude":
-            repo = parent.parent.parent
-            break
+    repo = _primary_checkout()
     candidates = []
     if os.environ.get("UILAB_PATH"):
         candidates.append(Path(os.environ["UILAB_PATH"]))

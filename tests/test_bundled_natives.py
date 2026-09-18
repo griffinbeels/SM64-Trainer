@@ -47,10 +47,23 @@ def test_the_bundled_native_was_built_from_these_sources(bundled, expected, rebu
 
 def test_the_packaged_exe_carries_all_three():
     """tools/build_exe.py must add every bundled native, or the installed app
-    installs a wrapper with no renderer and spawns a helper with no DLL."""
-    text = (ROOT / "tools" / "build_exe.py").read_text(encoding="utf-8")
+    installs a wrapper with no renderer and spawns a helper with no DLL.
+
+    Asked of the ARGUMENTS PyInstaller is actually given, not of the file's
+    text: a comment naming a DLL satisfies a text search and packages nothing.
+    The destination matters as much as the name -- core/paths.py finds these
+    three under `sm64_events/data/plugin` inside the frozen app."""
+    build = _tool("build_exe")
+    argv = build.app_args(None)
+    packaged = {}
+    for flag, value in zip(argv, argv[1:], strict=False):
+        if flag == "--add-data":
+            source, _, destination = value.rpartition(build.SEP)
+            packaged[Path(source).name] = destination
     for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"):
-        assert name in text, f"tools/build_exe.py does not package {name}"
+        assert packaged.get(name) == "sm64_events/data/plugin", (
+            f"tools/build_exe.py does not package {name} into the plugin "
+            f"folder (it lands at {packaged.get(name)!r})")
 
 
 def test_renderer_inputs_are_pinned_by_hash():

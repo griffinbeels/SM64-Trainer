@@ -25,6 +25,11 @@ def snap(timer: int, igt: int = 0, action: int = ACT_IDLE,
 
 
 def test_igt_drop_to_zero_emits_practice_reset():
+    """The reset anchor and every payload key this file owns.
+
+    A SUBSET, not an exact dict: an exact pin claims the whole payload shape,
+    so any field a later feature adds fails here for no reason -- which is
+    what a purely observational field (`warp_op`, 2026-08-01) did."""
     events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
     assert len(events) == 1
     ev = events[0]
@@ -226,13 +231,6 @@ def test_mario_acted_re_emitted_after_anchor():
     assert [e.type for e in events] == ["mario_acted"]
 
 
-def test_anchor_payloads_carry_acted_tracking_marker():
-    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
-    assert events[0].payload["acted_tracking"] is True
-    events = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
-    assert events[0].payload["acted_tracking"] is True
-
-
 def test_death_action_does_not_emit_mario_acted_or_set_acted():
     d = AnchorDetector()
     # AFK then Mario dies to quicksand with zero input: NOT activity
@@ -334,12 +332,6 @@ def test_frames_since_door_present_after_door_action():
     assert events[0].payload["frames_since_door"] == 4
 
 
-def test_frames_since_door_none_when_no_door_seen():
-    """If no door action has been observed, frames_since_door must be None."""
-    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
-    assert events[0].payload["frames_since_door"] is None
-
-
 def test_frames_since_door_cleared_on_backward_jump_self_heal():
     """domain rule 4: if global_timer jumps backward, _last_door_frame must be
     cleared so a stale recency value cannot poison anchors after the jump."""
@@ -357,23 +349,6 @@ def test_frames_since_door_cleared_on_backward_jump_self_heal():
     assert len(events) == 1
     assert events[0].type == "state_loaded"
     assert events[0].payload["frames_since_door"] is None
-
-
-def test_existing_payload_pins_include_frames_since_door():
-    """The keys this file OWNS, and their values when nothing recent happened.
-
-    Subset, not exact equality: an exact-dict pin claims the whole payload
-    shape, so any field a later feature adds fails here for no reason — which
-    is what a purely observational field (`warp_op`, 2026-08-01) did. Assert
-    what you mean; the anchor payload is deliberately open to additions."""
-    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
-    owned = {
-        "igt_frames_before": 500, "mario_acted": False,
-        "paused_frames_before": 0, "acted_tracking": True,
-        "action": ACT_IDLE, "prev_action": ACT_IDLE,
-        "save_pending": False, "frames_since_door": None,
-        "frames_since_dialog": None}
-    assert {k: events[0].payload.get(k) for k in owned} == owned
 
 
 # ---------------------------------------------------------------------------
@@ -462,11 +437,6 @@ def test_frames_since_dialog_present_after_waiting_for_dialog_alone():
                        snap(3006, igt=0, action=ACT_WALKING))
     assert len(events) == 1 and events[0].type == "practice_reset"
     assert events[0].payload["frames_since_dialog"] == 3
-
-
-def test_frames_since_dialog_none_when_no_dialogue_seen():
-    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
-    assert events[0].payload["frames_since_dialog"] is None
 
 
 def test_frames_since_dialog_cleared_on_backward_jump_self_heal():

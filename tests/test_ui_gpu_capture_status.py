@@ -3,15 +3,18 @@
 import json
 from types import SimpleNamespace as NS
 
-import pytest
 from playwright.sync_api import sync_playwright
 
 from test_gpucapture import GpuCapture, US_LAYOUT, WIN, make_recorder, FakeAudioSource
 from test_ui_replay_picture_steps import PROJECT
 
 
-@pytest.mark.parametrize("width", [850, 1500])
-def test_gpu_failure_status_reaches_real_recording_indicator(tmp_path, width):
+def test_gpu_failure_status_reaches_real_recording_indicator(tmp_path):
+    # ONE width: nothing here reads geometry -- the claims are the indicator's
+    # own text, a clean console and clean API responses -- so the second
+    # viewport bought a second server and a second browser launch and no
+    # coverage. The responsive sweep owns layout at both widths.
+    width = 1500
     video = GpuCapture(WIN.pid, US_LAYOUT, nominal_rate=30)
     recorder = make_recorder(tmp_path, video, FakeAudioSource())
     recorder._video_source = video
@@ -35,8 +38,10 @@ def test_gpu_failure_status_reaches_real_recording_indicator(tmp_path, width):
             page.wait_for_selector(PROJECT.ready_selector)
             indicator = page.locator(".recording-button.bad:visible")
             indicator.wait_for()
+            # No `.ok` assertion: `RecordingDot` (replay.js) sets exactly one
+            # of `ok`/`bad` on the one node app.js mounts, and the locator
+            # above already matched it as `.bad`.
             assert indicator.inner_text().strip() == "no capture"
-            assert not page.locator(".recording-button.ok").count()
             indicator.screenshot(path=str(tmp_path / f"capture-unavailable-{width}.png"))
             (tmp_path / "browser.json").write_text(json.dumps(
                 {"errors": errors, "requests": requests}), encoding="utf-8")

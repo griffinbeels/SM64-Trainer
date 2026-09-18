@@ -6,6 +6,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.tracking.segments import validate_definition
 
 TOOLS = Path(__file__).resolve().parent.parent / "tools"
@@ -18,8 +19,16 @@ _spec.loader.exec_module(build_seed)
 MOVEMENTS = build_seed.corpus_movements.MOVEMENTS
 
 
-def test_movement_count():
-    assert len(MOVEMENTS) == 56          # 55 + seg:bowser2->bits (Task 20)
+def test_every_authored_movement_reaches_the_built_seed():
+    """A row can only be lost between here and the shipped seed, and a lost
+    movement is a route step that silently never fires. The COUNT is not the
+    contract -- a 57th movement is a feature, not a regression -- so this
+    compares the authored keys with the built ones."""
+    import json
+    seed = json.loads(bundled_defaults_seed().read_bytes().decode("utf-8"))
+    built = {row["seed_key"] for row in seed["segments"]
+             if row["category"] == "Castle Movement" and row["guards"]}
+    assert {row["seed_key"] for row in MOVEMENTS} == built
 
 
 def test_seed_keys_are_unique_and_prefixed():

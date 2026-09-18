@@ -203,3 +203,37 @@ def service(tmp_path):
     svc = TrackerService(db, Broadcaster())
     asyncio.run(svc.start())
     return svc
+
+
+@pytest.fixture(scope="session")
+def runtime_supervisor_exe(tmp_path_factory):
+    """`runtime_supervisor_host.c` over the four real runtime objects.
+
+    tests/test_runtime_supervisor.py (the watchdog against a blocked delivery
+    facade) and tests/test_gpudemand_native.py (a Python renew/revoke thread
+    against the same control IPC) drive the SAME host binary. Each used to
+    build it itself, so one run paid two identical MSVC passes for one
+    artifact. Built here once and shared by both.
+    """
+    import importlib.util
+
+    work = tmp_path_factory.mktemp("runtime_supervisor")
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "runtime_supervisor_build", root / "tools/build_plugin.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    vcvars = build.find_vcvars32()
+    assert vcvars, "the x86 MSVC toolchain (vcvars32.bat) is required"
+    native = root / "plugin/gfxwrap"
+    names = ["gpu_request", "runtime_control", "runtime_delivery",
+             "runtime_supervisor_fake"]
+    flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
+    build._cl(vcvars, flags + ["/std:c++17", "/EHsc", "/c", f"/I{native}",
+        *(str(native / f"{name}.cpp") for name in names), f"/Fo{work}\\"], work)
+    target = work / "runtime_supervisor.exe"
+    build._cl(vcvars, build.COMMON_FLAGS + [f"/I{native}",
+        str(native / "runtime_supervisor_host.c"),
+        *(str(work / f"{name}.obj") for name in names),
+        f"/Fo{work}\\", f"/Fe:{target}", "/link", *build.LIBS], work)
+    return target

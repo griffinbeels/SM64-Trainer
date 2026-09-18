@@ -6,6 +6,15 @@ import subprocess
 from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parents[1]
+#: Every fault the host walks (`gpu_encoder_fault_host.cpp`'s main()). Each one
+#: is a driver failure the encoder must survive without leaking a mapped input,
+#: a locked bitstream or a half-closed session.
+CASES = frozenset({
+    "ok", "map", "map-partial", "encode", "need-more", "lock", "unlock",
+    "unmap", "pts", "duration", "empty", "oversize", "null", "reject", "throw",
+    "eos", "invalid-then-eos", "wrong-owner", "destroy-output", "unregister",
+    "destroy-encoder",
+})
 
 
 def test_encoder_packet_cleanup(tmp_path):
@@ -28,4 +37,9 @@ def test_encoder_packet_cleanup(tmp_path):
                             timeout=10, **quiet_spawn_kwargs(), check=False)
     (tmp_path / "faults.log").write_bytes((result.stdout + result.stderr).encode())
     assert result.returncode == 0, result.stdout + result.stderr
-    assert sum(line.startswith("PASS ") for line in result.stdout.splitlines()) == 21, result.stdout
+    # The host CHECKs each case itself; what a count cannot see is a case
+    # QUIETLY DROPPED from main()'s list. Name them, and allow new ones: a
+    # missing fault case is a hole, an added one is coverage.
+    ran = {line.split(maxsplit=2)[1] for line in result.stdout.splitlines()
+           if line.startswith("PASS ")}
+    assert CASES <= ran, f"fault cases no longer run: {sorted(CASES - ran)}\n{result.stdout}"

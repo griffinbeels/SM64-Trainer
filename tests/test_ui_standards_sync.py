@@ -63,8 +63,12 @@ def _practice_cell(strategy):
     }})()"""
 
 
-@pytest.mark.parametrize("width", [850, 1500])
-def test_an_open_practice_panel_receives_another_clients_edit_without_reopening(width):
+def test_an_open_practice_panel_receives_another_clients_edit_without_reopening():
+    # ONE width: the claim is that the OPEN panel refetches in place -- the
+    # cell's text changes, the table node is the same node, the toggle stays
+    # expanded. No assertion reads geometry, so a second viewport was a
+    # second live server and a second browser launch for nothing.
+    width = 1500
     with serve_ui_live() as (base, _service):
         with get_driver().launch(headless=True, viewport=(width, 1100)) as page:
             page.goto(base)
@@ -125,8 +129,12 @@ def test_a_hidden_library_refetches_in_place_after_a_rank_edit():
             assert page.problems() == []
 
 
-@pytest.mark.parametrize("width", [850, 1280, 1920])
-def test_a_provisioned_manual_piece_shows_its_estimate_in_both_pages(width):
+def test_a_provisioned_manual_piece_shows_its_estimate_in_both_pages(tmp_path):
+    # ONE width: the claims are the estimate's presence, its title, the
+    # "Add a time below" copy and the Library's own "Estimated" line -- all
+    # text, none of it geometry -- so three viewports meant three live
+    # servers and three browser launches proving the same three strings.
+    width = 1920
     with serve_ui_live(stage=(4, 5), target=(4, 6)) as (base, service):
         piece = next(d for d in service.db.segment_defs()
                      if "star:4:6" in d["parents"] and not d["start_triggers"] and not d["end_triggers"]
@@ -154,8 +162,10 @@ def test_a_provisioned_manual_piece_shows_its_estimate_in_both_pages(width):
             assert page.evaluate("window.__manualCard.querySelector('.std-estimate').title")
             assert page.evaluate("window.__manualCard.textContent.includes('Add a time below')")
             _clear_fixture_startup_errors(page, base)
-            out = REPO / ".planning" / "sheet-practice-log" / "visuals"
-            out.mkdir(parents=True, exist_ok=True)
+            # The run's own tmp_path, never a tracked directory: a test that
+            # writes into .planning leaves artefacts in the checkout on every
+            # run and makes `git status` lie about what the task changed.
+            out = tmp_path
             (out / f"practice-manual-{width}.png").write_bytes(page.screenshot())
             page.evaluate("window.__manualCard.querySelector('.log-card-library-link').click()")
             page.wait_for(".library-section.open .library-ladder-estimate")

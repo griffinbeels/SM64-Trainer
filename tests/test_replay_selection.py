@@ -1,11 +1,17 @@
-"""The existing selector owns full-picture and tiny-GPU-sample decisions."""
+"""One selector, two picture shapes.
+
+A full RGBA array (the CPU path) and a tiny `SampledPicture` (what the GPU
+hands over) must reach the SAME decision, retain the same source id and leave
+the ledger in the same state. That comparison is the whole point of this file:
+nothing here compares the selector against a second implementation, because
+there is only one.
+"""
 
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
 
-from sm64_events.replay.ledger import PictureLedger as ExistingLedger
 from sm64_events.replay.media import MediaRun
 from sm64_events.replay.feedmap import feed_map
 
@@ -28,9 +34,9 @@ def state(ledger):
 
 
 @pytest.mark.parametrize("dimensions", [(16, 16), (17, 17), (640, 480), (641, 481)])
-def test_full_and_tiny_match_existing_policy_and_keep_original_source(dimensions):
+def test_full_and_tiny_reach_the_same_decisions_and_keep_original_source(dimensions):
     width, height = dimensions
-    old, full, gpu = ExistingLedger(), L.PictureLedger(), L.PictureLedger()
+    full, gpu = L.PictureLedger(), L.PictureLedger()
     arrays = [frame(v, height, width) for v in [0, 17, 17, 33, 33, 44]]
     times = [1000, 1000.010, 1000.030, 1000.033, 1000.037, 1000.040]
     counters = [100, 100, 101, 101, 1, 1]
@@ -52,14 +58,12 @@ def test_full_and_tiny_match_existing_policy_and_keep_original_source(dimensions
             "pad": [i, -i, 0x8000],
             "exact": True,
         }
-        legacy = old.observe(pixels, ts, counter, extras)
         a = full.observe_result(pixels, ts, counter, extras)
         b = gpu.observe_result(tiny(pixels), ts, counter, extras)
-        assert legacy == (a.kind == "selected") == (b.kind == "selected")
-        if legacy:
+        if a.kind == "selected":
             selected.append(i)
         assert a == b and b.kind == wanted[i] and b.source_id == retained[i]
-        assert state(old) == state(full) == state(gpu)
+        assert state(full) == state(gpu)
         if i == 1:
             assert b.reason == "same_frame_fold"
             assert gpu._prev_sample == arrays[1][::8, ::8].tobytes()
@@ -122,9 +126,9 @@ def test_sampling_error_and_missing_clock_are_explicit():
 
 
 def test_probe_and_extras_behavior_is_unchanged_across_selection_and_coalescing():
-    old, full, gpu = ExistingLedger(), L.PictureLedger(), L.PictureLedger()
+    full, gpu = L.PictureLedger(), L.PictureLedger()
     counters = []
-    for ledger in [old, full, gpu]:
+    for ledger in [full, gpu]:
         good = Mock(return_value=71)
         bad = Mock(side_effect=LookupError("fixture missing probe"))
         ledger.stamps["probe"] = good
@@ -132,17 +136,16 @@ def test_probe_and_extras_behavior_is_unchanged_across_selection_and_coalescing(
         counters.append((good, bad))
     extras = {"source_id": "native:first", "pad": [31, -42, 0x8000], "exact": True}
     pixels = frame(3)
-    assert old.observe(pixels, 1000, 10, extras)
     assert full.observe_result(pixels, 1000, 10, extras).kind == "selected"
     assert gpu.observe_result(tiny(pixels), 1000, 10, extras).kind == "selected"
-    assert state(old) == state(full) == state(gpu)
+    assert state(full) == state(gpu)
     assert full._rows[0][2] == {**extras, "probe": 71}
     assert extras == {
         "source_id": "native:first",
         "pad": [31, -42, 0x8000],
         "exact": True,
     }
-    for ledger, value in [(old, pixels), (full, pixels), (gpu, tiny(pixels))]:
+    for ledger, value in [(full, pixels), (gpu, tiny(pixels))]:
         assert not ledger.observe(
             value, 1000.033, 11, {"source_id": "native:duplicate"}
         )
@@ -175,7 +178,7 @@ def test_original_shape_and_exact_immutable_bytes_without_full_image_accessor():
         P.SampledPicture(641, 481, picture.sample, 4)
 
 
-def test_source_id_feed_heartbeat_and_run_guard_survive_new_selector():
+def test_source_id_feed_heartbeat_and_run_guard_follow_the_fed_row():
     ledger = L.PictureLedger()
     run = MediaRun("encoder-A", 1000)
     a = ledger.observe_result(tiny(frame(1)), 1000, 10, {"source_id": "capture:1"})

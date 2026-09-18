@@ -424,7 +424,10 @@ def test_idle_preroll_first_reset_pixels_inputs_and_audio_match_source(idle_atte
 
 def test_long_idle_media_and_reader_resources_remain_bounded(idle_attempt):
     r = idle_attempt
-    assert r["source_count"] == 174
+    # The bounds below only mean something over a long run: the fixture's own
+    # cadence (half-second ticks across ~56 s, then 61 reset pictures) decides
+    # the exact number, so require the scale, not the count.
+    assert r["source_count"] >= 150, "the fixture stopped simulating a long idle"
     assert r["peak_bytes"] <= r["limits"]["ring_bytes"]
     assert r["peak_index_samples"] <= min(r["limits"]["index_samples"], r["limits"]["derived_index_bound"])
     assert r["peak_extents"] <= r["limits"]["derived_extent_bound"]

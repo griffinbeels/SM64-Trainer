@@ -181,10 +181,9 @@ def test_corrupt_copy_is_rejected_and_original_install_restored(
     assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == WRAPPER_DLL
 
 
-def test_install_receipts_identify_each_successful_copy(pj64_dir, dll_source, settings_path, caplog):
+def test_install_receipts_identify_each_successful_copy(pj64_dir, dll_source, settings_path):
     import hashlib
     layer, _, _ = make_layer(pj64_dir, dll_source, settings_path)
-    caplog.set_level("INFO", logger="sm64.capturelayer")
     layer.install(True)
     first = json.loads(settings_path.read_text())["installation_receipt"]
     assert first["reason"] == "explicit_install"
@@ -202,9 +201,16 @@ def test_install_receipts_identify_each_successful_copy(pj64_dir, dll_source, se
         assert receipt["after"]["sha256"] == overlay["installed_sha256"] == previous
         assert receipt["source"]["path"] == str(dll_source.resolve())
         assert receipt["server_pid"] > 0 and receipt["utc"]
-    # one renderer copy at install, then the wrapper three times (install + two
-    # refreshes); a current renderer is never re-copied by a refresh
-    assert len([r for r in caplog.records if "installation committed" in r.message]) == 4
+    # A current renderer is never re-copied by a refresh, and the effect is on
+    # disk rather than in a log line: after the install and both refreshes the
+    # renderer's receipt is STILL the explicit install's, while the wrapper's
+    # has moved on twice. Both installed files are the sources they name.
+    renderer_receipt = overlay["renderer_receipt"]
+    assert renderer_receipt["reason"] == "explicit_install"
+    assert renderer_receipt["after"]["sha256"] == overlay["installed_renderer_sha256"]
+    plugin_dir = pj64_dir / "Plugin"
+    assert (plugin_dir / WRAPPER_DLL).read_bytes() == dll_source.read_bytes()
+    assert (plugin_dir / RENDERER_DLL).read_bytes() == renderer_for(dll_source).read_bytes()
 
 
 def test_unknown_installation_history_requires_explicit_install(pj64_dir, dll_source, settings_path):

@@ -77,9 +77,17 @@ def skill_identity(path: Path) -> str:
 
 
 def shared_skill_names() -> set[str]:
-    """Keep the known regression covered even in a clone without the harness."""
-    names = {"create-artifacts"}
+    """Every skill the shared harness owns, which no project skill may shadow.
+
+    Without the harness on disk this used to silently narrow to one known
+    name, so a machine missing the harness read as a PASS on a guard that had
+    seen almost nothing. Skip instead: the guard cannot check what it cannot
+    see, and it must say so."""
     shared = Path.home() / ".claude" / "harness" / "skills"
+    if not shared.is_dir():
+        pytest.skip(f"the shared harness is not installed at {shared}; this "
+                    "guard cannot see the identities it protects")
+    names = {"create-artifacts"}   # the known regression, named explicitly
     names.update(skill_identity(path) for path in shared.glob("*/SKILL.md"))
     return names
 

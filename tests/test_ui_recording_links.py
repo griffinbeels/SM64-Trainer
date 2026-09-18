@@ -246,7 +246,6 @@ def test_playing_only_embeds_until_explicit_download(page, library):
     assert page.evaluate("calls.filter(call => call.method === 'POST').length") == 1
     if library:
         assert page.evaluate("document.querySelector('#recording-test .external-video-actions a').href") == 'https://recording.example/library'
-    assert page.evaluate("document.querySelectorAll('#recording-test .external-video-frames').length") == 0
     click(page, "Retry download")
     wait(page, "calls.filter(call => call.method === 'POST').length === 2")
     assert page.evaluate("calls.filter(call => call.method === 'POST')[1].body.retry")

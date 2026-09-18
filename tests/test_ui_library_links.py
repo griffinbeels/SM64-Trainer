@@ -152,18 +152,41 @@ def test_the_book_mark_opens_the_library_on_that_cards_entity_and_strategy(pract
     )
 
 
-def test_a_card_with_no_library_caller_renders_no_book_mark(practice_page):
-    """`ui/tunelog.js`'s own inspector reuses `PracticeLog`/`LogCard` with no
-    `openLibrary` prop at all (it passes `openCompare=null` the same way).
-    The real app always passes one, so this is really a guard against a
-    future call site that forgets to -- a book mark with nothing behind it
-    would read as a dead control (acceptance.md's rule against exactly that),
-    so the fold button is checked as a control: `LogCard` renders one for
-    every real card, and this proves it is CONDITIONAL, not a permanent
-    fixture."""
+def test_a_card_with_no_library_caller_renders_no_book_mark(practice_page,
+                                                            library_server):
+    """`ui/tunelog.js`'s inspector mounts the REAL `PracticeLog`/`LogCard`
+    with no `openLibrary` prop at all (it passes `openCompare=null` the same
+    way), so `/ui/tunelog.html` is the shipped no-caller call site -- and
+    this test now RENDERS it instead of asserting about it. Until 2026-09-17
+    the body only counted book marks on the real practice page, which is the
+    opposite case: the name and this docstring promised a claim nothing here
+    ever drove.
+
+    What it guards: a future call site that forgets the prop and gets a book
+    mark with nothing behind it (acceptance.md's rule against a dead
+    control), which is only impossible while the button stays CONDITIONAL.
+
+    Both halves, one browser. The real page must carry the mark -- so a zero
+    on the inspector cannot be a stale selector -- and the inspector's cards
+    must be real `LogCard`s (their own fold buttons prove the component
+    mounted) carrying none."""
     present = practice_page.evaluate(
         "document.querySelectorAll('.log-card .log-card-library-link').length")
     assert present >= 1, "the real app must render the book mark on real cards"
+
+    practice_page.goto(f"{library_server}/ui/tunelog.html")
+    practice_page.wait_for(".log-card", timeout_ms=20000)
+    inspector = practice_page.evaluate(
+        "({cards: document.querySelectorAll('.log-card').length,"
+        "  folds: document.querySelectorAll('.log-card .log-card-fold').length,"
+        "  marks: document.querySelectorAll('.log-card .log-card-library-link')"
+        ".length})")
+    assert inspector["cards"] and inspector["folds"], (
+        f"the inspector drew no real log cards, so it cannot answer whether "
+        f"the book mark is conditional: {inspector}")
+    assert inspector["marks"] == 0, (
+        f"a card mounted with no `openLibrary` still drew {inspector['marks']} "
+        f"book mark(s) -- a door onto nothing: {inspector}")
 
 
 # ---- the standards-ladder time-link deep link ------------------------------

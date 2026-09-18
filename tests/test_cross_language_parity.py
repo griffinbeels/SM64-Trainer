@@ -1,16 +1,19 @@
 # tests/test_cross_language_parity.py
-"""Four values this app defines TWICE — once in Python, once in JavaScript.
+"""Every value this app defines TWICE — once in Python, once in JavaScript.
 
 `tests/test_single_source.py` enforces "one derivation, one door" for things
-that CAN have one door. These four cannot: the server computes them in Python
-and the browser needs the same answer without a round trip, so the second copy
-is a real engineering decision, not an oversight. What was missing is the part
+that CAN have one door. These cannot: the server computes them in Python and
+the browser needs the same answer without a round trip, so the second copy is
+a real engineering decision, not an oversight. What was missing is the part
 that makes a deliberate duplicate safe — **something that fails when the two
 halves stop agreeing.**
 
-Until 2026-07-28 all four were held together by a comment. Each of the four
-sites said some version of "keep the two in lockstep" or "mirrors the labels",
-and a comment cannot fail a build. The specific ways they were free to rot:
+It started with four (2026-07-28) and has grown with every value the two
+languages both compute; the tests below are the current list, and a new
+duplicate belongs here on the day it is written. Until 2026-07-28 those first
+four were held together by a comment. Each of the four sites said some version
+of "keep the two in lockstep" or "mirrors the labels", and a comment cannot
+fail a build. The specific ways they were free to rot:
 
   * `RANK_NAMES` — add a tier in `ranks/classify.py` and every JS surface
     draws `capName(tier) -> tier` (the raw key) with `rankColor -> #3a4250`
@@ -28,12 +31,15 @@ and a comment cannot fail a build. The specific ways they were free to rot:
   * `selection_id` — disagree and a stat chip stops matching its own checkbox:
     ticking it adds a duplicate rather than toggling the one that is there.
 
-Two of the four JS modules are import-free and are imported directly by node.
-The other two (`ranks.js`, `statmenu.js`) import Preact through a browser
-import map that node cannot resolve, so their declaration is extracted from
-source and evaluated on its own — still the REAL expression, never a
-restatement of it, which is the distinction that decides whether a parity test
-is worth having.
+Import-free JS modules are imported directly by node. The ones that import
+Preact through a browser import map node cannot resolve (`ranks.js`,
+`statmenu.js` and their kin) have their declaration extracted from source and
+evaluated on its own — still the REAL expression, never a restatement of it,
+which is the distinction that decides whether a parity test is worth having.
+
+Each test spawns its own short-lived `node`. Batching them into one process
+would mean routing every test's script and data through a shared dispatcher —
+a rewrite of the file, not a cleanup — so the spawns stay per-test.
 """
 import json
 import re
