@@ -1,35 +1,52 @@
 """Every user32 write the overlay makes, on ONE thread in ONE DPI context.
 
-**The bug this class exists to make impossible.** DPI awareness on Windows is
-a property of the CALLING THREAD, so a rectangle read in one context and
-applied in another is a rectangle multiplied by the display scale. Until
-2026-09-19 the overlay spread those calls across whichever thread happened to
-ask -- the follower placed, the control pipe set the alpha, the host restyled
--- and on top of that it multiplied the rectangle it had just read by
+**The size bug this class exists to make impossible.** DPI awareness on
+Windows is a property of the CALLING THREAD, so a rectangle read in one
+context and applied in another is a rectangle multiplied by the display scale.
+On top of that the old follower multiplied the rectangle it had just read by
 `GetDpiForWindow(us) / GetDpiForWindow(pj64)`. PJ64 1.6 is DPI-unaware, so
 that ratio is 144/96 at his 150 % scaling whether or not anything was actually
 wrong, and his first try put a window half again as wide and tall as the game
 over his other apps. Now there is exactly one thread, it says out loud what
 context it is in, and it proves the result instead of trusting it.
 
-**Which context, and why this one.** PER_MONITOR_AWARE_V2, set on the
+**The startup race this class exists to survive, found in his SECOND try.**
+The window handle exists before the window is ours. pywebview's WinForms
+backend shows and hides the form during `create_window` and drives
+`Form.Opacity` around it -- and WinForms implements `Opacity` with the very
+`WS_EX_LAYERED` bit whole-window alpha needs. So an alpha set at the wrong
+moment simply fails. In his log (`evidence/second-try-ghost_window.jsonl`):
+the handle appeared at 08:20:06.806, the alpha asked for at that same
+millisecond came back `accepted: False, got: None`, and the styles did not
+land until 08:20:10.923 -- four seconds later, because styling lived inside a
+placement that only ran when the decision CHANGED.
+
+Nothing here is one-shot any more. `prepare()` is the gate, it runs every
+tick, and every step is confirmed by a READBACK rather than by a return value:
+
+    a real window handle  ->  the overlay styles  ->  the alpha  ->  may show
+
+Each step retries until its readback agrees, and a step that fails is never
+remembered as done. That is the whole of the fix: the old `ensure_alpha`
+stored the wanted value whether or not the call worked, so the first failed
+attempt was remembered as applied and never retried -- with the visibility
+gate opened, the ghost would have come up FULLY OPAQUE, his round-1 symptom.
+
+**Which DPI context, and why this one.** PER_MONITOR_AWARE_V2, set on the
 follower thread. What the ghost must cover is the picture the player SEES --
-the physical pixels Project64's client area occupies on the monitor -- and an
-aware thread is the one that reads that rectangle honestly (live 2026-07-23:
-PJ64's client reads 1600x1224 from an unaware thread and 2400x1836 from an
-aware one at 150 %). `replay/video.py` deliberately chooses UNAWARE for its
-geometry thread and is not in disagreement with this: it wants PJ64's backing
-SURFACE, because it is copying the emulator's pixels, and the surface is the
-logical size. Different question, opposite answer -- and both are only safe
-because each pins its own thread rather than inheriting one.
+the physical pixels Project64's client area occupies -- and an aware thread is
+the one that reads that honestly (live 2026-07-23: PJ64's client reads
+1600x1224 from an unaware thread and 2400x1836 from an aware one at 150 %).
+`replay/video.py` deliberately chooses UNAWARE for its geometry thread and is
+not in disagreement: it wants PJ64's backing SURFACE, because it is copying
+the emulator's pixels. Different question, opposite answer -- and both are
+only safe because each pins its own thread rather than inheriting one.
 
 The process context is NOT relied on. `SetProcessDpiAwarenessContext` is
-refused whenever awareness is already fixed, which it usually is here:
-python.exe carries a manifest that declares it, and pywebview's WinForms
-backend calls `SetProcessDPIAware()` before it starts the GUI thread
-(`webview/platforms/winforms.py`). A thread context can be set regardless, so
-that is what this uses -- and it reports what Windows actually gave back, not
-what it asked for.
+refused whenever awareness is already fixed, and pywebview's WinForms backend
+calls `SetProcessDPIAware()` before it starts the GUI thread. A thread context
+can be set regardless, so that is what this uses -- and it reports what
+Windows actually gave back, not what it asked for.
 
 **Nothing here may name Project64 as the window being MODIFIED.** The game's
 handle reaches two readers -- where its picture is, and which window sits
@@ -41,11 +58,11 @@ from dataclasses import asdict, dataclass
 from sm64_events.ghost.window import diag, native, style
 from sm64_events.ghost.window.geometry import (
     PLACE_TOLERANCE_PX,
-    Placement,
     Rect,
     correction_for,
     rects_agree,
 )
+from sm64_events.ghost.window.visibility import Visibility
 
 #: The context the follower thread runs in. See the module docstring for why
 #: this and not UNAWARE.
@@ -60,6 +77,24 @@ class DpiReport:
     thread: str
     process_pin_ok: bool
     thread_pin_ok: bool
+
+
+@dataclass(frozen=True)
+class Readiness:
+    """How far up the startup chain the window has actually got.
+
+    Each field is a READBACK, never a return value. `ok` is the one thing that
+    permits the window on his screen.
+    """
+
+    hwnd: int
+    window: bool
+    styles: bool
+    alpha: bool
+
+    @property
+    def ok(self) -> bool:
+        return self.window and self.styles and self.alpha
 
 
 @dataclass(frozen=True)
@@ -83,10 +118,10 @@ class Placer:
         self._ops = ops
         self._record = record
         self._tolerance = tolerance
-        self._styled = False
         self._alpha: int | None = None
         self._shown: bool | None = None
         self._placed: Rect | None = None
+        self._readiness: Readiness | None = None
 
     # --- the one context ----------------------------------------------------
 
@@ -106,17 +141,88 @@ class Placer:
         self._record("dpi_context", level="info", **asdict(report))
         return report
 
-    # --- what the follower asks for -----------------------------------------
+    # --- the gate -----------------------------------------------------------
 
-    def ensure_alpha(self, hwnd: int, alpha: int) -> None:
-        """Set the whole-window opacity and read back what the window kept."""
-        if not hwnd or alpha == self._alpha:
-            return
+    @property
+    def applied_alpha(self) -> int | None:
+        """The alpha this window is KNOWN to be holding, or None.
+
+        None after every failure, which is the whole point: the value the
+        window was merely asked for is not a value it has.
+        """
+        return self._alpha
+
+    def prepare(self, hwnd: int, alpha: int) -> Readiness:
+        """Everything that must read back true before the window may be shown.
+
+        Run EVERY tick, in this order, retrying whatever is not yet true. A
+        handle that does not exist yet and a window whose layered bit
+        pywebview removed a moment ago are the same thing from here: not
+        ready, try again in a tick.
+        """
+        if not hwnd or not self._ops.is_window(hwnd):
+            self._alpha = None
+            return self._note(Readiness(hwnd=hwnd, window=False, styles=False,
+                                        alpha=False))
+        styled = self.ensure_styles(hwnd)
+        # Alpha AFTER styles, never beside them: SetLayeredWindowAttributes
+        # fails on a window that is not WS_EX_LAYERED, which is exactly what
+        # happened at 08:20:06.806 in his second try.
+        alpha_ok = self.ensure_alpha(hwnd, alpha) if styled else False
+        return self._note(Readiness(hwnd=hwnd, window=True, styles=styled,
+                                    alpha=alpha_ok))
+
+    def _note(self, readiness: Readiness) -> Readiness:
+        if readiness != self._readiness:
+            self._readiness = readiness
+            self._record("readiness", level="info" if readiness.ok else "error",
+                         **asdict(readiness))
+        return readiness
+
+    def ensure_styles(self, hwnd: int) -> bool:
+        """Confirm the overlay bits are on, re-applying whenever they are not.
+
+        Not cached, because the bits can be taken away: WinForms implements
+        `Form.Opacity` with `WS_EX_LAYERED`, and pywebview sets Opacity on
+        this very form while it is starting up. The only honest answer is the
+        readback, and the only safe response to a bad one is to ask again.
+        """
+        if self._has_overlay_styles(hwnd):
+            return True
+        asked = self._ops.apply_overlay_styles(hwnd)
+        kept = self._ops.get_ex_style(hwnd)
+        ok = self._has_overlay_styles(hwnd)
+        self._record("styles", level="info" if ok else "error",
+                     asked=f"{asked:#x}", got=f"{kept:#x}",
+                     owner=self._ops.get_owner(hwnd))
+        return ok
+
+    def _has_overlay_styles(self, hwnd: int) -> bool:
+        kept = self._ops.get_ex_style(hwnd)
+        return kept & style.OVERLAY_EX_STYLE == style.OVERLAY_EX_STYLE
+
+    def ensure_alpha(self, hwnd: int, alpha: int) -> bool:
+        """Set the whole-window opacity and CONFIRM it. Never remembers a miss.
+
+        The bug this replaces stored the wanted value whether or not the call
+        worked, so an alpha set a millisecond too early was remembered as
+        applied and never retried. It only escaped notice in his second try
+        because he moved the slider, which asked for a DIFFERENT value; had he
+        left it alone the ghost would have been fully opaque.
+        """
+        if not hwnd:
+            return False
+        if self._alpha == alpha and self._ops.get_alpha(hwnd) == alpha:
+            return True
         taken = self._ops.set_alpha(hwnd, alpha)
         kept = self._ops.get_alpha(hwnd)
-        self._alpha = alpha
-        self._record("alpha", level="info" if kept == alpha else "error",
+        ok = bool(taken) and kept == alpha
+        self._alpha = alpha if ok else None
+        self._record("alpha", level="info" if ok else "error",
                      asked=alpha, got=kept, accepted=bool(taken))
+        return ok
+
+    # --- what the follower asks for -----------------------------------------
 
     def keep_above(self, hwnd: int, game_hwnd: int) -> bool:
         """Put the ghost back directly above Project64 if something got between.
@@ -138,38 +244,31 @@ class Placer:
             self._visibility(hwnd, False, outcome.detail)
         return True
 
-    def apply(self, hwnd: int, placement: Placement,
+    def apply(self, hwnd: int, want: Visibility,
               *, game_hwnd: int = 0) -> PlaceOutcome | None:
         """Make the window match one decision. Returns the placement it made.
 
+        The caller must have had `prepare()` say `ok` first; this does not
+        check again, because the order is the point and one owner of it is
+        clearer than two.
+
         A placement that cannot be proved HIDES the window. That is the whole
-        rule: the overlay is allowed to be missing, and is not allowed to be
-        an opaque rectangle over somebody else's app.
+        rule: the overlay is allowed to be missing, and is not allowed to be a
+        rectangle over somebody else's app.
         """
         if not hwnd:
             return None
-        self._ensure_styles(hwnd)
-        if not placement.show or placement.rect is None:
+        if not want.shown or want.rect is None:
             self._placed = None
-            self._visibility(hwnd, False, placement.reason)
+            self._visibility(hwnd, False, want.reason)
             return None
-        outcome = self._place(hwnd, placement.rect, game_hwnd)
-        self._placed = placement.rect if outcome.ok else None
+        outcome = self._place(hwnd, want.rect, game_hwnd)
+        self._placed = want.rect if outcome.ok else None
         self._visibility(hwnd, outcome.ok,
-                         placement.reason if outcome.ok else outcome.detail)
+                         want.reason if outcome.ok else outcome.detail)
         return outcome
 
     # --- the parts ----------------------------------------------------------
-
-    def _ensure_styles(self, hwnd: int) -> None:
-        if self._styled:
-            return
-        asked = self._ops.apply_overlay_styles(hwnd)
-        kept = self._ops.get_ex_style(hwnd)
-        self._styled = True
-        self._record("styles", level="info" if kept == asked else "error",
-                     asked=f"{asked:#x}", got=f"{kept:#x}",
-                     owner=self._ops.get_owner(hwnd))
 
     def _z_target(self, hwnd: int, game_hwnd: int) -> int | None:
         """The handle to insert AFTER so the ghost lands directly above PJ64.

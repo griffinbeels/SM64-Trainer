@@ -1,10 +1,16 @@
-"""The one thread that moves the overlay, and the read-back that proves it.
+"""The one thread that moves the overlay, the gate before it, and the proof.
 
-Two halves.
+Three halves, which is one too many but they belong together.
 
-The FAKE half drives `Placer` against a Windows that can be told to misbehave
--- to scale what it is given, the way a placement crossing a DPI-awareness
-boundary does -- so the correct-once-then-hide rule can be exercised at all.
+The GATE tests drive `Placer.prepare` against a Windows that behaves the way
+his second try behaved: a window that is not ours yet, whose layered bit is
+missing, so `SetLayeredWindowAttributes` fails exactly as it did at
+08:20:06.806. Nothing may be remembered as done until its readback agrees.
+
+The FAKE half drives placement against a Windows that can be told to
+misbehave -- to scale what it is given, the way a placement crossing a
+DPI-awareness boundary does -- so the correct-once-then-hide rule can be
+exercised at all.
 
 The REAL half builds the mixed-context hazard out of actual windows: a
 stand-in for Project64 created on a thread pinned to UNAWARE (what PJ64 1.6
@@ -30,6 +36,7 @@ from sm64_events.ghost.window.geometry import (
     scale_rect,
 )
 from sm64_events.ghost.window.placer import Placer
+from sm64_events.ghost.window.visibility import visibility_for
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Win32 windows")
 
@@ -37,17 +44,27 @@ OVERLAY = 0xABC
 GAME = 0xDEF
 PICTURE = Rect(x=120, y=80, width=1600, height=1224)
 ABOVE_GAME = 0x111
+ALPHA = 128
 
 
 class FakeWindows:
-    """A Windows that answers, and can be told to put the window elsewhere."""
+    """A Windows that answers, and that can be told to behave badly.
+
+    `layers` models the one that actually bit: WinForms drives `Form.Opacity`
+    on our form while pywebview starts it, and WinForms implements Opacity
+    with `WS_EX_LAYERED` -- so for a while our styles do not stick, and every
+    `SetLayeredWindowAttributes` against the window fails.
+    """
 
     def __init__(self, *, scale=1.0, above=ABOVE_GAME, game=PICTURE,
-                 keeps_alpha=True):
+                 keeps_alpha=True, layers=True, real=True):
         self.scale = scale
         self.above = above
         self.game = game
         self.keeps_alpha = keeps_alpha
+        self.layers = layers
+        self.real = real
+        self.ex = 0
         self.placed: list[tuple] = []
         self.shown: list[tuple] = []
         self.rect: Rect | None = None
@@ -55,8 +72,11 @@ class FakeWindows:
         self.styled = 0
 
     # reads
+    def is_window(self, hwnd):
+        return bool(hwnd) and self.real
+
     def get_ex_style(self, hwnd):
-        return 0x4321
+        return self.ex
 
     def get_owner(self, hwnd):
         return 0
@@ -88,9 +108,13 @@ class FakeWindows:
     # writes, all against the overlay's handle
     def apply_overlay_styles(self, hwnd):
         self.styled += 1
-        return 0x4321
+        if self.layers:
+            self.ex = style.OVERLAY_EX_STYLE
+        return style.OVERLAY_EX_STYLE
 
     def set_alpha(self, hwnd, alpha):
+        if not self.ex & style.WS_EX_LAYERED:
+            return False  # exactly what Windows does to an unlayered window
         self.alpha = alpha if self.keeps_alpha else 255
         return True
 
@@ -117,14 +141,111 @@ def make_placer(**kwargs):
     return Placer(ops=fake, record=record), fake, records
 
 
-SHOW = follow_decision(GameWindow(found=True, minimized=False, client=PICTURE))
-HIDE = follow_decision(None)
+def want(placement, alpha=ALPHA):
+    return visibility_for(placement, wanted_alpha=alpha)
 
 
-# --- the rule ---------------------------------------------------------------
+PLAYING = GameWindow(found=True, minimized=False, client=PICTURE)
+SHOW = want(follow_decision(PLAYING))
+HIDE = want(follow_decision(None))
+
+
+def ready(placer, alpha=ALPHA):
+    """Walk the gate the way the follower does, then answer."""
+    return placer.prepare(OVERLAY, alpha)
+
+
+# --- the gate ---------------------------------------------------------------
+
+def test_a_window_that_does_not_exist_yet_is_not_ready():
+    placer, fake, _ = make_placer(real=False)
+    state = ready(placer)
+    assert state.ok is False
+    assert state.window is False
+    assert fake.styled == 0, "nothing is done to a window that is not there"
+    assert placer.prepare(0, ALPHA).ok is False
+
+
+def test_the_styles_come_before_the_alpha_and_the_alpha_before_showing():
+    placer, fake, records = make_placer()
+    state = ready(placer)
+    assert state.ok is True
+    order = [entry["event"] for entry in records]
+    assert order.index("styles") < order.index("alpha"), (
+        "SetLayeredWindowAttributes fails on a window that is not layered yet")
+    assert fake.alpha == ALPHA
+    assert fake.shown == [], "being ready is not being shown"
+
+
+def test_a_window_that_will_not_take_the_styles_never_becomes_ready():
+    placer, fake, records = make_placer(layers=False)
+    for _ in range(3):
+        state = ready(placer)
+        assert state.ok is False
+        assert state.styles is False
+        assert state.alpha is False
+    assert fake.styled == 3, "it keeps asking rather than giving up"
+    assert fake.alpha is None
+    assert not [entry for entry in records if entry["event"] == "alpha"], (
+        "the alpha is not even attempted on a window that is not layered yet "
+        "-- SetLayeredWindowAttributes can only fail there")
+
+
+def test_a_failed_alpha_is_never_remembered_as_applied():
+    """THE bug from his second try. The window was not layered when the first
+    alpha was asked for, the call failed, and the wanted value was stored
+    anyway -- so it never retried and the ghost would have been fully opaque.
+    """
+    placer, fake, _ = make_placer(layers=False)
+    assert placer.ensure_alpha(OVERLAY, ALPHA) is False
+    assert fake.alpha is None
+    assert placer.applied_alpha is None, (
+        "a value the window refused is not a value the window is holding")
+
+    fake.ex = style.OVERLAY_EX_STYLE  # the window becomes ours a moment later
+    assert placer.ensure_alpha(OVERLAY, ALPHA) is True, (
+        "the same value must be asked for again, not skipped as done")
+    assert fake.alpha == ALPHA
+    assert placer.applied_alpha == ALPHA
+
+
+def test_an_alpha_the_window_did_not_keep_is_an_error_and_is_retried():
+    placer, fake, records = make_placer(keeps_alpha=False)
+    ready(placer)
+    assert placer.ensure_alpha(OVERLAY, ALPHA) is False
+    alpha = [entry for entry in records if entry["event"] == "alpha"]
+    assert alpha and alpha[0]["level"] == "error"
+    assert alpha[0]["asked"] == ALPHA and alpha[0]["got"] == 255
+
+
+def test_styles_taken_away_behind_our_back_are_put_straight_back():
+    """WinForms clears WS_EX_LAYERED when it sets Form.Opacity to 1, which
+    pywebview does while the window is starting."""
+    placer, fake, _ = make_placer()
+    assert ready(placer).ok is True
+    fake.ex = 0  # pywebview drives Form.Opacity; our bits are gone
+    assert ready(placer).ok is True
+    assert fake.styled == 2
+
+
+def test_the_readiness_is_written_down_when_it_changes():
+    placer, fake, records = make_placer(layers=False)
+    ready(placer)
+    ready(placer)
+    notes = [entry for entry in records if entry["event"] == "readiness"]
+    assert len(notes) == 1, "a steady state is not written every tick"
+    assert notes[0]["level"] == "error"
+    fake.layers = True
+    ready(placer)
+    notes = [entry for entry in records if entry["event"] == "readiness"]
+    assert notes[-1]["styles"] is True and notes[-1]["alpha"] is True
+
+
+# --- placement --------------------------------------------------------------
 
 def test_a_placement_that_lands_is_kept_and_shown():
     placer, fake, records = make_placer()
+    ready(placer)
     outcome = placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
     assert outcome.ok is True
     assert outcome.corrected is False
@@ -136,6 +257,7 @@ def test_a_placement_that_lands_is_kept_and_shown():
 
 def test_the_ghost_is_inserted_above_the_game_and_never_below_it():
     placer, fake, _ = make_placer()
+    ready(placer)
     placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
     _hwnd, _rect, insert_after = fake.placed[0]
     assert insert_after == ABOVE_GAME
@@ -147,6 +269,7 @@ def test_the_ghost_is_inserted_above_the_game_and_never_below_it():
 def test_being_already_above_the_game_leaves_the_z_order_alone():
     """Re-inserting every tick churns the whole z-order for nothing."""
     placer, fake, _ = make_placer(above=OVERLAY)
+    ready(placer)
     placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
     assert fake.placed[0][2] is None
 
@@ -155,6 +278,7 @@ def test_a_window_windows_scaled_is_corrected_once_and_then_kept():
     """His first try, as arithmetic: we asked for the picture and got one half
     again as wide and tall. One corrected retry lands it."""
     placer, fake, records = make_placer(scale=1.5)
+    ready(placer)
     outcome = placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
     assert outcome.ok is True
     assert outcome.corrected is True
@@ -171,6 +295,7 @@ def test_a_placement_that_cannot_be_proved_hides_the_window():
     """The rule he is owed: the overlay may be missing, and may not be an
     opaque rectangle over somebody else's app."""
     placer, fake, records = make_placer(scale=9.0)
+    ready(placer)
     outcome = placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
     assert outcome.ok is False
     assert fake.shown == [("hide", OVERLAY)], "it was never shown at all"
@@ -180,6 +305,7 @@ def test_a_placement_that_cannot_be_proved_hides_the_window():
 
 def test_the_game_moving_under_the_ghost_hides_it_until_the_next_look():
     placer, fake, _ = make_placer(game=Rect(x=0, y=0, width=800, height=600))
+    ready(placer)
     outcome = placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
     assert outcome.ok is False
     assert outcome.detail == "game_moved"
@@ -191,6 +317,7 @@ def test_something_sliding_in_front_of_the_ghost_puts_it_back():
     "nothing changed" would leave the ghost buried under whatever came
     forward."""
     placer, fake, records = make_placer(above=OVERLAY)
+    ready(placer)
     placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
     assert placer.keep_above(OVERLAY, GAME) is False, "already on top"
 
@@ -203,6 +330,7 @@ def test_something_sliding_in_front_of_the_ghost_puts_it_back():
 
 def test_a_hidden_ghost_is_not_pushed_back_over_anything():
     placer, fake, _ = make_placer()
+    ready(placer)
     placer.apply(OVERLAY, HIDE, game_hwnd=GAME)
     assert placer.keep_above(OVERLAY, GAME) is False
     assert fake.placed == []
@@ -210,6 +338,7 @@ def test_a_hidden_ghost_is_not_pushed_back_over_anything():
 
 def test_a_hidden_decision_moves_nothing():
     placer, fake, _ = make_placer()
+    ready(placer)
     assert placer.apply(OVERLAY, HIDE, game_hwnd=GAME) is None
     assert fake.placed == []
     assert fake.shown == [("hide", OVERLAY)]
@@ -221,33 +350,11 @@ def test_nothing_happens_before_the_window_exists():
     assert fake.placed == [] and fake.shown == []
 
 
-def test_the_styles_are_applied_once_and_read_back():
-    placer, fake, records = make_placer()
-    placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
-    placer.apply(OVERLAY, HIDE, game_hwnd=GAME)
-    assert fake.styled == 1
+def test_the_overlay_never_takes_an_owner():
+    placer, _fake, records = make_placer()
+    ready(placer)
     styles = next(entry for entry in records if entry["event"] == "styles")
     assert styles["owner"] == 0, "the overlay must never have an owner"
-
-
-# --- opacity ----------------------------------------------------------------
-
-def test_the_opacity_is_set_once_and_read_back():
-    placer, fake, records = make_placer()
-    placer.ensure_alpha(OVERLAY, 128)
-    placer.ensure_alpha(OVERLAY, 128)
-    assert fake.alpha == 128
-    alphas = [entry for entry in records if entry["event"] == "alpha"]
-    assert len(alphas) == 1, "an unchanged opacity is not re-applied"
-    assert alphas[0]["asked"] == 128 and alphas[0]["got"] == 128
-
-
-def test_an_opacity_the_window_did_not_keep_is_an_error():
-    placer, _fake, records = make_placer(keeps_alpha=False)
-    placer.ensure_alpha(OVERLAY, 128)
-    alpha = next(entry for entry in records if entry["event"] == "alpha")
-    assert alpha["level"] == "error"
-    assert alpha["asked"] == 128 and alpha["got"] == 255
 
 
 # --- the context ------------------------------------------------------------
@@ -316,7 +423,7 @@ def unaware_standin():
     being reproduced. PJ64 1.6 is DPI-unaware; this window is too.
     """
     made: dict = {}
-    ready, finished = threading.Event(), threading.Event()
+    ready_now, finished = threading.Event(), threading.Event()
 
     def own_the_window():
         made["set_ok"] = native.set_thread_dpi_context(
@@ -331,14 +438,14 @@ def unaware_standin():
         made["hwnd"] = int(user32.CreateWindowExW(
             style.OVERLAY_EX_STYLE, "STATIC", "sm64 ghost pj64 stand-in",
             style.CREATE_STYLE, 100, 80, 320, 240, None, None, None, None))
-        ready.set()
+        ready_now.set()
         finished.wait(30)
         ctypes.windll.user32.DestroyWindow(wt.HWND(made["hwnd"]))
 
     thread = threading.Thread(target=own_the_window, name="pj64-standin",
                               daemon=True)
     thread.start()
-    assert ready.wait(10), "the stand-in window was never created"
+    assert ready_now.wait(10), "the stand-in window was never created"
     assert made["context"] == "unaware"
     try:
         yield made["hwnd"]
@@ -366,12 +473,17 @@ def test_reading_and_placing_in_one_context_lands_exactly(unaware_standin,
         assert report.thread == "per_monitor"
 
         overlay = windows_made(w=10, h=10)
+        state = placer.prepare(overlay, ALPHA)
+        assert state.ok is True, f"the gate never opened: {state}"
+        assert native.get_alpha(overlay) == ALPHA, (
+            "the alpha is confirmed by readback before anything may be shown")
+
         seen = native.read_game_window(unaware_standin)
         assert seen.client is not None
         placement = follow_decision(
             GameWindow(found=True, minimized=False, client=seen.client))
 
-        outcome = placer.apply(overlay, placement, game_hwnd=unaware_standin)
+        outcome = placer.apply(overlay, want(placement), game_hwnd=unaware_standin)
         assert outcome is not None
         assert outcome.ok is True, f"placement was not proved: {outcome}"
         assert outcome.corrected is False, (

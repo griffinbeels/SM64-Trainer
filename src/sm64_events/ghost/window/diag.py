@@ -92,6 +92,45 @@ def _plain(value):
     return str(value)
 
 
+class Collapsing:
+    """A recorder that folds identical consecutive rows into one with a count.
+
+    Written for the page watch, which asks the page ten times a second. Logging
+    only a CHANGE was the mistake that made his second try unreadable: one row
+    said `said: null`, and "never asked", "raised every time" and "answered no"
+    were indistinguishable in it. Logging every poll instead would be 36,000
+    rows an hour.
+
+    So: the first of every distinct row is always written, and a run of
+    identical ones is closed by a single row carrying `repeated`. A long steady
+    run is flushed every `flush_every` so it is never invisible for long.
+    """
+
+    def __init__(self, record=None, flush_every: int = 100):
+        self._record = record or globals()["record"]
+        self._flush_every = flush_every
+        self._key = None
+        self._pending: tuple | None = None
+        self._repeats = 0
+
+    def __call__(self, event: str, **fields):
+        key = (event, json.dumps(_plain(fields), sort_keys=True, default=str))
+        if key == self._key:
+            self._repeats += 1
+            if self._repeats >= self._flush_every:
+                self.flush()
+            return None
+        self.flush()
+        self._key, self._pending, self._repeats = key, (event, fields), 0
+        return self._record(event, **fields)
+
+    def flush(self) -> None:
+        if self._repeats and self._pending is not None:
+            event, fields = self._pending
+            self._record(event, **{**fields, "repeated": self._repeats})
+        self._repeats = 0
+
+
 def _trim(path: Path) -> None:
     kept = path.read_text(encoding="utf-8").splitlines()[-MAX_RECORDS:]
     path.write_text("".join(line + "\n" for line in kept),

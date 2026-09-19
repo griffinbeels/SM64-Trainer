@@ -138,10 +138,14 @@ def follow_decision(game: GameWindow | None, *, wanted_visible: bool = True,
         return Placement(show=False, rect=None, reason="minimized")
     if not game.foreground:
         return Placement(show=False, rect=None, reason="not_foreground")
-    if not presentable:
-        return Placement(show=False, rect=None, reason="no_footage")
     client = game.client
     if (client is None or client.width < MIN_PICTURE_SIDE
             or client.height < MIN_PICTURE_SIDE):
         return Placement(show=False, rect=None, reason="too_small")
+    if not presentable:
+        # The rectangle is carried even though the ghost stays off. This is
+        # the one refusal where the window HAS somewhere to be, and the other
+        # visibility strategy (`visibility.py`) needs that somewhere to put a
+        # fully transparent window while the page reaches its first frame.
+        return Placement(show=False, rect=client, reason="no_footage")
     return Placement(show=True, rect=client, reason="follow")

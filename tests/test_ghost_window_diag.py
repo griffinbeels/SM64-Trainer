@@ -73,6 +73,52 @@ def test_a_log_that_cannot_be_written_never_stops_the_overlay(monkeypatch,
     assert diag.record("decision", show=False, reason="gone") is None
 
 
+def test_no_test_can_reach_the_checkouts_own_ghost_log(tmp_path):
+    """His second try was read off `data/ghost_window.jsonl`, and that file
+    carried rows from test runs on ports 8099 and 8123 interleaved with his
+    own -- `GhostSession` writes a row every time it starts or ends the
+    window, so every session test appended to the dev checkout's copy. The
+    shared conftest now roots it under the test's own tmp dir, the same move
+    it makes for the UI log. Mutation-proved: drop that fixture and this test
+    reads the repo path."""
+    assert diag.log_path().is_relative_to(tmp_path), diag.log_path()
+
+
+# --- keeping a ten-times-a-second log readable ------------------------------
+
+def test_a_run_of_identical_rows_becomes_one_row_and_a_count():
+    written = []
+    fold = diag.Collapsing(record=lambda event, **fields: written.append(
+        {"event": event, **fields}))
+    for _ in range(5):
+        fold("page_poll", state="raised", detail="timeout")
+    fold("page_poll", state="status", detail=None)
+    assert [entry["state"] for entry in written] == ["raised", "raised", "status"]
+    assert written[1]["repeated"] == 4
+
+
+def test_the_first_row_of_every_kind_is_always_written():
+    """The bound may never cost a KIND of answer: that is what made his
+    second try unreadable."""
+    written = []
+    fold = diag.Collapsing(record=lambda event, **fields: written.append(
+        {"event": event, **fields}))
+    for state in ("no_window", "raised", "nothing", "status", "no_window"):
+        fold("page_poll", state=state)
+    assert [entry["state"] for entry in written if "repeated" not in entry] == [
+        "no_window", "raised", "nothing", "status", "no_window"]
+
+
+def test_a_long_steady_run_is_not_invisible_for_long():
+    written = []
+    fold = diag.Collapsing(record=lambda event, **fields: written.append(
+        {"event": event, **fields}), flush_every=10)
+    for _ in range(25):
+        fold("page_poll", state="raised")
+    counts = [entry["repeated"] for entry in written if "repeated" in entry]
+    assert counts == [10, 10], "a run that never ends still lands periodically"
+
+
 def test_the_childs_own_stream_is_kept_verbatim(log_file):
     """What the session forwards: the child's event exactly as it printed it,
     which is all that survives when the child dies before writing itself."""

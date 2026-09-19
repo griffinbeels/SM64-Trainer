@@ -18,6 +18,7 @@ import pytest
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.ghost.window import diag
 from sm64_events.ghost.window.child import (
+    PAGE_SAMPLE_EVERY,
     PAGE_STALE_S,
     ControlPlane,
     FollowLoop,
@@ -27,7 +28,15 @@ from sm64_events.ghost.window.child import (
     run_control_loop,
 )
 from sm64_events.ghost.window.geometry import GameWindow, Placement, Rect
-from sm64_events.ghost.window.host import NullHost, WebviewHost
+from sm64_events.ghost.window.host import (
+    NOTHING,
+    NO_WINDOW,
+    RAISED,
+    STATUS,
+    NullHost,
+    PageAnswer,
+    WebviewHost,
+)
 
 GHOST_URL = "http://127.0.0.1:8065/ui/ghost/index.html?kind=star&entity_key=bob-1"
 OTHER_URL = "http://127.0.0.1:8065/ui/ghost/index.html?kind=segment&entity_key=s1"
@@ -107,7 +116,7 @@ def test_the_child_ends_when_its_parent_goes_away():
 def test_the_follow_loop_places_the_overlay_once_per_change():
     seen = []
     game = [GameWindow(found=True, minimized=False, client=PICTURE)]
-    loop = FollowLoop(observe=lambda: game[0], apply=seen.append,
+    loop = FollowLoop(observe=lambda: game[0], apply=lambda placement: bool(seen.append(placement)) or True,
                       wanted=lambda: True)
 
     first = loop.tick()
@@ -123,7 +132,7 @@ def test_the_follow_loop_places_the_overlay_once_per_change():
 
 def test_the_follow_loop_hides_when_project64_is_minimized_and_returns_after():
     game = [GameWindow(found=True, minimized=False, client=PICTURE)]
-    loop = FollowLoop(observe=lambda: game[0], apply=lambda _p: None,
+    loop = FollowLoop(observe=lambda: game[0], apply=lambda _p: True,
                       wanted=lambda: True)
     loop.tick()
     game[0] = GameWindow(found=True, minimized=True, client=PICTURE)
@@ -136,7 +145,7 @@ def test_the_follow_loop_obeys_the_wanted_switch():
     wanted = [False]
     loop = FollowLoop(
         observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
-        apply=lambda _p: None, wanted=lambda: wanted[0])
+        apply=lambda _p: True, wanted=lambda: wanted[0])
     assert loop.tick().reason == "hidden_by_request"
     wanted[0] = True
     assert loop.tick().show is True
@@ -150,29 +159,60 @@ def test_the_follow_loop_places_exactly_what_it_read():
     window half again as big on his screen."""
     loop = FollowLoop(
         observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
-        apply=lambda _p: None, wanted=lambda: True)
+        apply=lambda _p: True, wanted=lambda: True)
     assert loop.tick().rect == PICTURE
 
 
-def test_the_follow_loop_settles_the_opacity_every_tick():
+def test_the_loop_prepares_the_window_every_tick():
     """A control line only records the opacity; this thread is what applies
-    it. That has to happen whether or not the placement changed, or an
-    opacity change made while the window has not moved never lands."""
+    it. Preparing has to happen whether or not the placement changed, or an
+    opacity change made while the window has not moved never lands -- and the
+    window's styles would wait for the next decision, which is what left his
+    second try unstyled for 4.1 seconds."""
     ticks = []
     loop = FollowLoop(
         observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
-        apply=lambda _p: None, wanted=lambda: True,
-        settle=lambda: ticks.append(1))
+        apply=lambda _p: True, wanted=lambda: True,
+        prepare=lambda _p: bool(ticks.append(1)) or True)
     loop.tick()
     loop.tick()
-    assert len(ticks) == 2, "the second tick changed no placement but must settle"
+    assert len(ticks) == 2, "the second tick changed no placement but must prepare"
+
+
+def test_a_decision_taken_before_the_window_was_ready_is_not_remembered():
+    """The structural fault of his second try: the loop stored the placement
+    and THEN tried to apply it, so a tick that found no window handle counted
+    as done and nothing ran again until the decision changed."""
+    applied = []
+    window_ready = [False]
+    loop = FollowLoop(
+        observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
+        apply=lambda placement: bool(applied.append(placement)) or True,
+        wanted=lambda: True, prepare=lambda _p: window_ready[0])
+    assert loop.tick() is None
+    assert loop.tick() is None
+    assert applied == []
+
+    window_ready[0] = True
+    assert loop.tick().show is True, "the same decision is applied once ready"
+    assert len(applied) == 1
+
+
+def test_an_apply_that_did_not_happen_is_retried():
+    done = [False]
+    loop = FollowLoop(
+        observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
+        apply=lambda _p: done[0], wanted=lambda: True)
+    assert loop.tick() is None
+    done[0] = True
+    assert loop.tick() is not None
 
 
 def test_the_follow_loop_hides_when_he_is_using_another_app():
     away = GameWindow(found=True, minimized=False, client=PICTURE,
                       foreground=False)
     game = [away]
-    loop = FollowLoop(observe=lambda: game[0], apply=lambda _p: None,
+    loop = FollowLoop(observe=lambda: game[0], apply=lambda _p: True,
                       wanted=lambda: True)
     assert loop.tick().reason == "not_foreground"
     game[0] = GameWindow(found=True, minimized=False, client=PICTURE)
@@ -202,7 +242,7 @@ def test_the_follow_loop_keeps_the_ghost_off_until_the_page_has_a_picture():
     has_picture = [False]
     loop = FollowLoop(
         observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
-        apply=lambda _p: None, wanted=lambda: True,
+        apply=lambda _p: True, wanted=lambda: True,
         presentable=lambda: has_picture[0])
     assert loop.tick().reason == "no_footage"
     has_picture[0] = True
@@ -215,12 +255,16 @@ class StubPage:
     """A host whose page answers whatever a test wants, including nothing."""
 
     def __init__(self, answer=None):
-        self.answer = answer
+        self.answer = answer if answer is not None else PageAnswer(state=NOTHING)
         self.asked = 0
 
     def page_status(self):
         self.asked += 1
         return self.answer
+
+
+def a_status(**fields):
+    return PageAnswer(state=STATUS, status=fields)
 
 
 def a_watch(answer=None, clock=None):
@@ -232,34 +276,70 @@ def a_watch(answer=None, clock=None):
 
 
 def test_a_page_with_a_picture_is_presentable():
-    watch, records = a_watch({"presentable": True, "video_time": 1.25})
+    watch, records = a_watch(a_status(presentable=True, video_time=1.25))
     watch.poll()
     assert watch.presentable() is True
-    said = next(entry for entry in records if entry["event"] == "page_status")
-    assert said["presentable"] is True
+    said = next(entry for entry in records if entry["event"] == "page_poll")
+    assert said["presentable"] is True and said["state"] == STATUS
     assert said["said"]["video_time"] == 1.25, "the page's own answer is kept"
 
 
-@pytest.mark.parametrize("answer", [
-    None,                       # the page could not be asked at all
-    {},                         # an older build with no such field
-    {"presentable": False},     # the page saying it has nothing yet
-    {"presentable": None},
-    "not a dict",
+@pytest.mark.parametrize("answer,why", [
+    (PageAnswer(state=NO_WINDOW), "there is no window to ask yet"),
+    (PageAnswer(state=RAISED, detail="WebViewException: timeout"),
+     "evaluate_js raised"),
+    (PageAnswer(state=NOTHING), "the page answered nothing"),
+    (a_status(), "an older build of the page with no such field"),
+    (a_status(presentable=False), "the page says it has nothing yet"),
+    (a_status(presentable=None), "the page says it does not know"),
 ])
-def test_anything_short_of_a_clear_yes_keeps_the_ghost_off(answer):
+def test_anything_short_of_a_clear_yes_keeps_the_ghost_off(answer, why):
     """"I do not know yet" has to mean "stay off": the alternative is a dark
     sheet over his game while the page works out whether it has footage."""
     watch, _records = a_watch(answer)
     watch.poll()
-    assert watch.presentable() is False
+    assert watch.presentable() is False, why
+
+
+def test_every_kind_of_failure_is_told_apart_in_the_log():
+    """His second try carried ONE page row, `said: null`, and "never asked",
+    "raised every time" and "answered no" were indistinguishable in it.
+
+    Driven through the REAL collapsing recorder, and through ONE watch, so
+    this proves what the file will actually contain: four kinds in a row must
+    survive the bound, not be folded into each other.
+    """
+    written = []
+    fold = diag.Collapsing(record=lambda event, **fields: written.append(
+        {"event": event, **fields}))
+    page = StubPage(PageAnswer(state=NO_WINDOW))
+    watch = PageWatch(page, clock=lambda: 0.0, record=fold)
+
+    for answer in (PageAnswer(state=NO_WINDOW),
+                   PageAnswer(state=RAISED, detail="WebViewException: timeout"),
+                   PageAnswer(state=NOTHING),
+                   a_status(presentable=False),
+                   a_status(presentable=True)):
+        page.answer = answer
+        watch.poll()
+    fold.flush()
+
+    rows = [entry for entry in written if "repeated" not in entry]
+    assert [entry["state"] for entry in rows] == [
+        NO_WINDOW, RAISED, NOTHING, STATUS, STATUS], written
+    assert [entry["presentable"] for entry in rows][-2:] == [False, True], (
+        "two page answers that differ only in the flag are still two rows")
+    raised = rows[1]
+    assert raised["level"] == "error"
+    assert "WebViewException" in raised["detail"], (
+        "the exception text is kept; a swallowed one is why this was unreadable")
 
 
 def test_a_page_that_stopped_answering_is_not_presentable():
     """pywebview's evaluate_js waits forever on a wedged page, so the answer
     simply stops arriving rather than turning into a no. A stale one is a no."""
     now = [100.0]
-    watch, _records = a_watch({"presentable": True}, clock=lambda: now[0])
+    watch, _records = a_watch(a_status(presentable=True), clock=lambda: now[0])
     watch.poll()
     assert watch.presentable() is True
     now[0] += PAGE_STALE_S / 2
@@ -269,18 +349,21 @@ def test_a_page_that_stopped_answering_is_not_presentable():
 
 
 def test_the_ghost_is_never_asked_before_the_page_has_answered_once():
-    watch, _records = a_watch({"presentable": True})
+    watch, _records = a_watch(a_status(presentable=True))
     assert watch.presentable() is False, "nothing has been asked yet"
 
 
-def test_only_a_change_of_answer_is_written_down():
-    watch, records = a_watch({"presentable": True})
-    for _ in range(3):
+def test_a_steady_page_still_leaves_periodic_proof_it_is_running():
+    """Every poll is recorded, but the raw status carries a moving video time,
+    so repeating it ten times a second would defeat the collapsing. It rides
+    the first row of a run and one sample per PAGE_SAMPLE_EVERY after that."""
+    watch, records = a_watch(a_status(presentable=True, video_time=2.0))
+    for _ in range(PAGE_SAMPLE_EVERY + 1):
         watch.poll()
-    watch._host.answer = {"presentable": False}
-    watch.poll()
-    flips = [entry for entry in records if entry["event"] == "page_status"]
-    assert [entry["presentable"] for entry in flips] == [True, False]
+    polls = [entry for entry in records if entry["event"] == "page_poll"]
+    assert len(polls) == PAGE_SAMPLE_EVERY + 1, "every poll is offered"
+    with_status = [entry for entry in polls if entry["said"] is not None]
+    assert len(with_status) == 2, "the first, and one periodic sample"
 
 
 def test_a_page_that_throws_does_not_end_the_watch():
@@ -305,20 +388,24 @@ def test_a_page_that_throws_does_not_end_the_watch():
 
 # --- the page background ----------------------------------------------------
 
-def test_the_background_handover_is_attempted_exactly_once():
-    """pywebview's `transparent=True` shows and focuses the window on every
-    navigation (edgechromium.py), so the WebView2 control is reached by hand
-    instead. Whatever comes back, it is asked once and logged once."""
+def test_the_background_handover_keeps_trying_until_it_works():
+    """It was one-shot, and in his second try it fired a millisecond before
+    the window handle existed, found no control and gave up for the session.
+    pywebview's `transparent=True` is not the alternative: it shows and
+    focuses the window on every navigation (edgechromium.py)."""
     host = WebviewHost()
     assert host.use_transparent_page_background() == "unreachable"
-    assert host.use_transparent_page_background() is None, (
-        "one line in the log, not one per follow tick")
+    assert host.use_transparent_page_background() == "unreachable", (
+        "a window that did not exist yet is asked again, not given up on")
 
 
 def test_the_null_backend_answers_both_page_questions():
     host = NullHost()
-    assert host.page_status() == {"presentable": True}
+    answer = host.page_status()
+    assert answer.state == STATUS and answer.presentable is True
     assert host.use_transparent_page_background() == "no_window"
+    assert host.hosts_window is False, (
+        "there is no window to make ready, so the gate must not wait for one")
 
 
 # --- the real child process, with no window anywhere ------------------------
