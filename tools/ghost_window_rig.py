@@ -61,6 +61,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -86,6 +87,7 @@ from sm64_events.ghost.window.geometry import (  # noqa: E402
 from sm64_events.ghost.window.protocol import alpha_byte  # noqa: E402
 
 PAGE = Path(__file__).resolve().parent / "ghost_rig_page.html"
+COLOURKEY_PAGE = Path(__file__).resolve().parent / "ghost_rig_colourkey_page.html"
 
 #: The stand-in's title. Titled like the emulator on purpose -- it is what the
 #: overlay's own window lookup would match -- and never shown, so it can never
@@ -122,6 +124,23 @@ FOREGROUND_POLL_S = 5.0
 
 PW_RENDERFULLCONTENT = 0x00000002
 DIB_RGB_COLORS = 0
+SRCCOPY = 0x00CC0020
+#: Included in a screen capture only when the older layered-window path needs
+#: it. Not used by default: it forces a desktop redraw, which on some machines
+#: is a visible flash, and this rig may not be seen.
+CAPTUREBLT = 0x40000000
+LWA_COLORKEY = 0x00000001
+
+#: The key colour punched out of the window. Bright and unlike anything in the
+#: footage on purpose: a BLACK key would punch holes through the dark parts of
+#: Hazy Maze Cave, which is why `host.py` never shipped one. An only-Mario
+#: picture owns every background pixel, so the key can be any colour at all.
+COLOUR_KEY_RGB = (255, 0, 255)
+
+#: The most the rig will ever let a window be on his screen: 3/255 is about
+#: 1.2 %, which moves an unpunched bright region by one to three levels per
+#: channel -- readable by a capture, not by a person.
+MAX_SHOW_ALPHA = 3
 GW_HWNDFIRST = 0
 GW_HWNDNEXT = 2
 PM_REMOVE = 0x0001
@@ -164,17 +183,19 @@ def style_report(asked: int, kept: int) -> dict:
             "missing_required": missing, "equal": asked == kept}
 
 
-def parse_tick_title(title: str) -> dict | None:
-    """One `RIG ...` window title -> the numbers in it. None if it is not one.
+def parse_tick_title(title: str, prefix: str = "RIG ") -> dict | None:
+    """One rig window title -> the numbers in it. None if it is not one.
 
-    The page writes `key=value` pairs and nothing else, so an unparsed title is
-    a page that has not reported yet rather than a format to guess at.
+    Every rig page writes `key=value` pairs behind a short prefix and nothing
+    else, so an unparsed title is a page that has not reported yet rather than
+    a format to guess at. The prefix says which page is being read: `RIG` for
+    the frame counter, `RK` for the colour-key regions.
     """
     text = (title or "").strip()
-    if not text.startswith("RIG "):
+    if not text.startswith(prefix):
         return None
     out: dict = {}
-    for token in text[4:].split():
+    for token in text[len(prefix):].split():
         name, _, value = token.partition("=")
         if not name or not _:
             continue
@@ -235,6 +256,47 @@ def summarize_pixels(data: bytes, width: int, height: int,
             "pixel_count": int(width) * int(height)}
 
 
+def still_block(moved, brightness, width: int, height: int,
+                step: int = 40) -> tuple[int, int] | None:
+    """The darkest `width` x `height` block in which nothing moved. Pure.
+
+    Given a map of which pixels changed between two screen captures and a map
+    of how bright each one is, both as 2-D arrays. Summed-area tables rather
+    than a loop over candidates: this searches a whole multi-monitor desktop,
+    and his is mostly live video, so the answer is usually a small corner that
+    a coarse hunt would walk straight past.
+
+    Returns the block's top-left inside the arrays, or None if every block has
+    something moving in it.
+    """
+    rows, columns = moved.shape
+    if height > rows or width > columns:
+        return None
+    changed = np.pad(np.asarray(moved, dtype=np.int64).cumsum(0).cumsum(1),
+                     ((1, 0), (1, 0)))
+    light = np.pad(np.asarray(brightness, dtype=np.int64).cumsum(0).cumsum(1),
+                   ((1, 0), (1, 0)))
+
+    def blocks(table, tops, lefts):
+        return (table[np.ix_(tops + height, lefts + width)]
+                - table[np.ix_(tops, lefts + width)]
+                - table[np.ix_(tops + height, lefts)]
+                + table[np.ix_(tops, lefts)])
+
+    tops = np.arange(0, rows - height + 1, step)
+    lefts = np.arange(0, columns - width + 1, step)
+    if not tops.size or not lefts.size:
+        return None
+    motion = blocks(changed, tops, lefts)
+    still = motion == 0
+    if not still.any():
+        return None
+    totals = blocks(light, tops, lefts).astype(np.float64)
+    totals[~still] = np.inf
+    index = int(np.argmin(totals))
+    return (int(lefts[index % lefts.size]), int(tops[index // lefts.size]))
+
+
 def rects_intersect(one: Rect, other: Rect) -> bool:
     return (one.x < other.x + other.width and other.x < one.x + one.width
             and one.y < other.y + other.height and other.y < one.y + one.height)
@@ -272,6 +334,101 @@ def checked_child_opacity(value: float) -> float:
             f"the rig may only start the overlay child fully transparent; "
             f"opacity {value!r} is alpha {alpha}")
     return float(value)
+
+
+def colour_ref(rgb: tuple[int, int, int]) -> int:
+    """An RGB triple as Windows wants it: COLORREF is 0x00BBGGRR.
+
+    Written out rather than assumed because a colour key that is byte-swapped
+    keys the wrong colour and punches nothing, which looks exactly like a
+    colour key that does not work.
+    """
+    red, green, blue = (int(part) & 0xFF for part in rgb)
+    return (blue << 16) | (green << 8) | red
+
+
+def grid_cells(rect: Rect, columns: int = 3, rows: int = 2) -> dict[str, Rect]:
+    """The page's regions as rectangles, named r1..rN, left to right.
+
+    The page lays its regions out as a grid filling the viewport exactly, so
+    the rig can address each one by arithmetic on the window rectangle instead
+    of asking the page for geometry over a title that has no room for it.
+    """
+    out: dict[str, Rect] = {}
+    for row in range(rows):
+        for column in range(columns):
+            left = rect.x + round(column * rect.width / columns)
+            right = rect.x + round((column + 1) * rect.width / columns)
+            top = rect.y + round(row * rect.height / rows)
+            bottom = rect.y + round((row + 1) * rect.height / rows)
+            out[f"r{row * columns + column + 1}"] = Rect(
+                x=left, y=top, width=right - left, height=bottom - top)
+    return out
+
+
+def split_halves(cell: Rect) -> dict[str, Rect]:
+    """A region's left and right halves.
+
+    The video and the canvas each carry an opaque half and a transparent half,
+    so one region answers both "does it reach the screen" and "is it punched
+    out" -- and a region that shows nothing at all is told apart from one that
+    is see-through everywhere.
+    """
+    middle = cell.x + cell.width // 2
+    return {"left": Rect(x=cell.x, y=cell.y, width=middle - cell.x,
+                         height=cell.height),
+            "right": Rect(x=middle, y=cell.y,
+                          width=cell.x + cell.width - middle,
+                          height=cell.height)}
+
+
+def inset(rect: Rect, fraction: float = 0.4) -> Rect:
+    """A smaller box at the centre of a region.
+
+    Sampled instead of the whole region because a region's edge is where a
+    rounded grid line, a scrollbar or the neighbour's antialiasing lands, and
+    one stray column would move a mean that has to resolve single levels.
+    """
+    width = max(1, int(rect.width * fraction))
+    height = max(1, int(rect.height * fraction))
+    return Rect(x=rect.x + (rect.width - width) // 2,
+                y=rect.y + (rect.height - height) // 2,
+                width=width, height=height)
+
+
+def region_delta(before: bytes, after: bytes, width: int, height: int,
+                 box: Rect, origin: Rect) -> dict:
+    """How much one region of the screen moved, per channel.
+
+    `box` is in screen coordinates and `origin` is the captured rectangle, so
+    a region is addressed the same way whether it came from the grid or from
+    one half of it. The mean is what answers the question -- a punched region
+    does not move at all -- and the maximum and the changed fraction are kept
+    beside it, because at an alpha of 3 a mean can round to zero while some
+    pixels did move.
+    """
+    wanted = int(width) * int(height) * 4
+    if len(before) < wanted or len(after) < wanted or width <= 0 or height <= 0:
+        return {"ok": False, "reason": "short_buffer"}
+    left, top = box.x - origin.x, box.y - origin.y
+    right, bottom = left + box.width, top + box.height
+    if left < 0 or top < 0 or right > width or bottom > height:
+        return {"ok": False, "reason": "box_outside_capture"}
+    shape = (height, width, 4)
+    first = np.frombuffer(before[:wanted], dtype=np.uint8).reshape(shape)
+    second = np.frombuffer(after[:wanted], dtype=np.uint8).reshape(shape)
+    one = first[top:bottom, left:right, :3].astype(np.int16)
+    two = second[top:bottom, left:right, :3].astype(np.int16)
+    difference = two - one
+    moved = np.abs(difference).max(axis=2)
+    return {"ok": True,
+            # BGRA off the wire, reported as RGB so it reads like a colour.
+            "mean_delta_rgb": [round(float(difference[:, :, 2].mean()), 3),
+                               round(float(difference[:, :, 1].mean()), 3),
+                               round(float(difference[:, :, 0].mean()), 3)],
+            "max_abs_delta": int(moved.max()),
+            "changed_fraction": round(float((moved > 0).mean()), 4),
+            "pixels": int(box.width) * int(box.height)}
 
 
 def rect_inside(outer: Rect, inner: Rect) -> bool:
@@ -420,6 +577,20 @@ def _win32():
     user32.DefWindowProcW.argtypes = [wt.HWND, ctypes.c_uint, wt.WPARAM, wt.LPARAM]
     user32.GetSystemMetrics.restype = ctypes.c_int
     user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.EnumDisplayMonitors.restype = wt.BOOL
+    user32.EnumDisplayMonitors.argtypes = [wt.HDC, ctypes.c_void_p,
+                                           _MONITORENUMPROC, wt.LPARAM]
+    user32.SetLayeredWindowAttributes.restype = wt.BOOL
+    user32.SetLayeredWindowAttributes.argtypes = [wt.HWND, wt.COLORREF,
+                                                  ctypes.c_ubyte, wt.DWORD]
+    user32.GetLayeredWindowAttributes.restype = wt.BOOL
+    user32.GetLayeredWindowAttributes.argtypes = [
+        wt.HWND, ctypes.POINTER(wt.COLORREF), ctypes.POINTER(ctypes.c_ubyte),
+        ctypes.POINTER(wt.DWORD)]
+    gdi32.BitBlt.restype = wt.BOOL
+    gdi32.BitBlt.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                             ctypes.c_int, wt.HDC, ctypes.c_int, ctypes.c_int,
+                             wt.DWORD]
     gdi32.CreateCompatibleDC.restype = wt.HDC
     gdi32.CreateCompatibleDC.argtypes = [wt.HDC]
     gdi32.CreateCompatibleBitmap.restype = wt.HBITMAP
@@ -495,6 +666,48 @@ def zorder_list() -> list[int]:
     return out
 
 
+_MONITORENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HMONITOR, wt.HDC,
+                                      ctypes.POINTER(wt.RECT), wt.LPARAM)
+
+
+def monitor_rects() -> list[Rect]:
+    """Every physical monitor's rectangle, in the caller's DPI context.
+
+    The virtual screen is the BOUNDING BOX of the monitors, so on a desktop
+    whose screens are not aligned it contains rectangles no monitor covers.
+    Such a hole captures as pure black and never changes -- perfectly still,
+    perfectly dark, and therefore exactly what a hunt for a quiet corner
+    settles on (measured 2026-09-19: the probe window was placed at
+    (-1880,-147), composited nowhere, and every region read zero).
+    """
+    user32, _ = _win32()
+    found: list[Rect] = []
+
+    def visit(_monitor, _dc, area, _lparam):
+        rect = area.contents
+        found.append(Rect(x=rect.left, y=rect.top,
+                          width=rect.right - rect.left,
+                          height=rect.bottom - rect.top))
+        return True
+
+    user32.EnumDisplayMonitors(None, None, _MONITORENUMPROC(visit), 0)
+    return found
+
+
+def coverage_mask(shape: tuple[int, int], origin: Rect,
+                  rects: list[Rect]):
+    """A boolean map of which pixels of a capture a monitor actually covers."""
+    covered = np.zeros(shape, dtype=bool)
+    for rect in rects:
+        top = max(0, rect.y - origin.y)
+        left = max(0, rect.x - origin.x)
+        bottom = min(shape[0], rect.y - origin.y + rect.height)
+        right = min(shape[1], rect.x - origin.x + rect.width)
+        if bottom > top and right > left:
+            covered[top:bottom, left:right] = True
+    return covered
+
+
 def virtual_screen() -> Rect:
     user32, _ = _win32()
     return Rect(x=user32.GetSystemMetrics(76), y=user32.GetSystemMetrics(77),
@@ -539,6 +752,109 @@ def capture_window(hwnd: int) -> dict:
         gdi32.DeleteObject(bitmap)
         gdi32.DeleteDC(memory_dc)
         user32.ReleaseDC(None, screen_dc)
+
+
+def _dib_header(width: int, height: int) -> "_BITMAPINFO":
+    info = _BITMAPINFO()
+    info.bmiHeader.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+    info.bmiHeader.biWidth = width
+    info.bmiHeader.biHeight = -height  # top-down
+    info.bmiHeader.biPlanes = 1
+    info.bmiHeader.biBitCount = 32
+    info.bmiHeader.biCompression = 0
+    return info
+
+
+def capture_screen(rect: Rect, *, capture_layered: bool = False) -> bytes | None:
+    """What the SCREEN shows over one rectangle, composed, as raw BGRA.
+
+    Not `PrintWindow`: that asks a window to draw ITSELF, which cannot answer
+    whether a pixel of it reached the desktop. Whether the window's pixels are
+    absent from the composed result is the entire question here, so the
+    reading has to come from the composed result.
+
+    `capture_layered` adds CAPTUREBLT, which is the old way of pulling layered
+    windows into a screen blit. It is off by default because it forces a
+    desktop redraw that can flash, and nothing this rig does may be seen.
+    """
+    user32, gdi32 = _win32()
+    if rect.width <= 0 or rect.height <= 0:
+        return None
+    screen_dc = user32.GetDC(None)
+    memory_dc = gdi32.CreateCompatibleDC(screen_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(screen_dc, rect.width, rect.height)
+    previous = gdi32.SelectObject(memory_dc, bitmap)
+    try:
+        flags = SRCCOPY | (CAPTUREBLT if capture_layered else 0)
+        if not gdi32.BitBlt(memory_dc, 0, 0, rect.width, rect.height,
+                            screen_dc, rect.x, rect.y, flags):
+            return None
+        info = _dib_header(rect.width, rect.height)
+        buffer = (ctypes.c_char * (rect.width * rect.height * 4))()
+        if not gdi32.GetDIBits(memory_dc, bitmap, 0, rect.height, buffer,
+                               ctypes.byref(info), DIB_RGB_COLORS):
+            return None
+        return bytes(buffer)
+    finally:
+        gdi32.SelectObject(memory_dc, previous)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(memory_dc)
+        user32.ReleaseDC(None, screen_dc)
+
+
+def backdrop_report(rect: Rect, *, gap_s: float = 1.0,
+                    capture_layered: bool = False) -> dict:
+    """Is what is already on screen here holding still?
+
+    Everything downstream is a BEFORE/AFTER difference, so a backdrop that
+    repaints by itself -- a clock, a blinking caret, a video -- turns into a
+    delta that reads exactly like the window showing through. Two captures a
+    second apart have to be byte-identical before anything is shown.
+    """
+    first = capture_screen(rect, capture_layered=capture_layered)
+    if first is None:
+        return {"static": False, "reason": "capture_failed"}
+    time.sleep(gap_s)
+    second = capture_screen(rect, capture_layered=capture_layered)
+    if second is None:
+        return {"static": False, "reason": "capture_failed"}
+    if first == second:
+        return {"static": True, "bytes": len(first)}
+    moved = region_delta(first, second, rect.width, rect.height, rect, rect)
+    return {"static": False, "reason": "backdrop moved between two captures",
+            "drift": moved}
+
+
+def set_colour_key(hwnd: int, rgb: tuple[int, int, int], alpha: int) -> bool:
+    """Punch one colour out of the window AND give the rest an alpha.
+
+    `LWA_COLORKEY | LWA_ALPHA` together: every pixel that is exactly the key
+    colour is absent from the screen, and everything else is blended at the
+    alpha. This is the call `ghost/window/host.py` names and never made -- the
+    product's own `native.set_alpha` passes LWA_ALPHA alone -- so the rig makes
+    it here rather than changing product code to ask the question.
+    """
+    user32, _ = _win32()
+    return bool(user32.SetLayeredWindowAttributes(
+        wt.HWND(hwnd), wt.COLORREF(colour_ref(rgb)), ctypes.c_ubyte(alpha),
+        wt.DWORD(LWA_COLORKEY | style.LWA_ALPHA)))
+
+
+def get_colour_key(hwnd: int) -> dict:
+    """The key, the alpha and the flags the window actually kept."""
+    user32, _ = _win32()
+    key, alpha, flags = wt.COLORREF(), ctypes.c_ubyte(), wt.DWORD()
+    ok = user32.GetLayeredWindowAttributes(
+        wt.HWND(hwnd), ctypes.byref(key), ctypes.byref(alpha),
+        ctypes.byref(flags))
+    if not ok:
+        return {"ok": False}
+    value = int(key.value)
+    return {"ok": True, "alpha": int(alpha.value), "flags": int(flags.value),
+            "key_colorref": f"{value:#08x}",
+            "key_rgb": [value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF],
+            "keyed": bool(flags.value & LWA_COLORKEY),
+            "alpha_applied": bool(flags.value & style.LWA_ALPHA)}
 
 
 def read_client_rect(hwnd: int, context: int) -> Rect | None:
@@ -756,6 +1072,43 @@ def ensure_clip(path: Path, *, seconds: int = 4, fps: int = 30,
     return {"path": str(path), "made": True, "bytes": path.stat().st_size}
 
 
+def ensure_alpha_clip(path: Path) -> dict:
+    """Two seconds of VP9-with-alpha WebM: white on the left, nothing on the right.
+
+    Made rather than found, because no clip in this repo has an alpha channel.
+    The two halves are what let one region answer both questions at once: the
+    opaque half proves the video reached the screen, and the transparent half
+    is the thing being asked about.
+
+    The alpha does not ride in the picture: WebM carries it as a second VP9
+    stream in each block's BlockAdditional, which is what `alpha_mode=1` in the
+    container means. ffmpeg writes it and will not read it back, so the
+    encoder's own decode is NOT a check -- only a browser is.
+    """
+    from sm64_events.core.paths import bundled_ffmpeg
+
+    if path.exists() and path.stat().st_size > 0:
+        return {"path": str(path), "made": False, "bytes": path.stat().st_size}
+    ffmpeg = bundled_ffmpeg() or shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {"path": str(path), "made": False, "error": "no ffmpeg found"}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=white@1:s=64x96:d=2:r=30,format=yuva420p",
+        "-f", "lavfi", "-i", "color=c=white@0:s=64x96:d=2:r=30,format=yuva420p",
+        "-filter_complex", "[0:v][1:v]hstack=inputs=2,format=yuva420p[v]",
+        "-map", "[v]", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
+        "-auto-alt-ref", "0", "-b:v", "300k", str(path)]
+    finished = subprocess.run(command, capture_output=True, text=True,
+                              check=False, **quiet_spawn_kwargs())
+    if finished.returncode != 0 or not path.exists():
+        return {"path": str(path), "made": False,
+                "error": (finished.stderr or "ffmpeg failed")[:400]}
+    return {"path": str(path), "made": True, "bytes": path.stat().st_size,
+            "ffmpeg": str(ffmpeg)}
+
+
 def page_url(clip: Path, *, present: str, post: bool) -> str:
     """The counting page with its settings, carried in the FRAGMENT.
 
@@ -793,10 +1146,16 @@ class PageHost:
     once (the alpha of his second try).
     """
 
-    def __init__(self, title: str, url: str, rect: Rect):
+    def __init__(self, title: str, url: str, rect: Rect,
+                 background: str = "#000000"):
         self.title = title
         self.url = url
         self.rect = rect
+        #: What the FORM behind the WebView2 control is painted. Black for the
+        #: counting page, the key colour for the colour-key probe: the form is
+        #: what shows wherever the page and the control paint nothing, so it
+        #: is the surface the key has to punch.
+        self.background = background
         self.window = None
         self._hwnd = 0
 
@@ -879,18 +1238,72 @@ class PageHost:
                 "got": got.as_list() if got else None}
 
     def do_show(self, _message: dict) -> dict:
-        """Shown only at a PROVEN alpha of 0.
+        """Shown only at an alpha that has been READ BACK and is invisible.
 
         The rig proves the readback before it ever sends this; the host refuses
-        anyway, because an instrument that CAN put an opaque window on his
-        screen is not a safe instrument whatever its caller intended.
+        anyway, because an instrument that CAN put a visible window on his
+        screen is not a safe instrument whatever its caller intended. The
+        ceiling is `MAX_SHOW_ALPHA` -- 0 for every experiment but the colour
+        key, which needs a few levels of signal to measure at all.
         """
         hwnd = self.hwnd()
         kept = native.get_alpha(hwnd) if hwnd else None
-        if kept == 0:
+        allowed = kept is not None and 0 <= kept <= MAX_SHOW_ALPHA
+        if allowed:
             native.show_no_activate(hwnd)
-        return {"event": "show", "done": kept == 0, "alpha": kept,
+        return {"event": "show", "done": allowed, "alpha": kept,
+                "ceiling": MAX_SHOW_ALPHA,
                 "visible": native.is_visible(hwnd) if hwnd else False}
+
+    def do_background(self, message: dict) -> dict:
+        """Stop the WebView2 control painting its own background.
+
+        The same call `WebviewHost.use_transparent_page_background()` makes,
+        with one difference that turns out to be the whole difference:
+        `DefaultBackgroundColor` reaches `ICoreWebView2Controller2`, which may
+        only be touched from the control's OWN UI thread. Set from any other
+        thread it throws `InvalidOperationException` wrapping an
+        `E_NOINTERFACE` -- measured here 2026-09-19 from the rig's control
+        thread. The product makes this call from its FOLLOW thread, so it
+        cannot be succeeding there either.
+
+        `Invoke` marshals it, which is what `edgechromium.py` does for every
+        other controller call it makes.
+        """
+        control = self._control()
+        if control is None:
+            return {"event": "background", "result": "unreachable"}
+        direct = bool(message.get("direct"))
+        try:
+            from System import Func, Object
+            from System.Drawing import Color
+
+            def apply():
+                control.DefaultBackgroundColor = Color.Transparent
+                return None
+
+            if direct:
+                apply()
+            else:
+                control.Invoke(Func[Object](apply))
+        except Exception as error:  # noqa: BLE001 - "it refused" is a reading
+            return {"event": "background", "direct": direct,
+                    "result": f"refused: {type(error).__name__}: {error}"}
+        return {"event": "background", "direct": direct,
+                "result": "transparent"}
+
+    def do_colourkey(self, message: dict) -> dict:
+        """Punch the key colour out of the window and set the rest's alpha."""
+        hwnd = self.hwnd()
+        rgb = tuple(message.get("rgb") or COLOUR_KEY_RGB)
+        alpha = int(message.get("alpha", MAX_SHOW_ALPHA))
+        if alpha > MAX_SHOW_ALPHA:
+            return {"event": "colourkey", "refused": "above the show ceiling",
+                    "asked": alpha, "ceiling": MAX_SHOW_ALPHA}
+        taken = set_colour_key(hwnd, rgb, alpha) if hwnd else False
+        return {"event": "colourkey", "taken": bool(taken),
+                "asked_rgb": list(rgb), "asked_alpha": alpha,
+                "kept": get_colour_key(hwnd) if hwnd else None}
 
     def do_hide(self, _message: dict) -> dict:
         hwnd = self.hwnd()
@@ -946,7 +1359,8 @@ class PageHost:
                 "style": self.do_style, "alpha": self.do_alpha,
                 "place": self.do_place, "show": self.do_show,
                 "hide": self.do_hide, "probe": self.do_probe,
-                "source": self.do_source}
+                "source": self.do_source, "background": self.do_background,
+                "colourkey": self.do_colourkey}
 
     # --- the pipe -----------------------------------------------------------
 
@@ -988,7 +1402,7 @@ class PageHost:
             hidden=True, frameless=True, focus=False, resizable=False,
             easy_drag=False, shadow=False, on_top=False, text_select=False,
             zoomable=False, draggable=False, confirm_close=False,
-            background_color="#000000")
+            background_color=self.background)
         threading.Thread(target=self.control_loop, name="rig-host-control",
                          daemon=True).start()
         _host_say({"event": "creating", "pid": os.getpid()})
@@ -998,22 +1412,35 @@ class PageHost:
 
 def run_page_host(args) -> int:
     rect = Rect(*args.rect) if args.rect else Rect(x=0, y=0, width=640, height=480)
-    return PageHost(args.title, args.url, rect).run()
+    return PageHost(args.title, args.url, rect,
+                    background=getattr(args, "background", None) or "#000000").run()
 
 
 class HostProcess:
     """The page host as the rig sees it: one pipe in, named lines out."""
 
-    def __init__(self, url: str, rect: Rect, title: str = RIG_HOST_TITLE):
+    def __init__(self, url: str, rect: Rect, title: str = RIG_HOST_TITLE,
+                 background: str = "#000000"):
         self.title = title
         self.lines: list[str] = []
         self.events: list[dict] = []
+        # `--flag=value` throughout, for the reason `child_command` spells out:
+        # a rectangle on the monitor left of the primary starts with a minus
+        # sign, and argparse reads `--rect -1880,-147,240,160` as a flag with
+        # no value. The host then exits 2 before it can say anything, which
+        # reads exactly like "the window never came up" (measured 2026-09-19,
+        # when the only still corner of his desktop was on the left screen).
         command = [sys.executable, str(Path(__file__).resolve()),
-                   "--role", "page-host", "--url", url, "--title", title,
-                   "--rect", ",".join(str(value) for value in rect.as_list())]
+                   "--role=page-host", f"--url={url}", f"--title={title}",
+                   f"--background={background}",
+                   f"--rect={','.join(str(value) for value in rect.as_list())}"]
+        self.command = command
+        # stderr joins stdout: a host that dies before it can say anything --
+        # a bad argument, a WebView2 that will not start -- otherwise leaves
+        # the rig with a broken pipe and no reason for it.
         self.process = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
             cwd=str(REPO_ROOT), **quiet_spawn_kwargs())
         threading.Thread(target=self._read, name="rig-host-reader",
                          daemon=True).start()
@@ -1026,14 +1453,27 @@ class HostProcess:
                 with contextlib.suppress(ValueError):
                     self.events.append(json.loads(text[len(HOST_PREFIX):]))
 
-    def send(self, **message) -> None:
-        self.process.stdin.write(json.dumps(message) + "\n")
-        self.process.stdin.flush()
+    def send(self, **message) -> bool:
+        """One command down the pipe. False means the host is not there.
+
+        A dead host is reported rather than raised: it is one of the readings,
+        and an experiment that crashes on it writes no report at all.
+        """
+        try:
+            self.process.stdin.write(json.dumps(message) + "\n")
+            self.process.stdin.flush()
+        except (OSError, ValueError):
+            self.events.append({"event": "pipe_closed",
+                                "cmd": message.get("cmd"),
+                                "exit_code": self.process.poll()})
+            return False
+        return True
 
     def ask(self, timeout_s: float = 10.0, **message) -> dict | None:
         """One command, and the next event it produces."""
         seen = len(self.events)
-        self.send(**message)
+        if not self.send(**message):
+            return self.events[-1]
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if len(self.events) > seen:
@@ -1776,6 +2216,10 @@ class Bench:
     overlay_rect: Rect
     hosts: list
     children: list
+    #: A few seconds of VP9-with-alpha WebM: half opaque white, half fully
+    #: transparent. Only the colour-key probe uses it, and only to ask whether
+    #: a transparent video pixel can be absent from the screen.
+    alpha_clip: Path | None = None
 
 
 def place_standin(width: int, height: int) -> tuple[StandIn, dict]:
@@ -1835,6 +2279,8 @@ def build_bench(scratch: Path, width: int, height: int) -> Bench:
     picture = Rect(*report["picture_aware"]) if report["picture_aware"] else None
     clip = scratch / "rig_clip.mp4"
     report["clip"] = ensure_clip(clip)
+    alpha_clip = scratch / "rig_alpha_clip.webm"
+    report["alpha_clip"] = ensure_alpha_clip(alpha_clip)
     return Bench(scratch=scratch, clip=clip, guard=guard, standin=standin,
                  standin_report=report, standin_client_aware=aware,
                  standin_picture_aware=picture,
@@ -1844,7 +2290,7 @@ def build_bench(scratch: Path, width: int, height: int) -> Bench:
                  # placer forgot the rectangle and could never re-assert the
                  # z-order. The rig has to ask for what the overlay asks for.
                  overlay_rect=picture or aware or Rect(*report["asked_unaware"]),
-                 hosts=[], children=[])
+                 hosts=[], children=[], alpha_clip=alpha_clip)
 
 
 def _emulator_rects() -> list[Rect]:
@@ -1877,9 +2323,309 @@ def close_bench(bench: Bench) -> dict:
             "survivors": survivors}
 
 
+# --------------------------------------------------------------------------
+# the colour-key probe
+# --------------------------------------------------------------------------
+
+#: How big the probe window is. Small on purpose: everything it does is a
+#: difference of two screen captures, and a small rectangle is easier to find
+#: a still backdrop under.
+COLOURKEY_RECT = (240, 160)
+
+#: What each sample box is expected to do if per-pixel see-through works.
+COLOURKEY_EXPECTATION = {
+    "r1_nothing": "no change (the form's key shows through an unpainted page)",
+    "r2_key": "no change (the page painted the key colour itself)",
+    "r3_white": "a small blend toward white -- the control that proves the "
+                "capture can see the window at all",
+    "r4_white_half_alpha": "the edge-fringe question: toward white, or toward "
+                           "the key",
+    "r5_video_opaque": "a small blend toward white",
+    "r5_video_transparent": "no change, if Chromium decodes the WebM alpha",
+    "r6_canvas_opaque": "a small blend toward white",
+    "r6_canvas_cleared": "no change",
+}
+
+
+def colourkey_sample_boxes(rect: Rect) -> dict[str, Rect]:
+    """Where on screen each of the page's regions lands, named by what it is.
+
+    The video and the canvas are split, because "it did not show" and "it was
+    punched out" are the same reading unless the same element has an opaque
+    half right beside the transparent one.
+    """
+    cells = grid_cells(rect, columns=3, rows=2)
+    video, sheet = split_halves(cells["r5"]), split_halves(cells["r6"])
+    return {"r1_nothing": inset(cells["r1"]),
+            "r2_key": inset(cells["r2"]),
+            "r3_white": inset(cells["r3"]),
+            "r4_white_half_alpha": inset(cells["r4"]),
+            "r5_video_opaque": inset(video["left"]),
+            "r5_video_transparent": inset(video["right"]),
+            "r6_canvas_opaque": inset(sheet["left"]),
+            "r6_canvas_cleared": inset(sheet["right"])}
+
+
+def backdrop_brightness(rect: Rect) -> float:
+    """How bright what is already on screen here is, 0..255.
+
+    Headroom, not decoration. A white region blended at 3/255 over a WHITE
+    backdrop moves by nothing at all, so a bright rectangle would report
+    "punched out" for every region including the control -- the measurement
+    would be a flat table of zeroes that means nothing.
+    """
+    data = capture_screen(rect, capture_layered=True)
+    if data is None:
+        return 255.0
+    summary = summarize_pixels(data, rect.width, rect.height)
+    return float(sum(summary.get("mean_rgb", [255, 255, 255])) / 3.0)
+
+
+def _still_backdrop(bench: "Bench", width: int, height: int,
+                    out: dict, *, gap_s: float = 1.0) -> Rect | None:
+    """The darkest still rectangle anywhere on the desktop, clear of PJ64.
+
+    Two captures of the WHOLE desktop rather than a poll of a handful of
+    guessed spots. His screen is mostly live video -- OBS's preview alone
+    moved every one of the first eight candidates -- so the still corner has
+    to be searched for rather than assumed, and searching it a rectangle at a
+    time would take a minute of captures to find nothing.
+    """
+    with dpi_context(style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+        screen = virtual_screen()
+        monitors = monitor_rects()
+    first = capture_screen(screen, capture_layered=True)
+    time.sleep(gap_s)
+    second = capture_screen(screen, capture_layered=True)
+    if first is None or second is None:
+        out["blocked"] = "the desktop could not be captured"
+        return None
+    shape = (screen.height, screen.width, 4)
+    before = np.frombuffer(first, dtype=np.uint8).reshape(shape)[:, :, :3]
+    after = np.frombuffer(second, dtype=np.uint8).reshape(shape)[:, :, :3]
+    moved = (np.abs(after.astype(np.int16) - before.astype(np.int16)).max(axis=2) > 0)
+    brightness = after.max(axis=2)
+    # Anything no monitor covers is ruled out first. It is the stillest,
+    # darkest thing on the desktop and it is not on screen at all.
+    moved |= ~coverage_mask(moved.shape, screen, monitors)
+    # Project64 is blacked out of the search rather than checked afterwards:
+    # a rectangle over his emulator must never be chosen even if it is the
+    # stillest, darkest place that IS on a monitor.
+    for taken in _emulator_rects():
+        top = max(0, taken.y - screen.y)
+        left = max(0, taken.x - screen.x)
+        moved[top:top + taken.height, left:left + taken.width] = True
+    found = still_block(moved, brightness, width, height)
+    out["backdrop"] = {"desktop": screen.as_list(),
+                       "monitors": [rect.as_list() for rect in monitors],
+                       "moving_or_offscreen_fraction": round(float(moved.mean()), 4),
+                       "gap_s": gap_s}
+    if found is None:
+        out["blocked"] = "backdrop not static"
+        return None
+    spot = Rect(x=screen.x + found[0], y=screen.y + found[1],
+                width=width, height=height)
+    # Confirmed on its own, after the search: the desktop pair says the block
+    # held still for one second, and this says it is still holding still.
+    confirmed = backdrop_report(spot, capture_layered=True)
+    level = backdrop_brightness(spot)
+    out["backdrop"].update(rect=spot.as_list(), brightness=round(level, 2),
+                           headroom_to_white=round(255.0 - level, 2),
+                           **confirmed)
+    if not confirmed.get("static"):
+        out["blocked"] = "backdrop not static"
+        return None
+    return spot
+
+
+#: Both ways of reading the screen, measured in the same shown state.
+#: A plain screen blit does NOT include a layered window on Windows 11 --
+#: measured 2026-09-19, every region flat zero including the control -- so
+#: CAPTUREBLT is the one that can answer, and the plain one is kept beside it
+#: as the proof of why.
+CAPTURE_WAYS = {"plain": False, "captureblt": True}
+
+
+def _capture_probe(rect: Rect) -> dict:
+    """What each way of reading the screen actually returns, side by side.
+
+    Kept in the report because the first run of this experiment was answered
+    by a capture that was not reading the desktop at all: the plain blit
+    called a rectangle of live video "static" and the window's own white
+    region "unchanged" in the same run.
+    """
+    out: dict = {}
+    for name, layered in CAPTURE_WAYS.items():
+        data = capture_screen(rect, capture_layered=layered)
+        out[name] = ({"ok": False, "reason": "capture_failed"} if data is None
+                     else summarize_pixels(data, rect.width, rect.height))
+    return out
+
+
+def _colourkey_pass(host: "HostProcess", bench: "Bench", rect: Rect,
+                    alpha: int, *, keyed: bool = True,
+                    stage: str = "control_transparent") -> dict:
+    """One alpha: capture, key, show, capture, difference, hide.
+
+    `keyed=False` is the control the whole experiment turns on. It runs the
+    product's own call -- whole-window alpha and no key at all -- so "that
+    region was absent" can be told apart from "that region was never painted".
+    Without it, a page that simply drew nothing would read as a colour key
+    working perfectly.
+    """
+    result: dict = {"alpha": alpha, "keyed": keyed, "stage": stage}
+    host.ask(cmd="hide")
+    time.sleep(0.4)
+    before = {name: capture_screen(rect, capture_layered=layered)
+              for name, layered in CAPTURE_WAYS.items()}
+    if any(shot is None for shot in before.values()):
+        return {**result, "skipped": "the screen could not be captured"}
+    result["key"] = (host.ask(cmd="colourkey", rgb=list(COLOUR_KEY_RGB),
+                              alpha=alpha) if keyed
+                     else host.ask(cmd="alpha", value=alpha))
+    kept = get_colour_key(host_hwnd(host))
+    result["key_readback"] = kept
+    if kept.get("alpha") != alpha or bool(kept.get("keyed")) != keyed:
+        return {**result, "skipped": "the layered attributes did not read back"}
+    watched = bench.guard.look()
+    result["foreground_before_show"] = watched
+    result["show"] = host.ask(cmd="show")
+    # Shown before captured, and given a moment: a hidden page draws no
+    # frames at all (experiment 1), so the video and the canvas only start
+    # painting once the window is on screen.
+    time.sleep(1.5)
+    result["foreground_after_show"] = bench.guard.check(watched)
+    result["title"] = read_title(host_hwnd(host))
+    result["page"] = parse_tick_title(result["title"], prefix="RK ")
+    after = {name: capture_screen(rect, capture_layered=layered)
+             for name, layered in CAPTURE_WAYS.items()}
+    result["window_pixels"] = capture_window(host_hwnd(host))
+    host.ask(cmd="hide")
+    if any(shot is None for shot in after.values()):
+        return {**result, "skipped": "the screen could not be captured"}
+    boxes = colourkey_sample_boxes(rect)
+    result["capture"] = {}
+    for way in CAPTURE_WAYS:
+        regions = {
+            name: region_delta(before[way], after[way], rect.width,
+                               rect.height, box, rect)
+            for name, box in boxes.items()}
+        result["capture"][way] = {"regions": regions,
+                                  "verdict": _colourkey_verdict(regions)}
+    decided = [way for way, row in result["capture"].items()
+               if row["verdict"].get("decided")]
+    result["answered_by"] = decided[0] if decided else None
+    result["verdict"] = (result["capture"][decided[0]]["verdict"] if decided
+                         else {"decided": False,
+                               "reason": "neither capture saw the window"})
+    return result
+
+
+def host_hwnd(host: "HostProcess") -> int:
+    answer = host.ask(cmd="hwnd")
+    return int((answer or {}).get("hwnd") or 0)
+
+
+def _colourkey_verdict(regions: dict) -> dict:
+    """What the numbers say, before anyone reads the table.
+
+    `r3_white` is the control. If the opaque white region did not move, the
+    capture never saw the window and every "no change" below it is meaningless
+    rather than encouraging -- the failure mode an instrument like this has to
+    name for itself.
+    """
+    def moved(name: str) -> float:
+        row = regions.get(name) or {}
+        return max(abs(value) for value in row.get("mean_delta_rgb", [0])) \
+            if row.get("ok") else 0.0
+
+    control = moved("r3_white")
+    if control < 0.5:
+        return {"decided": False,
+                "reason": "the opaque white control did not move, so the "
+                          "capture did not see the window",
+                "control_delta": control}
+    return {"decided": True, "control_delta": round(control, 3),
+            "key_punched": moved("r2_key") < 0.5,
+            "unpainted_punched": moved("r1_nothing") < 0.5,
+            "video_alpha_punched": moved("r5_video_transparent") < 0.5,
+            "video_opaque_shows": moved("r5_video_opaque") >= 0.5,
+            "canvas_cleared_punched": moved("r6_canvas_cleared") < 0.5,
+            "canvas_opaque_shows": moved("r6_canvas_opaque") >= 0.5,
+            "half_alpha_delta": round(moved("r4_white_half_alpha"), 3)}
+
+
+def experiment_colourkey(bench: "Bench", alphas=(3, 2, 1)) -> dict:
+    """Can a pixel of this window be absent from the screen entirely?
+
+    Whole-window opacity cannot do that: it dims every pixel equally, which is
+    the dark sheet he saw. `LWA_COLORKEY` can, if the key colour survives the
+    page's paint, the WebView2 control, the form behind it and the layered
+    window. Every Mario-only option depends on the answer.
+    """
+    out: dict = {"name": "colourkey", "question":
+                 "with the form painted the key colour and the WebView2 "
+                 "control told not to paint, which of the page's regions are "
+                 "absent from the composed screen?",
+                 "key_rgb": list(COLOUR_KEY_RGB),
+                 "expectation": COLOURKEY_EXPECTATION}
+    width, height = COLOURKEY_RECT
+    out["foreground_before_create"] = bench.guard.wait_until_clear()
+    spot = _still_backdrop(bench, width, height, out)
+    if spot is None:
+        return out
+    out["rect"] = spot.as_list()
+    out["capture_probe"] = _capture_probe(spot)
+    key_hex = "%02x%02x%02x" % COLOUR_KEY_RGB
+    settings = urlencode({"video": bench.alpha_clip.as_uri(), "key": key_hex,
+                          "post": "1"})
+    host = HostProcess(f"{COLOURKEY_PAGE.as_uri()}#{settings}", spot,
+                       title=RIG_HOST_TITLE, background=f"#{key_hex}")
+    bench.hosts.append(host)
+    bench.guard.own_pids.add(host.process.pid)
+    try:
+        hwnd = host.wait_for_window()
+        out["hwnd"] = hwnd
+        out["foreground_after_create"] = bench.guard.check(
+            out["foreground_before_create"])
+        if not hwnd:
+            out["skipped"] = "the page host never reported a window handle"
+            return out
+        bench.guard.own_hwnds.add(hwnd)
+        out["bridge"] = host.ask(cmd="bridge")
+        out["styles"] = style_report(native.apply_overlay_styles(hwnd),
+                                     native.get_ex_style(hwnd))
+        out["place"] = host.ask(cmd="place", rect=spot.as_list())
+        # Three stages, each answering what the one before it leaves open.
+        # FIRST, before anything is made transparent: whole-window alpha only,
+        # with the WebView2 control still painting its own background. This is
+        # what the overlay does today, and it is the baseline every "absent"
+        # below has to be measured against.
+        out["passes"] = [_colourkey_pass(host, bench, spot, alphas[0],
+                                         keyed=False,
+                                         stage="opaque_control")]
+        out["background"] = host.ask(cmd="background")
+        # SECOND, with the control transparent but still NO key: this is where
+        # a page-transparent pixel either survives to the screen or does not.
+        out["passes"].append(_colourkey_pass(host, bench, spot, alphas[0],
+                                             keyed=False,
+                                             stage="transparent_no_key"))
+        # THIRD, the colour key itself, at each alpha.
+        out["passes"] += [_colourkey_pass(host, bench, spot, alpha,
+                                          stage="transparent_keyed")
+                          for alpha in alphas]
+        out["visible_at_end"] = native.is_visible(hwnd)
+        return out
+    finally:
+        host.close()
+        out["host_exit_code"] = host.process.poll()
+        out["host_lines"] = host.lines[-20:]
+
+
 EXPERIMENTS = {"e1": experiment_1, "e4": experiment_4,
                "picture": experiment_picture,
-               "zorder": experiment_zorder}
+               "zorder": experiment_zorder,
+               "colourkey": experiment_colourkey}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1900,6 +2646,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--title", default=RIG_HOST_TITLE)
     parser.add_argument("--rect", default=None,
                         help="page-host: x,y,w,h for the window")
+    parser.add_argument("--background", default="#000000",
+                        help="page-host: what the FORM behind the control is "
+                             "painted; the colour key punches this")
     return parser
 
 
