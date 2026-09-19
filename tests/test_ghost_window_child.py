@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import threading
+import types
 
 import pytest
 
@@ -466,6 +467,155 @@ def test_the_background_handover_keeps_trying_until_it_works():
     assert host.use_transparent_page_background() == "unreachable"
     assert host.use_transparent_page_background() == "unreachable", (
         "a window that did not exist yet is asked again, not given up on")
+
+
+class ThreadBoundControl:
+    """A WebView2 control as the real one behaves: its own thread, or nothing.
+
+    `DefaultBackgroundColor` reaches `ICoreWebView2Controller2`, which throws
+    off its owning thread (measured 2026-09-19: `InvalidOperationException`
+    wrapping `E_NOINTERFACE`). `BeginInvoke` queues the delegate for that
+    thread instead of running it, which is exactly what makes the difference
+    visible: a host that sets the property directly raises, a host that
+    marshals gets its answer on the next pump.
+    """
+
+    def __init__(self):
+        self._owner = threading.get_ident()
+        self._queued = []
+        self.background = None
+        self.refuse_begin_invoke = False
+
+    def BeginInvoke(self, action):  # noqa: N802 - the .NET spelling
+        if self.refuse_begin_invoke:
+            raise RuntimeError("the control has no window handle yet")
+        self._queued.append(action)
+
+    def pump(self):
+        """Run what the UI thread would have run. Call it ON the owner thread."""
+        queued, self._queued = self._queued, []
+        for action in queued:
+            action()
+
+    @property
+    def DefaultBackgroundColor(self):  # noqa: N802 - the .NET spelling
+        return self.background
+
+    @DefaultBackgroundColor.setter
+    def DefaultBackgroundColor(self, value):  # noqa: N802
+        if threading.get_ident() != self._owner:
+            raise RuntimeError(
+                "CoreWebView2Controller members can only be accessed from the "
+                "UI thread")
+        self.background = value
+
+
+def host_over(control, clock=None):
+    """A `WebviewHost` holding one fake control, with no .NET anywhere."""
+    host = WebviewHost(colour=lambda: "transparent",
+                       clock=clock or (lambda: 0.0))
+    # pywebview owns window creation; there is no seam for handing one in, and
+    # inventing one for a test would be a second door onto the same field.
+    host._window = types.SimpleNamespace(
+        native=types.SimpleNamespace(webview=control))
+    return host
+
+
+def ask_off_the_owning_thread(host):
+    """Call the host the way the FOLLOWER does: from another thread."""
+    answers = []
+    worker = threading.Thread(target=lambda: answers.append(
+        host.use_transparent_page_background()))
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "the follower thread never came back"
+    return answers[0]
+
+
+def test_the_background_is_set_on_the_controls_own_thread():
+    """The whole of his black sheet. Set from the follower thread this throws,
+    and the only outcome this feature's evidence ever recorded was
+    `page_background: unreachable` -- the product never had a see-through page.
+    """
+    control = ThreadBoundControl()
+    host = host_over(control)
+
+    assert ask_off_the_owning_thread(host) == "asked"
+    assert control.background is None, (
+        "the follower must not touch the control; it queues the work")
+
+    control.pump()  # the UI thread gets to it
+    assert control.background == "transparent"
+    assert ask_off_the_owning_thread(host) == "transparent"
+
+
+def test_the_background_is_announced_once_and_then_costs_nothing():
+    control = ThreadBoundControl()
+    host = host_over(control)
+    ask_off_the_owning_thread(host)
+    control.pump()
+    assert ask_off_the_owning_thread(host) == "transparent"
+    assert ask_off_the_owning_thread(host) is None, (
+        "it has taken; there is nothing left to do or to say")
+
+
+def test_the_follower_is_never_parked_on_the_ui_thread():
+    """`Invoke` would block here until the delegate ran. `BeginInvoke` does
+    not, and a follower held on a wedged UI thread is a ghost frozen on his
+    screen."""
+    control = ThreadBoundControl()
+    host = host_over(control)
+    # Nothing ever pumps: the UI thread is wedged for the whole test.
+    assert ask_off_the_owning_thread(host) == "asked"
+    assert ask_off_the_owning_thread(host) is None, (
+        "while the UI thread holds it, the follower has nothing to say")
+
+
+def test_a_control_with_no_handle_yet_is_asked_again_later():
+    control = ThreadBoundControl()
+    control.refuse_begin_invoke = True
+    now = [0.0]
+    host = host_over(control, clock=lambda: now[0])
+
+    assert ask_off_the_owning_thread(host) == "refused: RuntimeError"
+    assert ask_off_the_owning_thread(host) is None, "it waits before retrying"
+
+    now[0] = 10.0
+    control.refuse_begin_invoke = False
+    assert ask_off_the_owning_thread(host) == "asked"
+    control.pump()
+    assert control.background == "transparent"
+
+
+def test_a_refusal_from_the_ui_thread_is_reported_and_retried():
+    class Fussy(ThreadBoundControl):
+        def __init__(self):
+            super().__init__()
+            self.attempts = 0
+
+        @property
+        def DefaultBackgroundColor(self):  # noqa: N802
+            return self.background
+
+        @DefaultBackgroundColor.setter
+        def DefaultBackgroundColor(self, value):  # noqa: N802
+            self.attempts += 1
+            if self.attempts == 1:
+                raise ValueError("CoreWebView2 is not built yet")
+            self.background = value
+
+    control = Fussy()
+    now = [0.0]
+    host = host_over(control, clock=lambda: now[0])
+
+    assert ask_off_the_owning_thread(host) == "asked"
+    control.pump()
+    assert ask_off_the_owning_thread(host) == "refused: ValueError"
+
+    now[0] = 10.0
+    assert ask_off_the_owning_thread(host) == "asked"
+    control.pump()
+    assert ask_off_the_owning_thread(host) == "transparent"
 
 
 def test_the_null_backend_answers_both_page_questions():

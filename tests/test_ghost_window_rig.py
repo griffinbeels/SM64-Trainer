@@ -18,19 +18,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import pytest  # noqa: E402
 
 from ghost_window_rig import (  # noqa: E402
+    COLOUR_KEY_RGB,
     HWND_TOP,
+    MAX_SHOW_ALPHA,
     REQUIRED_EX_BITS,
     SWP_NOMOVE_NOSIZE_NOACTIVATE,
     Rect,
+    _colourkey_verdict,
     _picture_verdict,
     checked_child_opacity,
     child_command,
+    colour_ref,
+    colourkey_sample_boxes,
+    coverage_mask,
     foreground_verdict,
+    grid_cells,
+    inset,
     parse_tick_title,
     rect_inside,
     rects_intersect,
+    region_delta,
     scale_between,
+    split_halves,
     standin_candidates,
+    still_block,
     style_report,
     summarize_pixels,
     tick_rates,
@@ -317,3 +328,199 @@ def test_the_command_cannot_carry_an_opacity_that_would_be_seen():
     with pytest.raises(ValueError):
         child_command("file:///c.html", Rect(x=0, y=0, width=8, height=8),
                       0.5, python="python")
+
+
+# --- the colour key --------------------------------------------------------
+
+def screen(width, height, colour=(0, 0, 0)):
+    """A capture buffer of one flat colour, in the BGRA order GetDIBits gives."""
+    red, green, blue = colour
+    return bytes((blue, green, red, 0)) * (width * height)
+
+
+def test_colour_ref_is_byte_swapped_the_way_windows_wants():
+    # COLORREF is 0x00BBGGRR. A key written the other way round keys a colour
+    # nothing on the page paints, which looks exactly like a key that does not
+    # work at all.
+    assert colour_ref((255, 0, 255)) == 0x00FF00FF
+    assert colour_ref((1, 2, 3)) == 0x00030201
+    assert colour_ref(COLOUR_KEY_RGB) == 0x00FF00FF
+
+
+def test_grid_cells_tile_the_window_with_no_gap_and_no_overlap():
+    rect = Rect(x=100, y=50, width=240, height=160)
+    cells = grid_cells(rect, columns=3, rows=2)
+    assert len(cells) == 6
+    assert cells["r1"] == Rect(x=100, y=50, width=80, height=80)
+    assert cells["r3"] == Rect(x=260, y=50, width=80, height=80)
+    assert cells["r6"] == Rect(x=260, y=130, width=80, height=80)
+    covered = sum(cell.width * cell.height for cell in cells.values())
+    assert covered == rect.width * rect.height
+
+
+def test_grid_cells_still_tile_a_width_that_does_not_divide():
+    rect = Rect(x=0, y=0, width=241, height=161)
+    cells = grid_cells(rect, columns=3, rows=2)
+    covered = sum(cell.width * cell.height for cell in cells.values())
+    assert covered == rect.width * rect.height
+
+
+def test_split_halves_divides_a_region_without_losing_a_column():
+    halves = split_halves(Rect(x=10, y=10, width=81, height=20))
+    assert halves["left"].width + halves["right"].width == 81
+    assert halves["right"].x == halves["left"].x + halves["left"].width
+
+
+def test_inset_keeps_the_sample_off_the_region_edges():
+    box = inset(Rect(x=0, y=0, width=80, height=80), 0.4)
+    assert box.width == 32 and box.height == 32
+    assert box.x == 24 and box.y == 24
+
+
+def test_colourkey_sample_boxes_name_every_region_and_stay_inside():
+    rect = Rect(x=0, y=0, width=240, height=160)
+    boxes = colourkey_sample_boxes(rect)
+    assert set(boxes) == {
+        "r1_nothing", "r2_key", "r3_white", "r4_white_half_alpha",
+        "r5_video_opaque", "r5_video_transparent",
+        "r6_canvas_opaque", "r6_canvas_cleared"}
+    for box in boxes.values():
+        assert rect_inside(rect, box)
+
+
+def test_region_delta_reads_zero_when_the_screen_did_not_move():
+    before = screen(8, 8, (40, 40, 40))
+    row = region_delta(before, before, 8, 8, Rect(x=0, y=0, width=8, height=8),
+                       Rect(x=0, y=0, width=8, height=8))
+    assert row["mean_delta_rgb"] == [0.0, 0.0, 0.0]
+    assert row["max_abs_delta"] == 0
+    assert row["changed_fraction"] == 0.0
+
+
+def test_region_delta_measures_a_blend_toward_white():
+    # What an unpunched white region does under an alpha of 3/255 over a dark
+    # backdrop: a couple of levels, which is the whole signal being read.
+    before = screen(4, 4, (40, 40, 40))
+    after = screen(4, 4, (43, 43, 43))
+    row = region_delta(before, after, 4, 4, Rect(x=0, y=0, width=4, height=4),
+                       Rect(x=0, y=0, width=4, height=4))
+    assert row["mean_delta_rgb"] == [3.0, 3.0, 3.0]
+    assert row["changed_fraction"] == 1.0
+
+
+def test_region_delta_addresses_a_box_inside_the_captured_rectangle():
+    origin = Rect(x=100, y=100, width=4, height=2)
+    before = screen(4, 2, (0, 0, 0))
+    after = bytearray(before)
+    after[0:4] = bytes((0, 0, 10, 0))  # one pixel, red +10, at (100,100)
+    row = region_delta(before, bytes(after), 4, 2,
+                       Rect(x=100, y=100, width=1, height=1), origin)
+    assert row["mean_delta_rgb"] == [10.0, 0.0, 0.0]
+
+
+def test_region_delta_refuses_a_box_outside_what_was_captured():
+    origin = Rect(x=0, y=0, width=4, height=4)
+    row = region_delta(screen(4, 4), screen(4, 4), 4, 4,
+                       Rect(x=3, y=3, width=4, height=4), origin)
+    assert row["ok"] is False
+    assert row["reason"] == "box_outside_capture"
+
+
+def test_the_colourkey_verdict_refuses_to_decide_when_the_control_is_flat():
+    # Every "no change" is meaningless unless the OPAQUE white region moved:
+    # a capture that cannot see the window reads identically to a window whose
+    # every pixel was punched out.
+    flat = {name: {"ok": True, "mean_delta_rgb": [0.0, 0.0, 0.0]}
+            for name in ("r1_nothing", "r2_key", "r3_white",
+                         "r4_white_half_alpha", "r5_video_transparent",
+                         "r5_video_opaque", "r6_canvas_cleared",
+                         "r6_canvas_opaque")}
+    verdict = _colourkey_verdict(flat)
+    assert verdict["decided"] is False
+    assert "did not see the window" in verdict["reason"]
+
+
+def test_the_colourkey_verdict_reads_a_punched_key_against_a_live_control():
+    regions = {
+        "r3_white": {"ok": True, "mean_delta_rgb": [2.4, 2.4, 2.4]},
+        "r2_key": {"ok": True, "mean_delta_rgb": [0.0, 0.0, 0.0]},
+        "r1_nothing": {"ok": True, "mean_delta_rgb": [0.0, 0.0, 0.0]},
+        "r5_video_transparent": {"ok": True, "mean_delta_rgb": [0.0, 0.0, 0.0]},
+        "r5_video_opaque": {"ok": True, "mean_delta_rgb": [2.4, 2.4, 2.4]},
+        "r6_canvas_cleared": {"ok": True, "mean_delta_rgb": [0.0, 0.0, 0.0]},
+        "r6_canvas_opaque": {"ok": True, "mean_delta_rgb": [2.4, 2.4, 2.4]},
+        "r4_white_half_alpha": {"ok": True, "mean_delta_rgb": [1.2, 1.2, 1.2]},
+    }
+    verdict = _colourkey_verdict(regions)
+    assert verdict["decided"] is True
+    assert verdict["key_punched"] is True
+    assert verdict["video_alpha_punched"] is True
+    assert verdict["video_opaque_shows"] is True
+    assert verdict["half_alpha_delta"] == 1.2
+
+
+def test_a_title_prefix_picks_which_rig_page_is_being_read():
+    line = "RK t=12 vrs=4 canvas=tainted va_o=255 va_t=0 dpr=1.5"
+    assert parse_tick_title(line) is None            # not the counting page
+    parsed = parse_tick_title(line, prefix="RK ")
+    assert parsed["vrs"] == 4
+    assert parsed["canvas"] == "tainted"
+    assert parsed["va_t"] == 0
+
+
+def test_still_block_finds_the_one_corner_that_is_not_moving():
+    import numpy as np
+
+    moved = np.ones((40, 60), dtype=bool)
+    moved[0:12, 0:12] = False          # the only still corner
+    brightness = np.full((40, 60), 200, dtype=np.uint8)
+    assert still_block(moved, brightness, 10, 10, step=2) == (0, 0)
+
+
+def test_still_block_prefers_the_darker_of_two_still_corners():
+    import numpy as np
+
+    moved = np.ones((40, 60), dtype=bool)
+    moved[0:12, 0:12] = False
+    moved[0:12, 40:52] = False
+    brightness = np.full((40, 60), 255, dtype=np.uint8)
+    brightness[0:12, 40:52] = 10       # the dark one has the headroom
+    assert still_block(moved, brightness, 10, 10, step=2) == (40, 0)
+
+
+def test_still_block_gives_up_when_the_whole_desktop_is_moving():
+    import numpy as np
+
+    moved = np.ones((40, 60), dtype=bool)
+    brightness = np.zeros((40, 60), dtype=np.uint8)
+    assert still_block(moved, brightness, 10, 10, step=2) is None
+
+
+def test_still_block_refuses_a_block_bigger_than_the_screen():
+    import numpy as np
+
+    moved = np.zeros((8, 8), dtype=bool)
+    brightness = np.zeros((8, 8), dtype=np.uint8)
+    assert still_block(moved, brightness, 20, 20, step=2) is None
+
+
+def test_coverage_mask_rules_out_the_hole_between_two_screens():
+    # The virtual screen is the bounding box of the monitors, so a desktop
+    # whose screens are not aligned contains rectangles no monitor covers.
+    # A hole is perfectly still and perfectly black, which is exactly what a
+    # hunt for a quiet corner settles on -- and nothing composites there.
+    origin = Rect(x=-100, y=-50, width=200, height=100)
+    monitors = [Rect(x=-100, y=-50, width=100, height=50),
+                Rect(x=0, y=0, width=100, height=50)]
+    covered = coverage_mask((100, 200), origin, monitors)
+    assert bool(covered[0, 0]) is True        # inside the first monitor
+    assert bool(covered[50, 100]) is True     # inside the second
+    assert bool(covered[0, 150]) is False     # the hole above the second
+    assert bool(covered[90, 10]) is False     # the hole below the first
+
+
+def test_the_show_ceiling_stays_invisible():
+    # 3/255 is about 1.2 %. The number is load-bearing: it is the most this
+    # rig will ever put on his screen, and a change to it is a change to that
+    # promise.
+    assert MAX_SHOW_ALPHA == 3
