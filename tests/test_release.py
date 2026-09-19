@@ -150,3 +150,19 @@ def test_the_release_does_not_spell_the_gate_out_itself():
     assert 'tools/run_tests.py' not in source, (
         "name the lane, not the runner -- the worker count lives in "
         ".verification.toml and a second spelling drops it")
+
+
+def test_a_dry_run_leaves_the_checkout_clean():
+    """A dry run builds the bumped version, then puts the version files back.
+
+    On 2026-09-19 it left them bumped, and the dirty tree then blocked
+    prepare-merge until someone restored three files by hand. A rehearsal
+    that dirties your checkout is not a rehearsal."""
+    import inspect
+    source = inspect.getsource(release.main)
+    assert "originals = {" in source, "the dry run must remember the originals"
+    restore = source.index("if args.dry_run:")
+    assert "path.write_text(text" in source[restore:restore + 400], (
+        "the dry-run branch must restore what the bump overwrote")
+    assert source.index("originals = {") < source.index("bump_version_py("), (
+        "capture the originals BEFORE the bump overwrites them")

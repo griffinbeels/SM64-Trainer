@@ -219,6 +219,12 @@ def main() -> int:
     _preflight(args.dry_run)
     _verify_or_run_gate()
 
+    # A dry run BUILDS the bumped version -- that is the point -- but it must
+    # not leave your checkout dirty afterwards. On 2026-09-19 it did, and the
+    # bumped files then blocked prepare-merge until they were restored by
+    # hand. Remember the originals and put them back.
+    originals = {path: path.read_text(encoding="utf-8")
+                 for path in (VERSION_PY, PYPROJECT, UV_LOCK) if path.is_file()}
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
     PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))
 
@@ -243,7 +249,10 @@ def main() -> int:
     print("assets ready:", ", ".join(a.name for a in release_assets(DIST)))
 
     if args.dry_run:
-        print("dry-run: built + checksummed, skipping commit/tag/publish")
+        for path, text in originals.items():
+            path.write_text(text, encoding="utf-8")
+        print("dry-run: built + checksummed, version files restored, "
+              "skipping commit/tag/publish")
         return 0
 
     # uv.lock records the editable package's OWN version, so the bump above
