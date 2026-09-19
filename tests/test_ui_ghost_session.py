@@ -47,10 +47,16 @@ def controls(session, entity_key="star:8:1"):
 def session(**over):
     body = {"enabled": False, "opacity": 0.6, "nudge_frames": 0,
             "tint": {"enabled": True, "hue_degrees": 120},
+            "view": "whole",
             "target": {"kind": "star", "entity_key": "8-1", "strat": None},
             "source": {"available": True, "reason": None, "reason_text": None,
                        "template_id": 4, "attempt_id": 90,
-                       "exactness": "frame_map"},
+                       "exactness": "frame_map",
+                       "mario_boxes_available": False,
+                       "mario_boxes_reason": "no_box_list",
+                       "mario_boxes_reason_text":
+                           "This run has not had Mario found in it yet, so "
+                           "only the whole picture can be shown."},
             "window": {"running": False, "visible": False}}
     for key, value in over.items():
         if key in ("source", "target", "window") and isinstance(value, dict):
@@ -278,3 +284,60 @@ def test_the_newest_ghost_change_is_picked_out_of_the_raw_feed():
         == {"enabled": True}
     assert run_node("newestGhostSession", "newestGhostSession([])") is None
     assert run_node("newestGhostSession", "newestGhostSession(undefined)") is None
+
+
+# --- what the ghost shows ---------------------------------------------------
+
+def test_the_control_claims_no_view_before_the_server_states_one():
+    """Unknown is null, the same rule the colour and the visibility follow: a
+    control that guesses is one small gesture from writing its guess back."""
+    assert controls(None)["view"] is None
+    unstated = session()
+    del unstated["view"]
+    assert controls(unstated)["known"] is True
+    assert controls(unstated)["view"] is None
+    assert controls(session())["view"] == "whole"
+    assert controls(session(view="mario"))["view"] == "mario"
+
+
+def test_a_view_this_build_cannot_draw_reads_as_unknown():
+    """A payload from another build, or a typo on the wire. Drawing the
+    control on a value nothing renders is how a select goes blank and looks
+    unset (the same trap a filtered dropdown already paid for)."""
+    assert controls(session(view="rotoscope"))["view"] is None
+
+
+def test_the_card_is_told_whether_this_ghost_can_be_drawn_as_mario():
+    """One bit and one sentence. The boxes themselves are hundreds of rows and
+    never ride `ghost_changed`; what the control needs is whether it may be
+    used and, if not, the server's own words for why."""
+    without = controls(session())["marioBoxes"]
+    assert without["available"] is False
+    assert "Mario" in without["reasonText"]
+
+    with_boxes = controls(session(source={"mario_boxes_available": True,
+                                          "mario_boxes_reason": None,
+                                          "mario_boxes_reason_text": None}))
+    assert with_boxes["marioBoxes"] == {"available": True, "reasonText": None}
+
+
+@pytest.mark.parametrize("current,draft,expected", [
+    (None, None, None),
+    ("whole", None, "whole"),
+    ("whole", "mario", "mario"),      # his choice wins while it is in flight
+    ("mario", "whole", "whole"),
+    (None, "mario", "mario"),
+    ("whole", "rotoscope", "whole"),  # a draft nothing draws is not a choice
+])
+def test_the_view_control_shows_his_choice_before_the_server_agrees(
+        current, draft, expected):
+    assert run_node("shownView", f"shownView({json.dumps(current)}, "
+                                 f"{json.dumps(draft)})") == expected
+
+
+def test_the_two_views_are_named_for_what_they_draw():
+    """His standing rule for anything a user reads: say what it does. Neither
+    label names a rectangle, a model or a box."""
+    labels = run_node("GHOST_VIEWS, VIEW_LABELS",
+                      "GHOST_VIEWS.map((name) => VIEW_LABELS[name])")
+    assert labels == ["Whole picture", "Only Mario"]

@@ -196,6 +196,12 @@ STATES = {
     # cleanly rather than sit there greyed.
     "plain": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
                            tint={"enabled": False, "hue_degrees": 120}),
+    # A ghost whose recording HAS had Mario found in it: the one state where
+    # the view control can actually be used.
+    "boxed": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           mario_boxes=True),
+    "mario": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           mario_boxes=True, view="mario"),
 }
 
 MEASURE = """
@@ -215,9 +221,22 @@ MEASURE = """
     const track = row.querySelector('.ghost-switch-track');
     const knob = row.querySelector('.ghost-switch-knob');
     const hue = row.querySelector('.ghost-hue');
+    const pick = row.querySelector('.ghost-view-select');
+    const viewWhy = row.querySelector('.ghost-view-why');
     const colour = row.querySelector('.ghost-colour');
     const colourSwitch = colour && colour.querySelector('.ghost-switch');
     return {
+      views: row.querySelectorAll('.ghost-view').length,
+      viewValue: pick ? pick.value : null,
+      viewDisabled: pick ? pick.disabled : null,
+      viewOptions: pick
+        ? Array.from(pick.options).map((o) => o.textContent.trim()) : null,
+      viewTitle: pick ? pick.title : null,
+      // The popup is drawn by the browser off the SELECT's own computed
+      // background, so a transparent one gets a white list: read the paint.
+      viewPaint: pick ? getComputedStyle(pick).backgroundColor : null,
+      viewWhy: viewWhy ? viewWhy.textContent.trim() : null,
+      viewWhySeen: seen(viewWhy),
       colours: row.querySelectorAll('.ghost-colour').length,
       hues: row.querySelectorAll('.ghost-hue').length,
       hueValue: hue ? hue.value : null,
@@ -253,7 +272,9 @@ MEASURE = """
       readout: (row.querySelector('.ghost-field-value') || {}).textContent,
       trackPaint: getComputedStyle(track).backgroundColor,
       knobShift: getComputedStyle(knob).transform,
-      tuneBoxes: Array.from(row.querySelectorAll('.ghost-tune > *'))
+      // The control GROUPS, not everything in the row: the reason sentence
+      // is a row of its own and is measured by its own checks.
+      tuneBoxes: Array.from(row.querySelectorAll('.ghost-tune > .ghost-field'))
         .map((el) => box(el)),
       row: box(row), card: box(card),
       rowScroll: row.scrollWidth, rowClient: row.clientWidth,
@@ -314,8 +335,8 @@ def test_a_target_with_no_ghost_refuses_and_says_why_on_screen(rendered, width):
     assert row["describedBy"] == row["whyId"], (
         "the switch does not point at its own reason")
     # Nothing to tune when there is nothing to show.
-    assert (row["sliders"], row["steps"], row["resets"], row["colours"]) \
-        == (0, 0, 0, 0)
+    assert (row["sliders"], row["steps"], row["resets"], row["colours"],
+            row["views"]) == (0, 0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -324,8 +345,9 @@ def test_off_offers_the_switch_and_nothing_else(rendered, width):
     assert row["disabled"] is False
     assert row["checked"] == "false"
     assert row["whyText"] is None
-    assert (row["sliders"], row["steps"], row["colours"]) == (0, 0, 0), (
-        "the tuning controls are on screen with the overlay off")
+    assert (row["sliders"], row["steps"], row["colours"], row["views"]) \
+        == (0, 0, 0, 0), (
+            "the tuning controls are on screen with the overlay off")
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -364,8 +386,8 @@ def test_the_tuning_line_holds_its_three_groups_inside_the_row(rendered, width):
     """
     row = rendered[("on", width)][0]
     boxes = row["tuneBoxes"]
-    assert len(boxes) == 3, f"slider, colour and timing: {boxes}"
-    for name, box in zip(("visibility", "colour", "timing"), boxes,
+    assert len(boxes) == 4, f"slider, colour, view and timing: {boxes}"
+    for name, box in zip(("visibility", "colour", "view", "timing"), boxes,
                          strict=True):
         assert box["height"] <= ONE_LINE_PX, (
             f"the {name} group wrapped inside itself at {width}px: {box}")
@@ -698,3 +720,40 @@ def test_the_fixture_reaches_the_state_it_claims():
     assert STATES["on"]["target"]["entity_key"] == "2-4"
     assert json.dumps(STATES["disabled"]["source"]["reason_text"]) \
         == json.dumps(NO_FRAME_MAP_TEXT)
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_ghost_can_be_asked_to_show_only_mario(rendered, width):
+    """His words: *"It's still extremely hard to understand the ghost, because
+    all the camera movement / scenery overlaps... we can try a v0 where it's
+    just a super tight rectangle around mario's body."*
+
+    Two options in a native select -- this project's rule for a SHORT dropdown
+    -- named for what each one DRAWS. Read back off the rendered control, not
+    off the source that builds it.
+    """
+    row = rendered[("boxed", width)][0]
+    assert row["views"] == 1
+    assert row["viewOptions"] == ["Whole picture", "Only Mario"]
+    assert row["viewDisabled"] is False
+    assert row["viewValue"] == "whole"
+    assert row["viewWhy"] is None, "a usable control is explaining itself"
+    # An opaque background of its own, or Chromium draws its popup white.
+    assert row["viewPaint"] != "rgba(0, 0, 0, 0)", row["viewPaint"]
+    assert rendered[("mario", width)][0]["viewValue"] == "mario"
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_a_ghost_with_no_mario_boxes_says_why_it_cannot_show_him(
+        rendered, width):
+    """Every recording made before this round. His acceptance rule is that a
+    control which cannot run says why, and it matters more than usual here:
+    only-Mario is the point of the round, so a control that silently vanished
+    would read as the feature not shipping."""
+    row = rendered[("on", width)][0]
+    assert row["views"] == 1, "the control was dropped instead of explained"
+    assert row["viewDisabled"] is True
+    assert row["viewWhy"], "the reason is not on screen"
+    assert row["viewWhySeen"], "the reason is in the DOM but not visible"
+    assert "Mario" in row["viewWhy"]
+    # The same sentence is the hover, so a narrow row still answers.
+    assert row["viewTitle"] == row["viewWhy"]

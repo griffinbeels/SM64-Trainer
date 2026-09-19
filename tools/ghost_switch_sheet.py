@@ -46,6 +46,13 @@ STATES = {
     # cleanly rather than sit there greyed. Both are worth looking at.
     "plain": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
                            tint={"enabled": False, "hue_degrees": 120}),
+    # WHAT THE GHOST SHOWS. Three states worth a look: the control usable
+    # in either position, and the one every recording made before this round
+    # lands in -- disabled, with the server's own sentence beside it.
+    "boxed": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           mario_boxes=True),
+    "mario": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           mario_boxes=True, view="mario"),
     "off": ghost_session(enabled=False, opacity=0.6),
     # The longest refusal the server can produce, not the shortest: a sheet
     # of the easy end of a range is a picture of a card nobody has.

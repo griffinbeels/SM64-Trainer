@@ -1122,6 +1122,34 @@ as the [[target]] changes.
   overlay on the [[ghost clock]], which is what lets it change without the
   overlay page reloading; the [[ghost follower]] applies it
 
+### Ghost view
+
+What a [[ghost]] draws: the whole recorded screen, or only Mario. The whole
+picture is the [[ghost]] you already know; only-Mario draws the rectangle he is
+in and leaves the scenery out, which is what makes it readable when your camera
+and the recording's have drifted apart. Only-Mario needs a [[Mario box list]]
+for that recording, so a [[run]] that has never had Mario found in it offers
+the choice greyed out and says so. Changing it takes effect on the next game
+[[frame]], because it travels on the [[ghost clock]].
+
+- **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it; it
+  travels on the [[ghost clock]]; `src/sm64_events/ui/ghost/index.html` draws
+  it, with the geometry in `src/sm64_events/ui/ghost/mariobox.js`; the switch
+  row (`src/sm64_events/ui/components/ghostswitch.js`) is where you choose it
+
+### Mario box list
+
+Where Mario is in every picture of one saved recording: a rectangle per
+picture, or nothing for a picture he is not in. You make one outside the
+trainer and save it beside the clip, so the recording itself stays untouched
+and the whole picture stays watchable. The trainer re-checks the list against
+the recording every time it reads one — it refuses a list that does not match
+picture for picture rather than drawing it a few pictures out.
+
+- **Lives** — `src/sm64_events/ghost/mariobox.py` reads it and checks it, from
+  a file named after the clip beside the clip; the [[ghost source]] hands it to
+  the overlay page
+
 ### Ghost colour
 
 The colour shift applied to a whole [[ghost]] picture so it cannot be mistaken
