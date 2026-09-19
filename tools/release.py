@@ -133,7 +133,13 @@ def main() -> int:
     tag = f"v{args.version}"
 
     _preflight()
-    _run(["uv", "run", "pytest", "-q"])
+    # THE PROJECT'S GATE, not a bare `pytest -q`. A serial whole-suite run is
+    # not the standard this repo merges against, and on 2026-09-18 it blocked
+    # a release for 2h30m and then failed 12 timing-sensitive tests -- A/V
+    # tolerances and UI animation frames -- that pass in 43 seconds through
+    # this door. It also skips `test_under_loadgroup_the_group_reached_the
+    # _scheduler`, which has no scheduler to check when run serially.
+    _run(["uv", "run", "python", "tools/run_tests.py"])
 
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
     PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))

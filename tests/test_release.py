@@ -119,3 +119,17 @@ def test_the_setup_fact_guard_can_still_fail():
     absent = [fact for fact, _ in SHARED_SETUP_FACTS if fact not in prose]
     assert len(absent) == len(SHARED_SETUP_FACTS), (
         "a 'fact' in the list is generic enough to appear in unrelated prose")
+
+
+def test_the_release_runs_the_projects_gate_not_a_bare_pytest():
+    """A release must ship through the same check a merge does.
+
+    `uv run pytest -q` is serial, takes 2h30m on this suite, and on
+    2026-09-18 failed 12 timing-sensitive tests (A/V tolerances, UI animation
+    frames) that pass in 43 seconds under tools/run_tests.py -- plus it skips
+    the loadgroup scheduler test, which has no scheduler to check serially.
+    The gate is the door; the release is not allowed its own weaker one."""
+    import inspect
+    source = inspect.getsource(release.main)
+    assert 'tools/run_tests.py' in source, "the release must call the project's gate"
+    assert '"pytest", "-q"' not in source, "a bare serial pytest is not the gate"
