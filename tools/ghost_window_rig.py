@@ -65,6 +65,7 @@ if str(REPO_ROOT / "src") not in sys.path:  # runnable as a plain script
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 from sm64_events.ghost.window import diag, native, style  # noqa: E402
 from sm64_events.ghost.window.geometry import Rect, rects_agree  # noqa: E402
+from sm64_events.ghost.window.protocol import alpha_byte  # noqa: E402
 
 PAGE = Path(__file__).resolve().parent / "ghost_rig_page.html"
 
@@ -224,6 +225,23 @@ def scale_between(smaller: Rect | None, larger: Rect | None) -> float | None:
     if abs(by_width - by_height) > 0.02:
         return None
     return round(by_width, 4)
+
+
+def checked_child_opacity(value: float) -> float:
+    """The only opacity the rig may start the overlay child with.
+
+    A structural guard rather than a careful caller. The child decides for
+    itself when to show its window, so the instrument must never be able to
+    hand it an opacity that would put a solid rectangle on the player's
+    screen: anything that does not round to an alpha of 0 is refused here,
+    before the process exists.
+    """
+    alpha = alpha_byte(value)
+    if alpha != 0:
+        raise ValueError(
+            f"the rig may only start the overlay child fully transparent; "
+            f"opacity {value!r} is alpha {alpha}")
+    return float(value)
 
 
 def rect_inside(outer: Rect, inner: Rect) -> bool:
@@ -1077,6 +1095,7 @@ class ChildProcess:
     def __init__(self, url: str, rect: Rect, log_path: Path, opacity: float):
         self.events: list[dict] = []
         self.lines: list[str] = []
+        opacity = checked_child_opacity(opacity)
         command = [sys.executable, "-m", "sm64_events.ghost.window",
                    "--url", url, "--opacity", f"{opacity:g}",
                    "--backend", "webview", "--title", CHILD_GAME_TITLE,
@@ -1247,8 +1266,13 @@ def _e4_show(bench: "Bench", child: "ChildProcess", hwnd: int, out: dict) -> boo
     out["alpha_before_rig_styles"] = native.get_alpha(hwnd)
     out["rig_applied_styles"] = style_report(native.apply_overlay_styles(hwnd),
                                              native.get_ex_style(hwnd))
-    # A value DIFFERENT from the one already cached, or `ensure_alpha` returns
-    # without asking Windows anything.
+    # The rig sets the alpha itself, on a window it has just made layered. The
+    # child cannot: it was started fully transparent, so `ensure_alpha` has
+    # already stored 0 as applied -- whether or not that first call succeeded
+    # -- and every later request for 0 is skipped as a repeat.
+    out["rig_set_alpha"] = native.set_alpha(hwnd, 0)
+    out["alpha_after_rig_set"] = native.get_alpha(hwnd)
+    # Asked anyway, so the log says what the child's own path does with it.
     child.send(opacity=0.0)
     out["alpha_readback_after_request"] = _wait_for_alpha(hwnd, 0)
     if out["alpha_readback_after_request"] != 0:
@@ -1325,10 +1349,13 @@ def experiment_4(bench: "Bench") -> dict:
     # this machine, and its window must not be mistaken for the one under test.
     known = {int(window.hwnd) for window in overlay_windows()}
     out["overlay_windows_before"] = sorted(known)
-    # present=always opens the child's own visibility gate on purpose: this
+    # present=always opens the child's own PAGE gate on purpose: this
     # experiment is about geometry, and the gate is experiment 1's subject.
+    # It does NOT make the window appear -- `--visible` is absent, so the
+    # follower answers `hidden_by_request` whatever the page says -- and the
+    # opacity is 0, so the child could not show anything solid even if it did.
     child = ChildProcess(page_url(bench.clip, present="always", post=False),
-                         bench.overlay_rect, log_path, opacity=1.0)
+                         bench.overlay_rect, log_path, opacity=0.0)
     bench.children.append(child)
     bench.guard.own_pids.add(child.process.pid)
     try:
