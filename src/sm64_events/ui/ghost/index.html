@@ -176,20 +176,30 @@ window.addEventListener("message", (event) => {
 //   no sample yet      -> nothing has said where the player is
 //   holding for a hold -> the clock feed stopped arriving (the emulator, or us)
 //   elsewhere          -> he is in another level; the template was never there
+//   past the attempt   -> the ghost's run is over; see below
 //   too far off        -> the picture on screen is not the one the rule names
 //
-// Parked at either END of the attempt's own span it stays TRUE: the ghost is
-// deliberately on its first picture through the reload after a reset, and on
-// its last while he is still going. See the report for the case against the
-// second one.
+// THE TWO ENDS OF THE SPAN ARE NOT THE SAME CASE, and the difference is what
+// the player gets out of it. Before the template's first picture -- the tenth
+// of a second of reload after a reset -- the ghost is parked on the frame it
+// is about to run from, and hiding the window for three game frames would be
+// a blink he reads as a fault. Past its last picture he is SLOWER than the
+// ghost was, and a frozen star-grab frame at half opacity sits over his game
+// telling him nothing he does not already know, exactly while he is still
+// trying to finish. So the ghost's run ending takes the window away, which is
+// itself the useful signal; his next reset brings it straight back, because
+// the counter returns to near zero and the follower re-places it.
+//
+// The follower still PARKS on the last picture either way (his ruling: never
+// a frame outside the attempt). This is only about whether the window is up.
 function presentable() {
   if (status.state !== "ready" || document.body.dataset.shown !== "yes")
     return false;
   if (!follower || !status.decision || !status.sample || status.holding)
     return false;
   const reason = status.decision.reason;
-  if (reason === "elsewhere") return false;
-  if (reason === "before_template" || reason === "past_template") return true;
+  if (reason === "elsewhere" || reason === "past_template") return false;
+  if (reason === "before_template") return true;
   const shown = follower.template.igtAtTime(videoTime());
   const target = status.sample.igt + follower.nudge;
   // The follower's own resync threshold: past it the ghost is not following,

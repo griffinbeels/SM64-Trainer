@@ -324,7 +324,9 @@ def _the_page_hands_the_span_to_the_follower(page, fixture, url: str) -> None:
     over = _trace(page, [LAST_IGT + 200] * 10)
     assert over["decision"]["reason"] == "past_template", over
     assert over["shown_igt"] == LAST_IGT, over
-    assert over["presentable"] is True, over
+    # The attempt is over, so the window comes down rather than freezing a
+    # grab frame over his game -- see `_presentable_tracks_the_footage`.
+    assert over["presentable"] is False, over
     fixture.span = None
 
 
@@ -346,11 +348,27 @@ def _presentable_tracks_the_footage(page) -> None:
     assert playing["shown"] is True, playing
 
     # Past the template's last picture -- he is slower than the ghost was.
-    # It parks on the grab frame and STAYS presentable; see the report for the
-    # argument against hiding the window there.
+    # The ghost's run is over, so the window goes away: a frozen star-grab
+    # frame over his game while he is still trying to finish tells him nothing
+    # and covers what he is doing. It still PARKS on that picture (nothing
+    # outside the attempt is ever shown); only the window is taken down.
     over = _trace(page, [700] * 10)
     assert over["decision"]["reason"] == "past_template", over
-    assert over["presentable"] is True, over
+    assert over["shown_igt"] == LAST_IGT, over
+    assert over["presentable"] is False, over
+
+    # ...and his next reset brings it straight back. The reload is the OTHER
+    # end of the span and it stays presentable: the ghost is parked on the
+    # frame it is about to run from, and taking the window away for the three
+    # game frames the counter spends below the template's start would be a
+    # blink he reads as a fault.
+    reloading = _trace(page, [0, 1, 2])
+    assert reloading["decision"]["reason"] == "before_template", reloading
+    assert reloading["shown_igt"] == 3, reloading
+    assert reloading["presentable"] is True, reloading
+
+    back = _trace(page, list(range(3, 40)))
+    assert back["presentable"] is True, back
 
     # The clock stops arriving (the emulator is paused, or the server went
     # away): the ghost holds, and there is no longer anything true on screen.
