@@ -35,6 +35,19 @@ e4  The real overlay child (`python -m sm64_events.ghost.window`) over the
     stand-in with `--fixed-rect`: the rectangle asked for, the rectangle read
     back, the stand-in's own, the extended-style bits Windows kept, the alpha,
     the z-order, and the window's own pixels.
+picture
+    Item 3. The stand-in carries a status-bar child like Project64's, so the
+    client rectangle, every child with its class, and the picture that comes
+    out of them are printed in both coordinate spaces. Also reads the PLAYER's
+    emulator if it is open -- read-only, nothing is touched -- because the
+    numbers that matter are the ones inside his own window.
+zorder
+    Item 4. The child is given the stand-in as its z-order anchor, the
+    relation "directly above, nothing between" is asserted, and then the
+    stand-in is raised over it repeatedly and the repair is timed -- once with
+    the reorder hook and once with `--no-reorder-watch`, so the hook's value
+    is a difference rather than a claim. It measures the z-order and the
+    repair; it cannot reproduce an activation or say what the player sees.
 
 The counters come back through the window TITLE, read with GetWindowText --
 `evaluate_js` is one of the things under suspicion, so the instrument may not
@@ -53,6 +66,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -64,7 +78,11 @@ if str(REPO_ROOT / "src") not in sys.path:  # runnable as a plain script
 
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 from sm64_events.ghost.window import diag, native, style  # noqa: E402
-from sm64_events.ghost.window.geometry import Rect, rects_agree  # noqa: E402
+from sm64_events.ghost.window.geometry import (  # noqa: E402
+    Rect,
+    bottom_strip,
+    rects_agree,
+)
 from sm64_events.ghost.window.protocol import alpha_byte  # noqa: E402
 
 PAGE = Path(__file__).resolve().parent / "ghost_rig_page.html"
@@ -74,6 +92,18 @@ PAGE = Path(__file__).resolve().parent / "ghost_rig_page.html"
 #: be the foreground window and can never be mistaken for the real thing.
 STANDIN_TITLE = "Project64 1.6 - SM64 Trainer rig stand-in"
 STANDIN_CLASS = "SM64TrainerGhostRigStandIn"
+
+#: How tall the stand-in's status-bar child is, in its own unaware space.
+#: Project64 1.6's is 23 logical pixels on his machine.
+STANDIN_STRIP_H = 23
+
+#: A child window, which is what a status bar is.
+WS_CHILD = 0x40000000
+
+#: `SetWindowPos`'s "put this at the front of the ordinary band". Used by the
+#: rig on ITS OWN stand-in, to provoke the reorder the overlay has to survive.
+HWND_TOP = 0
+SWP_NOMOVE_NOSIZE_NOACTIVATE = 0x0002 | 0x0001 | 0x0010
 
 #: What the overlay child is told to look for. Deliberately a title nothing on
 #: this machine has: with `--fixed-rect` the child never looks a window up, and
@@ -256,16 +286,37 @@ def rect_inside(outer: Rect, inner: Rect) -> bool:
             and inner.y + inner.height <= outer.y + outer.height)
 
 
-def standin_candidates(width: int, height: int, *, count: int = 8) -> list[Rect]:
+def standin_candidates(width: int, height: int, *, count: int = 24,
+                       screen: Rect | None = None,
+                       blocked: tuple[Rect, ...] = ()) -> list[Rect]:
     """Places to try putting the stand-in, in ITS OWN (unaware) space.
 
-    A list rather than a computed answer because the coordinate a DPI-unaware
-    window is given is not the coordinate it ends up at -- that is the whole
-    subject of this rig. Each one is created, measured in the aware space, and
-    kept or moved on.
+    A list of guesses rather than a computed answer, because the coordinate a
+    DPI-unaware window is given is not the coordinate it ends up at -- that is
+    the whole subject of this rig. Each one is created, measured in the aware
+    space, and kept or moved on; this only decides the ORDER of the tries.
+
+    Walks the whole desktop rather than a short diagonal from the top-left.
+    With Project64 maximized -- 2409x1910 of a 2560-wide monitor, which is how
+    he actually plays -- every spot on that diagonal was over the emulator and
+    the rig had nowhere to stand (measured 2026-09-19, eight refusals and no
+    run). Spots overlapping a `blocked` rectangle are dropped up front so the
+    walk spends its tries somewhere it might land.
     """
-    return [Rect(x=80 + 150 * index, y=80 + 70 * index,
-                 width=width, height=height) for index in range(count)]
+    if screen is None:
+        screen = Rect(x=0, y=0, width=1920, height=1080)
+    step_x, step_y = width + 40, height + 40
+    spots: list[Rect] = []
+    y = screen.y + 20
+    while y + height <= screen.y + screen.height and len(spots) < count * 4:
+        x = screen.x + 20
+        while x + width <= screen.x + screen.width and len(spots) < count * 4:
+            spot = Rect(x=x, y=y, width=width, height=height)
+            if not any(rects_intersect(spot, taken) for taken in blocked):
+                spots.append(spot)
+            x += step_x
+        y += step_y
+    return spots[:count]
 
 
 def zorder_relation(order: list[int], overlay: int, other: int) -> str:
@@ -496,6 +547,31 @@ def read_client_rect(hwnd: int, context: int) -> Rect | None:
         return native.read_game_window(hwnd).client
 
 
+def read_picture_rect(hwnd: int, context: int) -> Rect | None:
+    """The part of the window a renderer would draw into, in ONE context."""
+    with dpi_context(context):
+        return native.read_game_window(hwnd).picture
+
+
+def read_window_survey(hwnd: int, context: int) -> dict:
+    """Client, every child with its class and rectangle, and the picture.
+
+    The exact numbers item 3 turns on, all read in ONE named context by the
+    same reader the overlay runs. Read-only: enumerate, measure, never touch.
+    """
+    with dpi_context(context):
+        seen = native.read_game_window(hwnd)
+    strip = bottom_strip(seen.client, seen.children)
+    return {"found": seen.found, "minimized": seen.minimized,
+            "client": seen.client.as_list() if seen.client else None,
+            "children": [{"class": child.cls, "rect": child.rect.as_list(),
+                          "visible": child.visible, "hwnd": child.hwnd}
+                         for child in seen.children],
+            "picture": seen.picture.as_list() if seen.picture else None,
+            "subtracted": strip.cls if strip else None,
+            "picture_equals_client": seen.picture == seen.client}
+
+
 class StandIn:
     """A window standing in for Project64: unaware, fixed, never shown.
 
@@ -505,10 +581,13 @@ class StandIn:
     two is exactly the defect this rig has to be able to catch.
     """
 
-    def __init__(self, rect: Rect, title: str = STANDIN_TITLE):
+    def __init__(self, rect: Rect, title: str = STANDIN_TITLE,
+                 strip_height: int = STANDIN_STRIP_H):
         self.asked = rect
         self.title = title
+        self.strip_height = strip_height
         self.hwnd = 0
+        self.strip_hwnd = 0
         self.error: str | None = None
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -563,6 +642,17 @@ class StandIn:
             None, None, module, None) or 0)
         if not self.hwnd:
             self.error = f"CreateWindowExW failed, GetLastError={ctypes.GetLastError()}"
+            return
+        if self.strip_height > 0:
+            # Project64 1.6 keeps a `msctls_statusbar32` docked along the
+            # bottom of its own client area and the renderer draws into what is
+            # left. A child of ours in the same place is what lets the picture
+            # rule be measured without reading the player's emulator.
+            self.strip_hwnd = int(user32.CreateWindowExW(
+                0, "STATIC", "", WS_CHILD | style.WS_VISIBLE,
+                0, self.asked.height - self.strip_height,
+                self.asked.width, self.strip_height,
+                wt.HWND(self.hwnd), None, module, None) or 0)
 
 
 # --------------------------------------------------------------------------
@@ -1089,25 +1179,52 @@ def _e1_verdict(out: dict) -> str:
 # experiment 4
 # --------------------------------------------------------------------------
 
+def child_command(url: str, rect: Rect, opacity: float, *,
+                  anchor_hwnd: int = 0, reorder_watch: bool = True,
+                  python: str | None = None) -> list[str]:
+    """The exact command line the rig starts the overlay child with.
+
+    **Every value goes in as `--flag=value`, and that is not a style choice.**
+    A rectangle on a monitor left of the primary starts with a minus sign, and
+    argparse reads `--fixed-rect -2540,-127,640,457` as a flag with no value:
+    the child exits 2 before it can write a single line of its own log, which
+    reads exactly like "the overlay never made a window" (measured 2026-09-19,
+    once Project64 maximized pushed the stand-in onto his left screen).
+    """
+    return [python or sys.executable, "-m", "sm64_events.ghost.window",
+            f"--url={url}", f"--opacity={checked_child_opacity(opacity):g}",
+            "--backend=webview", f"--title={CHILD_GAME_TITLE}",
+            f"--fixed-rect={','.join(str(value) for value in rect.as_list())}",
+            # The rectangle stands in for the PICTURE; the anchor stands in for
+            # the window the ghost has to sit directly above. Read, never
+            # modified, and absent unless a caller asked for one.
+            *([f"--anchor-hwnd={int(anchor_hwnd)}"] if anchor_hwnd else []),
+            *([] if reorder_watch else ["--no-reorder-watch"])]
+
+
 class ChildProcess:
     """The REAL overlay child, started the way the trainer starts it."""
 
-    def __init__(self, url: str, rect: Rect, log_path: Path, opacity: float):
+    def __init__(self, url: str, rect: Rect, log_path: Path, opacity: float,
+                 *, anchor_hwnd: int = 0, reorder_watch: bool = True):
         self.events: list[dict] = []
         self.lines: list[str] = []
-        opacity = checked_child_opacity(opacity)
-        command = [sys.executable, "-m", "sm64_events.ghost.window",
-                   "--url", url, "--opacity", f"{opacity:g}",
-                   "--backend", "webview", "--title", CHILD_GAME_TITLE,
-                   "--fixed-rect", ",".join(str(v) for v in rect.as_list())]
+        self.errors: list[str] = []
+        command = child_command(url, rect, opacity, anchor_hwnd=anchor_hwnd,
+                                reorder_watch=reorder_watch)
         environment = dict(os.environ)
         environment[diag.PATH_ENV] = str(log_path)
         self.command = command
         self.process = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+            stderr=subprocess.PIPE, text=True, encoding="utf-8",
             cwd=str(REPO_ROOT), env=environment, **quiet_spawn_kwargs())
         threading.Thread(target=self._read, name="rig-child-reader",
+                         daemon=True).start()
+        # Kept, not discarded. A child that dies inside argparse never reaches
+        # its own log, and "the overlay never made a findable window" is what
+        # that looked like from here until 2026-09-19.
+        threading.Thread(target=self._read_errors, name="rig-child-stderr",
                          daemon=True).start()
 
     def _read(self) -> None:
@@ -1120,6 +1237,10 @@ class ChildProcess:
                 continue
             if isinstance(payload, dict) and "event" in payload:
                 self.events.append(payload)
+
+    def _read_errors(self) -> None:
+        for line in self.process.stderr:
+            self.errors.append(line.rstrip("\n"))
 
     def send(self, **message) -> None:
         self.process.stdin.write(json.dumps(message) + "\n")
@@ -1295,13 +1416,18 @@ def _e4_measure(bench: "Bench", hwnd: int, log_path: Path, out: dict) -> None:
     """Rectangle, styles, alpha, owner, z-order and pixels, all read back."""
     with dpi_context(style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
         read_back = native.get_window_rect(hwnd)
-    standin_aware = bench.standin_client_aware
+    standin_aware = bench.standin_picture_aware
     out["rect_read_back_aware"] = read_back.as_list() if read_back else None
-    out["standin_client_aware"] = (standin_aware.as_list()
-                                   if standin_aware else None)
+    out["standin_client_aware"] = (bench.standin_client_aware.as_list()
+                                   if bench.standin_client_aware else None)
+    out["standin_picture_aware"] = (standin_aware.as_list()
+                                    if standin_aware else None)
     out["rect_equals_asked"] = rects_agree(bench.overlay_rect, read_back)
-    out["rect_equals_standin_client"] = (
+    out["rect_equals_standin_picture"] = (
         standin_aware is not None and rects_agree(standin_aware, read_back))
+    out["covers_the_strip"] = (
+        bench.standin_client_aware is not None and read_back is not None
+        and rects_agree(bench.standin_client_aware, read_back))
     out["scale_vs_asked"] = scale_between(bench.overlay_rect, read_back)
     out["ex_style_when_shown"] = style_report(style.OVERLAY_EX_STYLE,
                                               native.get_ex_style(hwnd))
@@ -1320,9 +1446,38 @@ def _e4_measure(bench: "Bench", hwnd: int, log_path: Path, out: dict) -> None:
                                if row.get("event") == "page_status"]
 
 
+def _reassert_gaps(rounds: list[dict], rows: list[dict]) -> dict:
+    """Milliseconds from the rig raising the stand-in to the child's own row.
+
+    Both stamps are UTC from the same machine clock, so this is the number the
+    player would feel: how long the ghost was behind the game.
+    """
+    reasserted = sorted(datetime.fromisoformat(row["utc"]) for row in rows
+                        if row.get("event") == "z_reasserted")
+    gaps: list[float] = []
+    unmatched = 0
+    for entry in rounds:
+        raised = datetime.fromisoformat(entry["raised_at"])
+        after = [stamp for stamp in reasserted if stamp >= raised]
+        if not after:
+            unmatched += 1
+            continue
+        gaps.append(round((after[0] - raised).total_seconds() * 1000.0, 1))
+    if not gaps:
+        return {"rows": len(reasserted), "unmatched": unmatched,
+                "note": "the child logged no z_reasserted after any raise"}
+    ordered = sorted(gaps)
+    return {"rows": len(reasserted), "unmatched": unmatched, "each_ms": gaps,
+            "min_ms": ordered[0], "median_ms": ordered[len(ordered) // 2],
+            "max_ms": ordered[-1]}
+
+
 def _e4_finish(child: "ChildProcess", log_path: Path, out: dict) -> None:
     child.close()
     out["child_exit_code"] = child.process.poll()
+    out["child_command"] = child.command
+    if child.process.poll():
+        out["child_stderr"] = child.errors[-12:]
     rows = diag.read(log_path)
     out["diag_events"] = [row.get("event") for row in rows]
     out["diag_first_alpha"] = next(
@@ -1332,6 +1487,8 @@ def _e4_finish(child: "ChildProcess", log_path: Path, out: dict) -> None:
     out["diag_placed"] = [row for row in rows
                           if row.get("event") in ("placed", "place_mismatch")]
     out["ordering"] = _ordering_finding(rows)
+    if out.get("rounds"):
+        out["reassert_gap"] = _reassert_gaps(out["rounds"], rows)
 
 
 def experiment_4(bench: "Bench") -> dict:
@@ -1385,6 +1542,221 @@ def _ordering_finding(rows: list[dict]) -> dict:
             "gap_rows": abs(first_styles - first_alpha)}
 
 
+
+# --------------------------------------------------------------------------
+# item 3: the picture is the client MINUS the emulator's own chrome
+# --------------------------------------------------------------------------
+
+def experiment_picture(bench: "Bench") -> dict:
+    """Does the reader find the status bar and take it off the picture?
+
+    Creates nothing and shows nothing: the stand-in already exists and carries
+    a status-bar child, and Project64 -- if the player has it open -- is read
+    with the same read-only survey and never touched.
+    """
+    out: dict = {"name": "picture", "question":
+                 "is the rectangle the overlay is given the part of the "
+                 "client area the renderer draws into?"}
+    standin = bench.standin
+    out["standin_strip_height_unaware"] = standin.strip_height
+    out["standin_strip_hwnd"] = standin.strip_hwnd
+    for name, context in (("unaware", style.DPI_AWARENESS_CONTEXT_UNAWARE),
+                          ("per_monitor_aware",
+                           style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)):
+        out["standin_" + name] = read_window_survey(standin.hwnd, context)
+    aware = out["standin_per_monitor_aware"]
+    client, picture = aware["client"], aware["picture"]
+    out["verdict"] = _picture_verdict(aware, client, picture)
+    out["shortfall_px"] = (None if not client or not picture
+                           else client[3] - picture[3])
+    # Read-only, and the whole point of item 3: what the PLAYER's emulator
+    # actually contains. Never modified, messaged or reparented.
+    out["project64"] = _project64_survey()
+    return out
+
+
+def _picture_verdict(aware: dict, client, picture) -> str:
+    if not client or not picture:
+        return "the stand-in reported no rectangle"
+    if aware["subtracted"] is None:
+        return "no strip was found, so the picture is the whole client"
+    if picture[3] >= client[3]:
+        return "a strip was found but nothing came off the picture"
+    return "picture is client minus the " + aware["subtracted"] + " strip"
+
+
+def _project64_survey() -> dict:
+    """The player's emulator, read only, in the context the placer uses."""
+    from sm64_events.replay.window import enum_windows
+
+    out: dict = {"windows": []}
+    for window in enum_windows():
+        if PROTECTED_TITLE not in (window.title or "").lower():
+            continue
+        if not window.visible:
+            continue
+        survey = read_window_survey(
+            window.hwnd, style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+        survey["title"] = window.title
+        survey["unaware"] = read_window_survey(
+            window.hwnd, style.DPI_AWARENESS_CONTEXT_UNAWARE)
+        out["windows"].append(survey)
+    if not out["windows"]:
+        out["note"] = "Project64 was not running; nothing was read"
+    return out
+
+
+# --------------------------------------------------------------------------
+# item 4: directly above the game, and back there promptly
+# --------------------------------------------------------------------------
+
+def _raise_standin(hwnd: int) -> bool:
+    """Put the rig's OWN stand-in at the front of the ordinary band.
+
+    This is the reorder the overlay has to survive, generated without touching
+    focus: `SetForegroundWindow` on a never-shown window does nothing, and
+    taking the player's foreground is forbidden anyway.
+    """
+    user32, _ = _win32()
+    return bool(user32.SetWindowPos(wt.HWND(hwnd), wt.HWND(HWND_TOP), 0, 0, 0,
+                                    0, SWP_NOMOVE_NOSIZE_NOACTIVATE))
+
+
+def directly_above(overlay: int, other: int) -> bool:
+    """Is the overlay the window immediately above `other`? ONE call.
+
+    `zorder_relation` over `zorder_list` answers the same question and says
+    more when it is wrong, but it walks every top-level window on the machine
+    -- 631 of them here, ~90 ms a pass -- which is LONGER THAN THE REPAIR being
+    timed. The first run of this measurement reported ~92 ms for both the
+    hooked and the unhooked overlay, and the only thing separating them was a
+    flag on the first read. An instrument slower than its subject measures
+    itself, so the poll below asks the cheap question and the expensive one is
+    kept for the verdict at each end.
+    """
+    return int(native.window_above(other) or 0) == overlay
+
+
+def _repair_latency(overlay: int, standin: int, *,
+                    timeout_s: float = 2.0) -> dict:
+    """Raise the stand-in, then time the ghost getting back above it."""
+    before = zorder_relation(zorder_list(), overlay, standin)
+    started = time.perf_counter()
+    # Stamped in the same clock the child writes its log in, so the repair can
+    # be timed from the child's own `z_reasserted` row. The rig's own poll
+    # cannot do it: `SetWindowPos` on a window of ours delivers messages to
+    # every thread that owns one, and the overlay's belongs to a process busy
+    # inside WebView2, so the call alone takes 70-100 ms here.
+    raised_at = datetime.now(timezone.utc)
+    raised = _raise_standin(standin)
+    buried = directly_above(overlay, standin)
+    deadline = started + timeout_s
+    repaired = buried
+    while not repaired and time.perf_counter() < deadline:
+        repaired = directly_above(overlay, standin)
+    return {"before": before, "raise_ok": raised,
+            "raised_at": raised_at.isoformat(),
+            "buried_at_first_read": not buried,
+            "after": zorder_relation(zorder_list(), overlay, standin),
+            "ms": round((time.perf_counter() - started) * 1000.0, 1),
+            "repaired": repaired}
+
+
+def _probe_cost(overlay: int, standin: int, *, samples: int = 200) -> dict:
+    """What one poll costs, so a latency can be read against its own floor."""
+    started = time.perf_counter()
+    for _ in range(samples):
+        directly_above(overlay, standin)
+    cheap = (time.perf_counter() - started) * 1000.0 / samples
+    started = time.perf_counter()
+    zorder_relation(zorder_list(), overlay, standin)
+    return {"one_poll_ms": round(cheap, 3),
+            "full_walk_ms": round((time.perf_counter() - started) * 1000.0, 1)}
+
+
+def _zorder_run(bench: "Bench", *, watch: bool, rounds: int) -> dict:
+    """One child, asserted above the stand-in, then knocked down `rounds` times."""
+    out: dict = {"reorder_watch": watch}
+    name = "hook" if watch else "tick"
+    log_path = bench.scratch / ("z_" + name + "_ghost_window.jsonl")
+    with contextlib.suppress(OSError):
+        log_path.unlink()
+    known = {int(window.hwnd) for window in overlay_windows()}
+    out["foreground_before_create"] = bench.guard.wait_until_clear()
+    child = ChildProcess(page_url(bench.clip, present="always", post=False),
+                         bench.overlay_rect, log_path, opacity=0.0,
+                         anchor_hwnd=bench.standin.hwnd,
+                         reorder_watch=watch)
+    bench.children.append(child)
+    bench.guard.own_pids.add(child.process.pid)
+    try:
+        hwnd = _e4_bring_up(bench, child, out, known)
+        if not hwnd or not _e4_show(bench, child, hwnd, out):
+            return out
+        out["ex_style_topmost"] = bool(native.get_ex_style(hwnd)
+                                       & style.WS_EX_TOPMOST)
+        out["owner"] = native.get_owner(hwnd)
+        out["relation_when_placed"] = zorder_relation(
+            zorder_list(), hwnd, bench.standin.hwnd)
+        out["window_above_overlay"] = native.window_above(hwnd)
+        out["probe_cost_ms"] = _probe_cost(hwnd, bench.standin.hwnd)
+        rounds_out = []
+        for _ in range(rounds):
+            rounds_out.append(_repair_latency(hwnd, bench.standin.hwnd))
+            # Let the follower settle before knocking it down again, or the
+            # next round measures a loop still finishing the last one.
+            time.sleep(0.3)
+        out["rounds"] = rounds_out
+        repaired = sorted(row["ms"] for row in out["rounds"] if row["repaired"])
+        out["repaired_of"] = [len(repaired), rounds]
+        if repaired:
+            out["ms"] = {"min": repaired[0],
+                         "median": repaired[len(repaired) // 2],
+                         "max": repaired[-1]}
+        out["foreground_at_end"] = bench.guard.check(
+            out["foreground_before_create"])
+        return out
+    finally:
+        _e4_finish(child, log_path, out)
+
+
+def experiment_zorder(bench: "Bench", rounds: int = 8) -> dict:
+    """Is the ghost directly above the game, and how fast does it get back?
+
+    **What a never-shown stand-in CAN answer.** Windows keeps one z-order for
+    every top-level window, shown or not, so `SetWindowPos` moves a hidden
+    window in it and `GetWindow(GW_HWNDPREV)` reads the result. The relation
+    "directly above, with nothing between" and the time the overlay takes to
+    restore it after something is raised in front are therefore real
+    measurements rather than stand-ins for one.
+
+    **What it CANNOT.** An activation. `SetForegroundWindow` on a window that
+    was never shown does nothing, and taking the player's foreground is
+    forbidden, so his actual gesture -- clicking Project64, which raises the
+    emulator AND fires `EVENT_SYSTEM_FOREGROUND` -- is reproduced here by its
+    z-order half alone, through `EVENT_OBJECT_REORDER`. It also cannot say
+    whether the ghost LOOKS right over a DirectX surface. Those stay his.
+    """
+    out: dict = {"name": "zorder", "question":
+                 "does the overlay sit directly above the game window, never "
+                 "topmost, and how long is it buried when something is "
+                 "raised over it?",
+                 "standin": bench.standin_report["hwnd"],
+                 "measures": "z-order relation and repair latency; not an "
+                             "activation, and not what the player sees"}
+    out["with_hook"] = _zorder_run(bench, watch=True, rounds=rounds)
+    out["tick_only"] = _zorder_run(bench, watch=False, rounds=rounds)
+    hook = out["with_hook"].get("reassert_gap") or {}
+    tick = out["tick_only"].get("reassert_gap") or {}
+    if "median_ms" in hook and "median_ms" in tick:
+        out["median_saved_ms"] = round(tick["median_ms"] - hook["median_ms"], 1)
+    out["buried_at_first_read"] = {
+        key: sum(1 for row in out[key].get("rounds") or []
+                 if row["buried_at_first_read"])
+        for key in ("with_hook", "tick_only")}
+    return out
+
+
 # --------------------------------------------------------------------------
 # the bench
 # --------------------------------------------------------------------------
@@ -1397,6 +1769,10 @@ class Bench:
     standin: StandIn
     standin_report: dict
     standin_client_aware: Rect | None
+    #: What the overlay is asked to cover: the stand-in's client MINUS its
+    #: status-bar child, exactly as the real follower covers Project64's
+    #: picture rather than its client area.
+    standin_picture_aware: Rect | None
     overlay_rect: Rect
     hosts: list
     children: list
@@ -1412,9 +1788,9 @@ def place_standin(width: int, height: int) -> tuple[StandIn, dict]:
     """
     with dpi_context(style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
         screen = virtual_screen()
-    blocked = _emulator_rects()
+    blocked = tuple(_emulator_rects())
     tried: list[dict] = []
-    for spot in standin_candidates(width, height):
+    for spot in standin_candidates(width, height, screen=screen, blocked=blocked):
         standin = StandIn(spot)
         standin.start()
         aware = read_client_rect(standin.hwnd,
@@ -1429,6 +1805,8 @@ def place_standin(width: int, height: int) -> tuple[StandIn, dict]:
         elif any(rects_intersect(aware, taken) for taken in blocked):
             refusal = "over a Project64 window"
         if refusal is None:
+            picture = read_picture_rect(
+                standin.hwnd, style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
             return standin, {
                 "hwnd": standin.hwnd, "error": standin.error,
                 "title": standin.title,
@@ -1436,13 +1814,16 @@ def place_standin(width: int, height: int) -> tuple[StandIn, dict]:
                 "asked_unaware": spot.as_list(),
                 "client_unaware": unaware.as_list() if unaware else None,
                 "client_aware": aware.as_list() if aware else None,
+                "picture_aware": picture.as_list() if picture else None,
+                "strip_hwnd": standin.strip_hwnd,
                 "aware_over_unaware": scale_between(unaware, aware),
                 "screen_aware": screen.as_list(),
                 "emulator_rects": [rect.as_list() for rect in blocked],
                 "rejected": tried}
         tried.append({"asked_unaware": spot.as_list(), "reason": refusal})
         standin.close()
-    raise Blocked(f"no room for the stand-in clear of Project64: {tried}")
+    raise Blocked(f"no room for the stand-in clear of Project64 on "
+                  f"{screen.as_list()}: {tried}")
 
 
 def build_bench(scratch: Path, width: int, height: int) -> Bench:
@@ -1451,11 +1832,18 @@ def build_bench(scratch: Path, width: int, height: int) -> Bench:
     if standin.hwnd:
         guard.own_hwnds.add(standin.hwnd)
     aware = Rect(*report["client_aware"]) if report["client_aware"] else None
+    picture = Rect(*report["picture_aware"]) if report["picture_aware"] else None
     clip = scratch / "rig_clip.mp4"
     report["clip"] = ensure_clip(clip)
     return Bench(scratch=scratch, clip=clip, guard=guard, standin=standin,
                  standin_report=report, standin_client_aware=aware,
-                 overlay_rect=aware or Rect(*report["asked_unaware"]),
+                 standin_picture_aware=picture,
+                 # The PICTURE, not the client. Handing the child the client
+                 # makes its own second opinion disagree with it -- measured
+                 # 2026-09-19: every placement came back `game_moved`, so the
+                 # placer forgot the rectangle and could never re-assert the
+                 # z-order. The rig has to ask for what the overlay asks for.
+                 overlay_rect=picture or aware or Rect(*report["asked_unaware"]),
                  hosts=[], children=[])
 
 
@@ -1489,7 +1877,9 @@ def close_bench(bench: Bench) -> dict:
             "survivors": survivors}
 
 
-EXPERIMENTS = {"e1": experiment_1, "e4": experiment_4}
+EXPERIMENTS = {"e1": experiment_1, "e4": experiment_4,
+               "picture": experiment_picture,
+               "zorder": experiment_zorder}
 
 
 def build_parser() -> argparse.ArgumentParser:

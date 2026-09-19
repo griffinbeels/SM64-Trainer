@@ -16,6 +16,10 @@ Three threads, and each one is here for a reason.
   with NO timeout, so a wedged page holds whoever asked, and a held follower
   is a ghost frozen on his screen. This thread is the one allowed to hang;
   the follower reads its last answer and treats a stale one as a no.
+- REORDER pumps a message queue so Windows can tell us the stacking order
+  moved -- his click on Project64 raises the emulator over the ghost, and
+  waiting a whole tick to put it back is a blink he can see (`reorder.py`).
+  It sets the follower's wake event and touches no window itself.
 
 **FOLLOW owns every window call, and that is the fix of 2026-09-19.** DPI
 awareness is per thread, so a rectangle read on one thread and applied on
@@ -43,6 +47,7 @@ from sm64_events.ghost.window.geometry import (
     GameWindow,
     Placement,
     Rect,
+    bottom_strip,
     follow_decision,
 )
 from sm64_events.ghost.window.host import BACKENDS, RAISED, PageAnswer, make_host
@@ -53,6 +58,7 @@ from sm64_events.ghost.window.protocol import (
     is_allowed_url,
     parse_control_line,
 )
+from sm64_events.ghost.window.reorder import ReorderWatch
 from sm64_events.ghost.window.visibility import Visibility, visibility_for
 
 log = logging.getLogger("sm64.ghost")
@@ -314,6 +320,13 @@ def build_parser() -> argparse.ArgumentParser:
                         metavar="X,Y,W,H",
                         help="stand in for the emulator at this rectangle "
                              "instead of looking for it")
+    parser.add_argument("--anchor-hwnd", type=int, default=0,
+                        help="measurement only: the window to sit directly "
+                             "above while --fixed-rect stands in for the "
+                             "emulator's picture. Read, never modified.")
+    parser.add_argument("--no-reorder-watch", action="store_true",
+                        help="measurement only: fall back to the follow tick "
+                             "for putting the ghost back above the game")
     return parser
 
 
@@ -329,20 +342,51 @@ def make_emitter(stream):
     return emit
 
 
+def record_geometry(record, game: GameWindow | None) -> None:
+    """What the emulator's window actually looks like, whenever it changes.
+
+    Round 3's instrument: he reported the ghost "almost" overlaid, and nothing
+    on disk could say which rectangle it had been given or what was inside it.
+    So every number the picture is derived from is written down -- the client
+    area, every child window with its class and rectangle, the picture that
+    came out and which child was subtracted to get it. `diag.Collapsing` means
+    a steady window costs one row, not ten a second.
+    """
+    if game is None or not game.found or game.client is None:
+        record("game_geometry", level="info", found=bool(game and game.found),
+               client=None, children=[], picture=None, why="no_client")
+        return
+    strip = bottom_strip(game.client, game.children)
+    record("game_geometry", level="info", client=game.client,
+           children=[{"class": child.cls, "rect": child.rect,
+                      "visible": child.visible} for child in game.children],
+           picture=game.picture, foreground=game.foreground,
+           why=f"client_minus_{strip.cls}" if strip else "whole_client")
+
+
 def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowLoop:
     """The follow loop wired to this run: what it looks at, what it moves.
 
     `--fixed-rect` stands in for the emulator so the suite never queries
-    Project64's window; with no game handle the placer leaves the z-order
-    alone, which is what makes a test child safe to run while he plays.
+    Project64's window. With no anchor handle the placer leaves the z-order
+    alone, which is what makes a test child safe to run while he plays;
+    `--anchor-hwnd` is how the rig hands it a stand-in to sit above instead.
     """
     if args.fixed_rect is not None:
         fixed = GameWindow(found=True, minimized=False, client=args.fixed_rect)
+        watcher.hwnd = int(args.anchor_hwnd or 0)
 
         def observe() -> GameWindow:
             return fixed
     else:
         observe = watcher.observe
+
+    geometry_log = diag.Collapsing()
+
+    def look() -> GameWindow | None:
+        game = observe()
+        record_geometry(geometry_log, game)
+        return game
 
     # The background handover is retried until it takes, so its refusals
     # collapse into one row with a count rather than one row per tick.
@@ -382,7 +426,7 @@ def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowL
         placer.apply(host.hwnd(), wanted_for(placement), game_hwnd=watcher.hwnd)
         return True
 
-    return FollowLoop(observe=observe, apply=place,
+    return FollowLoop(observe=look, apply=place,
                       wanted=lambda: state.visible, prepare=prepare,
                       presentable=page.presentable)
 
@@ -404,9 +448,12 @@ def main(argv=None) -> int:
     watcher = Project64Watcher(args.title)
     diag.record("child_start", level="info", backend=host.name, url=state.url,
                 opacity=state.opacity, visible=state.visible,
-                title=args.title, process_pin_ok=bool(dpi_pinned))
+                title=args.title, process_pin_ok=bool(dpi_pinned),
+                reorder_watch=not args.no_reorder_watch,
+                anchor_hwnd=int(args.anchor_hwnd or 0))
 
     page = PageWatch(host)
+    watch = ReorderWatch(wake)
     follow = build_follower(args, watcher=watcher, host=host, placer=placer,
                             state=state, emit=emit, page=page)
     plane = ControlPlane(host=host, state=state, emit=emit, wake=wake)
@@ -433,6 +480,12 @@ def main(argv=None) -> int:
         threading.Thread(target=page.run, args=(stop, PAGE_PERIOD_S),
                          name="ghost-page", daemon=True),
     ]
+    if not args.no_reorder_watch:
+        # Its own thread because it has to pump a message queue, and the
+        # follower cannot: it spends its time inside user32 queries against
+        # Project64. All it ever does is set the follower's wake event.
+        threads.append(threading.Thread(
+            target=watch.run, args=(stop,), name="ghost-reorder", daemon=True))
     # Ready goes out BEFORE the follower can report its DPI context or its
     # first placement, so whoever reads this stream sees the child come up in
     # one known order.
