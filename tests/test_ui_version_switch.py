@@ -130,7 +130,7 @@ def library_page(library_server):
     flakiness test_ui_library_target.py's own fixture already paid for."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-target .library-section", timeout_ms=15000)
         yield page
@@ -251,7 +251,7 @@ def test_the_effective_version_still_picks_which_ladder_the_bands_come_from(
     def cutoff_on_a_fresh_page():
         with driver.get_driver().launch(headless=True) as page:
             page.goto(f"{library_server}/ui/index.html")
-            page.wait_for(".log-list-card", timeout_ms=20000)
+            page.wait_for(".log-list-card")
             page.evaluate(CLICK_LIBRARY_TAB)
             page.wait_for(".library-target .library-section", timeout_ms=15000)
             assert page.evaluate(OPEN_OWL_STRAT), "no Owl strat section"

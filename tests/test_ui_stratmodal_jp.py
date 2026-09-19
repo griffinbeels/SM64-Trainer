@@ -237,7 +237,7 @@ def modal_page(jp_server):
     of that should leak into a sibling test."""
     with driver.get_driver().launch(headless=True, viewport=(1500, 1100)) as page:
         page.goto(f"{jp_server}/ui/index.html")
-        page.wait_for(".log-card", timeout_ms=20000)
+        page.wait_for(".log-card")
         _open_new_strategy_modal(page)
         yield page
 

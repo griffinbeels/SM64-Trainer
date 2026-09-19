@@ -81,7 +81,7 @@ def library_page(library_server):
     the fixture's own seeded attempts)."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-target .library-section", timeout_ms=15000)
         yield page
@@ -595,7 +595,7 @@ def test_a_click_the_instant_the_header_exists_is_never_reverted(library_server)
     for trial in range(10):
         with driver.get_driver().launch(headless=True) as page:
             page.goto(f"{library_server}/ui/index.html")
-            page.wait_for(".log-list-card", timeout_ms=20000)
+            page.wait_for(".log-list-card")
             open_name = page.evaluate(click_and_wait_for_settle)
             assert open_name == target_name, (trial, open_name)
 
@@ -767,7 +767,7 @@ def test_an_ungraded_movement_says_so_rather_than_rendering_nothing():
             {"target_index": target["index"]}, method="POST")
         assert api(library_server, f"/api/library/target/{target['index']}")["entity_key"] is None
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         # The tab AUTO-OPENS onto the last-practiced star's target page, so
         # the course grid is not on screen yet -- walk back to it first. A
@@ -812,7 +812,7 @@ def test_a_star_with_no_saved_time_still_marks_the_floor_it_stands_on(library_se
     attempts for, which is the only way this state renders at all."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-target", timeout_ms=15000)
         page.evaluate("document.querySelector('.library-page .entity-back').click()")
@@ -1190,7 +1190,7 @@ def test_a_movement_with_no_wiki_page_draws_no_mark(library_server):
     rejects. Same navigation as the ungraded-movement test above."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-target", timeout_ms=15000)
         page.evaluate("document.querySelector('.library-page .entity-back').click()")

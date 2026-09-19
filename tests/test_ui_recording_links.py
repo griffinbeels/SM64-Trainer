@@ -32,7 +32,7 @@ def server():
 def page(server):
     with driver.get_driver().launch(headless=True, viewport=(850, 900)) as browser:
         browser.goto(f"{server}/ui/index.html")
-        browser.wait_for(".log-list-card", timeout_ms=20000)
+        browser.wait_for(".log-list-card")
         browser.evaluate("""(() => {
           window.recording = {url: null, revision: 0};
           window.calls = []; window.failSave = false; window.conflict = false;
