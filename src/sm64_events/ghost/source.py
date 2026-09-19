@@ -44,11 +44,19 @@ records both ends: the attempt row carries the game frame its anchor (the
 reset) landed on and how many frames it ran, and the clip's frame map says
 which game frame every picture shows. So the span is two lookups —
 the first picture at or after the start, the last picture at or before the end
-— and `basis` records which reading answered. The END is the frame the
-attempt's TIME was taken on, because that is where the recorded time stops; for
-a midair grab the game stops at the landing (the x-cam), a little after the
-touch, and the touch travels separately as `grab_frame` for anyone who wants
-to end there instead.
+— and `basis` records which reading answered.
+
+**A star ends on the TOUCH.** His ruling, 2026-09-19: *"End at the touch. No
+reason to keep it after that... Disappear upon its own star touch."* The
+recorded TIME is taken at the landing (the x-cam, 0-39 frames after a midair
+grab), and the ghost used to run that far; it now stops where he stops
+watching. The touch is journaled on the grab event's own `grab_frame` and
+never copied onto the attempt, so it is read back through the narrowest
+read-only door there is — the journal rows inside the attempt's own wall-clock
+span. The landing stays on the span as `timed_frame`, so nothing is lost, and
+a row whose touch cannot be found (a grab journaled before that field existed,
+an imported time) falls back to it and says so in `basis`. A SEGMENT has no
+touch and keeps its own end.
 
 `span` is a SIBLING of `view`, never a rewrite of it — the view still belongs
 to `replay/service.py` alone (domain contract 6).
@@ -83,9 +91,14 @@ REASONS: dict[str, str] = {
 # footage, which has no map and can only count seconds from a trim point.
 EXACT = "frame_map"
 
-# How the span's two ends were found, on `GhostSpan.basis`.
+# How the span's two ends were found, on `GhostSpan.basis`; a reading that
+# took both is joined, e.g. "attempt_frames+grab_event".
 ATTEMPT_FRAMES = "attempt_frames"   # the attempt row's own anchor and length
+GRAB_EVENT = "grab_event"           # the journalled star touch
 PICTURE_TIMER = "picture_timer"     # the clip's per-picture game timer
+
+#: The one event whose payload names the frame the star was touched on.
+GRAB_EVENT_TYPE = "star_collected"
 
 
 @dataclass(frozen=True)
@@ -96,12 +109,19 @@ class GhostSpan:
     per-picture arrays, so a follower clamps with them and needs no arithmetic
     of its own. The frames beside them say what those indices mean, so a
     disagreement can be read rather than argued about.
+
+    `end_frame` is where the ghost STOPS — the touch for a star whose grab is
+    on the journal. `timed_frame` is where the recorded TIME was taken, which
+    for a midair grab is the landing a few frames later; it is kept because it
+    is the other honest answer to "when did this run end" and losing it would
+    make the two unreconcilable.
     """
 
     first_picture: int
     last_picture: int
     start_frame: int
     end_frame: int
+    timed_frame: int
     basis: str
     grab_frame: int | None = None
 
@@ -110,6 +130,7 @@ class GhostSpan:
                 "last_picture": self.last_picture,
                 "start_frame": self.start_frame,
                 "end_frame": self.end_frame,
+                "timed_frame": self.timed_frame,
                 "grab_frame": self.grab_frame,
                 "basis": self.basis}
 
@@ -186,24 +207,58 @@ Provider = Callable[..., GhostSource | None]
 PROVIDERS: tuple[Provider, ...] = (from_marked_attempt,)
 
 
-def _attempt_ends(attempt) -> tuple[int, int, int | None] | None:
-    """(start, end, grab) from the attempt's OWN frames, or None if it has
-    none — an imported time, or any row closed with no anchor to measure from.
+def _attempt_ends(attempt) -> tuple[int, int] | None:
+    """(start, timed) from the attempt's OWN frames, or None if it has none —
+    an imported time, or any row closed with no anchor to measure from.
 
     `anchor_frame` is the game frame the reset landed on and `rta_frames` the
     frames from there to the closing event, which for a star IS the x-cam: the
-    moment the recorded time was taken. The TOUCH is journaled on the grab
-    event and never copied onto the row, so the only attempt that can state it
-    is one whose time was taken at the grab (`timed_at`), which is the backstop
-    case where no star dance ever ran. `None` there is unknown, not "the same
-    frame" — that reading was retired from the projector on 2026-08-02.
+    moment the recorded time was taken.
     """
     anchor = getattr(attempt, "anchor_frame", None)
     ran = getattr(attempt, "rta_frames", None)
     if anchor is None or ran is None or ran < 0:
         return None
-    end = anchor + ran
-    return anchor, end, end if getattr(attempt, "timed_at", None) == "grab" else None
+    return anchor, anchor + ran
+
+
+def _touch_frame(attempt, events, timed: int) -> tuple[int, str] | None:
+    """(the frame the star was TOUCHED on, where that came from), or None.
+
+    The touch lives on the grab event's `grab_frame` and nowhere else, so this
+    reads the journal rows inside the attempt's own wall-clock span and takes
+    the closing grab's — matched to the row's own star, so a stray grab inside
+    the span cannot answer for it. Three ways to get nothing back, all
+    ordinary: a SEGMENT has no touch at all; a grab journaled before that field
+    existed carries none; and a boot with no database yet has no door to ask.
+
+    A row whose time was taken AT the grab (`timed_at`) needs no lookup at all
+    — the landing IS the touch there, the backstop case where no star dance
+    ran — and says `attempt_frames`, because that is where the frame came from.
+    """
+    if getattr(attempt, "segment_id", None) is not None:
+        return None
+    if getattr(attempt, "timed_at", None) == "grab":
+        return timed, ATTEMPT_FRAMES
+    started = getattr(attempt, "started_utc", None)
+    ended = getattr(attempt, "ended_utc", None)
+    if events is None or not started or not ended:
+        return None
+    course = getattr(attempt, "course_id", None)
+    star = getattr(attempt, "star_id", None)
+    found = None
+    for row in events(started, ended):
+        if getattr(row, "type", None) != GRAB_EVENT_TYPE:
+            continue
+        payload = getattr(row, "payload", None) or {}
+        if course is not None and payload.get("course_id") not in (None, course):
+            continue
+        if star is not None and payload.get("star_id") not in (None, star):
+            continue
+        frame = payload.get("grab_frame")
+        if isinstance(frame, int):
+            found = frame
+    return None if found is None else (found, f"{ATTEMPT_FRAMES}+{GRAB_EVENT}")
 
 
 def _recorded_frames(attempt) -> int | None:
@@ -244,9 +299,9 @@ def _timer_pictures(view: dict, attempt) -> tuple[int, int] | None:
     return first, next((i for i in run if timer[i] >= recorded), run[-1])
 
 
-def span_of(view: dict, attempt=None) -> GhostSpan | None:
+def span_of(view: dict, attempt=None, events=None) -> GhostSpan | None:
     """The pictures this ghost may show: exactly the attempt, never the
-    lead-in before the reset nor the tail after the star.
+    lead-in before the reset nor anything past the star it was practising.
 
     Both ends are LOOKED UP in the frame map — the first picture at or after
     the start, the last at or before the end — so two pictures sharing a game
@@ -257,19 +312,28 @@ def span_of(view: dict, attempt=None) -> GhostSpan | None:
     frames = view.get("frame_map") or []
     ends = _attempt_ends(attempt)
     if ends is not None:
-        start, end, grab = ends
+        start, timed = ends
+        touch = _touch_frame(attempt, events, timed)
+        if touch is None or not start <= touch[0] <= timed:
+            # No touch to be had: end where the time was taken, which is what
+            # the ghost did before his ruling, and say so in the basis.
+            grab, end, basis = None, timed, ATTEMPT_FRAMES
+        else:
+            grab, basis = touch
+            end = grab
         first = next((i for i, f in enumerate(frames)
                       if f is not None and f >= start), None)
         last = next((i for i in reversed(range(len(frames)))
                      if frames[i] is not None and frames[i] <= end), None)
         if first is None or last is None or last < first:
             return None
-        return GhostSpan(first, last, start, end, ATTEMPT_FRAMES, grab)
+        return GhostSpan(first, last, start, end, timed, basis, grab)
     pictures = _timer_pictures(view, attempt)
     if pictures is None:
         return None
     first, last = pictures
-    return GhostSpan(first, last, frames[first], frames[last], PICTURE_TIMER)
+    return GhostSpan(first, last, frames[first], frames[last], frames[last],
+                     PICTURE_TIMER)
 
 
 def _attempt_row(attempts, attempt_id):
@@ -283,16 +347,16 @@ def _attempt_row(attempts, attempt_id):
         return None
 
 
-def _with_span(answer: GhostSource, attempts) -> GhostSource:
+def _with_span(answer: GhostSource, attempts, events) -> GhostSource:
     """Attach the span BESIDE the view, whichever provider answered."""
     if not answer.available or not answer.view:
         return answer
     row = _attempt_row(attempts, answer.attempt_id)
-    return replace(answer, span=span_of(answer.view, row))
+    return replace(answer, span=span_of(answer.view, row, events))
 
 
 def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
-                  templates, replay, attempts=None,
+                  templates, replay, attempts=None, events=None,
                   providers: tuple[Provider, ...] = PROVIDERS) -> GhostSource:
     """Is there a ghost for this star or segment, and where is its footage?
 
@@ -302,10 +366,12 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
     strategy still answers.
 
     `attempts` is `attempt_id -> the attempt row` (the captured-input service's
-    own door). It is what lets the span be exact; without it a ghost still
-    resolves, and the span falls back to the clip's timer or to null. The span
-    is attached HERE rather than inside a provider so every future provider
-    gets it for free and none of them can grow a second rule for it.
+    own door) and `events` is `(started_utc, ended_utc) -> the journal rows in
+    that span` (`storage/db.py::events_between`). Together they are what let
+    the span be exact; without them a ghost still resolves, and the span falls
+    back to the landing, to the clip's timer, or to null. The span is attached
+    HERE rather than inside a provider so every future provider gets it for
+    free and none of them can grow a second rule for it.
     """
     if kind not in KINDS:
         raise ValueError("a ghost is for a star or a segment")
@@ -315,10 +381,11 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
     for provider in providers:
         answer = provider(template, replay=replay)
         if answer is not None:
-            return _with_span(answer, attempts)
+            return _with_span(answer, attempts, events)
     return unavailable("template_has_no_attempt", template_id=template.id)
 
 
-__all__ = ["ATTEMPT_FRAMES", "EXACT", "KINDS", "PICTURE_TIMER", "PROVIDERS",
-           "REASONS", "GhostSource", "GhostSpan", "attempt_id_of",
-           "from_marked_attempt", "resolve_ghost", "span_of", "unavailable"]
+__all__ = ["ATTEMPT_FRAMES", "EXACT", "GRAB_EVENT", "GRAB_EVENT_TYPE", "KINDS",
+           "PICTURE_TIMER", "PROVIDERS", "REASONS", "GhostSource", "GhostSpan",
+           "attempt_id_of", "from_marked_attempt", "resolve_ghost", "span_of",
+           "unavailable"]

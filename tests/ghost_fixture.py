@@ -36,20 +36,59 @@ def a_view(attempt_id: int, frame_map=(11, 11, 12, 13)) -> dict:
             "truncated": False, "saved_path": "C:/replays/attempt_0007_x.mp4"}
 
 
+def real_clip() -> dict:
+    """The whole fixture: the clip's arrays, its attempt row and its grab."""
+    return json.loads(REAL_CLIP.read_text(encoding="utf-8"))
+
+
 def a_real_clip_view(attempt_id: int = 9) -> dict:
     """The clip he actually played the overlay against, numbers only.
 
     642 pictures: the timer sits frozen at the previous run's 3029 through the
-    first 44, then restarts and climbs to 584, and fifteen more pictures follow
-    the star. Three slots carry no stamp at all. Footage, file paths and every
-    other key of the real payload are left out.
+    first 45, then restarts and runs on past the star to 584, where Usamune's
+    counter comes to rest on the star-select screen. Three slots carry no stamp
+    at all. Footage, file paths and every other key of the real payload are
+    left out.
     """
-    clip = json.loads(REAL_CLIP.read_text(encoding="utf-8"))
+    clip = real_clip()
     return {"clip_url": f"/api/replay/saved/{attempt_id}", "source": "saved",
             "duration_s": 23.150689, "fps": 60, "game_fps": 30,
             "frame_map": clip["frame_map"], "frame_map_source": "plugin",
             "picture_igt": clip["picture_igt"], "video_start_s": 0.0,
             "encode": "picture_feed", "truncated": False}
+
+
+def a_real_clip_attempt(attempt_id: int = 9, **overrides) -> "FakeAttempt":
+    """Attempt 9 exactly as the journal holds it."""
+    return FakeAttempt(**{**real_clip()["attempt"], "id": attempt_id,
+                          **overrides})
+
+
+@dataclass(frozen=True)
+class FakeEvent:
+    """One journal row, the three fields the grab lookup reads."""
+
+    type: str
+    frame: int
+    payload: dict
+
+
+def a_real_clip_journal(**overrides):
+    """`(started_utc, ended_utc) -> the journal rows in that span`, holding the
+    real grab that closed attempt 9 (`storage/db.py::events_between`'s shape:
+    inclusive at both ends, oldest first)."""
+    grab = real_clip()["grab_event"]
+    row = FakeEvent(grab["type"], grab["frame"],
+                    dict(grab["payload"], **overrides))
+    return events_of(row)
+
+
+def events_of(*rows: FakeEvent):
+    def events(started_utc: str, ended_utc: str):
+        assert started_utc and ended_utc, "the span comes off the attempt row"
+        return list(rows)
+
+    return events
 
 
 @dataclass(frozen=True)
@@ -66,6 +105,11 @@ class FakeAttempt:
     rta_frames: int | None = None
     igt_frames: int | None = None
     timed_at: str | None = None
+    course_id: int | None = None
+    star_id: int | None = None
+    segment_id: int | None = None
+    started_utc: str = "2026-09-19T06:30:24.666969Z"
+    ended_utc: str = "2026-09-19T06:30:42.709358Z"
 
 
 def attempts_of(*rows: FakeAttempt):
@@ -81,13 +125,26 @@ def attempts_of(*rows: FakeAttempt):
     return attempt
 
 
-class FakeReplay:
-    """Only the two doors the ghost source reads: is this attempt's clip
-    saved, and what is its view."""
+class FakeTracker:
+    """`ReplayService.tracker`, only far enough for the journal door."""
 
-    def __init__(self, saved=(), views=None):
+    class Db:
+        def __init__(self, events):
+            self.events_between = events
+
+    def __init__(self, events):
+        self.db = None if events is None else self.Db(events)
+
+
+class FakeReplay:
+    """Only the two doors the ghost source reads — is this attempt's clip
+    saved, and what is its view — plus the `tracker.db` the route reaches
+    through for the journal, exactly as `ReplayService` exposes it."""
+
+    def __init__(self, saved=(), views=None, journal=None):
         self._saved = set(saved)
         self._views = dict(views or {})
+        self.tracker = FakeTracker(journal)
         self.viewed: list[int] = []
 
     def find_saved(self, attempt_id: int):

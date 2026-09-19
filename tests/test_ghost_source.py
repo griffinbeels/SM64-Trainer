@@ -7,16 +7,18 @@ sentence a player can read.
 """
 import pytest
 
+from sm64_events.detectors.star_grab import _PendingGrab
 from sm64_events.ghost.source import (
-    ATTEMPT_FRAMES, PICTURE_TIMER, REASONS, GhostSource, from_marked_attempt,
-    resolve_ghost, span_of)
+    ATTEMPT_FRAMES, GRAB_EVENT, GRAB_EVENT_TYPE, PICTURE_TIMER, REASONS,
+    GhostSource, from_marked_attempt, resolve_ghost, span_of)
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.replay.service import ReplayService
 from sm64_events.storage.db import Database
-from sm64_events.tracking.projection import Attempt
+from sm64_events.tracking.projection import BOUNDARY_EVENT_TYPES, Attempt
 
 from tests.ghost_fixture import (
-    FakeAttempt, FakeReplay, a_document, a_real_clip_view, attempts_of, a_view)
+    FakeAttempt, FakeEvent, FakeReplay, a_document, a_real_clip_attempt,
+    a_real_clip_journal, a_real_clip_view, attempts_of, a_view, events_of)
 
 
 @pytest.fixture
@@ -41,24 +43,31 @@ def ghost(templates, replay, kind="star", entity_key="24-1", strat="10 coin",
 
 # -- his own clip, and the facts this file reads out of it -------------------
 #
-# `tests/fixtures/ghost_span_clip.json` holds the two per-picture arrays of the
-# saved clip behind his star 6-0 template, verbatim. Read straight out of them:
+# `tests/fixtures/ghost_span_clip.json` holds his Swimming Beast in the Cavern
+# run: the clip's two per-picture arrays, the attempt row, and the grab that
+# closed it, all verbatim (the file says where each came from). Read out of it:
 LEAD_IN_PICTURES = 45      # 0..44, the previous run held through the reload
 FIRST_OF_THE_RUN = 45      # game frame 308680, the first picture timed 3
+ANCHOR_FRAME = 308679      # the reset, three frames before that picture
 RUN_START_FRAME = 308680
-LAST_OF_THE_RUN = 626      # game frame 309261, the first picture timed 584
-RUN_END_FRAME = 309261
-RECORDED_FRAMES = 584      # the run's own length, where its timer stops
-CLIP_PICTURES = 642        # so fifteen pictures follow the star
+TOUCH_FRAME = 309215       # the grab event's own `grab_frame`
+TOUCH_PICTURE = 580        # where the ghost now ends
+TIMED_FRAME = 309219       # the landing, four frames later, where the time is
+TIMED_PICTURE = 584        # where the ghost used to end
+RECORDED_FRAMES = 543      # the row's igt_frames -- NOT the clip's final 584,
+                           # which is where Usamune's counter came to rest on
+                           # the star-select screen, 41 frames on
+CLIP_PICTURES = 642        # so 61 pictures follow the touch
 
 
-def real_clip(templates, attempt_id=9, **attempt_fields):
-    """His clip, the template that was marked from it, and its attempt row."""
+def real_clip(templates, attempt_id=9, with_grab=True, **attempt_fields):
+    """His clip, the template marked from it, its attempt row and its grab."""
     save(templates, origin=f"attempt:{attempt_id}")
     replay = FakeReplay(saved=[attempt_id],
                         views={attempt_id: a_real_clip_view(attempt_id)})
-    row = FakeAttempt(id=attempt_id, **attempt_fields)
-    return replay, attempts_of(row)
+    row = a_real_clip_attempt(attempt_id, **attempt_fields)
+    return replay, {"attempts": attempts_of(row),
+                    "events": a_real_clip_journal() if with_grab else None}
 
 
 def a_ready_ghost(templates, attempt_id=7, **overrides):
@@ -218,24 +227,33 @@ def test_an_unavailable_payload_fills_every_key(templates):
 
 # -- the span: exactly the attempt, whatever the recorder was set to ---------
 
-@pytest.mark.parametrize("anchor_frame", [308677, 308678, 308679, 308680])
-def test_his_own_clip_is_clamped_to_the_run_inside_it(templates, anchor_frame):
+def test_his_own_clip_is_clamped_to_the_run_inside_it(templates):
     """His ruling: "clamped to the EXACT START FRAME of the attempt, and the
     exact ending frame of the star grab... regardless of the user's recording
-    settings."
+    settings," and then "End at the touch. No reason to keep it after that."
 
-    The clip's timer reads 3 on picture 45, so the reset landed three game
-    frames earlier; the anchor is swept across all four candidates because the
-    ANSWER must not depend on which of them the row recorded.
+    Every number here is the journal's own: the reset landed on 308679 and the
+    grab that closed the attempt records the touch at 309215.
     """
-    replay, attempts = real_clip(
-        templates, anchor_frame=anchor_frame,
-        rta_frames=RUN_END_FRAME - anchor_frame, igt_frames=RECORDED_FRAMES)
-    span = ghost(templates, replay, attempts=attempts).span
+    replay, doors = real_clip(templates)
+    span = ghost(templates, replay, **doors).span
     assert (span.first_picture, span.last_picture) == (FIRST_OF_THE_RUN,
-                                                       LAST_OF_THE_RUN)
-    assert (span.start_frame, span.end_frame) == (anchor_frame, RUN_END_FRAME)
-    assert span.basis == ATTEMPT_FRAMES
+                                                       TOUCH_PICTURE)
+    assert (span.start_frame, span.end_frame) == (ANCHOR_FRAME, TOUCH_FRAME)
+    assert span.grab_frame == TOUCH_FRAME
+    assert span.basis == f"{ATTEMPT_FRAMES}+{GRAB_EVENT}"
+
+
+def test_the_ghost_now_stops_four_pictures_earlier_than_the_recorded_time(
+        templates):
+    """The time is taken at the landing, four game frames after the touch on
+    this run, and the ghost used to run that far. The landing is kept beside
+    the end so the two can still be reconciled."""
+    replay, doors = real_clip(templates)
+    span = ghost(templates, replay, **doors).span
+    assert span.timed_frame == TIMED_FRAME
+    assert TIMED_FRAME - TOUCH_FRAME == 4
+    assert TIMED_PICTURE - span.last_picture == 4
 
 
 def test_the_lead_in_from_the_previous_run_is_left_out(templates):
@@ -246,32 +264,49 @@ def test_the_lead_in_from_the_previous_run_is_left_out(templates):
     before = [t for t in view["picture_igt"][:LEAD_IN_PICTURES]
               if t is not None]
     assert set(before) == {3029} and len(before) == 42
-    replay, attempts = real_clip(templates, anchor_frame=308677,
-                                 rta_frames=584, igt_frames=RECORDED_FRAMES)
-    assert ghost(templates, replay, attempts=attempts
-                 ).span.first_picture == FIRST_OF_THE_RUN
+    replay, doors = real_clip(templates)
+    assert ghost(templates, replay, **doors).span.first_picture == (
+        FIRST_OF_THE_RUN)
 
 
-def test_the_footage_after_the_star_is_left_out(templates):
-    """The recorder kept rolling: the last fifteen pictures sit frozen at the
-    run's own final time, which is where the recorded time stops."""
+def test_the_footage_after_the_touch_is_left_out(templates):
+    """The recorder kept rolling to the star-select screen: 61 pictures follow
+    the touch, and Usamune's counter runs 41 frames past the recorded time
+    before coming to rest — so the clip's final 584 is not this run's length."""
     view = a_real_clip_view()
     assert len(view["frame_map"]) == CLIP_PICTURES
-    after = view["picture_igt"][LAST_OF_THE_RUN + 1:]
-    assert after and set(after) == {RECORDED_FRAMES}
-    replay, attempts = real_clip(templates, anchor_frame=308677,
-                                 rta_frames=584, igt_frames=RECORDED_FRAMES)
-    assert ghost(templates, replay, attempts=attempts
-                 ).span.last_picture == LAST_OF_THE_RUN
+    assert view["picture_igt"][-1] == 584 and RECORDED_FRAMES == 543
+    replay, doors = real_clip(templates)
+    span = ghost(templates, replay, **doors).span
+    assert span.last_picture == TOUCH_PICTURE
+    assert CLIP_PICTURES - 1 - span.last_picture == 61
 
 
-def test_the_first_picture_of_the_run_is_the_one_the_timer_restarts_on(
-        templates):
+def test_the_first_picture_of_the_run_is_the_one_the_timer_restarts_on():
     view = a_real_clip_view()
     assert view["picture_igt"][FIRST_OF_THE_RUN] == 3
     assert view["frame_map"][FIRST_OF_THE_RUN] == RUN_START_FRAME
-    assert view["frame_map"][LAST_OF_THE_RUN] == RUN_END_FRAME
-    assert view["picture_igt"][LAST_OF_THE_RUN] == RECORDED_FRAMES
+    assert view["frame_map"][TOUCH_PICTURE] == TOUCH_FRAME
+    assert view["frame_map"][TIMED_PICTURE] == TIMED_FRAME
+
+
+def test_a_star_whose_touch_is_not_journalled_ends_at_the_landing(templates):
+    """A grab written before that field existed, or a boot with no database to
+    ask: the ghost ends where the time was taken, and the basis says so."""
+    replay, doors = real_clip(templates, with_grab=False)
+    span = ghost(templates, replay, **doors).span
+    assert (span.end_frame, span.timed_frame) == (TIMED_FRAME, TIMED_FRAME)
+    assert (span.last_picture, span.grab_frame) == (TIMED_PICTURE, None)
+    assert span.basis == ATTEMPT_FRAMES
+
+
+def test_a_grab_from_another_star_inside_the_span_does_not_answer(templates):
+    """`events_between` is a wall-clock slice, so a grab that is not this
+    attempt's can land in it. Matched on the row's own star."""
+    replay, doors = real_clip(templates)
+    doors["events"] = a_real_clip_journal(star_id=4, grab_frame=308900)
+    span = ghost(templates, replay, **doors).span
+    assert span.end_frame == TIMED_FRAME and span.basis == ATTEMPT_FRAMES
 
 
 def test_unstamped_pictures_and_repeated_frames_move_neither_end():
@@ -288,14 +323,16 @@ def test_unstamped_pictures_and_repeated_frames_move_neither_end():
 def test_a_row_with_no_frames_of_its_own_falls_back_to_the_clip_timer(
         templates):
     """An imported time, or any row closed with no anchor, still gets a span —
-    read off the timer, and SAYING it was read off the timer."""
-    replay, attempts = real_clip(templates, igt_frames=RECORDED_FRAMES)
-    span = ghost(templates, replay, attempts=attempts).span
+    read off the timer, and SAYING it was read off the timer. It lands one
+    picture past the landing, because the recorded time is the counter plus
+    the display tick while the picture carries the counter itself."""
+    replay, doors = real_clip(templates, anchor_frame=None, rta_frames=None)
+    span = ghost(templates, replay, **doors).span
     assert span.basis == PICTURE_TIMER
     assert (span.first_picture, span.last_picture) == (FIRST_OF_THE_RUN,
-                                                       LAST_OF_THE_RUN)
-    assert (span.start_frame, span.end_frame) == (RUN_START_FRAME,
-                                                  RUN_END_FRAME)
+                                                       TIMED_PICTURE + 1)
+    assert span.start_frame == RUN_START_FRAME
+    assert span.end_frame == span.timed_frame == TIMED_FRAME + 1
 
 
 def test_the_timer_fallback_takes_the_LAST_restart_not_the_first():
@@ -315,22 +352,26 @@ def test_a_clip_that_opens_at_zero_has_no_drop_to_find():
     assert span.basis == PICTURE_TIMER
 
 
-def test_a_grab_timed_row_also_names_the_frame_of_the_touch():
-    """The ghost ends where the recorded time stops. A row whose time was
-    taken AT the touch says so, so the choice can be overruled without the
-    server being asked again."""
+def test_a_grab_timed_row_needs_no_journal_to_find_its_touch():
+    """The backstop case where no star dance ever ran: the landing IS the
+    touch, and it comes off the row, so the basis says the row."""
     view = {"frame_map": [10, 11, 12], "picture_igt": [1, 2, 3]}
     span = span_of(view, FakeAttempt(anchor_frame=10, rta_frames=2,
                                      timed_at="grab"))
-    assert span.grab_frame == 12 and span.end_frame == 12
+    assert (span.grab_frame, span.end_frame, span.timed_frame) == (12, 12, 12)
+    assert span.basis == ATTEMPT_FRAMES
 
 
-def test_an_xcam_timed_row_does_not_claim_to_know_the_touch():
-    """`timed_at` is the only record of the moment, and the touch frame is
-    journaled on the grab event rather than copied onto the row."""
+def test_a_touch_outside_the_attempt_is_refused_rather_than_used():
+    """A grab frame below the anchor or above the landing cannot be this run's,
+    so the landing stands."""
     view = {"frame_map": [10, 11, 12], "picture_igt": [1, 2, 3]}
-    assert span_of(view, FakeAttempt(anchor_frame=10, rta_frames=2,
-                                     timed_at="xcam")).grab_frame is None
+    for grab in (9, 13):
+        span = span_of(view, FakeAttempt(anchor_frame=10, rta_frames=2),
+                       a_real_clip_journal(grab_frame=grab, course_id=None,
+                                           star_id=None))
+        assert (span.end_frame, span.grab_frame) == (12, None)
+        assert span.basis == ATTEMPT_FRAMES
 
 
 @pytest.mark.parametrize("view,attempt", [
@@ -357,25 +398,28 @@ def test_a_ghost_with_no_span_is_still_available(templates):
 
 def test_the_span_never_rewrites_the_view(templates):
     """Domain contract 6: the view has one owner. The span is a sibling."""
-    replay, attempts = real_clip(templates, anchor_frame=308677,
-                                 rta_frames=584, igt_frames=RECORDED_FRAMES)
+    replay, doors = real_clip(templates)
     served = replay._views[9]
-    answer = ghost(templates, replay, attempts=attempts)
+    answer = ghost(templates, replay, **doors)
     assert answer.view is served
     assert answer.view["frame_map"] == a_real_clip_view()["frame_map"]
     assert "span" not in answer.view
 
 
-def test_a_segment_is_clamped_to_its_own_frames_too(templates):
+def test_a_segment_keeps_its_own_end_because_it_has_no_touch(templates):
+    """Only a star is touched. A segment ends where its own frames say, even
+    with a grab sitting inside its wall-clock span."""
     save(templates, kind="segment", entity_key="12", strat_tag=None,
          origin="attempt:9", document=a_document(target="segment 12"))
     replay = FakeReplay(saved=[9], views={9: a_real_clip_view(9)})
-    attempts = attempts_of(FakeAttempt(id=9, anchor_frame=308677,
-                                       rta_frames=584, igt_frames=584))
+    attempts = attempts_of(a_real_clip_attempt(9, segment_id=12,
+                                               course_id=None, star_id=None))
     span = ghost(templates, replay, kind="segment", entity_key="12",
-                 strat=None, attempts=attempts).span
+                 strat=None, attempts=attempts,
+                 events=a_real_clip_journal()).span
     assert (span.first_picture, span.last_picture) == (FIRST_OF_THE_RUN,
-                                                       LAST_OF_THE_RUN)
+                                                       TIMED_PICTURE)
+    assert (span.end_frame, span.grab_frame) == (TIMED_FRAME, None)
     assert span.basis == ATTEMPT_FRAMES
 
 
@@ -386,11 +430,30 @@ def test_a_missing_attempt_row_costs_the_clamp_and_nothing_else(templates):
     assert answer.available is True and answer.span is None
 
 
+def test_only_the_grab_event_is_asked_for_the_touch(templates):
+    """Other rows land in the same wall-clock slice; none of them is a touch."""
+    replay, doors = real_clip(templates)
+    doors["events"] = events_of(
+        FakeEvent("practice_reset", 308679, {"mario_acted": True}),
+        FakeEvent("warp_entered", 308900, {"grab_frame": 308900}))
+    span = ghost(templates, replay, **doors).span
+    assert span.end_frame == TIMED_FRAME and span.basis == ATTEMPT_FRAMES
+
+
 def test_the_attempt_fields_the_span_reads_still_exist():
     """`FakeAttempt` stands in for the projector's row; a rename there must
     fail here rather than silently drop every ghost back to the timer."""
-    for field in ("anchor_frame", "rta_frames", "igt_frames", "timed_at"):
+    for field in ("anchor_frame", "rta_frames", "igt_frames", "timed_at",
+                  "course_id", "star_id", "segment_id", "started_utc",
+                  "ended_utc"):
         assert field in Attempt.__dataclass_fields__, field
+
+
+def test_the_grab_this_reads_is_the_one_the_detector_writes():
+    """The touch is a payload key on one event type. A rename of either must
+    fail here rather than send every ghost quietly back to the landing."""
+    assert GRAB_EVENT_TYPE in BOUNDARY_EVENT_TYPES
+    assert "grab_frame" in _PendingGrab.__dataclass_fields__
 
 
 # -- the seam the other two providers arrive through -------------------------
