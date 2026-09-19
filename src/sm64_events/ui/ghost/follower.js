@@ -226,14 +226,34 @@ const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
  * somewhere the template never was; leave it out and the check is skipped.
  * `options.span` is the source's own answer for where the attempt starts and
  * ends; leave it out and the template reads that off the counter itself.
+ * `options.grabEndsRun` is true for a STAR, whose run ends when he touches it.
  */
 export function createFollower(view, options = {}) {
   const cfg = { ...DEFAULTS, ...options };
   const template = ghostTemplate(view, options.span || null);
   const expect = options.expect || null;
+  // HIS OWN GRAB ENDS THE GHOST. His ruling: *"The ghost should close when I
+  // grab the star (sometimes I might be faster than the ghost!)."* The clock
+  // says `star_grab` while Mario is in an action a grab puts him in; a STAR's
+  // run is over at that touch.
+  //
+  // A SEGMENT is not, and that is why this is a choice rather than a rule.
+  // Some segments run through a star grab on their way somewhere, and taking
+  // the ghost down there would delete the half he was practising. A segment's
+  // own end is the segment engine's judgement and it is not on this socket, so
+  // a segment keeps the end it already had -- the template's own last picture.
+  const grabEndsRun = options.grabEndsRun !== false;
   let nudge = options.nudgeFrames || 0;
   let lastIgt = null;
   let lastSampleMs = null;
+  //: LATCHED, not read per sample, and that is the whole behaviour. The action
+  //: holds through the dance and then goes away while the player is still
+  //: standing in the level with the counter running, so a per-sample test
+  //: would put the ghost back up seconds after the star. It comes down at the
+  //: touch and stays down until the live timer goes back INSIDE the run, which
+  //: only a reset or a state load can do -- exactly what already brings it
+  //: back when the ghost finishes first.
+  let grabbed = false;
   //: why the next sample must PLACE the ghost rather than play it on: a
   //: reason string, or null when the follower is simply following. It holds
   //: the reason rather than a flag so a placement can say what caused it,
@@ -289,17 +309,54 @@ export function createFollower(view, options = {}) {
              drift: template.igtAtTime(videoTime) - target };
   };
 
+  // Does his own grab hold the ghost down this sample? Latch and release in
+  // one place: the release is the interesting half and it is easy to read
+  // wrong from two.
+  //
+  // THE RELEASE IS A BACKWARD COUNTER ONLY, and that is narrower than the
+  // placement rule above on purpose. Going back INSIDE a run that is over is
+  // something only a reset or a load back can do; a counter that is still
+  // climbing is the same attempt continuing, whatever size its steps are.
+  //
+  // Reading a forward JUMP as a release is what the first version did, and a
+  // real browser caught it: the clock feed deliberately collapses a burst to
+  // its newest sample (`server/ghost_clock.py`), so an ordinary stretch of
+  // play that the pump skipped arrives as one big forward step and is
+  // indistinguishable from a state load. The ghost came straight back up while
+  // he walked around after the star -- the exact overstaying this exists to
+  // stop, reintroduced by the rule meant to end it.
+  //
+  // `clamped !== "after"` survives for the case it was written for: a load
+  // back that still lands past the template's last picture has nothing left to
+  // show, so it does not raise a ghost either.
+  const grabHolds = (sample, moved, clamped) => {
+    if (grabEndsRun && sample.star_grab === true) grabbed = true;
+    else if (grabbed && moved !== null && moved < 0 && clamped !== "after")
+      grabbed = false;
+    return grabbed;
+  };
+
   const choose = (sample, videoTime) => {
     if (!template.ok) return HOLD(template.reason);
     if (away(sample)) {
-      // Coming back is a jump, whatever the counter did while away.
-      retarget = "elsewhere";
+      // Coming back is a jump, whatever the counter did while away. The
+      // marker is NOT "elsewhere": the placement that brings the ghost back
+      // carries this reason, and a page that reads "elsewhere" keeps the
+      // window down -- one frame of blink, for a ghost that is already right.
+      retarget = "came_back";
       lastIgt = sample.igt;
       return HOLD("elsewhere");
     }
     const target = sample.igt + nudge;
     const { time, clamped } = template.timeAtIgt(target);
     const moved = lastIgt === null ? null : sample.igt - lastIgt;
+    if (grabHolds(sample, moved, clamped)) {
+      // Hold exactly where it is; the next reset places it. `retarget` is left
+      // alone rather than consumed, so whatever was pending still places when
+      // the ghost is allowed up again.
+      lastIgt = sample.igt;
+      return HOLD("grabbed", time);
+    }
     const asked = retarget;
     lastIgt = sample.igt;
     retarget = null;
@@ -329,6 +386,10 @@ export function createFollower(view, options = {}) {
   return {
     template,
     get nudge() { return nudge; },
+    //: whether his own grab is currently holding the ghost down. Read back
+    //: through `window.ghostStatus()`: "the ghost vanished and I do not know
+    //: why" has two answers, and this is the one no other field shows.
+    get grabbed() { return grabbed; },
     setNudge(frames) {
       const next = Math.round(Number(frames) || 0);
       if (next === nudge) return nudge;

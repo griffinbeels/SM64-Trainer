@@ -48,11 +48,19 @@ NO_FRAME_MAP_TEXT = ("The recording behind this template does not say which "
 def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
                   nudge_frames: int = 0, available: bool = True,
                   reason: str | None = None, reason_text: str | None = None,
-                  target: dict | None = None) -> dict:
-    """One I5 payload, in the frozen shape."""
+                  target: dict | None = None,
+                  tint: dict | None = None) -> dict:
+    """One I5 payload, in the frozen shape.
+
+    The colour treatment defaults to ON here because that is what the shipped
+    session defaults to, and a fixture sitting at the easy end of a range
+    measures a card nobody has: the tuning line is at its WIDEST with the hue
+    slider out, so that is the one worth rendering.
+    """
     return {
         "enabled": enabled,
         "opacity": opacity,
+        "tint": {"enabled": True, "hue_degrees": 120} if tint is None else tint,
         "nudge_frames": nudge_frames,
         "target": FIXTURE_TARGET if target is None else target,
         "source": {"available": available,
@@ -109,6 +117,15 @@ def attach_ghost_routes(app, state: dict) -> None:
                 raise HTTPException(422, "The ghost can only be nudged ten "
                                          "seconds either way.")
             session["nudge_frames"] = frames
+        if "tint" in body:
+            # MERGED, as the real session merges it: the control sends only the
+            # half he touched, and a fixture that replaced the whole object
+            # would let a control that drops the other half look correct.
+            asked = dict(body["tint"])
+            if "hue_degrees" in asked and not 0 <= int(asked["hue_degrees"]) <= 359:
+                raise HTTPException(422, "The ghost's colour goes from 0 to "
+                                         "359 degrees around the colour wheel.")
+            session["tint"] = {**(session.get("tint") or {}), **asked}
         available = session["source"]["available"]
         session["window"] = {"running": session["enabled"] and available,
                              "visible": session["enabled"] and available}

@@ -23,12 +23,14 @@ through `server/ghost_clock.py`, which is publish-and-forget. This module only
 ever touches the database and the filesystem from its own task, off the loop
 thread, and never from the poller's.
 
-**Two things reach the overlay, and they travel differently on purpose.** WHAT
-it is showing is the page, so a target change re-points the window and the page
-loads. HOW FAR AHEAD it runs -- the nudge -- is a number the running page can
-take, so it rides the clock feed and the page is never navigated for it. Doing
-the second the way the first is done is what made his timing key blink the
-overlay off and re-seek it on every press.
+**Two KINDS of thing reach the overlay, and they travel differently on
+purpose.** WHAT it is showing is the page, so a target change re-points the
+window and the page loads. Everything the RUNNING page can simply take -- how
+far ahead it runs (the nudge) and how its picture is coloured (the tint) --
+rides the clock feed instead, so the page is never navigated for either. Doing
+that the first way is what made his timing key blink the overlay off and
+re-seek it on every press, and a colour he is dragging a slider through would
+do it fifteen times a second.
 
 **Hide on a flip, end on OFF.** Walking to the next star hides the window and
 keeps the child, so coming back costs nothing. Turning the switch off ends the
@@ -60,6 +62,20 @@ EVENT_TYPE = "ghost_changed"
 #: what it looked like on 2026-09-19). A value he has already chosen wins:
 #: `_load_persisted` only falls back to this one.
 DEFAULT_OPACITY = 0.5
+#: HOW THE GHOST IS COLOURED, so it cannot be mistaken for the live picture.
+#: His words, 2026-09-19: *"It feels really hard to understand which one is the
+#: ACTUAL LIVE GAMEPLAY and which one is the GHOST gameplay... Maybe we can have
+#: a color picker... and then apply a color filter to the entire picture? e.g.
+#: 'Hue Adjustment: Shift the hue angle by +120 degrees'... The user can disable
+#: the color shift if they want."* So: on by default, a third of the way round
+#: the colour wheel, and his to move or switch off. A shipped preference like
+#: the opacity above, so no test pins these two numbers -- what is pinned is
+#: that they are a coherent, reachable choice.
+DEFAULT_TINT = {"enabled": True, "hue_degrees": 120}
+#: One full turn of the colour wheel. 0 and 360 are the same colour, so the
+#: control offers the half-open range and 360 is refused rather than silently
+#: meaning "off".
+HUE_LIMIT_DEGREES = 359
 #: How far the ghost may be nudged, in game frames. 600 is twenty seconds at
 #: 30 fps -- past the length of most of the stars this is used on, so the limit
 #: only ever catches a typo or a stuck key.
@@ -78,6 +94,8 @@ MAX_START_ATTEMPTS = 3
 
 ENABLED_KEY = "ghost_enabled"
 OPACITY_KEY = "ghost_opacity"
+TINT_ENABLED_KEY = "ghost_tint_enabled"
+TINT_HUE_KEY = "ghost_tint_hue"
 
 PAGE_PATH = "/ui/ghost/index.html"
 
@@ -96,7 +114,7 @@ NO_RECORDINGS = {
     "template_id": None, "attempt_id": None, "exactness": None}
 
 #: What a client may send to PUT /api/ghost.
-SETTABLE = ("enabled", "opacity", "nudge_frames")
+SETTABLE = ("enabled", "opacity", "nudge_frames", "tint")
 
 
 def template_store(inputs):
@@ -154,6 +172,37 @@ def _checked_enabled(value) -> bool:
     return value
 
 
+def _checked_tint(value) -> dict:
+    """The colour treatment, as a PARTIAL: a client may send either half.
+
+    Sending only the angle must not switch the treatment off and sending only
+    the switch must not throw away the angle he chose, so this returns exactly
+    the fields it was given and `_apply` merges them over what is already set.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("The ghost's colour is a switch and an angle.")
+    unknown = sorted(set(value) - {"enabled", "hue_degrees"})
+    if unknown:
+        raise ValueError(
+            f"The ghost's colour has no setting called {unknown[0]!r}.")
+    checked = {}
+    if "enabled" in value:
+        if not isinstance(value["enabled"], bool):
+            raise ValueError("The ghost's colour shift is either on or off.")
+        checked["enabled"] = value["enabled"]
+    if "hue_degrees" in value:
+        hue = value["hue_degrees"]
+        if isinstance(hue, bool) or not isinstance(hue, int):
+            raise ValueError("The ghost's colour is a whole number of degrees "
+                             "around the colour wheel.")
+        if not 0 <= hue <= HUE_LIMIT_DEGREES:
+            raise ValueError(
+                f"The ghost's colour goes from 0 to {HUE_LIMIT_DEGREES} "
+                "degrees around the colour wheel.")
+        checked["hue_degrees"] = hue
+    return checked
+
+
 def validate_changes(changes: dict) -> dict:
     """What a client asked for, or the one sentence saying why it cannot have
     it. Raises ValueError; nothing is applied until every value passes, so a
@@ -169,6 +218,8 @@ def validate_changes(changes: dict) -> dict:
         checked["opacity"] = _checked_opacity(changes["opacity"])
     if "nudge_frames" in changes:
         checked["nudge_frames"] = _checked_nudge(changes["nudge_frames"])
+    if "tint" in changes:
+        checked["tint"] = _checked_tint(changes["tint"])
     return checked
 
 
@@ -191,6 +242,7 @@ class GhostSession:
 
         self._enabled = False
         self._opacity = DEFAULT_OPACITY
+        self._tint = dict(DEFAULT_TINT)
         self._nudge = 0
         self._loaded = False
         self._pending: dict = {}
@@ -225,6 +277,7 @@ class GhostSession:
         whether there is anything to show, and what the window is doing."""
         return {"enabled": self._enabled,
                 "opacity": self._opacity,
+                "tint": dict(self._tint),
                 "nudge_frames": self._nudge,
                 "target": dict(self._target) if self._target else None,
                 "source": dict(self._source),
@@ -368,6 +421,10 @@ class GhostSession:
         try:
             stored_enabled = database.get_state(ENABLED_KEY, False)
             stored_opacity = database.get_state(OPACITY_KEY, DEFAULT_OPACITY)
+            stored_tint_on = database.get_state(TINT_ENABLED_KEY,
+                                                DEFAULT_TINT["enabled"])
+            stored_hue = database.get_state(TINT_HUE_KEY,
+                                            DEFAULT_TINT["hue_degrees"])
         except Exception:  # noqa: BLE001 - a preference must never block the app
             log.debug("ghost preference unreadable", exc_info=True)
             return
@@ -379,6 +436,11 @@ class GhostSession:
             self._opacity = min(1.0, max(0.0, float(stored_opacity)))
         except (TypeError, ValueError):
             self._opacity = DEFAULT_OPACITY
+        try:
+            hue = int(stored_hue) % (HUE_LIMIT_DEGREES + 1)
+        except (TypeError, ValueError):
+            hue = DEFAULT_TINT["hue_degrees"]
+        self._tint = {"enabled": bool(stored_tint_on), "hue_degrees": hue}
         self._loaded = True
 
     def _apply(self, changes: dict) -> None:
@@ -390,6 +452,11 @@ class GhostSession:
         if "opacity" in changes:
             self._opacity = changes["opacity"]
             _remember(database, OPACITY_KEY, self._opacity)
+        if "tint" in changes:
+            # Merged, not replaced: the control sends the half he touched.
+            self._tint = {**self._tint, **changes["tint"]}
+            _remember(database, TINT_ENABLED_KEY, self._tint["enabled"])
+            _remember(database, TINT_HUE_KEY, self._tint["hue_degrees"])
         if "nudge_frames" in changes:
             # Never persisted: it belongs to the target, and the target is
             # gone by the next session.
@@ -405,12 +472,18 @@ class GhostSession:
         return await self.refresh(resolve=True)
 
     def _tell_clock(self) -> None:
-        """Publish the nudge to whoever is following the clock. Best effort by
-        design: a feed that cannot take it must not stop the switch working."""
+        """Publish the nudge and the colour to whoever is following the clock.
+
+        Both travel this way for the same reason: the page is already reading
+        this socket every game frame, so a change reaches it without the window
+        being re-pointed at a URL -- which is a page LOAD. Best effort by
+        design: a feed that cannot take them must not stop the switch working.
+        """
         if self._clock is None:
             return
         try:
             self._clock.set_nudge(self._nudge)
+            self._clock.set_tint(self._tint)
         except Exception:  # noqa: BLE001 - the overlay's timing is not worth the app
             log.debug("the ghost clock would not take the nudge", exc_info=True)
 
@@ -513,6 +586,7 @@ def _default_controller(**kwargs):
     return GhostWindowController(**kwargs)
 
 
-__all__ = ["DEFAULT_OPACITY", "EVENT_TYPE", "MAX_START_ATTEMPTS",
-           "NUDGE_LIMIT_FRAMES", "SETTABLE", "GhostSession", "follower_url",
-           "template_store", "validate_changes"]
+__all__ = ["DEFAULT_OPACITY", "DEFAULT_TINT", "EVENT_TYPE",
+           "HUE_LIMIT_DEGREES", "MAX_START_ATTEMPTS", "NUDGE_LIMIT_FRAMES",
+           "SETTABLE", "GhostSession", "follower_url", "template_store",
+           "validate_changes"]

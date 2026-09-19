@@ -28,13 +28,34 @@
      `DefaultBackgroundColor`, and the host asks for opaque black -- so the
      window side owns the other half of this (ghost/window/host.py). */
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
-  /* Full-bleed, and `contain` rather than `fill`: the clip follows the
-     renderer's own picture size, which is not standardised, so stretching it
-     to a window of another aspect would put the ghost's Mario somewhere the
-     player's never goes. */
+  /* Full-bleed element, `contain` picture, CENTRED -- and the reason is
+     measured rather than chosen.
+
+     His report, 2026-09-19: *"it's ALMOST overlaid properly -- you can see
+     that the bottom of the gameplay (where the red becomes black) is slightly
+     shifted."* The cause was the WINDOW, not this rule: it covered Project64's
+     whole client area, status-bar strip included, so a 1600x1200 clip was
+     stretched over a 1600x1224-ish box -- about 1.9% vertically. The window
+     track now sits the window on the rectangle the renderer actually draws
+     into (1600x1201 on his machine, against clips that are all 1600x1200).
+
+     What decides this property is that THE GAME IMAGE IS ALREADY 4:3. This
+     project's GLideN64 build forces it (`frameBufferEmulation\aspect=1`), so
+     the picture is inscribed 4:3 and centred inside whatever rectangle the
+     renderer has, and the black bands at the top and bottom of his footage are
+     the GAME's own borders -- they scale with the picture rather than sitting
+     outside it. So the correct mapping is the clip's 4:3 box onto the live 4:3
+     box. When the window's aspect equals the clip's, `contain` and `fill` are
+     the same picture; when he has resized Project64 to another shape they are
+     not, and `fill` would distort exactly what this round is about. `cover`
+     would crop instead. Centred because that is where the renderer puts it.
+
+     The ELEMENT still covers the window (`inset: 0`): what it does not paint,
+     it leaves see-through, which over a running game is the whole point. */
   #ghost {
     position: fixed; inset: 0; width: 100%; height: 100%;
-    object-fit: contain; background: transparent; pointer-events: none;
+    object-fit: contain; object-position: center;
+    background: transparent; pointer-events: none;
   }
   /* Nothing to show yet, or nothing to show at all: paint nothing. A
      chrome-less overlay has no room to explain itself, so the reason lives on
@@ -67,7 +88,7 @@ const video = document.getElementById("ghost");
 // which is the one thing a live diagnosis needs to read back.
 const status = { state: "loading", reason: null, reason_text: null,
                  samples: 0, decision: null, sample: null, template: null,
-                 holding: null };
+                 holding: null, tint: null };
 let follower = null;
 // The last nudge the SERVER stated. The clock's value is adopted on the edge,
 // not held as a level: the parent window may push its own nudge by
@@ -75,6 +96,13 @@ let follower = null;
 // Null until the first sample, which is how a page that has just loaded takes
 // the current value straight away.
 let clockNudge = null;
+// The same for the colour treatment, and THIS PAGE SHIPS NO DEFAULT FOR IT.
+// The angle and the switch are a preference the session owns and persists, so
+// a copy here would be a second opinion that drifts the first time he changes
+// the shipped one. There is no gap to cover: the window shows itself only
+// while a picture is presentable, and nothing is presentable before the first
+// clock sample, so the first frame the player ever sees is already coloured.
+let clockTint = null;
 
 function mark(state, reason = null, reasonText = null) {
   Object.assign(status, { state, reason, reason_text: reasonText });
@@ -122,6 +150,7 @@ function onSample(sample) {
     clockNudge = sample.nudge_frames;
     setNudge(clockNudge);
   }
+  if (sample.tint) setTint(sample.tint);
   status.samples += 1;
   status.sample = sample;
   status.holding = null;
@@ -132,6 +161,33 @@ function onSample(sample) {
 function setNudge(frames) {
   if (!follower) return;
   follower.setNudge(frames);
+}
+
+// THE GHOST IS COLOURED, so it cannot be read as the live game. His words:
+// *"It feels really hard to understand which one is the ACTUAL LIVE GAMEPLAY
+// and which one is the GHOST gameplay... apply a color filter to the entire
+// picture."* One CSS filter on the video element, which is the whole picture
+// and nothing else -- the page paints no other surface, so there is nothing
+// else it could tint wrongly, and the compositor does the work rather than
+// anything on a per-frame path here.
+//
+// Adopted only when the VALUE changes, and written to the element only when
+// the FILTER changes -- two different questions. The first keeps the page from
+// handing the compositor a string 30 times a second for a colour that has not
+// moved; the second is why they are separate: switching the treatment off and
+// then moving the wheel leaves the filter `none` both times, and comparing the
+// strings alone would leave the readback reporting the angle from before.
+function setTint(tint) {
+  const enabled = Boolean(tint.enabled);
+  const hue = Number(tint.hue_degrees) || 0;
+  if (clockTint && clockTint.enabled === enabled && clockTint.hue === hue)
+    return;
+  // Zero degrees IS no shift, so it asks for no filter at all rather than for
+  // a turn of nothing; the switch beside it is what he uses to mean "off".
+  const wanted = enabled && hue ? `hue-rotate(${hue}deg)` : "none";
+  clockTint = { enabled, hue, filter: wanted };
+  status.tint = { enabled, hue_degrees: hue };
+  if (video.style.filter !== wanted) video.style.filter = wanted;
 }
 
 // The clock. One tiny message per game snapshot, and only while this socket is
@@ -160,6 +216,7 @@ window.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || typeof data !== "object") return;
   if (data.type === "ghost-nudge") setNudge(data.nudge_frames);
+  else if (data.type === "ghost-tint" && data.tint) setTint(data.tint);
   else if (data.type === "ghost-clock") onSample(data);
 });
 
@@ -176,8 +233,17 @@ window.addEventListener("message", (event) => {
 //   no sample yet      -> nothing has said where the player is
 //   holding for a hold -> the clock feed stopped arriving (the emulator, or us)
 //   elsewhere          -> he is in another level; the template was never there
+//   he took the star   -> HIS run is over, whoever got there first; see below
 //   past the attempt   -> the ghost's run is over; see below
 //   too far off        -> the picture on screen is not the one the rule names
+//
+// THE TWO RUNS END SEPARATELY AND EITHER ENDING TAKES THE WINDOW AWAY. `past
+// the attempt` is the ghost finishing first; `grabbed` is HIM finishing first,
+// which is the case his own words name -- *"sometimes I might be faster than
+// the ghost!"* Both leave a picture on screen that says nothing he does not
+// already know, over a star he has just taken. His next reset brings the
+// window straight back, by the same route in both cases: the counter returns
+// to near zero and the follower re-places the ghost.
 //
 // THE TWO ENDS OF THE SPAN ARE NOT THE SAME CASE, and the difference is what
 // the player gets out of it. Before the template's first picture -- the tenth
@@ -198,7 +264,8 @@ function presentable() {
   if (!follower || !status.decision || !status.sample || status.holding)
     return false;
   const reason = status.decision.reason;
-  if (reason === "elsewhere" || reason === "past_template") return false;
+  if (reason === "elsewhere" || reason === "past_template"
+      || reason === "grabbed") return false;
   if (reason === "before_template") return true;
   const shown = follower.template.igtAtTime(videoTime());
   const target = status.sample.igt + follower.nudge;
@@ -222,6 +289,13 @@ window.ghostStatus = () => ({
   //: rule names is on screen. The companion window polls this and shows itself
   //: only while it holds.
   presentable: presentable(),
+  //: whether HIS OWN grab is holding the ghost down, as opposed to the ghost
+  //: having finished: two reasons for one empty screen, told apart here.
+  grabbed: follower ? follower.grabbed : false,
+  //: the colour treatment actually applied to the picture, and the filter
+  //: string it produced -- a tint nobody can see reads identically to one that
+  //: was never sent, so the readback carries what the element is wearing.
+  tint_filter: video.style.filter || "none",
   paused: video.paused,
   playback_rate: video.playbackRate,
   shown_igt: follower && follower.template.ok
@@ -259,13 +333,18 @@ async function start() {
     // running app does not put it in the URL at all: the live value is the
     // server's, and it arrives on the first clock sample.
     nudgeFrames: Number(params.get("nudge")) || 0,
-    // Where the template was recorded, if the source knows. A counter running
-    // in another course names a picture in this one, so the ghost holds
-    // instead of showing a confident lie. Dormant until the source payload
-    // carries `level`; nothing else here has to change when it does.
+    // Where the template was recorded, when the source knows. A counter
+    // running in another course names a picture in this one, so the ghost
+    // holds instead of showing a confident lie -- his report of LLL footage
+    // still playing in the castle. The source answers with the target's own
+    // level, and with an area only where the target names one (a course's
+    // subareas are the course); a segment names neither and the gate is off.
     expect: source.level != null
       ? { level: source.level, area: source.area == null ? null : source.area }
       : null,
+    // A STAR's run ends when he touches it, whoever got there first. A
+    // segment's does not -- see follower.js.
+    grabEndsRun: (params.get("kind") || "star") !== "segment",
   });
   // What the rule made of this clip, readable from outside: how many pictures
   // it will play, how many it threw away as pre-roll from the previous run,

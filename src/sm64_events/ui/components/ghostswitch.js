@@ -13,9 +13,10 @@
 // is markup, fetches and the one write policy below.
 //
 // THE WRITE POLICY, and why it is two shapes rather than one:
-//   * the switch writes on the gesture. A flip is one decision and the
-//     server answers with the whole session, so there is nothing to batch.
-//   * the slider and the timing buttons write on a TRAILING edge. Dragging a
+//   * the switches write on the gesture -- the overlay's own and the colour
+//     treatment's alike. A flip is one decision and the server answers with
+//     the whole session, so there is nothing to batch.
+//   * the sliders and the timing buttons write on a TRAILING edge. Dragging a
 //     range fires an event per pixel and a held nudge steps about fifteen
 //     times a second (ui/holdrepeat.js, his own 0.25s-then-repeat rule), so
 //     writing per event would put a burst of PUTs on the wire for one
@@ -34,9 +35,10 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
-import { clampNudge, clampOpacity, ghostControls, newestGhostSession,
-         nudgeSeconds, nudgeText, opacityText,
-         NUDGE_STEP, OPACITY_MAX, OPACITY_MIN } from "../ghostsession.js";
+import { clampNudge, clampOpacity, ghostControls, hueText, newestGhostSession,
+         nudgeSeconds, nudgeText, opacityText, shownTint,
+         HUE_MAX, HUE_MIN, NUDGE_STEP,
+         OPACITY_MAX, OPACITY_MIN } from "../ghostsession.js";
 
 const html = htm.bind(h);
 
@@ -144,9 +146,20 @@ export function useGhostSession(t, active = true) {
   return { session, reachable, draft, write, queue };
 }
 
-function GhostSwitchButton({ on, canToggle, onToggle, labelId, reasonId }) {
-  return html`<button type="button" role="switch" class="ghost-switch"
-      aria-checked=${on ? "true" : "false"} aria-labelledby=${labelId}
+/**
+ * The iOS-style switch, at either of the two sizes this row uses. ONE
+ * implementation: the colour treatment's own switch is the same control a size
+ * down, so the two can never drift into looking like different kinds of thing
+ * (`small` adds a class and nothing else). `labelId` names it where a visible
+ * label sits beside it; `label` is for the smaller one, whose name is the
+ * field it sits in.
+ */
+function GhostSwitchButton({ on, canToggle, onToggle, labelId, reasonId,
+                             label, small = false }) {
+  return html`<button type="button" role="switch"
+      class=${`ghost-switch${small ? " ghost-switch-sm" : ""}`}
+      aria-checked=${on ? "true" : "false"}
+      aria-labelledby=${labelId || undefined} aria-label=${label || undefined}
       aria-describedby=${reasonId || undefined}
       disabled=${!canToggle} onclick=${onToggle}>
     <span class="ghost-switch-track" aria-hidden="true">
@@ -156,13 +169,57 @@ function GhostSwitchButton({ on, canToggle, onToggle, labelId, reasonId }) {
 }
 
 /**
- * The two things worth reaching for while the ghost is up, and nothing else:
- * how solid it is drawn over the game, and where it sits against your own
- * run. The whole block is absent while the overlay is off -- there would be
- * nothing for either to act on, and the acceptance rule is to omit an action
- * that does not apply rather than to disable it.
+ * HOW THE GHOST IS COLOURED, so it cannot be read as the live game.
+ *
+ * His words: *"Maybe we can have a color picker (like on the rank page), and
+ * then apply a color filter to the entire picture? e.g. 'Hue Adjustment: Shift
+ * the hue angle by +120 degrees'... The user can disable the color shift if
+ * they want."*
+ *
+ * NOT the rank page's picker, and the reason is what the two controls answer.
+ * That one (`components/sheetstyle.js`) is `<input type="color">` -- a whole
+ * RGB colour, for a sheet cell that is PAINTED that colour. This shifts every
+ * colour in a picture around the wheel by one ANGLE, so a hex would throw away
+ * two thirds of what he picked: navy and sky blue are the same shift, the
+ * swatch would not match anything on his screen, and there would be no way to
+ * ask for "no shift" and still have the treatment on. So: the simplest native
+ * control that expresses an angle, which is also the affordance already beside
+ * it -- a range, wearing the colour wheel as its track so the choice is
+ * visible rather than a number to decode.
+ *
+ * The slider is OMITTED rather than disabled while the shift is off: there is
+ * nothing for it to act on, and the acceptance rule is to omit an action that
+ * does not apply rather than to grey it out.
  */
-function GhostTuning({ opacity, nudge, queue }) {
+function GhostColour({ tint, write, queue }) {
+  const known = tint != null;
+  return html`<div class="ghost-field ghost-colour" role="group"
+      aria-label="Ghost colour">
+    <span class="ghost-field-name">Colour</span>
+    <${GhostSwitchButton} on=${known && tint.enabled} canToggle=${known}
+      small=${true}
+      label=${known ? "Colour the ghost so it stands out from the live game"
+                    : "Waiting for how the ghost is coloured"}
+      onToggle=${() => write({ tint: { enabled: !(known && tint.enabled) } })} />
+    ${known && tint.enabled && html`
+      <input class="ghost-hue" type="range" min=${HUE_MIN} max=${HUE_MAX}
+        step="1" value=${tint.hue}
+        title="How far the ghost's colours are shifted around the colour wheel"
+        oninput=${(event) =>
+          queue({ tint: { hue_degrees: Number(event.target.value) } })} />
+      <span class="ghost-field-value">${hueText(tint.hue)}</span>`}
+  </div>`;
+}
+
+/**
+ * The three things worth reaching for while the ghost is up, and nothing else:
+ * how solid it is drawn over the game, how it is coloured so the two pictures
+ * cannot be confused, and where it sits against your own run. The whole block
+ * is absent while the overlay is off -- there would be nothing for any of them
+ * to act on, and the acceptance rule is to omit an action that does not apply
+ * rather than to disable it.
+ */
+function GhostTuning({ opacity, tint, nudge, write, queue }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -186,6 +243,7 @@ function GhostTuning({ opacity, nudge, queue }) {
         oninput=${(event) => queue({ opacity: Number(event.target.value) })} />
       <span class="ghost-field-value">${opacityText(opacity)}</span>
     </label>
+    <${GhostColour} tint=${tint} write=${write} queue=${queue} />
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
       <button type="button" class="ghost-step"
@@ -232,6 +290,9 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     ? controls.opacity : clampOpacity(held.opacity);
   const nudge = held.nudge_frames == null
     ? controls.nudge : clampNudge(held.nudge_frames);
+  // Null until the server says, same state the opacity has, and the two halves
+  // arrive by different gestures -- so the merge is its own rule.
+  const tint = shownTint(controls.tint, held.tint);
   const labelId = idFor(entityKey, "label");
   const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
 
@@ -245,7 +306,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         ${controls.reasonText}
       </span>`}
     </div>
-    ${on && html`<${GhostTuning} opacity=${opacity} nudge=${nudge}
-      queue=${queue} />`}
+    ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} nudge=${nudge}
+      write=${write} queue=${queue} />`}
   </div>`;
 }

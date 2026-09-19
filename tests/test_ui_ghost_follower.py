@@ -431,6 +431,109 @@ function spannedTemplate(preroll, frames, tail, after = "hold") {
   out.span_empty = { ok: t.ok, reason: t.reason };
 }
 
+// -- 12. HE grabs the star first -------------------------------------------
+//
+// His ruling: *"The ghost should close when I grab the star (sometimes I might
+// be faster than the ghost!)."* The clock says `star_grab` while Mario is in
+// an action a grab puts him in; it holds through the dance and then GOES AWAY
+// while he is still standing there with the counter running, which is why the
+// follower latches it rather than reading it per sample.
+{
+  const view = feedTemplate(400);
+  const trace = steady(120);
+  // The dance: 90 samples of the action, then it clears and he walks around
+  // for another 90 with the counter still climbing.
+  for (let k = 0; k < 90; k += 1)
+    trace.push({ igt: 120 + k, global_timer: 1120 + k, level: 8, area: 1,
+                 star_grab: true });
+  for (let k = 0; k < 90; k += 1)
+    trace.push({ igt: 210 + k, global_timer: 1210 + k, level: 8, area: 1,
+                 star_grab: false });
+  // Then he resets, and the ghost is owed back.
+  for (let k = 0; k < 20; k += 1)
+    trace.push({ igt: 0, global_timer: 1300 + k, level: 8, area: 1 });
+  for (let k = 0; k < 80; k += 1)
+    trace.push({ igt: k, global_timer: 1320 + k, level: 8, area: 1 });
+  const { rows } = drive(view, trace);
+  const after = rows.slice(120, 300);
+  out.his_grab = {
+    before: rows[119].reason,
+    at_touch: rows[120].reason,
+    // Never plays again between the touch and the reset -- including the
+    // ninety samples after the action itself has cleared.
+    held_paused: after.every((r) => r.paused),
+    reasons_after: [...new Set(after.map((r) => r.reason))],
+    // ...and it is back after the reset, following him again.
+    after_reset: score(rows, 325),
+    played_again: rows.slice(325).some((r) => !r.paused),
+  };
+}
+{
+  // A SEGMENT does not end on a star grab: some run through one on the way
+  // somewhere, and taking the ghost down there deletes the half he was
+  // practising. Same trace, `grabEndsRun: false`.
+  const view = feedTemplate(400);
+  const trace = steady(120);
+  for (let k = 0; k < 90; k += 1)
+    trace.push({ igt: 120 + k, global_timer: 1120 + k, level: 8, area: 1,
+                 star_grab: true });
+  const { rows } = drive(view, trace, { grabEndsRun: false });
+  out.segment_grab = { ...score(rows, 122),
+                       reasons: [...new Set(rows.slice(122).map((r) => r.reason))],
+                       kept_playing: rows.slice(122).every((r) => !r.paused) };
+}
+{
+  // A COUNTER STILL CLIMBING never raises the ghost again, however big its
+  // step. The clock feed collapses a burst to its newest sample, so a stretch
+  // of ordinary play the pump skipped arrives as one big forward jump; reading
+  // that as a state load put the ghost straight back up over a star he had
+  // already taken. Both shapes here: a skip well past the follower's own jump
+  // threshold, and a load FORWARD past the end of the template.
+  const view = feedTemplate(400);
+  const trace = steady(120);
+  for (let k = 0; k < 10; k += 1)
+    trace.push({ igt: 120 + k, global_timer: 1120 + k, level: 8, area: 1,
+                 star_grab: true });
+  for (let k = 0; k < 20; k += 1)          // the pump skipped 40 frames
+    trace.push({ igt: 170 + k * 3, global_timer: 1130 + k, level: 8, area: 1 });
+  for (let k = 0; k < 20; k += 1)          // and a load past the last picture
+    trace.push({ igt: 900 + k, global_timer: 1150 + k, level: 8, area: 1 });
+  const { rows } = drive(view, trace);
+  out.grab_then_forward = {
+    skipped: [...new Set(rows.slice(131, 149).map((r) => r.reason))],
+    past_the_end: [...new Set(rows.slice(151).map((r) => r.reason))] };
+}
+
+// -- 13. the course's own subareas are the course --------------------------
+// His report was LLL: the ghost kept playing after he died out of the course.
+// The gate names the LEVEL and leaves the area open, so walking into the
+// volcano (same level, another area) never takes the ghost down, and dying to
+// the castle does -- and returning brings it straight back.
+{
+  const view = feedTemplate(400);
+  const at = (igt, level, area) =>
+    ({ igt, global_timer: 1000 + igt, level, area });
+  const trace = [];
+  for (let k = 0; k < 60; k += 1) trace.push(at(k, 22, 1));        // LLL
+  for (let k = 0; k < 60; k += 1) trace.push(at(60 + k, 22, 2));   // volcano
+  for (let k = 0; k < 60; k += 1) trace.push(at(120 + k, 16, 1));  // died out
+  for (let k = 0; k < 60; k += 1) trace.push(at(180 + k, 22, 1));  // walked in
+  const { rows } = drive(view, trace, { expect: { level: 22, area: null } });
+  out.subarea = {
+    in_course: score(rows.slice(2, 59)).worst,
+    subarea_played: rows.slice(62, 119).every((r) => !r.paused),
+    subarea_reasons: [...new Set(rows.slice(62, 119).map((r) => r.reason))],
+    away_paused: rows.slice(120, 180).every((r) => r.paused),
+    away_reason: rows[150].reason,
+    // Back in the course: the very next sample PLACES it rather than holding,
+    // and the reason it carries is not "elsewhere" -- a page reading that
+    // keeps the window down for a ghost that is already right.
+    back_action: rows[180].action,
+    back_reason: rows[180].reason,
+    back_recovery: recovery(rows, 181),
+  };
+}
+
 out.near_zero = NEAR_ZERO_IGT;
 console.log(JSON.stringify(out));
 """
@@ -533,6 +636,77 @@ def test_a_clip_whose_first_picture_is_not_at_zero_still_lines_up(scores):
     assert cfr["first_time"] > 0.011, cfr
     assert cfr["worst"] <= 1, cfr
     assert cfr["over_one"] == 0, cfr
+
+
+def test_his_own_grab_takes_the_ghost_down_and_a_reset_brings_it_back(scores):
+    """ROUND 3, ITEM 1. His words: *"The ghost should close when I grab the
+    star (sometimes I might be faster than the ghost!). Upon star grab for the
+    player's actual live session."*
+
+    The interesting half is the NINETY SAMPLES AFTER THE ACTION CLEARS. A star
+    dance holds the grab action for about three seconds and then Mario is an
+    ordinary walking Mario again with the counter still climbing, so a follower
+    that read the flag per sample would put the ghost back up over a star he
+    had already taken -- the exact overstaying this round is about. The latch
+    is what makes those ninety samples silent too.
+    """
+    grab = scores["his_grab"]
+    assert grab["before"] == "playing", grab
+    assert grab["at_touch"] == "grabbed", grab
+    assert grab["held_paused"] is True, grab
+    assert grab["reasons_after"] == ["grabbed"], grab
+    # ...and his reset brings it straight back, by the same route the ghost
+    # finishing first already used: the counter returns to near zero.
+    assert grab["played_again"] is True, grab
+    assert grab["after_reset"]["worst"] <= 1, grab
+
+
+def test_a_segment_ghost_is_not_ended_by_a_star_grab(scores):
+    """A segment's run does not end at a star: some run through one on the way
+    somewhere, and taking the ghost down there deletes the half he was
+    practising. A segment's own end is the segment engine's judgement and it is
+    not on this socket, so a segment keeps the end it already had."""
+    segment = scores["segment_grab"]
+    assert segment["kept_playing"] is True, segment
+    assert "grabbed" not in segment["reasons"], segment
+    assert segment["worst"] <= 1, segment
+
+
+def test_a_counter_still_climbing_never_raises_the_ghost_again(scores):
+    """The release is a BACKWARD counter, not "the counter jumped", and that
+    narrowness was bought in a real browser.
+
+    The clock feed collapses a burst to its newest sample, so a stretch of
+    ordinary play the pump skipped arrives as one big forward step -- which the
+    first version read as a state load and used to put the ghost back up while
+    he walked around after the star. A load FORWARD past the template's last
+    picture is the other shape, and it has nothing left to show either.
+    """
+    forward = scores["grab_then_forward"]
+    assert forward["skipped"] == ["grabbed"], forward
+    assert forward["past_the_end"] == ["grabbed"], forward
+
+
+def test_a_courses_own_subarea_is_still_the_course(scores):
+    """ROUND 3, ITEM 5. His report: *"I exited LLL (by dying) -- and it looks
+    like the ghost is still playing... We should only play a ghost when it's
+    the active star / we're in that course/area."*
+
+    The gate names the LEVEL and leaves the area open, which is the whole
+    reading: the volcano is Lethal Lava Land and the pyramid is Shifting Sand
+    Land, so a gate on the area would take the ghost down inside the very star
+    it is playing. Dying out of the course is a LEVEL change and does take it
+    down, and walking back in brings it back on the next sample.
+    """
+    sub = scores["subarea"]
+    assert sub["in_course"] <= 1, sub
+    assert sub["subarea_played"] is True, sub
+    assert "elsewhere" not in sub["subarea_reasons"], sub
+    assert sub["away_paused"] is True, sub
+    assert sub["away_reason"] == "elsewhere", sub
+    assert sub["back_action"] == "seek", sub
+    assert sub["back_reason"] != "elsewhere", sub
+    assert sub["back_recovery"] is not None and sub["back_recovery"] <= 2, sub
 
 
 def test_the_ghost_holds_while_the_player_is_in_another_level(scores):

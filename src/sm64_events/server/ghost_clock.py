@@ -22,16 +22,32 @@ overlay sees the current value one wake later.
 open, so a tracker nobody is practising against runs exactly what it ran
 before this module existed.
 
-**The nudge rides this message too.** How far ahead or behind the ghost runs
-is a property of the SAME rule -- show the picture whose timer equals the live
-timer plus the nudge -- so it belongs on the same wire as the timer. The
-session sets it here (`set_nudge`) and every open overlay reads it off its very
-next sample, which means a change takes effect within one game frame and
-WITHOUT the page being navigated. It used to ride the page's URL instead, and
-every press of his timing key therefore re-pointed the window at a new URL: a
-full page load, which blinks the overlay off and re-seeks it from scratch. A
-held key fired a stream of them. Carrying it here costs nothing when nobody is
-listening (the early return happens first) and nothing at all on the poll path.
+**The nudge and the colour ride this message too.** How far ahead or behind the
+ghost runs is a property of the SAME rule -- show the picture whose timer equals
+the live timer plus the nudge -- so it belongs on the same wire as the timer,
+and the colour treatment is the same kind of thing: a preference the RUNNING
+page can take. The session sets both here (`set_nudge`, `set_tint`) and every
+open overlay reads them off its very next sample, which means a change takes
+effect within one game frame and WITHOUT the page being navigated. The nudge
+used to ride the page's URL instead, and every press of his timing key
+therefore re-pointed the window at a new URL: a full page load, which blinks
+the overlay off and re-seeks it from scratch. A held key fired a stream of
+them. Carrying them here costs nothing when nobody is listening (the early
+return happens first) and nothing at all on the poll path.
+
+**AND SO DOES HIS OWN STAR GRAB.** His ruling, 2026-09-19: *"The ghost should
+close when I grab the star (sometimes I might be faster than the ghost!). Upon
+star grab for the player's actual live session."* The page already follows this
+socket every game frame, so the cheapest truthful answer is a boolean on the
+message it is already reading -- no second socket, no detector, and nothing new
+read out of the emulator, because Mario's action is already in the snapshot the
+poll loop handed over. It is the TOUCH rather than the journal's
+`star_collected`, which is a HELD emit published after the fact: waiting for it
+would leave the ghost up over the star dance, which is exactly the moment he
+says it should be gone. `memory/addresses.py::STAR_GRAB_ACTIONS` is this
+project's ONE answer to "this action means a star was just grabbed" (the dance
+actions plus the midair fall), shared with the star-grab detector, so this reads
+the registry rather than restating its ids.
 """
 import asyncio
 import logging
@@ -39,10 +55,13 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from sm64_events.ghost.session import DEFAULT_TINT
+from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
+
 log = logging.getLogger("sm64.ghost")
 
 
-def clock_message(snapshot, nudge_frames: int = 0) -> dict:
+def clock_message(snapshot, nudge_frames: int = 0, tint: dict | None = None) -> dict:
     """The whole wire format. `igt` is Usamune's counter exactly as sampled --
     the same number every template picture is stamped with -- so the follower
     matches raw counter against raw counter with nothing in between.
@@ -59,18 +78,30 @@ def clock_message(snapshot, nudge_frames: int = 0) -> dict:
     moving while the game is paused, so it is what tells a stalled attempt
     apart from a stalled feed.
 
-    `nudge_frames` is the ghost session's current offset, carried on every
-    message rather than only on the ones that change it: a page that missed a
-    message, or one that loaded a moment ago, converges on the next sample
-    instead of waiting for the player to press the key again.
+    `nudge_frames` and `tint` are the ghost session's current settings, carried
+    on every message rather than only on the ones that change them: a page that
+    missed a message, or one that loaded a moment ago, converges on the next
+    sample instead of waiting for the player to touch the control again. The
+    page therefore ships NO default of its own for either -- it draws what the
+    server states, and it is never shown before its first sample.
+
+    `star_grab` is true while Mario is in an action a star grab puts him in. It
+    is a LEVEL, not an edge, because the dance holds it for a second or more and
+    a page that missed the one frame it changed on would keep a ghost up over a
+    star he has already taken; the page latches it and holds the ghost down
+    until the live timer goes back inside the run.
 
     The integrator adds `play_mode` here once the pause signal lands.
     """
+    chosen = DEFAULT_TINT if tint is None else tint
     return {"global_timer": snapshot.global_timer,
             "igt": snapshot.igt_overall,
             "level": snapshot.curr_level,
             "area": snapshot.curr_area,
-            "nudge_frames": int(nudge_frames)}
+            "nudge_frames": int(nudge_frames),
+            "tint": {"enabled": bool(chosen.get("enabled")),
+                     "hue_degrees": int(chosen.get("hue_degrees", 0))},
+            "star_grab": snapshot.mario_action in STAR_GRAB_ACTIONS}
 
 
 class GhostClockFeed:
@@ -82,9 +113,11 @@ class GhostClockFeed:
         self._pending = None
         self._wake: asyncio.Event | None = None
         self._pump: asyncio.Task | None = None
-        #: How far ahead or behind the ghost is being run, in game frames. The
-        #: ghost session owns the value; this is where it is published from.
+        #: How far ahead or behind the ghost is being run, in game frames, and
+        #: how its picture is coloured. The ghost session owns both values;
+        #: this is where they are published from.
         self.nudge_frames = 0
+        self.tint = dict(DEFAULT_TINT)
         #: samples handed over by the poll loop, and messages actually sent.
         #: `noted - sent` is how far behind the pump ran, i.e. how many
         #: samples collapsed. Read by tests and worth a /health line later.
@@ -124,6 +157,12 @@ class GhostClockFeed:
         """
         self.nudge_frames = int(frames)
 
+    def set_tint(self, tint: dict) -> None:
+        """How the ghost's picture is coloured, from now on. Same wire and the
+        same reason as `set_nudge`: changing it must never navigate the page."""
+        self.tint = {"enabled": bool(tint.get("enabled")),
+                     "hue_degrees": int(tint.get("hue_degrees", 0))}
+
     async def connect(self, client) -> None:
         self._clients.add(client)
         if self._pump is None:
@@ -149,7 +188,8 @@ class GhostClockFeed:
             if snapshot is None:
                 continue
             try:
-                await self._send(clock_message(snapshot, self.nudge_frames))
+                await self._send(
+                    clock_message(snapshot, self.nudge_frames, self.tint))
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - one bad sample must not end the feed

@@ -8460,6 +8460,13 @@
   .ghost-switch[aria-checked="true"] .ghost-switch-knob {
     background: var(--gold-soft); transform: translateX(14px);
   }
+  /* The SAME switch a size down, for the colour treatment inside the tuning
+     line: a second kind of toggle on one row would read as a different kind of
+     decision. Only the box shrinks -- the track, the knob, the gold, the
+     focus ring and the 160ms are all the rule above. */
+  .ghost-switch-sm .ghost-switch-track { width: 26px; height: 15px; }
+  .ghost-switch-sm .ghost-switch-knob { width: 11px; height: 11px; top: 1px; left: 1px; }
+  .ghost-switch-sm[aria-checked="true"] .ghost-switch-knob { transform: translateX(11px); }
   .ghost-switch:hover:not(:disabled) .ghost-switch-track { border-color: var(--gold-soft); }
   .ghost-switch:focus-visible { outline: none; }
   .ghost-switch:focus-visible .ghost-switch-track {
@@ -8491,6 +8498,9 @@
      readout ever arrives, the timing group wraps within itself rather than
      pushing the whole line past the card. */
   .ghost-timing { flex-wrap: wrap; }
+  /* Tighter than a default field: its first item is a small switch, not text,
+     so the label sits closer to it without the two running together. */
+  .ghost-colour { gap: .4rem; }
   .ghost-field-name {
     font-size: .66rem; color: var(--muted-2); text-transform: uppercase;
     letter-spacing: .05em; white-space: nowrap;
@@ -8506,6 +8516,31 @@
     width: 120px; min-width: 0; margin: 0; padding: 0; border: 0;
     accent-color: var(--gold);
   }
+  /* THE COLOUR WHEEL IS THE TRACK. The control answers "how far round the
+     wheel", which is a number nobody can picture, so the slider wears the
+     wheel itself and the position IS the answer -- no swatch to keep in sync
+     and nothing to decode. Drawn with `appearance: none` because a themed
+     range paints its own track over any background; the thumb is then ours
+     too, and it is the row's own text colour rather than a second accent. */
+  .ghost-hue {
+    appearance: none; -webkit-appearance: none;
+    width: 108px; min-width: 0; height: 12px; margin: 0; padding: 0;
+    border: 1px solid var(--border-soft); border-radius: 999px;
+    cursor: pointer;
+    background: linear-gradient(to right,
+      hsl(0 72% 55%), hsl(60 72% 55%), hsl(120 72% 55%), hsl(180 72% 55%),
+      hsl(240 72% 55%), hsl(300 72% 55%), hsl(360 72% 55%));
+  }
+  .ghost-hue::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--text); border: 1px solid rgba(3,10,18,.9);
+  }
+  .ghost-hue::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--text); border: 1px solid rgba(3,10,18,.9);
+  }
+  .ghost-hue:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
   .ghost-step, .ghost-reset {
     min-height: 24px; padding: 0 .5rem; border-radius: 5px;
     border: 1px solid var(--border-soft); background: rgba(9,22,36,.6);
@@ -8520,17 +8555,23 @@
     outline: 2px solid var(--gold); outline-offset: 2px;
   }
   /* NO WIDTH RULE, and that is measured rather than assumed. The tuning line
-     is its own flex row under the switch and its content is 461px wide
-     (slider 120px + the two step buttons + the fixed timing lane), while the
-     card's pane at the supported 850px floor gives the row 695px. So it fits
-     at every supported width and a breakpoint here would only stack a line
-     that had room. A first version gated on `@container (max-width: 760px)`;
-     that threshold sat between the 850 and 900 probe points, and
-     `.claude/rules/ui-core.md` requires a new container threshold below
-     ~1180px to have its WINDOW equivalent added to the sweep matrix -- which
-     would change what every other surface is measured at, to stack a row
-     that did not need it. `flex-wrap: wrap` is the fallback if a longer
-     readout ever arrives. */
+     is its own flex row under the switch, and with the colour treatment on it
+     holds three groups: 203px (visibility) + 226px (colour) + 299px (timing)
+     with 16px gaps, so 760px. The card's pane gives the row 1187 / 887 / 717 /
+     667px at 1500 / 1200 / 900 / 850. All three therefore share one line down
+     to 1200px and the timing group takes a second line at 900 and 850 -- which
+     is what `flex-wrap: wrap` is here for, and why each group is its own flex
+     item rather than a run of loose controls: the wrap falls BETWEEN groups
+     and never inside one. With the colour switched off the wheel is gone
+     (610px) and it is one line everywhere. Numbers re-measured 2026-09-19 when
+     the colour group was added.
+
+     A breakpoint here would only stack a line that flexbox already stacks. A
+     first version gated on `@container (max-width: 760px)`; that threshold sat
+     between the 850 and 900 probe points, and `.claude/rules/ui-core.md`
+     requires a new container threshold below ~1180px to have its WINDOW
+     equivalent added to the sweep matrix -- which would change what every
+     other surface is measured at. */
 </style></head>
 <body>
 <div id="app"></div>

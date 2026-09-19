@@ -15,6 +15,7 @@ import pytest
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.ghost.session import (
     DEFAULT_OPACITY,
+    HUE_LIMIT_DEGREES,
     MAX_START_ATTEMPTS,
     NUDGE_LIMIT_FRAMES,
     GhostSession,
@@ -164,8 +165,9 @@ def test_the_payload_carries_exactly_the_frozen_shape(tmp_path):
     session, _controllers, _tracker, store = a_session(tmp_path)
     mark(store)
     body = drive(session)
-    assert set(body) == {"enabled", "opacity", "nudge_frames", "target",
-                         "source", "window"}
+    assert set(body) == {"enabled", "opacity", "tint", "nudge_frames",
+                         "target", "source", "window"}
+    assert set(body["tint"]) == {"enabled", "hue_degrees"}
     assert set(body["target"]) == {"kind", "entity_key", "strat"}
     # The I1 answer WITHOUT the two keys only the overlay page needs.
     assert set(body["source"]) == {"available", "reason", "reason_text",
@@ -230,6 +232,29 @@ def test_a_target_with_no_ghost_hides_the_window_and_keeps_the_child(tmp_path):
     assert body["source"]["reason_text"]
     assert body["window"] == {"running": True, "visible": False}
     assert len(controllers) == 1 and controllers[0].stops == 0
+
+
+def test_a_retired_target_parks_the_window_rather_than_leaving_it_up(tmp_path):
+    """ROUND 3, ITEM 5's other half. The tracker retires the active star when
+    he walks into another course (`tracking/projection.py`), and the answer has
+    to be the same as any other "nothing to show": the window PARKS.
+
+    It must not keep the last target's footage on screen -- that is the shape
+    of his report, LLL footage still playing in the castle -- and it must not
+    kill the child either, because he walks back in a moment later.
+    """
+    session, controllers, tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True, nudge_frames=12))
+    assert controllers[0].visible is True
+    tracker.target = None
+    body = drive(session)
+    assert body["target"] is None
+    assert body["source"]["reason"] == "no_target"
+    assert body["window"] == {"running": True, "visible": False}
+    assert controllers[0].stops == 0
+    # The offset belonged to the star that is gone.
+    assert body["nudge_frames"] == 0
 
 
 def test_the_window_comes_back_when_the_target_has_a_ghost_again(tmp_path):
@@ -422,6 +447,77 @@ def test_a_session_with_no_clock_still_works(tmp_path):
     assert controllers[0].visible is True
 
 
+# -- the colour treatment -----------------------------------------------------
+
+def test_the_ghost_is_coloured_by_default_so_it_cannot_be_mistaken(tmp_path):
+    """His report: *"It feels really hard to understand which one is the ACTUAL
+    LIVE GAMEPLAY and which one is the GHOST gameplay."* So the treatment is on
+    the first time the overlay is ever used, and at a shift big enough to see.
+
+    The exact angle is a shipped preference and is deliberately NOT pinned
+    (domain contract 7) -- what is pinned is that it is on, and that it is a
+    real shift rather than zero, which would be the same picture with a
+    preference switched on to say otherwise.
+    """
+    session, _controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    tint = drive(session)["tint"]
+    assert tint["enabled"] is True
+    assert 0 < tint["hue_degrees"] <= HUE_LIMIT_DEGREES
+
+
+def test_the_colour_reaches_the_overlay_on_the_clock(tmp_path):
+    """It travels the way the nudge does: the page is already reading this
+    socket, so a change lands within one game frame and the window is never
+    re-pointed at a URL. Dragging a colour slider through a page load per
+    event is the failure this shape exists to avoid."""
+    clock = GhostClockFeed()
+    session, controllers, _tracker, store = a_session(tmp_path, clock=clock)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    opened = list(controllers[0].urls)
+    asyncio.run(session.update(tint={"hue_degrees": 240}))
+    assert session.payload()["tint"]["hue_degrees"] == 240
+    assert clock.tint == {"enabled": True, "hue_degrees": 240}
+    assert clock_message(_a_snapshot(), 0, clock.tint)["tint"]["hue_degrees"] == 240
+    assert controllers[0].urls == opened, "the overlay page was navigated"
+
+
+def test_each_half_of_the_colour_can_be_set_without_losing_the_other(tmp_path):
+    """The control sends the half he touched: the switch on its own gesture,
+    the angle on a trailing edge. Replacing the whole object here would throw
+    away the angle he chose the moment he switched the treatment off and on."""
+    session, _controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(tint={"hue_degrees": 300}))
+    asyncio.run(session.update(tint={"enabled": False}))
+    assert session.payload()["tint"] == {"enabled": False, "hue_degrees": 300}
+    asyncio.run(session.update(tint={"enabled": True}))
+    assert session.payload()["tint"] == {"enabled": True, "hue_degrees": 300}
+
+
+def test_the_colour_survives_a_restart(tmp_path):
+    """Persisted the way the opacity is: it is a look he chose once, and
+    picking it again on every launch is the preference not working."""
+    db = FakeStateDb()
+    store = a_store(tmp_path)
+    mark(store)
+    session, _c, _t, _s = a_session(tmp_path, db=db, store=store)
+    asyncio.run(session.update(tint={"enabled": False, "hue_degrees": 45}))
+    again, _c2, _t2, _s2 = a_session(tmp_path, db=db, store=store)
+    assert drive(again)["tint"] == {"enabled": False, "hue_degrees": 45}
+
+
+def test_a_nonsense_stored_colour_never_breaks_the_session(tmp_path):
+    db = FakeStateDb({"ghost_tint_enabled": "sure", "ghost_tint_hue": "blue"})
+    store = a_store(tmp_path)
+    mark(store)
+    session, _c, _t, _s = a_session(tmp_path, db=db, store=store)
+    tint = drive(session)["tint"]
+    assert tint["enabled"] is True
+    assert 0 <= tint["hue_degrees"] <= HUE_LIMIT_DEGREES
+
+
 # -- what a bad value does ----------------------------------------------------
 
 @pytest.mark.parametrize("changes", [
@@ -429,6 +525,9 @@ def test_a_session_with_no_clock_still_works(tmp_path):
     {"nudge_frames": NUDGE_LIMIT_FRAMES + 1},
     {"nudge_frames": -NUDGE_LIMIT_FRAMES - 1},
     {"nudge_frames": 1.5}, {"enabled": "yes"},
+    {"tint": {"hue_degrees": HUE_LIMIT_DEGREES + 1}},
+    {"tint": {"hue_degrees": -1}}, {"tint": {"hue_degrees": 12.5}},
+    {"tint": {"enabled": "on"}}, {"tint": {"shade": 3}}, {"tint": 120},
 ])
 def test_an_out_of_range_value_is_refused_with_a_readable_sentence(tmp_path, changes):
     session, _controllers, _tracker, store = a_session(tmp_path)

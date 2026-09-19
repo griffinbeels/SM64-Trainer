@@ -22,6 +22,8 @@ Both of the page's own inputs are exercised: the clock over the socket, and
 window uses, and the one the graphics plugin would use if the memory poll ever
 proves too slow -- the brainstorm's A+ escalation).
 """
+import asyncio
+import io
 import json
 import shutil
 import socket
@@ -38,6 +40,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
+
+from tests.source_scan import strip_comments
 from sm64_events.server.ghost_clock import (GhostClockFeed,
                                             create_ghost_clock_router)
 
@@ -111,14 +116,21 @@ def _build_clip(path: Path) -> None:
         check=True, capture_output=True, timeout=180)
 
 
-def _snapshot(igt: int, timer: int, level: int, area: int) -> GameSnapshot:
+def _snapshot(igt: int, timer: int, level: int, area: int,
+              action: int = 0) -> GameSnapshot:
     """The shape the poll loop hands the feed, so the wire format under test
     is the real one rather than a dict shaped like it."""
     return GameSnapshot(
         wall_time_utc=datetime.now(timezone.utc), global_timer=timer,
-        mario_action=0, mario_action_timer=0, num_stars=0,
+        mario_action=action, mario_action_timer=0, num_stars=0,
         last_completed_course=0, last_completed_star=0,
         igt_overall=igt, curr_level=level, curr_area=area)
+
+
+#: An action a star grab actually puts Mario in, taken from the project's one
+#: registry rather than typed: the point of driving the REAL `clock_message`
+#: here is that the page is answering the server's own reading of the game.
+GRAB_ACTION = min(STAR_GRAB_ACTIONS)
 
 
 class _Fixture:
@@ -149,8 +161,49 @@ class _Fixture:
             return {**AVAILABLE, "span": self.span}
 
         @app.post("/test/clock")
-        def clock(igt: int, global_timer: int, level: int = 8, area: int = 1):
-            self.feed.note(_snapshot(igt, global_timer, level, area))
+        def clock(igt: int, global_timer: int, level: int = 8, area: int = 1,
+                  action: int = 0):
+            self.feed.note(_snapshot(igt, global_timer, level, area, action))
+            return {"ok": True}
+
+        @app.post("/test/clock-run")
+        async def clock_run(run: dict):
+            """A WHOLE TRACE, paced on the server's own loop.
+
+            The page used to post one sample per game frame. That put the
+            harness on the critical path twice over: the requests are issued in
+            order and complete out of it, so the page could be handed a counter
+            that went BACKWARDS (a reset, to any follower), and on a loaded
+            machine a round trip could exceed the follower's 200 ms starvation
+            window between two samples of a steady trace. Both faults belong to
+            the rig -- the live poll loop calls `note()` in order on one thread,
+            at the game's own rate -- so the rig owes them rather than the page
+            owing tolerance for an emulator that cannot do either.
+            """
+            period = run.get("period_ms", 33) / 1000
+            loop = asyncio.get_running_loop()
+            opened = loop.time()
+            for index, igt in enumerate(run["igts"]):
+                self.feed.note(_snapshot(int(igt), 9000 + index,
+                                         run.get("level", 8),
+                                         run.get("area", 1),
+                                         run.get("action", 0)))
+                # Against a DEADLINE, not `sleep(period)`. Windows' timer wakes
+                # on ~15.6 ms boundaries, so a plain 33 ms sleep is really 47 --
+                # the counter would advance at 21 fps while the clip plays at
+                # 30, and the follower would honestly report a drift that was
+                # the rig's own. A deadline lets each overshoot be absorbed by
+                # the next wait instead of accumulating.
+                delay = opened + (index + 1) * period - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            return {"sent": len(run["igts"])}
+
+        @app.post("/test/tint")
+        def tint(enabled: bool, hue_degrees: int):
+            # What `PUT /api/ghost` does: the session hands the feed the new
+            # colour and nothing else happens. No URL, no navigation.
+            self.feed.set_tint({"enabled": enabled, "hue_degrees": hue_degrees})
             return {"ok": True}
 
         @app.post("/test/nudge")
@@ -202,30 +255,52 @@ class _Fixture:
 # measure the harness rather than the page; and READING the status over a round
 # trip afterwards would race the follower's own starvation hold, which stops
 # the ghost after `starveMs` without a sample exactly as it must when the
-# emulator is paused. So the page samples itself 25 ms after the last one.
+# emulator is paused. So the page samples itself.
+#
+# IT READS WHEN THE CLOCK GOES QUIET, not after a fixed delay, and that is a
+# fix rather than a preference. A fixed 120 ms assumed the round trip from this
+# `fetch` through the server, the feed's pump and the socket was quicker than
+# that; on a loaded machine it is not, so the status was captured BEFORE the
+# last sample landed and the page had legitimately starved -- `holding:
+# no_clock`, which reads exactly like a ghost that stopped following. It cost
+# three runs, on sections written today and on one that had been green for a
+# day.
+#
+# ONE REQUEST STARTS THE WHOLE TRACE and the server paces it (see
+# `/test/clock-run`), so the browser is not between the samples at all.
+#
+# The wait that ENDS a trace is "no new sample for ~60 ms": quiet enough to
+# mean it is over, and far enough inside `starveMs` (200) that the page cannot
+# have started holding.
 _TRACE = """(() => {
-  const igts = %s;
+  const run = %s;
   window.__done = false; window.__result = null;
-  let k = 0;
-  const id = setInterval(() => {
-    fetch(`/test/clock?igt=${igts[k]}&global_timer=${9000 + k}`,
-          {method: 'POST'});
-    k += 1;
-    if (k >= igts.length) {
-      clearInterval(id);
-      setTimeout(() => {
-        window.__result = window.ghostStatus();
-        window.__done = true;
-      }, 120);
+  (async () => {
+    await fetch('/test/clock-run', {method: 'POST',
+      headers: {'content-type': 'application/json'}, body: JSON.stringify(run)});
+    const deadline = performance.now() + 4000;
+    let seen = -1;
+    let quiet = 0;
+    while (quiet < 4 && performance.now() < deadline) {
+      const samples = window.ghostStatus().samples;
+      if (samples === seen) quiet += 1; else { seen = samples; quiet = 0; }
+      await new Promise((go) => setTimeout(go, 15));
     }
-  }, 33);
+    window.__result = window.ghostStatus();
+    window.__done = true;
+  })();
   return true;
 })()"""
 
 
-def _trace(page, igts: list) -> dict:
-    """Run one clock trace and answer with what the page was doing at its end."""
-    page.evaluate(_TRACE % json.dumps(igts))
+def _trace(page, igts: list, **fields) -> dict:
+    """Run one clock trace and answer with what the page was doing at its end.
+
+    `fields` ride every sample: the live grab flag is a field of the clock
+    message like any other, so it belongs on the same trace rather than in a
+    second mechanism the page never sees in real use.
+    """
+    page.evaluate(_TRACE % json.dumps({"igts": list(igts), **fields}))
     for _ in range(len(igts) * 2 + 80):
         if page.evaluate("window.__done === true"):
             break
@@ -378,6 +453,193 @@ def _presentable_tracks_the_footage(page) -> None:
     assert starved["presentable"] is False, starved
 
 
+def _the_element_covers_the_whole_window(page) -> None:
+    """The ELEMENT is full-bleed even though the PICTURE may not be.
+
+    What it does not paint it leaves see-through, which over a running game is
+    the point; a smaller element would give the window edges nothing at all.
+    """
+    box = page.evaluate(
+        "(() => { const r = document.getElementById('ghost')"
+        ".getBoundingClientRect(); return {w: r.width, h: r.height,"
+        " x: r.x, y: r.y}; })()")
+    assert box["x"] == 0 and box["y"] == 0
+    assert box["w"] == page.evaluate("window.innerWidth")
+    assert box["h"] == page.evaluate("window.innerHeight")
+
+
+#: Two backdrops, because a pixel of the FOOTAGE could legitimately be either
+#: one of them -- the stand-in clip is a colour-bar pattern and magenta is one
+#: of its bars. A pixel that matches both is impossible, so the union of the
+#: two differences is the picture and nothing else. Same two-pass trick a
+#: transparent export needs.
+BACKDROPS = ("#ff00ff", "#0a2f10")
+
+
+def _painted_picture_box(page) -> tuple[tuple[int, int, int, int], int, int]:
+    """WHERE THE PICTURE ACTUALLY IS, measured from painted pixels.
+
+    Not derived from the element box and the clip's aspect -- that is the same
+    arithmetic `object-fit` does, so it would agree with any value of it. The
+    element covers the window and leaves what it does not paint see-through, so
+    a temporary backdrop makes the picture's own box readable in a screenshot.
+
+    The backdrop is restored immediately: a driven test that leaves the page in
+    a state it invented measures a page only it has ever seen.
+    """
+    from PIL import Image, ImageChops, ImageColor
+
+    shots = []
+    for colour in BACKDROPS:
+        page.evaluate("(() => { document.documentElement.style.background ="
+                      f" {colour!r}; return true; }})()")
+        page.wait_ms(150)
+        shots.append((colour, page.screenshot()))
+    page.evaluate("(() => { document.documentElement.style.background = '';"
+                  " return true; })()")
+    painted = None
+    size = None
+    for colour, shot in shots:
+        image = Image.open(io.BytesIO(shot)).convert("RGB")
+        size = image.size
+        backdrop = Image.new("RGB", size, ImageColor.getrgb(colour))
+        difference = ImageChops.difference(image, backdrop)
+        painted = (difference if painted is None
+                   else ImageChops.lighter(painted, difference))
+    box = painted.getbbox()
+    assert box is not None, "nothing at all was painted over the backdrop"
+    return box, size[0], size[1]
+
+
+def _the_picture_is_centred_and_undistorted(page) -> None:
+    """ROUND 3 ITEM 3, as the window track's live measurements corrected it.
+
+    His report was *"it's ALMOST overlaid properly"*, and the cause was the
+    WINDOW covering Project64's whole client area, status-bar strip included --
+    about 1.9% of vertical stretch. The window now sits on the rectangle the
+    renderer draws into.
+
+    What this page owes is the MAPPING. The project's GLideN64 build forces 4:3
+    (`frameBufferEmulation\\aspect=1`), so the game image is inscribed 4:3 and
+    centred inside that rectangle and the black bands in his footage are the
+    game's own borders. The clip's 4:3 box therefore maps onto the live 4:3
+    box: identical to stretching while the two aspects agree, and undistorted
+    when he has resized Project64 to another shape.
+
+    So this is measured in a window that is deliberately NOT the clip's shape
+    -- 2:1 against a 4:3 clip -- because that is the only shape in which
+    `contain` and `fill` paint different pictures.
+    """
+    was = page.evaluate("(() => ({w: window.innerWidth,"
+                        " h: window.innerHeight}))()")
+    page.set_viewport(800, 400)
+    page.wait_ms(200)
+    _the_element_covers_the_whole_window(page)
+    intrinsic = page.evaluate(
+        "(() => { const v = document.getElementById('ghost');"
+        " return {w: v.videoWidth, h: v.videoHeight}; })()")
+    assert intrinsic["w"] and intrinsic["h"], intrinsic
+    (left, top, right, bottom), width, height = _painted_picture_box(page)
+    # Put the window back: the sections after this one measure a page they did
+    # not resize, and a rig that leaves its own shape behind measures a page
+    # only it has ever seen.
+    page.set_viewport(was["w"], was["h"])
+    page.wait_ms(200)
+
+    # It fills the SHORT axis and is centred on the long one, with the margins
+    # equal to within a pixel of rounding.
+    assert top <= 1 and bottom >= height - 1, (left, top, right, bottom, height)
+    margins = (left, width - right)
+    assert abs(margins[0] - margins[1]) <= 2, margins
+    assert margins[0] > 10, (
+        f"the picture reaches the window edges at 2:1 -- it was stretched "
+        f"rather than mapped: {margins}")
+    # ...and it is the clip's own shape, not the window's.
+    painted_aspect = (right - left) / (bottom - top)
+    clip_aspect = intrinsic["w"] / intrinsic["h"]
+    assert abs(painted_aspect - clip_aspect) / clip_aspect < 0.02, (
+        f"the picture is distorted: painted {painted_aspect:.4f} against the "
+        f"clip's own {clip_aspect:.4f}")
+
+
+def _his_own_grab_takes_the_window_down(page) -> None:
+    """ROUND 3, ITEM 1, through the real socket and the real message.
+
+    His words: *"The ghost should close when I grab the star (sometimes I might
+    be faster than the ghost!). Upon star grab for the player's actual live
+    session."* The flag is computed on the server from Mario's action against
+    `memory/addresses.py::STAR_GRAB_ACTIONS`, so this drives a real grab action
+    through `clock_message` rather than hand-posting a boolean.
+
+    Both halves are here because only one of them is obvious: the ghost goes
+    down at the touch, and it STAYS down once the dance action has cleared and
+    he is walking around with the counter still running.
+    """
+    following = _trace(page, list(range(3, 60)))
+    assert following["presentable"] is True, following
+
+    touched = _trace(page, list(range(60, 70)), action=GRAB_ACTION)
+    assert touched["sample"]["star_grab"] is True, touched
+    assert touched["decision"]["reason"] == "grabbed", touched
+    assert touched["grabbed"] is True, touched
+    assert touched["presentable"] is False, touched
+    assert touched["paused"] is True, touched
+
+    # The dance ends and he walks on: the action is gone, the counter is still
+    # climbing, and the ghost must not come back for a star he already has.
+    walking = _trace(page, list(range(70, 100)))
+    assert walking["sample"]["star_grab"] is False, walking
+    assert walking["decision"]["reason"] == "grabbed", walking
+    assert walking["presentable"] is False, walking
+
+    # His reset brings it back, by the same route a finished ghost already
+    # uses: the counter returns to near zero and the follower re-places it.
+    _trace(page, [0, 1, 2])
+    back = _trace(page, list(range(3, 40)))
+    assert back["grabbed"] is False, back
+    assert back["presentable"] is True, back
+
+
+def _the_ghost_is_coloured_over_the_clock(page) -> None:
+    """ROUND 3, ITEM 2, at the page's own level.
+
+    His words: *"apply a color filter to the entire picture."* The filter is
+    read off the ELEMENT rather than off the status: a filter string that the
+    engine rejected leaves the property empty with every field still saying it
+    was applied. And the page ships no default for it -- nothing is painted
+    until the server has said, which is safe because nothing is presentable
+    before the first sample either.
+
+    `__alive` is how "the page was never navigated for this" is measured; a
+    load of any kind wipes it.
+    """
+    filter_of = ("getComputedStyle(document.getElementById('ghost')).filter")
+    page.evaluate("(() => { window.__alive = 'yes'; return true; })()")
+    page.evaluate("(() => { fetch('/test/tint?enabled=true&hue_degrees=200',"
+                  " {method: 'POST'}); return true; })()")
+    coloured = _trace(page, list(range(3, 20)))
+    assert page.evaluate("window.__alive") == "yes", "the page was reloaded"
+    assert coloured["tint"] == {"enabled": True, "hue_degrees": 200}, coloured
+    assert page.evaluate(filter_of) == "hue-rotate(200deg)"
+    assert coloured["tint_filter"] == "hue-rotate(200deg)", coloured
+
+    # Switched off: the picture goes back to the game's own colours, live.
+    page.evaluate("(() => { fetch('/test/tint?enabled=false&hue_degrees=200',"
+                  " {method: 'POST'}); return true; })()")
+    plain = _trace(page, list(range(20, 35)))
+    assert page.evaluate("window.__alive") == "yes", "the page was reloaded"
+    assert plain["tint"] == {"enabled": False, "hue_degrees": 200}, plain
+    assert page.evaluate(filter_of) == "none"
+
+    # And the parent window can push it too, the way it can push the nudge.
+    _post_message(page, "{type: 'ghost-tint',"
+                        " tint: {enabled: true, hue_degrees: 90}}")
+    assert page.evaluate(filter_of) == "hue-rotate(90deg)"
+    page.evaluate("(() => { fetch('/test/tint?enabled=true&hue_degrees=120',"
+                  " {method: 'POST'}); return true; })()")
+    _trace(page, list(range(35, 45)))
+
+
 def _nudge_over_the_clock(page, url: str) -> None:
     """THE DEFECT THIS CLOSES, at the page's own level.
 
@@ -417,6 +679,25 @@ def _post_message(page, body: str) -> None:
     page.wait_ms(200)
 
 
+def test_the_picture_is_mapped_rather_than_stretched():
+    """ROUND 3, ITEM 3, the half a rendered check cannot see.
+
+    `fill` is the CSS initial value, so a browser reporting it cannot tell a
+    declaration from its absence -- and the declaration is what a future edit
+    would change. Read the page's own stylesheet instead, with comments
+    stripped so the paragraph EXPLAINING why `fill` was rejected cannot fail
+    the guard it is about.
+    """
+    css = strip_comments((UI / "ghost" / "index.html").read_text(encoding="utf-8"))
+    assert "object-fit: contain" in css, (
+        "the overlay does not map the clip's picture onto the live one")
+    assert "object-position: center" in css, (
+        "the overlay does not say where the picture sits in its window")
+    assert "object-fit: fill" not in css, (
+        "the overlay stretches the clip to the window, which distorts it "
+        "whenever Project64 is not the shape the clip was recorded at")
+
+
 def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
     clip = tmp_path / "ghost.mp4"
     _build_clip(clip)
@@ -442,14 +723,7 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert fixture.source_queries[-1] == {"kind": "star",
                                               "entity_key": "LLL-1"}
         assert page.evaluate("document.getElementById('ghost').muted") is True
-        # Full-bleed: the video fills the window, with no chrome beside it.
-        box = page.evaluate(
-            "(() => { const r = document.getElementById('ghost')"
-            ".getBoundingClientRect(); return {w: r.width, h: r.height,"
-            " x: r.x, y: r.y}; })()")
-        assert box["x"] == 0 and box["y"] == 0
-        assert box["w"] == page.evaluate("window.innerWidth")
-        assert box["h"] == page.evaluate("window.innerHeight")
+        _the_element_covers_the_whole_window(page)
 
         # 3. Steady play over the real socket: the element runs, on the
         #    picture the rule names.
@@ -488,9 +762,24 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         #     at all. Before the nudge tests, which leave one in force.
         _presentable_tracks_the_footage(page)
 
+        # 5c. HIS grab ends the ghost, whoever got there first (round 3, item
+        #     1), and 5d the colour that tells the two pictures apart (item 2).
+        #     Both before the nudge tests for the same reason.
+        _his_own_grab_takes_the_window_down(page)
+        _the_ghost_is_coloured_over_the_clock(page)
+
+        # 5e. The picture is MAPPED onto the window rather than stretched to
+        #     it (item 3), measured in a window that is not the clip's shape.
+        #     Last of the rendered checks: it resizes the viewport.
+        _the_picture_is_centred_and_undistorted(page)
+
         # 6. His timing hotkey, over the channel the companion window uses.
         _post_message(page, "{type: 'ghost-nudge', nudge_frames: 45}")
-        nudged = _trace(page, list(range(100, 131)))
+        # Long enough for the rate correction to have done its work: it closes
+        # the remaining error over `correctionTau` (0.5 s), so a 31-sample
+        # trace measured it mid-correction and reported 3 frames on a page that
+        # was settling correctly. Four time constants, not a wider tolerance.
+        nudged = _trace(page, list(range(100, 161)))
         assert nudged["nudge_frames"] == 45, nudged
         assert nudged["target_igt"] == nudged["sample"]["igt"] + 45, nudged
         assert nudged["decision"]["target"] == nudged["sample"]["igt"] + 45, nudged
