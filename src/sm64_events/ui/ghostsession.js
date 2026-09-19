@@ -33,6 +33,14 @@ export const GAME_FPS = 30;
 export const OPACITY_MIN = 0.15;
 export const OPACITY_MAX = 1;
 
+// THE COLOUR WHEEL, one full turn. The ghost's whole picture is shifted this
+// far around it, which is what makes it unmistakable against the live game.
+// 0 and 360 are the same colour, so the control offers the half-open range --
+// and 0 is a real choice (no shift) rather than a hole in the range, because
+// the switch beside it is what turns the treatment off.
+export const HUE_MIN = 0;
+export const HUE_MAX = 359;
+
 // One press is one game frame: the unit the ghost actually moves in, and the
 // unit a frame map can express. Press and hold to run through them.
 export const NUDGE_STEP = 1;
@@ -62,6 +70,53 @@ export function clampNudge(frames) {
   const number = Math.round(Number(frames));
   if (!Number.isFinite(number)) return 0;
   return Math.min(NUDGE_LIMIT, Math.max(-NUDGE_LIMIT, number));
+}
+
+export function clampHue(degrees) {
+  const number = Math.round(Number(degrees));
+  if (!Number.isFinite(number)) return HUE_MIN;
+  return Math.min(HUE_MAX, Math.max(HUE_MIN, number));
+}
+
+/**
+ * The colour treatment as the server stated it, or null while nobody has said.
+ *
+ * UNKNOWN IS NOT "OFF", for exactly the reason unknown is not an opacity (see
+ * clampOpacity): drawing the switch as off before the server has answered puts
+ * a state on screen that the very next payload corrects, and one click from
+ * there writes "off" back as though he had chosen it. The shipped default is
+ * ON, so guessing wrong here would show him a plain ghost and tell him the
+ * colour was something he had already turned off.
+ */
+export function ghostTint(tint) {
+  if (!tint || typeof tint !== "object") return null;
+  return { enabled: Boolean(tint.enabled), hue: clampHue(tint.hue_degrees) };
+}
+
+/** "+120°" -- the shift, for the readout beside the control. */
+export function hueText(degrees) {
+  return `+${clampHue(degrees)}°`;
+}
+
+/**
+ * What the colour control SHOWS: the server's answer with whichever half he
+ * has just touched laid over it, or null while nobody has said.
+ *
+ * `current` is `ghostControls().tint` and `draft` is the optimistic patch in
+ * the WIRE's own shape (`{enabled, hue_degrees}`), because that is the thing
+ * about to be sent. One merge, here, rather than one at each reader -- the
+ * two halves are written by different gestures and either can be in flight
+ * alone, so `"enabled" in draft` is the question, never its truthiness.
+ */
+export function shownTint(current, draft) {
+  if (!current && !draft) return null;
+  const base = current || { enabled: false, hue: HUE_MIN };
+  return {
+    enabled: draft && "enabled" in draft
+      ? Boolean(draft.enabled) : base.enabled,
+    hue: draft && "hue_degrees" in draft
+      ? clampHue(draft.hue_degrees) : base.hue,
+  };
 }
 
 /**
@@ -100,6 +155,7 @@ export function ghostTargetKey(target) {
  *   opacity     0..1 as the SERVER stated it, already clamped -- or null
  *               while nobody has said, which the control draws as unknown and
  *               never writes back
+ *   tint        {enabled, hue} as the SERVER stated it -- or null, same rule
  *   nudge       whole game frames, already clamped
  */
 export function ghostControls(session, entityKey) {
@@ -111,7 +167,7 @@ export function ghostControls(session, entityKey) {
     reasonText: "Checking whether this has a run to play alongside you...",
     // Nobody has said how solid the ghost is drawn, so the control does not
     // pretend to know -- see clampOpacity.
-    showsTuning: false, opacity: null, nudge: 0,
+    showsTuning: false, opacity: null, tint: null, nudge: 0,
   };
   if (!session || typeof session !== "object") return waiting;
   const targetKey = ghostTargetKey(session.target);
@@ -128,6 +184,7 @@ export function ghostControls(session, entityKey) {
       || "There is no run to play alongside you here yet."),
     showsTuning: enabled,
     opacity: clampOpacity(session.opacity),
+    tint: ghostTint(session.tint),
     nudge: clampNudge(session.nudge_frames),
   };
 }

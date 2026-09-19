@@ -74,18 +74,48 @@ def test_only_the_ghost_switch_names_the_session_endpoint():
     assert named == ["ghostswitch.js"], named
 
 
+def ghost_classes_in(source: str) -> set:
+    """Every `ghost-` class this source could put on an element.
+
+    BOTH SPELLINGS, and the second one is why this is a function. A class built
+    from a template (`class=${`ghost-switch${small ? " ghost-switch-sm" : ""}`}`)
+    carries a `$`, and the first version of this scan stopped at one -- so the
+    conditional half of a class, which is exactly where a rename hides, was
+    never looked at, and neither was `.ghost-row` itself. Tokens inside an
+    interpolation are read too: a class name is a class name wherever in the
+    expression it is written.
+    """
+    found = set()
+    for match in re.finditer(r'class=(?:"([^"]*)"|\$\{`([^`]*)`\})', source):
+        text = match.group(1) if match.group(1) is not None else match.group(2)
+        found.update(name for name in re.findall(r"[\w-]+", text)
+                     if name.startswith("ghost-"))
+    return found
+
+
 def test_every_class_the_switch_renders_is_styled():
     """A class rename empties the stylesheet silently: the markup stays
     correct, `node --check` is happy, and nothing paints."""
     source = GHOSTSWITCH_JS.read_text(encoding="utf-8")
     css = INDEX_HTML.read_text(encoding="utf-8")
-    rendered = set()
-    for match in re.finditer(r'class="([^"$]*)"', source):
-        rendered.update(re.findall(r"[\w-]+", match.group(1)))
-    ghost_classes = {name for name in rendered if name.startswith("ghost-")}
+    ghost_classes = ghost_classes_in(source)
     assert ghost_classes, "no ghost classes found -- did the scan break?"
+    # The scan reaches both spellings, which is the half that was silently
+    # missing: the row's own class and the small switch's are only expressible
+    # inside a template.
+    assert {"ghost-row", "ghost-switch-sm", "ghost-hue"} <= ghost_classes, (
+        sorted(ghost_classes))
     missing = [name for name in sorted(ghost_classes) if f".{name}" not in css]
     assert not missing, f"unstyled classes: {missing}"
+
+
+def test_the_class_scan_can_still_fail():
+    """The calibration for the guard above: a scan that matched nothing would
+    pass it forever while looking healthy."""
+    assert ghost_classes_in('class="ghost-made-up"') == {"ghost-made-up"}
+    assert ghost_classes_in(
+        'class=${`ghost-a ${x ? "ghost-b" : ""}`}') == {"ghost-a", "ghost-b"}
+    assert ghost_classes_in('class="log-card"') == set()
 
 
 def test_the_stylesheet_carries_one_ghost_block():
@@ -161,6 +191,11 @@ STATES = {
     "on": ghost_session(enabled=True, opacity=0.6, nudge_frames=3),
     "disabled": ghost_session(available=False, reason="recording_has_no_frame_map",
                               reason_text=NO_FRAME_MAP_TEXT),
+    # The colour treatment switched OFF: the widest state is the one above
+    # (the wheel is out), this is the one where a control has to DISAPPEAR
+    # cleanly rather than sit there greyed.
+    "plain": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           tint={"enabled": False, "hue_degrees": 120}),
 }
 
 MEASURE = """
@@ -179,7 +214,27 @@ MEASURE = """
     const slider = row.querySelector('.ghost-opacity');
     const track = row.querySelector('.ghost-switch-track');
     const knob = row.querySelector('.ghost-switch-knob');
+    const hue = row.querySelector('.ghost-hue');
+    const colour = row.querySelector('.ghost-colour');
+    const colourSwitch = colour && colour.querySelector('.ghost-switch');
     return {
+      colours: row.querySelectorAll('.ghost-colour').length,
+      hues: row.querySelectorAll('.ghost-hue').length,
+      hueValue: hue ? hue.value : null,
+      // THE PAINT, not the class: the wheel is a gradient, and a gradient that
+      // failed to parse leaves the element a plain box with the class still on
+      // it. `none` is the answer for a background-image that is not there.
+      hueTrack: hue ? getComputedStyle(hue).backgroundImage : null,
+      hueBox: box(hue),
+      colourChecked: colourSwitch ? colourSwitch.getAttribute('aria-checked') : null,
+      colourNamed: colourSwitch ? colourSwitch.getAttribute('aria-label') : null,
+      colourLabel: colour
+        ? colour.querySelector('.ghost-field-name').textContent.trim() : null,
+      colourReadout: colour && colour.querySelector('.ghost-field-value')
+        ? colour.querySelector('.ghost-field-value').textContent.trim() : null,
+      colourKnobShift: colourSwitch
+        ? getComputedStyle(colourSwitch.querySelector('.ghost-switch-knob')).transform
+        : null,
       onActiveCard: card.classList.contains('log-card-active'),
       cardClasses: card.className,
       label: row.querySelector('.ghost-label').textContent.trim(),
@@ -259,7 +314,8 @@ def test_a_target_with_no_ghost_refuses_and_says_why_on_screen(rendered, width):
     assert row["describedBy"] == row["whyId"], (
         "the switch does not point at its own reason")
     # Nothing to tune when there is nothing to show.
-    assert (row["sliders"], row["steps"], row["resets"]) == (0, 0, 0)
+    assert (row["sliders"], row["steps"], row["resets"], row["colours"]) \
+        == (0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -268,7 +324,7 @@ def test_off_offers_the_switch_and_nothing_else(rendered, width):
     assert row["disabled"] is False
     assert row["checked"] == "false"
     assert row["whyText"] is None
-    assert (row["sliders"], row["steps"]) == (0, 0), (
+    assert (row["sliders"], row["steps"], row["colours"]) == (0, 0, 0), (
         "the tuning controls are on screen with the overlay off")
 
 
@@ -284,22 +340,81 @@ def test_on_offers_visibility_and_timing(rendered, width):
     assert "60%" in row["readout"]
 
 
+#: The tallest a tuning group is on ONE line: the range input's own 34px box
+#: (the timing group of 24px chips is the short one). A group that wrapped
+#: inside itself is 48px or more, so this discriminates -- measured, not
+#: chosen, and it is what makes "each group stays whole" a real claim.
+ONE_LINE_PX = 40
+
+
 @pytest.mark.parametrize("width", WIDTHS)
-def test_the_tuning_line_stays_one_aligned_line_down_to_the_floor(rendered, width):
-    """Measured rather than assumed, and the reason this carries no width
-    rule: at the 850px floor the card's pane gives this row 695px and the
-    controls need 461px. The assertion is that they share ONE baseline -- a
-    wrap would put the timing group under the slider and leave the two step
-    buttons a card apart."""
-    boxes = rendered[("on", width)][0]["tuneBoxes"]
-    assert len(boxes) == 2, f"expected the slider and the timing group: {boxes}"
-    # They are centre-aligned, not top-aligned, so "one line" is an OVERLAP
-    # in y -- a wrap separates them entirely.
-    assert max(b["top"] for b in boxes) < min(b["bottom"] for b in boxes), (
-        f"the tuning controls wrapped at {width}px: {boxes}")
+def test_the_tuning_line_holds_its_three_groups_inside_the_row(rendered, width):
+    """Three groups now: how solid, what colour, and where it sits against
+    your run.
+
+    MEASURED, and the numbers decide rather than anybody's intention. The
+    groups are 203 + 226 + 299px with 16px gaps -- 760px -- and the card's pane
+    gives the row 1187/887/717/667px at 1500/1200/900/850. So all three share
+    one line down to 1200 and the timing group takes a second line at 900 and
+    850, which is a deliberate wrap and not an overflow.
+
+    What is pinned is the part that must hold at every width: each group stays
+    WHOLE (a wrap inside one would put the two step buttons a card apart, or
+    the wheel under its own switch) and nothing reaches past the row.
+    """
+    row = rendered[("on", width)][0]
+    boxes = row["tuneBoxes"]
+    assert len(boxes) == 3, f"slider, colour and timing: {boxes}"
+    for name, box in zip(("visibility", "colour", "timing"), boxes,
+                         strict=True):
+        assert box["height"] <= ONE_LINE_PX, (
+            f"the {name} group wrapped inside itself at {width}px: {box}")
     right = max(b["right"] for b in boxes)
-    assert right <= rendered[("on", width)][0]["row"]["right"] + 0.5, (
+    assert right <= row["row"]["right"] + 0.5, (
         f"the tuning controls reach past the row at {width}px: {right}")
+    if width >= 1200:
+        # Wide enough for one line, so it IS one line: they overlap in y.
+        assert max(b["top"] for b in boxes) < min(b["bottom"] for b in boxes), (
+            f"the tuning controls wrapped at {width}px with room: {boxes}")
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_ghost_is_coloured_and_the_wheel_is_the_control(rendered, width):
+    """ROUND 3, ITEM 2. His words: *"It feels really hard to understand which
+    one is the ACTUAL LIVE GAMEPLAY and which one is the GHOST gameplay...
+    Maybe we can have a color picker... The user can disable the color shift if
+    they want."*
+
+    The label says what it does rather than naming the technique, the switch is
+    the same control the row's own switch is, and the slider wears the colour
+    wheel -- read off the PAINT, because a gradient that failed to parse leaves
+    a plain box with the class still on it.
+    """
+    row = rendered[("on", width)][0]
+    assert row["colours"] == 1 and row["hues"] == 1
+    assert row["colourLabel"] == "Colour"
+    assert row["colourChecked"] == "true"
+    assert row["hueValue"] == "120"
+    assert row["colourReadout"] == "+120°"
+    assert "gradient" in (row["hueTrack"] or ""), row["hueTrack"]
+    assert row["hueBox"]["width"] > 40, row["hueBox"]
+    # The name a screen reader gets says what the control does, in the same
+    # words -- there is no visible label beside this smaller switch.
+    assert "colour" in (row["colourNamed"] or "").lower(), row["colourNamed"]
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_switching_the_colour_off_takes_the_wheel_away(rendered, width):
+    """Omitted, not greyed: with the treatment off there is nothing for the
+    wheel to act on, and the acceptance rule is to omit an action that does not
+    apply. The switch itself stays, because that is how it comes back."""
+    row = rendered[("plain", width)][0]
+    assert row["colours"] == 1, "the colour control vanished with its slider"
+    assert row["colourChecked"] == "false"
+    assert row["hues"] == 0, "a wheel with nothing to act on is on screen"
+    assert row["colourReadout"] is None
+    assert row["colourKnobShift"] != rendered[("on", width)][0]["colourKnobShift"], (
+        "the smaller switch paints identically on and off")
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -375,6 +490,20 @@ CLICK_EARLIER = """
 })()
 """
 
+DRAG_HUE = """
+(() => {
+  const el = document.querySelector('.ghost-hue');
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype, 'value').set;
+  const steps = [30, 90, 150, 210, 270, 300, 330];
+  for (const value of steps) {
+    setter.call(el, String(value));
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+  }
+  return steps.length;
+})()
+"""
+
 
 @pytest.fixture(scope="module")
 def driven():
@@ -412,6 +541,22 @@ def driven():
             page.wait_ms(200)
             out["nudge_readout"] = page.evaluate(
                 "document.querySelector('.ghost-nudge-value').textContent.trim()")
+            # The colour: a drag through the wheel is ONE write carrying where
+            # it stopped, and the switch beside it writes on the press.
+            state["writes"].clear()
+            out["hue_events"] = page.evaluate(DRAG_HUE)
+            page.wait_ms(500)
+            out["after_hue"] = {"writes": list(state["writes"]),
+                                "tint": dict(state["session"]["tint"])}
+            state["writes"].clear()
+            page.evaluate(
+                "(() => document.querySelector('.ghost-colour .ghost-switch')"
+                ".click())()")
+            page.wait_ms(400)
+            out["after_colour_off"] = {"writes": list(state["writes"]),
+                                       "tint": dict(state["session"]["tint"])}
+            out["wheel_after_off"] = page.evaluate(
+                "document.querySelectorAll('.ghost-hue').length")
     return out
 
 
@@ -521,6 +666,29 @@ def test_repeated_nudges_collapse_into_one_write(driven):
     assert writes[0] == {"nudge_frames": 5}
     assert driven["after_nudge"]["nudge"] == 5
     assert driven["nudge_readout"] == "5 frames ahead"
+
+
+def test_dragging_the_colour_wheel_is_one_write_carrying_where_it_stopped(driven):
+    """The whole reason the colour rides the clock feed rather than the page's
+    URL: he tunes this by dragging, and seven drag events must be one PUT --
+    and the value it carries is the angle he let go on."""
+    assert driven["hue_events"] == 7
+    writes = driven["after_hue"]["writes"]
+    assert len(writes) == 1, f"{len(writes)} writes for one drag: {writes}"
+    assert writes[0] == {"tint": {"hue_degrees": 330}}
+    assert driven["after_hue"]["tint"]["hue_degrees"] == 330
+
+
+def test_switching_the_colour_off_keeps_the_angle_he_chose(driven):
+    """The press writes at once (it is one decision), it carries ONLY the
+    switch, and the angle survives -- so switching the treatment back on
+    returns to his colour rather than to the shipped one."""
+    writes = driven["after_colour_off"]["writes"]
+    assert writes == [{"tint": {"enabled": False}}], writes
+    assert driven["after_colour_off"]["tint"] == {"enabled": False,
+                                                  "hue_degrees": 330}
+    assert driven["wheel_after_off"] == 0, (
+        "the wheel is still on screen with nothing to act on")
 
 
 def test_the_fixture_reaches_the_state_it_claims():

@@ -46,6 +46,7 @@ def controls(session, entity_key="star:8:1"):
 
 def session(**over):
     body = {"enabled": False, "opacity": 0.6, "nudge_frames": 0,
+            "tint": {"enabled": True, "hue_degrees": 120},
             "target": {"kind": "star", "entity_key": "8-1", "strat": None},
             "source": {"available": True, "reason": None, "reason_text": None,
                        "template_id": 4, "attempt_id": 90,
@@ -211,6 +212,57 @@ def test_the_opacity_readout_is_a_percentage():
     assert run_node("opacityText", "opacityText(0.62)") == "62%"
     # And it does not invent one for a value nobody has stated.
     assert run_node("opacityText", "opacityText(null)") == "—"
+
+
+# --- the colour treatment ---------------------------------------------------
+
+@pytest.mark.parametrize("given,expected", [
+    (120, 120), (0, 0), (359, 359), (400, 359), (-30, 0), (12.6, 13),
+    (None, 0), ("x", 0),
+])
+def test_a_colour_is_a_whole_turn_of_the_wheel(given, expected):
+    assert run_node("clampHue", f"clampHue({json.dumps(given)})") == expected
+
+
+def test_the_control_claims_no_colour_before_the_server_states_one():
+    """Unknown is null, never "off" -- the same rule the opacity follows, and
+    here the wrong guess is worse: the shipped treatment is ON, so drawing it
+    off would show a plain ghost and tell him he had already turned it off."""
+    assert controls(None)["tint"] is None
+    unstated = session()
+    del unstated["tint"]
+    assert controls(unstated)["known"] is True
+    assert controls(unstated)["tint"] is None
+    assert controls(session())["tint"] == {"enabled": True, "hue": 120}
+
+
+def test_the_colour_readout_names_the_shift():
+    assert run_node("hueText", "hueText(120)") == "+120°"
+    assert run_node("hueText", "hueText(0)") == "+0°"
+
+
+@pytest.mark.parametrize("current,draft,expected", [
+    # Nothing stated and nothing touched: still unknown.
+    (None, None, None),
+    # The switch alone must not throw away the angle he chose...
+    ({"enabled": True, "hue": 200}, {"enabled": False},
+     {"enabled": False, "hue": 200}),
+    # ...and the angle alone must not switch the treatment off.
+    ({"enabled": True, "hue": 200}, {"hue_degrees": 40},
+     {"enabled": True, "hue": 40}),
+    # `false` is a value, not an absence: the question is whether the key is
+    # there, never whether it is truthy.
+    ({"enabled": True, "hue": 200}, {"enabled": False, "hue_degrees": 0},
+     {"enabled": False, "hue": 0}),
+    ({"enabled": False, "hue": 200}, None, {"enabled": False, "hue": 200}),
+])
+def test_the_two_halves_of_the_colour_merge_rather_than_replace(
+        current, draft, expected):
+    """They are written by DIFFERENT gestures -- the switch on the press, the
+    angle on a trailing edge -- so either can be in flight alone. Replacing
+    the whole object is how one of them silently reverts the other."""
+    assert run_node("shownTint", f"shownTint({json.dumps(current)}, "
+                                 f"{json.dumps(draft)})") == expected
 
 
 # --- the broadcast ----------------------------------------------------------

@@ -41,6 +41,11 @@ WIDTHS = (1500, 1200, 900, 850)
 
 STATES = {
     "on": ghost_session(enabled=True, opacity=0.6, nudge_frames=3),
+    # The colour treatment switched off: the tuning line is at its WIDEST in
+    # "on" (the wheel is out), and this is where a control has to disappear
+    # cleanly rather than sit there greyed. Both are worth looking at.
+    "plain": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           tint={"enabled": False, "hue_degrees": 120}),
     "off": ghost_session(enabled=False, opacity=0.6),
     # The longest refusal the server can produce, not the shortest: a sheet
     # of the easy end of a range is a picture of a card nobody has.

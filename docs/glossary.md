@@ -1073,10 +1073,11 @@ away or small, and ends when the trainer does.
 
 The live [[attempt]]'s timer, pushed to whatever follows it: Usamune's own
 counter exactly as the poll loop reads it, beside the emulator's [[frame]]
-counter, which keeps moving while the game pauses. It carries the [[nudge]]
-too, since both are parts of the one rule the [[ghost follower]] applies. With
-nothing listening it costs the poll loop one test and never touches the
-[[snapshot]].
+counter, which keeps moving while the game pauses. It carries the [[nudge]] and
+the [[ghost colour]] too — both are things the running overlay page can simply
+take, so neither needs the page reloaded — and it says whether you have just
+touched a star, which is what ends your own run. With nothing listening it
+costs the poll loop one test and never touches the [[snapshot]].
 
 - **Lives** — `src/sm64_events/server/ghost_clock.py` → the /ws/ghost-clock
   socket
@@ -1086,7 +1087,9 @@ nothing listening it costs the poll loop one test and never touches the
 The rule that turns a [[ghost clock]] reading into a picture: show the template
 picture whose [[in-game time]] equals the live one plus the [[nudge]]. Steady
 play moves the footage at game speed and corrects; a stalled timer holds; a
-jump either way seeks.
+jump either way seeks. It also knows when there is nothing honest to show: when
+you are not in the course the ghost belongs to, and once you have touched the
+star yourself — either way it holds until your timer is back inside the run.
 
 - **Lives** — `src/sm64_events/ui/ghost/follower.js`, drawn by
   `src/sm64_events/ui/ghost/index.html`
@@ -1101,6 +1104,19 @@ as the [[target]] changes.
 - **Lives** — `src/sm64_events/ghost/session.py` holds it; it travels to the
   overlay on the [[ghost clock]], which is what lets it change without the
   overlay page reloading; the [[ghost follower]] applies it
+
+### Ghost colour
+
+The colour shift applied to a whole [[ghost]] picture so it cannot be mistaken
+for the live game — every colour in the footage moved the same way around the
+colour wheel. On by default, at a third of a turn; you can pick another angle
+or switch it off, and the choice is remembered. Changing it takes effect on the
+next game [[frame]], because it travels the way the [[nudge]] does.
+
+- **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it;
+  it travels on the [[ghost clock]]; `src/sm64_events/ui/ghost/index.html`
+  applies it to the picture, and the switch row
+  (`src/sm64_events/ui/components/ghostswitch.js`) is where you choose it
 
 ### Input document
 

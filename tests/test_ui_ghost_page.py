@@ -38,6 +38,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
+
+from tests.source_scan import strip_comments
 from sm64_events.server.ghost_clock import (GhostClockFeed,
                                             create_ghost_clock_router)
 
@@ -111,14 +114,21 @@ def _build_clip(path: Path) -> None:
         check=True, capture_output=True, timeout=180)
 
 
-def _snapshot(igt: int, timer: int, level: int, area: int) -> GameSnapshot:
+def _snapshot(igt: int, timer: int, level: int, area: int,
+              action: int = 0) -> GameSnapshot:
     """The shape the poll loop hands the feed, so the wire format under test
     is the real one rather than a dict shaped like it."""
     return GameSnapshot(
         wall_time_utc=datetime.now(timezone.utc), global_timer=timer,
-        mario_action=0, mario_action_timer=0, num_stars=0,
+        mario_action=action, mario_action_timer=0, num_stars=0,
         last_completed_course=0, last_completed_star=0,
         igt_overall=igt, curr_level=level, curr_area=area)
+
+
+#: An action a star grab actually puts Mario in, taken from the project's one
+#: registry rather than typed: the point of driving the REAL `clock_message`
+#: here is that the page is answering the server's own reading of the game.
+GRAB_ACTION = min(STAR_GRAB_ACTIONS)
 
 
 class _Fixture:
@@ -149,8 +159,16 @@ class _Fixture:
             return {**AVAILABLE, "span": self.span}
 
         @app.post("/test/clock")
-        def clock(igt: int, global_timer: int, level: int = 8, area: int = 1):
-            self.feed.note(_snapshot(igt, global_timer, level, area))
+        def clock(igt: int, global_timer: int, level: int = 8, area: int = 1,
+                  action: int = 0):
+            self.feed.note(_snapshot(igt, global_timer, level, area, action))
+            return {"ok": True}
+
+        @app.post("/test/tint")
+        def tint(enabled: bool, hue_degrees: int):
+            # What `PUT /api/ghost` does: the session hands the feed the new
+            # colour and nothing else happens. No URL, no navigation.
+            self.feed.set_tint({"enabled": enabled, "hue_degrees": hue_degrees})
             return {"ok": True}
 
         @app.post("/test/nudge")
@@ -205,10 +223,11 @@ class _Fixture:
 # emulator is paused. So the page samples itself 25 ms after the last one.
 _TRACE = """(() => {
   const igts = %s;
+  const extra = %s;
   window.__done = false; window.__result = null;
   let k = 0;
   const id = setInterval(() => {
-    fetch(`/test/clock?igt=${igts[k]}&global_timer=${9000 + k}`,
+    fetch(`/test/clock?igt=${igts[k]}&global_timer=${9000 + k}${extra}`,
           {method: 'POST'});
     k += 1;
     if (k >= igts.length) {
@@ -223,9 +242,15 @@ _TRACE = """(() => {
 })()"""
 
 
-def _trace(page, igts: list) -> dict:
-    """Run one clock trace and answer with what the page was doing at its end."""
-    page.evaluate(_TRACE % json.dumps(igts))
+def _trace(page, igts: list, **query) -> dict:
+    """Run one clock trace and answer with what the page was doing at its end.
+
+    `query` rides every sample: the live grab flag is a field of the clock
+    message like any other, so it belongs on the same trace rather than in a
+    second mechanism the page never sees in real use.
+    """
+    extra = "".join(f"&{key}={value}" for key, value in query.items())
+    page.evaluate(_TRACE % (json.dumps(igts), json.dumps(extra)))
     for _ in range(len(igts) * 2 + 80):
         if page.evaluate("window.__done === true"):
             break
@@ -378,6 +403,108 @@ def _presentable_tracks_the_footage(page) -> None:
     assert starved["presentable"] is False, starved
 
 
+def _the_footage_covers_every_pixel_of_the_window(page) -> None:
+    """Full-bleed, and ROUND 3 ITEM 3's one line in this page.
+
+    The window now covers exactly the rectangle Project64's renderer draws
+    into, so the footage must cover every pixel of it: `contain` turns a hair's
+    difference in aspect into a band of live game along one edge, which is what
+    *"it's ALMOST overlaid properly"* looks like.
+
+    `fill` is also the CSS INITIAL value, so this reads the OUTCOME -- nothing
+    letterboxed, nothing cropped -- and cannot tell a declaration from its
+    absence. `test_the_footage_fills_the_window_it_is_given` pins the
+    declaration; the two together are the guard.
+    """
+    box = page.evaluate(
+        "(() => { const r = document.getElementById('ghost')"
+        ".getBoundingClientRect(); return {w: r.width, h: r.height,"
+        " x: r.x, y: r.y}; })()")
+    assert box["x"] == 0 and box["y"] == 0
+    assert box["w"] == page.evaluate("window.innerWidth")
+    assert box["h"] == page.evaluate("window.innerHeight")
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('ghost')).objectFit") == "fill"
+
+
+def _his_own_grab_takes_the_window_down(page) -> None:
+    """ROUND 3, ITEM 1, through the real socket and the real message.
+
+    His words: *"The ghost should close when I grab the star (sometimes I might
+    be faster than the ghost!). Upon star grab for the player's actual live
+    session."* The flag is computed on the server from Mario's action against
+    `memory/addresses.py::STAR_GRAB_ACTIONS`, so this drives a real grab action
+    through `clock_message` rather than hand-posting a boolean.
+
+    Both halves are here because only one of them is obvious: the ghost goes
+    down at the touch, and it STAYS down once the dance action has cleared and
+    he is walking around with the counter still running.
+    """
+    following = _trace(page, list(range(3, 60)))
+    assert following["presentable"] is True, following
+
+    touched = _trace(page, list(range(60, 70)), action=GRAB_ACTION)
+    assert touched["sample"]["star_grab"] is True, touched
+    assert touched["decision"]["reason"] == "grabbed", touched
+    assert touched["grabbed"] is True, touched
+    assert touched["presentable"] is False, touched
+    assert touched["paused"] is True, touched
+
+    # The dance ends and he walks on: the action is gone, the counter is still
+    # climbing, and the ghost must not come back for a star he already has.
+    walking = _trace(page, list(range(70, 100)))
+    assert walking["sample"]["star_grab"] is False, walking
+    assert walking["decision"]["reason"] == "grabbed", walking
+    assert walking["presentable"] is False, walking
+
+    # His reset brings it back, by the same route a finished ghost already
+    # uses: the counter returns to near zero and the follower re-places it.
+    _trace(page, [0, 1, 2])
+    back = _trace(page, list(range(3, 40)))
+    assert back["grabbed"] is False, back
+    assert back["presentable"] is True, back
+
+
+def _the_ghost_is_coloured_over_the_clock(page) -> None:
+    """ROUND 3, ITEM 2, at the page's own level.
+
+    His words: *"apply a color filter to the entire picture."* The filter is
+    read off the ELEMENT rather than off the status: a filter string that the
+    engine rejected leaves the property empty with every field still saying it
+    was applied. And the page ships no default for it -- nothing is painted
+    until the server has said, which is safe because nothing is presentable
+    before the first sample either.
+
+    `__alive` is how "the page was never navigated for this" is measured; a
+    load of any kind wipes it.
+    """
+    filter_of = ("getComputedStyle(document.getElementById('ghost')).filter")
+    page.evaluate("(() => { window.__alive = 'yes'; return true; })()")
+    page.evaluate("(() => { fetch('/test/tint?enabled=true&hue_degrees=200',"
+                  " {method: 'POST'}); return true; })()")
+    coloured = _trace(page, list(range(3, 20)))
+    assert page.evaluate("window.__alive") == "yes", "the page was reloaded"
+    assert coloured["tint"] == {"enabled": True, "hue_degrees": 200}, coloured
+    assert page.evaluate(filter_of) == "hue-rotate(200deg)"
+    assert coloured["tint_filter"] == "hue-rotate(200deg)", coloured
+
+    # Switched off: the picture goes back to the game's own colours, live.
+    page.evaluate("(() => { fetch('/test/tint?enabled=false&hue_degrees=200',"
+                  " {method: 'POST'}); return true; })()")
+    plain = _trace(page, list(range(20, 35)))
+    assert page.evaluate("window.__alive") == "yes", "the page was reloaded"
+    assert plain["tint"] == {"enabled": False, "hue_degrees": 200}, plain
+    assert page.evaluate(filter_of) == "none"
+
+    # And the parent window can push it too, the way it can push the nudge.
+    _post_message(page, "{type: 'ghost-tint',"
+                        " tint: {enabled: true, hue_degrees: 90}}")
+    assert page.evaluate(filter_of) == "hue-rotate(90deg)"
+    page.evaluate("(() => { fetch('/test/tint?enabled=true&hue_degrees=120',"
+                  " {method: 'POST'}); return true; })()")
+    _trace(page, list(range(35, 45)))
+
+
 def _nudge_over_the_clock(page, url: str) -> None:
     """THE DEFECT THIS CLOSES, at the page's own level.
 
@@ -417,6 +544,22 @@ def _post_message(page, body: str) -> None:
     page.wait_ms(200)
 
 
+def test_the_footage_fills_the_window_it_is_given():
+    """ROUND 3, ITEM 3, the half a rendered check cannot see.
+
+    `fill` is the CSS initial value, so a browser reporting it proves the
+    outcome and not the declaration -- and the declaration is the thing a
+    future edit would change. Read the page's own stylesheet instead, with
+    comments stripped so the paragraph EXPLAINING why `contain` was dropped
+    cannot fail the guard it is about.
+    """
+    css = strip_comments((UI / "ghost" / "index.html").read_text(encoding="utf-8"))
+    assert "object-fit: fill" in css, (
+        "the overlay's video does not state that it fills its window")
+    assert "object-fit: contain" not in css, (
+        "the overlay letterboxes inside a window sized to the game picture")
+
+
 def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
     clip = tmp_path / "ghost.mp4"
     _build_clip(clip)
@@ -442,14 +585,7 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert fixture.source_queries[-1] == {"kind": "star",
                                               "entity_key": "LLL-1"}
         assert page.evaluate("document.getElementById('ghost').muted") is True
-        # Full-bleed: the video fills the window, with no chrome beside it.
-        box = page.evaluate(
-            "(() => { const r = document.getElementById('ghost')"
-            ".getBoundingClientRect(); return {w: r.width, h: r.height,"
-            " x: r.x, y: r.y}; })()")
-        assert box["x"] == 0 and box["y"] == 0
-        assert box["w"] == page.evaluate("window.innerWidth")
-        assert box["h"] == page.evaluate("window.innerHeight")
+        _the_footage_covers_every_pixel_of_the_window(page)
 
         # 3. Steady play over the real socket: the element runs, on the
         #    picture the rule names.
@@ -487,6 +623,12 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         # 5b. What the companion window polls to decide whether to show itself
         #     at all. Before the nudge tests, which leave one in force.
         _presentable_tracks_the_footage(page)
+
+        # 5c. HIS grab ends the ghost, whoever got there first (round 3, item
+        #     1), and 5d the colour that tells the two pictures apart (item 2).
+        #     Both before the nudge tests for the same reason.
+        _his_own_grab_takes_the_window_down(page)
+        _the_ghost_is_coloured_over_the_clock(page)
 
         # 6. His timing hotkey, over the channel the companion window uses.
         _post_message(page, "{type: 'ghost-nudge', nudge_frames: 45}")
