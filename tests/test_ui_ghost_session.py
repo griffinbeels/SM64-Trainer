@@ -160,11 +160,33 @@ def test_segments_get_the_switch_too():
 # --- values -----------------------------------------------------------------
 
 @pytest.mark.parametrize("given,expected", [
-    (0.6, 0.6), (0, 0.15), (-3, 0.15), (2, 1), (None, 1), ("x", 1),
+    (0.6, 0.6), (0, 0.15), (-3, 0.15), (2, 1),
 ])
 def test_opacity_is_clamped_into_a_range_that_can_be_seen(given, expected):
     assert run_node("clampOpacity", f"clampOpacity({json.dumps(given)})") \
         == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("given", [None, "", "x"])
+def test_an_opacity_nobody_stated_is_unknown_rather_than_fully_visible(given):
+    """A value the server never sent must not come back as a number.
+
+    It used to answer `OPACITY_MAX`, so a payload that had simply not said yet
+    put "100%" under the slider -- a figure nobody chose, sitting one small
+    drag from being written back as though he had chosen it. His own stored
+    ghost visibility is 1.0 while the server's default has always been 0.5.
+    """
+    assert run_node("clampOpacity", f"clampOpacity({json.dumps(given)})") is None
+
+
+def test_the_control_claims_no_visibility_before_the_server_states_one():
+    """Both doors: the third state while the first read is in flight, and a
+    payload that answers about this entity without saying how solid to draw."""
+    assert controls(None)["opacity"] is None
+    unstated = session()
+    del unstated["opacity"]
+    assert controls(unstated)["known"] is True
+    assert controls(unstated)["opacity"] is None
 
 
 @pytest.mark.parametrize("given,expected", [
@@ -187,6 +209,8 @@ def test_the_timing_readout_is_a_sentence_not_a_signed_number(frames, expected):
 
 def test_the_opacity_readout_is_a_percentage():
     assert run_node("opacityText", "opacityText(0.62)") == "62%"
+    # And it does not invent one for a value nobody has stated.
+    assert run_node("opacityText", "opacityText(null)") == "—"
 
 
 # --- the broadcast ----------------------------------------------------------

@@ -39,13 +39,22 @@ export const NUDGE_STEP = 1;
 // Ten seconds either way. Past that a "nudge" is a different run.
 export const NUDGE_LIMIT = 300;
 
-// `Number(null)` is 0 and `Number("")` is 0, so a MISSING opacity would
-// otherwise clamp to the floor and draw the faintest possible ghost for a
-// payload that simply had not said yet. Absent means fully visible.
+// A MISSING opacity is UNKNOWN, and unknown is `null` -- never a number.
+//
+// `Number(null)` is 0 and `Number("")` is 0, so a payload that had not said
+// yet would otherwise clamp to the floor and draw the faintest possible ghost.
+// The first version answered `OPACITY_MAX` for that instead, which is the
+// mirror of the same mistake and the worse direction: the control then SHOWS
+// "100%" for a value the server never sent, and a number on screen that
+// nobody chose is one small drag away from being written back as though he
+// had chosen it. His stored ghost opacity is 1.0 while the server's default
+// has always been 0.5, and this is the shape that could put it there.
+//
+// So: unknown stays unknown, the control says so, and nothing sends it.
 export function clampOpacity(value) {
-  if (value === null || value === undefined || value === "") return OPACITY_MAX;
+  if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
-  if (!Number.isFinite(number)) return OPACITY_MAX;
+  if (!Number.isFinite(number)) return null;
   return Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, number));
 }
 
@@ -88,7 +97,9 @@ export function ghostTargetKey(target) {
  *   canToggle   the switch may be flipped at all
  *   reasonText  why it may not be -- never null while canToggle is false
  *   showsTuning the opacity and timing controls belong on screen
- *   opacity     0..1, already clamped
+ *   opacity     0..1 as the SERVER stated it, already clamped -- or null
+ *               while nobody has said, which the control draws as unknown and
+ *               never writes back
  *   nudge       whole game frames, already clamped
  */
 export function ghostControls(session, entityKey) {
@@ -98,7 +109,9 @@ export function ghostControls(session, entityKey) {
     // to say something, because a disabled control with no reason is the
     // dead button this project has already shipped once.
     reasonText: "Checking whether this has a run to play alongside you...",
-    showsTuning: false, opacity: OPACITY_MAX, nudge: 0,
+    // Nobody has said how solid the ghost is drawn, so the control does not
+    // pretend to know -- see clampOpacity.
+    showsTuning: false, opacity: null, nudge: 0,
   };
   if (!session || typeof session !== "object") return waiting;
   const targetKey = ghostTargetKey(session.target);
@@ -119,9 +132,11 @@ export function ghostControls(session, entityKey) {
   };
 }
 
-/** "60%" -- what the slider is showing, for the readout beside it. */
+/** "60%" -- what the slider is showing, for the readout beside it. An unknown
+ *  opacity reads as a dash: a percentage nobody chose is a claim. */
 export function opacityText(opacity) {
-  return `${Math.round(clampOpacity(opacity) * 100)}%`;
+  const value = clampOpacity(opacity);
+  return value === null ? "—" : `${Math.round(value * 100)}%`;
 }
 
 /**

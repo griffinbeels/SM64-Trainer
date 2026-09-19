@@ -59,13 +59,37 @@ pytestmark = pytest.mark.skipif(
 
 CLIP_SECONDS = 20
 CLIP_FPS = 30
-# A constant-rate stand-in for a template: one picture per game frame, the
-# counter running from zero. The follower's own VFR and offset-cut cases are
-# scored in the trace harness; what this file needs is a clip a browser will
-# really play.
-VIEW = {"frame_times": None, "picture_igt": list(range(CLIP_SECONDS * CLIP_FPS)),
+PRE_ROLL = 44
+#: pictures of star cutscene after the grab, holding the final counter value.
+#: What a recording keeps around the attempt is the player's setting; the
+#: source's `span` is the attempt itself.
+TAIL = 30
+RUN = CLIP_SECONDS * CLIP_FPS - PRE_ROLL - TAIL
+#: The value the counter holds through a reset's reload: the PREVIOUS run's
+#: final time. Taken from the payload his own overlay was handed on its first
+#: real try (star 6-0, 2026-09-19), reduced to numbers in
+#: `tests/fixtures/ghost_preroll_view.json`.
+HELD = 3029
+# A constant-rate stand-in for a template, SHAPED LIKE A REAL SAVED CLIP: it
+# opens before the reset that started the attempt, so its first 44 pictures
+# carry a number from a run that is already over, the attempt's own counter
+# starts at 3, and 30 pictures of star cutscene follow it. The follower's VFR
+# and offset-cut cases are scored in the trace harness; what this file needs is
+# a clip a browser will really play, with both ends on it -- an earlier fixture
+# started cleanly at zero and stopped at the grab, which is why a rule that
+# refused every real clip could pass here.
+LAST_IGT = 3 + RUN - 1
+VIEW = {"frame_times": None,
+        "picture_igt": [HELD] * PRE_ROLL + list(range(3, LAST_IGT + 1))
+        + [LAST_IGT] * TAIL,
         "duration_s": float(CLIP_SECONDS), "video_start_s": 0.0,
         "fps": CLIP_FPS, "game_fps": 30, "encode": "cfr"}
+#: what the source computes from the attempt's own frames: the attempt is
+#: pictures PRE_ROLL..PRE_ROLL+RUN-1, and neither the lead-in nor the cutscene
+#: is part of it.
+SPAN = {"first_picture": PRE_ROLL, "last_picture": PRE_ROLL + RUN - 1,
+        "start_frame": 1000, "end_frame": 1000 + LAST_IGT,
+        "basis": "attempt_frames"}
 
 UNAVAILABLE = {
     "available": False, "reason": "template_has_no_attempt",
@@ -103,6 +127,9 @@ class _Fixture:
 
     def __init__(self, clip: Path):
         self.available = True
+        #: the attempt's exact span, when the source can compute one. None is
+        #: the older server (and the clip whose frames cannot be resolved).
+        self.span = None
         self.feed = GhostClockFeed()
         #: every source query the page actually sent, so the test can check
         #: which star the page ASKED about rather than trusting that it read
@@ -117,7 +144,9 @@ class _Fixture:
         @app.get("/api/ghost/source")
         def source(request: Request):
             self.source_queries.append(dict(request.query_params))
-            return AVAILABLE if self.available else UNAVAILABLE
+            if not self.available:
+                return UNAVAILABLE
+            return {**AVAILABLE, "span": self.span}
 
         @app.post("/test/clock")
         def clock(igt: int, global_timer: int, level: int = 8, area: int = 1):
@@ -206,6 +235,149 @@ def _trace(page, igts: list) -> dict:
     return result
 
 
+def _opens_on_the_attempt_not_the_pre_roll(page) -> None:
+    """THE DEFECT THIS CLOSES, at the page's own level.
+
+    A saved clip begins before the reset that started the attempt, and through
+    that reload the counter still holds the previous run's final value. The
+    follower threw the whole template away for it (`counter_restarts`) and the
+    page had nothing to play -- his first real try was a black rectangle over
+    Project64 with no footage in it (2026-09-19).
+
+    Two claims here, and they are different: the pre-roll is not part of the
+    template, and the element does not appear until a picture has actually been
+    presented -- because the picture it would show first is the pre-roll.
+    """
+    # 600 pictures: 44 from the run before this one, then the attempt and its
+    # cutscene tail. With no span from the source the counter decides the start
+    # and the clip's own end decides the end.
+    # Fields, not the whole payload -- other tracks add their own.
+    template = page.evaluate("window.ghostStatus().template")
+    assert template["ok"] is True, template
+    assert template["reason"] is None, template
+    assert template["basis"] == "counter_restart", template
+    assert template["pictures"] == RUN + TAIL, template
+    assert template["preroll_pictures"] == PRE_ROLL, template
+    assert template["first_igt"] == 3, template
+    assert template["last_igt"] == LAST_IGT, template
+
+    page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('ghost')).visibility"
+    ) == "visible"
+    opened = page.evaluate("window.ghostStatus()")
+    assert opened["shown"] is True, opened
+    assert opened["shown_igt"] == 3, opened
+    # The picture it presented is the attempt's own first one. The pre-roll
+    # ends at 44/30 s, so a clip still sitting at its start has not been placed
+    # and the first thing the player would see is the previous run.
+    assert opened["video_time"] >= PRE_ROLL / CLIP_FPS - 0.05, opened
+
+    # The gate is the attribute, not the timing: take it away and the element
+    # goes back to painting nothing. Restored immediately -- a driven test that
+    # leaves the page in a state it invented measures a page only it has seen.
+    assert page.evaluate(
+        "(() => { delete document.body.dataset.shown;"
+        " const v = getComputedStyle(document.getElementById('ghost')).visibility;"
+        " document.body.dataset.shown = 'yes'; return v; })()") == "hidden"
+
+
+def _paints_nothing_at_all(page) -> None:
+    """NOTHING IS PAINTED, which is not the same claim as "the video is
+    hidden". This page sits over the running game, so an opaque page is a black
+    rectangle over Project64 -- what his first real try saw, and what he saw
+    again as a translucent dark sheet once whole-window opacity was turned
+    down. Read the COMPUTED colour: a `background: #000` anywhere in the chain
+    is invisible to a class-name check and is exactly the defect."""
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('ghost')).visibility"
+    ) == "hidden"
+    assert page.evaluate(
+        "[document.documentElement, document.body,"
+        " document.getElementById('ghost')]"
+        ".map((el) => getComputedStyle(el).backgroundColor)"
+    ) == ["rgba(0, 0, 0, 0)"] * 3
+    # And the window that owns this page is told there is nothing to show.
+    assert page.evaluate("window.ghostStatus().presentable") is False
+
+
+def _the_page_hands_the_span_to_the_follower(page, fixture, url: str) -> None:
+    """HIS RULING, through the page: *"It should always be clamped to exactly
+    the span of the attempt, regardless of the user's recording settings."*
+
+    The page's own job here is one hop -- take the span off the source payload
+    and hand it to the follower -- and it is exactly the hop a trace harness
+    cannot see. Everything the span then MEANS is scored in
+    `tests/test_ui_ghost_follower.py`.
+    """
+    fixture.span = SPAN
+    page.goto(url)
+    page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+    template = page.evaluate("window.ghostStatus().template")
+    assert template["basis"] == "attempt_frames", template
+    # The cutscene tail is gone; the attempt's own pictures are all that is left.
+    assert template["pictures"] == RUN, template
+    assert template["first_igt"] == 3, template
+    assert template["last_igt"] == LAST_IGT, template
+    # Past the grab it parks on the last picture of the ATTEMPT and keeps
+    # showing it, rather than playing the cutscene he has not earned.
+    over = _trace(page, [LAST_IGT + 200] * 10)
+    assert over["decision"]["reason"] == "past_template", over
+    assert over["shown_igt"] == LAST_IGT, over
+    # The attempt is over, so the window comes down rather than freezing a
+    # grab frame over his game -- see `_presentable_tracks_the_footage`.
+    assert over["presentable"] is False, over
+    fixture.span = None
+
+
+def _presentable_tracks_the_footage(page) -> None:
+    """`presentable` is the WINDOW's signal, so it is tested where the window
+    reads it: through `window.ghostStatus()` on the real page.
+
+    The companion window shows itself only while this is true, which is what
+    makes an overlay with nothing to draw cost the player nothing. He saw the
+    other arrangement on the first try: at 80% opacity a translucent dark sheet
+    over the game, at 100% an opaque black one, with no footage in either.
+
+    Four states here, and the two that must be TRUE are the point -- a signal
+    that only ever says "no" would hide the feature just as thoroughly.
+    """
+    # Following: a decoded picture of the one the rule names is on screen.
+    playing = _trace(page, list(range(3, 90)))
+    assert playing["presentable"] is True, playing
+    assert playing["shown"] is True, playing
+
+    # Past the template's last picture -- he is slower than the ghost was.
+    # The ghost's run is over, so the window goes away: a frozen star-grab
+    # frame over his game while he is still trying to finish tells him nothing
+    # and covers what he is doing. It still PARKS on that picture (nothing
+    # outside the attempt is ever shown); only the window is taken down.
+    over = _trace(page, [700] * 10)
+    assert over["decision"]["reason"] == "past_template", over
+    assert over["shown_igt"] == LAST_IGT, over
+    assert over["presentable"] is False, over
+
+    # ...and his next reset brings it straight back. The reload is the OTHER
+    # end of the span and it stays presentable: the ghost is parked on the
+    # frame it is about to run from, and taking the window away for the three
+    # game frames the counter spends below the template's start would be a
+    # blink he reads as a fault.
+    reloading = _trace(page, [0, 1, 2])
+    assert reloading["decision"]["reason"] == "before_template", reloading
+    assert reloading["shown_igt"] == 3, reloading
+    assert reloading["presentable"] is True, reloading
+
+    back = _trace(page, list(range(3, 40)))
+    assert back["presentable"] is True, back
+
+    # The clock stops arriving (the emulator is paused, or the server went
+    # away): the ghost holds, and there is no longer anything true on screen.
+    page.wait_ms(400)
+    starved = page.evaluate("window.ghostStatus()")
+    assert starved["holding"] == "no_clock", starved
+    assert starved["presentable"] is False, starved
+
+
 def _nudge_over_the_clock(page, url: str) -> None:
     """THE DEFECT THIS CLOSES, at the page's own level.
 
@@ -257,15 +429,13 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         page.goto(url)
         page.wait_for('body[data-ghost="unavailable"]')
         assert page.evaluate("document.body.dataset.reason") == "template_has_no_attempt"
-        assert page.evaluate(
-            "getComputedStyle(document.getElementById('ghost')).visibility"
-        ) == "hidden"
+        _paints_nothing_at_all(page)
 
         # 2. A real template: the page resolves it and opens the clip.
         fixture.available = True
         page.goto(url)
         page.wait_for('body[data-ghost="ready"]')
-        assert page.evaluate("window.ghostStatus().template.pictures") == 600
+        _opens_on_the_attempt_not_the_pre_roll(page)
         # It asked about the star in its OWN address, in the template store's
         # spelling, and asked for nothing else: the nudge is not a page, so it
         # is not in the URL (see ghost/session.py::follower_url).
@@ -306,11 +476,17 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert stalled["decision"]["reason"] == "stalled", stalled
 
         # 5. A reset: the counter returns to zero and so does the ghost, held
-        #    on the template's own first picture until the timer moves.
+        #    on the template's own first picture until the timer moves -- which
+        #    for a real clip is the first picture AFTER its pre-roll, never the
+        #    previous run's last frame that the clip opens on.
         reset = _trace(page, [0])
         assert reset["decision"]["reason"] == "reset", reset
         assert reset["paused"] is True, reset
-        assert reset["shown_igt"] == 0, reset
+        assert reset["shown_igt"] == 3, reset
+
+        # 5b. What the companion window polls to decide whether to show itself
+        #     at all. Before the nudge tests, which leave one in force.
+        _presentable_tracks_the_footage(page)
 
         # 6. His timing hotkey, over the channel the companion window uses.
         _post_message(page, "{type: 'ghost-nudge', nudge_frames: 45}")
@@ -331,6 +507,9 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
 
         # 8 and 9. His timing key, the way the running app sends it.
         _nudge_over_the_clock(page, url)
+
+        # 10. The source's exact span reaches the follower through the page.
+        _the_page_hands_the_span_to_the_follower(page, fixture, url)
 
         # `problems()` DRAINS, so it is asked once and the answer kept --
         # asking twice (once for the assertion, once for its message) reports

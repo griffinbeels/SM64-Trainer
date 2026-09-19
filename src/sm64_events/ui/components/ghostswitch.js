@@ -169,12 +169,20 @@ function GhostTuning({ opacity, nudge, queue }) {
     nudge_frames: clampNudge(
       (pending.nudge_frames == null ? nudge : pending.nudge_frames) + delta),
   }));
+  // UNKNOWN IS NOT A POSITION ON THE SLIDER. Until the server has said how
+  // solid the ghost is drawn, the control carries no author value, cannot be
+  // dragged, and says why -- so the only opacity that ever reaches the server
+  // is one HE chose. A thumb parked at some default looks exactly like a
+  // value he picked, and one small drag from there writes it back for good.
+  const known = opacity != null;
   return html`<div class="ghost-tune">
     <label class="ghost-field">
       <span class="ghost-field-name">Visibility</span>
       <input class="ghost-opacity" type="range" min=${OPACITY_MIN}
-        max=${OPACITY_MAX} step="0.05" value=${opacity}
-        title="How solid the ghost is drawn over the game"
+        max=${OPACITY_MAX} step="0.05" value=${known ? opacity : null}
+        disabled=${!known}
+        title=${known ? "How solid the ghost is drawn over the game"
+                      : "Waiting for how solid the ghost is drawn"}
         oninput=${(event) => queue({ opacity: Number(event.target.value) })} />
       <span class="ghost-field-value">${opacityText(opacity)}</span>
     </label>
@@ -217,6 +225,9 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   const held = draft || {};
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
+  // May be null, and that is a state rather than a gap: nobody has said how
+  // solid the ghost is drawn, so the tuning row draws it as unknown and no
+  // write can carry it (see GhostTuning).
   const opacity = held.opacity == null
     ? controls.opacity : clampOpacity(held.opacity);
   const nudge = held.nudge_frames == null
