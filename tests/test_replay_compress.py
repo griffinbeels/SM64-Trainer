@@ -7,6 +7,8 @@ the file runs the same on a machine with no NVIDIA encoder.
 import json
 import shutil
 import subprocess
+import threading
+import time
 
 import pytest
 
@@ -58,7 +60,7 @@ def saved(source_clip, tmp_path):
 
 
 def _leftovers(clip):
-    return sorted(p.name for p in clip.parent.iterdir() if "shrink" in p.name)
+    return sorted(p.name for p in clip.parent.iterdir() if ".compressed." in p.name)
 
 
 def test_shrink_then_adopt_changes_the_bytes_and_nothing_a_consumer_reads(saved):
@@ -162,6 +164,51 @@ def test_session_start_adopts_what_the_last_session_proved(saved):
         assert json.loads(saved.with_suffix(".json").read_text())["media"]["state"] == "compressed"
     finally:
         worker.stop()
+
+
+def test_closing_the_app_swaps_what_is_proven_even_if_it_was_just_watched(saved):
+    """His first clean close left both files in the folder: he had watched the
+    clips inside the two quiet minutes, then closed (2026-09-19)."""
+    ff = _ffmpeg()
+    compress.shrink(ff, saved, codecs=CPU_ONLY)
+    worker = compress.SavedReplayCompressor(ff, saved.parents[2], idle_s=120)
+    worker.touch(saved)
+    assert worker.adopt_ready() == []
+
+    worker.stop()
+
+    assert json.loads(saved.with_suffix(".json").read_text())["media"]["state"] == "compressed"
+    assert _leftovers(saved) == []
+
+
+def test_a_job_the_close_interrupted_writes_no_verdict_and_runs_again_next_start(saved):
+    ff = _ffmpeg()
+    closing = threading.Event()
+
+    def killed_by_the_close(args, **kwargs):
+        closing.set()
+        return subprocess.CompletedProcess(args, 1, "", "killed")
+
+    outcome = compress.shrink(ff, saved, codecs=CPU_ONLY, run=killed_by_the_close,
+                              cancel=closing)
+
+    assert outcome["state"] == "interrupted"
+    assert "media" not in json.loads(saved.with_suffix(".json").read_text())
+    assert compress.staged_path(saved).exists() and not compress.proof_path(saved).exists()
+
+    worker = compress.SavedReplayCompressor(
+        ff, saved.parents[2], poll_s=0.05, idle_s=0,
+        shrink_fn=lambda ffmpeg, clip, cancel=None: compress.shrink(
+            ffmpeg, clip, codecs=CPU_ONLY, cancel=cancel))
+    worker.start()
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not worker.outcomes:
+            time.sleep(0.1)
+    finally:
+        worker.stop()
+    assert json.loads(saved.with_suffix(".json").read_text())["media"]["state"] == "compressed"
+    assert _leftovers(saved) == []
 
 
 def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path):

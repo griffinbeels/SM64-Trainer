@@ -18,12 +18,13 @@ every-slot browser seek check (`tools/probe_clip_seek.py`).
 
 Two steps, because a player may be reading the file when the encode ends:
 
-1. `shrink` writes `<clip>.mp4.shrink` beside the clip and, once proven, the
-   `<clip>.mp4.shrink.json` that says so. Neither name matches the
-   `attempt_*.mp4` glob that indexes the save tree.
+1. `shrink` writes `<clip>.mp4.compressed.tmp` beside the clip and, once
+   proven, the `<clip>.mp4.compressed.json` that says so. Neither name matches
+   the `attempt_*.mp4` glob that indexes the save tree.
 2. `adopt` swaps a proven file under the clip's own name and records the
    sidecar's `media` block. It runs when nobody has asked for the clip's
-   bytes lately, and at session start, when nobody can have.
+   bytes lately, when the app closes, and at session start. A job the close
+   interrupts leaves an empty staged file, and the next start runs it again.
 
 The `media` block is also the manifest a later uploader/downloader verifies
 with the same `fingerprint`: the file's sha256, the picture count and a
@@ -40,6 +41,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,8 +55,12 @@ from sm64_events.replay.publication import atomic_json
 log = logging.getLogger("sm64.replay")
 
 MEDIA_VERSION = 1
-STAGED_SUFFIX = ".shrink"            # <clip>.mp4.shrink
-PROOF_SUFFIX = ".shrink.json"        # <clip>.mp4.shrink.json
+# Working files beside the clip while a job is in flight. They are an ordinary
+# MP4 and its proof under names that do NOT end in .mp4, because every
+# `attempt_*.mp4` in the save tree is a saved replay. They exist only until
+# the swap: seconds when nobody is watching, else until the app closes.
+STAGED_SUFFIX = ".compressed.tmp"    # <clip>.mp4.compressed.tmp
+PROOF_SUFFIX = ".compressed.json"    # <clip>.mp4.compressed.json
 SETTLED_STATES = ("compressed", "kept_original", "adopting")
 # A re-encode that is structurally perfect and visually broken (a driver
 # fault, a green picture) would destroy a PB for good. SSIM against the saved
@@ -90,6 +96,41 @@ def _spawn_kwargs() -> dict:
     if _BELOW_NORMAL:
         kwargs["creationflags"] = kwargs.get("creationflags", 0) | _BELOW_NORMAL
     return kwargs
+
+
+_CHILDREN: set[subprocess.Popen] = set()
+_CHILDREN_GUARD = threading.Lock()
+
+
+def run_child(args, *, timeout, **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run`, except the child can be ended from another thread.
+    An encode left running after the app closed would keep a core busy and
+    finish a file nobody is waiting for."""
+    text = kwargs.pop("text", False)
+    kwargs.pop("check", None)
+    if kwargs.pop("capture_output", False):
+        kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    child = subprocess.Popen(args, text=text, **kwargs)
+    with _CHILDREN_GUARD:
+        _CHILDREN.add(child)
+    try:
+        out, err = child.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.communicate()
+        raise
+    finally:
+        with _CHILDREN_GUARD:
+            _CHILDREN.discard(child)
+    return subprocess.CompletedProcess(args, child.returncode, out, err)
+
+
+def end_children() -> None:
+    with _CHILDREN_GUARD:
+        running = list(_CHILDREN)
+    for child in running:
+        with suppress(OSError):
+            child.kill()
 
 
 def file_sha256(path: Path) -> str:
@@ -151,10 +192,10 @@ def audio_digest(ffmpeg: str, clip: Path) -> str | None:
     and samples. None when the clip has no audio track."""
     if not _probe(ffmpeg, clip, "a:0", "stream=index"):
         return None
-    out = subprocess.run(
+    out = run_child(
         [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(clip),
          "-map", "0:a:0", "-f", "framemd5", "-"],
-        capture_output=True, timeout=600, check=False, **_spawn_kwargs())
+        capture_output=True, timeout=600, **_spawn_kwargs())
     if out.returncode:
         raise Unproven(f"audio unreadable: {clip.name}")
     rows = [line for line in out.stdout.splitlines() if not line.startswith(b"#")]
@@ -173,11 +214,10 @@ def picture_similarity(ffmpeg: str, clip: Path, reference: Path) -> float:
     """Mean SSIM, pictures paired by POSITION (their times are proven apart)."""
     graph = ("[0:v]setpts=N,format=yuv420p[a];[1:v]setpts=N,format=yuv420p[b];"
              "[a][b]ssim")
-    out = subprocess.run(
+    out = run_child(
         [ffmpeg, "-nostdin", "-hide_banner", "-nostats", "-loglevel", "info",
          "-i", str(clip), "-i", str(reference), "-lavfi", graph, "-f", "null", "-"],
-        capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S, check=False,
-        **_spawn_kwargs())
+        capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S, **_spawn_kwargs())
     found = re.findall(r"SSIM .*All:([0-9.]+)", out.stderr)
     if out.returncode or not found:
         raise Unproven("picture comparison failed")
@@ -227,12 +267,20 @@ def proof_path(saved: Path) -> Path:
     return saved.with_name(saved.name + PROOF_SUFFIX)
 
 
-def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=subprocess.run) -> dict:
+def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
+           cancel: threading.Event | None = None) -> dict:
     """Step 1. Encode beside `saved`, prove it, and leave the proof on disk.
 
     Returns the `media` block either way: state `ready` (a proven staged file
     awaits adoption) or `kept_original` with the reason. Never touches `saved`.
+
+    `cancel` is the app closing mid-job. A cancelled job says nothing about
+    the clip, so it writes no verdict and LEAVES its staged file: a staged
+    file with no proof beside it is how the next session knows to try again.
     """
+    def cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
+
     sidecar = saved.with_suffix(".json")
     meta = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.exists() else {}
     settled = meta.get("media")
@@ -241,30 +289,34 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=subprocess.ru
         # would stack a second generation of loss on a PB for nothing.
         return settled
     staged, proof = staged_path(saved), proof_path(saved)
-    staged.unlink(missing_ok=True)
     proof.unlink(missing_ok=True)
+    staged.write_bytes(b"")   # the "a job was started for this clip" marker
     reasons: list[str] = []
     encoded = False
     try:
         original = fingerprint(ffmpeg, saved)
         end = end_in_stream_units(ffmpeg, saved)
         for codec in codecs:
+            if cancelled():
+                break
             started = time.monotonic()
             result = run(encode_args(ffmpeg, saved, staged, codec, end),
                          capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S,
                          check=False, **_spawn_kwargs())
+            if cancelled():
+                break
             if result.returncode:
                 reasons.append(f"{codec}: ffmpeg exited {result.returncode}: "
                                f"{(result.stderr or '')[-160:].strip()}")
-                staged.unlink(missing_ok=True)
                 continue
             encoded = True
             try:
                 candidate, similarity = prove(ffmpeg, saved, staged, original,
                                               meta.get("frame_times"))
             except Unproven as refused:
+                if cancelled():
+                    break
                 reasons.append(f"{codec}: {refused}")
-                staged.unlink(missing_ok=True)
                 continue
             block = {"version": MEDIA_VERSION, "state": "ready", "codec": codec,
                      **candidate.as_dict(), "original": original.as_dict(),
@@ -277,12 +329,18 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=subprocess.ru
         reasons.append(str(refused))
     except (OSError, subprocess.SubprocessError) as failed:
         reasons.append(f"{type(failed).__name__}: {failed}")
+    if cancelled() or not encoded:
+        # Nothing was learned about THIS clip: the app closed mid-job, or the
+        # machine could not encode or probe at all. Leave the empty marker so
+        # the next session start tries again, and write no verdict.
+        staged.write_bytes(b"")
+        state = "interrupted" if cancelled() else "kept_original"
+        return {"version": MEDIA_VERSION, "state": state, "reasons": reasons}
+    # An answer about this clip (it does not shrink, or does not survive the
+    # proof) is settled, and is never asked again.
     staged.unlink(missing_ok=True)
     kept = {"version": MEDIA_VERSION, "state": "kept_original", "reasons": reasons}
-    if encoded and sidecar.exists():
-        # An answer about THIS clip (it does not shrink, or does not survive
-        # the proof) is settled. A machine that could not encode or probe at
-        # all has answered nothing, so the next session may try again.
+    if sidecar.exists():
         atomic_json(sidecar, {**meta, "media": kept}, allow_nan=True)
     return kept
 
@@ -361,16 +419,37 @@ class SavedReplayCompressor:
     def start(self) -> None:
         # Session start: no player exists yet, so every proven file is idle.
         self.adopt_ready(everything_idle=True)
+        self._requeue_interrupted()
         self._stopping.clear()
         self._thread = threading.Thread(target=self._work, name="replay-compressor",
                                         daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
+        """The app is closing: end the job in flight, then swap everything
+        already proven. Nothing can be playing a clip after this, and he
+        expects to find the small file, not two files, when he looks in the
+        folder (2026-09-19: "I would expect the old, uncompressed files to be
+        deleted, while the new video file replaces the old file")."""
         self._stopping.set()
         self._wake.set()
+        end_children()
         if self._thread is not None:
             self._thread.join(timeout=5)
+        self.adopt_ready(everything_idle=True)
+
+    def _requeue_interrupted(self) -> None:
+        """A staged file with no proof beside it is a job the last session
+        started and never finished. Its bytes are worthless; the clip is not."""
+        if not self._root.exists():
+            return
+        for staged in self._root.rglob(f"attempt_*.mp4{STAGED_SUFFIX}"):
+            saved = staged.with_name(staged.name.removesuffix(STAGED_SUFFIX))
+            if proof_path(saved).exists():
+                continue
+            staged.unlink(missing_ok=True)
+            if saved.is_file():
+                self.enqueue(saved)
 
     def enqueue(self, saved: Path) -> None:
         with self._guard:
@@ -414,11 +493,11 @@ class SavedReplayCompressor:
                 saved = self._jobs.pop(0) if self._jobs else None
             if saved is not None and saved.is_file():
                 try:
-                    outcome = self._shrink(self._ffmpeg, saved)
+                    outcome = self._shrink(self._ffmpeg, saved, cancel=self._stopping)
                 except Exception:  # noqa: BLE001 - the worker outlives one bad clip
                     log.exception("replay compression failed for %s", saved.name)
                     outcome = {"state": "kept_original", "reasons": ["worker error"]}
-                if outcome.get("state") != "ready":
+                if outcome.get("state") == "kept_original":
                     log.info("replay kept as saved: %s (%s)", saved.name,
                              "; ".join(outcome.get("reasons", [])))
                 self.outcomes.append({"clip": saved.name, **outcome})

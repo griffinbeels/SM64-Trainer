@@ -382,7 +382,12 @@ class ReplayRecorder:
                        else "buffer owned by another session" if not self._scratch.owns()
                        else None)
             if refusal is not None:
-                log.info("replay buffer kept at stop: %s", refusal)
+                # stop() asks twice; the second call finds the marker already
+                # gone with the buffer. Only a buffer that still holds bytes
+                # is worth a line (his first clean close logged a false
+                # "owned by another session" right after "142.7 MB removed").
+                if _buffer_bytes(self._cfg.scratch_dir):
+                    log.info("replay buffer kept at stop: %s", refusal)
                 return False
             held = self._rec_lock
             if held is None:

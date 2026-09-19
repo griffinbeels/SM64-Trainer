@@ -871,8 +871,9 @@ so the swap is allowed only once the smaller file is proven to hold the same
 pictures, in the same order, on the same ticks, for the same length, under
 identical decoded audio, and to look like the original. A proof that fails
 keeps the original and says why. Saving stays instant: the swap happens
-later, when no player has asked for the clip lately, or at the next session
-start. A replay saved before this existed is never rewritten unasked, and a
+later, when no player has asked for the clip lately, and otherwise when the
+app closes, so the folder never keeps both files past a session. A job the
+close interrupts runs again at the next start. A replay saved before this existed is never rewritten unasked, and a
 compressed one is never encoded a second time.
 
 - **Lives** -- `src/sm64_events/replay/compress.py`; the quality rows are
