@@ -7,10 +7,12 @@ runs, when it is merely hidden, when it is ended, and what it is told to show.
 What only a human can see is listed in the report.
 """
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
+from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.ghost.session import (
     DEFAULT_OPACITY,
     MAX_START_ATTEMPTS,
@@ -19,11 +21,22 @@ from sm64_events.ghost.session import (
     follower_url,
 )
 from sm64_events.inputs.templates import TemplateStore
+from sm64_events.server.ghost_clock import GhostClockFeed, clock_message
 from sm64_events.storage.db import Database
 
 from tests.ghost_fixture import FakeReplay, a_document, a_view
 
 PORT = 8099
+
+
+def _a_snapshot() -> GameSnapshot:
+    """The shape the poll loop hands the clock feed, so a nudge read back here
+    is read off the real wire format."""
+    return GameSnapshot(
+        wall_time_utc=datetime(2026, 9, 18, tzinfo=timezone.utc),
+        global_timer=900, mario_action=0, mario_action_timer=0, num_stars=0,
+        last_completed_course=0, last_completed_star=0,
+        igt_overall=42, curr_level=24, curr_area=1)
 
 
 class FakeController:
@@ -100,9 +113,14 @@ def mark(store, *, kind="star", entity_key="24-1", strat="10 coin",
 
 def a_session(tmp_path, *, target=("star", 24, 1), strat="10 coin",
               saved=(7,), views=None, db=None, store=None, replay=None,
-              controllers=None):
+              controllers=None, clock=None):
     """A session over real template storage, a fake replay service and a fake
-    window. Returns (session, controllers, tracker, store)."""
+    window. Returns (session, controllers, tracker, store).
+
+    `clock` is the REAL `GhostClockFeed` where a test cares about the nudge:
+    it is the module the value has to reach, and a stand-in for it would prove
+    only that the session called something.
+    """
     store = a_store(tmp_path) if store is None else store
     if replay is None:
         replay = FakeReplay(saved=saved,
@@ -117,7 +135,7 @@ def a_session(tmp_path, *, target=("star", 24, 1), strat="10 coin",
 
     session = GhostSession(tracker=tracker, inputs=SimpleNamespace(templates=store),
                            replay=replay, broadcaster=FakeBroadcaster(),
-                           port=PORT, controller_factory=factory)
+                           clock=clock, port=PORT, controller_factory=factory)
     return session, made, tracker, store
 
 
@@ -183,9 +201,8 @@ def test_enabling_over_an_available_ghost_shows_the_follower_page(tmp_path):
     assert len(controllers) == 1
     window = controllers[0]
     assert window.starts == 1 and window.visible is True
-    assert window.url == follower_url(body["target"], 0, PORT)
+    assert window.url == follower_url(body["target"], PORT)
     assert window.url.startswith(f"http://127.0.0.1:{PORT}/ui/ghost/index.html?")
-    assert "nudge=0" in window.url
 
 
 def test_the_url_is_this_servers_own_port(tmp_path, monkeypatch):
@@ -324,19 +341,44 @@ def test_the_opacity_reaches_the_running_window(tmp_path):
 
 # -- the nudge ----------------------------------------------------------------
 
-def test_the_nudge_rides_the_page_url(tmp_path):
-    session, controllers, _tracker, store = a_session(tmp_path)
+def test_the_nudge_reaches_the_overlay_on_the_clock(tmp_path):
+    """The overlay follows the live clock, and the nudge is part of the same
+    rule, so the session publishes it on that feed. The real feed, because the
+    point of this test is that the value arrives where the page reads it."""
+    clock = GhostClockFeed()
+    session, _controllers, _tracker, store = a_session(tmp_path, clock=clock)
     mark(store)
     asyncio.run(session.update(enabled=True))
     asyncio.run(session.update(nudge_frames=-12))
     assert session.payload()["nudge_frames"] == -12
-    assert "nudge=-12" in controllers[0].url
+    assert clock.nudge_frames == -12
+    assert clock_message(_a_snapshot(), clock.nudge_frames)["nudge_frames"] == -12
+
+
+def test_changing_the_nudge_never_re_points_the_window(tmp_path):
+    """THE DEFECT THIS CLOSES. The nudge used to ride the page's URL, so every
+    press made the session call `set_url` — which is how the window is told to
+    LOAD ANOTHER PAGE. The ghost blinked off and re-seeked on every press, and
+    a held key fired a stream of them."""
+    session, controllers, _tracker, store = a_session(tmp_path,
+                                                      clock=GhostClockFeed())
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    window = controllers[0]
+    opened = list(window.urls)
+    for frames in (1, 2, 3, 4, 5, -20):
+        asyncio.run(session.update(nudge_frames=frames))
+    assert window.urls == opened, "the overlay page was navigated for a nudge"
+    assert window.starts == 1 and window.stops == 0
+    assert session.payload()["nudge_frames"] == -20
 
 
 def test_a_target_change_resets_the_nudge_and_swaps_the_url(tmp_path):
     """His timing offset is about ONE thing he is practising. Carrying it onto
-    the next star would put the next ghost silently out of step."""
-    session, controllers, tracker, store = a_session(tmp_path)
+    the next star would put the next ghost silently out of step. The target IS
+    another page, so this one does re-point the window."""
+    clock = GhostClockFeed()
+    session, controllers, tracker, store = a_session(tmp_path, clock=clock)
     mark(store)
     mark(store, entity_key="15-3", strat=None, attempt_id=7)
     asyncio.run(session.update(enabled=True))
@@ -345,7 +387,7 @@ def test_a_target_change_resets_the_nudge_and_swaps_the_url(tmp_path):
     body = drive(session)
     assert body["nudge_frames"] == 0
     assert "entity_key=15-3" in controllers[0].url
-    assert "nudge=0" in controllers[0].url
+    assert clock.nudge_frames == 0
 
 
 def test_a_strategy_change_alone_counts_as_a_new_target(tmp_path):
@@ -354,6 +396,28 @@ def test_a_strategy_change_alone_counts_as_a_new_target(tmp_path):
     asyncio.run(session.update(enabled=True, nudge_frames=9))
     tracker.strat_tag = "backflip"
     assert drive(session)["nudge_frames"] == 0
+
+
+def test_a_clock_attached_after_the_fact_is_told_the_current_nudge(tmp_path):
+    """`mount_ghost_routes` makes the join, and the app factory runs after the
+    session is built. A page that opens later must not have to wait for the
+    next press to learn where the ghost belongs."""
+    session, _controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True, nudge_frames=7))
+    clock = GhostClockFeed()
+    session.attach_clock(clock)
+    assert clock.nudge_frames == 7
+
+
+def test_a_session_with_no_clock_still_works(tmp_path):
+    """A window with no overlay feed (the db-less boot, a test app) must not
+    lose the switch because the nudge has nowhere to go."""
+    session, controllers, _tracker, store = a_session(tmp_path, clock=None)
+    mark(store)
+    asyncio.run(session.update(enabled=True, nudge_frames=4))
+    assert session.payload()["nudge_frames"] == 4
+    assert controllers[0].visible is True
 
 
 # -- what a bad value does ----------------------------------------------------

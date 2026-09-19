@@ -21,6 +21,17 @@ overlay sees the current value one wake later.
 **No listener, no task.** The pump exists only while at least one socket is
 open, so a tracker nobody is practising against runs exactly what it ran
 before this module existed.
+
+**The nudge rides this message too.** How far ahead or behind the ghost runs
+is a property of the SAME rule -- show the picture whose timer equals the live
+timer plus the nudge -- so it belongs on the same wire as the timer. The
+session sets it here (`set_nudge`) and every open overlay reads it off its very
+next sample, which means a change takes effect within one game frame and
+WITHOUT the page being navigated. It used to ride the page's URL instead, and
+every press of his timing key therefore re-pointed the window at a new URL: a
+full page load, which blinks the overlay off and re-seeks it from scratch. A
+held key fired a stream of them. Carrying it here costs nothing when nobody is
+listening (the early return happens first) and nothing at all on the poll path.
 """
 import asyncio
 import logging
@@ -31,7 +42,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 log = logging.getLogger("sm64.ghost")
 
 
-def clock_message(snapshot) -> dict:
+def clock_message(snapshot, nudge_frames: int = 0) -> dict:
     """The whole wire format. `igt` is Usamune's counter exactly as sampled --
     the same number every template picture is stamped with -- so the follower
     matches raw counter against raw counter with nothing in between.
@@ -48,12 +59,18 @@ def clock_message(snapshot) -> dict:
     moving while the game is paused, so it is what tells a stalled attempt
     apart from a stalled feed.
 
+    `nudge_frames` is the ghost session's current offset, carried on every
+    message rather than only on the ones that change it: a page that missed a
+    message, or one that loaded a moment ago, converges on the next sample
+    instead of waiting for the player to press the key again.
+
     The integrator adds `play_mode` here once the pause signal lands.
     """
     return {"global_timer": snapshot.global_timer,
             "igt": snapshot.igt_overall,
             "level": snapshot.curr_level,
-            "area": snapshot.curr_area}
+            "area": snapshot.curr_area,
+            "nudge_frames": int(nudge_frames)}
 
 
 class GhostClockFeed:
@@ -65,6 +82,9 @@ class GhostClockFeed:
         self._pending = None
         self._wake: asyncio.Event | None = None
         self._pump: asyncio.Task | None = None
+        #: How far ahead or behind the ghost is being run, in game frames. The
+        #: ghost session owns the value; this is where it is published from.
+        self.nudge_frames = 0
         #: samples handed over by the poll loop, and messages actually sent.
         #: `noted - sent` is how far behind the pump ran, i.e. how many
         #: samples collapsed. Read by tests and worth a /health line later.
@@ -94,6 +114,16 @@ class GhostClockFeed:
         self.noted += 1
         self._wake.set()
 
+    def set_nudge(self, frames: int) -> None:
+        """The ghost session's current offset, from now on.
+
+        Deliberately does NOT wake the pump: the next game snapshot carries it,
+        which is within one game frame while the poll loop is reading the
+        emulator at all -- and while it is not, there is no clock for the
+        overlay to follow and nothing for a nudge to move it against.
+        """
+        self.nudge_frames = int(frames)
+
     async def connect(self, client) -> None:
         self._clients.add(client)
         if self._pump is None:
@@ -119,7 +149,7 @@ class GhostClockFeed:
             if snapshot is None:
                 continue
             try:
-                await self._send(clock_message(snapshot))
+                await self._send(clock_message(snapshot, self.nudge_frames))
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - one bad sample must not end the feed
@@ -141,8 +171,9 @@ class GhostClockFeed:
 
 def create_ghost_clock_router(feed: GhostClockFeed) -> APIRouter:
     """`/ws/ghost-clock`. The socket carries nothing upstream -- a receive is
-    only how a disconnect is noticed -- because the nudge is the page's own
-    business and the clock is the server's."""
+    only how a disconnect is noticed. Everything the overlay is told, the
+    timer and the nudge alike, is the server's own state; the page never
+    answers back."""
     router = APIRouter()
 
     @router.websocket("/ws/ghost-clock")

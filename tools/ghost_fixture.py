@@ -73,8 +73,20 @@ def attach_ghost_routes(app, state: dict) -> None:
     session, exactly as I5 says, so the card's own write path is exercised
     rather than stubbed. Out-of-range values are the 422 the interface
     promises, which is what lets a test prove the control never sends one.
+
+    THE REAL ROUTES ARE TAKEN OUT FIRST, and they have to be. The app factory
+    now mounts `/api/ghost` itself, with no session behind it in an offline
+    fixture, so it answers 503 — and a duplicate FastAPI path shadows
+    silently, first registration winning (`.claude/rules/server.md`). Adding
+    this door beside that one left the switch reading "unreachable" and
+    rendering NOTHING, which looks exactly like a component that is broken:
+    28 rendered switch checks errored on a control that was never drawn
+    (measured 2026-09-18, on the merge of tracks E and F).
     """
     from fastapi import HTTPException
+
+    app.router.routes = [route for route in app.router.routes
+                         if getattr(route, "path", None) != "/api/ghost"]
 
     @app.get("/api/ghost")
     def _ghost_get():

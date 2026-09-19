@@ -438,6 +438,10 @@ def test_build_gives_the_app_the_session_that_owns_the_window(monkeypatch):
     main_mod.build()
     assert isinstance(captured.get("ghost"), GhostSession)
     assert captured.get("ghost_clock") is not None
+    # And the two are JOINED: the nudge travels on the clock feed, so a built
+    # app that hands them over separately has a timing key that reaches no
+    # overlay at all — while every unit below it still passes.
+    assert captured["ghost"]._clock is captured["ghost_clock"]
 
 
 def test_the_frozen_entry_point_opens_the_overlay_window(monkeypatch):
