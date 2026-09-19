@@ -44,9 +44,17 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
         if replay is None:
             raise HTTPException(503, "recordings are unavailable")
         try:
+            # Resolved once per request (the database can arrive after boot),
+            # then asked for BOTH of its doors: the template store says which
+            # run the ghost is, and `attempt` hands over that run's own frames
+            # so the span can be exact rather than read off the timer's shape.
+            # `template_store` stays the one answer to "what is the store".
+            service = inputs() if callable(inputs) else inputs
             return resolve_ghost(kind, entity_key, strat,
-                                 templates=template_store(inputs),
-                                 replay=replay).payload()
+                                 templates=template_store(service),
+                                 replay=replay,
+                                 attempts=getattr(service, "attempt", None),
+                                 ).payload()
         except HTTPException:
             raise
         except Exception as error:

@@ -8,12 +8,15 @@ sentence a player can read.
 import pytest
 
 from sm64_events.ghost.source import (
-    REASONS, GhostSource, from_marked_attempt, resolve_ghost)
+    ATTEMPT_FRAMES, PICTURE_TIMER, REASONS, GhostSource, from_marked_attempt,
+    resolve_ghost, span_of)
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.replay.service import ReplayService
 from sm64_events.storage.db import Database
+from sm64_events.tracking.projection import Attempt
 
-from tests.ghost_fixture import FakeReplay, a_document, a_view
+from tests.ghost_fixture import (
+    FakeAttempt, FakeReplay, a_document, a_real_clip_view, attempts_of, a_view)
 
 
 @pytest.fixture
@@ -34,6 +37,28 @@ def ghost(templates, replay, kind="star", entity_key="24-1", strat="10 coin",
           **kwargs) -> GhostSource:
     return resolve_ghost(kind, entity_key, strat, templates=templates,
                          replay=replay, **kwargs)
+
+
+# -- his own clip, and the facts this file reads out of it -------------------
+#
+# `tests/fixtures/ghost_span_clip.json` holds the two per-picture arrays of the
+# saved clip behind his star 6-0 template, verbatim. Read straight out of them:
+LEAD_IN_PICTURES = 45      # 0..44, the previous run held through the reload
+FIRST_OF_THE_RUN = 45      # game frame 308680, the first picture timed 3
+RUN_START_FRAME = 308680
+LAST_OF_THE_RUN = 626      # game frame 309261, the first picture timed 584
+RUN_END_FRAME = 309261
+RECORDED_FRAMES = 584      # the run's own length, where its timer stops
+CLIP_PICTURES = 642        # so fifteen pictures follow the star
+
+
+def real_clip(templates, attempt_id=9, **attempt_fields):
+    """His clip, the template that was marked from it, and its attempt row."""
+    save(templates, origin=f"attempt:{attempt_id}")
+    replay = FakeReplay(saved=[attempt_id],
+                        views={attempt_id: a_real_clip_view(attempt_id)})
+    row = FakeAttempt(id=attempt_id, **attempt_fields)
+    return replay, attempts_of(row)
 
 
 def a_ready_ghost(templates, attempt_id=7, **overrides):
@@ -178,7 +203,7 @@ def test_the_payload_carries_exactly_the_agreed_keys(templates):
     _, replay = a_ready_ghost(templates)
     assert set(ghost(templates, replay).payload()) == {
         "available", "reason", "reason_text", "template_id", "attempt_id",
-        "media_url", "view", "exactness"}
+        "media_url", "view", "exactness", "span"}
 
 
 def test_an_unavailable_payload_fills_every_key(templates):
@@ -187,8 +212,185 @@ def test_an_unavailable_payload_fills_every_key(templates):
     assert payload["reason"] == "no_template"
     assert isinstance(payload["reason_text"], str)
     assert [payload[key] for key in
-            ("template_id", "attempt_id", "media_url", "view", "exactness")
-            ] == [None] * 5
+            ("template_id", "attempt_id", "media_url", "view", "exactness",
+             "span")] == [None] * 6
+
+
+# -- the span: exactly the attempt, whatever the recorder was set to ---------
+
+@pytest.mark.parametrize("anchor_frame", [308677, 308678, 308679, 308680])
+def test_his_own_clip_is_clamped_to_the_run_inside_it(templates, anchor_frame):
+    """His ruling: "clamped to the EXACT START FRAME of the attempt, and the
+    exact ending frame of the star grab... regardless of the user's recording
+    settings."
+
+    The clip's timer reads 3 on picture 45, so the reset landed three game
+    frames earlier; the anchor is swept across all four candidates because the
+    ANSWER must not depend on which of them the row recorded.
+    """
+    replay, attempts = real_clip(
+        templates, anchor_frame=anchor_frame,
+        rta_frames=RUN_END_FRAME - anchor_frame, igt_frames=RECORDED_FRAMES)
+    span = ghost(templates, replay, attempts=attempts).span
+    assert (span.first_picture, span.last_picture) == (FIRST_OF_THE_RUN,
+                                                       LAST_OF_THE_RUN)
+    assert (span.start_frame, span.end_frame) == (anchor_frame, RUN_END_FRAME)
+    assert span.basis == ATTEMPT_FRAMES
+
+
+def test_the_lead_in_from_the_previous_run_is_left_out(templates):
+    """Every one of the 45 pictures before the run carries the PREVIOUS run's
+    final timer, held through the reset's reload — the shape that made the
+    follower refuse his footage outright."""
+    view = a_real_clip_view()
+    before = [t for t in view["picture_igt"][:LEAD_IN_PICTURES]
+              if t is not None]
+    assert set(before) == {3029} and len(before) == 42
+    replay, attempts = real_clip(templates, anchor_frame=308677,
+                                 rta_frames=584, igt_frames=RECORDED_FRAMES)
+    assert ghost(templates, replay, attempts=attempts
+                 ).span.first_picture == FIRST_OF_THE_RUN
+
+
+def test_the_footage_after_the_star_is_left_out(templates):
+    """The recorder kept rolling: the last fifteen pictures sit frozen at the
+    run's own final time, which is where the recorded time stops."""
+    view = a_real_clip_view()
+    assert len(view["frame_map"]) == CLIP_PICTURES
+    after = view["picture_igt"][LAST_OF_THE_RUN + 1:]
+    assert after and set(after) == {RECORDED_FRAMES}
+    replay, attempts = real_clip(templates, anchor_frame=308677,
+                                 rta_frames=584, igt_frames=RECORDED_FRAMES)
+    assert ghost(templates, replay, attempts=attempts
+                 ).span.last_picture == LAST_OF_THE_RUN
+
+
+def test_the_first_picture_of_the_run_is_the_one_the_timer_restarts_on(
+        templates):
+    view = a_real_clip_view()
+    assert view["picture_igt"][FIRST_OF_THE_RUN] == 3
+    assert view["frame_map"][FIRST_OF_THE_RUN] == RUN_START_FRAME
+    assert view["frame_map"][LAST_OF_THE_RUN] == RUN_END_FRAME
+    assert view["picture_igt"][LAST_OF_THE_RUN] == RECORDED_FRAMES
+
+
+def test_unstamped_pictures_and_repeated_frames_move_neither_end():
+    """Two pictures can show one game frame, and a picture can carry no stamp
+    at all. The first end takes the EARLIER of a pair and the last end the
+    LATER, so neither drops a frame the player actually played."""
+    view = {"frame_map": [100, None, 100, 101, 101, None, 102, 102, 103],
+            "picture_igt": [0, None, 0, 1, 1, None, 2, 2, 3]}
+    span = span_of(view, FakeAttempt(anchor_frame=101, rta_frames=1))
+    assert (span.first_picture, span.last_picture) == (3, 7)
+    assert (span.start_frame, span.end_frame) == (101, 102)
+
+
+def test_a_row_with_no_frames_of_its_own_falls_back_to_the_clip_timer(
+        templates):
+    """An imported time, or any row closed with no anchor, still gets a span —
+    read off the timer, and SAYING it was read off the timer."""
+    replay, attempts = real_clip(templates, igt_frames=RECORDED_FRAMES)
+    span = ghost(templates, replay, attempts=attempts).span
+    assert span.basis == PICTURE_TIMER
+    assert (span.first_picture, span.last_picture) == (FIRST_OF_THE_RUN,
+                                                       LAST_OF_THE_RUN)
+    assert (span.start_frame, span.end_frame) == (RUN_START_FRAME,
+                                                  RUN_END_FRAME)
+
+
+def test_the_timer_fallback_takes_the_LAST_restart_not_the_first():
+    """A clip can hold more than one reset. The run being shown is the one
+    the clip ends on."""
+    view = {"frame_map": [10, 11, 12, 13, 14, 15, 16],
+            "picture_igt": [900, 1, 2, 800, 1, 2, 3]}
+    span = span_of(view, FakeAttempt(igt_frames=3))
+    assert (span.first_picture, span.last_picture) == (4, 6)
+
+
+def test_a_clip_that_opens_at_zero_has_no_drop_to_find():
+    """His one clip that happened to carry no pre-roll is still a run."""
+    view = {"frame_map": [10, 11, 12], "picture_igt": [1, 2, 3]}
+    span = span_of(view, FakeAttempt(igt_frames=3))
+    assert (span.first_picture, span.last_picture) == (0, 2)
+    assert span.basis == PICTURE_TIMER
+
+
+def test_a_grab_timed_row_also_names_the_frame_of_the_touch():
+    """The ghost ends where the recorded time stops. A row whose time was
+    taken AT the touch says so, so the choice can be overruled without the
+    server being asked again."""
+    view = {"frame_map": [10, 11, 12], "picture_igt": [1, 2, 3]}
+    span = span_of(view, FakeAttempt(anchor_frame=10, rta_frames=2,
+                                     timed_at="grab"))
+    assert span.grab_frame == 12 and span.end_frame == 12
+
+
+def test_an_xcam_timed_row_does_not_claim_to_know_the_touch():
+    """`timed_at` is the only record of the moment, and the touch frame is
+    journaled on the grab event rather than copied onto the row."""
+    view = {"frame_map": [10, 11, 12], "picture_igt": [1, 2, 3]}
+    assert span_of(view, FakeAttempt(anchor_frame=10, rta_frames=2,
+                                     timed_at="xcam")).grab_frame is None
+
+
+@pytest.mark.parametrize("view,attempt", [
+    ({"frame_map": None, "picture_igt": None}, FakeAttempt(anchor_frame=10,
+                                                           rta_frames=2)),
+    ({"frame_map": [10, 11], "picture_igt": [99, 100]}, None),
+    ({"frame_map": [10, 11], "picture_igt": [99, 100]},
+     FakeAttempt(igt_frames=5)),
+    ({"frame_map": [10, 11], "picture_igt": [1, 2]},
+     FakeAttempt(anchor_frame=900, rta_frames=10)),
+])
+def test_a_span_nothing_can_find_is_null_rather_than_a_guess(view, attempt):
+    assert span_of(view, attempt) is None
+
+
+def test_a_ghost_with_no_span_is_still_available(templates):
+    """The page has its own rule to fall back on; refusing the footage because
+    the clamp is unknown would hide a run he can watch."""
+    template, replay = a_ready_ghost(templates)
+    answer = ghost(templates, replay)
+    assert answer.available is True and answer.span is None
+    assert answer.payload()["span"] is None
+
+
+def test_the_span_never_rewrites_the_view(templates):
+    """Domain contract 6: the view has one owner. The span is a sibling."""
+    replay, attempts = real_clip(templates, anchor_frame=308677,
+                                 rta_frames=584, igt_frames=RECORDED_FRAMES)
+    served = replay._views[9]
+    answer = ghost(templates, replay, attempts=attempts)
+    assert answer.view is served
+    assert answer.view["frame_map"] == a_real_clip_view()["frame_map"]
+    assert "span" not in answer.view
+
+
+def test_a_segment_is_clamped_to_its_own_frames_too(templates):
+    save(templates, kind="segment", entity_key="12", strat_tag=None,
+         origin="attempt:9", document=a_document(target="segment 12"))
+    replay = FakeReplay(saved=[9], views={9: a_real_clip_view(9)})
+    attempts = attempts_of(FakeAttempt(id=9, anchor_frame=308677,
+                                       rta_frames=584, igt_frames=584))
+    span = ghost(templates, replay, kind="segment", entity_key="12",
+                 strat=None, attempts=attempts).span
+    assert (span.first_picture, span.last_picture) == (FIRST_OF_THE_RUN,
+                                                       LAST_OF_THE_RUN)
+    assert span.basis == ATTEMPT_FRAMES
+
+
+def test_a_missing_attempt_row_costs_the_clamp_and_nothing_else(templates):
+    save(templates, origin="attempt:7")
+    replay = FakeReplay(saved=[7], views={7: a_real_clip_view(7)})
+    answer = ghost(templates, replay, attempts=attempts_of())
+    assert answer.available is True and answer.span is None
+
+
+def test_the_attempt_fields_the_span_reads_still_exist():
+    """`FakeAttempt` stands in for the projector's row; a rename there must
+    fail here rather than silently drop every ghost back to the timer."""
+    for field in ("anchor_frame", "rta_frames", "igt_frames", "timed_at"):
+        assert field in Attempt.__dataclass_fields__, field
 
 
 # -- the seam the other two providers arrive through -------------------------

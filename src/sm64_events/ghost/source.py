@@ -28,9 +28,35 @@ answer. Today there is one — the marked attempt's saved clip. An imported
 template that ships its own replay, and downloaded footage trimmed by hand
 (his two later asks), each arrive as one more function in `PROVIDERS`, not as
 a second copy of this resolution.
+
+**The SPAN is the attempt, and it is looked up rather than guessed.** His
+ruling, 2026-09-19: *"Ghost footage should be clamped to the EXACT START FRAME
+of the attempt, and the exact ending frame of the star grab... It should always
+be clamped to exactly the span of the attempt, regardless of the user's
+recording settings."* A clip is cut with whatever pre-roll and post-roll the
+recorder was set to, so his own first try began with 44 pictures of the
+PREVIOUS run — the game's timer still frozen at that run's final value through
+the reset's reload — and ended fifteen pictures after the star. Neither is his
+attempt.
+
+Nothing has to be inferred from the timer's shape, because the system already
+records both ends: the attempt row carries the game frame its anchor (the
+reset) landed on and how many frames it ran, and the clip's frame map says
+which game frame every picture shows. So the span is two lookups —
+the first picture at or after the start, the last picture at or before the end
+— and `basis` records which reading answered. The END is the frame the
+attempt's TIME was taken on, because that is where the recorded time stops; for
+a midair grab the game stops at the landing (the x-cam), a little after the
+touch, and the touch travels separately as `grab_frame` for anyone who wants
+to end there instead.
+
+`span` is a SIBLING of `view`, never a rewrite of it — the view still belongs
+to `replay/service.py` alone (domain contract 6).
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
+
+from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 
 KINDS = ("star", "segment")
 
@@ -57,6 +83,36 @@ REASONS: dict[str, str] = {
 # footage, which has no map and can only count seconds from a trim point.
 EXACT = "frame_map"
 
+# How the span's two ends were found, on `GhostSpan.basis`.
+ATTEMPT_FRAMES = "attempt_frames"   # the attempt row's own anchor and length
+PICTURE_TIMER = "picture_timer"     # the clip's per-picture game timer
+
+
+@dataclass(frozen=True)
+class GhostSpan:
+    """Which pictures of the clip ARE the attempt.
+
+    `first_picture` and `last_picture` are INCLUSIVE indices into the view's
+    per-picture arrays, so a follower clamps with them and needs no arithmetic
+    of its own. The frames beside them say what those indices mean, so a
+    disagreement can be read rather than argued about.
+    """
+
+    first_picture: int
+    last_picture: int
+    start_frame: int
+    end_frame: int
+    basis: str
+    grab_frame: int | None = None
+
+    def payload(self) -> dict:
+        return {"first_picture": self.first_picture,
+                "last_picture": self.last_picture,
+                "start_frame": self.start_frame,
+                "end_frame": self.end_frame,
+                "grab_frame": self.grab_frame,
+                "basis": self.basis}
+
 
 @dataclass(frozen=True)
 class GhostSource:
@@ -70,6 +126,7 @@ class GhostSource:
     media_url: str | None = None
     view: dict | None = None
     exactness: str | None = None
+    span: GhostSpan | None = None
 
     def payload(self) -> dict:
         """The JSON the route serves. `view` is the clip's own payload, by
@@ -81,7 +138,8 @@ class GhostSource:
                 "attempt_id": self.attempt_id,
                 "media_url": self.media_url,
                 "view": self.view,
-                "exactness": self.exactness}
+                "exactness": self.exactness,
+                "span": self.span.payload() if self.span else None}
 
 
 def unavailable(reason: str, **known: Any) -> GhostSource:
@@ -128,8 +186,113 @@ Provider = Callable[..., GhostSource | None]
 PROVIDERS: tuple[Provider, ...] = (from_marked_attempt,)
 
 
+def _attempt_ends(attempt) -> tuple[int, int, int | None] | None:
+    """(start, end, grab) from the attempt's OWN frames, or None if it has
+    none — an imported time, or any row closed with no anchor to measure from.
+
+    `anchor_frame` is the game frame the reset landed on and `rta_frames` the
+    frames from there to the closing event, which for a star IS the x-cam: the
+    moment the recorded time was taken. The TOUCH is journaled on the grab
+    event and never copied onto the row, so the only attempt that can state it
+    is one whose time was taken at the grab (`timed_at`), which is the backstop
+    case where no star dance ever ran. `None` there is unknown, not "the same
+    frame" — that reading was retired from the projector on 2026-08-02.
+    """
+    anchor = getattr(attempt, "anchor_frame", None)
+    ran = getattr(attempt, "rta_frames", None)
+    if anchor is None or ran is None or ran < 0:
+        return None
+    end = anchor + ran
+    return anchor, end, end if getattr(attempt, "timed_at", None) == "grab" else None
+
+
+def _recorded_frames(attempt) -> int | None:
+    """How long the row says the attempt ran — Usamune's number where there is
+    one, the wall-frame delta otherwise. Only the timer fallback needs it."""
+    for field in ("igt_frames", "rta_frames"):
+        value = getattr(attempt, field, None)
+        if value:
+            return int(value)
+    return None
+
+
+def _timer_pictures(view: dict, attempt) -> tuple[int, int] | None:
+    """The run's first and last picture read off the clip's own per-picture
+    timer, for a row whose frames are unavailable.
+
+    The start is the LAST drop into the near-zero band (`anchors.NEAR_ZERO_IGT`,
+    the same one the detectors call near-zero): a clip can open with the
+    previous run's final value held through the reset's reload, and a clip that
+    opens already at zero has no drop to find. The end is the first picture to
+    reach the recorded time, so the frozen tail after the star is left out.
+    """
+    timer = view.get("picture_igt") or []
+    frames = view.get("frame_map") or []
+    known = [i for i, (t, f) in enumerate(zip(timer, frames, strict=False))
+             if t is not None and f is not None]
+    if not known:
+        return None
+    drops = [slot for before, slot in zip(known, known[1:], strict=False)
+             if timer[before] > NEAR_ZERO_IGT >= timer[slot]]
+    first = drops[-1] if drops else None
+    if first is None and timer[known[0]] <= NEAR_ZERO_IGT:
+        first = known[0]
+    recorded = _recorded_frames(attempt)
+    if first is None or recorded is None:
+        return None
+    run = [i for i in known if i >= first]
+    return first, next((i for i in run if timer[i] >= recorded), run[-1])
+
+
+def span_of(view: dict, attempt=None) -> GhostSpan | None:
+    """The pictures this ghost may show: exactly the attempt, never the
+    lead-in before the reset nor the tail after the star.
+
+    Both ends are LOOKED UP in the frame map — the first picture at or after
+    the start, the last at or before the end — so two pictures sharing a game
+    frame and a picture with no stamp at all leave the answer where it was.
+    A span that lands nowhere in this clip is None rather than a guess: the
+    page has its own fallback and a wrong clamp would hide real footage.
+    """
+    frames = view.get("frame_map") or []
+    ends = _attempt_ends(attempt)
+    if ends is not None:
+        start, end, grab = ends
+        first = next((i for i, f in enumerate(frames)
+                      if f is not None and f >= start), None)
+        last = next((i for i in reversed(range(len(frames)))
+                     if frames[i] is not None and frames[i] <= end), None)
+        if first is None or last is None or last < first:
+            return None
+        return GhostSpan(first, last, start, end, ATTEMPT_FRAMES, grab)
+    pictures = _timer_pictures(view, attempt)
+    if pictures is None:
+        return None
+    first, last = pictures
+    return GhostSpan(first, last, frames[first], frames[last], PICTURE_TIMER)
+
+
+def _attempt_row(attempts, attempt_id):
+    """The attempt behind this ghost, or None when nothing can name it. A
+    missing row is not an error — the footage is still playable, unclamped."""
+    if attempts is None or attempt_id is None:
+        return None
+    try:
+        return attempts(attempt_id)
+    except LookupError:
+        return None
+
+
+def _with_span(answer: GhostSource, attempts) -> GhostSource:
+    """Attach the span BESIDE the view, whichever provider answered."""
+    if not answer.available or not answer.view:
+        return answer
+    row = _attempt_row(attempts, answer.attempt_id)
+    return replace(answer, span=span_of(answer.view, row))
+
+
 def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
-                  templates, replay,
+                  templates, replay, attempts=None,
                   providers: tuple[Provider, ...] = PROVIDERS) -> GhostSource:
     """Is there a ghost for this star or segment, and where is its footage?
 
@@ -137,6 +300,12 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
     are read-only here. The strategy falls back to the strategy-less template
     through the store's own rule, so a template recorded before he named a
     strategy still answers.
+
+    `attempts` is `attempt_id -> the attempt row` (the captured-input service's
+    own door). It is what lets the span be exact; without it a ghost still
+    resolves, and the span falls back to the clip's timer or to null. The span
+    is attached HERE rather than inside a provider so every future provider
+    gets it for free and none of them can grow a second rule for it.
     """
     if kind not in KINDS:
         raise ValueError("a ghost is for a star or a segment")
@@ -146,10 +315,10 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
     for provider in providers:
         answer = provider(template, replay=replay)
         if answer is not None:
-            return answer
+            return _with_span(answer, attempts)
     return unavailable("template_has_no_attempt", template_id=template.id)
 
 
-__all__ = ["EXACT", "KINDS", "PROVIDERS", "REASONS", "GhostSource",
-           "attempt_id_of", "from_marked_attempt", "resolve_ghost",
-           "unavailable"]
+__all__ = ["ATTEMPT_FRAMES", "EXACT", "KINDS", "PICTURE_TIMER", "PROVIDERS",
+           "REASONS", "GhostSource", "GhostSpan", "attempt_id_of",
+           "from_marked_attempt", "resolve_ghost", "span_of", "unavailable"]
