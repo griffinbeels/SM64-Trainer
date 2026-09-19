@@ -1499,6 +1499,13 @@ def _fixture_replay_routes(app, database):
     def _fixture_inactive_status():
         return None
 
+    # The recording-dot panel asks this when it opens. With compression off
+    # the real route answers the same idle list; a driven test scripts a busy
+    # one in the browser (`page.route`), as tests/test_ui_close_warning.py does.
+    @app.get("/api/replay/compression")
+    def _fixture_idle_compression():
+        return {"active": False, "jobs": []}
+
     # The real preference owner, isolated from saved media and live sessions.
     from sm64_events.replay.reviewstate import ReviewStateStore
     review_states = ReviewStateStore()
