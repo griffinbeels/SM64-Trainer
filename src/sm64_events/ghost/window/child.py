@@ -230,13 +230,18 @@ class FollowLoop:
     and the opacity unset for nineteen.
     """
 
-    def __init__(self, observe, apply, wanted, prepare=None, presentable=None):
+    def __init__(self, observe, apply, wanted, prepare=None, presentable=None,
+                 also=None):
         self._observe = observe
         self._apply = apply
         self._wanted = wanted
         self._prepare = prepare
         self._presentable = presentable or (lambda: True)
-        self._last: Placement | None = None
+        #: Whatever else `apply` puts on the window besides the placement --
+        #: the opacity he asked for. A steady ghost has an unchanged placement,
+        #: so without this a new opacity waited for the next thing to move.
+        self._also = also or (lambda: None)
+        self._last: tuple | None = None
 
     def tick(self) -> Placement | None:
         """One look. Returns what was applied, or None if nothing was."""
@@ -244,11 +249,12 @@ class FollowLoop:
                                     presentable=self._presentable())
         if self._prepare is not None and not self._prepare(placement):
             return None
-        if placement == self._last:
+        asked = (placement, self._also())
+        if asked == self._last:
             return None
         if not self._apply(placement):
             return None
-        self._last = placement
+        self._last = asked
         return placement
 
     def run(self, stop: threading.Event, period_s: float,
@@ -466,7 +472,8 @@ def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowL
 
     return FollowLoop(observe=look, apply=place,
                       wanted=lambda: state.visible, prepare=prepare,
-                      presentable=page.presentable)
+                      presentable=page.presentable,
+                      also=lambda: alpha_byte(state.opacity))
 
 
 def main(argv=None) -> int:

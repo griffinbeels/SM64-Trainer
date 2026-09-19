@@ -186,6 +186,24 @@ def test_the_loop_prepares_the_window_every_tick():
     assert len(ticks) == 2, "the second tick changed no placement but must prepare"
 
 
+def test_a_new_opacity_lands_on_a_ghost_that_has_not_moved():
+    """Found 2026-09-19 by the rig: the opacity reaches the window only inside
+    `apply`, and `apply` ran only when the PLACEMENT changed -- so dragging the
+    slider over a steady ghost did nothing until something else moved. What
+    the player asked for is part of what has to be re-applied."""
+    applied = []
+    alpha = [128]
+    loop = FollowLoop(
+        observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
+        apply=lambda placement: bool(applied.append((placement, alpha[0]))) or True,
+        wanted=lambda: True, also=lambda: alpha[0])
+    loop.tick()
+    assert loop.tick() is None, "nothing changed, so nothing is re-applied"
+    alpha[0] = 64
+    assert loop.tick() == Placement(show=True, rect=PICTURE, reason="follow")
+    assert [seen for _, seen in applied] == [128, 64]
+
+
 def test_a_decision_taken_before_the_window_was_ready_is_not_remembered():
     """The structural fault of his second try: the loop stored the placement
     and THEN tried to apply it, so a tick that found no window handle counted
