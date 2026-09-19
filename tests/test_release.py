@@ -121,15 +121,32 @@ def test_the_setup_fact_guard_can_still_fail():
         "a 'fact' in the list is generic enough to appear in unrelated prose")
 
 
-def test_the_release_runs_the_projects_gate_not_a_bare_pytest():
-    """A release must ship through the same check a merge does.
+def test_the_release_runs_the_merge_gates_own_command():
+    """A release is judged exactly as a merge is, from ONE definition.
 
-    `uv run pytest -q` is serial, takes 2h30m on this suite, and on
-    2026-09-18 failed 12 timing-sensitive tests (A/V tolerances, UI animation
-    frames) that pass in 43 seconds under tools/run_tests.py -- plus it skips
-    the loadgroup scheduler test, which has no scheduler to check serially.
-    The gate is the door; the release is not allowed its own weaker one."""
+    Two spellings of "run the tests" drift, and on 2026-09-18 both wrong ones
+    cost a night. A bare serial `pytest -q` took 2h30m and failed 12
+    timing-sensitive tests -- A/V tolerances, UI animation frames -- that pass
+    in 43 seconds through the gate. `run_tests.py` with its own default of 16
+    workers then failed a browser wait on three runs out of three, while the
+    configured lane's 4 workers passed 11010 tests on the same tree. So the
+    command comes from `.verification.toml`, which owns that number."""
+    import tomllib
+    from pathlib import Path
+    root = Path(release.__file__).resolve().parents[1]
+    config = tomllib.loads((root / ".verification.toml").read_text(encoding="utf-8"))
+    configured = next(c["command"] for c in config["checks"]
+                      if c["name"] == "integration-tests")
+    assert release.integration_command() == [
+        a.replace("{project}", str(root)) for a in configured], (
+        "the release must run the integration lane's own command")
+
+
+def test_the_release_does_not_spell_the_gate_out_itself():
+    """Red if anyone re-hardcodes a test command into the release."""
     import inspect
-    source = inspect.getsource(release.main)
-    assert 'tools/run_tests.py' in source, "the release must call the project's gate"
-    assert '"pytest", "-q"' not in source, "a bare serial pytest is not the gate"
+    source = inspect.getsource(release)
+    assert '"pytest"' not in source, "a bare pytest is not the gate"
+    assert 'tools/run_tests.py' not in source, (
+        "name the lane, not the runner -- the worker count lives in "
+        ".verification.toml and a second spelling drops it")
