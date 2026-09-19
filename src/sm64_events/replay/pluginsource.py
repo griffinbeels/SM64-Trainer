@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 from sm64_events.core.profiling import measured
 from sm64_events.inputs.frame import (MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE, InputFrame, decode,
-                                      valid_raw_stick)
+                                      decode_position, valid_raw_stick)
 from sm64_events.memory import addresses as A
 from sm64_events.memory.addresses import KSEG0_BASE
 from sm64_events.memory.base import RdramReader
@@ -97,6 +97,10 @@ class FrameStamp:
     # speed. Without it the row carries no `mario` at all: 0 degrees is a
     # real bearing and a frame nobody recorded must not claim it.
     mario_captured: bool = False
+    # Where he stood, from the same copied block. It rides with `mario` and
+    # is None wherever that is absent, or where the floats are not a place
+    # (`inputs/frame.py::decode_position`).
+    mario_pos: tuple[float, float, float] | None = None
 
     def extras(self) -> dict:
         """The ledger row's fields (JSON-able)."""
@@ -113,6 +117,9 @@ class FrameStamp:
             out["pad"] = [self.pad.stick_x, self.pad.stick_y, self.pad.buttons]
             if self.mario_captured:
                 out["mario"] = [self.pad.action, self.pad.yaw, round(self.pad.speed, 3)]
+                # Its own field: `mario` is read by position, so it never grows.
+                if self.mario_pos is not None:
+                    out["mario_pos"] = [round(axis, 2) for axis in self.mario_pos]
         elif self.pad_invalid:
             out["pad_invalid"] = True
         return out
@@ -136,23 +143,27 @@ def decode_stamp(slot, table: list, layout) -> FrameStamp | None:
            if "usamune_overall" in by_name else None)
     pad = None
     pad_invalid = False
+    mario_pos = None
     mario_captured = "mario" in by_name
     if "player1_controller" in by_name:
         block = memory.read_block(layout.player1_controller, A.CONTROLLER_SIZE)
         mario = (memory.read_block(layout.mario_struct + MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE)
                  if mario_captured else None)
         pad = decode(block, mario)
+        if mario is not None:
+            mario_pos = decode_position(mario)
         # The same refusal the live sampler applies (sampler.py): sign-
         # extended s8 axes and only real button bits. Anything else is
         # readable memory that is not a controller state, never a pad.
         if (not valid_raw_stick(pad.stick_x, pad.stick_y)
                 or pad.buttons & ~A.BUTTON_VALID_MASK
                 or pad.pressed & ~pad.buttons):
-            pad, pad_invalid = None, True
+            pad, pad_invalid, mario_pos = None, True, None
     return FrameStamp(frame=frame, igt_overall=igt, pad=pad, vi_origin=slot.vi_origin,
                       list_qpc=slot.list_qpc, present_qpc=slot.present_qpc,
                       lists_since=slot.lists_since, pad_invalid=pad_invalid,
-                      mario_captured=mario_captured and pad is not None)
+                      mario_captured=mario_captured and pad is not None,
+                      mario_pos=mario_pos)
 
 
 

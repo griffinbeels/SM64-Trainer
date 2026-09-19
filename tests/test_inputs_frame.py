@@ -4,7 +4,7 @@ import pytest
 
 from sm64_events.inputs.frame import (MARIO_BLOCK_OFF, MARIO_BLOCK_SIZE,
                                       InputFrame, button_names, dead_zone,
-                                      decode, fits_controller)
+                                      decode, decode_position, fits_controller)
 from sm64_events.memory import addresses as A
 
 
@@ -109,11 +109,12 @@ def test_button_names_reads_in_lane_order():
     assert button_names(0) == ()
 
 
-def mario_block(action=0, yaw=0, speed=0.0) -> bytes:
+def mario_block(action=0, yaw=0, speed=0.0, pos=(0.0, 0.0, 0.0)) -> bytes:
     """MARIO_BLOCK_SIZE bytes of gMarioState from the action field on."""
     block = bytearray(MARIO_BLOCK_SIZE)
     struct.pack_into(">I", block, 0, action)
     struct.pack_into(">h", block, A.MARIO_YAW_OFF - MARIO_BLOCK_OFF, yaw)
+    struct.pack_into(">fff", block, A.MARIO_POS_OFF - MARIO_BLOCK_OFF, *pos)
     struct.pack_into(">f", block, A.MARIO_FORWARD_VEL_OFF - MARIO_BLOCK_OFF,
                      speed)
     return bytes(block)
@@ -129,3 +130,36 @@ def test_marios_block_decodes_beside_the_pad():
 def test_no_mario_block_reads_as_not_captured():
     frame = decode(controller_block(raw_x=5), None)
     assert (frame.action, frame.yaw, frame.speed) == (0, 0, 0.0)
+
+
+def test_marios_position_sits_inside_the_block_already_copied():
+    """No new read: the three floats lie between action and forwardVel."""
+    assert MARIO_BLOCK_OFF <= A.MARIO_POS_OFF
+    assert A.MARIO_POS_OFF + 12 <= MARIO_BLOCK_OFF + MARIO_BLOCK_SIZE
+
+
+def test_marios_position_decodes_without_touching_the_frame():
+    here = (-1328.5, 260.0, 4664.25)
+    block = mario_block(action=A.ACT_DIVE, yaw=-1234, speed=31.25, pos=here)
+    assert decode_position(block) == here
+    # the 250 Hz frame neither carries it nor moves because of it
+    assert decode(controller_block(raw_x=5), block) == decode(
+        controller_block(raw_x=5),
+        mario_block(action=A.ACT_DIVE, yaw=-1234, speed=31.25))
+
+
+def test_the_edge_of_the_collision_world_is_still_a_position():
+    edge = (A.MARIO_POS_LIMIT, -A.MARIO_POS_LIMIT, 0.0)
+    assert decode_position(mario_block(pos=edge)) == edge
+
+
+@pytest.mark.parametrize("pos", [
+    (float("nan"), 0.0, 0.0),
+    (0.0, float("inf"), 0.0),
+    (0.0, 0.0, float("-inf")),
+    (A.MARIO_POS_LIMIT * 2, 0.0, 0.0),
+    (100.0, 200.0, -1e30),
+])
+def test_a_position_no_level_can_hold_is_refused_whole(pos):
+    """One bad axis refuses all three: two thirds of a position is not one."""
+    assert decode_position(mario_block(pos=pos)) is None

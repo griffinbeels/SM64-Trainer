@@ -64,3 +64,16 @@ def test_unverified_clip_does_not_expose_persisted_picture_states(tmp_path):
             "picture_states": [{"buttons": 0x8000}]}
     path.with_suffix(".json").write_text(json.dumps(meta))
     assert service.view(42)["picture_states"] is None
+
+
+def test_a_row_that_also_keeps_marios_position_projects_the_same_state():
+    """`mario` is read by position and must stay three long; where he stood
+    is a sibling field, so a clip with it and a clip without read alike."""
+    from sm64_events.replay.service import _picture_states
+
+    row = {"ts": 0, "frame": 100, "exact": True, "pad": [1, 2, 0x8000],
+           "mario": [7, 10, 1.5]}
+    kept = {**row, "mario_pos": [-1328.46, 260.0, 4664.25]}
+    plain = _picture_states({"state_rows": [0], "picture_ledger": [row]})
+    assert _picture_states({"state_rows": [0], "picture_ledger": [kept]}) == plain
+    assert (plain[0]["action"], plain[0]["yaw"], plain[0]["speed"]) == (7, 10, 1.5)
