@@ -5,17 +5,50 @@ Two hosts behind one small surface.
 `WebviewHost` is the shipped one. pywebview must own its process's MAIN
 thread, which is the whole reason the overlay is a child process rather than
 part of the desktop shell: browser and desktop users both get the ghost, so
-the server side owns it. The window is created HIDDEN and restyled the moment
-its handle is known, so it never appears with a frame and never appears
-before it has been placed on the game picture.
+the server side owns it. The window is created HIDDEN and is not shown until
+the follower has placed it and READ THAT PLACEMENT BACK.
 
 `NullHost` records what a window would have been told. It is what lets the
 control plane and the follower be driven end to end in a test with nothing on
 screen -- the hard limit on this feature's verification.
 
-Anything a host is told before its window exists is remembered and applied on
-the first flush, because the trainer can set an opacity a whole second before
-WebView2 has finished starting.
+**A host no longer moves, shows, hides or fades anything.** Every user32 write
+belongs to `placer.Placer` on the follower thread, because DPI awareness is
+per thread and a rectangle read on one thread and applied on another is a
+rectangle multiplied by the display scale. A host creates the window, loads
+URLs into it and hands out its handle; that is all.
+
+**`transparent=True` is never passed, and three separate things in pywebview
+6.2.1 say so.** All three are in this venv's source, not from memory:
+
+- `edgechromium.py::on_navigation_start` calls `self.form.Show()` and
+  `self.form.Activate()` whenever the window is transparent. That runs on
+  EVERY navigation, and the session navigates the ghost on every target
+  change -- it would show an unplaced window and take the keyboard off him
+  mid-attempt. On its own this rules the flag out.
+- `winforms.py::create_window` runs the transparency workaround its own
+  comment says is what makes a transparent window work (`Show()` then
+  `Hide()`) only in the branch for a window that is NOT hidden. The ghost is
+  created hidden, so it would never get it anyway.
+- `winforms.py` never sets `AllowTransparency` or `TransparencyKey`, so the
+  FORM stays opaque whatever the page does.
+
+The background is reached directly instead, by
+`use_transparent_page_background()` below. Be clear about what that can and
+cannot buy: it stops the WebView2 CONTROL painting, which reveals the form
+behind it, and that form is still opaque (`BackColor` = `PAGE_BACKGROUND`).
+Making the game show through the un-footaged parts of the window as well would
+need a colour key (`LWA_COLORKEY`) punching that colour out of the layered
+window -- deliberately not shipped, because nothing here can be seen by an
+agent and the footage he is practising on (Hazy Maze Cave) is full of
+near-black pixels that a black key would punch holes through.
+
+**So the dark sheet is solved by not being on screen, not by transparency.**
+Whole-window alpha blends every pixel of the window equally -- live 2026-09-19,
+80 % opacity read as a translucent dark sheet over his game and his browser --
+so a window with no footage on it is a window dimming his game. The child only
+ever shows it while the page says a picture is presentable; `page_status()` is
+how it asks.
 """
 import logging
 import os
@@ -30,7 +63,19 @@ log = logging.getLogger("sm64.ghost")
 #: button), but it is how the process finds its own window handle.
 OVERLAY_TITLE = "SM64 Trainer ghost overlay"
 
+#: The FALLBACK background, used for the form and for the WebView2 control
+#: until `use_transparent_page_background()` takes. Black rather than
+#: pywebview's white default on purpose: if that call is ever refused, a black
+#: rectangle over the game is bad and a white one is blinding.
+PAGE_BACKGROUND = "#000000"
+
 _DEFAULT_RECT = Rect(x=0, y=0, width=640, height=480)
+
+
+#: What the page is asked, once per page-watch tick. Written to survive a page
+#: that has not defined the function yet (an early load, or an older build of
+#: `ui/ghost/index.html`): that answers null, which reads as NOT presentable.
+STATUS_SCRIPT = "window.ghostStatus ? window.ghostStatus() : null"
 
 
 class NullHost:
@@ -40,6 +85,10 @@ class NullHost:
 
     def __init__(self):
         self.calls: list[tuple] = []
+        #: What a page would have answered. A backend with no window stands in
+        #: for a healthy one, so the control plane and the follower can be
+        #: driven end to end; a test that cares about the gate sets it.
+        self.status: dict | None = {"presentable": True}
 
     def open(self, url: str, rect: Rect) -> None:
         self.calls.append(("open", url, rect))
@@ -47,17 +96,11 @@ class NullHost:
     def load_url(self, url: str) -> None:
         self.calls.append(("load_url", url))
 
-    def set_alpha(self, alpha: int) -> None:
-        self.calls.append(("set_alpha", alpha))
+    def page_status(self) -> dict | None:
+        return self.status
 
-    def place(self, rect: Rect, owner_hwnd: int) -> None:
-        self.calls.append(("place", rect, owner_hwnd))
-
-    def show(self) -> None:
-        self.calls.append(("show",))
-
-    def hide(self) -> None:
-        self.calls.append(("hide",))
+    def use_transparent_page_background(self) -> str | None:
+        return "no_window"
 
     def hwnd(self) -> int:
         return 0
@@ -70,7 +113,7 @@ class NullHost:
 
 
 class WebviewHost:
-    """One frameless, click-through WebView2 window, glued to Project64."""
+    """One frameless WebView2 window. Placing it is somebody else's job."""
 
     name = "webview"
 
@@ -79,13 +122,9 @@ class WebviewHost:
         self._lock = threading.RLock()
         self._window = None
         self._hwnd = 0
-        self._styled = False
         self._url = "about:blank"
         self._rect: Rect | None = None
-        self._owner = 0
-        self._owned = 0
-        self._alpha: int | None = None
-        self._visible = False
+        self._background_tried = False
 
     # --- what the child tells it -------------------------------------------
 
@@ -101,29 +140,75 @@ class WebviewHost:
         if window is not None:
             window.load_url(url)
 
-    def set_alpha(self, alpha: int) -> None:
-        with self._lock:
-            self._alpha = alpha
-        self._flush()
+    def page_status(self) -> dict | None:
+        """What the page says about itself, or None if it cannot be asked.
 
-    def place(self, rect: Rect, owner_hwnd: int) -> None:
-        with self._lock:
-            self._rect = rect
-            self._owner = int(owner_hwnd or 0)
-        self._flush()
+        **This blocks, and it may block forever.** pywebview's `evaluate_js`
+        marshals to the WebView2 UI thread and waits on a semaphore with no
+        timeout (`edgechromium.py`), so a wedged page would hold whichever
+        thread asked. That is why `child.PageWatch` owns the asking on a
+        thread of its own and the follower only ever reads a cached answer:
+        a frozen follower is a ghost frozen on his screen.
+        """
+        window = self._window
+        if window is None:
+            return None
+        try:
+            answer = window.evaluate_js(STATUS_SCRIPT)
+        except Exception:  # noqa: BLE001 - a page that will not answer is not presentable
+            log.debug("the ghost page would not answer", exc_info=True)
+            return None
+        return answer if isinstance(answer, dict) else None
 
-    def show(self) -> None:
-        with self._lock:
-            self._visible = True
-        self._flush()
+    def use_transparent_page_background(self) -> str | None:
+        """Stop the WebView2 control painting its own background. Once.
 
-    def hide(self) -> None:
+        Returns what happened the first time and None afterwards, so the
+        caller logs one line rather than one per tick. See the module
+        docstring for why this is done by hand instead of with pywebview's
+        `transparent=True`, and for what it does and does not buy.
+        """
         with self._lock:
-            self._visible = False
-        self._flush()
+            if self._background_tried:
+                return None
+            self._background_tried = True
+            form = getattr(self._window, "native", None)
+            control = getattr(form, "webview", None)
+            if control is None:
+                control = getattr(getattr(form, "browser", None), "webview", None)
+            if control is None:
+                return "unreachable"
+            try:
+                from System.Drawing import Color
+                control.DefaultBackgroundColor = Color.Transparent
+            except Exception as error:  # noqa: BLE001 - the black fallback is fine
+                return f"refused: {type(error).__name__}: {error}"
+            return "transparent"
 
     def hwnd(self) -> int:
-        return self._hwnd
+        """The window handle, the moment WebView2 has one.
+
+        pywebview's native object is the first place to look; the fallback is
+        this process's own window list, because the overlay is hidden and the
+        visible-only picker in replay/window.py cannot see it.
+
+        Called from the follower thread only, like every other window query.
+        """
+        with self._lock:
+            if self._hwnd or self._window is None:
+                return self._hwnd
+            handle = getattr(self._window, "native", None)
+            for attribute in ("Handle", "handle", "hwnd"):
+                raw = getattr(handle, attribute, None)
+                value = raw.ToInt64() if hasattr(raw, "ToInt64") else raw
+                if isinstance(value, int) and value:
+                    self._hwnd = value
+                    break
+            else:
+                self._hwnd = native.find_overlay_window(os.getpid(), self._title) or 0
+            if self._hwnd:
+                log.info("ghost overlay window handle %#x", self._hwnd)
+            return self._hwnd
 
     # --- the window itself --------------------------------------------------
 
@@ -135,12 +220,13 @@ class WebviewHost:
         self._window = webview.create_window(
             self._title, url=self._url,
             x=rect.x, y=rect.y, width=rect.width, height=rect.height,
-            # hidden: nothing appears until the follower has decided where.
+            # hidden: nothing appears until the follower has decided where AND
+            # proved the window landed there.
             # focus=False + frameless: no chrome, no keyboard.
             hidden=True, frameless=True, focus=False, resizable=False,
             easy_drag=False, shadow=False, on_top=False, text_select=False,
             zoomable=False, draggable=False, confirm_close=False,
-            background_color="#000000")
+            background_color=PAGE_BACKGROUND)
         threading.Thread(target=self._close_when_stopped, args=(stop,),
                          name="ghost-window-stop", daemon=True).start()
         webview.start(private_mode=True)
@@ -157,52 +243,6 @@ class WebviewHost:
     def _close_when_stopped(self, stop: threading.Event) -> None:
         stop.wait()
         self.close()
-
-    def _resolve_hwnd(self) -> int:
-        """The window handle, the moment WebView2 has one.
-
-        pywebview's native object is the first place to look; the fallback is
-        this process's own window list, because the overlay is hidden and the
-        visible-only picker in replay/window.py cannot see it.
-        """
-        if self._hwnd:
-            return self._hwnd
-        handle = getattr(self._window, "native", None)
-        for attribute in ("Handle", "handle", "hwnd"):
-            raw = getattr(handle, attribute, None)
-            value = raw.ToInt64() if hasattr(raw, "ToInt64") else raw
-            if isinstance(value, int) and value:
-                self._hwnd = value
-                break
-        else:
-            self._hwnd = native.find_overlay_window(os.getpid(), self._title) or 0
-        if self._hwnd:
-            log.info("ghost overlay window handle %#x", self._hwnd)
-        return self._hwnd
-
-    def _flush(self) -> None:
-        """Apply everything the host has been told, in the one right order."""
-        with self._lock:
-            hwnd = self._resolve_hwnd()
-            if not hwnd:
-                return
-            if not self._styled:
-                applied = native.apply_overlay_styles(hwnd)
-                readback = native.get_ex_style(hwnd)
-                if readback != applied:
-                    log.warning("ghost overlay styles: asked %#x, window kept %#x",
-                                applied, readback)
-                self._styled = True
-            if self._alpha is not None:
-                native.set_alpha(hwnd, self._alpha)
-            if self._rect is not None:
-                if self._owner and self._owner != self._owned:
-                    self._owned = self._owner if native.set_owner(hwnd, self._owner) else 0
-                native.place(hwnd, self._rect, insert_after=self._owner or None)
-            if self._visible:
-                native.show_no_activate(hwnd)
-            else:
-                native.hide(hwnd)
 
 
 #: Backend name -> host. `none` is how the control plane and the follower are

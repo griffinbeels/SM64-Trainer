@@ -10,6 +10,7 @@ constants.
 """
 import ctypes
 import ctypes.wintypes as wt
+import os
 import sys
 
 import pytest
@@ -106,16 +107,46 @@ def test_whole_window_opacity_reaches_the_window(hidden_window):
     assert native.get_alpha(hwnd) == 255
 
 
-def test_the_overlay_can_be_owned_by_another_window(hidden_window):
-    """Microsoft: an owned window "is always above its owner in the z-order"
-    and "is hidden when its owner is minimized". Proved here against a second
-    window of our own; that it also holds across the process boundary to
-    Project64 is a human check."""
-    owner = hidden_window()
+def test_the_overlay_never_takes_an_owner(hidden_window):
+    """Ownership bought "always above its owner" and "hidden when its owner is
+    minimized" for free, and it is what this package did until 2026-09-19.
+    Making Project64 -- a DPI-unaware window in another process -- the owner of
+    ours is the prime suspect for the emulator's window coming back with
+    wallpaper showing through its status strip, so there is no longer any code
+    that can set one. The overlay stays above the game by z-order alone."""
     overlay = hidden_window()
     assert native.get_owner(overlay) == 0
-    assert native.set_owner(overlay, owner) is True
-    assert native.get_owner(overlay) == owner
+    assert not hasattr(native, "set_owner"), (
+        "nothing may make Project64 the owner of our window again")
+
+
+def test_the_z_order_target_is_the_window_above_the_game_not_the_game(hidden_window):
+    """SetWindowPos inserts the moved window BELOW the handle it is given, so
+    handing it Project64 puts the ghost UNDER the emulator -- which is what
+    the first try did. `window_above` is the handle that lands it on top."""
+    game = hidden_window()
+    above = native.window_above(game)
+    assert above != game
+    assert isinstance(above, int)
+    # A window with nothing above it answers 0, which SetWindowPos reads as
+    # HWND_TOP -- still above the game, never below it.
+    assert above >= 0
+
+
+def test_a_window_of_ours_that_nothing_is_looking_at_is_not_the_foreground_app(
+        hidden_window):
+    """These windows are never shown, so they can never be the foreground --
+    which is exactly the state that must hide the ghost."""
+    hwnd = hidden_window()
+    assert native.is_foreground_app(hwnd) is False
+    assert native.is_foreground_app(0) is False
+    assert native.window_pid(hwnd) == os.getpid()
+
+
+def test_a_window_reads_as_away_when_its_app_is_not_in_front(hidden_window):
+    hwnd = hidden_window()
+    native.place(hwnd, Rect(x=10, y=10, width=640, height=480), insert_after=None)
+    assert native.read_game_window(hwnd).foreground is False
 
 
 def test_placing_the_overlay_moves_it_without_showing_it(hidden_window):
@@ -149,6 +180,35 @@ def test_a_destroyed_window_reads_as_gone(hidden_window):
 
 def test_reading_handle_zero_is_gone_not_an_exception():
     assert native.read_game_window(0).found is False
+
+
+def test_a_thread_can_pin_its_own_coordinate_space_and_say_which_one():
+    """The whole fix rests on this: DPI awareness is per THREAD, and a thread
+    can set its own whatever the process was fixed at. The readback is the
+    part that matters -- "the call succeeded" and "this thread is per-monitor
+    aware" are different facts."""
+    before = native.thread_dpi_awareness()
+    try:
+        assert native.set_thread_dpi_context(
+            style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) is True
+        assert native.thread_dpi_awareness() == "per_monitor"
+        assert native.set_thread_dpi_context(
+            style.DPI_AWARENESS_CONTEXT_UNAWARE) is True
+        assert native.thread_dpi_awareness() == "unaware"
+    finally:
+        native.set_thread_dpi_context(
+            {"unaware": style.DPI_AWARENESS_CONTEXT_UNAWARE,
+             "system": style.DPI_AWARENESS_CONTEXT_SYSTEM_AWARE,
+             "per_monitor": style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+             }.get(before, style.DPI_AWARENESS_CONTEXT_UNAWARE))
+
+
+def test_the_process_awareness_is_reported_by_name():
+    """Read rather than assumed: the overlay logs what the process ACTUALLY
+    is, because `SetProcessDpiAwarenessContext` is refused whenever something
+    already fixed it."""
+    assert native.process_dpi_awareness() in {
+        "unaware", "system", "per_monitor", "unaware_gdi_scaled", "unknown"}
 
 
 def test_finding_our_own_window_ignores_whether_it_is_visible():
