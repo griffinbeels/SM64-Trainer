@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RIG boot</title>
+<!--
+  The rig's counting page. It exists to answer one question a screenshot
+  cannot: is this page's compositor actually running inside the window it was
+  put in?
+
+  It counts `requestAnimationFrame` (one per painted frame) and
+  `requestVideoFrameCallback` (one per video picture Chromium actually
+  presented) and writes both into `document.title` -- read from outside with
+  GetWindowText, never with `evaluate_js`, because `evaluate_js` is one of the
+  things under suspicion.
+
+  The report goes out on a `setInterval`, NOT on a frame callback. A reporter
+  driven by the thing being measured cannot tell "the frames stopped" from
+  "the page died", and that difference is the whole experiment.
+
+  `window.ghostStatus()` is the shape `ui/ghost/index.html` exposes, so the
+  real overlay child can be pointed at this page and driven through its own
+  visibility gate. `?present=always` opens that gate on purpose, which is how
+  the placement path gets exercised without any footage logic in the way.
+
+  Settings arrive in the FRAGMENT, and fall back to the query string. A
+  `file://` URL loses everything after its `?` on the way through .NET's `Uri`
+  (measured: the page arrived as `...html%3Fvideo=...` and Chromium answered
+  with an error page), so a rig opened from disk has to carry its settings
+  past that. An http:// URL keeps either.
+
+  Settings: video=<url>  present=always|onframe|never  post=0|1
+-->
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+  video { display: block; width: 100%; height: 100%; object-fit: fill; }
+</style>
+</head>
+<body>
+<video id="clip" muted loop playsinline autoplay></video>
+<script>
+(function () {
+  const params = new URLSearchParams(
+    location.hash.replace(/^#/, "") || location.search.replace(/^\?/, ""));
+  const present = params.get("present") || "onframe";
+  const post = params.get("post") === "1";
+  const source = params.get("video");
+  const video = document.getElementById("clip");
+
+  let raf = 0;
+  let rvfc = 0;
+  let firstFrameAt = null;
+  let trouble = "";
+
+  if (source) video.src = source;
+
+  function onFrame() { raf += 1; requestAnimationFrame(onFrame); }
+  requestAnimationFrame(onFrame);
+
+  const hasVideoFrames = typeof video.requestVideoFrameCallback === "function";
+  if (hasVideoFrames) {
+    const onVideoFrame = () => {
+      rvfc += 1;
+      if (firstFrameAt === null) firstFrameAt = Math.round(performance.now());
+      video.requestVideoFrameCallback(onVideoFrame);
+    };
+    video.requestVideoFrameCallback(onVideoFrame);
+  }
+
+  video.addEventListener("error", () => {
+    trouble = "media_error_" + (video.error ? video.error.code : "unknown");
+  });
+  const playing = video.play();
+  if (playing && typeof playing.catch === "function")
+    playing.catch((error) => { trouble = "play_rejected_" + error.name; });
+
+  function presentable() {
+    if (present === "always") return true;
+    if (present === "never") return false;
+    return rvfc > 0;
+  }
+
+  window.ghostStatus = () => ({
+    presentable: presentable(),
+    state: "ready",
+    shown: rvfc > 0,
+    raf: raf,
+    rvfc: rvfc,
+    hasVideoFrames: hasVideoFrames,
+    visibility: document.visibilityState,
+    hidden: document.hidden,
+    t: Math.round(performance.now()),
+    firstFrameAt: firstFrameAt,
+    videoTime: Number((video.currentTime || 0).toFixed(3)),
+    readyState: video.readyState,
+    paused: video.paused,
+    error: trouble || "none",
+  });
+
+  function line() {
+    const s = window.ghostStatus();
+    return "RIG t=" + s.t + " raf=" + s.raf + " rvfc=" + s.rvfc
+      + " vis=" + s.visibility + " vt=" + s.videoTime + " rs=" + s.readyState
+      + " paused=" + (s.paused ? 1 : 0) + " err=" + s.error;
+  }
+
+  function report() {
+    const text = line();
+    document.title = text;
+    // pywebview 6.2.1 never copies `document.title` onto the host window, so
+    // the same payload goes out over WebView2's own page-to-host channel and
+    // the host writes it to the HWND title. Shaped as pywebview's console
+    // bridge expects, so its own handler prints it instead of raising.
+    if (post && window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage(["console", JSON.stringify(text), 0]);
+  }
+
+  report();
+  setInterval(report, 250);
+})();
+</script>
+</body>
+</html>
