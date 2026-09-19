@@ -11,11 +11,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sm64_events.inputs.service import InputsService
-from sm64_events.server.ghost_api import create_ghost_router
+from sm64_events.server.ghost_api import create_ghost_router, journal_door
 from sm64_events.storage.db import Database
 
 from tests.ghost_fixture import (
-    FakeAttempt, FakeReplay, a_document, a_real_clip_view, a_view)
+    FakeReplay, a_document, a_real_clip_attempt, a_real_clip_journal,
+    a_real_clip_view, a_view)
 
 
 @pytest.fixture
@@ -64,17 +65,30 @@ def test_a_ready_ghost_answers_with_its_footage_and_view(db):
 
 
 def test_the_answer_carries_the_span_the_ghost_is_clamped_to(db):
-    """His ruling, over his own clip: the ghost is exactly the attempt, so the
-    45 pictures of the previous run and the fifteen after the star are out."""
+    """His ruling, over his own clip: the ghost is exactly the attempt and it
+    ends on the TOUCH, so the 45 pictures of the previous run and the 61 after
+    the grab are out. Every number here is the journal's own."""
     mark(db, origin="attempt:9")
-    replay = FakeReplay(saved=[9], views={9: a_real_clip_view(9)})
-    row = FakeAttempt(id=9, anchor_frame=308677, rta_frames=584,
-                      igt_frames=584, timed_at="xcam")
-    body = ask(client(a_service(db, row), replay)).json()
-    assert body["span"] == {"first_picture": 45, "last_picture": 626,
-                            "start_frame": 308677, "end_frame": 309261,
-                            "grab_frame": None, "basis": "attempt_frames"}
+    replay = FakeReplay(saved=[9], views={9: a_real_clip_view(9)},
+                        journal=a_real_clip_journal())
+    body = ask(client(a_service(db, a_real_clip_attempt(9)), replay)).json()
+    assert body["span"] == {"first_picture": 45, "last_picture": 580,
+                            "start_frame": 308679, "end_frame": 309215,
+                            "timed_frame": 309219, "grab_frame": 309215,
+                            "basis": "attempt_frames+grab_event"}
     assert len(body["view"]["frame_map"]) == 642
+
+
+def test_the_journal_door_is_the_replay_services_own_database(db):
+    """One read-only slice of the journal, reached through the object already
+    resolving this attempt against the same database. A boot with no database
+    yet has no door, and the span falls back rather than failing."""
+    events = a_real_clip_journal()
+    replay = FakeReplay(saved=[9], journal=events)
+    assert journal_door(replay) is events
+    assert journal_door(FakeReplay()) is None
+    assert journal_door(None) is None
+    assert callable(Database.events_between)
 
 
 def test_a_ghost_whose_run_left_the_history_is_served_unclamped(db):

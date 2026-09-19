@@ -1,6 +1,31 @@
 {
- "note": "The numeric arrays of one real saved clip of star 6-0 (his first live try of the overlay, 2026-09-19). Footage, file paths and every other key are left out; only the two per-picture arrays the span is found from are kept, verbatim.",
+ "note": "The numeric arrays of one real saved clip -- his Swimming Beast in the Cavern run, the star he first tried the overlay on, 2026-09-19. Footage, file paths and every other key of the view are left out; only the two per-picture arrays the span is found from are kept, verbatim.",
+ "attempt_note": "The attempt row and its closing grab, read read-only (sqlite3 backup of data/tracker.db in the ghost-overlay worktree, 2026-09-19) because the touch frame is journaled on the grab event and never copied onto the row. Attempt 9 is the run this clip is of; event 16 is the grab that closed it.",
  "pictures": 642,
+ "attempt": {
+  "id": 9,
+  "course_id": 6,
+  "star_id": 0,
+  "segment_id": null,
+  "anchor_frame": 308679,
+  "rta_frames": 540,
+  "igt_frames": 543,
+  "timed_at": "xcam",
+  "started_utc": "2026-09-19T06:30:24.666969Z",
+  "ended_utc": "2026-09-19T06:30:42.709358Z"
+ },
+ "grab_event": {
+  "id": 16,
+  "type": "star_collected",
+  "frame": 309219,
+  "payload": {
+   "course_id": 6,
+   "star_id": 0,
+   "grab_frame": 309215,
+   "igt_frames": 543,
+   "igt_timed_at": "xcam"
+  }
+ },
  "frame_map": [
   308601,
   308631,

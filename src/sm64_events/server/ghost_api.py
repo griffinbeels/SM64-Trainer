@@ -18,6 +18,21 @@ from sm64_events.ghost.session import template_store
 from sm64_events.ghost.source import resolve_ghost
 
 
+def journal_door(replay):
+    """`(started_utc, ended_utc) -> the journal rows in that span`, or None.
+
+    The narrowest read-only read of the journal there is (`storage/db.py::
+    events_between`, one wall-clock slice, oldest first). The ghost needs it
+    for ONE number — the frame the star was touched on, which lives on the grab
+    event's payload and is never copied onto the attempt row. It is reached
+    through the replay service because that is the object already resolving
+    this attempt against the same database; a boot that has not attached one
+    yet simply has no door, and the span falls back to the landing.
+    """
+    db = getattr(getattr(replay, "tracker", None), "db", None)
+    return getattr(db, "events_between", None)
+
+
 def _http(error: Exception) -> HTTPException:
     if isinstance(error, LookupError):
         return HTTPException(404, str(error))
@@ -69,7 +84,7 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
                                  templates=template_store(service),
                                  replay=replay,
                                  attempts=getattr(service, "attempt", None),
-                                 ).payload()
+                                 events=journal_door(replay)).payload()
         except HTTPException:
             raise
         except Exception as error:
