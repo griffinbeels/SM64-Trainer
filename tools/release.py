@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -136,7 +137,14 @@ def _verify_tool() -> Path | None:
     return None
 
 
-def _verify_or_run_gate() -> None:
+def _verify_or_run_gate(attempts: int = 6, pause: float = 30.0) -> None:
+    """Verified, by receipt if one is current and by running the lane if not.
+
+    `unavailable` is not `failed`. The harness takes its verification lock
+    non-blocking, so a background checker holding it for a second reads as
+    "unavailable" -- and treating that as a red build is how a release dies
+    for no reason. Retry it; only a real `failed` stops the release.
+    """
     tool = _verify_tool()
     if tool is None:
         _run(integration_command())
@@ -145,13 +153,25 @@ def _verify_or_run_gate() -> None:
     # verification must be READ here, not raised as a CalledProcessError whose
     # message says nothing about which test failed.
     command = [sys.executable, str(tool), "full", "--project", str(REPO), "--json"]
-    print("+", " ".join(command))
-    result = subprocess.run(command, cwd=REPO, capture_output=True, text=True, check=False)
-    receipt = json.loads(result.stdout or "{}") if result.stdout else {}
-    if receipt.get("status") != "passed":
-        sys.exit(f"refusing: verification is {receipt.get('status', 'unavailable')}; "
-                 f"{receipt.get('message') or 'run it and read the failures'}")
-    print(f"verification: passed ({'reused' if receipt.get('reused') else 'fresh'})")
+    for attempt in range(1, attempts + 1):
+        print("+", " ".join(command))
+        result = subprocess.run(command, cwd=REPO, capture_output=True,
+                                text=True, check=False)
+        receipt = json.loads(result.stdout) if result.stdout.strip() else {}
+        status = receipt.get("status", "unavailable")
+        if status == "passed":
+            print(f"verification: passed ({'reused' if receipt.get('reused') else 'fresh'})")
+            return
+        if status == "failed":
+            failed = [c["name"] for c in receipt.get("checks", [])
+                      if c.get("status") != "passed"]
+            sys.exit(f"refusing: verification failed ({', '.join(failed) or 'unknown check'}); "
+                     "read the receipt and fix the tests")
+        print(f"verification unavailable ({receipt.get('message') or result.stderr.strip()[:120]}); "
+              f"attempt {attempt}/{attempts}")
+        if attempt < attempts:
+            time.sleep(pause)
+    sys.exit("refusing: verification never became available")
 
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
