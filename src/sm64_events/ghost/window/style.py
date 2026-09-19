@@ -11,9 +11,16 @@ proves on this machine:
 
 TOPMOST is deliberately absent. A topmost window floats over every other app
 after an alt-tab; the overlay instead sits directly above Project64 by being
-inserted above it in the z-order (and, where Windows allows it, by being
-OWNED by it: Microsoft documents an owned window as "always above its owner"
-and "hidden when its owner is minimized").
+inserted above it in the z-order.
+
+OWNERSHIP IS ALSO ABSENT, and that is deliberate as of 2026-09-19. Making
+Project64 -- a DPI-unaware window in another process -- the OWNER of our
+window bought "always above its owner" and "hidden when its owner is
+minimized" for free, and it is the prime suspect for the emulator's window
+coming back with desktop wallpaper showing through its status strip after his
+first try. A practice tool may not risk the emulator: nothing in this package
+may name Project64 as the window being MODIFIED, which
+`tests/test_ghost_window_guard.py` enforces by reading the source.
 """
 
 # --- window styles ---------------------------------------------------------
@@ -74,12 +81,27 @@ LWA_ALPHA = 0x00000002
 
 GWL_STYLE = -16
 GWL_EXSTYLE = -20
-GWLP_HWNDPARENT = -8
+
+# --- GetWindow ---------------------------------------------------------------
+#: The window immediately ABOVE this one in the z-order. SetWindowPos inserts
+#: the moved window AFTER (below) the handle it is given, so THIS is what the
+#: overlay is inserted after to end up directly above Project64. Handing it
+#: Project64's own handle -- which is what the first try did -- puts the ghost
+#: underneath the emulator instead.
+GW_HWNDPREV = 3
+#: Read-only, and only ever asked about our OWN window, to prove it has no
+#: owner. Nothing here sets one.
 GW_OWNER = 4
 
 #: SetThreadDpiAwarenessContext / SetProcessDpiAwarenessContext values.
 DPI_AWARENESS_CONTEXT_UNAWARE = -1
+DPI_AWARENESS_CONTEXT_SYSTEM_AWARE = -2
+DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE = -3
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+
+#: GetAwarenessFromDpiAwarenessContext / GetProcessDpiAwareness, in one
+#: spelling so a log line reads the same whichever asked.
+AWARENESS_NAMES = {0: "unaware", 1: "system", 2: "per_monitor", 3: "unaware_gdi_scaled"}
 
 
 def overlay_ex_style(base: int = 0) -> int:

@@ -1,19 +1,24 @@
-"""Where the overlay goes, and when it must not be on screen at all.
+"""Where the overlay goes, when it must not be on screen, and how we know.
 
 The rectangle is the game PICTURE (Project64's client area in screen
 coordinates), never its frame -- a ghost aligned to the title bar is a ghost
-offset by the title bar. `scale` exists for one reason: PJ64 1.6 is
-DPI-unaware, so a reader and a placer that disagree about DPI awareness see
-the same window at two sizes.
+offset by the title bar.
+
+There is no DPI factor in here any more. The follower reads and places in one
+DPI context, so what it read is what it asks for; `rects_agree` is how it
+finds out whether Windows agreed, and `correction_for` is its one bounded
+retry before it hides rather than leaves an unproved rectangle on screen.
 """
 import pytest
 
 from sm64_events.ghost.window.geometry import (
     MIN_PICTURE_SIDE,
+    PLACE_TOLERANCE_PX,
     GameWindow,
     Rect,
-    dpi_scale,
+    correction_for,
     follow_decision,
+    rects_agree,
     scale_rect,
 )
 
@@ -26,6 +31,14 @@ def test_the_overlay_takes_the_game_picture_rectangle():
     assert placement.show is True
     assert placement.rect == PICTURE
     assert placement.reason == "follow"
+
+
+def test_what_was_read_is_what_is_asked_for():
+    """The 2026-09-19 fix, as an assertion: no factor, no correction, no
+    guess. A rectangle read in one DPI context and placed in that same context
+    needs nothing done to it, and the old `GetDpiForWindow` ratio multiplied
+    it by 1.5 at his display scaling whether or not anything was wrong."""
+    assert follow_decision(PLAYING).rect is PICTURE
 
 
 def test_no_project64_means_no_overlay():
@@ -41,6 +54,20 @@ def test_a_minimized_emulator_takes_the_ghost_with_it():
         GameWindow(found=True, minimized=True, client=PICTURE))
     assert placement.show is False
     assert placement.reason == "minimized"
+
+
+def test_the_ghost_leaves_when_he_is_using_another_app():
+    """He reported the overlay "covering other apps". An overlay glued to a
+    window nobody is looking at is an overlay over whatever they ARE looking
+    at, so the emulator not being the foreground app hides it -- and it comes
+    back the moment he clicks into the game again."""
+    away = GameWindow(found=True, minimized=False, client=PICTURE,
+                      foreground=False)
+    placement = follow_decision(away)
+    assert placement.show is False
+    assert placement.rect is None
+    assert placement.reason == "not_foreground"
+    assert follow_decision(PLAYING).show is True
 
 
 @pytest.mark.parametrize("width,height", [
@@ -68,11 +95,41 @@ def test_a_missing_client_rect_is_not_a_crash():
     assert placement.reason == "too_small"
 
 
-def test_at_150_percent_scaling_the_rectangle_grows_by_the_scale_factor():
-    """Live 2026-07-23: PJ64's client is 1600x1224 logical / 2400x1836
-    physical at 150 %. A logical read placed physically needs this."""
-    placement = follow_decision(PLAYING, scale=1.5)
-    assert placement.rect == Rect(x=180, y=120, width=2400, height=1836)
+# --- proving a placement ----------------------------------------------------
+
+def test_a_window_that_landed_where_it_was_told_agrees():
+    assert rects_agree(PICTURE, PICTURE) is True
+
+
+def test_a_rounding_edge_still_agrees_but_a_scale_never_does():
+    nudged = Rect(x=PICTURE.x + PLACE_TOLERANCE_PX, y=PICTURE.y,
+                  width=PICTURE.width, height=PICTURE.height)
+    assert rects_agree(PICTURE, nudged) is True
+    assert rects_agree(PICTURE, scale_rect(PICTURE, 1.5)) is False
+
+
+@pytest.mark.parametrize("got", [None, Rect(x=120, y=80, width=1600, height=1500)])
+def test_a_window_somewhere_else_does_not_agree(got):
+    assert rects_agree(PICTURE, got) is False
+
+
+def test_a_uniformly_scaled_window_is_corrected_by_asking_for_less():
+    """His symptom, as arithmetic: we asked for the picture and Windows made
+    it half again as big. Asking for picture/1.5 lands it on the picture."""
+    got = scale_rect(PICTURE, 1.5)
+    corrected = correction_for(PICTURE, got)
+    assert corrected is not None
+    assert rects_agree(PICTURE, scale_rect(corrected, 1.5))
+
+
+@pytest.mark.parametrize("got,why", [
+    (Rect(x=120, y=80, width=2400, height=1224), "only one side is wrong"),
+    (Rect(x=120, y=80, width=16000, height=12240), "outside the sane band"),
+    (Rect(x=0, y=0, width=0, height=0), "nothing to divide by"),
+    (PICTURE, "the size is right; the position is somebody else's problem"),
+])
+def test_anything_that_is_not_a_clean_scale_is_not_corrected(got, why):
+    assert correction_for(PICTURE, got) is None, why
 
 
 def test_scaling_keeps_the_far_edges_on_the_same_pixel():
@@ -85,13 +142,3 @@ def test_scaling_keeps_the_far_edges_on_the_same_pixel():
 
 def test_scale_of_one_changes_nothing():
     assert scale_rect(PICTURE, 1.0) == PICTURE
-
-
-@pytest.mark.parametrize("read_dpi,place_dpi,expected", [
-    (96, 96, 1.0), (96, 144, 1.5), (144, 96, pytest.approx(2 / 3)),
-    (96, 192, 2.0), (0, 96, 1.0), (96, 0, 1.0),
-])
-def test_the_scale_between_two_dpi_readings(read_dpi, place_dpi, expected):
-    """A nonsense DPI (a query that failed and returned 0) must leave the
-    rectangle alone rather than collapse it to a point."""
-    assert dpi_scale(read_dpi, place_dpi) == expected

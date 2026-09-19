@@ -51,6 +51,8 @@ class FakeController:
         self.url = url
         self.opacity = opacity
         self.visible = bool(visible)
+        #: where the child's own stream is sent; see the diagnostic-log test
+        self.on_event = _kw.get("on_event")
         self.alive = False
         self.starts = 0
         self.stops = 0
@@ -593,3 +595,56 @@ def test_the_watcher_survives_a_failing_cycle(tmp_path):
         return running
 
     assert asyncio.run(run()) is True
+
+
+def test_a_first_ever_switch_on_is_see_through(tmp_path):
+    """His first try was fully solid, so the ghost was indistinguishable from
+    the emulator having vanished behind a black rectangle.
+
+    The exact number is a shipped preference and his to move, so nothing here
+    pins it (domain contract 7); what is pinned is that a player who has never
+    chosen one can still see the game through the ghost.
+    """
+    assert 0.15 <= DEFAULT_OPACITY <= 0.85, (
+        "a first switch-on must be see-through, not solid and not invisible")
+    session, controllers, _tracker, store = a_session(tmp_path, db=None)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    assert session.payload()["opacity"] == DEFAULT_OPACITY
+    assert controllers[0].opacity == DEFAULT_OPACITY
+
+
+def test_the_child_is_given_somewhere_to_report(tmp_path, monkeypatch):
+    """Whatever the overlay child prints goes into the same file it writes its
+    own rectangles to. That stream is all that survives when the child dies
+    before it can write anything itself -- a WebView2 that will not start."""
+    from sm64_events.ghost.window import diag
+
+    log = tmp_path / "data" / "ghost_window.jsonl"
+    monkeypatch.setenv(diag.PATH_ENV, str(log))
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+
+    forward = controllers[0].on_event
+    assert callable(forward), "the controller was not told where to report"
+    forward({"event": "error", "detail": "WebView2Error: runtime not found"})
+
+    written = diag.read(log)
+    assert any(entry["event"] == "window_starting" for entry in written)
+    said = next(entry for entry in written if entry["event"] == "child_said")
+    assert said["level"] == "error"
+    assert said["said"]["detail"] == "WebView2Error: runtime not found"
+
+
+def test_the_diagnostic_log_never_stops_the_window(tmp_path, monkeypatch):
+    from sm64_events.ghost.window import diag
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("the disk is gone")
+
+    monkeypatch.setattr(diag, "record", explode)
+    session, controllers, _tracker, store = a_session(tmp_path)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    assert controllers[0].is_running() is True

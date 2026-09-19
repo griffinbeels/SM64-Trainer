@@ -5,17 +5,45 @@ Two hosts behind one small surface.
 `WebviewHost` is the shipped one. pywebview must own its process's MAIN
 thread, which is the whole reason the overlay is a child process rather than
 part of the desktop shell: browser and desktop users both get the ghost, so
-the server side owns it. The window is created HIDDEN and restyled the moment
-its handle is known, so it never appears with a frame and never appears
-before it has been placed on the game picture.
+the server side owns it. The window is created HIDDEN and is not shown until
+the follower has placed it and READ THAT PLACEMENT BACK.
 
 `NullHost` records what a window would have been told. It is what lets the
 control plane and the follower be driven end to end in a test with nothing on
 screen -- the hard limit on this feature's verification.
 
-Anything a host is told before its window exists is remembered and applied on
-the first flush, because the trainer can set an opacity a whole second before
-WebView2 has finished starting.
+**A host no longer moves, shows, hides or fades anything.** Every user32 write
+belongs to `placer.Placer` on the follower thread, because DPI awareness is
+per thread and a rectangle read on one thread and applied on another is a
+rectangle multiplied by the display scale. A host creates the window, loads
+URLs into it and hands out its handle; that is all.
+
+**Why the page background stays black, and `transparent=True` is not used.**
+The follower track asked for a transparent page so the game would show
+untouched wherever there is no footage. Read against pywebview 6.2.1 in this
+venv, that flag cannot deliver it here, for two reasons that are both in the
+source:
+
+- `winforms.py` never sets `AllowTransparency` or `TransparencyKey` on the
+  form. `transparent=True` only sets the WebView2 control's
+  `DefaultBackgroundColor` to `Color.Transparent` (`edgechromium.py`), so the
+  page becomes see-through to the FORM behind it -- and that form is an
+  ordinary opaque window whose `BackColor` is left at the WinForms default in
+  exactly that branch. A transparent page would trade a black rectangle for a
+  light-grey one.
+- `create_window` runs its transparency workaround (`Show()` then `Hide()`,
+  which its own comment says is what makes a transparent window work) only in
+  the branch for a window that is NOT hidden. The ghost must be created
+  hidden, so it takes the other branch and never gets it.
+
+Whole-window alpha (`WS_EX_LAYERED` + `SetLayeredWindowAttributes`) blends
+every pixel of the window by the same amount, so "untouched outside the
+footage" is not something an alpha value can express either way. The one
+technique that would express it is a colour key (`LWA_COLORKEY`), punching the
+background colour out completely while the video keeps its alpha. That is a
+real option and it is deliberately not taken yet: nothing in this package can
+be seen by an agent, and a key colour appearing inside the footage would punch
+holes in the ghost. It wants his eyes before it ships.
 """
 import logging
 import os
@@ -29,6 +57,10 @@ log = logging.getLogger("sm64.ghost")
 #: The window's title. Nothing shows it (there is no frame and no taskbar
 #: button), but it is how the process finds its own window handle.
 OVERLAY_TITLE = "SM64 Trainer ghost overlay"
+
+#: What the page paints where it has nothing to show. See the module docstring
+#: for why this is not transparent.
+PAGE_BACKGROUND = "#000000"
 
 _DEFAULT_RECT = Rect(x=0, y=0, width=640, height=480)
 
@@ -47,18 +79,6 @@ class NullHost:
     def load_url(self, url: str) -> None:
         self.calls.append(("load_url", url))
 
-    def set_alpha(self, alpha: int) -> None:
-        self.calls.append(("set_alpha", alpha))
-
-    def place(self, rect: Rect, owner_hwnd: int) -> None:
-        self.calls.append(("place", rect, owner_hwnd))
-
-    def show(self) -> None:
-        self.calls.append(("show",))
-
-    def hide(self) -> None:
-        self.calls.append(("hide",))
-
     def hwnd(self) -> int:
         return 0
 
@@ -70,7 +90,7 @@ class NullHost:
 
 
 class WebviewHost:
-    """One frameless, click-through WebView2 window, glued to Project64."""
+    """One frameless WebView2 window. Placing it is somebody else's job."""
 
     name = "webview"
 
@@ -79,13 +99,8 @@ class WebviewHost:
         self._lock = threading.RLock()
         self._window = None
         self._hwnd = 0
-        self._styled = False
         self._url = "about:blank"
         self._rect: Rect | None = None
-        self._owner = 0
-        self._owned = 0
-        self._alpha: int | None = None
-        self._visible = False
 
     # --- what the child tells it -------------------------------------------
 
@@ -101,29 +116,30 @@ class WebviewHost:
         if window is not None:
             window.load_url(url)
 
-    def set_alpha(self, alpha: int) -> None:
-        with self._lock:
-            self._alpha = alpha
-        self._flush()
-
-    def place(self, rect: Rect, owner_hwnd: int) -> None:
-        with self._lock:
-            self._rect = rect
-            self._owner = int(owner_hwnd or 0)
-        self._flush()
-
-    def show(self) -> None:
-        with self._lock:
-            self._visible = True
-        self._flush()
-
-    def hide(self) -> None:
-        with self._lock:
-            self._visible = False
-        self._flush()
-
     def hwnd(self) -> int:
-        return self._hwnd
+        """The window handle, the moment WebView2 has one.
+
+        pywebview's native object is the first place to look; the fallback is
+        this process's own window list, because the overlay is hidden and the
+        visible-only picker in replay/window.py cannot see it.
+
+        Called from the follower thread only, like every other window query.
+        """
+        with self._lock:
+            if self._hwnd or self._window is None:
+                return self._hwnd
+            handle = getattr(self._window, "native", None)
+            for attribute in ("Handle", "handle", "hwnd"):
+                raw = getattr(handle, attribute, None)
+                value = raw.ToInt64() if hasattr(raw, "ToInt64") else raw
+                if isinstance(value, int) and value:
+                    self._hwnd = value
+                    break
+            else:
+                self._hwnd = native.find_overlay_window(os.getpid(), self._title) or 0
+            if self._hwnd:
+                log.info("ghost overlay window handle %#x", self._hwnd)
+            return self._hwnd
 
     # --- the window itself --------------------------------------------------
 
@@ -135,12 +151,13 @@ class WebviewHost:
         self._window = webview.create_window(
             self._title, url=self._url,
             x=rect.x, y=rect.y, width=rect.width, height=rect.height,
-            # hidden: nothing appears until the follower has decided where.
+            # hidden: nothing appears until the follower has decided where AND
+            # proved the window landed there.
             # focus=False + frameless: no chrome, no keyboard.
             hidden=True, frameless=True, focus=False, resizable=False,
             easy_drag=False, shadow=False, on_top=False, text_select=False,
             zoomable=False, draggable=False, confirm_close=False,
-            background_color="#000000")
+            background_color=PAGE_BACKGROUND)
         threading.Thread(target=self._close_when_stopped, args=(stop,),
                          name="ghost-window-stop", daemon=True).start()
         webview.start(private_mode=True)
@@ -157,52 +174,6 @@ class WebviewHost:
     def _close_when_stopped(self, stop: threading.Event) -> None:
         stop.wait()
         self.close()
-
-    def _resolve_hwnd(self) -> int:
-        """The window handle, the moment WebView2 has one.
-
-        pywebview's native object is the first place to look; the fallback is
-        this process's own window list, because the overlay is hidden and the
-        visible-only picker in replay/window.py cannot see it.
-        """
-        if self._hwnd:
-            return self._hwnd
-        handle = getattr(self._window, "native", None)
-        for attribute in ("Handle", "handle", "hwnd"):
-            raw = getattr(handle, attribute, None)
-            value = raw.ToInt64() if hasattr(raw, "ToInt64") else raw
-            if isinstance(value, int) and value:
-                self._hwnd = value
-                break
-        else:
-            self._hwnd = native.find_overlay_window(os.getpid(), self._title) or 0
-        if self._hwnd:
-            log.info("ghost overlay window handle %#x", self._hwnd)
-        return self._hwnd
-
-    def _flush(self) -> None:
-        """Apply everything the host has been told, in the one right order."""
-        with self._lock:
-            hwnd = self._resolve_hwnd()
-            if not hwnd:
-                return
-            if not self._styled:
-                applied = native.apply_overlay_styles(hwnd)
-                readback = native.get_ex_style(hwnd)
-                if readback != applied:
-                    log.warning("ghost overlay styles: asked %#x, window kept %#x",
-                                applied, readback)
-                self._styled = True
-            if self._alpha is not None:
-                native.set_alpha(hwnd, self._alpha)
-            if self._rect is not None:
-                if self._owner and self._owner != self._owned:
-                    self._owned = self._owner if native.set_owner(hwnd, self._owner) else 0
-                native.place(hwnd, self._rect, insert_after=self._owner or None)
-            if self._visible:
-                native.show_no_activate(hwnd)
-            else:
-                native.hide(hwnd)
 
 
 #: Backend name -> host. `none` is how the control plane and the follower are

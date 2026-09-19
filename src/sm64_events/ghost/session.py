@@ -53,6 +53,12 @@ log = logging.getLogger("sm64.ghost")
 #: behind it at all -- this is live UI state, like the segment notices.
 EVENT_TYPE = "ghost_changed"
 
+#: How see-through the ghost is the FIRST time it is ever switched on. A
+#: shipped preference, so its exact value is his to move and no test pins it --
+#: what matters is that a first switch-on is see-through, because a solid
+#: overlay is indistinguishable from the emulator having vanished (which is
+#: what it looked like on 2026-09-19). A value he has already chosen wins:
+#: `_load_persisted` only falls back to this one.
 DEFAULT_OPACITY = 0.5
 #: How far the ghost may be nudged, in game frames. 600 is twenty seconds at
 #: 30 fps -- past the length of most of the stars this is used on, so the limit
@@ -424,11 +430,14 @@ class GhostSession:
         url = follower_url(self._target, self._port)
         if controller is None:
             controller = self._controller = self._factory(
-                url=url, opacity=self._opacity, visible=True)
+                url=url, opacity=self._opacity, visible=True,
+                on_event=self._child_said)
         if not controller.is_running():
             if self._starts >= MAX_START_ATTEMPTS:
                 return
             self._starts += 1
+            self._diag("window_starting", url=url, opacity=self._opacity,
+                       attempt=self._starts)
             # Set first, start second: a value handed to a stopped controller
             # is carried into the next start (ghost/window/controller.py).
             controller.set_url(url)
@@ -448,7 +457,37 @@ class GhostSession:
         controller, self._controller = self._controller, None
         self._starts = 0
         if controller is not None:
+            self._diag("window_ending")
             controller.stop()
+
+    # -- the diagnostic log ---------------------------------------------------
+
+    def _diag(self, event: str, **fields) -> None:
+        """Into `data/ghost_window.jsonl`, beside what the child writes there.
+
+        Imported per call for the same reason `_default_controller` is: nothing
+        outside a running overlay should pay for the window package. Best
+        effort by design -- a log that can stop the ghost is a log that deletes
+        its own evidence.
+        """
+        try:
+            from sm64_events.ghost.window import diag
+            diag.record(event, **fields)
+        except Exception:  # noqa: BLE001 - never let the record stop the window
+            log.debug("the ghost diagnostic log would not take %s", event,
+                      exc_info=True)
+
+    def _child_said(self, payload) -> None:
+        """Every line the overlay child prints, kept where a failed try is read.
+
+        The child writes its own rectangles, DPI contexts and errors; this adds
+        the stream the trainer sees, which is all that survives when the child
+        dies before it can write anything itself -- a WebView2 that will not
+        start being the case that matters.
+        """
+        kind = payload.get("event") if isinstance(payload, dict) else None
+        self._diag("child_said", level="error" if kind == "error" else "info",
+                   said=payload)
 
     # -- the wire -------------------------------------------------------------
 
