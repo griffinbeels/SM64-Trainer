@@ -45,8 +45,9 @@ import subprocess
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -92,6 +93,9 @@ class Fingerprint:
     picture_times_sha256: str
     audio_sha256: str | None
     end_ticks: int
+    # Every picture's tick, kept so a proof need not decode the clip again.
+    # Not part of the stored block: `picture_times_sha256` is its digest.
+    ticks: tuple = field(default=(), compare=False, repr=False)
 
     def as_dict(self) -> dict:
         return {"bytes": self.bytes, "sha256": self.sha256, "pictures": self.pictures,
@@ -255,11 +259,21 @@ def audio_digest(ffmpeg: str, clip: Path) -> str | None:
 
 
 def fingerprint(ffmpeg: str, clip: Path) -> Fingerprint:
-    """What a copy of this clip must reproduce to be the same replay."""
-    ticks = picture_ticks(ffmpeg, clip)
-    times = hashlib.sha256(",".join(map(str, ticks)).encode()).hexdigest()
-    return Fingerprint(clip.stat().st_size, file_sha256(clip), len(ticks), times,
-                       audio_digest(ffmpeg, clip), end_ticks(ffmpeg, clip))
+    """What a copy of this clip must reproduce to be the same replay.
+
+    The four reads are independent and each is a child process or a file
+    read, so they run side by side: measured one after another they were ten
+    seconds of a thirty-second job on a 53 s replay, with the progress bar
+    standing still for all of it (2026-09-19)."""
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="replay-fingerprint") as pool:
+        ticks_f = pool.submit(picture_ticks, ffmpeg, clip)
+        audio_f = pool.submit(audio_digest, ffmpeg, clip)
+        sha_f = pool.submit(file_sha256, clip)
+        end_f = pool.submit(end_ticks, ffmpeg, clip)
+        ticks = ticks_f.result()
+        times = hashlib.sha256(",".join(map(str, ticks)).encode()).hexdigest()
+        return Fingerprint(clip.stat().st_size, sha_f.result(), len(ticks), times,
+                           audio_f.result(), end_f.result(), tuple(ticks))
 
 
 def picture_similarity(ffmpeg: str, clip: Path, reference: Path, on_line=None) -> float:
@@ -279,24 +293,41 @@ def picture_similarity(ffmpeg: str, clip: Path, reference: Path, on_line=None) -
     return float(found[-1])
 
 
-def prove(ffmpeg: str, saved: Path, staged: Path, original: Fingerprint,
-          sidecar_times: list | None, report=None) -> tuple[Fingerprint, float]:
+def prove(ffmpeg: str, saved: Path, staged: Path, original,
+          sidecar_times: list | None, report=None,
+          pictures: int = 0) -> tuple[Fingerprint, float]:
     """Raise Unproven unless `staged` can stand in for `saved` everywhere.
-    `report(fraction)` follows the proof; the picture comparison is most of it."""
+
+    `original` is the saved clip's Fingerprint, or a callable that returns it
+    once it is measured: the proof's own reads start without waiting for it.
+    `report(fraction)` follows the proof on a scale of `pictures`; the picture
+    comparison is most of it."""
     def told(fraction: float) -> None:
         if report is not None:
             report(fraction)
 
+    def compared(line: str) -> None:
+        seen = progress_of(line, pictures)
+        if seen is not None:
+            told(0.95 * seen)   # the last step is the fingerprints finishing
+
     told(0.0)
-    candidate = fingerprint(ffmpeg, staged)
-    told(0.2)
+    # The picture comparison is the long read; the fingerprint runs beside it.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="replay-proof") as pool:
+        similarity_f = pool.submit(picture_similarity, ffmpeg, staged, saved,
+                                   compared if report is not None else None)
+        candidate = fingerprint(ffmpeg, staged)
+        if callable(original):
+            original = original()
+        similarity = similarity_f.result()
+    told(1.0)
     if candidate.pictures != original.pictures:
         raise Unproven(f"picture count {original.pictures} -> {candidate.pictures}")
     if candidate.picture_times_sha256 != original.picture_times_sha256:
         raise Unproven("a picture moved in time")
     if sidecar_times is not None:
-        expected = [round(at * MEDIA_HZ) for at in sidecar_times]
-        if expected != picture_ticks(ffmpeg, staged):
+        expected = tuple(round(at * MEDIA_HZ) for at in sidecar_times)
+        if expected != candidate.ticks:
             raise Unproven("pictures no longer sit on the sidecar's frame times")
     if candidate.audio_sha256 != original.audio_sha256:
         raise Unproven("the audio changed")
@@ -304,14 +335,6 @@ def prove(ffmpeg: str, saved: Path, staged: Path, original: Fingerprint,
         raise Unproven(f"clip length {original.end_ticks} -> {candidate.end_ticks} ticks")
     if candidate.bytes > original.bytes * (1 - MIN_SAVING):
         raise Unproven(f"not smaller: {original.bytes} -> {candidate.bytes} bytes")
-    def compared(line: str) -> None:
-        seen = progress_of(line, original.pictures)
-        if seen is not None:
-            told(0.2 + 0.8 * seen)
-
-    similarity = picture_similarity(ffmpeg, staged, saved,
-                                    compared if report is not None else None)
-    told(1.0)
     if similarity < MIN_SSIM:
         raise Unproven(f"pictures differ too much (SSIM {similarity:.4f})")
     return candidate, similarity
@@ -331,6 +354,42 @@ def encode_args(ffmpeg: str, saved: Path, staged: Path, codec: str, end: int) ->
 def _tell(report, stage: str, fraction: float | None) -> None:
     if fraction is not None:
         report(stage, fraction)
+
+
+def _picture_scale(ffmpeg: str, saved: Path, meta: dict) -> int:
+    """How many pictures the progress bar counts to. The sidecar knows for a
+    picture-feed clip; the container's own count is close enough otherwise."""
+    pictures = len(meta.get("frame_times") or ())
+    if not pictures:
+        with suppress(Unproven, ValueError, IndexError):
+            pictures = int(_probe(ffmpeg, saved, "v:0", "stream=nb_frames")[0])
+    return pictures
+
+
+def _encode(run, args: list[str], report, pictures: int):
+    follow = {}
+    if report is not None:
+        # The feed goes right after the binary; the output stays last.
+        args = [args[0], *progress_args(), *args[1:]]
+        follow["on_line"] = lambda line: _tell(
+            report, "compressing", progress_of(line, pictures))
+        report("compressing", 0.0)
+    return run(args, capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S,
+               check=False, **follow, **_spawn_kwargs())
+
+
+def _without_a_file(sidecar: Path, meta: dict, reasons: list[str], unlearned: str | None) -> dict:
+    """The block for a job that produced nothing to adopt. `unlearned` names a
+    job that learned nothing about THIS clip (`interrupted`, `unavailable`):
+    no verdict is written, and the compressor's job note makes the next session
+    try again. Otherwise the clip itself was answered (it does not shrink, or
+    does not survive the proof): that is settled, and never asked again."""
+    if unlearned is not None:
+        return {"version": MEDIA_VERSION, "state": unlearned, "reasons": reasons}
+    kept = {"version": MEDIA_VERSION, "state": "kept_original", "reasons": reasons}
+    if sidecar.exists():
+        atomic_json(sidecar, {**meta, "media": kept}, allow_nan=True)
+    return kept
 
 
 def staged_path(saved: Path, work: Path | None = None) -> Path:
@@ -376,23 +435,21 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
     staged.unlink(missing_ok=True)
     reasons: list[str] = []
     encoded = False
+    # The original is measured WHILE the first encode runs: neither needs the
+    # other, and measured first it was ten seconds of a standing progress bar.
+    measuring = ThreadPoolExecutor(max_workers=1, thread_name_prefix="replay-original")
+    original_f = measuring.submit(fingerprint, ffmpeg, saved)
     try:
-        original = fingerprint(ffmpeg, saved)
         end = end_in_stream_units(ffmpeg, saved)
+        pictures = _picture_scale(ffmpeg, saved, meta)
         for codec in codecs:
+            if original_f.done() and original_f.exception() is not None:
+                raise original_f.exception()   # unreadable clip: no codec can help
             if cancelled():
                 break
             started = time.monotonic()
-            args = encode_args(ffmpeg, saved, staged, codec, end)
-            follow = {}
-            if report is not None:
-                # The feed goes right after the binary; the output stays last.
-                args = [args[0], *progress_args(), *args[1:]]
-                follow["on_line"] = lambda line: _tell(
-                    report, "compressing", progress_of(line, original.pictures))
-                report("compressing", 0.0)
-            result = run(args, capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S,
-                         check=False, **follow, **_spawn_kwargs())
+            result = _encode(run, encode_args(ffmpeg, saved, staged, codec, end),
+                             report, pictures)
             if cancelled():
                 break
             if result.returncode:
@@ -402,8 +459,10 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
             encoded = True
             try:
                 candidate, similarity = prove(
-                    ffmpeg, saved, staged, original, meta.get("frame_times"),
-                    (lambda f: report("checking", f)) if report is not None else None)
+                    ffmpeg, saved, staged, original_f.result, meta.get("frame_times"),
+                    (lambda f: report("checking", f)) if report is not None else None,
+                    pictures)
+                original = original_f.result()
             except Unproven as refused:
                 if cancelled():
                     break
@@ -420,18 +479,11 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
         reasons.append(str(refused))
     except (OSError, subprocess.SubprocessError) as failed:
         reasons.append(f"{type(failed).__name__}: {failed}")
+    finally:
+        measuring.shutdown(wait=True)   # no read of the clip outlives the job
     staged.unlink(missing_ok=True)
-    if cancelled() or not encoded:
-        # Nothing was learned about THIS clip, so no verdict is written. The
-        # compressor's job file is what makes the next session try again.
-        state = "interrupted" if cancelled() else "unavailable"
-        return {"version": MEDIA_VERSION, "state": state, "reasons": reasons}
-    # An answer about this clip (it does not shrink, or does not survive the
-    # proof) is settled, and is never asked again.
-    kept = {"version": MEDIA_VERSION, "state": "kept_original", "reasons": reasons}
-    if sidecar.exists():
-        atomic_json(sidecar, {**meta, "media": kept}, allow_nan=True)
-    return kept
+    return _without_a_file(sidecar, meta, reasons,
+                           "interrupted" if cancelled() else None if encoded else "unavailable")
 
 
 def adopt(saved: Path, work: Path | None = None) -> dict | None:
