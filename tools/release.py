@@ -141,8 +141,12 @@ def _verify_or_run_gate() -> None:
     if tool is None:
         _run(integration_command())
         return
-    result = _run([sys.executable, str(tool), "full", "--project", str(REPO), "--json"],
-                  capture_output=True, text=True, check=False)
+    # subprocess.run directly: `_run` hardcodes check=True, and a failed
+    # verification must be READ here, not raised as a CalledProcessError whose
+    # message says nothing about which test failed.
+    command = [sys.executable, str(tool), "full", "--project", str(REPO), "--json"]
+    print("+", " ".join(command))
+    result = subprocess.run(command, cwd=REPO, capture_output=True, text=True, check=False)
     receipt = json.loads(result.stdout or "{}") if result.stdout else {}
     if receipt.get("status") != "passed":
         sys.exit(f"refusing: verification is {receipt.get('status', 'unavailable')}; "
