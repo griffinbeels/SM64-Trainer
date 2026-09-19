@@ -11,6 +11,11 @@ Three threads, and each one is here for a reason.
   is a thread of its own because a user32 query against PJ64 can block for
   110-170 ms at its 1 Hz window lock (replay/video.py), and the window host
   must never wait on that.
+- PAGE asks the page whether it has a picture worth showing. A thread of its
+  own for a harder reason: pywebview's `evaluate_js` waits on a semaphore
+  with NO timeout, so a wedged page holds whoever asked, and a held follower
+  is a ghost frozen on his screen. This thread is the one allowed to hang;
+  the follower reads its last answer and treats a stale one as a no.
 
 **FOLLOW owns every window call, and that is the fix of 2026-09-19.** DPI
 awareness is per thread, so a rectangle read on one thread and applied on
@@ -30,6 +35,7 @@ import argparse
 import logging
 import sys
 import threading
+import time
 from dataclasses import asdict, dataclass
 
 from sm64_events.ghost.window import diag, native
@@ -54,6 +60,16 @@ log = logging.getLogger("sm64.ghost")
 #: moved mid-attempt, so this is about catching a resize, a minimize or an
 #: alt-tab promptly, not about tracking a drag frame by frame.
 DEFAULT_FOLLOW_PERIOD_S = 0.10
+
+#: How often the page is asked whether it has a picture worth showing. Kept at
+#: the follow period so the ghost appears within about two ticks of the
+#: footage starting -- a delay he can see is a defect of its own.
+PAGE_PERIOD_S = 0.10
+
+#: An answer older than this is no answer. A page whose UI thread has wedged
+#: stops answering rather than answering "no", and the ghost has to come off
+#: his screen either way. Long enough that a busy decode does not blink it.
+PAGE_STALE_S = 1.0
 
 
 @dataclass
@@ -114,6 +130,61 @@ def run_control_loop(stream, plane: ControlPlane) -> str:
             return "quit"
 
 
+class PageWatch:
+    """Asks the page whether it has a picture, on a thread that may hang.
+
+    `host.page_status()` waits on pywebview's semaphore with no timeout, so a
+    wedged page holds whichever thread asked. It holds THIS one, which has
+    nothing else to do. The follower reads `presentable()`, which never blocks
+    and treats an answer that has stopped arriving exactly like a "no" -- so a
+    page that dies takes the ghost off his screen rather than freezing it
+    there.
+
+    A page that has not defined `ghostStatus`, or answers without the field,
+    is NOT presentable. The overlay dims everything under it, so "I do not
+    know yet" has to mean "stay off".
+    """
+
+    def __init__(self, host, *, stale_after_s: float = PAGE_STALE_S,
+                 clock=time.monotonic, record=diag.record):
+        self._host = host
+        self._stale = stale_after_s
+        self._clock = clock
+        self._record = record
+        self._lock = threading.Lock()
+        self._answer: dict | None = None
+        self._at: float | None = None
+        self._reported: bool | None = None
+
+    def poll(self) -> dict | None:
+        answer = self._host.page_status()
+        with self._lock:
+            self._answer, self._at = answer, self._clock()
+        said = bool(isinstance(answer, dict) and answer.get("presentable"))
+        if said != self._reported:
+            self._reported = said
+            self._record("page_status", level="info", presentable=said,
+                         said=answer)
+        return answer
+
+    def presentable(self) -> bool:
+        with self._lock:
+            answer, at = self._answer, self._at
+        if at is None or self._clock() - at > self._stale:
+            return False
+        return bool(isinstance(answer, dict) and answer.get("presentable"))
+
+    def run(self, stop: threading.Event, period_s: float) -> None:
+        while not stop.is_set():
+            try:
+                self.poll()
+            except Exception as error:  # noqa: BLE001 - the ghost outlives one bad answer
+                log.exception("ghost overlay page status failed")
+                self._record("page_status_failed", level="error",
+                             detail=f"{type(error).__name__}: {error}")
+            stop.wait(period_s)
+
+
 class FollowLoop:
     """Keeps the overlay on the game picture, and applies only what changed.
 
@@ -122,18 +193,20 @@ class FollowLoop:
     rather than on the control pipe's.
     """
 
-    def __init__(self, observe, apply, wanted, settle=None):
+    def __init__(self, observe, apply, wanted, settle=None, presentable=None):
         self._observe = observe
         self._apply = apply
         self._wanted = wanted
         self._settle = settle
+        self._presentable = presentable or (lambda: True)
         self._last: Placement | None = None
 
     def tick(self) -> Placement | None:
         """One look. Returns what was applied, or None if nothing changed."""
         if self._settle is not None:
             self._settle()
-        placement = follow_decision(self._observe(), wanted_visible=self._wanted())
+        placement = follow_decision(self._observe(), wanted_visible=self._wanted(),
+                                    presentable=self._presentable())
         if placement == self._last:
             return None
         self._last = placement
@@ -225,7 +298,7 @@ def make_emitter(stream):
     return emit
 
 
-def build_follower(args, *, watcher, host, placer, state, emit) -> FollowLoop:
+def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowLoop:
     """The follow loop wired to this run: what it looks at, what it moves.
 
     `--fixed-rect` stands in for the emulator so the suite never queries
@@ -250,15 +323,21 @@ def build_follower(args, *, watcher, host, placer, state, emit) -> FollowLoop:
         placer.apply(host.hwnd(), placement, game_hwnd=watcher.hwnd)
 
     def settle() -> None:
-        """Every tick, whatever the decision: the two things that change
-        WITHOUT the game picture moving. An opacity he just asked for, and
-        another window sliding in front of the ghost."""
+        """Every tick, whatever the decision: the things that change WITHOUT
+        the game picture moving. An opacity he just asked for, another window
+        sliding in front of the ghost, and the one-time handover of the page
+        background to the WebView2 control itself."""
         hwnd = host.hwnd()
+        if hwnd:
+            background = host.use_transparent_page_background()
+            if background is not None:
+                diag.record("page_background", level="info", result=background)
         placer.ensure_alpha(hwnd, alpha_byte(state.opacity))
         placer.keep_above(hwnd, watcher.hwnd)
 
     return FollowLoop(observe=observe, apply=place,
-                      wanted=lambda: state.visible, settle=settle)
+                      wanted=lambda: state.visible, settle=settle,
+                      presentable=page.presentable)
 
 
 def main(argv=None) -> int:
@@ -280,8 +359,9 @@ def main(argv=None) -> int:
                 opacity=state.opacity, visible=state.visible,
                 title=args.title, process_pin_ok=bool(dpi_pinned))
 
+    page = PageWatch(host)
     follow = build_follower(args, watcher=watcher, host=host, placer=placer,
-                            state=state, emit=emit)
+                            state=state, emit=emit, page=page)
     plane = ControlPlane(host=host, state=state, emit=emit, wake=wake)
 
     host.open(state.url, args.fixed_rect or Rect(x=0, y=0, width=640, height=480))
@@ -301,6 +381,10 @@ def main(argv=None) -> int:
     threads = [
         threading.Thread(target=control, name="ghost-control", daemon=True),
         threading.Thread(target=follow_thread, name="ghost-follow", daemon=True),
+        # Daemon, and never joined with a deadline that matters: this is the
+        # thread allowed to hang inside a wedged page's evaluate_js.
+        threading.Thread(target=page.run, args=(stop, PAGE_PERIOD_S),
+                         name="ghost-page", daemon=True),
     ]
     # Ready goes out BEFORE the follower can report its DPI context or its
     # first placement, so whoever reads this stream sees the child come up in

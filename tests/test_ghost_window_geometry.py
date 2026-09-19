@@ -70,6 +70,26 @@ def test_the_ghost_leaves_when_he_is_using_another_app():
     assert follow_decision(PLAYING).show is True
 
 
+def test_a_window_with_no_footage_on_it_stays_off_his_screen():
+    """Live 2026-09-19: at 80 % the ghost read as a translucent dark sheet
+    over his game AND his browser. Whole-window alpha dims everything under
+    the window, so a window with nothing to show is a window making the game
+    harder to see -- it may only be up while the page has a picture."""
+    placement = follow_decision(PLAYING, presentable=False)
+    assert placement.show is False
+    assert placement.rect is None
+    assert placement.reason == "no_footage"
+    assert follow_decision(PLAYING, presentable=True).show is True
+
+
+def test_the_window_state_reasons_beat_the_page_one():
+    """A minimized emulator says so, rather than blaming the page."""
+    gone = GameWindow(found=False, minimized=False, client=None)
+    assert follow_decision(gone, presentable=False).reason == "gone"
+    assert follow_decision(PLAYING, wanted_visible=False,
+                           presentable=False).reason == "hidden_by_request"
+
+
 @pytest.mark.parametrize("width,height", [
     (MIN_PICTURE_SIDE - 1, 1224), (1600, MIN_PICTURE_SIDE - 1), (0, 0)])
 def test_a_degenerate_picture_is_not_worth_covering(width, height):

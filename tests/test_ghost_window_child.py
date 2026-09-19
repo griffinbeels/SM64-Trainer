@@ -11,20 +11,23 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.ghost.window import diag
 from sm64_events.ghost.window.child import (
+    PAGE_STALE_S,
     ControlPlane,
     FollowLoop,
     OverlayState,
+    PageWatch,
     build_parser,
     run_control_loop,
 )
 from sm64_events.ghost.window.geometry import GameWindow, Placement, Rect
-from sm64_events.ghost.window.host import NullHost
+from sm64_events.ghost.window.host import NullHost, WebviewHost
 
 GHOST_URL = "http://127.0.0.1:8065/ui/ghost/index.html?kind=star&entity_key=bob-1"
 OTHER_URL = "http://127.0.0.1:8065/ui/ghost/index.html?kind=segment&entity_key=s1"
@@ -191,6 +194,131 @@ def test_the_command_line_the_trainer_starts_the_child_with():
 def test_a_malformed_fixed_rect_is_refused_at_the_command_line(bad):
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--url", GHOST_URL, "--fixed-rect", bad])
+
+
+def test_the_follow_loop_keeps_the_ghost_off_until_the_page_has_a_picture():
+    """The ghost dims everything under it, so an empty window is a window
+    making his game harder to see."""
+    has_picture = [False]
+    loop = FollowLoop(
+        observe=lambda: GameWindow(found=True, minimized=False, client=PICTURE),
+        apply=lambda _p: None, wanted=lambda: True,
+        presentable=lambda: has_picture[0])
+    assert loop.tick().reason == "no_footage"
+    has_picture[0] = True
+    assert loop.tick().show is True
+
+
+# --- asking the page --------------------------------------------------------
+
+class StubPage:
+    """A host whose page answers whatever a test wants, including nothing."""
+
+    def __init__(self, answer=None):
+        self.answer = answer
+        self.asked = 0
+
+    def page_status(self):
+        self.asked += 1
+        return self.answer
+
+
+def a_watch(answer=None, clock=None):
+    records = []
+    watch = PageWatch(StubPage(answer), clock=clock or (lambda: 0.0),
+                      record=lambda event, **fields: records.append(
+                          {"event": event, **fields}))
+    return watch, records
+
+
+def test_a_page_with_a_picture_is_presentable():
+    watch, records = a_watch({"presentable": True, "video_time": 1.25})
+    watch.poll()
+    assert watch.presentable() is True
+    said = next(entry for entry in records if entry["event"] == "page_status")
+    assert said["presentable"] is True
+    assert said["said"]["video_time"] == 1.25, "the page's own answer is kept"
+
+
+@pytest.mark.parametrize("answer", [
+    None,                       # the page could not be asked at all
+    {},                         # an older build with no such field
+    {"presentable": False},     # the page saying it has nothing yet
+    {"presentable": None},
+    "not a dict",
+])
+def test_anything_short_of_a_clear_yes_keeps_the_ghost_off(answer):
+    """"I do not know yet" has to mean "stay off": the alternative is a dark
+    sheet over his game while the page works out whether it has footage."""
+    watch, _records = a_watch(answer)
+    watch.poll()
+    assert watch.presentable() is False
+
+
+def test_a_page_that_stopped_answering_is_not_presentable():
+    """pywebview's evaluate_js waits forever on a wedged page, so the answer
+    simply stops arriving rather than turning into a no. A stale one is a no."""
+    now = [100.0]
+    watch, _records = a_watch({"presentable": True}, clock=lambda: now[0])
+    watch.poll()
+    assert watch.presentable() is True
+    now[0] += PAGE_STALE_S / 2
+    assert watch.presentable() is True
+    now[0] += PAGE_STALE_S
+    assert watch.presentable() is False, "a wedged page takes the ghost off"
+
+
+def test_the_ghost_is_never_asked_before_the_page_has_answered_once():
+    watch, _records = a_watch({"presentable": True})
+    assert watch.presentable() is False, "nothing has been asked yet"
+
+
+def test_only_a_change_of_answer_is_written_down():
+    watch, records = a_watch({"presentable": True})
+    for _ in range(3):
+        watch.poll()
+    watch._host.answer = {"presentable": False}
+    watch.poll()
+    flips = [entry for entry in records if entry["event"] == "page_status"]
+    assert [entry["presentable"] for entry in flips] == [True, False]
+
+
+def test_a_page_that_throws_does_not_end_the_watch():
+    """A dead watch is worse than a slow one: the last answer would go stale
+    and the ghost would come off, but nothing would ever bring it back."""
+    class Exploding:
+        def page_status(self):
+            raise RuntimeError("the webview is gone")
+
+    records = []
+    stop = threading.Event()
+
+    def record(event, **_fields):
+        records.append(event)
+        stop.set()  # one round is enough to prove it survived
+
+    watch = PageWatch(Exploding(), clock=lambda: 0.0, record=record)
+    watch.run(stop, 0.01)
+    assert records == ["page_status_failed"]
+    assert watch.presentable() is False
+
+
+# --- the page background ----------------------------------------------------
+
+def test_the_background_handover_is_attempted_exactly_once():
+    """pywebview's `transparent=True` shows and focuses the window on every
+    navigation (edgechromium.py), so the WebView2 control is reached by hand
+    instead. Whatever comes back, it is asked once and logged once."""
+    host = WebviewHost()
+    assert host.use_transparent_page_background() == "unreachable"
+    assert host.use_transparent_page_background() is None, (
+        "one line in the log, not one per follow tick")
+
+
+def test_the_null_backend_answers_both_page_questions():
+    host = NullHost()
+    assert host.page_status() == {"presentable": True}
+    assert host.use_transparent_page_background() == "no_window"
 
 
 # --- the real child process, with no window anywhere ------------------------

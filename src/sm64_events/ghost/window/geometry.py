@@ -119,9 +119,17 @@ def correction_for(asked: Rect, got: Rect) -> Rect | None:
     return None if corrected == asked else corrected
 
 
-def follow_decision(game: GameWindow | None, *,
-                    wanted_visible: bool = True) -> Placement:
-    """The whole rule the overlay follows, as one pure function."""
+def follow_decision(game: GameWindow | None, *, wanted_visible: bool = True,
+                    presentable: bool = True) -> Placement:
+    """The whole rule the overlay follows, as one pure function.
+
+    `presentable` is the page's own answer to "have I got a picture worth
+    showing". It has to be part of this decision rather than a separate check,
+    because whole-window alpha dims everything under the window: live
+    2026-09-19, the ghost at 80 % read as a translucent dark sheet over his
+    game and his browser with no footage on it. A window with nothing to show
+    is a window making his game harder to see.
+    """
     if not wanted_visible:
         return Placement(show=False, rect=None, reason="hidden_by_request")
     if game is None or not game.found:
@@ -130,6 +138,8 @@ def follow_decision(game: GameWindow | None, *,
         return Placement(show=False, rect=None, reason="minimized")
     if not game.foreground:
         return Placement(show=False, rect=None, reason="not_foreground")
+    if not presentable:
+        return Placement(show=False, rect=None, reason="no_footage")
     client = game.client
     if (client is None or client.width < MIN_PICTURE_SIDE
             or client.height < MIN_PICTURE_SIDE):

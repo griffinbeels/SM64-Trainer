@@ -18,32 +18,37 @@ per thread and a rectangle read on one thread and applied on another is a
 rectangle multiplied by the display scale. A host creates the window, loads
 URLs into it and hands out its handle; that is all.
 
-**Why the page background stays black, and `transparent=True` is not used.**
-The follower track asked for a transparent page so the game would show
-untouched wherever there is no footage. Read against pywebview 6.2.1 in this
-venv, that flag cannot deliver it here, for two reasons that are both in the
-source:
+**`transparent=True` is never passed, and three separate things in pywebview
+6.2.1 say so.** All three are in this venv's source, not from memory:
 
-- `winforms.py` never sets `AllowTransparency` or `TransparencyKey` on the
-  form. `transparent=True` only sets the WebView2 control's
-  `DefaultBackgroundColor` to `Color.Transparent` (`edgechromium.py`), so the
-  page becomes see-through to the FORM behind it -- and that form is an
-  ordinary opaque window whose `BackColor` is left at the WinForms default in
-  exactly that branch. A transparent page would trade a black rectangle for a
-  light-grey one.
-- `create_window` runs its transparency workaround (`Show()` then `Hide()`,
-  which its own comment says is what makes a transparent window work) only in
-  the branch for a window that is NOT hidden. The ghost must be created
-  hidden, so it takes the other branch and never gets it.
+- `edgechromium.py::on_navigation_start` calls `self.form.Show()` and
+  `self.form.Activate()` whenever the window is transparent. That runs on
+  EVERY navigation, and the session navigates the ghost on every target
+  change -- it would show an unplaced window and take the keyboard off him
+  mid-attempt. On its own this rules the flag out.
+- `winforms.py::create_window` runs the transparency workaround its own
+  comment says is what makes a transparent window work (`Show()` then
+  `Hide()`) only in the branch for a window that is NOT hidden. The ghost is
+  created hidden, so it would never get it anyway.
+- `winforms.py` never sets `AllowTransparency` or `TransparencyKey`, so the
+  FORM stays opaque whatever the page does.
 
-Whole-window alpha (`WS_EX_LAYERED` + `SetLayeredWindowAttributes`) blends
-every pixel of the window by the same amount, so "untouched outside the
-footage" is not something an alpha value can express either way. The one
-technique that would express it is a colour key (`LWA_COLORKEY`), punching the
-background colour out completely while the video keeps its alpha. That is a
-real option and it is deliberately not taken yet: nothing in this package can
-be seen by an agent, and a key colour appearing inside the footage would punch
-holes in the ghost. It wants his eyes before it ships.
+The background is reached directly instead, by
+`use_transparent_page_background()` below. Be clear about what that can and
+cannot buy: it stops the WebView2 CONTROL painting, which reveals the form
+behind it, and that form is still opaque (`BackColor` = `PAGE_BACKGROUND`).
+Making the game show through the un-footaged parts of the window as well would
+need a colour key (`LWA_COLORKEY`) punching that colour out of the layered
+window -- deliberately not shipped, because nothing here can be seen by an
+agent and the footage he is practising on (Hazy Maze Cave) is full of
+near-black pixels that a black key would punch holes through.
+
+**So the dark sheet is solved by not being on screen, not by transparency.**
+Whole-window alpha blends every pixel of the window equally -- live 2026-09-19,
+80 % opacity read as a translucent dark sheet over his game and his browser --
+so a window with no footage on it is a window dimming his game. The child only
+ever shows it while the page says a picture is presentable; `page_status()` is
+how it asks.
 """
 import logging
 import os
@@ -58,11 +63,19 @@ log = logging.getLogger("sm64.ghost")
 #: button), but it is how the process finds its own window handle.
 OVERLAY_TITLE = "SM64 Trainer ghost overlay"
 
-#: What the page paints where it has nothing to show. See the module docstring
-#: for why this is not transparent.
+#: The FALLBACK background, used for the form and for the WebView2 control
+#: until `use_transparent_page_background()` takes. Black rather than
+#: pywebview's white default on purpose: if that call is ever refused, a black
+#: rectangle over the game is bad and a white one is blinding.
 PAGE_BACKGROUND = "#000000"
 
 _DEFAULT_RECT = Rect(x=0, y=0, width=640, height=480)
+
+
+#: What the page is asked, once per page-watch tick. Written to survive a page
+#: that has not defined the function yet (an early load, or an older build of
+#: `ui/ghost/index.html`): that answers null, which reads as NOT presentable.
+STATUS_SCRIPT = "window.ghostStatus ? window.ghostStatus() : null"
 
 
 class NullHost:
@@ -72,12 +85,22 @@ class NullHost:
 
     def __init__(self):
         self.calls: list[tuple] = []
+        #: What a page would have answered. A backend with no window stands in
+        #: for a healthy one, so the control plane and the follower can be
+        #: driven end to end; a test that cares about the gate sets it.
+        self.status: dict | None = {"presentable": True}
 
     def open(self, url: str, rect: Rect) -> None:
         self.calls.append(("open", url, rect))
 
     def load_url(self, url: str) -> None:
         self.calls.append(("load_url", url))
+
+    def page_status(self) -> dict | None:
+        return self.status
+
+    def use_transparent_page_background(self) -> str | None:
+        return "no_window"
 
     def hwnd(self) -> int:
         return 0
@@ -101,6 +124,7 @@ class WebviewHost:
         self._hwnd = 0
         self._url = "about:blank"
         self._rect: Rect | None = None
+        self._background_tried = False
 
     # --- what the child tells it -------------------------------------------
 
@@ -115,6 +139,51 @@ class WebviewHost:
             window = self._window
         if window is not None:
             window.load_url(url)
+
+    def page_status(self) -> dict | None:
+        """What the page says about itself, or None if it cannot be asked.
+
+        **This blocks, and it may block forever.** pywebview's `evaluate_js`
+        marshals to the WebView2 UI thread and waits on a semaphore with no
+        timeout (`edgechromium.py`), so a wedged page would hold whichever
+        thread asked. That is why `child.PageWatch` owns the asking on a
+        thread of its own and the follower only ever reads a cached answer:
+        a frozen follower is a ghost frozen on his screen.
+        """
+        window = self._window
+        if window is None:
+            return None
+        try:
+            answer = window.evaluate_js(STATUS_SCRIPT)
+        except Exception:  # noqa: BLE001 - a page that will not answer is not presentable
+            log.debug("the ghost page would not answer", exc_info=True)
+            return None
+        return answer if isinstance(answer, dict) else None
+
+    def use_transparent_page_background(self) -> str | None:
+        """Stop the WebView2 control painting its own background. Once.
+
+        Returns what happened the first time and None afterwards, so the
+        caller logs one line rather than one per tick. See the module
+        docstring for why this is done by hand instead of with pywebview's
+        `transparent=True`, and for what it does and does not buy.
+        """
+        with self._lock:
+            if self._background_tried:
+                return None
+            self._background_tried = True
+            form = getattr(self._window, "native", None)
+            control = getattr(form, "webview", None)
+            if control is None:
+                control = getattr(getattr(form, "browser", None), "webview", None)
+            if control is None:
+                return "unreachable"
+            try:
+                from System.Drawing import Color
+                control.DefaultBackgroundColor = Color.Transparent
+            except Exception as error:  # noqa: BLE001 - the black fallback is fine
+                return f"refused: {type(error).__name__}: {error}"
+            return "transparent"
 
     def hwnd(self) -> int:
         """The window handle, the moment WebView2 has one.
