@@ -56,7 +56,7 @@
 // THE GHOST IS A FUNCTION OF THE CLOCK. This file is only the wiring: resolve
 // which clip to show, open the clock, and hand every sample to the follower,
 // which owns every decision. See ./follower.js for the rule itself.
-import { createFollower } from "./follower.js";
+import { createFollower, DEFAULTS } from "./follower.js";
 import { presentedVideoTime, watchVideoPicture } from "../videopicture.js";
 
 const params = new URLSearchParams(location.search);
@@ -163,6 +163,41 @@ window.addEventListener("message", (event) => {
   else if (data.type === "ghost-clock") onSample(data);
 });
 
+// IS THERE FOOTAGE ON SCREEN RIGHT NOW? The window that owns this page shows
+// itself only while this is true, so a page with nothing to draw costs the
+// player nothing at all -- no sheet of tint over the game, which is what he
+// saw at 80% and 100% opacity on the first try.
+//
+// It is a claim about a DECODED PICTURE, not about a loaded source, and every
+// clause below is a state in which the page has nothing truthful to show:
+//
+//   not ready          -> refused, unavailable, loading, or a media error
+//   no presented frame -> a src with nothing decoded yet, or a seek in flight
+//   no sample yet      -> nothing has said where the player is
+//   holding for a hold -> the clock feed stopped arriving (the emulator, or us)
+//   elsewhere          -> he is in another level; the template was never there
+//   too far off        -> the picture on screen is not the one the rule names
+//
+// Parked at either END of the attempt's own span it stays TRUE: the ghost is
+// deliberately on its first picture through the reload after a reset, and on
+// its last while he is still going. See the report for the case against the
+// second one.
+function presentable() {
+  if (status.state !== "ready" || document.body.dataset.shown !== "yes")
+    return false;
+  if (!follower || !status.decision || !status.sample || status.holding)
+    return false;
+  const reason = status.decision.reason;
+  if (reason === "elsewhere") return false;
+  if (reason === "before_template" || reason === "past_template") return true;
+  const shown = follower.template.igtAtTime(videoTime());
+  const target = status.sample.igt + follower.nudge;
+  // The follower's own resync threshold: past it the ghost is not following,
+  // it is on its way somewhere. One number, and it lives in the module that
+  // acts on it.
+  return Math.abs(shown - target) <= DEFAULTS.seekFrames;
+}
+
 // The page's whole readable surface. A chrome-less overlay cannot show what it
 // is doing, so this is how the window that owns it, a test, or a live
 // diagnosis asks.
@@ -173,6 +208,10 @@ window.ghostStatus = () => ({
   //: whether the element is actually painting. False is the honest answer for
   //: every state in which this page must leave the game's picture alone.
   shown: document.body.dataset.shown === "yes",
+  //: THE WINDOW'S OWN SIGNAL: true only while a decoded picture of the one the
+  //: rule names is on screen. The companion window polls this and shows itself
+  //: only while it holds.
+  presentable: presentable(),
   paused: video.paused,
   playback_rate: video.playbackRate,
   shown_igt: follower && follower.template.ok
@@ -200,6 +239,12 @@ async function start() {
     return;
   }
   follower = createFollower(source.view, {
+    // WHERE THE ATTEMPT ACTUALLY STARTS AND ENDS, when the source knows. His
+    // ruling: the ghost is clamped to exactly the attempt's span -- its start
+    // frame to the star grab -- whatever the player's recording settings kept
+    // around it. Absent (an older server, a clip whose frames cannot be
+    // resolved) the follower reads the start off the counter instead.
+    span: source.span || null,
     // A starting value only, for a tab opened by hand with `?nudge=`. The
     // running app does not put it in the URL at all: the live value is the
     // server's, and it arrives on the first clock sample.
@@ -220,7 +265,9 @@ async function start() {
   status.template = { ok: follower.template.ok, reason: follower.template.reason,
                       pictures: follower.template.pictures || 0,
                       preroll_pictures: follower.template.prerollPictures || 0,
-                      first_igt: follower.template.firstIgt ?? null };
+                      first_igt: follower.template.firstIgt ?? null,
+                      last_igt: follower.template.lastIgt ?? null,
+                      basis: follower.template.basis || null };
   if (!follower.template.ok) {
     mark("unavailable", follower.template.reason);
     return;

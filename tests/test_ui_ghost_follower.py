@@ -110,7 +110,9 @@ function apply(video, decision) {
 // Run one trace. `trace` is the clock as the server would push it.
 function drive(view, trace, options = {}) {
   const follower = createFollower(view, options);
-  const template = ghostTemplate(view);
+  // The SAME template the follower built, span and all -- scoring against a
+  // differently-bounded one would measure the harness.
+  const template = ghostTemplate(view, options.span || null);
   const video = fakeVideo();
   const rows = [];
   let now = 0;
@@ -122,7 +124,12 @@ function drive(view, trace, options = {}) {
     // now sits on, against the picture the rule says it should show.
     const shown = template.igtAtTime(video.currentTime);
     const wanted = sample.igt + follower.nudge;
+    // `outside` is the claim his ruling turns on and it is a SLOT question:
+    // comparing clip times cannot answer it, because `timeOfSlot` returns the
+    // middle of a picture's interval, so a video a fraction past the last
+    // picture's midpoint is still ON that picture.
     rows.push({ igt: sample.igt, wanted, shown, time: video.currentTime,
+                outside: template.outsideRun(video.currentTime),
                 error: shown == null ? null : shown - wanted,
                 paused: video.paused, rate: Number(video.playbackRate.toFixed(4)),
                 action: decision.action, reason: decision.reason });
@@ -322,6 +329,28 @@ const steady = (n, start = 0) =>
                         recovery: recovery(rows, 230), after: score(rows, 232) };
 }
 
+// A clip with lead-in AND a tail: the previous run's last pictures, the
+// attempt, then the star cutscene holding the final counter value. What a
+// recording keeps around the attempt is the player's setting; the span is the
+// attempt itself.
+// `after` says what the tail carries: "hold" is the star cutscene keeping the
+// final value (his own clip's shape), "next_run" is a recording long enough to
+// have caught the START of the next attempt -- a second run's counter climbing
+// from near zero inside the same clip.
+function spannedTemplate(preroll, frames, tail, after = "hold") {
+  const [held, startIgt] = [3029, 3];
+  const view = feedTemplate(preroll + frames + tail);
+  const last = startIgt + frames - 1;
+  view.picture_igt = view.picture_igt.map((_, k) => {
+    if (k < preroll) return held;
+    if (k < preroll + frames) return startIgt + (k - preroll);
+    return after === "hold" ? last : 1 + (k - preroll - frames);
+  });
+  return { view, span: { first_picture: preroll,
+                         last_picture: preroll + frames - 1,
+                         basis: "attempt_frames" } };
+}
+
 // -- 12. what the clip is showing before anything has placed it ------------
 // A page that has just loaded sits at clip time 0, and in a real clip that is
 // the PRE-ROLL. Asked what is on screen, the template answers with the
@@ -336,6 +365,59 @@ const steady = (n, start = 0) =>
                                 0, 0);
   out.unplaced = { shown_at_zero: t.igtAtTime(0), first_igt: t.firstIgt,
                    first_drift: first.drift };
+}
+
+// -- 13. the source's own span clamps BOTH ends ----------------------------
+{
+  const { view, span } = spannedTemplate(44, 400, 60);
+  const t = ghostTemplate(view, span);
+  // Played from the attempt's start to well past its end: the last 40 samples
+  // are all past the template's final picture.
+  const { rows } = drive(view, steady(440, 3), { span });
+  const past = rows.slice(405);
+  out.span = { ok: t.ok, reason: t.reason, pictures: t.pictures, basis: t.basis,
+               first_igt: t.firstIgt, last_igt: t.lastIgt,
+               first_time: t.firstTime, last_time: t.lastTime,
+               // Nothing outside the attempt was ever on screen: not a picture
+               // from the run before it, not one from the star cutscene.
+               ever_outside: rows.some((r) => r.outside),
+               ever_preroll: rows.some((r) => r.shown === 3029),
+               ...score(rows.slice(2, 400), 0),
+               // Past the end it parks on the last picture and stays there.
+               past_reason: past[10].reason,
+               past_paused: past.every((r) => r.paused),
+               past_on_last: past.every((r) => r.shown === t.lastIgt) };
+}
+{
+  // The same clip WITHOUT a span: the counter rule finds the start, and the
+  // end is the clip's own last picture -- the cutscene tail is playable.
+  const { view } = spannedTemplate(44, 400, 60);
+  const t = ghostTemplate(view, null);
+  out.span_absent = { ok: t.ok, basis: t.basis, pictures: t.pictures,
+                      preroll_pictures: t.prerollPictures,
+                      first_igt: t.firstIgt, last_igt: t.lastIgt };
+}
+{
+  // The recording was long enough to catch the START of the next attempt.
+  // Asked what is on screen at a clip time past the run, the template answers
+  // with its own last picture -- never with the counter of a different
+  // attempt that happens to be encoded there. Without the span there is no
+  // way to tell the two runs apart, and it is refused.
+  const { view, span } = spannedTemplate(44, 400, 60, "next_run");
+  const t = ghostTemplate(view, span);
+  out.span_trims_next_run = {
+    ok: t.ok, pictures: t.pictures, last_igt: t.lastIgt,
+    shown_past_end: t.igtAtTime(t.lastTime + 1),
+    tail_igt: view.picture_igt[view.picture_igt.length - 1],
+    without_span: ghostTemplate(view, null).reason };
+}
+{
+  // A span naming pictures the capture never stamped says so by name rather
+  // than falling back to the whole clip, which would show the lead-in.
+  const { view } = spannedTemplate(44, 400, 60);
+  view.picture_igt = view.picture_igt.map((v, k) => (k >= 44 && k <= 60 ? null : v));
+  const t = ghostTemplate(view, { first_picture: 44, last_picture: 60 });
+  out.span_empty = { ok: t.ok, reason: t.reason };
 }
 
 out.near_zero = NEAR_ZERO_IGT;
@@ -497,6 +579,68 @@ def test_a_clip_sitting_in_its_pre_roll_never_reports_the_previous_run(scores):
     assert unplaced["first_drift"] == 3 - 200, unplaced
 
 
+def test_the_sources_span_clamps_the_ghost_to_the_attempt(scores):
+    """HIS RULING: *"Ghost footage should be clamped to the EXACT START FRAME
+    of the attempt, and the exact ending frame of the star grab... It should
+    always be clamped to exactly the span of the attempt, regardless of the
+    user's recording settings."*
+
+    So when the source hands over the span it decides both ends, and what the
+    recording kept around the attempt -- lead-in before the reset, cutscene
+    after the star -- is never shown. Past the end the ghost parks on the last
+    picture of the attempt rather than playing into the cutscene."""
+    span = scores["span"]
+    assert span["ok"] is True, span
+    assert span["basis"] == "attempt_frames", span
+    assert span["pictures"] == 400, span
+    assert span["first_igt"] == 3, span
+    assert span["last_igt"] == 402, span
+    # Neither end of the clip outside the span was ever on screen.
+    assert span["ever_preroll"] is False, span
+    assert span["ever_outside"] is False, span
+    # And inside it, it follows.
+    assert span["worst"] <= 1, span
+    assert span["over_one"] == 0, span
+    # Past the last picture: parked on it, paused, and it stays there.
+    assert span["past_reason"] == "past_template", span
+    assert span["past_paused"] is True, span
+    assert span["past_on_last"] is True, span
+
+
+def test_without_a_span_the_counter_decides_the_start_and_the_clip_the_end(scores):
+    """The fallback, for an older server or a clip whose frames cannot be
+    resolved: the last restart into the near-zero band is the start, and the
+    clip's own last picture is the end -- so the cutscene tail IS part of the
+    template, which is exactly what the span exists to trim."""
+    absent = scores["span_absent"]
+    assert absent["ok"] is True, absent
+    assert absent["basis"] == "counter_restart", absent
+    assert absent["preroll_pictures"] == 44, absent
+    assert absent["first_igt"] == 3, absent
+    assert absent["last_igt"] == 402, absent
+    assert absent["pictures"] == 460, absent   # the attempt plus its 60 tail
+
+
+def test_a_clip_holding_the_next_attempt_shows_only_this_one(scores):
+    """A long enough recording catches the beginning of the NEXT attempt in the
+    same clip. Asked what is on screen past the run's end, the template answers
+    with its own last picture rather than with the other run's counter -- a
+    number that would read as the ghost being wildly out of step. Without a
+    span the two runs cannot be told apart, and the clip is refused."""
+    trimmed = scores["span_trims_next_run"]
+    assert trimmed["ok"] is True, trimmed
+    assert trimmed["pictures"] == 400, trimmed
+    assert trimmed["tail_igt"] == 60, trimmed   # the next run, 60 frames in
+    assert trimmed["shown_past_end"] == trimmed["last_igt"] == 402, trimmed
+    assert trimmed["without_span"] == "counter_restarts", trimmed
+
+
+def test_a_span_naming_no_stamped_picture_says_so(scores):
+    """It does not quietly widen back to the whole clip: that would put the
+    lead-in on screen, which is the defect the span exists to make impossible."""
+    assert scores["span_empty"] == {"ok": False, "reason": "span_has_no_pictures"}
+
+
 def test_a_reset_returns_to_the_attempts_first_picture_not_the_pre_roll(scores):
     """The counter returning to zero is the reset signal, and the picture it
     names is the template's own first one -- never a picture from the run the
@@ -602,14 +746,80 @@ console.log(JSON.stringify({
 #: shapes broke the original rule.
 HIS_VIEW = Path(__file__).resolve().parent / "fixtures" / "ghost_preroll_view.json"
 
+def _his_span(view: dict) -> dict:
+    """The span the source track will compute, DERIVED from his clip rather
+    than typed in: the attempt starts on the frame its counter read zero and
+    ends on the frame the star was grabbed.
+
+    The counter's first playable picture is frame 308680 reading 3, so the
+    attempt's frame zero is 308677 -- three frames the reload ate, with no
+    picture between them. The grab is the first picture carrying the final
+    value 584. Both ends are then resolved through the frame map exactly as
+    the source does: the first picture at or after the start frame, the last
+    at or before the end frame.
+
+    The derivation checks itself: 309261 - 308677 = 584, which is the counter
+    value at the grab. A span and a counter that disagreed would mean one of
+    them is not measuring this attempt.
+    """
+    frames, igt = view["frame_map"], view["picture_igt"]
+    opening = next(k for k, value in enumerate(igt) if value is not None
+                   and value <= 30)
+    start_frame = frames[opening] - igt[opening]
+    run = igt[opening:]
+    grab = opening + run.index(max(v for v in run if v is not None))
+    end_frame = frames[grab]
+    assert end_frame - start_frame == igt[grab] == 584, (start_frame, end_frame)
+    return {
+        "first_picture": next(k for k, f in enumerate(frames)
+                              if f is not None and f >= start_frame),
+        "last_picture": max(k for k, f in enumerate(frames)
+                            if f is not None and f <= end_frame),
+        "start_frame": start_frame, "end_frame": end_frame,
+        "basis": "attempt_frames"}
+
+
+def test_his_own_payload_clamped_to_the_attempts_exact_span():
+    """The span path over the real clip. Derived from his own frame map: the
+    attempt is pictures 45 through 626 -- 42 pictures of lead-in before it and
+    15 of star cutscene after it, both of which the ghost must never show."""
+    view = json.loads(HIS_VIEW.read_text(encoding="utf-8"))
+    span = _his_span(view)
+    assert span["first_picture"] == 45, span
+    assert span["last_picture"] == 626, span
+    assert span["start_frame"] == 308677 and span["end_frame"] == 309261, span
+
+    result = _drive(HIS_CLIP.replace("__FOLLOWER__", FOLLOWER)
+                    .replace("__VIEW__", json.dumps(view))
+                    .replace("__SPAN__", json.dumps(span)))
+    assert result["ok"] is True, result
+    assert result["basis"] == "attempt_frames", result
+    # 582 pictures between those indices, none of them refused by the capture.
+    assert result["pictures"] == 582, result
+    assert result["first_igt"] == 3, result
+    assert result["last_igt"] == 584, result
+    # It follows inside the span, and never leaves it in either direction.
+    assert result["steady"]["worst"] <= 1, result
+    assert result["steady"]["over_one"] == 0, result
+    assert result["ever_preroll"] is False, result
+    assert result["ever_outside"] is False, result
+    assert result["earliest"] >= result["first_time"] - 1e-9, result
+    # Slower than the ghost: it waits on the grab frame rather than playing
+    # the cutscene he has not earned yet.
+    assert result["past"]["reason"] == "past_template", result
+    assert result["past"]["paused"] is True, result
+    assert result["past"]["on_last"] is True, result
+
+
 HIS_CLIP = r"""
 import { createFollower, ghostTemplate } from "__FOLLOWER__";
 const view = __VIEW__;
+const span = __SPAN__;
 const DT = 1 / 30;
-const template = ghostTemplate(view);
+const template = ghostTemplate(view, span);
 
 function drive(trace) {
-  const follower = createFollower(view, {});
+  const follower = createFollower(view, { span });
   const video = { currentTime: 0, playbackRate: 1, paused: true };
   const rows = [];
   let now = 0;
@@ -620,6 +830,7 @@ function drive(trace) {
     else video.paused = true;
     const shown = template.igtAtTime(video.currentTime);
     rows.push({ igt: sample.igt, shown, time: video.currentTime,
+                outside: template.outsideRun(video.currentTime),
                 error: shown == null ? null : shown - sample.igt,
                 paused: video.paused, reason: d.reason });
     if (!video.paused) video.currentTime += video.playbackRate * DT;
@@ -651,15 +862,27 @@ for (let igt = template.firstIgt; igt <= template.lastIgt; igt += 1)
 const reset = drive(mixed);
 const afterReload = reset.slice(reloadAt + 42).filter((r) => r.error != null);
 
+// 3. He is SLOWER than the ghost was: the live counter keeps climbing past
+//    the template's last picture.
+const over_run = [];
+for (let igt = template.lastIgt - 30; igt <= template.lastIgt + 60; igt += 1)
+  over_run.push(clock(igt, over_run.length));
+const overrun = drive(over_run);
+const past = overrun.slice(35);
+
+const every = [].concat(steady, reset, overrun);
 console.log(JSON.stringify({
   ok: template.ok, reason: template.reason, pictures: template.pictures,
-  preroll_pictures: template.prerollPictures,
+  preroll_pictures: template.prerollPictures, basis: template.basis,
   first_igt: template.firstIgt, last_igt: template.lastIgt,
-  first_time: template.firstTime,
+  first_time: template.firstTime, last_time: template.lastTime,
   steady: { worst: worst(moving), over_one: over(moving), samples: moving.length },
-  // Nothing from the run before this one was ever on screen, in either trace.
-  ever_preroll: steady.concat(reset).some((r) => r.shown === 3029),
-  earliest: Math.min(...steady.concat(reset).map((r) => r.time)),
+  // Nothing outside the attempt was on screen in ANY of the three traces.
+  ever_preroll: every.some((r) => r.shown === 3029),
+  ever_outside: every.some((r) => r.outside),
+  earliest: Math.min(...every.map((r) => r.time)),
+  past: { reason: past[10].reason, paused: past.every((r) => r.paused),
+          on_last: past.every((r) => r.shown === template.lastIgt) },
   reset: { reason: reset[reloadAt].reason, shown: reset[reloadAt].shown,
            held_paused: reset.slice(reloadAt + 1, reloadAt + 20).every((r) => r.paused),
            held_on_first: reset.slice(reloadAt + 1, reloadAt + 20)
@@ -680,9 +903,11 @@ def test_his_own_first_try_payload_plays_its_attempt():
     outright (`counter_restarts`) and the page had nothing to play."""
     view = json.loads(HIS_VIEW.read_text(encoding="utf-8"))
     result = _drive(HIS_CLIP.replace("__FOLLOWER__", FOLLOWER)
-                    .replace("__VIEW__", json.dumps(view)))
+                    .replace("__VIEW__", json.dumps(view))
+                    .replace("__SPAN__", "null"))
     assert result["ok"] is True, result
     assert result["reason"] is None, result
+    assert result["basis"] == "counter_restart", result
     # 642 pictures, three of which the capture layer refused: 639 stamped, of
     # which 42 belong to the run that was already over when the clip opened.
     assert result["preroll_pictures"] == 42, result
@@ -697,6 +922,7 @@ def test_his_own_first_try_payload_plays_its_attempt():
 
     # The pre-roll is never shown, in either trace.
     assert result["ever_preroll"] is False, result
+    assert result["ever_outside"] is False, result
     assert result["earliest"] >= result["first_time"] - 1e-9, result
 
     # A reset mid-run goes back to the attempt's first picture and holds there

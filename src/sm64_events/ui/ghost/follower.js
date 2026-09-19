@@ -82,19 +82,34 @@ const HOLD = (reason, time = null) => ({ action: "hold", rate: 0, time, reason }
  * refusal that rejected it rejected essentially every real one (his first try,
  * 2026-09-19: a black screen, no footage). The prototype's stated scope is
  * unchanged -- single-area stars.
+ *
+ * WHEN THE SOURCE KNOWS THE SPAN, IT WINS. His ruling: *"Ghost footage should
+ * be clamped to the EXACT START FRAME of the attempt, and the exact ending
+ * frame of the star grab... regardless of the user's recording settings."* So
+ * the source may hand over `{first_picture, last_picture}` -- inclusive indices
+ * into these same per-picture arrays, computed from the attempt's own game
+ * frames through the clip's frame map. The span narrows WHICH PICTURES THE
+ * TEMPLATE IS BUILT FROM and nothing else: everything above still applies
+ * inside it, so an area crossing is still refused and an off-by-one that leaves
+ * one picture of lead-in inside the span is absorbed rather than fatal. No
+ * span (an older server, a clip whose frames cannot be resolved) falls back to
+ * the timer rule for the start and the clip's own last picture for the end.
  */
-export function ghostTemplate(view) {
-  const stamps = view && view.picture_igt;
-  if (!Array.isArray(stamps) || !stamps.length)
-    return { ok: false, reason: "no_picture_timer" };
-  const clock = clipClock(view);
-  // Every picture the capture actually stamped. A gap (the capture layer
-  // refuses a picture rather than guessing its frame) is skipped, never
-  // interpolated: this list is what the counter is looked up in.
+function attemptPictures(stamps, span) {
+  const bound = (value, fallback) =>
+    (Number.isFinite(value) ? Math.max(0, Math.min(stamps.length - 1, Math.trunc(value)))
+                            : fallback);
+  const lo = bound(span && span.first_picture, 0);
+  const hi = bound(span && span.last_picture, stamps.length - 1);
+  // Every picture the capture actually stamped, inside the span. A gap (the
+  // capture layer refuses a picture rather than guessing its frame) is
+  // skipped, never interpolated: this list is what the counter is looked up
+  // in, and nothing outside it is ever shown.
   const read = [];
-  for (let slot = 0; slot < stamps.length; slot += 1)
+  for (let slot = lo; slot <= hi; slot += 1)
     if (stamps[slot] != null) read.push(slot);
-  if (!read.length) return { ok: false, reason: "no_picture_timer" };
+  if (!read.length)
+    return { reason: span ? "span_has_no_pictures" : "no_picture_timer" };
 
   // Where the attempt starts. Repeated values are NOT restarts -- the capture
   // runs at 60 fps over a 30 fps game, so several pictures legitimately carry
@@ -105,7 +120,17 @@ export function ghostTemplate(view) {
     if (stamps[read[k]] < stamps[read[k - 1]]) restarts.push(k);
   const zero = restarts.length ? restarts[restarts.length - 1] : 0;
   if (restarts.length > 1 || (restarts.length && stamps[read[zero]] > NEAR_ZERO_IGT))
-    return { ok: false, reason: "counter_restarts" };
+    return { reason: "counter_restarts" };
+  return { read, zero, reason: null };
+}
+
+export function ghostTemplate(view, span = null) {
+  const stamps = view && view.picture_igt;
+  if (!Array.isArray(stamps) || !stamps.length)
+    return { ok: false, reason: "no_picture_timer" };
+  const clock = clipClock(view);
+  const { read, zero, reason } = attemptPictures(stamps, span);
+  if (reason) return { ok: false, reason };
 
   const igts = [];
   const slots = [];
@@ -113,9 +138,10 @@ export function ghostTemplate(view) {
     slots.push(read[k]);
     igts.push(stamps[read[k]]);
   }
-  //: the first picture the ghost may ever show. Anything before it belongs to
-  //: the run that ended before this one.
+  //: the first and last pictures the ghost may ever show. Outside them lies
+  //: the run that ended before this one and the cutscene after the star.
   const zeroSlot = slots[0];
+  const lastSlot = slots[slots.length - 1];
 
   // The first entry at or after `igt`. A counter the capture missed answers
   // with the next picture the template would have shown -- the same rule
@@ -137,9 +163,13 @@ export function ghostTemplate(view) {
     firstIgt: igts[0], lastIgt: igts[igts.length - 1], pictures: igts.length,
     //: how many stamped pictures the clip holds BEFORE the attempt's own
     //: start. A live diagnosis reads it through `window.ghostStatus()`: a
-    //: template with none was cut after the reset, one with hundreds is the
-    //: shape that has to be refused rather than followed.
-    prerollPictures: zero, zeroSlot,
+    //: template with none was cut after the reset (or clamped to a span that
+    //: starts there), one with hundreds is a clip with a long lead-in.
+    prerollPictures: zero, zeroSlot, lastSlot,
+    //: how the run's bounds were decided: the source's exact span, or this
+    //: module's own reading of the counter. It is the first thing to look at
+    //: when a ghost shows a frame he did not expect.
+    basis: span ? (span.basis || "span") : "counter_restart",
 
     /** Where in the clip the picture for this counter value sits, and
      *  whether the template even reaches that far. */
@@ -161,9 +191,21 @@ export function ghostTemplate(view) {
      *  a broken clock rather than as a ghost that has not been placed. */
     igtAtTime(seconds) {
       const raw = slotAtTime(seconds, clock);
-      let slot = Math.max(zeroSlot, Math.min(stamps.length - 1, raw));
+      let slot = Math.max(zeroSlot, Math.min(lastSlot, raw));
       while (slot > zeroSlot && stamps[slot] == null) slot -= 1;
       return stamps[slot];
+    },
+
+    /** Is the element sitting on a picture the ghost must never show -- the
+     *  lead-in before the attempt, or the cutscene after the star?
+     *
+     *  Asked rather than inferred from the counter: `igtAtTime` CLAMPS, so a
+     *  video that has run one frame past the last picture answers with the
+     *  last picture's value and looks perfectly in step. This is the question
+     *  "his ruling" turns on, so it is measured on the clip's own time axis. */
+    outsideRun(seconds) {
+      const raw = slotAtTime(seconds, clock);
+      return raw < zeroSlot || raw > lastSlot;
     },
   };
 }
@@ -182,10 +224,12 @@ const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
  *
  * `options.expect` ({level, area}) holds the ghost while the player is
  * somewhere the template never was; leave it out and the check is skipped.
+ * `options.span` is the source's own answer for where the attempt starts and
+ * ends; leave it out and the template reads that off the counter itself.
  */
 export function createFollower(view, options = {}) {
   const cfg = { ...DEFAULTS, ...options };
-  const template = ghostTemplate(view);
+  const template = ghostTemplate(view, options.span || null);
   const expect = options.expect || null;
   let nudge = options.nudgeFrames || 0;
   let lastIgt = null;
@@ -267,8 +311,18 @@ export function createFollower(view, options = {}) {
       return { action: "seek", rate: 0, time,
                reason: placement(moved, target, asked) };
     }
-    if (clamped)
-      return HOLD(clamped === "before" ? "before_template" : "past_template", time);
+    if (clamped) {
+      // Either end of the attempt's own span: the live counter has not
+      // reached the template's first picture yet (the reload after a reset),
+      // or it has run past its last (he is slower than the ghost was). Park
+      // ON the boundary picture rather than wherever play left the element --
+      // one frame past the last picture IS the cutscene the span excludes,
+      // and his ruling is that nothing outside the attempt is ever shown.
+      const reason = clamped === "before" ? "before_template" : "past_template";
+      return template.outsideRun(videoTime)
+        ? { action: "seek", rate: 0, time, reason }
+        : HOLD(reason, time);
+    }
     return running(moved, target, time, videoTime);
   };
 
