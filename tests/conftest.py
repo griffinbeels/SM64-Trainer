@@ -32,6 +32,13 @@ def pytest_configure(config):
     Configure precedes xdist worker creation. Workers and runner-owned pytest
     inherit the live ancestor's budget and must never acquire it a second time.
     """
+    # Browser waits get a bound that matches how THIS suite runs: several
+    # servers, browsers and node drivers on one machine. uilab's 10s default
+    # suits one browser on an idle box and failed four release attempts here
+    # (2026-09-18/19), each on a different selector, on pages that render in
+    # under a second alone. A bound is not a timing assertion -- a test that
+    # means "within 200 ms" still passes its own timeout_ms.
+    os.environ.setdefault("UILAB_WAIT_MS", "30000")
     from tools.test_resources import TestResources, WORKERS_ENV, effective_workers, inherited_owner
 
     if hasattr(config, "workerinput"):
