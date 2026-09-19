@@ -863,36 +863,52 @@ is the first of them.
 
 ### Compressed replay
 
-A saved replay whose video was re-encoded smaller in the background after
-Save/PB published it, under the same filename. The [[frame map]], the
+A saved replay whose video the trainer re-encoded smaller in the background
+after Save/PB published it, under the same filename. The [[frame map]], the
 picture states and the [[input timeline]] index a clip's pictures by
 position and by each picture's own time, and none of them reads the video,
-so the swap is allowed only once the smaller file is proven to hold the same
-pictures, in the same order, on the same ticks, for the same length, under
-identical decoded audio, and to look like the original. A proof that fails
-keeps the original and says why. Saving stays instant: the swap happens
-later, when no player has asked for the clip lately, and otherwise when the
-app closes, so the folder never keeps both files past a session. A save that
-is closed on before its job finishes is shrunk at the next start. Working
-files live in one hidden folder at the top of the save tree, never beside the
-replay. A replay saved before this existed is never rewritten unasked, and a
-compressed one is never encoded a second time.
+so the trainer swaps the file only once it has proven the smaller one holds
+the same pictures, in the same order, on the same ticks, for the same
+length, under identical decoded audio, and looks like the original. A proof
+that fails keeps the original and says why. Saving stays instant: the swap
+happens later, when no player has asked for the clip lately, and otherwise
+when the app closes, so the folder never keeps both files once the app has
+closed. When he closes the app before a job finishes, the next launch
+finishes it. Working files live in one hidden folder at the top of the save tree,
+never beside the replay. The trainer never rewrites a replay saved before
+this existed unless asked, and never encodes a compressed one a second time.
 
 - **Lives** -- `src/sm64_events/replay/compress.py`; the quality rows are
   the archive stage in `src/sm64_events/replay/config.py`
 - **Not** -- a second copy. There is one file per saved replay, and the ring
-  and the clip the drawer shows straight after an attempt are untouched.
+  and the clip the drawer shows straight after an [[attempt]] stay as they were.
 
 ### Media fingerprint
 
 What a copy of a saved replay must reproduce to be the same replay: the
 file's sha256, the picture count with a digest of every picture's tick, a
-digest of the decoded audio, and where the last picture ends. It is written
-into the sidecar's `media` block when a [[compressed replay]] is adopted,
-beside the original's own fingerprint, and it is what an uploader or
-downloader checks to say a shared replay arrived exactly as it left.
+digest of the decoded audio, and where the last picture ends. The trainer
+writes it into the sidecar's `media` block when it adopts a [[compressed
+replay]], beside the original's own fingerprint, and it is what an uploader
+or downloader checks to say a shared replay arrived exactly as it left.
 
 - **Lives** -- `src/sm64_events/replay/compress.py` (fingerprint, prove)
+
+### Close warning
+
+The modal the page shows when he closes the app while the trainer is still
+making a [[compressed replay]]: which replays are in flight, what is
+happening to each in plain words, one moving bar apiece, and Exit anyway /
+Wait / Keep using the app. Its copy is a contract: the replays are already
+saved and exiting only leaves some of them full size until the next launch,
+so Exit never wears a destructive style. The desktop shell asks the page to
+show it, and closes instead whenever it cannot be sure a page is there to
+answer. The recording panel shows the same list at any time.
+
+- **Lives** -- `src/sm64_events/ui/components/closewarning.js` (the modal),
+  `src/sm64_events/ui/components/compressionjobs.js` (the one list),
+  `src/sm64_events/desktop/closeguard.py` (when to ask),
+  `src/sm64_events/server/replay_api.py` (the list it polls)
 
 ### Pad reader
 
