@@ -136,12 +136,17 @@ def follow_decision(game: GameWindow | None, *, wanted_visible: bool = True,
         return Placement(show=False, rect=None, reason="gone")
     if game.minimized:
         return Placement(show=False, rect=None, reason="minimized")
-    if not game.foreground:
-        return Placement(show=False, rect=None, reason="not_foreground")
-    if not presentable:
-        return Placement(show=False, rect=None, reason="no_footage")
     client = game.client
     if (client is None or client.width < MIN_PICTURE_SIDE
             or client.height < MIN_PICTURE_SIDE):
         return Placement(show=False, rect=None, reason="too_small")
+    # From here the game picture EXISTS, so the rectangle is carried even
+    # though the ghost is not raised. That is what lets the window park over
+    # the picture, fully transparent, instead of being hidden -- and a hidden
+    # WebView2 never presents a frame at all (rig, 2026-09-19: 0 rAF/s hidden
+    # against 237/s shown at alpha 0), which made the old rule a deadlock.
+    if not game.foreground:
+        return Placement(show=False, rect=client, reason="not_foreground")
+    if not presentable:
+        return Placement(show=False, rect=client, reason="no_footage")
     return Placement(show=True, rect=client, reason="follow")

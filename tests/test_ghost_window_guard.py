@@ -40,6 +40,11 @@ APPROVED_WRITERS = frozenset({
     "SetWindowLongW", "SetWindowPos", "SetLayeredWindowAttributes",
     "ShowWindow", "SetProcessDpiAwarenessContext",
     "SetThreadDpiAwarenessContext",
+    # Not a window call at all: it closes the process snapshot and the process
+    # handles `controller.py` uses to end the overlay's own process tree. It
+    # is listed because the pattern below cannot tell a Close* apart by shape,
+    # and a row here is meant to be a deliberate act.
+    "CloseHandle",
 })
 
 #: Our own wrappers that change a window, plus the raw calls behind them. The

@@ -65,8 +65,10 @@ def test_the_ghost_leaves_when_he_is_using_another_app():
                       foreground=False)
     placement = follow_decision(away)
     assert placement.show is False
-    assert placement.rect is None
     assert placement.reason == "not_foreground"
+    assert placement.rect == PICTURE, (
+        "the picture is still there, so the window stays parked over it "
+        "rather than coming off screen and losing its frames")
     assert follow_decision(PLAYING).show is True
 
 
@@ -77,9 +79,11 @@ def test_a_window_with_no_footage_on_it_stays_off_his_screen():
     harder to see -- it may only be up while the page has a picture."""
     placement = follow_decision(PLAYING, presentable=False)
     assert placement.show is False
-    assert placement.rect is None
     assert placement.reason == "no_footage"
     assert follow_decision(PLAYING, presentable=True).show is True
+    assert placement.rect == PICTURE, (
+        "the one refusal that still knows where the window would go: the "
+        "other visibility strategy needs somewhere to put a clear window")
 
 
 def test_the_window_state_reasons_beat_the_page_one():

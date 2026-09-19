@@ -7,6 +7,7 @@ processes before we did; `test_stop_leaves_nothing_running` is the case that
 exists because of it.
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.ghost.window import controller as controller_module
+from sm64_events.ghost.window import diag
 from sm64_events.ghost.window.controller import (
     GHOST_WINDOW_FLAG,
     GhostWindowController,
@@ -236,3 +238,90 @@ def test_the_real_module_is_what_the_default_command_names():
                            text=True, check=False, **quiet_spawn_kwargs())
     assert probe.returncode == 0, probe.stderr
     assert "--fixed-rect" in probe.stdout
+
+
+# --- ending the whole tree, by parent pid only ------------------------------
+
+def test_the_parent_map_is_the_only_thing_used_to_find_children():
+    """Never by name or command line: half this machine is a python process,
+    and matching on that is how a cleanup kills somebody else's work."""
+    parents = controller_module.parent_map()
+    assert parents, "the kernel snapshot came back empty"
+    assert os.getpid() in parents
+    assert parents[os.getpid()] > 0
+
+
+def test_descendants_walks_every_generation():
+    """Pure, over a made-up tree: 1 -> 2 -> 4, and 3 belongs to nobody."""
+    tree = {1: 0, 2: 1, 4: 2, 3: 99, 99: 0}
+    assert controller_module.descendants(1, tree) == [2, 4]
+    assert controller_module.descendants(4, tree) == []
+    assert controller_module.descendants(99, tree) == [3]
+
+
+def test_a_real_child_and_everything_under_it_is_gone_after_stop(tmp_path):
+    """The recorded pid may be a SHIM, so stopping has to end the tree it
+    started. Proved against a real child on the `none` backend -- no window
+    anywhere -- and checked with a process listing rather than an exit code.
+    """
+    log_path = tmp_path / "ghost_window.jsonl"
+    os.environ[diag.PATH_ENV] = str(log_path)
+    window = GhostWindowController(
+        url=GHOST_URL, backend="none",
+        command=[sys.executable, "-m", "sm64_events.ghost.window",
+                 "--url", GHOST_URL, "--backend", "none",
+                 "--fixed-rect", "10,20,640,480", "--follow-period", "0.05"])
+    try:
+        window.start()
+        assert window.is_running()
+        owned = window.tree()
+        assert owned and owned[0] == window._process.pid
+        window.stop()
+        alive = controller_module.parent_map()
+        left = [pid for pid in owned if pid in alive]
+        assert left == [], f"these were left running: {left}"
+        assert window.is_running() is False
+    finally:
+        window.stop()
+        os.environ.pop(diag.PATH_ENV, None)
+
+
+def test_a_grandchild_the_shim_started_is_ended_too():
+    """THE failure this exists for: `Popen.pid` is the SHIM this venv starts
+    Python through, so terminate() and kill() reach the shim and leave the
+    process that owns the overlay window alive on his screen. Measured here,
+    2026-09-19: the pid we record spawns a real python, which spawns the
+    grandchild -- two generations down from what the old code ended.
+
+    The stand-in prints its grandchild's pid so this waits for THAT process
+    rather than for "the tree grew", which the shim's own child satisfies
+    before the grandchild exists. Nothing opens a window: the grandchild
+    carries CREATE_NO_WINDOW of its own, since a console app spawned by a
+    process with no console gets a brokered Terminal window otherwise.
+    """
+    inner = ("import json, subprocess, sys;"
+             "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'],"
+             " creationflags=0x08000000);"
+             "print(json.dumps({'event': 'ready', 'grandchild': p.pid}), flush=True);"
+             "sys.stdin.read()")
+    heard = []
+    window = GhostWindowController(
+        url=GHOST_URL, backend="none",
+        command=[sys.executable, "-c", inner], on_event=heard.append)
+    grandchild = None
+    try:
+        window.start()
+        assert wait_until(lambda: any("grandchild" in e for e in heard)), heard
+        grandchild = next(e["grandchild"] for e in heard if "grandchild" in e)
+        assert wait_until(lambda: grandchild in window.tree()), (
+            f"{grandchild} never appeared under {window.tree()}")
+        owned = window.tree()
+        window.stop()
+        alive = controller_module.parent_map()
+        left = [pid for pid in owned if pid in alive]
+        assert left == [], f"left running after stop: {left}"
+        assert grandchild not in alive, "the overlay's real process outlived stop()"
+    finally:
+        if grandchild is not None and grandchild in controller_module.parent_map():
+            controller_module.terminate(grandchild)
+        window.stop()

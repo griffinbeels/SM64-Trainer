@@ -12,6 +12,8 @@ project before:
 - nothing left running -- `stop()` asks, then terminates, then kills, and does
   not return until the process is actually gone.
 """
+import ctypes
+import ctypes.wintypes as wt
 import json
 import logging
 import subprocess
@@ -19,9 +21,83 @@ import sys
 import threading
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost.window import diag
 from sm64_events.ghost.window.protocol import encode_control_line, is_allowed_url
 
 log = logging.getLogger("sm64.ghost")
+
+TH32CS_SNAPPROCESS = 0x00000002
+PROCESS_TERMINATE = 0x0001
+
+
+class _PROCESSENTRY32(ctypes.Structure):
+    _fields_ = [("dwSize", wt.DWORD), ("cntUsage", wt.DWORD),
+                ("th32ProcessID", wt.DWORD),
+                ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID", wt.DWORD), ("cntThreads", wt.DWORD),
+                ("th32ParentProcessID", wt.DWORD),
+                ("pcPriClassBase", ctypes.c_long), ("dwFlags", wt.DWORD),
+                ("szExeFile", ctypes.c_char * 260)]
+
+
+def parent_map() -> dict[int, int]:
+    """Every live process id -> its parent's, from one kernel snapshot.
+
+    By PARENT PID and nothing else. Names and command lines are deliberately
+    not read: half this machine is a python process, and matching on that is
+    how a cleanup kills somebody else's work.
+    """
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = wt.HANDLE
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == wt.HANDLE(-1).value:
+        return {}
+    entry = _PROCESSENTRY32()
+    entry.dwSize = ctypes.sizeof(_PROCESSENTRY32)
+    found: dict[int, int] = {}
+    try:
+        if not kernel32.Process32First(snapshot, ctypes.byref(entry)):
+            return {}
+        while True:
+            found[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+                break
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return found
+
+
+def descendants(pid: int, parents: dict[int, int] | None = None) -> list[int]:
+    """Every live process descended from `pid`, nearest generation first.
+
+    This exists because THE RECORDED PID IS NOT THE OVERLAY. This venv starts
+    Python through a shim, so `Popen.pid` is the shim and the process that
+    owns the WebView2 window is its child -- terminating the shim leaves an
+    overlay on his screen, which is the one failure this class was written to
+    prevent.
+    """
+    known = parent_map() if parents is None else parents
+    out: list[int] = []
+    frontier = {pid}
+    while frontier:
+        children = {child for child, parent in known.items()
+                    if parent in frontier and child != pid and child not in out}
+        out.extend(sorted(children))
+        frontier = children
+    return out
+
+
+def terminate(pid: int) -> bool:
+    """End one process by its id. Returns whether the handle took it."""
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = wt.HANDLE
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.TerminateProcess(handle, 1))
+    finally:
+        kernel32.CloseHandle(handle)
 
 MODULE = "sm64_events.ghost.window"
 
@@ -85,6 +161,17 @@ class GhostWindowController:
 
     # --- lifecycle ----------------------------------------------------------
 
+    def tree(self) -> list[int]:
+        """The pids this controller is responsible for, recorded at spawn.
+
+        The shim first, then whatever it started. Read live rather than
+        cached, because WebView2 starts its own helpers after we let go.
+        """
+        process = self._process
+        if process is None:
+            return []
+        return [process.pid, *descendants(process.pid)]
+
     def start(self) -> None:
         if self.is_running():
             return
@@ -108,11 +195,22 @@ class GhostWindowController:
         self._reader.start()
 
     def stop(self) -> None:
-        """Ask, then terminate, then kill. Returns only once it is gone."""
+        """Ask, then terminate, then kill the whole TREE. Returns once gone.
+
+        **The recorded pid is not the overlay.** This venv starts Python
+        through a shim, so `Popen.pid` names the shim and the process holding
+        the WebView2 window is its child. `terminate()` and `kill()` reach
+        only the shim, which leaves a window on his screen in exactly the case
+        this escalation exists for. Every survivor is found by PARENT PID from
+        the pid we recorded at spawn -- never by name or command line.
+        """
         process, self._process = self._process, None
         reader, self._reader = self._reader, None
         if process is None:
             return
+        # Taken BEFORE anything ends: once the shim exits its children are
+        # reparented and the chain back to our pid is gone.
+        owned = [process.pid, *descendants(process.pid)]
         if process.poll() is None:
             self._write(process, encode_control_line(quit=True))
         _close(process.stdin)
@@ -124,12 +222,24 @@ class GhostWindowController:
                 break
             except subprocess.TimeoutExpired:
                 log.warning("ghost overlay did not end on its own; escalating")
-        if process.poll() is None:
-            log.error("ghost overlay process %s survived terminate and kill",
-                      process.pid)
+        self._end_survivors(owned)
         if reader is not None:
             reader.join(timeout=2)
         _close(process.stdout)
+
+    def _end_survivors(self, owned: list[int]) -> None:
+        """Whatever the shim left behind, by the pids we recorded."""
+        alive = parent_map()
+        survivors = [pid for pid in owned if pid in alive]
+        if not survivors:
+            return
+        # Deepest first: a parent that outlives its child cannot adopt it out.
+        ended = [pid for pid in reversed(survivors) if terminate(pid)]
+        still = [pid for pid in survivors if pid in parent_map()]
+        log.warning("ghost overlay left %s behind; ended %s", survivors, ended)
+        diag.record("window_tree_ended", level="error" if still else "info",
+                    owned=owned, survivors=survivors, ended=ended,
+                    still_running=still)
 
     def __enter__(self) -> "GhostWindowController":
         self.start()

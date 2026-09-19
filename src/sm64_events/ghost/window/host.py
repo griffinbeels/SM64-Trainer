@@ -26,10 +26,16 @@ URLs into it and hands out its handle; that is all.
   EVERY navigation, and the session navigates the ghost on every target
   change -- it would show an unplaced window and take the keyboard off him
   mid-attempt. On its own this rules the flag out.
-- `winforms.py::create_window` runs the transparency workaround its own
-  comment says is what makes a transparent window work (`Show()` then
-  `Hide()`) only in the branch for a window that is NOT hidden. The ghost is
-  created hidden, so it would never get it anyway.
+- `winforms.py::create_window` reaches its transparency workaround (`Show()`
+  then `Hide()`, under the comment saying that is what makes a transparent
+  window work) only through an `elif` a HIDDEN window never takes, so the
+  ghost would not get it anyway. **Note what the hidden branch does instead,
+  because an earlier version of this docstring implied a hidden window is
+  never shown and that is wrong:** it runs `Opacity = 0; Show(); Hide();
+  Opacity = 1`. The form IS shown, invisibly, before any of our styles exist
+  -- and WinForms implements `Form.Opacity` with `WS_EX_LAYERED`, the very bit
+  whole-window alpha needs. That is why nothing in this package is one-shot;
+  see `placer.Placer.prepare`.
 - `winforms.py` never sets `AllowTransparency` or `TransparencyKey`, so the
   FORM stays opaque whatever the page does.
 
@@ -53,6 +59,7 @@ how it asks.
 import logging
 import os
 import threading
+from dataclasses import dataclass
 
 from sm64_events.ghost.window import native
 from sm64_events.ghost.window.geometry import Rect
@@ -77,11 +84,35 @@ _DEFAULT_RECT = Rect(x=0, y=0, width=640, height=480)
 #: `ui/ghost/index.html`): that answers null, which reads as NOT presentable.
 STATUS_SCRIPT = "window.ghostStatus ? window.ghostStatus() : null"
 
+#: Every way asking the page can turn out. They were all `None` before, which
+#: is what made his second try unreadable: one row saying `said: null` cannot
+#: distinguish "there was no window yet" from "evaluate_js raised" from "the
+#: page answered nothing".
+NO_WINDOW, RAISED, NOTHING, STATUS = "no_window", "raised", "nothing", "status"
+
+
+@dataclass(frozen=True)
+class PageAnswer:
+    """What came back when the page was asked, and which kind of answer it is."""
+
+    state: str
+    status: dict | None = None
+    detail: str | None = None
+
+    @property
+    def presentable(self) -> bool:
+        return bool(self.status and self.status.get("presentable"))
+
 
 class NullHost:
     """A host with no window, for driving everything around one."""
 
     name = "none"
+    #: There is no window to make ready, so the follower's readiness gate has
+    #: nothing to wait for. Without this the gate never opens and the `none`
+    #: backend -- the one that proves the control plane and the follower with
+    #: nothing on screen -- would sit refusing every decision forever.
+    hosts_window = False
 
     def __init__(self):
         self.calls: list[tuple] = []
@@ -96,8 +127,10 @@ class NullHost:
     def load_url(self, url: str) -> None:
         self.calls.append(("load_url", url))
 
-    def page_status(self) -> dict | None:
-        return self.status
+    def page_status(self) -> PageAnswer:
+        if self.status is None:
+            return PageAnswer(state=NOTHING)
+        return PageAnswer(state=STATUS, status=self.status)
 
     def use_transparent_page_background(self) -> str | None:
         return "no_window"
@@ -116,6 +149,7 @@ class WebviewHost:
     """One frameless WebView2 window. Placing it is somebody else's job."""
 
     name = "webview"
+    hosts_window = True
 
     def __init__(self, title: str = OVERLAY_TITLE):
         self._title = title
@@ -140,38 +174,49 @@ class WebviewHost:
         if window is not None:
             window.load_url(url)
 
-    def page_status(self) -> dict | None:
-        """What the page says about itself, or None if it cannot be asked.
+    def page_status(self) -> PageAnswer:
+        """What the page says about itself, and WHICH KIND of answer it is.
+
+        Every failure used to come back as `None`, which is why his second try
+        could not be read: "no window yet", "evaluate_js raised" and "the page
+        answered nothing" were one row. They are three states now, and the
+        exception text travels with the third.
 
         **This blocks, and it may block forever.** pywebview's `evaluate_js`
         marshals to the WebView2 UI thread and waits on a semaphore with no
-        timeout (`edgechromium.py`), so a wedged page would hold whichever
-        thread asked. That is why `child.PageWatch` owns the asking on a
-        thread of its own and the follower only ever reads a cached answer:
-        a frozen follower is a ghost frozen on his screen.
+        timeout (`edgechromium.py`), behind a readiness wrapper that waits 20 s
+        and then raises. That is why `child.PageWatch` owns the asking on a
+        thread of its own and the follower only ever reads a cached answer: a
+        frozen follower is a ghost frozen on his screen.
         """
         window = self._window
         if window is None:
-            return None
+            return PageAnswer(state=NO_WINDOW)
         try:
             answer = window.evaluate_js(STATUS_SCRIPT)
-        except Exception:  # noqa: BLE001 - a page that will not answer is not presentable
+        except Exception as error:  # noqa: BLE001 - reported, never swallowed
             log.debug("the ghost page would not answer", exc_info=True)
-            return None
-        return answer if isinstance(answer, dict) else None
+            return PageAnswer(state=RAISED,
+                              detail=f"{type(error).__name__}: {error}"[:300])
+        if isinstance(answer, dict):
+            return PageAnswer(state=STATUS, status=answer)
+        return PageAnswer(state=NOTHING,
+                          detail=None if answer is None else str(answer)[:120])
 
     def use_transparent_page_background(self) -> str | None:
-        """Stop the WebView2 control painting its own background. Once.
+        """Stop the WebView2 control painting its own background.
 
-        Returns what happened the first time and None afterwards, so the
-        caller logs one line rather than one per tick. See the module
-        docstring for why this is done by hand instead of with pywebview's
-        `transparent=True`, and for what it does and does not buy.
+        RETRIED until it works, and None only once it has. It used to be
+        one-shot, and in his second try it fired at 08:20:06.805 -- a
+        millisecond before the window handle existed -- found no control, and
+        gave up for the rest of the session.
+
+        See the module docstring for why this is done by hand instead of with
+        pywebview's `transparent=True`, and for what it does and does not buy.
         """
         with self._lock:
             if self._background_tried:
                 return None
-            self._background_tried = True
             form = getattr(self._window, "native", None)
             control = getattr(form, "webview", None)
             if control is None:
@@ -183,6 +228,7 @@ class WebviewHost:
                 control.DefaultBackgroundColor = Color.Transparent
             except Exception as error:  # noqa: BLE001 - the black fallback is fine
                 return f"refused: {type(error).__name__}: {error}"
+            self._background_tried = True
             return "transparent"
 
     def hwnd(self) -> int:

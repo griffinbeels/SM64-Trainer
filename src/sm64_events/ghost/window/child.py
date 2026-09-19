@@ -45,7 +45,7 @@ from sm64_events.ghost.window.geometry import (
     Rect,
     follow_decision,
 )
-from sm64_events.ghost.window.host import BACKENDS, make_host
+from sm64_events.ghost.window.host import BACKENDS, RAISED, PageAnswer, make_host
 from sm64_events.ghost.window.placer import Placer
 from sm64_events.ghost.window.protocol import (
     alpha_byte,
@@ -53,6 +53,7 @@ from sm64_events.ghost.window.protocol import (
     is_allowed_url,
     parse_control_line,
 )
+from sm64_events.ghost.window.visibility import Visibility, visibility_for
 
 log = logging.getLogger("sm64.ghost")
 
@@ -70,6 +71,11 @@ PAGE_PERIOD_S = 0.10
 #: stops answering rather than answering "no", and the ghost has to come off
 #: his screen either way. Long enough that a busy decode does not blink it.
 PAGE_STALE_S = 1.0
+
+#: One full raw page answer every this many polls, on top of every change. At
+#: the period above that is a sample roughly every ten seconds, which is what
+#: makes a moving video time visible without writing ten rows a second.
+PAGE_SAMPLE_EVERY = 100
 
 
 @dataclass
@@ -143,28 +149,45 @@ class PageWatch:
     A page that has not defined `ghostStatus`, or answers without the field,
     is NOT presentable. The overlay dims everything under it, so "I do not
     know yet" has to mean "stay off".
+
+    **Every poll is written down**, which it was not in his second try: that
+    log carries ONE page row, `said: null`, taken before the window existed,
+    and it could not distinguish "never asked" from "raised every time" from
+    "answered no". Now each poll records WHICH KIND of answer came back, the
+    exception text when one was raised, and the page's own status; identical
+    consecutive rows collapse into one carrying a count, and a steady run
+    still drops a full sample every `PAGE_SAMPLE_EVERY` polls so a page whose
+    video time is moving leaves proof of it.
     """
 
     def __init__(self, host, *, stale_after_s: float = PAGE_STALE_S,
-                 clock=time.monotonic, record=diag.record):
+                 clock=time.monotonic, record=None):
         self._host = host
         self._stale = stale_after_s
         self._clock = clock
-        self._record = record
+        self._record = diag.Collapsing() if record is None else record
         self._lock = threading.Lock()
-        self._answer: dict | None = None
+        self._answer: PageAnswer | None = None
         self._at: float | None = None
-        self._reported: bool | None = None
+        self._signature: tuple | None = None
+        self._polls = 0
 
-    def poll(self) -> dict | None:
+    def poll(self) -> PageAnswer:
         answer = self._host.page_status()
         with self._lock:
             self._answer, self._at = answer, self._clock()
-        said = bool(isinstance(answer, dict) and answer.get("presentable"))
-        if said != self._reported:
-            self._reported = said
-            self._record("page_status", level="info", presentable=said,
-                         said=answer)
+        self._polls += 1
+        signature = (answer.state, answer.presentable, answer.detail)
+        fresh = signature != self._signature
+        self._signature = signature
+        # The raw status carries a moving video time, so repeating it every
+        # tick would defeat the collapsing. It rides the first row of each run
+        # -- never dropping a kind -- and one periodic sample after that.
+        sample = fresh or self._polls % PAGE_SAMPLE_EVERY == 0
+        self._record("page_poll", level="error" if answer.state == RAISED else "info",
+                     state=answer.state, presentable=answer.presentable,
+                     detail=answer.detail,
+                     said=answer.status if sample else None)
         return answer
 
     def presentable(self) -> bool:
@@ -172,7 +195,7 @@ class PageWatch:
             answer, at = self._answer, self._at
         if at is None or self._clock() - at > self._stale:
             return False
-        return bool(isinstance(answer, dict) and answer.get("presentable"))
+        return bool(answer is not None and answer.presentable)
 
     def run(self, stop: threading.Event, period_s: float) -> None:
         while not stop.is_set():
@@ -188,29 +211,37 @@ class PageWatch:
 class FollowLoop:
     """Keeps the overlay on the game picture, and applies only what changed.
 
-    `settle` runs every tick whatever the decision is -- it is where the
-    opacity the player just asked for reaches the window, on this thread
-    rather than on the control pipe's.
+    Two callbacks, and the order between them is the fix of 2026-09-19.
+    `prepare` runs EVERY tick and answers whether the window is ours yet --
+    styled, faded and confirmed by readback. `apply` runs only when the
+    decision has changed, and only after prepare said yes.
+
+    **A decision is remembered as done only when it was actually done.** The
+    old loop stored the placement before applying it, so a tick that found no
+    window handle yet still counted, and nothing ran again until the decision
+    CHANGED. In his second try that left the window unstyled for 4.1 seconds
+    and the opacity unset for nineteen.
     """
 
-    def __init__(self, observe, apply, wanted, settle=None, presentable=None):
+    def __init__(self, observe, apply, wanted, prepare=None, presentable=None):
         self._observe = observe
         self._apply = apply
         self._wanted = wanted
-        self._settle = settle
+        self._prepare = prepare
         self._presentable = presentable or (lambda: True)
         self._last: Placement | None = None
 
     def tick(self) -> Placement | None:
-        """One look. Returns what was applied, or None if nothing changed."""
-        if self._settle is not None:
-            self._settle()
+        """One look. Returns what was applied, or None if nothing was."""
         placement = follow_decision(self._observe(), wanted_visible=self._wanted(),
                                     presentable=self._presentable())
+        if self._prepare is not None and not self._prepare(placement):
+            return None
         if placement == self._last:
             return None
+        if not self._apply(placement):
+            return None
         self._last = placement
-        self._apply(placement)
         return placement
 
     def run(self, stop: threading.Event, period_s: float,
@@ -313,30 +344,46 @@ def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowL
     else:
         observe = watcher.observe
 
-    def place(placement: Placement) -> None:
+    # The background handover is retried until it takes, so its refusals
+    # collapse into one row with a count rather than one row per tick.
+    background_log = diag.Collapsing()
+
+    def wanted_for(placement: Placement) -> Visibility:
+        """The ONE place the "is it on screen" decision is taken. Pure, so it
+        costs nothing to ask twice in a tick."""
+        return visibility_for(placement, wanted_alpha=alpha_byte(state.opacity))
+
+    def prepare(placement: Placement) -> bool:
+        """Is the window ours yet? Every tick, retrying whatever is not.
+
+        Nothing here is one-shot. A handle that does not exist, a window whose
+        layered bit pywebview just removed, and a WebView2 control that has
+        not been built yet are all the same thing: ask again next tick.
+        """
+        if not host.hosts_window:
+            return True
+        hwnd = host.hwnd()
+        if hwnd:
+            background = host.use_transparent_page_background()
+            if background is not None:
+                background_log("page_background", level="info", result=background)
+        ready = placer.prepare(hwnd)
+        if ready.ok:
+            placer.keep_above(hwnd, watcher.hwnd)
+        return ready.ok
+
+    def place(placement: Placement) -> bool:
         emit({"event": "placed", "show": placement.show,
               "reason": placement.reason,
               "rect": placement.rect.as_list() if placement.rect else None})
         diag.record("decision", level="info", show=placement.show,
                     reason=placement.reason, rect=placement.rect,
                     game_hwnd=watcher.hwnd)
-        placer.apply(host.hwnd(), placement, game_hwnd=watcher.hwnd)
-
-    def settle() -> None:
-        """Every tick, whatever the decision: the things that change WITHOUT
-        the game picture moving. An opacity he just asked for, another window
-        sliding in front of the ghost, and the one-time handover of the page
-        background to the WebView2 control itself."""
-        hwnd = host.hwnd()
-        if hwnd:
-            background = host.use_transparent_page_background()
-            if background is not None:
-                diag.record("page_background", level="info", result=background)
-        placer.ensure_alpha(hwnd, alpha_byte(state.opacity))
-        placer.keep_above(hwnd, watcher.hwnd)
+        placer.apply(host.hwnd(), wanted_for(placement), game_hwnd=watcher.hwnd)
+        return True
 
     return FollowLoop(observe=observe, apply=place,
-                      wanted=lambda: state.visible, settle=settle,
+                      wanted=lambda: state.visible, prepare=prepare,
                       presentable=page.presentable)
 
 
