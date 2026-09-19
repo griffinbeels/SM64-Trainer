@@ -19,6 +19,7 @@ The scores this file prints are in the report; read `SCENARIOS` for what each
 trace does to the clock.
 """
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,9 +34,19 @@ pytestmark = pytest.mark.skipif(
 
 
 def _clip_roots() -> list[Path]:
-    """Where this machine's own footage sits, read-only. A worktree has its
-    own (empty) `replays/`, so the primary checkout -- the one the human
-    actually plays on -- is the interesting one."""
+    """Where this machine's own footage sits, READ-ONLY. A worktree has its
+    own (usually empty) `replays/`, so the primary checkout -- the one the
+    human actually plays on -- is the interesting one.
+
+    `SM64_GHOST_CLIP_ROOTS` (os.pathsep-separated) aims this check at another
+    checkout's recordings without copying them: the clips from his first try
+    live in the FEATURE worktree, because that is where he was recording, and
+    this check is the promise that the follower works on his real footage.
+    Nothing here ever writes to a clip root.
+    """
+    override = os.environ.get("SM64_GHOST_CLIP_ROOTS", "").strip()
+    if override:
+        return [Path(part) for part in override.split(os.pathsep) if part]
     roots = [REPO / "replays"]
     try:
         common = subprocess.run(
@@ -426,7 +437,16 @@ console.log(JSON.stringify(out));
 
 
 def _drive(script: str) -> dict:
-    proc = subprocess.run(["node", "--input-type=module", "-e", script],
+    """Run one harness script in node and read its answer.
+
+    Over STDIN, not `-e`: a script carrying a real clip's arrays is an
+    argument, and Windows caps a command line at ~32k. His Wet-Dry World
+    100-coin clip (3,232 pictures) is past that, so the check died with
+    `[WinError 206] The filename or extension is too long` -- a failure about
+    argument length, on the one clip big enough to be interesting.
+    `tests/test_ui_ghost_session.py` already feeds node this way.
+    """
+    proc = subprocess.run(["node", "--input-type=module", "-"], input=script,
                           capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -659,9 +679,16 @@ def test_a_reset_returns_to_the_attempts_first_picture_not_the_pre_roll(scores):
 # -- the real clip ----------------------------------------------------------
 
 
-def _real_clip() -> dict | None:
-    """A saved sidecar on this machine, read-only. The payload the server
-    would hand the page is these same keys."""
+def _real_clips() -> list[dict]:
+    """EVERY saved sidecar on this machine that carries a picture timer,
+    read-only. The payload the server would hand the page is these same keys.
+
+    All of them rather than the first: the first one sorted happened to be the
+    clip with no pre-roll while the rule was being written, which is exactly
+    how the refusal that rejected essentially every real clip survived its own
+    check (his first try, 2026-09-19).
+    """
+    clips = []
     for root in _clip_roots():
         if not root.is_dir():
             continue
@@ -671,11 +698,11 @@ def _real_clip() -> dict | None:
             except (OSError, ValueError):
                 continue
             if meta.get("picture_igt") and meta.get("frame_times"):
-                return {"name": path.name,
-                        "view": {k: meta.get(k) for k in
-                                 ("frame_times", "picture_igt", "duration_s",
-                                  "video_start_s", "fps", "encode")}}
-    return None
+                clips.append({"name": path.name,
+                              "view": {k: meta.get(k) for k in
+                                       ("frame_times", "picture_igt", "duration_s",
+                                        "video_start_s", "fps", "encode")}})
+    return clips
 
 
 REAL = r"""
@@ -684,7 +711,24 @@ const view = __VIEW__;
 const DT = 1 / 30;
 const template = ghostTemplate(view);
 const igts = view.picture_igt.filter((v) => v != null);
-const first = igts[0], last = igts[igts.length - 1];
+// THE TRACE WALKS THE TEMPLATE'S OWN RUN, not the clip's raw stamps.
+//
+// This used to be `igts[0] .. igts[igts.length - 1]`, which on a real saved
+// clip is "the previous run's final timer .. this attempt's last" -- 3029
+// down to 584 on his Swimming Beast clip. The loop then never ran, the trace
+// was EMPTY, and `Math.max()` of nothing is -Infinity, which JSON writes as
+// `null`: the test died comparing None to 1 rather than reporting anything
+// about the follower (measured on his own recording, 2026-09-19). The
+// template already knows where the attempt starts and ends; ask it.
+const first = template.firstIgt, last = template.lastIgt;
+
+// A REFUSED template has no run to walk and no `igtAtTime` to ask, so the
+// answer is the refusal itself. Calling on regardless threw
+// "igtAtTime is not a function" on the sixth of his clips -- an error about
+// the harness, in a check whose whole job is to report on the follower.
+if (!template.ok) {
+  console.log(JSON.stringify({ok: false, reason: template.reason}));
+} else {
 
 function drive(trace) {
   const follower = createFollower(view, {});
@@ -723,15 +767,21 @@ for (let igt = quarter; igt <= last; igt += 1)
   mixed.push({ igt, global_timer: 7000 + igt, level: 8, area: 1 });
 const interrupted = drive(mixed).slice(2).filter((e) => e != null);
 
-const worst = (xs) => Math.max(...xs.map(Math.abs));
+// `Math.max()` of nothing is -Infinity and JSON writes that as null, which
+// reads downstream as "no error" rather than "no samples". An empty trace is
+// a broken harness, so it says so in the answer.
+const worst = (xs) => (xs.length ? Math.max(...xs.map(Math.abs)) : "no samples");
 console.log(JSON.stringify({
-  ok: template.ok, pictures: igts.length, first, last,
+  ok: template.ok, reason: template.reason, pictures: template.pictures,
+  preroll_pictures: template.prerollPictures, stamped: igts.length,
+  first, last,
   steady: { worst: worst(steady), over_one: steady.filter((e) => Math.abs(e) > 1).length,
             samples: steady.length },
   interrupted: { worst: worst(interrupted),
                  over_one: interrupted.filter((e) => Math.abs(e) > 1).length,
                  samples: interrupted.length },
 }));
+}
 """
 
 
@@ -935,18 +985,41 @@ def test_his_own_first_try_payload_plays_its_attempt():
     assert result["reset"]["after"]["over_one"] == 0, result
 
 
-def test_the_real_saved_clip_follows_its_own_timer():
-    """The one end-to-end check against footage this machine actually holds:
-    the template's own per-picture timer, played back against a clock that
-    walks it, stalls in it and loads backwards inside it."""
-    clip = _real_clip()
-    if clip is None:
+def test_the_real_saved_clips_follow_their_own_timer():
+    """The end-to-end check against footage this machine actually holds:
+    every saved clip's own per-picture timer, played back against a clock that
+    walks it, stalls in it and loads backwards inside it.
+
+    A clip the rule REFUSES is a pass with a name -- an area-crossing star
+    makes one counter value name two pictures and the prototype says so rather
+    than guessing. What is not allowed is a clip it accepts and then follows
+    badly, or a trace with no samples in it (which is what an empty play loop
+    looked like before: `worst` came back null and the comparison, not the
+    follower, is what failed).
+    """
+    clips = _real_clips()
+    if not clips:
         pytest.skip("no saved clip with a picture timer on this machine")
-    script = (REAL.replace("__FOLLOWER__", FOLLOWER)
-              .replace("__VIEW__", json.dumps(clip["view"])))
-    result = _drive(script)
-    assert result["ok"] is True, result
-    assert result["steady"]["worst"] <= 1, result
-    assert result["steady"]["over_one"] == 0, result
-    assert result["interrupted"]["worst"] <= 1, result
-    assert result["interrupted"]["over_one"] == 0, result
+    followed, refused = [], []
+    for clip in clips:
+        result = _drive(REAL.replace("__FOLLOWER__", FOLLOWER)
+                        .replace("__VIEW__", json.dumps(clip["view"])))
+        note = f"{clip['name']}: {result}"
+        if not result["ok"]:
+            assert result["reason"] in {"counter_restarts", "no_picture_timer",
+                                        "span_has_no_pictures"}, note
+            refused.append(clip["name"])
+            continue
+        # It played the ATTEMPT, not the clip: a template whose run starts at
+        # the previous attempt's final timer would walk an empty trace.
+        assert result["first"] < result["last"], note
+        assert result["steady"]["samples"] > 0, note
+        assert result["interrupted"]["samples"] > 0, note
+        assert result["steady"]["worst"] <= 1, note
+        assert result["steady"]["over_one"] == 0, note
+        assert result["interrupted"]["worst"] <= 1, note
+        assert result["interrupted"]["over_one"] == 0, note
+        followed.append(clip["name"])
+    # A run in which every clip was refused would satisfy every assertion
+    # above and prove nothing at all.
+    assert followed, f"no clip on this machine was followed: refused {refused}"
