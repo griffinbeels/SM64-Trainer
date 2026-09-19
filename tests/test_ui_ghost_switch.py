@@ -107,6 +107,37 @@ def test_no_technique_names_reach_the_player():
             f"user-facing wording names the technique: {banned!r} in {visible!r}")
 
 
+def test_the_fixtures_ghost_door_is_not_shadowed_by_the_real_one():
+    """The app factory mounts `/api/ghost` itself now, and with no session
+    behind it — an offline fixture — it answers 503. A duplicate FastAPI path
+    shadows SILENTLY, first registration winning, so the fixture's door became
+    unreachable the day tracks E and F met.
+
+    What that looks like from outside is the reason this is its own test: the
+    switch treats an unreachable session as "this build has no ghost" and
+    renders nothing at all, so every rendered check below errors on a missing
+    element and reads exactly like a broken component. Measured: 28 of them.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    sys.path.insert(0, str(REPO / "tools"))
+    from ghost_fixture import attach_ghost_routes, ghost_session
+
+    app = FastAPI()
+
+    @app.get("/api/ghost")           # the real mount, with no session
+    def _real():
+        raise RuntimeError("the real route answered")
+
+    state = {"session": ghost_session(enabled=True), "writes": []}
+    attach_ghost_routes(app, state)
+    with TestClient(app) as client:
+        answer = client.get("/api/ghost")
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["enabled"] is True
+
+
 # --------------------------------------------------------------------------
 # The rendered card
 # --------------------------------------------------------------------------

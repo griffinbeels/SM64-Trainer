@@ -1073,8 +1073,10 @@ away or small, and ends when the trainer does.
 
 The live [[attempt]]'s timer, pushed to whatever follows it: Usamune's own
 counter exactly as the poll loop reads it, beside the emulator's [[frame]]
-counter, which keeps moving while the game pauses. With nothing listening it
-costs the poll loop one test and never touches the [[snapshot]].
+counter, which keeps moving while the game pauses. It carries the [[nudge]]
+too, since both are parts of the one rule the [[ghost follower]] applies. With
+nothing listening it costs the poll loop one test and never touches the
+[[snapshot]].
 
 - **Lives** — `src/sm64_events/server/ghost_clock.py` → the /ws/ghost-clock
   socket
@@ -1096,8 +1098,9 @@ Positive shows you where you should be next; negative shows what you just did.
 It belongs to the one thing you are practising, so it goes back to zero as soon
 as the [[target]] changes.
 
-- **Lives** — `src/sm64_events/ghost/session.py` holds it; the
-  [[ghost follower]] applies it
+- **Lives** — `src/sm64_events/ghost/session.py` holds it; it travels to the
+  overlay on the [[ghost clock]], which is what lets it change without the
+  overlay page reloading; the [[ghost follower]] applies it
 
 ### Input document
 

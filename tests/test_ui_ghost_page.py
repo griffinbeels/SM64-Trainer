@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -104,16 +104,33 @@ class _Fixture:
     def __init__(self, clip: Path):
         self.available = True
         self.feed = GhostClockFeed()
+        #: every source query the page actually sent, so the test can check
+        #: which star the page ASKED about rather than trusting that it read
+        #: its own URL correctly. The three spellings of a star's key are
+        #: walked end to end in `tests/test_ghost_key_forms.py`; this is the
+        #: one hop that needs a real browser, because it is the page reading
+        #: its own address.
+        self.source_queries: list[dict] = []
         app = FastAPI()
         app.include_router(create_ghost_clock_router(self.feed))
 
         @app.get("/api/ghost/source")
-        def source():
+        def source(request: Request):
+            self.source_queries.append(dict(request.query_params))
             return AVAILABLE if self.available else UNAVAILABLE
 
         @app.post("/test/clock")
         def clock(igt: int, global_timer: int, level: int = 8, area: int = 1):
             self.feed.note(_snapshot(igt, global_timer, level, area))
+            return {"ok": True}
+
+        @app.post("/test/nudge")
+        def nudge(frames: int):
+            # What `PUT /api/ghost` does on the real server: the session hands
+            # the feed its new nudge and nothing else happens. No URL, no
+            # navigation — which is the property this fixture exists to let
+            # the test observe.
+            self.feed.set_nudge(frames)
             return {"ok": True}
 
         @app.get("/media/ghost.mp4")
@@ -189,6 +206,40 @@ def _trace(page, igts: list) -> dict:
     return result
 
 
+def _nudge_over_the_clock(page, url: str) -> None:
+    """THE DEFECT THIS CLOSES, at the page's own level.
+
+    The nudge used to ride the overlay page's URL, so every press of his timing
+    key re-pointed the window: a full page LOAD, which blinks the ghost off and
+    re-seeks it from scratch — many times over for a key held down. It now
+    arrives on the clock feed, so the page adopts it on its next game frame and
+    is never navigated.
+
+    `__alive` is how "never navigated" is MEASURED rather than asserted: it is
+    set once, and a load of any kind wipes it. Watching for a flicker would be
+    the weaker claim, since a reload can finish between two samples.
+    """
+    page.evaluate("(() => { window.__alive = 'yes'; return true; })()")
+    page.evaluate("(() => { fetch('/test/nudge?frames=-20', {method: 'POST'});"
+                  " return true; })()")
+    page.wait_ms(100)
+    over_the_clock = _trace(page, list(range(400, 431)))
+    assert page.evaluate("window.__alive") == "yes", "the page was reloaded"
+    assert over_the_clock["nudge_frames"] == -20, over_the_clock
+    assert over_the_clock["target_igt"] == over_the_clock["sample"]["igt"] - 20
+    assert abs(over_the_clock["decision"]["drift"]) <= 2, over_the_clock
+
+    # A page that starts FRESH — a reload, a new window, a child the session
+    # restarted — takes the nudge in force NOW on its first sample, rather than
+    # sitting at zero until he presses the key again.
+    page.goto(url)
+    page.wait_for('body[data-ghost="ready"]')
+    assert page.evaluate("window.__alive") is None
+    assert page.evaluate("window.ghostStatus().nudge_frames") == 0
+    fresh = _trace(page, list(range(400, 411)))
+    assert fresh["nudge_frames"] == -20, fresh
+
+
 def _post_message(page, body: str) -> None:
     page.evaluate(f"(() => {{ window.postMessage({body}, '*'); return true; }})()")
     page.wait_ms(200)
@@ -215,6 +266,11 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         page.goto(url)
         page.wait_for('body[data-ghost="ready"]')
         assert page.evaluate("window.ghostStatus().template.pictures") == 600
+        # It asked about the star in its OWN address, in the template store's
+        # spelling, and asked for nothing else: the nudge is not a page, so it
+        # is not in the URL (see ghost/session.py::follower_url).
+        assert fixture.source_queries[-1] == {"kind": "star",
+                                              "entity_key": "LLL-1"}
         assert page.evaluate("document.getElementById('ghost').muted") is True
         # Full-bleed: the video fills the window, with no chrome beside it.
         box = page.evaluate(
@@ -272,6 +328,9 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         pushed = page.evaluate("window.ghostStatus()")
         assert pushed["sample"]["igt"] == 300, pushed
         assert pushed["target_igt"] == 345, pushed
+
+        # 8 and 9. His timing key, the way the running app sends it.
+        _nudge_over_the_clock(page, url)
 
         # `problems()` DRAINS, so it is asked once and the answer kept --
         # asking twice (once for the assertion, once for its message) reports

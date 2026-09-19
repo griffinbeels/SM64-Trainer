@@ -50,6 +50,12 @@ const status = { state: "loading", reason: null, reason_text: null,
                  samples: 0, decision: null, sample: null, template: null,
                  holding: null };
 let follower = null;
+// The last nudge the SERVER stated. The clock's value is adopted on the edge,
+// not held as a level: the parent window may push its own nudge by
+// postMessage, and a level would overwrite that on the very next game frame.
+// Null until the first sample, which is how a page that has just loaded takes
+// the current value straight away.
+let clockNudge = null;
 
 function mark(state, reason = null, reasonText = null) {
   Object.assign(status, { state, reason, reason_text: reasonText });
@@ -81,6 +87,18 @@ function apply(decision) {
 
 function onSample(sample) {
   if (!follower) return;
+  // THE NUDGE ARRIVES WITH THE CLOCK. It is part of the same rule -- the
+  // picture whose timer equals the live timer plus the nudge -- so it rides
+  // the same message, and a change takes effect on this very sample. The
+  // alternative, re-pointing the window at a URL carrying the new value, is a
+  // page LOAD: the overlay blinks off and re-seeks, once per press of a key he
+  // holds down. Absent (an older server, or a parent pushing only a clock)
+  // leaves whatever the page already had.
+  if (typeof sample.nudge_frames === "number"
+      && sample.nudge_frames !== clockNudge) {
+    clockNudge = sample.nudge_frames;
+    setNudge(clockNudge);
+  }
   status.samples += 1;
   status.sample = sample;
   status.holding = null;
@@ -156,6 +174,9 @@ async function start() {
     return;
   }
   follower = createFollower(source.view, {
+    // A starting value only, for a tab opened by hand with `?nudge=`. The
+    // running app does not put it in the URL at all: the live value is the
+    // server's, and it arrives on the first clock sample.
     nudgeFrames: Number(params.get("nudge")) || 0,
     // Where the template was recorded, if the source knows. A counter running
     // in another course names a picture in this one, so the ghost holds

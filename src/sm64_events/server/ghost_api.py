@@ -79,8 +79,17 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
 
 def mount_ghost_routes(app, *, inputs, replay, session=None, clock=None) -> None:
     """THE one call the app factory makes for everything ghost: the source
-    door, the session doors, and the clock socket the overlay page follows."""
+    door, the session doors, and the clock socket the overlay page follows.
+
+    It is also where the session meets the clock, because the nudge travels on
+    that socket rather than in the overlay page's URL — a URL change is a page
+    LOAD, and he changes the nudge by holding a key down. This function is the
+    one place already handed both, so the join costs the composition root
+    nothing and the app factory keeps its single ghost call.
+    """
     app.include_router(create_ghost_router(inputs, replay, session=session))
     if clock is not None:
+        if session is not None:
+            session.attach_clock(clock)
         from sm64_events.server.ghost_clock import create_ghost_clock_router
         app.include_router(create_ghost_clock_router(clock))

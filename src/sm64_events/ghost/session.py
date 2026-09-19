@@ -23,6 +23,13 @@ through `server/ghost_clock.py`, which is publish-and-forget. This module only
 ever touches the database and the filesystem from its own task, off the loop
 thread, and never from the poller's.
 
+**Two things reach the overlay, and they travel differently on purpose.** WHAT
+it is showing is the page, so a target change re-points the window and the page
+loads. HOW FAR AHEAD it runs -- the nudge -- is a number the running page can
+take, so it rides the clock feed and the page is never navigated for it. Doing
+the second the way the first is done is what made his timing key blink the
+overlay off and re-seek it on every press.
+
 **Hide on a flip, end on OFF.** Walking to the next star hides the window and
 keeps the child, so coming back costs nothing. Turning the switch off ends the
 child process, because off means off. Stopping the session — server shutdown —
@@ -95,17 +102,22 @@ def template_store(inputs):
     return service.templates
 
 
-def follower_url(target: dict, nudge_frames: int, port: int | None = None) -> str:
+def follower_url(target: dict, port: int | None = None) -> str:
     """The overlay page for this target, on this server's own port.
 
     `core/paths.py::server_port()` is the one port source -- the overlay is
     served by the very app it is watching, so guessing 8064/8065 here is the
     one thing that could point the window at another instance's page.
+
+    **THE NUDGE IS NOT IN HERE**, and that is the whole point of this URL being
+    stable: changing it is how the window is told to LOAD ANOTHER PAGE, so
+    anything that moves often must travel some other way. Only the thing he is
+    practising belongs here, because that genuinely is another page. The nudge
+    rides the clock feed (`server/ghost_clock.py`).
     """
     params = {"kind": target["kind"], "entity_key": target["entity_key"]}
     if target.get("strat"):
         params["strat"] = target["strat"]
-    params["nudge"] = int(nudge_frames)
     chosen = paths.server_port() if port is None else port
     return f"http://127.0.0.1:{chosen}{PAGE_PATH}?{urlencode(params)}"
 
@@ -158,13 +170,14 @@ class GhostSession:
     """The app's one ghost. Built in the composition root, owned by the server
     app's lifespan, read and written through `GET/PUT /api/ghost`."""
 
-    def __init__(self, *, tracker, inputs, replay, broadcaster,
+    def __init__(self, *, tracker, inputs, replay, broadcaster, clock=None,
                  port: int | None = None, controller_factory=None,
                  resolve=resolve_ghost, period_s: float = WATCH_PERIOD_S):
         self._tracker = tracker
         self._inputs = inputs
         self._replay = replay
         self._broadcaster = broadcaster
+        self._clock = clock
         self._port = port
         self._factory = controller_factory or _default_controller
         self._resolve = resolve
@@ -186,6 +199,18 @@ class GhostSession:
         # keeps them from reading a half-applied change or starting the window
         # twice.
         self._lock = asyncio.Lock()
+
+    def attach_clock(self, clock) -> None:
+        """Hand the session the clock feed the overlay follows.
+
+        The nudge travels on that feed rather than in the page's URL, so this
+        join is what makes his timing key reach the overlay at all. It is made
+        at the composition surface (`server/ghost_api.py::mount_ghost_routes`,
+        which is handed both), not in `main.py`, so the app factory's one ghost
+        call stays the one ghost call.
+        """
+        self._clock = clock
+        self._tell_clock()
 
     # -- what anyone reads ---------------------------------------------------
 
@@ -270,6 +295,10 @@ class GhostSession:
         if self._pending:
             self._apply(self._pending)
             self._pending = {}
+        # Every cycle, not only the ones that changed it: a feed attached late,
+        # or a session whose watch reset the nudge on a target change, converges
+        # here rather than waiting for the next press.
+        self._tell_clock()
         if resolve:
             self._source = self._resolve_source(target)
         try:
@@ -369,6 +398,16 @@ class GhostSession:
         self._pending.update(validate_changes(asked))
         return await self.refresh(resolve=True)
 
+    def _tell_clock(self) -> None:
+        """Publish the nudge to whoever is following the clock. Best effort by
+        design: a feed that cannot take it must not stop the switch working."""
+        if self._clock is None:
+            return
+        try:
+            self._clock.set_nudge(self._nudge)
+        except Exception:  # noqa: BLE001 - the overlay's timing is not worth the app
+            log.debug("the ghost clock would not take the nudge", exc_info=True)
+
     # -- the window -----------------------------------------------------------
 
     def _reconcile(self) -> None:
@@ -382,7 +421,7 @@ class GhostSession:
             if controller is not None and controller.is_running():
                 controller.set_visible(False)
             return
-        url = follower_url(self._target, self._nudge, self._port)
+        url = follower_url(self._target, self._port)
         if controller is None:
             controller = self._controller = self._factory(
                 url=url, opacity=self._opacity, visible=True)

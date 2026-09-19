@@ -75,7 +75,16 @@ def test_the_message_carries_the_clock_and_where_it_is_running():
     `global_timer` is the one clock that keeps moving while the game is
     paused -- which is how a stall is told apart from a dead feed."""
     assert clock_message(snap(1234, igt=57, level=8, area=2)) == {
-        "global_timer": 1234, "igt": 57, "level": 8, "area": 2}
+        "global_timer": 1234, "igt": 57, "level": 8, "area": 2,
+        "nudge_frames": 0}
+
+
+def test_the_message_carries_the_nudge_beside_the_clock():
+    """The nudge is part of the SAME rule -- the picture whose timer equals the
+    live timer plus the nudge -- so it rides the same message. Its own value
+    travelling separately is what would put the overlay a moment out of step
+    with the number the player just asked for."""
+    assert clock_message(snap(1234, igt=57), -12)["nudge_frames"] == -12
 
 
 # -- the idle path ----------------------------------------------------------
@@ -111,12 +120,50 @@ def test_every_listener_gets_the_sample():
         feed.note(snap(900, igt=42, level=8, area=2))
         assert await _settle(lambda: one.messages and two.messages)
         assert one.messages[-1] == {"global_timer": 900, "igt": 42,
-                                    "level": 8, "area": 2}
+                                    "level": 8, "area": 2, "nudge_frames": 0}
         assert two.messages[-1] == one.messages[-1]
         await feed.disconnect(one)
         await feed.disconnect(two)
 
     asyncio.run(run())
+
+
+def test_a_new_nudge_reaches_every_overlay_on_the_next_sample():
+    """His timing key writes the nudge into the session, the session hands it
+    here, and the very next game snapshot carries it out. One game frame, and
+    no page load anywhere -- which is the whole reason it travels this way
+    instead of in the overlay page's URL."""
+    async def run():
+        feed = GhostClockFeed()
+        client = StubClient()
+        await feed.connect(client)
+        feed.note(snap(900, igt=42))
+        assert await _settle(lambda: bool(client.messages))
+        assert client.messages[-1]["nudge_frames"] == 0
+
+        feed.set_nudge(-12)
+        feed.note(snap(901, igt=43))
+        assert await _settle(lambda: len(client.messages) == 2)
+        assert client.messages[-1] == {"global_timer": 901, "igt": 43,
+                                       "level": 24, "area": 1,
+                                       "nudge_frames": -12}
+        # It rides EVERY message, not only the one that changed it: an overlay
+        # that just loaded, or that missed a sample, converges on its next one.
+        feed.note(snap(902, igt=44))
+        assert await _settle(lambda: len(client.messages) == 3)
+        assert client.messages[-1]["nudge_frames"] == -12
+        await feed.disconnect(client)
+
+    asyncio.run(run())
+
+
+def test_setting_the_nudge_costs_an_unwatched_feed_nothing():
+    """The early return still comes first: a nudge with no overlay open must
+    not start a pump or make the poll loop read a snapshot."""
+    feed = GhostClockFeed()
+    feed.set_nudge(30)
+    feed.note(Untouchable())
+    assert feed.running is False and feed.noted == 0
 
 
 def test_a_burst_collapses_to_the_newest_sample():
@@ -188,11 +235,13 @@ def _app_with_feed(feed: GhostClockFeed) -> FastAPI:
 
 def test_the_socket_delivers_a_noted_snapshot():
     feed = GhostClockFeed()
+    feed.set_nudge(5)
     with TestClient(_app_with_feed(feed)) as client:
         with client.websocket_connect("/ws/ghost-clock") as ws:
             client.post("/test/note?timer=4242&igt=17")
             message = ws.receive_json()
-    assert message == {"global_timer": 4242, "igt": 17, "level": 24, "area": 1}
+    assert message == {"global_timer": 4242, "igt": 17, "level": 24, "area": 1,
+                       "nudge_frames": 5}
 
 
 def test_a_closed_socket_leaves_no_listener_behind():
