@@ -116,13 +116,17 @@ def run_child(args, *, timeout, **kwargs) -> subprocess.CompletedProcess:
     finish a file nobody is waiting for."""
     text = kwargs.pop("text", False)
     kwargs.pop("check", None)
+    on_line = kwargs.pop("on_line", None)
     if kwargs.pop("capture_output", False):
         kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     child = subprocess.Popen(args, text=text, **kwargs)
     with _CHILDREN_GUARD:
         _CHILDREN.add(child)
     try:
-        out, err = child.communicate(timeout=timeout)
+        if on_line is None:
+            out, err = child.communicate(timeout=timeout)
+        else:
+            out, err = _follow(child, on_line, timeout)
     except subprocess.TimeoutExpired:
         child.kill()
         child.communicate()
@@ -131,6 +135,39 @@ def run_child(args, *, timeout, **kwargs) -> subprocess.CompletedProcess:
         with _CHILDREN_GUARD:
             _CHILDREN.discard(child)
     return subprocess.CompletedProcess(args, child.returncode, out, err)
+
+
+def _follow(child: subprocess.Popen, on_line, timeout: float):
+    """Hand each stdout line to `on_line` as it arrives (ffmpeg's `-progress`
+    feed) while stderr drains on its own thread, so neither pipe can fill."""
+    errors: list = []
+    drain = threading.Thread(target=lambda: errors.append(child.stderr.read()), daemon=True)
+    drain.start()
+    deadline = time.monotonic() + timeout
+    for line in child.stdout:
+        with suppress(Exception):   # a progress display must never cost the encode
+            on_line(line if isinstance(line, str) else line.decode("utf-8", "replace"))
+        if time.monotonic() > deadline:
+            raise subprocess.TimeoutExpired(child.args, timeout)
+    child.wait(timeout=max(1.0, deadline - time.monotonic()))
+    drain.join(timeout=5)
+    return None, (errors[0] if errors else None)
+
+
+def progress_args() -> list[str]:
+    return ["-progress", "pipe:1", "-nostats"]
+
+
+def progress_of(line: str, pictures: int) -> float | None:
+    """ffmpeg's `frame=<n>` as a fraction of the clip's pictures. Counted in
+    pictures, not seconds: a picture-feed clip is variable-rate, and the
+    comparison pass renumbers its timestamps."""
+    key, _, value = line.strip().partition("=")
+    if key != "frame" or pictures <= 0:
+        return None
+    with suppress(ValueError):
+        return min(1.0, max(0.0, int(value) / pictures))
+    return None
 
 
 def end_children() -> None:
@@ -225,14 +262,17 @@ def fingerprint(ffmpeg: str, clip: Path) -> Fingerprint:
                        audio_digest(ffmpeg, clip), end_ticks(ffmpeg, clip))
 
 
-def picture_similarity(ffmpeg: str, clip: Path, reference: Path) -> float:
+def picture_similarity(ffmpeg: str, clip: Path, reference: Path, on_line=None) -> float:
     """Mean SSIM, pictures paired by POSITION (their times are proven apart)."""
     graph = ("[0:v]setpts=N,format=yuv420p[a];[1:v]setpts=N,format=yuv420p[b];"
              "[a][b]ssim")
+    follow = {"on_line": on_line} if on_line is not None else {}
     out = run_child(
         [ffmpeg, "-nostdin", "-hide_banner", "-nostats", "-loglevel", "info",
+         *(progress_args() if on_line is not None else []),
          "-i", str(clip), "-i", str(reference), "-lavfi", graph, "-f", "null", "-"],
-        capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S, **_spawn_kwargs())
+        capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S, **follow,
+        **_spawn_kwargs())
     found = re.findall(r"SSIM .*All:([0-9.]+)", out.stderr)
     if out.returncode or not found:
         raise Unproven("picture comparison failed")
@@ -240,9 +280,16 @@ def picture_similarity(ffmpeg: str, clip: Path, reference: Path) -> float:
 
 
 def prove(ffmpeg: str, saved: Path, staged: Path, original: Fingerprint,
-          sidecar_times: list | None) -> tuple[Fingerprint, float]:
-    """Raise Unproven unless `staged` can stand in for `saved` everywhere."""
+          sidecar_times: list | None, report=None) -> tuple[Fingerprint, float]:
+    """Raise Unproven unless `staged` can stand in for `saved` everywhere.
+    `report(fraction)` follows the proof; the picture comparison is most of it."""
+    def told(fraction: float) -> None:
+        if report is not None:
+            report(fraction)
+
+    told(0.0)
     candidate = fingerprint(ffmpeg, staged)
+    told(0.2)
     if candidate.pictures != original.pictures:
         raise Unproven(f"picture count {original.pictures} -> {candidate.pictures}")
     if candidate.picture_times_sha256 != original.picture_times_sha256:
@@ -257,7 +304,14 @@ def prove(ffmpeg: str, saved: Path, staged: Path, original: Fingerprint,
         raise Unproven(f"clip length {original.end_ticks} -> {candidate.end_ticks} ticks")
     if candidate.bytes > original.bytes * (1 - MIN_SAVING):
         raise Unproven(f"not smaller: {original.bytes} -> {candidate.bytes} bytes")
-    similarity = picture_similarity(ffmpeg, staged, saved)
+    def compared(line: str) -> None:
+        seen = progress_of(line, original.pictures)
+        if seen is not None:
+            told(0.2 + 0.8 * seen)
+
+    similarity = picture_similarity(ffmpeg, staged, saved,
+                                    compared if report is not None else None)
+    told(1.0)
     if similarity < MIN_SSIM:
         raise Unproven(f"pictures differ too much (SSIM {similarity:.4f})")
     return candidate, similarity
@@ -274,6 +328,11 @@ def encode_args(ffmpeg: str, saved: Path, staged: Path, codec: str, end: int) ->
             "-movflags", "+faststart", "-f", "mp4", str(staged)]
 
 
+def _tell(report, stage: str, fraction: float | None) -> None:
+    if fraction is not None:
+        report(stage, fraction)
+
+
 def staged_path(saved: Path, work: Path | None = None) -> Path:
     return (work or saved.parent) / (saved.name + STAGED_SUFFIX)
 
@@ -287,7 +346,8 @@ def job_path(saved: Path, work: Path) -> Path:
 
 
 def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
-           cancel: threading.Event | None = None, work: Path | None = None) -> dict:
+           cancel: threading.Event | None = None, work: Path | None = None,
+           report=None) -> dict:
     """Step 1. Encode into `work`, prove it, and leave the proof on disk.
 
     Returns a block whose state is `ready` (a proven staged file awaits
@@ -298,6 +358,8 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
     leave nothing behind. Never touches `saved`.
 
     `work` is where the working files go; None means beside the clip.
+    `report(stage, fraction)` follows the job for whoever is watching it:
+    stage `compressing` then `checking`, each with its own 0..1.
     """
     def cancelled() -> bool:
         return cancel is not None and cancel.is_set()
@@ -321,9 +383,16 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
             if cancelled():
                 break
             started = time.monotonic()
-            result = run(encode_args(ffmpeg, saved, staged, codec, end),
-                         capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S,
-                         check=False, **_spawn_kwargs())
+            args = encode_args(ffmpeg, saved, staged, codec, end)
+            follow = {}
+            if report is not None:
+                # The feed goes right after the binary; the output stays last.
+                args = [args[0], *progress_args(), *args[1:]]
+                follow["on_line"] = lambda line: _tell(
+                    report, "compressing", progress_of(line, original.pictures))
+                report("compressing", 0.0)
+            result = run(args, capture_output=True, text=True, timeout=_ENCODE_TIMEOUT_S,
+                         check=False, **follow, **_spawn_kwargs())
             if cancelled():
                 break
             if result.returncode:
@@ -332,8 +401,9 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
                 continue
             encoded = True
             try:
-                candidate, similarity = prove(ffmpeg, saved, staged, original,
-                                              meta.get("frame_times"))
+                candidate, similarity = prove(
+                    ffmpeg, saved, staged, original, meta.get("frame_times"),
+                    (lambda f: report("checking", f)) if report is not None else None)
             except Unproven as refused:
                 if cancelled():
                     break
@@ -435,6 +505,37 @@ class SavedReplayCompressor:
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
         self.outcomes: deque[dict] = deque(maxlen=50)   # newest last; for status/tests
+        # What the close warning and the recording panel show: this session's
+        # jobs by clip name, in the order they were queued.
+        self._shown: dict[str, dict] = {}
+
+    # A job's one bar runs across both halves of the work. The encode is a
+    # little over half of the wall time on the clips measured (6 s of 10).
+    _ENCODE_SHARE = 0.55
+    _SHOWN_MAX = 8
+
+    def _show(self, name: str, **fields) -> None:
+        with self._guard:
+            row = self._shown.get(name)
+            if row is not None:
+                # One bar never runs backwards, whatever order reports land in.
+                if "fraction" in fields and fields["fraction"] is not None:
+                    fields["fraction"] = max(row.get("fraction") or 0.0, fields["fraction"])
+                row.update(fields)
+
+    def _report_for(self, name: str):
+        def report(stage: str, fraction: float) -> None:
+            share = self._ENCODE_SHARE
+            overall = fraction * share if stage == "compressing" else share + fraction * (1 - share)
+            self._show(name, stage=stage, fraction=round(min(overall, 0.999), 4))
+        return report
+
+    def status(self) -> dict:
+        """The contract of `GET /api/replay/compression` (docs/api.md)."""
+        with self._guard:
+            jobs = [dict(row) for row in reversed(self._shown.values())][:self._SHOWN_MAX]
+        return {"active": any(j["stage"] in ("waiting", "compressing", "checking") for j in jobs),
+                "jobs": jobs}
 
     def start(self) -> None:
         # Session start: no player exists yet, so every proven file is idle.
@@ -492,18 +593,34 @@ class SavedReplayCompressor:
             saved = self._clip_of(note)
             if saved is None:
                 self._forget(name)   # he deleted the replay; nothing is owed
-            else:
-                self.enqueue(saved)
+                continue
+            shown = {}
+            with suppress(OSError, ValueError, TypeError):
+                shown = json.loads(note.read_text(encoding="utf-8")).get("shown") or {}
+            self.enqueue(saved, **{key: shown.get(key)
+                                   for key in ("attempt_id", "label", "time_text")})
 
-    def enqueue(self, saved: Path) -> None:
+    def enqueue(self, saved: Path, *, attempt_id: int | None = None,
+                label: str | None = None, time_text: str | None = None) -> None:
+        """`label`/`time_text` are what the progress list calls this replay;
+        they ride in the job note so a job re-run next session is still named."""
+        shown = {"attempt_id": attempt_id, "label": label, "time_text": time_text}
         # Written BEFORE the work starts: a close between the save and the
         # first encoded byte must still leave the job owed.
         with suppress(OSError, ValueError):
             atomic_json(job_path(saved, self.work),
-                        {"clip": saved.relative_to(self._root).as_posix()})
+                        {"clip": saved.relative_to(self._root).as_posix(), "shown": shown})
+        size = None
+        with suppress(OSError):
+            size = saved.stat().st_size
         with self._guard:
             if saved not in self._jobs:
                 self._jobs.append(saved)
+            self._shown.pop(saved.name, None)   # re-queued: back to the newest end
+            self._shown[saved.name] = {**shown, "stage": "waiting", "fraction": None,
+                                       "from_bytes": size, "to_bytes": None}
+            while len(self._shown) > self._SHOWN_MAX * 2:
+                self._shown.pop(next(iter(self._shown)))
         self._wake.set()
 
     def touch(self, saved: Path) -> None:
@@ -534,6 +651,8 @@ class SavedReplayCompressor:
                 continue
             if done is not None:
                 self._forget(saved.name)
+                self._show(saved.name, stage="done", fraction=1.0,
+                           from_bytes=done["original"]["bytes"], to_bytes=done["bytes"])
                 log.info("replay compressed: %s %.1f -> %.1f MB (%s, SSIM %.4f)",
                          saved.name, done["original"]["bytes"] / 2**20,
                          done["bytes"] / 2**20, done["codec"], done["ssim"])
@@ -545,12 +664,22 @@ class SavedReplayCompressor:
             with self._guard:
                 saved = self._jobs.pop(0) if self._jobs else None
             if saved is not None and saved.is_file():
+                self._show(saved.name, stage="compressing", fraction=0.0)
                 try:
                     outcome = self._shrink(self._ffmpeg, saved, cancel=self._stopping,
-                                           work=self.work)
+                                           work=self.work, report=self._report_for(saved.name))
                 except Exception:  # noqa: BLE001 - the worker outlives one bad clip
                     log.exception("replay compression failed for %s", saved.name)
                     outcome = {"state": "unavailable", "reasons": ["worker error"]}
+                state = outcome.get("state")
+                if state == "ready":
+                    self._show(saved.name, stage="in_use", fraction=1.0,
+                               to_bytes=outcome.get("bytes"))
+                elif state in ("compressed", "adopting"):
+                    self._show(saved.name, stage="done", fraction=1.0,
+                               to_bytes=outcome.get("bytes"))
+                elif state in ("kept_original", "unavailable"):
+                    self._show(saved.name, stage="kept", fraction=1.0)
                 if outcome.get("state") in ("kept_original", "compressed", "adopting"):
                     self._forget(saved.name)   # answered; `unavailable` and
                     # `interrupted` keep their note and run again next start

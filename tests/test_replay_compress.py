@@ -226,6 +226,60 @@ def test_a_save_closed_on_at_once_is_shrunk_next_start_and_his_folder_stays_clea
     assert list(second.work.iterdir()) == []
 
 
+def test_the_progress_list_follows_a_job_from_waiting_to_done(saved):
+    """What the close warning and the recording panel poll: which replay, what
+    is happening to it, and one bar that only ever moves forward."""
+    worker = _worker(saved, poll_s=0.05, idle_s=0)
+    assert worker.status() == {"active": False, "jobs": []}
+    worker.enqueue(saved, attempt_id=42, label="Test Course: Test Star", time_text="11.16")
+    first = worker.status()
+    assert first["active"] is True
+    assert first["jobs"][0]["stage"] == "waiting" and first["jobs"][0]["fraction"] is None
+
+    seen = []
+    worker.start()
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            row = worker.status()["jobs"][0]
+            seen.append((row["stage"], row["fraction"]))
+            if row["stage"] in ("done", "kept"):
+                break
+            time.sleep(0.02)
+    finally:
+        worker.stop()
+
+    stages = [stage for stage, _ in seen]
+    assert stages[-1] == "done", seen[-5:]
+    assert {"compressing", "checking"} <= set(stages), sorted(set(stages))
+    fractions = [f for _, f in seen if f is not None]
+    assert fractions == sorted(fractions) and fractions[-1] == 1.0
+    assert any(0.0 < f < 1.0 for f in fractions), "the bar never showed work in progress"
+    last = worker.status()
+    assert last["active"] is False
+    assert last["jobs"][0]["label"] == "Test Course: Test Star"
+    assert last["jobs"][0]["attempt_id"] == 42
+    assert 0 < last["jobs"][0]["to_bytes"] < last["jobs"][0]["from_bytes"]
+
+
+def test_a_proven_replay_someone_is_watching_is_not_a_reason_to_warn_at_close(saved):
+    worker = _worker(saved, poll_s=0.05, idle_s=3600)
+    worker.touch(saved)
+    worker.enqueue(saved)
+    worker.start()
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and worker.status()["jobs"][0]["stage"] != "in_use":
+            time.sleep(0.05)
+        waiting_on_him = worker.status()
+    finally:
+        worker.stop()
+
+    assert waiting_on_him["jobs"][0]["stage"] == "in_use"
+    assert waiting_on_him["active"] is False     # its work is finished; close swaps it
+    assert worker.status()["jobs"][0]["stage"] == "done"
+
+
 def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path):
     from test_replay_service import attempt, make_service
 
@@ -233,8 +287,9 @@ def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path):
         def __init__(self):
             self.queued, self.touched = [], []
 
-        def enqueue(self, path):
+        def enqueue(self, path, **named):
             self.queued.append(path)
+            self.named = named
 
         def touch(self, path):
             self.touched.append(path)
@@ -246,6 +301,9 @@ def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path):
     served = svc.saved_clip_path(42)
 
     assert [str(p) for p in svc.compressor.queued] == [path]
+    # The progress list names the replay the way its filename does.
+    assert svc.compressor.named["attempt_id"] == 42
+    assert set(svc.compressor.named) == {"attempt_id", "label", "time_text"}
     assert svc.compressor.touched == [served] and str(served) == path
 
 

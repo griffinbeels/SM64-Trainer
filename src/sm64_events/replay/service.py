@@ -888,11 +888,35 @@ class ReplayService:
                 with self._save_guard:
                     self._save_failures.pop(attempt_id, None)
                 if self.compressor is not None:
-                    self.compressor.enqueue(Path(result["path"]))
+                    self.compressor.enqueue(Path(result["path"]), attempt_id=attempt_id,
+                                            **self._replay_name(attempt_id))
                 return result
         finally:
             with self._save_guard:
                 self._active_saves -= 1
+
+    def _replay_name(self, attempt_id: int) -> dict:
+        """What the compression progress list calls this replay: the same
+        course/star (or segment) and time its filename is built from."""
+        try:
+            a = self._attempt(attempt_id)
+        except (LookupError, ValueError):
+            return {"label": None, "time_text": None}
+        if a.segment_id is not None:
+            label = next((d.name for d in self.tracker.segment_defs if d.id == a.segment_id),
+                         f"Segment {a.segment_id}")
+        elif a.course_id is not None and a.star_id is not None:
+            label = f"{course_name(a.course_id)}: {star_name(a.course_id, a.star_id)}"
+        else:
+            label = course_name(a.course_id) if a.course_id is not None else None
+        frames = a.igt_frames if a.igt_frames is not None else a.rta_frames
+        return {"label": label, "time_text": format_igt(frames) if frames is not None else None}
+
+    def compression_status(self) -> dict:
+        """`GET /api/replay/compression`; empty when compression is off."""
+        if self.compressor is None:
+            return {"active": False, "jobs": []}
+        return self.compressor.status()
 
     def _save(self, attempt_id: int) -> dict:
         # Hold the exact GOP/AAC dependencies from selection through publication.

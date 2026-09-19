@@ -9,9 +9,10 @@ import os
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.core.paths import (APP_DISPLAY_NAME, data_root,
                                     instance_lock_path,
-                                    migrate_legacy_data_dir)
+                                    migrate_legacy_data_dir, server_port)
 from sm64_events.core.relaunch import spawn_replacement, wait_port_free
 from sm64_events.desktop import single_instance, tray, window
+from sm64_events.desktop.closeguard import ASK_PAGE_JS, CloseGuard, compression_active
 from sm64_events.storage.instance_lock import wait_lock_free
 from sm64_events.desktop.server_runner import ServerRunner
 from sm64_events.main import build
@@ -92,6 +93,8 @@ def main() -> None:
         if state["quit"]:
             return
         state["quit"] = True
+        if state.get("guard") is not None:
+            state["guard"].quitting = True   # the windows destroyed below are not asked
         runner.stop()
         if state["tray"] is not None:
             tray.stop(state["tray"])
@@ -110,8 +113,17 @@ def main() -> None:
     app.state.request_shutdown = quit_all
     app.state.request_restart = do_restart
 
-    win = window.create(on_closed=quit_all)
-    state["tray"] = tray.create(on_show=win.show, on_quit=quit_all)
+    def ask_page() -> bool:
+        win.show()   # a tray Quit can arrive with the window hidden
+        return win.evaluate_js(ASK_PAGE_JS) is True
+
+    # Closing while saved replays are still compressing asks first
+    # (desktop/closeguard.py); any doubt closes.
+    guard = state["guard"] = CloseGuard(
+        is_active=lambda: compression_active(server_port()),
+        ask_page=ask_page, quit_all=quit_all)
+    win = window.create(on_closed=quit_all, on_closing=guard.closing)
+    state["tray"] = tray.create(on_show=win.show, on_quit=guard.quit_requested)
     tray.start(state["tray"])
 
     window.run()    # blocks until the window closes
