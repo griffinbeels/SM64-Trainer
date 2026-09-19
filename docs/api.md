@@ -939,9 +939,14 @@ the last decision and why, the nudge, the colour treatment and the filter it
 produced, whether his own grab is holding the ghost down, and the template
 picture currently on screen against the one the rule asked for.
 
-The video fills its window exactly (`object-fit: fill`, never `contain`): the
-companion window is sized to the rectangle Project64's renderer draws into, so
-letterboxing inside it would show a band of live game along one edge.
+The video element covers the window and MAPS the picture into it (`object-fit:
+contain`, centred — never `fill`). The companion window is sized to the
+rectangle Project64's renderer draws into, and this project's GLideN64 build
+forces 4:3 (`frameBufferEmulation\aspect=1`), so the game image is inscribed
+4:3 and centred inside that rectangle and the black bands in saved footage are
+the game's own borders. Mapping the clip's 4:3 box onto the live 4:3 box is
+therefore identical to stretching while the two aspects agree, and undistorted
+when the player has resized Project64 to another shape.
 
 The decision rule itself is `ui/ghost/follower.js`, a pure module scored over
 clock traces in `tests/test_ui_ghost_follower.py`.

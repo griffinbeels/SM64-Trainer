@@ -28,20 +28,34 @@
      `DefaultBackgroundColor`, and the host asks for opaque black -- so the
      window side owns the other half of this (ghost/window/host.py). */
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
-  /* Full-bleed, and `fill` rather than `contain`.
+  /* Full-bleed element, `contain` picture, CENTRED -- and the reason is
+     measured rather than chosen.
+
      His report, 2026-09-19: *"it's ALMOST overlaid properly -- you can see
      that the bottom of the gameplay (where the red becomes black) is slightly
-     shifted."* The window now covers EXACTLY the rectangle Project64's
-     renderer draws into, so this element's box already has the game picture's
-     own aspect and the footage must cover every pixel of it. `contain`
-     letterboxes anything whose aspect differs by a hair -- which is a band of
-     the live game showing through along one edge, read as the ghost being
-     misaligned -- and `cover` crops the other way. `fill` maps corner to
-     corner: any residual mismatch is a sub-pixel stretch rather than a visible
-     offset, and the window side owns getting the rectangle right. */
+     shifted."* The cause was the WINDOW, not this rule: it covered Project64's
+     whole client area, status-bar strip included, so a 1600x1200 clip was
+     stretched over a 1600x1224-ish box -- about 1.9% vertically. The window
+     track now sits the window on the rectangle the renderer actually draws
+     into (1600x1201 on his machine, against clips that are all 1600x1200).
+
+     What decides this property is that THE GAME IMAGE IS ALREADY 4:3. This
+     project's GLideN64 build forces it (`frameBufferEmulation\aspect=1`), so
+     the picture is inscribed 4:3 and centred inside whatever rectangle the
+     renderer has, and the black bands at the top and bottom of his footage are
+     the GAME's own borders -- they scale with the picture rather than sitting
+     outside it. So the correct mapping is the clip's 4:3 box onto the live 4:3
+     box. When the window's aspect equals the clip's, `contain` and `fill` are
+     the same picture; when he has resized Project64 to another shape they are
+     not, and `fill` would distort exactly what this round is about. `cover`
+     would crop instead. Centred because that is where the renderer puts it.
+
+     The ELEMENT still covers the window (`inset: 0`): what it does not paint,
+     it leaves see-through, which over a running game is the whole point. */
   #ghost {
     position: fixed; inset: 0; width: 100%; height: 100%;
-    object-fit: fill; background: transparent; pointer-events: none;
+    object-fit: contain; object-position: center;
+    background: transparent; pointer-events: none;
   }
   /* Nothing to show yet, or nothing to show at all: paint nothing. A
      chrome-less overlay has no room to explain itself, so the reason lives on

@@ -483,19 +483,25 @@ function spannedTemplate(preroll, frames, tail, after = "hold") {
                        kept_playing: rows.slice(122).every((r) => !r.paused) };
 }
 {
-  // A state load FORWARD past the end of the template does not raise the
-  // ghost again: there is nothing left for it to show, so a placement that
-  // lands outside the run leaves the latch set.
-  const view = feedTemplate(200);
+  // A COUNTER STILL CLIMBING never raises the ghost again, however big its
+  // step. The clock feed collapses a burst to its newest sample, so a stretch
+  // of ordinary play the pump skipped arrives as one big forward jump; reading
+  // that as a state load put the ghost straight back up over a star he had
+  // already taken. Both shapes here: a skip well past the follower's own jump
+  // threshold, and a load FORWARD past the end of the template.
+  const view = feedTemplate(400);
   const trace = steady(120);
   for (let k = 0; k < 10; k += 1)
     trace.push({ igt: 120 + k, global_timer: 1120 + k, level: 8, area: 1,
                  star_grab: true });
-  for (let k = 0; k < 40; k += 1)
-    trace.push({ igt: 900 + k, global_timer: 1130 + k, level: 8, area: 1 });
+  for (let k = 0; k < 20; k += 1)          // the pump skipped 40 frames
+    trace.push({ igt: 170 + k * 3, global_timer: 1130 + k, level: 8, area: 1 });
+  for (let k = 0; k < 20; k += 1)          // and a load past the last picture
+    trace.push({ igt: 900 + k, global_timer: 1150 + k, level: 8, area: 1 });
   const { rows } = drive(view, trace);
-  out.grab_then_load_past_the_end = {
-    reasons: [...new Set(rows.slice(131).map((r) => r.reason))] };
+  out.grab_then_forward = {
+    skipped: [...new Set(rows.slice(131, 149).map((r) => r.reason))],
+    past_the_end: [...new Set(rows.slice(151).map((r) => r.reason))] };
 }
 
 // -- 13. the course's own subareas are the course --------------------------
@@ -666,12 +672,19 @@ def test_a_segment_ghost_is_not_ended_by_a_star_grab(scores):
     assert segment["worst"] <= 1, segment
 
 
-def test_a_load_past_the_end_does_not_raise_a_ghost_with_nothing_left(scores):
-    """The release is "back INSIDE the run", not "the counter jumped". A load
-    landing past the template's last picture has nothing to show, so the ghost
-    stays down rather than parking a star-grab frame over his game."""
-    assert scores["grab_then_load_past_the_end"]["reasons"] == ["grabbed"], (
-        scores["grab_then_load_past_the_end"])
+def test_a_counter_still_climbing_never_raises_the_ghost_again(scores):
+    """The release is a BACKWARD counter, not "the counter jumped", and that
+    narrowness was bought in a real browser.
+
+    The clock feed collapses a burst to its newest sample, so a stretch of
+    ordinary play the pump skipped arrives as one big forward step -- which the
+    first version read as a state load and used to put the ghost back up while
+    he walked around after the star. A load FORWARD past the template's last
+    picture is the other shape, and it has nothing left to show either.
+    """
+    forward = scores["grab_then_forward"]
+    assert forward["skipped"] == ["grabbed"], forward
+    assert forward["past_the_end"] == ["grabbed"], forward
 
 
 def test_a_courses_own_subarea_is_still_the_course(scores):

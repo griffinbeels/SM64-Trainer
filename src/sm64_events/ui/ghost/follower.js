@@ -313,15 +313,26 @@ export function createFollower(view, options = {}) {
   // one place: the release is the interesting half and it is easy to read
   // wrong from two.
   //
-  // BACK INSIDE THE RUN is the release, and only a counter discontinuity can
-  // put him there -- playing on cannot walk backwards into a run that is over
-  // -- and it has to land somewhere the template can actually name, so a load
-  // into the cutscene past the star does not raise a ghost with nothing left
-  // to show.
+  // THE RELEASE IS A BACKWARD COUNTER ONLY, and that is narrower than the
+  // placement rule above on purpose. Going back INSIDE a run that is over is
+  // something only a reset or a load back can do; a counter that is still
+  // climbing is the same attempt continuing, whatever size its steps are.
+  //
+  // Reading a forward JUMP as a release is what the first version did, and a
+  // real browser caught it: the clock feed deliberately collapses a burst to
+  // its newest sample (`server/ghost_clock.py`), so an ordinary stretch of
+  // play that the pump skipped arrives as one big forward step and is
+  // indistinguishable from a state load. The ghost came straight back up while
+  // he walked around after the star -- the exact overstaying this exists to
+  // stop, reintroduced by the rule meant to end it.
+  //
+  // `clamped !== "after"` survives for the case it was written for: a load
+  // back that still lands past the template's last picture has nothing left to
+  // show, so it does not raise a ghost either.
   const grabHolds = (sample, moved, clamped) => {
     if (grabEndsRun && sample.star_grab === true) grabbed = true;
-    else if (grabbed && moved !== null && (moved < 0 || moved > cfg.jumpFrames)
-             && clamped !== "after") grabbed = false;
+    else if (grabbed && moved !== null && moved < 0 && clamped !== "after")
+      grabbed = false;
     return grabbed;
   };
 
