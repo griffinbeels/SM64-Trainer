@@ -415,6 +415,86 @@ def driven():
     return out
 
 
+READ_OPACITY = """
+(() => {
+  const el = document.querySelector('.ghost-opacity');
+  if (!el) return null;
+  return {disabled: el.disabled,
+          readout: el.parentElement.querySelector('.ghost-field-value')
+                     .textContent.trim()};
+})()
+"""
+
+
+@pytest.fixture(scope="module")
+def unstated_opacity():
+    """A session that never says how solid to draw the ghost, then one that
+    does -- and every body the page PUT along the way.
+
+    This is the shape behind a live finding: his stored ghost visibility is
+    1.0 while the server's default has always been 0.5. The control used to
+    turn a MISSING opacity into `OPACITY_MAX`, so it showed "100%" for a
+    figure nobody had chosen, and a number on screen that looks chosen is one
+    small drag from being written back for good.
+    """
+    payload = ghost_session(enabled=True, opacity=0.6)
+    del payload["opacity"]
+    out = {}
+    with serve_ui_with_ghost(payload, arm_segment=FIXTURE_SEGMENT,
+                             seed_editor_fixtures=True) as (base, state):
+        with get_driver().launch() as page:
+            page.goto(base)
+            page.wait_for(".ghost-opacity")
+            out["unknown"] = page.evaluate(READ_OPACITY)
+            # A real gesture that DOES write, while the visibility is still
+            # unknown: flipping the switch must carry the switch and nothing
+            # else. This is the write that could smuggle a default out.
+            page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
+            page.wait_ms(400)
+            out["writes_while_unknown"] = list(state["writes"])
+
+            # The server catches up. Now the control has a value to show, it
+            # is his to move, and his move is what reaches the server. The
+            # overlay is switched back on because the flip above turned it
+            # off, and the tuning row only exists while it is on.
+            state["session"] = {**state["session"], "opacity": 0.5,
+                                "enabled": True}
+            state["writes"].clear()
+            page.goto(base)
+            page.wait_for(".ghost-opacity")
+            out["known"] = page.evaluate(READ_OPACITY)
+            page.evaluate(DRAG)
+            page.wait_ms(500)
+            out["writes_after_drag"] = list(state["writes"])
+    return out
+
+
+def test_a_visibility_nobody_stated_is_shown_as_unknown_and_cannot_be_moved(
+        unstated_opacity):
+    """Rendered, not reasoned: the slider is dead and the readout is a dash,
+    so nothing on screen claims a value the server never sent."""
+    unknown = unstated_opacity["unknown"]
+    assert unknown is not None, "the tuning row never rendered"
+    assert unknown["disabled"] is True, unknown
+    assert unknown["readout"] == "—", unknown
+
+
+def test_no_write_carries_a_visibility_until_he_has_moved_the_slider(
+        unstated_opacity):
+    """THE CONTRACT. The only opacity that may reach the server is one he
+    chose or one it sent us -- never a client-side default, and never on the
+    back of an unrelated write."""
+    flips = unstated_opacity["writes_while_unknown"]
+    assert flips == [{"enabled": False}], flips
+    assert all("opacity" not in body for body in flips), flips
+
+    known = unstated_opacity["known"]
+    assert known["disabled"] is False, known
+    assert known["readout"] == "50%", known
+    dragged = unstated_opacity["writes_after_drag"]
+    assert dragged == [{"opacity": 0.95}], dragged
+
+
 def test_flipping_the_switch_writes_immediately_and_stays_flipped(driven):
     assert driven["after_flip"]["writes"] == [{"enabled": True}]
     assert driven["after_flip"]["session"]["enabled"] is True
