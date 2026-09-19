@@ -57,11 +57,13 @@ class FakeWindows:
     """
 
     def __init__(self, *, scale=1.0, above=ABOVE_GAME, game=PICTURE,
-                 keeps_alpha=True, layers=True, real=True):
+                 keeps_alpha=True, layers=True, real=True,
+                 lies_about_alpha=False):
         self.scale = scale
         self.above = above
         self.game = game
         self.keeps_alpha = keeps_alpha
+        self.lies_about_alpha = lies_about_alpha
         self.layers = layers
         self.real = real
         self.ex = 0
@@ -113,6 +115,9 @@ class FakeWindows:
         return style.OVERLAY_EX_STYLE
 
     def set_alpha(self, hwnd, alpha):
+        if self.lies_about_alpha:
+            return True  # rig: "asked 255 got 255 accepted TRUE" on an
+            # unlayered window with no alpha at all 1.5 s later
         if not self.ex & style.WS_EX_LAYERED:
             return False  # exactly what Windows does to an unlayered window
         self.alpha = alpha if self.keeps_alpha else 255
@@ -213,9 +218,10 @@ def test_a_window_whose_alpha_is_unconfirmed_never_reaches_his_screen():
     assert placer.applied_alpha is None
     assert ("show", OVERLAY) not in fake.shown, (
         "nothing may be on screen at an unknown opacity")
-    assert [entry["reason"] for entry in records
-            if entry["event"] == "visibility"] == ["alpha_unconfirmed"], (
-        "it says why it stayed off, once")
+    reasons = {entry["reason"] for entry in records
+               if entry["event"] == "visibility"}
+    assert reasons <= {"alpha_unconfirmed", "alpha_lost"} and reasons, (
+        "it says why it stayed off")
     assert len([entry for entry in records if entry["event"] == "alpha"]) >= 3, (
         "and it keeps trying on every tick rather than giving up")
 
@@ -278,10 +284,68 @@ def test_an_alpha_the_window_did_not_keep_is_an_error_and_is_retried():
     assert ready(placer).alpha is False, "even parking it is not confirmed"
     assert placer.ensure_alpha(OVERLAY, ALPHA, reason="follow") is False
     alpha = [entry for entry in records if entry["event"] == "alpha"]
-    assert len(alpha) == 2 and all(row["level"] == "error" for row in alpha)
+    assert len(alpha) >= 2 and all(row["level"] == "error" for row in alpha)
     assert alpha[-1]["asked"] == ALPHA and alpha[-1]["got"] == 255
     assert alpha[-1]["reason"] == "follow"
     assert fake.alpha == 255
+
+
+def test_styles_taken_back_after_a_successful_raise_take_the_ghost_off_screen():
+    """Rig, 2026-09-19: pywebview's creation runs `Opacity=0; Show(); Hide();
+    Opacity=1`, and WinForms implements Opacity with WS_EX_LAYERED -- so the
+    form is layered and then UN-layered underneath us, AFTER our own styles
+    read back fine. With the bit gone no alpha applies at all and the window
+    is SOLID, so it has to come off screen, not fade."""
+    placer, fake, records = make_placer()
+    parked_then_raised(placer)
+    assert fake.alpha == ALPHA and fake.shown == [("show", OVERLAY)]
+
+    fake.ex, fake.alpha, fake.layers = 0, None, False  # taken back, and it sticks
+    state = ready(placer)
+    assert state.ok is False and state.styles is False
+    assert fake.shown[-1] == ("hide", OVERLAY), (
+        "he may not be left looking at a solid rectangle")
+    assert placer.applied_alpha is None
+    parked = next(entry for entry in records if entry["event"] == "parked")
+    assert parked["reason"] == "styles_lost" and parked["was_holding"] == ALPHA
+
+    fake.layers = True  # our re-apply starts sticking again
+    ready(placer)
+    placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
+    assert fake.shown[-1] == ("show", OVERLAY)
+    assert fake.alpha == CLEAR, "back to parked, not straight back to visible"
+
+
+def test_an_alpha_accepted_and_then_taken_away_is_never_trusted_from_memory():
+    """The other half of the same rig finding: a set can report SUCCESS on a
+    window that reads back with no alpha at all. Only the readback counts, and
+    it is taken again every tick."""
+    placer, fake, records = make_placer()
+    parked_then_raised(placer)
+    assert fake.alpha == ALPHA
+
+    fake.lies_about_alpha = True
+    fake.alpha = None  # accepted earlier, gone now
+    state = ready(placer)
+    assert state.alpha is False
+    assert fake.shown[-1] == ("hide", OVERLAY)
+    assert any(entry["event"] == "parked" and entry["reason"] == "alpha_lost"
+               for entry in records)
+
+    fake.lies_about_alpha = False
+    assert ready(placer).ok is True
+    assert fake.alpha == CLEAR
+
+
+def test_an_alpha_that_merely_drifted_is_put_straight_back():
+    """Not every loss is a lost window: with the styles intact the value is
+    simply re-asserted, and the ghost keeps running."""
+    placer, fake, _ = make_placer()
+    parked_then_raised(placer)
+    fake.alpha = None
+    assert ready(placer).ok is True
+    assert fake.alpha == ALPHA, "re-asserted in the same tick"
+    assert fake.shown == [("show", OVERLAY)], "and never taken off screen"
 
 
 def test_styles_taken_away_behind_our_back_are_put_straight_back():

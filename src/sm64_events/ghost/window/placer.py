@@ -176,13 +176,37 @@ class Placer:
             return self._note(Readiness(hwnd=hwnd, window=False, styles=False,
                                         alpha=False))
         styled = self.ensure_styles(hwnd)
+        if not styled:
+            # The bits were taken back, so no alpha is being applied at all
+            # and the window is SOLID -- his round-1 look. Nothing may be on
+            # screen until both read back again.
+            self._fall_back(hwnd, "styles_lost")
+            return self._note(Readiness(hwnd=hwnd, window=True, styles=False,
+                                        alpha=False))
         # Alpha AFTER styles, never beside them: SetLayeredWindowAttributes
         # fails on a window that is not WS_EX_LAYERED, which is exactly what
         # happened at 08:20:06.806 in his second try.
-        alpha_ok = (self.ensure_alpha(hwnd, self._hold, reason=self._hold_reason)
-                    if styled else False)
-        return self._note(Readiness(hwnd=hwnd, window=True, styles=styled,
+        alpha_ok = self.ensure_alpha(hwnd, self._hold, reason=self._hold_reason)
+        if not alpha_ok:
+            # Measured in the rig: an alpha can be ACCEPTED and then taken
+            # away 1.5 s later, and a set can report success on a window that
+            # reads back unlayered with no alpha at all. One good readback is
+            # never proof, so this drops to parked and keeps asking.
+            self._fall_back(hwnd, "alpha_lost")
+            alpha_ok = self.ensure_alpha(hwnd, CLEAR, reason="alpha_lost")
+        return self._note(Readiness(hwnd=hwnd, window=True, styles=True,
                                     alpha=alpha_ok))
+
+    def _fall_back(self, hwnd: int, reason: str) -> None:
+        """Stop showing him anything, and forget what we thought we held."""
+        if self._hold != CLEAR or self._shown:
+            self._record("parked", level="error", reason=reason,
+                         was_holding=self._hold, was_shown=bool(self._shown))
+        self._hold, self._hold_reason = CLEAR, reason
+        self._alpha = None
+        # Hidden, not faded: with the layered bit gone there is no alpha that
+        # can make it invisible, so ShowWindow is the only lever left.
+        self._visibility(hwnd, False, reason)
 
     def _note(self, readiness: Readiness) -> Readiness:
         if readiness != self._readiness:
