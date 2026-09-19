@@ -60,9 +60,11 @@ MARIO_BLOCK_OFF = A.MARIO_ACTION_OFF
 _YAW_AT = A.MARIO_YAW_OFF - MARIO_BLOCK_OFF
 _SPEED_AT = A.MARIO_FORWARD_VEL_OFF - MARIO_BLOCK_OFF
 MARIO_BLOCK_SIZE = _SPEED_AT + 4
+_POS_AT = A.MARIO_POS_OFF - MARIO_BLOCK_OFF
 _ACTION = struct.Struct(">I")
 _YAW = struct.Struct(">h")
 _SPEED = struct.Struct(">f")
+_POS = struct.Struct(">fff")
 
 
 def decode(block: bytes, mario: bytes | None = None) -> InputFrame:
@@ -86,6 +88,20 @@ def decode(block: bytes, mario: bytes | None = None) -> InputFrame:
     return InputFrame(buttons=buttons, pressed=pressed,
                       stick_x=raw_x, stick_y=raw_y, action=action, yaw=yaw,
                       speed=speed)
+
+
+def decode_position(mario: bytes) -> tuple[float, float, float] | None:
+    """Where Mario stood, out of the same block `decode` takes, or None.
+
+    Beside the frame rather than on it: `InputFrame` is what the chunk store,
+    the document format and the 250 Hz sampler all carry, and only a recorded
+    picture wants this. One axis that is NaN, infinite or past
+    `MARIO_POS_LIMIT` refuses all three -- that block is not a game state.
+    """
+    pos = _POS.unpack_from(mario, _POS_AT)
+    if any(axis != axis or abs(axis) > A.MARIO_POS_LIMIT for axis in pos):
+        return None
+    return pos
 
 
 def dead_zone(raw: int) -> float:

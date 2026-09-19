@@ -1,6 +1,8 @@
 """The stamp: a picture's copied RDRAM bytes decode through the sampler's own
 decoder, the address table is word-aligned from the live layout, and the
 desktop camera hands over to the GPU route."""
+import json
+import struct
 import threading
 import time
 from types import SimpleNamespace
@@ -22,8 +24,14 @@ def layout():
     return layout_for("us")
 
 
+def float_word(value: float) -> int:
+    """The float's bits as the word's value."""
+    return struct.unpack(">I", struct.pack(">f", value))[0]
+
+
 def rdram_with(layout, frame: int, stick=(12, -34), buttons=0x8000, igt=77,
-               action=0x04000440, yaw=-1234, speed=31.5) -> BufferMemory:
+               action=0x04000440, yaw=-1234, speed=31.5,
+               pos=(-1328.456, 260.0, 4664.254)) -> BufferMemory:
     memory = BufferMemory()
     memory.write_u32(layout.global_timer, frame)
     base = layout.player1_controller
@@ -35,9 +43,9 @@ def rdram_with(layout, frame: int, stick=(12, -34), buttons=0x8000, igt=77,
     mario = layout.mario_struct + MARIO_BLOCK_OFF
     memory.write_u32(mario, action)
     memory.write_u16(layout.mario_struct + A.MARIO_YAW_OFF, yaw & 0xFFFF)
-    import struct
-    speed_word, = struct.unpack(">I", struct.pack(">f", speed))   # the float's bits as the word's value
-    memory.write_u32(layout.mario_struct + A.MARIO_FORWARD_VEL_OFF, speed_word)
+    memory.write_u32(layout.mario_struct + A.MARIO_FORWARD_VEL_OFF, float_word(speed))
+    for axis, value in enumerate(pos):
+        memory.write_u32(layout.mario_struct + A.MARIO_POS_OFF + 4 * axis, float_word(value))
     return memory
 
 
@@ -182,3 +190,42 @@ def test_a_layout_without_mario_stamps_no_facing_or_speed(layout):
     assert stamp.pad is not None and stamp.mario_captured is False
     extras = stamp.extras()
     assert extras["pad"] == [12, -34, 0x8000] and "mario" not in extras
+    assert stamp.mario_pos is None and "mario_pos" not in extras
+
+
+def test_a_stamp_keeps_where_mario_stood_beside_an_unchanged_mario_field(layout):
+    """Additive: the position is its own field, two decimals of a world unit,
+    and `mario` still serialises to the bytes every existing reader parses."""
+    table = P.table_for(layout)
+    memory = rdram_with(layout, frame=1234, pos=(-1328.456, 260.0, 4664.254))
+    extras = P.decode_stamp(slot_with(raw_table(memory, table)), table, layout).extras()
+    assert extras["mario_pos"] == [-1328.46, 260.0, 4664.25]
+    assert json.dumps(extras["mario"]) == "[67109952, -1234, 31.5]"
+    assert json.loads(json.dumps(extras))["mario_pos"] == extras["mario_pos"]
+
+
+@pytest.mark.parametrize("pos", [
+    (float("nan"), 260.0, 4664.0),
+    (-1328.0, float("inf"), 4664.0),
+    (-1328.0, 260.0, 1e9),
+])
+def test_a_position_no_level_can_hold_is_left_off_the_row(layout, pos):
+    """Garbage costs the row its position only: the pad and `mario` stand,
+    and the row stays strict JSON (a bare NaN is not)."""
+    table = P.table_for(layout)
+    memory = rdram_with(layout, frame=9, pos=pos)
+    stamp = P.decode_stamp(slot_with(raw_table(memory, table)), table, layout)
+    extras = stamp.extras()
+    assert stamp.mario_pos is None and "mario_pos" not in extras
+    assert extras["mario"] == [0x04000440, -1234, 31.5] and extras["pad"] == [12, -34, 0x8000]
+    json.dumps(extras, allow_nan=False)
+
+
+def test_a_stamp_that_refuses_its_pad_carries_no_position_either(layout):
+    """`mario_pos` rides with `mario`: memory that is not a controller state
+    is reset/loading memory, and nothing else read from it is trusted."""
+    table = P.table_for(layout)
+    memory = rdram_with(layout, frame=500, stick=(32767, -32768), buttons=0xFFFF)
+    stamp = P.decode_stamp(slot_with(raw_table(memory, table)), table, layout)
+    assert stamp.pad_invalid is True and stamp.mario_pos is None
+    assert "mario_pos" not in stamp.extras()
