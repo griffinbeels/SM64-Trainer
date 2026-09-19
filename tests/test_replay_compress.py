@@ -139,12 +139,22 @@ def test_every_archive_candidate_runs_without_picture_reordering(codec, tmp_path
     assert video_quality_args(codec, "archive", CLIP_MAXRATE), codec
 
 
+def _worker(saved, **kwargs):
+    """A compressor over the fixture's save tree that only uses the CPU encoder."""
+    return compress.SavedReplayCompressor(
+        _ffmpeg(), saved.parents[2],
+        shrink_fn=lambda ffmpeg, clip, **kw: compress.shrink(ffmpeg, clip, codecs=CPU_ONLY, **kw),
+        **kwargs)
+
+
+def _replay_folder(saved):
+    return sorted(p.name for p in saved.parent.iterdir())
+
+
 def test_a_clip_a_player_is_reading_is_not_swapped_until_it_goes_quiet(saved):
-    ff = _ffmpeg()
-    compress.shrink(ff, saved, codecs=CPU_ONLY)
     now = [1000.0]
-    worker = compress.SavedReplayCompressor(ff, saved.parents[2], idle_s=120,
-                                            clock=lambda: now[0])
+    worker = _worker(saved, idle_s=120, clock=lambda: now[0])
+    compress.shrink(_ffmpeg(), saved, codecs=CPU_ONLY, work=worker.work)
     worker.touch(saved)
     original = compress.file_sha256(saved)
 
@@ -155,9 +165,8 @@ def test_a_clip_a_player_is_reading_is_not_swapped_until_it_goes_quiet(saved):
 
 
 def test_session_start_adopts_what_the_last_session_proved(saved):
-    ff = _ffmpeg()
-    compress.shrink(ff, saved, codecs=CPU_ONLY)
-    worker = compress.SavedReplayCompressor(ff, saved.parents[2], poll_s=0.05)
+    worker = _worker(saved, poll_s=0.05)
+    compress.shrink(_ffmpeg(), saved, codecs=CPU_ONLY, work=worker.work)
     worker.touch(saved)   # last session's player is gone with that session
     worker.start()
     try:
@@ -169,46 +178,52 @@ def test_session_start_adopts_what_the_last_session_proved(saved):
 def test_closing_the_app_swaps_what_is_proven_even_if_it_was_just_watched(saved):
     """His first clean close left both files in the folder: he had watched the
     clips inside the two quiet minutes, then closed (2026-09-19)."""
-    ff = _ffmpeg()
-    compress.shrink(ff, saved, codecs=CPU_ONLY)
-    worker = compress.SavedReplayCompressor(ff, saved.parents[2], idle_s=120)
+    worker = _worker(saved, idle_s=120)
+    compress.shrink(_ffmpeg(), saved, codecs=CPU_ONLY, work=worker.work)
     worker.touch(saved)
     assert worker.adopt_ready() == []
 
     worker.stop()
 
     assert json.loads(saved.with_suffix(".json").read_text())["media"]["state"] == "compressed"
-    assert _leftovers(saved) == []
+    assert list(worker.work.iterdir()) == []
 
 
-def test_a_job_the_close_interrupted_writes_no_verdict_and_runs_again_next_start(saved):
-    ff = _ffmpeg()
+def test_a_save_closed_on_at_once_is_shrunk_next_start_and_his_folder_stays_clean(saved):
+    """"I opened the replay, saved it, and then immediately closed the app" --
+    and found a 0 KB temp file beside his replay (2026-09-19). The note that a
+    job is owed lives in the hidden work folder, never beside the clip."""
+    his_folder = _replay_folder(saved)
     closing = threading.Event()
 
-    def killed_by_the_close(args, **kwargs):
+    def killed_by_the_close(ffmpeg, clip, **kw):
         closing.set()
-        return subprocess.CompletedProcess(args, 1, "", "killed")
+        return compress.shrink(ffmpeg, clip, codecs=CPU_ONLY, **{**kw, "cancel": closing})
 
-    outcome = compress.shrink(ff, saved, codecs=CPU_ONLY, run=killed_by_the_close,
-                              cancel=closing)
+    first = compress.SavedReplayCompressor(_ffmpeg(), saved.parents[2], poll_s=0.05,
+                                           shrink_fn=killed_by_the_close)
+    first.start()
+    first.enqueue(saved)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and not first.outcomes:
+        time.sleep(0.05)
+    first.stop()
 
-    assert outcome["state"] == "interrupted"
+    assert [o["state"] for o in first.outcomes] == ["interrupted"]
     assert "media" not in json.loads(saved.with_suffix(".json").read_text())
-    assert compress.staged_path(saved).exists() and not compress.proof_path(saved).exists()
+    assert _replay_folder(saved) == his_folder
+    assert [p.name for p in first.work.iterdir()] == [saved.name + compress.JOB_SUFFIX]
 
-    worker = compress.SavedReplayCompressor(
-        ff, saved.parents[2], poll_s=0.05, idle_s=0,
-        shrink_fn=lambda ffmpeg, clip, cancel=None: compress.shrink(
-            ffmpeg, clip, codecs=CPU_ONLY, cancel=cancel))
-    worker.start()
-    try:
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and not worker.outcomes:
-            time.sleep(0.1)
-    finally:
-        worker.stop()
+    second = _worker(saved, poll_s=0.05, idle_s=0)
+    second.start()
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and not second.outcomes:
+        time.sleep(0.1)
+    second.stop()
+
     assert json.loads(saved.with_suffix(".json").read_text())["media"]["state"] == "compressed"
-    assert _leftovers(saved) == []
+    assert _replay_folder(saved) == his_folder
+    assert list(second.work.iterdir()) == []
 
 
 def test_a_save_queues_its_clip_and_a_request_for_it_marks_it_in_use(tmp_path):

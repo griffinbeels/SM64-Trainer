@@ -18,13 +18,17 @@ every-slot browser seek check (`tools/probe_clip_seek.py`).
 
 Two steps, because a player may be reading the file when the encode ends:
 
-1. `shrink` writes `<clip>.mp4.compressed.tmp` beside the clip and, once
-   proven, the `<clip>.mp4.compressed.json` that says so. Neither name matches
-   the `attempt_*.mp4` glob that indexes the save tree.
+1. `shrink` writes `<clip>.mp4.compressed.tmp` and, once proven, the
+   `<clip>.mp4.compressed.json` that says so. Neither name matches the
+   `attempt_*.mp4` glob that indexes the save tree, and the compressor keeps
+   both in one hidden folder at the top of that tree, never beside the clip.
 2. `adopt` swaps a proven file under the clip's own name and records the
    sidecar's `media` block. It runs when nobody has asked for the clip's
-   bytes lately, when the app closes, and at session start. A job the close
-   interrupts leaves an empty staged file, and the next start runs it again.
+   bytes lately, when the app closes, and at session start.
+
+A save leaves a job note in that folder before any work starts, so a close
+that lands mid-encode (or before the worker reached the clip) still leaves the
+job owed, and the next session start runs it.
 
 The `media` block is also the manifest a later uploader/downloader verifies
 with the same `fingerprint`: the file's sha256, the picture count and a
@@ -55,12 +59,16 @@ from sm64_events.replay.publication import atomic_json
 log = logging.getLogger("sm64.replay")
 
 MEDIA_VERSION = 1
-# Working files beside the clip while a job is in flight. They are an ordinary
-# MP4 and its proof under names that do NOT end in .mp4, because every
-# `attempt_*.mp4` in the save tree is a saved replay. They exist only until
-# the swap: seconds when nobody is watching, else until the app closes.
+# Working files: an ordinary MP4, its proof, and the note that a job is owed,
+# under names that do NOT end in .mp4 because every `attempt_*.mp4` in the
+# save tree is a saved replay. The compressor keeps them in ONE hidden folder
+# at the top of the save tree, never beside the clip: the folder he opens
+# after a session holds his replays and nothing else ("i still see the temp
+# files", 2026-09-19, after a save followed at once by closing the app).
+WORK_DIR = ".compressing"
 STAGED_SUFFIX = ".compressed.tmp"    # <clip>.mp4.compressed.tmp
 PROOF_SUFFIX = ".compressed.json"    # <clip>.mp4.compressed.json
+JOB_SUFFIX = ".job.json"             # <clip>.mp4.job.json: {"clip": path under the save tree}
 SETTLED_STATES = ("compressed", "kept_original", "adopting")
 # A re-encode that is structurally perfect and visually broken (a driver
 # fault, a green picture) would destroy a PB for good. SSIM against the saved
@@ -131,6 +139,13 @@ def end_children() -> None:
     for child in running:
         with suppress(OSError):
             child.kill()
+
+
+def _hide(folder: Path) -> None:
+    """Explorer's hidden flag, where there is one. Cosmetic: never raises."""
+    with suppress(Exception):
+        import ctypes
+        ctypes.windll.kernel32.SetFileAttributesW(str(folder), 0x2)  # FILE_ATTRIBUTE_HIDDEN
 
 
 def file_sha256(path: Path) -> str:
@@ -259,24 +274,30 @@ def encode_args(ffmpeg: str, saved: Path, staged: Path, codec: str, end: int) ->
             "-movflags", "+faststart", "-f", "mp4", str(staged)]
 
 
-def staged_path(saved: Path) -> Path:
-    return saved.with_name(saved.name + STAGED_SUFFIX)
+def staged_path(saved: Path, work: Path | None = None) -> Path:
+    return (work or saved.parent) / (saved.name + STAGED_SUFFIX)
 
 
-def proof_path(saved: Path) -> Path:
-    return saved.with_name(saved.name + PROOF_SUFFIX)
+def proof_path(saved: Path, work: Path | None = None) -> Path:
+    return (work or saved.parent) / (saved.name + PROOF_SUFFIX)
+
+
+def job_path(saved: Path, work: Path) -> Path:
+    return work / (saved.name + JOB_SUFFIX)
 
 
 def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
-           cancel: threading.Event | None = None) -> dict:
-    """Step 1. Encode beside `saved`, prove it, and leave the proof on disk.
+           cancel: threading.Event | None = None, work: Path | None = None) -> dict:
+    """Step 1. Encode into `work`, prove it, and leave the proof on disk.
 
-    Returns the `media` block either way: state `ready` (a proven staged file
-    awaits adoption) or `kept_original` with the reason. Never touches `saved`.
+    Returns a block whose state is `ready` (a proven staged file awaits
+    adoption), `kept_original` (a verdict about this clip, written to its
+    sidecar and never asked again), `unavailable` (this machine could not
+    encode or probe at all) or `interrupted` (`cancel`: the app closed
+    mid-job). The last two say nothing about the clip, write nothing, and
+    leave nothing behind. Never touches `saved`.
 
-    `cancel` is the app closing mid-job. A cancelled job says nothing about
-    the clip, so it writes no verdict and LEAVES its staged file: a staged
-    file with no proof beside it is how the next session knows to try again.
+    `work` is where the working files go; None means beside the clip.
     """
     def cancelled() -> bool:
         return cancel is not None and cancel.is_set()
@@ -288,9 +309,9 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
         # Already answered for this clip. Re-encoding a compressed replay
         # would stack a second generation of loss on a PB for nothing.
         return settled
-    staged, proof = staged_path(saved), proof_path(saved)
+    staged, proof = staged_path(saved, work), proof_path(saved, work)
     proof.unlink(missing_ok=True)
-    staged.write_bytes(b"")   # the "a job was started for this clip" marker
+    staged.unlink(missing_ok=True)
     reasons: list[str] = []
     encoded = False
     try:
@@ -329,23 +350,21 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
         reasons.append(str(refused))
     except (OSError, subprocess.SubprocessError) as failed:
         reasons.append(f"{type(failed).__name__}: {failed}")
+    staged.unlink(missing_ok=True)
     if cancelled() or not encoded:
-        # Nothing was learned about THIS clip: the app closed mid-job, or the
-        # machine could not encode or probe at all. Leave the empty marker so
-        # the next session start tries again, and write no verdict.
-        staged.write_bytes(b"")
-        state = "interrupted" if cancelled() else "kept_original"
+        # Nothing was learned about THIS clip, so no verdict is written. The
+        # compressor's job file is what makes the next session try again.
+        state = "interrupted" if cancelled() else "unavailable"
         return {"version": MEDIA_VERSION, "state": state, "reasons": reasons}
     # An answer about this clip (it does not shrink, or does not survive the
     # proof) is settled, and is never asked again.
-    staged.unlink(missing_ok=True)
     kept = {"version": MEDIA_VERSION, "state": "kept_original", "reasons": reasons}
     if sidecar.exists():
         atomic_json(sidecar, {**meta, "media": kept}, allow_nan=True)
     return kept
 
 
-def adopt(saved: Path) -> dict | None:
+def adopt(saved: Path, work: Path | None = None) -> dict | None:
     """Step 2. Swap a proven staged file under the clip's own name.
 
     None when there is nothing proven to adopt, or the clip is open elsewhere
@@ -353,7 +372,8 @@ def adopt(saved: Path) -> dict | None:
     sidecar names the swap BEFORE it happens, so a crash between the two
     writes is visible afterwards as a digest that does not match the file.
     """
-    staged, proof, sidecar = staged_path(saved), proof_path(saved), saved.with_suffix(".json")
+    staged, proof = staged_path(saved, work), proof_path(saved, work)
+    sidecar = saved.with_suffix(".json")
     if not (staged.is_file() and proof.is_file() and saved.is_file() and sidecar.is_file()):
         return None
     block = json.loads(proof.read_text(encoding="utf-8"))
@@ -378,7 +398,7 @@ def adopt(saved: Path) -> dict | None:
     return done
 
 
-def settle(saved: Path) -> None:
+def settle(saved: Path, work: Path | None = None) -> None:
     """Repair a sidecar left at `adopting` by a crash: the file's own digest
     says which side of the swap it is on."""
     sidecar = saved.with_suffix(".json")
@@ -390,7 +410,7 @@ def settle(saved: Path) -> None:
         return
     if file_sha256(saved) == block.get("sha256"):
         meta["media"] = {**block, "state": "compressed"}
-        proof_path(saved).unlink(missing_ok=True)
+        proof_path(saved, work).unlink(missing_ok=True)
     else:
         meta.pop("media")
     atomic_json(sidecar, meta, allow_nan=True)
@@ -438,20 +458,49 @@ class SavedReplayCompressor:
             self._thread.join(timeout=5)
         self.adopt_ready(everything_idle=True)
 
+    @property
+    def work(self) -> Path:
+        """The one hidden folder holding every working file (see WORK_DIR)."""
+        folder = self._root / WORK_DIR
+        if not folder.is_dir():
+            folder.mkdir(parents=True, exist_ok=True)
+            _hide(folder)
+        return folder
+
+    def _clip_of(self, note: Path) -> Path | None:
+        """The saved replay a job note or proof belongs to. The note holds its
+        path under the save tree; a clip he moved in Explorer is found by name."""
+        name = note.name.removesuffix(JOB_SUFFIX).removesuffix(PROOF_SUFFIX)
+        job = self.work / (name + JOB_SUFFIX)
+        with suppress(OSError, ValueError, KeyError, TypeError):
+            listed = self._root / json.loads(job.read_text(encoding="utf-8"))["clip"]
+            if listed.is_file():
+                return listed
+        return next((p for p in self._root.rglob(name) if p.is_file()), None)
+
+    def _forget(self, saved_name: str) -> None:
+        for suffix in (JOB_SUFFIX, STAGED_SUFFIX, PROOF_SUFFIX):
+            (self.work / (saved_name + suffix)).unlink(missing_ok=True)
+
     def _requeue_interrupted(self) -> None:
-        """A staged file with no proof beside it is a job the last session
-        started and never finished. Its bytes are worthless; the clip is not."""
-        if not self._root.exists():
-            return
-        for staged in self._root.rglob(f"attempt_*.mp4{STAGED_SUFFIX}"):
-            saved = staged.with_name(staged.name.removesuffix(STAGED_SUFFIX))
-            if proof_path(saved).exists():
+        """A job note with no proof is a save the last session never finished
+        shrinking: it closed mid-encode, or before the worker reached it."""
+        for note in sorted(self.work.glob(f"*{JOB_SUFFIX}")):
+            name = note.name.removesuffix(JOB_SUFFIX)
+            if (self.work / (name + PROOF_SUFFIX)).exists():
                 continue
-            staged.unlink(missing_ok=True)
-            if saved.is_file():
+            saved = self._clip_of(note)
+            if saved is None:
+                self._forget(name)   # he deleted the replay; nothing is owed
+            else:
                 self.enqueue(saved)
 
     def enqueue(self, saved: Path) -> None:
+        # Written BEFORE the work starts: a close between the save and the
+        # first encoded byte must still leave the job owed.
+        with suppress(OSError, ValueError):
+            atomic_json(job_path(saved, self.work),
+                        {"clip": saved.relative_to(self._root).as_posix()})
         with self._guard:
             if saved not in self._jobs:
                 self._jobs.append(saved)
@@ -470,17 +519,21 @@ class SavedReplayCompressor:
         adopted = []
         if not self._root.exists():
             return adopted
-        for proof in self._root.rglob(f"attempt_*.mp4{PROOF_SUFFIX}"):
-            saved = proof.with_name(proof.name.removesuffix(PROOF_SUFFIX))
+        for proof in sorted(self.work.glob(f"*{PROOF_SUFFIX}")):
+            saved = self._clip_of(proof)
+            if saved is None:
+                self._forget(proof.name.removesuffix(PROOF_SUFFIX))
+                continue
             if not (everything_idle or self._idle(saved)):
                 continue
             try:
-                settle(saved)
-                done = adopt(saved)
+                settle(saved, self.work)
+                done = adopt(saved, self.work)
             except (OSError, ValueError, KeyError) as failed:
                 log.warning("replay compression: could not adopt %s: %s", saved.name, failed)
                 continue
             if done is not None:
+                self._forget(saved.name)
                 log.info("replay compressed: %s %.1f -> %.1f MB (%s, SSIM %.4f)",
                          saved.name, done["original"]["bytes"] / 2**20,
                          done["bytes"] / 2**20, done["codec"], done["ssim"])
@@ -493,11 +546,15 @@ class SavedReplayCompressor:
                 saved = self._jobs.pop(0) if self._jobs else None
             if saved is not None and saved.is_file():
                 try:
-                    outcome = self._shrink(self._ffmpeg, saved, cancel=self._stopping)
+                    outcome = self._shrink(self._ffmpeg, saved, cancel=self._stopping,
+                                           work=self.work)
                 except Exception:  # noqa: BLE001 - the worker outlives one bad clip
                     log.exception("replay compression failed for %s", saved.name)
-                    outcome = {"state": "kept_original", "reasons": ["worker error"]}
-                if outcome.get("state") == "kept_original":
+                    outcome = {"state": "unavailable", "reasons": ["worker error"]}
+                if outcome.get("state") in ("kept_original", "compressed", "adopting"):
+                    self._forget(saved.name)   # answered; `unavailable` and
+                    # `interrupted` keep their note and run again next start
+                if outcome.get("state") in ("kept_original", "unavailable"):
                     log.info("replay kept as saved: %s (%s)", saved.name,
                              "; ".join(outcome.get("reasons", [])))
                 self.outcomes.append({"clip": saved.name, **outcome})
