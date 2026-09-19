@@ -27,6 +27,13 @@
 // on Usamune's attempt counter, which is the number the live snapshot carries.
 import { clipClock, slotAtTime, timeOfSlot } from "../frame.js";
 
+// The counter band that means "a run has just started". NOT a number invented
+// here: `detectors/anchors.py::NEAR_ZERO_IGT` is this project's one definition
+// of when the Usamune counter has restarted, shared by the anchor detector and
+// `igt_clock.py` so there are not two opinions about it. This is its JS twin
+// and `tests/test_ui_ghost_follower.py` fails if the two ever disagree.
+export const NEAR_ZERO_IGT = 30;   // 30 frames = 1 s at 30 fps
+
 export const DEFAULTS = {
   // Beyond this many counter frames in one sample, the clock did not get here
   // by PLAYING. Play adds one frame per game frame (two under a hiccup); a
@@ -53,28 +60,62 @@ const HOLD = (reason, time = null) => ({ action: "hold", rate: 0, time, reason }
  * Index a clip's view payload by the game's own timer.
  *
  * `picture_igt[slot]` is the counter Usamune held when the capture layer drew
- * that picture, so the index is just its ascending non-null entries. A
- * template whose counter goes BACKWARD is refused by name: an area warp or a
- * state load inside the recording makes one counter value name two different
- * pictures, and picking one of them silently is how a ghost ends up confidently
- * wrong. That is the prototype's stated scope -- single-area stars.
+ * that picture, so the index is its ascending non-null entries -- FROM THE
+ * ATTEMPT'S OWN START.
+ *
+ * EVERY SAVED CLIP OF A STAR BEGINS BEFORE THE RESET THAT STARTED IT. The
+ * recorder keeps a lead-in, and through the reload the counter still holds the
+ * PREVIOUS run's final value, so a real clip opens with a stretch of pictures
+ * stamped with a number from a run that is over and then drops to near zero.
+ * (His first real template, star 6-0: 44 pictures frozen at 3029, then 3
+ * climbing to 584.) Those lead-in pictures are PRE-ROLL: the live counter can
+ * never name one, so the ghost never shows one, and the template's zero is the
+ * last drop into the near-zero band -- `NEAR_ZERO_IGT`, the same band
+ * `anchors.py` calls a restart.
+ *
+ * A counter that restarts AGAIN after that zero is still refused by name: an
+ * area warp mid-run (Usamune restarts the counter per leg) or a state load
+ * inside the recording makes one counter value name two different pictures, and
+ * picking one of them silently is how a ghost ends up confidently wrong. So is
+ * a single restart that does NOT land near zero, which is a load rather than a
+ * start. One restart, at the start, into the band is the ORDINARY clip and the
+ * refusal that rejected it rejected essentially every real one (his first try,
+ * 2026-09-19: a black screen, no footage). The prototype's stated scope is
+ * unchanged -- single-area stars.
  */
 export function ghostTemplate(view) {
   const stamps = view && view.picture_igt;
   if (!Array.isArray(stamps) || !stamps.length)
     return { ok: false, reason: "no_picture_timer" };
   const clock = clipClock(view);
+  // Every picture the capture actually stamped. A gap (the capture layer
+  // refuses a picture rather than guessing its frame) is skipped, never
+  // interpolated: this list is what the counter is looked up in.
+  const read = [];
+  for (let slot = 0; slot < stamps.length; slot += 1)
+    if (stamps[slot] != null) read.push(slot);
+  if (!read.length) return { ok: false, reason: "no_picture_timer" };
+
+  // Where the attempt starts. Repeated values are NOT restarts -- the capture
+  // runs at 60 fps over a 30 fps game, so several pictures legitimately carry
+  // one counter value, and the clip's tail holds the final value while the
+  // star cutscene plays.
+  const restarts = [];
+  for (let k = 1; k < read.length; k += 1)
+    if (stamps[read[k]] < stamps[read[k - 1]]) restarts.push(k);
+  const zero = restarts.length ? restarts[restarts.length - 1] : 0;
+  if (restarts.length > 1 || (restarts.length && stamps[read[zero]] > NEAR_ZERO_IGT))
+    return { ok: false, reason: "counter_restarts" };
+
   const igts = [];
   const slots = [];
-  for (let slot = 0; slot < stamps.length; slot += 1) {
-    const igt = stamps[slot];
-    if (igt == null) continue;
-    if (igts.length && igt < igts[igts.length - 1])
-      return { ok: false, reason: "counter_restarts" };
-    igts.push(igt);
-    slots.push(slot);
+  for (let k = zero; k < read.length; k += 1) {
+    slots.push(read[k]);
+    igts.push(stamps[read[k]]);
   }
-  if (!igts.length) return { ok: false, reason: "no_picture_timer" };
+  //: the first picture the ghost may ever show. Anything before it belongs to
+  //: the run that ended before this one.
+  const zeroSlot = slots[0];
 
   // The first entry at or after `igt`. A counter the capture missed answers
   // with the next picture the template would have shown -- the same rule
@@ -94,6 +135,11 @@ export function ghostTemplate(view) {
   return {
     ok: true, reason: null, clock, firstTime, lastTime,
     firstIgt: igts[0], lastIgt: igts[igts.length - 1], pictures: igts.length,
+    //: how many stamped pictures the clip holds BEFORE the attempt's own
+    //: start. A live diagnosis reads it through `window.ghostStatus()`: a
+    //: template with none was cut after the reset, one with hundreds is the
+    //: shape that has to be refused rather than followed.
+    prerollPictures: zero, zeroSlot,
 
     /** Where in the clip the picture for this counter value sits, and
      *  whether the template even reaches that far. */
@@ -105,12 +151,19 @@ export function ghostTemplate(view) {
     },
 
     /** Which counter value the picture at this clip time carries -- how the
-     *  ghost's error is measured, in game frames. */
+     *  ghost's error is measured, in game frames.
+     *
+     *  Clamped at the template's zero, so a video still sitting in the
+     *  pre-roll answers with the first picture the ghost may show rather than
+     *  with a number from the previous run. Unclamped, a clip that has loaded
+     *  and not yet been placed reports his own template's 3029 -- a hundred
+     *  seconds of game time that belong to a finished attempt, which reads as
+     *  a broken clock rather than as a ghost that has not been placed. */
     igtAtTime(seconds) {
       const raw = slotAtTime(seconds, clock);
-      let slot = Math.max(0, Math.min(stamps.length - 1, raw));
-      while (slot >= 0 && stamps[slot] == null) slot -= 1;
-      return slot < 0 ? igts[0] : stamps[slot];
+      let slot = Math.max(zeroSlot, Math.min(stamps.length - 1, raw));
+      while (slot > zeroSlot && stamps[slot] == null) slot -= 1;
+      return stamps[slot];
     },
   };
 }

@@ -59,11 +59,22 @@ pytestmark = pytest.mark.skipif(
 
 CLIP_SECONDS = 20
 CLIP_FPS = 30
-# A constant-rate stand-in for a template: one picture per game frame, the
-# counter running from zero. The follower's own VFR and offset-cut cases are
-# scored in the trace harness; what this file needs is a clip a browser will
-# really play.
-VIEW = {"frame_times": None, "picture_igt": list(range(CLIP_SECONDS * CLIP_FPS)),
+PRE_ROLL = 44
+#: The value the counter holds through a reset's reload: the PREVIOUS run's
+#: final time. Taken from the payload his own overlay was handed on its first
+#: real try (star 6-0, 2026-09-19), reduced to numbers in
+#: `tests/fixtures/ghost_preroll_view.json`.
+HELD = 3029
+# A constant-rate stand-in for a template, SHAPED LIKE A REAL SAVED CLIP: it
+# opens before the reset that started the attempt, so its first 44 pictures
+# carry a number from a run that is already over, and the attempt's own counter
+# starts at 3. The follower's VFR and offset-cut cases are scored in the trace
+# harness; what this file needs is a clip a browser will really play, with the
+# pre-roll in it -- an earlier fixture started cleanly at zero, which is why a
+# rule that refused every real clip could pass here.
+VIEW = {"frame_times": None,
+        "picture_igt": [HELD] * PRE_ROLL
+        + list(range(3, 3 + CLIP_SECONDS * CLIP_FPS - PRE_ROLL)),
         "duration_s": float(CLIP_SECONDS), "video_start_s": 0.0,
         "fps": CLIP_FPS, "game_fps": 30, "encode": "cfr"}
 
@@ -206,6 +217,49 @@ def _trace(page, igts: list) -> dict:
     return result
 
 
+def _opens_on_the_attempt_not_the_pre_roll(page) -> None:
+    """THE DEFECT THIS CLOSES, at the page's own level.
+
+    A saved clip begins before the reset that started the attempt, and through
+    that reload the counter still holds the previous run's final value. The
+    follower threw the whole template away for it (`counter_restarts`) and the
+    page had nothing to play -- his first real try was a black rectangle over
+    Project64 with no footage in it (2026-09-19).
+
+    Two claims here, and they are different: the pre-roll is not part of the
+    template, and the element does not appear until a picture has actually been
+    presented -- because the picture it would show first is the pre-roll.
+    """
+    # 600 pictures: 44 from the run before this one, 556 of the attempt itself.
+    # Fields, not the whole payload -- other tracks add their own.
+    template = page.evaluate("window.ghostStatus().template")
+    assert template["ok"] is True, template
+    assert template["reason"] is None, template
+    assert template["pictures"] == 556, template
+    assert template["preroll_pictures"] == 44, template
+    assert template["first_igt"] == 3, template
+
+    page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('ghost')).visibility"
+    ) == "visible"
+    opened = page.evaluate("window.ghostStatus()")
+    assert opened["shown"] is True, opened
+    assert opened["shown_igt"] == 3, opened
+    # The picture it presented is the attempt's own first one. The pre-roll
+    # ends at 44/30 s, so a clip still sitting at its start has not been placed
+    # and the first thing the player would see is the previous run.
+    assert opened["video_time"] >= PRE_ROLL / CLIP_FPS - 0.05, opened
+
+    # The gate is the attribute, not the timing: take it away and the element
+    # goes back to painting nothing. Restored immediately -- a driven test that
+    # leaves the page in a state it invented measures a page only it has seen.
+    assert page.evaluate(
+        "(() => { delete document.body.dataset.shown;"
+        " const v = getComputedStyle(document.getElementById('ghost')).visibility;"
+        " document.body.dataset.shown = 'yes'; return v; })()") == "hidden"
+
+
 def _nudge_over_the_clock(page, url: str) -> None:
     """THE DEFECT THIS CLOSES, at the page's own level.
 
@@ -260,12 +314,22 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert page.evaluate(
             "getComputedStyle(document.getElementById('ghost')).visibility"
         ) == "hidden"
+        # NOTHING IS PAINTED, which is not the same claim as "the video is
+        # hidden". This page sits over the running game, so an opaque page is a
+        # black rectangle over Project64 -- what his first real try saw. Read
+        # the COMPUTED colour: a `background: #000` anywhere in the chain is
+        # invisible to a class-name check and is exactly the defect.
+        assert page.evaluate(
+            "[document.documentElement, document.body,"
+            " document.getElementById('ghost')]"
+            ".map((el) => getComputedStyle(el).backgroundColor)"
+        ) == ["rgba(0, 0, 0, 0)"] * 3
 
         # 2. A real template: the page resolves it and opens the clip.
         fixture.available = True
         page.goto(url)
         page.wait_for('body[data-ghost="ready"]')
-        assert page.evaluate("window.ghostStatus().template.pictures") == 600
+        _opens_on_the_attempt_not_the_pre_roll(page)
         # It asked about the star in its OWN address, in the template store's
         # spelling, and asked for nothing else: the nudge is not a page, so it
         # is not in the URL (see ghost/session.py::follower_url).
@@ -306,11 +370,13 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert stalled["decision"]["reason"] == "stalled", stalled
 
         # 5. A reset: the counter returns to zero and so does the ghost, held
-        #    on the template's own first picture until the timer moves.
+        #    on the template's own first picture until the timer moves -- which
+        #    for a real clip is the first picture AFTER its pre-roll, never the
+        #    previous run's last frame that the clip opens on.
         reset = _trace(page, [0])
         assert reset["decision"]["reason"] == "reset", reset
         assert reset["paused"] is True, reset
-        assert reset["shown_igt"] == 0, reset
+        assert reset["shown_igt"] == 3, reset
 
         # 6. His timing hotkey, over the channel the companion window uses.
         _post_message(page, "{type: 'ghost-nudge', nudge_frames: 45}")

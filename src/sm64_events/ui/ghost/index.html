@@ -16,19 +16,38 @@
   something to see through. Everything it draws is below.
 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  /* NOTHING HERE PAINTS EXCEPT THE VIDEO. This page sits over the running
+     game, so every surface it could tint is a surface it would tint wrongly:
+     an opaque background is a black rectangle over Project64, which is exactly
+     what his first real try saw (2026-09-19). No background on the document,
+     none on the element, and the letterbox around a clip of another aspect is
+     see-through rather than black.
+
+     A page can only decline to paint; it cannot make the window behind it
+     transparent. What composites this page onto the desktop is WebView2's own
+     `DefaultBackgroundColor`, and the host asks for opaque black -- so the
+     window side owns the other half of this (ghost/window/host.py). */
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
   /* Full-bleed, and `contain` rather than `fill`: the clip follows the
      renderer's own picture size, which is not standardised, so stretching it
      to a window of another aspect would put the ghost's Mario somewhere the
-     player's never goes. Letterbox bars are black on black. */
+     player's never goes. */
   #ghost {
     position: fixed; inset: 0; width: 100%; height: 100%;
-    object-fit: contain; background: #000; pointer-events: none;
+    object-fit: contain; background: transparent; pointer-events: none;
   }
   /* Nothing to show yet, or nothing to show at all: paint nothing. A
      chrome-less overlay has no room to explain itself, so the reason lives on
-     the body's data attributes and in ghostStatus() instead. */
-  body:not([data-ghost="ready"]) #ghost { visibility: hidden; }
+     the body's data attributes and in ghostStatus() instead.
+
+     `data-shown` is a SEPARATE question from `data-ghost`: ready means a clip
+     resolved and its metadata loaded, shown means the decoder has actually
+     presented a picture. Between the two an element with a src and no decoded
+     frame paints its own (transparent) box, and before the first seek lands
+     that box would be the PRE-ROLL -- a picture from the run before this one.
+     Neither is something to put on top of his game. */
+  #ghost { visibility: hidden; }
+  body[data-ghost="ready"][data-shown="yes"] #ghost { visibility: visible; }
 </style>
 </head>
 <body data-ghost="loading">
@@ -62,6 +81,10 @@ function mark(state, reason = null, reasonText = null) {
   document.body.dataset.ghost = state;
   if (reason) document.body.dataset.reason = reason;
   else delete document.body.dataset.reason;
+  // Anything but a running ghost goes back to painting nothing: a refusal, an
+  // unreachable source or a media error must leave the game's own picture
+  // untouched rather than freeze the last thing that was decoded.
+  if (state !== "ready") delete document.body.dataset.shown;
 }
 
 // WHAT IS ON SCREEN, not what was asked for. `requestVideoFrameCallback` hands
@@ -147,6 +170,9 @@ window.ghostStatus = () => ({
   ...status,
   nudge_frames: follower ? follower.nudge : null,
   video_time: videoTime(),
+  //: whether the element is actually painting. False is the honest answer for
+  //: every state in which this page must leave the game's picture alone.
+  shown: document.body.dataset.shown === "yes",
   paused: video.paused,
   playback_rate: video.playbackRate,
   shown_igt: follower && follower.template.ok
@@ -186,8 +212,15 @@ async function start() {
       ? { level: source.level, area: source.area == null ? null : source.area }
       : null,
   });
+  // What the rule made of this clip, readable from outside: how many pictures
+  // it will play, how many it threw away as pre-roll from the previous run,
+  // and the counter value its first playable picture carries. A refusal names
+  // itself here too -- `counter_restarts` is a template the ghost will not
+  // guess at, and a chrome-less overlay has nowhere else to say so.
   status.template = { ok: follower.template.ok, reason: follower.template.reason,
-                      pictures: follower.template.pictures || 0 };
+                      pictures: follower.template.pictures || 0,
+                      preroll_pictures: follower.template.prerollPictures || 0,
+                      first_igt: follower.template.firstIgt ?? null };
   if (!follower.template.ok) {
     mark("unavailable", follower.template.reason);
     return;
@@ -198,6 +231,14 @@ async function start() {
   video.addEventListener("error", () => mark("error", "media_unplayable"));
   video.addEventListener("loadedmetadata", () => {
     if (status.state === "ready") return;
+    // PARK IT ON THE TEMPLATE'S ZERO BEFORE ANYTHING IS SHOWN. A clip opens on
+    // its pre-roll -- the tail of the run before this one -- and the element
+    // decodes that picture the moment it has metadata, a whole clock sample
+    // before the first decision seeks. Seeking here means the first picture
+    // this page ever presents is the attempt's own first frame, which is also
+    // where the ghost belongs while the live timer is still in the near-zero
+    // band after a reset.
+    video.currentTime = follower.template.firstTime;
     mark("ready");
     openClock();
     const tick = () => {
@@ -207,7 +248,23 @@ async function start() {
     };
     requestAnimationFrame(tick);
   });
-  watchVideoPicture(video, () => {});
+  // THE ELEMENT APPEARS WHEN A PICTURE DOES, not when a src is assigned.
+  // `requestVideoFrameCallback` fires with the picture Chromium actually
+  // presented, so this is the one signal that says there is footage to show
+  // rather than an empty box waiting for a decoder.
+  watchVideoPicture(video, (time) => {
+    if (time == null || status.state !== "ready") return;
+    document.body.dataset.shown = "yes";
+  });
+  // No `requestVideoFrameCallback` (an older engine, or a headless run with no
+  // compositor): `loadeddata` means the element has a frame for its current
+  // position, which is the same claim one signal weaker. Without this the
+  // overlay would be permanently invisible there, which is the failure mode
+  // this whole section exists to avoid in the other direction.
+  if (typeof video.requestVideoFrameCallback !== "function")
+    video.addEventListener("loadeddata", () => {
+      if (status.state === "ready") document.body.dataset.shown = "yes";
+    });
   video.src = source.media_url;
 }
 
