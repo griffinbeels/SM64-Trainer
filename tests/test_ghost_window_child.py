@@ -562,6 +562,25 @@ def test_the_real_child_takes_control_lines_and_dies_with_its_parent(child):
     assert child.wait(timeout=20) == 0
 
 
+def test_the_real_child_dies_when_the_trainer_takes_both_pipes_with_it(child):
+    """A dead trainer closes BOTH ends at once, which the test above does not.
+
+    Found 2026-09-19: two ghost windows were still over his game hours after
+    the servers that started them had gone. The child read end-of-input, tried
+    to say "stopping" down a pipe nobody held any more, and that write raised
+    ahead of the line that stops the window.
+    """
+    assert read_event(child, "the ready event")["event"] == "ready"
+    send(child, {"opacity": 0.25, "visible": True})
+    drain_until(child, "the ghost landing on the picture",
+                lambda events: any(e["event"] == "placed" and e["show"]
+                                   for e in events))
+
+    child.stdout.close()
+    child.stdin.close()
+    assert child.wait(timeout=20) == 0
+
+
 def test_the_real_child_exits_on_a_quit_line(child):
     assert read_event(child, "the ready event")["event"] == "ready"
     send(child, {"quit": True})

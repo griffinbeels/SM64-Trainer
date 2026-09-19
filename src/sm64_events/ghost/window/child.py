@@ -37,6 +37,7 @@ four different pieces of code that disagree.
 """
 import argparse
 import logging
+import os
 import sys
 import threading
 import time
@@ -330,16 +331,53 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def make_emitter(stream):
+def make_emitter(stream, on_broken=None):
+    """Event lines to the trainer. A write that fails means it has gone.
+
+    A dead trainer takes this pipe and the control pipe in the same instant, so
+    the write that would have said "stopping" is the first thing to fail. It
+    used to raise out of the control thread ahead of the line that stops the
+    window (2026-09-19: two ghost windows still over his game hours after
+    their servers had gone, one logging Errno 22 ten times a second). Now the
+    first failure calls `on_broken` once and every later line is dropped.
+    """
     lock = threading.Lock()
+    broken = threading.Event()
 
     def emit(payload: dict) -> None:
+        if broken.is_set():
+            return
         fields = dict(payload)
         line = encode_event(fields.pop("event"), **fields)
-        with lock:
-            stream.write(line)
-            stream.flush()
+        try:
+            with lock:
+                stream.write(line)
+                stream.flush()
+        except (OSError, ValueError) as error:  # ValueError: a closed stream
+            if broken.is_set():
+                return
+            broken.set()
+            diag.record("trainer_pipe_broken", level="info",
+                        detail=f"{type(error).__name__}: {error}")
+            if on_broken is not None:
+                on_broken()
     return emit
+
+
+def quiet_a_dead_stdout() -> None:
+    """Exit 0, not 120, once the trainer's pipe has gone.
+
+    The interpreter flushes stdout on the way out and turns a failure there
+    into exit code 120. Pointing the descriptor at the null device is the
+    recipe the Python docs give for a reader that has left.
+    """
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
 
 
 def record_geometry(record, game: GameWindow | None) -> None:
@@ -443,7 +481,12 @@ def main(argv=None) -> int:
     state = OverlayState(url=args.url, opacity=args.opacity, visible=args.visible)
     stop = threading.Event()
     wake = threading.Event()
-    emit = make_emitter(sys.stdout)
+
+    def end() -> None:
+        stop.set()
+        wake.set()
+
+    emit = make_emitter(sys.stdout, on_broken=end)
     placer = Placer()
     watcher = Project64Watcher(args.title)
     diag.record("child_start", level="info", backend=host.name, url=state.url,
@@ -461,11 +504,14 @@ def main(argv=None) -> int:
     host.open(state.url, args.fixed_rect or Rect(x=0, y=0, width=640, height=480))
 
     def control() -> None:
-        reason = run_control_loop(sys.stdin, plane)
-        emit({"event": "stopping", "reason": reason})
-        diag.record("stopping", level="info", reason=reason)
-        stop.set()
-        wake.set()
+        # Ending never waits on being able to SAY so: whatever this thread
+        # meets on the way out, the window comes down.
+        try:
+            reason = run_control_loop(sys.stdin, plane)
+            diag.record("stopping", level="info", reason=reason)
+            emit({"event": "stopping", "reason": reason})
+        finally:
+            end()
 
     def follow_thread() -> None:
         report = placer.adopt_thread(process_pin_ok=dpi_pinned)
@@ -502,9 +548,9 @@ def main(argv=None) -> int:
         emit({"event": "error", "detail": failed})
         diag.record("host_failed", level="error", detail=failed)
     finally:
-        stop.set()
-        wake.set()
+        end()
         host.close()
         for thread in threads:
             thread.join(timeout=2)
+        quiet_a_dead_stdout()
     return 1 if failed else 0
