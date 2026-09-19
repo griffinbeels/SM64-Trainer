@@ -1,25 +1,30 @@
 """Whether the ghost window is on screen at all, decided in ONE place.
 
-There are two ways to keep a ghost with nothing to show from dimming his game,
-and which one is right is an open measurement, not a preference:
+**`SHOWN_AT_ZERO_ALPHA` ships, and the rig is why.** Measured on this machine
+over three runs (2026-09-19): a HIDDEN pywebview window runs its page --
+`setInterval` ticks, `evaluate_js` answers in 0.18 s -- and presents NOTHING.
+`requestAnimationFrame` 0/s, `requestVideoFrameCallback` 0/s,
+`visibilityState` "hidden", a `<video>` stuck at `readyState` 0, and its own
+pixels all black under `PrintWindow`. The SAME window shown at alpha 0:
+rAF 237/s, rVFC 29.6/s, "visible", `readyState` 4, real picture pixels.
 
-`HIDDEN_UNTIL_PRESENTABLE` (shipping) keeps the window hidden until the page
-says it has a picture. Simple, and it cannot leak a dark sheet. The open
-question against it: pywebview never touches `CoreWebView2Controller.IsVisible`
-(absent from both its WinForms and its EdgeChromium backends), so WebView2 may
-believe it is visible while the host window has no `WS_VISIBLE` and DWM never
-composites it -- and a page that is never composited may never fire
-`requestVideoFrameCallback`, which is the only thing that sets the page's
-`presentable` flag. If that is true this strategy is a deadlock by
-construction: hidden until presentable, never presentable because hidden.
+So the old rule was a deadlock by construction -- hidden until the page has a
+picture, and the page can never get one because it is hidden. That is what he
+saw on his second try: nothing at all.
 
-`SHOWN_AT_ZERO_ALPHA` keeps the window on screen and fully transparent
-instead, so WebView2 composites and the page can reach a first frame, and the
-opacity he chose is only applied once there is something to see.
+The window's resting state is therefore ON SCREEN and fully transparent, over
+the game picture, click-through and non-activating. "Visible to him" is an
+ALPHA, never a `ShowWindow`: the opacity he chose is reached only once the
+page says it has a picture, the session wants the ghost, Project64 is the
+foreground app, and the placement has been proved by readback. Any of those
+going false takes the alpha back to 0 -- not the window off screen, because
+taking it off screen is what stops the page presenting at all.
 
-**The two differ in exactly one function, and nothing else may branch on the
-strategy.** A parallel track is measuring which is true in a rig; flipping
-`STRATEGY` is the whole change when the answer arrives.
+`HIDDEN_UNTIL_PRESENTABLE` is kept, tested and unused: it is the thing the rig
+ruled out, and a named alternative is cheaper to re-read than a deleted one.
+
+**Nothing outside this module may branch on the strategy**, which
+`tests/test_ghost_window_visibility.py` enforces by reading the package.
 """
 from dataclasses import dataclass
 
@@ -32,8 +37,9 @@ SHOWN_AT_ZERO_ALPHA = "shown_at_zero_alpha"
 
 STRATEGIES = (HIDDEN_UNTIL_PRESENTABLE, SHOWN_AT_ZERO_ALPHA)
 
-#: What ships today. See the module docstring for what would change it.
-STRATEGY = HIDDEN_UNTIL_PRESENTABLE
+#: What ships. Flipped from HIDDEN_UNTIL_PRESENTABLE on 2026-09-19 when the
+#: rig measured a hidden WebView2 presenting nothing at all.
+STRATEGY = SHOWN_AT_ZERO_ALPHA
 
 #: Fully transparent: on screen for the compositor, invisible to him.
 CLEAR = 0

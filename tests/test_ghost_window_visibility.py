@@ -35,10 +35,12 @@ NO_FOOTAGE = follow_decision(PLAYING, presentable=False)
 GONE = follow_decision(None)
 
 
-def test_the_shipping_strategy_is_the_hidden_one():
+def test_the_shipping_strategy_is_the_one_the_rig_measured():
     """Stated as a test so a flip is a deliberate, reviewable change rather
-    than something that arrives with an unrelated edit."""
-    assert STRATEGY == HIDDEN_UNTIL_PRESENTABLE
+    than something that arrives with an unrelated edit. Flipped 2026-09-19:
+    a hidden WebView2 presents nothing at all (0 rAF/s against 237/s shown at
+    alpha 0), so hidden-until-presentable could never open."""
+    assert STRATEGY == SHOWN_AT_ZERO_ALPHA
     assert set(STRATEGIES) == {HIDDEN_UNTIL_PRESENTABLE, SHOWN_AT_ZERO_ALPHA}
 
 

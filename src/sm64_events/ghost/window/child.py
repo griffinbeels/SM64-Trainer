@@ -367,7 +367,7 @@ def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowL
             background = host.use_transparent_page_background()
             if background is not None:
                 background_log("page_background", level="info", result=background)
-        ready = placer.prepare(hwnd, wanted_for(placement).alpha)
+        ready = placer.prepare(hwnd)
         if ready.ok:
             placer.keep_above(hwnd, watcher.hwnd)
         return ready.ok

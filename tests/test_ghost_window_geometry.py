@@ -65,8 +65,10 @@ def test_the_ghost_leaves_when_he_is_using_another_app():
                       foreground=False)
     placement = follow_decision(away)
     assert placement.show is False
-    assert placement.rect is None
     assert placement.reason == "not_foreground"
+    assert placement.rect == PICTURE, (
+        "the picture is still there, so the window stays parked over it "
+        "rather than coming off screen and losing its frames")
     assert follow_decision(PLAYING).show is True
 
 

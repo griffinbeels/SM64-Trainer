@@ -62,7 +62,7 @@ from sm64_events.ghost.window.geometry import (
     correction_for,
     rects_agree,
 )
-from sm64_events.ghost.window.visibility import Visibility
+from sm64_events.ghost.window.visibility import CLEAR, Visibility
 
 #: The context the follower thread runs in. See the module docstring for why
 #: this and not UNAWARE.
@@ -122,6 +122,12 @@ class Placer:
         self._shown: bool | None = None
         self._placed: Rect | None = None
         self._readiness: Readiness | None = None
+        #: What the window should be HOLDING right now. It starts fully
+        #: transparent and is only ever raised by `apply`, on a proved
+        #: placement, after the page has reported a picture -- so the window
+        #: can never first appear at anything but invisible.
+        self._hold: int = CLEAR
+        self._hold_reason = "parked"
 
     # --- the one context ----------------------------------------------------
 
@@ -152,13 +158,18 @@ class Placer:
         """
         return self._alpha
 
-    def prepare(self, hwnd: int, alpha: int) -> Readiness:
+    def prepare(self, hwnd: int) -> Readiness:
         """Everything that must read back true before the window may be shown.
 
         Run EVERY tick, in this order, retrying whatever is not yet true. A
         handle that does not exist yet and a window whose layered bit
         pywebview removed a moment ago are the same thing from here: not
         ready, try again in a tick.
+
+        The alpha it confirms is the one the window is supposed to be HOLDING,
+        which starts fully transparent. So "ready" means parked and safe to
+        put on screen, and re-asserting it every tick is what defends the
+        opacity against WinForms clearing the layered bit underneath us.
         """
         if not hwnd or not self._ops.is_window(hwnd):
             self._alpha = None
@@ -168,7 +179,8 @@ class Placer:
         # Alpha AFTER styles, never beside them: SetLayeredWindowAttributes
         # fails on a window that is not WS_EX_LAYERED, which is exactly what
         # happened at 08:20:06.806 in his second try.
-        alpha_ok = self.ensure_alpha(hwnd, alpha) if styled else False
+        alpha_ok = (self.ensure_alpha(hwnd, self._hold, reason=self._hold_reason)
+                    if styled else False)
         return self._note(Readiness(hwnd=hwnd, window=True, styles=styled,
                                     alpha=alpha_ok))
 
@@ -201,8 +213,12 @@ class Placer:
         kept = self._ops.get_ex_style(hwnd)
         return kept & style.OVERLAY_EX_STYLE == style.OVERLAY_EX_STYLE
 
-    def ensure_alpha(self, hwnd: int, alpha: int) -> bool:
+    def ensure_alpha(self, hwnd: int, alpha: int, *, reason: str = "") -> bool:
         """Set the whole-window opacity and CONFIRM it. Never remembers a miss.
+
+        This is the only thing that makes the ghost visible or invisible to
+        him -- the window itself stays on screen -- so every transition is
+        written down with what was asked, what the window kept, and why.
 
         The bug this replaces stored the wanted value whether or not the call
         worked, so an alpha set a millisecond too early was remembered as
@@ -219,7 +235,7 @@ class Placer:
         ok = bool(taken) and kept == alpha
         self._alpha = alpha if ok else None
         self._record("alpha", level="info" if ok else "error",
-                     asked=alpha, got=kept, accepted=bool(taken))
+                     asked=alpha, got=kept, accepted=bool(taken), reason=reason)
         return ok
 
     # --- what the follower asks for -----------------------------------------
@@ -252,20 +268,37 @@ class Placer:
         check again, because the order is the point and one owner of it is
         clearer than two.
 
-        A placement that cannot be proved HIDES the window. That is the whole
-        rule: the overlay is allowed to be missing, and is not allowed to be a
-        rectangle over somebody else's app.
+        **Being on his screen and being VISIBLE to him are different things
+        here.** The window stays up over the game picture whatever happens,
+        because a WebView2 that is not on screen presents no frames at all; it
+        is the ALPHA that goes to and from zero. `ShowWindow` is reserved for
+        the cases with no picture to sit over -- the emulator gone, minimized
+        or too small, or the session not wanting a ghost at all -- where there
+        is nothing for the page to be under anyway.
+
+        The opacity he chose is reached only on a PROVED placement. An
+        unproved one parks the window transparent rather than leaving an
+        unknown rectangle visible over somebody else's app.
         """
         if not hwnd:
             return None
-        if not want.shown or want.rect is None:
+        if want.rect is None:
             self._placed = None
+            self._hold, self._hold_reason = CLEAR, want.reason
+            self.ensure_alpha(hwnd, CLEAR, reason=want.reason)
             self._visibility(hwnd, False, want.reason)
             return None
         outcome = self._place(hwnd, want.rect, game_hwnd)
         self._placed = want.rect if outcome.ok else None
-        self._visibility(hwnd, outcome.ok,
-                         want.reason if outcome.ok else outcome.detail)
+        alpha = want.alpha if outcome.ok else CLEAR
+        reason = want.reason if outcome.ok else outcome.detail
+        if alpha != CLEAR and not self._shown:
+            # The window has never been on screen, so no page running in it
+            # can have reported a picture yet. Park first; raise next tick.
+            alpha, reason = CLEAR, "first_show"
+        self._hold, self._hold_reason = alpha, reason
+        self.ensure_alpha(hwnd, alpha, reason=reason)
+        self._visibility(hwnd, True, reason)
         return outcome
 
     # --- the parts ----------------------------------------------------------
@@ -322,6 +355,12 @@ class Placer:
         raise AssertionError("unreachable: the loop returns on both passes")
 
     def _visibility(self, hwnd: int, show: bool, reason: str) -> None:
+        if show and self._alpha is None:
+            # NEVER on screen at an alpha nobody has read back. That is how a
+            # ghost appears fully opaque: a window with no layered attributes
+            # set is simply solid, and the first alpha of his second try
+            # failed silently. Stay off and try again next tick.
+            show, reason = False, "alpha_unconfirmed"
         if show == self._shown:
             return
         self._shown = show
