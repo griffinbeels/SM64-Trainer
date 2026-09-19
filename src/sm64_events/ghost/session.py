@@ -24,13 +24,14 @@ ever touches the database and the filesystem from its own task, off the loop
 thread, and never from the poller's.
 
 **Two KINDS of thing reach the overlay, and they travel differently on
-purpose.** WHAT it is showing is the page, so a target change re-points the
-window and the page loads. Everything the RUNNING page can simply take -- how
-far ahead it runs (the nudge) and how its picture is coloured (the tint) --
-rides the clock feed instead, so the page is never navigated for either. Doing
-that the first way is what made his timing key blink the overlay off and
-re-seek it on every press, and a colour he is dragging a slider through would
-do it fifteen times a second.
+purpose.** WHICH RUN it is showing is the page, so a target change re-points
+the window and the page loads. Everything the RUNNING page can simply take --
+how far ahead it runs (the nudge), how its picture is coloured (the tint) and
+whether it draws the whole picture or only Mario (the view) -- rides the clock
+feed instead, so the page is never navigated for any of them. Doing that the
+first way is what made his timing key blink the overlay off and re-seek it on
+every press, and a colour he is dragging a slider through would do it fifteen
+times a second.
 
 **Hide on a flip, end on OFF.** Walking to the next star hides the window and
 keeps the child, so coming back costs nothing. Turning the switch off ends the
@@ -76,6 +77,14 @@ DEFAULT_TINT = {"enabled": True, "hue_degrees": 120}
 #: control offers the half-open range and 360 is refused rather than silently
 #: meaning "off".
 HUE_LIMIT_DEGREES = 359
+#: WHAT THE GHOST SHOWS. His words, 2026-09-20: *"let's do tight rectangles on
+#: our existing ghosts, let's try it."* The whole recorded screen is what the
+#: ghost has always been, and his complaint about it is that two cameras' worth
+#: of scenery overlap; "mario" draws only the rectangle Mario is in, in the
+#: place the footage has him. Default "whole", because that is the ghost he
+#: already knows and most clips have no boxes to draw the other one from.
+GHOST_VIEWS = ("whole", "mario")
+DEFAULT_VIEW = "whole"
 #: How far the ghost may be nudged, in game frames. 600 is twenty seconds at
 #: 30 fps -- past the length of most of the stars this is used on, so the limit
 #: only ever catches a typo or a stuck key.
@@ -96,6 +105,7 @@ ENABLED_KEY = "ghost_enabled"
 OPACITY_KEY = "ghost_opacity"
 TINT_ENABLED_KEY = "ghost_tint_enabled"
 TINT_HUE_KEY = "ghost_tint_hue"
+VIEW_KEY = "ghost_view"
 
 PAGE_PATH = "/ui/ghost/index.html"
 
@@ -106,15 +116,19 @@ NO_TARGET = {
     "available": False, "reason": "no_target",
     "reason_text": "Pick a star or a segment to practise and the ghost will "
                    "follow it.",
-    "template_id": None, "attempt_id": None, "exactness": None}
+    "template_id": None, "attempt_id": None, "exactness": None,
+    "mario_boxes_available": False, "mario_boxes_reason": None,
+    "mario_boxes_reason_text": None}
 NO_RECORDINGS = {
     "available": False, "reason": "no_recordings",
     "reason_text": "The trainer is not holding recordings this run, so there "
                    "is nothing to play alongside you.",
-    "template_id": None, "attempt_id": None, "exactness": None}
+    "template_id": None, "attempt_id": None, "exactness": None,
+    "mario_boxes_available": False, "mario_boxes_reason": None,
+    "mario_boxes_reason_text": None}
 
 #: What a client may send to PUT /api/ghost.
-SETTABLE = ("enabled", "opacity", "nudge_frames", "tint")
+SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view")
 
 
 def template_store(inputs):
@@ -203,6 +217,21 @@ def _checked_tint(value) -> dict:
     return checked
 
 
+def _checked_view(value) -> str:
+    """Which of the ghost's views he asked for.
+
+    Asking for "mario" on a ghost whose clip has no boxes is NOT an error: the
+    setting is app-wide and he walks between stars, so refusing it would make
+    the control jam on the first ghost without boxes. The page falls back to
+    the whole picture and says why in `ghostStatus()`; the switch row gets the
+    same reason from the source.
+    """
+    if value not in GHOST_VIEWS:
+        raise ValueError("The ghost shows either the whole picture or only "
+                         "Mario.")
+    return value
+
+
 def validate_changes(changes: dict) -> dict:
     """What a client asked for, or the one sentence saying why it cannot have
     it. Raises ValueError; nothing is applied until every value passes, so a
@@ -220,6 +249,8 @@ def validate_changes(changes: dict) -> dict:
         checked["nudge_frames"] = _checked_nudge(changes["nudge_frames"])
     if "tint" in changes:
         checked["tint"] = _checked_tint(changes["tint"])
+    if "view" in changes:
+        checked["view"] = _checked_view(changes["view"])
     return checked
 
 
@@ -243,6 +274,7 @@ class GhostSession:
         self._enabled = False
         self._opacity = DEFAULT_OPACITY
         self._tint = dict(DEFAULT_TINT)
+        self._view = DEFAULT_VIEW
         self._nudge = 0
         self._loaded = False
         self._pending: dict = {}
@@ -278,6 +310,7 @@ class GhostSession:
         return {"enabled": self._enabled,
                 "opacity": self._opacity,
                 "tint": dict(self._tint),
+                "view": self._view,
                 "nudge_frames": self._nudge,
                 "target": dict(self._target) if self._target else None,
                 "source": dict(self._source),
@@ -404,9 +437,13 @@ class GhostSession:
             log.debug("ghost source unavailable", exc_info=True)
             return dict(NO_RECORDINGS)
         answer = answer.payload()
-        # The I1 answer WITHOUT the two keys only the overlay page needs: the
-        # practice card has no use for a clip URL, and the view payload is
-        # large enough to make a broadcast worth not sending.
+        # The I1 answer WITHOUT the keys only the overlay page needs: the
+        # practice card has no use for a clip URL, and the view payload and the
+        # BOX LIST are both large enough to make a broadcast worth not sending
+        # -- one rectangle per picture is hundreds of rows, on every
+        # `ghost_changed`. What the card needs from them is one bit and one
+        # sentence: can this ghost be drawn as Mario alone, and if not, why.
+        answer["mario_boxes_available"] = answer["mario_boxes"] is not None
         return {key: answer[key] for key in NO_TARGET}
 
     # -- the preference -------------------------------------------------------
@@ -425,6 +462,7 @@ class GhostSession:
                                                 DEFAULT_TINT["enabled"])
             stored_hue = database.get_state(TINT_HUE_KEY,
                                             DEFAULT_TINT["hue_degrees"])
+            stored_view = database.get_state(VIEW_KEY, DEFAULT_VIEW)
         except Exception:  # noqa: BLE001 - a preference must never block the app
             log.debug("ghost preference unreadable", exc_info=True)
             return
@@ -441,6 +479,11 @@ class GhostSession:
         except (TypeError, ValueError):
             hue = DEFAULT_TINT["hue_degrees"]
         self._tint = {"enabled": bool(stored_tint_on), "hue_degrees": hue}
+        # A stored value from a build that knew another view name is not a
+        # view: it falls back rather than leaving the page asking for
+        # something nothing draws.
+        self._view = (stored_view if stored_view in GHOST_VIEWS
+                      else DEFAULT_VIEW)
         self._loaded = True
 
     def _apply(self, changes: dict) -> None:
@@ -457,6 +500,9 @@ class GhostSession:
             self._tint = {**self._tint, **changes["tint"]}
             _remember(database, TINT_ENABLED_KEY, self._tint["enabled"])
             _remember(database, TINT_HUE_KEY, self._tint["hue_degrees"])
+        if "view" in changes:
+            self._view = changes["view"]
+            _remember(database, VIEW_KEY, self._view)
         if "nudge_frames" in changes:
             # Never persisted: it belongs to the target, and the target is
             # gone by the next session.
@@ -472,18 +518,21 @@ class GhostSession:
         return await self.refresh(resolve=True)
 
     def _tell_clock(self) -> None:
-        """Publish the nudge and the colour to whoever is following the clock.
+        """Publish the nudge, the colour and the view to whoever is following
+        the clock.
 
-        Both travel this way for the same reason: the page is already reading
-        this socket every game frame, so a change reaches it without the window
-        being re-pointed at a URL -- which is a page LOAD. Best effort by
-        design: a feed that cannot take them must not stop the switch working.
+        All three travel this way for the same reason: the page is already
+        reading this socket every game frame, so a change reaches it without
+        the window being re-pointed at a URL -- which is a page LOAD. Best
+        effort by design: a feed that cannot take them must not stop the switch
+        working.
         """
         if self._clock is None:
             return
         try:
             self._clock.set_nudge(self._nudge)
             self._clock.set_tint(self._tint)
+            self._clock.set_view(self._view)
         except Exception:  # noqa: BLE001 - the overlay's timing is not worth the app
             log.debug("the ghost clock would not take the nudge", exc_info=True)
 
@@ -586,7 +635,7 @@ def _default_controller(**kwargs):
     return GhostWindowController(**kwargs)
 
 
-__all__ = ["DEFAULT_OPACITY", "DEFAULT_TINT", "EVENT_TYPE",
-           "HUE_LIMIT_DEGREES", "MAX_START_ATTEMPTS", "NUDGE_LIMIT_FRAMES",
-           "SETTABLE", "GhostSession", "follower_url", "template_store",
-           "validate_changes"]
+__all__ = ["DEFAULT_OPACITY", "DEFAULT_TINT", "DEFAULT_VIEW", "EVENT_TYPE",
+           "GHOST_VIEWS", "HUE_LIMIT_DEGREES", "MAX_START_ATTEMPTS",
+           "NUDGE_LIMIT_FRAMES", "SETTABLE", "GhostSession", "follower_url",
+           "template_store", "validate_changes"]

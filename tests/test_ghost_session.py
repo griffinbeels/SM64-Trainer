@@ -15,6 +15,7 @@ import pytest
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.ghost.session import (
     DEFAULT_OPACITY,
+    DEFAULT_VIEW,
     HUE_LIMIT_DEGREES,
     MAX_START_ATTEMPTS,
     NUDGE_LIMIT_FRAMES,
@@ -165,13 +166,16 @@ def test_the_payload_carries_exactly_the_frozen_shape(tmp_path):
     session, _controllers, _tracker, store = a_session(tmp_path)
     mark(store)
     body = drive(session)
-    assert set(body) == {"enabled", "opacity", "tint", "nudge_frames",
+    assert set(body) == {"enabled", "opacity", "tint", "view", "nudge_frames",
                          "target", "source", "window"}
     assert set(body["tint"]) == {"enabled", "hue_degrees"}
     assert set(body["target"]) == {"kind", "entity_key", "strat"}
     # The I1 answer WITHOUT the two keys only the overlay page needs.
     assert set(body["source"]) == {"available", "reason", "reason_text",
-                                   "template_id", "attempt_id", "exactness"}
+                                   "template_id", "attempt_id", "exactness",
+                                   "mario_boxes_available",
+                                   "mario_boxes_reason",
+                                   "mario_boxes_reason_text"}
     assert set(body["window"]) == {"running", "visible"}
     assert body["target"] == {"kind": "star", "entity_key": "24-1",
                               "strat": "10 coin"}
@@ -528,6 +532,7 @@ def test_a_nonsense_stored_colour_never_breaks_the_session(tmp_path):
     {"tint": {"hue_degrees": HUE_LIMIT_DEGREES + 1}},
     {"tint": {"hue_degrees": -1}}, {"tint": {"hue_degrees": 12.5}},
     {"tint": {"enabled": "on"}}, {"tint": {"shade": 3}}, {"tint": 120},
+    {"view": "rotoscope"}, {"view": None}, {"view": "Mario"},
 ])
 def test_an_out_of_range_value_is_refused_with_a_readable_sentence(tmp_path, changes):
     session, _controllers, _tracker, store = a_session(tmp_path)
@@ -747,3 +752,71 @@ def test_the_diagnostic_log_never_stops_the_window(tmp_path, monkeypatch):
     mark(store)
     asyncio.run(session.update(enabled=True))
     assert controllers[0].is_running() is True
+
+
+# -- what the ghost shows ----------------------------------------------------
+
+def test_the_ghost_shows_the_whole_picture_until_he_asks_otherwise(tmp_path):
+    """The ghost he already knows. Most clips have no Mario boxes, so a
+    default of "mario" would ship a ghost that silently fell back."""
+    session, _c, _t, store = a_session(tmp_path)
+    mark(store)
+    assert drive(session)["view"] == DEFAULT_VIEW == "whole"
+
+
+def test_the_view_reaches_the_overlay_on_the_clock(tmp_path):
+    """Same wire as the nudge and the colour, and the same reason: what the
+    ghost SHOWS is something the running page can take, so changing it must
+    never re-point the window at a URL."""
+    clock = GhostClockFeed()
+    session, controllers, _t, store = a_session(tmp_path, clock=clock)
+    mark(store)
+    asyncio.run(session.update(enabled=True))
+    opened = list(controllers[0].urls)
+    asyncio.run(session.update(view="mario"))
+    assert session.payload()["view"] == "mario"
+    assert clock.view == "mario"
+    assert clock_message(_a_snapshot(), 0, None, clock.view)["view"] == "mario"
+    assert controllers[0].urls == opened, "the overlay page was navigated"
+
+
+def test_asking_for_mario_on_a_ghost_with_no_boxes_is_not_an_error(tmp_path):
+    """The setting is app-wide and he walks between stars. Refusing it would
+    jam the control on the first ghost without boxes; the page falls back to
+    the whole picture and the card says why."""
+    session, _c, _t, store = a_session(tmp_path)
+    mark(store)
+    body = asyncio.run(session.update(view="mario"))
+    assert body["view"] == "mario"
+    assert body["source"]["mario_boxes_available"] is False
+
+
+def test_the_view_survives_a_restart(tmp_path):
+    db = FakeStateDb()
+    store = a_store(tmp_path)
+    mark(store)
+    session, _c, _t, _s = a_session(tmp_path, db=db, store=store)
+    asyncio.run(session.update(view="mario"))
+    again, _c2, _t2, _s2 = a_session(tmp_path, db=db, store=store)
+    assert drive(again)["view"] == "mario"
+
+
+def test_a_stored_view_this_build_cannot_draw_falls_back(tmp_path):
+    db = FakeStateDb({"ghost_view": "rotoscope"})
+    store = a_store(tmp_path)
+    mark(store)
+    session, _c, _t, _s = a_session(tmp_path, db=db, store=store)
+    assert drive(session)["view"] == DEFAULT_VIEW
+
+
+def test_the_card_is_told_whether_this_ghost_can_be_drawn_as_mario(tmp_path):
+    """One bit and one sentence, not the boxes themselves: a list is one
+    rectangle per picture, and `ghost_changed` broadcasts this shape every
+    time anything moves."""
+    session, _c, _t, store = a_session(tmp_path)
+    mark(store)
+    source = drive(session)["source"]
+    assert source["mario_boxes_available"] is False
+    assert source["mario_boxes_reason"] == "no_box_list"
+    assert "Mario" in source["mario_boxes_reason_text"]
+    assert "mario_boxes" not in source, "the whole list rode the broadcast"

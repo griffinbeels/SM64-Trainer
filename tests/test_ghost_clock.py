@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sm64_events.core.snapshot import GameSnapshot
-from sm64_events.ghost.session import DEFAULT_TINT
+from sm64_events.ghost.session import DEFAULT_TINT, DEFAULT_VIEW
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 from sm64_events.server.ghost_clock import (GhostClockFeed, clock_message,
                                             create_ghost_clock_router)
@@ -388,3 +388,38 @@ def test_a_poller_with_no_feed_still_ticks():
     asyncio.run(poller.tick())
     asyncio.run(poller.tick())
     assert poller.latest.global_timer == 11
+
+
+def test_the_message_says_which_view_the_overlay_should_draw():
+    """"whole" is the ghost he already knows; "mario" draws only the rectangle
+    Mario is in. It rides this message for the reason the nudge does: changing
+    what the ghost shows must not re-point the window, which is a page load."""
+    assert clock_message(snap(1234))["view"] == DEFAULT_VIEW
+    assert clock_message(snap(1234), 0, None, "mario")["view"] == "mario"
+    assert clock_message(snap(1234), 0, None, "whole")["view"] == "whole"
+
+
+def test_a_view_this_build_does_not_draw_falls_back_rather_than_shipping():
+    """A stored preference from another build, or a typo on the wire, must not
+    leave the page asking for something nothing draws: the message always
+    names a view this page knows."""
+    for asked in ("rotoscope", "", None, 7):
+        assert clock_message(snap(1), 0, None, asked)["view"] == DEFAULT_VIEW
+
+
+def test_a_new_view_reaches_every_overlay_on_the_next_sample():
+    async def run():
+        feed = GhostClockFeed()
+        client = StubClient()
+        await feed.connect(client)
+        feed.set_view("mario")
+        feed.note(snap(900))
+        assert await _settle(lambda: bool(client.messages))
+        assert client.messages[-1]["view"] == "mario"
+        feed.set_view("whole")
+        feed.note(snap(901))
+        assert await _settle(lambda: len(client.messages) == 2)
+        assert client.messages[-1]["view"] == "whole"
+        await feed.disconnect(client)
+
+    asyncio.run(run())
