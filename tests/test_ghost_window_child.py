@@ -25,9 +25,15 @@ from sm64_events.ghost.window.child import (
     OverlayState,
     PageWatch,
     build_parser,
+    record_geometry,
     run_control_loop,
 )
-from sm64_events.ghost.window.geometry import GameWindow, Placement, Rect
+from sm64_events.ghost.window.geometry import (
+    ChildWindow,
+    GameWindow,
+    Placement,
+    Rect,
+)
 from sm64_events.ghost.window.host import (
     NOTHING,
     NO_WINDOW,
@@ -208,15 +214,18 @@ def test_an_apply_that_did_not_happen_is_retried():
     assert loop.tick() is not None
 
 
-def test_the_follow_loop_hides_when_he_is_using_another_app():
+def test_the_follow_loop_does_not_move_when_he_clicks_another_app():
+    """Clicking away is not a decision change, so the loop does not even have
+    anything to apply -- which is what "it should just stay always on" is,
+    from in here."""
     away = GameWindow(found=True, minimized=False, client=PICTURE,
                       foreground=False)
     game = [away]
     loop = FollowLoop(observe=lambda: game[0], apply=lambda _p: True,
                       wanted=lambda: True)
-    assert loop.tick().reason == "not_foreground"
-    game[0] = GameWindow(found=True, minimized=False, client=PICTURE)
     assert loop.tick().show is True
+    game[0] = GameWindow(found=True, minimized=False, client=PICTURE)
+    assert loop.tick() is None, "same placement, so there is nothing to redo"
 
 
 def test_the_command_line_the_trainer_starts_the_child_with():
@@ -228,6 +237,66 @@ def test_the_command_line_the_trainer_starts_the_child_with():
     assert args.visible is True
     assert args.backend == "none"
     assert args.fixed_rect == Rect(x=1, y=2, width=640, height=480)
+    assert args.anchor_hwnd == 0, "no stand-in to sit above unless one is given"
+    assert args.no_reorder_watch is False, "the prompt re-assert ships on"
+
+
+# --- what the window actually looked like ------------------------------------
+
+def test_every_number_the_picture_came_from_is_written_down():
+    """Round 3's instrument. He reported the ghost "almost" overlaid and
+    nothing on disk could say what rectangle it had been handed or what was
+    inside Project64's client area when it was."""
+    rows = []
+    game = GameWindow(
+        found=True, minimized=False, foreground=False,
+        client=Rect(x=18, y=81, width=2400, height=1836),
+        children=(ChildWindow(hwnd=9, cls="msctls_statusbar32",
+                              rect=Rect(x=18, y=1883, width=2400, height=35),
+                              visible=True),))
+    record_geometry(lambda event, **fields: rows.append((event, fields)), game)
+
+    (event, fields), = rows
+    assert event == "game_geometry"
+    assert fields["client"].as_list() == [18, 81, 2400, 1836]
+    assert fields["picture"].as_list() == [18, 81, 2400, 1802]
+    assert fields["why"] == "client_minus_msctls_statusbar32"
+    assert fields["foreground"] is False, (
+        "still read and still logged -- it just does not decide anything")
+    child, = fields["children"]
+    assert child["class"] == "msctls_statusbar32"
+    assert child["rect"].as_list() == [18, 1883, 2400, 35]
+    assert child["visible"] is True
+
+
+def test_an_unchanged_window_costs_one_row_and_a_moved_one_costs_another():
+    """Ten looks a second, so only a CHANGE may reach the file."""
+    written = []
+    collapsing = diag.Collapsing(
+        record=lambda event, **fields: written.append(fields))
+    first = GameWindow(found=True, minimized=False,
+                       client=Rect(x=0, y=0, width=640, height=480))
+    for _ in range(20):
+        record_geometry(collapsing, first)
+    assert len(written) == 1, "twenty identical looks, one row"
+    assert written[0]["why"] == "whole_client"
+
+    record_geometry(collapsing, GameWindow(
+        found=True, minimized=False,
+        client=Rect(x=0, y=0, width=800, height=600)))
+    assert len(written) == 3
+    assert written[1]["repeated"] == 19, (
+        "the run that just ended is closed with its count, so the file says "
+        "how long the window sat where it was")
+    assert written[-1]["client"].as_list() == [0, 0, 800, 600]
+    assert "repeated" not in written[-1]
+
+
+def test_a_missing_emulator_is_recorded_rather_than_skipped():
+    rows = []
+    record_geometry(lambda event, **fields: rows.append(fields), None)
+    assert rows and rows[0]["why"] == "no_client"
+    assert rows[0]["picture"] is None
 
 
 @pytest.mark.parametrize("bad", ["1,2,3", "a,b,c,d", "1,2,3,4,5", ""])

@@ -29,6 +29,7 @@ import pytest
 
 from sm64_events.ghost.window import native, style
 from sm64_events.ghost.window.geometry import (
+    ChildWindow,
     GameWindow,
     Rect,
     follow_decision,
@@ -58,10 +59,11 @@ class FakeWindows:
 
     def __init__(self, *, scale=1.0, above=ABOVE_GAME, game=PICTURE,
                  keeps_alpha=True, layers=True, real=True,
-                 lies_about_alpha=False):
+                 lies_about_alpha=False, game_children=()):
         self.scale = scale
         self.above = above
         self.game = game
+        self.game_children = tuple(game_children)
         self.keeps_alpha = keeps_alpha
         self.lies_about_alpha = lies_about_alpha
         self.layers = layers
@@ -96,7 +98,8 @@ class FakeWindows:
         return self.above
 
     def read_game_window(self, hwnd):
-        return GameWindow(found=True, minimized=False, client=self.game)
+        return GameWindow(found=True, minimized=False, client=self.game,
+                          children=self.game_children)
 
     def set_thread_dpi_context(self, context):
         return True
@@ -465,7 +468,11 @@ def test_no_picture_to_sit_over_is_the_one_case_that_hides_the_window():
     assert fake.alpha == CLEAR
 
 
-def test_he_is_never_shown_a_ghost_while_he_is_in_another_app():
+def test_the_ghost_is_left_alone_when_he_clicks_another_app():
+    """Round 3's reversal, at the placer: clicking away used to take the alpha
+    to zero, which is the blink he reported. Nothing about the window changes
+    now -- it stays where it is, at the opacity he chose, and the stacking
+    order is what keeps it from covering the app he moved to."""
     placer, fake, _ = make_placer()
     parked_then_raised(placer)
     assert fake.alpha == ALPHA
@@ -473,9 +480,8 @@ def test_he_is_never_shown_a_ghost_while_he_is_in_another_app():
                                            client=PICTURE, foreground=False)))
     ready(placer)
     placer.apply(OVERLAY, away, game_hwnd=GAME)
-    assert fake.alpha == CLEAR
-    assert ("hide", OVERLAY) not in fake.shown, (
-        "still on screen, so the page keeps presenting and coming back is free")
+    assert fake.alpha == ALPHA
+    assert ("hide", OVERLAY) not in fake.shown
 
 
 def test_something_sliding_in_front_of_the_ghost_puts_it_back():
@@ -492,6 +498,66 @@ def test_something_sliding_in_front_of_the_ghost_puts_it_back():
     assert fake.placed[-1][2] == 0x999
     assert fake.placed[-1][1] == PICTURE, "it goes back where it was"
     assert any(entry["event"] == "z_reasserted" for entry in records)
+
+
+STATUS_BAR = ChildWindow(
+    hwnd=0x555, cls="msctls_statusbar32",
+    rect=Rect(x=PICTURE.x, y=PICTURE.y + PICTURE.height - 34,
+              width=PICTURE.width, height=34), visible=True)
+GAME_PICTURE = Rect(x=PICTURE.x, y=PICTURE.y, width=PICTURE.width,
+                    height=PICTURE.height - 34)
+
+
+def test_the_second_opinion_compares_against_the_picture_not_the_client():
+    """The placer re-reads the emulator after moving, and that second read has
+    to answer the same question the first one did. It did not, for one run of
+    the rig: the ghost was asked for the picture and checked against the
+    client, so every placement came back `game_moved`, the placer forgot the
+    rectangle, and it could then never re-assert the z-order at all."""
+    placer, fake, _ = make_placer(game_children=(STATUS_BAR,))
+    on_the_picture = want(follow_decision(
+        GameWindow(found=True, minimized=False, client=PICTURE,
+                   children=(STATUS_BAR,))))
+    assert on_the_picture.rect == GAME_PICTURE
+
+    parked_then_raised(placer, on_the_picture)
+    assert fake.placed[-1][1] == GAME_PICTURE
+    assert fake.alpha == ALPHA, (
+        "a placement the second read agrees with is what raises the ghost")
+
+    fake.above = 0x999  # something slid in front
+    assert placer.keep_above(OVERLAY, GAME) is True
+    assert fake.placed[-1][1] == GAME_PICTURE, (
+        "the rectangle was remembered, so the z-order can be put back at all")
+
+
+def test_a_ghost_asked_for_the_whole_client_is_refused_by_the_second_read():
+    placer, fake, records = make_placer(game_children=(STATUS_BAR,))
+    parked_then_raised(placer, SHOW)
+    assert fake.alpha == CLEAR
+    mismatch = [row for row in records if row["event"] == "place_mismatch"]
+    assert mismatch and mismatch[-1]["detail"] == "game_moved"
+    assert mismatch[-1]["game"] == GAME_PICTURE
+
+
+def test_the_ghost_drops_behind_an_app_he_brings_over_the_game():
+    """The safety half of "the ghost stays up while he uses another app".
+
+    Being directly above Project64 cuts both ways: when he raises a browser
+    over the emulator the ghost has to go UNDER it, and the same re-assert
+    does both, because the anchor is always whatever is directly above the
+    game rather than a fixed place in the order.
+    """
+    placer, fake, _ = make_placer(above=OVERLAY)
+    ready(placer)
+    placer.apply(OVERLAY, SHOW, game_hwnd=GAME)
+
+    browser = 0x777
+    fake.above = browser  # he clicked his browser; it is now over the game
+    assert placer.keep_above(OVERLAY, GAME) is True
+    assert fake.placed[-1][2] == browser, (
+        "inserted AFTER the browser, which puts the ghost under it and still "
+        "directly above the game")
 
 
 def test_a_hidden_ghost_is_not_pushed_back_over_anything():

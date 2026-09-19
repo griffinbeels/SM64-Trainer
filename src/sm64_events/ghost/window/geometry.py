@@ -1,8 +1,25 @@
 """Where the ghost goes, when it must not be on screen, and how we know.
 
-The rectangle is the game PICTURE -- Project64's client area in screen
-coordinates -- never its window frame: a ghost aligned to the outside of the
-window is a ghost offset by the title bar.
+The rectangle is the game PICTURE -- the part of Project64's client area the
+RENDERER draws into -- never its window frame and, since 2026-09-19, never the
+whole client area either.
+
+**Why the client area is too big, measured on his machine.** Project64 1.6
+keeps a status bar inside its own client area: a `msctls_statusbar32` child
+docked along the bottom. Live read of his running emulator, per-monitor-aware:
+client `[18, 81, 2400, 1836]`, status bar window rect `[18, 1883, 2400, 35]`,
+and the (hidden) ROM-browser list sized to `[18, 81, 2400, 1802]` -- PJ64's own
+arithmetic for "the client, minus the strip". The renderer gets that remainder,
+which is why every clip the trainer records is 1600x1200: his client is 1600
+logical wide by 1224 tall, the strip takes 23, and the capture layer's
+floor-even crop turns the remaining 1601 into 1200. A ghost placed on the whole
+client is therefore a ghost stretched by 1836/1802 -- about 1.9 % -- which is
+the drift he could see at the bottom edge and on the Mario icon.
+
+So the picture is derived here, from read-only geometry: the client rectangle
+with any visible full-width strip docked to its bottom edge subtracted. Keyed
+on the SHAPE rather than on the class name, because a build with a different
+status-bar control is still a strip; the class is logged either way.
 
 **There is no DPI guess in here any more, and that is the fix.** Until
 2026-09-19 the follower read PJ64's picture, then multiplied it by
@@ -34,6 +51,16 @@ CORRECTION_AGREEMENT = 0.02
 CORRECTION_MIN = 0.25
 CORRECTION_MAX = 4.0
 
+#: What makes a child window a STRIP of chrome rather than a panel of content.
+#: A status bar spans the client and is a small fraction of it; the ROM browser
+#: spans the client and is nearly all of it, and must never be subtracted.
+STRIP_MAX_HEIGHT_FRACTION = 0.5
+STRIP_MIN_WIDTH_FRACTION = 0.9
+#: Windows rounds a DPI-unaware child's rectangle into the aware space, so the
+#: strip's bottom lands within a pixel or two of the client's, sometimes past
+#: it (measured: client bottom 1917, status bar bottom 1918).
+STRIP_EDGE_TOLERANCE_PX = 4
+
 
 @dataclass(frozen=True)
 class Rect:
@@ -47,16 +74,44 @@ class Rect:
 
 
 @dataclass(frozen=True)
+class ChildWindow:
+    """One window living inside Project64's client area, as read.
+
+    `visible` is the child's OWN `WS_VISIBLE` bit, not `IsWindowVisible`: a
+    child of a window that is itself hidden reports invisible whatever it
+    chose, and the question here is which children Project64 is currently
+    laying out -- the ROM browser is style-hidden while a game runs, the
+    status bar is not.
+    """
+
+    hwnd: int
+    cls: str
+    rect: Rect
+    visible: bool
+
+
+@dataclass(frozen=True)
 class GameWindow:
     """One observation of the Project64 window, all in ONE coordinate space."""
 
     found: bool
     minimized: bool
     client: Rect | None
-    #: Whether the emulator is the app the player is actually using. A ghost
-    #: over a window nobody is looking at is a ghost covering whatever they
-    #: ARE looking at -- which is what he reported.
+    #: Whether the emulator is the app the player is actually using. READ AND
+    #: LOGGED, never branched on: the ghost sits directly above Project64 in
+    #: the stacking order rather than above everything, so an app he clicks
+    #: covers it exactly as it covers the game. Taking the ghost down for this
+    #: is what made it "blink in / out" (his round-3 words), and
+    #: `tests/test_ghost_window_geometry.py` holds the reversal.
     foreground: bool = True
+    #: Everything inside the client area, so the picture can be derived from
+    #: what is actually there rather than from an assumed layout.
+    children: tuple[ChildWindow, ...] = ()
+
+    @property
+    def picture(self) -> Rect | None:
+        """The rectangle the renderer draws into. The ONE derivation."""
+        return picture_rect(self.client, self.children)
 
 
 @dataclass(frozen=True)
@@ -66,6 +121,82 @@ class Placement:
     show: bool
     rect: Rect | None
     reason: str
+
+
+def _strip_at(client: Rect, bottom: int,
+              children: tuple[ChildWindow, ...] | list[ChildWindow],
+              taken: set[int]) -> ChildWindow | None:
+    """A child docked along `bottom`, or None. One step of the walk below."""
+    for child in children:
+        rect = child.rect
+        if child.hwnd in taken or not child.visible:
+            continue
+        if rect.height <= 0 or rect.width <= 0:
+            continue
+        if rect.height > client.height * STRIP_MAX_HEIGHT_FRACTION:
+            continue
+        if rect.width < client.width * STRIP_MIN_WIDTH_FRACTION:
+            continue
+        if abs(rect.x - client.x) > STRIP_EDGE_TOLERANCE_PX:
+            continue
+        if rect.y + rect.height < bottom - STRIP_EDGE_TOLERANCE_PX:
+            continue
+        return child
+    return None
+
+
+def bottom_strip(client: Rect | None,
+                 children: tuple[ChildWindow, ...] | list[ChildWindow]
+                 ) -> ChildWindow | None:
+    """The topmost edge of the chrome docked along the bottom of the client.
+
+    A strip is a VISIBLE child that starts at the client's left edge, spans
+    almost its whole width, reaches its bottom edge, and is a small fraction of
+    its height. That last clause is what keeps Project64's ROM browser -- same
+    width, same left edge, but nearly the full height -- from being mistaken
+    for chrome, and it is also why there is no "must start below the client's
+    top" clause: a child short enough to be a strip and low enough to reach the
+    bottom edge cannot also begin at the top. A clause added on 2026-09-19 to
+    say so survived every mutation, which is how it was found to be dead.
+
+    Stacked strips are walked: once the lowest is found the bottom moves up to
+    its top and the search runs again, so the answer is the HIGHEST child of a
+    contiguous run and the picture stops above all of them. Project64 1.6 has
+    exactly one (its `msctls_statusbar32`); the walk costs three lines and
+    removes a limit that would otherwise have to be discovered live.
+    """
+    if client is None or client.width <= 0 or client.height <= 0:
+        return None
+    bottom = client.y + client.height
+    taken: set[int] = set()
+    found: ChildWindow | None = None
+    for _pass in range(len(children)):
+        strip = _strip_at(client, bottom, children, taken)
+        if strip is None:
+            break
+        found, bottom = strip, strip.rect.y
+        taken.add(strip.hwnd)
+    return found
+
+
+def picture_rect(client: Rect | None,
+                 children: tuple[ChildWindow, ...] | list[ChildWindow] = ()
+                 ) -> Rect | None:
+    """The client area, minus whatever chrome is docked inside its bottom.
+
+    With no children -- a test's stand-in, or an emulator with its status bar
+    turned off -- this is the client rectangle unchanged, which is what the
+    overlay did before this function existed.
+    """
+    if client is None:
+        return None
+    strip = bottom_strip(client, children)
+    if strip is None:
+        return client
+    height = strip.rect.y - client.y
+    if height <= 0:
+        return client
+    return Rect(x=client.x, y=client.y, width=client.width, height=height)
 
 
 def scale_rect(rect: Rect, scale: float) -> Rect:
@@ -129,6 +260,14 @@ def follow_decision(game: GameWindow | None, *, wanted_visible: bool = True,
     2026-09-19, the ghost at 80 % read as a translucent dark sheet over his
     game and his browser with no footage on it. A window with nothing to show
     is a window making his game harder to see.
+
+    **Which app he is CLICKING is deliberately not one of these clauses**, as
+    of round 3. "It should just stay always on, unless we turn the ghost
+    overlay off (or move out of the area and disable the ghost naturally)."
+    Hiding it whenever Project64 lost the foreground made it blink every time
+    he touched another window, and the ghost never needed that rule: it is
+    inserted directly above Project64 in the stacking order, so anything he
+    raises over the emulator is over the ghost too.
     """
     if not wanted_visible:
         return Placement(show=False, rect=None, reason="hidden_by_request")
@@ -136,17 +275,15 @@ def follow_decision(game: GameWindow | None, *, wanted_visible: bool = True,
         return Placement(show=False, rect=None, reason="gone")
     if game.minimized:
         return Placement(show=False, rect=None, reason="minimized")
-    client = game.client
-    if (client is None or client.width < MIN_PICTURE_SIDE
-            or client.height < MIN_PICTURE_SIDE):
+    picture = game.picture
+    if (picture is None or picture.width < MIN_PICTURE_SIDE
+            or picture.height < MIN_PICTURE_SIDE):
         return Placement(show=False, rect=None, reason="too_small")
     # From here the game picture EXISTS, so the rectangle is carried even
     # though the ghost is not raised. That is what lets the window park over
     # the picture, fully transparent, instead of being hidden -- and a hidden
     # WebView2 never presents a frame at all (rig, 2026-09-19: 0 rAF/s hidden
     # against 237/s shown at alpha 0), which made the old rule a deadlock.
-    if not game.foreground:
-        return Placement(show=False, rect=client, reason="not_foreground")
     if not presentable:
-        return Placement(show=False, rect=client, reason="no_footage")
-    return Placement(show=True, rect=client, reason="follow")
+        return Placement(show=False, rect=picture, reason="no_footage")
+    return Placement(show=True, rect=picture, reason="follow")

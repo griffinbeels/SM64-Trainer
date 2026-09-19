@@ -51,6 +51,25 @@ def hidden_window():
         ctypes.windll.user32.DestroyWindow(wt.HWND(hwnd))
 
 
+#: WS_CHILD, and the visibility bit a status bar carries. A child of a window
+#: that is itself never shown still cannot appear.
+_WS_CHILD = 0x40000000
+
+
+def child_window(parent: int, *, x: int, y: int, width: int, height: int,
+                 shown: bool = True) -> int:
+    """A control living inside another window, in ITS client coordinates.
+
+    Destroyed with its parent, so the fixture above needs no extra bookkeeping.
+    """
+    user32 = ctypes.windll.user32
+    hwnd = user32.CreateWindowExW(
+        0, "STATIC", "", _WS_CHILD | (style.WS_VISIBLE if shown else 0),
+        x, y, width, height, wt.HWND(parent), None, None, None)
+    assert hwnd, "CreateWindowExW refused the child window"
+    return int(hwnd)
+
+
 def test_the_style_set_says_what_the_overlay_promises():
     ex = style.overlay_ex_style()
     assert ex & style.WS_EX_LAYERED, "whole-window opacity needs a layered window"
@@ -168,6 +187,52 @@ def test_reading_a_window_reports_its_picture_in_screen_coordinates(hidden_windo
     assert seen.client.width == 640 and seen.client.height == 480
     assert (seen.client.x, seen.client.y) == (200, 150), (
         "a popup with no frame has client origin == window origin")
+
+
+def test_a_status_bar_inside_the_client_comes_off_the_picture(hidden_window):
+    """Item 3, against a REAL window tree rather than a made-up list.
+
+    Project64 keeps a `msctls_statusbar32` docked along the bottom of its own
+    client area and the renderer draws into the rest; a window of ours with a
+    child in the same place proves the reader finds it, classifies it and
+    subtracts it -- with Windows supplying the class name and the rectangles.
+    """
+    hwnd = hidden_window(w=320, h=240)
+    native.place(hwnd, Rect(x=0, y=0, width=320, height=240), insert_after=None)
+    strip = child_window(hwnd, x=0, y=220, width=320, height=20)
+
+    seen = native.read_game_window(hwnd)
+    found = {child.hwnd: child for child in seen.children}
+    assert strip in found, "EnumChildWindows did not report the child at all"
+    assert found[strip].cls.lower() == "static"
+    assert found[strip].visible is True
+    assert found[strip].rect == Rect(x=0, y=220, width=320, height=20)
+
+    assert seen.client == Rect(x=0, y=0, width=320, height=240)
+    assert seen.picture == Rect(x=0, y=0, width=320, height=220), (
+        "the strip is inside the client, so the picture stops above it")
+
+
+def test_a_style_hidden_child_is_not_taken_for_chrome(hidden_window):
+    """Project64's ROM browser is style-hidden while a game runs. The reader
+    reads the child's OWN visibility bit, because `IsWindowVisible` answers
+    for the whole chain and our parent is never shown."""
+    hwnd = hidden_window(w=320, h=240)
+    native.place(hwnd, Rect(x=0, y=0, width=320, height=240), insert_after=None)
+    hidden = child_window(hwnd, x=0, y=220, width=320, height=20, shown=False)
+
+    seen = native.read_game_window(hwnd)
+    found = {child.hwnd: child for child in seen.children}
+    assert found[hidden].visible is False
+    assert seen.picture == seen.client
+
+
+def test_a_window_with_nothing_in_it_keeps_its_whole_client(hidden_window):
+    hwnd = hidden_window()
+    assert native.read_child_windows(hwnd) == []
+    seen = native.read_game_window(hwnd)
+    assert seen.children == ()
+    assert seen.picture == seen.client
 
 
 def test_a_destroyed_window_reads_as_gone(hidden_window):

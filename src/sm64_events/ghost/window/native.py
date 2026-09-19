@@ -13,8 +13,11 @@ replay/video.py). Nothing here may be called from a thread with a deadline --
 path does, and in one explicitly set DPI awareness context.
 
 WHOSE WINDOW. Every WRITING call below takes the OVERLAY's handle. Project64's
-handle only ever reaches a reader (`read_game_window`, `window_above`,
-`window_pid`). Owning the emulator's window is what this package did until
+handle only ever reaches a reader (`read_game_window`, `read_child_windows`,
+`window_above`, `window_pid`) -- including the child-window survey the picture
+rectangle is derived from, which enumerates and measures and never messages,
+moves or reparents anything of the emulator's. Owning its window is what this
+package did until
 2026-09-19 and is the prime suspect for the damage he reported to it;
 `tests/test_ghost_window_guard.py` reads this package's source and fails if a
 writer ever takes the game's handle again.
@@ -24,16 +27,25 @@ import ctypes.wintypes as wt
 import logging
 
 from sm64_events.ghost.window import style
-from sm64_events.ghost.window.geometry import GameWindow, Rect
+from sm64_events.ghost.window.geometry import ChildWindow, GameWindow, Rect
 from sm64_events.replay.window import WindowInfo, enum_windows, find_window
 
 log = logging.getLogger("sm64.ghost")
 
 _api_ready = False
 
+#: Long enough for any Win32 class name (the system caps them at 256).
+_CLASS_NAME_MAX = 256
+
 
 class _POINT(ctypes.Structure):
     _fields_ = [("x", wt.LONG), ("y", wt.LONG)]
+
+
+#: The callback `EnumChildWindows` calls back on. Declared as its own type so
+#: ctypes marshals the Python function rather than taking its address as a
+#: plain pointer.
+_ENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
 
 def _user32():
@@ -72,6 +84,10 @@ def _user32():
         getattr(user32, name).argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     user32.ClientToScreen.restype = wt.BOOL
     user32.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(_POINT)]
+    user32.GetClassNameW.restype = ctypes.c_int
+    user32.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    user32.EnumChildWindows.restype = wt.BOOL
+    user32.EnumChildWindows.argtypes = [wt.HWND, _ENUMPROC, wt.LPARAM]
     _api_ready = True
     return user32
 
@@ -156,6 +172,46 @@ def is_foreground_app(hwnd: int) -> bool:
     return window_pid(front) == window_pid(hwnd) != 0
 
 
+def window_class(hwnd: int) -> str:
+    buffer = ctypes.create_unicode_buffer(_CLASS_NAME_MAX)
+    _user32().GetClassNameW(wt.HWND(hwnd), buffer, _CLASS_NAME_MAX)
+    return buffer.value
+
+
+def read_child_windows(hwnd: int) -> list[ChildWindow]:
+    """Every window living inside this one, read and never touched.
+
+    `EnumChildWindows` walks descendants too, which is wanted: Project64's
+    status bar and its ROM browser are siblings, and the browser's header is
+    the browser's child. Measured against his running emulator (2026-09-19):
+    three children, 0.065 ms for the whole survey at the median and 0.55 ms at
+    the worst of 300 samples -- cheap enough for the follower's 10 Hz tick
+    without a cache to go stale on a resize.
+    """
+    user32 = _user32()
+    handles: list[int] = []
+
+    @_ENUMPROC
+    def collect(child, _lparam):
+        handles.append(int(child))
+        return True
+
+    if not user32.EnumChildWindows(wt.HWND(hwnd), collect, 0) and not handles:
+        return []
+    out: list[ChildWindow] = []
+    for child in handles:
+        rect = get_window_rect(child)
+        if rect is None:
+            continue
+        out.append(ChildWindow(
+            hwnd=child, cls=window_class(child), rect=rect,
+            # The child's OWN bit: `IsWindowVisible` answers for the whole
+            # chain, and the emulator's window may be hidden behind something
+            # while its status bar is still very much laid out.
+            visible=bool(get_style(child) & style.WS_VISIBLE)))
+    return out
+
+
 def read_game_window(hwnd: int) -> GameWindow:
     """One observation of the emulator window, in the caller thread's space."""
     if not is_window(hwnd):
@@ -175,7 +231,8 @@ def read_game_window(hwnd: int) -> GameWindow:
     user32.ClientToScreen(handle, ctypes.byref(origin))
     return GameWindow(found=True, minimized=False, foreground=front,
                       client=Rect(x=origin.x, y=origin.y,
-                                  width=client.right, height=client.bottom))
+                                  width=client.right, height=client.bottom),
+                      children=tuple(read_child_windows(hwnd)))
 
 
 def window_dpi(hwnd: int) -> int:

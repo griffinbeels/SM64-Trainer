@@ -340,9 +340,16 @@ class Placer:
         return None if above == hwnd else above
 
     def _game_rect(self, game_hwnd: int) -> Rect | None:
+        """Where the game PICTURE is right now, for the second opinion below.
+
+        The picture rather than the client area, and the same derivation the
+        follower asked for -- comparing a placement against the whole client
+        would report a correct ghost as misplaced by the height of Project64's
+        status bar.
+        """
         if not game_hwnd:
             return None
-        return self._ops.read_game_window(game_hwnd).client
+        return self._ops.read_game_window(game_hwnd).picture
 
     def _place(self, hwnd: int, wanted: Rect, game_hwnd: int) -> PlaceOutcome:
         insert_after = self._z_target(hwnd, game_hwnd)

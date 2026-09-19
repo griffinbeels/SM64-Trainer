@@ -1035,7 +1035,8 @@ delete the one you do not want instead of cropping it.
 ### Ghost
 
 The [[attempt]] you are racing: the footage behind your active
-[[template track]], drawn see-through over the game picture while you play.
+[[template track]], drawn see-through over the [[game picture]] while you
+play.
 It is not a video that plays by itself — every [[frame]] it shows the template
 picture whose [[in-game time]] matches your own plus the [[nudge]], so a pause,
 the Usamune menu and a save-state load all move it the same way. The practice
@@ -1063,11 +1064,27 @@ carries the one sentence the switch shows in its place.
 
 The see-through window the trainer draws a [[ghost]] in: no border, no taskbar
 button, never taking focus, the mouse passing straight through to the game.
-It sits on the Project64 picture and follows it, hides when the emulator goes
-away or small, and ends when the trainer does.
+It sits on the [[game picture]] and follows it, hides when the emulator goes
+away or small, and ends when the trainer does. It stays up while you work in
+another app: the trainer inserts it directly above Project64 rather than above
+everything, so whatever covers the emulator covers it too.
 
 - **Lives** — `src/sm64_events/ghost/window/`, a child process of its own
   because the window toolkit wants a main thread
+
+### Game picture
+
+The part of Project64's window its [[renderer]] draws into: the client area
+minus whatever chrome Project64 keeps inside it, which on 1.6 is a status bar
+docked along the bottom. This, not the client area, is what the
+[[capture layer]] records and what a [[ghost window]] has to cover — a
+[[ghost]] placed on the whole client area covers that strip too, which
+stretches the footage by its height.
+
+- **Not** the client area, and not the window's outer border
+- **Lives** — `src/sm64_events/ghost/window/geometry.py` derives it; the
+  emulator's own child windows come from
+  `src/sm64_events/ghost/window/native.py`
 
 ### Ghost clock
 
