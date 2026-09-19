@@ -20,6 +20,8 @@ are unit-tested; the git/gh/build orchestration is exercised by cutting a
 real release."""
 import argparse
 import hashlib
+import json
+import os
 import re
 import subprocess
 import sys
@@ -121,6 +123,33 @@ def integration_command() -> list[str]:
     raise SystemExit("no integration-tests check in .verification.toml")
 
 
+def _verify_tool() -> Path | None:
+    """The harness's verify.py, which REUSES a receipt whose fingerprint still
+    matches. A release minutes after a merge then costs seconds instead of
+    re-running the same 40-minute suite against the same bytes (2026-09-18:
+    it ran three times for one release). Absent harness: run the lane."""
+    named = os.environ.get("SM64_VERIFY_TOOL")
+    for candidate in (Path(named) if named else None,
+                      Path.home() / ".claude" / "harness" / "tools" / "verify.py"):
+        if candidate and candidate.is_file():
+            return candidate
+    return None
+
+
+def _verify_or_run_gate() -> None:
+    tool = _verify_tool()
+    if tool is None:
+        _run(integration_command())
+        return
+    result = _run([sys.executable, str(tool), "full", "--project", str(REPO), "--json"],
+                  capture_output=True, text=True, check=False)
+    receipt = json.loads(result.stdout or "{}") if result.stdout else {}
+    if receipt.get("status") != "passed":
+        sys.exit(f"refusing: verification is {receipt.get('status', 'unavailable')}; "
+                 f"{receipt.get('message') or 'run it and read the failures'}")
+    print(f"verification: passed ({'reused' if receipt.get('reused') else 'fresh'})")
+
+
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd))
     return subprocess.run(cmd, cwd=REPO, check=True, **kw)
@@ -131,11 +160,21 @@ def _capture(cmd: list[str]) -> str:
                           capture_output=True, text=True).stdout.strip()
 
 
-def _preflight() -> None:
-    if _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
-        sys.exit("refusing: not on main")
-    if _capture(["git", "status", "--porcelain"]):
-        sys.exit("refusing: working tree is dirty")
+def _preflight(dry_run: bool = False) -> None:
+    """A DRY RUN may stand anywhere; a real release still may not.
+
+    Until 2026-09-19 this path could only be exercised from a clean main, so
+    every bug in it cost a full merge cycle (two 40-minute gate passes) before
+    anyone could see whether the fix worked. Three separate release bugs were
+    found that way, one at a time, across a day. A dry run commits nothing,
+    tags nothing and publishes nothing -- let it run from the worktree where
+    the fix was written, and the next bug is found in one pass.
+    """
+    if not dry_run:
+        if _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
+            sys.exit("refusing: not on main")
+        if _capture(["git", "status", "--porcelain"]):
+            sys.exit("refusing: working tree is dirty")
     try:
         _run(["gh", "auth", "status"], capture_output=True)
     except Exception:
@@ -153,8 +192,8 @@ def main() -> int:
         sys.exit(f"bad version {args.version!r} (want X.Y.Z)")
     tag = f"v{args.version}"
 
-    _preflight()
-    _run(integration_command())
+    _preflight(args.dry_run)
+    _verify_or_run_gate()
 
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
     PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))
