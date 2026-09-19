@@ -15,9 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
+import pytest  # noqa: E402
+
 from ghost_window_rig import (  # noqa: E402
     REQUIRED_EX_BITS,
     Rect,
+    checked_child_opacity,
     foreground_verdict,
     parse_tick_title,
     rect_inside,
@@ -199,3 +202,19 @@ def test_foreground_verdict_protects_the_real_emulator():
 
 def test_foreground_verdict_claims_a_window_of_a_process_we_started():
     assert foreground_verdict(9, "anything", set(), {4242}, pid=4242) == "ours"
+
+
+# --- the rig may not start a child that could be seen ----------------------
+
+def test_the_rig_refuses_to_start_the_child_at_a_visible_opacity():
+    # The child decides for itself when to show its window, so the instrument
+    # must not be able to hand it an opacity that would paint over his game.
+    for refused in (1.0, 0.5, 0.01, 0.002):
+        with pytest.raises(ValueError):
+            checked_child_opacity(refused)
+
+
+def test_the_rig_allows_only_a_fully_transparent_child():
+    assert checked_child_opacity(0.0) == 0.0
+    # Rounds to alpha 0, so it can put nothing on screen.
+    assert checked_child_opacity(0.001) == 0.001
