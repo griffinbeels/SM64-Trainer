@@ -43,10 +43,10 @@ def _http(error: Exception) -> HTTPException:
 
 def no_session_state() -> dict:
     """What GET /api/ghost says in a window that has no ghost session: the
-    agreed shape, switched off, with the reason as a sentence. Opacity is
-    None on purpose: nobody chose one here, and the card shows unknown as
-    unknown."""
-    return {"enabled": False, "opacity": None, "nudge_frames": 0,
+    agreed shape, switched off, with the reason as a sentence. Opacity and the
+    colour treatment are None on purpose: nobody chose them here, and the card
+    shows unknown as unknown."""
+    return {"enabled": False, "opacity": None, "tint": None, "nudge_frames": 0,
             "target": None,
             "source": {"available": False, "reason": "no_session",
                        "reason_text": "The ghost overlay is not available in "

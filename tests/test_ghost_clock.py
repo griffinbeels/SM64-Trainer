@@ -21,17 +21,29 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from sm64_events.core.snapshot import GameSnapshot
+from sm64_events.ghost.session import DEFAULT_TINT
+from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 from sm64_events.server.ghost_clock import (GhostClockFeed, clock_message,
                                             create_ghost_clock_router)
 from sm64_events.server.poller import Poller
 
 
-def snap(timer: int, igt: int = 0, level: int = 24, area: int = 1) -> GameSnapshot:
+def snap(timer: int, igt: int = 0, level: int = 24, area: int = 1,
+         action: int = 0) -> GameSnapshot:
     return GameSnapshot(
         wall_time_utc=datetime(2026, 9, 18, tzinfo=timezone.utc),
-        global_timer=timer, mario_action=0, mario_action_timer=0,
+        global_timer=timer, mario_action=action, mario_action_timer=0,
         num_stars=0, last_completed_course=0, last_completed_star=0,
         igt_overall=igt, curr_level=level, curr_area=area)
+
+
+def walking_action() -> int:
+    """An action that is NOT a grab, taken from the registry rather than typed:
+    a hand-picked id agrees with itself whichever way the code spells things."""
+    for candidate in range(0x1000):
+        if candidate not in STAR_GRAB_ACTIONS:
+            return candidate
+    raise AssertionError("every action id is a star grab?")
 
 
 class Untouchable:
@@ -74,9 +86,15 @@ def test_the_message_carries_the_clock_and_where_it_is_running():
     and `area` are what tells it the player left the template's world, and
     `global_timer` is the one clock that keeps moving while the game is
     paused -- which is how a stall is told apart from a dead feed."""
-    assert clock_message(snap(1234, igt=57, level=8, area=2)) == {
-        "global_timer": 1234, "igt": 57, "level": 8, "area": 2,
-        "nudge_frames": 0}
+    message = clock_message(snap(1234, igt=57, level=8, area=2))
+    # The FIELDS this test owns, not the whole dict: the message is a shape
+    # other work extends (the integrator's `play_mode` is already promised),
+    # and whole-dict equality here claims ownership of everything anyone adds.
+    assert message["global_timer"] == 1234
+    assert message["igt"] == 57
+    assert message["level"] == 8
+    assert message["area"] == 2
+    assert message["nudge_frames"] == 0
 
 
 def test_the_message_carries_the_nudge_beside_the_clock():
@@ -85,6 +103,46 @@ def test_the_message_carries_the_nudge_beside_the_clock():
     travelling separately is what would put the overlay a moment out of step
     with the number the player just asked for."""
     assert clock_message(snap(1234, igt=57), -12)["nudge_frames"] == -12
+
+
+def test_the_message_says_when_he_has_just_touched_a_star():
+    """HIS OWN GRAB TAKES THE GHOST DOWN, and this is the signal it rides.
+
+    His words: *"The ghost should close when I grab the star (sometimes I might
+    be faster than the ghost!)."* The page already reads this socket every game
+    frame, so the answer is a boolean here rather than a second feed -- and it
+    is Mario's ACTION, already in the snapshot, rather than the journal's
+    `star_collected`, which is published after the fact.
+
+    Every grab action is walked out of `memory/addresses.py::STAR_GRAB_ACTIONS`
+    rather than typed in: the registry is the project's one answer to "this
+    action means a star was just grabbed", and a copy here would agree with
+    itself while disagreeing with the detector.
+    """
+    assert STAR_GRAB_ACTIONS, "the grab registry is empty -- did the scan break?"
+    for action in sorted(STAR_GRAB_ACTIONS):
+        assert clock_message(snap(1234, action=action))["star_grab"] is True, (
+            f"action {action:#x} is in the registry and did not read as a grab")
+    assert clock_message(snap(1234, action=walking_action()))["star_grab"] is False
+
+
+def test_the_message_carries_how_the_ghost_is_coloured():
+    """The colour treatment travels the way the nudge does, and for the same
+    reason: it is a preference the RUNNING page can take, so a change must
+    never re-point the window at a URL (which is a page load)."""
+    message = clock_message(snap(1234), 0, {"enabled": True, "hue_degrees": 200})
+    assert message["tint"] == {"enabled": True, "hue_degrees": 200}
+    off = clock_message(snap(1234), 0, {"enabled": False, "hue_degrees": 120})
+    assert off["tint"] == {"enabled": False, "hue_degrees": 120}
+
+
+def test_a_message_nobody_has_stated_a_colour_for_carries_the_shipped_one():
+    """The page ships NO default of its own -- a second copy of a preference is
+    a second opinion -- so the message always carries one. Read from the
+    session's own constant rather than restated, which is the whole point."""
+    assert clock_message(snap(1234))["tint"] == {
+        "enabled": bool(DEFAULT_TINT["enabled"]),
+        "hue_degrees": int(DEFAULT_TINT["hue_degrees"])}
 
 
 # -- the idle path ----------------------------------------------------------
@@ -119,8 +177,9 @@ def test_every_listener_gets_the_sample():
         await feed.connect(two)
         feed.note(snap(900, igt=42, level=8, area=2))
         assert await _settle(lambda: one.messages and two.messages)
-        assert one.messages[-1] == {"global_timer": 900, "igt": 42,
-                                    "level": 8, "area": 2, "nudge_frames": 0}
+        assert {key: one.messages[-1][key]
+                for key in ("global_timer", "igt", "level", "area")} == {
+            "global_timer": 900, "igt": 42, "level": 8, "area": 2}
         assert two.messages[-1] == one.messages[-1]
         await feed.disconnect(one)
         await feed.disconnect(two)
@@ -144,9 +203,11 @@ def test_a_new_nudge_reaches_every_overlay_on_the_next_sample():
         feed.set_nudge(-12)
         feed.note(snap(901, igt=43))
         assert await _settle(lambda: len(client.messages) == 2)
-        assert client.messages[-1] == {"global_timer": 901, "igt": 43,
-                                       "level": 24, "area": 1,
-                                       "nudge_frames": -12}
+        assert {key: client.messages[-1][key]
+                for key in ("global_timer", "igt", "level", "area",
+                            "nudge_frames")} == {
+            "global_timer": 901, "igt": 43, "level": 24, "area": 1,
+            "nudge_frames": -12}
         # It rides EVERY message, not only the one that changed it: an overlay
         # that just loaded, or that missed a sample, converges on its next one.
         feed.note(snap(902, igt=44))
@@ -162,8 +223,32 @@ def test_setting_the_nudge_costs_an_unwatched_feed_nothing():
     not start a pump or make the poll loop read a snapshot."""
     feed = GhostClockFeed()
     feed.set_nudge(30)
+    feed.set_tint({"enabled": True, "hue_degrees": 90})
     feed.note(Untouchable())
     assert feed.running is False and feed.noted == 0
+
+
+def test_a_new_colour_reaches_every_overlay_on_the_next_sample():
+    """Same wire, same one-game-frame answer, and the same reason: he tunes
+    this by dragging, and a page load per drag event is what the nudge already
+    taught this feed not to do."""
+    async def run():
+        feed = GhostClockFeed()
+        client = StubClient()
+        await feed.connect(client)
+        feed.set_tint({"enabled": True, "hue_degrees": 200})
+        feed.note(snap(900))
+        assert await _settle(lambda: bool(client.messages))
+        assert client.messages[-1]["tint"] == {"enabled": True,
+                                               "hue_degrees": 200}
+        feed.set_tint({"enabled": False, "hue_degrees": 200})
+        feed.note(snap(901))
+        assert await _settle(lambda: len(client.messages) == 2)
+        assert client.messages[-1]["tint"] == {"enabled": False,
+                                               "hue_degrees": 200}
+        await feed.disconnect(client)
+
+    asyncio.run(run())
 
 
 def test_a_burst_collapses_to_the_newest_sample():
@@ -240,8 +325,11 @@ def test_the_socket_delivers_a_noted_snapshot():
         with client.websocket_connect("/ws/ghost-clock") as ws:
             client.post("/test/note?timer=4242&igt=17")
             message = ws.receive_json()
-    assert message == {"global_timer": 4242, "igt": 17, "level": 24, "area": 1,
-                       "nudge_frames": 5}
+    assert {key: message[key]
+            for key in ("global_timer", "igt", "level", "area",
+                        "nudge_frames")} == {
+        "global_timer": 4242, "igt": 17, "level": 24, "area": 1,
+        "nudge_frames": 5}
 
 
 def test_a_closed_socket_leaves_no_listener_behind():

@@ -172,6 +172,7 @@ class FakeSession:
 
     def __init__(self):
         self.state = {"enabled": False, "opacity": 0.5, "nudge_frames": 0,
+                      "tint": {"enabled": True, "hue_degrees": 120},
                       "target": None, "source": {"available": False},
                       "window": {"running": False, "visible": False}}
         self.refreshes = 0
@@ -197,8 +198,8 @@ def test_reading_the_ghost_answers_the_whole_shape_freshly_resolved():
     template he has just deleted, so the read re-resolves."""
     session = FakeSession()
     body = session_client(session).get("/api/ghost").json()
-    assert set(body) == {"enabled", "opacity", "nudge_frames", "target",
-                         "source", "window"}
+    assert set(body) == {"enabled", "opacity", "tint", "nudge_frames",
+                         "target", "source", "window"}
     assert session.refreshes == 1
 
 
@@ -214,6 +215,8 @@ def test_setting_the_ghost_answers_the_same_shape():
     ({"nudge_frames": 10_000}, "nudged"),
     ({"enabled": "on"}, "on or off"),
     ({"opactiy": 0.5}, "no setting called"),
+    ({"tint": {"hue_degrees": 400}}, "colour wheel"),
+    ({"tint": {"shade": "blue"}}, "no setting called"),
 ])
 def test_a_value_it_cannot_take_is_422_with_one_readable_sentence(body, word):
     response = session_client(FakeSession()).put("/api/ghost", json=body)
@@ -234,6 +237,10 @@ def test_without_a_session_the_read_says_so_and_the_write_is_refused():
     assert read.status_code == 200
     state = read.json()
     assert state["enabled"] is False and state["opacity"] is None
+    # Unknown rather than a guess, the same rule the opacity follows: the
+    # shipped colour is ON, so answering "off" here would show him a plain
+    # ghost and claim it was something he had already turned off.
+    assert state["tint"] is None
     assert state["target"] is None
     assert state["window"] == {"running": False, "visible": False}
     assert state["source"]["available"] is False
