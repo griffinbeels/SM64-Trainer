@@ -9,8 +9,11 @@ import pytest
 
 from sm64_events.detectors.star_grab import _PendingGrab
 from sm64_events.ghost.source import (
-    ATTEMPT_FRAMES, GRAB_EVENT, GRAB_EVENT_TYPE, PICTURE_TIMER, REASONS,
-    GhostSource, from_marked_attempt, resolve_ghost, span_of)
+    ATTEMPT_FRAMES, GRAB_EVENT, GRAB_EVENT_TYPE, LEVEL_BY_COURSE,
+    PICTURE_TIMER, REASONS, GhostSource, from_marked_attempt, place_of,
+    resolve_ghost, span_of)
+from sm64_events.memory.addresses import (CASTLE_SECRET_STAR_AREAS,
+                                          COURSE_BY_LEVEL, LEVEL_CASTLE_INSIDE)
 from sm64_events.inputs.templates import TemplateStore
 from sm64_events.replay.service import ReplayService
 from sm64_events.storage.db import Database
@@ -212,7 +215,7 @@ def test_the_payload_carries_exactly_the_agreed_keys(templates):
     _, replay = a_ready_ghost(templates)
     assert set(ghost(templates, replay).payload()) == {
         "available", "reason", "reason_text", "template_id", "attempt_id",
-        "media_url", "view", "exactness", "span"}
+        "media_url", "view", "exactness", "span", "level", "area"}
 
 
 def test_an_unavailable_payload_fills_every_key(templates):
@@ -223,6 +226,64 @@ def test_an_unavailable_payload_fills_every_key(templates):
     assert [payload[key] for key in
             ("template_id", "attempt_id", "media_url", "view", "exactness",
              "span")] == [None] * 6
+
+
+# -- where the ghost belongs -------------------------------------------------
+#
+# His report, 2026-09-19: *"I exited LLL (by dying) -- and it looks like the
+# ghost is still playing... We should only play a ghost when it's the active
+# star / we're in that course/area."*
+
+def test_a_stars_ghost_names_the_level_its_course_is_played_in(templates):
+    """Every main course, derived from the registry rather than typed: a
+    hand-picked pair agrees with itself whichever way the table is spelled."""
+    assert LEVEL_BY_COURSE, "the course registry is empty -- did the scan break?"
+    for level, course in COURSE_BY_LEVEL.items():
+        assert place_of("star", f"{course}-1") == (level, None)
+
+
+def test_a_course_subarea_is_still_the_course(templates):
+    """The area is left OPEN for a course star, and that is the whole point:
+    the volcano is Lethal Lava Land and the pyramid is Shifting Sand Land, so
+    a gate that named an area would take the ghost down inside the very star
+    it is playing. LLL is the course he reported."""
+    lll_level = LEVEL_BY_COURSE[7]
+    level, area = place_of("star", "7-4")
+    assert (level, area) == (lll_level, None)
+
+
+def test_a_castle_secret_star_names_its_room_as_well(templates):
+    """The castle is the one place whose areas are different places rather than
+    parts of one course, and the game says which room two of these stars are
+    in. Where it does not, the level answers alone rather than a guess."""
+    pinned = sorted(CASTLE_SECRET_STAR_AREAS)
+    assert pinned, "no castle secret star names an area -- did the table move?"
+    for star in pinned:
+        assert place_of("star", f"0-{star}") == (
+            LEVEL_CASTLE_INSIDE, CASTLE_SECRET_STAR_AREAS[star])
+    unpinned = next(s for s in range(1, 30) if s not in CASTLE_SECRET_STAR_AREAS)
+    assert place_of("star", f"0-{unpinned}") == (LEVEL_CASTLE_INSIDE, None)
+
+
+@pytest.mark.parametrize("kind,key", [
+    ("segment", "12"),        # a movement crosses levels by definition
+    ("star", "999-1"),        # a course this build has never heard of
+    ("star", "not-a-star"),
+])
+def test_a_target_with_no_one_place_gates_nothing(templates, kind, key):
+    """Null means "no gate", and the page then shows the ghost wherever he is
+    -- which is what it did before this existed. A wrong gate would be worse
+    than none: it hides footage that was correct."""
+    assert place_of(kind, key) == (None, None)
+
+
+def test_the_payload_hands_the_page_the_place_it_gates_on(templates):
+    """The page has had this gate since it was built and nothing to feed it.
+    It reads `level`/`area` straight off this answer."""
+    _, replay = a_ready_ghost(templates)
+    payload = ghost(templates, replay, entity_key="24-1").payload()
+    assert payload["level"] == LEVEL_BY_COURSE[24]
+    assert payload["area"] is None
 
 
 # -- the span: exactly the attempt, whatever the recorder was set to ---------

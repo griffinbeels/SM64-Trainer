@@ -60,11 +60,26 @@ touch and keeps its own end.
 
 `span` is a SIBLING of `view`, never a rewrite of it — the view still belongs
 to `replay/service.py` alone (domain contract 6).
+
+**WHERE THE GHOST BELONGS.** His report, 2026-09-19: *"I exited LLL (by dying)
+-- and it looks like the ghost is still playing... We should only play a ghost
+when it's the active star / we're in that course/area."* The overlay page has
+always had the gate for this and nothing to feed it, so the answer is added
+here: a star's own course names one level, and the live clock says which level
+the player is in. A COURSE'S OWN SUBAREAS ARE THE COURSE — the pyramid is still
+Shifting Sand Land, and the same seven stars are practised inside it — so a
+star's gate names the level and leaves the area open. The CASTLE is the
+opposite case and the one exception: its areas are three different places, so a
+castle secret star (course 0) names the area too where the game says which one.
+A SEGMENT names no place at all: a movement crosses levels by definition, and a
+gate that refused the second half of a route would be worse than none.
 """
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
+from sm64_events.memory.addresses import (CASTLE_SECRET_STAR_AREAS,
+                                          COURSE_BY_LEVEL, LEVEL_CASTLE_INSIDE)
 
 KINDS = ("star", "segment")
 
@@ -99,6 +114,12 @@ PICTURE_TIMER = "picture_timer"     # the clip's per-picture game timer
 
 #: The one event whose payload names the frame the star was touched on.
 GRAB_EVENT_TYPE = "star_collected"
+
+#: course id -> the level it is played in. `COURSE_BY_LEVEL` in
+#: `memory/addresses.py` is THE registry and it is 1:1, so this is its own
+#: table read backwards rather than a second opinion about which level a course
+#: is; nothing here knows a level id that the registry does not.
+LEVEL_BY_COURSE = {course: level for level, course in COURSE_BY_LEVEL.items()}
 
 
 @dataclass(frozen=True)
@@ -148,6 +169,12 @@ class GhostSource:
     view: dict | None = None
     exactness: str | None = None
     span: GhostSpan | None = None
+    #: Where this ghost belongs: the level the target is played in, and the
+    #: area only where the target names one. Null means "no gate" -- a segment,
+    #: or a target whose place this build cannot name -- and the page then
+    #: shows the ghost wherever the player is, which is what it did before.
+    level: int | None = None
+    area: int | None = None
 
     def payload(self) -> dict:
         """The JSON the route serves. `view` is the clip's own payload, by
@@ -160,7 +187,9 @@ class GhostSource:
                 "media_url": self.media_url,
                 "view": self.view,
                 "exactness": self.exactness,
-                "span": self.span.payload() if self.span else None}
+                "span": self.span.payload() if self.span else None,
+                "level": self.level,
+                "area": self.area}
 
 
 def unavailable(reason: str, **known: Any) -> GhostSource:
@@ -336,6 +365,39 @@ def span_of(view: dict, attempt=None, events=None) -> GhostSpan | None:
                      PICTURE_TIMER)
 
 
+def place_of(kind: str, entity_key: str) -> tuple[int | None, int | None]:
+    """(level, area) the ghost for this target belongs in, either may be None.
+
+    A star's key is `"<course>-<star>"` (`inputs/service.py::entity_key_of`).
+    The course names its level through the registry above; the AREA is left
+    open, because a course's own subareas are that course -- gating LLL's
+    volcano out would take the ghost down inside the very star it is playing.
+
+    Course 0 is the castle's own secret stars, and the castle is the one place
+    whose areas are genuinely different rooms. Those stars name the castle
+    interior, and the area as well for the two the game pins down
+    (`CASTLE_SECRET_STAR_AREAS`); the rest name the level alone rather than a
+    guess.
+
+    A segment answers (None, None): a movement crosses levels by definition.
+    """
+    if kind != "star":
+        return None, None
+    course, _, star = str(entity_key).partition("-")
+    if not course.isdigit() or not star.isdigit():
+        return None, None
+    course_id, star_id = int(course), int(star)
+    if course_id == 0:
+        return LEVEL_CASTLE_INSIDE, CASTLE_SECRET_STAR_AREAS.get(star_id)
+    return LEVEL_BY_COURSE.get(course_id), None
+
+
+def _with_place(answer: GhostSource, kind: str, entity_key: str) -> GhostSource:
+    """Say where this ghost belongs, whichever way the answer went."""
+    level, area = place_of(kind, entity_key)
+    return replace(answer, level=level, area=area)
+
+
 def _attempt_row(attempts, attempt_id):
     """The attempt behind this ghost, or None when nothing can name it. A
     missing row is not an error — the footage is still playable, unclamped."""
@@ -377,15 +439,18 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
         raise ValueError("a ghost is for a star or a segment")
     template = templates.active_for(kind, entity_key, strat)
     if template is None:
-        return unavailable("no_template")
+        return _with_place(unavailable("no_template"), kind, entity_key)
     for provider in providers:
         answer = provider(template, replay=replay)
         if answer is not None:
-            return _with_span(answer, attempts, events)
-    return unavailable("template_has_no_attempt", template_id=template.id)
+            return _with_place(_with_span(answer, attempts, events),
+                               kind, entity_key)
+    return _with_place(
+        unavailable("template_has_no_attempt", template_id=template.id),
+        kind, entity_key)
 
 
 __all__ = ["ATTEMPT_FRAMES", "EXACT", "GRAB_EVENT", "GRAB_EVENT_TYPE", "KINDS",
-           "PICTURE_TIMER", "PROVIDERS", "REASONS", "GhostSource", "GhostSpan",
-           "attempt_id_of", "from_marked_attempt", "resolve_ghost", "span_of",
-           "unavailable"]
+           "LEVEL_BY_COURSE", "PICTURE_TIMER", "PROVIDERS", "REASONS",
+           "GhostSource", "GhostSpan", "attempt_id_of", "from_marked_attempt",
+           "place_of", "resolve_ghost", "span_of", "unavailable"]
