@@ -861,6 +861,36 @@ is the first of them.
   (slotAtTime, timeOfSlot); `tools/probe_clip_seek.py` proves the
   browser lands where the timeline asked.
 
+### Compressed replay
+
+A saved replay whose video was re-encoded smaller in the background after
+Save/PB published it, under the same filename. The [[frame map]], the
+picture states and the [[input timeline]] index a clip's pictures by
+position and by each picture's own time, and none of them reads the video,
+so the swap is allowed only once the smaller file is proven to hold the same
+pictures, in the same order, on the same ticks, for the same length, under
+identical decoded audio, and to look like the original. A proof that fails
+keeps the original and says why. Saving stays instant: the swap happens
+later, when no player has asked for the clip lately, or at the next session
+start. A replay saved before this existed is never rewritten unasked, and a
+compressed one is never encoded a second time.
+
+- **Lives** -- `src/sm64_events/replay/compress.py`; the quality rows are
+  the archive stage in `src/sm64_events/replay/config.py`
+- **Not** -- a second copy. There is one file per saved replay, and the ring
+  and the clip the drawer shows straight after an attempt are untouched.
+
+### Media fingerprint
+
+What a copy of a saved replay must reproduce to be the same replay: the
+file's sha256, the picture count with a digest of every picture's tick, a
+digest of the decoded audio, and where the last picture ends. It is written
+into the sidecar's `media` block when a [[compressed replay]] is adopted,
+beside the original's own fingerprint, and it is what an uploader or
+downloader checks to say a shared replay arrived exactly as it left.
+
+- **Lives** -- `src/sm64_events/replay/compress.py` (fingerprint, prove)
+
 ### Pad reader
 
 The reader that reads Usamune's input display out of every picture of a
