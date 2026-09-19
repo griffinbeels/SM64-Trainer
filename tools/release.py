@@ -100,6 +100,27 @@ def compose_release_body(setup_header: str, patch_notes: str) -> str:
             + patch_notes.lstrip())
 
 
+def integration_command() -> list[str]:
+    """The gate a merge runs, read from ITS definition, not restated here.
+
+    A release must be judged exactly as a merge is. Two spellings of "run the
+    tests" drift, and on 2026-09-18 both wrong ones cost a night: a bare
+    serial `pytest -q` took 2h30m and failed 12 timing tests that pass in 43s
+    through the gate, and `run_tests.py` with its own default of 16 workers
+    failed a browser wait on three runs out of three, while the configured
+    lane's 4 workers passed 11010 on the same tree. `.verification.toml` owns
+    that number; this reads it.
+    """
+    import tomllib
+    config = tomllib.loads((REPO / ".verification.toml").read_text(encoding="utf-8"))
+    for check in config.get("checks", []):
+        if check.get("name") == "integration-tests":
+            # Same placeholders the harness substitutes (harness/verification.py).
+            return [arg.replace("{python}", sys.executable).replace("{project}", str(REPO))
+                    for arg in check["command"]]
+    raise SystemExit("no integration-tests check in .verification.toml")
+
+
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd))
     return subprocess.run(cmd, cwd=REPO, check=True, **kw)
@@ -133,13 +154,7 @@ def main() -> int:
     tag = f"v{args.version}"
 
     _preflight()
-    # THE PROJECT'S GATE, not a bare `pytest -q`. A serial whole-suite run is
-    # not the standard this repo merges against, and on 2026-09-18 it blocked
-    # a release for 2h30m and then failed 12 timing-sensitive tests -- A/V
-    # tolerances and UI animation frames -- that pass in 43 seconds through
-    # this door. It also skips `test_under_loadgroup_the_group_reached_the
-    # _scheduler`, which has no scheduler to check when run serially.
-    _run(["uv", "run", "python", "tools/run_tests.py"])
+    _run(integration_command())
 
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
     PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))
