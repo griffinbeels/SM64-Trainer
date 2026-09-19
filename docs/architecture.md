@@ -519,6 +519,22 @@ Corollary that cost a round: the grab thread must make NO user32 calls at
 all — even a 1 Hz cached-handle re-query inherited the ~170 ms lock stall.
 A separate geometry thread owns every window query (`replay/video.py`).
 
+**What "the picture" is, and why it is not the client area.** PJ64 1.6 keeps a
+`msctls_statusbar32` docked along the bottom of its own client area and the
+renderer draws into the remainder. Live, 2026-09-19, per-monitor-aware: client
+`[18, 81, 2400, 1836]`, status bar `[18, 1883, 2400, 35]`, picture
+`[18, 81, 2400, 1802]`; unaware (PJ64's own space) client `1600x1224`, picture
+`1600x1201`. That remainder, floor-even cropped, is the size of every clip the
+capture layer records — `1600x1200` — which is the independent check on the
+rule. Anything that has to COVER the picture derives it from the client
+rectangle and the emulator's child windows
+(`ghost/window/geometry.py::picture_rect`); the desktop-grab fallback crops the
+whole client and keeps the strip, which is a difference, not a disagreement.
+GLideN64 ships here with `frameBufferEmulation\aspect=1` (force 4:3), so the
+game image is inscribed 4:3 inside that rectangle; the black bands top and
+bottom of a clip are the GAME's own 8-of-240 scanline borders (40 rows of 1200,
+measured), which scale with the picture rather than with the window's shape.
+
 **Hard real-time in CPython — why encoding left the process.** At 60 fps
 (16.7 ms/frame) and PortAudio callbacks (21 ms budget), every Python thread
 pays every other thread's latency through the GIL. Real offenders were
