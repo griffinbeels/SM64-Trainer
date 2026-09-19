@@ -208,9 +208,21 @@ def test_a_value_it_cannot_take_is_422_with_one_readable_sentence(body, word):
     assert isinstance(detail, str) and word in detail
 
 
-def test_without_a_session_the_doors_answer_503_rather_than_404():
-    """A 404 reads to the practice card exactly like a feature that does not
-    exist; 503 says "not in this window" and can be shown."""
+def test_without_a_session_the_read_says_so_and_the_write_is_refused():
+    """The practice card reads /api/ghost on every page that mounts it, so a
+    window with no session (a broadcast-only second server, every UI fixture)
+    must get an ANSWER, not an error: the full gate on 91041033 went red on 40
+    browser tests whose only fault was "HTTP 503 /api/ghost" in the page's
+    problem list. The read is 200 in the agreed shape with the reason as a
+    sentence; only the write, which genuinely cannot happen here, is a 503."""
     unmanned = session_client(None)
-    assert unmanned.get("/api/ghost").status_code == 503
+    read = unmanned.get("/api/ghost")
+    assert read.status_code == 200
+    state = read.json()
+    assert state["enabled"] is False and state["opacity"] is None
+    assert state["target"] is None
+    assert state["window"] == {"running": False, "visible": False}
+    assert state["source"]["available"] is False
+    assert state["source"]["reason"] == "no_session"
+    assert "this window" in state["source"]["reason_text"]
     assert unmanned.put("/api/ghost", json={"enabled": True}).status_code == 503

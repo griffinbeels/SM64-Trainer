@@ -26,6 +26,21 @@ def _http(error: Exception) -> HTTPException:
     return HTTPException(503, str(error))
 
 
+def no_session_state() -> dict:
+    """What GET /api/ghost says in a window that has no ghost session: the
+    agreed shape, switched off, with the reason as a sentence. Opacity is
+    None on purpose: nobody chose one here, and the card shows unknown as
+    unknown."""
+    return {"enabled": False, "opacity": None, "nudge_frames": 0,
+            "target": None,
+            "source": {"available": False, "reason": "no_session",
+                       "reason_text": "The ghost overlay is not available in "
+                                      "this window.",
+                       "template_id": None, "attempt_id": None,
+                       "exactness": None},
+            "window": {"running": False, "visible": False}}
+
+
 def create_ghost_router(inputs, replay, session=None) -> APIRouter:
     """`inputs` is the captured-input service or a callable returning it —
     resolved per request for the same reason `create_inputs_router` does it,
@@ -70,8 +85,14 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
     async def ghost_state():
         """Everything the switch needs in one read, re-resolved on the spot:
         a stale `available` is what would leave the control enabled over a
-        template he has just deleted."""
-        return await _session().refresh()
+        template he has just deleted.
+
+        With no session the READ still answers, in the same shape: every page
+        that mounts the practice card asks, and an error status lands in the
+        page's own problem list (it turned 40 unrelated browser tests red)."""
+        if session is None:
+            return no_session_state()
+        return await session.refresh()
 
     @router.put("/ghost")
     async def set_ghost(body: dict):
