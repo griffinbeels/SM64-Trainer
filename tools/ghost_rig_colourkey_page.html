@@ -120,6 +120,37 @@
     }
   }
 
+  // The shape `ui/ghost/index.html` exposes, so the REAL overlay child can be
+  // pointed at this page and driven through its own visibility gate. Without
+  // it the child asks, gets null, decides there is no footage, and keeps the
+  // window at alpha 0 forever -- which reads exactly like a window that will
+  // not show (measured 2026-09-19, the first run of the `background`
+  // experiment). `present=never` is how a test asks for the closed gate.
+  const present = params.get("present") || "always";
+
+  // `blink` reports "no picture" for a moment every few seconds. It is how a
+  // test makes the overlay child's DECISION change, which is the only thing
+  // that makes its placer re-read the opacity: `FollowLoop.tick` returns early
+  // while the Placement is equal to the last one, and an opacity is not part
+  // of a Placement. Measured 2026-09-19 -- a control line raising the opacity
+  // of a settled ghost reaches nothing.
+  function presentableNow() {
+    if (present === "never") return false;
+    if (present !== "blink") return true;
+    return (performance.now() % 4000) > 800;
+  }
+
+  window.ghostStatus = () => ({
+    presentable: presentableNow(),
+    state: "ready",
+    shown: presentableNow(),
+    canvas: canvasState,
+    videoAlphaOpaque: alphaOpaque,
+    videoAlphaClear: alphaTransparent,
+    readyState: video.readyState,
+    error: trouble || "none",
+  });
+
   function line() {
     const box = document.getElementById("r1").getBoundingClientRect();
     return "RK t=" + Math.round(performance.now())

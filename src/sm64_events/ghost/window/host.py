@@ -40,25 +40,66 @@ URLs into it and hands out its handle; that is all.
   FORM stays opaque whatever the page does.
 
 The background is reached directly instead, by
-`use_transparent_page_background()` below. Be clear about what that can and
-cannot buy: it stops the WebView2 CONTROL painting, which reveals the form
-behind it, and that form is still opaque (`BackColor` = `PAGE_BACKGROUND`).
-Making the game show through the un-footaged parts of the window as well would
-need a colour key (`LWA_COLORKEY`) punching that colour out of the layered
-window -- deliberately not shipped, because nothing here can be seen by an
-agent and the footage he is practising on (Hazy Maze Cave) is full of
-near-black pixels that a black key would punch holes through.
+`use_transparent_page_background()` below.
 
-**So the dark sheet is solved by not being on screen, not by transparency.**
-Whole-window alpha blends every pixel of the window equally -- live 2026-09-19,
-80 % opacity read as a translucent dark sheet over his game and his browser --
-so a window with no footage on it is a window dimming his game. The child only
-ever shows it while the page says a picture is presentable; `page_status()` is
-how it asks.
+**What that buys, MEASURED 2026-09-19 rather than reasoned about** (rig
+experiment `colourkey`, three stages over a black backdrop at a window alpha of
+3/255, each region read off the COMPOSED SCREEN as a per-channel difference):
+
+    region                     control opaque   control transparent
+    page paints nothing        3,0,3            0,0,0
+    video's see-through half   3,0,3            0,0,0
+    canvas's cleared half      3,0,3            0,0,0
+    page paints solid white    3,3,3            3,3,3
+
+So every pixel the page does not paint is ABSENT FROM THE SCREEN once the
+control is transparent, and arrives as the background colour until then. Two
+things this overturns, both of which this docstring used to assert:
+
+- The form is NOT what shows through. It is painted `PAGE_BACKGROUND` and
+  that colour does not reach the screen at all; what shows through is the
+  game.
+- A colour key (`LWA_COLORKEY`) is NOT needed and does nothing here. The same
+  experiment ran keyed and unkeyed passes and they are identical at every
+  alpha, and a key colour the PAGE paints is never punched out. So the old
+  worry -- that a black key would punch holes through Hazy Maze Cave's dark
+  pixels -- is moot: there is no key.
+
+A half-transparent page pixel arrives NEUTRAL (2,2,2 where solid white gives
+3,3,3), so an anti-aliased edge gets no coloured rim.
+
+**This call is thread-affine, but only once WebView2 has finished starting,
+and that is a RACE rather than a permanent failure.** Measured 2026-09-19 on
+the same control, twice:
+
+- asked the instant the window appears, from a non-UI thread: succeeds. There
+  is no `CoreWebView2` behind the control yet, so the WinForms wrapper just
+  remembers the value and no COM call is made.
+- asked eight seconds later, from a non-UI thread: throws
+  `InvalidOperationException` wrapping an `E_NOINTERFACE` on
+  `ICoreWebView2Controller2` -- "members can only be accessed from the UI
+  thread".
+- marshalled, in BOTH cases: succeeds.
+
+So the follower wins that race on this machine and loses it on any machine
+where the control initialises before the first tick gets there -- and with the
+pre-2026-09-19 one-shot version, losing it once meant losing it for the
+session. The call is now marshalled with `BeginInvoke`, which hands the setter
+to the UI thread and returns at once; `Invoke` would park the follower on a
+thread that may be wedged, and a frozen follower is a ghost frozen on his
+screen. What the old evidence actually recorded, `page_background:
+unreachable`, is the earlier fault: it fired before the control existed at all
+and never asked again.
+
+Whole-window alpha still blends every pixel equally -- live 2026-09-19, 80 %
+opacity read as a translucent dark sheet over his game and his browser -- so
+opacity remains the wrong tool for "show nothing here", and per-pixel
+transparency is the right one.
 """
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 
 from sm64_events.ghost.window import native
@@ -77,6 +118,43 @@ OVERLAY_TITLE = "SM64 Trainer ghost overlay"
 PAGE_BACKGROUND = "#000000"
 
 _DEFAULT_RECT = Rect(x=0, y=0, width=640, height=480)
+
+#: What `use_transparent_page_background()` can say. Short on purpose: they
+#: are written to the diag log by name, one collapsed row each.
+BACKGROUND_TRANSPARENT = "transparent"
+BACKGROUND_UNREACHABLE = "unreachable"
+BACKGROUND_ASKED = "asked"
+
+#: How long to leave the UI thread alone after handing it the setter, or after
+#: it refused. The follower asks every tick; without this, a control that is
+#: not built yet would collect one queued delegate per tick forever.
+BACKGROUND_RETRY_S = 2.0
+
+
+def transparent_colour():
+    """`Color.Transparent`, imported where .NET actually exists.
+
+    pywebview's WinForms backend is what loads `clr` and its assemblies, so
+    nothing in this package can import `System.Drawing` before a window has
+    been created -- and a unit test never can. Hence one seam, which
+    `WebviewHost` takes as an argument.
+    """
+    from System.Drawing import Color
+
+    return Color.Transparent
+
+
+def as_delegate(action):
+    """A Python callable in the form `Control.BeginInvoke` wants.
+
+    Falls back to the bare callable where there is no .NET, which is what lets
+    the marshal itself be driven by a test against a fake control.
+    """
+    try:
+        from System import Action
+    except Exception:  # noqa: BLE001 - no .NET here; the callable stands in
+        return action
+    return Action(action)
 
 
 #: What the page is asked, once per page-watch tick. Written to survive a page
@@ -151,14 +229,25 @@ class WebviewHost:
     name = "webview"
     hosts_window = True
 
-    def __init__(self, title: str = OVERLAY_TITLE):
+    def __init__(self, title: str = OVERLAY_TITLE, *,
+                 colour=transparent_colour, clock=time.monotonic):
         self._title = title
         self._lock = threading.RLock()
         self._window = None
         self._hwnd = 0
         self._url = "about:blank"
         self._rect: Rect | None = None
-        self._background_tried = False
+        #: The two seams the marshal is driven through in a test: what colour
+        #: to set (it needs .NET) and what time it is.
+        self._colour = colour
+        self._clock = clock
+        #: Set by the UI THREAD, read by the follower. None means it has not
+        #: answered yet.
+        self._background_result: str | None = None
+        self._background_quiet_until = 0.0
+        self._background_done = False
+        #: pythonnet hands the delegate to Windows; it must outlive this call.
+        self._background_delegate = None
 
     # --- what the child tells it -------------------------------------------
 
@@ -203,33 +292,71 @@ class WebviewHost:
         return PageAnswer(state=NOTHING,
                           detail=None if answer is None else str(answer)[:120])
 
+    def _control(self):
+        """pywebview's WebView2 control, by either of the two shapes it takes."""
+        form = getattr(self._window, "native", None)
+        found = getattr(form, "webview", None)
+        if found is None:
+            found = getattr(getattr(form, "browser", None), "webview", None)
+        return found
+
     def use_transparent_page_background(self) -> str | None:
         """Stop the WebView2 control painting its own background.
 
-        RETRIED until it works, and None only once it has. It used to be
+        Called every tick by the follower, so it must be cheap and must NEVER
+        wait on the UI thread. Returns one short word for the diag log, or
+        None when there is nothing new to say; the caller collapses repeats.
+
+        RETRIED until it works, and silent only once it has. It used to be
         one-shot, and in his second try it fired at 08:20:06.805 -- a
         millisecond before the window handle existed -- found no control, and
-        gave up for the rest of the session.
-
-        See the module docstring for why this is done by hand instead of with
-        pywebview's `transparent=True`, and for what it does and does not buy.
+        gave up for the rest of the session. It was ALSO made on this thread,
+        which is the older and larger fault: see the module docstring.
         """
         with self._lock:
-            if self._background_tried:
+            if self._background_done:
                 return None
-            form = getattr(self._window, "native", None)
-            control = getattr(form, "webview", None)
-            if control is None:
-                control = getattr(getattr(form, "browser", None), "webview", None)
-            if control is None:
-                return "unreachable"
+            result, self._background_result = self._background_result, None
+            if result == BACKGROUND_TRANSPARENT:
+                self._background_done = True
+                return BACKGROUND_TRANSPARENT
+            if result is not None:
+                # A refusal is never final: the CoreWebView2 behind the control
+                # may simply not have been built yet. Wait, then ask again.
+                self._background_quiet_until = self._clock() + BACKGROUND_RETRY_S
+                return result
+            if self._clock() < self._background_quiet_until:
+                return None
+        control = self._control()
+        # No control yet costs nothing to discover, so it is not rate-limited;
+        # the log collapses the repeats into one row with a count.
+        return BACKGROUND_UNREACHABLE if control is None else self._ask(control)
+
+    def _ask(self, control) -> str:
+        """Hand the setter to the control's OWN thread, and come straight back.
+
+        `BeginInvoke` rather than `Invoke`: the follower may not be parked on a
+        UI thread that has wedged. The outcome arrives later, in
+        `_background_result`, and the next tick reports it.
+        """
+        def apply() -> None:
             try:
-                from System.Drawing import Color
-                control.DefaultBackgroundColor = Color.Transparent
-            except Exception as error:  # noqa: BLE001 - the black fallback is fine
-                return f"refused: {type(error).__name__}: {error}"
-            self._background_tried = True
-            return "transparent"
+                control.DefaultBackgroundColor = self._colour()
+                outcome = BACKGROUND_TRANSPARENT
+            except Exception as error:  # noqa: BLE001 - reported, never raised
+                outcome = f"refused: {type(error).__name__}"
+            with self._lock:
+                self._background_result = outcome
+
+        delegate = as_delegate(apply)
+        with self._lock:
+            self._background_delegate = delegate
+            self._background_quiet_until = self._clock() + BACKGROUND_RETRY_S
+        try:
+            control.BeginInvoke(delegate)
+        except Exception as error:  # noqa: BLE001 - a control with no handle yet
+            return f"refused: {type(error).__name__}"
+        return BACKGROUND_ASKED
 
     def hwnd(self) -> int:
         """The window handle, the moment WebView2 has one.

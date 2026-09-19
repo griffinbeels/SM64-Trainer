@@ -2293,6 +2293,33 @@ def build_bench(scratch: Path, width: int, height: int) -> Bench:
                  hosts=[], children=[], alpha_clip=alpha_clip)
 
 
+def occupied_rects(screen: Rect) -> list[Rect]:
+    """Where another app's window is, so the rig can avoid landing under one.
+
+    "Still and black" is not the same as "empty". The `background` experiment
+    first chose a patch of Discord's dark panel -- perfectly static, perfectly
+    black, and ABOVE the overlay in the z-order (measured 2026-09-19: Discord
+    at index 80, the child's window at 89), so the child painted correctly and
+    the screen never showed a single level of it. The rig needs bare desktop.
+
+    Windows that span the whole virtual screen are the desktop itself and the
+    wallpaper hosts; they are what we WANT to be over.
+    """
+    from sm64_events.replay.window import enum_windows
+
+    out: list[Rect] = []
+    for window in enum_windows():
+        if not window.visible or window.pid == os.getpid():
+            continue
+        rect = native.get_window_rect(window.hwnd)
+        if rect is None or rect.width <= 0 or rect.height <= 0:
+            continue
+        if rect.width >= screen.width and rect.height >= screen.height:
+            continue
+        out.append(rect)
+    return out
+
+
 def _emulator_rects() -> list[Rect]:
     """Where Project64's windows are, read-only, so nothing lands on them."""
     from sm64_events.replay.window import enum_windows
@@ -2408,10 +2435,13 @@ def _still_backdrop(bench: "Bench", width: int, height: int,
     # Anything no monitor covers is ruled out first. It is the stillest,
     # darkest thing on the desktop and it is not on screen at all.
     moved |= ~coverage_mask(moved.shape, screen, monitors)
-    # Project64 is blacked out of the search rather than checked afterwards:
-    # a rectangle over his emulator must never be chosen even if it is the
-    # stillest, darkest place that IS on a monitor.
-    for taken in _emulator_rects():
+    # Then every other app's window, Project64's among them. Two reasons in
+    # one: a rectangle over his emulator must never be chosen, and a rectangle
+    # under ANY window is one the overlay may be stacked beneath -- which
+    # reads as a window that paints nothing.
+    with dpi_context(style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+        blocked = occupied_rects(screen)
+    for taken in blocked:
         top = max(0, taken.y - screen.y)
         left = max(0, taken.x - screen.x)
         moved[top:top + taken.height, left:left + taken.width] = True
@@ -2622,7 +2652,222 @@ def experiment_colourkey(bench: "Bench", alphas=(3, 2, 1)) -> dict:
         out["host_lines"] = host.lines[-20:]
 
 
+def checked_show_opacity(value: float) -> float:
+    """An opacity the rig may ASK A RUNNING CHILD for. At most the ceiling.
+
+    `checked_child_opacity` governs what a child may be STARTED with -- alpha
+    0, because the child decides for itself when to show its window. This is
+    the other half: once the rig owns the moment, it may raise the opacity to
+    the few levels a measurement needs, and no further.
+    """
+    alpha = alpha_byte(value)
+    if alpha > MAX_SHOW_ALPHA:
+        raise ValueError(f"opacity {value!r} is alpha {alpha}, above the "
+                         f"rig's ceiling of {MAX_SHOW_ALPHA}")
+    return float(value)
+
+
+#: An opacity that rounds to exactly `MAX_SHOW_ALPHA`. Spelled as the number
+#: the control line carries, because that is what the child is actually told.
+SHOW_OPACITY = 0.0118
+
+
+def _background_rows(log_path: Path) -> list[dict]:
+    return [row for row in diag.read(log_path)
+            if row.get("event") == "page_background"]
+
+
+def experiment_background(bench: "Bench") -> dict:
+    """Does the REAL child get a see-through page, and does the screen agree?
+
+    The product's own child, its own log, its own page gate -- the rig only
+    chooses where the window goes and raises the opacity to a few levels so
+    the screen can be read. The page paints half its regions and leaves the
+    rest alone, so one capture answers both halves: what it painted blends,
+    what it did not is absent.
+    """
+    out: dict = {"name": "background", "question":
+                 "does `use_transparent_page_background` reach the control's "
+                 "UI thread in the shipped child, and does the unpainted page "
+                 "area then vanish from the composed screen?"}
+    out["foreground_before_create"] = bench.guard.wait_until_clear()
+    width, height = COLOURKEY_RECT
+    spot = _still_backdrop(bench, width, height, out)
+    if spot is None:
+        return out
+    out["rect"] = spot.as_list()
+    log_path = bench.scratch / "background_ghost_window.jsonl"
+    with contextlib.suppress(OSError):
+        log_path.unlink()
+    # `blink`, not `always`: the child only re-reads the opacity when its
+    # DECISION changes, so the page has to give it one. See the page's own
+    # note and `_background_read`.
+    settings = urlencode({"video": bench.alpha_clip.as_uri(),
+                          "key": "%02x%02x%02x" % COLOUR_KEY_RGB,
+                          "present": "blink", "post": "0"})
+    known = {int(window.hwnd) for window in overlay_windows()}
+    child = ChildProcess(f"{COLOURKEY_PAGE.as_uri()}#{settings}", spot,
+                         log_path, opacity=0.0, reorder_watch=False)
+    bench.children.append(child)
+    bench.guard.own_pids.add(child.process.pid)
+    try:
+        child.wait_for_event("ready")
+        found = _wait_for_overlay_window(child.process.pid, known)
+        out["window_search"] = found
+        hwnd = found["hwnd"]
+        out["hwnd"] = hwnd
+        out["foreground_after_create"] = bench.guard.check(
+            out["foreground_before_create"])
+        if not hwnd:
+            out["skipped"] = "the overlay child never created a findable window"
+            return out
+        bench.guard.own_hwnds.add(hwnd)
+        bench.guard.own_pids.update(found["family"])
+        _background_settle(child, hwnd, log_path, out)
+        if out.get("skipped"):
+            return out
+        _background_read(bench, child, hwnd, spot, out)
+        out["verdict"] = _background_verdict(out)
+        return out
+    finally:
+        child.close()
+        out["child_exit_code"] = child.process.poll()
+        out["page_background_rows"] = _background_rows(log_path)
+        out["child_errors"] = child.errors[-6:]
+
+
+def _background_settle(child: "ChildProcess", hwnd: int, log_path: Path,
+                       out: dict) -> None:
+    """Let the child style, place and show itself, then read where it landed.
+
+    Nothing is done TO the window here. The product's own follower owns the
+    styles, the alpha and the showing; the rig only asks for the ghost the way
+    the trainer does -- one control line -- and writes down what it chose. The
+    opacity is still 0, so "shown" here means present and completely invisible.
+    """
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline and not _background_rows(log_path):
+        time.sleep(0.3)
+    child.send(visible=True)
+    shown_by = time.monotonic() + 20.0
+    while time.monotonic() < shown_by and not native.is_visible(hwnd):
+        time.sleep(0.2)
+    out["page_background_rows"] = _background_rows(log_path)
+    time.sleep(2.0)
+    out["alpha_at_rest"] = native.get_alpha(hwnd)
+    out["visible_at_rest"] = native.is_visible(hwnd)
+    out["ex_style_at_rest"] = style_report(style.OVERLAY_EX_STYLE,
+                                           native.get_ex_style(hwnd))
+    with dpi_context(style.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+        landed = native.get_window_rect(hwnd)
+    out["window_rect"] = landed.as_list() if landed else None
+    # Where it is and what it paints, separately: a screen that reads nothing
+    # is a window in the wrong place OR a window painting nothing, and those
+    # want different fixes.
+    out["window_pixels"] = capture_window(hwnd)
+    order = zorder_list()
+    out["zorder_index"] = order.index(hwnd) if hwnd in order else None
+    out["windows_above"] = order.index(hwnd) if hwnd in order else None
+    if out["alpha_at_rest"] != 0:
+        out["skipped"] = ("the child settled at an alpha other than 0, so the "
+                          "rig did not raise it")
+
+
+def _background_read(bench: "Bench", child: "ChildProcess", hwnd: int,
+                     rect: Rect, out: dict) -> None:
+    """Capture at alpha 0, raise to the ceiling, capture again, put it back.
+
+    The control line is sent FIRST even though the rig has a way of its own,
+    because whether a new opacity reaches the window is a product question and
+    the answer belongs in the report. On this branch it does not:
+    `FollowLoop.tick` returns early whenever the Placement is unchanged, and an
+    opacity is not part of a Placement, so nothing is applied until the ghost
+    moves. The rig then raises the alpha itself, which changes only how much
+    of the window the screen shows -- the page, the transparency and the
+    placement all stay the child's.
+    """
+    before = capture_screen(rect, capture_layered=True)
+    watched = bench.guard.look()
+    child.send(opacity=checked_show_opacity(SHOW_OPACITY))
+    out["alpha_after_control_line"] = _wait_for_alpha(hwnd, MAX_SHOW_ALPHA,
+                                                      timeout_s=3.0)
+    out["opacity_line_reached_window_at_once"] = (
+        out["alpha_after_control_line"] == MAX_SHOW_ALPHA)
+    # The page blinks its picture away every few seconds, which is what makes
+    # the child's decision change and its placer re-read the opacity. Waiting
+    # for that is the honest way in: the rig cannot simply set the alpha
+    # itself, because `Placer.prepare` re-asserts its own held value on every
+    # tick and takes it straight back (measured 2026-09-19 -- a rig-set alpha
+    # of 3 read back as 0 within a second).
+    out["alpha_after_a_decision_change"] = _wait_for_alpha(
+        hwnd, MAX_SHOW_ALPHA, timeout_s=15.0)
+    out["alpha_when_read"] = native.get_alpha(hwnd)
+    out["foreground_after_raise"] = bench.guard.check(watched)
+    after = capture_screen(rect, capture_layered=True)
+    boxes = colourkey_sample_boxes(rect)
+
+    def table(shot):
+        return {name: region_delta(before, shot, rect.width, rect.height,
+                                   box, rect)
+                for name, box in boxes.items()}
+
+    if before is not None and after is not None:
+        out["regions"] = table(after)
+    # A window SHOWN while its alpha was 0 may never be composited again when
+    # the alpha is raised under it -- nothing has asked the desktop to redraw
+    # it. Taking it off screen and putting it back is the cheapest way to ask,
+    # and whether it changes the answer is itself the finding.
+    if not _anything_moved(out.get("regions")):
+        native.hide(hwnd)
+        time.sleep(0.3)
+        native.show_no_activate(hwnd)
+        time.sleep(1.0)
+        again = capture_screen(rect, capture_layered=True)
+        out["reshown"] = True
+        if before is not None and again is not None:
+            out["regions_after_reshow"] = table(again)
+            if _anything_moved(out["regions_after_reshow"]):
+                out["regions"] = out["regions_after_reshow"]
+                out["needed_a_reshow"] = True
+    native.set_alpha(hwnd, 0)
+    child.send(opacity=0.0)
+    if out["alpha_when_read"] != MAX_SHOW_ALPHA:
+        out["skipped"] = "the window never reached the alpha the screen needs"
+    elif before is None or after is None:
+        out["skipped"] = "the screen could not be captured"
+
+
+def _anything_moved(regions: dict | None) -> bool:
+    for row in (regions or {}).values():
+        if row.get("ok") and any(abs(value) >= 0.5
+                                 for value in row.get("mean_delta_rgb", [])):
+            return True
+    return False
+
+
+def _background_verdict(out: dict) -> dict:
+    """Did the page's unpainted area actually leave the screen?"""
+    rows = out.get("page_background_rows") or []
+    regions = out.get("regions") or {}
+
+    def moved(name: str) -> float:
+        row = regions.get(name) or {}
+        return (max(abs(value) for value in row.get("mean_delta_rgb", [0]))
+                if row.get("ok") else 0.0)
+
+    painted, unpainted = moved("r3_white"), moved("r1_nothing")
+    return {"log_says": [row.get("result") for row in rows],
+            "reached_transparent": any(row.get("result") == "transparent"
+                                       for row in rows),
+            "painted_delta": round(painted, 3),
+            "unpainted_delta": round(unpainted, 3),
+            "video_clear_delta": round(moved("r5_video_transparent"), 3),
+            "decided": painted >= 0.5,
+            "see_through": painted >= 0.5 and unpainted < 0.5}
+
+
 EXPERIMENTS = {"e1": experiment_1, "e4": experiment_4,
+               "background": experiment_background,
                "picture": experiment_picture,
                "zorder": experiment_zorder,
                "colourkey": experiment_colourkey}
