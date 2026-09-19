@@ -14,7 +14,8 @@ from sm64_events.inputs.service import InputsService
 from sm64_events.server.ghost_api import create_ghost_router
 from sm64_events.storage.db import Database
 
-from tests.ghost_fixture import FakeReplay, a_document, a_view
+from tests.ghost_fixture import (
+    FakeAttempt, FakeReplay, a_document, a_real_clip_view, a_view)
 
 
 @pytest.fixture
@@ -22,8 +23,10 @@ def db(tmp_path):
     return Database(tmp_path / "t.db")
 
 
-def a_service(db) -> InputsService:
-    return InputsService(db.inputs, db.input_templates, lambda: [])
+def a_service(db, *attempts) -> InputsService:
+    """The captured-input service the route reads BOTH doors of: the template
+    store, and `attempt` for the frames the span is clamped to."""
+    return InputsService(db.inputs, db.input_templates, lambda: list(attempts))
 
 
 def mark(db, *, kind="star", entity_key="24-1", strat_tag="10 coin",
@@ -58,6 +61,29 @@ def test_a_ready_ghost_answers_with_its_footage_and_view(db):
     assert body["exactness"] == "frame_map"
     assert body["view"]["frame_map"] == [11, 11, 12, 13]
     assert body["view"]["picture_igt"] == [100, 100, 101, 102]
+
+
+def test_the_answer_carries_the_span_the_ghost_is_clamped_to(db):
+    """His ruling, over his own clip: the ghost is exactly the attempt, so the
+    45 pictures of the previous run and the fifteen after the star are out."""
+    mark(db, origin="attempt:9")
+    replay = FakeReplay(saved=[9], views={9: a_real_clip_view(9)})
+    row = FakeAttempt(id=9, anchor_frame=308677, rta_frames=584,
+                      igt_frames=584, timed_at="xcam")
+    body = ask(client(a_service(db, row), replay)).json()
+    assert body["span"] == {"first_picture": 45, "last_picture": 626,
+                            "start_frame": 308677, "end_frame": 309261,
+                            "grab_frame": None, "basis": "attempt_frames"}
+    assert len(body["view"]["frame_map"]) == 642
+
+
+def test_a_ghost_whose_run_left_the_history_is_served_unclamped(db):
+    """`span: null` is an answer the page can act on; refusing the footage
+    would hide a run he can still watch."""
+    mark(db)
+    replay = FakeReplay(saved=[7], views={7: a_view(7)})
+    body = ask(client(a_service(db), replay)).json()
+    assert body["available"] is True and body["span"] is None
 
 
 def test_no_ghost_is_a_200_carrying_the_reason_to_show(db):
