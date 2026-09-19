@@ -1093,7 +1093,7 @@ counter exactly as the poll loop reads it, beside the emulator's [[frame]]
 counter, which keeps moving while the game pauses. It carries the [[nudge]] and
 the [[ghost colour]] too — both are things the running overlay page can simply
 take, so neither needs the page reloaded — and it says whether you have just
-touched a star, which is what ends your own run. With nothing listening it
+touched a [[star]], which is what ends your own [[run]]. With nothing listening it
 costs the poll loop one test and never touches the [[snapshot]].
 
 - **Lives** — `src/sm64_events/server/ghost_clock.py` → the /ws/ghost-clock
@@ -1105,8 +1105,8 @@ The rule that turns a [[ghost clock]] reading into a picture: show the template
 picture whose [[in-game time]] equals the live one plus the [[nudge]]. Steady
 play moves the footage at game speed and corrects; a stalled timer holds; a
 jump either way seeks. It also knows when there is nothing honest to show: when
-you are not in the course the ghost belongs to, and once you have touched the
-star yourself — either way it holds until your timer is back inside the run.
+you are not in the course the [[ghost]] belongs to, and once you have touched the
+[[star]] yourself — either way it holds until your timer is back inside the [[run]].
 
 - **Lives** — `src/sm64_events/ui/ghost/follower.js`, drawn by
   `src/sm64_events/ui/ghost/index.html`
@@ -1127,7 +1127,7 @@ as the [[target]] changes.
 The colour shift applied to a whole [[ghost]] picture so it cannot be mistaken
 for the live game — every colour in the footage moved the same way around the
 colour wheel. On by default, at a third of a turn; you can pick another angle
-or switch it off, and the choice is remembered. Changing it takes effect on the
+or switch it off, and the trainer remembers the choice. Changing it takes effect on the
 next game [[frame]], because it travels the way the [[nudge]] does.
 
 - **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it;
