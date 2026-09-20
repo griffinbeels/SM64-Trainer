@@ -42,6 +42,11 @@ const clipped = canvas();
 out.clipped = cropPacket(clipped, {dx: -0.25, dy: 3.1, dw: 11, dh: 2}, 8, 'mario', true);
 out.clipped.pixels = [...Buffer.from(out.clipped.pixels, 'base64')];
 out.clippedReads = clipped.reads;
+const nativeCanvas = canvas(961, 721, 641.333333, 481.333333);
+out.nativeEdge = cropPacket(nativeCanvas,
+  {dx: 959 / 1.5, dy: 720 / 1.5, dw: 4 / 1.5, dh: 3 / 1.5}, 8, 'mario', true,
+  {width: 961 / 1.5, height: 721 / 1.5});
+out.nativeEdgeReads = nativeCanvas.reads;
 
 const absent = canvas();
 out.hidden = [
@@ -145,6 +150,11 @@ def test_crop_clips_both_edges_without_shifting_or_rescaling_pixels(result):
     packet = result["clipped"]
     assert (packet["x"], packet["y"], packet["width"], packet["height"]) == (0, 9, 20, 3)
     assert len(packet["pixels"]) == 20 * 3 * 4
+
+
+def test_native_drawing_extent_overrides_the_rounded_webview_control(result):
+    assert result["nativeEdgeReads"] == [[959, 720, 2, 1]]
+    assert result["nativeEdge"]["visible"] is True
 
 
 def test_missing_unpresentable_and_unreadable_frames_clear_previous_pixels(result):

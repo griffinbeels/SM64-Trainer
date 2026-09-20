@@ -535,6 +535,19 @@ game image is inscribed 4:3 inside that rectangle; the black bands top and
 bottom of a clip are the GAME's own 8-of-240 scanline borders (40 rows of 1200,
 measured), which scale with the picture rather than with the window's shape.
 
+**Mario-only ghost composition.** The browser still owns decoding, the ghost
+clock, crop lookup and colour treatment. Its canvas sends only the crop's RGBA
+pixels and physical destination through a bounded latest-frame bridge
+(`ui/ghost/presenter.js` → `ghost/window/presentation.py`). A separate unowned,
+click-through HWND submits that bitmap, position, dimensions and opacity together
+with `UpdateLayeredWindow` (`ghost/window/surface.py`). Mario mode holds the
+full-size browser HWND at alpha zero: transparent page pixels otherwise reveal
+its black WinForms backing and darken the whole game. The native crop HWND must
+never receive `SetLayeredWindowAttributes`, which disables later layered bitmap
+uploads. Whole-picture mode continues through the browser HWND. Navigation tokens,
+null crops, stale producers and unproved geometry fail closed; the existing page
+diagnostic records include native crop geometry, alpha, upload count and errors.
+
 **Hard real-time in CPython — why encoding left the process.** At 60 fps
 (16.7 ms/frame) and PortAudio callbacks (21 ms budget), every Python thread
 pays every other thread's latency through the GIL. Real offenders were

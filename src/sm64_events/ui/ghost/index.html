@@ -99,6 +99,13 @@
   body[data-ghost="ready"][data-shown="yes"][data-view="mario"] #mario {
     visibility: visible;
   }
+  /* Native Mario mode uploads the crop to its own layered HWND. Keep the
+     decoder painting its full picture while that HWND takes over: a view
+     switch must never expose this browser's black backing window. */
+  body[data-native="yes"][data-ghost="ready"][data-shown="yes"] #ghost {
+    visibility: visible;
+  }
+  body[data-native="yes"] #mario { visibility: hidden !important; }
 </style>
 </head>
 <body data-ghost="loading">
@@ -113,10 +120,19 @@ import { MARGIN_FRACTION, containRect, marioDraw,
          usableBoxes } from "./mariobox.js";
 import { clipClock, slotAtTime } from "../frame.js";
 import { presentedVideoTime, watchVideoPicture } from "../videopicture.js";
+import { cropPacket, createPresenter } from "./presenter.js";
 
 const params = new URLSearchParams(location.search);
 const video = document.getElementById("ghost");
 const canvas = document.getElementById("mario");
+const nativeSession = params.get("native_session");
+if (nativeSession) document.body.dataset.native = "yes";
+let nativePresenter = null;
+let nativePacket = null;
+let nativeSequence = 0;
+let nativeVisible = null;
+let nativeViewport = null;
+let drawingSize = null;
 // `decision` is the last thing a CLOCK SAMPLE decided and `holding` is the
 // separate question of whether any clock is arriving at all. Folding the two
 // together would let a quiet second overwrite why the ghost is where it is,
@@ -210,6 +226,7 @@ function mark(state, reason = null, reasonText = null) {
   // unreachable source or a media error must leave the game's own picture
   // untouched rather than freeze the last thing that was decoded.
   if (state !== "ready") delete document.body.dataset.shown;
+  pulseNative();
 }
 
 // WHAT IS ON SCREEN, not what was asked for. `requestVideoFrameCallback` hands
@@ -254,6 +271,7 @@ function onSample(sample) {
   status.holding = null;
   status.decision = follower.sample(sample, videoTime(), performance.now());
   apply(status.decision);
+  pulseNative();
 }
 
 function setNudge(frames) {
@@ -373,10 +391,11 @@ function redraw() {
 function drawMario(time) {
   if (!paint) return;
   lastPresented = time;
-  const size = sizeCanvas();
+  const size = drawingSize = sizeCanvas();
   if (status.view !== "mario" || !boxes || !clipTiming) {
     status.mario_drawn = null;
     status.mario_state = status.view !== "mario" ? "whole_view" : "no_boxes";
+    publishNative();
     return;
   }
   const slot = slotAtTime(time + PICTURE_EPSILON, clipTiming);
@@ -398,6 +417,7 @@ function drawMario(time) {
     // A box the geometry cannot use is the same story on screen as no box at
     // all, and the counter above has already recorded it.
     if (box) status.mario_state = "no_mario";
+    publishNative();
     return;
   }
   paint.filter = boxFilter;
@@ -411,6 +431,38 @@ function drawMario(time) {
   const at = presentedVideoTime(video);
   if (at != null && Math.abs(at - time) > PICTURE_EPSILON)
     status.late_pictures += 1;
+  publishNative();
+}
+
+// Cache pixels when they are painted, not on every clock sample. A heartbeat
+// reuses the last packet so a paused ghost stays up, but a dead page expires.
+function publishNative() {
+  if (!nativePresenter) return;
+  nativePacket = cropPacket(canvas, status.mario_drawn, 0, status.view, true, drawingSize);
+  pulseNative(true);
+}
+
+function pulseNative(force = false) {
+  if (!nativePresenter || !nativePacket) return;
+  const visible = nativePacket.visible && presentable();
+  if (!force && visible === nativeVisible) return;
+  nativeVisible = visible;
+  nativePresenter.submit({ ...nativePacket, visible, sequence: ++nativeSequence });
+}
+
+function connectNative() {
+  if (!nativeSession || nativePresenter || !window.pywebview?.api?.present) return;
+  nativePresenter = createPresenter(async packet => {
+    const reply = await window.pywebview.api.present({...packet, session: nativeSession});
+    const size = reply?.viewport;
+    if (!reply?.accepted || !size || !Number.isSafeInteger(size.width)
+        || !Number.isSafeInteger(size.height) || size.width <= 0 || size.height <= 0) return;
+    if (nativeViewport?.width === size.width && nativeViewport?.height === size.height) return;
+    nativeViewport = size;
+    if (lastPresented != null) drawMario(lastPresented);
+  });
+  publishNative();
+  setInterval(() => pulseNative(true), 250);
 }
 
 // The backing store follows the window, and the canvas is CLEARED here.
@@ -435,8 +487,11 @@ function drawMario(time) {
 function sizeCanvas() {
   const box = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.round(box.width * ratio));
-  const height = Math.max(1, Math.round(box.height * ratio));
+  // WebView2 can round its child control one physical pixel beyond an odd
+  // native window at fractional DPI. Draw against the acknowledged native
+  // extent, not that oversized control; the bridge rejects old resize frames.
+  const width = nativeViewport?.width ?? Math.max(1, Math.round(box.width * ratio));
+  const height = nativeViewport?.height ?? Math.max(1, Math.round(box.height * ratio));
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
@@ -446,7 +501,8 @@ function sizeCanvas() {
   // Drawn in CSS pixels whatever the device does, so every rectangle in
   // `mariobox.js` is in the same space as the video element's own box.
   paint.setTransform(ratio, 0, 0, ratio, 0, 0);
-  return { width: box.width, height: box.height };
+  return nativeViewport ? { width: width / ratio, height: height / ratio }
+    : { width: box.width, height: box.height };
 }
 
 // The clock. One tiny message per game snapshot, and only while this socket is
@@ -545,6 +601,8 @@ function presentable() {
 // diagnosis asks.
 window.ghostStatus = () => ({
   ...status,
+  native_bridge: Boolean(nativePresenter),
+  native_sequence: nativeSequence,
   nudge_frames: follower ? follower.nudge : null,
   video_time: videoTime(),
   //: whether the element is actually painting. False is the honest answer for
@@ -721,6 +779,7 @@ async function start() {
     const tick = () => {
       const idle = follower.idle(videoTime(), performance.now());
       if (idle) { status.holding = idle.reason; apply(idle); }
+      pulseNative();
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -748,6 +807,8 @@ async function start() {
   video.src = source.media_url;
 }
 
+window.addEventListener("pywebviewready", connectNative);
+connectNative();
 start();
 </script>
 </body>

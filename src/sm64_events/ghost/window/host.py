@@ -1,109 +1,36 @@
-"""What actually holds the ghost picture: a WebView2 window, or nothing.
+"""The browser owns playback; a separate crop window owns Mario's pixels.
 
-Two hosts behind one small surface.
+WebviewHost creates a hidden, frameless WebView2 and hands its HWND to Placer.
+Placer alone moves and fades that browser on its DPI-aware follower thread.
+NullHost supplies the same control-plane surface without any windows.
 
-`WebviewHost` is the shipped one. pywebview must own its process's MAIN
-thread, which is the whole reason the overlay is a child process rather than
-part of the desktop shell: browser and desktop users both get the ghost, so
-the server side owns it. The window is created HIDDEN and is not shown until
-the follower has placed it and READ THAT PLACEMENT BACK.
+A transparent WebView2 background DOES NOT make its WinForms backing window
+transparent. The September 19 probe over black could not distinguish absent
+pixels from black pixels; the September 20 gray-backdrop control disproved its
+conclusion. Whole-window alpha darkened every unpainted pixel over the game.
+A GDI color key did not remove WebView2's separately composed pixels either.
 
-`NullHost` records what a window would have been told. It is what lets the
-control plane and the follower be driven end to end in a test with nothing on
-screen -- the hard limit on this feature's verification.
+Mario mode therefore keeps the decoder window at alpha zero and sends cropped
+canvas RGBA + position to CropBridge. Its own native layered window submits
+pixels, geometry and SourceConstantAlpha together, leaving everything outside
+the crop untouched. The whole-picture option still uses the browser window.
 
-**A host no longer moves, shows, hides or fades anything.** Every user32 write
-belongs to `placer.Placer` on the follower thread, because DPI awareness is
-per thread and a rectangle read on one thread and applied on another is a
-rectangle multiplied by the display scale. A host creates the window, loads
-URLs into it and hands out its handle; that is all.
-
-**`transparent=True` is never passed, and three separate things in pywebview
-6.2.1 say so.** All three are in this venv's source, not from memory:
-
-- `edgechromium.py::on_navigation_start` calls `self.form.Show()` and
-  `self.form.Activate()` whenever the window is transparent. That runs on
-  EVERY navigation, and the session navigates the ghost on every target
-  change -- it would show an unplaced window and take the keyboard off him
-  mid-attempt. On its own this rules the flag out.
-- `winforms.py::create_window` reaches its transparency workaround (`Show()`
-  then `Hide()`, under the comment saying that is what makes a transparent
-  window work) only through an `elif` a HIDDEN window never takes, so the
-  ghost would not get it anyway. **Note what the hidden branch does instead,
-  because an earlier version of this docstring implied a hidden window is
-  never shown and that is wrong:** it runs `Opacity = 0; Show(); Hide();
-  Opacity = 1`. The form IS shown, invisibly, before any of our styles exist
-  -- and WinForms implements `Form.Opacity` with `WS_EX_LAYERED`, the very bit
-  whole-window alpha needs. That is why nothing in this package is one-shot;
-  see `placer.Placer.prepare`.
-- `winforms.py` never sets `AllowTransparency` or `TransparencyKey`, so the
-  FORM stays opaque whatever the page does.
-
-The background is reached directly instead, by
-`use_transparent_page_background()` below.
-
-**What that buys, MEASURED 2026-09-19 rather than reasoned about** (rig
-experiment `colourkey`, three stages over a black backdrop at a window alpha of
-3/255, each region read off the COMPOSED SCREEN as a per-channel difference):
-
-    region                     control opaque   control transparent
-    page paints nothing        3,0,3            0,0,0
-    video's see-through half   3,0,3            0,0,0
-    canvas's cleared half      3,0,3            0,0,0
-    page paints solid white    3,3,3            3,3,3
-
-So every pixel the page does not paint is ABSENT FROM THE SCREEN once the
-control is transparent, and arrives as the background colour until then. Two
-things this overturns, both of which this docstring used to assert:
-
-- The form is NOT what shows through. It is painted `PAGE_BACKGROUND` and
-  that colour does not reach the screen at all; what shows through is the
-  game.
-- A colour key (`LWA_COLORKEY`) is NOT needed and does nothing here. The same
-  experiment ran keyed and unkeyed passes and they are identical at every
-  alpha, and a key colour the PAGE paints is never punched out. So the old
-  worry -- that a black key would punch holes through Hazy Maze Cave's dark
-  pixels -- is moot: there is no key.
-
-A half-transparent page pixel arrives NEUTRAL (2,2,2 where solid white gives
-3,3,3), so an anti-aliased edge gets no coloured rim.
-
-**This call is thread-affine, but only once WebView2 has finished starting,
-and that is a RACE rather than a permanent failure.** Measured 2026-09-19 on
-the same control, twice:
-
-- asked the instant the window appears, from a non-UI thread: succeeds. There
-  is no `CoreWebView2` behind the control yet, so the WinForms wrapper just
-  remembers the value and no COM call is made.
-- asked eight seconds later, from a non-UI thread: throws
-  `InvalidOperationException` wrapping an `E_NOINTERFACE` on
-  `ICoreWebView2Controller2` -- "members can only be accessed from the UI
-  thread".
-- marshalled, in BOTH cases: succeeds.
-
-So the follower wins that race on this machine and loses it on any machine
-where the control initialises before the first tick gets there -- and with the
-pre-2026-09-19 one-shot version, losing it once meant losing it for the
-session. The call is now marshalled with `BeginInvoke`, which hands the setter
-to the UI thread and returns at once; `Invoke` would park the follower on a
-thread that may be wedged, and a frozen follower is a ghost frozen on his
-screen. What the old evidence actually recorded, `page_background:
-unreachable`, is the earlier fault: it fired before the control existed at all
-and never asked again.
-
-Whole-window alpha still blends every pixel equally -- live 2026-09-19, 80 %
-opacity read as a translucent dark sheet over his game and his browser -- so
-opacity remains the wrong tool for "show nothing here", and per-pixel
-transparency is the right one.
+Do not pass pywebview transparent=True: its navigation callback shows and
+activates the form. The background setter below is marshalled with BeginInvoke
+because CoreWebView2 requires its UI thread; it neither blocks the follower nor
+claims desktop transparency. WinForms may reset its layered style at startup,
+so Placer continues to confirm styles and opacity on every follower tick.
 """
 import logging
 import os
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sm64_events.ghost.window import native
 from sm64_events.ghost.window.geometry import Rect
+from sm64_events.ghost.window.presentation import CropBridge, PageApi
 
 log = logging.getLogger("sm64.ghost")
 
@@ -248,6 +175,9 @@ class WebviewHost:
         self._background_done = False
         #: pythonnet hands the delegate to Windows; it must outlive this call.
         self._background_delegate = None
+        self.crop = CropBridge()
+        self._crop_stop = threading.Event()
+        self._crop_thread = None
 
     # --- what the child tells it -------------------------------------------
 
@@ -257,11 +187,21 @@ class WebviewHost:
             self._rect = rect
 
     def load_url(self, url: str) -> None:
+        self.crop.reset()
         with self._lock:
             self._url = url
             window = self._window
         if window is not None:
-            window.load_url(url)
+            window.load_url(self._page_url(url))
+
+    def _page_url(self, url):
+        parts = urlsplit(url)
+        # .NET Uri escapes a file URL's query into its path. The native rig
+        # therefore carries settings in its fragment; keep that transport.
+        field = "fragment" if parts.scheme == "file" else "query"
+        query = dict(parse_qsl(getattr(parts, field)))
+        query["native_session"] = self.crop.session
+        return urlunsplit(parts._replace(**{field: urlencode(query)}))
 
     def page_status(self) -> PageAnswer:
         """What the page says about itself, and WHICH KIND of answer it is.
@@ -288,7 +228,7 @@ class WebviewHost:
             return PageAnswer(state=RAISED,
                               detail=f"{type(error).__name__}: {error}"[:300])
         if isinstance(answer, dict):
-            return PageAnswer(state=STATUS, status=answer)
+            return PageAnswer(state=STATUS, status={**answer, "native_surface": self.crop.diagnostics()})
         return PageAnswer(state=NOTHING,
                           detail=None if answer is None else str(answer)[:120])
 
@@ -391,7 +331,7 @@ class WebviewHost:
 
         rect = self._rect or _DEFAULT_RECT
         self._window = webview.create_window(
-            self._title, url=self._url,
+            self._title, url=self._page_url(self._url), js_api=PageApi(self.crop),
             x=rect.x, y=rect.y, width=rect.width, height=rect.height,
             # hidden: nothing appears until the follower has decided where AND
             # proved the window landed there.
@@ -400,11 +340,17 @@ class WebviewHost:
             easy_drag=False, shadow=False, on_top=False, text_select=False,
             zoomable=False, draggable=False, confirm_close=False,
             background_color=PAGE_BACKGROUND)
+        self._crop_thread = threading.Thread(target=self.crop.run, args=(self._crop_stop,),
+                                            name="ghost-crop", daemon=True)
+        self._crop_thread.start()
         threading.Thread(target=self._close_when_stopped, args=(stop,),
                          name="ghost-window-stop", daemon=True).start()
         webview.start(private_mode=True)
 
     def close(self) -> None:
+        self._crop_stop.set()
+        if self._crop_thread is not None:
+            self._crop_thread.join(timeout=2)
         window, self._window = self._window, None
         if window is None:
             return

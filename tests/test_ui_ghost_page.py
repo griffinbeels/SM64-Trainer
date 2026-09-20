@@ -1060,6 +1060,61 @@ def test_the_ghost_can_be_drawn_as_only_mario(tmp_path):
         _a_list_that_appears_later_is_picked_up(page, fixture)
 
 
+def test_native_mario_packets_carry_the_pixels_the_real_page_just_drew(tmp_path):
+    """Exercise the native entry point; canvas transparency alone was false proof."""
+    from sm64_events.ghost.window.presentation import read_frame
+
+    clip = tmp_path / "ghost-native.mp4"
+    _build_clip(clip)
+    with _Fixture(clip) as fixture, get_driver().launch() as page:
+        fixture.boxes = box_list(len(VIEW["picture_igt"]))
+        page.set_viewport(*MARIO_VIEWPORT)
+        page.goto(f"{fixture.url}/ui/ghost/index.html?kind=star&entity_key=LLL-1"
+                  "&native_session=test-native")
+        page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+        page.evaluate("""(() => {
+          window.__native = {count: 0, mismatches: 0};
+          window.pywebview = {api: {present: async (packet) => {
+            window.__native.last = packet;
+            if (packet.mode === 'mario' && packet.visible) {
+              const bytes = atob(packet.pixels);
+              const actual = document.getElementById('mario').getContext('2d')
+                .getImageData(packet.x, packet.y, packet.width, packet.height).data;
+              if (bytes.length !== actual.length || [...actual].some(
+                    (value, index) => value !== bytes.charCodeAt(index)))
+                window.__native.mismatches++;
+              window.__native.count++;
+              window.__native.drawn = packet;
+            }
+            return {accepted: true, viewport: {width: 961, height: 721}};
+          }}};
+          dispatchEvent(new Event('pywebviewready'));
+          return true;
+        })()""")
+        fixture.feed.set_view("mario")
+        state = _trace(page, list(range(3, 65)))
+        assert state["native_bridge"] and state["view"] == "mario", state
+        delivered = page.evaluate("window.__native")
+        assert delivered["count"] > 10, delivered["count"]
+        assert delivered["mismatches"] == 0
+        frame = read_frame(delivered["drawn"])
+        assert frame.mode == "mario" and frame.visible
+        assert (frame.viewport_width, frame.viewport_height) == (961, 721)
+        assert frame.width * frame.height < frame.viewport_width * frame.viewport_height / 10
+        assert len(frame.rgba) == frame.width * frame.height * 4
+        assert delivered["drawn"]["session"] == "test-native"
+        assert page.evaluate("getComputedStyle(document.getElementById('mario')).visibility") == "hidden"
+        # A star grab must clear the native crop through the same entry point.
+        _trace(page, [65] * 4, action=GRAB_ACTION)
+        assert page.evaluate("window.__native.last.visible") is False
+        fixture.feed.set_view("whole")
+        _trace(page, [0, 1, 2, 3, 4, 5])
+        whole = page.evaluate("window.__native.last")
+        assert whole["mode"] == "whole" and whole["pixels"] is None
+        problems = page.problems()
+        assert problems == [], problems
+
+
 def _the_page_took_the_box_list(page):
     """It indexes like the clip's own per-picture arrays, and flipping the
     view is a message on the clock rather than a navigation."""

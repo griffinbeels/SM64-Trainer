@@ -11,14 +11,14 @@ function base64(bytes) {
   return btoa(parts.join(''));
 }
 
-function cropRect(canvas, draw) {
+function cropRect(canvas, draw, drawingSize) {
   const {dx, dy, dw, dh} = draw;
   if (![dx, dy, dw, dh].every(Number.isFinite) || dw <= 0 || dh <= 0) return null;
   const vw = canvas.width, vh = canvas.height;
   if (!Number.isSafeInteger(vw) || !Number.isSafeInteger(vh) || vw <= 0 || vh <= 0) {
     return null;
   }
-  const bounds = canvas.getBoundingClientRect();
+  const bounds = drawingSize || canvas.getBoundingClientRect();
   if (![bounds.width, bounds.height].every(Number.isFinite)
       || bounds.width <= 0 || bounds.height <= 0) return null;
   const sx = vw / bounds.width, sy = vh / bounds.height;
@@ -38,7 +38,9 @@ function bounded(rect) {
 // draw uses canvas-local CSS pixels, as returned by marioDraw. Packet geometry
 // uses backing pixels, including on displays whose horizontal/vertical ratios
 // differ. A hidden packet clears the previous native frame without pixel data.
-export function cropPacket(canvas, draw, sequence, mode, presentable) {
+// Native drawingSize follows the acknowledged physical window / DPR: WebView2's
+// own control bounds can round beyond that window at fractional display scales.
+export function cropPacket(canvas, draw, sequence, mode, presentable, drawingSize = null) {
   const packet = {
     sequence, mode, visible: false, x: 0, y: 0, width: 0, height: 0,
     viewport_width: canvas?.width ?? 0,
@@ -48,7 +50,7 @@ export function cropPacket(canvas, draw, sequence, mode, presentable) {
   if (!presentable) return packet;
   if (mode === 'whole') return {...packet, visible: true};
   if (mode !== 'mario' || !canvas || !draw) return packet;
-  const rect = cropRect(canvas, draw);
+  const rect = cropRect(canvas, draw, drawingSize);
   if (!bounded(rect)) return packet;
   const {x, y, width, height} = rect;
   try {

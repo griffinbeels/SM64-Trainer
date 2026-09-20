@@ -32,7 +32,7 @@ FORBIDDEN = frozenset({
 
 #: Anything that looks like a Win32 call that CHANGES a window.
 WRITER_PATTERN = re.compile(
-    r"(Set|Show|Move|Bring|Destroy|Post|Send|Attach|Switch|Close)[A-Z][A-Za-z]+")
+    r"(Set|Show|Move|Bring|Destroy|Post|Send|Attach|Switch|Close|Update)[A-Z][A-Za-z]+")
 
 #: The complete list of them this package is allowed to name. Adding a row
 #: here is the deliberate act; forgetting to is the accident this catches.
@@ -40,6 +40,8 @@ APPROVED_WRITERS = frozenset({
     "SetWindowLongW", "SetWindowPos", "SetLayeredWindowAttributes",
     "ShowWindow", "SetProcessDpiAwarenessContext",
     "SetThreadDpiAwarenessContext",
+    # The dedicated crop HWND owns these calls; the emulator is never modified.
+    "UpdateLayeredWindow", "DestroyWindow",
     # Not a window call: it asks Windows to TELL us when the stacking order
     # moved, out of context and with no DLL loaded anywhere. It is listed
     # because the pattern below cannot tell a Set* apart by shape.
@@ -55,6 +57,7 @@ APPROVED_WRITERS = frozenset({
 #: first argument of each is the window being modified.
 MODIFIERS = frozenset({
     "SetWindowLongW", "SetWindowPos", "SetLayeredWindowAttributes", "ShowWindow",
+    "UpdateLayeredWindow", "DestroyWindow",
     "apply_overlay_styles", "set_alpha", "place", "show_no_activate", "hide",
 })
 

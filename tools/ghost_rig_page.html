@@ -51,6 +51,8 @@
   let rvfc = 0;
   let firstFrameAt = null;
   let trouble = "";
+  let nativeSequence = 0;
+  let nativeBusy = false;
 
   if (source) video.src = source;
 
@@ -113,6 +115,17 @@
     // bridge expects, so its own handler prints it instead of raising.
     if (post && window.chrome && window.chrome.webview)
       window.chrome.webview.postMessage(["console", JSON.stringify(text), 0]);
+    // The real host requires a current-page handshake before exposing its
+    // browser. This counting fixture is whole-picture footage, never a crop.
+    const session = params.get("native_session");
+    if (session && window.pywebview?.api?.present && !nativeBusy) {
+      nativeBusy = true;
+      Promise.resolve(window.pywebview.api.present({
+        session, sequence: ++nativeSequence, mode: "whole", visible: presentable(),
+        x: 0, y: 0, width: 0, height: 0, viewport_width: 0, viewport_height: 0,
+        pixels: null,
+      })).catch(() => {}).finally(() => { nativeBusy = false; });
+    }
   }
 
   report();

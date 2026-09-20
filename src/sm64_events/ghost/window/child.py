@@ -1,6 +1,6 @@
 """The overlay child process: one window, told what to do over stdin.
 
-Three threads, and each one is here for a reason.
+The browser follower and its control threads each have one responsibility.
 
 - MAIN belongs to the window host. pywebview will not run anywhere else.
 - CONTROL reads JSON lines from stdin. When the pipe closes -- which is what
@@ -21,7 +21,7 @@ Three threads, and each one is here for a reason.
   waiting a whole tick to put it back is a blink he can see (`reorder.py`).
   It sets the follower's wake event and touches no window itself.
 
-**FOLLOW owns every window call, and that is the fix of 2026-09-19.** DPI
+**FOLLOW owns browser placement, and that is the fix of 2026-09-19.** DPI
 awareness is per thread, so a rectangle read on one thread and applied on
 another is a rectangle multiplied by the display scale. The control thread
 only records what the player asked for; it does not touch the window. The
@@ -29,7 +29,12 @@ follow thread pins its own DPI context (`placer.Placer.adopt_thread`), reads,
 places, reads the placement BACK, and hides the overlay rather than leaving an
 unproved rectangle over somebody else's app.
 
-The follower is also the ONE place that shows or hides the overlay. A control
+Mario-only pixels use a separate native crop HWND. Its render thread owns that
+window, pins the same physical DPI space, and receives the follower's confirmed
+rectangle. It never queries or modifies the emulator. Pixels and position arrive
+together from the browser, while the full browser window stays at zero alpha.
+
+The follower is also the ONE source of the overlay's visibility decision. A control
 line only records what the player wants; the decision that turns that into a
 visible window is `geometry.follow_decision`, so "the ghost is off", "PJ64 is
 minimized", "PJ64 is not the app he is using" and "PJ64 is gone" cannot be
@@ -408,7 +413,14 @@ def record_geometry(record, game: GameWindow | None) -> None:
            why=f"client_minus_{strip.cls}" if strip else "whole_client")
 
 
-def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowLoop:
+def browser_visibility(want, crop):
+    """Mario mode leaves the decoder running but gives it no screen opacity."""
+    if crop is not None and not crop.browser_ready:
+        return Visibility(shown=want.shown, alpha=0, rect=want.rect, reason=want.reason)
+    return want
+
+
+def build_follower(args, *, watcher, host, placer, state, emit, page, wake=None) -> FollowLoop:
     """The follow loop wired to this run: what it looks at, what it moves.
 
     `--fixed-rect` stands in for the emulator so the suite never queries
@@ -435,11 +447,19 @@ def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowL
     # The background handover is retried until it takes, so its refusals
     # collapse into one row with a count rather than one row per tick.
     background_log = diag.Collapsing()
+    crop = getattr(host, "crop", None)
+    if crop is not None:
+        crop.set_wake(wake)
 
     def wanted_for(placement: Placement) -> Visibility:
         """The ONE place the "is it on screen" decision is taken. Pure, so it
         costs nothing to ask twice in a tick."""
         return visibility_for(placement, wanted_alpha=alpha_byte(state.opacity))
+
+    def crop_scene(placement, ready):
+        if crop is None:
+            return
+        crop.follow(wanted_for(placement), host.hwnd(), ready, placer.applied_alpha)
 
     def prepare(placement: Placement) -> bool:
         """Is the window ours yet? Every tick, retrying whatever is not.
@@ -458,6 +478,7 @@ def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowL
         ready = placer.prepare(hwnd)
         if ready.ok:
             placer.keep_above(hwnd, watcher.hwnd)
+        crop_scene(placement, ready.ok)
         return ready.ok
 
     def place(placement: Placement) -> bool:
@@ -467,13 +488,17 @@ def build_follower(args, *, watcher, host, placer, state, emit, page) -> FollowL
         diag.record("decision", level="info", show=placement.show,
                     reason=placement.reason, rect=placement.rect,
                     game_hwnd=watcher.hwnd)
-        placer.apply(host.hwnd(), wanted_for(placement), game_hwnd=watcher.hwnd)
+        placer.apply(host.hwnd(), browser_visibility(wanted_for(placement), crop),
+                     game_hwnd=watcher.hwnd)
+        crop_scene(placement, True)
         return True
 
     return FollowLoop(observe=look, apply=place,
                       wanted=lambda: state.visible, prepare=prepare,
                       presentable=page.presentable,
-                      also=lambda: alpha_byte(state.opacity))
+                      also=lambda: (alpha_byte(state.opacity),
+                                    getattr(crop, "mode", None),
+                                    getattr(crop, "browser_ready", None)))
 
 
 def main(argv=None) -> int:
@@ -505,7 +530,7 @@ def main(argv=None) -> int:
     page = PageWatch(host)
     watch = ReorderWatch(wake)
     follow = build_follower(args, watcher=watcher, host=host, placer=placer,
-                            state=state, emit=emit, page=page)
+                            state=state, emit=emit, page=page, wake=wake)
     plane = ControlPlane(host=host, state=state, emit=emit, wake=wake)
 
     host.open(state.url, args.fixed_rect or Rect(x=0, y=0, width=640, height=480))
