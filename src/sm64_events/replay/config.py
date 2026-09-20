@@ -105,10 +105,22 @@ ARCHIVE_CRF = 24
 # slower preset for the same quality target.
 _NVENC_PRESET = {"realtime": "p4", "offline": "p6", "archive": "p7"}
 _X264_PRESET = {"realtime": "ultrafast", "offline": "veryfast", "archive": "slow"}
-_NVENC_CQ = {"realtime": VIDEO_CQ, "offline": VIDEO_CQ, "archive": ARCHIVE_H264_CQ}
-_X264_CRF = {"realtime": VIDEO_CRF, "offline": VIDEO_CRF, "archive": ARCHIVE_CRF}
 _AMF_QUALITY = {"realtime": "balanced", "offline": "quality"}
 _QSV_PRESET = {"realtime": "medium", "offline": "slow"}
+
+
+# The quality NUMBERS are read at the call, never captured in a per-stage table.
+# A table built at import froze VIDEO_CQ at its module-load value, so the ring
+# and the clip stopped following the constant they are defined by — invisible
+# in normal use (the value rarely changes) and caught by
+# tests/test_gpuencoder_client.py, which sets VIDEO_CQ and asks the native
+# encoder's options what it got (2026-09-20).
+def _nvenc_cq(stage: str) -> int:
+    return ARCHIVE_H264_CQ if stage == "archive" else VIDEO_CQ
+
+
+def _x264_crf(stage: str) -> int:
+    return ARCHIVE_CRF if stage == "archive" else VIDEO_CRF
 
 
 def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
@@ -121,7 +133,7 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
                 "-profile:v", "high",
                 # -b:v 0 is REQUIRED: with a bitrate set, NVENC treats cq as a
                 # cap-with-target and the average bitrate wins instead.
-                "-rc", "vbr", "-cq", str(_NVENC_CQ[stage]), "-b:v", "0",
+                "-rc", "vbr", "-cq", str(_nvenc_cq(stage)), "-b:v", "0",
                 "-maxrate", maxrate, "-bufsize", maxrate]
     if codec == "av1_nvenc":
         # Archive only (RTX 40-series and later encode AV1). Same cq-not-bitrate
@@ -130,7 +142,7 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
                 "-rc", "vbr", "-cq", str(ARCHIVE_AV1_CQ), "-b:v", "0",
                 "-maxrate", maxrate, "-bufsize", maxrate]
     if codec == "libx264":
-        return ["-preset", _X264_PRESET[stage], "-crf", str(_X264_CRF[stage])]
+        return ["-preset", _X264_PRESET[stage], "-crf", str(_x264_crf(stage))]
     if codec == "h264_amf":
         return ["-usage", "transcoding", "-quality", _AMF_QUALITY[stage],
                 "-profile:v", "high", "-rc", "cqp",
