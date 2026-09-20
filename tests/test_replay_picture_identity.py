@@ -46,8 +46,16 @@ def read_pictures(path):
         return result
 
 
-@pytest.fixture(scope="module", params=["libx264", "h264_nvenc", "h264_amf", "h264_qsv"])
+@pytest.fixture(scope="session", params=["libx264", "h264_nvenc", "h264_amf", "h264_qsv"])
 def encoder(request):
+    """One real encoder, or an honest skip naming the vendor that is missing.
+
+    SESSION scope, and the skip text carries no ffmpeg output. Twelve modules
+    import this fixture, so module scope re-probed every codec twelve times,
+    and the old message pasted the last 300 bytes of stderr -- which contains
+    a heap POINTER, so the same missing encoder produced a dozen different
+    skip reasons and `tests/skip_inventory.py` could not group them.
+    """
     ff = bundled_ffmpeg() or shutil.which("ffmpeg")
     if not ff:
         pytest.skip("ffmpeg required")
@@ -57,7 +65,9 @@ def encoder(request):
          "-frames:v", "1", "-c:v", codec, "-f", "null", "-"],
         capture_output=True, timeout=15, check=False, **quiet_spawn_kwargs())
     if probe.returncode:
-        pytest.skip(f"{codec} unavailable: {probe.stderr.decode(errors='replace')[-300:]}")
+        pytest.skip(f"{codec} is not usable on this machine "
+                    f"(ffmpeg exit {probe.returncode}); that vendor's hardware "
+                    "encoder is absent, so its path stays untested here")
     return ff, codec
 
 

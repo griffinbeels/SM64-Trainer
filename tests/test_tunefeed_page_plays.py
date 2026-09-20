@@ -77,12 +77,24 @@ def page_server(tmp_path_factory):
     """A plain static server over `ui/`. The inspector talks to no API except
     SAVE, which this deliberately does not provide -- a test that could write
     the registry would rewrite the shipped defaults as a side effect."""
-    port = _free_port()
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
-        cwd=str(UI.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # A sampled port is free until someone else takes it, and under 16 workers
+    # someone else does (tools/ui_fixture.py lost that race on 2026-09-17 and
+    # now holds its socket instead; a child process cannot be handed one, so
+    # this retries rather than reporting a collision as a failed test).
+    for attempt in range(4):
+        port = _free_port()
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+            cwd=str(UI.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            _wait_listening(port, timeout=5.0 if attempt < 3 else 15.0)
+            break
+        except RuntimeError:
+            proc.terminate()
+            proc.wait(timeout=10)
+            if attempt == 3:
+                raise
     try:
-        _wait_listening(port)
         yield f"http://127.0.0.1:{port}/ui/tunefeed.html"
     finally:
         proc.terminate()

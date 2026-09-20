@@ -404,6 +404,25 @@ def test_switching_the_active_scope_absorbs_instead_of_celebrating(tmp_path):
             body["tier"], body["division"])
 
 
+def _grade_a_star(test_client, service, course=8, star=2):
+    """Practise one star and grade it, so a scope holding it is RANKABLE.
+
+    Without this the bare fixture grades Iron V -- the floor -- and every
+    celebration path returns before it decides anything, which is how two
+    tests in this file managed to pass while proving nothing."""
+    asyncio.run(service.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
+    asyncio.run(service.publish(_ev("star_collected", 1315,
+                                    {"course_id": course, "star_id": star, "igt_frames": 315})))
+    for rank, seconds in (("Mario", 10.0), ("Gold", 20.0), ("Silver", 30.0)):
+        test_client.put(f"/api/ranks/standards/star:{course}:{star}/Standard/{rank}",
+                        json={"seconds": seconds})
+    asyncio.run(service.set_strat(course, star, "Standard"))
+    service.db._conn.execute("UPDATE attempts SET strat_tag='Standard' WHERE course_id=?", (course,))
+    service.db._conn.commit()
+    attempt_id = next(a.id for a in service.db.attempts() if a.course_id == course)
+    asyncio.run(service.save_pb(attempt_id, "igt"))
+
+
 def test_staying_on_a_scope_still_celebrates_a_real_rise(tmp_path):
     """The direction the absorb rule must never swallow: a rank earned while
     the scope stays active still fires.
@@ -416,17 +435,7 @@ def test_staying_on_a_scope_still_celebrates_a_real_rise(tmp_path):
     the other half still worked."""
     test_client, service = make_client(tmp_path, bundled_library=False)
     with test_client:
-        asyncio.run(service.publish(_ev("practice_reset", 1000, {"igt_frames_before": 0})))
-        asyncio.run(service.publish(_ev("star_collected", 1315,
-                                        {"course_id": 8, "star_id": 2, "igt_frames": 315})))
-        for rank, seconds in (("Mario", 10.0), ("Gold", 20.0), ("Silver", 30.0)):
-            test_client.put(f"/api/ranks/standards/star:8:2/Standard/{rank}",
-                            json={"seconds": seconds})
-        asyncio.run(service.set_strat(8, 2, "Standard"))
-        service.db._conn.execute("UPDATE attempts SET strat_tag='Standard' WHERE course_id=8")
-        service.db._conn.commit()
-        star_aid = next(a.id for a in service.db.attempts() if a.course_id == 8)
-        asyncio.run(service.save_pb(star_aid, "igt"))
+        _grade_a_star(test_client, service)
 
         body = test_client.get("/api/marelo").json()      # arrive, absorbing
         current = scoring.progression_key(body["tier"], body["division"])
@@ -440,16 +449,27 @@ def test_staying_on_a_scope_still_celebrates_a_real_rise(tmp_path):
 
 
 def test_browsing_a_non_active_scope_never_celebrates(tmp_path):
-    test_client, service = make_client(tmp_path)
+    """It MAKES the route it browses. The bare fixture seeds no routes, so
+    this test skipped on every machine and every run from the day it was
+    written until 2026-09-17 -- the one direction that proves browsing is not
+    an arrival had no gate at all, which is the same hole
+    `test_staying_on_a_scope_still_celebrates_a_real_rise` had."""
+    test_client, service = make_client(tmp_path, bundled_library=False)
     with test_client:
+        _grade_a_star(test_client, service)
+        made = test_client.post("/api/routes", json={"name": "Browsed", "steps": [
+            {"need": 1, "candidates": [{"type": "star", "course": 8, "star": 2}]}]})
+        assert made.status_code == 200, made.text
         test_client.get("/api/marelo")            # overall becomes the noted scope
-        service.db.set_state("marelo_watermarks", {"overall": 0, "route:1": 0})
         routes = [s for s in test_client.get("/api/marelo/scopes").json()["scopes"]
                   if s["kind"] == "route"]
-        if not routes:
-            pytest.skip("seeded fixture has no routes")
+        assert routes, "the route just created must be a pickable scope"
         other = routes[0]["id"]
+        # A watermark BELOW the route's real rank: if browsing were treated as
+        # an arrival, this is the rise it would wrongly announce.
+        service.db.set_state("marelo_watermarks", {"overall": 0, other: 0})
         body = test_client.get(f"/api/marelo?scope={other}").json()
+        assert body["tier"], f"the browsed scope must be rankable: {body}"
         assert body["celebration"] is None
         # Browsing must not move the ACTIVE-scope memory either, or the next
         # header fetch would read as an arrival and swallow a real rank-up.

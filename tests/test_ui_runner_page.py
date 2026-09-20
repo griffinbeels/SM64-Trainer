@@ -68,7 +68,7 @@ def rank_page(server):
     page open yet."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_RANK_TAB)
         page.wait_for(".leaderboard-card-head", timeout_ms=15000)
         assert page.evaluate(OPEN_LEADERBOARD)
@@ -83,7 +83,7 @@ def library_page(server):
     entries, divisions expanded so a runner's name is on screen."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-target .library-section", timeout_ms=15000)
         page.evaluate(EXPAND_DIVISIONS)
@@ -542,7 +542,7 @@ def closed_rank_page(server):
     """A fresh Rank tab with the board card left exactly as it loads."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_RANK_TAB)
         page.wait_for(".leaderboard-card-head", timeout_ms=15000)
         page.wait_ms(300)
@@ -649,7 +649,7 @@ def test_his_own_pb_with_a_replay_gets_the_same_play_button(server):
     carries a ▶ at all."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_RANK_TAB)
         page.wait_for(".rank-page .rank-table tbody tr", timeout_ms=15000)
         page.wait_ms(300)

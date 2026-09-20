@@ -32,6 +32,18 @@ def pytest_configure(config):
     Configure precedes xdist worker creation. Workers and runner-owned pytest
     inherit the live ancestor's budget and must never acquire it a second time.
     """
+    # Browser waits get a bound that scales with the machine this run ACTUALLY
+    # gets. uilab's 10s default suits one browser on an idle box; this suite
+    # runs several servers, browsers and node drivers at once, and when OBS is
+    # open the runner deliberately caps itself to a quarter of the CPUs so his
+    # capture never stutters. A page that paints in under a second alone took
+    # more than 20s under that cap (2026-09-19), which failed a merge.
+    #
+    # A bound is not a timing assertion: a page that never renders still
+    # fails, and a test that means "within 200 ms" still passes its own
+    # timeout_ms. What it must not do is report a busy machine as a defect.
+    from tools.test_resources import obs_is_open
+    os.environ.setdefault("UILAB_WAIT_MS", "60000" if obs_is_open() else "30000")
     from tools.test_resources import TestResources, WORKERS_ENV, effective_workers, inherited_owner
 
     if hasattr(config, "workerinput"):
@@ -237,3 +249,76 @@ def runtime_supervisor_exe(tmp_path_factory):
         *(str(work / f"{name}.obj") for name in names),
         f"/Fo{work}\\", f"/Fe:{target}", "/link", *build.LIBS], work)
     return target
+
+
+# --- the skip inventory -----------------------------------------------------
+# A skip is invisible: the gate prints one number and 67 of them can mean
+# "three vendors' hardware is absent" or "the rendered gate switched itself off
+# and 321 browser tests did nothing". Both read the same, and on 2026-09-17 the
+# second was true in every .codex worktree. So a whole-suite run fails on a
+# skip whose reason is not documented in tests/skip_inventory.py.
+#
+# WHOLE-SUITE ONLY: `pytest tests/test_x.py` or a `-k` run may skip freely --
+# only the run that claims to have covered everything has to account for what
+# it did not run. Reports arrive here on the xdist CONTROLLER, so one list
+# holds every worker's skips.
+_SKIPS: list[tuple[str, str]] = []
+
+
+def _skip_reason(report) -> str:
+    longrepr = getattr(report, "longrepr", None)
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        return str(longrepr[2]).removeprefix("Skipped: ")
+    return str(longrepr or "")
+
+
+def pytest_runtest_logreport(report):
+    # `wasxfail` also arrives as "skipped"; an xfail is a tracked defect with
+    # its own reason on the mark, not an untested path.
+    if report.skipped and not hasattr(report, "wasxfail"):
+        _SKIPS.append((report.nodeid, _skip_reason(report)))
+
+
+def pytest_collectreport(report):
+    """A MODULE-level skip never produces a test report, and that is the
+    dangerous kind: `pytest.skip(..., allow_module_level=True)` is what every
+    browser file does when uilab is absent, so the version of this guard that
+    only watched test reports proved nothing about the 321 tests it was
+    written for. Measured 2026-09-17: a planted module skip sailed through a
+    whole-suite run reporting "0 undocumented"."""
+    if report.skipped:
+        _SKIPS.append((report.nodeid or "<collection>", _skip_reason(report)))
+
+
+def _whole_suite(config) -> bool:
+    # SM64_SKIP_AUDIT=1 forces the check on a narrowed run. It exists so the
+    # guard itself can be tested in seconds instead of a 15-minute suite --
+    # and an untested guard is the thing this file is here to prevent.
+    if os.environ.get("SM64_SKIP_AUDIT") == "1":
+        return True
+    return not getattr(config.option, "file_or_dir", None) \
+        and not getattr(config.option, "keyword", "")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if hasattr(session.config, "workerinput") or not _whole_suite(session.config):
+        return
+    import skip_inventory
+    undocumented = [(nodeid, reason) for nodeid, reason in _SKIPS
+                    if skip_inventory.allowed_for(reason) is None]
+    # Say the number out loud even when it is fine: "67 skipped" in the gate's
+    # summary is the line that hid 321 disabled browser tests, and a silent
+    # guard is indistinguishable from a guard that never ran.
+    categories = {skip_inventory.allowed_for(reason)[0] for _, reason in _SKIPS
+                  if skip_inventory.allowed_for(reason) is not None}
+    print(f"\nskip inventory: {len(_SKIPS) - len(undocumented)} documented skips "
+          f"in {len(categories)} categories, {len(undocumented)} undocumented")
+    if not undocumented:
+        return
+    session.exitstatus = 1
+    shown = "\n".join(f"  {nodeid}\n    {reason}" for nodeid, reason in undocumented[:20])
+    more = f"\n  ... and {len(undocumented) - 20} more" if len(undocumented) > 20 else ""
+    print(f"\nUNDOCUMENTED SKIPS ({len(undocumented)}): a whole-suite run must "
+          f"account for every test it did not run.\n{shown}{more}\n"
+          "Fix the cause, or add a row to tests/skip_inventory.py saying why "
+          "this machine cannot run it and what would lift it.")
