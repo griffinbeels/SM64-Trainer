@@ -28,6 +28,19 @@ is: being correct when it was written is not being correct now.
 **The boxes index exactly like `picture_igt` and `frame_map`** -- one entry per
 picture, in the clip's own order -- so nothing here does timing work. The page
 looks up the picture it is actually showing and reads the box at that index.
+
+MEASURED, 2026-09-20, rather than assumed: box k belongs to the k-th PRESENTED
+picture, whose presentation time is `frame_times[k]` -- worst gap 0.44
+microseconds across every picture of all three of his clips, and the
+whole-number 90 kHz times match `media_clock.source_pts` with zero mismatches.
+So the index the page already derives for `picture_igt` is the box's index too,
+and no second reading of the clock exists for the boxes to drift against.
+
+One thing that reads like a count error and is not: a clip can DECODE more
+frames than there are entries (0573 decodes 440 against 435). Those are a
+keyframe lead-in with negative times that the clip's own edit list hides, and
+browsers skip them -- `requestVideoFrameCallback` never reports one. The count
+checked below is therefore the per-picture ARRAYS' length, never the decoder's.
 """
 import json
 import logging

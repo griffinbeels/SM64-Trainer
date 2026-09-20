@@ -288,6 +288,13 @@ function applyTreatment() {
 // same door the follower reads through; the boxes index exactly like the
 // clip's per-picture arrays, so the slot IS the box's index with no
 // arithmetic in between.
+//
+// MEASURED 2026-09-20 rather than assumed: the k-th presented picture's time
+// IS `frame_times[k]` (worst gap 0.44 microseconds over all of his clips), so
+// the `mediaTime` this callback hands over lands on the same index the
+// follower already derives for `picture_igt`. A clip that decodes more frames
+// than it has entries (0573: 440 against 435) is a keyframe lead-in the edit
+// list hides, and the browser never presents one.
 function drawMario(time) {
   if (!paint || !boxes || !clipTiming) return;
   const slot = slotAtTime(time, clipTiming);
