@@ -112,7 +112,7 @@ def practice_page(library_server):
     fixture gives (tray/nav state must not leak between tests)."""
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         yield page
 
 
@@ -175,7 +175,7 @@ def test_a_card_with_no_library_caller_renders_no_book_mark(practice_page,
     assert present >= 1, "the real app must render the book mark on real cards"
 
     practice_page.goto(f"{library_server}/ui/tunelog.html")
-    practice_page.wait_for(".log-card", timeout_ms=20000)
+    practice_page.wait_for(".log-card")
     inspector = practice_page.evaluate(
         "({cards: document.querySelectorAll('.log-card').length,"
         "  folds: document.querySelectorAll('.log-card .log-card-fold').length,"
@@ -316,8 +316,8 @@ def test_a_manual_section_pick_survives_a_repeat_of_the_same_deep_link(practice_
     assert manual_open == "No pole glitch", (
         f"manual section switch did not stick: {manual_open}")
 
-    back = practice_page.evaluate(CLICK_PRACTICE_TAB)
-    practice_page.wait_for(".log-list-card", timeout_ms=15000)
+    practice_page.evaluate(CLICK_PRACTICE_TAB)
+    practice_page.wait_for(".log-list-card")
     clicked_again = practice_page.evaluate(CLICK_SEGMENT_BOOKMARK)
     assert clicked_again == "clicked", clicked_again
     practice_page.wait_for(".library-target .library-section.open",
@@ -372,7 +372,7 @@ def test_the_book_mark_and_the_tier_link_open_the_same_paired_entity():
 
         with driver.get_driver().launch(headless=True) as page:
             page.goto(f"{base}/ui/index.html")
-            page.wait_for(".log-list-card", timeout_ms=20000)
+            page.wait_for(".log-list-card")
 
             def open_card_and_standards():
                 # The card's HEAD (book mark included) always renders; the
@@ -426,7 +426,7 @@ def test_the_book_mark_and_the_tier_link_open_the_same_paired_entity():
             book_mark_heading, book_mark_approaches = read_landed_library()
 
             page.evaluate(CLICK_PRACTICE_TAB)
-            page.wait_for(".log-list-card", timeout_ms=15000)
+            page.wait_for(".log-list-card")
             open_card_and_standards()
             # Round 3: the second door is a deep-linkable TIME. The panel
             # grades against standardsIdentity — the STAR's entity, never the

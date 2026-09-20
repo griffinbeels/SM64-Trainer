@@ -38,7 +38,7 @@ def practiced_page():
     with serve_ui(arm_segment=FIXTURE_SEGMENT, seed_editor_fixtures=True) as base, \
             driver.get_driver().launch(headless=True) as page:
         page.goto(f"{base}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         yield page
 
 
@@ -50,7 +50,7 @@ def empty_page():
     with serve_ui(seed=False) as base, \
             driver.get_driver().launch(headless=True) as page:
         page.goto(f"{base}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         yield page
 
 

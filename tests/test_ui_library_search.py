@@ -53,7 +53,7 @@ def page():
     with serve_ui(seed=False) as base, \
             driver.get_driver().launch(headless=True) as page:
         page.goto(f"{base}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-page .library-courses", timeout_ms=15000)
         yield page

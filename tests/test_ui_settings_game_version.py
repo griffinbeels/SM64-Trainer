@@ -138,7 +138,7 @@ def page(game_version_server):
     leak a typed value or an open dialog into whatever runs after it."""
     with driver.get_driver().launch(headless=True) as opened:
         opened.goto(f"{game_version_server}/ui/index.html")
-        opened.wait_for(".log-list-card", timeout_ms=20000)
+        opened.wait_for(".log-list-card")
         opened.evaluate(OPEN_SETTINGS)
         opened.wait_for(".settings-drawer .settings-section select",
                          timeout_ms=10000)

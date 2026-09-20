@@ -333,8 +333,15 @@ const rankBtn = document.querySelector('button.nav-item[title="Rank"]');
 if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') {
   rankBtn.click();
 }
-await waitFor(() => !!document.querySelector('.rank-page .scorecard-card'));
-await waitFor(() => !!document.querySelector('.rank-page .score-line'));
+// Bounded at 15s and CHECKED, exactly as the leaderboard story below already
+// is: the generic three-second wait is not enough for the Rank page under a
+// full parallel sweep, and an unchecked false result does not fail here -- it
+// falls through to `null.scrollIntoView` further down and reports a layout
+// "defect" naming no element (measured 2026-09-17, twice in five full runs).
+if (!await waitFor(() => !!document.querySelector('.rank-page .scorecard-card'), 15000))
+  throw new Error('Rank tab did not render the scorecard card');
+if (!await waitFor(() => !!document.querySelector('.rank-page .score-line'), 15000))
+  throw new Error('Scorecard card rendered no score lines');
 if (!document.querySelector('.rank-page .scorecard-card .score-gap.good, '
     + '.rank-page .scorecard-card .score-gap.bad')) {
   // Through the REAL picker, not a raw fetch() -- the card refetches only

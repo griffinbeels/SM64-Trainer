@@ -265,7 +265,7 @@ def library_server():
 def fresh_page(library_server):
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         yield page
 
 

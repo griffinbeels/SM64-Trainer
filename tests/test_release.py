@@ -119,3 +119,72 @@ def test_the_setup_fact_guard_can_still_fail():
     absent = [fact for fact, _ in SHARED_SETUP_FACTS if fact not in prose]
     assert len(absent) == len(SHARED_SETUP_FACTS), (
         "a 'fact' in the list is generic enough to appear in unrelated prose")
+
+
+def test_the_release_runs_the_merge_gates_own_command():
+    """A release is judged exactly as a merge is, from ONE definition.
+
+    Two spellings of "run the tests" drift, and on 2026-09-18 both wrong ones
+    cost a night. A bare serial `pytest -q` took 2h30m and failed 12
+    timing-sensitive tests -- A/V tolerances, UI animation frames -- that pass
+    in 43 seconds through the gate. `run_tests.py` with its own default of 16
+    workers then failed a browser wait on three runs out of three, while the
+    configured lane's 4 workers passed 11010 tests on the same tree. So the
+    command comes from `.verification.toml`, which owns that number."""
+    import tomllib
+    from pathlib import Path
+    root = Path(release.__file__).resolve().parents[1]
+    config = tomllib.loads((root / ".verification.toml").read_text(encoding="utf-8"))
+    configured = next(c["command"] for c in config["checks"]
+                      if c["name"] == "integration-tests")
+    assert release.integration_command() == [
+        a.replace("{project}", str(root)) for a in configured], (
+        "the release must run the integration lane's own command")
+
+
+def test_the_release_does_not_spell_the_gate_out_itself():
+    """Red if anyone re-hardcodes a test command into the release."""
+    import inspect
+    source = inspect.getsource(release)
+    assert '"pytest"' not in source, "a bare pytest is not the gate"
+    assert 'tools/run_tests.py' not in source, (
+        "name the lane, not the runner -- the worker count lives in "
+        ".verification.toml and a second spelling drops it")
+
+
+def test_the_dry_run_restore_is_byte_exact(tmp_path, monkeypatch):
+    """LF stays LF.
+
+    A dry run builds the bumped version, so the bump lands before the build
+    and has to be undone afterwards. The first cut restored with
+    `write_text`, which retypes every line ending on Windows: uv.lock came
+    back with 1,583 lines changed -- dirtier than the bump it was undoing
+    (2026-09-19, caught by the dry run this same commit made possible)."""
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b'version = 1\nname = "x"\n')       # LF, as git stores it
+    version = tmp_path / "version.py"
+    version.write_bytes(b'__version__ = "1.8.2"\n')
+    monkeypatch.setattr(release, "UV_LOCK", lock)
+    monkeypatch.setattr(release, "VERSION_PY", version)
+    monkeypatch.setattr(release, "PYPROJECT", tmp_path / "absent.toml")
+
+    originals = release.snapshot_version_files()
+    assert set(originals) == {lock, version}, "an absent file is not snapshotted"
+    lock.write_bytes(b"clobbered")
+    version.write_text('__version__ = "1.9.0"\n')          # as the bump writes it
+    release.restore_version_files(originals)
+
+    assert lock.read_bytes() == b'version = 1\nname = "x"\n'
+    assert version.read_bytes() == b'__version__ = "1.8.2"\n'
+    assert b"\r\n" not in lock.read_bytes(), "the restore must not retype line endings"
+
+
+def test_the_dry_run_branch_restores_before_returning():
+    """The call has to be ON the dry-run path, not merely defined."""
+    import inspect
+    source = inspect.getsource(release.main)
+    assert source.index("snapshot_version_files()") < source.index("bump_version_py("), (
+        "snapshot BEFORE the bump overwrites anything")
+    branch = source.index("if args.dry_run:")
+    assert "restore_version_files(originals)" in source[branch:branch + 300], (
+        "the dry-run branch must put them back before it returns")

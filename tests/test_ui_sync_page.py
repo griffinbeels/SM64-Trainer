@@ -87,7 +87,7 @@ def sync_page(report_file):
     with serve_ui(seed=False) as base, \
             driver.get_driver().launch(headless=True) as page:
         page.goto(f"{base}/ui/sync.html")
-        page.wait_for(".sync-card", timeout_ms=20000)
+        page.wait_for(".sync-card")
         yield base, page
 
 
@@ -182,7 +182,7 @@ def _assert_no_jp_overflow_at_850():
     with serve_ui(seed=False) as base, \
             driver.get_driver().launch(headless=True, viewport=(850, 1200)) as page:
         page.goto(f"{base}/ui/sync.html")
-        page.wait_for(".sync-card", timeout_ms=20000)
+        page.wait_for(".sync-card")
         overflow = page.evaluate(
             "return Array.from(document.querySelectorAll('.sync-card')).flatMap((card) => {"
             "  const right = card.getBoundingClientRect().right;"

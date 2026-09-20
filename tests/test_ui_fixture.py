@@ -40,7 +40,7 @@ def test_fixture_stops_its_server_on_exit(tmp_path):
 def test_startup_reports_an_exited_server_and_its_actual_cause(tmp_path, monkeypatch):
     import ui_fixture
 
-    def fail_start(server):
+    def fail_start(server, sockets=None):
         raise SystemExit("fixture bind failed")
 
     monkeypatch.setattr(ui_fixture.uvicorn.Server, "run", fail_start)
@@ -65,7 +65,7 @@ def test_failed_shutdown_preserves_files_until_the_owner_exits(tmp_path, monkeyp
         directories.append(directory)
         return directory
 
-    def held_server(server):
+    def held_server(server, sockets=None):
         threads.append(threading.current_thread())
         server.started = True
         release.wait(5)

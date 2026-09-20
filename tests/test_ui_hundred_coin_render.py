@@ -66,7 +66,7 @@ def hundred_coin_page(hundred_coin_server):
     randomises order inside a module, so it failed about one run in three.
     Booting the server is the expensive half and stays module-scoped."""
     with _page(f"{hundred_coin_server}/ui/index.html") as page:
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         _open_the_standards_panel(page)
         yield page
 
@@ -285,7 +285,7 @@ def test_editing_a_cutoff_offers_three_boxes_and_saves_what_was_typed(
     # browser cannot interrupt a queued restoration or contaminate another case.
     with serve_ui(stage=(CCM, CCM_LEVEL), target=(CCM, HUNDRED_COIN)) as base:
         with _page(f"{base}/ui/index.html") as page:
-            page.wait_for(".log-list-card", timeout_ms=20000)
+            page.wait_for(".log-list-card")
             _open_the_standards_panel(page)
             _exercise_cutoff_editor(page, delay_earlier_save)
 
