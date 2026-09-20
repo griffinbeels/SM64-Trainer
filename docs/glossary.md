@@ -833,6 +833,12 @@ goes further: it writes one encoded picture per row and files each write
 in the ledger's [[feed log]]) -- and the clip's own
 metadata keeps its slice of the rows after the recording buffer forgets
 the footage. Registering one more per-picture fact takes one line.
+A row stamped by the [[capture layer]] holds the pad (`pad`), what Mario was
+doing (`mario`: action, facing, speed) and, on pictures recorded from
+2026-09-19, where he stood (`mario_pos`: x, y, z in the game's world units,
+two decimals). A row leaves out any fact that was not captured or did not
+read as a real game state, so an older clip has no `mario_pos` and still
+loads unchanged.
 
 - **Lives** -- `src/sm64_events/replay/ledger.py`; the [[recorder]] feeds it
   (`src/sm64_events/replay/recorder.py`) and extraction reads it back

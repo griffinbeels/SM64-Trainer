@@ -668,6 +668,19 @@ MARIO_YAW_OFF = 0x2E             # s16, the yaw of that vector
 # changes over time and where there are opportunities to go faster".
 # VERIFY until read live with him.
 MARIO_FORWARD_VEL_OFF = 0x54     # f32
+# pos -- where he stands in the level, for the ghost. It lies BETWEEN action
+# (0x0C) and forwardVel, so the one block inputs/frame.py already copies per
+# picture holds it: no new read, no layout row, no address gate. The same
+# decomp struct row as above; tools/probe_objects.py has read it at this
+# offset since 2026-08-05. VERIFY until a recording's `mario_pos` is watched
+# against the game with him.
+MARIO_POS_OFF = 0x3C             # Vec3f {x, y, z}, world units
+# The collision world is s16: every floor the game can find lies inside
+# +-32768, a level's own cells stop at +-8192 sideways, and the default
+# floor/ceiling are -11000/+20000. So this is four times a level's width and
+# clears its full height; a float past it is reset/loading memory, not a
+# place. (A parallel-universe excursion also reads past it and is refused.)
+MARIO_POS_LIMIT = 32768.0
 
 # An s16 angle spans the whole circle, so degrees are (value / 65536) * 360.
 # The game's own units are what every other tool shows ("the 64xxx whatever
