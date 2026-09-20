@@ -189,7 +189,7 @@ def opened_page(server):
     fixture docstring)."""
     with driver.get_driver().launch(headless=True, viewport=(1500, 1100)) as page:
         page.goto(server)
-        page.wait_for(".log-card", timeout_ms=20000)
+        page.wait_for(".log-card")
         opened = page.evaluate(OPEN_IT)
         assert opened, "no card carries a .standards-toggle to open"
         page.wait_for(".stdpanel .stdtable", timeout_ms=15000)
@@ -265,7 +265,7 @@ def test_default_follows_the_grading_version():
             with driver.get_driver().launch(headless=True,
                                             viewport=(1500, 1100)) as page:
                 page.goto(base)
-                page.wait_for(".log-card", timeout_ms=20000)
+                page.wait_for(".log-card")
                 opened = page.evaluate(OPEN_IT)
                 assert opened, "no card carries a .standards-toggle to open"
                 page.wait_for(".stdpanel .stdtable", timeout_ms=15000)
@@ -295,7 +295,7 @@ def test_an_open_panel_follows_a_live_setting_change(fixture_data):
             with driver.get_driver().launch(headless=True,
                                             viewport=(1500, 1100)) as page:
                 page.goto(base)
-                page.wait_for(".log-card", timeout_ms=20000)
+                page.wait_for(".log-card")
                 assert page.evaluate(OPEN_IT)
                 page.wait_for(".stdpanel .stdtable", timeout_ms=15000)
                 page.evaluate(SETTLE)

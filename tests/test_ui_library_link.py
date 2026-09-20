@@ -83,7 +83,7 @@ def library_server():
 def library_page(library_server):
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-target .library-section", timeout_ms=15000)
         yield page
@@ -293,7 +293,7 @@ def test_linking_a_piece_updates_every_practice_picker_without_reload(
     # Establish the precondition on the actual Practice card and mount its
     # attempt rows so both StratPicker call sites are part of the assertion.
     library_page.evaluate(CLICK_PRACTICE_TAB)
-    library_page.wait_for(".log-list-card", timeout_ms=15000)
+    library_page.wait_for(".log-list-card")
     _open_fixture_segment_card(library_page)
     before = _wait_for_fixture_options(
         library_page, lambda groups: all("Standard" not in group for group in groups))
@@ -334,7 +334,7 @@ def test_linking_a_piece_updates_every_practice_picker_without_reload(
     # Switching tabs is not a page reload. The linked-state wait above only
     # resolves after Library's relink callback has refreshed the shared view.
     library_page.evaluate(CLICK_PRACTICE_TAB)
-    library_page.wait_for(".log-list-card", timeout_ms=15000)
+    library_page.wait_for(".log-list-card")
     _open_fixture_segment_card(library_page)
     linked = _wait_for_fixture_options(
         library_page, lambda groups: all("Standard" in group for group in groups))
@@ -351,7 +351,7 @@ def test_linking_a_piece_updates_every_practice_picker_without_reload(
     library_page.wait_for(".library-pieces .library-link-button", timeout_ms=15000)
 
     library_page.evaluate(CLICK_PRACTICE_TAB)
-    library_page.wait_for(".log-list-card", timeout_ms=15000)
+    library_page.wait_for(".log-list-card")
     _open_fixture_segment_card(library_page)
     unlinked = _wait_for_fixture_options(
         library_page, lambda groups: all("Standard" not in group for group in groups))
@@ -641,7 +641,7 @@ def test_the_practice_cards_library_door_follows_the_link(library_server):
     try:
         with driver.get_driver().launch(headless=True) as page:
             page.goto(f"{proxy_base}/ui/index.html")
-            page.wait_for(".log-list-card", timeout_ms=20000)
+            page.wait_for(".log-list-card")
             clicked = page.evaluate("""
               (() => {
                 const card = Array.from(document.querySelectorAll('.log-card')).find((c) => {
@@ -707,7 +707,7 @@ def test_a_held_time_shows_on_its_library_row_and_lands_when_the_row_is_linked(
         assert any("Volcano entry" in row["text"] for row in imported["held"])
         with driver.get_driver().launch(headless=True) as page:
             page.goto(f"{base}/ui/index.html")
-            page.wait_for(".log-list-card", timeout_ms=20000)
+            page.wait_for(".log-list-card")
             page.evaluate(CLICK_LIBRARY_TAB)
             page.wait_for(".library-target .library-section", timeout_ms=15000)
             _navigate_to_target(page, "7. Lethal Lava Land",

@@ -103,6 +103,24 @@ def compose_release_body(setup_header: str, patch_notes: str) -> str:
             + patch_notes.lstrip())
 
 
+def snapshot_version_files() -> dict[Path, bytes]:
+    """The files the bump overwrites, as BYTES.
+
+    A dry run has to build the version it claims, so the bump happens before
+    the build -- but it must not leave your checkout dirty afterwards. The
+    first cut of this restored with `write_text`, which retypes every line
+    ending on Windows: uv.lock came back with 1,583 lines changed, dirtier
+    than the bump it was undoing (2026-09-19). Bytes in, bytes out.
+    """
+    return {path: path.read_bytes()
+            for path in (VERSION_PY, PYPROJECT, UV_LOCK) if path.is_file()}
+
+
+def restore_version_files(originals: dict[Path, bytes]) -> None:
+    for path, data in originals.items():
+        path.write_bytes(data)
+
+
 def integration_command() -> list[str]:
     """The gate a merge runs, read from ITS definition, not restated here.
 
@@ -219,6 +237,7 @@ def main() -> int:
     _preflight(args.dry_run)
     _verify_or_run_gate()
 
+    originals = snapshot_version_files()
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
     PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))
 
@@ -243,7 +262,9 @@ def main() -> int:
     print("assets ready:", ", ".join(a.name for a in release_assets(DIST)))
 
     if args.dry_run:
-        print("dry-run: built + checksummed, skipping commit/tag/publish")
+        restore_version_files(originals)
+        print("dry-run: built + checksummed, version files restored, "
+              "skipping commit/tag/publish")
         return 0
 
     # uv.lock records the editable package's OWN version, so the bump above

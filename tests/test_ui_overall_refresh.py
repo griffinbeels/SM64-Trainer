@@ -168,7 +168,7 @@ def test_overall_edit_fixed_reset_and_region_isolation(overall_fixture, width):
     fixed_selector = f'{OVERALL} [data-tier="{rank}"] .library-overall-by .meta'
     with driver.get_driver().launch(headless=True, viewport=(width, 1100)) as page:
         page.goto(f"{overall_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.click('.sidebar-nav .nav-item[title="Library"]')
         page.wait_for(".library-target .library-section", timeout_ms=15000)
         page.evaluate(OPEN_OVERALL)

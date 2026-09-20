@@ -150,3 +150,41 @@ def test_the_release_does_not_spell_the_gate_out_itself():
     assert 'tools/run_tests.py' not in source, (
         "name the lane, not the runner -- the worker count lives in "
         ".verification.toml and a second spelling drops it")
+
+
+def test_the_dry_run_restore_is_byte_exact(tmp_path, monkeypatch):
+    """LF stays LF.
+
+    A dry run builds the bumped version, so the bump lands before the build
+    and has to be undone afterwards. The first cut restored with
+    `write_text`, which retypes every line ending on Windows: uv.lock came
+    back with 1,583 lines changed -- dirtier than the bump it was undoing
+    (2026-09-19, caught by the dry run this same commit made possible)."""
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b'version = 1\nname = "x"\n')       # LF, as git stores it
+    version = tmp_path / "version.py"
+    version.write_bytes(b'__version__ = "1.8.2"\n')
+    monkeypatch.setattr(release, "UV_LOCK", lock)
+    monkeypatch.setattr(release, "VERSION_PY", version)
+    monkeypatch.setattr(release, "PYPROJECT", tmp_path / "absent.toml")
+
+    originals = release.snapshot_version_files()
+    assert set(originals) == {lock, version}, "an absent file is not snapshotted"
+    lock.write_bytes(b"clobbered")
+    version.write_text('__version__ = "1.9.0"\n')          # as the bump writes it
+    release.restore_version_files(originals)
+
+    assert lock.read_bytes() == b'version = 1\nname = "x"\n'
+    assert version.read_bytes() == b'__version__ = "1.8.2"\n'
+    assert b"\r\n" not in lock.read_bytes(), "the restore must not retype line endings"
+
+
+def test_the_dry_run_branch_restores_before_returning():
+    """The call has to be ON the dry-run path, not merely defined."""
+    import inspect
+    source = inspect.getsource(release.main)
+    assert source.index("snapshot_version_files()") < source.index("bump_version_py("), (
+        "snapshot BEFORE the bump overwrites anything")
+    branch = source.index("if args.dry_run:")
+    assert "restore_version_files(originals)" in source[branch:branch + 300], (
+        "the dry-run branch must put them back before it returns")
