@@ -45,6 +45,12 @@ ALLOWED = (
      "Windows Performance Recorder needs elevation. The ownership half of "
      "that module still runs.",
      "tests/test_profile_external.py"),
+    ("only meaningful under",
+     "A check on the xdist scheduler itself, which a SERIAL run has no "
+     "scheduler to check. Lifts under `-n <k> --dist loadgroup`, which is how "
+     "tools/run_tests.py always runs -- found 2026-09-18 by `release.py`, "
+     "which runs a bare serial `pytest -q` instead of the project's gate.",
+     "tests/test_worker_groups.py"),
     ("data/tracker.db not present",
      "The corpus check reads this machine's own practice database, which a "
      "fresh clone has not got. Its rules are covered by seeded tests; this "

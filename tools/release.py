@@ -20,9 +20,12 @@ are unit-tested; the git/gh/build orchestration is exercised by cutting a
 real release."""
 import argparse
 import hashlib
+import json
+import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -100,6 +103,95 @@ def compose_release_body(setup_header: str, patch_notes: str) -> str:
             + patch_notes.lstrip())
 
 
+def snapshot_version_files() -> dict[Path, bytes]:
+    """The files the bump overwrites, as BYTES.
+
+    A dry run has to build the version it claims, so the bump happens before
+    the build -- but it must not leave your checkout dirty afterwards. The
+    first cut of this restored with `write_text`, which retypes every line
+    ending on Windows: uv.lock came back with 1,583 lines changed, dirtier
+    than the bump it was undoing (2026-09-19). Bytes in, bytes out.
+    """
+    return {path: path.read_bytes()
+            for path in (VERSION_PY, PYPROJECT, UV_LOCK) if path.is_file()}
+
+
+def restore_version_files(originals: dict[Path, bytes]) -> None:
+    for path, data in originals.items():
+        path.write_bytes(data)
+
+
+def integration_command() -> list[str]:
+    """The gate a merge runs, read from ITS definition, not restated here.
+
+    A release must be judged exactly as a merge is. Two spellings of "run the
+    tests" drift, and on 2026-09-18 both wrong ones cost a night: a bare
+    serial `pytest -q` took 2h30m and failed 12 timing tests that pass in 43s
+    through the gate, and `run_tests.py` with its own default of 16 workers
+    failed a browser wait on three runs out of three, while the configured
+    lane's 4 workers passed 11010 on the same tree. `.verification.toml` owns
+    that number; this reads it.
+    """
+    import tomllib
+    config = tomllib.loads((REPO / ".verification.toml").read_text(encoding="utf-8"))
+    for check in config.get("checks", []):
+        if check.get("name") == "integration-tests":
+            # Same placeholders the harness substitutes (harness/verification.py).
+            return [arg.replace("{python}", sys.executable).replace("{project}", str(REPO))
+                    for arg in check["command"]]
+    raise SystemExit("no integration-tests check in .verification.toml")
+
+
+def _verify_tool() -> Path | None:
+    """The harness's verify.py, which REUSES a receipt whose fingerprint still
+    matches. A release minutes after a merge then costs seconds instead of
+    re-running the same 40-minute suite against the same bytes (2026-09-18:
+    it ran three times for one release). Absent harness: run the lane."""
+    named = os.environ.get("SM64_VERIFY_TOOL")
+    for candidate in (Path(named) if named else None,
+                      Path.home() / ".claude" / "harness" / "tools" / "verify.py"):
+        if candidate and candidate.is_file():
+            return candidate
+    return None
+
+
+def _verify_or_run_gate(attempts: int = 6, pause: float = 30.0) -> None:
+    """Verified, by receipt if one is current and by running the lane if not.
+
+    `unavailable` is not `failed`. The harness takes its verification lock
+    non-blocking, so a background checker holding it for a second reads as
+    "unavailable" -- and treating that as a red build is how a release dies
+    for no reason. Retry it; only a real `failed` stops the release.
+    """
+    tool = _verify_tool()
+    if tool is None:
+        _run(integration_command())
+        return
+    # subprocess.run directly: `_run` hardcodes check=True, and a failed
+    # verification must be READ here, not raised as a CalledProcessError whose
+    # message says nothing about which test failed.
+    command = [sys.executable, str(tool), "full", "--project", str(REPO), "--json"]
+    for attempt in range(1, attempts + 1):
+        print("+", " ".join(command))
+        result = subprocess.run(command, cwd=REPO, capture_output=True,
+                                text=True, check=False)
+        receipt = json.loads(result.stdout) if result.stdout.strip() else {}
+        status = receipt.get("status", "unavailable")
+        if status == "passed":
+            print(f"verification: passed ({'reused' if receipt.get('reused') else 'fresh'})")
+            return
+        if status == "failed":
+            failed = [c["name"] for c in receipt.get("checks", [])
+                      if c.get("status") != "passed"]
+            sys.exit(f"refusing: verification failed ({', '.join(failed) or 'unknown check'}); "
+                     "read the receipt and fix the tests")
+        print(f"verification unavailable ({receipt.get('message') or result.stderr.strip()[:120]}); "
+              f"attempt {attempt}/{attempts}")
+        if attempt < attempts:
+            time.sleep(pause)
+    sys.exit("refusing: verification never became available")
+
+
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd))
     return subprocess.run(cmd, cwd=REPO, check=True, **kw)
@@ -110,11 +202,21 @@ def _capture(cmd: list[str]) -> str:
                           capture_output=True, text=True).stdout.strip()
 
 
-def _preflight() -> None:
-    if _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
-        sys.exit("refusing: not on main")
-    if _capture(["git", "status", "--porcelain"]):
-        sys.exit("refusing: working tree is dirty")
+def _preflight(dry_run: bool = False) -> None:
+    """A DRY RUN may stand anywhere; a real release still may not.
+
+    Until 2026-09-19 this path could only be exercised from a clean main, so
+    every bug in it cost a full merge cycle (two 40-minute gate passes) before
+    anyone could see whether the fix worked. Three separate release bugs were
+    found that way, one at a time, across a day. A dry run commits nothing,
+    tags nothing and publishes nothing -- let it run from the worktree where
+    the fix was written, and the next bug is found in one pass.
+    """
+    if not dry_run:
+        if _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
+            sys.exit("refusing: not on main")
+        if _capture(["git", "status", "--porcelain"]):
+            sys.exit("refusing: working tree is dirty")
     try:
         _run(["gh", "auth", "status"], capture_output=True)
     except Exception:
@@ -132,9 +234,10 @@ def main() -> int:
         sys.exit(f"bad version {args.version!r} (want X.Y.Z)")
     tag = f"v{args.version}"
 
-    _preflight()
-    _run(["uv", "run", "pytest", "-q"])
+    _preflight(args.dry_run)
+    _verify_or_run_gate()
 
+    originals = snapshot_version_files()
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
     PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), args.version))
 
@@ -159,7 +262,9 @@ def main() -> int:
     print("assets ready:", ", ".join(a.name for a in release_assets(DIST)))
 
     if args.dry_run:
-        print("dry-run: built + checksummed, skipping commit/tag/publish")
+        restore_version_files(originals)
+        print("dry-run: built + checksummed, version files restored, "
+              "skipping commit/tag/publish")
         return 0
 
     # uv.lock records the editable package's OWN version, so the bump above

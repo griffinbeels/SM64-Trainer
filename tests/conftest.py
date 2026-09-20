@@ -32,6 +32,18 @@ def pytest_configure(config):
     Configure precedes xdist worker creation. Workers and runner-owned pytest
     inherit the live ancestor's budget and must never acquire it a second time.
     """
+    # Browser waits get a bound that scales with the machine this run ACTUALLY
+    # gets. uilab's 10s default suits one browser on an idle box; this suite
+    # runs several servers, browsers and node drivers at once, and when OBS is
+    # open the runner deliberately caps itself to a quarter of the CPUs so his
+    # capture never stutters. A page that paints in under a second alone took
+    # more than 20s under that cap (2026-09-19), which failed a merge.
+    #
+    # A bound is not a timing assertion: a page that never renders still
+    # fails, and a test that means "within 200 ms" still passes its own
+    # timeout_ms. What it must not do is report a busy machine as a defect.
+    from tools.test_resources import obs_is_open
+    os.environ.setdefault("UILAB_WAIT_MS", "60000" if obs_is_open() else "30000")
     from tools.test_resources import TestResources, WORKERS_ENV, effective_workers, inherited_owner
 
     if hasattr(config, "workerinput"):

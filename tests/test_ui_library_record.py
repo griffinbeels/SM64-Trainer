@@ -55,7 +55,7 @@ def library_server():
 def library_page(library_server):
     with driver.get_driver().launch(headless=True) as page:
         page.goto(f"{library_server}/ui/index.html")
-        page.wait_for(".log-list-card", timeout_ms=20000)
+        page.wait_for(".log-list-card")
         page.evaluate(CLICK_LIBRARY_TAB)
         page.wait_for(".library-target .library-section", timeout_ms=15000)
         yield page

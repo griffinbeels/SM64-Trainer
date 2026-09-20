@@ -5,6 +5,7 @@ decides which tests may share a worker. These read the mark off the live item
 so the rule is proved on the test that asks, not restated: drop the hook and
 both go red.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -85,3 +86,28 @@ def test_files_that_share_one_real_file_share_one_group():
     for name, group in SHARED_GROUPS.items():
         assert (REPO / name).exists(), f"{name} no longer exists; drop its row"
         assert not set(group) & {"@", "]"}, "xdist splits a group on those"
+
+
+def test_the_browser_wait_bound_scales_with_the_machine_the_run_gets():
+    """One bound, scaled -- not 35 hand-tuned numbers.
+
+    Every app-shell wait used to carry its own `timeout_ms`, bumped 10s ->
+    20s one file at a time as runs got slower. Under the OBS cap (a quarter
+    of the CPUs, so his capture never stutters) even 20s was short, and a
+    page that paints in under a second failed a merge (2026-09-19). conftest
+    now sets UILAB_WAIT_MS from the budget the run actually got."""
+    import inspect
+    from conftest import pytest_configure
+    source = inspect.getsource(pytest_configure)
+    assert "UILAB_WAIT_MS" in source and "obs_is_open" in source, (
+        "the bound must come from the admitted budget, not a constant")
+
+    shell_waits = []
+    for path in sorted((REPO / "tests").glob("*.py")):
+        for selector in ('".log-list-card"', '".log-card"', '".sync-card"'):
+            shell_waits += re.findall(
+                rf"wait_for\({re.escape(selector)}, timeout_ms=\d+\)",
+                path.read_text(encoding="utf-8"))
+    assert not shell_waits, (
+        "app-shell waits must inherit the scaled bound, not re-pin their own: "
+        f"{shell_waits[:3]}")
