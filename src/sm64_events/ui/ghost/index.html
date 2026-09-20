@@ -78,10 +78,17 @@
      His report is what this is for: *"all the camera movement / scenery
      overlaps"* -- so the Mario view stops painting the scenery and nothing
      else changes.
-     The canvas paints in BOTH views whenever this clip has boxes, because the
-     colour treatment now belongs to the box alone (his ruling, 2026-09-20:
-     *"color correction should only apply to the Mario box now"*): in the
-     whole view it lays a coloured Mario over an untouched picture. */
+
+     THE CANVAS PAINTS IN THE MARIO VIEW AND NOWHERE ELSE, and that is a
+     correction. It used to paint in both, laying a coloured Mario over an
+     untouched picture in the whole view -- which reads well and does not
+     survive the compositor: the canvas and the element reach the screen by
+     two different paths, so on a pan the cut-out can land a refresh after the
+     picture under it. What he would see is a rectangle of scenery tinted and
+     sliding against the footage, with the whole-picture colour he asked for
+     in round 3 gone. His words name the narrow case anyway: *"the cutout
+     mario"*. So the whole view is exactly the base behaviour -- the hue on
+     the element, this canvas never painted. */
   #mario {
     position: fixed; inset: 0; width: 100%; height: 100%;
     background: transparent; pointer-events: none;
@@ -89,7 +96,7 @@
   body[data-ghost="ready"][data-shown="yes"]:not([data-view="mario"]) #ghost {
     visibility: visible;
   }
-  body[data-ghost="ready"][data-shown="yes"][data-boxes="yes"] #mario {
+  body[data-ghost="ready"][data-shown="yes"][data-view="mario"] #mario {
     visibility: visible;
   }
 </style>
@@ -102,7 +109,8 @@
 // which clip to show, open the clock, and hand every sample to the follower,
 // which owns every decision. See ./follower.js for the rule itself.
 import { createFollower, DEFAULTS } from "./follower.js";
-import { MARGIN_FRACTION, containRect, marioDraw } from "./mariobox.js";
+import { MARGIN_FRACTION, containRect, marioDraw,
+         usableBoxes } from "./mariobox.js";
 import { clipClock, slotAtTime } from "../frame.js";
 import { presentedVideoTime, watchVideoPicture } from "../videopicture.js";
 
@@ -125,17 +133,44 @@ const status = { state: "loading", reason: null, reason_text: null,
                  //: the picture the LAST PAINT used and the box it read for it
                  //: -- a failed try is read back here, per picture.
                  mario_picture: null, mario_box: null, mario_drawn: null,
-                 margin_fraction: MARGIN_FRACTION };
+                 margin_fraction: MARGIN_FRACTION,
+                 //: pictures whose cut-out was drawn from a picture that had
+                 //: already moved on. `drawImage` reads the element's CURRENT
+                 //: picture, and under main-thread jank that can be a newer
+                 //: one than the box was looked up for -- a single paint with
+                 //: Mario clipped. Counted rather than prevented: it is rare,
+                 //: self-correcting on the next picture, and a number here is
+                 //: what makes a bad sitting readable off the log.
+                 late_pictures: 0 };
 let follower = null;
 //: The clip's own per-picture clock and its box list, both fixed once the
 //: source answers. `boxes` is null for every ghost recorded before Mario was
 //: ever found in one, which is most of them.
 let clipTiming = null;
 let boxes = null;
-//: What the canvas draws WITH. The colour treatment belongs to the box alone
-//: now, so it is a filter on this context rather than on the element.
+//: What the CUT-OUT is drawn with -- the same string the element wears, so
+//: the two views colour the ghost identically and only the scenery differs.
 let boxFilter = "none";
+//: The last picture `requestVideoFrameCallback` reported, and the query that
+//: resolved this ghost. The first is what lets anything but a new picture
+//: cause a repaint (a colour change on a still ghost, a view flip, a resize);
+//: the second is what lets the page ask again for a box list that did not
+//: exist when it loaded.
+let lastPresented = null;
+let sourceQuery = "";
+let canWatchPictures = false;
 const paint = canvas.getContext("2d", { alpha: true });
+//: A picture's own start time IS `frame_times[k]` (measured 2026-09-20, worst
+//: gap 0.44 microseconds), so the lookup sits exactly on the boundary with
+//: nothing to spare: a `mediaTime` a float hair below it names picture k-1.
+//: A tenth of a millisecond is far under a picture (33 ms) and far over the
+//: error.
+const PICTURE_EPSILON = 0.0001;
+//: How often the page asks again for a box list it does not have, while the
+//: Mario view is the one he wants. The boxes are made outside the app and
+//: appear beside the clip whenever that finishes, and a ghost already up would
+//: otherwise need switching off and on.
+const RECHECK_MS = 4000;
 // The last nudge the SERVER stated. The clock's value is adopted on the edge,
 // not held as a level: the parent window may push its own nudge by
 // postMessage, and a level would overwrite that on the very next game frame.
@@ -227,6 +262,7 @@ function setView(asked) {
   if (status.view === drawn && document.body.dataset.view === drawn) return;
   status.view = drawn;
   document.body.dataset.view = drawn;
+  redraw();
 }
 
 // THE GHOST IS COLOURED, so it cannot be read as the live game. His words,
@@ -234,19 +270,18 @@ function setView(asked) {
 // LIVE GAMEPLAY and which one is the GHOST gameplay... apply a color filter to
 // the entire picture."*
 //
-// AND SINCE 2026-09-20 IT IS THE MARIO BOX THAT WEARS IT: *"color correction
-// should only apply to the Mario box now (it shouldn't impact anything other
-// than the cutout mario)."* So where the colour is applied depends on whether
-// this clip has boxes at all, and on nothing else:
+// AND SINCE 2026-09-20 THE MARIO VIEW PUTS IT ON THE CUT-OUT: *"color
+// correction should only apply to the Mario box now (it shouldn't impact
+// anything other than the cutout mario)."* Which surface wears it follows the
+// VIEW, not the presence of boxes:
 //
-//   boxes    -> the element wears NOTHING and the canvas draws the box region
-//               through the filter. In the Mario view that is the only thing
-//               on screen; in the whole view it is a coloured Mario over an
-//               untouched picture, which is the reading of his ruling recorded
-//               in the round ledger for him to confirm.
-//   no boxes -> today's whole-picture filter on the element, unchanged. The
-//               alternative is a ghost whose colour silently vanished, and
-//               every clip recorded before this round has no boxes.
+//   whole picture -> the filter on the element, exactly as before this round.
+//   only Mario    -> the element is hidden and the canvas draws the cut-out
+//                    through the same filter, so it is the only thing tinted
+//                    because it is the only thing on screen.
+//
+// Both get the same string, so flipping the view never changes the colour --
+// only what is under it.
 //
 // Adopted only when the VALUE changes, and written to the element only when
 // the FILTER changes -- two different questions. The first keeps the page from
@@ -267,13 +302,25 @@ function setTint(tint) {
   applyTreatment();
 }
 
-// Which surface wears the colour. Called whenever either half of the answer
-// moves -- the colour itself, or the arrival of a box list.
+// The colour, on both surfaces, and a REPAINT.
+//
+// The repaint is the fix for a defect a still ghost makes obvious: the canvas
+// only paints when a new picture is presented, so with the game paused, the
+// Usamune menu open, or Project64 auto-paused because he clicked the trainer,
+// dragging the colour slider changed nothing at all. Painted from the LAST
+// PRESENTED picture, never from `currentTime` -- the element may have been
+// seeked somewhere it has not shown yet.
 function applyTreatment() {
   const filter = clockTint ? clockTint.filter : "none";
-  boxFilter = boxes ? filter : "none";
-  const onElement = boxes ? "none" : filter;
-  if (video.style.filter !== onElement) video.style.filter = onElement;
+  if (video.style.filter !== filter) video.style.filter = filter;
+  boxFilter = filter;
+  redraw();
+}
+
+// Everything that changes what the cut-out should look like WITHOUT a new
+// picture arriving: the colour, the view, and the window's own size.
+function redraw() {
+  if (lastPresented != null) drawMario(lastPresented);
 }
 
 // ONLY MARIO, AND ONLY THE PICTURE THAT IS ACTUALLY ON SCREEN.
@@ -296,17 +343,21 @@ function applyTreatment() {
 // than it has entries (0573: 440 against 435) is a keyframe lead-in the edit
 // list hides, and the browser never presents one.
 function drawMario(time) {
-  if (!paint || !boxes || !clipTiming) return;
-  const slot = slotAtTime(time, clipTiming);
+  if (!paint) return;
+  lastPresented = time;
+  const size = sizeCanvas();
+  if (status.view !== "mario" || !boxes || !clipTiming) {
+    status.mario_drawn = null;
+    return;
+  }
+  const slot = slotAtTime(time + PICTURE_EPSILON, clipTiming);
   const box = slot >= 0 && slot < boxes.boxes.length ? boxes.boxes[slot] : null;
   status.mario_picture = slot;
   status.mario_box = box;
-  sizeCanvas();
-  paint.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
   // A picture Mario is not in paints NOTHING, and that is the honest answer:
   // carrying the previous box forward would put a stale Mario on his screen
   // through a cutscene or a warp.
-  const rect = containRect(canvas.clientWidth, canvas.clientHeight,
+  const rect = containRect(size.width, size.height,
                            video.videoWidth, video.videoHeight);
   const draw = box && marioDraw(box, boxes, {
     width: video.videoWidth, height: video.videoHeight,
@@ -317,22 +368,49 @@ function drawMario(time) {
   paint.drawImage(video, draw.sx, draw.sy, draw.sw, draw.sh,
                   draw.dx, draw.dy, draw.dw, draw.dh);
   paint.filter = "none";
+  // WHICH PICTURE DID `drawImage` ACTUALLY TAKE? It reads the element's
+  // current one, and under main-thread jank that can already be newer than the
+  // box was looked up for. Rare, and it corrects itself on the next picture,
+  // so it is counted rather than prevented -- a number a live look can read.
+  const at = presentedVideoTime(video);
+  if (at != null && Math.abs(at - time) > PICTURE_EPSILON)
+    status.late_pictures += 1;
 }
 
-// The backing store follows the window, and only when it has to: assigning
-// `width` CLEARS a canvas, so doing it every picture would throw away the
-// paint we are about to make and cost a reallocation thirty times a second.
+// The backing store follows the window, and the canvas is CLEARED here.
+//
+// Cleared in DEVICE pixels before the ratio transform goes on: at 150% a
+// `clearRect` in CSS pixels rounds inward, so a box touching the bottom or
+// right edge could leave a one-device-pixel line of the previous cut-out
+// behind -- a stripe over his game, from footage that has moved on. Sized from
+// `getBoundingClientRect()` for the same reason: `clientWidth` is a rounded
+// integer, and rounding the size the picture is mapped into puts the cut-out
+// up to half a pixel off the whole picture's own mapping.
+//
+// NOT COVERED BY A TEST, and the reason is worth knowing rather than
+// discovering: this can only bite when the canvas's CSS box is FRACTIONAL,
+// and a browser viewport never gives it one -- `inset: 0` on an 800px viewport
+// is 800 CSS pixels at any device ratio, so the mutation that clears in CSS
+// pixels passes every check here. The real case is his own window: sized in
+// DEVICE pixels to the renderer's rectangle (1600x1201) at 150%, which is
+// 1066.67 x 800.67 CSS pixels. The edge-touching box and the outside-pixel
+// count in `tests/test_ui_ghost_page.py` guard the clear generally; this
+// particular half-pixel needs the real window to show it.
 function sizeCanvas() {
+  const box = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
-  const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
+  const width = Math.max(1, Math.round(box.width * ratio));
+  const height = Math.max(1, Math.round(box.height * ratio));
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
   }
+  paint.setTransform(1, 0, 0, 1, 0, 0);
+  paint.clearRect(0, 0, canvas.width, canvas.height);
   // Drawn in CSS pixels whatever the device does, so every rectangle in
   // `mariobox.js` is in the same space as the video element's own box.
   paint.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return { width: box.width, height: box.height };
 }
 
 // The clock. One tiny message per game snapshot, and only while this socket is
@@ -352,17 +430,22 @@ function openClock() {
   connect();
 }
 
-// The parent window can push the same two things the page owns: the nudge (his
-// timing hotkey) and -- if the socket ever proves too slow to feel locked --
-// the clock itself, which is the escalation the brainstorm calls A+: the
-// graphics plugin publishes the picture it is drawing and the window follows
-// that instead of the memory poll. Same message, another source.
+// The parent window can push the nudge (his timing hotkey), the colour, and
+// -- if the socket ever proves too slow to feel locked -- the clock itself,
+// which is the escalation the brainstorm calls A+: the graphics plugin
+// publishes the picture it is drawing and the window follows that instead of
+// the memory poll. Same message, another source.
+//
+// THE VIEW HAS NO DOOR HERE, deliberately. Every clock sample carries it, so a
+// pushed value would be overwritten 33 ms later -- a control that appears to
+// work and does not. The colour's door survives only because a parent pushing
+// one is a parent that also owns the session's value; the view is the
+// session's alone.
 window.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || typeof data !== "object") return;
   if (data.type === "ghost-nudge") setNudge(data.nudge_frames);
   else if (data.type === "ghost-tint" && data.tint) setTint(data.tint);
-  else if (data.type === "ghost-view" && data.view) setView(data.view);
   else if (data.type === "ghost-clock") onSample(data);
 });
 
@@ -445,6 +528,10 @@ window.ghostStatus = () => ({
   //: the two rules ran.
   tint_filter: video.style.filter || "none",
   box_filter: boxFilter,
+  //: whether this engine can say which picture is on screen at all. Without
+  //: it the cut-out has nothing to key on, so the Mario view is refused the
+  //: same way a clip with no boxes refuses it.
+  frame_callback: canWatchPictures,
   //: the size the browser decoded, against the size the boxes were measured
   //: in -- the one comparison that says whether a cut-out landing beside
   //: Mario is the maker's fault or the page's.
@@ -462,15 +549,68 @@ window.ghostStatus = () => ({
 const pictureSize = () => ({ width: video.videoWidth || null,
                              height: video.videoHeight || null });
 
+// WHERE MARIO IS, PICTURE BY PICTURE -- when this clip has a list beside it.
+// Validated on the server every time it is served (ghost/mariobox.py), so the
+// page's own job is two checks: the boxes have to index like the clip's
+// per-picture arrays, and this engine has to be able to say which picture is
+// on screen.
+//
+// `requestVideoFrameCallback` is the second one and it is not a formality: the
+// cut-out is drawn from the presented picture's own index, so without it the
+// page would have no picture to key on and would paint nothing while reporting
+// itself presentable -- a window up over his game with nothing in it. Refused
+// by name instead, exactly like a clip with no list.
+//
+// IDEMPOTENT, because it is also the re-ask: an answer that says what the page
+// already believes changes nothing and paints nothing.
+function adoptBoxes(source) {
+  const stamps = (source.view && source.view.picture_igt) || [];
+  const answer = usableBoxes(source, { frameCallback: canWatchPictures,
+                                       pictures: stamps.length });
+  // The list itself is always taken: a rewritten one of the same length is a
+  // different list, and the next presented picture must use it.
+  boxes = answer.usable ? source.mario_boxes : null;
+  if (status.boxes_available === answer.usable
+      && status.boxes_reason === answer.reason
+      && status.boxes_pictures === answer.pictures) return;
+  status.boxes_available = answer.usable;
+  status.boxes_reason = answer.reason;
+  status.boxes_pictures = answer.pictures;
+  if (answer.usable) document.body.dataset.boxes = "yes";
+  else delete document.body.dataset.boxes;
+  applyTreatment();
+  setView(status.view_requested);
+}
+
+// A BOX LIST CAN APPEAR WHILE THE GHOST IS ALREADY UP. They are made outside
+// the app, one clip at a time, and land beside the clip whenever that
+// finishes -- the practice card notices within a couple of seconds because the
+// session re-resolves on a timer, and until this the PAGE did not, so the
+// control said the Mario view was available and the overlay still drew the
+// whole picture until he switched it off and on.
+//
+// Asked only while the Mario view is the one he wants, and only through the
+// same door the page resolved through. An answer that changes nothing changes
+// nothing: no reload, no blink.
+async function reaskForBoxes() {
+  if (status.view_requested !== "mario" || status.state !== "ready") return;
+  try {
+    const answer = await (await fetch(sourceQuery)).json();
+    if (answer && answer.available) adoptBoxes(answer);
+  } catch { /* the next tick asks again */ }
+}
+
 async function start() {
   const query = new URLSearchParams();
   for (const key of ["kind", "entity_key", "strat"]) {
     const value = params.get(key);
     if (value) query.set(key, value);
   }
+  sourceQuery = `/api/ghost/source?${query}`;
+  canWatchPictures = typeof video.requestVideoFrameCallback === "function";
   let source;
   try {
-    source = await (await fetch(`/api/ghost/source?${query}`)).json();
+    source = await (await fetch(sourceQuery)).json();
   } catch (error) {
     mark("error", "source_unreachable", String(error));
     return;
@@ -519,30 +659,8 @@ async function start() {
     mark("unavailable", follower.template.reason);
     return;
   }
-  // WHERE MARIO IS, PICTURE BY PICTURE -- when this clip has a list beside it.
-  // Validated on the server every time it is served (ghost/mariobox.py), so
-  // the page's own job is one check: the boxes have to index like the clip's
-  // per-picture arrays, and a list that does not is not this clip's.
   clipTiming = clipClock(source.view);
-  const offered = source.mario_boxes || null;
-  const stamps = (source.view && source.view.picture_igt) || [];
-  if (offered && Array.isArray(offered.boxes)
-      && offered.boxes.length === stamps.length && offered.width > 0
-      && offered.height > 0) {
-    boxes = offered;
-    status.boxes_available = true;
-    status.boxes_pictures = offered.boxes.length;
-    document.body.dataset.boxes = "yes";
-  } else {
-    status.boxes_available = false;
-    status.boxes_reason = offered ? "box_list_count"
-                                  : (source.mario_boxes_reason || "no_box_list");
-  }
-  // The colour goes to the box rather than the element the moment there IS a
-  // box, and a view already asked for on the clock is re-read against the
-  // answer that just arrived.
-  applyTreatment();
-  setView(status.view_requested);
+  adoptBoxes(source);
   // READY means a picture can be shown, not that a URL was assigned. Seeking
   // an element that has not loaded its metadata is a request the browser may
   // still be holding, and the first thing every clock sample does is seek.
@@ -559,6 +677,11 @@ async function start() {
     video.currentTime = follower.template.firstTime;
     mark("ready");
     openClock();
+    setInterval(reaskForBoxes, RECHECK_MS);
+    // The window can be resized under a still ghost (he moves Project64), and
+    // a canvas whose backing store no longer matches its box shows a stretched
+    // bitmap until the next picture arrives.
+    window.addEventListener("resize", redraw);
     const tick = () => {
       const idle = follower.idle(videoTime(), performance.now());
       if (idle) { status.holding = idle.reason; apply(idle); }

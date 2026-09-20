@@ -1158,11 +1158,13 @@ picture for picture rather than drawing it a few pictures out.
 
 ### Ghost colour
 
-The colour shift applied to a whole [[ghost]] picture so it cannot be mistaken
-for the live game — every colour in the footage moved the same way around the
-colour wheel. On by default, at a third of a turn; you can pick another angle
-or switch it off, and the trainer remembers the choice. Changing it takes effect on the
-next game [[frame]], because it travels the way the [[nudge]] does.
+The colour shift applied to a [[ghost]] so it cannot be mistaken for the live
+game — every colour in the footage moved the same way around the colour wheel.
+It follows the [[ghost view]]: showing the whole picture colours the whole
+picture, and showing only Mario colours only him, because he is the only thing
+on screen. On by default, at a third of a turn; you can pick another angle or
+switch it off, and the trainer remembers the choice. Changing it takes effect
+on the next game [[frame]], because it travels the way the [[nudge]] does.
 
 - **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it;
   it travels on the [[ghost clock]]; `src/sm64_events/ui/ghost/index.html`

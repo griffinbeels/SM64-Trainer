@@ -945,10 +945,19 @@ over the same box as the video, drawn inside `requestVideoFrameCallback` from
 the presented picture's own index, so the box and the picture change in one
 paint (a clip updated afterwards lags by a refresh and visibly swims). A small
 margin comes with him (`ui/ghost/mariobox.js::MARGIN_FRACTION`); a picture he
-is not in paints nothing. **With a box list the colour treatment moves to the
-box alone in BOTH views** (his ruling, 2026-09-20: *"color correction should
-only apply to the Mario box now"*) — with no box list the whole-picture
-filter stays, or the colour would silently vanish for every older recording.
+is not in paints nothing. **The colour follows the VIEW**: the whole-picture view is exactly the base
+behaviour (the filter on the element), and the Mario view draws the cut-out
+through the same filter, so it is the only thing tinted because it is the only
+thing on screen (his ruling, 2026-09-20: *"color correction should only apply
+to the Mario box now... the cutout mario"*). The canvas paints in the Mario
+view and nowhere else: it and the element reach the screen by two different
+paths, so a cut-out laid over the footage can land a refresh after the picture
+under it — on a pan that is a tinted rectangle of scenery sliding against the
+game. The page also refuses the Mario view outright (`no_frame_callback`) on
+an engine with no `requestVideoFrameCallback`, since it would have no picture
+to key the cut-out on, and it re-asks the source every few seconds while that
+view is wanted so a box list finished after the ghost went up is picked up
+without switching the overlay off and on.
 
 The video element covers the window and MAPS the picture into it (`object-fit:
 contain`, centred — never `fill`). The companion window is sized to the

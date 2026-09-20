@@ -202,6 +202,11 @@ STATES = {
                            mario_boxes=True),
     "mario": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
                            mario_boxes=True, view="mario"),
+    # THE SESSION ASKS FOR MARIO AND THIS GHOST HAS NO BOXES. The setting is
+    # app-wide and he walks between stars, so this is the ordinary state on
+    # every older recording once he has ever picked the Mario view.
+    "asked": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           view="mario"),
 }
 
 MEASURE = """
@@ -527,6 +532,26 @@ DRAG_HUE = """
 """
 
 
+def settled(page, state, expected, within_ms=4000):
+    """The writes the page has actually sent, once it has stopped sending.
+
+    Waits for `expected` of them and then for the window to go quiet, so a
+    check that one gesture is ONE write still fails when it is two. A bounded
+    deadline, and the assertion afterwards is what reports an absence -- this
+    only stops the rig calling a slow write a missing one.
+    """
+    waited = 0
+    while waited < within_ms:
+        if len(state["writes"]) >= expected:
+            break
+        page.wait_ms(50)
+        waited += 50
+    # Past the trailing edge (`ghostswitch.js::WRITE_SETTLE_MS` is 180 ms), so
+    # a second write would have shown up by now.
+    page.wait_ms(400)
+    return list(state["writes"])
+
+
 @pytest.fixture(scope="module")
 def driven():
     """One page, three gestures, and the server's own record of what arrived.
@@ -544,21 +569,18 @@ def driven():
             page.goto(base)
             page.wait_for(".ghost-row")
             page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
-            page.wait_ms(400)
-            out["after_flip"] = {"writes": list(state["writes"]),
+            out["after_flip"] = {"writes": settled(page, state, 1),
                                  "session": dict(state["session"])}
             out["flip_checked"] = page.evaluate(
                 "document.querySelector('.ghost-switch').getAttribute('aria-checked')")
             page.wait_for(".ghost-opacity")
             state["writes"].clear()
             out["drag_events"] = page.evaluate(DRAG)
-            page.wait_ms(500)
-            out["after_drag"] = {"writes": list(state["writes"]),
+            out["after_drag"] = {"writes": settled(page, state, 1),
                                  "opacity": state["session"]["opacity"]}
             state["writes"].clear()
             out["clicks"] = page.evaluate(CLICK_EARLIER)
-            page.wait_ms(500)
-            out["after_nudge"] = {"writes": list(state["writes"]),
+            out["after_nudge"] = {"writes": settled(page, state, 1),
                                   "nudge": state["session"]["nudge_frames"]}
             page.wait_ms(200)
             out["nudge_readout"] = page.evaluate(
@@ -567,15 +589,13 @@ def driven():
             # it stopped, and the switch beside it writes on the press.
             state["writes"].clear()
             out["hue_events"] = page.evaluate(DRAG_HUE)
-            page.wait_ms(500)
-            out["after_hue"] = {"writes": list(state["writes"]),
+            out["after_hue"] = {"writes": settled(page, state, 1),
                                 "tint": dict(state["session"]["tint"])}
             state["writes"].clear()
             page.evaluate(
                 "(() => document.querySelector('.ghost-colour .ghost-switch')"
                 ".click())()")
-            page.wait_ms(400)
-            out["after_colour_off"] = {"writes": list(state["writes"]),
+            out["after_colour_off"] = {"writes": settled(page, state, 1),
                                        "tint": dict(state["session"]["tint"])}
             out["wheel_after_off"] = page.evaluate(
                 "document.querySelectorAll('.ghost-hue').length")
@@ -617,8 +637,7 @@ def unstated_opacity():
             # unknown: flipping the switch must carry the switch and nothing
             # else. This is the write that could smuggle a default out.
             page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
-            page.wait_ms(400)
-            out["writes_while_unknown"] = list(state["writes"])
+            out["writes_while_unknown"] = settled(page, state, 1)
 
             # The server catches up. Now the control has a value to show, it
             # is his to move, and his move is what reaches the server. The
@@ -631,8 +650,7 @@ def unstated_opacity():
             page.wait_for(".ghost-opacity")
             out["known"] = page.evaluate(READ_OPACITY)
             page.evaluate(DRAG)
-            page.wait_ms(500)
-            out["writes_after_drag"] = list(state["writes"])
+            out["writes_after_drag"] = settled(page, state, 1)
     return out
 
 
@@ -757,3 +775,17 @@ def test_a_ghost_with_no_mario_boxes_says_why_it_cannot_show_him(
     assert "Mario" in row["viewWhy"]
     # The same sentence is the hover, so a narrow row still answers.
     assert row["viewTitle"] == row["viewWhy"]
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_a_control_he_cannot_use_reads_what_is_actually_on_screen(
+        rendered, width):
+    """The session is set to "only Mario" and this ghost has no boxes, so the
+    overlay is drawing the WHOLE PICTURE. A disabled control reading "Only
+    Mario" beside it is a control contradicting the screen -- and the reason
+    sentence right under it says the whole picture is all that can be shown."""
+    row = rendered[("asked", width)][0]
+    assert row["viewDisabled"] is True
+    assert row["viewValue"] == "whole", (
+        "the control names a view the overlay is not drawing")
+    assert row["viewWhy"], "and it still says why"

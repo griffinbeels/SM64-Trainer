@@ -53,6 +53,10 @@ STATES = {
                            mario_boxes=True),
     "mario": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
                            mario_boxes=True, view="mario"),
+    # The session asks for Mario and THIS ghost has no boxes: the ordinary
+    # state on every older recording once he has picked the Mario view.
+    "asked": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           view="mario"),
     "off": ghost_session(enabled=False, opacity=0.6),
     # The longest refusal the server can produce, not the shortest: a sheet
     # of the easy end of a range is a picture of a card nobody has.

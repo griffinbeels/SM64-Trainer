@@ -239,10 +239,16 @@ function GhostColour({ tint, write, queue }) {
 function GhostView({ view, boxes, write }) {
   const known = view != null;
   const can = known && boxes.available;
+  // WHAT IS ON SCREEN, not what the session is set to. The setting is app-wide
+  // and he walks between stars, so it arrives at "only Mario" on ghosts whose
+  // recording has no boxes -- and the overlay is drawing the whole picture
+  // there. A disabled control reading "Only Mario" beside a whole-picture
+  // ghost is a control contradicting the screen.
+  const shown = can ? view : "whole";
   return html`<div class="ghost-field ghost-view">
     <span class="ghost-field-name">Show</span>
     <select class="ghost-view-select" disabled=${!can}
-      value=${known ? view : "whole"}
+      value=${shown}
       aria-label="What the ghost draws over your game"
       title=${can ? "What the ghost draws over your game"
                   : (boxes.reasonText || "Waiting for what the ghost draws")}

@@ -174,3 +174,66 @@ def test_the_shipped_margin_is_small_and_real():
     v0 he asked for ("a super tight rectangle")."""
     fraction = run_node("MARGIN_FRACTION", "MARGIN_FRACTION")
     assert 0 < fraction < 0.25
+
+
+# -- can this page draw this ghost as Mario alone? ---------------------------
+
+def usable(source, frame_callback=True, pictures=4):
+    return run_node("usableBoxes",
+                    f"usableBoxes({json.dumps(source)}, "
+                    f"{{frameCallback: {json.dumps(frame_callback)}, "
+                    f"pictures: {pictures}}})")
+
+
+def a_source(boxes=4, **over):
+    body = {"mario_boxes": {"width": 320, "height": 240,
+                            "boxes": [[1, 2, 3, 4]] * boxes},
+            "mario_boxes_reason": None}
+    body.update(over)
+    return body
+
+
+def test_a_list_as_long_as_the_clip_can_be_drawn():
+    assert usable(a_source()) == {"usable": True, "reason": None,
+                                  "pictures": 4}
+
+
+def test_an_engine_that_cannot_say_which_picture_is_on_screen_refuses():
+    """THE ONE THAT WAS SILENT. The cut-out is drawn from the presented
+    picture's index, so without `requestVideoFrameCallback` the page has
+    nothing to key on -- and it used to report itself presentable and paint
+    nothing, which is a window up over his game with nothing in it."""
+    answer = usable(a_source(), frame_callback=False)
+    assert answer["usable"] is False
+    assert answer["reason"] == "no_frame_callback"
+    # ...and it refuses on that ground FIRST, whatever else is wrong: an engine
+    # that cannot answer cannot be talked round by a better list.
+    assert usable(a_source(boxes=9), frame_callback=False)["reason"] \
+        == "no_frame_callback"
+
+
+def test_a_list_of_another_length_is_not_this_clips():
+    assert usable(a_source(boxes=9))["reason"] == "box_list_count"
+    assert usable(a_source(boxes=9))["usable"] is False
+
+
+def test_no_list_carries_the_servers_own_reason():
+    """The server looked for the file and knows why there is none; repeating
+    its reasoning here would be a second opinion that drifts."""
+    assert usable({"mario_boxes": None,
+                   "mario_boxes_reason": "box_list_version"})["reason"] \
+        == "box_list_version"
+    assert usable({"mario_boxes": None})["reason"] == "no_box_list"
+    assert usable({})["reason"] == "no_box_list"
+
+
+@pytest.mark.parametrize("broken", [
+    {"width": 0, "height": 240, "boxes": [[1, 2, 3, 4]] * 4},
+    {"width": 320, "height": 0, "boxes": [[1, 2, 3, 4]] * 4},
+    {"width": 320, "height": 240, "boxes": "four"},
+])
+def test_a_list_the_page_cannot_use_falls_back_rather_than_throwing(broken):
+    """The server validates every one of these, so reaching the page means a
+    build mismatch -- and a page that threw here would leave the overlay
+    loading forever rather than showing the whole picture."""
+    assert usable({"mario_boxes": broken})["usable"] is False

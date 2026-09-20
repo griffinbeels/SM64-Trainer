@@ -36,6 +36,41 @@
 export const MARGIN_FRACTION = 0.08;
 
 /**
+ * CAN THIS PAGE DRAW THIS GHOST AS MARIO ALONE? `{usable, reason, pictures}`.
+ *
+ * The server validates the list on every read and hands over a named reason
+ * when it will not serve one (`ghost/mariobox.py`). Two things it cannot
+ * answer are decided here, and both are refusals in the same vocabulary so the
+ * page has one story to tell rather than two:
+ *
+ *   the boxes index the CLIP, so they have to be as long as the clip's own
+ *   per-picture arrays -- the server checked that against the view it served,
+ *   and this checks it against the view this page actually loaded;
+ *
+ *   the cut-out is drawn from the PRESENTED picture's index, so an engine with
+ *   no `requestVideoFrameCallback` has no picture to key on. Without this the
+ *   page reported itself presentable and painted nothing -- a window up over
+ *   his game with nothing in it, which is the one failure this whole feature
+ *   is supposed to make impossible.
+ *
+ * Pure, so every branch can be driven without a browser -- including the one
+ * that needs a browser that does not exist.
+ */
+export function usableBoxes(source, { frameCallback, pictures }) {
+  const offered = (source && source.mario_boxes) || null;
+  const long = offered && Array.isArray(offered.boxes)
+    ? offered.boxes.length : null;
+  if (!frameCallback) return { usable: false, reason: "no_frame_callback",
+                               pictures: 0 };
+  if (!offered || long === null || !(offered.width > 0 && offered.height > 0))
+    return { usable: false, pictures: 0,
+             reason: (source && source.mario_boxes_reason) || "no_box_list" };
+  if (long !== pictures)
+    return { usable: false, reason: "box_list_count", pictures: 0 };
+  return { usable: true, reason: null, pictures: long };
+}
+
+/**
  * Where the clip's picture lands inside a box, the way the browser puts it.
  *
  * This is `object-fit: contain` with `object-position: center` written out:
