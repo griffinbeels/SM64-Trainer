@@ -126,12 +126,19 @@ def shell_wait_ms() -> int:
 
     The same bound `tests/conftest.py` gives uilab's own waits, read from the
     same place, because it answers the same question: how loaded is the machine
-    this run actually got. Under the OBS cap the suite runs on a quarter of the
-    CPUs, and a Rank page that paints in under a second alone needs far longer
-    than the generic three-second wait -- these eight waits had already been
-    bumped to 15s by hand (2026-09-17) and still lost under that cap. A bound
-    is not a timing assertion: a page that never renders still fails, and a
-    story that means "within 400ms" still passes its own explicit maxMs.
+    this run actually got. Consistency is the whole reason -- eight story waits
+    had been hand-bumped to 15s (2026-09-17) while b15f16d0 was scaling every
+    other wait from one variable, which is the drift that commit retired. A
+    bound is not a timing assertion: a page that never renders still fails, and
+    a story that means "within 400ms" still passes its own explicit maxMs.
+
+    It does NOT fix a starving sweep, and nothing here should be read as
+    claiming it does. Measured 2026-09-20: raising these eight from 15s to 60s
+    moved a full gate from 21 failures to 10, then 19 on the next run. The axis
+    is `tools/test_resources.py::budget`'s WORKER COUNT -- `test_responsive.py`
+    is `spread`, so each of ~20 viewports boots its own uvicorn fixture and its
+    own Chromium, and eight at once starve each other on this hardware while
+    four pass (11016 green at 4 workers, twice; red 3/3 at 8).
 
     Read here rather than baked in: conftest sets the variable in
     pytest_configure, which precedes the collection that imports this module.

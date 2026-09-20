@@ -118,11 +118,15 @@ def test_the_story_setup_waits_inherit_that_same_bound():
 
     `tools/uilab_project.py`'s story setups wait INSIDE `page.evaluate`, so
     they never saw `UILAB_WAIT_MS` and kept their own hand-bumped numbers:
-    eight waits pinned at 15s, already raised once by hand (2026-09-17) for
-    exactly this reason. Under the OBS cap a full sweep blew through all
-    eight, and every one reported a busy machine as a layout defect naming no
-    element (21 failures in one run, 2026-09-20). A story that means a real
+    eight waits pinned at 15s, already raised once by hand (2026-09-17). This
+    guard is about CONSISTENCY -- one bound, from the one variable -- which is
+    the drift b15f16d0 retired for the Python half. A story that means a real
     short interval still passes its own explicit maxMs.
+
+    It is NOT the cure for a starving sweep, and the neighbouring failures
+    must not be read that way: raising these eight to 60s moved a full gate
+    from 21 failures to 10, then 19 (2026-09-20). Worker count is the axis --
+    see `shell_wait_ms`'s docstring for the measurement.
     """
     source = (REPO / "tools" / "uilab_project.py").read_text(encoding="utf-8")
     assert "SHELL_WAIT = %d" in source, (
