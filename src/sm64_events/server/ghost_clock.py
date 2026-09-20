@@ -55,13 +55,14 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from sm64_events.ghost.session import DEFAULT_TINT
+from sm64_events.ghost.session import DEFAULT_TINT, DEFAULT_VIEW, GHOST_VIEWS
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 
 log = logging.getLogger("sm64.ghost")
 
 
-def clock_message(snapshot, nudge_frames: int = 0, tint: dict | None = None) -> dict:
+def clock_message(snapshot, nudge_frames: int = 0, tint: dict | None = None,
+                  view: str | None = None) -> dict:
     """The whole wire format. `igt` is Usamune's counter exactly as sampled --
     the same number every template picture is stamped with -- so the follower
     matches raw counter against raw counter with nothing in between.
@@ -78,12 +79,19 @@ def clock_message(snapshot, nudge_frames: int = 0, tint: dict | None = None) -> 
     moving while the game is paused, so it is what tells a stalled attempt
     apart from a stalled feed.
 
-    `nudge_frames` and `tint` are the ghost session's current settings, carried
-    on every message rather than only on the ones that change them: a page that
-    missed a message, or one that loaded a moment ago, converges on the next
-    sample instead of waiting for the player to touch the control again. The
-    page therefore ships NO default of its own for either -- it draws what the
-    server states, and it is never shown before its first sample.
+    `nudge_frames`, `tint` and `view` are the ghost session's current
+    settings, carried on every message rather than only on the ones that change
+    them: a page that missed a message, or one that loaded a moment ago,
+    converges on the next sample instead of waiting for the player to touch the
+    control again. The page therefore ships NO default of its own for any of
+    them -- it draws what the server states, and it is never shown before its
+    first sample.
+
+    `view` is "whole" or "mario" -- the whole recorded screen, or only the
+    rectangle Mario is in. It rides here rather than in the page's URL for the
+    same reason the nudge does: re-pointing the window is a page LOAD, and a
+    ghost that blinks off every time he changes his mind about what it shows is
+    worse than either view.
 
     `star_grab` is true while Mario is in an action a star grab puts him in. It
     is a LEVEL, not an edge, because the dance holds it for a second or more and
@@ -101,6 +109,7 @@ def clock_message(snapshot, nudge_frames: int = 0, tint: dict | None = None) -> 
             "nudge_frames": int(nudge_frames),
             "tint": {"enabled": bool(chosen.get("enabled")),
                      "hue_degrees": int(chosen.get("hue_degrees", 0))},
+            "view": view if view in GHOST_VIEWS else DEFAULT_VIEW,
             "star_grab": snapshot.mario_action in STAR_GRAB_ACTIONS}
 
 
@@ -118,6 +127,7 @@ class GhostClockFeed:
         #: this is where they are published from.
         self.nudge_frames = 0
         self.tint = dict(DEFAULT_TINT)
+        self.view = DEFAULT_VIEW
         #: samples handed over by the poll loop, and messages actually sent.
         #: `noted - sent` is how far behind the pump ran, i.e. how many
         #: samples collapsed. Read by tests and worth a /health line later.
@@ -163,6 +173,12 @@ class GhostClockFeed:
         self.tint = {"enabled": bool(tint.get("enabled")),
                      "hue_degrees": int(tint.get("hue_degrees", 0))}
 
+    def set_view(self, view: str) -> None:
+        """Whether the overlay draws the whole picture or only Mario, from now
+        on. Same wire, same reason: a page load to change what it shows would
+        blink the ghost off exactly as the nudge used to."""
+        self.view = view if view in GHOST_VIEWS else DEFAULT_VIEW
+
     async def connect(self, client) -> None:
         self._clients.add(client)
         if self._pump is None:
@@ -188,8 +204,8 @@ class GhostClockFeed:
             if snapshot is None:
                 continue
             try:
-                await self._send(
-                    clock_message(snapshot, self.nudge_frames, self.tint))
+                await self._send(clock_message(snapshot, self.nudge_frames,
+                                               self.tint, self.view))
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - one bad sample must not end the feed

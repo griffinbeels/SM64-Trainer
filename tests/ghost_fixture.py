@@ -141,16 +141,20 @@ class FakeReplay:
     saved, and what is its view — plus the `tracker.db` the route reaches
     through for the journal, exactly as `ReplayService` exposes it."""
 
-    def __init__(self, saved=(), views=None, journal=None):
+    def __init__(self, saved=(), views=None, journal=None, saved_dir=None):
         self._saved = set(saved)
         self._views = dict(views or {})
         self.tracker = FakeTracker(journal)
         self.viewed: list[int] = []
+        #: Where the saved clips pretend to live. A REAL directory is what a
+        #: test needs to put a Mario box list beside one; the bare filename
+        #: this defaulted to could never have a file beside it.
+        self.saved_dir = Path(saved_dir) if saved_dir else Path()
 
     def find_saved(self, attempt_id: int):
         if attempt_id not in self._saved:
             return None
-        return Path(f"attempt_{attempt_id:04d}_star.mp4")
+        return self.saved_dir / f"attempt_{attempt_id:04d}_star.mp4"
 
     def view(self, attempt_id: int) -> dict:
         self.viewed.append(attempt_id)

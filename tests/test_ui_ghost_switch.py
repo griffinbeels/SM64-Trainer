@@ -196,6 +196,17 @@ STATES = {
     # cleanly rather than sit there greyed.
     "plain": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
                            tint={"enabled": False, "hue_degrees": 120}),
+    # A ghost whose recording HAS had Mario found in it: the one state where
+    # the view control can actually be used.
+    "boxed": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           mario_boxes=True),
+    "mario": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           mario_boxes=True, view="mario"),
+    # THE SESSION ASKS FOR MARIO AND THIS GHOST HAS NO BOXES. The setting is
+    # app-wide and he walks between stars, so this is the ordinary state on
+    # every older recording once he has ever picked the Mario view.
+    "asked": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
+                           view="mario"),
 }
 
 MEASURE = """
@@ -215,9 +226,22 @@ MEASURE = """
     const track = row.querySelector('.ghost-switch-track');
     const knob = row.querySelector('.ghost-switch-knob');
     const hue = row.querySelector('.ghost-hue');
+    const pick = row.querySelector('.ghost-view-select');
+    const viewWhy = row.querySelector('.ghost-view-why');
     const colour = row.querySelector('.ghost-colour');
     const colourSwitch = colour && colour.querySelector('.ghost-switch');
     return {
+      views: row.querySelectorAll('.ghost-view').length,
+      viewValue: pick ? pick.value : null,
+      viewDisabled: pick ? pick.disabled : null,
+      viewOptions: pick
+        ? Array.from(pick.options).map((o) => o.textContent.trim()) : null,
+      viewTitle: pick ? pick.title : null,
+      // The popup is drawn by the browser off the SELECT's own computed
+      // background, so a transparent one gets a white list: read the paint.
+      viewPaint: pick ? getComputedStyle(pick).backgroundColor : null,
+      viewWhy: viewWhy ? viewWhy.textContent.trim() : null,
+      viewWhySeen: seen(viewWhy),
       colours: row.querySelectorAll('.ghost-colour').length,
       hues: row.querySelectorAll('.ghost-hue').length,
       hueValue: hue ? hue.value : null,
@@ -253,7 +277,9 @@ MEASURE = """
       readout: (row.querySelector('.ghost-field-value') || {}).textContent,
       trackPaint: getComputedStyle(track).backgroundColor,
       knobShift: getComputedStyle(knob).transform,
-      tuneBoxes: Array.from(row.querySelectorAll('.ghost-tune > *'))
+      // The control GROUPS, not everything in the row: the reason sentence
+      // is a row of its own and is measured by its own checks.
+      tuneBoxes: Array.from(row.querySelectorAll('.ghost-tune > .ghost-field'))
         .map((el) => box(el)),
       row: box(row), card: box(card),
       rowScroll: row.scrollWidth, rowClient: row.clientWidth,
@@ -314,8 +340,8 @@ def test_a_target_with_no_ghost_refuses_and_says_why_on_screen(rendered, width):
     assert row["describedBy"] == row["whyId"], (
         "the switch does not point at its own reason")
     # Nothing to tune when there is nothing to show.
-    assert (row["sliders"], row["steps"], row["resets"], row["colours"]) \
-        == (0, 0, 0, 0)
+    assert (row["sliders"], row["steps"], row["resets"], row["colours"],
+            row["views"]) == (0, 0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -324,8 +350,9 @@ def test_off_offers_the_switch_and_nothing_else(rendered, width):
     assert row["disabled"] is False
     assert row["checked"] == "false"
     assert row["whyText"] is None
-    assert (row["sliders"], row["steps"], row["colours"]) == (0, 0, 0), (
-        "the tuning controls are on screen with the overlay off")
+    assert (row["sliders"], row["steps"], row["colours"], row["views"]) \
+        == (0, 0, 0, 0), (
+            "the tuning controls are on screen with the overlay off")
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -364,8 +391,8 @@ def test_the_tuning_line_holds_its_three_groups_inside_the_row(rendered, width):
     """
     row = rendered[("on", width)][0]
     boxes = row["tuneBoxes"]
-    assert len(boxes) == 3, f"slider, colour and timing: {boxes}"
-    for name, box in zip(("visibility", "colour", "timing"), boxes,
+    assert len(boxes) == 4, f"slider, colour, view and timing: {boxes}"
+    for name, box in zip(("visibility", "colour", "view", "timing"), boxes,
                          strict=True):
         assert box["height"] <= ONE_LINE_PX, (
             f"the {name} group wrapped inside itself at {width}px: {box}")
@@ -505,6 +532,26 @@ DRAG_HUE = """
 """
 
 
+def settled(page, state, expected, within_ms=4000):
+    """The writes the page has actually sent, once it has stopped sending.
+
+    Waits for `expected` of them and then for the window to go quiet, so a
+    check that one gesture is ONE write still fails when it is two. A bounded
+    deadline, and the assertion afterwards is what reports an absence -- this
+    only stops the rig calling a slow write a missing one.
+    """
+    waited = 0
+    while waited < within_ms:
+        if len(state["writes"]) >= expected:
+            break
+        page.wait_ms(50)
+        waited += 50
+    # Past the trailing edge (`ghostswitch.js::WRITE_SETTLE_MS` is 180 ms), so
+    # a second write would have shown up by now.
+    page.wait_ms(400)
+    return list(state["writes"])
+
+
 @pytest.fixture(scope="module")
 def driven():
     """One page, three gestures, and the server's own record of what arrived.
@@ -522,21 +569,18 @@ def driven():
             page.goto(base)
             page.wait_for(".ghost-row")
             page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
-            page.wait_ms(400)
-            out["after_flip"] = {"writes": list(state["writes"]),
+            out["after_flip"] = {"writes": settled(page, state, 1),
                                  "session": dict(state["session"])}
             out["flip_checked"] = page.evaluate(
                 "document.querySelector('.ghost-switch').getAttribute('aria-checked')")
             page.wait_for(".ghost-opacity")
             state["writes"].clear()
             out["drag_events"] = page.evaluate(DRAG)
-            page.wait_ms(500)
-            out["after_drag"] = {"writes": list(state["writes"]),
+            out["after_drag"] = {"writes": settled(page, state, 1),
                                  "opacity": state["session"]["opacity"]}
             state["writes"].clear()
             out["clicks"] = page.evaluate(CLICK_EARLIER)
-            page.wait_ms(500)
-            out["after_nudge"] = {"writes": list(state["writes"]),
+            out["after_nudge"] = {"writes": settled(page, state, 1),
                                   "nudge": state["session"]["nudge_frames"]}
             page.wait_ms(200)
             out["nudge_readout"] = page.evaluate(
@@ -545,15 +589,13 @@ def driven():
             # it stopped, and the switch beside it writes on the press.
             state["writes"].clear()
             out["hue_events"] = page.evaluate(DRAG_HUE)
-            page.wait_ms(500)
-            out["after_hue"] = {"writes": list(state["writes"]),
+            out["after_hue"] = {"writes": settled(page, state, 1),
                                 "tint": dict(state["session"]["tint"])}
             state["writes"].clear()
             page.evaluate(
                 "(() => document.querySelector('.ghost-colour .ghost-switch')"
                 ".click())()")
-            page.wait_ms(400)
-            out["after_colour_off"] = {"writes": list(state["writes"]),
+            out["after_colour_off"] = {"writes": settled(page, state, 1),
                                        "tint": dict(state["session"]["tint"])}
             out["wheel_after_off"] = page.evaluate(
                 "document.querySelectorAll('.ghost-hue').length")
@@ -595,8 +637,7 @@ def unstated_opacity():
             # unknown: flipping the switch must carry the switch and nothing
             # else. This is the write that could smuggle a default out.
             page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
-            page.wait_ms(400)
-            out["writes_while_unknown"] = list(state["writes"])
+            out["writes_while_unknown"] = settled(page, state, 1)
 
             # The server catches up. Now the control has a value to show, it
             # is his to move, and his move is what reaches the server. The
@@ -609,8 +650,7 @@ def unstated_opacity():
             page.wait_for(".ghost-opacity")
             out["known"] = page.evaluate(READ_OPACITY)
             page.evaluate(DRAG)
-            page.wait_ms(500)
-            out["writes_after_drag"] = list(state["writes"])
+            out["writes_after_drag"] = settled(page, state, 1)
     return out
 
 
@@ -698,3 +738,54 @@ def test_the_fixture_reaches_the_state_it_claims():
     assert STATES["on"]["target"]["entity_key"] == "2-4"
     assert json.dumps(STATES["disabled"]["source"]["reason_text"]) \
         == json.dumps(NO_FRAME_MAP_TEXT)
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_ghost_can_be_asked_to_show_only_mario(rendered, width):
+    """His words: *"It's still extremely hard to understand the ghost, because
+    all the camera movement / scenery overlaps... we can try a v0 where it's
+    just a super tight rectangle around mario's body."*
+
+    Two options in a native select -- this project's rule for a SHORT dropdown
+    -- named for what each one DRAWS. Read back off the rendered control, not
+    off the source that builds it.
+    """
+    row = rendered[("boxed", width)][0]
+    assert row["views"] == 1
+    assert row["viewOptions"] == ["Whole picture", "Only Mario"]
+    assert row["viewDisabled"] is False
+    assert row["viewValue"] == "whole"
+    assert row["viewWhy"] is None, "a usable control is explaining itself"
+    # An opaque background of its own, or Chromium draws its popup white.
+    assert row["viewPaint"] != "rgba(0, 0, 0, 0)", row["viewPaint"]
+    assert rendered[("mario", width)][0]["viewValue"] == "mario"
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_a_ghost_with_no_mario_boxes_says_why_it_cannot_show_him(
+        rendered, width):
+    """Every recording made before this round. His acceptance rule is that a
+    control which cannot run says why, and it matters more than usual here:
+    only-Mario is the point of the round, so a control that silently vanished
+    would read as the feature not shipping."""
+    row = rendered[("on", width)][0]
+    assert row["views"] == 1, "the control was dropped instead of explained"
+    assert row["viewDisabled"] is True
+    assert row["viewWhy"], "the reason is not on screen"
+    assert row["viewWhySeen"], "the reason is in the DOM but not visible"
+    assert "Mario" in row["viewWhy"]
+    # The same sentence is the hover, so a narrow row still answers.
+    assert row["viewTitle"] == row["viewWhy"]
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_a_control_he_cannot_use_reads_what_is_actually_on_screen(
+        rendered, width):
+    """The session is set to "only Mario" and this ghost has no boxes, so the
+    overlay is drawing the WHOLE PICTURE. A disabled control reading "Only
+    Mario" beside it is a control contradicting the screen -- and the reason
+    sentence right under it says the whole picture is all that can be shown."""
+    row = rendered[("asked", width)][0]
+    assert row["viewDisabled"] is True
+    assert row["viewValue"] == "whole", (
+        "the control names a view the overlay is not drawing")
+    assert row["viewWhy"], "and it still says why"

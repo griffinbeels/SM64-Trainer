@@ -46,13 +46,15 @@ def no_session_state() -> dict:
     agreed shape, switched off, with the reason as a sentence. Opacity and the
     colour treatment are None on purpose: nobody chose them here, and the card
     shows unknown as unknown."""
-    return {"enabled": False, "opacity": None, "tint": None, "nudge_frames": 0,
-            "target": None,
+    return {"enabled": False, "opacity": None, "tint": None, "view": None,
+            "nudge_frames": 0, "target": None,
             "source": {"available": False, "reason": "no_session",
                        "reason_text": "The ghost overlay is not available in "
                                       "this window.",
                        "template_id": None, "attempt_id": None,
-                       "exactness": None},
+                       "exactness": None, "mario_boxes_available": False,
+                       "mario_boxes_reason": None,
+                       "mario_boxes_reason_text": None},
             "window": {"running": False, "visible": False}}
 
 

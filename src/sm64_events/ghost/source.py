@@ -73,11 +73,24 @@ opposite case and the one exception: its areas are three different places, so a
 castle secret star (course 0) names the area too where the game says which one.
 A SEGMENT names no place at all: a movement crosses levels by definition, and a
 gate that refused the second half of a route would be worse than none.
+
+**AND WHERE MARIO IS IN IT.** His words, 2026-09-20: *"let's do tight
+rectangles on our existing ghosts, let's try it."* A clip may have a box list
+beside it -- one rectangle per picture, made outside the app -- and a ghost
+that has one can be drawn as MARIO ALONE instead of the whole recorded screen.
+The list is read and re-validated here on every answer (`ghost/mariobox.py`),
+never cached and never trusted because it was saved; a ghost without one simply
+does not offer that view, and says why. `mario_boxes` is another SIBLING of
+`view`, like `span`: it is beside the clip on disk and owns nothing inside it.
 """
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Callable
 
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
+from sm64_events.ghost.mariobox import MarioBoxList
+from sm64_events.ghost.mariobox import REASONS as BOX_REASONS
+from sm64_events.ghost.mariobox import read_box_list
 from sm64_events.memory.addresses import (CASTLE_SECRET_STAR_AREAS,
                                           COURSE_BY_LEVEL, LEVEL_CASTLE_INSIDE)
 
@@ -175,6 +188,16 @@ class GhostSource:
     #: shows the ghost wherever the player is, which is what it did before.
     level: int | None = None
     area: int | None = None
+    #: Mario's rectangle in every picture, when a box list sits beside this
+    #: clip, and the named reason when one does not. Absent is the ORDINARY
+    #: case: every ghost recorded before this existed has no boxes.
+    mario_boxes: MarioBoxList | None = None
+    mario_boxes_reason: str | None = None
+    #: WHERE THE CLIP IS ON DISK, and deliberately NOT on the wire. The box
+    #: list is found beside it, so the provider that resolved the clip is the
+    #: only thing that can say where to look; the page has no business knowing
+    #: a path on his machine, and `payload()` therefore omits it.
+    clip_path: Path | None = None
 
     def payload(self) -> dict:
         """The JSON the route serves. `view` is the clip's own payload, by
@@ -189,7 +212,13 @@ class GhostSource:
                 "exactness": self.exactness,
                 "span": self.span.payload() if self.span else None,
                 "level": self.level,
-                "area": self.area}
+                "area": self.area,
+                "mario_boxes": self.mario_boxes.payload() if self.mario_boxes
+                               else None,
+                "mario_boxes_reason": self.mario_boxes_reason,
+                "mario_boxes_reason_text":
+                    BOX_REASONS.get(self.mario_boxes_reason)
+                    if self.mario_boxes_reason else None}
 
 
 def unavailable(reason: str, **known: Any) -> GhostSource:
@@ -216,7 +245,8 @@ def from_marked_attempt(template, *, replay) -> GhostSource | None:
     if attempt_id is None:
         return None
     known = {"template_id": template.id, "attempt_id": attempt_id}
-    if replay.find_saved(attempt_id) is None:
+    saved = replay.find_saved(attempt_id)
+    if saved is None:
         # Asked BEFORE view(), which would cut a clip out of the live ring
         # for an unsaved run. Reading a practice card must never do that.
         return unavailable("recording_not_saved", **known)
@@ -228,8 +258,10 @@ def from_marked_attempt(template, *, replay) -> GhostSource | None:
         return unavailable("recording_not_saved", **known)
     if view.get("frame_map") is None:
         return unavailable("recording_has_no_frame_map", **known)
+    # The clip's own path rides along so the box list can be found beside it;
+    # `payload()` never emits it.
     return GhostSource(available=True, media_url=view["clip_url"], view=view,
-                       exactness=EXACT, **known)
+                       exactness=EXACT, clip_path=saved, **known)
 
 
 Provider = Callable[..., GhostSource | None]
@@ -398,6 +430,29 @@ def _with_place(answer: GhostSource, kind: str, entity_key: str) -> GhostSource:
     return replace(answer, level=level, area=area)
 
 
+def _with_boxes(answer: GhostSource) -> GhostSource:
+    """Attach Mario's per-picture rectangles, or the named reason there are
+    none. Beside the view, never inside it.
+
+    READ EVERY TIME, and validated against THIS clip's picture count. The list
+    is made outside the app by a hand-run tool; the clip can be re-extracted
+    under it, and the count is the one check that catches a list belonging to
+    another cut of the same run. Remembering it across calls would be
+    remembering somebody else's file -- so `read_box_list` keys what it holds
+    on the file's own mtime and size, and a file that has changed at all is
+    parsed again. Attached HERE rather than in the provider so a later provider (an
+    imported replay, downloaded footage) gets it for free and none of them can
+    grow a second rule for where the boxes live.
+    """
+    if not answer.available or not answer.view or answer.clip_path is None:
+        return replace(answer, mario_boxes=None,
+                       mario_boxes_reason="no_box_list")
+    stamps = answer.view.get("picture_igt") or ()
+    boxes, reason = read_box_list(answer.clip_path,
+                                  pictures=len(stamps) or None)
+    return replace(answer, mario_boxes=boxes, mario_boxes_reason=reason)
+
+
 def _attempt_row(attempts, attempt_id):
     """The attempt behind this ghost, or None when nothing can name it. A
     missing row is not an error — the footage is still playable, unclamped."""
@@ -415,6 +470,14 @@ def _with_span(answer: GhostSource, attempts, events) -> GhostSource:
         return answer
     row = _attempt_row(attempts, answer.attempt_id)
     return replace(answer, span=span_of(answer.view, row, events))
+
+
+def _answer(source: GhostSource, kind: str, entity_key: str) -> GhostSource:
+    """Every answer, whichever way it went, says where the ghost belongs and
+    whether Mario has been found in it. One door so a new refusal cannot ship
+    with a field nobody filled -- `None` there would mean "not asked", which is
+    a third state the page has no reading for."""
+    return _with_place(_with_boxes(source), kind, entity_key)
 
 
 def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
@@ -439,18 +502,18 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
         raise ValueError("a ghost is for a star or a segment")
     template = templates.active_for(kind, entity_key, strat)
     if template is None:
-        return _with_place(unavailable("no_template"), kind, entity_key)
+        return _answer(unavailable("no_template"), kind, entity_key)
     for provider in providers:
         answer = provider(template, replay=replay)
         if answer is not None:
-            return _with_place(_with_span(answer, attempts, events),
-                               kind, entity_key)
-    return _with_place(
-        unavailable("template_has_no_attempt", template_id=template.id),
-        kind, entity_key)
+            return _answer(_with_span(answer, attempts, events),
+                           kind, entity_key)
+    return _answer(unavailable("template_has_no_attempt",
+                               template_id=template.id), kind, entity_key)
 
 
-__all__ = ["ATTEMPT_FRAMES", "EXACT", "GRAB_EVENT", "GRAB_EVENT_TYPE", "KINDS",
-           "LEVEL_BY_COURSE", "PICTURE_TIMER", "PROVIDERS", "REASONS",
-           "GhostSource", "GhostSpan", "attempt_id_of", "from_marked_attempt",
-           "place_of", "resolve_ghost", "span_of", "unavailable"]
+__all__ = ["ATTEMPT_FRAMES", "BOX_REASONS", "EXACT", "GRAB_EVENT",
+           "GRAB_EVENT_TYPE", "KINDS", "LEVEL_BY_COURSE", "PICTURE_TIMER",
+           "PROVIDERS", "REASONS", "GhostSource", "GhostSpan", "attempt_id_of",
+           "from_marked_attempt", "place_of", "resolve_ghost", "span_of",
+           "unavailable"]

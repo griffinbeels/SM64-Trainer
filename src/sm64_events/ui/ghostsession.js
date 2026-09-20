@@ -41,6 +41,16 @@ export const OPACITY_MAX = 1;
 export const HUE_MIN = 0;
 export const HUE_MAX = 359;
 
+// WHAT THE GHOST SHOWS. His report is why there is a choice: *"it's still
+// extremely hard to understand the ghost, because all the camera movement /
+// scenery overlaps."* The whole recorded screen is the ghost he already knows;
+// only-Mario draws the rectangle he is in and leaves the scenery out.
+//
+// The LABELS say what each one does rather than naming the technique, and they
+// are the words the control offers -- there is no second list anywhere.
+export const GHOST_VIEWS = ["whole", "mario"];
+export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
+
 // One press is one game frame: the unit the ghost actually moves in, and the
 // unit a frame map can express. Press and hold to run through them.
 export const NUDGE_STEP = 1;
@@ -156,6 +166,11 @@ export function ghostTargetKey(target) {
  *               while nobody has said, which the control draws as unknown and
  *               never writes back
  *   tint        {enabled, hue} as the SERVER stated it -- or null, same rule
+ *   view        "whole" or "mario" as the SERVER stated it -- or null, same
+ *               rule again: a control that guesses is a control that writes
+ *               its guess back the first time he touches it
+ *   marioBoxes  whether this ghost CAN be drawn as Mario alone, and the
+ *               server's own sentence saying why not
  *   nudge       whole game frames, already clamped
  */
 export function ghostControls(session, entityKey) {
@@ -167,7 +182,8 @@ export function ghostControls(session, entityKey) {
     reasonText: "Checking whether this has a run to play alongside you...",
     // Nobody has said how solid the ghost is drawn, so the control does not
     // pretend to know -- see clampOpacity.
-    showsTuning: false, opacity: null, tint: null, nudge: 0,
+    showsTuning: false, opacity: null, tint: null, view: null,
+    marioBoxes: { available: false, reasonText: null }, nudge: 0,
   };
   if (!session || typeof session !== "object") return waiting;
   const targetKey = ghostTargetKey(session.target);
@@ -185,6 +201,13 @@ export function ghostControls(session, entityKey) {
     showsTuning: enabled,
     opacity: clampOpacity(session.opacity),
     tint: ghostTint(session.tint),
+    view: GHOST_VIEWS.includes(session.view) ? session.view : null,
+    marioBoxes: {
+      available: Boolean(source.mario_boxes_available),
+      // The server's own sentence, never a second copy of it here: the reader
+      // that knows WHY there are no boxes is the one that looked for them.
+      reasonText: source.mario_boxes_reason_text || null,
+    },
     nudge: clampNudge(session.nudge_frames),
   };
 }
@@ -212,6 +235,20 @@ export function nudgeText(frames) {
 /** The same offset as a duration, for the control's own hover text. */
 export function nudgeSeconds(frames) {
   return clampNudge(frames) / GAME_FPS;
+}
+
+/**
+ * What the view control SHOWS: the server's answer, or the choice he has just
+ * made and which has not come back yet. Null while nobody has said.
+ *
+ * The same optimistic-draft rule the colour follows, and it is its own
+ * function for the same reason: the control has to be able to tell "the
+ * server says whole" from "nobody has said", because only one of those may be
+ * written back.
+ */
+export function shownView(current, draft) {
+  if (GHOST_VIEWS.includes(draft)) return draft;
+  return GHOST_VIEWS.includes(current) ? current : null;
 }
 
 /**

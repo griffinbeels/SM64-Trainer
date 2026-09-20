@@ -25,6 +25,7 @@ proves too slow -- the brainstorm's A+ escalation).
 import asyncio
 import io
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -84,11 +85,18 @@ HELD = 3029
 # started cleanly at zero and stopped at the grab, which is why a rule that
 # refused every real clip could pass here.
 LAST_IGT = 3 + RUN - 1
-VIEW = {"frame_times": None,
+#: PER-PICTURE TIMES, because that is what his real clips carry and the
+#: difference is not cosmetic: with them the lookup from a presented
+#: `mediaTime` to a picture sits exactly ON the boundary -- a float hair below
+#: `frame_times[k]` names picture k-1 -- while a constant-rate clip rounds to
+#: the nearest and hides it. A clip without them could not catch the off-by-one
+#: the page guards against with `PICTURE_EPSILON`.
+PICTURES = CLIP_SECONDS * CLIP_FPS
+VIEW = {"frame_times": [round(k / CLIP_FPS, 6) for k in range(PICTURES)],
         "picture_igt": [HELD] * PRE_ROLL + list(range(3, LAST_IGT + 1))
         + [LAST_IGT] * TAIL,
         "duration_s": float(CLIP_SECONDS), "video_start_s": 0.0,
-        "fps": CLIP_FPS, "game_fps": 30, "encode": "cfr"}
+        "fps": CLIP_FPS, "game_fps": 30, "encode": "picture_feed"}
 #: what the source computes from the attempt's own frames: the attempt is
 #: pictures PRE_ROLL..PRE_ROLL+RUN-1, and neither the lead-in nor the cutscene
 #: is part of it.
@@ -142,6 +150,12 @@ class _Fixture:
         #: the attempt's exact span, when the source can compute one. None is
         #: the older server (and the clip whose frames cannot be resolved).
         self.span = None
+        #: Mario's rectangle per picture, when the test gives the clip one.
+        #: None is every ghost recorded before this existed.
+        self.boxes = None
+        #: The clip's own view payload, when a test serves REAL footage rather
+        #: than the stand-in this module builds.
+        self.source_view = None
         self.feed = GhostClockFeed()
         #: every source query the page actually sent, so the test can check
         #: which star the page ASKED about rather than trusting that it read
@@ -158,7 +172,13 @@ class _Fixture:
             self.source_queries.append(dict(request.query_params))
             if not self.available:
                 return UNAVAILABLE
-            return {**AVAILABLE, "span": self.span}
+            return {**AVAILABLE,
+                    "view": self.source_view or AVAILABLE["view"],
+                    "span": self.span,
+                    "mario_boxes": self.boxes,
+                    "mario_boxes_reason": None if self.boxes else "no_box_list",
+                    "mario_boxes_reason_text": None if self.boxes else
+                        "This run has not had Mario found in it yet."}
 
         @app.post("/test/clock")
         def clock(igt: int, global_timer: int, level: int = 8, area: int = 1,
@@ -198,6 +218,13 @@ class _Fixture:
                 if delay > 0:
                     await asyncio.sleep(delay)
             return {"sent": len(run["igts"])}
+
+        @app.post("/test/view")
+        def view(name: str):
+            # What `PUT /api/ghost` does: the session hands the feed the new
+            # view and nothing else happens. No URL, no navigation.
+            self.feed.set_view(name)
+            return {"ok": True}
 
         @app.post("/test/tint")
         def tint(enabled: bool, hue_degrees: int):
@@ -661,7 +688,7 @@ def _nudge_over_the_clock(page, url: str) -> None:
     assert page.evaluate("window.__alive") == "yes", "the page was reloaded"
     assert over_the_clock["nudge_frames"] == -20, over_the_clock
     assert over_the_clock["target_igt"] == over_the_clock["sample"]["igt"] - 20
-    assert abs(over_the_clock["decision"]["drift"]) <= 2, over_the_clock
+    assert abs(over_the_clock["decision"]["drift"]) <= DRIFT_FRAMES, over_the_clock
 
     # A page that starts FRESH — a reload, a new window, a child the session
     # restarted — takes the nudge in force NOW on its first sample, rather than
@@ -741,7 +768,7 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
         assert playing["samples"] >= 100, playing
         assert playing["paused"] is False, playing
         assert playing["decision"]["drift"] is not None, playing
-        assert abs(playing["decision"]["drift"]) <= 2, playing
+        assert abs(playing["decision"]["drift"]) <= DRIFT_FRAMES, playing
         assert fixture.feed.listeners == 1
 
         # 4. The timer stalls: the element pauses, with no pause detector.
@@ -775,15 +802,16 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
 
         # 6. His timing hotkey, over the channel the companion window uses.
         _post_message(page, "{type: 'ghost-nudge', nudge_frames: 45}")
-        # Long enough for the rate correction to have done its work: it closes
-        # the remaining error over `correctionTau` (0.5 s), so a 31-sample
-        # trace measured it mid-correction and reported 3 frames on a page that
-        # was settling correctly. Four time constants, not a wider tolerance.
+        # Long enough for the rate correction to have done its work: it
+        # closes the remaining error over `correctionTau` (0.5 s), so a
+        # 31-sample trace measured it mid-correction and reported 3 frames on
+        # a page that was settling correctly. Four time constants, not a wider
+        # tolerance.
         nudged = _trace(page, list(range(100, 161)))
         assert nudged["nudge_frames"] == 45, nudged
         assert nudged["target_igt"] == nudged["sample"]["igt"] + 45, nudged
         assert nudged["decision"]["target"] == nudged["sample"]["igt"] + 45, nudged
-        assert abs(nudged["decision"]["drift"]) <= 2, nudged
+        assert abs(nudged["decision"]["drift"]) <= DRIFT_FRAMES, nudged
 
         # 7. The same clock, pushed by the parent instead of the server --
         #    the escalation path, proved rather than assumed.
@@ -808,3 +836,818 @@ def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
 
     assert fixture.feed.listeners == 0
     assert fixture.feed.running is False
+
+
+# ---------------------------------------------------------------------------
+# ONLY MARIO: the third ghost view, read off the canvas it paints
+# ---------------------------------------------------------------------------
+#
+# His words, 2026-09-20: *"let's do tight rectangles on our existing ghosts,
+# let's try it."* Everything below is measured from PAINTED PIXELS rather than
+# from the page's own account of itself: the claim is about what lands on his
+# screen over Project64, and a status field saying a box was used is exactly
+# what a page with a broken draw would still report.
+
+#: HOW FAR OUT THE GHOST MAY BE, in game frames, on a single reading.
+#:
+#: Measured rather than chosen (probe, 2026-09-20, 168 consecutive readings of
+#: steady play on this clip): drift is 0 in 104, 1 in 62, and reaches 3 once,
+#: while the rate correction hunts between 0.967 and 1.1. It hunts because the
+#: clip carries PER-PICTURE times, so the target is a picture's midpoint while
+#: the presented `mediaTime` is its start -- half a picture of standing error
+#: for the correction to chase, which a constant-rate fixture never showed.
+#:
+#: A bound of 2 on one sample of a hunting value is a coin flip (it failed 2
+#: runs in 4), and the repo has paid for that shape before: take the step from
+#: the recorded values and allow it. It keeps its teeth -- a ghost that had
+#: stopped following drifts without bound, and the mutation that reads the
+#: requested picture instead of the presented one still fails by name.
+DRIFT_FRAMES = 3
+
+#: The clip is 320x240, so a 640x480 window makes the `contain` mapping a
+#: plain doubling with no offset -- which is what lets the expected rectangle
+#: be computed HERE, by hand, instead of by the module under test.
+MARIO_VIEWPORT = (640, 480)
+MARIO_SCALE = 2
+#: Boxes that JUMP between neighbouring pictures. A list that crept would let
+#: a one-picture lag pass unnoticed; 50 clip pixels between consecutive
+#: pictures is 100 on screen, and no tolerance hides that.
+BOX_STRIDE = 50
+BOX_WIDTH, BOX_HEIGHT = 40, 60
+BOX_TOP = 30
+#: `ui/ghost/mariobox.js::MARGIN_FRACTION` is 0.08 and the box's larger side
+#: is 60, so the margin is round(4.8) = 5 clip pixels on every side. Stated
+#: here rather than imported: this file is the independent opinion.
+BOX_MARGIN = 5
+
+
+def mario_box(index):
+    """Mario's rectangle in picture `index`, in the clip's own pixels.
+
+    ONE IN FIVE SITS IN THE BOTTOM-RIGHT CORNER, touching both edges. Not
+    variety for its own sake: a clear that rounds the wrong way only leaves a
+    line where the cut-out reached the canvas's own edge, so a generator that
+    kept Mario comfortably inside the picture made that guard TOOTHLESS -- and
+    it measurably was, until this row existed.
+    """
+    if index % 5 == 4:
+        return [320 - BOX_WIDTH, 240 - BOX_HEIGHT, BOX_WIDTH, BOX_HEIGHT]
+    return [20 + (index % 5) * BOX_STRIDE, BOX_TOP, BOX_WIDTH, BOX_HEIGHT]
+
+
+def expected_on_canvas(box):
+    """Where that rectangle must land on the canvas, with its margin, at a
+    viewport of exactly the clip's aspect. Plain arithmetic, deliberately not
+    the page's."""
+    x, y, w, h = box
+    left = max(0, x - BOX_MARGIN)
+    top = max(0, y - BOX_MARGIN)
+    right = min(320, x + w + BOX_MARGIN)
+    bottom = min(240, y + h + BOX_MARGIN)
+    return {"left": left * MARIO_SCALE, "top": top * MARIO_SCALE,
+            "width": (right - left) * MARIO_SCALE,
+            "height": (bottom - top) * MARIO_SCALE}
+
+
+def box_list(pictures):
+    return {"width": 320, "height": 240, "maker": "the test",
+            "boxes": [mario_box(index) for index in range(pictures)]}
+
+
+#: The painted region of the overlay's canvas, in CSS pixels, from its own
+#: alpha channel, TOGETHER WITH the status that produced it. Everything the
+#: page does not draw is left CLEAR -- which over Project64 is the game
+#: showing through -- so the bounding box of what is not clear is exactly what
+#: he would see.
+#:
+#: ONE READ, and that is not tidiness. A `requestVideoFrameCallback` fires
+#: between two `evaluate` round trips and repaints; the first run of the
+#: cut-out check reported the rectangle exactly one picture (100 screen pixels)
+#: away from the box the status named, and the page was right both times.
+PAINTED = """
+(() => {
+  const status = window.ghostStatus();
+  const canvas = document.getElementById('mario');
+  const ratio = window.devicePixelRatio || 1;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const data = ctx.getImageData(0, 0, w, h).data;
+  let left = w, top = h, right = -1, bottom = -1, painted = 0;
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      if (data[(y * w + x) * 4 + 3] > 8) {
+        painted += 1;
+        if (x < left) left = x;
+        if (x > right) right = x;
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+      }
+    }
+  }
+  // PAINTED PIXELS OUTSIDE THE RECTANGLE THE PAGE SAYS IT DREW. A bounding
+  // box cannot see a one-device-pixel line left behind by a clear that
+  // rounded inward at 150%: it widens the box by two thirds of a CSS pixel,
+  // inside any sane tolerance, while being a visible stripe of stale footage
+  // over his game.
+  let outside = 0;
+  const drawn = status.mario_drawn;
+  if (drawn) {
+    const l = Math.floor(drawn.dx * ratio) - 1;
+    const t = Math.floor(drawn.dy * ratio) - 1;
+    const r = Math.ceil((drawn.dx + drawn.dw) * ratio) + 1;
+    const b = Math.ceil((drawn.dy + drawn.dh) * ratio) + 1;
+    for (let y = 0; y < h; y += 1)
+      for (let x = 0; x < w; x += 1)
+        if (data[(y * w + x) * 4 + 3] > 8
+            && (x < l || x > r || y < t || y > b)) outside += 1;
+  }
+  const box = {painted, outside,
+               picture: status.mario_picture, box: status.mario_box,
+               view: status.view, canvas: {width: w / ratio, height: h / ratio}};
+  if (!painted) return box;
+  return {...box,
+          left: left / ratio, top: top / ratio,
+          width: (right - left + 1) / ratio,
+          height: (bottom - top + 1) / ratio};
+})()
+"""
+
+#: Two readings the test installs on the page ONCE, both built on the REAL
+#: modules rather than on a restatement of what they do.
+#:
+#: `__slotOfPresented` asks `ui/frame.js` -- the clip's one owner of time ->
+#: picture, the same door the follower reads through -- which picture the
+#: PRESENTED media time names, and `__slotOfRequested` asks the same question
+#: of `currentTime`, which is what the element was told to seek to. While the
+#: video plays those two are about a picture apart, and that gap is what makes
+#: the lag check able to fail at all.
+#:
+#: `__compareCutOut` is the colour reading: how much of the painted cut-out is
+#: still the footage's own colour, compared against the SAME source rectangle
+#: drawn into a scratch canvas the page has never seen.
+INSTALL = """
+(async () => {
+  const frame = await import('/ui/frame.js');
+  const answer = await (await fetch(
+    '/api/ghost/source?kind=star&entity_key=LLL-1')).json();
+  const clock = frame.clipClock(answer.view);
+  const video = document.getElementById('ghost');
+  const canvas = document.getElementById('mario');
+  // Both readings and the page's own answer in ONE tick, for the reason
+  // `PAINTED` takes its own: a picture can be presented between two calls.
+  window.__followed = () => {
+    const status = window.ghostStatus();
+    return {presented: frame.slotAtTime(status.video_time, clock),
+            requested: frame.slotAtTime(video.currentTime, clock),
+            picture: status.mario_picture, box: status.mario_box};
+  };
+  window.__compareCutOut = () => {
+    const drawn = window.ghostStatus().mario_drawn;
+    if (!drawn) return {same: null, pixels: 0};
+    const ratio = window.devicePixelRatio || 1;
+    const ctx = canvas.getContext('2d');
+    const painted = ctx.getImageData(
+      Math.round(drawn.dx * ratio), Math.round(drawn.dy * ratio),
+      Math.max(1, Math.round(drawn.dw * ratio)),
+      Math.max(1, Math.round(drawn.dh * ratio)));
+    const probe = document.createElement('canvas');
+    probe.width = painted.width;
+    probe.height = painted.height;
+    const pctx = probe.getContext('2d');
+    pctx.drawImage(video, drawn.sx, drawn.sy, drawn.sw, drawn.sh,
+                   0, 0, probe.width, probe.height);
+    const source = pctx.getImageData(0, 0, probe.width, probe.height).data;
+    let same = 0, total = 0;
+    for (let i = 0; i < painted.data.length; i += 4) {
+      total += 1;
+      if (Math.abs(painted.data[i] - source[i]) <= 8
+          && Math.abs(painted.data[i + 1] - source[i + 1]) <= 8
+          && Math.abs(painted.data[i + 2] - source[i + 2]) <= 8) same += 1;
+    }
+    return {same: total ? same / total : null, pixels: total};
+  };
+  return true;
+})()
+"""
+
+
+def test_the_ghost_can_be_drawn_as_only_mario(tmp_path):
+    """The whole round at the page's own level: the box list arrives, the view
+    flips on the clock without a reload, only the box region is painted, it is
+    painted where the footage has it, it follows the PRESENTED picture, and
+    the colour lands on the box alone."""
+    clip = tmp_path / "ghost.mp4"
+    _build_clip(clip)
+
+    with _Fixture(clip) as fixture, get_driver().launch() as page:
+        fixture.boxes = box_list(len(VIEW["picture_igt"]))
+        url = f"{fixture.url}/ui/ghost/index.html?kind=star&entity_key=LLL-1"
+        page.set_viewport(*MARIO_VIEWPORT)
+        page.goto(url)
+        page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+        assert page.evaluate(INSTALL) is True
+        _the_page_took_the_box_list(page)
+        _only_the_box_region_is_painted(page)
+        _the_cut_out_is_where_the_footage_has_it(page)
+        _the_box_follows_the_presented_picture(page)
+        _the_colour_lands_on_the_cut_out(page)
+        _a_still_ghost_still_takes_a_new_colour(page)
+        _the_ghost_still_follows_in_the_mario_view(page)
+        _the_whole_picture_view_is_the_base_behaviour(page)
+        _a_ghost_with_no_boxes_never_offers_the_view(page, fixture, url)
+        _a_list_that_appears_later_is_picked_up(page, fixture)
+
+
+def _the_page_took_the_box_list(page):
+    """It indexes like the clip's own per-picture arrays, and flipping the
+    view is a message on the clock rather than a navigation."""
+    status = page.evaluate("window.ghostStatus()")
+    assert status["boxes_available"] is True, status
+    assert status["boxes_pictures"] == len(VIEW["picture_igt"]), status
+    assert status["view"] == "whole", "the ghost starts as the one he knows"
+
+    page.evaluate("(() => { window.__alive = 'yes'; return true; })()")
+    page.evaluate("(() => { fetch('/test/view?name=mario', {method: 'POST'});"
+                  " return true; })()")
+    _trace(page, list(range(3, 30)))
+    assert page.evaluate("window.__alive") == "yes", "the page was reloaded"
+    after = page.evaluate("window.ghostStatus()")
+    assert after["view"] == "mario" and after["view_requested"] == "mario"
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('ghost')).visibility"
+    ) == "hidden", "the whole picture is still on screen under the cut-out"
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('mario')).visibility"
+    ) == "visible"
+
+
+def _only_the_box_region_is_painted(page):
+    """(a) Everything outside the box is left CLEAR, which over Project64 is
+    the game showing through. Measured on the alpha channel of the real
+    canvas, never on a style."""
+    painted = page.evaluate(PAINTED)
+    assert painted["painted"] > 0, "nothing was painted at all"
+    assert painted["canvas"] == {"width": MARIO_VIEWPORT[0],
+                                 "height": MARIO_VIEWPORT[1]}, painted
+    # A cut-out, not a picture: 50 x 70 clip pixels of 320 x 240 is under 5%.
+    whole = MARIO_VIEWPORT[0] * MARIO_VIEWPORT[1]
+    assert painted["painted"] < whole * 0.10, painted
+
+
+def _the_cut_out_is_where_the_footage_has_it(page):
+    """(b) At a viewport of the clip's own aspect the mapping is a doubling,
+    so the expected rectangle is arithmetic this file does itself."""
+    painted = page.evaluate(PAINTED)
+    box = painted["box"]
+    assert box is not None, painted
+    assert box == mario_box(painted["picture"]), painted
+    want = expected_on_canvas(box)
+    for edge in ("left", "top", "width", "height"):
+        assert abs(painted[edge] - want[edge]) <= 2, (
+            f"{edge}: painted {painted[edge]} against {want[edge]} for box "
+            f"{box} on picture {painted['picture']}")
+    assert painted["outside"] == 0, (
+        f"{painted['outside']} pixels are painted outside the cut-out -- a "
+        "previous one was not fully cleared")
+
+
+def _the_box_follows_the_presented_picture(page):
+    """(c) THE ONE A STATUS FIELD CANNOT SETTLE. The box drawn has to be the
+    one for the picture Chromium PRESENTED, not for the one the element was
+    asked to seek to -- those are about a picture apart while it plays, and a
+    Mario a picture behind his own footage visibly swims.
+
+    The boxes jump 50 clip pixels between neighbours, so a one-picture slip is
+    100 screen pixels out and no tolerance hides it. Both readings come from
+    `ui/frame.js` itself rather than from a restatement of what it does.
+    """
+    seen = []
+    for start in (40, 70, 100, 130):
+        _trace(page, list(range(start, start + 12)))
+        seen.append(page.evaluate("(() => window.__followed())()"))
+    # ...and MID-TRACE, while the element is really playing. A trace that has
+    # settled leaves the two clocks equal, and comparing them there compares a
+    # function with itself: the assertion below can only fail if they can
+    # differ, so at least one sample must catch them apart.
+    seen += _followed_while_playing(page, list(range(160, 240)))
+    for row in seen:
+        assert row["picture"] == row["presented"], seen
+        assert row["box"] == mario_box(row["presented"]), seen
+    # ...and the pictures really moved, or every line above is vacuous.
+    assert len({row["picture"] for row in seen}) > 1, seen
+    apart = [row for row in seen if row["requested"] != row["presented"]]
+    assert apart, (
+        "the requested and presented pictures never differed, so this check "
+        f"could not have failed: {seen}")
+
+
+def _followed_while_playing(page, igts):
+    """Samples taken DURING a trace rather than after it settles.
+
+    The page's own trace door returns when the clock goes quiet, and by then
+    the element has caught up -- `currentTime` and the presented picture agree,
+    and the difference this whole check is about has gone.
+    """
+    page.evaluate(_TRACE % json.dumps({"igts": list(igts)}))
+    rows = []
+    for _ in range(12):
+        page.wait_ms(60)
+        if page.evaluate("window.__done === true"):
+            break
+        row = page.evaluate("(() => window.__followed())()")
+        if row["picture"] is not None:
+            rows.append(row)
+    for _ in range(80):
+        if page.evaluate("window.__done === true"):
+            break
+        page.wait_ms(50)
+    return rows
+
+
+def _the_colour_lands_on_the_cut_out(page):
+    """(d) His ruling, 2026-09-20: *"color correction should only apply to the
+    Mario box now (it shouldn't impact anything other than the cutout
+    mario)."*
+
+    In the MARIO view the cut-out is the only thing on screen, so colouring it
+    is colouring the ghost. Compared against the SAME pixels cut out of the
+    video by this test: the cut-out matches the footage's own colours while the
+    shift is off and stops matching them while it is on.
+
+    READ ON A HELD GHOST -- a repeated counter value, so the follower pauses
+    the element. The canvas was painted on the last presented picture and this
+    comparison draws the video as it is NOW; while it is playing those can be
+    one picture apart, and the reading is then about two different moments of
+    the footage rather than about the colour. Measured at 0.75 under a loaded
+    run (three browser files in one process), and it is the same class of
+    mistake as reading the status and the canvas in two round trips.
+    """
+    page.evaluate("(() => { fetch('/test/tint?enabled=false&hue_degrees=120',"
+                  " {method: 'POST'}); return true; })()")
+    _trace(page, [170] * 12)
+    plain = page.evaluate("(() => window.__compareCutOut())()")
+    assert plain["pixels"] > 1000, plain
+    assert plain["same"] > 0.9, (
+        f"the cut-out does not match the footage it came from: {plain}")
+
+    page.evaluate("(() => { fetch('/test/tint?enabled=true&hue_degrees=120',"
+                  " {method: 'POST'}); return true; })()")
+    _trace(page, [170] * 12)
+    shifted = page.evaluate("(() => window.__compareCutOut())()")
+    assert shifted["same"] < plain["same"] - 0.3, (
+        f"the colour shift changed nothing inside the box: {shifted} "
+        f"against {plain}")
+    status = page.evaluate("window.ghostStatus()")
+    assert status["box_filter"] == "hue-rotate(120deg)", status
+    # BOTH surfaces wear the same string: flipping the view must change what is
+    # under the colour, never the colour.
+    assert status["tint_filter"] == "hue-rotate(120deg)", status
+
+
+def _a_still_ghost_still_takes_a_new_colour(page):
+    """F1. The canvas only paints when a picture is presented, so with the
+    game paused, the Usamune menu open, or Project64 auto-paused because he
+    clicked the trainer, dragging the colour slider changed NOTHING -- and
+    those are exactly the moments he would be tuning it.
+
+    Driven with no new picture at all: the clock is left alone, so the element
+    is holding, and the only thing that happens is the colour arriving.
+    """
+    _trace(page, [220] * 8)          # a stalled timer: the ghost holds
+    before = page.evaluate(PAINTED)
+    assert before["painted"] > 0, before
+    held = page.evaluate("window.ghostStatus()")
+    assert held["paused"] is True, held
+
+    page.evaluate("(() => { fetch('/test/tint?enabled=false&hue_degrees=120',"
+                  " {method: 'POST'}); return true; })()")
+    # ONE sample, the same picture again: the tint rides it, nothing new is
+    # presented, and the cut-out still has to change.
+    _trace(page, [220])
+    after = page.evaluate("(() => window.__compareCutOut())()")
+    assert after["same"] > 0.9, (
+        f"a still ghost kept its old colour: {after}")
+    page.evaluate("(() => { fetch('/test/tint?enabled=true&hue_degrees=120',"
+                  " {method: 'POST'}); return true; })()")
+    _trace(page, [220])
+    back = page.evaluate("(() => window.__compareCutOut())()")
+    assert back["same"] < 0.2, f"the colour did not come back: {back}"
+
+
+def _the_whole_picture_view_is_the_base_behaviour(page):
+    """THE DECISION CHANGE. The canvas paints in the Mario view and nowhere
+    else: it and the element reach the screen by two different paths, so a
+    cut-out laid over the footage can land a refresh after the picture under
+    it -- on a pan, a tinted rectangle of scenery sliding against the game.
+    The whole view is therefore exactly what it was before this round."""
+    page.evaluate("(() => { fetch('/test/view?name=whole', {method: 'POST'});"
+                  " return true; })()")
+    _trace(page, list(range(200, 215)))
+    status = page.evaluate("window.ghostStatus()")
+    assert status["view"] == "whole", status
+    assert status["boxes_available"] is True, "the boxes are still there"
+    assert page.evaluate(PAINTED)["painted"] == 0, (
+        "the cut-out is painted over the whole picture")
+    assert status["tint_filter"] == "hue-rotate(120deg)", status
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('ghost')).visibility"
+    ) == "visible"
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('mario')).visibility"
+    ) == "hidden"
+    page.evaluate("(() => { fetch('/test/view?name=mario', {method: 'POST'});"
+                  " return true; })()")
+    _trace(page, list(range(215, 230)))
+    assert page.evaluate(PAINTED)["painted"] > 0, "the cut-out did not return"
+
+
+def _the_ghost_still_follows_in_the_mario_view(page):
+    """F6(d). The element is HIDDEN in this view, and a hidden element is the
+    kind of thing a browser is allowed to stop feeding. If it quietly stopped
+    following, every cut-out would be correct and every one of them would be
+    from the wrong moment -- which no pixel check here would notice."""
+    following = _trace(page, list(range(240, 290)))
+    assert following["presentable"] is True, following
+    assert following["decision"]["reason"] == "playing", following
+    # The DECISION's own drift, not `shown_igt` against `target_igt`: the
+    # status is captured after the last sample and the element keeps PLAYING
+    # through it, so the difference read afterwards is the video's progress
+    # since, not the follower's error. This file already paid for that reading
+    # once (2026-09-18) and it cost this check a false red.
+    assert following["decision"]["drift"] is not None, following
+    assert abs(following["decision"]["drift"]) <= DRIFT_FRAMES, following
+
+
+def _a_ghost_with_no_boxes_never_offers_the_view(page, fixture, url):
+    """Every recording made before this round. Asking for Mario is NOT an
+    error -- the setting is app-wide and he walks between stars -- so the page
+    draws the whole picture and says why."""
+    fixture.boxes = None
+    page.goto(url)
+    page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+    page.evaluate("(() => { window.__alive = 'yes'; return true; })()")
+    _trace(page, list(range(3, 20)))
+    status = page.evaluate("window.ghostStatus()")
+    assert status["boxes_available"] is False, status
+    assert status["boxes_reason"] == "no_box_list", status
+    assert status["view_requested"] == "mario", "the session still asks"
+    assert status["view"] == "whole", "but the page draws what it has"
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('ghost')).visibility"
+    ) == "visible"
+    assert page.evaluate(PAINTED)["painted"] == 0
+    # ...and the whole picture wears the colour, as it always has.
+    assert status["tint_filter"] == "hue-rotate(120deg)", status
+
+
+def _a_list_that_appears_later_is_picked_up(page, fixture):
+    """F7. The boxes are made outside the app, one clip at a time, and land
+    beside the clip whenever that finishes. The practice card notices within a
+    couple of seconds because the session re-resolves on a timer; until this
+    the PAGE did not, so the control offered the Mario view while the overlay
+    kept drawing the whole picture until he switched it off and on.
+
+    Entered with no boxes and the Mario view already asked for -- which is
+    exactly the state he would be in, having turned it on for the star whose
+    boxes are still being made.
+    """
+    assert page.evaluate("window.ghostStatus()")["boxes_available"] is False
+    fixture.boxes = box_list(len(VIEW["picture_igt"]))
+    # The page asks again on its own timer; nothing here touches it.
+    for _ in range(30):
+        page.wait_ms(500)
+        if page.evaluate("window.ghostStatus()")["boxes_available"]:
+            break
+    status = page.evaluate("window.ghostStatus()")
+    assert status["boxes_available"] is True, (
+        "a box list that appeared while the ghost was up never arrived")
+    assert status["view"] == "mario", status
+    _trace(page, list(range(300, 320)))
+    assert page.evaluate(PAINTED)["painted"] > 0, "no cut-out was drawn"
+    assert page.evaluate("window.__alive") == "yes", (
+        "the page reloaded to pick up a box list")
+
+
+# ---------------------------------------------------------------------------
+# REGISTRATION: the cut-out lands on the whole picture's own box
+# ---------------------------------------------------------------------------
+#
+# Every geometry check above runs at a viewport of the clip's own aspect, where
+# the mapping is a doubling and the arithmetic is trivial. That is the easy end
+# of the range, and it is not the shape his window is: Project64 resized to
+# anything else letterboxes the picture inside the overlay, and his machine
+# runs at 150%.
+#
+# Measured against the VIDEO'S OWN PAINTED BOX rather than against a restated
+# `containRect`: the whole picture is drawn by the browser from `object-fit:
+# contain`, and where it lands is the thing the cut-out has to agree with. Two
+# backdrops, because the stand-in clip is a colour-bar pattern and a pixel of
+# it can legitimately match one of them -- a pixel matching BOTH is impossible.
+
+REGISTRATION_BACKDROPS = ("#ff00ff", "#0a2f10")
+
+
+def _painted_video_box(page):
+    """Where the whole picture actually lands, in CSS pixels, from a
+    screenshot of the composed page with the cut-out switched off."""
+    from PIL import Image, ImageChops, ImageColor
+
+    shots = []
+    for colour in REGISTRATION_BACKDROPS:
+        page.evaluate("(() => { document.documentElement.style.background ="
+                      f" {colour!r}; return true; }})()")
+        page.wait_ms(150)
+        shots.append((colour, page.screenshot()))
+    page.evaluate("(() => { document.documentElement.style.background = '';"
+                  " return true; })()")
+    painted, size = None, None
+    for colour, shot in shots:
+        image = Image.open(io.BytesIO(shot)).convert("RGB")
+        size = image.size
+        backdrop = Image.new("RGB", size, ImageColor.getrgb(colour))
+        difference = ImageChops.difference(image, backdrop)
+        painted = (difference if painted is None
+                   else ImageChops.lighter(painted, difference))
+    box = painted.getbbox()
+    assert box is not None, "the whole picture painted nothing at all"
+    ratio = page.evaluate("window.devicePixelRatio || 1")
+    left, top, right, bottom = box
+    return {"left": left / ratio, "top": top / ratio,
+            "width": (right - left) / ratio, "height": (bottom - top) / ratio,
+            "ratio": ratio, "image": size}
+
+
+def _registers_on_the_whole_picture(page, fixture, url, viewport):
+    """The cut-out's painted rectangle, against the same rectangle derived
+    from the picture's OWN painted box and the box's place inside the clip."""
+    page.set_viewport(*viewport)
+    page.goto(url)
+    page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+    page.evaluate("(() => { fetch('/test/view?name=whole', {method: 'POST'});"
+                  " return true; })()")
+    _trace(page, list(range(60, 80)))
+    whole = _painted_video_box(page)
+
+    page.evaluate("(() => { fetch('/test/view?name=mario', {method: 'POST'});"
+                  " return true; })()")
+    _trace(page, list(range(80, 100)))
+    cut = page.evaluate(PAINTED)
+    assert cut["painted"] > 0, (viewport, cut)
+    box = cut["box"]
+    assert box == mario_box(cut["picture"]), cut
+
+    # The grown box as a FRACTION of the clip's own picture, then that
+    # fraction of where the whole picture really landed. Nothing here restates
+    # the page's mapping; it reads the browser's.
+    x, y, w, h = box
+    left = max(0, x - BOX_MARGIN) / 320
+    top = max(0, y - BOX_MARGIN) / 240
+    right = min(320, x + w + BOX_MARGIN) / 320
+    bottom = min(240, y + h + BOX_MARGIN) / 240
+    want = {"left": whole["left"] + left * whole["width"],
+            "top": whole["top"] + top * whole["height"],
+            "width": (right - left) * whole["width"],
+            "height": (bottom - top) * whole["height"]}
+    # Two CSS pixels: the whole picture's box is read off a screenshot, so its
+    # own edges carry a pixel of rounding at either end.
+    for edge in ("left", "top", "width", "height"):
+        assert abs(cut[edge] - want[edge]) <= 2, (
+            f"{viewport} at {whole['ratio']}x -- {edge}: cut-out "
+            f"{cut[edge]:.2f} against the picture's own {want[edge]:.2f} "
+            f"(picture box {whole})")
+    assert cut["outside"] == 0, (
+        f"{viewport} at {whole['ratio']}x: {cut['outside']} pixels painted "
+        "outside the cut-out")
+    _nothing_is_left_behind_at_the_edge(page, viewport, whole["ratio"])
+    return {"viewport": viewport, "ratio": whole["ratio"],
+            "picture": whole, "cut": {k: cut[k] for k in
+                                      ("left", "top", "width", "height")}}
+
+
+def _nothing_is_left_behind_at_the_edge(page, viewport, ratio):
+    """A cut-out that reached the canvas's own edge, then one that did not.
+
+    The clear runs in DEVICE pixels before the ratio transform. In CSS pixels
+    it rounds inward, and at 150% the backing store is up to half a device
+    pixel wider than the rectangle a CSS-pixel clear covers -- so a box against
+    the right or bottom edge leaves a line of the previous cut-out behind: a
+    stripe of stale footage over his game, from a picture that has moved on.
+    Invisible to a bounding box, which it widens by two thirds of a CSS pixel.
+    """
+    # FOUND rather than computed: which picture a counter value lands on runs
+    # through the template, the seek and the decoder, and a test that assumed
+    # the arithmetic asked for the wrong one.
+    corner = None
+    for igt in range(60, 76):
+        corner = _trace(page, [igt] * 5)
+        if corner["mario_picture"] is not None and corner["mario_picture"] % 5 == 4:
+            break
+    assert corner and corner["mario_picture"] % 5 == 4, (
+        f"no corner box was reached: {corner}")
+    assert page.evaluate(PAINTED)["painted"] > 0, corner
+
+    # Stepped until the PICTURE changes, not the counter: neighbouring counter
+    # values can land on the same picture, and moving the clock is not the
+    # same as moving the cut-out.
+    away = None
+    for step in range(1, 8):
+        away = _trace(page, [corner["sample"]["igt"] + step] * 5)
+        if away["mario_picture"] != corner["mario_picture"]:
+            break
+    assert away and away["mario_picture"] != corner["mario_picture"], (
+        f"the ghost never left the corner box: {away}")
+    painted = page.evaluate(PAINTED)
+    assert painted["outside"] == 0, (
+        f"{viewport} at {ratio}x: {painted['outside']} pixels of the corner "
+        "cut-out survived the clear")
+
+
+@pytest.mark.parametrize("ratio", [1.0, 1.5])
+def test_the_cut_out_registers_on_the_whole_picture(tmp_path, ratio):
+    """A LETTERBOXED window and his own 150%: the two shapes where a mapping
+    error is visible and the easy 4:3 case hides one.
+
+    At 150% the canvas's backing store is 1.5 device pixels per CSS pixel, so
+    a clear that rounds the wrong way leaves a line of the previous cut-out on
+    his screen, and a size taken from a rounded `clientWidth` puts the cut-out
+    up to half a pixel off the picture it came from.
+    """
+    clip = tmp_path / "ghost.mp4"
+    _build_clip(clip)
+    with _Fixture(clip) as fixture, \
+            get_driver().launch(device_scale_factor=ratio) as page:
+        fixture.boxes = box_list(len(VIEW["picture_igt"]))
+        url = f"{fixture.url}/ui/ghost/index.html?kind=star&entity_key=LLL-1"
+        measured = [
+            _registers_on_the_whole_picture(page, fixture, url, (800, 400)),
+            _registers_on_the_whole_picture(page, fixture, url, (500, 700)),
+        ]
+    # The rig has to have MEASURED a letterbox, or it proved nothing about one.
+    wide, tall = measured
+    assert wide["picture"]["left"] > 10, wide
+    assert tall["picture"]["top"] > 10, tall
+    assert abs(measured[0]["ratio"] - ratio) < 0.01, measured
+
+
+# ---------------------------------------------------------------------------
+# HIS OWN FOOTAGE, and the box list a hand-run session really produced
+# ---------------------------------------------------------------------------
+#
+# Everything above runs on a 320x240 colour-bar stand-in with a box list this
+# file invented: every picture has a box, every box is the same size, and the
+# clip is a tenth the size of a real one. A real list is none of those things
+# -- 1600x1200, several hundred pictures, and a good fraction of them with NO
+# box. The nulls arrive BOTH ways: a long run of menu and fade at the head of
+# a recording, and single-picture dropouts where a fast flip lost him. Nothing
+# interpolates them; "null means null" is the boxes worker's deliberate call.
+#
+# Skipped rather than failed when the footage is not on this machine, the way
+# `tests/test_ui_ghost_follower.py` treats his clips: it is HIS recording, not
+# a fixture, and a fresh clone has neither the clip nor the boxes.
+
+
+def _his_clips():
+    """His own saved clips, READ-ONLY, wherever this checkout can see them.
+
+    The feature worktree is where he was recording and where the boxes worker
+    wrote the lists, so that is the interesting tree even from a child
+    worktree. `SM64_GHOST_CLIP_ROOTS` aims this elsewhere without copying
+    anything.
+    """
+    override = os.environ.get("SM64_GHOST_CLIP_ROOTS", "").strip()
+    if override:
+        roots = [Path(part) for part in override.split(os.pathsep) if part]
+    else:
+        # EVERY CHECKOUT ABOVE THIS ONE, not just the main one. `replays/` is
+        # gitignored, so it belongs to whichever tree he was recording in --
+        # and a child worktree's git common dir points at the MAIN checkout,
+        # which is not where a feature worktree's footage sits. Walking the
+        # ancestors finds the feature worktree this one is nested inside.
+        roots = [REPO / "replays"]
+        roots += [parent / "replays" for parent in REPO.parents]
+        try:
+            common = subprocess.run(
+                ["git", "-C", str(REPO), "rev-parse", "--path-format=absolute",
+                 "--git-common-dir"],
+                capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            common = ""
+        if common:
+            roots.append(Path(common).parent / "replays")
+    found = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for clip in sorted(root.rglob("attempt_*.mp4")):
+            boxes = clip.with_name(clip.stem + ".mario.json")
+            side = clip.with_suffix(".json")
+            if boxes.exists() and side.exists():
+                found.append((clip, side, boxes))
+    return found
+
+
+def _real_ghosts():
+    """Every clip of his with a box list that indexes it, newest first."""
+    for clip, side, listed in _his_clips():
+        view = json.loads(side.read_text(encoding="utf-8"))
+        boxes = json.loads(listed.read_text(encoding="utf-8-sig"))
+        if len(boxes.get("boxes", ())) == len(view.get("picture_igt") or ()):
+            yield clip, view, boxes
+
+
+def test_the_cut_out_holds_on_his_own_footage():
+    """A REAL clip, a REAL box list, and the two states an empty overlay can
+    mean told apart.
+
+    The one thing the synthetic list cannot exercise: a picture Mario is not
+    in. Nothing bridges those, so the honest answer on them is an empty
+    screen -- and `ghostStatus()` has to say WHICH empty screen it is, or a
+    flicker he reports cannot be read off the log.
+    """
+    playable = None
+    with get_driver().launch() as page:
+        page.set_viewport(800, 600)
+        for clip, view, boxes in _real_ghosts():
+            # NOT EVERY CLIP OF HIS CAN BE A GHOST, and that is the follower
+            # working: a star that crosses into a subarea restarts Usamune's
+            # counter mid-run, one counter value then names two pictures, and
+            # the template refuses (`counter_restarts`) rather than picking
+            # one. His Hazy Maze Cave clip is exactly that. The span the real
+            # server computes from the attempt row is what narrows those; this
+            # fixture has no database, so it takes the first clip that stands
+            # on its own.
+            fixture = _Fixture(clip)
+            fixture.boxes = boxes
+            fixture.source_view = view
+            with fixture:
+                page.goto(f"{fixture.url}/ui/ghost/index.html"
+                          "?kind=star&entity_key=WF-1")
+                page.wait_ms(1500)
+                if page.evaluate("window.ghostStatus().state") == "ready":
+                    playable = (clip, view, boxes)
+                    break
+    if playable is None:
+        pytest.skip("no saved clip with a usable Mario box list on this machine")
+
+    clip, view, boxes = playable
+    listed = boxes["boxes"]
+    with_mario = [i for i, box in enumerate(listed) if box]
+    without = [i for i, box in enumerate(listed) if not box]
+    assert with_mario and without, f"{clip.name} exercises neither state"
+
+    fixture = _Fixture(clip)
+    fixture.boxes = boxes
+    with fixture, get_driver().launch() as page:
+        fixture.source_view = view
+        url = f"{fixture.url}/ui/ghost/index.html?kind=star&entity_key=WF-1"
+        page.set_viewport(800, 600)
+        page.goto(url)
+        page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+        page.evaluate("(() => { fetch('/test/view?name=mario', "
+                      "{method: 'POST'}); return true; })()")
+
+        state = page.evaluate("window.ghostStatus()")
+        assert state["boxes_available"] is True, state
+        assert state["boxes_pictures"] == len(listed), state
+        assert (boxes["width"], boxes["height"]) == (
+            state["picture_size"]["width"], state["picture_size"]["height"]), (
+            "the boxes were measured on a different decode of this clip")
+
+        drawn = _drive_to_a_picture(page, view, with_mario)
+        assert drawn is not None, "no picture with a box was ever presented"
+        assert drawn["mario_state"] == "drawn", drawn
+        assert drawn["mario_box"] == listed[drawn["mario_picture"]], drawn
+        painted = page.evaluate(PAINTED)
+        assert painted["painted"] > 0, drawn
+        assert painted["outside"] == 0, painted
+
+        empty = _drive_to_a_picture(page, view, without)
+        assert empty is not None, "no picture without a box was presented"
+        assert empty["mario_state"] == "no_mario", empty
+        assert empty["mario_box"] is None, empty
+        assert page.evaluate(PAINTED)["painted"] == 0, (
+            "a picture Mario is not in painted something")
+        # ...and the two empty screens are told apart, which is the whole
+        # point of the field: no list at all says something else.
+        assert empty["boxes_available"] is True, empty
+        assert empty["pictures_without_mario"] >= 1, empty
+
+
+def _drive_to_a_picture(page, view, wanted):
+    """Hold the clock on a counter value until a picture from `wanted` is the
+    one on screen.
+
+    Driven by the CLOCK, like everything else here: there is no door that says
+    "show picture 200", and inventing one would test a path the ghost never
+    takes. Several counter values can land on one picture, so this walks.
+    """
+    stamps = view["picture_igt"]
+    targets = set(wanted)
+    for index in wanted[:: max(1, len(wanted) // 24)]:
+        igt = stamps[index]
+        if igt is None:
+            continue
+        status = _trace(page, [igt] * 6)
+        if status["mario_picture"] in targets:
+            return status
+    return None

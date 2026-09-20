@@ -5,9 +5,12 @@ from (his ruling, 2026-09-18: "yes"). Everything here is the executable form
 of that sentence, plus the rule that every unavailable case says why in one
 sentence a player can read.
 """
+import json
+
 import pytest
 
 from sm64_events.detectors.star_grab import _PendingGrab
+from sm64_events.ghost.mariobox import box_list_path
 from sm64_events.ghost.source import (
     ATTEMPT_FRAMES, GRAB_EVENT, GRAB_EVENT_TYPE, LEVEL_BY_COURSE,
     PICTURE_TIMER, REASONS, GhostSource, from_marked_attempt, place_of,
@@ -215,7 +218,8 @@ def test_the_payload_carries_exactly_the_agreed_keys(templates):
     _, replay = a_ready_ghost(templates)
     assert set(ghost(templates, replay).payload()) == {
         "available", "reason", "reason_text", "template_id", "attempt_id",
-        "media_url", "view", "exactness", "span", "level", "area"}
+        "media_url", "view", "exactness", "span", "level", "area",
+        "mario_boxes", "mario_boxes_reason", "mario_boxes_reason_text"}
 
 
 def test_an_unavailable_payload_fills_every_key(templates):
@@ -547,3 +551,100 @@ def test_the_replay_doors_this_reads_still_exist():
     here rather than leave the ghost quietly unavailable forever."""
     for door in ("find_saved", "view"):
         assert callable(getattr(ReplayService, door))
+
+
+# -- where Mario is, picture by picture --------------------------------------
+#
+# His words, 2026-09-20: *"let's do tight rectangles on our existing ghosts,
+# let's try it."* The list is made outside the app and sits beside the clip;
+# everything here is about what happens when it is there, when it is not, and
+# when it does not describe this clip.
+
+def write_box_list(clip, boxes, *, pictures=None, **extra):
+    body = {"version": 1, "maker": "sam2.1 by hand", "clip": clip.name,
+            "width": 1600, "height": 1200,
+            "pictures": len(boxes) if pictures is None else pictures,
+            "boxes": boxes}
+    body.update(extra)
+    box_list_path(clip).write_text(json.dumps(body), encoding="utf-8")
+
+
+def a_boxed_ghost(templates, tmp_path, boxes=None, **extra):
+    """A ready ghost whose clip really is on disk, so a box list can sit
+    beside it. `a_view`'s four `picture_igt` stamps are the picture count the
+    reader checks against."""
+    save(templates, origin="attempt:7")
+    replay = FakeReplay(saved=[7], views={7: a_view(7)}, saved_dir=tmp_path)
+    clip = replay.find_saved(7)
+    clip.write_bytes(b"not really a clip")
+    if boxes is not None:
+        write_box_list(clip, boxes, **extra)
+    return replay, clip
+
+
+def test_a_ghost_whose_clip_has_boxes_hands_them_to_the_page(templates, tmp_path):
+    replay, _clip = a_boxed_ghost(
+        templates, tmp_path,
+        boxes=[[10, 20, 60, 90], None, [12, 22, 60, 90], [13, 23, 60, 90]])
+    payload = ghost(templates, replay).payload()
+    assert payload["mario_boxes_reason"] is None
+    assert payload["mario_boxes"]["width"] == 1600
+    assert payload["mario_boxes"]["boxes"] == [
+        [10, 20, 60, 90], None, [12, 22, 60, 90], [13, 23, 60, 90]]
+    # And it is beside the view, never inside it: the clip payload has one
+    # owner (`replay/service.py`) and nothing here reshapes it.
+    assert "mario_boxes" not in payload["view"]
+
+
+def test_a_ghost_with_no_boxes_says_so_rather_than_going_quiet(templates, tmp_path):
+    """The ORDINARY case -- every ghost recorded before this existed. The
+    practice card needs to tell him why the Mario view is not on offer."""
+    replay, _clip = a_boxed_ghost(templates, tmp_path)
+    payload = ghost(templates, replay).payload()
+    assert payload["available"] is True          # the ghost itself is fine
+    assert payload["mario_boxes"] is None
+    assert payload["mario_boxes_reason"] == "no_box_list"
+    assert "Mario" in payload["mario_boxes_reason_text"]
+
+
+def test_a_box_list_that_does_not_match_this_clip_is_refused_by_name(
+        templates, tmp_path):
+    """The clip can be re-extracted under a list that was right when it was
+    made. A list of another length would draw a box on every picture, a few
+    pictures out, every time -- which is the failure nobody would recognise."""
+    replay, _clip = a_boxed_ghost(templates, tmp_path,
+                                  boxes=[[10, 20, 60, 90]] * 3)
+    payload = ghost(templates, replay).payload()
+    assert payload["mario_boxes"] is None
+    assert payload["mario_boxes_reason"] == "box_list_count"
+    assert payload["mario_boxes_reason_text"]
+
+
+def test_the_box_list_is_read_again_on_every_answer(templates, tmp_path):
+    """Not cached. It is somebody else's file: he can make one, remake one, or
+    delete one while the trainer is running, and the practice card is supposed
+    to notice."""
+    replay, clip = a_boxed_ghost(templates, tmp_path)
+    assert ghost(templates, replay).payload()["mario_boxes"] is None
+    write_box_list(clip, [[1, 2, 3, 4]] * 4)
+    assert ghost(templates, replay).payload()["mario_boxes"] is not None
+    box_list_path(clip).unlink()
+    assert ghost(templates, replay).payload()["mario_boxes"] is None
+
+
+def test_a_ghost_that_is_not_available_carries_no_boxes(templates, tmp_path):
+    """No footage, no boxes -- and the reason names the missing list rather
+    than leaving the field ambiguous between "none" and "not asked"."""
+    payload = ghost(templates, FakeReplay()).payload()
+    assert payload["available"] is False
+    assert payload["mario_boxes"] is None
+    assert payload["mario_boxes_reason"] == "no_box_list"
+
+
+def test_the_clip_path_never_reaches_the_page(templates, tmp_path):
+    """The provider carries it so the boxes can be found beside the clip; a
+    path on his machine has no business on the wire."""
+    replay, _clip = a_boxed_ghost(templates, tmp_path, boxes=[[1, 2, 3, 4]] * 4)
+    answer = ghost(templates, replay)
+    assert answer.clip_path is not None
+    assert "clip_path" not in answer.payload()

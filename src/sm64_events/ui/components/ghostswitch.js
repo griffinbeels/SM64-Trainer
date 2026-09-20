@@ -36,9 +36,9 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { clampNudge, clampOpacity, ghostControls, hueText, newestGhostSession,
-         nudgeSeconds, nudgeText, opacityText, shownTint,
-         HUE_MAX, HUE_MIN, NUDGE_STEP,
-         OPACITY_MAX, OPACITY_MIN } from "../ghostsession.js";
+         nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
+         GHOST_VIEWS, HUE_MAX, HUE_MIN, NUDGE_STEP,
+         OPACITY_MAX, OPACITY_MIN, VIEW_LABELS } from "../ghostsession.js";
 
 const html = htm.bind(h);
 
@@ -212,14 +212,63 @@ function GhostColour({ tint, write, queue }) {
 }
 
 /**
- * The three things worth reaching for while the ghost is up, and nothing else:
- * how solid it is drawn over the game, how it is coloured so the two pictures
- * cannot be confused, and where it sits against your own run. The whole block
- * is absent while the overlay is off -- there would be nothing for any of them
- * to act on, and the acceptance rule is to omit an action that does not apply
- * rather than to disable it.
+ * WHAT THE GHOST SHOWS: the whole recorded screen, or only Mario.
+ *
+ * His report is the reason this exists: *"It's still extremely hard to
+ * understand the ghost, because all the camera movement / scenery overlaps.
+ * So, what if we train an image detection model on detecting the exact
+ * position of Mario in every single frame of the ghost. Then, we extract ONLY
+ * mario."*
+ *
+ * A native `<select>` of two options, which is this project's rule for a SHORT
+ * dropdown -- a filtered popup over two rows is worse than what it replaces.
+ * The labels say what each one draws; neither of them names a rectangle, a
+ * model or a box.
+ *
+ * DISABLED WITH ITS REASON when this ghost's recording has never had Mario
+ * found in it, which is every recording made before this round. That is his
+ * acceptance rule -- a control that cannot run says why -- and it matters more
+ * than usual here: the whole point of the round is the Mario view, so a
+ * control that silently vanished would read as the feature not shipping.
+ *
+ * The sentence itself is the SERVER's and it is NOT inside this group: a whole
+ * sentence is not part of a control's box, and putting it there made the group
+ * two lines tall, which is indistinguishable from the controls wrapping. It is
+ * rendered beside this one by `GhostTuning`, on a row of its own.
  */
-function GhostTuning({ opacity, tint, nudge, write, queue }) {
+function GhostView({ view, boxes, write }) {
+  const known = view != null;
+  const can = known && boxes.available;
+  // WHAT IS ON SCREEN, not what the session is set to. The setting is app-wide
+  // and he walks between stars, so it arrives at "only Mario" on ghosts whose
+  // recording has no boxes -- and the overlay is drawing the whole picture
+  // there. A disabled control reading "Only Mario" beside a whole-picture
+  // ghost is a control contradicting the screen.
+  const shown = can ? view : "whole";
+  return html`<div class="ghost-field ghost-view">
+    <span class="ghost-field-name">Show</span>
+    <select class="ghost-view-select" disabled=${!can}
+      value=${shown}
+      aria-label="What the ghost draws over your game"
+      title=${can ? "What the ghost draws over your game"
+                  : (boxes.reasonText || "Waiting for what the ghost draws")}
+      onchange=${(event) => write({ view: event.target.value })}>
+      ${GHOST_VIEWS.map((name) => html`<option key=${name} value=${name}>
+        ${VIEW_LABELS[name]}
+      </option>`)}
+    </select>
+  </div>`;
+}
+
+/**
+ * The four things worth reaching for while the ghost is up, and nothing else:
+ * how solid it is drawn over the game, how it is coloured so the two pictures
+ * cannot be confused, what it draws at all, and where it sits against your own
+ * run. The whole block is absent while the overlay is off -- there would be
+ * nothing for any of them to act on, and the acceptance rule is to omit an
+ * action that does not apply rather than to disable it.
+ */
+function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -244,6 +293,7 @@ function GhostTuning({ opacity, tint, nudge, write, queue }) {
       <span class="ghost-field-value">${opacityText(opacity)}</span>
     </label>
     <${GhostColour} tint=${tint} write=${write} queue=${queue} />
+    <${GhostView} view=${view} boxes=${boxes} write=${write} />
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
       <button type="button" class="ghost-step"
@@ -260,6 +310,8 @@ function GhostTuning({ opacity, tint, nudge, write, queue }) {
           title="Put the ghost back in step with your own run"
           onclick=${() => queue({ nudge_frames: 0 })}>Reset</button>`}
     </div>
+    ${view != null && !boxes.available && boxes.reasonText
+      && html`<span class="ghost-why ghost-view-why">${boxes.reasonText}</span>`}
   </div>`;
 }
 
@@ -293,6 +345,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   // Null until the server says, same state the opacity has, and the two halves
   // arrive by different gestures -- so the merge is its own rule.
   const tint = shownTint(controls.tint, held.tint);
+  const view = shownView(controls.view, held.view);
   const labelId = idFor(entityKey, "label");
   const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
 
@@ -306,7 +359,8 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         ${controls.reasonText}
       </span>`}
     </div>
-    ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} nudge=${nudge}
+    ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
+      boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} />`}
   </div>`;
 }

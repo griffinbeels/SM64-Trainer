@@ -45,11 +45,19 @@ NO_FRAME_MAP_TEXT = ("The recording behind this template does not say which "
                      "stay in step with your play.")
 
 
+#: The server's own sentence for a ghost whose recording has never had Mario
+#: found in it, copied rather than imported so a fixture cannot start passing
+#: by agreeing with a sentence somebody shortened (`ghost/mariobox.py`).
+NO_BOXES_TEXT = ("This run has not had Mario found in it yet, so only the "
+                 "whole picture can be shown.")
+
+
 def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
                   nudge_frames: int = 0, available: bool = True,
                   reason: str | None = None, reason_text: str | None = None,
                   target: dict | None = None,
-                  tint: dict | None = None) -> dict:
+                  tint: dict | None = None, view: str = "whole",
+                  mario_boxes: bool = False) -> dict:
     """One I5 payload, in the frozen shape.
 
     The colour treatment defaults to ON here because that is what the shipped
@@ -61,6 +69,7 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
         "enabled": enabled,
         "opacity": opacity,
         "tint": {"enabled": True, "hue_degrees": 120} if tint is None else tint,
+        "view": view,
         "nudge_frames": nudge_frames,
         "target": FIXTURE_TARGET if target is None else target,
         "source": {"available": available,
@@ -68,7 +77,15 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
                    "reason_text": reason_text,
                    "template_id": 7 if available else None,
                    "attempt_id": 91 if available else None,
-                   "exactness": "frame_map" if available else None},
+                   "exactness": "frame_map" if available else None,
+                   # Whether this ghost can be drawn as Mario alone, and the
+                   # server's own sentence when it cannot. One bit and one
+                   # sentence: the boxes themselves never ride the broadcast.
+                   "mario_boxes_available": bool(mario_boxes and available),
+                   "mario_boxes_reason":
+                       None if (mario_boxes and available) else "no_box_list",
+                   "mario_boxes_reason_text":
+                       None if (mario_boxes and available) else NO_BOXES_TEXT},
         "window": {"running": enabled and available,
                    "visible": enabled and available},
     }
@@ -126,6 +143,11 @@ def attach_ghost_routes(app, state: dict) -> None:
                 raise HTTPException(422, "The ghost's colour goes from 0 to "
                                          "359 degrees around the colour wheel.")
             session["tint"] = {**(session.get("tint") or {}), **asked}
+        if "view" in body:
+            if body["view"] not in ("whole", "mario"):
+                raise HTTPException(422, "The ghost shows either the whole "
+                                         "picture or only Mario.")
+            session["view"] = body["view"]
         available = session["source"]["available"]
         session["window"] = {"running": session["enabled"] and available,
                              "visible": session["enabled"] and available}
