@@ -187,6 +187,16 @@ manual. Unsaved footage shares a modest storage budget and is discarded when
 the session ends; storage pressure removes the oldest unsaved footage first.
 Explicitly saved replays remain on disk. See [replay storage](docs/replay-storage.md).
 
+Saving is instant, and afterwards the trainer makes the saved replay smaller
+in the background — around a third of its original size, in the same file,
+with the picture, the sound and the frame-by-frame input match all unchanged.
+It checks the smaller version against the original before replacing it, and
+keeps the original if anything differs. Nothing waits on this: you can watch
+a replay, keep playing, or close the app, and an unfinished one is finished
+the next time you open the trainer. Closing while it is still working says
+what is left and offers to wait. The recording panel lists the same progress
+at any time.
+
 **Library.** Browse the whole community spreadsheet without leaving the app —
 every star and segment's proven ways to do it, laid out beginner to expert
 with real recorded times filed by the rank and subdivision they'd earn
