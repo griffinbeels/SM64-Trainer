@@ -959,6 +959,14 @@ to key the cut-out on, and it re-asks the source every few seconds while that
 view is wanted so a box list finished after the ghost went up is picked up
 without switching the overlay off and on.
 
+An empty overlay has more than one meaning, so `ghostStatus()` names which one
+in `mario_state`: `drawn`, `no_mario` (this PICTURE has no box — a cutscene, a
+fade, or a single-picture dropout in a fast flip; nothing is bridged, because
+null means null), `no_boxes` (the recording has no list), `whole_view`, or
+`no_picture`. The first two look identical on screen, which is exactly what a
+reported flicker looks like, so `pictures_without_mario` counts them and the
+answer can be read off the log instead of reproduced.
+
 The video element covers the window and MAPS the picture into it (`object-fit:
 contain`, centred — never `fill`). The companion window is sized to the
 rectangle Project64's renderer draws into, and this project's GLideN64 build

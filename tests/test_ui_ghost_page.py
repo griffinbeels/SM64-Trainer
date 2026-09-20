@@ -25,6 +25,7 @@ proves too slow -- the brainstorm's A+ escalation).
 import asyncio
 import io
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -152,6 +153,9 @@ class _Fixture:
         #: Mario's rectangle per picture, when the test gives the clip one.
         #: None is every ghost recorded before this existed.
         self.boxes = None
+        #: The clip's own view payload, when a test serves REAL footage rather
+        #: than the stand-in this module builds.
+        self.source_view = None
         self.feed = GhostClockFeed()
         #: every source query the page actually sent, so the test can check
         #: which star the page ASKED about rather than trusting that it read
@@ -168,7 +172,9 @@ class _Fixture:
             self.source_queries.append(dict(request.query_params))
             if not self.available:
                 return UNAVAILABLE
-            return {**AVAILABLE, "span": self.span,
+            return {**AVAILABLE,
+                    "view": self.source_view or AVAILABLE["view"],
+                    "span": self.span,
                     "mario_boxes": self.boxes,
                     "mario_boxes_reason": None if self.boxes else "no_box_list",
                     "mario_boxes_reason_text": None if self.boxes else
@@ -1481,3 +1487,167 @@ def test_the_cut_out_registers_on_the_whole_picture(tmp_path, ratio):
     assert wide["picture"]["left"] > 10, wide
     assert tall["picture"]["top"] > 10, tall
     assert abs(measured[0]["ratio"] - ratio) < 0.01, measured
+
+
+# ---------------------------------------------------------------------------
+# HIS OWN FOOTAGE, and the box list a hand-run session really produced
+# ---------------------------------------------------------------------------
+#
+# Everything above runs on a 320x240 colour-bar stand-in with a box list this
+# file invented: every picture has a box, every box is the same size, and the
+# clip is a tenth the size of a real one. A real list is none of those things
+# -- 1600x1200, several hundred pictures, and a good fraction of them with NO
+# box. The nulls arrive BOTH ways: a long run of menu and fade at the head of
+# a recording, and single-picture dropouts where a fast flip lost him. Nothing
+# interpolates them; "null means null" is the boxes worker's deliberate call.
+#
+# Skipped rather than failed when the footage is not on this machine, the way
+# `tests/test_ui_ghost_follower.py` treats his clips: it is HIS recording, not
+# a fixture, and a fresh clone has neither the clip nor the boxes.
+
+
+def _his_clips():
+    """His own saved clips, READ-ONLY, wherever this checkout can see them.
+
+    The feature worktree is where he was recording and where the boxes worker
+    wrote the lists, so that is the interesting tree even from a child
+    worktree. `SM64_GHOST_CLIP_ROOTS` aims this elsewhere without copying
+    anything.
+    """
+    override = os.environ.get("SM64_GHOST_CLIP_ROOTS", "").strip()
+    if override:
+        roots = [Path(part) for part in override.split(os.pathsep) if part]
+    else:
+        # EVERY CHECKOUT ABOVE THIS ONE, not just the main one. `replays/` is
+        # gitignored, so it belongs to whichever tree he was recording in --
+        # and a child worktree's git common dir points at the MAIN checkout,
+        # which is not where a feature worktree's footage sits. Walking the
+        # ancestors finds the feature worktree this one is nested inside.
+        roots = [REPO / "replays"]
+        roots += [parent / "replays" for parent in REPO.parents]
+        try:
+            common = subprocess.run(
+                ["git", "-C", str(REPO), "rev-parse", "--path-format=absolute",
+                 "--git-common-dir"],
+                capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            common = ""
+        if common:
+            roots.append(Path(common).parent / "replays")
+    found = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for clip in sorted(root.rglob("attempt_*.mp4")):
+            boxes = clip.with_name(clip.stem + ".mario.json")
+            side = clip.with_suffix(".json")
+            if boxes.exists() and side.exists():
+                found.append((clip, side, boxes))
+    return found
+
+
+def _real_ghosts():
+    """Every clip of his with a box list that indexes it, newest first."""
+    for clip, side, listed in _his_clips():
+        view = json.loads(side.read_text(encoding="utf-8"))
+        boxes = json.loads(listed.read_text(encoding="utf-8-sig"))
+        if len(boxes.get("boxes", ())) == len(view.get("picture_igt") or ()):
+            yield clip, view, boxes
+
+
+def test_the_cut_out_holds_on_his_own_footage():
+    """A REAL clip, a REAL box list, and the two states an empty overlay can
+    mean told apart.
+
+    The one thing the synthetic list cannot exercise: a picture Mario is not
+    in. Nothing bridges those, so the honest answer on them is an empty
+    screen -- and `ghostStatus()` has to say WHICH empty screen it is, or a
+    flicker he reports cannot be read off the log.
+    """
+    playable = None
+    with get_driver().launch() as page:
+        page.set_viewport(800, 600)
+        for clip, view, boxes in _real_ghosts():
+            # NOT EVERY CLIP OF HIS CAN BE A GHOST, and that is the follower
+            # working: a star that crosses into a subarea restarts Usamune's
+            # counter mid-run, one counter value then names two pictures, and
+            # the template refuses (`counter_restarts`) rather than picking
+            # one. His Hazy Maze Cave clip is exactly that. The span the real
+            # server computes from the attempt row is what narrows those; this
+            # fixture has no database, so it takes the first clip that stands
+            # on its own.
+            fixture = _Fixture(clip)
+            fixture.boxes = boxes
+            fixture.source_view = view
+            with fixture:
+                page.goto(f"{fixture.url}/ui/ghost/index.html"
+                          "?kind=star&entity_key=WF-1")
+                page.wait_ms(1500)
+                if page.evaluate("window.ghostStatus().state") == "ready":
+                    playable = (clip, view, boxes)
+                    break
+    if playable is None:
+        pytest.skip("no saved clip with a usable Mario box list on this machine")
+
+    clip, view, boxes = playable
+    listed = boxes["boxes"]
+    with_mario = [i for i, box in enumerate(listed) if box]
+    without = [i for i, box in enumerate(listed) if not box]
+    assert with_mario and without, f"{clip.name} exercises neither state"
+
+    fixture = _Fixture(clip)
+    fixture.boxes = boxes
+    with fixture, get_driver().launch() as page:
+        fixture.source_view = view
+        url = f"{fixture.url}/ui/ghost/index.html?kind=star&entity_key=WF-1"
+        page.set_viewport(800, 600)
+        page.goto(url)
+        page.wait_for('body[data-ghost="ready"][data-shown="yes"]')
+        page.evaluate("(() => { fetch('/test/view?name=mario', "
+                      "{method: 'POST'}); return true; })()")
+
+        state = page.evaluate("window.ghostStatus()")
+        assert state["boxes_available"] is True, state
+        assert state["boxes_pictures"] == len(listed), state
+        assert (boxes["width"], boxes["height"]) == (
+            state["picture_size"]["width"], state["picture_size"]["height"]), (
+            "the boxes were measured on a different decode of this clip")
+
+        drawn = _drive_to_a_picture(page, view, with_mario)
+        assert drawn is not None, "no picture with a box was ever presented"
+        assert drawn["mario_state"] == "drawn", drawn
+        assert drawn["mario_box"] == listed[drawn["mario_picture"]], drawn
+        painted = page.evaluate(PAINTED)
+        assert painted["painted"] > 0, drawn
+        assert painted["outside"] == 0, painted
+
+        empty = _drive_to_a_picture(page, view, without)
+        assert empty is not None, "no picture without a box was presented"
+        assert empty["mario_state"] == "no_mario", empty
+        assert empty["mario_box"] is None, empty
+        assert page.evaluate(PAINTED)["painted"] == 0, (
+            "a picture Mario is not in painted something")
+        # ...and the two empty screens are told apart, which is the whole
+        # point of the field: no list at all says something else.
+        assert empty["boxes_available"] is True, empty
+        assert empty["pictures_without_mario"] >= 1, empty
+
+
+def _drive_to_a_picture(page, view, wanted):
+    """Hold the clock on a counter value until a picture from `wanted` is the
+    one on screen.
+
+    Driven by the CLOCK, like everything else here: there is no door that says
+    "show picture 200", and inventing one would test a path the ghost never
+    takes. Several counter values can land on one picture, so this walks.
+    """
+    stamps = view["picture_igt"]
+    targets = set(wanted)
+    for index in wanted[:: max(1, len(wanted) // 24)]:
+        igt = stamps[index]
+        if igt is None:
+            continue
+        status = _trace(page, [igt] * 6)
+        if status["mario_picture"] in targets:
+            return status
+    return None

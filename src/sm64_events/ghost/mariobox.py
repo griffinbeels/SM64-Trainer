@@ -29,12 +29,23 @@ is: being correct when it was written is not being correct now.
 picture, in the clip's own order -- so nothing here does timing work. The page
 looks up the picture it is actually showing and reads the box at that index.
 
-MEASURED, 2026-09-20, rather than assumed: box k belongs to the k-th PRESENTED
-picture, whose presentation time is `frame_times[k]` -- worst gap 0.44
-microseconds across every picture of all three of his clips, and the
-whole-number 90 kHz times match `media_clock.source_pts` with zero mismatches.
-So the index the page already derives for `picture_igt` is the box's index too,
-and no second reading of the clock exists for the boxes to drift against.
+MEASURED by the boxes worker, 2026-09-20 (evidence under the feature folder's
+`evidence/mario_boxes/`; not reproducible from this repository): box k belongs
+to the k-th PRESENTED picture, and its exact 90 kHz presentation tick matches
+`media_clock.source_pts` for every picture of all three of his clips, with no
+mismatches. `replay/service.py` stores those ticks as `round(t, 6)`, and the
+rounded value and the browser's own `mediaTime` come out as the SAME double --
+which is what makes the index the page derives for `picture_igt` the box's
+index too.
+
+THE LOOKUP ITSELF HAS NO TOLERANCE, so read that as a claim about equality and
+not as licence. On the `frame_times` path `ui/frame.js::slotAtTime` takes the
+last picture whose start is `<= seconds`: one microsecond under names the
+picture BEFORE, which is a box one picture late on every frame. The page does
+not rely on the equality holding -- it looks up with a tenth of a millisecond
+of slack (`PICTURE_EPSILON` in `ui/ghost/index.html`, far under a picture's
+33 ms), and its real-browser check runs on a clip carrying per-picture
+`frame_times` so the boundary is exercised rather than rounded away.
 
 One thing that reads like a count error and is not: a clip can DECODE more
 frames than there are entries (0573 decodes 440 against 435). Those are a

@@ -133,6 +133,22 @@ const status = { state: "loading", reason: null, reason_text: null,
                  //: the picture the LAST PAINT used and the box it read for it
                  //: -- a failed try is read back here, per picture.
                  mario_picture: null, mario_box: null, mario_drawn: null,
+                 //: WHY NOTHING IS ON SCREEN, when nothing is, in one word:
+                 //:
+                 //:   drawn        the cut-out is up
+                 //:   no_mario     this PICTURE has no box -- a cutscene, a
+                 //:                fade, or one of the single-picture dropouts
+                 //:                a fast flip leaves. The list says null and
+                 //:                nothing bridges it: null means null.
+                 //:   no_boxes     this recording has no list at all
+                 //:   whole_view   he is not asking for the cut-out
+                 //:   no_picture   nothing has been presented yet
+                 //:
+                 //: `no_mario` and `no_boxes` look identical on screen -- an
+                 //: empty overlay -- and a flicker he reports is one of them.
+                 //: Counting the first is what makes that readable off the log
+                 //: rather than a thing to reproduce.
+                 mario_state: "no_picture", pictures_without_mario: 0,
                  margin_fraction: MARGIN_FRACTION,
                  //: pictures whose cut-out was drawn from a picture that had
                  //: already moved on. `drawImage` reads the element's CURRENT
@@ -336,24 +352,39 @@ function redraw() {
 // clip's per-picture arrays, so the slot IS the box's index with no
 // arithmetic in between.
 //
-// MEASURED 2026-09-20 rather than assumed: the k-th presented picture's time
-// IS `frame_times[k]` (worst gap 0.44 microseconds over all of his clips), so
-// the `mediaTime` this callback hands over lands on the same index the
-// follower already derives for `picture_igt`. A clip that decodes more frames
-// than it has entries (0573: 440 against 435) is a keyframe lead-in the edit
-// list hides, and the browser never presents one.
+// MEASURED by the boxes worker, 2026-09-20 (evidence in the feature folder's
+// `evidence/mario_boxes/`): the k-th presented picture's exact 90 kHz tick
+// matches `media_clock.source_pts` for every picture of all three of his
+// clips. The two quantities THIS lookup compares are the browser's `mediaTime`
+// and the STORED `frame_times[k]` (`replay/service.py` rounds to six decimal
+// places), and they come out as the same double -- so the index lands where
+// the follower's own does for `picture_igt`.
+//
+// EQUALITY, NOT TOLERANCE: `slotAtTime` takes the last picture whose start is
+// `<= seconds`, so a microsecond under names the picture BEFORE -- a box one
+// picture late, on every frame. `PICTURE_EPSILON` is what makes this true by
+// construction rather than by trusting the equality, and the real-browser
+// check runs on a clip with per-picture `frame_times` so the boundary is
+// exercised instead of rounded away.
+//
+// A clip that decodes more frames than it has entries (0573: 440 against 435)
+// is a keyframe lead-in the edit list hides, and the browser never presents
+// one.
 function drawMario(time) {
   if (!paint) return;
   lastPresented = time;
   const size = sizeCanvas();
   if (status.view !== "mario" || !boxes || !clipTiming) {
     status.mario_drawn = null;
+    status.mario_state = status.view !== "mario" ? "whole_view" : "no_boxes";
     return;
   }
   const slot = slotAtTime(time + PICTURE_EPSILON, clipTiming);
   const box = slot >= 0 && slot < boxes.boxes.length ? boxes.boxes[slot] : null;
+  if (slot !== status.mario_picture && !box) status.pictures_without_mario += 1;
   status.mario_picture = slot;
   status.mario_box = box;
+  status.mario_state = box ? "drawn" : "no_mario";
   // A picture Mario is not in paints NOTHING, and that is the honest answer:
   // carrying the previous box forward would put a stale Mario on his screen
   // through a cutscene or a warp.
@@ -363,7 +394,12 @@ function drawMario(time) {
     width: video.videoWidth, height: video.videoHeight,
   }, rect, MARGIN_FRACTION);
   status.mario_drawn = draw || null;
-  if (!draw) return;
+  if (!draw) {
+    // A box the geometry cannot use is the same story on screen as no box at
+    // all, and the counter above has already recorded it.
+    if (box) status.mario_state = "no_mario";
+    return;
+  }
   paint.filter = boxFilter;
   paint.drawImage(video, draw.sx, draw.sy, draw.sw, draw.sh,
                   draw.dx, draw.dy, draw.dw, draw.dh);
