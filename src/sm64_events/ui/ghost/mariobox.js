@@ -33,7 +33,26 @@
 //
 // A number he will want to move once he has seen it. It is one constant in one
 // place, reported in `ghostStatus()` so a live look says what it was.
-export const MARGIN_FRACTION = 0.08;
+// HIS RULING, 2026-09-20, after seeing it on his own screen: "The box is also
+// not tight at all. There's a ton of room around mario's arms / heads / legs.
+// We should be as close to mario's extents as possible." So the margin is
+// gone. It was 0.08, which is 8 % on EVERY side of BOTH dimensions -- about a
+// third more area than the box itself, and measured against his own footage
+// that was the whole of the slack he saw: on his Fall onto the Caged Island
+// pictures where the background is stone, the detector's box came out 127x174
+// against a Mario measuring 128x174. The detector is tight; the margin was
+// not.
+//
+// What it cost, kept rather than hidden: the detector shaves a raised glove or
+// the top of his cap on a few pictures, and the margin used to cover that.
+// Those pictures now show him shaved. The fix for THAT belongs at the maker,
+// or to the projection that knows his real extents -- not to a band of scenery
+// around every picture.
+//
+// Still a fraction of the box's LARGER side rather than of the picture, so a
+// value he asks for later scales with him. One constant in one place, reported
+// in `ghostStatus()` so a live look says what it was.
+export const MARGIN_FRACTION = 0;
 
 /**
  * CAN THIS PAGE DRAW THIS GHOST AS MARIO ALONE? `{usable, reason, pictures}`.

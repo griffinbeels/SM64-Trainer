@@ -672,8 +672,17 @@ MARIO_FORWARD_VEL_OFF = 0x54     # f32
 # (0x0C) and forwardVel, so the one block inputs/frame.py already copies per
 # picture holds it: no new read, no layout row, no address gate. The same
 # decomp struct row as above; tools/probe_objects.py has read it at this
-# offset since 2026-08-05. VERIFY until a recording's `mario_pos` is watched
-# against the game with him.
+# offset since 2026-08-05.
+#
+# VERIFIED 2026-09-20 against his own play, and by a check that needs no ground
+# truth: on his Fall onto the Caged Island recording, over the 45 consecutive
+# picture pairs where he was on level ground above walking speed, the distance
+# between the two stored positions matches that row's own `forwardVel` to a
+# median of 2.4 %. The residual is the engine's own order of operations -- the
+# step taken between two pictures is the LATER row's speed, and he was
+# decelerating exactly one unit a frame through most of them (moved 42.14 at a
+# speed of 43.14, 41.14 at 42.14, and so on down). Two independently decoded
+# fields of the same struct agreeing on his motion is what pins the offset.
 MARIO_POS_OFF = 0x3C             # Vec3f {x, y, z}, world units
 # The collision world is s16: every floor the game can find lies inside
 # +-32768, a level's own cells stop at +-8192 sideways, and the default

@@ -60,6 +60,21 @@ ALLOWED = (
      "The profiling extra is not in the default sync. Lifts with "
      "`uv sync --group profiling`.",
      "tests/test_profile_external.py"),
+    ("no saved clip with a picture timer",
+     "The ghost follower driven against REAL footage. `replays/` is this "
+     "checkout's own and gitignored, so a clone that has never recorded has "
+     "nothing to follow. The follower's rules are covered by seeded tests; "
+     "this row only runs them against a real recording.",
+     "tests/test_ui_ghost_follower.py"),
+    ("no saved clip with a usable Mario box list",
+     "The cut-out driven against a REAL box list. Box lists are made outside "
+     "the app, one clip at a time, and saved beside the clip in a gitignored "
+     "`replays/` -- so only a checkout somebody has made them in can run this. "
+     "Lifts by running the tracker in "
+     "`.tasks/features/session-f80d4eae236dc626451116fc/evidence/mario_boxes/` "
+     "over a saved clip. The geometry and the refusals are covered by seeded "
+     "tests; this row is the one that uses his own footage.",
+     "tests/test_ui_ghost_page.py"),
 )
 
 

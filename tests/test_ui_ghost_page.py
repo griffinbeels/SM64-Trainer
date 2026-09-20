@@ -875,10 +875,12 @@ MARIO_SCALE = 2
 BOX_STRIDE = 50
 BOX_WIDTH, BOX_HEIGHT = 40, 60
 BOX_TOP = 30
-#: `ui/ghost/mariobox.js::MARGIN_FRACTION` is 0.08 and the box's larger side
-#: is 60, so the margin is round(4.8) = 5 clip pixels on every side. Stated
-#: here rather than imported: this file is the independent opinion.
-BOX_MARGIN = 5
+#: `ui/ghost/mariobox.js::MARGIN_FRACTION` is 0 since 2026-09-20 -- he looked
+#: at an 8 % margin on his own screen and asked for none ("as close to mario's
+#: extents as possible"), so the cut-out IS the box. Stated here rather than
+#: imported: this file is the independent opinion, and if the constant moves
+#: again this number has to be moved deliberately rather than following along.
+BOX_MARGIN = 0
 
 
 def mario_box(index):

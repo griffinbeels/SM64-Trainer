@@ -168,12 +168,29 @@ def test_nothing_to_draw_answers_nothing():
     assert draw([1, 1, 10, 10], size, size, None) is None
 
 
-def test_the_shipped_margin_is_small_and_real():
-    """A preference he will move once he has seen it, so no test pins the
-    number -- what is pinned is that it is a real margin and a small one, the
-    v0 he asked for ("a super tight rectangle")."""
+def test_the_shipped_margin_is_none_or_small():
+    """He HAS now seen it, and asked for none: *"We should be as close to
+    mario's extents as possible"* (2026-09-20). So the shipped value is zero,
+    and what is pinned is only that it stays a small fraction -- the number
+    itself is his to move, and a test that owned it would turn his next
+    preference into a red build."""
     fraction = run_node("MARGIN_FRACTION", "MARGIN_FRACTION")
-    assert 0 < fraction < 0.25
+    assert 0 <= fraction < 0.25
+
+
+def test_a_margin_still_grows_the_box_when_one_is_asked_for():
+    """The mechanism outlives the shipped zero. Without this, setting the
+    constant to 0 would leave every line that grows a box untested, and the
+    next value he asks for would be the first thing to exercise it."""
+    # A tenth of the larger side (60) is 6 on every side.
+    grown = run_node("grownBox", "grownBox([100, 100, 40, 60], "
+                     "{width: 320, height: 240}, 0.1)")
+    assert grown == {"x": 94, "y": 94, "width": 52, "height": 72}, grown
+    # And it keeps the margin it can have at an edge rather than running off
+    # the picture, which is what the footage itself does.
+    corner = run_node("grownBox", "grownBox([0, 0, 40, 60], "
+                      "{width: 320, height: 240}, 0.5)")
+    assert corner == {"x": 0, "y": 0, "width": 70, "height": 90}, corner
 
 
 # -- can this page draw this ghost as Mario alone? ---------------------------
