@@ -45,6 +45,7 @@ checked below is therefore the per-picture ARRAYS' length, never the decoder's.
 import json
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 log = logging.getLogger("sm64.ghost")
@@ -78,6 +79,9 @@ REASONS: dict[str, str] = {
     "box_list_boxes":
         "The file saying where Mario is puts him outside the picture, so "
         "only the whole picture can be shown.",
+    "box_list_other_clip":
+        "The file saying where Mario is was made for a different recording, "
+        "so only the whole picture can be shown.",
 }
 
 
@@ -110,8 +114,13 @@ def box_list_path(clip: Path) -> Path:
 
 
 def _whole(value) -> bool:
-    """A whole number, and NOT a bool. `True` is an `int` in Python and is not
-    a coordinate; letting one through would put a box at x=1."""
+    """A whole number, and NOT a bool.
+
+    `True` is an `int` in Python and `1.0` compares equal to `1`, so every
+    check here goes through this rather than through `==`. Measured on a probe
+    of this reader: `"version": true` and `"version": 1.0` both passed the
+    first version, and a `True` coordinate would have put a box at x=1.
+    """
     return isinstance(value, int) and not isinstance(value, bool)
 
 
@@ -135,34 +144,42 @@ def _checked_box(box, width: int, height: int):
     return (x, y, w, h), True
 
 
-def read_box_list(clip: Path, *, pictures: int | None = None):
-    """`(the list, None)` or `(None, a named reason)`.
-
-    `pictures` is how many pictures the CLIP holds, taken from the view payload
-    the ghost source already has. It is the check that matters: the boxes are
-    an index into that clip, so a list of another length is not this clip's.
-    Passing None skips only that comparison; the file's own declared count is
-    still checked against the boxes it ships.
-    """
-    path = box_list_path(clip)
+def _parse(text: str, clip_name: str, pictures: int | None):
+    """The whole check, over a string. Split out so the memo below has
+    something pure to hold."""
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None, "no_box_list"
-    except (OSError, ValueError, UnicodeDecodeError):
-        log.debug("ghost mario boxes unreadable: %s", path, exc_info=True)
+        raw = json.loads(text)
+    except ValueError:
+        return None, "box_list_unreadable"
+    except RecursionError:
+        # A deeply nested file is malformed input, not a crash: `json` raises
+        # this rather than a ValueError, and letting it out reached the ghost
+        # session's broad except, which disabled the WHOLE ghost and told him
+        # "the trainer is not holding recordings this run" -- a sentence about
+        # something else entirely.
+        log.debug("ghost mario boxes nested too deeply", exc_info=True)
         return None, "box_list_unreadable"
     if not isinstance(raw, dict):
         return None, "box_list_unreadable"
-    if raw.get("version") != BOX_LIST_VERSION:
+    version = raw.get("version")
+    if not _whole(version) or version != BOX_LIST_VERSION:
         return None, "box_list_version"
+    # THE FILE NAMES THE RECORDING IT WAS MADE FOR, so a list copied beside
+    # another clip is refused rather than drawn over the wrong footage. Absent
+    # is allowed: the name is a cross-check, not the identity (the identity is
+    # where the file sits), and a maker that omits it is not wrong.
+    named = raw.get("clip")
+    if named is not None and named != clip_name:
+        return None, "box_list_other_clip"
     width, height, boxes = raw.get("width"), raw.get("height"), raw.get("boxes")
     if not _whole(width) or not _whole(height) or width <= 0 or height <= 0:
         return None, "box_list_unreadable"
     if not isinstance(boxes, list):
         return None, "box_list_unreadable"
     declared = raw.get("pictures")
-    if _whole(declared) and declared != len(boxes):
+    if declared is not None and not _whole(declared):
+        return None, "box_list_unreadable"
+    if declared is not None and declared != len(boxes):
         return None, "box_list_count"
     if pictures is not None and len(boxes) != pictures:
         return None, "box_list_count"
@@ -175,6 +192,58 @@ def read_box_list(clip: Path, *, pictures: int | None = None):
     maker = raw.get("maker")
     return MarioBoxList(width=width, height=height, boxes=tuple(checked),
                         maker=maker if isinstance(maker, str) else None), None
+
+
+@lru_cache(maxsize=8)
+def _parsed(path_str: str, stamp: tuple, clip_name: str, pictures: int | None):
+    """The parse, remembered against the FILE'S OWN identity.
+
+    `stamp` is (mtime_ns, size), so the memo answers again only while the file
+    on disk is byte-for-byte the one it read. A rewrite, a touch or a delete
+    all miss it, which keeps the promise this module opens with -- re-validated
+    on every read -- while not re-parsing thousands of rectangles every four
+    seconds. A 1m44 segment is about 3,200 pictures and longer ones exist, and
+    the ghost session re-resolves on a timer whether or not anything moved.
+
+    Bounded at eight entries because the key includes the stamp: without a
+    bound, a file he rewrites in a loop would grow the memo forever. The value
+    is a frozen dataclass over a tuple, so sharing one is safe.
+    """
+    del stamp  # in the key for its identity, not read here
+    return _parse(Path(path_str).read_text(encoding="utf-8-sig"),
+                  clip_name, pictures)
+
+
+def read_box_list(clip: Path, *, pictures: int | None = None):
+    """`(the list, None)` or `(None, a named reason)`.
+
+    `pictures` is how many pictures the CLIP holds, taken from the view payload
+    the ghost source already has. It is the check that matters: the boxes are
+    an index into that clip, so a list of another length is not this clip's.
+    Passing None skips only that comparison; the file's own declared count is
+    still checked against the boxes it ships.
+
+    Read as `utf-8-sig`: anything PowerShell wrote starts with a byte-order
+    mark, and refusing a file for a BOM would be refusing it for how it was
+    saved rather than for what it says.
+    """
+    path = box_list_path(clip)
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None, "no_box_list"
+    except OSError:
+        log.debug("ghost mario boxes unreadable: %s", path, exc_info=True)
+        return None, "box_list_unreadable"
+    try:
+        return _parsed(str(path), (info.st_mtime_ns, info.st_size),
+                       clip.name, pictures)
+    except FileNotFoundError:
+        # Deleted between the stat and the read.
+        return None, "no_box_list"
+    except (OSError, UnicodeDecodeError):
+        log.debug("ghost mario boxes unreadable: %s", path, exc_info=True)
+        return None, "box_list_unreadable"
 
 
 __all__ = ["BOX_LIST_SUFFIX", "BOX_LIST_VERSION", "REASONS", "MarioBoxList",

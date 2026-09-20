@@ -188,3 +188,126 @@ def test_every_reason_has_a_sentence_a_player_could_read():
         for jargon in ("json", "null", "parse", "validate", "schema",
                        "index", "sidecar"):
             assert jargon not in text.lower(), f"{reason}: {text}"
+
+
+# -- what a probe of this reader actually accepted ---------------------------
+#
+# Every case below was ACCEPTED by the first version and found by probing it
+# rather than by reading it. Python is what made each one look fine: `True` is
+# an `int`, `1.0 == 1`, and a missing cross-check is indistinguishable from a
+# passing one.
+
+@pytest.mark.parametrize("version", [True, 1.0, "1", None])
+def test_a_version_that_merely_compares_equal_to_one_is_refused(
+        tmp_path, version):
+    clip = clip_at(tmp_path)
+    a_box_list(clip, pictures=2, boxes=[[1, 2, 3, 4]] * 2, version=version)
+    found, reason = read_box_list(clip, pictures=2)
+    assert found is None and reason == "box_list_version"
+
+
+@pytest.mark.parametrize("pictures", ["2", True, 2.0, [2]])
+def test_a_count_that_is_not_a_count_is_refused(tmp_path, pictures):
+    clip = clip_at(tmp_path)
+    a_box_list(clip, pictures=pictures, boxes=[[1, 2, 3, 4]] * 2)
+    found, reason = read_box_list(clip, pictures=2)
+    assert found is None and reason == "box_list_unreadable"
+
+
+def test_a_list_with_no_count_of_its_own_is_still_read(tmp_path):
+    """The field is a cross-check, not the identity. A maker that omits it is
+    not wrong, and the clip's own picture count still decides."""
+    clip = clip_at(tmp_path)
+    body = {"version": 1, "width": 1600, "height": 1200,
+            "boxes": [[1, 2, 3, 4]] * 2}
+    box_list_path(clip).write_text(json.dumps(body), encoding="utf-8")
+    found, reason = read_box_list(clip, pictures=2)
+    assert reason is None and len(found.boxes) == 2
+
+
+def test_a_list_made_for_another_recording_is_refused(tmp_path):
+    """Copied beside the wrong clip. Both files exist, both parse, and every
+    count agrees -- the only thing that says it is the wrong footage is the
+    name the maker wrote into it."""
+    clip = clip_at(tmp_path)
+    body = {"version": 1, "width": 1600, "height": 1200, "pictures": 2,
+            "clip": "attempt_0425_hazy-maze-cave_another-star_0m18s10.mp4",
+            "boxes": [[1, 2, 3, 4]] * 2}
+    box_list_path(clip).write_text(json.dumps(body), encoding="utf-8")
+    found, reason = read_box_list(clip, pictures=2)
+    assert found is None and reason == "box_list_other_clip"
+
+
+def test_a_list_that_does_not_name_a_recording_is_still_read(tmp_path):
+    clip = clip_at(tmp_path)
+    body = {"version": 1, "width": 1600, "height": 1200, "pictures": 2,
+            "boxes": [[1, 2, 3, 4]] * 2}
+    box_list_path(clip).write_text(json.dumps(body), encoding="utf-8")
+    found, reason = read_box_list(clip, pictures=2)
+    assert reason is None and len(found.boxes) == 2
+
+
+def test_a_file_nested_too_deeply_is_refused_rather_than_raising(tmp_path):
+    """`json` raises `RecursionError`, which is not a `ValueError`. Letting it
+    out reached the ghost session's broad except, which disabled the WHOLE
+    ghost and showed "the trainer is not holding recordings this run" -- a
+    sentence about something else entirely."""
+    clip = clip_at(tmp_path)
+    box_list_path(clip).write_text("[" * 200000, encoding="utf-8")
+    found, reason = read_box_list(clip, pictures=2)
+    assert found is None and reason == "box_list_unreadable"
+
+
+def test_a_file_saved_with_a_byte_order_mark_is_read(tmp_path):
+    """Anything PowerShell wrote starts with one. Refusing a list for how it
+    was saved rather than for what it says is a refusal he could not act on."""
+    clip = clip_at(tmp_path)
+    body = {"version": 1, "clip": clip.name, "width": 1600, "height": 1200,
+            "pictures": 2, "boxes": [[1, 2, 3, 4]] * 2}
+    box_list_path(clip).write_text(json.dumps(body), encoding="utf-8-sig")
+    found, reason = read_box_list(clip, pictures=2)
+    assert reason is None and len(found.boxes) == 2
+
+
+# -- read again whenever the file changes, and not otherwise -----------------
+
+def test_a_rewritten_list_is_read_again_rather_than_remembered(tmp_path):
+    """The memo is keyed on the file's own identity, so the promise this
+    module opens with -- re-validated on every read -- survives it. He can
+    make one, remake one or delete one while the trainer is running."""
+    clip = clip_at(tmp_path)
+    a_box_list(clip, pictures=2, boxes=[[1, 2, 3, 4], None])
+    first, _ = read_box_list(clip, pictures=2)
+    assert first.boxes == ((1, 2, 3, 4), None)
+
+    # A different file at the same path: same size is the hard case, so the
+    # boxes change without the length changing.
+    a_box_list(clip, pictures=2, boxes=[[9, 8, 7, 6], None])
+    again, reason = read_box_list(clip, pictures=2)
+    assert reason is None
+    assert again.boxes == ((9, 8, 7, 6), None), (
+        "a rewritten list came back from the memo")
+
+    box_list_path(clip).unlink()
+    gone, reason = read_box_list(clip, pictures=2)
+    assert gone is None and reason == "no_box_list"
+
+
+def test_reading_the_same_unchanged_file_twice_does_not_parse_it_twice(
+        tmp_path, monkeypatch):
+    """The session re-resolves on a timer whether or not anything moved, and a
+    long segment is thousands of rectangles. Counted on the parse itself: the
+    only honest way to tell a memo from a re-read."""
+    import sm64_events.ghost.mariobox as module
+
+    clip = clip_at(tmp_path)
+    a_box_list(clip, pictures=2, boxes=[[1, 2, 3, 4]] * 2)
+    module._parsed.cache_clear()
+    parses = []
+    real = module._parse
+    monkeypatch.setattr(module, "_parse",
+                        lambda *args: (parses.append(1), real(*args))[1])
+    for _ in range(5):
+        found, reason = read_box_list(clip, pictures=2)
+        assert reason is None and len(found.boxes) == 2
+    assert parses == [1], f"parsed {len(parses)} times for one unchanged file"
