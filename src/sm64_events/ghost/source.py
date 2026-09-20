@@ -437,8 +437,10 @@ def _with_boxes(answer: GhostSource) -> GhostSource:
     READ EVERY TIME, and validated against THIS clip's picture count. The list
     is made outside the app by a hand-run tool; the clip can be re-extracted
     under it, and the count is the one check that catches a list belonging to
-    another cut of the same run. Caching it would be caching somebody else's
-    file. Attached HERE rather than in the provider so a later provider (an
+    another cut of the same run. Remembering it across calls would be
+    remembering somebody else's file -- so `read_box_list` keys what it holds
+    on the file's own mtime and size, and a file that has changed at all is
+    parsed again. Attached HERE rather than in the provider so a later provider (an
     imported replay, downloaded footage) gets it for free and none of them can
     grow a second rule for where the boxes live.
     """
