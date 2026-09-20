@@ -111,3 +111,23 @@ def test_the_browser_wait_bound_scales_with_the_machine_the_run_gets():
     assert not shell_waits, (
         "app-shell waits must inherit the scaled bound, not re-pin their own: "
         f"{shell_waits[:3]}")
+
+
+def test_the_story_setup_waits_inherit_that_same_bound():
+    """The JS half of the same rule, and the half the first sweep missed.
+
+    `tools/uilab_project.py`'s story setups wait INSIDE `page.evaluate`, so
+    they never saw `UILAB_WAIT_MS` and kept their own hand-bumped numbers:
+    eight waits pinned at 15s, already raised once by hand (2026-09-17) for
+    exactly this reason. Under the OBS cap a full sweep blew through all
+    eight, and every one reported a busy machine as a layout defect naming no
+    element (21 failures in one run, 2026-09-20). A story that means a real
+    short interval still passes its own explicit maxMs.
+    """
+    source = (REPO / "tools" / "uilab_project.py").read_text(encoding="utf-8")
+    assert "SHELL_WAIT = %d" in source, (
+        "the composed script must declare the bound it was given")
+    pinned = re.findall(r"waitFor\([^;]*?,\s*(\d{5,})\)", source, re.S)
+    assert not pinned, (
+        "a story shell wait re-pinned its own five-digit bound instead of "
+        f"SHELL_WAIT: {pinned[:3]}")
