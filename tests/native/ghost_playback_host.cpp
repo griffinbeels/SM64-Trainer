@@ -260,7 +260,7 @@ int main() {
         Clip segment(8);segment.header.clock_kind=GCLIP_SEGMENT_CLOCK;
         for(unsigned i=4;i<8;++i) {
             auto& s=segment.frames[i].sample;s.level=24;s.igt=uint16_t(i-4);
-            s.clock.raw_igt=s.igt;s.clock.origin_id=8;
+            s.clock.raw_igt=s.igt;s.clock.origin_id=8;s.live_action=0x1302;
         }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"segment model prepared");
         check(api->prepare_clip(&segment.header,segment.frames.data())==GP_OK,"segment spans level and raw counter reset");
@@ -289,6 +289,41 @@ int main() {
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_AFTER_END);
         ++r.revision;r.seek_igt=15;check(api->configure(&r)==GP_OK,"last star coordinate precedes closing generation");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,true,GP_READY,7,2);
+        Clip touch(10);
+        // The first duplicate is an ordinary drawable pose. A later duplicate
+        // carries a valid touch action despite its refused graphics pose.
+        touch.frames[1].sample.valid_fields|=GC_VALID_POSE;
+        touch.frames[1].sample.pose=touch.frames[0].sample.pose;
+        touch.frames[1].sample.status=GC_NO_CAMERA;
+        touch.frames[3].sample.live_action=0x1303;
+        touch.frames[6].sample.live_action=touch.frames[7].sample.live_action=0x1302;
+        check(api->prepare_clip(&touch.header,touch.frames.data())==GP_OK,"index recorded action independently from graphics pose");
+        revision=r.revision+1;r=request(touch,revision);r.model_id=4;
+        r.star_action_count=2;r.star_actions[1]=0x1303;
+        r.origin={GO_STAR,7,live.sequence+1,source_continuity,5000,source_generation,0,0};elapsed_base=5000;
+        live.level=9;live.live_action=1;
+        check(api->configure(&r)==GP_OK,"follow template with its own touch and later landing");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+        draw(10,true,GP_READY,1);draw(11,false,GP_STAR_ENDED);draw(16,false,GP_STAR_ENDED,0,2);
+        ++r.revision;r.nudge_frames=-1;check(api->configure(&r)==GP_OK,"nudge can move before recorded touch without reviving live-end latch");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(11,true,GP_READY,1);
+        ++r.revision;r.nudge_frames=3;check(api->configure(&r)==GP_OK,"positive nudge reaches recorded touch early");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(8,false,GP_STAR_ENDED);
+        ++r.revision;r.nudge_frames=0;r.star_action_count=1;r.star_actions[1]=0;
+        check(api->configure(&r)==GP_OK,"changed action registry recomputes first matching touch");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+        draw(13,true,GP_READY,5,2);draw(15,false,GP_STAR_ENDED,0,2);
+        ++r.revision;r.star_ends=0;check(api->configure(&r)==GP_OK,"disabled touch policy retains recorded landing tail");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(16,true,GP_READY,8,2);
+        ++r.revision;r.star_ends=1;r.mode=GP_FIXED;r.origin={};r.seek_igt=16;
+        check(api->configure(&r)==GP_OK,"fixed seek can inspect recorded post-touch pose");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,true,GP_READY,8,2);
+        Clip touched_first(11);touched_first.frames[0].sample.live_action=0x1302;
+        check(api->prepare_clip(&touched_first.header,touched_first.frames.data())==GP_OK,"clip begins on recorded touch");
+        ++r.revision;std::memcpy(r.clip_id,touched_first.header.clip_id,16);r.mode=GP_FOLLOW;r.nudge_frames=-600;
+        r.origin={GO_STAR,7,live.sequence+1,source_continuity,6000,source_generation,0,0};elapsed_base=6000;
+        check(api->configure(&r)==GP_OK,"before-start clamp must not reveal an already touched first pose");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_STAR_ENDED);
         Clip large(2,GCLIP_MAX_RECORDS);
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
         check(api->prepare_clip(&large.header,large.frames.data())==GP_OK,"largest supported clip");
