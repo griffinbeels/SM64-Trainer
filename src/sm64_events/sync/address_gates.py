@@ -44,6 +44,7 @@ from sm64_events.sync.gates import Gate, Verdict, register
 POLL_INTERVAL_S = 1 / 60
 
 GLOBAL_TIMER_SAMPLE_SECONDS = 2.0
+GHOST_ADDRESS_SAMPLE_SECONDS = 2.0
 MARIO_STRUCT_EDGE_TIMEOUT_S = 10.0     # "stand still, then jump once"
 CURR_LEVEL_TIMEOUT_S = 60.0
 CURR_AREA_TIMEOUT_S = 60.0
@@ -236,6 +237,88 @@ register(Gate(
     instruction="No action needed — needs address.object_pool verified first.",
     proves="gMarioObject's candidate address holds a pointer into the object pool.",
     check=_check_mario_object,
+))
+
+
+def _ghost_ram_pointer(pointer: int, size: int) -> bool:
+    """A bounded guest pointer, never a host address or segmented display list."""
+    return (pointer % 4 == 0 and A.KSEG0_BASE <= pointer
+            and pointer + size <= A.KSEG0_BASE + A.RDRAM_FULL_SIZE)
+
+
+def _check_current_area_pointer(ctx) -> Verdict:
+    candidate = ctx.candidate("current_area_pointer")
+    state, area_number = ctx.candidate("mario_struct"), ctx.candidate("curr_area")
+    if candidate is None or state is None or area_number is None:
+        return Verdict("missing", evidence="active Area pointer candidate/dependencies missing")
+    mem = ctx.raw()
+    pointer = mem.read_u32(candidate)
+    if not _ghost_ram_pointer(pointer, A.AREA_CAMERA_OFF + 4):
+        return Verdict("failed", evidence="active Area pointer is outside aligned RDRAM")
+    root = mem.read_u32(pointer + A.AREA_GRAPH_ROOT_OFF)
+    camera = mem.read_u32(pointer + A.AREA_CAMERA_OFF)
+    area = mem.read_s16(area_number)
+    if (not _ghost_ram_pointer(root, A.GRAPH_ROOT_AREA_OFF + 4)
+            or not _ghost_ram_pointer(camera, 0x6C)
+            or not 1 <= area <= 8
+            or mem.read_u32(state + A.MARIO_AREA_OFF) != pointer
+            or mem.read_u8(pointer + A.AREA_INDEX_OFF) != area
+            or not mem.read_u8(pointer + A.AREA_FLAGS_OFF) & 1
+            or mem.read_u16(root + A.GRAPH_NODE_TYPE_OFF) != 1
+            or not mem.read_u16(root + A.GRAPH_NODE_FLAGS_OFF) & 1
+            or mem.read_u8(root + A.GRAPH_ROOT_AREA_OFF) != area):
+        return Verdict("failed", evidence="Area, MarioState, active graph root and area index disagree")
+    return Verdict("verified", value=candidate,
+                   measured={"area": area, "pointer": pointer, "root": root},
+                   evidence="active Area agrees with MarioState.area and independent area/root identity; "
+                            "this gate does not certify rendered camera matrices")
+
+
+register(Gate(
+    id="address.current_area_pointer", feature="version", kind="address", auto=True,
+    needs=("address.mario_struct", "address.curr_area"),
+    instruction="Load a normal playable area; reads its active graph and Mario's Area pointer.",
+    proves="gCurrentArea's candidate points to the same active Area as MarioState and the area graph.",
+    check=_check_current_area_pointer,
+))
+
+
+def _check_area_update_counter(ctx) -> Verdict:
+    candidate = ctx.candidate("area_update_counter")
+    mario, pool = ctx.candidate("mario_object"), ctx.candidate("object_pool")
+    if candidate is None or mario is None or pool is None:
+        return Verdict("missing", evidence="area counter candidate/dependencies missing")
+    mem, start = ctx.raw(), ctx.now()
+    previous, advances, matches = None, 0, 0
+    while ctx.now() - start < GHOST_ADDRESS_SAMPLE_SECONDS:
+        obj = mem.read_u32(mario)
+        if not pool_contains(pool, obj, slot_size=A.OBJECT_SIZE, slots=A.OBJECT_COUNT):
+            return Verdict("failed", evidence="Mario object left the verified pool")
+        before = mem.read_u16(candidate)
+        rendered = mem.read_u16(obj + A.MARIO_GFX_ANIM_TIMER_OFF)
+        after = mem.read_u16(candidate)
+        if before == after == rendered:
+            matches += 1
+            if previous is not None and 0 < ((after - previous) & 0xFFFF) < 64:
+                advances += 1
+            previous = after
+        ctx.sleep(POLL_INTERVAL_S)
+    measured = {"matching_samples": matches, "matching_advances": advances}
+    if advances < 5:
+        return Verdict("failed", measured=measured,
+                       evidence="counter did not repeatedly advance with Mario's rendered animTimer")
+    return Verdict("verified", value=candidate, measured=measured,
+                   evidence="candidate advances and equals the independent gfx animation timer; "
+                            "pose/picture alignment still needs its renderer witness")
+
+
+register(Gate(
+    id="address.area_update_counter", feature="version", kind="address",
+    needs=("address.mario_object", "address.object_pool"),
+    timeout_s=GHOST_ADDRESS_SAMPLE_SECONDS + 5,
+    instruction="Keep Mario visible in a normal area, unpaused, for two seconds.",
+    proves="gAreaUpdateCounter's candidate advances with the actual graphics animation timer.",
+    check=_check_area_update_counter,
 ))
 
 

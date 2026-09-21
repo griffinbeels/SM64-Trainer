@@ -67,6 +67,12 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "s8; vanilla races only"),
     LayoutRow("mario_object", "gMarioObject", None,
               "pointer to Mario's own object; its behaviour is bhvMario"),
+    LayoutRow("current_area_pointer", "gCurrentArea", None,
+              "VERIFY: pointer to the active Area and its persistent camera graph; "
+              "address.current_area_pointer checks independent area/root identity"),
+    LayoutRow("area_update_counter", "gAreaUpdateCounter", None,
+              "VERIFY: u16 render animation/blink phase; address.area_update_counter "
+              "compares Mario gfx animTimer during live motion"),
     LayoutRow("usamune_overall", None, "usamune_time",
               "u16 running leg counter; counter_epoch banks subarea resets"),
     LayoutRow("usamune_star_result", None, "usamune_time",
@@ -96,6 +102,8 @@ class Layout:
     hud_display: int | None = None
     hud_timer_running: int | None = None
     mario_object: int | None = None
+    current_area_pointer: int | None = None
+    area_update_counter: int | None = None
     usamune_overall: int | None = None
     usamune_star_result: int | None = None
     usamune_timer: int | None = None
@@ -144,6 +152,10 @@ US = Layout(
     hud_display=0x8033B260,         # +HUD_TIMER_OFF is the race timer; 0 under Usamune (trap)
     hud_timer_running=0x8033B25E,
     mario_object=0x80361158,        # STROOP MappingUS.map gMarioObject
+    current_area_pointer=0x8032DDCC, # VERIFY: STROOP MappingUS.map gCurrentArea;
+                                    # new ghost read, not yet live gate verified.
+    area_update_counter=0x8032DF08, # VERIFY: STROOP MappingUS.map gAreaUpdateCounter;
+                                    # u16, distinct from gGlobalTimer.
     usamune_overall=0x80417C72,     # tools/hunt_value.py + watch session 2026-06-10
     usamune_star_result=0x80417C74,
     usamune_timer=0x8033D5DC,       # section counter; diagnostics only
