@@ -1,0 +1,21 @@
+{
+  "libsm64": {
+    "revision": "fd11813208272b4271d92bd92feb8f3fdbe61be5",
+    "url": "https://codeload.github.com/libsm64/libsm64/zip/fd11813208272b4271d92bd92feb8f3fdbe61be5",
+    "filename": "libsm64.zip",
+    "sha256": "693d94a895388e8f60dff09d65739f75c4628946b5460ecd0dadbebec6293578",
+    "license": "CC0-1.0"
+  },
+  "mario_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mario/geo.inc.c",
+    "filename": "upstream-mario-geo.c",
+    "sha256": "fc276e326a9cb22f55dfae8349b0ff746b9a7db7c108074a47508f3e2b225364"
+  },
+  "mario_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mario/model.inc.c",
+    "filename": "upstream-mario-model.c",
+    "sha256": "3c28959f915121cd94daab7941e144078098b3cac668fdc70817f4127c549e8f"
+  }
+}

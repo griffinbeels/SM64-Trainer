@@ -1,0 +1,119 @@
+#ifndef SM64_TRAINER_MODEL_H
+#define SM64_TRAINER_MODEL_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct sg_model sg_model;
+
+enum sg_status {
+    SG_OK = 0, SG_INVALID_ARGUMENT = -1, SG_INVALID_ROM = -2,
+    SG_OUT_OF_MEMORY = -3, SG_BUSY = -4, SG_WRONG_THREAD = -5,
+    SG_INVALID_ANIMATION = -6, SG_CAPACITY = -7, SG_INVALID_GEOMETRY = -8,
+    SG_INVALID_MODEL = -9
+};
+
+enum sg_pose_fields {
+    SG_POSE_TRANSFORM = 1u, SG_POSE_ANIMATION = 2u, SG_POSE_BODY = 4u,
+    SG_POSE_HEAD_ROTATION = 8u, SG_POSE_REQUIRED = 15u,
+    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u
+};
+
+/* A native C value, not a packed wire format. Angles are signed SM64 turns.
+ * position/angles are the DRAWN gfx transform. body_action is separate from
+ * MarioState action. head_rotation is the effective geo-node XYZ rotation,
+ * after camera/action rules. throw_matrix is the native row-major Mat4 layout
+ * (translation in elements 12..14), replacing position/angles when present.
+ * scale applies in both paths. Missing required fields are rejected.
+ */
+typedef struct sg_pose {
+    uint32_t fields;
+    uint32_t action;
+    uint32_t body_action;
+    uint32_t mario_flags;
+    uint32_t area_update_counter; /* Captured area clock, not global_timer. */
+    int32_t animation_id;
+    float position[3];
+    float scale[3];
+    float throw_matrix[16];
+    int16_t angles[3];
+    int16_t torso_angles[3];
+    int16_t head_angles[3];
+    int16_t head_rotation[3];
+    int16_t animation_frame;
+    int16_t anim_y_translation;
+    uint16_t model_state;
+    uint8_t cap_state, eye_state, hand_state, wing_flutter;
+    uint8_t punch_state, grab_position;
+} sg_pose;
+
+enum sg_mesh_errors {
+    SG_MESH_BAD_POSE = 1u, SG_MESH_BAD_ANIMATION = 2u,
+    SG_MESH_TOO_SMALL = 4u, SG_MESH_NONFINITE = 8u,
+    SG_MESH_SCRATCH_EXHAUSTED = 16u, SG_MESH_UNSUPPORTED_MATERIAL = 32u
+};
+
+/* Active display-list combiner, with game fade replaced by renderer opacity.
+ * ALPHA_MIX: mix(vertex RGB, texture RGB, texture alpha), opaque coverage.
+ * DECAL: texture RGB; MODULATE: vertex RGB * texture RGB.
+ * RGBA variants additionally use texture alpha for coverage; RGB ignores it.
+ */
+enum sg_material {
+    SG_MATERIAL_SOLID = 0, SG_MATERIAL_ALPHA_MIX = 1,
+    SG_MATERIAL_DECAL_RGBA = 2, SG_MATERIAL_DECAL_RGB = 3,
+    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5
+};
+
+enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = 704,
+       SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = 180224 };
+
+/* Arrays are caller-owned, nonoverlapping: 3 floats per vertex for position,
+ * normal and color; 2 floats per vertex for UV; one material per vertex, with
+ * all three vertices of a triangle agreeing. Failure clears vertex_count.
+ * Capacity is checked before each triangle is written. Hidden poses succeed
+ * with vertex_count=0. Material color/UV follow libsm64's atlas convention.
+ */
+typedef struct sg_mesh {
+    float *position, *normal, *color, *uv;
+    uint32_t *material;
+    uint32_t vertex_capacity;
+    uint32_t vertex_count;
+    uint32_t error_flags;
+} sg_mesh;
+
+typedef struct sg_atlas_view {
+    const uint8_t *rgba;
+    uint32_t width, height, animation_count;
+} sg_atlas_view;
+
+/* Exactly one runtime may be open in a linked module. Calls are nonblocking:
+ * concurrent/reentrant operations return SG_BUSY. Open/evaluate/close belong
+ * to the same thread. Open does bounded asset extraction and allocation; call
+ * it outside steady-state drawing. ROM bytes are not retained after open.
+ * Supported layout: 8 MiB big-endian US SM64 asset sections, structurally
+ * validated here; caller additionally establishes desired ROM/version identity.
+ */
+int32_t sg_model_open(const uint8_t *rom, size_t rom_bytes, sg_model **out);
+int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out);
+int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out);
+/* Exact upstream SM64 look-at, including its sine table. Native Mat4 layout,
+ * translation at 12..14; no N64 quantization or projection is applied. Rejects
+ * nonfinite, coincident and vertical-degenerate camera pairs. Clears output on
+ * failure. The same owner-thread/lifetime rules apply as evaluate.
+ */
+int32_t sg_model_view(sg_model *model, const float position[3],
+    const float focus[3], int16_t roll, float out_matrix[16]);
+/* On success clears *model; a NULL *model is a successful no-op. Atlas pointers
+ * expire at close. A handle must not be reused or copied across close/reopen;
+ * foreign pointers are rejected before dereferencing.
+ */
+int32_t sg_model_close(sg_model **model);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
