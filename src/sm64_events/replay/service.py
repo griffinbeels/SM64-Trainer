@@ -74,6 +74,7 @@ def _native_manifest(path: Path) -> dict:
 def _native_attempt_ids(root: Path) -> set[int]:
     """Pruning evidence must contain a committed, hashed clip, not just a name."""
     from sm64_events.ghost.clip import check_manifest
+    from types import SimpleNamespace
     root = root.resolve()
     identities = set()
     for meta in (root / "native").glob("attempt_*.json"):
@@ -90,7 +91,10 @@ def _native_attempt_ids(root: Path) -> set[int]:
                     or target.get("strat") is not None and not isinstance(target["strat"], str)):
                 continue
             attempt_id = int(match.group(1))
-            check_manifest(path, manifest, attempt_id=attempt_id, session_id=session, target=target)
+            # This protects a saved source from pruning before the database is
+            # available. Playback separately compares the current projected row.
+            recorded = SimpleNamespace(**{**manifest, "id": attempt_id})
+            check_manifest(path, manifest, attempt=recorded, target=target)
             identities.add(attempt_id)
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
@@ -436,7 +440,6 @@ class ReplayService:
     def find_native(self, attempt_id: int) -> tuple[Path, dict] | None:
         """Read a validated permanent pose clip, independent of video availability."""
         from sm64_events.ghost.clip import check_manifest
-        from sm64_events.ghost.source import _attempt_ends
         attempt = self._attempt(attempt_id)
         root = self.cfg.save_root.resolve()
         candidates = [(root / "native" / f"attempt_{attempt_id}.ghost", False)]
@@ -452,15 +455,18 @@ class ReplayService:
                             else _native_manifest(meta))
                 if video_metadata:
                     manifest = manifest.get("native_ghost")
-                clip = check_manifest(path, manifest, attempt_id=attempt.id,
-                                      session_id=attempt.session_id, target=self._native_target(attempt))
-                ends = _attempt_ends(attempt)
-                if (ends is not None and clip.frames[0].global_timer == ends[0]
-                        and ends[0] <= clip.frames[-1].global_timer <= ends[1]):
-                    return path, manifest
+                check_manifest(path, manifest, attempt=attempt, target=self._native_target(attempt))
+                return path, manifest
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 continue
         return None
+
+    def native_identity(self, attempt_id: int) -> dict:
+        """Cheap projected ownership key; reprojected origins invalidate cached clips."""
+        from sm64_events.ghost.clip import attempt_origin
+        attempt = self._attempt(attempt_id)
+        return {"attempt_id": attempt.id, "session_id": attempt.session_id,
+                "target": self._native_target(attempt), **attempt_origin(attempt)}
 
     def available_attempt_ids(self) -> list[int]:
         """Attempt ids whose replay is obtainable RIGHT NOW: a saved clip on
@@ -1050,20 +1056,11 @@ class ReplayService:
 
     def _preserve_ghost(self, attempt, path):
         from sm64_events.ghost.clip import ClipError
-        from sm64_events.ghost.source import _attempt_ends, _touch_frame
         archive = getattr(self.recorder, "pose_archive", None)
         if archive is None:
             return None, None, "This recording has no native Mario poses."
-        ends = _attempt_ends(attempt)
-        if ends is None:
-            return None, None, "This attempt has no exact start and end frames."
-        database = getattr(self.tracker, "db", None)
-        events = getattr(database, "events_between", None)
-        touch = _touch_frame(attempt, events, ends[1])
-        end = touch[0] if touch is not None and ends[0] <= touch[0] <= ends[1] else ends[1]
         try:
-            manifest = archive.export_attempt(attempt, path,
-                        end_frame=end, target=self._native_target(attempt))
+            manifest = archive.export_attempt(attempt, path, target=self._native_target(attempt))
         except (ClipError, OSError, sqlite3.Error) as error:
             return None, None, str(error)
         return path, manifest, None

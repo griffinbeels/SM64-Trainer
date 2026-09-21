@@ -13,7 +13,9 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *c) {
 extern "C" uint32_t ghost_capture_read(gc_reader *,const gc_layout *c,const gc_frame *f,gc_sample *s) {
     *s = {}; s->bytes=sizeof(*s); s->version=GC_VERSION; s->epoch=f->epoch;
     s->sequence=f->sequence; s->dlist_serial=f->dlist_serial; s->qpc=f->qpc;
-    s->global_timer=c->global_timer; s->valid_fields=GC_VALID_CLOCK | GC_VALID_CAMERA;
+    s->global_timer=c->global_timer;
+    s->valid_fields=GC_VALID_CLOCK | GC_VALID_CAMERA | GC_VALID_ACTION | GC_VALID_WARP;
+    s->level=9; s->area=1; s->igt=static_cast<uint16_t>(f->sequence); s->live_action=2;
     return GC_OK;
 }
 static void emit(int64_t qpc) {
@@ -22,6 +24,7 @@ static void emit(int64_t qpc) {
 int main() {
     const auto *api=ghost_stream::api();
     gc_layout config{}; config.bytes=sizeof(config); config.version=GC_VERSION; config.global_timer=0x1234;
+    config.clock={GCC_VERSION,30,10,10,60,30,1,65000,1,1,{6},{2}};
     assert(api->configure(&config)); ghost_stream::rom(true);
     // Fill all slots, prove bounded drops preserve every already-published item.
     for(unsigned i=0;i<GS_SLOTS+9;++i) emit(1000+i);
@@ -33,10 +36,13 @@ int main() {
         assert(record.bytes==sizeof(record) && record.version==GS_VERSION);
         assert(record.sample.qpc==1000+i && record.sample.sequence==previous+1);
         assert(record.sample.global_timer==0x1234); previous=record.sample.sequence;
+        assert((record.sample.clock.valid&GCC_ELAPSED_VALID)
+            && record.sample.clock.elapsed_frames==record.sample.sequence-1);
     }
     assert(api->read(&record,sizeof(record))==0 && record.bytes==0);
     emit(2000); assert(api->read(&record,sizeof(record))==1);
     assert(record.sample.sequence==GS_SLOTS+10); // actual missed occurrences remain visible
+    assert(record.sample.clock.elapsed_frames==GS_SLOTS+9); // clock precedes queue loss
     assert(api->read(&record,sizeof(record)-1)==-1);
     // Concurrent single producer/consumer; copy never races slot reuse.
     std::atomic<bool> done{false};

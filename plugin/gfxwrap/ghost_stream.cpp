@@ -18,6 +18,7 @@ bool rom_open = false, active = false;
 uint32_t observed_config = 0;
 uint64_t serial = 0;
 gc_reader reader{};
+gcc_clock source_clock{};
 gc_layout layout{};
 gc_sample current{};
 ghost::Pass pass;
@@ -65,6 +66,7 @@ void new_epoch() {
     if (old == std::numeric_limits<uint32_t>::max()) { disable(); rom_open = false; return; }
     epoch.store(old + 1, std::memory_order_release);
     ghost_capture_reset(&reader);
+    gcc_reset(&source_clock);
 }
 void publish(const gs_record &record) {
     offered.fetch_add(1, std::memory_order_relaxed);
@@ -97,11 +99,11 @@ gs_stats __cdecl stats() {
     return {sizeof(gs_stats), GS_VERSION, epoch.load(), configuration.load(),
         offered.load(), dropped.load(), taken.load(), busy.load(), configured.load() ? 1u : 0u};
 }
-const gs_api api_v1 = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WORLD_PASS, 0,
+const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WORLD_PASS, 0,
     configure, disable, read, stats};
 }
 namespace ghost_stream {
-const gs_api *api() { return &api_v1; }
+const gs_api *api() { return &capture_api; }
 bool requested() { return rom_open && configured.load(std::memory_order_acquire) != 0; }
 void cancel() { active = false; current = {}; pass.reset(); }
 void rom(bool opened) {
@@ -113,11 +115,24 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc)
     if (!rom_open || !generation || !read_config(layout, revision)) return false;
     if (revision != observed_config) {
         new_epoch(); observed_config = revision; configuration.store(revision, std::memory_order_release);
+        if (!gcc_init(&source_clock, &layout.clock)) { disable(); return false; }
     }
     if (!rom_open || serial == std::numeric_limits<uint64_t>::max()) { disable(); return false; }
     ++serial;
     gc_frame frame{ram,bytes,epoch.load(std::memory_order_relaxed),serial,serial,qpc};
     ghost_capture_read(&reader, &layout, &frame, &current);
+    gcc_input timing{};
+    timing.fields = ((current.valid_fields & GC_VALID_CLOCK) ? GCC_CLOCK : 0)
+        | ((current.valid_fields & GC_VALID_ACTION) ? GCC_ACTION : 0)
+        | ((current.valid_fields & GC_VALID_WARP) ? GCC_WARP : 0);
+    timing.epoch = current.epoch; timing.sequence = current.sequence;
+    timing.global_timer = current.global_timer; timing.raw_igt = current.igt;
+    timing.level = current.level; timing.area = current.area;
+    timing.action = current.live_action; timing.warp_op = current.pending_warp_op;
+    timing.warp_timer = current.delayed_warp_timer;
+    // Classification precedes the bounded queue. A slow recorder may lose a
+    // pose occurrence, but it cannot erase timing evidence seen by the source.
+    gcc_step(&source_clock, &timing, &current.clock);
     // A rewind gets an explicit invalid occurrence, then the next occurrence
     // starts a new epoch. Never retry this sample under a newly invented clock.
     if (current.status == GC_RESET_REQUIRED) new_epoch();

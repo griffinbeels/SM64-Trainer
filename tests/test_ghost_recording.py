@@ -106,24 +106,21 @@ def test_partial_native_start_keeps_failed_owner_until_joined(tmp_path):
     assert not owner.archive.path.exists()
 
 
-def test_service_preservation_uses_grab_and_refuses_outside_attempt(tmp_path):
+def test_service_preservation_uses_authoritative_attempt_instead_of_video_span(tmp_path):
     seen = []
-    archive = SimpleNamespace(export_attempt=lambda *args, **kw: seen.append(kw) or {"records": 3})
+    archive = SimpleNamespace(export_attempt=lambda *args, **kw: seen.append((args, kw)) or {"records": 3})
     row = attempt(end=110)
     row.segment_id, row.course_id, row.star_id, row.strat_tag = None, 24, 1, None
-    event = SimpleNamespace(type="star_collected", payload={"course_id": 24, "star_id": 1, "grab_frame": 103})
     service = ReplayService.__new__(ReplayService)
     service.recorder = SimpleNamespace(pose_archive=archive)
-    service.tracker = SimpleNamespace(db=SimpleNamespace(events_between=lambda *args: [event]))
+    service.tracker = SimpleNamespace(db=SimpleNamespace(
+        events_between=lambda *args: pytest.fail("native export inferred an endpoint from video events")))
     assert service._preserve_ghost(row, tmp_path / "clip.ghost")[1] == {"records": 3}
-    assert seen[-1]["end_frame"] == 103
-    event.payload["grab_frame"] = 111
-    service._preserve_ghost(row, tmp_path / "clip.ghost")
-    assert seen[-1]["end_frame"] == 110
+    assert seen[-1][0] == (row, tmp_path / "clip.ghost")
+    assert seen[-1][1] == {"target": {"kind": "star", "entity_key": "24-1", "strat": None}}
     row.segment_id = "segment-one"
-    event.payload["grab_frame"] = 103
     service._preserve_ghost(row, tmp_path / "clip.ghost")
-    assert seen[-1]["end_frame"] == 110
+    assert seen[-1][0][0] is row and "end_frame" not in seen[-1][1]
 
 
 def native_service(tmp_path):
@@ -132,7 +129,10 @@ def native_service(tmp_path):
     from test_replay_service import attempt as replay_attempt, make_service
     sample = attempt()
     row = replay_attempt(anchor_frame=sample.anchor_frame, rta_frames=sample.rta_frames,
-                         started_utc=sample.started_utc, ended_utc=sample.ended_utc)
+                         started_utc=sample.started_utc, ended_utc=sample.ended_utc,
+                         native_clock_frame=sample.native_clock_frame,
+                         native_clock_utc=sample.native_clock_utc,
+                         native_clock_kind=sample.native_clock_kind, closed_frame=sample.closed_frame)
     service = make_service(tmp_path, [row], cov=(datetime.fromisoformat(row.started_utc) - timedelta(seconds=10),
                                                datetime.fromisoformat(row.ended_utc) + timedelta(seconds=10)))
     archive = PoseArchive(tmp_path / "poses.sqlite")

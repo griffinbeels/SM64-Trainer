@@ -465,15 +465,26 @@ def build():
     # accepted reading straight off the poll loop -- publish-and-forget, one
     # set test when no overlay is open (server/ghost_clock.py).
     ghost_clock = GhostClockFeed()
+    from sm64_events.ghost.native_session import NativeGhost
+    native_ghost = NativeGhost(replay, supported=layout.version == "us",
+                               origin_of=service.native_ghost_origin)
+
+    def note_ghost_snapshot(snapshot):
+        ghost_clock.note(snapshot)
+        native_ghost.note(snapshot)
+
+    async def ghost_capture_gap(reason):
+        await service.capture_gap(reason)
+        native_ghost.note()
+
     poller = Poller(memory, detector_stream(), service, on_frame=service.settle_frame,
                     reader=reader, detector_factory=detector_stream,
-                    on_gap=service.capture_gap, on_snapshot=ghost_clock.note)
+                    on_gap=ghost_capture_gap, on_snapshot=note_ghost_snapshot)
     inputs.bind(poller)
     # One ghost for the app: the switch, its window, and the target it follows.
-    from sm64_events.ghost.native_session import NativeGhost
     ghost = GhostSession(tracker=service, inputs=inputs.get_service,
                          replay=replay, broadcaster=broadcaster,
-                         native=NativeGhost(replay, supported=layout.version == "us"))
+                         native=native_ghost)
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
         # nothing; unknown (no header read yet) keeps the old behaviour.

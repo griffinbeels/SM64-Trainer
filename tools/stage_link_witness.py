@@ -120,6 +120,7 @@ def _stage_ghost(output: Path, enabled: bool) -> None:
         (output / relative).write_bytes(data)
     for name in ["ghost_capture.h", "ghost_capture.cpp", "ghost_pass.h", "ghost_pass.cpp",
                  "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
+                 "ghost_clock.h", "ghost_clock.cpp", "ghost_origin.h", "ghost_origin.cpp",
                  "ghost_pose.h", "ghost_pose.cpp", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h",
                  "ghost_clip.h", "ghost_assets.h", "ghost_assets.cpp", "ghost_ipc.h", "ghost_ipc.cpp",
                  "ghost_draw.h", "ghost_draw.cpp", "ghost_playback.h", "ghost_playback.cpp",
@@ -207,7 +208,7 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--context-lifetime", action="store_true", help="also stage protected context retirement; compile with SM64_REPLAY_CONTEXT_LIFETIME")
     parser.add_argument("--boundary", action="store_true", help="also stage the explicit command boundary API")
-    parser.add_argument("--ghost", action="store_true", help="stage GhostV1 per-DList pose/camera/world capture")
+    parser.add_argument("--ghost", action="store_true", help="stage GhostV2 per-DList pose/camera/world capture")
     parser.add_argument("--label", help="distinct test-only selector name; settings identity stays unchanged")
     args = parser.parse_args()
     overlay(args.source, args.out, boundary=args.boundary, label=args.label,

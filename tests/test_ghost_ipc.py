@@ -25,6 +25,7 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
     inputs = ["plugin/gfxwrap/ghost_ipc.cpp", "plugin/gfxwrap/ghost_ipc.h",
               "plugin/gfxwrap/ghost_assets.cpp", "plugin/gfxwrap/ghost_assets.h",
               "plugin/gfxwrap/ghost_clip.h", "plugin/gfxwrap/ghost_playback.h",
+              "plugin/gfxwrap/ghost_origin.h", "plugin/gfxwrap/ghost_origin.cpp",
               "tests/native/ghost_ipc_host.cpp", "tests/test_ghost_ipc.py"]
     (tmp_path / "ipc-inputs.json").write_text(json.dumps({path: hashlib.sha256(
         (ROOT / path).read_bytes()).hexdigest() for path in inputs}, indent=2), encoding="utf-8")
@@ -33,6 +34,7 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy", "/LD",
         f"/I{ROOT / 'renderer/model'}", f"/I{ROOT / 'plugin/gfxwrap'}",
         str(ROOT / "plugin/gfxwrap/ghost_ipc.cpp"), str(ROOT / "plugin/gfxwrap/ghost_assets.cpp"),
+        str(ROOT / "plugin/gfxwrap/ghost_origin.cpp"),
         str(ROOT / "tests/native/ghost_ipc_host.cpp"), f"/Fe:{library}", f"/Fo{tmp_path}\\",
         "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'",
         *compiler.LIBS], tmp_path)
@@ -56,16 +58,17 @@ int wmain(int argc,wchar_t** argv) {
 ''', encoding="utf-8")
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17",
         str(launcher), f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *compiler.LIBS], tmp_path)
-    header = struct.pack("<8s8I16sQqdQQIIii4I", b"SM64GHO1", 1, 128, 192, 1,
-                         1, 2, 1, 1, bytes([1]) + bytes(15), 10_000_000, 0, 1.0,
-                         1, 1, 100, 100, 9, 1, 0, 0, 0, 0)
-    frame = bytearray(192)
-    struct.pack_into("<8IQQqIHHhhII", frame, 0, 192, 1, 1, 3, 176, 2, 1, 3,
+    header = struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO2", 2, 160, 260, 1,
+                         1, 3, 1, 1, bytes([1]) + bytes(15), 10_000_000, 0, 1.0,
+                         1, 1, 100, 100, 9, 1, 1, 100, 10, 0, 1, 0, 1, 0, 0)
+    frame = bytearray(260)
+    struct.pack_into("<8IQQqIHHhhII", frame, 0, 260, 2, 1, 3, 244, 3, 1, 3,
                      1, 1, 0, 100, 0, 10, 9, 1, 8, 0)
     struct.pack_into("<3f", frame, 88, 1.0, 1.0, 1.0)  # gc_pose.scale
     struct.pack_into("<h", frame, 106, 197)  # idle animation
     struct.pack_into("<2I", frame, 116, 0x0c400201, 0x0c400201)  # action/body_action
     struct.pack_into("<I", frame, 128, 1)  # GC_ROOT_TRS
+    struct.pack_into("<4I6Q", frame, 196, 5, 1, 0, 10, 0, 0, 0, 1, 0, 1)
     clip = tmp_path / "fixture.ghost"
     clip.write_bytes(header + frame)
     rom = bytearray(8 << 20)

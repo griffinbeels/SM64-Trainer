@@ -1,4 +1,4 @@
-"""Source-only GhostV1 seams on the pinned renderer; never install or run it."""
+"""Source-only GhostV2 seams on the pinned renderer; never install or run it."""
 from pathlib import Path
 
 GUARD = "#if defined(OS_WINDOWS) && defined(SM64_GHOST_RENDERER)\n"

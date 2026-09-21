@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Callable
 
 from sm64_events.ghost.native_channel import NativeChannel
-from sm64_events.ghost.native_protocol import Producer
+from sm64_events.ghost.native_protocol import RECORD_BYTES, Producer
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.replay.capturecontrol import CaptureControl
 from sm64_events.replay.ownedclose import CleanupPending, retain
@@ -20,7 +20,7 @@ def grouped(producer: Producer, frames: tuple[bytes, ...]):
     """Queue batches can straddle rewind; attach each record's own identity."""
     group, identity = [], None
     for frame in frames:
-        if len(frame) != 192:
+        if len(frame) != RECORD_BYTES:
             raise ValueError("native ghost record size changed")
         key = (struct.unpack_from("<I", frame, 8)[0],
                struct.unpack_from("<I", frame, 24)[0])
@@ -67,17 +67,26 @@ class NativeCapture:
         self._thread.join(timeout_s)
         return not self._thread.is_alive()
 
-    def set_playback(self, **controls):
-        """Human-paced controls; immutable native assets load on its worker."""
-        with self._lock:
+    def set_playback(self, *, blocking=True, **controls) -> bool:
+        """Control changes only; poll callbacks skip a contended publication."""
+        if not self._lock.acquire(blocking=blocking):
+            return False
+        try:
             if controls == self._playback:
-                return
+                return True
             self._playback = dict(controls)
             self._revision += 1
+            return True
+        finally:
+            self._lock.release()
 
-    def snapshot_status(self) -> dict:
-        with self._lock:
+    def snapshot_status(self, *, blocking=True) -> dict | None:
+        if not self._lock.acquire(blocking=blocking):
+            return None
+        try:
             return dict(self._status)
+        finally:
+            self._lock.release()
 
     def _report(self, **status):
         with self._lock:

@@ -12,11 +12,13 @@ class Capture:
         self.commands = []
         self.displayed = False
 
-    def set_playback(self, **command):
+    def set_playback(self, *, blocking=True, **command):
         self.commands.append(command)
+        return True
 
-    def snapshot_status(self):
+    def snapshot_status(self, *, blocking=True):
         return {"available": True, "state": 4, "playback_reason": 2,
+                "producer": SimpleNamespace(configuration=2, epoch=3),
                 "displayed": self.displayed}
 
 
@@ -25,8 +27,11 @@ def native_session(tmp_path, *, asset=True):
     source = Capture()
     manifest = {"clip_id": "ab" * 16, "sha256": "cd" * 32}
     replay = SimpleNamespace(recorder=SimpleNamespace(ghost_capture=source),
+                             native_identity=lambda _: {"native_clock_frame": 100},
                              find_native=lambda _: (tmp_path / "run.ghost", manifest) if asset else None)
-    session._native = NativeGhost(replay)
+    session._native = NativeGhost(replay, origin_of=lambda *_: {
+        "kind": "star", "session_id": 1, "arm_id": 9,
+        "frame": 100, "utc": "2026-09-21T08:00:00+00:00"})
     mark(store)
     return session, source, windows, tracker
 
@@ -37,12 +42,15 @@ def test_native_switch_uses_pose_without_video_window_and_preserves_controls(tmp
     async def check():
         await session.update({"enabled": True, "view": "mario", "opacity": 1,
                            "tint": {"enabled": True, "hue_degrees": 120}, "nudge_frames": 9})
+        session._native.note()
         assert not windows
         assert session.payload()["source"]["exactness"] == "native_pose"
         command = source.commands[-1]
         assert command["enabled"] and command["opacity"] == 1 and command["nudge"] == 9
         assert command["tint_enabled"] and command["hue_degrees"] == 120
         assert command["stop_at_star"] and command["rom_path"] == ""
+        assert command["origin"]["global_timer"] == 100
+        assert command["origin"]["configuration"] == 2 and command["origin"]["epoch"] == 3
         count = len(source.commands)
         await session.refresh(resolve=False)
         assert len(source.commands) == count
@@ -71,6 +79,7 @@ def test_pose_ready_is_not_display_evidence(tmp_path):
 
     async def check():
         await session.update({"enabled": True, "view": "mario"})
+        session._native.note()
         assert session._native.state()["running"]
         assert not session._native.state()["visible"]
         source.displayed = True
@@ -78,6 +87,38 @@ def test_pose_ready_is_not_display_evidence(tmp_path):
         source.displayed = False
         assert not session._native.state()["visible"]
         await session.stop()
+
+    asyncio.run(check())
+
+
+def test_poll_markers_rebase_and_disarm_without_frame_pacing_or_file_reads(tmp_path):
+    session, source, _, _ = native_session(tmp_path)
+    origin = {"kind": "segment", "session_id": 1, "arm_id": 99,
+              "frame": 120, "utc": "2026-09-21T08:00:00+00:00"}
+    session._native._origin_of = lambda *_: origin
+
+    async def check():
+        nonlocal origin
+        await session.update({"enabled": True, "view": "mario"})
+        assert not source.commands[-1]["enabled"]
+        assert session._native.state()["reason"] == "Waiting for the next attempt."
+        session._native.note()
+        first = source.commands[-1]
+        assert first["origin"]["kind"] == 2 and first["origin"]["global_timer"] == 120
+        count = len(source.commands)
+        for _ in range(90):
+            session._native.note()
+        assert len(source.commands) == count
+        origin = {**origin, "frame": 145, "utc": "2026-09-21T08:00:00.8+00:00"}
+        session._native.note()
+        assert source.commands[-1]["origin"]["global_timer"] == 145
+        assert source.commands[-1]["origin"]["arm_id"] == 99
+        origin = None
+        session._native.note()
+        assert source.commands[-1] == {"enabled": False}
+        await session.stop()
+        session._native.note()
+        assert source.commands[-1] == {"enabled": False}
 
     asyncio.run(check())
 
@@ -144,6 +185,59 @@ def test_unchanged_clip_is_validated_once_until_asset_changes(tmp_path):
         path.write_bytes(b"changed asset")
         await session.refresh()
         assert calls == [7, 7]
+        await session.stop()
+
+    asyncio.run(check())
+
+
+def test_reprojected_attempt_invalidates_unchanged_cached_asset(tmp_path):
+    session, _, _, _ = native_session(tmp_path)
+    path = tmp_path / "run.ghost"
+    path.write_bytes(b"asset")
+    path.with_suffix(".json").write_text("{}")
+    calls = []
+    replay = session._native._replay
+    find = replay.find_native
+    replay.find_native = lambda number: calls.append(number) or find(number)
+
+    async def check():
+        await session.update({"view": "mario"})
+        await session.refresh()
+        assert session._native._asset is not None
+        replay.native_identity = lambda _: {"native_clock_frame": 145}
+        replay.find_native = lambda number: calls.append(number)
+        await session.refresh()
+        assert calls == [7, 7] and session._native._asset is None
+        assert not session.payload()["source"]["available"]
+        await session.stop()
+
+    asyncio.run(check())
+
+
+def test_poll_tick_skips_capture_lock_and_retries_unpublished_command(tmp_path):
+    from sm64_events.ghost.capture import NativeCapture
+    from sm64_events.memory.layout import US
+
+    session, fake, _, _ = native_session(tmp_path)
+    source = NativeCapture(US, lambda *_: None)
+    source._report(**fake.snapshot_status())
+    session._native._replay.recorder.ghost_capture = source
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        completed = threading.Event()
+        thread = threading.Thread(target=lambda: (session._native.note(), completed.set()))
+        source._lock.acquire()
+        try:
+            thread.start()
+            assert completed.wait(1), "poll tick waited on the capture worker"
+            assert source.set_playback(blocking=False, enabled=True) is False
+            assert session._native._sent == {"enabled": False}
+        finally:
+            source._lock.release()
+            thread.join(2)
+        session._native.note()
+        assert source._playback["enabled"] and session._native._sent == source._playback
         await session.stop()
 
     asyncio.run(check())

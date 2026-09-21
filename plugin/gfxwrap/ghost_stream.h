@@ -1,4 +1,4 @@
-/* GhostV1 is independent of the video SourceV2 stamp/coalescing ABI. One value
+/* GhostV2 is independent of the video SourceV2 stamp/coalescing ABI. One value
  * is offered per rendered DList, including refusals. No emulation waits.
  * Lifecycle and consumer contract: docs/ghost-native-runtime.md.
  */
@@ -6,7 +6,7 @@
 #include "ghost_capture.h"
 #include <stdint.h>
 
-#define GS_VERSION 1u
+#define GS_VERSION 2u
 #define GS_SLOTS 128u
 #define GS_CAP_POSE 1u
 #define GS_CAP_WORLD_PASS 2u

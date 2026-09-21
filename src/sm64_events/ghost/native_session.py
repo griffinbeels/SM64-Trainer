@@ -1,17 +1,27 @@
 """Human-paced native ghost selection; the renderer owns every frame decision."""
 from __future__ import annotations
 
+from datetime import datetime
+import threading
+
 from sm64_events.ghost.source import attempt_id_of
 
 
 class NativeGhost:
-    def __init__(self, replay, *, supported=True):
+    def __init__(self, replay, *, supported=True, origin_of=None):
         self._replay, self._supported = replay, supported
         self._asset = None
         self._source = None
         self._sent = None
         self._enabled = False
         self._cached = None
+        self._origin_of = origin_of
+        self._control_lock = threading.Lock()
+        self._target = None
+        self._origin = None
+        self._controls = None
+        self._selected_asset = None
+        self._requested = False
 
     @staticmethod
     def _fingerprint(path):
@@ -41,7 +51,11 @@ class NativeGhost:
         answer["attempt_id"] = attempt_id
         if attempt_id is None or self._replay is None:
             return answer
-        key = (template.id, template.origin, target["kind"], target["entity_key"], target.get("strat"))
+        try:
+            identity = self._replay.native_identity(attempt_id)
+        except ValueError:
+            return answer
+        key = (template.id, template.origin, target["kind"], target["entity_key"], target.get("strat"), identity)
         if self._cached is not None:
             cached_key, asset, stamp, result = self._cached
             if key == cached_key and stamp is not None and self._fingerprint(asset[0]) == stamp:
@@ -59,33 +73,81 @@ class NativeGhost:
 
     def reconcile(self, *, enabled, opacity, nudge, tint, target):
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
-        if source is not self._source:
-            self.stop()
-            self._source, self._sent = source, None
+        with self._control_lock:
+            if source is not self._source:
+                self._stop()
+                self._source, self._sent = source, None
+            identity = (target["kind"], target["entity_key"]) if target else None
+            if identity != self._target:
+                self._origin = None
+            self._target = identity
+            self._selected_asset = self._asset
+            self._requested = bool(enabled)
+            self._controls = {"opacity": opacity, "nudge": nudge,
+                              "tint_enabled": tint["enabled"], "hue_degrees": tint["hue_degrees"],
+                              "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
+            self._send()
+
+    def note(self, _snapshot=None):
+        """After a settled poll tick, forward changed owner markers only.
+
+        No files, model work or frame pacing. Skip a contended control update;
+        the next tick observes the same authoritative arm/rebase/disarm state.
+        Selection and template validation run separately on the session worker.
+        """
+        if not self._control_lock.acquire(blocking=False):
+            return
+        try:
+            self._origin = (self._origin_of(*self._target)
+                            if self._target and self._origin_of and self._requested else None)
+            self._send(blocking=False)
+        finally:
+            self._control_lock.release()
+
+    def _send(self, *, blocking=True):
+        source = self._source
         command = {"enabled": False}
-        if enabled and self._asset is not None and source is not None:
-            path, manifest = self._asset
+        status = source.snapshot_status(blocking=blocking) if source is not None else {}
+        if status is None:
+            return
+        producer = status.get("producer")
+        origin = self._origin
+        if (self._requested and self._selected_asset is not None and source is not None
+                and origin is not None and producer is not None
+                and producer.configuration and producer.epoch):
+            path, manifest = self._selected_asset
+            instant = datetime.fromisoformat(origin["utc"].replace("Z", "+00:00"))
+            if instant.tzinfo is None:
+                self._origin = None
+                return self._send(blocking=blocking)
             command = {"enabled": True, "model_id": 1,
                        "clip_id": bytes.fromhex(manifest["clip_id"]),
                        "clip_sha256": bytes.fromhex(manifest["sha256"]),
                        "clip_path": str(path), "rom_path": "",
-                       "opacity": opacity, "nudge": nudge,
-                       "tint_enabled": tint["enabled"], "hue_degrees": tint["hue_degrees"],
-                       "stop_at_star": target["kind"] == "star", "mode": 0}
+                       **self._controls,
+                       "origin": {"kind": 1 if origin["kind"] == "star" else 2,
+                                  "configuration": producer.configuration, "epoch": producer.epoch,
+                                  "global_timer": origin["frame"], "utc": instant.timestamp(),
+                                  "session_id": origin["session_id"], "arm_id": origin["arm_id"]}}
         if source is not None and command != self._sent:
-            source.set_playback(**command)
+            if source.set_playback(blocking=blocking, **command) is False:
+                return
             self._sent = command
         self._enabled = command["enabled"]
 
     def state(self):
-        status = self._source.snapshot_status() if self._source is not None else {}
+        status = (self._source.snapshot_status() or {}) if self._source is not None else {}
         ready = bool(self._enabled and status.get("available") and status.get("state") == 4)
         # A generated pose is not display evidence. Only the renderer's last
         # qualified swap can say this command reached the game window.
         visible = ready and bool(status.get("displayed"))
         reason = None
-        if self._enabled and not ready:
-            if status.get("state") == 3:
+        if self._requested and not ready:
+            if status.get("reason") == 10:
+                reason = "Waiting for this attempt's recorded clock."
+            elif not self._enabled and status.get("available"):
+                reason = "Waiting for the next attempt."
+            elif status.get("state") == 3:
                 reason = "Preparing Mario..."
             elif status.get("state") == 5:
                 reason = {4: "Open the US practice ROM to show Mario.",
@@ -99,7 +161,13 @@ class NativeGhost:
         return {"running": ready, "visible": visible, "backend": "native", "reason": reason}
 
     def stop(self):
+        with self._control_lock:
+            self._stop()
+
+    def _stop(self):
         if self._source is not None and self._sent != {"enabled": False}:
             self._source.set_playback(enabled=False)
             self._sent = {"enabled": False}
         self._enabled = False
+        self._requested = False
+        self._origin = None

@@ -149,7 +149,7 @@ void triangles(uint32_t count) {
 }
 }
 
-#pragma comment(linker,"/EXPORT:SM64GhostSourceV1=_SM64GhostSourceV1")
-extern "C" const gs_api *__cdecl SM64GhostSourceV1(uint32_t version, uint32_t bytes) {
+#pragma comment(linker,"/EXPORT:SM64GhostSourceV2=_SM64GhostSourceV2")
+extern "C" const gs_api *__cdecl SM64GhostSourceV2(uint32_t version, uint32_t bytes) {
     return version == GS_VERSION && bytes == sizeof(gs_api) ? ghost_stream::api() : nullptr;
 }

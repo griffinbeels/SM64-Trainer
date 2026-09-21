@@ -535,8 +535,20 @@ game image is inscribed 4:3 inside that rectangle; the black bands top and
 bottom of a clip are the GAME's own 8-of-240 scanline borders (40 rows of 1200,
 measured), which scale with the picture rather than with the window's shape.
 
-**Mario-only ghost composition.** The browser still owns decoding, the ghost
-clock, crop lookup and colour treatment. Its canvas sends only the crop's RGBA
+**Native Mario-only ghost.** The application uses libsm64's recorded graphics
+poses inside the owned GLideN64 renderer. `ghost/native_session.py` selects a
+validated saved clip and publishes the tracker's exact attempt origin; the
+native clock, frame selection and drawing run in the renderer. `ghost/capture.py`
+owns the leased IPC channel and recording worker. A separate display target
+blends Mario against live terrain depth while SourceV3 exposes clean game color
+for recording. Opacity and tint affect only Mario pixels. Poll callbacks skip
+contended control locks; neither Python nor IPC paces rendered ghost frames.
+See [native runtime contracts](ghost-native-runtime.md) for identity, timing,
+refusals and the remaining live verification boundary.
+
+**Legacy browser crop composition.** Whole-picture mode still uses the browser.
+The crop page and its diagnostic rig retain the earlier video path: the browser
+owns decoding, clock lookup and colour treatment. Its canvas sends crop RGBA
 pixels and physical destination through a bounded latest-frame bridge
 (`ui/ghost/presenter.js` → `ghost/window/presentation.py`). A separate unowned,
 click-through HWND submits that bitmap, position, dimensions and opacity together

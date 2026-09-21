@@ -1040,13 +1040,14 @@ delete the one you do not want instead of cropping it.
 
 ### Ghost
 
-The [[attempt]] you are racing: the footage behind your active
-[[template track]], drawn see-through over the [[game picture]] while you
-play.
-It is not a video that plays by itself — every [[frame]] it shows the template
-picture whose [[in-game time]] matches your own plus the [[nudge]], so a pause,
-the Usamune menu and a save-state load all move it the same way. The practice
-card's switch calls it Ghost Overlay.
+The [[attempt]] you are racing from your active [[template track]]. Whole-picture
+mode draws its footage over the [[game picture]]. Mario-only mode rebuilds its
+recorded graphics pose through libsm64 inside GLideN64, using the live camera
+and terrain depth. Opacity and tint apply to the displayed ghost.
+Playback follows [[in-game time]] plus the [[nudge]]. The native path binds the
+exact recorded and live attempt origins; a missing clock or a save-state
+discontinuity hides the ghost until its identity is established again. The
+practice card's switch calls it Ghost Overlay.
 
 - **Lives** — the one thing that joins the switch, the [[ghost window]] and the
   [[target]] (`src/sm64_events/ghost/session.py`)
@@ -1055,10 +1056,11 @@ card's switch calls it Ghost Overlay.
 
 ### Ghost source
 
-Where a [[ghost]]'s footage comes from, and how exact its timing is. There is
-one kind today: the saved recording of the [[attempt]] you marked your active
-[[template track]] from, which carries a [[frame map]] and therefore says
-exactly which game [[frame]] each of its pictures shows. A [[template track]]
+Where a [[ghost]]'s pictures or poses come from, and how exact their timing is.
+Mario-only uses a new native pose recording with exact attempt-origin metadata;
+old video-only recordings cannot supply it. Whole-picture mode uses the saved
+recording of the [[attempt]] you marked your active [[template track]] from,
+whose [[frame map]] says which game [[frame]] each picture shows. A [[template track]]
 that came from a
 file, or one whose recording nobody saved, has no source — and every "no"
 carries the one sentence the switch shows in its place.

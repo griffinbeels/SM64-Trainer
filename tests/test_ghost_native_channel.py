@@ -58,7 +58,7 @@ def test_channel_acquires_renews_copies_and_releases(kernel):
         assert request.token and request.capture_enabled and request.generation == 1
         assert request.star_action_count == len(channel.STAR_GRAB_ACTIONS)
         assert set(request.star_actions[:request.star_action_count]) == channel.STAR_GRAB_ACTIONS
-        payload = bytes(range(192))
+        payload = bytes(i % 256 for i in range(P.RECORD_BYTES))
         C.memmove(kernel.address + P.RING_OFFSET, payload, len(payload))
         P.U64.from_address(kernel.address + P.Status.produced.offset).value = 1
         before = kernel.request.heartbeat
@@ -118,8 +118,27 @@ def test_status_rejects_overrun_and_wrong_producer():
     with pytest.raises(ValueError): P.checked_status(bytes(status()), 999)
 
 
+@pytest.mark.parametrize("birth", [None, (999, 0)])
+def test_retained_ready_page_cannot_keep_dead_or_replaced_producer_alive(kernel, monkeypatch, birth):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        reply = status()
+        reply.ack_token, reply.ack_revision = kernel.request.token, kernel.request.revision
+        reply.state, reply.displayed = 4, 1
+        C.memmove(kernel.address, bytes(reply), 256)
+        assert connection.poll()[0].displayed == 1
+        before = bytes(kernel.request)
+        monkeypatch.setattr(channel, "_process_creation", lambda *_: birth)
+        with pytest.raises(ProcessLookupError, match="producer ended or was replaced"):
+            connection.poll()
+        assert bytes(kernel.request) == before
+    finally:
+        connection.close()
+    assert set(kernel.closed) == {1, 2, 3}
+
+
 def frame(configuration, epoch):
-    value = bytearray(192)
+    value = bytearray(P.RECORD_BYTES)
     struct.pack_into("<I", value, 8, configuration)
     struct.pack_into("<I", value, 24, epoch)
     return bytes(value)
@@ -132,6 +151,29 @@ def test_queued_epoch_transition_uses_record_identity():
     assert batches == [(replace(producer, configuration=2, epoch=7), frames[:2]),
                        (replace(producer, configuration=2, epoch=8), frames[2:3]),
                        (replace(producer, configuration=4, epoch=9), frames[3:])]
+
+
+def test_exact_origin_transport_and_full_width_seek(kernel, tmp_path):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    controls = {"enabled": True, "model_id": 1, "clip_id": b"a" * 16,
+                "clip_sha256": b"b" * 32, "clip_path": tmp_path / "poses.ghost",
+                "origin": {"kind": 2, "configuration": 4, "epoch": 5,
+                           "global_timer": 1234, "utc": 1000.0, "session_id": 7, "arm_id": 8}}
+    try:
+        connection.poll(controls)
+        assert kernel.request.origin.global_timer == 1234
+        assert kernel.request.origin.kind == 2 and kernel.request.origin.arm_id == 8
+        before = bytes(kernel.request)
+        with pytest.raises(ValueError):
+            connection.poll({**controls, "origin": {**controls["origin"], "epoch": 2**32}})
+        assert bytes(kernel.request) == before
+        with pytest.raises(ValueError):
+            connection.poll({**controls, "mode": 1, "seek_igt": 2**32})
+        assert bytes(kernel.request) == before
+        connection.poll({**controls, "mode": 1, "seek_igt": 100000})
+        assert kernel.request.seek_igt == 100000 and not any(bytes(kernel.request.origin))
+    finally:
+        connection.close()
 
 
 def test_stop_retains_owner_until_inflight_callback_releases(monkeypatch):

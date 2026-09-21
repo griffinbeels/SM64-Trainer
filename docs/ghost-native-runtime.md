@@ -191,13 +191,15 @@ loader, compositor and presentation modules. See
 calls the real native loader with model calls forbidden; it proves acceptance
 parity, not rendered geometry.
 
-The retained earlier connected hidden-WGL proof used real model/compositor/
-presentation code with synthetic capture and terrain: RTX5090, 640x480,
-20 warmups and 180 samples. CPU plus GPU completion plus hidden swap measured
-p50 0.4496 ms, p95 0.6583 ms and max 1.4745 ms. It also checked 100%/50% opacity,
+The connected hidden-WGL proof used GC3/GS2/GP2/GCLIP2 and the actual native
+capture, clock, queue, model, compositor and presentation code with synthetic
+RDRAM and terrain: RTX 5090, 640x480, 20 warmups and 180 samples. CPU plus GPU
+completion plus hidden swap measured p50 0.3952 ms, p95 0.5007 ms and max
+0.7434 ms. It also checked 100%/50% opacity,
 unchanged pixels outside Mario, clean recording and wall occlusion. That receipt
-used the earlier capture2 format; it is not a timing claim for a later build.
-It excludes live GLideN64 terrain/VI work, IPC and video encoding.
+binds its actual source hashes and executable. Paused IGT with advancing global
+timer leaves the selected pose unchanged. This excludes live GLideN64 terrain/VI
+work, IPC and video encoding; it is not the full live gameplay budget.
 
 For the actual staged RSP lifetime guard, stage a fresh pinned renderer with
 `tools/stage_link_witness.py --source <pinned-source> --out <temporary-output>

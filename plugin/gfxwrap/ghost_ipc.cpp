@@ -6,6 +6,7 @@
 #include "practice_rom.h"
 #include <windows.h>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <cwchar>
 #include <limits>
@@ -95,12 +96,24 @@ struct Session {
     bool live = false, awaiting_configuration = false, assets_loaded = false, clip_prepared = false;
     std::vector<uint8_t> rom_bytes, clip_bytes;
     gclip_header clip_header{};
+    ghost_origin::Ledger origins;
+    go_marker resolved_marker{};
+    go_origin resolved_origin{};
+    bool have_origin = false;
+    uint64_t qpc_frequency;
+    int64_t qpc_anchor;
+    double utc_anchor;
+
+    explicit Session(const gipc_status &clock) : qpc_frequency(clock.qpc_frequency),
+        qpc_anchor(clock.qpc_anchor), utc_anchor(clock.utc_anchor) {}
 
     void revoke(uint32_t why) {
         capture->disable();
         if (live || applied) play->revoke(why);
         live = false; applied = 0; configuration = 0; awaiting_configuration = false;
         clip_prepared = false;
+        origins.clear();
+        have_origin = false;
         reason = why; state = why ? GIPC_REFUSED : GIPC_PASSIVE;
     }
     bool demand(const gipc_request &r, uint32_t generation) {
@@ -118,10 +131,18 @@ struct Session {
         if (identity && ((accepted.revision && (r.revision < accepted.revision ||
                 (r.revision == accepted.revision && !same_command(r, accepted)))) || r.reserved
                 || r.capture_enabled > 1 || r.play_enabled > 1 || r.mode > 1
-                || r.seek_igt < 0 || r.seek_igt > 65535 || r.nudge < -600 || r.nudge > 600
+                || r.nudge < -600 || r.nudge > 600
                 || !(r.opacity >= 0 && r.opacity <= 1) || r.stop_at_star > 1
                 || r.star_action_count > 8 || r.tint_enabled > 1 || r.hue_degrees > 359
                 || (r.play_enabled && !r.model_id))) {
+            revoke(GIPC_PROTOCOL); previous = r; return false;
+        }
+        const go_marker empty_origin{};
+        if (identity && r.play_enabled && (r.mode == GP_FIXED
+                ? std::memcmp(&r.origin, &empty_origin, sizeof(r.origin)) != 0
+                : (r.origin.kind != GO_STAR && r.origin.kind != GO_SEGMENT)
+                    || !r.origin.configuration || !r.origin.epoch || !r.origin.session_id || !r.origin.arm_id
+                    || !std::isfinite(r.origin.utc) || r.origin.utc <= 0)) {
             revoke(GIPC_PROTOCOL); previous = r; return false;
         }
         if (identity) accepted = r;
@@ -138,6 +159,8 @@ struct Session {
         if (!live || rom != current_rom || std::memcmp(&r.layout, &previous.layout, sizeof(r.layout))) {
             play->revoke(GP_WRONG_IDENTITY);
             clip_prepared = false;
+            origins.clear();
+            have_origin = false;
             prior_configuration = capture->stats().configuration;
             if (!capture->configure(&r.layout)) {
                 revoke(GIPC_LAYOUT); previous = r; return false;
@@ -168,9 +191,10 @@ struct Session {
             applied = 0; clip_prepared = false;
         }
         if (!r.play_enabled) {
-            if (applied) { play->revoke(GP_DISABLED); clip_prepared = false; }
+            if (applied) play->withdraw();
             applied = 0;
         } else if (assets_loaded && configuration) {
+            if (applied != r.revision) play->withdraw();
             const int model = play->prepare_model(r.model_id, rom_bytes.data(), static_cast<uint32_t>(rom_bytes.size()));
             const int clip = clip_prepared ? GP_OK : play->prepare_clip(&clip_header,
                 reinterpret_cast<const gclip_frame *>(clip_bytes.data() + sizeof(gclip_header)));
@@ -178,6 +202,19 @@ struct Session {
             if (model == GP_OK && clip == GP_OK) {
                 if (applied != r.revision) {
                     gp_request command{};
+                    if (r.mode == GP_FOLLOW) {
+                        const bool retained = have_origin
+                            && !std::memcmp(&r.origin, &resolved_marker, sizeof(r.origin));
+                        const auto resolved = retained ? GO_READY : origins.resolve(r.origin, qpc_frequency,
+                            qpc_anchor, utc_anchor, r.layout.clock.near_zero, resolved_origin);
+                        if (r.origin.configuration != configuration || resolved != GO_READY) {
+                            have_origin = false;
+                            state = resolved == GO_MISSING ? GIPC_PREPARING : GIPC_REFUSED;
+                            reason = GIPC_ORIGIN; previous = r; return false;
+                        }
+                        resolved_marker = r.origin; have_origin = true;
+                        command.origin = resolved_origin;
+                    }
                     command.bytes = sizeof(command); command.version = GP_VERSION;
                     if (playback_revision == UINT64_MAX) { revoke(GIPC_PROTOCOL); previous = r; return false; }
                     command.revision = ++playback_revision; command.enabled = 1;
@@ -240,6 +277,10 @@ struct Session {
         gs_record record{};
         for (uint32_t count = 0; count < GS_SLOTS && capture->read(&record, sizeof(record)) == 1; ++count) {
             if (!live || !configuration || record.configuration != configuration) continue;
+            origins.add(record.configuration, record.sample);
+            if (have_origin && (record.sample.epoch != resolved_origin.epoch
+                    || !(record.sample.clock.valid & GCC_ELAPSED_VALID)
+                    || record.sample.clock.continuity_id != resolved_origin.continuity)) have_origin = false;
             if (s.produced == UINT64_MAX) { revoke(GIPC_PROTOCOL); return; }
             if (s.produced - s.consumed == GIPC_SLOTS) { ++s.dropped; continue; }
             gclip_frame &out = page.records[s.produced % GIPC_SLOTS];
@@ -268,6 +309,7 @@ DWORD WINAPI worker(void *argument) {
             Handle wake{CreateEventW(nullptr, FALSE, FALSE, (base + L"_wake").c_str())};
             if (view.page && mutex.value && wake.value) {
                 uint32_t generation = 0;
+                gipc_status source_clock{};
                 while (!generation && opened.load()) {
                     Lock guard(mutex.value);
                     if (guard.held) {
@@ -289,10 +331,11 @@ DWORD WINAPI worker(void *argument) {
                         initial.qpc_anchor = before.QuadPart + (after.QuadPart - before.QuadPart) / 2;
                         const uint64_t ticks = (static_cast<uint64_t>(utc.dwHighDateTime) << 32) | utc.dwLowDateTime;
                         initial.utc_anchor = static_cast<double>(ticks - 116444736000000000ull) / 10000000.0;
+                        source_clock = initial;
                         view.page->status = initial;
                     } else WaitForSingleObject(lifecycle_signal.load(), 16);
                 }
-                Session session;
+                Session session(source_clock);
                 while (generation) {
                     gipc_request request{};
                     bool received = false;

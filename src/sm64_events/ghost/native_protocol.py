@@ -9,12 +9,20 @@ import ctypes as C
 from dataclasses import dataclass
 from pathlib import Path
 
-MAGIC = b"SM64GIP1"
-VERSION = 1
-PREFIX = "Local\\sm64_trainer_ghost_v1_"
-SLOTS, RECORD_BYTES, RING_OFFSET = 512, 192, 4096
+MAGIC = b"SM64GIP2"
+VERSION = 2
+PREFIX = "Local\\sm64_trainer_ghost_v2_"
+SLOTS, RECORD_BYTES, RING_OFFSET = 512, 260, 4096
+LAYOUT_BYTES = 168
 PAGE_BYTES = RING_OFFSET + SLOTS * RECORD_BYTES
 U32, U64, I32 = C.c_uint32, C.c_uint64, C.c_int32
+
+
+class Origin(C.LittleEndianStructure):
+    _pack_ = 4
+    _fields_ = [("kind", U32), ("configuration", U32), ("epoch", U32),
+                ("global_timer", U32), ("utc", C.c_double),
+                ("session_id", U64), ("arm_id", U64)]
 
 
 class Request(C.LittleEndianStructure):
@@ -23,13 +31,14 @@ class Request(C.LittleEndianStructure):
         ("owner_pid", U32), ("owner_created_lo", U32), ("owner_created_hi", U32),
         ("generation", U32), ("token", U64), ("revision", U64),
         ("heartbeat", U32), ("capture_enabled", U32), ("play_enabled", U32),
-        ("mode", U32), ("seek_igt", I32), ("nudge", I32), ("opacity", C.c_float),
+        ("mode", U32), ("seek_igt", U32), ("nudge", I32), ("opacity", C.c_float),
         ("stop_at_star", U32), ("rom_generation", U32), ("reserved", U32),
         ("model_id", U64), ("clip_id", C.c_ubyte * 16),
-        ("layout", C.c_ubyte * 64), ("rom_path", C.c_uint16 * 520),
+        ("layout", C.c_ubyte * LAYOUT_BYTES), ("rom_path", C.c_uint16 * 520),
         ("clip_path", C.c_uint16 * 520), ("clip_sha256", C.c_ubyte * 32),
         ("star_action_count", U32), ("star_actions", U32 * 8),
         ("tint_enabled", U32), ("hue_degrees", U32),
+        ("origin", Origin),
     ]
 
 
@@ -49,7 +58,7 @@ class Status(C.LittleEndianStructure):
     ]
 
 
-assert C.sizeof(Request) == 2316 and C.sizeof(Status) == 256
+assert C.sizeof(Origin) == 40 and C.sizeof(Request) == 2460 and C.sizeof(Status) == 256
 assert Request.layout.offset == 96 and Status.consumed.offset == 96
 
 

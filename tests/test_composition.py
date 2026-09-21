@@ -399,8 +399,12 @@ def test_build_hands_every_snapshot_to_the_ghost_clock(monkeypatch):
     own tests and the overlay simply never moves — the same shape as the frame
     heartbeat above."""
     from sm64_events.server.ghost_clock import GhostClockFeed
+    from sm64_events.ghost.native_session import NativeGhost
     main_mod = _stubbed_main(monkeypatch)
     captured = {}
+    delivered = []
+    monkeypatch.setattr(GhostClockFeed, "note", lambda self, snapshot: delivered.append(("video", snapshot)))
+    monkeypatch.setattr(NativeGhost, "note", lambda self, snapshot=None: delivered.append(("native", snapshot)))
     real_poller = main_mod.Poller
 
     def spy(memory, detectors, sink, **kw):
@@ -411,8 +415,9 @@ def test_build_hands_every_snapshot_to_the_ghost_clock(monkeypatch):
     main_mod.build()
     note = captured.get("on_snapshot")
     assert note is not None, "the poller was built with no snapshot hook"
-    assert note.__func__ is GhostClockFeed.note
-    assert isinstance(note.__self__, GhostClockFeed)
+    sample = object()
+    note(sample)
+    assert delivered == [("video", sample), ("native", sample)]
 
 
 def test_build_mounts_every_ghost_door(monkeypatch):

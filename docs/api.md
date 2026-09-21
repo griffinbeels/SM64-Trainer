@@ -911,7 +911,30 @@ Deleting the file resets all history.
 | `tools/watch_timer.py` | Characterize a candidate address across game scenarios |
 | `tools/dedupe_journal.py` | Scan for double-journaled events from concurrent-instance incidents (read-only); `--fix` deletes duplicates and re-projects (server must be stopped first) |
 
-## Ghost overlay — the clock feed and the overlay page
+## Ghost overlay — native Mario and whole-picture video
+
+`GET /api/ghost`, `PUT /api/ghost` and `ghost_changed` control both views.
+With the application's native backend, `view: "mario"` selects recorded native
+poses and does not open the companion browser window. Its `source.exactness`
+is `"native_pose"`; `source.native_available` and `source.native_reason_text`
+describe native availability, with equivalent `whole_*` fields for video.
+`window` adds `backend: "native"` and a readable `reason` while
+waiting. `running` means the command is ready; `visible` requires a matching
+renderer presentation acknowledgement, not merely a generated pose. Opacity,
+tint and nudge apply inside GLideN64. Missing native poses remain unavailable;
+there is no whole-picture fallback for this mode.
+
+Native capture uses the existing recorder ownership lock. Marking a local
+attempt as a template preserves its available native poses independently of
+video extraction. Native clips bind the current database attempt's exact clock
+origin and closing frame; changed projected metadata invalidates a cached clip.
+The tracker's settled arm/rebase/disarm markers control FOLLOW playback, while
+the renderer advances its own IGT clock each occurrence. The browser clock feed
+below does not drive native frame selection. See [native runtime contracts](ghost-native-runtime.md).
+
+The remaining page/crop protocol below documents whole-picture playback and
+the retained standalone browser crop rig. Statements about Mario box lists and
+browser fallback apply to that page, not the native application mode.
 
 The ghost overlay shows your own best attempt inside the game picture. It is
 not a video that plays: every game frame it shows the template picture whose

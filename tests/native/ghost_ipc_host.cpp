@@ -21,9 +21,10 @@ namespace {
 unsigned checks=0;
 void check(bool value,const char* message) {++checks;if(!value)throw std::runtime_error(message);}
 std::atomic<DWORD> worker_owner{0};
-std::atomic<unsigned> wrong_thread{0},binds{0},releases{0},revokes{0},commands{0},models{0};
+std::atomic<unsigned> wrong_thread{0},binds{0},releases{0},revokes{0},commands{0},models{0},withdrawals{0};
 std::atomic<uint32_t> configuration{0},model_state{GP_MODEL_EMPTY};
 std::atomic<uint32_t> pending_record{0},sample_sequence{0};
+std::atomic<uint32_t> burst_records{0};
 std::atomic<bool> capture_enabled{false},retirement_allowed{true},fail_model{false};
 std::mutex command_mutex;
 gp_request command{};
@@ -38,11 +39,21 @@ int __cdecl capture_configure(const gc_layout*) {capture_enabled=true;pending_re
 void __cdecl capture_disable() {capture_enabled=false;}
 int __cdecl capture_read(gs_record* out,uint32_t bytes) {
     if(!out || bytes!=sizeof(*out))return -1;
-    const uint32_t configured=pending_record.exchange(0);if(!configured)return 0;
+    uint32_t configured=pending_record.exchange(0);
+    const bool continuation=!configured;
+    if(continuation) {
+        auto remaining=burst_records.load();
+        do {if(!remaining)return 0;}while(!burst_records.compare_exchange_weak(remaining,remaining-1));
+        configured=configuration.load();
+    }
     *out={};out->bytes=sizeof(*out);out->version=GS_VERSION;out->configuration=configured;
     auto& sample=out->sample;sample.bytes=sizeof(sample);sample.version=GC_VERSION;sample.epoch=1;
     sample.sequence=sample.dlist_serial=++sample_sequence;sample.valid_fields=GC_VALID_CLOCK;
     sample.global_timer=100;sample.igt=10;sample.level=9;sample.area=1;sample.status=GC_NO_CAMERA;
+    LARGE_INTEGER now{};QueryPerformanceCounter(&now);sample.qpc=now.QuadPart;
+    sample.clock.valid=GCC_RAW_VALID|GCC_ELAPSED_VALID;sample.clock.raw_igt=10;
+    sample.clock.continuity_id=1;
+    if(continuation) {sample.global_timer=200+sample_sequence.load();sample.clock.elapsed_frames=sample_sequence.load();}
     out->world.status=GCLIP_WORLD_READY;return 1;
 }
 gs_stats __cdecl capture_stats() {
@@ -67,6 +78,7 @@ int32_t __cdecl configure(const gp_request* value) {
     last_revision=value->revision;command=*value;++commands;model_state=GP_MODEL_RENDER_OWNED;return GP_OK;
 }
 void __cdecl revoke(uint32_t) {++revokes;if(model_state.load()!=GP_MODEL_EMPTY)model_state=GP_MODEL_RETIRED;}
+void __cdecl withdraw() {++withdrawals;}
 int32_t __cdecl collect() {
     if(!enter_worker())return GP_WRONG_THREAD;
     if(model_state.load()==GP_MODEL_RETIRED && retirement_allowed.load())model_state=GP_MODEL_EMPTY;
@@ -89,7 +101,7 @@ int32_t __cdecl playback_status(gp_status* out,uint32_t bytes) {
 const gs_api capture_api={sizeof(gs_api),GS_VERSION,GS_CAP_POSE|GS_CAP_WORLD_PASS,0,
     capture_configure,capture_disable,capture_read,capture_stats};
 const gp_api playback_api={sizeof(gp_api),GP_VERSION,{0,0},prepare_model,prepare_clip,
-    configure,revoke,collect,release_worker,playback_status};
+    configure,revoke,collect,release_worker,playback_status,withdraw};
 
 struct Handle {
     HANDLE value=nullptr;
@@ -131,8 +143,8 @@ struct Page {
     gipc_status wait(const std::function<bool(const gipc_status&)>& predicate,const char* why,DWORD milliseconds=2500) {
         const auto start=GetTickCount();
         do {auto result=status();if(predicate(result))return result;Sleep(5);}while(GetTickCount()-start<milliseconds);
-        auto last=status();std::fprintf(stderr,"last status state=%u reason=%u revision=%llu generation=%u\n",
-            last.state,last.reason,last.ack_revision,last.generation);
+        auto last=status();std::fprintf(stderr,"last status state=%u reason=%u revision=%llu token=%llu generation=%u\n",
+            last.state,last.reason,last.ack_revision,last.ack_token,last.generation);
         throw std::runtime_error(why);
     }
     void stopped() {
@@ -151,8 +163,10 @@ void ready(Page& page,gipc_request& r) {
         && s.state==GIPC_READY;},"request becomes ready");
 }
 void refused(Page& page,gipc_request& r,uint32_t reason) {
+    const std::string why="request refusal reason="+std::to_string(reason)
+        +" revision="+std::to_string(r.revision)+" token="+std::to_string(r.token);
     page.send(r);page.wait([&](const gipc_status& s){return s.ack_token==r.token && s.ack_revision==r.revision
-        && s.state==GIPC_REFUSED && s.reason==reason;},"request refusal");
+        && s.state==GIPC_REFUSED && s.reason==reason;},why.c_str());
 }
 }
 namespace ghost_stream {const gs_api* api(){return &capture_api;}}
@@ -188,8 +202,10 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.owner_created_lo=birth.dwLowDateTime;r.owner_created_hi=birth.dwHighDateTime;r.generation=initial.generation;
         r.token=123;r.revision=1;r.capture_enabled=r.play_enabled=1;r.rom_generation=ghost_ipc::rom_generation();
         r.model_id=1;r.clip_id[0]=1;r.opacity=0.75f;r.tint_enabled=1;r.hue_degrees=217;
+        r.mode=GP_FIXED;
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
+        r.layout.clock.near_zero=30;
         std::memcpy(r.clip_sha256,digest,32);std::memcpy(r.clip_path,clip_path,sizeof(clip_path));
         ready(page,r);auto first=last_command();
         page.consume_record();
@@ -205,6 +221,19 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         page.wait([](const gipc_status& s){return s.displayed==1;},"matching presentation restored");
         ghost_ipc::presented(0);
         page.wait([](const gipc_status& s){return !s.displayed;},"clean swap clears display acknowledgement");
+        r.revision=2;r.mode=GP_FOLLOW;
+        LARGE_INTEGER origin_now{};QueryPerformanceCounter(&origin_now);
+        r.origin={GO_STAR,first.configuration,1,100,
+            initial.utc_anchor+double(origin_now.QuadPart-initial.qpc_anchor)/double(initial.qpc_frequency),1,9};
+        ready(page,r);
+        check(last_command().origin.sequence && last_command().origin.continuity==1
+            && last_command().origin.raw==10,"worker binds exact source origin");
+        const auto bound_origin=last_command().origin.sequence;
+        burst_records=GO_HISTORY+10;
+        page.wait([](const gipc_status&){return burst_records.load()==0;},"origin ages out of bounded ledger");
+        r.revision=3;r.opacity=0.6f;ready(page,r);
+        check(last_command().origin.sequence==bound_origin,"tuning reuses resolved origin after history eviction");
+        r.revision=4;r.mode=GP_FIXED;r.origin={};ready(page,r);
         const auto before=commands.load();ready(page,r);check(commands.load()==before,"heartbeat is not semantic mutation");
         r.opacity=0.25f;refused(page,r,GIPC_PROTOCOL);
         check(commands.load()==before,"same revision mutation never configured");
@@ -212,9 +241,9 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.revision=4;refused(page,r,GIPC_PROTOCOL);r.revision=3;refused(page,r,GIPC_PROTOCOL);
         r.revision=4;refused(page,r,GIPC_PROTOCOL);check(last_command().revision==five,"rejected requests cannot lower high-water");
         r.revision=6;ready(page,r);
-        r.revision=7;r.play_enabled=0;const auto revoked=revokes.load();page.send(r);
+        r.revision=7;r.play_enabled=0;const auto withdrawn=withdrawals.load();page.send(r);
         page.wait([&](const gipc_status& s){return s.ack_revision==7 && s.state==GIPC_CAPTURING;},"playback stop keeps capture");
-        check(revokes.load()>revoked,"playback disable revokes");
+        check(withdrawals.load()>withdrawn,"playback disable withdraws without discarding assets");
         r.revision=8;r.play_enabled=1;r.clip_sha256[0]^=1;refused(page,r,GIPC_FILE);
         r.revision=9;r.clip_sha256[0]^=1;ready(page,r);
         r.revision=10;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);

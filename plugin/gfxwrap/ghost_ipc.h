@@ -2,23 +2,25 @@
  * for every mapped-page access. The render thread never accesses this page. */
 #pragma once
 #include "ghost_clip.h"
+#include "ghost_origin.h"
 #include <stddef.h>
-#define GIPC_VERSION 1u
-#define GIPC_MAGIC "SM64GIP1"
+#define GIPC_VERSION 2u
+#define GIPC_MAGIC "SM64GIP2"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v1_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v2_"
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
-    GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY };
+    GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY, GIPC_ORIGIN };
 #pragma pack(push, 4)
 typedef struct gipc_request {
     uint32_t owner_pid, owner_created_lo, owner_created_hi, generation;
     uint64_t token, revision;
     uint32_t heartbeat, capture_enabled, play_enabled, mode;
-    int32_t seek_igt, nudge;
+    uint32_t seek_igt;
+    int32_t nudge;
     float opacity;
     uint32_t stop_at_star;
     uint32_t rom_generation, reserved;
@@ -29,6 +31,7 @@ typedef struct gipc_request {
     uint8_t clip_sha256[32];
     uint32_t star_action_count, star_actions[8];
     uint32_t tint_enabled, hue_degrees;
+    go_marker origin;
 } gipc_request;
 typedef struct gipc_status {
     char magic[8];
@@ -52,7 +55,7 @@ typedef struct gipc_page {
 #pragma pack(pop)
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
-static_assert(sizeof(gipc_request) == 2316, "ghost request bytes");
+static_assert(sizeof(gipc_request) == 2460, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 4096, "ghost ring offset");
 namespace ghost_ipc {

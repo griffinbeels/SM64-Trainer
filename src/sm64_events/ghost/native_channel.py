@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes as C
+import math
 import os
 import secrets
 from contextlib import contextmanager
@@ -14,8 +15,8 @@ from sm64_events.replay.ownedclose import close_after_error, release_many
 
 class NativeChannel:
     def __init__(self, pid: int, layout: bytes):
-        if len(layout) != 64:
-            raise ValueError("ghost layout must contain 64 bytes")
+        if len(layout) != P.LAYOUT_BYTES:
+            raise ValueError("ghost layout has an unsupported byte size")
         self.pid, self.name = pid, P.PREFIX + str(pid)
         self._k = _kernel()
         self._map = self._view = self._mutex = self._wake = None
@@ -93,6 +94,10 @@ class NativeChannel:
 
     def poll(self, playback: dict | None = None):
         """Copy a bounded batch and renew demand; never return mapped pointers."""
+        # A mapping can outlive its producer because this client retains a
+        # handle. Its last READY status is not proof that Project64 still lives.
+        if _process_creation(self._k, self.pid) != self._birth:
+            raise ProcessLookupError("native ghost producer ended or was replaced")
         with self._locked():
             status = self._status()
             request = self._request
@@ -140,20 +145,40 @@ class NativeChannel:
         if type(hue) is not int or not 0 <= hue <= 359:
             raise ValueError("invalid native ghost hue")
         request.hue_degrees = hue
-        request.mode = int(value.get("mode", 0))
-        request.seek_igt = int(value.get("seek_igt", 0))
-        if request.mode not in (0, 1) or not 0 <= request.seek_igt <= 65535:
+        mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
+        if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")
+        request.mode, request.seek_igt, request.origin = mode, seek, P.Origin()
+        if enabled and mode == 0:
+            origin = value.get("origin", {})
+            if not isinstance(origin, dict):
+                raise ValueError("native ghost origin is missing")
+            for field, bits in (("kind", 32), ("configuration", 32), ("epoch", 32),
+                                ("global_timer", 32), ("session_id", 64), ("arm_id", 64)):
+                scalar = origin.get(field)
+                if type(scalar) is not int or not (0 if field == "global_timer" else 1) <= scalar < 2**bits:
+                    raise ValueError("native ghost origin identity is invalid")
+                setattr(request.origin, field, scalar)
+            instant = origin.get("utc")
+            if (request.origin.kind not in (1, 2) or type(instant) not in (int, float)
+                    or not math.isfinite(instant) or instant <= 0):
+                raise ValueError("native ghost origin timestamp is invalid")
+            request.origin.utc = instant
         if enabled:
-            request.model_id = int(value["model_id"])
+            model_id = value["model_id"]
+            if type(model_id) is not int or not 0 < model_id < 2**64:
+                raise ValueError("native ghost model identity is invalid")
+            request.model_id = model_id
             clip_id, digest = bytes(value["clip_id"]), bytes(value["clip_sha256"])
-            if not request.model_id or len(clip_id) != 16 or len(digest) != 32:
+            if not request.model_id or len(clip_id) != 16 or not any(clip_id) or len(digest) != 32:
                 raise ValueError("native ghost asset identity is missing")
             request.clip_id[:], request.clip_sha256[:] = clip_id, digest
             for field in ("rom_path", "clip_path"):
                 units = (() if field == "rom_path" and not value.get(field)
                          else P.path_units(value[field]))
                 getattr(request, field)[:] = units + (0,) * (520 - len(units))
+        if request.revision == (1 << 64) - 1:
+            raise OverflowError("native ghost command identity exhausted")
         self._request = request
         self._next_revision()
 
