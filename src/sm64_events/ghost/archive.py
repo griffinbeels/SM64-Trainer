@@ -32,10 +32,10 @@ def _utc(value: str) -> float:
 
 class PoseArchive:
     def __init__(self, path: Path, *, max_records: int = MAX_RECORDS,
-                 retention_s: float = 7200, boundary_slack_s: float = 1):
+                 retention_s: float | None = 7200, boundary_slack_s: float = 1):
         if type(max_records) is not int or not 1 <= max_records <= MAX_RECORDS:
             raise ValueError("pose archive record bound is invalid")
-        if (not math.isfinite(retention_s) or retention_s <= 0
+        if ((retention_s is not None and (not math.isfinite(retention_s) or retention_s <= 0))
                 or not math.isfinite(boundary_slack_s) or boundary_slack_s < 0):
             raise ValueError("pose archive time bound is invalid")
         self.path = Path(path)
@@ -89,8 +89,11 @@ class PoseArchive:
                 self._db.executemany(
                     "INSERT INTO poses(producer,sequence,captured,timer,valid,data) VALUES (?,?,?,?,?,?)", rows)
                 newest = self._db.execute("SELECT MAX(captured) FROM poses").fetchone()[0]
-                removed = self._db.execute("DELETE FROM poses WHERE captured < ?",
-                                           (newest - self.retention_s,)).rowcount
+                # None follows the recorder's size-only retention mode; the
+                # hard record ceiling still bounds native history independently.
+                removed = (self._db.execute("DELETE FROM poses WHERE captured < ?",
+                                            (newest - self.retention_s,)).rowcount
+                           if self.retention_s is not None else 0)
                 count = self._count + len(rows) - removed
                 if count > self.max_records:
                     count -= self._db.execute("""DELETE FROM poses WHERE id IN
