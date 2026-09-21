@@ -11,13 +11,16 @@
 extern "C" {
 #endif
 
-#define GC_VERSION 1u
+#define GC_VERSION 2u
 #define GC_RAM_WORD_SWAPPED 1u
 #define GC_ROM_US 1u
 #define GC_GRAPH_NODE_LIMIT 256u
 #define GC_GRAPH_DEPTH_LIMIT 32u
 
-enum gc_valid { GC_VALID_CLOCK = 1u, GC_VALID_POSE = 2u, GC_VALID_CAMERA = 4u };
+enum gc_valid {
+    GC_VALID_CLOCK = 1u, GC_VALID_POSE = 2u, GC_VALID_CAMERA = 4u,
+    GC_VALID_ACTION = 8u
+};
 enum gc_status {
     GC_OK = 0, GC_BAD_ARGUMENT = 1, GC_BAD_CONFIG = 2,
     GC_BAD_POINTER = 3, GC_BAD_VALUE = 4, GC_BAD_GRAPH = 5,
@@ -46,7 +49,7 @@ typedef struct gc_pose {
     uint32_t action, body_action, mario_flags, root_kind;
     /* Post-callback body angles. The model applies rotation XYZ = (Y,Z,X).
      * C-up overrides graph rotations without updating body.headAngle and is
-     * refused in V1; head_angles is never guessed from that stale body field.
+     * refused; head_angles is never guessed from that stale body field.
      */
     int16_t torso_angles[3], head_angles[3];
     uint16_t model_state;
@@ -74,6 +77,11 @@ typedef struct gc_sample {
     uint16_t area_update_counter, igt;
     int16_t level, area;
     uint32_t status;
+    /* Current gMarioState action, independently valid under GC_VALID_ACTION.
+     * Remains available when graphics pose/body/root capture is unsupported.
+     * Requires a nonzero action and MarioState belonging to the active area.
+     */
+    uint32_t live_action;
     gc_pose pose;
     gc_camera camera;
 } gc_sample;
@@ -100,9 +108,9 @@ typedef struct gc_frame {
 
 void ghost_capture_reset(gc_reader *reader);
 uint32_t ghost_capture_validate_layout(const gc_layout *layout);
-/* Returns GC_OK only when all three components are valid. Output is cleared
+/* Returns GC_OK only when all four components are valid. Output is cleared
  * first, including on malformed arguments. Inspect valid_fields for partial
- * clock/camera evidence when the live Mario pose is unsupported.
+ * clock/camera/action evidence when the live Mario pose is unsupported.
  */
 uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layout,
                            const gc_frame *frame, gc_sample *out);

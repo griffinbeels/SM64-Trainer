@@ -1,4 +1,5 @@
 #include "ghost_capture.h"
+#include <cstddef>
 #include <cmath>
 #include <cstring>
 
@@ -240,10 +241,14 @@ extern "C" uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layou
     const uint32_t area = ram.u32(layout->current_area_pointer);
     if (!ram.has(area, 0x28)) return out->status = GC_BAD_POINTER;
     if (ram.u8(area) != out->area || !(ram.u8(area + 1) & active)) return out->status = GC_BAD_VALUE;
+    const uint32_t action = ram.u32(layout->mario_state + 0x0c);
+    if (action && ram.u32(layout->mario_state + mario_area) == area) {
+        out->live_action = action; out->valid_fields |= GC_VALID_ACTION;
+    } else out->status = GC_BAD_VALUE;
     gc_camera camera{};
     const uint32_t camera_status = capture_camera(ram, area, out->area, camera);
     if (camera_status == GC_OK) { out->camera = camera; out->valid_fields |= GC_VALID_CAMERA; }
-    else out->status = camera_status;
+    else if (!out->status) out->status = camera_status;
     ram.ok = true;
     gc_pose pose{};
     const uint32_t pose_status = capture_pose(ram, *layout, area, out->area, out->area_update_counter, pose);
@@ -253,4 +258,8 @@ extern "C" uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layou
 }
 
 static_assert(sizeof(gc_layout) == 64, "Ghost layout ABI changed");
+static_assert(sizeof(gc_sample) == 176, "Ghost sample ABI changed");
+static_assert(offsetof(gc_sample, live_action) == 56, "Ghost action ABI changed");
+static_assert(offsetof(gc_sample, pose) == 60, "Ghost pose ABI changed");
+static_assert(offsetof(gc_sample, camera) == 140, "Ghost camera ABI changed");
 static_assert(sizeof(float) == 4, "Ghost capture requires IEEE binary32");
