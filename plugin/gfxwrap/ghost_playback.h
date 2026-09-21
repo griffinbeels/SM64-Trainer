@@ -2,10 +2,11 @@
  * select/evaluate borrowed values. No file access, IPC, GL, physics or waits. */
 #pragma once
 #include "ghost_clip.h"
+#include "ghost_origin.h"
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 1u
+#define GP_VERSION 2u
 #define GP_CLIP_SLOTS 3u
 #define GP_CLIP_BUDGET (128u * 1024u * 1024u)
 #define GP_STAR_ACTIONS 8u
@@ -32,6 +33,7 @@ enum gp_decision {
 };
 
 #pragma pack(push, 4)
+typedef go_origin gp_origin;
 typedef struct gp_request {
     uint32_t bytes, version;
     uint64_t revision;
@@ -46,6 +48,8 @@ typedef struct gp_request {
     uint32_t star_actions[GP_STAR_ACTIONS];
     uint32_t tint_enabled, hue_degrees;
     uint32_t reserved[2];
+    /* FOLLOW binds an exact owner occurrence; FIXED requires all zero. */
+    gp_origin origin;
 } gp_request;
 
 typedef struct gp_status {
@@ -81,7 +85,8 @@ typedef struct gp_api {
     /* Revision strictly increases for the module lifetime, including worker
      * replacement and stop/seek/opacity changes; UINT64_MAX fails closed. A
      * request binds the validated owner token, ROM session, layout, model and
-     * clip. Capture epochs reset transient following, not that clip identity.
+     * clip. A changed capture epoch refuses the old live origin while the
+     * preloaded clip remains available for a newly resolved origin.
      * star_actions comes from the application's canonical action registry. */
     int32_t (__cdecl *configure)(const gp_request *);
     /* Any lifecycle/watchdog thread: atomically cancel, never close/free/wait.
@@ -99,6 +104,10 @@ typedef struct gp_api {
      * No retained internal pointers. "rendered" counts produced pose values,
      * not display submissions (this module never calls GL). */
     int32_t (__cdecl *status)(gp_status *, uint32_t bytes);
+    /* Any control worker: hide immediately without retiring preloaded assets.
+     * A later strictly newer configure resumes them. Lease/ROM shutdown uses
+     * revoke instead; withdraw does not authorize worker/module shutdown. */
+    void (__cdecl *withdraw)(void);
 } gp_api;
 
 #ifdef __cplusplus
@@ -112,9 +121,13 @@ const gp_api *api();
 void safe_boundary(uint32_t rom_generation, uint32_t configuration);
 /* Borrowed until the next safe_boundary/retire call. Obtain only on renderer. */
 bool atlas(sg_atlas_view *out, uint64_t *model_id);
-/* Exact live raw IGT+nudge, or an explicit fixed seek. Before-start clamps to
- * the first occurrence; after-end/gaps/refusals hide. Repeated IGT uses the
- * first occurrence INCLUDING invalid poses. Clears outputs on failure.
+/* FOLLOW uses exact elapsed-origin differences plus origin.raw for stars and
+ * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Select
+ * first exact coordinate INCLUDING refused poses, then compare live scene.
+ * Before-start clamps first; after-end/gaps/refusals hide. A star generation
+ * change or star grab ends that origin; tuning the same origin cannot revive
+ * it. A new continuity refuses, never subtracts across the gap.
+ * Clears outputs on failure.
  * Geometry stays borrowed until the next evaluate/safe_boundary/retire call. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
               ghost_compositor::Pose &out, gp_draw_token &token);
