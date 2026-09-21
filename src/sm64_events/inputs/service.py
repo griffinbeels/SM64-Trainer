@@ -24,6 +24,7 @@ from sm64_events.inputs.templates import TemplateStore
 from sm64_events.inputs.track import (document_for_attempt, target_of,
                                       resolve_track, track_for_attempt)
 from sm64_events.memory import addresses as A
+import logging
 
 # Development credit only. A future profile passes its name at composition.
 DEVELOPMENT_AUTHOR = "griffman1212"
@@ -115,7 +116,7 @@ class InputsService:
 
     def __init__(self, store, templates: TemplateStore, attempts,
                  version: str = "us", events=None, landmark_names=None,
-                 author: str = DEVELOPMENT_AUTHOR):
+                 author: str = DEVELOPMENT_AUTHOR, preserve_native=None):
         self.store = store
         self.templates = templates
         self._attempts = attempts
@@ -123,6 +124,7 @@ class InputsService:
         self._events = events
         self._landmark_names = landmark_names
         self.author = author
+        self._preserve_native = preserve_native
 
     def attempt(self, attempt_id: int):
         for attempt in self._attempts():
@@ -154,6 +156,13 @@ class InputsService:
             raise ValueError("this attempt has no captured input, so there "
                              "is nothing to compare against")
         kind, key = entity_key_of(attempt)
+        # Preserve poses while this attempt is still in the recorder's archive.
+        # A missing pose is a supported result; the input template still exists.
+        if self._preserve_native is not None:
+            try:
+                self._preserve_native(attempt_id)
+            except (OSError, ValueError, RuntimeError, LookupError):
+                logging.getLogger("sm64.inputs").exception("Could not preserve template Mario poses")
         return self.templates.save(
             kind=kind, entity_key=key, strat_tag=attempt.strat_tag,
             name=name or f"attempt #{attempt.id}",

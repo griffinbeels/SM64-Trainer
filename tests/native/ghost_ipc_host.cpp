@@ -80,7 +80,11 @@ int32_t __cdecl release_worker() {
 int32_t __cdecl playback_status(gp_status* out,uint32_t bytes) {
     if(!out || bytes!=sizeof(*out))return GP_INVALID;
     *out={};out->bytes=sizeof(*out);out->version=GP_VERSION;
-    out->model_state=model_state.load();return GP_OK;
+    out->model_state=model_state.load();
+    std::lock_guard<std::mutex> lock(command_mutex);
+    out->revision=command.revision;out->owner_token=command.owner_token;
+    out->decision=out->model_state==GP_MODEL_RENDER_OWNED?GP_READY:GP_DISABLED;
+    return GP_OK;
 }
 const gs_api capture_api={sizeof(gs_api),GS_VERSION,GS_CAP_POSE|GS_CAP_WORLD_PASS,0,
     capture_configure,capture_disable,capture_read,capture_stats};
@@ -192,6 +196,15 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(first.rom_generation==r.rom_generation && first.owner_token==r.token && first.opacity==0.75f
             && first.tint_enabled==1 && first.hue_degrees==217 && first.star_actions[0]==0x1302,"command fields transported");
         check(first.configuration && first.revision,"capture and playback identities acknowledged");
+        check(!page.status().displayed,"ready pose is not presentation evidence");
+        ghost_ipc::presented(first.revision);
+        page.wait([](const gipc_status& s){return s.displayed==1;},"actual matching presentation acknowledged");
+        ghost_ipc::presented(first.revision+1);
+        page.wait([](const gipc_status& s){return !s.displayed;},"foreign presentation revision refused");
+        ghost_ipc::presented(first.revision);
+        page.wait([](const gipc_status& s){return s.displayed==1;},"matching presentation restored");
+        ghost_ipc::presented(0);
+        page.wait([](const gipc_status& s){return !s.displayed;},"clean swap clears display acknowledgement");
         const auto before=commands.load();ready(page,r);check(commands.load()==before,"heartbeat is not semantic mutation");
         r.opacity=0.25f;refused(page,r,GIPC_PROTOCOL);
         check(commands.load()==before,"same revision mutation never configured");

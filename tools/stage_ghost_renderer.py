@@ -51,6 +51,24 @@ def edits(source: Path, replace_once) -> dict[str, bytes]:
     anchor = "\tm_graphicsDrawer->drawTriangles(_params);"
     data = replace_once(data, anchor, anchor + "\n" + GUARD +
         "\tghost_link::triangles((_params.elementsCount ? _params.elementsCount : _params.verticesCount) / 3);\n#endif")
+    # Mirror only the actual raster operation. A scope restores bindings even
+    # if an upstream draw reports an exception; no N64 command runs twice.
+    for call in ("m_graphicsDrawer->drawTriangles(_params);",
+                 "m_graphicsDrawer->drawRects(_params);",
+                 "m_graphicsDrawer->drawLine(_width, _vertices);"):
+        anchor = "\t" + call
+        data = replace_once(data, anchor, anchor + "\n" + GUARD +
+            "\t{ struct GhostHud { bool active = ghost_link::begin_hud();\n"
+            "\t\t~GhostHud() { if (active) ghost_link::end_hud(); } } hud;\n"
+            f"\t\tif (hud.active) {call} }}\n#endif")
+    for signature in (
+        "void ContextImpl::clearColorBuffer(f32 _red, f32 _green, f32 _blue, f32 _alpha)",
+        "void ContextImpl::clearDepthBuffer()",
+        "bool ContextImpl::blitFramebuffers(const graphics::Context::BlitFramebuffersParams & _params)",
+    ):
+        anchor = signature + "\n{"
+        data = replace_once(data, anchor, anchor + "\n" + GUARD +
+                            "\tghost_link::clear_target();\n#endif")
     result[path] = data
     path = "src/common/CommonAPIImpl_common.cpp"
     data = (source / path).read_bytes()
@@ -58,6 +76,12 @@ def edits(source: Path, replace_once) -> dict[str, bytes]:
     for opened, anchor in [(True, "\tm_bRomOpen = true;"), (False, "\tm_bRomOpen = false;")]:
         value = "true" if opened else "false"
         data = replace_once(data, anchor, anchor + "\n" + GUARD + f"\tghost_link::rom({value});\n#endif")
+    result[path] = data
+    path = "src/PluginAPI.h"
+    data = (GUARD + '#include "Graphics/OpenGLContext/ghost_ipc.h"\n#endif\n').encode() + (source / path).read_bytes()
+    data = replace_once(data, "\tvoid CloseDLL(void) { rb_close(); }",
+        "\tvoid CloseDLL(void) { rb_close();\n" + GUARD +
+        "\t\tghost_ipc::rom(false);\n#endif\n\t}")
     result[path] = data
     path = "src/Graphics/OpenGLContext/windows/windows_DisplayWindow.cpp"
     data = (source / path).read_bytes()

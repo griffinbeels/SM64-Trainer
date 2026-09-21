@@ -236,15 +236,15 @@ function GhostColour({ tint, write, queue }) {
  * two lines tall, which is indistinguishable from the controls wrapping. It is
  * rendered beside this one by `GhostTuning`, on a row of its own.
  */
-function GhostView({ view, boxes, write }) {
+function GhostView({ view, boxes, choices = null, write }) {
   const known = view != null;
-  const can = known && boxes.available;
+  const can = known && (choices ? choices.whole || choices.mario : boxes.available);
   // WHAT IS ON SCREEN, not what the session is set to. The setting is app-wide
   // and he walks between stars, so it arrives at "only Mario" on ghosts whose
   // recording has no boxes -- and the overlay is drawing the whole picture
   // there. A disabled control reading "Only Mario" beside a whole-picture
   // ghost is a control contradicting the screen.
-  const shown = can ? view : "whole";
+  const shown = choices ? view : (can ? view : "whole");
   return html`<div class="ghost-field ghost-view">
     <span class="ghost-field-name">Show</span>
     <select class="ghost-view-select" disabled=${!can}
@@ -253,7 +253,8 @@ function GhostView({ view, boxes, write }) {
       title=${can ? "What the ghost draws over your game"
                   : (boxes.reasonText || "Waiting for what the ghost draws")}
       onchange=${(event) => write({ view: event.target.value })}>
-      ${GHOST_VIEWS.map((name) => html`<option key=${name} value=${name}>
+      ${GHOST_VIEWS.map((name) => html`<option key=${name} value=${name}
+        disabled=${choices ? !choices[name] : false}>
         ${VIEW_LABELS[name]}
       </option>`)}
     </select>
@@ -268,7 +269,7 @@ function GhostView({ view, boxes, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue }) {
+function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue, showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -293,7 +294,7 @@ function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue }) {
       <span class="ghost-field-value">${opacityText(opacity)}</span>
     </label>
     <${GhostColour} tint=${tint} write=${write} queue=${queue} />
-    <${GhostView} view=${view} boxes=${boxes} write=${write} />
+    ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
       <button type="button" class="ghost-step"
@@ -310,7 +311,7 @@ function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue }) {
           title="Put the ghost back in step with your own run"
           onclick=${() => queue({ nudge_frames: 0 })}>Reset</button>`}
     </div>
-    ${view != null && !boxes.available && boxes.reasonText
+    ${showView && view != null && !boxes.available && boxes.reasonText
       && html`<span class="ghost-why ghost-view-why">${boxes.reasonText}</span>`}
   </div>`;
 }
@@ -355,12 +356,14 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         labelId=${labelId} reasonId=${reasonId}
         onToggle=${() => write({ enabled: !on })} />
       <span class="ghost-label" id=${labelId}>Ghost Overlay</span>
+      ${controls.nativeViews && html`<${GhostView} view=${view}
+        boxes=${controls.marioBoxes} choices=${controls.nativeViews} write=${write} />`}
       ${controls.reasonText && html`<span class="ghost-why" id=${reasonId}>
         ${controls.reasonText}
       </span>`}
     </div>
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
       boxes=${controls.marioBoxes} nudge=${nudge}
-      write=${write} queue=${queue} />`}
+      write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
   </div>`;
 }

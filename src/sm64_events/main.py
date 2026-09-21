@@ -324,6 +324,10 @@ def _build_replay(replay_cfg, layout, service):
     codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
     from sm64_events.replay.sourcefactory import SourceFactory
     sources = SourceFactory(layout, replay_cfg, DwmSurfaceVideoSource)
+    ghost_capture_factory = None
+    if layout.version == "us":
+        from sm64_events.ghost.capture import NativeCapture
+        ghost_capture_factory = lambda **kwargs: NativeCapture(layout, **kwargs)
 
     recorder = ReplayRecorder(
         cfg=replay_cfg,
@@ -334,7 +338,8 @@ def _build_replay(replay_cfg, layout, service):
         fallback_audio_factory=lambda pid: SystemAudioSource(
             rate=replay_cfg.audio_rate, pid=pid),
         codec=codec,
-        video_sink_factory=video_sink_factory)
+        video_sink_factory=video_sink_factory,
+        ghost_capture_factory=ghost_capture_factory)
     replay = _replay_service(replay_cfg, recorder, codec, service)
     return replay, codec
 
@@ -465,8 +470,10 @@ def build():
                     on_gap=service.capture_gap, on_snapshot=ghost_clock.note)
     inputs.bind(poller)
     # One ghost for the app: the switch, its window, and the target it follows.
+    from sm64_events.ghost.native_session import NativeGhost
     ghost = GhostSession(tracker=service, inputs=inputs.get_service,
-                         replay=replay, broadcaster=broadcaster)
+                         replay=replay, broadcaster=broadcaster,
+                         native=NativeGhost(replay, supported=layout.version == "us"))
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
         # nothing; unknown (no header read yet) keeps the old behaviour.

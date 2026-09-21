@@ -65,6 +65,10 @@ def boundary_overlay(source: Path) -> dict[str, bytes]:
     data = replace_once(data, anchor, extra + anchor)
     data = replace_once(data, "\tm_bRomOpen = true;", "\tm_bRomOpen = true;\n" + source_guard + "\trb_rom_open();\n#endif")
     data = replace_once(data, "\tm_bRomOpen = false;", "\tm_bRomOpen = false;\n" + source_guard + "\trb_rom_closed();\n#endif")
+    update = b"VI_UpdateScreen();"
+    if data.count(update) != 3:
+        raise ValueError("expected three actual renderer VI update call sites")
+    data = data.replace(update, ("\n" + source_guard + "rs_before_update();\n#endif\nVI_UpdateScreen();").encode())
     edited[common] = data
     return edited
 
@@ -109,9 +113,17 @@ def _stage_ghost(output: Path, enabled: bool) -> None:
     spec.loader.exec_module(module)
     for relative, data in module.edits(output, replace_once).items():
         (output / relative).write_bytes(data)
+    spec = importlib.util.spec_from_file_location("stage_ghost_presentation", ROOT / "tools/stage_ghost_presentation.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for relative, data in module.edits(output, replace_once).items():
+        (output / relative).write_bytes(data)
     for name in ["ghost_capture.h", "ghost_capture.cpp", "ghost_pass.h", "ghost_pass.cpp",
                  "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
-                 "ghost_pose.h", "ghost_pose.cpp", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h"]:
+                 "ghost_pose.h", "ghost_pose.cpp", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h",
+                 "ghost_clip.h", "ghost_assets.h", "ghost_assets.cpp", "ghost_ipc.h", "ghost_ipc.cpp",
+                 "ghost_draw.h", "ghost_draw.cpp", "ghost_playback.h", "ghost_playback.cpp",
+                 "ghost_dispatch.h", "ghost_dispatch.cpp", "ghost_presentation.h", "ghost_presentation.cpp"]:
         shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     shutil.copyfile(ROOT / "renderer/model/model.h", output / GL / "model.h")
 
@@ -183,7 +195,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
         for name in ["context_lifetime.h", "context_lifetime.cpp"]:
             shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     if boundary:
-        for name in ["renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp"]:
+        for name in ["renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp", "source_descriptor3.h"]:
             shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
     _stage_ghost(output, ghost)
     print(f"Staged the capture overlay: {output}; pinned LINK {PIN}")

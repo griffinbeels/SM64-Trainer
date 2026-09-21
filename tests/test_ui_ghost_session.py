@@ -44,6 +44,19 @@ def controls(session, entity_key="star:8:1"):
                     f"{json.dumps(entity_key)})")
 
 
+def test_pose_only_template_offers_mario_even_when_whole_video_is_unavailable():
+    result = controls(session(source={"available": False, "native_available": True,
+                                      "whole_available": False, "native_reason_text": None}))
+    assert result["nativeViews"]["mario"] and not result["nativeViews"]["whole"]
+    assert result["marioBoxes"]["available"]
+
+
+def test_native_preparation_is_visible_while_switch_stays_usable():
+    result = controls(session(enabled=True, view="mario", source={"native_available": True},
+                              window={"backend": "native", "reason": "Preparing Mario..."}))
+    assert result["canToggle"] and result["reasonText"] == "Preparing Mario..."
+
+
 def session(**over):
     body = {"enabled": False, "opacity": 0.6, "nudge_frames": 0,
             "tint": {"enabled": True, "hue_degrees": 120},

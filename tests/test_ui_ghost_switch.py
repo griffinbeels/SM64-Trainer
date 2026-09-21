@@ -567,7 +567,9 @@ def driven():
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:
             page.goto(base)
-            page.wait_for(".ghost-row")
+            # The row mounts while GET /api/ghost is still pending. A DOM
+            # .click() on its waiting/disabled switch is ignored by the browser.
+            page.wait_for(".ghost-row-head > .ghost-switch:enabled")
             page.evaluate("(() => document.querySelector('.ghost-switch').click())()")
             out["after_flip"] = {"writes": settled(page, state, 1),
                                  "session": dict(state["session"])}

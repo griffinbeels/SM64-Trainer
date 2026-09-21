@@ -40,6 +40,7 @@ ends it too, and `stop()` does not return until the process is gone.
 """
 import asyncio
 import logging
+import threading
 from contextlib import suppress
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -260,7 +261,7 @@ class GhostSession:
 
     def __init__(self, *, tracker, inputs, replay, broadcaster, clock=None,
                  port: int | None = None, controller_factory=None,
-                 resolve=resolve_ghost, period_s: float = WATCH_PERIOD_S):
+                 resolve=resolve_ghost, period_s: float = WATCH_PERIOD_S, native=None):
         self._tracker = tracker
         self._inputs = inputs
         self._replay = replay
@@ -270,6 +271,8 @@ class GhostSession:
         self._factory = controller_factory or _default_controller
         self._resolve = resolve
         self._period_s = period_s
+        self._native = native
+        self._native_answer = {}
 
         self._enabled = False
         self._opacity = DEFAULT_OPACITY
@@ -289,6 +292,8 @@ class GhostSession:
         # keeps them from reading a half-applied change or starting the window
         # twice.
         self._lock = asyncio.Lock()
+        self._lifecycle_lock = threading.RLock()
+        self._closing = False
 
     def attach_clock(self, clock) -> None:
         """Hand the session the clock feed the overlay follows.
@@ -317,6 +322,8 @@ class GhostSession:
                 "window": self._window_state()}
 
     def _window_state(self) -> dict:
+        if self._view == "mario" and self._native is not None:
+            return self._native.state()
         controller = self._controller
         running = controller is not None and controller.is_running()
         return {"running": running,
@@ -329,6 +336,7 @@ class GhostSession:
         broadcasts: nothing has changed yet."""
         if self._task is not None:
             return
+        self._closing = False
         try:
             await self.refresh(resolve=True, publish=False)
         except Exception:  # noqa: BLE001 - the ghost may never stop the trainer booting
@@ -337,12 +345,21 @@ class GhostSession:
 
     async def stop(self) -> None:
         """Leave nothing running. Returns once the overlay child is gone."""
+        self._closing = True
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        await asyncio.to_thread(self._end_window)
+        await asyncio.to_thread(self._finish_stop)
+
+    def _finish_stop(self):
+        # Cancelling an asyncio waiter does not cancel its to_thread work.
+        # Join the in-flight selection before revoking the final command.
+        with self._lifecycle_lock:
+            self._end_window()
+            if self._native is not None:
+                self._native.stop()
 
     async def _watch(self) -> None:
         tick = 0
@@ -378,6 +395,11 @@ class GhostSession:
         return body
 
     def _cycle(self, target: dict | None, resolve: bool) -> None:
+        with self._lifecycle_lock:
+            if not self._closing:
+                self._active_cycle(target, resolve)
+
+    def _active_cycle(self, target: dict | None, resolve: bool) -> None:
         if target != self._target:
             # His timing offset is about ONE thing he is practising; carrying
             # it onto the next star would put that ghost silently out of step.
@@ -385,6 +407,7 @@ class GhostSession:
             resolve = True
         self._load_persisted()
         if self._pending:
+            resolve = resolve or "view" in self._pending
             self._apply(self._pending)
             self._pending = {}
         # Every cycle, not only the ones that changed it: a feed attached late,
@@ -424,6 +447,22 @@ class GhostSession:
                 "strat": self._tracker.strat_tag}
 
     def _resolve_source(self, target: dict | None) -> dict:
+        video = self._resolve_video_source(target)
+        if self._native is not None:
+            try:
+                self._native_answer = self._native.resolve(target, template_store(self._inputs))
+            except Exception:  # noqa: BLE001 - selection failure must revoke the prior target
+                log.exception("native ghost source unavailable")
+                self._native_answer = {"available": False, "reason": "native_unavailable",
+                                       "reason_text": "The template's Mario poses could not be read."}
+            selected = self._native_answer if self._view == "mario" else video
+            return {**NO_TARGET, **selected,
+                    "native_available": self._native_answer.get("available", False),
+                    "native_reason_text": self._native_answer.get("reason_text"),
+                    "whole_available": video["available"], "whole_reason_text": video["reason_text"]}
+        return video
+
+    def _resolve_video_source(self, target: dict | None) -> dict:
         if target is None:
             return dict(NO_TARGET)
         if self._replay is None:
@@ -539,6 +578,14 @@ class GhostSession:
     # -- the window -----------------------------------------------------------
 
     def _reconcile(self) -> None:
+        if self._native is not None:
+            native_view = self._view == "mario"
+            self._native.reconcile(enabled=native_view and self._enabled and self._source.get("available", False),
+                                   opacity=self._opacity, nudge=self._nudge,
+                                   tint=self._tint, target=self._target)
+            if native_view:
+                self._end_window()
+                return
         controller = self._controller
         if not self._enabled:
             self._end_window()

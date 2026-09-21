@@ -2,6 +2,10 @@
 #include "GLFunctions.h"
 #include "ghost_link.h"
 #include "ghost_stream.h"
+#include "ghost_draw.h"
+#include "ghost_ipc.h"
+#include "link_dispatch.h"
+#include "practice_rom.h"
 #include "N64.h"
 #include "RSP.h"
 #include "GBI.h"
@@ -17,30 +21,47 @@
 namespace {
 uint32_t context_generation = 0;
 bool context_current = false, observing = false;
+bool supported_rom() {
+    unsigned char bytes[PRACTICE_ROM_HEADER_BYTES]{};
+    SIZE_T got = 0;
+    return HEADER && ReadProcessMemory(GetCurrentProcess(), HEADER, bytes, sizeof(bytes), &got)
+        && got == sizeof(bytes) && practice_rom(bytes);
+}
 }
 namespace ghost_link {
-void rom(bool opened) { observing = false; ghost_stream::rom(opened); }
+void rom(bool opened) {
+    const bool practice = opened && supported_rom();
+    observing = false; ghost_stream::rom(practice); ghost_ipc::rom(practice, practice ? HEADER : nullptr);
+}
 void context_created() {
-    context_current = context_generation < UINT32_MAX;
-    if (context_current) ++context_generation;
+    context_current = true; context_generation = 0;
 }
 void context_lost() {
     if (observing) ghost_stream::end(false);
     ghost_stream::cancel();
+    ghost_draw::context_lost();
     context_current = false; observing = false;
 }
 bool begin_list() {
     if (!context_current || !ghost_stream::requested()) {
+        ghost_draw::begin(ghost_ipc::rom_generation(), 0);
         ghost_stream::cancel(); observing = false; return false;
     }
+    renderer::Identity identity{}; snapshot::RestoreBindings ignored{};
+    if (!replay_gl::CandidateBindings(&identity, &ignored)) {
+        ghost_draw::cancel(); ghost_stream::cancel(); observing = false; return false;
+    }
+    context_generation = identity.context_generation;
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
     // Upstream RDRAMSize is the inclusive maximum byte index, not a byte count.
     const uint32_t bytes = RDRAMSize == 0x7fffff || RDRAMSize == 0x3fffff ? RDRAMSize + 1 : 0;
     observing = context_current && ghost_stream::begin(RDRAM,bytes,context_generation,now.QuadPart);
+    ghost_draw::begin(ghost_ipc::rom_generation(), ghost_stream::api()->stats().configuration);
     return observing;
 }
 void end_list(bool completed) {
     if (observing) ghost_stream::end(completed && context_current);
+    ghost_draw::finish(completed && context_current ? ghost_stream::candidate() : nullptr);
     observing = false;
 }
 void projection() {
@@ -54,16 +75,29 @@ void geometry(uint32_t before, uint32_t after) {
         auto &drawer = dwnd().getDrawer();
         drawer.drawTriangles(); drawer.flush();
     }
-    ghost_stream::geometry((before & G_ZBUFFER) != 0,(after & G_ZBUFFER) != 0);
+    if (ghost_stream::geometry((before & G_ZBUFFER) != 0,(after & G_ZBUFFER) != 0)) {
+        const auto *sample = ghost_stream::sample();
+        const auto *world = ghost_stream::candidate();
+        if (sample && world) ghost_draw::seal(*sample, *world);
+    } else if (!ghost_stream::candidate()) ghost_draw::cancel();
 }
-void color_target_changed() { if (observing) ghost_stream::color_target_changed(); }
+void color_target_changed() {
+    if (observing) { ghost_stream::color_target_changed(); ghost_draw::cancel(); }
+}
+void clear_target() {
+    if (observing) { ghost_stream::color_target_changed(); ghost_draw::cancel(); }
+}
+bool begin_hud() {
+    return observing && ghost_stream::candidate() && ghost_draw::begin_hud();
+}
+void end_hud() { ghost_draw::end_hud(); }
 void triangles(uint32_t count) {
     if (!observing || !count || !(gSP.geometryMode & G_ZBUFFER)) return;
     auto *buffer = frameBufferList().getCurrent();
     ghost::RasterTarget target{};
     // Supported command-generation contract is deliberately specific. Missing
     // framebuffer/depth/ucode evidence becomes an invalid world, not a guess.
-    if (!RSP.LLE && GBI.getMicrocodeType() == F3D && buffer && buffer->m_pTexture
+    if (!RSP.LLE && GBI.getMicrocodeType() == F3D && !GBI.isNoN() && buffer && buffer->m_pTexture
             && !buffer->m_isDepthBuffer && buffer->m_pDepthBuffer) {
         GLint draw = 0; glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
         if (static_cast<uint32_t>(draw) != static_cast<uint32_t>(buffer->m_FBO)) {
@@ -111,6 +145,7 @@ void triangles(uint32_t count) {
         if (gSP.viewport.vscale[1] < 0) target.screen_scale[1] *= -1;
     }
     ghost_stream::triangles(target,count,true);
+    ghost_draw::observe(target);
 }
 }
 

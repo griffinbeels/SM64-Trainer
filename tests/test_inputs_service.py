@@ -397,6 +397,20 @@ def test_source_revision_tracks_document_content_not_view_bounds(rig):
     assert service._template_payload(changed)["source"]["revision"] != source["revision"]
 
 
+def test_template_survives_optional_native_pose_publication_failure(rig):
+    service, templates, _ = rig
+    attempted = []
+
+    def preserve(number):
+        attempted.append(number)
+        raise OSError("disk full while saving poses")
+
+    service._preserve_native = preserve
+    template = service.mark_template(7)
+    assert attempted == [7] and template.origin == "attempt:7"
+    assert templates.active_for(template.kind, template.entity_key, template.strat_tag).id == template.id
+
+
 def test_preview_and_import_bind_to_current_local_segment(rig):
     service, _templates, attempt = rig
     attempt.segment_id = 12

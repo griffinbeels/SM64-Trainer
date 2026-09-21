@@ -148,6 +148,12 @@ def attach_ghost_routes(app, state: dict) -> None:
                 raise HTTPException(422, "The ghost shows either the whole "
                                          "picture or only Mario.")
             session["view"] = body["view"]
+        if "native_available" in session["source"]:
+            source = dict(session["source"])
+            native = session["view"] == "mario"
+            source["available"] = source["native_available" if native else "whole_available"]
+            source["reason_text"] = source["native_reason_text" if native else "whole_reason_text"]
+            session["source"] = source
         available = session["source"]["available"]
         session["window"] = {"running": session["enabled"] and available,
                              "visible": session["enabled"] and available}

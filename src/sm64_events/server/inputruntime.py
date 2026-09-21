@@ -32,7 +32,8 @@ class InputRuntime:
             return
         inputs = InputsService(db.inputs, db.input_templates, db.attempts,
                                version=self.layout.version,
-                               events=db.events_between, landmark_names=db.landmark_names)
+                               events=db.events_between, landmark_names=db.landmark_names,
+                               preserve_native=getattr(self.replay, "preserve_native", None))
         writer = sampler = None
         if self.layout.player1_controller is not None:
             writer = ChunkWriter(db.inputs, lambda: self.tracker.session_id)

@@ -35,6 +35,7 @@ uniform sampler2D atlas;
 uniform sampler2D terrain;
 uniform vec2 depthMapping;
 uniform float opacity;
+uniform float hueDegrees;
 in vec3 vertexColor;
 in vec2 texCoord;
 in float illumination;
@@ -59,7 +60,14 @@ void main() {
             material*=textureColor;
         }
     }
-    outputColor=vec4(material.rgb,opacity*material.a);
+    vec3 rgb=material.rgb;
+    if(hueDegrees!=0.0) {
+        float c=cos(radians(hueDegrees)),s=sin(radians(hueDegrees));
+        rgb=vec3(dot(rgb,vec3(.213+.787*c-.213*s,.715-.715*c-.715*s,.072-.072*c+.928*s)),
+                 dot(rgb,vec3(.213-.213*c+.143*s,.715+.285*c+.140*s,.072-.072*c-.283*s)),
+                 dot(rgb,vec3(.213-.213*c-.787*s,.715-.715*c+.715*s,.072+.928*c+.072*s)));
+    }
+    outputColor=vec4(clamp(rgb,0.0,1.0),opacity*material.a);
 })";
 
 uint32_t shader(const Dispatch& g,uint32_t type,const char* source) {
@@ -121,7 +129,7 @@ struct Instance {
     uint32_t textures[3]={}; // display color, copied ordinary depth, atlas
     uint32_t fbos[2]={}; // display/self depth; copied terrain depth
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
-    int32_t uniforms[8]={};
+    int32_t uniforms[9]={};
     Target target{};
     bool ready=false,begun=false,finalized=false,hud=false;
     int32_t hud_draw_fbo=0;
@@ -154,8 +162,8 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     const auto& g=p->g;Guard guard(g);
     if(!p->shader_program) {
         p->shader_program=program(g);if(!p->shader_program)return Result::resources;
-        constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain"};
-        for(size_t i=0;i<8;++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
+        constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain","hueDegrees"};
+        for(size_t i=0;i<9;++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
         g.GenTextures(3,p->textures);g.GenFramebuffers(2,p->fbos);
         g.GenRenderbuffers(1,&p->self_depth);g.GenVertexArrays(1,&p->vao);g.GenBuffers(1,&p->vbo);
     }
@@ -195,7 +203,8 @@ Result begin(Instance* p,const Target& t,const Pose& pose) {
        !pose.vertices || !pose.count || pose.count>p->capacity || pose.count%3 ||
        !finite(pose.view_projection,16) || !finite(pose.light_direction,3) ||
        !std::isfinite(pose.ambient) || !std::isfinite(pose.diffuse) || !std::isfinite(pose.opacity) ||
-       pose.opacity<0 || pose.opacity>1 || pose.flip_y>1)return Result::invalid;
+       pose.opacity<0 || pose.opacity>1 || pose.flip_y>1 || !std::isfinite(pose.hue_degrees) ||
+       pose.hue_degrees<0 || pose.hue_degrees>359)return Result::invalid;
     if(t.samples!=1 || t.unsupported || (t.depth!=Depth::ordinary && t.depth!=Depth::n64_image))return Result::unsupported;
     if(t.depth==Depth::n64_image && (!t.n64_depth_texture || t.n64_depth_texture==p->textures[0] ||
         t.n64_depth_texture==p->textures[2]))return Result::invalid;
@@ -249,6 +258,7 @@ Result begin(Instance* p,const Target& t,const Pose& pose) {
         g.Uniform3fv(p->uniforms[2],1,pose.light_direction);g.Uniform2f(p->uniforms[3],pose.ambient,pose.diffuse);
         g.Uniform2f(p->uniforms[4],t.depth_scale,t.depth_translate);g.Uniform1f(p->uniforms[5],pose.opacity);
         g.Uniform1i(p->uniforms[6],0);g.Uniform1i(p->uniforms[7],1);
+        g.Uniform1f(p->uniforms[8],pose.hue_degrees);
         g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,p->textures[2]);g.BindSampler(0,0);
         g.ActiveTexture(TEXTURE0+1);g.BindTexture(TEXTURE_2D,t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture);g.BindSampler(1,0);
         // Private nearest-surface prepass, then exactly one color contribution

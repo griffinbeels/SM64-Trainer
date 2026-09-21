@@ -41,14 +41,18 @@ LABEL = "LINK v4.2 [SM64 Trainer]"
 OVERLAY_SOURCES = (
     "link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h",
     "source_format.h", "practice_rom.h", "context_lifetime.h", "context_lifetime.cpp",
-    "renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp",
+    "renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp", "source_descriptor3.h",
     "ghost_capture.h", "ghost_capture.cpp", "ghost_pass.h", "ghost_pass.cpp",
     "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
     "ghost_pose.h", "ghost_pose.cpp", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h",
+    "ghost_clip.h", "ghost_assets.h", "ghost_assets.cpp", "ghost_ipc.h", "ghost_ipc.cpp",
+    "ghost_draw.h", "ghost_draw.cpp", "ghost_playback.h", "ghost_playback.cpp",
+    "ghost_dispatch.h", "ghost_dispatch.cpp", "ghost_presentation.h", "ghost_presentation.cpp",
 )
 OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp",
                    "ghost_capture.cpp", "ghost_pass.cpp", "ghost_stream.cpp", "ghost_link.cpp",
-                   "ghost_pose.cpp", "ghost_compositor.cpp")
+                   "ghost_pose.cpp", "ghost_compositor.cpp", "ghost_assets.cpp", "ghost_ipc.cpp",
+                   "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp")
 DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;SM64_GHOST_RENDERER;"
 RECIPE_VERSION = "3"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -92,6 +96,7 @@ def renderer_build_id() -> str:
     digest.update(Path(__file__).read_bytes() + b"\0")
     digest.update((REPO / "tools" / "stage_link_witness.py").read_bytes() + b"\0")
     digest.update((REPO / "tools" / "stage_ghost_renderer.py").read_bytes() + b"\0")
+    digest.update((REPO / "tools" / "stage_ghost_presentation.py").read_bytes() + b"\0")
     model = _load("renderer_model_build", REPO / "tools/build_model.py")
     digest.update(model.component_hash().encode() + b"\0")
     for name in OVERLAY_SOURCES:

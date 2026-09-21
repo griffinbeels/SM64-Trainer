@@ -13,7 +13,10 @@ is distinct from `action`. Effective head rotation is supplied after the
 original camera/action rules. A supplied throw matrix preserves terrain
 alignment and replaces the position/angle transform. `sg_model_view` uses the
 same sine table and SM64 look-at routine; its raw Mat4 translation is at
-indices 12–14. The renderer applies N64 quantization and projection separately.
+indices 12–14. The renderer supplies the live projection separately. The current
+adapter uses floating-point model/view transforms; the game's per-node N64
+fixed-point matrix quantization is not reproduced. Pixel-identical registration
+therefore remains unproven, separately from model/opacity/depth correctness.
 
 All calls are serialized with a nonblocking guard. Wrong-thread use fails;
 there is no worker, lock wait or per-evaluation heap allocation. A preload

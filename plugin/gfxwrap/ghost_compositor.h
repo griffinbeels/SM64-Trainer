@@ -91,6 +91,7 @@ struct Pose {
     float light_direction[3]; // same space as supplied normals; normalized
     float ambient, diffuse, opacity;
     uint32_t flip_y; // GLideN64 world triangle path requires 1
+    float hue_degrees; // 0 retains the original model colors
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;

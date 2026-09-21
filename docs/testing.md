@@ -31,6 +31,34 @@ Do not rerun responsive checks separately after a full run already executed
 them against the same inputs. Do not run five full suites to test queueing:
 the admission regression uses five tiny real processes instead.
 
+## Native ghost witnesses
+
+The ordinary suite covers portable clips, recording ownership, IPC, frame
+selection and the practice controls. Hidden OpenGL witnesses run separately
+through the same `tools/run_tests.py` admission gate. Enable
+`SM64_TEST_GHOST_COMPOSITOR=1` for `test_ghost_compositor.py` and
+`test_ghost_compositor_tint.py`, and `SM64_TEST_GHOST_PRESENTATION=1` for
+`test_ghost_presentation.py`.
+
+`test_native_model.py` also needs `SM64_MODEL_ROM` pointing at a locally supplied
+big-endian US ROM. `SM64_MODEL_SEED_DIR` names a cache containing the exact input
+files and hashes in `renderer/model/inputs.json`; `SM64_MODEL_PRACTICE_ROM` adds
+a separate practice-ROM compatibility check. ROM bytes are never committed.
+
+The connected `test_ghost_pipeline.py` additionally requires
+`SM64_TEST_GHOST_PIPELINE=1`, the stock US ROM and that pinned seed cache. Its
+synthetic scene connects actual capture, model, playback, compositor and
+presentation components. Pixel checks cover opaque and half-opacity Mario,
+foreground occlusion, and unchanged clean color/depth. Timing includes GPU
+completion and reports swap cost separately. It does not measure the actual
+GLideN64 terrain/VI path, capture encoding or live emulator frame budget.
+
+The actual staged display-list witness in `test_ghost_pass.py` takes
+`SM64_GHOST_WITNESS_SOURCE` pointing at the `staged` directory retained by
+`tools/build_renderer.py --keep-scratch`. Its source-identity checks require a
+fresh build when the adapter changes. A skipped optional witness is explicitly
+listed in `tests/skip_inventory.py`; it is never a native acceptance result.
+
 ## Browser-free component checks
 
 Install Node 24.13+ on the 24.x line (or Node 26+) and run

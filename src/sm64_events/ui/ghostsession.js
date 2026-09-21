@@ -44,7 +44,7 @@ export const HUE_MAX = 359;
 // WHAT THE GHOST SHOWS. His report is why there is a choice: *"it's still
 // extremely hard to understand the ghost, because all the camera movement /
 // scenery overlaps."* The whole recorded screen is the ghost he already knows;
-// only-Mario draws the rectangle he is in and leaves the scenery out.
+// only-Mario draws the recorded Mario pose into the live game.
 //
 // The LABELS say what each one does rather than naming the technique, and they
 // are the words the control offers -- there is no second list anywhere.
@@ -173,6 +173,27 @@ export function ghostTargetKey(target) {
  *               server's own sentence saying why not
  *   nudge       whole game frames, already clamped
  */
+function viewAvailability(source) {
+  return {
+    nativeViews: typeof source.native_available === "boolean" ? {
+      mario: source.native_available,
+      whole: Boolean(source.whole_available),
+      marioReason: source.native_reason_text,
+      wholeReason: source.whole_reason_text,
+    } : null,
+    marioBoxes: {
+      available: Boolean(source.native_available ?? source.mario_boxes_available),
+      reasonText: (typeof source.native_available === "boolean"
+        ? source.native_reason_text : source.mario_boxes_reason_text) || null,
+    },
+  };
+}
+
+function ghostReason(session, source) {
+  if (!source.available) return source.reason_text || "There is no run to play alongside you here yet.";
+  return session.enabled && session.view === "mario" ? session.window?.reason || null : null;
+}
+
 export function ghostControls(session, entityKey) {
   const waiting = {
     known: false, available: false, enabled: false, canToggle: false,
@@ -196,18 +217,12 @@ export function ghostControls(session, entityKey) {
     available,
     enabled,
     canToggle: available,
-    reasonText: available ? null : (source.reason_text
-      || "There is no run to play alongside you here yet."),
+    reasonText: ghostReason(session, source),
     showsTuning: enabled,
     opacity: clampOpacity(session.opacity),
     tint: ghostTint(session.tint),
     view: GHOST_VIEWS.includes(session.view) ? session.view : null,
-    marioBoxes: {
-      available: Boolean(source.mario_boxes_available),
-      // The server's own sentence, never a second copy of it here: the reader
-      // that knows WHY there are no boxes is the one that looked for them.
-      reasonText: source.mario_boxes_reason_text || null,
-    },
+    ...viewAvailability(source),
     nudge: clampNudge(session.nudge_frames),
   };
 }
