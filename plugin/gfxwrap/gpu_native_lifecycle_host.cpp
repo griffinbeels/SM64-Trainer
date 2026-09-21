@@ -114,6 +114,17 @@ bool bootstrap(){
     REQUIRE(f.r.accounted==ticket.occurrence && f.no_graphics());
     gd_disarm(GD_CANCELLED);REQUIRE(f.r.drain_tick());return true;
 }
+bool availability(){
+    Fixture f;REQUIRE(rc_bind_delivery(&f.r.limits));
+    ControlRequest request(f.request(501),501);uint32_t state=0,why=0;
+    rc_rom(TRUE);rc_available(FALSE);request.demand(state,why);
+    REQUIRE(state==CONTROL_UNAVAILABLE && why==CONTROL_NO_BACKEND && activations==0);
+    rc_rom(FALSE);request.demand(state,why);
+    REQUIRE(state==CONTROL_PASSIVE && why==0 && activations==0 && rc_capabilities()==0);
+    rc_available(TRUE);rc_rom(TRUE);request.demand(state,why);
+    REQUIRE(state==CONTROL_PREPARING && why==0 && activations==1 && f.no_graphics());
+    gd_disarm(GD_CANCELLED);REQUIRE(f.r.drain_tick());return true;
+}
 bool gap(const std::string&mode){
     Fixture f;REQUIRE(f.start(401));f.r.set_state(GD_ACTIVE);
     if(mode=="image-gap"){
@@ -158,6 +169,7 @@ extern "C" int __cdecl sa_probe_frontier(uint64_t through,sa_frontier*out){
 int main(int argc,char**argv){
     if(argc!=2)return 2;const std::string mode=argv[1];bool passed=false;
     if(mode=="bootstrap")passed=lifecycle_fixture::bootstrap();
+    else if(mode=="availability")passed=lifecycle_fixture::availability();
     else if(mode=="recover"||mode=="cancel-deferred"||mode=="rom-deferred"||mode=="quarantine-deferred")passed=lifecycle_fixture::recovery(mode);
     else if(mode=="image-gap"||mode=="record-gap"||mode=="epoch-gap"||mode=="refusal-gap")passed=lifecycle_fixture::gap(mode);
     if(!passed)return 1;printf("native lifecycle passed: %s\n",mode.c_str());return 0;

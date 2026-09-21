@@ -38,8 +38,11 @@ extern "C" void __cdecl rc_revoke(uint32_t reason){if(live.exchange(false))cance
 extern "C" void __cdecl rc_demand(const control_page_t *page,const control_request_t *request,
                                   uint32_t *state,uint32_t *reason){
  if(!state||!reason)return;*state=CONTROL_UNAVAILABLE;*reason=CONTROL_NO_BACKEND;
- if(!configured.load()||!available.load()||!page||!request)return;
+ if(!configured.load()||!page||!request)return;
+ // A closed or baseline ROM is passive even while clean-source capability
+ // is revoked. An open practice ROM must still pass the availability gate.
  if(!rom.load()){*state=CONTROL_PASSIVE;*reason=0;return;}
+ if(!available.load())return;
  if(exhausted.load()){*reason=CONTROL_BACKEND_FAILED;return;}
  const gr_identity identity{page->producer_pid,request->owner_pid,page->generation,request->token,
     (uint64_t(page->producer_created_hi)<<32)|page->producer_created_lo,
