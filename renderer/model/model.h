@@ -91,13 +91,26 @@ typedef struct sg_atlas_view {
 } sg_atlas_view;
 
 /* Exactly one runtime may be open in a linked module. Calls are nonblocking:
- * concurrent/reentrant operations return SG_BUSY. Open/evaluate/close belong
- * to the same thread. Open does bounded asset extraction and allocation; call
+ * concurrent/reentrant operations return SG_BUSY. Operations belong to the
+ * current owner thread, with explicit detach/adopt for handoff. Open does
+ * bounded asset extraction and allocation; call
  * it outside steady-state drawing. ROM bytes are not retained after open.
  * Supported layout: 8 MiB big-endian US SM64 asset sections, structurally
  * validated here; caller additionally establishes desired ROM/version identity.
  */
 int32_t sg_model_open(const uint8_t *rom, size_t rom_bytes, sg_model **out);
+/* Ownership transfer only: no allocation, destruction, wait or graph mutation.
+ * Detach requires the current owner and leaves the runtime without an owner.
+ * Adopt claims a detached runtime for the calling thread; any existing owner,
+ * including the caller, returns SG_WRONG_THREAD. While detached, atlas/view/
+ * evaluate/close return SG_WRONG_THREAD. SG_BUSY and all other failures leave
+ * ownership unchanged. The caller must publish the handle through its own
+ * synchronized handoff; these operations do not publish or reclaim storage.
+ * Previously borrowed atlas pointers remain allocated until close, but the
+ * caller must finish their use before handing custody to a closing owner.
+ */
+int32_t sg_model_detach(sg_model *model);
+int32_t sg_model_adopt(sg_model *model);
 int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out);
 int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out);
 /* Exact upstream SM64 look-at, including its sine table. Native Mat4 layout,

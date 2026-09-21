@@ -105,6 +105,24 @@ int32_t sg_model_open(const uint8_t *rom, size_t bytes, sg_model **out)
     return leave(SG_OK);
 }
 
+int32_t sg_model_detach(sg_model *model)
+{
+    int status;
+    if (!enter()) return SG_BUSY;
+    status = valid_model(model);
+    if (status == SG_OK) model->owner = 0;
+    return leave(status);
+}
+
+int32_t sg_model_adopt(sg_model *model)
+{
+    if (!enter()) return SG_BUSY;
+    if (!model || model != sg_active) return leave(SG_INVALID_MODEL);
+    if (model->owner) return leave(SG_WRONG_THREAD);
+    model->owner = GetCurrentThreadId();
+    return leave(SG_OK);
+}
+
 int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out)
 {
     int status;
@@ -296,6 +314,8 @@ int32_t sg_model_close(sg_model **model)
 }
 
 #ifdef SG_MODEL_TESTING
+int sg_model_test_enter(void) { return enter(); }
+void sg_model_test_leave(void) { leave(SG_OK); }
 void sg_model_test_scratch_limit(size_t limit) { if (sg_active) sg_active->scratch_limit = limit; }
 size_t sg_model_test_scratch_used(void) { return sg_active ? sg_active->scratch_used : 0; }
 #endif

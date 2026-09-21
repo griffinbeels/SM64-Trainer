@@ -16,6 +16,8 @@
 
 extern "C" void sg_model_test_scratch_limit(size_t);
 extern "C" size_t sg_model_test_scratch_used(void);
+extern "C" int sg_model_test_enter(void);
+extern "C" void sg_model_test_leave(void);
 
 static unsigned checks;
 static void check(bool ok, const char* message) {
@@ -65,6 +67,87 @@ static void malformed(const std::vector<uint8_t>& original, size_t at, unsigned 
     std::fill_n(bytes.begin()+at, count, value);
     sg_model* model = nullptr;
     check(sg_model_open(bytes.data(), bytes.size(), &model) == SG_INVALID_ROM && !model, "malformed ROM accepted");
+}
+
+struct Event {
+    HANDLE value=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+    Event() { check(value!=nullptr,"ownership event"); }
+    ~Event() { CloseHandle(value); }
+};
+static void ownership_transfer(sg_model* model, const sg_pose& p, const std::vector<float>& expected) {
+    auto* invalid=reinterpret_cast<sg_model*>(uintptr_t(1));
+    check(sg_model_detach(invalid)==SG_INVALID_MODEL && sg_model_adopt(invalid)==SG_INVALID_MODEL,
+        "foreign transfer handles rejected before dereference");
+    check(sg_model_detach(nullptr)==SG_INVALID_MODEL && sg_model_adopt(nullptr)==SG_INVALID_MODEL,
+        "null transfer handles");
+    check(sg_model_adopt(model)==SG_WRONG_THREAD,"adopt does not bypass detach");
+    check(sg_model_test_enter()==1,"hold existing nonblocking gate");
+    const int busy_detach=sg_model_detach(model), busy_adopt=sg_model_adopt(model);
+    sg_model_test_leave();
+    sg_atlas_view atlas{};
+    check(busy_detach==SG_BUSY && busy_adopt==SG_BUSY && sg_model_get_atlas(model,&atlas)==SG_OK,
+        "busy transfer preserves current owner");
+    int foreign_detach=SG_OK, foreign_adopt=SG_OK;
+    std::thread foreign([&] { foreign_detach=sg_model_detach(model); foreign_adopt=sg_model_adopt(model); });
+    foreign.join();
+    check(foreign_detach==SG_WRONG_THREAD && foreign_adopt==SG_WRONG_THREAD,
+        "foreign thread cannot steal or release ownership");
+    check(sg_model_detach(model)==SG_OK,"owner detaches");
+    check(sg_model_detach(model)==SG_WRONG_THREAD,"detached model has no owner");
+    Mesh mesh; mesh.out.vertex_count=99;
+    float camera[3]={0,0,100}, focus[3]={0,0,0}, matrix[16];
+    std::fill_n(matrix,16,123.0f);
+    auto* borrowed=model;
+    check(sg_model_get_atlas(model,&atlas)==SG_WRONG_THREAD && !atlas.rgba,
+        "detached atlas access clears output");
+    check(sg_model_evaluate(model,&p,&mesh.out)==SG_WRONG_THREAD && !mesh.out.vertex_count,
+        "detached evaluation clears output");
+    check(sg_model_view(model,camera,focus,0,matrix)==SG_WRONG_THREAD &&
+        std::all_of(matrix,matrix+16,[](float v){return v==0;}),"detached camera clears output");
+    check(sg_model_close(&borrowed)==SG_WRONG_THREAD && borrowed==model,"detached close preserves storage");
+    check(sg_model_test_enter()==1,"hold detached gate");
+    const int detached_busy=sg_model_adopt(model);
+    sg_model_test_leave();
+    check(detached_busy==SG_BUSY && sg_model_get_atlas(model,&atlas)==SG_WRONG_THREAD,
+        "busy adoption leaves model detached");
+
+    Event start, evaluate, finish, ready[2], done[2];
+    int adopted[2]={SG_INVALID_MODEL,SG_INVALID_MODEL}, detached[2]={SG_INVALID_MODEL,SG_INVALID_MODEL};
+    bool evaluated[2]={false,false};
+    auto contender=[&](unsigned i) {
+        if(WaitForSingleObject(start.value,5000)==WAIT_OBJECT_0) {
+            adopted[i]=sg_model_adopt(model);
+            SetEvent(ready[i].value);
+            if(WaitForSingleObject(evaluate.value,5000)==WAIT_OBJECT_0 && adopted[i]==SG_OK) {
+                try {
+                    Mesh local; sg_atlas_view local_atlas{};
+                    evaluated[i]=sg_model_evaluate(model,&p,&local.out)==SG_OK && local.snapshot()==expected
+                        && sg_model_get_atlas(model,&local_atlas)==SG_OK && local_atlas.rgba;
+                } catch(...) { evaluated[i]=false; }
+            }
+        }
+        SetEvent(done[i].value);
+        WaitForSingleObject(finish.value,5000);
+        if(adopted[i]==SG_OK) detached[i]=sg_model_detach(model);
+    };
+    std::thread first(contender,0), second(contender,1);
+    SetEvent(start.value);
+    HANDLE adoptions[2]={ready[0].value,ready[1].value};
+    const DWORD adoption_complete=WaitForMultipleObjects(2,adoptions,TRUE,5000);
+    SetEvent(evaluate.value);
+    HANDLE completions[2]={done[0].value,done[1].value};
+    const DWORD completed=WaitForMultipleObjects(2,completions,TRUE,5000);
+    const int previous_owner=sg_model_adopt(model);
+    SetEvent(finish.value);
+    first.join(); second.join();
+    check(adoption_complete==WAIT_OBJECT_0 && completed==WAIT_OBJECT_0,"bounded competing handoff");
+    check((adopted[0]==SG_OK)+(adopted[1]==SG_OK)==1,"exactly one adopting owner");
+    const unsigned winner=adopted[0]==SG_OK?0:1, loser=1-winner;
+    check(adopted[loser]==SG_BUSY || adopted[loser]==SG_WRONG_THREAD,"competing owner refused");
+    check(evaluated[winner] && detached[winner]==SG_OK && previous_owner==SG_WRONG_THREAD,
+        "new owner evaluates deterministic geometry and returns custody");
+    check(sg_model_adopt(model)==SG_OK && sg_model_evaluate(model,&p,&mesh.out)==SG_OK &&
+        mesh.snapshot()==expected,"original thread re-adopts unchanged model");
 }
 
 // Hidden WGL context plus FBO means window-system occlusion cannot mask output.
@@ -242,6 +325,7 @@ int main(int argc, char** argv) {
         std::thread other([&]{sg_atlas_view view{}; wrong=sg_model_get_atlas(model,&view);
             if(sg_model_close(&borrowed)!=SG_WRONG_THREAD) wrong=0;}); other.join();
         check(wrong==SG_WRONG_THREAD && borrowed==model,"owner thread enforcement");
+        ownership_transfer(model,a,first_mesh);
         HWND foreground=GetForegroundWindow(); unsigned covered=0;
         { HiddenGL gl; gl.open(); covered=gl.draw(mesh.out); }
         check(covered>1000 && covered<20000,"hidden GL Mario silhouette");
@@ -252,7 +336,12 @@ int main(int argc, char** argv) {
         check(sg_model_get_atlas(borrowed,&atlas)==SG_INVALID_MODEL,"closed handle rejected");
         check(sg_model_open(rom.data(),rom.size(),&model)==SG_OK,"reopen");
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"reopen deterministic");
-        check(sg_model_close(&model)==SG_OK,"final close");
+        check(sg_model_detach(model)==SG_OK,"detach before background reclamation");
+        int reclaimed=SG_INVALID_MODEL;
+        std::thread reclaimer([&] { reclaimed=sg_model_adopt(model);
+            if(reclaimed==SG_OK) reclaimed=sg_model_close(&model); });
+        reclaimer.join();
+        check(reclaimed==SG_OK && !model,"background owner reclaims runtime");
         std::printf("{\"ok\":true,\"checks\":%u,\"vertices\":%u,\"scratch_bytes\":%zu,\"hidden_gl_pixels\":%u}\n",checks,vertices,scratch,covered);
         return 0;
     } catch(const std::exception& e) {
