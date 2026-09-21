@@ -1,5 +1,6 @@
 """Build and run the real Win32 model, using explicitly provided local ROM bytes."""
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,14 +38,24 @@ def test_native_pose_runtime(tmp_path):
         f"/I{ROOT / 'renderer/model'}", str(ROOT / "tests/native/model_host.cpp"),
         str(library), f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF",
         "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *compiler.LIBS], tmp_path)
-    result = subprocess.run([str(target), rom], cwd=tmp_path, capture_output=True,
-                            text=True, timeout=30, **quiet_spawn_kwargs(), check=False)
-    (tmp_path / "native-witness.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
-    assert result.returncode == 0, result.stdout + result.stderr
-    report = json.loads(result.stdout)
-    assert report["ok"] and report["vertices"] > 1800
-    assert 0 < report["scratch_bytes"] <= 256 * 1024
-    assert report["hidden_gl_pixels"] > 1000
+    fixtures = [("native", rom)]
+    practice = os.environ.get("SM64_MODEL_PRACTICE_ROM")
+    if practice:
+        fixtures.append(("practice", practice))
+    evidence = []
+    for label, supplied in fixtures:
+        result = subprocess.run([str(target), supplied], cwd=tmp_path, capture_output=True,
+                                text=True, timeout=30, **quiet_spawn_kwargs(), check=False)
+        (tmp_path / f"{label}-witness.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
+        assert result.returncode == 0, f"{label}: {result.stdout}{result.stderr}"
+        report = json.loads(result.stdout)
+        assert report["ok"] and report["vertices"] > 1800
+        assert 0 < report["scratch_bytes"] <= 256 * 1024
+        assert report["hidden_gl_pixels"] > 1000
+        evidence.append({"fixture": label, "rom": Path(supplied).name,
+                         "sha256": hashlib.sha256(Path(supplied).read_bytes()).hexdigest(),
+                         "result": report})
+    (tmp_path / "asset-witness.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
 
 
 def test_component_identity_covers_inputs_and_recipe(tmp_path, monkeypatch):

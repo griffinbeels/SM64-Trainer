@@ -16,8 +16,14 @@ same sine table and SM64 look-at routine; its raw Mat4 translation is at
 indices 12–14. The renderer applies N64 quantization and projection separately.
 
 All calls are serialized with a nonblocking guard. Wrong-thread use fails;
-there is no worker, lock wait or per-evaluation heap allocation. Close on the
-owner thread after consumers stop using the atlas. Handles and borrowed
+there is no worker, lock wait or per-evaluation heap allocation. A preload
+worker can open the runtime, detach it, and publish its handle for the renderer
+to adopt. Only the current owner may detach; only a detached runtime may be
+adopted. Both operations are bounded and preserve ownership on failure. A
+detached runtime refuses atlas access, view/evaluation and close. The caller
+owns synchronized publication and retirement; no timeout or thread exit
+transfers ownership automatically. Close on the current owner thread after
+consumers stop using the atlas. Handles and borrowed
 pointers expire at close and must not survive a later open. Failures clear the
 mesh's vertex count; the caller must discard partial buffer contents. Maximum
 capacity is 3072 vertices. Scratch storage is reused and checked before each
@@ -41,7 +47,9 @@ encoders are excluded. The original libsm64 global initializer is not called.
 Set `SM64_MODEL_ROM` to an explicitly supplied local ROM and optionally
 `SM64_MODEL_SEED_DIR` to cached pinned inputs, then run
 `python tools/run_tests.py tests/test_native_model.py`. The native witness
-compiles against the public header, exercises malformed assets, all animation
+also runs against `SM64_MODEL_PRACTICE_ROM` when supplied and records both
+asset hashes; this tests the practice ROM's actual asset sections.
+It compiles against the public header and exercises malformed assets, all animation
 endpoints, repeated/interleaved poses, distinct body/head transforms, normals,
 capacity and scratch failures, camera matrices, lifecycle and thread checks.
 Its WGL window stays hidden and renders to an FBO. That readback establishes
