@@ -101,7 +101,8 @@ class ReplayRecorder:
                  codec: str | None = None,
                  video_sink_factory=None,
                  recorder_lock_factory=acquire_recorder_lock,
-                 scratch_protection: Callable[[], Iterable[Path]] | None = None):
+                 scratch_protection: Callable[[], Iterable[Path]] | None = None,
+                 ghost_capture_factory=None):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
         # instance holding this lock actually captures; others run viewer-only.
@@ -122,6 +123,7 @@ class ReplayRecorder:
         # ReplayService._map_from_ledger.
         self.ledger = PictureLedger()
         self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
+        self._configure_pose_capture(ghost_capture_factory)
         # The picture feed (config.picture_feed, item 38): with the ffmpeg
         # sink, a grab reaches the encoder only when the ledger says it is
         # a NEW picture, and every write the sink completes lands in the
@@ -194,6 +196,12 @@ class ReplayRecorder:
         self._session_paused_since = None
 
     # -- lifecycle -----------------------------------------------------------
+
+    def _configure_pose_capture(self, factory) -> None:
+        self._pose_archive_name = f"ghost-poses-{uuid4().hex}.sqlite3"
+        self._ghost_capture_factory = factory
+        self._pose_owner = None
+        self.pose_archive = None
 
     def _configure_recovery(self) -> None:
         self.maintain_history = lambda: None
@@ -348,6 +356,9 @@ class ReplayRecorder:
             archive = self._cfg.scratch_dir / self._ledger_name
             protected.update(Path(str(archive) + suffix)
                              for suffix in ("", "-journal", "-wal", "-shm"))
+            poses = self._cfg.scratch_dir / self._pose_archive_name
+            protected.update(Path(str(poses) + suffix)
+                             for suffix in ("", "-journal", "-wal", "-shm"))
         if self.scratch_protection is not None:
             protected.update(self.scratch_protection())
         return protected
@@ -405,6 +416,8 @@ class ReplayRecorder:
             self.fragments.reset()
             self.ledger.reset()
             self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
+            self._pose_archive_name = f"ghost-poses-{uuid4().hex}.sqlite3"
+            self.pose_archive = None
             self._scratch.prepare(self._protected_scratch())
             self.ring.prune_missing()
             self._scratch_ready = True
@@ -468,9 +481,7 @@ class ReplayRecorder:
 
         # Resolve capture first: GPU source owns a compressed-packet sink and
         # must not also start the raw-picture FFmpeg pipeline.
-        video = self._video_factory(win)
-        with self._lock:
-            self._video_source = video
+        video = self._create_video_source(win)
         make_sink = getattr(video, "create_sink", None)
 
         # PRIMARY: one ffmpeg muxes video+audio on a single wall-clock (the AV
@@ -524,6 +535,13 @@ class ReplayRecorder:
         self._recording = True
         log.info("capture started — window=%r audio=%s codec=%s",
                  win.title, self._audio_mode, self._codec)
+
+    def _create_video_source(self, win: WindowInfo):
+        video = self._video_factory(win)
+        with self._lock:
+            self._video_source = video
+        self._start_pose_capture(win)
+        return video
 
     def _start_sources(self, win, clock, video, *, paired: bool) -> bool:
         if paired:
@@ -646,11 +664,29 @@ class ReplayRecorder:
             if self._video_source is source:
                 self._window_lost.set()
 
+    @property
+    def ghost_capture(self):
+        """The recorder-owned native control source, also used for playback."""
+        return self._pose_owner.source if self._pose_owner is not None else None
+
+    def _start_pose_capture(self, win):
+        if self._ghost_capture_factory is None:
+            return
+        from sm64_events.ghost.recording import PoseRecording
+        owner = PoseRecording(self._cfg.scratch_dir / self._pose_archive_name,
+                              self._ghost_capture_factory, producer_pid=win.pid,
+                              retention_s=self._cfg.retention_s,
+                              allowed=lambda: not self._session_paused)
+        self._pose_owner, self.pose_archive = owner, owner.archive
+        owner.start()
+
     def _teardown_capture(self, *, keep_owner: bool = False) -> None:
         with self._capture_lock:
             self._close_capture(keep_owner=keep_owner)
 
     def _request_capture_stop(self) -> None:
+        if self._pose_owner is not None:
+            self._pose_owner.request_stop()
         source = self._video_source
         if source is not None and hasattr(source, "request_stop"):
             try:
@@ -662,22 +698,24 @@ class ReplayRecorder:
         """Stop sources and close writer. Safe to call when already idle."""
         self._request_capture_stop()
         # Failed owners are separate from active callback routes. The fixed
-        # five keys retain actual objects for a later, explicit close attempt.
+        # fixed keys retain actual objects for a later, explicit close attempt.
         owners = dict(getattr(self, "_capture_retained", {}))
         with self._lock:
             for name, owner in (("video", self._video_source), ("audio", self._audio_source),
                                 ("sink", self._video_sink), ("writer", self._writer),
-                                ("ledger", self.ledger)):
+                                ("ledger", self.ledger), ("poses", self._pose_owner)):
                 if owner is not None:
                     owners[name] = owner
             self._capture_retained = owners
             self._video_source = None
+            self._pose_owner = None
             self._window_lost.clear()
             self._capture_window = None
             self._writer = None
             self._clock = None
 
         self._close_capture_owner(owners, "video", "stop")
+        self._close_capture_owner(owners, "poses", "stop")
         self._close_capture_owner(owners, "audio", "stop")
         if "audio" not in owners:
             with self._lock:

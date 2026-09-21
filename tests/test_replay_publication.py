@@ -77,3 +77,47 @@ def test_recovery_refuses_outside_root_without_touching_target(tmp_path):
         "destination": "../attempt_42.mp4", "media_bytes": 4}))
     assert "invalid replay publication destination" in publication.recover(root)[0]
     assert outside.read_bytes() == b"keep"
+
+
+def test_native_pose_sidecar_commits_with_video_and_recovers_without_scratch(tmp_path, monkeypatch):
+    from ghost_native_fixture import frame, producer
+    from sm64_events.ghost.clip import read_clip, write_clip
+    source, root, destination = inputs(tmp_path)
+    ghost = tmp_path / "scratch.ghost"
+    identity = write_clip(ghost, (frame(),), producer())
+    identity["file"] = destination.with_suffix(".ghost").name
+    replace = publication.os.replace
+
+    def interrupt(src, dst):
+        if Path(dst) == destination.resolve():
+            assert destination.with_suffix(".ghost").is_file()
+            raise OSError("native publication interrupted")
+        return replace(src, dst)
+
+    monkeypatch.setattr(publication.os, "replace", interrupt)
+    with pytest.raises(OSError, match="interrupted"):
+        publication.publish(root, 42, source, destination, {"native_ghost": identity}, {}, ghost=ghost)
+    assert not destination.exists()
+    source.unlink()
+    ghost.unlink()
+    monkeypatch.setattr(publication.os, "replace", replace)
+    assert publication.recover(root) == []
+    assert read_clip(destination.with_suffix(".ghost"), identity["sha256"]).clip_id == identity["clip_id"]
+    assert json.loads(destination.with_suffix(".json").read_text())["native_ghost"] == identity
+
+
+def test_native_pose_tampering_or_missing_bytes_never_publishes_video(tmp_path):
+    from ghost_native_fixture import frame, producer
+    from sm64_events.ghost.clip import write_clip
+    source, root, destination = inputs(tmp_path)
+    ghost = tmp_path / "scratch.ghost"
+    identity = write_clip(ghost, (frame(),), producer())
+    metadata = {"native_ghost": identity}
+    with pytest.raises(ValueError, match="missing native ghost bytes"):
+        publication.publish(root, 42, source, destination, metadata, {})
+    changed = bytearray(ghost.read_bytes())
+    changed[-1] ^= 1
+    ghost.write_bytes(changed)
+    with pytest.raises(ValueError, match="hash mismatch"):
+        publication.publish(root, 42, source, destination, metadata, {}, ghost=ghost)
+    assert not destination.exists()
