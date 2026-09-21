@@ -53,9 +53,25 @@ int main() {
     live.area=1; world.list_serial=21;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::wrong_occurrence);
     world.list_serial=20;
-    record.world.status=static_cast<uint32_t>(ghost::PassStatus::Interrupted);
+    // Historical framebuffer status is retained, while the current camera and
+    // occurrence still determine whether the recorded pose can be projected.
+    for(uint32_t status=0;status<=static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity);++status) {
+        record.world.status=status;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+        assert(record.world.status==status && camera_x==42 && pose.count==3);
+    }
+    saved.valid_fields&=~GC_VALID_POSE;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::missing_pose);
-    record.world.status=static_cast<uint32_t>(ghost::PassStatus::Ready);
+    assert(!pose.vertices && !pose.count);
+    saved.valid_fields|=GC_VALID_POSE;
+    live.valid_fields&=~GC_VALID_CAMERA;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::missing_pose);
+    assert(!pose.vertices && !pose.count);
+    live.valid_fields|=GC_VALID_CAMERA;
+    world.context_generation=0;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::wrong_occurrence);
+    assert(!pose.vertices && !pose.count);
+    world.context_generation=2;
     assert(ghost_pose::evaluate(nullptr,record,live,world,1.1f,scratch,pose)==Result::unsupported_pose);
     assert(!pose.vertices && !pose.count);
     std::puts("recorded pose to live camera mapping passed");

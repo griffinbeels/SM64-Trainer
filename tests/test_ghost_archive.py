@@ -6,9 +6,11 @@ from sm64_events.ghost.archive import PoseArchive
 from sm64_events.ghost.clip import ClipError, attempt_origin, check_manifest, read_clip
 
 
-def test_exact_attempt_export_survives_detach_and_includes_unencoded_invalid_rows(tmp_path):
+@pytest.mark.parametrize("world_status", [3, 11])
+def test_exact_attempt_export_survives_detach_and_includes_unencoded_invalid_rows(tmp_path, world_status):
     archive = PoseArchive(tmp_path / "poses.sqlite")
-    rows = (frame(1), frame(2, valid=29), frame(3), frame(4))
+    rows = (frame(1, world=world_status), frame(2, world=world_status, valid=29),
+            frame(3, world=world_status), frame(4, world=world_status))
     assert archive.ingest(producer(), rows)
     archive.close()
     assert not archive.ingest(producer(), (frame(5),))
@@ -16,6 +18,7 @@ def test_exact_attempt_export_survives_detach_and_includes_unencoded_invalid_row
     manifest = archive.export_attempt(attempt(), output, target={"kind": "star", "entity_key": "24-1"})
     assert (manifest["attempt_id"], manifest["session_id"], manifest["records"]) == (77, 9, 3)
     assert tuple(f.raw for f in read_clip(output).frames) == rows[:3]
+    assert manifest["invalid_records"] == 1
     assert archive.status()["closed"]
 
 

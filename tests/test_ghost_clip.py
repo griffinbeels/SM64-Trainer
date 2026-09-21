@@ -46,6 +46,18 @@ def test_first_exact_coordinate_keeps_refused_pose_and_per_row_scene():
     assert clip.canonical_frames()[4].level == 22
 
 
+@pytest.mark.parametrize("world_status", range(12))
+def test_recorded_world_refusal_preserves_usable_pose_and_diagnostic_bytes(world_status):
+    rows = (frame(1, world=world_status), frame(2, world=world_status, valid=29),
+            frame(3, world=world_status, igt=2, elapsed=2))
+    clip = decode_clip(encoded(rows))
+    assert tuple(item.raw for item in clip.frames) == rows
+    assert all(item.world_status == world_status for item in clip.frames)
+    assert clip.frames[0].playable
+    assert clip.canonical_frames()[2].sequence == 2
+    assert not clip.canonical_frames()[2].playable
+
+
 def test_segment_origin_is_zero_and_raw_restarts_do_not_rebase_it():
     rows = (frame(1, igt=90, elapsed=100), frame(2, igt=0, elapsed=100, area=2),
             frame(4, igt=4, elapsed=104, area=2))
@@ -74,6 +86,7 @@ INVALID_ROWS = [
     ((frame(1, elapsed=8), frame(2, elapsed=1)), "backward"),
     ((frame(1), frame(2, continuity=10)), "continuity"),
     ((frame(1, valid=29),), "no supported"),
+    ((frame(1, world=11, valid=29),), "no supported"),
     ((frame(1), frame(2, valid=0)), "elapsed clock"),
     ((frame(1), frame(2, clock_valid=1)), "elapsed clock"),
     ((frame(1, elapsed=0), frame(2, elapsed=2**64-1)), "coordinate"),

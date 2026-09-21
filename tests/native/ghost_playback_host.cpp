@@ -65,6 +65,7 @@ static unsigned opens=0,closes=0;
 static DWORD last_close=0;
 static bool refuse_adoption=false,refuse_close=false,revoke_evaluation=false;
 static uint64_t selected_sequence=0;
+static uint32_t selected_world=0;
 static float selected_x=0;
 extern "C" int32_t sg_model_open(const uint8_t*,size_t,sg_model **out) {
     if(fake_model)return SG_BUSY;
@@ -98,7 +99,9 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     out={};
     if(!p || p!=fake_model || p->owner!=GetCurrentThreadId())return Result::model_failed;
     if(!(live.valid_fields&GC_VALID_CAMERA))return Result::missing_pose;
-    if(world.epoch!=live.epoch || world.list_serial!=live.dlist_serial)return Result::wrong_occurrence;
+    if(world.epoch!=live.epoch || world.list_serial!=live.dlist_serial || !world.context_generation)
+        return Result::wrong_occurrence;
+    selected_world=recorded.world.status;
     selected_sequence=recorded.sample.sequence;
     selected_x=recorded.sample.pose.position[0];
     if(revoke_evaluation)ghost_playback::api()->revoke(GP_DISABLED);
@@ -158,9 +161,12 @@ int main() {
         check(api->bytes==sizeof(gp_api) && api->version==GP_VERSION,"API version");
         std::vector<uint8_t> rom(8u*1024u*1024u);
         Clip clip(1);
+        for(auto& frame:clip.frames)
+            frame.world_status=static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity);
         check(api->prepare_model(1,rom.data(),uint32_t(rom.size()))==GP_OK,"worker prepares detached model");
         check(fake_model && !fake_model->owner,"prepared model detached");
-        check(api->prepare_clip(&clip.header,clip.frames.data())==GP_OK,"worker indexes explicit invalid rows");
+        check(api->prepare_clip(&clip.header,clip.frames.data())==GP_OK,
+            "worker indexes reusable poses despite historical framebuffer refusal");
         clip.frames[0].sample.pose.position[0]=99;
         check(api->prepare_clip(&clip.header,clip.frames.data())==GP_INVALID,"same clip ID cannot change its payload");
         auto r=request(clip,1);check(api->configure(&r)==GP_OK,"configure playback");
@@ -185,6 +191,11 @@ int main() {
         renderer.run([&] {ghost_playback::safe_boundary(7,4);sg_atlas_view atlas{};uint64_t id=0;
             check(ghost_playback::atlas(&atlas,&id) && id==1 && atlas.rgba,"renderer adopted atlas");});
         draw(8,true,GP_BEFORE_START,1);draw(10,true,GP_READY,1);check(selected_x==0,"preloaded frame is an owned copy");
+        check(selected_world==static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity),
+            "selected pose retains its historical renderer diagnostic");
+        live.valid_fields&=~GC_VALID_CAMERA;draw(10,false,GP_POSE_REFUSED);
+        live.valid_fields|=GC_VALID_CAMERA;world.context_generation=0;
+        draw(10,false,GP_POSE_REFUSED);world.context_generation=2;
         draw(10,true,GP_READY,1);
         draw(11,false,GP_INVALID_FRAME);draw(11,false,GP_WRONG_SCENE,0,2);
         draw(12,false,GP_GAP);draw(13,false,GP_WRONG_SCENE);

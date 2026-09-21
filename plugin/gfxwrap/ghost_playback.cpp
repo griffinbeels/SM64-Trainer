@@ -258,7 +258,7 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
         if(h.clock_kind==GCLIP_STAR_CLOCK && s.clock.origin_id!=frames[0].sample.clock.origin_id)indexing=false;
         if(indexing) {
             ++indexed;
-            if(f.world_status==GCLIP_WORLD_READY && (s.valid_fields&GC_VALID_POSE))playable=true;
+            if(s.valid_fields&GC_VALID_POSE)playable=true;
         }
         sequence=s.sequence;serial=s.dlist_serial;prior_qpc=s.qpc;
         prior_timer=s.global_timer;prior_elapsed=s.clock.elapsed_frames;
@@ -523,7 +523,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     if(live.level!=selected.sample.level || live.area!=selected.sample.area) {decision(GP_WRONG_SCENE);return false;}
     report.selected_sequence_lo=uint32_t(selected.sample.sequence);
     report.selected_sequence_hi=uint32_t(selected.sample.sequence>>32);
-    if(selected.world_status!=GCLIP_WORLD_READY || !(selected.sample.valid_fields&GC_VALID_POSE)) {
+    if(!(selected.sample.valid_fields&GC_VALID_POSE)) {
         refusals.fetch_add(1);decision(GP_INVALID_FRAME);return false;
     }
     gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;

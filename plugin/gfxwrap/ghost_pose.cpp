@@ -25,8 +25,9 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
                 const ghost::WorldPass &world, float opacity, Scratch &scratch,
                 ghost_compositor::Pose &out) {
     out = {};
-    if (record.bytes != sizeof(record) || record.version != GS_VERSION || !record.configuration
-            || record.world.status != static_cast<uint32_t>(ghost::PassStatus::Ready))
+    // Historical framebuffer qualification does not invalidate captured Mario
+    // state. The caller supplies the separately qualified LIVE world pass.
+    if (record.bytes != sizeof(record) || record.version != GS_VERSION || !record.configuration)
         return Result::missing_pose;
     const gc_sample &recorded = record.sample;
     if (!sample_valid(recorded, GC_VALID_CLOCK | GC_VALID_POSE)

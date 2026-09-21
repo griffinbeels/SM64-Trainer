@@ -29,8 +29,14 @@ def corpus():
               encoded((frame(clock_valid=7, banked=30),)),
               encoded((frame(1, elapsed=0), frame(2, elapsed=2**64-1)), SEGMENT_CLOCK),
               base[:100], base[:-1], base + b"\0"]
+    for status in range(12):
+        values.append(encoded((frame(world=status),)))
+        # Timing and origin are unchanged; absent pose remains a refusal even
+        # when the historical renderer was ready or its target was unsupported.
+        values.append(base[:160] + frame(world=status, valid=29))
     for offset, value in [*BAD_HEADER_WORDS, *((160 + at, value) for at, value in BAD_CLOCK_WORDS),
                            (160, 192), (164, 1), (180, 2), (188, 63),
+                           (172, 12),
                            (160 + 72, 0), (160 + 76, 0x7fc00000), (160 + 184, 0x7f800000)]:
         changed = bytearray(base)
         struct.pack_into("<I", changed, offset, value)

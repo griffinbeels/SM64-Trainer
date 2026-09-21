@@ -64,6 +64,11 @@ int main() {
     p.begin(2,3,46,false); p.projection(projection); p.triangles(target(),1,true);
     assert(!p.geometry(true,false) && !p.end(true) && !p.candidate());
     p.begin(0,3,47,true); assert(p.status()==PassStatus::InvalidIdentity);
+    // A reusable historical pose cannot supply missing LIVE framebuffer/depth
+    // evidence. This pass has no candidate for the draw/pose callback.
+    p.begin(2,3,48,true); p.projection(projection); p.triangles({},1,true);
+    assert(p.status()==PassStatus::InvalidIdentity && !p.candidate());
+    assert(!p.geometry(true,false) && !p.end(true) && !p.candidate());
     p.reset(); assert(p.status()==PassStatus::Disabled && !p.candidate());
     std::puts("world-pass qualification passed");
 }

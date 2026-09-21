@@ -90,7 +90,9 @@ class Frame:
 
     @property
     def playable(self) -> bool:
-        return self.world_status == WORLD_READY and self.valid_fields & (CLOCK | POSE) == CLOCK | POSE
+        # Stored renderer qualification is diagnostic. Playback uses the live
+        # world/camera, so a historical framebuffer refusal cannot erase a pose.
+        return self.valid_fields & (CLOCK | POSE) == CLOCK | POSE
 
 
 def frame_from_bytes(data: bytes) -> Frame:
