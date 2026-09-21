@@ -16,6 +16,7 @@ from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay import compress
 from sm64_events.replay.config import ARCHIVE_CODECS, CLIP_MAXRATE, video_quality_args
 from sm64_events.replay.extract import frame_times_of
+from test_replay_picture_identity import av1_encoder as av1_encoder  # real availability
 
 CPU_ONLY = ("libx264",)
 NAME = "attempt_0042_test-course_test-star_0m02s00.mp4"
@@ -137,6 +138,59 @@ def test_every_archive_candidate_runs_without_picture_reordering(codec, tmp_path
     assert args[args.index("-fps_mode") + 1] == "passthrough"
     assert args[args.index("-c:a") + 1] == "copy"
     assert video_quality_args(codec, "archive", CLIP_MAXRATE), codec
+
+
+@pytest.fixture
+def saved_in_av1(av1_encoder, saved):
+    """The same save-tree entry, but recorded the way an AV1 GPU records it."""
+    ffmpeg, codec = av1_encoder
+    av1 = saved.with_name("av1_" + saved.name)
+    subprocess.run([
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(saved),
+        "-c:v", codec, *video_quality_args(codec, "realtime", CLIP_MAXRATE),
+        "-bf", "0", "-fps_mode", "passthrough", "-c:a", "copy", str(av1),
+    ], check=True, capture_output=True)
+    shutil.copy2(saved.with_suffix(".json"), av1.with_suffix(".json"))
+    return av1
+
+
+def test_a_replay_already_recorded_in_av1_is_not_encoded_again(saved_in_av1):
+    """The whole point of recording in AV1: Save publishes already-small bytes
+    and the compression pass never runs for that replay. A second encode at
+    the same target could only stack another generation of loss."""
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("re-encoded a replay that was recorded in AV1")
+
+    block = compress.shrink(_ffmpeg(), saved_in_av1, run=must_not_run)
+    assert block["state"] == "kept_original"
+    assert not _leftovers(saved_in_av1)
+    # Settled in the sidecar, so it is never asked again.
+    written = json.loads(saved_in_av1.with_suffix(".json").read_text())["media"]
+    assert written["state"] == "kept_original"
+
+
+def test_the_skip_stops_applying_when_the_two_av1_targets_diverge(
+        saved_in_av1, monkeypatch):
+    """The skip is not "AV1 is exempt", it is "the recorder already produced
+    what this pass would". Re-tune the ring away from the archive and there is
+    a real encode to do again -- so the guard has to read both constants at
+    the call, and this is what proves it does."""
+    from sm64_events.replay import config as replay_config
+    monkeypatch.setattr(replay_config, "VIDEO_AV1_CQ", 20)
+    assert not compress._recorded_at_archive_quality(
+        _ffmpeg(), saved_in_av1, ARCHIVE_CODECS)
+    monkeypatch.setattr(replay_config, "VIDEO_AV1_CQ",
+                        replay_config.ARCHIVE_AV1_CQ)
+    assert compress._recorded_at_archive_quality(
+        _ffmpeg(), saved_in_av1, ARCHIVE_CODECS)
+
+
+def test_an_h264_recording_is_still_worth_re_encoding(saved):
+    """H.264 never qualifies for the skip: the ring records at cq20 for
+    quality and the archive re-encodes at cq28 for size, so the bytes really
+    are there to save."""
+    assert not compress._recorded_at_archive_quality(
+        _ffmpeg(), saved, ARCHIVE_CODECS)
 
 
 def _worker(saved, **kwargs):

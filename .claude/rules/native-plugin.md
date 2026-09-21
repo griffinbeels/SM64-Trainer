@@ -21,7 +21,7 @@ NVENC helper. Why they are built this way, and what failed on the way:
 | The renderer overlay (SourceV2/ContextV1, GL state, snapshot, boundary) | `link_dispatch.*`, `link_source_api.*`, `renderer_boundary.*`, `context_lifetime.*`, `gl_snapshot.*`, `renderer_gl_state.h`; `tools/build_renderer.py` `OVERLAY_SOURCES` lists them. Docs: `replay-link-state.md`, `replay-renderer-boundary.md`, `replay-gl-snapshot.md` |
 | Delivery worker, GPU bridge, selection sample | `gpu_delivery*`, `gpu_bridge*`, `gpu_selection*`; doc `replay-gpu-bridge.md` |
 | Control page and capture lease | `control.h`, `control_worker.h`, `runtime_control.*`; Python reads the page by offset in `replay/capturecontrol.py`; doc `replay-capture-control.md` |
-| The NVENC helper | `gpu_encoder_dll.*`, `gpu_bridge_encoder*`; Python side `replay/gpuencoder*.py` and `replay/gpuprocess/` |
+| The NVENC helper | `gpu_encoder_dll.*`, `gpu_bridge_encoder*`; Python side `replay/gpuencoder*.py` and `replay/gpuprocess/`. It encodes H264 or AV1, named by `gbenc_options_v1.codec` (H264 is 0, taken from the checked-zero reserved words so old callers and old DLLs still mean H264). AV1 needs `repeatSeqHdr` for the same reason H264 needs `repeatSPSPPS`: the mux builds its sample description from the first key picture and never decodes. |
 
 - **Build ids hash the sources.** Any edit here changes the wrapper and
   encoder ids (`tools/build_plugin.py`); an overlay edit also changes the

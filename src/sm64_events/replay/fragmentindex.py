@@ -105,8 +105,12 @@ def tracks_of(unit):
         descriptions = list(boxes(stsd[8:]))
         if word(stsd, 4) != 1 or len(descriptions) != 1:
             raise ValueError("unsupported sample descriptions")
-        expected = b"avc1" if handler == b"vide" else b"mp4a"
-        if descriptions[0][0] != expected:
+        # The recorder writes AV1 on a GPU that has an AV1 encoder and H.264
+        # everywhere else, so a video track may legitimately be either. Both
+        # are one-picture-per-sample and reordering-free, which is the property
+        # the sample tables below depend on; nothing else is admitted.
+        expected = (b"avc1", b"av01") if handler == b"vide" else (b"mp4a",)
+        if descriptions[0][0] not in expected:
             raise ValueError("unsupported fragment codec")
         tracks[identity] = Track(identity, "video" if handler == b"vide" else "audio",
                                  scale, edit_origin(trak), *defaults[identity])

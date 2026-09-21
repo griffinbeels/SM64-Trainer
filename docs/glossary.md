@@ -861,6 +861,27 @@ is the first of them.
   (slotAtTime, timeOfSlot); `tools/probe_clip_seek.py` proves the
   browser lands where the timeline asked.
 
+### Recording codec
+
+Which video codec the [[recorder]] writes while it records, decided per
+graphics card at the start of each recording. The trainer asks the card for
+AV1 first, because AV1 holds the same picture in about a third of the bytes
+and encodes faster than the H.264 it used to write, so a replay saved from an
+AV1 recording is already small and never needs a [[compressed replay]] pass at
+all. Only newer cards have an AV1 encoder; a card without one refuses by
+codec -- a typed answer, distinct from anything going wrong -- and the trainer
+records H.264 and shrinks the save afterwards exactly as before. The trainer
+puts the question to the card through the same encoder that will do the
+recording, then remembers the answer, so it costs one extra request per card
+per launch.
+
+- **Lives** -- `src/sm64_events/replay/gpusettings.py` (the choice and the
+  memory of it), `plugin/gfxwrap/gpu_bridge_encoder.cpp` (the card's own
+  answer), `src/sm64_events/replay/packetmux.py` (the archive carries whichever
+  codec came back)
+- **Not** -- the archive stage in `src/sm64_events/replay/config.py`, which is
+  the codec a [[compressed replay]] is re-encoded INTO after the fact.
+
 ### Compressed replay
 
 A saved replay whose video the trainer re-encoded smaller in the background
@@ -877,6 +898,9 @@ closed. When he closes the app before a job finishes, the next launch
 finishes it. Working files live in one hidden folder at the top of the save tree,
 never beside the replay. The trainer never rewrites a replay saved before
 this existed unless asked, and never encodes a compressed one a second time.
+A replay whose [[recording codec]] was already AV1 comes out small: the
+trainer reads the codec, answers "nothing to do" without encoding anything,
+and never asks about that replay again.
 
 - **Lives** -- `src/sm64_events/replay/compress.py`; the quality rows are
   the archive stage in `src/sm64_events/replay/config.py`

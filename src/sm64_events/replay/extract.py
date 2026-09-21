@@ -41,6 +41,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.paths import bundled_ffmpeg
 from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
                                        video_quality_args)
+from sm64_events.replay.packetmux import NATIVE_CODECS
 from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.media import MEDIA_HZ, MediaRun, picture_duration_filter
 
@@ -127,10 +128,11 @@ def _native_packet_index(ffprobe: str, clip: Path,
                          allow_preroll: bool = False) -> list[dict] | None:
     """Read timestamps without decoding pixels, only for our native encoder.
 
-    Our H264 mux writes one picture per packet with no B frames. Arbitrary
-    downloads do not have that contract and must keep the decoded-frame path.
-    Refuse reordered, discarded, corrupt or incomplete packets rather than
-    sorting them into an apparently plausible picture map.
+    Our mux writes one picture per packet with no B frames, in H264 or in AV1
+    depending on what the recording GPU can encode. Arbitrary downloads do not
+    have that contract and must keep the decoded-frame path. Refuse reordered,
+    discarded, corrupt or incomplete packets rather than sorting them into an
+    apparently plausible picture map.
     """
     try:
         out = subprocess.run(
@@ -148,7 +150,8 @@ def _native_packet_index(ffprobe: str, clip: Path,
         if len(streams) != 1:
             return None
         stream = streams[0]
-        if (stream.get("codec_name") != "h264" or stream.get("has_b_frames") != 0
+        if (stream.get("codec_name") not in NATIVE_CODECS
+                or stream.get("has_b_frames") != 0
                 or stream.get("time_base") != "1/90000"):
             return None
         ticks = []

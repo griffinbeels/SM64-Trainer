@@ -194,6 +194,16 @@ header and assigns no clock. The first real offer establishes the media origin.
 Its bind command creates the archive on the sink, leaving capture free to consume
 the next offers. Startup cannot fill a source queue with cold codec construction.
 
+Helper Open also settles WHICH CODEC this adapter records in. The session asks
+for AV1 first — 32% of H.264's bytes at equal quality and faster to encode
+(measured 2026-09-20) — and the encoder checks `nvEncGetEncodeGUIDs` before it
+configures anything. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
+typed apart from every real fault, and the session opens again asking for
+H.264 inside the SAME startup budget; `gpusettings.py` remembers the refusal
+per adapter LUID, so only the first capture of a launch pays the extra round
+trip. The codec that actually opened is what `PacketFragmentMux` writes the
+fragments as, so an `av01` track is never described as `avc1`.
+
 The lease supervisor allows five seconds from admitted request to ACTIVE. Helper
 Open uses its startup budget; ordinary native requests use the shorter call
 deadline. An unavailable backend ends the request explicitly. Transient failures

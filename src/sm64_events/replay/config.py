@@ -100,6 +100,19 @@ ARCHIVE_AV1_CQ = 36
 ARCHIVE_H264_CQ = 28
 ARCHIVE_CRF = 24
 
+# THE RING IN AV1 (RTX 40-series and later). Measured 2026-09-20 on one real
+# saved replay re-encoded with the ring's own settings, VMAF against that
+# source, `x realtime` with no game rendering beside it:
+#   ring today, h264_nvenc p4 cq20   100 %   16.9x   VMAF 99.8 / worst 1 % 96.8
+#   av1_nvenc p4 cq28                 60 %   19.0x        99.8 / 96.3
+#   av1_nvenc p4 cq36                 32 %   19.0x        99.4 / 94.0   <- this
+# Realtime AV1 lands where the OFFLINE archive pass lands and encodes FASTER
+# than the H.264 the ring uses now, so a recorder that writes it makes Save
+# publish already-small bytes. Deliberately its own constant rather than a
+# reuse of ARCHIVE_AV1_CQ: the two stages are independent decisions that
+# currently agree, and re-tuning the ring must not move the archive.
+VIDEO_AV1_CQ = 36
+
 # Encoder speed per stage. The ring runs REALTIME (must beat 1/fps per frame,
 # measured ~8x headroom at p4); clip extraction is offline, so it can afford a
 # slower preset for the same quality target.
@@ -119,6 +132,10 @@ def _nvenc_cq(stage: str) -> int:
     return ARCHIVE_H264_CQ if stage == "archive" else VIDEO_CQ
 
 
+def _av1_cq(stage: str) -> int:
+    return ARCHIVE_AV1_CQ if stage == "archive" else VIDEO_AV1_CQ
+
+
 def _x264_crf(stage: str) -> int:
     return ARCHIVE_CRF if stage == "archive" else VIDEO_CRF
 
@@ -136,10 +153,11 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
                 "-rc", "vbr", "-cq", str(_nvenc_cq(stage)), "-b:v", "0",
                 "-maxrate", maxrate, "-bufsize", maxrate]
     if codec == "av1_nvenc":
-        # Archive only (RTX 40-series and later encode AV1). Same cq-not-bitrate
-        # reasoning as H.264 above; the scales are not comparable.
+        # RTX 40-series and later encode AV1; every other GPU keeps H.264 and
+        # the compression pass. Same cq-not-bitrate reasoning as H.264 above;
+        # the scales are not comparable. No -profile:v: AV1 NVENC has one.
         return ["-preset", _NVENC_PRESET[stage], "-tune", "hq",
-                "-rc", "vbr", "-cq", str(ARCHIVE_AV1_CQ), "-b:v", "0",
+                "-rc", "vbr", "-cq", str(_av1_cq(stage)), "-b:v", "0",
                 "-maxrate", maxrate, "-bufsize", maxrate]
     if codec == "libx264":
         return ["-preset", _X264_PRESET[stage], "-crf", str(_x264_crf(stage))]
@@ -156,7 +174,7 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
 
 def forced_idr_args(codec: str) -> list[str]:
     """Forced I pictures must be independent starts for the segment muxer."""
-    if codec == "h264_nvenc":
+    if codec in ("h264_nvenc", "av1_nvenc"):
         return ["-forced-idr", "1"]
     if codec in ("h264_amf", "h264_qsv"):
         return ["-forced_idr", "1"]

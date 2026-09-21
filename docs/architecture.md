@@ -500,15 +500,47 @@ unchanged — at 1431 bytes against H.264's 3255. It also encodes 1600x1200
 (a non-standard size) through the same chain at 44% of H.264's bytes. That is
 the property the frame map depends on, and it holds.
 
-**But `codecprobe.py` would reject AV1 today, and that is the probe's fault:**
-it validates through MPEG-TS, which has no usable AV1 mapping — the same
-pictures yield ZERO video streams there while passing in fragmented MP4, the
-container `ffmpeg_sink.py` and `packetmux.py` actually write. Any AV1 work
-starts by moving that probe off MPEG-TS; leaving it would read as "this GPU
-cannot encode AV1".
+**`codecprobe.py` rejected AV1, and that was the probe's fault:** it validated
+through MPEG-TS, which has no usable AV1 mapping — the same pictures yield ZERO
+video streams there while passing in fragmented MP4, the container
+`ffmpeg_sink.py` and `packetmux.py` actually write. The probe now validates
+through `fragment_mux_options()`, the sinks' own policy from its one owner;
+`tests/test_replay_codecprobe.py` puts MPEG-TS back and shows the stream
+disappearing, so the container is doing the work rather than a loosened check.
 
-STILL UNMEASURED: realtime AV1 while SM64 actually renders (both runs above
-were on an idle GPU).
+### Built 2026-09-21: the recorder writes AV1 where the adapter can
+
+- **The archive carries it with no decoder.** `PacketFragmentMux` takes a
+  `NativeFormat` that names its codec instead of assuming H.264, and
+  `delay_moov` builds an `av01` sample entry from the first key picture's
+  repeated sequence header exactly as it builds `avc1` from repeated SPS/PPS.
+  Measured on real `av1_nvenc` packets and again on the native encoder's own:
+  muxed unchanged, read back through `fragmentindex`, every picture decoded on
+  its exact source tick. `fragmentindex` admits `av01` beside `avc1` and
+  `extract.py`'s native packet index admits `av1` beside `h264`; `virtualmp4`
+  copies the sample description verbatim and needed nothing.
+- **The adapter is asked, not the model name.** `gpu_bridge_encoder.cpp` takes
+  a codec in the ABI's first reserved word (H264 is zero, so an older caller
+  or an older DLL still means H.264) and checks `nvEncGetEncodeGUIDs` before
+  configuring anything. An adapter without AV1 refuses with `GBDLL_CODEC`,
+  typed apart from every real fault; `gpusettings.py` remembers that per
+  adapter, so the extra open happens once per adapter per launch and every
+  later capture goes straight to H.264.
+- **The compression pass steps aside rather than being removed.** `shrink`
+  reads the saved clip's codec and settles a clip already in the archive's own
+  codec without encoding, so an AV1 recording is small at Save and is never
+  queued, re-encoded, or named in the close warning. Every GPU without an AV1
+  encoder keeps the pass exactly as it was.
+- Ring AV1 quality is its own constant (`VIDEO_AV1_CQ`), read at the call like
+  every other row. It equals `ARCHIVE_AV1_CQ` today; they are independent
+  decisions and re-tuning the ring must not move the archive. `forced_idr_args`
+  now gives `av1_nvenc` NVIDIA's `-forced-idr` spelling, which it was silently
+  missing.
+
+STILL UNMEASURED: realtime AV1 while SM64 actually renders (every run above was
+on an idle GPU). Take it from `/api/replay/status`'s `frame_source_health`
+(refused vs delivered) and the stage timings against the same numbers on
+H.264, on the first live session.
 
 ## Replay capture (2026-06-11/12 live-audit marathon)
 

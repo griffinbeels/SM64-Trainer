@@ -22,7 +22,11 @@ typedef enum gbdll_result {
  GBDLL_OK=0,GBDLL_ARGUMENT=1,GBDLL_ABI=2,GBDLL_BUSY=3,GBDLL_THREAD=4,
  GBDLL_HANDLE=5,GBDLL_ADAPTER=6,GBDLL_IMPORT=7,GBDLL_FORMAT=8,
  GBDLL_TIMEOUT=9,GBDLL_PENDING=10,GBDLL_ABANDONED=11,GBDLL_ENCODER=12,
- GBDLL_QUARANTINE=13,GBDLL_STATE=14,GBDLL_MEMORY=15
+ GBDLL_QUARANTINE=13,GBDLL_STATE=14,GBDLL_MEMORY=15,
+ /* This adapter does not offer the requested codec. Appended, never
+    renumbered: the caller decodes these by value. A caller that asked for
+    AV1 may retry the same adapter with H264; nothing else may be inferred. */
+ GBDLL_CODEC=16
 } gbdll_result;
 typedef enum gbdll_state {GBDLL_OPEN=1,GBDLL_FAILED=2,GBDLL_FINISHING=3,GBDLL_FINISHED=4,GBDLL_QUARANTINED=5} gbdll_state;
 typedef struct gbdll_config_v1 {

@@ -35,8 +35,13 @@ int wmain(int argc,wchar_t**argv) {
         REQUIRE(mutex[i]->AcquireSync(1,0)==WAIT_TIMEOUT);
     }
     #ifdef GPU_BRIDGE_NVENC
-    BridgeTestFileSink file_sink;REQUIRE(file_sink.open("witness.h264","packets.csv"));
-    const auto encoder_settings=bridge_test_options(width,height);
+    #ifdef GPU_BRIDGE_AV1
+    constexpr uint32_t witness_codec=GBENC_CODEC_AV1;const char*witness_path="witness.av1";
+    #else
+    constexpr uint32_t witness_codec=GBENC_CODEC_H264;const char*witness_path="witness.h264";
+    #endif
+    BridgeTestFileSink file_sink;REQUIRE(file_sink.open(witness_path,"packets.csv"));
+    const auto encoder_settings=bridge_test_options(width,height,witness_codec);
     BridgeEncoder encoder;REQUIRE(encoder.prepare(device.Get(),context.Get(),encoder_settings,file_sink.descriptor()));
     #endif
     D3D11_TEXTURE2D_DESC desc{};textures[0]->GetDesc(&desc);

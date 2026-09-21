@@ -31,7 +31,9 @@ bool BridgeEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,
        !settings.nominal_fps_num||!settings.nominal_fps_den||settings.cq>51||!settings.max_bitrate||
        !settings.vbv_buffer_bits||!settings.gop_frames||settings.full_range>1||settings.signal_color>1||
        settings.initial_qp_p>51||settings.initial_qp_i>51||settings.initial_qp_b>51||
-       settings.profile!=GBENC_H264_HIGH||settings.preset!=GBENC_PRESET_P4||settings.tuning!=GBENC_TUNE_HQ||
+       (settings.codec!=GBENC_CODEC_H264&&settings.codec!=GBENC_CODEC_AV1)||
+       settings.profile!=(settings.codec==GBENC_CODEC_AV1?GBENC_AV1_MAIN:GBENC_H264_HIGH)||
+       settings.preset!=GBENC_PRESET_P4||settings.tuning!=GBENC_TUNE_HQ||
        settings.rate_control!=GBENC_RC_VBR||settings.b_frames!=0||
        !settings.max_packet_bytes||settings.max_packet_bytes>16u*1024u*1024u||
        (settings.matrix!=5&&settings.matrix!=1)||settings.primaries!=2||settings.transfer!=2) {
@@ -57,18 +59,31 @@ bool BridgeEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,
     NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS open{NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER};
     open.device=device;open.deviceType=NV_ENC_DEVICE_TYPE_DIRECTX;open.apiVersion=NVENCAPI_VERSION;
     NV_CHECK(api_.nvEncOpenEncodeSessionEx(&open,&encoder_));
+    const bool av1=settings.codec==GBENC_CODEC_AV1;
+    const GUID codec_guid=av1?NV_ENC_CODEC_AV1_GUID:NV_ENC_CODEC_H264_GUID;
+    // ASK THE ADAPTER, never the model name. Every NVENC has H264; only
+    // RTX 40-series and newer add AV1, and a caller that wants AV1 needs a
+    // typed refusal it can fall back from rather than a driver error.
+    uint32_t codec_count=0;
+    NV_CHECK(api_.nvEncGetEncodeGUIDCount(encoder_,&codec_count));
+    GUID codec_guids[32]{};uint32_t returned=0;
+    NV_CHECK(api_.nvEncGetEncodeGUIDs(encoder_,codec_guids,codec_count<32?codec_count:32,&returned));
+    bool codec_supported=false;
+    for(unsigned i=0;i<returned&&i<32;++i)codec_supported|=!memcmp(&codec_guids[i],&codec_guid,sizeof(GUID));
+    if(!codec_supported)return prepare_failed(GBENC_CODEC_UNAVAILABLE);
     NV_ENC_BUFFER_FORMAT formats[32]{};uint32_t count=0;
-    NV_CHECK(api_.nvEncGetInputFormats(encoder_,NV_ENC_CODEC_H264_GUID,formats,32,&count));
+    NV_CHECK(api_.nvEncGetInputFormats(encoder_,codec_guid,formats,32,&count));
     bool format_supported=false;for(unsigned i=0;i<count&&i<32;++i)format_supported|=formats[i]==buffer_format_;
     if(!format_supported)return prepare_failed(GBENC_INVALID_ARGUMENT);
     NV_ENC_CAPS_PARAM caps{NV_ENC_CAPS_PARAM_VER};int min_width=0,min_height=0;
-    caps.capsToQuery=NV_ENC_CAPS_WIDTH_MIN;NV_CHECK(api_.nvEncGetEncodeCaps(encoder_,NV_ENC_CODEC_H264_GUID,&caps,&min_width));
-    caps.capsToQuery=NV_ENC_CAPS_HEIGHT_MIN;NV_CHECK(api_.nvEncGetEncodeCaps(encoder_,NV_ENC_CODEC_H264_GUID,&caps,&min_height));
+    caps.capsToQuery=NV_ENC_CAPS_WIDTH_MIN;NV_CHECK(api_.nvEncGetEncodeCaps(encoder_,codec_guid,&caps,&min_width));
+    caps.capsToQuery=NV_ENC_CAPS_HEIGHT_MIN;NV_CHECK(api_.nvEncGetEncodeCaps(encoder_,codec_guid,&caps,&min_height));
     if(min_width>int(settings.width)||min_height>int(settings.height))return prepare_failed(GBENC_INVALID_ARGUMENT);
     NV_ENC_PRESET_CONFIG preset{NV_ENC_PRESET_CONFIG_VER};preset.presetCfg.version=NV_ENC_CONFIG_VER;
-    NV_CHECK(api_.nvEncGetEncodePresetConfigEx(encoder_,NV_ENC_CODEC_H264_GUID,NV_ENC_PRESET_P4_GUID,NV_ENC_TUNING_INFO_HIGH_QUALITY,&preset));
+    NV_CHECK(api_.nvEncGetEncodePresetConfigEx(encoder_,codec_guid,NV_ENC_PRESET_P4_GUID,NV_ENC_TUNING_INFO_HIGH_QUALITY,&preset));
     auto config=preset.presetCfg;
-    config.profileGUID=NV_ENC_H264_PROFILE_HIGH_GUID;config.frameIntervalP=1;config.gopLength=settings.gop_frames;
+    config.profileGUID=av1?NV_ENC_AV1_PROFILE_MAIN_GUID:NV_ENC_H264_PROFILE_HIGH_GUID;
+    config.frameIntervalP=1;config.gopLength=settings.gop_frames;
     config.frameFieldMode=NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
     config.rcParams.rateControlMode=NV_ENC_PARAMS_RC_VBR;config.rcParams.targetQuality=static_cast<uint8_t>(settings.cq);config.rcParams.targetQualityLSB=0;
     // Caller supplies the resolved FFmpeg-compatible initial QPs; no quality registry here.
@@ -77,21 +92,38 @@ bool BridgeEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,
     config.rcParams.initialRCQP.qpInterP=settings.initial_qp_p;config.rcParams.initialRCQP.qpIntra=settings.initial_qp_i;config.rcParams.initialRCQP.qpInterB=settings.initial_qp_b;
     config.rcParams.averageBitRate=0;config.rcParams.maxBitRate=settings.max_bitrate;config.rcParams.vbvBufferSize=settings.vbv_buffer_bits;
     config.rcParams.enableLookahead=0;config.rcParams.lookaheadDepth=0;config.rcParams.enableAQ=0;config.rcParams.enableTemporalAQ=0;
-    config.encodeCodecConfig.h264Config.idrPeriod=settings.gop_frames;
-    config.encodeCodecConfig.h264Config.chromaFormatIDC=1;
-    config.encodeCodecConfig.h264Config.sliceMode=3;config.encodeCodecConfig.h264Config.sliceModeData=1;
-    if(settings.signal_color) {
-        auto &vui=config.encodeCodecConfig.h264Config.h264VUIParameters;
-        vui.videoFormat=NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
-        vui.videoSignalTypePresentFlag=1;vui.colourDescriptionPresentFlag=1;
-        vui.videoFullRangeFlag=settings.full_range;
-        vui.colourMatrix=static_cast<NV_ENC_VUI_MATRIX_COEFFS>(settings.matrix);
-        vui.colourPrimaries=static_cast<NV_ENC_VUI_COLOR_PRIMARIES>(settings.primaries);
-        vui.transferCharacteristics=static_cast<NV_ENC_VUI_TRANSFER_CHARACTERISTIC>(settings.transfer);
+    if(av1) {
+        auto &av1cfg=config.encodeCodecConfig.av1Config;
+        av1cfg.idrPeriod=settings.gop_frames;av1cfg.chromaFormatIDC=1;
+        // The mux builds its sample description from the first key picture
+        // and never decodes: H264 repeats SPS/PPS, AV1 must repeat its
+        // sequence header or the fragment archive has no `av1C` to write.
+        av1cfg.repeatSeqHdr=1;av1cfg.disableSeqHdr=0;
+        // Low-overhead OBU, not Annex B: MP4 carries AV1 that way.
+        av1cfg.outputAnnexBFormat=0;
+        if(settings.signal_color) {
+            av1cfg.colorRange=settings.full_range;
+            av1cfg.matrixCoefficients=static_cast<NV_ENC_VUI_MATRIX_COEFFS>(settings.matrix);
+            av1cfg.colorPrimaries=static_cast<NV_ENC_VUI_COLOR_PRIMARIES>(settings.primaries);
+            av1cfg.transferCharacteristics=static_cast<NV_ENC_VUI_TRANSFER_CHARACTERISTIC>(settings.transfer);
+        }
+    } else {
+        config.encodeCodecConfig.h264Config.idrPeriod=settings.gop_frames;
+        config.encodeCodecConfig.h264Config.chromaFormatIDC=1;
+        config.encodeCodecConfig.h264Config.sliceMode=3;config.encodeCodecConfig.h264Config.sliceModeData=1;
+        if(settings.signal_color) {
+            auto &vui=config.encodeCodecConfig.h264Config.h264VUIParameters;
+            vui.videoFormat=NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
+            vui.videoSignalTypePresentFlag=1;vui.colourDescriptionPresentFlag=1;
+            vui.videoFullRangeFlag=settings.full_range;
+            vui.colourMatrix=static_cast<NV_ENC_VUI_MATRIX_COEFFS>(settings.matrix);
+            vui.colourPrimaries=static_cast<NV_ENC_VUI_COLOR_PRIMARIES>(settings.primaries);
+            vui.transferCharacteristics=static_cast<NV_ENC_VUI_TRANSFER_CHARACTERISTIC>(settings.transfer);
+        }
+        config.encodeCodecConfig.h264Config.repeatSPSPPS=1;
     }
-    config.encodeCodecConfig.h264Config.repeatSPSPPS=1;
     NV_ENC_INITIALIZE_PARAMS init{NV_ENC_INITIALIZE_PARAMS_VER};
-    init.encodeGUID=NV_ENC_CODEC_H264_GUID;init.presetGUID=NV_ENC_PRESET_P4_GUID;
+    init.encodeGUID=codec_guid;init.presetGUID=NV_ENC_PRESET_P4_GUID;
     init.encodeWidth=settings.width;init.encodeHeight=settings.height;init.darWidth=settings.width;init.darHeight=settings.height;
     init.frameRateNum=settings.nominal_fps_num;init.frameRateDen=settings.nominal_fps_den;init.enablePTD=1;init.enableEncodeAsync=0;
     init.tuningInfo=NV_ENC_TUNING_INFO_HIGH_QUALITY;init.encodeConfig=&config;

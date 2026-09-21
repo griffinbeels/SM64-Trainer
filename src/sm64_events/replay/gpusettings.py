@@ -1,12 +1,50 @@
 """Explicit budgets for the renderer GPU path; quality stays in replay.config."""
 
 from dataclasses import dataclass
+import logging
 
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.memory.addresses import RDRAM_FULL_SIZE
+from sm64_events.replay.gpuencoder_abi import CODEC_AV1, CODEC_H264
 from sm64_events.replay.gpurequest import RequestLimits
 from sm64_events.replay.gpuencoder_options import from_replay_config
 from sm64_events.replay.gpuprocess.process_controller import Limits
+
+log = logging.getLogger("sm64.replay")
+
+# WHICH CODEC THE RECORDER WRITES, per graphics adapter, and the one owner of
+# that question. AV1 is worth 32% of H.264's bytes at equal quality and encodes
+# FASTER (measured 2026-09-20), so Save publishes already-small bytes and the
+# compression pass never runs for that replay -- but only RTX 40-series and
+# newer have an AV1 encoder at all.
+#
+# The answer is not guessed from a model name and not borrowed from ffmpeg's
+# NVENC: it is asked of the exact adapter, through the exact encoder the
+# recorder will use, by opening an AV1 session. An adapter without one refuses
+# by codec (`Result.CODEC`), which is typed apart from every real fault, and
+# the refusal is remembered so the extra open happens once per adapter per
+# process rather than once per capture.
+_ADAPTER_CODECS: dict[tuple[int, int], int] = {}
+
+
+def recording_codec(luid: tuple[int, int]) -> int:
+    """The codec to ask this adapter for. AV1 until it says otherwise."""
+    return _ADAPTER_CODECS.get(tuple(luid), CODEC_AV1)
+
+
+def note_codec_unavailable(luid: tuple[int, int], codec: int) -> bool:
+    """Record a by-codec refusal. True when another codec is worth trying."""
+    if codec != CODEC_AV1:
+        return False
+    _ADAPTER_CODECS[tuple(luid)] = CODEC_H264
+    log.info("replay: this GPU has no AV1 encoder; recording H.264 and the "
+             "compression pass keeps shrinking saved replays")
+    return True
+
+
+def forget_adapter_codecs() -> None:
+    """Tests only: the memo is a per-process cache, never persisted state."""
+    _ADAPTER_CODECS.clear()
 
 
 @dataclass(frozen=True)
@@ -58,10 +96,11 @@ class GpuSettings:
             shutdown_timeout=1.0,
         )
 
-    def encoder(self, header, cfg, *, nominal_rate):
+    def encoder(self, header, cfg, *, nominal_rate, codec=CODEC_H264):
         # Structural values mirror the picture feed: no reordering, closed GOP
         # plus time-forced IDRs. Nominal rate is separate from actual VFR PTS.
         return from_replay_config(
+            codec=codec,
             width=header.even_width,
             height=header.even_height,
             nominal_fps_num=nominal_rate,

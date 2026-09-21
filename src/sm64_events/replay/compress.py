@@ -52,6 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.replay import config as replay_config
 from sm64_events.replay.config import ARCHIVE_CODECS, CLIP_MAXRATE, video_quality_args
 from sm64_events.replay.extract import ffprobe_beside, frame_times_of
 from sm64_events.replay.media import MEDIA_HZ, picture_duration_filter
@@ -366,6 +367,31 @@ def _picture_scale(ffmpeg: str, saved: Path, meta: dict) -> int:
     return pictures
 
 
+def _recorded_at_archive_quality(ffmpeg: str, saved: Path, codecs) -> bool:
+    """Did the recorder already write what this pass would have produced?
+
+    Only AV1 qualifies, and only while the ring and the archive name the SAME
+    target: a GPU with an AV1 encoder records at `VIDEO_AV1_CQ`, which the
+    archive row also asks for, so the two differ in preset (speed) and in
+    nothing that changes the bytes' quality. H.264 never qualifies -- the ring
+    records at cq20 for quality and the archive re-encodes at cq28 for size,
+    so an H.264 clip still has real bytes to save. Re-tuning either constant
+    apart from the other turns this off by itself.
+
+    An unreadable clip answers False and takes the ordinary path, where the
+    fingerprint's own failure reports the real cause.
+    """
+    # Read at the call, never captured at import: a table built at module load
+    # is how the ring and the clip stopped following their own constants
+    # (2026-09-20).
+    if ("av1_nvenc" not in codecs
+            or replay_config.VIDEO_AV1_CQ != replay_config.ARCHIVE_AV1_CQ):
+        return False
+    with suppress(Unproven, ValueError, IndexError):
+        return _probe(ffmpeg, saved, "v:0", "stream=codec_name")[0] == "av1"
+    return False
+
+
 def _encode(run, args: list[str], report, pictures: int):
     follow = {}
     if report is not None:
@@ -430,6 +456,14 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
         # Already answered for this clip. Re-encoding a compressed replay
         # would stack a second generation of loss on a PB for nothing.
         return settled
+    if _recorded_at_archive_quality(ffmpeg, saved, codecs):
+        # RECORDED IN THE ARCHIVE'S OWN CODEC AND TARGET. On a GPU with an AV1
+        # encoder the recorder writes what this pass would have produced, so
+        # Save publishes already-small bytes and a second encode could only
+        # stack another generation of loss. Settled, so the clip is never
+        # asked again and the close warning never names it.
+        return _without_a_file(sidecar, meta,
+                               ["recorded in the archive codec already"], None)
     staged, proof = staged_path(saved, work), proof_path(saved, work)
     proof.unlink(missing_ok=True)
     staged.unlink(missing_ok=True)

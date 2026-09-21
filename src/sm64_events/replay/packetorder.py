@@ -341,7 +341,7 @@ class OrderedPackets:
             and self.run.ticks_at(stamp) <= self._last_selected.pts
         ):
             return Refused("heartbeat does not advance")
-        # Request a NEW encode of a retained GPU image. Never repeat H264 bytes.
+        # Request a NEW encode of a retained GPU image. Never repeat encoded bytes.
         held = self._held.source
         result = self._append(held, packet_limit, now, True, event_ts=stamp)
         if isinstance(result, Ticket):
@@ -432,7 +432,7 @@ class OrderedPackets:
         self._encode.clear()
         self._selection.clear()
         self._dispositions.clear()
-        # A lost H264 reference invalidates pending dependent packets. End this
+        # A lost reference picture invalidates pending dependent packets. End this
         # run explicitly; do not bridge it with a fabricated last-picture hold.
         for node in self._nodes.values():
             node.state = "failed"

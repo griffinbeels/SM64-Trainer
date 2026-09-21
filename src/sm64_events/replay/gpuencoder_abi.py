@@ -44,8 +44,19 @@ class Options(C.Structure):
                 "max_packet_bytes",
             ]
         ]
-        + [("reserved", U * 5)]
+        # `codec` takes the FIRST of the five checked-zero reserved words, so
+        # the struct keeps its size, its version and every other offset.
+        # GBENC_CODEC_H264 is 0 deliberately: a caller that predates AV1 sends
+        # a zeroed word and still gets H.264, and an encoder that predates AV1
+        # refuses a nonzero one loudly instead of encoding the wrong codec.
+        + [("codec", U), ("reserved", U * 4)]
     )
+
+
+CODEC_H264 = 0
+CODEC_AV1 = 1
+# libav stream name per native codec; the one place the two vocabularies meet.
+CODEC_STREAM_NAMES = {CODEC_H264: "h264", CODEC_AV1: "av1"}
 
 
 class Packet(C.Structure):
