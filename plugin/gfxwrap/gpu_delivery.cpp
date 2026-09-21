@@ -62,7 +62,7 @@ struct BridgeCredit {
 };
 
 struct Runtime {
-    rs_api source{}; rcl_api contexts{}; gd_limits limits{};
+    rs_api source{};rs_api_v3 source3{}; rcl_api contexts{}; gd_limits limits{};
     HANDLE wake=nullptr,changed=nullptr;
     std::atomic<uint32_t> gate{0},cancel{1},session_cancel{0},state{GD_OFF},reason{GD_NONE};
     // Worker-owned diagnostic, readable by the watchdog. Later disarms still
@@ -324,7 +324,7 @@ struct Runtime {
         if(!live())return false;
         snapshot::Gl gl;if(!gl.load(false)){fail(GD_GL_UNSUPPORTED);return false;}
         TRACE("prepare snapshots");
-        if(!snapshots.prepare(gl,source,surface,request.offer_count,budget)){fail(GD_SNAPSHOT_FAILED,ERROR_INVALID_DATA,true);return false;}
+        if(!snapshots.prepare(gl,source,surface,request.offer_count,budget,source3.query?&source3:nullptr)){fail(GD_SNAPSHOT_FAILED,ERROR_INVALID_DATA,true);return false;}
         prepared=true;if(!live()){snapshots.stop();return false;}
         sampler_attempted=true;
         TRACE("prepare sampler");
@@ -574,17 +574,21 @@ std::atomic<bool> configured{false};
 DWORD WINAPI delivery_thread(void* p){static_cast<Runtime*>(p)->run();return 0;}
 }
 
-extern "C" int __cdecl gd_configure(const rs_api*s,const rcl_api*c,const gd_limits*l){
+static int configure_delivery(const rs_api*s,const rs_api_v3*extended,const rcl_api*c,const gd_limits*l){
     if(!source_valid(s,c) || !limits_valid(l))return GD_INVALID;
     bool no=false;if(!configured.compare_exchange_strong(no,true))return GD_BUSY;
     auto*r=new(std::nothrow)Runtime;if(!r){configured.store(false);return GD_SYSTEM_ERROR;}
-    r->source=*s;r->contexts=*c;r->limits=*l;
+    r->source=*s;if(extended)r->source3=*extended;r->contexts=*c;r->limits=*l;
     LARGE_INTEGER f{};QueryPerformanceFrequency(&f);r->frequency=uint64_t(f.QuadPart);
     r->wake=CreateEventW(nullptr,FALSE,FALSE,nullptr);r->changed=CreateEventW(nullptr,FALSE,FALSE,nullptr);
     if(!r->frequency || !r->wake || !r->changed){if(r->wake)CloseHandle(r->wake);if(r->changed)CloseHandle(r->changed);delete r;configured.store(false);return GD_SYSTEM_ERROR;}
     HANDLE worker=CreateThread(nullptr,0,delivery_thread,r,0,nullptr);
     if(!worker){CloseHandle(r->wake);CloseHandle(r->changed);delete r;configured.store(false);return GD_SYSTEM_ERROR;}
     CloseHandle(worker);runtime.store(r);return GD_ACCEPTED;
+}
+extern "C" int __cdecl gd_configure(const rs_api*s,const rcl_api*c,const gd_limits*l){return configure_delivery(s,nullptr,c,l);}
+extern "C" int __cdecl gd_configure3(const rs_api_v3*s,const rcl_api*c,const gd_limits*l){
+    return rs_valid_v3(s)?configure_delivery(&s->boundary,s,c,l):GD_INVALID;
 }
 extern "C" void __cdecl gd_set_diagnostic(gd_diagnostic_callback callback){diagnostic_callback.store(callback);}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){

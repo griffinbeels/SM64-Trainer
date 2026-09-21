@@ -12,7 +12,10 @@ constexpr uint64_t LAST_OCCURRENCE = UINT64_MAX >> 3;
 static_assert(RB_SLOTS == 8, "current token uses three slot bits");
 // The occurrence participates in every ownership CAS, so a delayed callback
 // cannot claim a recycled slot, even within the same enabled generation.
-struct Slot { std::atomic<uint64_t> state{FREE}; rb_record record{}; };
+struct Slot {
+    std::atomic<uint64_t> state{FREE}; rb_record record{};
+    std::atomic<uint32_t> rendering_thread{0};rs_source_descriptor3 source{};
+};
 Slot slots[RB_SLOTS];
 std::atomic<uint64_t> current{0};
 std::atomic<uint32_t> active_epoch{0};
@@ -38,6 +41,7 @@ struct Counters {
 /* Immutable after publication; deliberately independent of wrapper g_wrapped,
  * which its CloseDLL clears. Permanent pins cover late detached-thread exit. */
 rb_source_surface read_surface = nullptr;
+rb_source_surface3 read_surface3 = nullptr;
 rb_capture_image capture_image = nullptr;
 rb_image_completed image_completed = nullptr;
 bool image_configuration = false;
@@ -71,7 +75,8 @@ void complete_record(Slot *ticket) {
         if (capture_epoch() != r.epoch) {
             r.outcome = RB_RETIRED;
             counters.retired.fetch_add(1, std::memory_order_relaxed);
-        } else if (!read_surface || !read_surface(&r.surface)) {
+        } else if (!(read_surface3 ? read_surface3({r.occurrence,r.slot},&r.surface,&ticket->source)
+                                 : read_surface && read_surface(&r.surface))) {
             r.outcome = RB_SURFACE_FAILED;
             counters.surface_failed.fetch_add(1, std::memory_order_relaxed);
         } else if (capture_image && !capture_image(&r, &r.image)) {
@@ -96,25 +101,41 @@ extern "C" int rb_configure_images(rb_capture_image capture, rb_image_completed 
     capture_image = capture; image_completed = completed; image_configuration = true;
     return 1;
 }
-extern "C" int rb_bind_source(rb_source_surface surface) {
+static int bind_source(rb_source_surface surface,rb_source_surface3 surface3) {
     if (installed.load(std::memory_order_acquire))
-        return read_surface == surface ? RB_ALREADY_INSTALLED : RB_BOUND_TO_OTHER;
-    if (!surface || rom_open || malformed_lifecycle || install_attempted) return RB_LIFECYCLE_REFUSED;
+        return read_surface == surface && read_surface3 == surface3 ? RB_ALREADY_INSTALLED : RB_BOUND_TO_OTHER;
+    if ((!surface && !surface3) || rom_open || malformed_lifecycle || install_attempted) return RB_LIFECYCLE_REFUSED;
     // LINK's render thread is detached and can outlive CloseDLL/FreeLibrary: pin
     // this code and the surface provider without changing any renderer pointer.
     HMODULE self = nullptr, provider = nullptr;
     install_attempted = true;
     const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
     if (!GetModuleHandleExW(flags, reinterpret_cast<LPCWSTR>(&rb_source_begin), &self)
-            || !GetModuleHandleExW(flags, reinterpret_cast<LPCWSTR>(surface), &provider)) return RB_PIN_FAILED;
-    read_surface = surface;
+            || !GetModuleHandleExW(flags, surface ? reinterpret_cast<LPCWSTR>(surface)
+                                                : reinterpret_cast<LPCWSTR>(surface3), &provider)) return RB_PIN_FAILED;
+    read_surface = surface;read_surface3 = surface3;
     installed.store(true, std::memory_order_release);
     return RB_INSTALLED;
+}
+extern "C" int rb_bind_source(rb_source_surface surface){return bind_source(surface,nullptr);}
+extern "C" int rb_bind_source3(rb_source_surface3 surface){return bind_source(nullptr,surface);}
+extern "C" int rb_read_source_descriptor3(rb_ticket ticket,rs_source_descriptor3* out) {
+    if(!out)return 0;*out={};
+    if(!ticket.occurrence || ticket.occurrence>LAST_OCCURRENCE || ticket.slot>=RB_SLOTS || !read_surface3)return 0;
+    const auto& slot=slots[ticket.slot];
+    if(slot.state.load(std::memory_order_acquire)!=((ticket.occurrence<<3)|RENDERING) ||
+       slot.rendering_thread.load()!=GetCurrentThreadId())return 0;
+    // Only this rendering thread can finish/recycle its RENDERING slot. A
+    // different thread is rejected before reading its non-atomic payload.
+    if(slot.record.epoch!=capture_epoch() || slot.source.bytes!=sizeof(*out) || slot.source.version!=3)return 0;
+    *out=slot.source;return 1;
 }
 extern "C" rb_ticket rb_source_begin(rb_ticket ticket) {
     if (!ticket.occurrence || ticket.occurrence > LAST_OCCURRENCE || ticket.slot >= RB_SLOTS
             || !installed.load(std::memory_order_acquire)) return {0,0};
-    return claim_token((ticket.occurrence << 3) | ticket.slot) ? ticket : rb_ticket{0,0};
+    auto* claimed=claim_token((ticket.occurrence << 3) | ticket.slot);
+    if(claimed)claimed->rendering_thread.store(GetCurrentThreadId());
+    return claimed ? ticket : rb_ticket{0,0};
 }
 extern "C" void rb_source_end(rb_ticket ticket) {
     if (!ticket.occurrence || ticket.occurrence > LAST_OCCURRENCE || ticket.slot >= RB_SLOTS
@@ -164,7 +185,7 @@ extern "C" rb_ticket rb_stage(const rb_stamp *stamp) {
         if (!slot.state.compare_exchange_strong(expected, WRITING, std::memory_order_acq_rel)) continue;
         auto &r = slot.record;
         r.occurrence = ++next_occurrence; r.epoch = epoch; r.slot = index; r.outcome = 0;
-        r.stamp = *stamp; r.surface = {}; r.image = {};
+        r.stamp = *stamp; r.surface = {}; r.image = {};slot.source={};slot.rendering_thread.store(0);
         slot.state.store((r.occurrence << 3) | OFFERED, std::memory_order_release);
         current.store((r.occurrence << 3) | index, std::memory_order_release);
         next_slot = (index + 1) % RB_SLOTS;

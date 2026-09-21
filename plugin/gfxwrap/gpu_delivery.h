@@ -45,6 +45,7 @@ typedef struct {
  * Wrapper pins the owning module before configuration (same lifetime as sa_ops).
  */
 int __cdecl gd_configure(const rs_api*, const rcl_api*, const gd_limits*);
+int __cdecl gd_configure3(const rs_api_v3*,const rcl_api*,const gd_limits*);
 
 /* One supervisor. Exact repeats are idempotent. Only these template fields are
  * required: owner_pid/birth, nonce_lo/hi, generation (control generation),

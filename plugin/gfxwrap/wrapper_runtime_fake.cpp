@@ -23,6 +23,9 @@ extern "C" int __cdecl gd_configure(const rs_api*s,const rcl_api*c,const gd_limi
  signal=CreateEventW(nullptr,FALSE,FALSE,nullptr);if(!signal)return 0;
  source=s;configured=1;return 1;
 }
+extern "C" int __cdecl gd_configure3(const rs_api_v3*s,const rcl_api*c,const gd_limits*l){
+ return rs_valid_v3(s)?gd_configure(&s->boundary,c,l):0;
+}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
  if(!source||!h||h->bridge_count||!budget)return GD_INVALID;
  gd_disarm(GD_CANCELLED);const auto next=source->activate();if(!next)return GD_BAD_SOURCE;
