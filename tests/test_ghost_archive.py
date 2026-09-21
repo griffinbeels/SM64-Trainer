@@ -90,10 +90,13 @@ def test_rebased_segment_trims_pre_origin_and_uses_explicit_owner_kind(tmp_path)
     archive.close()
 
 
-@pytest.mark.parametrize("changes", [{"elapsed": 2}, {"continuity": 10}])
+@pytest.mark.parametrize("changes", [
+    {"elapsed": 2}, {"continuity": 10}, {"igt": 2}, {"origin": 2}, {"clock_valid": 7},
+])
 def test_same_producer_endpoint_with_distinct_timing_coordinates_is_ambiguous(tmp_path, changes):
     archive = PoseArchive(tmp_path / "poses.sqlite")
-    archive.ingest(producer(), (frame(1), frame(2, timer=101, **changes), frame(3)))
+    duplicate = {"timer": 101, "igt": 1, "elapsed": 1, **changes}
+    archive.ingest(producer(), (frame(1), frame(2, **duplicate), frame(3)))
     with pytest.raises(ClipError, match="ambiguous"):
         archive.export_attempt(attempt(), tmp_path / "bad.ghost")
     archive.close()
@@ -101,7 +104,7 @@ def test_same_producer_endpoint_with_distinct_timing_coordinates_is_ambiguous(tm
 
 def test_identical_endpoint_coordinates_choose_first_including_refused_pose(tmp_path):
     archive = PoseArchive(tmp_path / "poses.sqlite")
-    rows = (frame(1, valid=29), frame(2, timer=101, elapsed=1), frame(3))
+    rows = (frame(1, valid=29), frame(2, timer=101, igt=1, elapsed=1), frame(3))
     archive.ingest(producer(), rows)
     archive.export_attempt(attempt(), tmp_path / "exact.ghost")
     clip = read_clip(tmp_path / "exact.ghost")

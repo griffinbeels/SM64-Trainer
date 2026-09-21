@@ -134,7 +134,8 @@ class PoseArchive:
             if any(frame.clock.valid & (RAW_VALID | ELAPSED_VALID) != RAW_VALID | ELAPSED_VALID
                    for frame in frames):
                 raise ClipError("attempt endpoint has no exact native elapsed clock")
-            coordinates = {(frame.epoch, frame.clock.continuity_id, frame.clock.elapsed_frames)
+            coordinates = {(frame.epoch, frame.clock.continuity_id, frame.clock.elapsed_frames,
+                            frame.igt, frame.clock.origin_id, frame.clock.valid)
                            for frame in frames}
             if len(coordinates) != 1:
                 raise ClipError("attempt has ambiguous native endpoint coordinates")
