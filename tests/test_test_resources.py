@@ -74,6 +74,8 @@ def test_remote_workers_cannot_bypass_the_local_budget():
 def test_obs_opening_mid_run_tightens_then_latches_and_restores(tmp_path, monkeypatch):
     process = psutil.Process()
     original = process.cpu_affinity()
+    # The desktop's rule; a CI runner (GITHUB_ACTIONS) has no OBS to yield to.
+    monkeypatch.setattr(resources, "dedicated_machine", lambda: False)
     monkeypatch.setattr(resources, "obs_is_open", lambda: False)
     with resources.TestResources(path=tmp_path / "budget.lock") as lease:
         before = process.cpu_affinity()
