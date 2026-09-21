@@ -195,8 +195,7 @@ extern "C" void ghost_capture_reset(gc_reader *reader) {
 extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     if (!layout || layout->bytes != sizeof(*layout) || layout->version != GC_VERSION
             || layout->ram_order != GC_RAM_WORD_SWAPPED || layout->rom_layout != GC_ROM_US
-            || (layout->rdram_bytes != (4u << 20) && layout->rdram_bytes != (8u << 20))
-            || layout->reserved[0] || layout->reserved[1]) return GC_BAD_CONFIG;
+            || (layout->rdram_bytes != (4u << 20) && layout->rdram_bytes != (8u << 20))) return GC_BAD_CONFIG;
     const uint32_t words[] = {layout->global_timer, layout->mario_object, layout->current_area_pointer};
     for (auto address : words) if (!span(address, 4, layout->rdram_bytes)) return GC_BAD_CONFIG;
     const uint32_t halves[] = {layout->area_update_counter, layout->current_level,
@@ -204,6 +203,11 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     for (auto address : halves) if (!span(address, 2, layout->rdram_bytes, 2)) return GC_BAD_CONFIG;
     if (!span(layout->mario_state, 0xa0, layout->rdram_bytes)
             || !span(layout->object_pool, object_count*object_size, layout->rdram_bytes)) return GC_BAD_CONFIG;
+    const uint32_t warps[] = {layout->pending_warp_op, layout->delayed_warp_timer};
+    for (auto address : warps)
+        if (address && !span(address, 2, layout->rdram_bytes, 2)) return GC_BAD_CONFIG;
+    gcc_clock validation{};
+    if (!gcc_init(&validation, &layout->clock)) return GC_BAD_CONFIG;
     return GC_OK;
 }
 
@@ -238,13 +242,19 @@ extern "C" uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layou
     if (!ram.ok || out->level < 4 || out->level > 36 || out->area < 1 || out->area > 8)
         return out->status = GC_BAD_VALUE;
     out->valid_fields = GC_VALID_CLOCK;
+    if (layout->pending_warp_op && layout->delayed_warp_timer) {
+        out->pending_warp_op = ram.u16(layout->pending_warp_op);
+        out->delayed_warp_timer = ram.s16(layout->delayed_warp_timer);
+        out->valid_fields |= GC_VALID_WARP;
+    } else out->status = GC_BAD_VALUE;
     const uint32_t area = ram.u32(layout->current_area_pointer);
-    if (!ram.has(area, 0x28)) return out->status = GC_BAD_POINTER;
-    if (ram.u8(area) != out->area || !(ram.u8(area + 1) & active)) return out->status = GC_BAD_VALUE;
+    if (!ram.has(area, 0x28)) return out->status = out->status ? out->status : GC_BAD_POINTER;
+    if (ram.u8(area) != out->area || !(ram.u8(area + 1) & active))
+        return out->status = out->status ? out->status : GC_BAD_VALUE;
     const uint32_t action = ram.u32(layout->mario_state + 0x0c);
     if (action && ram.u32(layout->mario_state + mario_area) == area) {
         out->live_action = action; out->valid_fields |= GC_VALID_ACTION;
-    } else out->status = GC_BAD_VALUE;
+    } else if (!out->status) out->status = GC_BAD_VALUE;
     gc_camera camera{};
     const uint32_t camera_status = capture_camera(ram, area, out->area, camera);
     if (camera_status == GC_OK) { out->camera = camera; out->valid_fields |= GC_VALID_CAMERA; }
@@ -257,9 +267,15 @@ extern "C" uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layou
     return out->status;
 }
 
-static_assert(sizeof(gc_layout) == 64, "Ghost layout ABI changed");
-static_assert(sizeof(gc_sample) == 176, "Ghost sample ABI changed");
+static_assert(sizeof(gc_layout) == 168, "Ghost layout ABI changed");
+static_assert(offsetof(gc_layout, pending_warp_op) == 56, "Ghost warp layout ABI changed");
+static_assert(offsetof(gc_layout, delayed_warp_timer) == 60, "Ghost countdown layout ABI changed");
+static_assert(offsetof(gc_layout, clock) == 64, "Ghost clock layout ABI changed");
+static_assert(sizeof(gc_sample) == 244, "Ghost sample ABI changed");
 static_assert(offsetof(gc_sample, live_action) == 56, "Ghost action ABI changed");
 static_assert(offsetof(gc_sample, pose) == 60, "Ghost pose ABI changed");
 static_assert(offsetof(gc_sample, camera) == 140, "Ghost camera ABI changed");
+static_assert(offsetof(gc_sample, pending_warp_op) == 176, "Ghost warp ABI changed");
+static_assert(offsetof(gc_sample, delayed_warp_timer) == 178, "Ghost countdown ABI changed");
+static_assert(offsetof(gc_sample, clock) == 180, "Ghost clock evidence ABI changed");
 static_assert(sizeof(float) == 4, "Ghost capture requires IEEE binary32");

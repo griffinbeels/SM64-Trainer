@@ -7,13 +7,36 @@ or pair a sample with a rendered picture. JP remains disabled until verified.
 from dataclasses import dataclass, fields
 import struct
 
+from sm64_events.detectors import counter_epoch
+from sm64_events.detectors.anchors import IGT_WRAP_CEILING, NEAR_ZERO_IGT
+from sm64_events.memory import addresses
 from sm64_events.memory.addresses import KSEG0_BASE
 from sm64_events.memory.layout import Layout, LayoutIncomplete
 
 _CONFIG = struct.Struct("<16I")
-VERSION = 2
+_CLOCK_CONFIG = struct.Struct("<26I")
+VERSION = 3
 RAM_WORD_SWAPPED = 1
 ROM_US = 1
+
+
+def clock_config_bytes() -> bytes:
+    """Encode gcc_config from the existing clock/action registries, pack 4.
+
+    Native gcc_init owns semantic validation. The version and list capacity
+    here describe its ABI; timing/action values remain owned by their modules.
+    """
+    castles = sorted(addresses.CASTLE_LEVELS)
+    warps = sorted(counter_epoch.AREA_WARP_OPS)
+    if len(castles) > 8 or len(warps) > 8:
+        raise ValueError("Ghost clock registry exceeds its native list capacity")
+    return _CLOCK_CONFIG.pack(
+        1, NEAR_ZERO_IGT, counter_epoch.AREA_LOAD_WINDOW,
+        counter_epoch.TELEPORT_WINDOW, counter_epoch.LEVEL_LOAD_TAIL_FRAMES,
+        counter_epoch.WARP_FIRED_WINDOW, addresses.ACT_TELEPORT_FADE_OUT,
+        IGT_WRAP_CEILING, len(castles), len(warps),
+        *castles, *([0] * (8 - len(castles))), *warps, *([0] * (8 - len(warps))),
+    )
 
 
 @dataclass(frozen=True)
@@ -30,6 +53,8 @@ class GhostLayout:
     current_area: int
     igt_overall: int
     object_pool: int
+    pending_warp_op: int
+    delayed_warp_timer: int
 
     def __post_init__(self) -> None:
         if any(type(getattr(self, field.name)) is not int for field in fields(self)):
@@ -42,6 +67,7 @@ class GhostLayout:
             ("area_update_counter", 2, 2), ("current_level", 2, 2),
             ("current_area", 2, 2), ("igt_overall", 2, 2),
             ("object_pool", 240 * 0x260, 4),
+            ("pending_warp_op", 2, 2), ("delayed_warp_timer", 2, 2),
         ):
             address = getattr(self, name)
             if (address % alignment or address < KSEG0_BASE
@@ -55,15 +81,15 @@ class GhostLayout:
             raise LayoutIncomplete("Native ghost capture supports only the US layout schema")
         names = ("global_timer", "mario_struct", "mario_object", "current_area_pointer",
                  "area_update_counter", "curr_level", "curr_area", "usamune_overall",
-                 "object_pool")
+                 "object_pool", "pending_warp_op", "delayed_warp_timer")
         layout.require(*names)
         return cls(rdram_bytes, *(layout.value(name) for name in names))
 
     def to_bytes(self) -> bytes:
-        """Exactly 64 bytes; compared against the compiled C reader in tests."""
+        """Exactly 168 bytes; compared against the compiled C reader in tests."""
         roots = (self.global_timer, self.mario_state, self.mario_object,
                  self.current_area_pointer, self.area_update_counter,
                  self.current_level, self.current_area, self.igt_overall,
-                 self.object_pool)
-        return _CONFIG.pack(_CONFIG.size, VERSION, RAM_WORD_SWAPPED,
-                            self.rdram_bytes, ROM_US, *roots, 0, 0)
+                 self.object_pool, self.pending_warp_op, self.delayed_warp_timer)
+        return _CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size, VERSION, RAM_WORD_SWAPPED,
+                            self.rdram_bytes, ROM_US, *roots) + clock_config_bytes()

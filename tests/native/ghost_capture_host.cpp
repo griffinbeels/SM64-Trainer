@@ -44,6 +44,7 @@ struct Fixture {
         frame = {ram.data(), config.rdram_bytes, 1, 1, 1, 1234};
         put32(config.global_timer, 0x12345678);
         put16(config.area_update_counter, 0x8123); put16(config.igt_overall, 0xffe1);
+        put16(config.pending_warp_op, 0); put16(config.delayed_warp_timer, 0);
         put16(config.current_level, 24); put16(config.current_area, 1);
         put32(config.current_area_pointer, area); put8(area, 1); put8(area + 1, 1);
         put32(area + 4, root); put32(area + 0x24, control);
@@ -102,17 +103,18 @@ struct Fixture {
         check(ram == before, "reader wrote RDRAM");
         check(sample.status == result, "status mismatch");
         check(sample.sequence == frame.sequence && sample.epoch == frame.epoch, "metadata lost");
+        check(zero(sample.clock), "capture derived or retained clock evidence");
         ++frame.sequence; ++frame.dlist_serial;
         return result;
     }
     void pose_refusal(uint32_t expected) {
         check(run() == expected, "wrong pose refusal");
-        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_CAMERA | GC_VALID_ACTION), "pose refusal validity");
+        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_CAMERA | GC_VALID_ACTION | GC_VALID_WARP), "pose refusal validity");
         check(zero(sample.pose), "refused pose retained bytes");
     }
     void camera_refusal(uint32_t expected) {
         check(run() == expected, "wrong camera refusal");
-        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_POSE | GC_VALID_ACTION), "camera refusal validity");
+        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_POSE | GC_VALID_ACTION | GC_VALID_WARP), "camera refusal validity");
         check(zero(sample.camera), "refused camera retained bytes");
     }
 };
@@ -122,9 +124,9 @@ int main(int argc, char **argv) {
     Fixture f(argv[1]);
     const std::string mode(argv[2]);
     if (mode == "basic") {
-        check(f.run() == GC_OK && f.sample.valid_fields == 15, "valid capture failed");
+        check(f.run() == GC_OK && f.sample.valid_fields == 31, "valid capture failed");
         const auto &s = f.sample;
-        check(s.version == 2 && s.live_action == 0x0c400201 && s.pose.action == s.live_action, "live action endian");
+        check(s.version == 3 && s.live_action == 0x0c400201 && s.pose.action == s.live_action, "live action endian");
         check(s.global_timer == 0x12345678 && s.area_update_counter == 0x8123 && s.igt == 0xffe1, "clock endian");
         check(s.pose.angles[0] == -15 && s.pose.angles[1] == 12345 && s.pose.angles[2] == -32767, "angle endian");
         check(s.pose.position[2] == 22 && s.pose.scale[1] == 1.25f, "float order");
@@ -217,7 +219,7 @@ int main(int argc, char **argv) {
         check(f.sample.live_action == 0x1234abcd, "bad body lost current action");
         f.put32(Fixture::area+4, 0);
         check(f.run() == GC_BAD_POINTER
-              && f.sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_ACTION)
+              && f.sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_ACTION | GC_VALID_WARP)
               && f.sample.live_action == 0x1234abcd, "camera failure lost action");
         f.put32(Fixture::area+4, Fixture::root);
         f.put32(f.config.mario_state+0x0c, 0);
@@ -227,11 +229,39 @@ int main(int argc, char **argv) {
         f.put32(f.config.mario_state+0x90, Fixture::area+0x40);
         check(f.run() == GC_BAD_VALUE && f.sample.live_action == 0
               && !(f.sample.valid_fields & GC_VALID_ACTION), "foreign area action accepted");
+    } else if (mode == "warp") {
+        const auto op_address = f.config.pending_warp_op, timer_address = f.config.delayed_warp_timer;
+        f.put16(op_address, 0xabcd); f.put16(timer_address, 0x8123);
+        check(f.run() == GC_OK && f.sample.pending_warp_op == 0xabcd
+              && f.sample.delayed_warp_timer == -32477, "warp signed/unsigned halfword endian");
+        f.put16(op_address, 0xffff); f.put16(timer_address, 0x8000);
+        check(f.run() == GC_OK && f.sample.pending_warp_op == 65535
+              && f.sample.delayed_warp_timer == -32768, "warp extrema were narrowed");
+        f.put16(op_address, 0); f.put16(timer_address, 0x7fff);
+        check(f.run() == GC_OK && f.sample.pending_warp_op == 0
+              && f.sample.delayed_warp_timer == 32767, "warp zero/max timer were narrowed");
+        f.config.pending_warp_op = 0;
+        check(f.run() == GC_BAD_VALUE && f.sample.valid_fields == 15
+              && f.sample.pending_warp_op == 0 && f.sample.delayed_warp_timer == 0
+              && f.sample.pose.root_kind == GC_ROOT_TRS, "missing warp erased pose or reused timer");
+        f.config.pending_warp_op = op_address; f.config.delayed_warp_timer = 0;
+        check(f.run() == GC_BAD_VALUE && f.sample.valid_fields == 15
+              && f.sample.pending_warp_op == 0 && f.sample.delayed_warp_timer == 0,
+              "missing countdown retained warp evidence");
+        f.config.delayed_warp_timer = timer_address;
+        f.put16(op_address, 3); f.put16(timer_address, 1);
+        f.put32(f.config.mario_state+0x7c, 123); f.pose_refusal(GC_UNSUPPORTED_HELD);
+        check(f.sample.pending_warp_op == 3 && f.sample.delayed_warp_timer == 1,
+              "unsupported pose erased independent warp evidence");
+        f.put32(f.config.current_area_pointer, 0);
+        check(f.run() == GC_BAD_POINTER && f.sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_WARP)
+              && f.sample.pending_warp_op == 3, "area unload erased raw warp evidence");
     } else if (mode == "epochs") {
         check(f.run() == GC_OK, "initial capture failed");
         --f.frame.sequence; --f.frame.dlist_serial;
         check(f.run() == GC_STALE_SEQUENCE && f.sample.valid_fields == 0
-              && zero(f.sample.pose) && f.sample.live_action == 0, "duplicate retained old state");
+              && zero(f.sample.pose) && f.sample.live_action == 0
+              && !f.sample.pending_warp_op && !f.sample.delayed_warp_timer, "duplicate retained old state");
         check(f.run() == GC_OK, "fresh sequence did not recover");
         f.put32(f.config.global_timer, 10);
         check(f.run() == GC_RESET_REQUIRED && f.sample.valid_fields == 0
@@ -255,12 +285,23 @@ int main(int argc, char **argv) {
         f.put16(f.config.current_area, 1); f.put16(f.config.object_pool+2, 0x31);
         check(f.run() == GC_OK && f.sample.pose.hidden == 1, "hidden flag lost");
     } else if (mode == "arguments") {
-        f.config.version = 1;
+        f.config.version = GC_VERSION - 1;
         check(f.run() == GC_BAD_CONFIG && f.sample.valid_fields == 0 && f.sample.live_action == 0,
               "old capture ABI accepted");
         f.config.version = GC_VERSION;
-        f.config.reserved[0] = 1; check(f.run() == GC_BAD_CONFIG, "reserved config accepted");
-        f.config.reserved[0] = 0; f.config.global_timer |= 1; check(f.run() == GC_BAD_CONFIG, "unaligned config accepted");
+        const auto clock_config = f.config.clock;
+        f.config.clock.version = 99; check(f.run() == GC_BAD_CONFIG, "unknown clock config accepted");
+        f.config.clock = clock_config; f.config.clock.area_window = 0;
+        check(f.run() == GC_BAD_CONFIG, "invalid shared clock window accepted");
+        f.config.clock = clock_config; f.config.clock.castle_levels[GCC_LIST_MAX-1] = 6;
+        check(f.run() == GC_BAD_CONFIG, "unused shared clock slot accepted");
+        f.config.clock = clock_config;
+        const auto op = f.config.pending_warp_op, timer = f.config.delayed_warp_timer;
+        f.config.pending_warp_op |= 1; check(f.run() == GC_BAD_CONFIG, "unaligned warp root accepted");
+        f.config.pending_warp_op = op; f.config.delayed_warp_timer = Fixture::base + f.config.rdram_bytes;
+        check(f.run() == GC_BAD_CONFIG, "outside countdown root accepted");
+        f.config.delayed_warp_timer = timer;
+        f.config.global_timer |= 1; check(f.run() == GC_BAD_CONFIG, "unaligned config accepted");
         f.config.global_timer &= ~1u; f.frame.epoch = 0; check(f.run() == GC_BAD_ARGUMENT, "zero epoch accepted");
         std::memset(&f.sample, 0xcc, sizeof(f.sample));
         check(ghost_capture_read(nullptr, nullptr, nullptr, &f.sample) == GC_BAD_ARGUMENT

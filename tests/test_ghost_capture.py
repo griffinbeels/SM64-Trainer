@@ -8,6 +8,8 @@ import subprocess
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.detectors import counter_epoch
+from sm64_events.detectors.anchors import IGT_WRAP_CEILING, NEAR_ZERO_IGT
 from sm64_events.memory import addresses as A
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.memory.layout import JP, US, LayoutIncomplete
@@ -32,7 +34,8 @@ def capture_host(tmp_path_factory):
     flags += ["/std:c++17", "/EHsc", f"/I{NATIVE}"]
     target = work / "ghost_capture_host.exe"
     build._cl(vcvars, flags + [
-        str(NATIVE / "ghost_capture.cpp"), str(ROOT / "tests/native/ghost_capture_host.cpp"),
+        str(NATIVE / "ghost_capture.cpp"), str(NATIVE / "ghost_clock.cpp"),
+        str(ROOT / "tests/native/ghost_capture_host.cpp"),
         f"/Fe:{target}", f"/Fo{work}\\",
     ], work)
     # The public header also compiles as C, not merely inside the C++ fixture.
@@ -48,7 +51,7 @@ def capture_host(tmp_path_factory):
 
 @pytest.mark.parametrize("scenario", [
     "basic", "swizzle", "bounds", "graph", "duplicate", "limits",
-    "skip_objects", "values", "unsupported", "action", "epochs", "transitions", "arguments",
+    "skip_objects", "values", "unsupported", "action", "warp", "epochs", "transitions", "arguments",
 ])
 def test_compiled_capture(capture_host, scenario):
     target, config = capture_host
@@ -57,7 +60,7 @@ def test_compiled_capture(capture_host, scenario):
         capture_output=True, text=True, timeout=15, check=False, **quiet_spawn_kwargs(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"ghost capture passed: {scenario}; config=64 sample=176" in result.stdout
+    assert f"ghost capture passed: {scenario}; config=168 sample=244" in result.stdout
 
 
 def test_semantic_config_resolves_selected_layout():
@@ -65,12 +68,28 @@ def test_semantic_config_resolves_selected_layout():
     assert config.mario_state == US.mario_struct
     assert config.current_area_pointer == US.current_area_pointer
     assert config.area_update_counter == US.area_update_counter
-    assert len(config.to_bytes()) == 64
-    assert struct.unpack_from("<II", config.to_bytes()) == (64, 2)
+    assert config.pending_warp_op == US.pending_warp_op
+    assert config.delayed_warp_timer == US.delayed_warp_timer
+    assert len(config.to_bytes()) == 168
+    assert struct.unpack_from("<II", config.to_bytes()) == (168, 3)
+    assert struct.unpack_from("<II", config.to_bytes(), 56) == (US.pending_warp_op, US.delayed_warp_timer)
     with pytest.raises(LayoutIncomplete, match="US layout"):
         GhostLayout.from_layout(JP)
     with pytest.raises(LayoutIncomplete, match="current_area_pointer"):
         GhostLayout.from_layout(replace(US, current_area_pointer=None))
+    with pytest.raises(LayoutIncomplete, match="pending_warp_op"):
+        GhostLayout.from_layout(replace(US, pending_warp_op=None))
+
+
+def test_clock_encoder_uses_existing_registries_in_native_field_order():
+    words = struct.unpack_from("<26I", GhostLayout.from_layout(US).to_bytes(), 64)
+    castles, warps = sorted(A.CASTLE_LEVELS), sorted(counter_epoch.AREA_WARP_OPS)
+    assert words[:10] == (1, NEAR_ZERO_IGT, counter_epoch.AREA_LOAD_WINDOW,
+                         counter_epoch.TELEPORT_WINDOW, counter_epoch.LEVEL_LOAD_TAIL_FRAMES,
+                         counter_epoch.WARP_FIRED_WINDOW, A.ACT_TELEPORT_FADE_OUT,
+                         IGT_WRAP_CEILING, len(castles), len(warps))
+    assert words[10:18] == (*castles, *([0] * (8 - len(castles))))
+    assert words[18:26] == (*warps, *([0] * (8 - len(warps))))
 
 
 @pytest.mark.parametrize("changes", [
@@ -79,6 +98,8 @@ def test_semantic_config_resolves_selected_layout():
     {"mario_state": A.KSEG0_BASE + (8 << 20) - 4},
     {"global_timer": US.global_timer + 1},
     {"object_pool": A.KSEG0_BASE + (8 << 20) - 0x260},
+    {"pending_warp_op": 0}, {"delayed_warp_timer": US.delayed_warp_timer + 1},
+    {"pending_warp_op": A.KSEG0_BASE + (8 << 20)},
 ])
 def test_semantic_config_refuses_invalid_ranges(changes):
     with pytest.raises(ValueError):
