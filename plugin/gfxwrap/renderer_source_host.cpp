@@ -13,11 +13,24 @@ std::condition_variable queue_changed;
 APICommand *queued=nullptr;
 bool done=false,quit=false;
 unsigned original_calls=0,observed_calls=0,expected_byte=0,planned_swaps=0;
+uint64_t update_occurrence=0;
+uint32_t before_swaps=0;
 bool cancel_inside=false;
 DWORD producer_thread=0,render_thread=0;
 rb_surface visible{};
+class SourceWindow {
+public:
+    uint32_t getBuffersSwapCount() {
+        CHECK(GetCurrentThreadId()!=producer_thread);
+        CHECK(update_occurrence==original_calls); // one hook before this update
+        return visible.swap_count;
+    }
+};
+SourceWindow &dwnd(){static SourceWindow value;return value;}
 void VI_UpdateScreen() {
     CHECK(GetCurrentThreadId()!=producer_thread);
+    CHECK(update_occurrence==uint64_t(original_calls)+1);
+    CHECK(before_swaps==visible.swap_count); // actual hook captured the pre-VI count
     ++original_calls; visible.width=640; visible.height=480;
     visible.post_vi_origin=original_calls; visible.swap_count+=planned_swaps;
     visible.witness=original_calls; render_thread=GetCurrentThreadId();
@@ -39,6 +52,7 @@ int capture(const rb_record *record,rb_image *image) {
     CHECK(record->stamp.bytes[0]==expected_byte);
     CHECK(record->surface.witness==original_calls && original_calls>observed_calls);
     CHECK(record->surface.post_vi_origin==original_calls);
+    CHECK(update_occurrence==original_calls && visible.swap_count-before_swaps==planned_swaps);
     ++observed_calls; *image={record->occurrence,0,record->epoch,RB_IMAGE_SUBMITTED,0};return 1;
 }
 int complete(const rb_image *){return 1;}
@@ -83,8 +97,9 @@ int main(){
     CHECK(!rb_stage(&pending).occurrence);
     const auto full_before=original_calls;update(nullptr);CHECK(original_calls==full_before+1);
     for(auto item:held)CHECK(rb_release(item));
+    CHECK(update_occurrence==original_calls); // includes malformed, stale, cancelled and no-ticket updates
     rb_rom_closed();rb_close();
     {std::lock_guard<std::mutex> lock(queue_mutex);quit=true;queue_changed.notify_all();}
     worker.join();
-    printf("source boundary passed: original-once immutable-token retained-stamp 0-1-multi-swap malformed stale cancel full\n");
+    printf("source boundary passed: before-update-once pre-swap-count original-once immutable-token retained-stamp 0-1-multi-swap malformed stale cancel full\n");
 }
