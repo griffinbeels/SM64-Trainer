@@ -536,6 +536,19 @@ disappearing, so the container is doing the work rather than a loosened check.
   decisions and re-tuning the ring must not move the archive. `forced_idr_args`
   now gives `av1_nvenc` NVIDIA's `-forced-idr` spelling, which it was silently
   missing.
+- **Three AV1 facts measured on the way, none of them guessable.** NVENC
+  reports a forced AV1 key picture as `NV_ENC_PIC_TYPE_IDR`, the value the
+  packet's keyframe flag is derived from. AV1 NVENC refuses an all-intra GOP
+  (`gopLength` must exceed `b_frames + 1`) and returns that from
+  `InitializeEncoder` as a driver error, so `prepare` rejects `gop_frames < 2`
+  up front where the cause is legible. And libav's `codec_context.name`
+  answers `libdav1d` for an AV1 stream — the decoder it chose, not what was
+  written — so codec assertions read the `av01`/`avc1` sample entry instead.
+- The browser steps every slot of an AV1 clip forwards and backwards, reading
+  each picture's painted identity and its timer
+  (`test_ui_replay_picture_steps.py`, per codec). That check exists because
+  reordered H.264 passed ffprobe and lost a clip's last 11 pictures in
+  Chromium on 2026-09-18; a container diff would not have caught it.
 
 STILL UNMEASURED: realtime AV1 while SM64 actually renders (every run above was
 on an idle GPU). Take it from `/api/replay/status`'s `frame_source_health`

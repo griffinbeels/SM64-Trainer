@@ -32,6 +32,10 @@ bool BridgeEncoder::prepare(ID3D11Device*device,ID3D11DeviceContext*context,
        !settings.vbv_buffer_bits||!settings.gop_frames||settings.full_range>1||settings.signal_color>1||
        settings.initial_qp_p>51||settings.initial_qp_i>51||settings.initial_qp_b>51||
        (settings.codec!=GBENC_CODEC_H264&&settings.codec!=GBENC_CODEC_AV1)||
+       // AV1 refuses an all-intra GOP: NVENC wants gopLength > b_frames + 1,
+       // and returns it from InitializeEncoder as a driver error rather than
+       // an argument one. Caught here so the cause is legible.
+       (settings.codec==GBENC_CODEC_AV1&&settings.gop_frames<2)||
        settings.profile!=(settings.codec==GBENC_CODEC_AV1?GBENC_AV1_MAIN:GBENC_H264_HIGH)||
        settings.preset!=GBENC_PRESET_P4||settings.tuning!=GBENC_TUNE_HQ||
        settings.rate_control!=GBENC_RC_VBR||settings.b_frames!=0||
