@@ -2,11 +2,13 @@
  * floats are IEEE754. No renderer resources or process-local pointers. */
 #pragma once
 #include "ghost_capture.h"
+#include <stddef.h>
 #include <stdint.h>
-#define GCLIP_VERSION 1u
-#define GCLIP_MAGIC "SM64GHO1"
-#define GCLIP_MAX_RECORDS 262144u
+#define GCLIP_VERSION 2u
+#define GCLIP_MAGIC "SM64GHO2"
+#define GCLIP_MAX_RECORDS 240000u
 #define GCLIP_WORLD_READY 3u
+enum gclip_clock_kind { GCLIP_STAR_CLOCK = 1u, GCLIP_SEGMENT_CLOCK = 2u };
 #pragma pack(push, 4)
 typedef struct gclip_header {
     char magic[8];
@@ -19,7 +21,9 @@ typedef struct gclip_header {
     uint64_t first_sequence, last_sequence;
     uint32_t first_global_timer, last_global_timer;
     int32_t level, area;
-    uint32_t flags, reserved[3];
+    uint32_t clock_kind, origin_global_timer, origin_raw, flags;
+    uint64_t origin_sequence, origin_elapsed, origin_continuity;
+    uint32_t reserved[2];
 } gclip_header;
 typedef struct gclip_frame {
     uint32_t bytes, version, configuration, world_status;
@@ -27,6 +31,9 @@ typedef struct gclip_frame {
 } gclip_frame;
 #pragma pack(pop)
 #ifdef __cplusplus
-static_assert(sizeof(gclip_header) == 128, "portable ghost header");
-static_assert(sizeof(gclip_frame) == 16 + sizeof(gc_sample), "portable ghost record");
+static_assert(sizeof(gclip_header) == 160, "portable ghost header");
+static_assert(offsetof(gclip_header, clock_kind) == 112, "portable clock kind");
+static_assert(offsetof(gclip_header, origin_sequence) == 128, "portable origin sequence");
+static_assert(offsetof(gclip_header, origin_continuity) == 144, "portable continuity");
+static_assert(sizeof(gclip_frame) == 260, "portable ghost record");
 #endif
