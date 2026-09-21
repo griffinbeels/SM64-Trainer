@@ -95,6 +95,15 @@ to that coordinate. Paused clocks do not advance from wall time or Python poll
 cadence. A new star generation or configured star-grab action ends that origin;
 tuning the same origin cannot revive it. Explicit fixed seek is a separate mode.
 
+For star FOLLOW, the recorded template's own first touch also ends its display,
+even when the timed landing occurs later. The worker prepares a first-occurrence
+action index once; command adoption caches the earliest configured touch and
+drawing compares the nudged coordinate against it. Independently valid action
+evidence still counts on a refused-pose row or a later duplicate coordinate.
+Nudging back before the recorded touch can show an earlier pose unless the live
+origin has already ended. Fixed seek and segments without star-end behavior do
+not use this cutoff. Drawing neither scans the clip nor allocates an index.
+
 The index chooses the first exact coordinate, including an unsupported pose,
 then checks that row's scene against live. It never searches a later duplicate
 or another scene for a usable pose. Before-start selection clamps to the first
@@ -194,8 +203,8 @@ parity, not rendered geometry.
 The connected hidden-WGL proof used GC3/GS2/GP2/GCLIP2 and the actual native
 capture, clock, queue, model, compositor and presentation code with synthetic
 RDRAM and terrain: RTX 5090, 640x480, 20 warmups and 180 samples. CPU plus GPU
-completion plus hidden swap measured p50 0.3952 ms, p95 0.5007 ms and max
-0.7434 ms. It also checked 100%/50% opacity,
+completion plus hidden swap measured p50 0.4827 ms, p95 0.7580 ms and max
+1.4785 ms. It also checked 100%/50% opacity,
 unchanged pixels outside Mario, clean recording and wall occlusion. That receipt
 binds its actual source hashes and executable. Paused IGT with advancing global
 timer leaves the selected pose unchanged. This excludes live GLideN64 terrain/VI

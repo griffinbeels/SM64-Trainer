@@ -115,6 +115,13 @@ top of the page; repeat successes leave your scroll position alone.
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
 
+**Ghost Overlay.** Race your active template in the game window. Choose the
+whole recorded picture or only Mario, adjust opacity and colour, and nudge its
+timing in game frames. Mario-only follows the live camera and terrain through
+the trainer's GLideN64 renderer. It needs a new native recording; marking that
+attempt as a template preserves its poses without requiring a saved video.
+Older video-only templates remain available in whole-picture mode.
+
 **Bring your times with you.** Practised for years before finding this? Two
 ways in: type a time straight onto any star's card, or pick your name in
 Settings if you have a column on the Ultimate Sheet — every star time lands,

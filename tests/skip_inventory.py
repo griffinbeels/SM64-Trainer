@@ -86,9 +86,8 @@ ALLOWED = (
      "The cut-out driven against a REAL box list. Box lists are made outside "
      "the app, one clip at a time, and saved beside the clip in a gitignored "
      "`replays/` -- so only a checkout somebody has made them in can run this. "
-     "Lifts by running the tracker in "
-     "`.tasks/features/session-f80d4eae236dc626451116fc/evidence/mario_boxes/` "
-     "over a saved clip. The geometry and the refusals are covered by seeded "
+     "Lifts when a saved clip has a matching sidecar accepted by "
+     "`src/sm64_events/ghost/mariobox.py`. The geometry and the refusals are covered by seeded "
      "tests; this row is the one that uses his own footage.",
      "tests/test_ui_ghost_page.py"),
 )

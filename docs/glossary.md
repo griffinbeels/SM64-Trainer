@@ -1045,8 +1045,8 @@ mode draws its footage over the [[game picture]]. Mario-only mode rebuilds its
 recorded graphics pose through libsm64 inside GLideN64, using the live camera
 and terrain depth. Opacity and tint apply to the displayed ghost.
 Playback follows [[in-game time]] plus the [[nudge]]. The native path binds the
-exact recorded and live attempt origins; a missing clock or a save-state
-discontinuity hides the ghost until its identity is established again. The
+exact recorded and live [[attempt]] origins; a missing clock or a save-state
+discontinuity hides the ghost until the tracker establishes its identity again. The
 practice card's switch calls it Ghost Overlay.
 
 - **Lives** — the one thing that joins the switch, the [[ghost window]] and the
@@ -1057,25 +1057,26 @@ practice card's switch calls it Ghost Overlay.
 ### Ghost source
 
 Where a [[ghost]]'s pictures or poses come from, and how exact their timing is.
-Mario-only uses a new native pose recording with exact attempt-origin metadata;
+Mario-only uses a new native pose recording with exact [[attempt]] origin metadata;
 old video-only recordings cannot supply it. Whole-picture mode uses the saved
 recording of the [[attempt]] you marked your active [[template track]] from,
 whose [[frame map]] says which game [[frame]] each picture shows. A [[template track]]
-that came from a
-file, or one whose recording nobody saved, has no source — and every "no"
-carries the one sentence the switch shows in its place.
+that came from an input file has no pictures or poses. Marking a newly recorded
+native [[attempt]] preserves its poses even without saved footage. Each mode
+reports its own availability, with a sentence explaining every missing source.
 
 - **Lives** — `src/sm64_events/ghost/source.py`, one function per kind of
   source
 
 ### Ghost window
 
-The see-through window the trainer draws a [[ghost]] in: no border, no taskbar
+The see-through window the trainer draws a whole-picture [[ghost]] in: no border, no taskbar
 button, never taking focus, the mouse passing straight through to the game.
 It sits on the [[game picture]] and follows it, hides when the emulator goes
 away or small, and ends when the trainer does. It stays up while you work in
 another app: the trainer inserts it directly above Project64 rather than above
-everything, so whatever covers the emulator covers it too.
+everything, so whatever covers the emulator covers it too. Native Mario-only
+mode draws inside the [[renderer]] and does not use this window.
 
 - **Lives** — `src/sm64_events/ghost/window/`, a child process of its own
   because the window toolkit wants a main thread
@@ -1096,13 +1097,14 @@ stretches the footage by its height.
 
 ### Ghost clock
 
-The live [[attempt]]'s timer, pushed to whatever follows it: Usamune's own
+The live [[attempt]]'s timer, pushed to the whole-picture overlay: Usamune's own
 counter exactly as the poll loop reads it, beside the emulator's [[frame]]
 counter, which keeps moving while the game pauses. It carries the [[nudge]] and
 the [[ghost colour]] too — both are things the running overlay page can simply
 take, so neither needs the page reloaded — and it says whether you have just
 touched a [[star]], which is what ends your own [[run]]. With nothing listening it
-costs the poll loop one test and never touches the [[snapshot]].
+costs the poll loop one test and never touches the [[snapshot]]. Native Mario
+playback uses its own clock inside the [[renderer]], with origins from the tracker.
 
 - **Lives** — `src/sm64_events/server/ghost_clock.py` → the /ws/ghost-clock
   socket
@@ -1127,28 +1129,28 @@ It belongs to the one thing you are practising, so it goes back to zero as soon
 as the [[target]] changes.
 
 - **Lives** — `src/sm64_events/ghost/session.py` holds it; it travels to the
-  overlay on the [[ghost clock]], which is what lets it change without the
-  overlay page reloading; the [[ghost follower]] applies it
+  whole-picture overlay on the [[ghost clock]] and to native playback through
+  `src/sm64_events/ghost/native_session.py`; the [[ghost follower]] or
+  `plugin/gfxwrap/ghost_playback.cpp` applies it
 
 ### Ghost view
 
-What a [[ghost]] draws: the whole recorded screen, or only Mario. The whole
-picture is the [[ghost]] you already know; only-Mario draws the rectangle he is
-in and leaves the scenery out, which is what makes it readable when your camera
-and the recording's have drifted apart. Only-Mario needs a [[Mario box list]]
-for that recording, so a [[run]] that has never had Mario found in it offers
-the choice greyed out and says so. Changing it takes effect on the next game
-[[frame]], because it travels on the [[ghost clock]].
+What a [[ghost]] draws: the whole recorded screen, or Mario's recorded pose
+under the live camera. Mario-only uses libsm64 inside the [[renderer]] and can
+hide behind the live terrain. It needs a new native pose recording; older
+footage cannot supply one. The choice stays reachable before enabling the
+[[ghost]], and the control explains when the selected mode lacks a source.
 
-- **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it; it
-  travels on the [[ghost clock]]; `src/sm64_events/ui/ghost/index.html` draws
-  it, with the geometry in `src/sm64_events/ui/ghost/mariobox.js`; the switch
+- **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it;
+  `src/sm64_events/ui/ghost/index.html` draws whole-picture mode and
+  `src/sm64_events/ghost/native_session.py` controls native Mario mode; the switch
   row (`src/sm64_events/ui/components/ghostswitch.js`) is where you choose it
 
 ### Mario box list
 
-Where Mario is in every picture of one saved recording: a rectangle per
-picture, or nothing for a picture he is not in. You make one outside the
+Where Mario is in every picture of one saved recording, for the retained
+browser crop rig: a rectangle per picture, or nothing for a picture he is not
+in. Native Mario-only playback does not use these lists. You make one outside the
 trainer and save it beside the clip, so the recording itself stays untouched
 and the whole picture stays watchable. The trainer re-checks the list against
 the recording every time it reads one — it refuses a list that does not match
@@ -1169,8 +1171,9 @@ switch it off, and the trainer remembers the choice. Changing it takes effect
 on the next game [[frame]], because it travels the way the [[nudge]] does.
 
 - **Lives** — `src/sm64_events/ghost/session.py` holds it and remembers it;
-  it travels on the [[ghost clock]]; `src/sm64_events/ui/ghost/index.html`
-  applies it to the picture, and the switch row
+  it travels on the [[ghost clock]] or through the native session;
+  `src/sm64_events/ui/ghost/index.html` applies it to the picture and
+  `plugin/gfxwrap/ghost_compositor.cpp` applies it to Mario. The switch row
   (`src/sm64_events/ui/components/ghostswitch.js`) is where you choose it
 
 ### Input document
