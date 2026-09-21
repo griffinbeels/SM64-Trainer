@@ -24,12 +24,11 @@ not in this map.
 | Need | Command / reference |
 | --- | --- |
 | Dependencies | `uv sync` |
-| Automatic draft checks / local wrap verification | `python tools/verify.py quick` / `python tools/verify.py full`; [setup and scope](docs/local-verification.md). Full includes the merge check. |
-| Focused check while editing (never queues; any file, browser ones too) | `uv run python tools/run_tests.py tests/test_<module>.py` |
-| Python coverage selection | `uv run python tools/run_tests.py --changed` |
-| Merge check: every test that starts no browser or UI fixture server | `uv run python tools/run_tests.py` |
-| Browser run: the rest, on GitHub Actions for every push to main; gates releases | `uv run python tools/browser_ci.py status` (`wait`, `failures` for a red run's tests and first error lines); a branch: `gh workflow run browser.yml --ref <branch>` |
-| Test lanes, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
+| Draft checks / wrap verification | `python tools/verify.py quick` (lint, types) / `python tools/verify.py full` (adds the merge check). Wrap runs `full` once, reusing a content-keyed receipt from any checkout; [setup and scope](docs/local-verification.md) |
+| Focused check: exactly these tests, browser ones too; never queues | `uv run python tools/run_tests.py tests/test_<module>.py "tests/test_x.py::test_y"` |
+| Merge check: the blast radius of this change since the last green full run | `uv run python tools/run_tests.py`; `--why` lists what it picks and why. No local full-suite runs |
+| Full run: the whole suite on GitHub for every push to main; gates releases | `uv run python tools/full_run.py status` (`wait`; `failures` prints failing tests, first error lines and the rerun command); a branch: `gh workflow run full.yml --ref <branch>` |
+| Test selection, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
 | Run the app when authorized | `uv run python -m sm64_events.main` from repo root; data is cwd-relative |
 | Read back live play and the rendered UI | `uv run python tools/what_happened.py`; `--list` names all journals |
 | New memory address live gate | `uv run python tools/verify_addresses.py` with PJ64 + ROM |
@@ -106,11 +105,11 @@ Coordinate these shared contracts before parallel edits: `core/events.py`,
 together when changing their shared Attempt contract. Land prerequisite contract
 changes before dependent work. Integrate with `--no-ff`.
 
-Choose the smallest meaningful check while editing. The merge check is the
-integration gate and owns the shared resource budget and child cleanup; the
-browser run on GitHub covers responsive and rendered checks after the push.
-After appropriate checks pass, repeat or broaden only for changed inputs,
-failures, or unresolved concerns. Preserve actual native exit codes; in
+Choose the smallest meaningful check while editing: rerun a failure by name,
+never the whole suite. The merge check (the blast radius) is the integration
+gate and owns the shared resource budget and child cleanup; the full run on
+GitHub runs everything after the push. Repeat or broaden only for changed
+inputs, failures, or unresolved concerns. Preserve actual native exit codes; in
 PowerShell never pipe test output into `Select-Object` or use `2>&1` on native
 commands.
 
@@ -124,10 +123,10 @@ failure, then reverting it. Tests alone do not establish visual correctness.
 
 ## Definition of done for integration
 
-- The merge check (`tools/run_tests.py`) passes for the integrated tree. An
-  identical tree reuses that evidence; record revision, command, result and
-  skips. Changed browser tests were run locally by name; the browser run on
-  GitHub covers the rest after the push and must be green before a release.
+- The merge check (`tools/run_tests.py`, the blast radius) passes for the
+  integrated tree. An identical tree reuses that evidence; record revision,
+  command, result and skips. The full run on GitHub covers the whole suite
+  after the push and must be green before a release.
 - Relevant behavior tests and, for visible changes, rendered evidence cover
   the change. New memory reads have human live verification.
 - Update the glossary for changed domain nouns, chain rules for moved value

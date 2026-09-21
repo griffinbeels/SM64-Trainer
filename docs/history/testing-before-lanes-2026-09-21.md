@@ -1,7 +1,7 @@
 # Testing before the lanes split (archived 2026-09-21)
 
-Historical evidence only: docs/testing.md as it stood before the suite was
-split into the local merge check and the GitHub browser run. The single
+Historical evidence only: docs/testing.md as it stood before local runs
+became the blast radius of a change and the whole suite moved to GitHub. The single
 machine-wide lock, the 16-worker budget and the measurements below describe
 that earlier runner. Current guidance: [testing](../testing.md).
 

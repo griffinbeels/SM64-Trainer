@@ -1,8 +1,9 @@
 # Local verification
 
 `python tools/verify.py quick` invokes the shared harness verifier using this
-checkout's `.verification.toml`. `full` includes quick and the merge check
-([testing](testing.md)); the browser run happens on GitHub, not here.
+checkout's `.verification.toml`. `full` includes quick and the merge check,
+this checkout's blast radius ([testing](testing.md)); the whole suite runs on
+GitHub, not here.
 `fix --files <owned paths>` permits
 only explicit file ownership. The installed harness is resolved through
 `~/.claude/harness`; `HARNESS_ROOT` can select a harness worktree for development.
@@ -21,8 +22,8 @@ Ruff uses uv's machine cache offline; ESLint and its transitive dependencies use
 the committed npm lockfile and checkout-local node_modules. The ESLint version
 was selected from the existing cache for the pilot. It is deprecated upstream;
 an upgrade requires a deliberate compatibility review rather than a floating
-version inside the draft loop. Neither lane here needs a browser binary or
-the shared UI harness; running browser files locally does ([testing](testing.md)).
+version inside the draft loop. A blast radius that holds browser tests also
+needs uilab and Playwright's Chromium ([testing](testing.md)).
 
 ## Standalone lint contract
 
@@ -76,13 +77,14 @@ Type tools install through the same npm lockfile; `python tools/verify_types.py`
 runs the pilot directly. Additional ecosystem adapters are separate adoption
 work. No live recorder or server is restarted by these commands.
 
-The `full` lane's `merge-check` runs `tools/verify_full.py`, which refuses only
-what the merge check needs: the Vitest bridge (`npm ci --prefix tests/frontend
---ignore-scripts`) and Node on PATH. It no longer asks for uilab or Chromium,
-because the merge check starts neither. It removes inherited `PYTEST_ADDOPTS`,
+The `full` lane's `merge-check` runs `tools/verify_full.py`: the blast radius
+of this checkout against the newest green full run on main. It refuses a
+missing Vitest bridge (`npm ci --prefix tests/frontend --ignore-scripts`) or
+Node up front; `run_tests.py` refuses a radius holding browser tests when uilab
+is missing. It removes inherited `PYTEST_ADDOPTS`,
 `PYTEST_PLUGINS` and `PYTEST_DISABLE_PLUGIN_AUTOLOAD` so shell settings cannot
 select a partial suite, accepts only a worker ceiling and its identity probe,
 and leaves the worker count to the runner's budget (8, or 4 with OBS open).
 It stops the run 30 minutes after admission; the lane's 7200-second timeout is
 only an outer net, so time queued behind two other merge checks never cancels
-a run.
+a run. An empty radius passes without running anything.

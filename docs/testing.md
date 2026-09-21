@@ -1,114 +1,116 @@
 # Testing
 
-The suite is split so the local loop never waits on a browser. For the
-`tools/verify.py quick|full` wrappers see [local verification](local-verification.md).
+Griffin, 2026-09-21: *"if we're just changing one or two files when something
+fails, we SHOULD NOT be rerunning the whole suite. A single browser test fails,
+we rerun that test (and, if it requires code changes, any other tests
+impacted)... we ALREADY TESTED THE WHOLE SUITE. NO NEED TO RERUN ANY TESTS
+OTHER THAN THE BLAST RADIUS FOR OUR CHANGES. The \*FULL\* test suite should be
+run on GitHub, but during iteration / feature development / merging into main,
+we're testing \*what we changed\* / \*what is impacted by the change\*."*
+
+So there is no local full-suite run. For the `tools/verify.py quick|full`
+wrappers see [local verification](local-verification.md).
 
 | Check | How | What it runs | Waits? |
 | --- | --- | --- | --- |
-| **Focused check** | `uv run python tools/run_tests.py tests/test_x.py` or `--changed` | the files you name (either lane), or testmon's pick inside the merge check | never |
-| **Merge check** | `uv run python tools/run_tests.py` | every test that starts no UI fixture server and no browser (~10,400) | for one of two slots |
-| **Browser run** | GitHub Actions, every push to main; `uv run python tools/browser_ci.py status` | every test that does (~700), in 8 parallel jobs, about 10 minutes | not on this machine |
+| **Focused check** | `uv run python tools/run_tests.py tests/test_x.py "tests/test_y.py::test_z"` | exactly what you name, browser tests included | never |
+| **Merge check** | `uv run python tools/run_tests.py` (`--why` shows the selection) | the **blast radius**: the tests this change can affect | for one of two slots |
+| **Full run** | GitHub Actions, every push to main; `uv run python tools/full_run.py status` | the whole suite, browser tests included, in 12 parallel jobs | not on this machine |
 
-The merge check gates a merge. The browser run gates only a release
-(`tools/release.py` waits for a green one on the commit it releases).
+The merge check gates a merge; the full run gates a release (`tools/release.py`
+waits for a green one on the commit it releases). A failure reruns as a focused
+check: `tools/full_run.py failures` prints the ready-to-paste command for a red
+full run, and the merge check reruns last run's failures by itself.
 
-Use the smallest check that can disprove the change, then stop. Run the merge
-check once for the integrated change; repeat it only if code, test inputs,
-dependencies or the integrated result changed. Record revision, command,
-result and skips.
+## The blast radius
 
-| Change | First check | Broaden when |
-| --- | --- | --- |
-| One Python module | the module's test file | a shared contract or a failure names another consumer |
-| Python changes with a current coverage map | `--changed` | before integration; testmon cannot see subprocess-only Python |
-| UI or API consumed by UI | the relevant behavior test and one render of the surface, by naming the browser file | layout changed: the responsive case; integration: merge check, then the browser run after the push |
-| Docs, comments | the relevant doc/link/config test, if one applies | an executable configuration or documented contract changed |
-| Test infrastructure, shared contracts, integration | the merge check | another change or unresolved failure |
+`tools/blast_radius.py` diffs the working tree (uncommitted and untracked files
+included) against the **baseline**: the newest ancestor of HEAD whose full run
+on main passed, else the merge-base with main (the output says which). Then:
 
-Explicit targets are **focused**: serial by default (`--workers N` for a few
-independent files), no testmon, no stamp. `--changed` cannot be combined with
-targets and falls back to the whole merge check when any non-Python file
-changed. `--dry-run` prints the choice without starting pytest.
+| Changed | Selects |
+| --- | --- |
+| Python | the tests whose recorded coverage executed that file: the full run's published map, else the best local pytest-testmon database, else the tests importing it |
+| UI script | the module plus everything importing it up to the app shell; then every test naming one of those files, a CamelCase export, a class one of them renders, or the tab (`title="Rank"`) whose page it is |
+| Stylesheet | the **rules** that changed, not the file: their class names, then the components rendering them, as above. Only an element selector, `:root` tokens, `@font-face` or widely used keyframes select every browser test |
+| Test file | itself |
+| Anything else | tests and modules whose code (not comments) names the file |
+| Runner, lock file, `conftest.py` | every test that starts no browser; GitHub covers the rest |
 
-## Which lane a test is in
+Plus every test that failed in this checkout's last run. The viewport sweeps
+(`tests/test_responsive*.py`) are never picked: every case sweeps every page
+at every width. The full run covers them; name one to run it locally.
 
-`tools/test_lanes.py` reads each module's source, never importing it. A module
-is in the **browser lane** when it imports `uilab` or `playwright`, names
-`serve_ui` / `serve_ui_live`, or imports a `tests/` or `tools/` helper that does
-so at module level. Everything else is the **merge check**. A new browser file
-lands in the browser lane with no marker to remember.
+`tests/test_blast_radius.py` pins the rules against the real tree (a Rank
+component and a Rank class reach the Rank page and not the Library, a global
+rule reaches every page), each proved by mutation. If the radius missed
+something, the full run finds it after the push; widen the rule, not the habit.
 
-Two guards keep it honest, both in `tests/test_test_lanes.py` and proved by
-mutation: an independent token scan that fails if any merge-check module names
-a browser entry point, and a tripwire. During the merge check a Chromium launch
-or a fixture-server boot the classifier missed fails that test and names the
-rule, instead of making the local loop slow again.
+## The full run
 
-To run browser tests locally, name their files. `run_tests.py --browser` runs
-the whole browser lane here; it takes a slot and is rarely worth it.
-
-## The browser run
-
-`.github/workflows/browser.yml` runs the browser lane on Windows runners:
-`uv sync --frozen`, Playwright's Chromium, and uilab cloned at the commit pinned
-in the workflow (bump `UILAB_REF` when a test needs a newer uilab; it must be
-pushed to github.com/griffinbeels/uilab first). Each job takes `--shard K/N`:
-whole files, viewport sweeps split along their bounded groups, balanced
-longest-first by `tests/browser_durations.json`, two workers per 4-CPU runner.
-
-Reading it, without raw logs:
+`.github/workflows/full.yml` runs `run_tests.py --all --shard K/12
+--record-coverage` on Windows runners: `uv sync --frozen`, Node 24, ffmpeg,
+Playwright's Chromium, and uilab cloned at the commit pinned in the workflow
+(bump `UILAB_REF` after pushing uilab). Jobs are balanced by
+`tests/test_durations.json` (files whole, sweeps by their bounded groups);
+`full_run.py durations` refreshes it. Each job uploads JUnit XML, the rerun
+list, failure screenshots, and its piece of the coverage map the next blast
+radius reads.
 
 ```
-uv run python tools/browser_ci.py status     # HEAD's run: one line, plus any job not green
-uv run python tools/browser_ci.py wait       # block until it finishes
-uv run python tools/browser_ci.py failures   # failing tests + first error line; artifacts in %TEMP%
-uv run python tools/browser_ci.py durations  # rebalance the jobs from a run's JUnit times
-gh workflow run browser.yml --ref <branch>   # a run for a branch before merging
+uv run python tools/full_run.py status     # HEAD's run: one line, plus any job not green
+uv run python tools/full_run.py wait       # block until it finishes
+uv run python tools/full_run.py failures   # failing tests, first error line, rerun command
+gh workflow run full.yml --ref <branch>    # a run for a branch before merging
 ```
 
-**One retry, for setup errors only**, and only in this lane: fixture boot or
+**One retry, for setup errors only**, and only in the full run: fixture boot or
 seeding timeouts, `WinError 10055` / `ERR_NO_BUFFER_SPACE`, a closed or crashed
 browser (`SETUP_ERRORS` in `tools/test_lanes.py`). An `AssertionError` never
-reruns. A test that needed the retry is printed and put in the job summary as
-`FLAKY`; `failures` lists those too. The merge check has no retries.
+reruns. A retried test is printed and put in the job summary as `FLAKY`. Local
+runs have no retries.
+
+## Browser tests
+
+`tools/test_lanes.py` reads each module's source and calls it a browser module
+when it imports `uilab` or `playwright`, names `serve_ui`/`serve_ui_live`, or
+imports a helper that does so at module level. A test in any other module that
+launches Chromium or boots the fixture server fails, naming the rule (the
+tripwire in `tests/conftest.py`); `tests/test_test_lanes.py` checks the
+classification against an independent token scan. A merge check whose radius
+holds browser tests refuses to start without uilab.
 
 ## One budget across worktrees
 
-A merge check (or `--browser`) takes one of two OS-lock slots before creating
-any worker or browser; a third waits. Slot 0 is `%TEMP%\SM64Trainer_tests.lock`,
+A merge check (or `--all`) takes one of two OS-lock slots before creating any
+worker or browser; a third waits. Slot 0 is `%TEMP%\SM64Trainer_tests.lock`,
 the lock older runners take, so a runner from a worktree without this change
-still excludes and is excluded. Focused runs and `--changed` never queue. A
-killed owner releases its slot. An unregistered outside test controller (a
-very old runner) is waited for, never stopped.
-
-On this 32-CPU desktop each run gets half the machine budget, so two merge
-checks together fill it:
+still excludes and is excluded. Focused checks never queue; an empty radius
+takes no slot. A killed owner releases its slot. An unregistered outside test
+controller is waited for, never stopped.
 
 | Mode | Workers per run | CPUs all runs share |
 | --- | ---: | ---: |
-| Normal | 8 | 20 |
+| Normal (32-CPU desktop) | 8 | 20 |
 | OBS process open | 4 | 8 |
 | GitHub runner (4 CPUs) | 2 | 4 |
 
 Explicit `--workers`/`--reserve` may tighten these, never loosen them. Affinity
 is set before spawning; OBS opening mid-run tightens the whole tree within two
-seconds and stays latched. The runner contains pytest and every descendant in a
-Windows job, closed on completion, interruption or runner death.
+seconds. The runner contains pytest and every descendant in a Windows job.
 `--limit-minutes` stops a run that long after admission, so queued time never
-cancels a run (`tools/verify_full.py` uses 30).
+cancels it (`tools/verify_full.py` uses 30).
 
 ## Skips
 
-A whole-lane run (either lane, or one browser job) fails on a skip whose reason
-is not in `tests/skip_inventory.py`; a narrowed run may skip freely. Add a row
-only for something the machine genuinely cannot run, saying what would lift it.
-The browser lane refuses to start without uilab, because a missing uilab skips
-every module and would otherwise look green.
+A whole-suite run (each full-run job) fails on a skip whose reason is not in
+`tests/skip_inventory.py`; a narrowed run may skip freely. Add a row only for
+something the machine genuinely cannot run, saying what would lift it.
 
 ## Browser-free component checks
 
-`tests/test_ui_components.py` runs the real Preact components in jsdom through
-Vitest, inside the merge check. It needs Node 24.13+ and
+`tests/test_ui_components.py` and its siblings run the real Preact components
+in jsdom through Vitest. They need Node 24.13+ and
 `npm ci --prefix tests/frontend --ignore-scripts` once per checkout; a missing
 install fails with the setup command rather than skipping. Layout, hit testing
 and paint stay browser tests. [Pilot findings](testing-pilot.md).
@@ -132,7 +134,7 @@ answering all four:
 
 Delete a test when its contract has been retired, or when another test proves
 the same failure and a mutation shows the duplicate adds no protection. Do not
-delete behavior coverage merely because it is slow: move it to the right lane.
+delete behavior coverage merely because it is slow.
 
 Measurements behind the earlier single-lock runner, and the 2026-09-17 audit
 examples, are in [the archived testing guide](history/testing-before-lanes-2026-09-21.md).

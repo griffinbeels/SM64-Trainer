@@ -2039,27 +2039,39 @@ cannot hold.
   test running the machine-wide chain checker over them
   (`tests/test_chains.py`)
 
+### Blast radius
+
+The tests one change can affect, chosen from the diff since the newest main
+commit whose [[full run]] passed: the tests whose recorded coverage executed a
+changed Python file, the tests naming a changed UI module, its importers, a
+class it renders or its page's tab, and for a stylesheet only the rules that
+changed. It prints the reason for every group it picks.
+
+- **Lives** — the radius rules (`tools/blast_radius.py`) → the test door, which
+  lists them on request (`tools/run_tests.py`)
+- **Not** — the whole suite, which only the [[full run]] executes.
+
 ### Merge check
 
-The part of the test suite that starts no browser and no UI fixture server,
-checked on this machine before a merge. The lane module reads each test
-file's source to decide which part it belongs to; the test door takes one of
-two slots for it, so a third merge check waits while a focused check never
-does.
+The local check before a merge: the [[blast radius]] of the change, and
+nothing else. The test door takes one of two slots for it, so a third merge
+check waits while a focused check, which executes exactly the tests it names,
+never does.
 
-- **Lives** — the lane rule (`tools/test_lanes.py`) → the test door
-  (`tools/run_tests.py`)
-- **Not** — the [[browser run]], which holds every test the merge check leaves
+- **Lives** — the test door (`tools/run_tests.py`) → the wrapper the harness
+  calls before a merge (`tools/verify_full.py`)
+- **Not** — the [[full run]], which covers everything the merge check leaves
   out.
 
-### Browser run
+### Full run
 
-The part of the test suite that drives the real page in Chromium, executed by
-GitHub Actions on every push to main, split into parallel jobs. It blocks only
-a release: the release script refuses any commit it has not passed, and the
-reader prints its failing tests without anyone opening a log.
+The whole test suite, browser tests included, executed by GitHub Actions on
+every push to main and split into parallel jobs. It blocks only a release: the
+release script refuses any commit it has not passed. Its newest green result on
+main is where the next [[blast radius]] starts, and each job publishes its part
+of the coverage map the radius reads.
 
-- **Lives** — the workflow (`.github/workflows/browser.yml`) → the reader
-  (`tools/browser_ci.py`) → the release script (`tools/release.py`)
+- **Lives** — the workflow (`.github/workflows/full.yml`) → the reader
+  (`tools/full_run.py`) → the release script (`tools/release.py`)
 - **Not** — the [[merge check]], which executes locally and must pass before a
   merge.
