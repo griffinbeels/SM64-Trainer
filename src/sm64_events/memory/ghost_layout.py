@@ -1,4 +1,4 @@
-"""Typed semantic configuration for the native GhostV1 reader; no RAM reads.
+"""Typed semantic configuration for the native ghost reader; no RAM reads.
 
 The native reader owns the reviewed N64 pointer paths. These bytes configure
 its absolute roots from Layout; they do not certify the new VERIFY addresses
@@ -11,7 +11,7 @@ from sm64_events.memory.addresses import KSEG0_BASE
 from sm64_events.memory.layout import Layout, LayoutIncomplete
 
 _CONFIG = struct.Struct("<16I")
-VERSION = 1
+VERSION = 2
 RAM_WORD_SWAPPED = 1
 ROM_US = 1
 
@@ -52,7 +52,7 @@ class GhostLayout:
     def from_layout(cls, layout: Layout, *, rdram_bytes: int = 8 << 20) -> "GhostLayout":
         """Resolve known roots. VERIFY fields still need their human live gates."""
         if layout.version != "us":
-            raise LayoutIncomplete("GhostV1 supports only the US layout schema")
+            raise LayoutIncomplete("Native ghost capture supports only the US layout schema")
         names = ("global_timer", "mario_struct", "mario_object", "current_area_pointer",
                  "area_update_counter", "curr_level", "curr_area", "usamune_overall",
                  "object_pool")

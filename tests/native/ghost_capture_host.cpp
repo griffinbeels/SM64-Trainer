@@ -107,12 +107,12 @@ struct Fixture {
     }
     void pose_refusal(uint32_t expected) {
         check(run() == expected, "wrong pose refusal");
-        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_CAMERA), "pose refusal validity");
+        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_CAMERA | GC_VALID_ACTION), "pose refusal validity");
         check(zero(sample.pose), "refused pose retained bytes");
     }
     void camera_refusal(uint32_t expected) {
         check(run() == expected, "wrong camera refusal");
-        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_POSE), "camera refusal validity");
+        check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_POSE | GC_VALID_ACTION), "camera refusal validity");
         check(zero(sample.camera), "refused camera retained bytes");
     }
 };
@@ -122,8 +122,9 @@ int main(int argc, char **argv) {
     Fixture f(argv[1]);
     const std::string mode(argv[2]);
     if (mode == "basic") {
-        check(f.run() == GC_OK && f.sample.valid_fields == 7, "valid capture failed");
+        check(f.run() == GC_OK && f.sample.valid_fields == 15, "valid capture failed");
         const auto &s = f.sample;
+        check(s.version == 2 && s.live_action == 0x0c400201 && s.pose.action == s.live_action, "live action endian");
         check(s.global_timer == 0x12345678 && s.area_update_counter == 0x8123 && s.igt == 0xffe1, "clock endian");
         check(s.pose.angles[0] == -15 && s.pose.angles[1] == 12345 && s.pose.angles[2] == -32767, "angle endian");
         check(s.pose.position[2] == 22 && s.pose.scale[1] == 1.25f, "float order");
@@ -203,13 +204,38 @@ int main(int argc, char **argv) {
         f.put32(f.config.mario_state+0x7c, 0); f.put32(f.config.object_pool+0x8c, 0x800); f.pose_refusal(GC_UNSUPPORTED_ROOT);
         f.put32(f.config.object_pool+0x8c, 0); f.put32(f.config.object_pool+0x50, 0x1234); f.pose_refusal(GC_UNSUPPORTED_ROOT);
         f.put32(f.config.object_pool+0x50, 0); f.put8(Fixture::control, 6); f.pose_refusal(GC_UNSUPPORTED_HEAD);
+    } else if (mode == "action") {
+        // A live grab must hide the ghost even if Mario's graphics root or
+        // body is unsupported. Body action is independently post-callback.
+        f.put32(f.config.mario_state+0x0c, 0x00001302);
+        f.put32(f.config.mario_state+0x7c, 123);
+        f.pose_refusal(GC_UNSUPPORTED_HELD);
+        check(f.sample.live_action == 0x00001302, "held root lost grab action");
+        f.put32(f.config.mario_state+0x0c, 0x1234abcd);
+        f.put32(f.config.mario_state+0x98, 0);
+        f.pose_refusal(GC_BAD_POINTER);
+        check(f.sample.live_action == 0x1234abcd, "bad body lost current action");
+        f.put32(Fixture::area+4, 0);
+        check(f.run() == GC_BAD_POINTER
+              && f.sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_ACTION)
+              && f.sample.live_action == 0x1234abcd, "camera failure lost action");
+        f.put32(Fixture::area+4, Fixture::root);
+        f.put32(f.config.mario_state+0x0c, 0);
+        check(f.run() == GC_BAD_VALUE && f.sample.live_action == 0
+              && !(f.sample.valid_fields & GC_VALID_ACTION), "zero action retained old action");
+        f.put32(f.config.mario_state+0x0c, 0x00001302);
+        f.put32(f.config.mario_state+0x90, Fixture::area+0x40);
+        check(f.run() == GC_BAD_VALUE && f.sample.live_action == 0
+              && !(f.sample.valid_fields & GC_VALID_ACTION), "foreign area action accepted");
     } else if (mode == "epochs") {
         check(f.run() == GC_OK, "initial capture failed");
         --f.frame.sequence; --f.frame.dlist_serial;
-        check(f.run() == GC_STALE_SEQUENCE && f.sample.valid_fields == 0 && zero(f.sample.pose), "duplicate retained old pose");
+        check(f.run() == GC_STALE_SEQUENCE && f.sample.valid_fields == 0
+              && zero(f.sample.pose) && f.sample.live_action == 0, "duplicate retained old state");
         check(f.run() == GC_OK, "fresh sequence did not recover");
         f.put32(f.config.global_timer, 10);
-        check(f.run() == GC_RESET_REQUIRED && f.sample.valid_fields == 0, "backwards clock accepted");
+        check(f.run() == GC_RESET_REQUIRED && f.sample.valid_fields == 0
+              && f.sample.live_action == 0, "backwards clock accepted");
         f.put32(f.config.global_timer, 0x12345679);
         check(f.run() == GC_RESET_REQUIRED, "reset latch vanished without epoch");
         ++f.frame.epoch; f.frame.sequence = f.frame.dlist_serial = 1;
@@ -220,7 +246,8 @@ int main(int argc, char **argv) {
     } else if (mode == "transitions") {
         check(f.run() == GC_OK, "initial capture failed");
         f.put32(f.config.current_area_pointer, 0);
-        check(f.run() == GC_BAD_POINTER && zero(f.sample.pose) && zero(f.sample.camera), "unload retained data");
+        check(f.run() == GC_BAD_POINTER && zero(f.sample.pose) && zero(f.sample.camera)
+              && f.sample.live_action == 0 && !(f.sample.valid_fields & GC_VALID_ACTION), "unload retained data");
         f.put32(f.config.current_area_pointer, Fixture::area); f.put8(Fixture::area+1, 0);
         check(f.run() == GC_BAD_VALUE && zero(f.sample.camera), "inactive area retained camera");
         f.put8(Fixture::area+1, 1); f.put16(f.config.current_area, 2);
@@ -228,12 +255,17 @@ int main(int argc, char **argv) {
         f.put16(f.config.current_area, 1); f.put16(f.config.object_pool+2, 0x31);
         check(f.run() == GC_OK && f.sample.pose.hidden == 1, "hidden flag lost");
     } else if (mode == "arguments") {
+        f.config.version = 1;
+        check(f.run() == GC_BAD_CONFIG && f.sample.valid_fields == 0 && f.sample.live_action == 0,
+              "old capture ABI accepted");
+        f.config.version = GC_VERSION;
         f.config.reserved[0] = 1; check(f.run() == GC_BAD_CONFIG, "reserved config accepted");
         f.config.reserved[0] = 0; f.config.global_timer |= 1; check(f.run() == GC_BAD_CONFIG, "unaligned config accepted");
         f.config.global_timer &= ~1u; f.frame.epoch = 0; check(f.run() == GC_BAD_ARGUMENT, "zero epoch accepted");
         std::memset(&f.sample, 0xcc, sizeof(f.sample));
         check(ghost_capture_read(nullptr, nullptr, nullptr, &f.sample) == GC_BAD_ARGUMENT
-              && f.sample.valid_fields == 0 && zero(f.sample.pose), "bad args retained pose");
+              && f.sample.valid_fields == 0 && zero(f.sample.pose)
+              && f.sample.live_action == 0, "bad args retained state");
     } else check(false, "unknown scenario");
     std::printf("ghost capture passed: %s; config=%zu sample=%zu\n", argv[2], sizeof(gc_layout), sizeof(gc_sample));
     return 0;

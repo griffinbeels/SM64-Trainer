@@ -2,6 +2,7 @@
 from dataclasses import replace
 import importlib.util
 from pathlib import Path
+import struct
 import subprocess
 
 import pytest
@@ -47,7 +48,7 @@ def capture_host(tmp_path_factory):
 
 @pytest.mark.parametrize("scenario", [
     "basic", "swizzle", "bounds", "graph", "duplicate", "limits",
-    "skip_objects", "values", "unsupported", "epochs", "transitions", "arguments",
+    "skip_objects", "values", "unsupported", "action", "epochs", "transitions", "arguments",
 ])
 def test_compiled_capture(capture_host, scenario):
     target, config = capture_host
@@ -56,7 +57,7 @@ def test_compiled_capture(capture_host, scenario):
         capture_output=True, text=True, timeout=15, check=False, **quiet_spawn_kwargs(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"ghost capture passed: {scenario}; config=64 sample=172" in result.stdout
+    assert f"ghost capture passed: {scenario}; config=64 sample=176" in result.stdout
 
 
 def test_semantic_config_resolves_selected_layout():
@@ -65,6 +66,7 @@ def test_semantic_config_resolves_selected_layout():
     assert config.current_area_pointer == US.current_area_pointer
     assert config.area_update_counter == US.area_update_counter
     assert len(config.to_bytes()) == 64
+    assert struct.unpack_from("<II", config.to_bytes()) == (64, 2)
     with pytest.raises(LayoutIncomplete, match="US layout"):
         GhostLayout.from_layout(JP)
     with pytest.raises(LayoutIncomplete, match="current_area_pointer"):
