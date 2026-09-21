@@ -77,6 +77,23 @@ def test_gpu_bridge(tmp_path, native_build, mode):
                             "av1" if mode == "nvenc-av1" else "h264")
 
 
+def video_sample_entry(data: bytes) -> bytes:
+    """The four characters the video track's sample description carries."""
+    from sm64_events.replay.fragmentindex import boxes, child
+    for kind, moov, _, _ in boxes(data):
+        if kind != b"moov":
+            continue
+        for trak_kind, trak, _, _ in boxes(moov):
+            if trak_kind != b"trak":
+                continue
+            mdia = child(trak, b"mdia")
+            if bytes(child(mdia, b"hdlr")[8:12]) != b"vide":
+                continue
+            stsd = child(child(child(mdia, b"minf"), b"stbl"), b"stsd")
+            return bytes(list(boxes(stsd[8:]))[0][0])
+    raise AssertionError("no video track in the muxed fragments")
+
+
 def assert_nvenc_output(tmp_path, output, codec):
     """The native encoder's OWN packets, through the archive that stores them.
 
@@ -121,9 +138,15 @@ def assert_nvenc_output(tmp_path, output, codec):
             mux.abort()
     (tmp_path / f"witness-{codec}.mp4").write_bytes(output_mp4.getvalue())
 
+    # The sample entry, not the decoder's name: libav answers `libdav1d` for an
+    # AV1 stream, which says which decoder it chose and nothing about what the
+    # archive wrote. `avc1`/`av01` is what `fragmentindex.tracks_of` admits and
+    # what a browser dispatches on.
+    assert video_sample_entry(output_mp4.getvalue()) == {
+        "h264": b"avc1", "av1": b"av01"}[codec]
+
     with av.open(io.BytesIO(output_mp4.getvalue())) as video:
         video_stream = video.streams.video[0]
-        assert video_stream.codec_context.name == codec
         ticks = []
         frames = []
         for frame in video.decode(video_stream):
