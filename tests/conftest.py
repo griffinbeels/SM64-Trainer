@@ -25,54 +25,81 @@ from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
 from tools.test_lanes import (BROWSER_SWEEP_GROUPS, BROWSER_SWEEPS,  # noqa: F401 (tests read these here)
-                              LANE_ENV, LANES, browser_sweep_group, is_test_module,
+                              LANE_ENV, browser_sweep_group, is_test_module,
                               lane_of, load_durations, parse_shard, plan_shards,
                               refusal, shard_unit)
 
 
 def pytest_addoption(parser):
-    group = parser.getgroup("sm64 lanes", "which half of the suite (tools/test_lanes.py)")
-    group.addoption("--lane", choices=LANES, default=None,
-                    help="merge: every test that starts no UI fixture server or browser "
-                         "(the local merge check); browser: the rest (the GitHub browser run)")
+    group = parser.getgroup("sm64 selection", "what this run covers (tools/run_tests.py)")
+    group.addoption("--select-from", default=None, metavar="FILE",
+                    help="JSON {'files': {test file: null | [nodeids]}} -- the merge check's "
+                         "blast radius (tools/blast_radius.py); nothing else is collected")
     group.addoption("--shard", default=None, metavar="K/N",
-                    help="with --lane browser: run only job K of N, balanced by "
-                         "tests/browser_durations.json")
+                    help="run only job K of N of the whole suite, balanced by "
+                         "tests/test_durations.json")
+
+
+SELECTION = pytest.StashKey[dict]()
+
+
+def _selection(config) -> dict | None:
+    if SELECTION not in config.stash:
+        path = config.getoption("select_from", None)
+        config.stash[SELECTION] = (json.loads(Path(path).read_text(encoding="utf-8"))["files"]
+                                   if path else None)
+    return config.stash[SELECTION]
 
 
 def pytest_ignore_collect(collection_path, config):
-    """A lane never imports the other lane's modules: the merge check must not
-    need uilab or Chromium just to decide what it is skipping. Paths named on
-    the command line are never ignored, so an explicit target still runs."""
-    lane = config.getoption("lane", None)
-    if lane and is_test_module(collection_path) and lane_of(collection_path) != lane:
-        return True
+    """A blast-radius run never imports a test module outside the radius. Paths
+    named on the command line are never ignored."""
+    selection = _selection(config)
+    if selection is not None and is_test_module(collection_path):
+        relative = collection_path.relative_to(config.rootpath).as_posix()
+        if relative not in selection:
+            return True
     return None
 
 
-def _arm_the_merge_check_tripwire() -> None:
-    """The merge check starts no browser. The classifier reads source, so a
-    launch it cannot see -- an importlib trick, a tool loaded by path -- would
-    otherwise make the local loop slow and flaky again without a word. Here it
-    fails the test that did it, naming the rule. The fixture server's half of
-    the tripwire is in `tools/ui_fixture.py::serve_ui_live`, keyed on the same
-    environment variable so subprocesses and xdist workers inherit it."""
-    os.environ[LANE_ENV] = "merge"
+def _arm_the_browser_tripwire() -> None:
+    """Only a module tools/test_lanes.py puts in the browser set may start a
+    browser or the UI fixture server. The classifier reads source, so a launch
+    it cannot see -- an importlib trick, a tool loaded by path -- would put
+    Chromium where the blast radius and the fallback set promise there is none.
+    The launch fails that test instead, naming the rule. The per-test lane rides
+    in an environment variable (set around each test below) so subprocesses
+    and the fixture server's own check in `tools/ui_fixture.py` see it too."""
     try:
         from playwright.sync_api import BrowserType
     except ImportError:
         return
-
-    def refuse(*_args, **_kwargs):
-        raise RuntimeError(refusal("launch a browser"))
-
     for name in ("launch", "launch_persistent_context", "connect", "connect_over_cdp"):
-        setattr(BrowserType, name, refuse)
+        original = getattr(BrowserType, name)
+
+        def guarded(self, *args, _original=original, **kwargs):
+            if os.environ.get(LANE_ENV) == "nonbrowser":
+                raise RuntimeError(refusal("launch a browser"))
+            return _original(self, *args, **kwargs)
+        setattr(BrowserType, name, guarded)
 
 
-# Pages a browser-lane test opened, so a failure can be photographed while the
-# page is still up. Only on the browser run (SM64_REPORT_DIR names where its
-# artifacts go); a local run keeps nothing.
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    previous = os.environ.get(LANE_ENV)
+    os.environ[LANE_ENV] = "browser" if lane_of(Path(str(item.path))) == "browser" else "nonbrowser"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(LANE_ENV, None)
+        else:
+            os.environ[LANE_ENV] = previous
+
+
+# Pages a test opened, so a failure can be photographed while the page is
+# still up. Only on the full run (SM64_REPORT_DIR names where its artifacts
+# go); a local run keeps nothing.
 _OPEN_PAGES: list = []
 
 
@@ -113,11 +140,8 @@ def pytest_configure(config):
     Configure precedes xdist worker creation. Workers and runner-owned pytest
     inherit the live ancestor's budget and must never acquire it a second time.
     """
-    if config.getoption("shard") and config.getoption("lane") != "browser":
-        raise pytest.UsageError("--shard splits the browser lane; pass --lane browser")
-    if config.getoption("lane") == "merge":
-        _arm_the_merge_check_tripwire()
-    elif config.getoption("lane") == "browser" and os.environ.get("SM64_REPORT_DIR"):
+    _arm_the_browser_tripwire()
+    if os.environ.get("SM64_REPORT_DIR"):
         _keep_failure_screenshots()
     # Browser waits get a bound that scales with the machine this run ACTUALLY
     # gets. uilab's 10s default suits one browser on an idle box; this suite
@@ -219,9 +243,18 @@ def pytest_collection_modifyitems(config, items):
     never reach the workers. `tests/test_worker_groups.py` compares the
     live session's order against that recipe.
 
-    `--shard K/N` keeps one GitHub job's share of the browser lane. The unit
+    `--shard K/N` keeps one GitHub job's share of the whole suite. The unit
     is read BEFORE the yield: xdist's worker appends `@<group>` to the nodeid
     in its own impl, and a sweep case's group is a hash of the plain id."""
+    selection = _selection(config)
+    if selection is not None:
+        outside = [item for item in items
+                   if (chosen := selection.get(item.nodeid.split("::")[0])) is not None
+                   and item.nodeid not in chosen]
+        if outside:
+            config.hook.pytest_deselected(items=outside)
+            dropped = set(map(id, outside))
+            items[:] = [item for item in items if id(item) not in dropped]
     for index, item in enumerate(items):
         item.stash[RAW_INDEX] = index
         item.stash[SHARD_UNIT] = shard_unit(item.nodeid)
@@ -374,7 +407,7 @@ def runtime_supervisor_exe(tmp_path_factory):
 # it did not run. Reports arrive here on the xdist CONTROLLER, so one list
 # holds every worker's skips.
 _SKIPS: list[tuple[str, str]] = []
-# The browser lane retries a SETUP failure once (tools/test_lanes.py). A test
+# The full run retries a SETUP failure once (tools/test_lanes.py). A test
 # that needed it is FLAKY, not green: said out loud, and handed to the job
 # summary, so a machine problem that recurs cannot hide behind the retry.
 _RERUNS: dict[str, str] = {}
@@ -424,7 +457,8 @@ def _whole_suite(config) -> bool:
     if os.environ.get("SM64_SKIP_AUDIT") == "1":
         return True
     return not getattr(config.option, "file_or_dir", None) \
-        and not getattr(config.option, "keyword", "")
+        and not getattr(config.option, "keyword", "") \
+        and not getattr(config.option, "select_from", None)
 
 
 def _report_reruns() -> None:
@@ -465,7 +499,7 @@ def pytest_sessionfinish(session, exitstatus):
     session.exitstatus = 1
     shown = "\n".join(f"  {nodeid}\n    {reason}" for nodeid, reason in undocumented[:20])
     more = f"\n  ... and {len(undocumented) - 20} more" if len(undocumented) > 20 else ""
-    print(f"\nUNDOCUMENTED SKIPS ({len(undocumented)}): a whole-lane run must "
+    print(f"\nUNDOCUMENTED SKIPS ({len(undocumented)}): a whole-suite run must "
           f"account for every test it did not run.\n{shown}{more}\n"
           "Fix the cause, or add a row to tests/skip_inventory.py saying why "
           "this machine cannot run it and what would lift it.")

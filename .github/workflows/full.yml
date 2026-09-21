@@ -1,12 +1,15 @@
-# The browser run: every test that starts a UI fixture server or a browser
-# (tools/test_lanes.py decides), off the local machine. It runs on every push
-# to main and on demand, and it blocks only a release (tools/release.py).
-# Agents read it with `uv run python tools/browser_ci.py status|wait|failures`.
-name: browser run
+# The full run: the whole test suite, browser tests included, off the local
+# machine. Locally only a change's blast radius runs (tools/blast_radius.py);
+# this covers the rest on every push to main and on demand, and it blocks a
+# release (tools/release.py). Each job also publishes the coverage map the next
+# blast radius reads. Agents read it with `uv run python tools/full_run.py`.
+name: full run
 
 on:
   push:
-    branches: [main]
+    # TEMPORARY: test-lanes proves this workflow before main has it (GitHub
+    # only dispatches workflows present on the default branch). Removed before merge.
+    branches: [main, test-lanes]
   workflow_dispatch:
 
 permissions:
@@ -20,16 +23,16 @@ env:
   PYTHONUTF8: "1"
 
 jobs:
-  browser:
-    name: browser ${{ matrix.shard }}/${{ strategy.job-total }}
+  suite:
+    name: full ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         # The job count is this list's length; the jobs are balanced by
-        # tests/browser_durations.json (tools/browser_ci.py durations).
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        # tests/test_durations.json (tools/full_run.py durations).
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     env:
       SM64_REPORT_DIR: ${{ github.workspace }}\test-artifacts
     steps:
@@ -53,8 +56,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Add-Content $env:GITHUB_ENV "UILAB_PATH=$path"
 
-      # A few browser-lane modules also drive Preact components through Vitest,
-      # which needs Node 24.13+ (the runner image ships 22) and its lockfile.
+      # The component tests drive Preact through Vitest, which needs Node
+      # 24.13+ (the runner image ships 22) and its lockfile.
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
@@ -64,7 +67,7 @@ jobs:
       - name: Install the component test runner
         run: npm ci --prefix tests/frontend --ignore-scripts
 
-      # The replay pages cut real clips (libx264, SVT-AV1); a missing ffmpeg is
+      # The replay tests cut real clips (libx264, SVT-AV1); a missing ffmpeg is
       # a failure, never an inventory skip. Same GPL build line every run.
       - name: Cache ffmpeg
         id: ffmpeg-cache
@@ -93,17 +96,33 @@ jobs:
       - name: Install Playwright's Chromium
         run: uv run --frozen python -m playwright install chromium
 
-      - name: Browser lane, job ${{ matrix.shard }} of ${{ strategy.job-total }}
+      - name: Suite, job ${{ matrix.shard }} of ${{ strategy.job-total }}
         run: >
-          uv run --frozen python tools/run_tests.py --browser
+          uv run --frozen python tools/run_tests.py --all --record-coverage
           --shard ${{ matrix.shard }}/${{ strategy.job-total }}
           --workers 2 --junitxml test-artifacts/junit-${{ matrix.shard }}.xml
+
+      - name: Publish this job's coverage map
+        if: always() && hashFiles('.testmondata') != ''
+        run: >
+          uv run --frozen python tools/full_run.py export-coverage .testmondata
+          coverage/coverage-map-${{ matrix.shard }}.json
+          "full run ${{ github.run_id }} job ${{ matrix.shard }}"
 
       - name: Keep the reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: browser-${{ matrix.shard }}
+          name: full-${{ matrix.shard }}
           path: test-artifacts
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Keep the coverage map
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: coverage
+          if-no-files-found: ignore
+          retention-days: 30

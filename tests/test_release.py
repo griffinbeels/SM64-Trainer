@@ -192,24 +192,24 @@ def test_the_dry_run_branch_restores_before_returning():
         "the dry-run branch must put them back before it returns")
 
 
-def test_a_release_stops_on_a_browser_run_that_is_not_green(capsys):
-    """The browser half of the suite runs on GitHub; a release is the one
-    thing it blocks. The decision comes from tools/browser_ci.py."""
+def test_a_release_stops_on_a_full_run_that_is_not_green(capsys):
+    """The whole suite runs on GitHub; a release is the one thing that waits
+    for it. The decision comes from tools/full_run.py."""
     with pytest.raises(SystemExit) as refused:
-        release._require_browser_run(gate=lambda: (False, "the browser run for abc failed"))
-    assert "refusing: the browser run for abc failed" in str(refused.value)
-    release._require_browser_run(gate=lambda: (True, "browser run passed for abc"))
-    assert "browser run passed" in capsys.readouterr().out
+        release._require_full_run(gate=lambda: (False, "the full run for abc failed"))
+    assert "refusing: the full run for abc failed" in str(refused.value)
+    release._require_full_run(gate=lambda: (True, "full run passed for abc"))
+    assert "full run passed" in capsys.readouterr().out
 
 
-def test_a_dry_run_reports_the_browser_run_without_enforcing_it(capsys):
+def test_a_dry_run_reports_the_full_run_without_enforcing_it(capsys):
     """A dry run publishes nothing and usually stands on a commit GitHub has
     never seen, so it says what a real release would decide and carries on."""
-    release._require_browser_run(dry_run=True, gate=lambda: (False, "no browser run"))
+    release._require_full_run(dry_run=True, gate=lambda: (False, "no full run"))
     assert "not enforced" in capsys.readouterr().out
 
 
-def test_the_browser_gate_runs_before_anything_is_built():
+def test_the_full_run_gate_comes_before_anything_is_built():
     import inspect
     source = inspect.getsource(release.main)
-    assert source.index("_require_browser_run(") < source.index('"tools/build_exe.py"')
+    assert source.index("_require_full_run(") < source.index('"tools/build_exe.py"')

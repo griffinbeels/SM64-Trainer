@@ -1,5 +1,5 @@
-"""The merge check starts no browser: which lane a module lands in, and the
-two guards that keep a browser test from leaking into the local loop.
+"""Which test modules start a browser, and the two guards that keep that
+classification honest.
 
 `tools/test_lanes.py` reads source with `ast` to decide. These tests check
 that decision against an INDEPENDENT reading (the names a module's code uses,
@@ -35,7 +35,7 @@ def _code_names(source: str) -> set[str]:
 
 
 def _lane(source: str) -> str:
-    return "browser" if lanes.browser_reason_in_source(textwrap.dedent(source)) else "merge"
+    return "browser" if lanes.browser_reason_in_source(textwrap.dedent(source)) else "nonbrowser"
 
 
 @pytest.mark.parametrize("source,lane", [
@@ -44,51 +44,39 @@ def _lane(source: str) -> str:
     ("def test_x():\n    from uilab import driver\n", "browser"),        # inside the test
     ("from ui_fixture import serve_ui\n", "browser"),
     ("import ui_fixture\ndef test_x():\n    ui_fixture.serve_ui_live()\n", "browser"),
-    ("from ui_fixture import seed_practice, FIXTURE_COURSE\n", "merge"),  # seed helpers only
+    ("from ui_fixture import seed_practice, FIXTURE_COURSE\n", "nonbrowser"),  # seed helpers only
     ("from uilab_project import PROJECT\n", "browser"),                   # helper imports uilab
-    ("from export_overlay import main\n", "merge"),                       # helper's uilab is lazy
-    ("from find_uilab import find_uilab\n", "merge"),
-    ("import json\nNOTE = 'uilab playwright serve_ui'\n", "merge"),
+    ("from export_overlay import main\n", "nonbrowser"),                  # helper's uilab is lazy
+    ("from find_uilab import find_uilab\n", "nonbrowser"),
+    ("import json\nNOTE = 'uilab playwright serve_ui'\n", "nonbrowser"),
 ])
 def test_a_module_lands_in_the_lane_its_imports_say(source, lane):
     assert _lane(source) == lane
 
 
-def test_no_module_that_names_a_browser_entry_point_leaks_into_the_merge_check():
+def test_no_module_that_names_a_browser_entry_point_is_called_browser_free():
     """THE guard. Every test module whose code names a browser or fixture-server
-    entry point must be in the browser lane. The two readings are independent
-    -- tokens here, the syntax tree in the classifier -- so a classifier that
-    stops seeing an import pattern goes red here instead of quietly putting
-    Chromium back into the local loop."""
+    entry point must be classified as a browser module. The two readings are
+    independent -- tokens here, the syntax tree in the classifier -- so a
+    classifier that stops seeing an import pattern goes red here instead of
+    quietly starting Chromium in the set a global change falls back to."""
     leaks = []
     for path in sorted((ROOT / "tests").glob("test_*.py")):
         source = path.read_text(encoding="utf-8")
         named = _code_names(source) & BROWSER_NAMES
         if named and path.name != Path(__file__).name and lanes.lane_of(path) != "browser":
             leaks.append(f"{path.name}: names {sorted(named)}")
-    assert not leaks, "browser entry points in merge-check modules:\n" + "\n".join(leaks)
+    assert not leaks, "browser entry points in modules classified browser-free:\n" + "\n".join(leaks)
 
 
-def test_the_browser_lane_is_not_everything():
+def test_the_browser_set_is_not_everything():
     """The other failure: a classifier that says `browser` for everything would
-    pass the guard above and empty the merge check."""
+    pass the guard above and turn every fallback into the whole suite."""
     modules = sorted((ROOT / "tests").glob("test_*.py"))
     browser = [path for path in modules if lanes.lane_of(path) == "browser"]
     assert 50 < len(browser) < len(modules) // 3, len(browser)
-    assert lanes.lane_of(Path(__file__)) == "merge"
+    assert lanes.lane_of(Path(__file__)) == "nonbrowser"
     assert lanes.lane_of(ROOT / "tests" / "test_ui_leaderboard.py") == "browser"
-
-
-def test_this_session_holds_only_its_own_lane(request):
-    """On the merge check itself, nothing collected may come from a browser
-    module -- the collection hook, not just the classifier, is what enforces it."""
-    lane = request.config.getoption("lane")
-    if lane is None:
-        pytest.skip("only meaningful under --lane")
-    files = {Path(str(item.path)) for item in request.session.items}
-    wrong = sorted(path.name for path in files
-                   if lanes.is_test_module(path) and lanes.lane_of(path) != lane)
-    assert not wrong, f"--lane {lane} collected: {wrong[:5]}"
 
 
 LEAKS = '''
@@ -110,18 +98,18 @@ def test_launches_chromium_where_the_classifier_cannot_see():
 '''
 
 
-def test_the_merge_check_tripwire_fails_a_launch_the_classifier_missed(tmp_path):
-    """A real pytest process on the merge lane, two tests that reach the fixture
-    server and Chromium through importlib. Both must FAIL with the rule, and no
-    browser may start: the refusal happens before the launch."""
+def test_the_tripwire_fails_a_launch_the_classifier_missed(tmp_path):
+    """A real pytest process, two tests in a module classified browser-free that
+    reach the fixture server and Chromium through importlib. Both must FAIL
+    with the rule, and no browser may start: the refusal precedes the launch."""
     planted = tmp_path / "test_planted_leak.py"
     planted.write_text(LEAKS.format(tools=str(ROOT / "tools")), encoding="utf-8")
-    assert lanes.lane_of(planted) == "merge", "the plant must evade the classifier"
+    assert lanes.lane_of(planted) == "nonbrowser", "the plant must evade the classifier"
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT / "tests"), str(ROOT),
                                                         str(ROOT / "src")])}
     env.pop(lanes.LANE_ENV, None)
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "conftest", "--lane", "merge", "-q",
+        [sys.executable, "-m", "pytest", "-p", "conftest", "-q",
          "-p", "no:cacheprovider", "--no-testmon", str(planted),
          "--rootdir", str(tmp_path)],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120,
@@ -169,7 +157,7 @@ def test_a_sweep_case_travels_with_its_bounded_group_and_a_file_stays_whole():
     assert lanes.shard_unit("tests/test_ui_scorecard.py::test_x[a]") == "tests/test_ui_scorecard.py"
 
 
-def test_the_recorded_durations_cover_the_browser_lane():
+def test_the_recorded_durations_cover_the_suite():
     """Balancing by a stale file is fine; balancing by an EMPTY one is not."""
     recorded = json.loads(lanes.DURATIONS_PATH.read_text(encoding="utf-8"))
     assert recorded["source"] and len(recorded["units"]) > 50

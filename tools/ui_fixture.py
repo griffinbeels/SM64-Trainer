@@ -53,7 +53,7 @@ from sm64_events.tracking.defaults import reconcile_defaults
 from sm64_events.tracking.service import TrackerService
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_lanes import refuse_in_merge_check  # noqa: E402
+from test_lanes import refuse_outside_browser_modules  # noqa: E402
 
 
 def _run_coro(coro):
@@ -1824,7 +1824,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
     install/uninstall attempt fail with that sentence, for driving the 409
     path.
     """
-    refuse_in_merge_check("boot the UI fixture server")
+    refuse_outside_browser_modules("boot the UI fixture server")
     scratch = compare_cache_scratch = database = thread = listener = None
     try:
         if db_path is None:

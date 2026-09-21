@@ -1,10 +1,11 @@
-"""The merge check as the harness's `full` lane, refusing only what it needs.
+"""The merge check as the harness's `full` lane: this checkout's blast radius.
 
-The merge check starts no browser and no UI fixture server (tools/test_lanes.py),
-so it needs Node and the Vitest bridge but not uilab or Chromium: those belong
-to the browser run on GitHub. A missing component runner is refused here
-because the bridge would otherwise fail every component test with the same
-setup message, which reads as a code regression.
+The merge check runs only the tests tools/blast_radius.py selects for the diff
+since the newest green full run on main; the full run on GitHub covers the
+rest. It refuses a missing Vitest bridge up front, because the bridge would
+otherwise fail every component test with the same setup message, which reads
+as a code regression. A radius holding browser tests without uilab is refused
+by tools/run_tests.py itself.
 """
 import os
 import argparse
@@ -15,8 +16,9 @@ import runpy
 import shutil
 import sys
 
-# Measured runs of the whole merge lane take minutes; a run still going after
-# this many minutes of TESTING (queue time excluded) is hung, not slow.
+# A blast radius is minutes at most, and a global change's fallback (every
+# test that starts no browser) measured 7 minutes; a run still going after this
+# many minutes of TESTING (queue time excluded) is hung, not slow.
 LIMIT_MINUTES = 30
 
 

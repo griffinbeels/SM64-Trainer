@@ -1,13 +1,7 @@
-"""Which lane a test module belongs to, and how the browser lane splits into jobs.
+"""Which test modules start a browser, and how the full run splits into jobs.
 
-The MERGE CHECK is every test that starts no UI fixture server and no browser;
-it runs locally. The BROWSER RUN is the rest; it runs on GitHub Actions on
-every push to main and gates only a release. Classification is automatic so a
-new browser test lands in the browser lane without anyone remembering a
-marker, and it reads source with `ast` rather than importing it, so the merge
-check never has to import uilab, Playwright or the fixture server to decide.
-
-A module is in the browser lane when running it would start one of those:
+A module is a BROWSER module when running it would start Chromium or the UI
+fixture server:
 
   - it imports `uilab` or `playwright` anywhere in the file, or names
     `serve_ui` / `serve_ui_live` (the UI fixture server's two doors);
@@ -16,10 +10,14 @@ A module is in the browser lane when running it would start one of those:
     for uilab inside one function (`tools/export_overlay.py`) does not drag
     every test that borrows an unrelated function from it.
 
-What static reading cannot see -- `importlib` tricks, a path string handed to
-`spec_from_file_location` -- the merge check's tripwire catches at run time
-(tests/conftest.py): a browser launch or fixture boot there fails the test
-with the reason, rather than quietly making the local loop slow again.
+Classification reads source with `ast`, never an import, and is automatic, so
+a new browser test is known as one without anyone remembering a marker. Three
+things use it: the blast radius's fallback when a global input changes (every
+test that starts no browser; GitHub covers the rest), the local refusal to run
+browser tests without uilab, and the tripwire. What static reading cannot
+see -- `importlib` tricks, a path handed to `spec_from_file_location` -- the
+tripwire catches at run time (tests/conftest.py): a module classified as
+starting no browser that launches one fails that test, on every machine.
 """
 from __future__ import annotations
 
@@ -36,7 +34,6 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER_DIRS = (ROOT / "tests", ROOT / "tools")
 BROWSER_PACKAGES = ("uilab", "playwright")
 SERVER_NAMES = ("serve_ui", "serve_ui_live")
-LANES = ("merge", "browser")
 
 # `spread` says "these cases may leave their file". For most of them that is
 # free -- test_api.py is spread because it is hundreds of fast in-process
@@ -63,7 +60,7 @@ BROWSER_SWEEPS = (
     "tests/test_responsive_bowser.py",
     "tests/test_responsive_subsections.py",
 )
-DURATIONS_PATH = ROOT / "tests" / "browser_durations.json"
+DURATIONS_PATH = ROOT / "tests" / "test_durations.json"
 
 
 def browser_sweep_group(nodeid: str) -> str:
@@ -170,24 +167,24 @@ def browser_reason(path: Path) -> str | None:
 
 
 def lane_of(path: Path) -> str:
-    return "browser" if browser_reason(Path(path).resolve()) else "merge"
+    return "browser" if browser_reason(Path(path).resolve()) else "nonbrowser"
 
 
-# Set by the merge check's conftest; inherited by xdist workers and by any
-# subprocess a test starts, so the tripwire holds wherever the test reaches.
+# The lane of the test running now, set around every test by tests/conftest.py;
+# inherited by any subprocess it starts, so the tripwire holds wherever it reaches.
 LANE_ENV = "SM64_TEST_LANE"
 
 
 def refusal(what: str) -> str:
-    test = os.environ.get("PYTEST_CURRENT_TEST", "a merge-check test").split(" ")[0]
-    return (f"the merge check refused to {what} for {test}. The merge check starts no "
-            "browser and no UI fixture server; tools/test_lanes.py put this module "
-            "there because it could not see the browser use. Import uilab, playwright "
-            "or serve_ui in the test module itself so it lands in the browser lane.")
+    test = os.environ.get("PYTEST_CURRENT_TEST", "this test").split(" ")[0]
+    return (f"refused to {what} for {test}: tools/test_lanes.py classifies its module as "
+            "starting no browser, so the blast radius may run it where no browser is "
+            "expected. Import uilab, playwright or serve_ui in the test module itself so "
+            "it is known as a browser module.")
 
 
-def refuse_in_merge_check(what: str) -> None:
-    if os.environ.get(LANE_ENV) == "merge":
+def refuse_outside_browser_modules(what: str) -> None:
+    if os.environ.get(LANE_ENV) == "nonbrowser":
         raise RuntimeError(refusal(what))
 
 
@@ -195,7 +192,7 @@ def is_test_module(path: Path) -> bool:
     return path.suffix == ".py" and path.name.startswith("test_")
 
 
-# --- splitting the browser lane across GitHub jobs -------------------------
+# --- splitting the full run across GitHub jobs -------------------------------
 
 def shard_unit(nodeid: str) -> str:
     """The piece a job takes whole. A file, because its module-scoped server
@@ -248,7 +245,7 @@ def parse_shard(text: str) -> tuple[int, int]:
     return int(index), int(count)
 
 
-# --- the browser lane's one retry ------------------------------------------
+# --- the full run's one retry ------------------------------------------------
 # Only failures that say the MACHINE could not stand the page up, never what
 # the page showed. pytest-rerunfailures matches each pattern against
 # "<ExceptionType>: <message>"; every AssertionError is excluded outright, so a

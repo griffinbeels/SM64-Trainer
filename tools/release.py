@@ -4,7 +4,7 @@
     uv run python tools/release.py 1.1.0 [--notes-file NOTES.md] [--dry-run]
 
 Refuses unless the tree is clean, you're on main, `gh` is authed, the local
-merge check passes, and the commit's browser run on GitHub passed (it waits
+merge check passes, and the commit's full run on GitHub passed (it waits
 for one still running). Builds the onedir app + bootstrap installer via
 tools/build_exe.py (ffmpeg must be on PATH so it gets bundled), zips the
 onedir tree, emits the per-file update manifest, and publishes SIX assets
@@ -31,7 +31,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-sys.path.insert(0, str(REPO / "tools"))   # browser_ci, make_manifest
+sys.path.insert(0, str(REPO / "tools"))   # full_run, make_manifest
 
 from sm64_events.core.update_plan import (BOOTSTRAP_ASSET,  # noqa: E402
                                           MANIFEST_ASSET, PATCH_NOTES_MARKER,
@@ -194,24 +194,24 @@ def _verify_or_run_gate(attempts: int = 6, pause: float = 30.0) -> None:
     sys.exit("refusing: verification never became available")
 
 
-def _require_browser_run(dry_run: bool = False, gate=None) -> None:
-    """The browser half of the suite runs on GitHub, not here: a release is
-    the one thing it blocks. The commit being released must have a green
-    browser run; one still going is waited for. A dry run reports the verdict
-    and carries on, because it publishes nothing and usually stands on a
-    worktree commit GitHub has never seen."""
+def _require_full_run(dry_run: bool = False, gate=None) -> None:
+    """The whole suite runs on GitHub, not here: the merge check only covered
+    each change's blast radius. So the commit being released must have a green
+    full run; one still going is waited for. A dry run reports the verdict and
+    carries on, because it publishes nothing and usually stands on a worktree
+    commit GitHub has never seen."""
     if gate is None:
-        from browser_ci import GhUnavailable, release_gate
+        from full_run import GhUnavailable, release_gate
         try:
             allowed, why = release_gate(_capture(["git", "rev-parse", "HEAD"]), wait=not dry_run)
         except GhUnavailable as error:
-            allowed, why = False, f"could not read the browser run: {error}"
+            allowed, why = False, f"could not read the full run: {error}"
     else:
         allowed, why = gate()
     if allowed:
-        print(f"browser run: {why}")
+        print(f"full run: {why}")
     elif dry_run:
-        print(f"browser run (dry run, not enforced): {why}")
+        print(f"full run (dry run, not enforced): {why}")
     else:
         sys.exit(f"refusing: {why}")
 
@@ -260,7 +260,7 @@ def main() -> int:
 
     _preflight(args.dry_run)
     _verify_or_run_gate()
-    _require_browser_run(args.dry_run)
+    _require_full_run(args.dry_run)
 
     originals = snapshot_version_files()
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))
