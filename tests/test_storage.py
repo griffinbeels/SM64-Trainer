@@ -1335,7 +1335,7 @@ def test_a_replay_review_database_gains_mains_v36_after_its_own_index(tmp_path):
     connection.commit()
     connection.close()
     db = Database(path)
-    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 37
+    assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     columns = {row[1] for row in db._conn.execute("PRAGMA table_info(attempts)")}
     assert "game_version" in columns
     assert db._conn.execute(

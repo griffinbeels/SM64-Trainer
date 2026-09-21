@@ -380,9 +380,24 @@ class Attempt:
 
 
     game_version: str | None = None  # Imported times retain their source ROM.
+    # Native replay joins source occurrences by these observed endpoints;
+    # neither IGT nor rta_frames can reconstruct a closing game frame.
+    native_clock_frame: int | None = None
+    native_clock_utc: str | None = None
+    native_clock_kind: str | None = None  # clock owner, including reattributed stars
+    closed_frame: int | None = None
 
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
+
+
+def _native_star_origin_known(first) -> bool:
+    # Scoring opens a fallback span when attachment first sees an involuntary
+    # area/teleport reset. That proves this leg began, not the whole star.
+    return (first is not None and first.type in ANCHOR_EVENT_TYPES
+            and not first.payload.get("area_load")
+            and not first.payload.get("teleport"))
+
 
 # AFK rule (spec 2026-06-11): a reset/load arriving after >=5 s of pause (the
 # Usamune menu freezes IGT while gGlobalTimer keeps running) closes a run the
@@ -994,6 +1009,35 @@ class Projector:
                         "start_frame": arm.start_frame,
                         "deadline_frame": arm.deadline_frame}
         return arms
+
+    def native_ghost_origin(self, kind: str, entity_key: str) -> dict | None:
+        """Read the selected live timing owner; a held target alone is not an arm.
+
+        Returned ``kind`` names the clock policy, which remains ``segment``
+        when a 100-coin engine attributes its eventual attempt to a star.
+        """
+        target = self.target
+        if target is None or target[0] != kind:
+            return None
+        if kind == "segment":
+            if entity_key != str(target[1]):
+                return None
+            return self._segments.native_ghost_origin(target[1])
+        if kind != "star" or entity_key != f"{target[1]}-{target[2]}":
+            return None
+        armed = self._segments.armed_ids()
+        engines = [sid for sid, entity in self._hundred_coin_engine_ids.items()
+                   if entity == target[1:] and sid in armed]
+        if engines:
+            return (self._segments.native_ghost_origin(engines[0])
+                    if len(engines) == 1 else None)
+        first = self._open
+        if not _native_star_origin_known(first):
+            return None
+        return {"kind": "star", "session_id": first.session_id,
+                "arm_id": first.id, "start_frame": first.frame,
+                "started_utc": first.wall_time_utc,
+                "frame": first.frame, "utc": first.wall_time_utc}
 
     def armed_route_id(self):
         return self._runs.armed_route_id()
@@ -2289,6 +2333,7 @@ class Projector:
     def _build(self, first, close, outcome, outcome_detail, course_id, star_id,
                igt_frames, strat) -> Attempt:
         is_anchored = first.type in ANCHOR_EVENT_TYPES
+        native_origin_known = _native_star_origin_known(first)
         timed_at = (close.payload.get("igt_timed_at")
                     if close.type == "star_collected" else None)
         rta = (close.frame - first.frame
@@ -2310,6 +2355,10 @@ class Projector:
             jumps_total=self._jumps_total,
             jumps_dustless=self._jumps_dustless,
             timed_at=timed_at,
+            native_clock_frame=first.frame if native_origin_known else None,
+            native_clock_utc=first.wall_time_utc if native_origin_known else None,
+            native_clock_kind="star" if native_origin_known else None,
+            closed_frame=close.frame,
             platform=platform_from_payload(close.payload)))
 
     def _imported_attempt(self, ev) -> Attempt:

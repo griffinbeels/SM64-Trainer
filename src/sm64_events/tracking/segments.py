@@ -2851,6 +2851,16 @@ class _Arm:
     # change followed the start, and a "move" def times from the arm exactly
     # like a "trigger" one — Mario never stopped being able to move.
     clock_frame: int | None = None
+    # Paired source-event UTC, never the time an arm notice was delivered.
+    clock_utc: str | None = None
+    # A 100-coin proof arm may establish attribution after its true beginning
+    # was missed. Keep that scoring behavior, but do not claim a ghost origin.
+    native_origin_known: bool = True
+
+    def clock_origin(self, mode: str) -> tuple[int, str | None]:
+        if mode == "move" and self.clock_frame is not None:
+            return self.clock_frame, self.clock_utc
+        return self.start_frame, self.started_utc
 
 
 def _at_arm_position(arm: _Arm, ctx: MatchContext) -> bool:
@@ -3033,6 +3043,19 @@ class SegmentEngine:
         """The def for an id, or None (a deleted or never-loaded definition —
         callers must not assume every armed/pending id still has one)."""
         return self._def_by_id.get(sid)
+
+    def native_ghost_origin(self, sid: int) -> dict | None:
+        """The currently armed clock's ownership, with no matching inference."""
+        arm, definition = self._armed.get(sid), self._def_by_id.get(sid)
+        if arm is None or definition is None or not arm.native_origin_known:
+            return None
+        frame, utc = arm.clock_origin(definition.clock_start)
+        if utc is None:
+            return None
+        return {"kind": "segment", "session_id": arm.session_id,
+                "arm_id": arm.jid + SEGMENT_ATTEMPT_OFFSET * sid,
+                "start_frame": arm.start_frame, "started_utc": arm.started_utc,
+                "frame": frame, "utc": utc}
 
     def definitions(self) -> list[SegmentDef]:
         """Every loaded definition. The cross-definition rules
@@ -3279,7 +3302,8 @@ class SegmentEngine:
                 if (d is not None and d.clock_start == "move"
                         and 0 <= ev.frame - arm.start_frame
                         <= CLOCK_START_WINDOW_FRAMES):
-                    self._armed[def_id] = replace(arm, clock_frame=ev.frame)
+                    self._armed[def_id] = replace(arm, clock_frame=ev.frame,
+                                                  clock_utc=ev.wall_time_utc)
 
     def _settle_area_entries(self, ev, notices) -> None:
         if ev.type == "area_changed":
@@ -4235,7 +4259,8 @@ class SegmentEngine:
                    session_id=ev.session_id, level=ctx.level, area=ctx.area,
                    progress=(star_index + 1 if is_the_grab
                              else len(d.waypoints)),
-                   deadline_frame=self._deadline_for(d, ev))
+                   deadline_frame=self._deadline_for(d, ev),
+                   native_origin_known=False)
         if is_the_grab:
             self._armed[d.id] = arm
             notices.append({"event": "segment_armed", "segment_id": d.id,
@@ -4285,9 +4310,7 @@ class SegmentEngine:
         # 0'04"23+ — the door animation and fade. A "move" def with no
         # rebase, and every "trigger" def, times from the arm exactly as
         # before this field existed.
-        clock_origin = (arm.clock_frame
-                        if d.clock_start == "move" and arm.clock_frame is not None
-                        else arm.start_frame)
+        clock_origin, clock_utc = arm.clock_origin(d.clock_start)
         # AN IGT LONGER THAN THE SPAN IT COVERS DID NOT START HERE (round 24,
         # 2026-08-09). The zero-frame test above is necessary and, since
         # 2026-08-02, no longer sufficient: the star clock CARRIES a leg across
@@ -4385,4 +4408,8 @@ class SegmentEngine:
             igt_frames=None, rta_frames=rta,
             started_utc=arm.started_utc, ended_utc=ev.wall_time_utc,
             cleared=False, cleared_reason=None, segment_id=d.id,
-            timed_by=timed_by, closed_by=ev.type)
+            timed_by=timed_by, closed_by=ev.type,
+            native_clock_frame=(clock_origin if span_known and arm.native_origin_known else None),
+            native_clock_utc=(clock_utc if span_known and arm.native_origin_known else None),
+            native_clock_kind=("segment" if span_known and arm.native_origin_known else None),
+            closed_frame=ev.frame)

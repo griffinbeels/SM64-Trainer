@@ -753,6 +753,15 @@ MIGRATIONS = [
     """
     CREATE INDEX IF NOT EXISTS idx_input_chunks_ended ON input_chunks (ended_utc, started_utc);
     """,
+    # v38 -- retain observed native replay endpoints through the derived cache.
+    # Duration arithmetic cannot recover them, particularly after a segment's
+    # move-clock rebase. Existing rows stay unknown until journal projection.
+    """
+    ALTER TABLE attempts ADD COLUMN native_clock_frame INTEGER;
+    ALTER TABLE attempts ADD COLUMN native_clock_utc TEXT;
+    ALTER TABLE attempts ADD COLUMN native_clock_kind TEXT;
+    ALTER TABLE attempts ADD COLUMN closed_frame INTEGER;
+    """,
 ]
 
 _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
@@ -762,7 +771,8 @@ _ATTEMPT_COLS = ("id", "session_id", "course_id", "star_id", "strat_tag",
                  "rollouts_total", "rollouts_dustless",
                  "jumps_total", "jumps_dustless",
                  "segment_id", "timed_by", "closed_by", "timed_at",
-                 "platform", "game_version")
+                 "platform", "game_version", "native_clock_frame",
+                 "native_clock_utc", "native_clock_kind", "closed_frame")
 
 
 class EventRow:
@@ -1113,7 +1123,8 @@ class Database:
                 a.rollouts_total, a.rollouts_dustless,
                 a.jumps_total, a.jumps_dustless,
                 a.segment_id, a.timed_by, a.closed_by, a.timed_at,
-                a.platform, a.game_version)
+                a.platform, a.game_version, a.native_clock_frame,
+                a.native_clock_utc, a.native_clock_kind, a.closed_frame)
 
     def replace_attempts(self, attempts: list[Attempt]) -> None:
         with self._lock, self._conn:
