@@ -101,7 +101,7 @@ JUNIT = """<?xml version="1.0" encoding="utf-8"?>
  <testcase classname="tests.test_ui_x" name="test_ok" time="4.5"/>
  <testcase classname="tests.test_ui_x" name="test_bad[900x1000]" time="2.0">
   <failure message="AssertionError: the card clipped&#10;second line">long trace</failure></testcase>
- <testcase classname="tests.test_responsive" name="test_no_layout_defects_at_each_viewport[850x1000]" time="30.0"/>
+ <testcase classname="tests.test_responsive" name="test_no_layout_defects_at_each_viewport[850x1000]@browser_sweep_2" time="30.0"/>
 </testsuite></testsuites>
 """
 
@@ -123,6 +123,10 @@ def test_junit_names_map_back_to_nodeids_and_units_for_rebalancing(tmp_path):
     sweep = "tests/test_responsive.py::test_no_layout_defects_at_each_viewport[850x1000]"
     assert browser_ci.nodeid_of("tests.test_responsive",
                                 "test_no_layout_defects_at_each_viewport[850x1000]") == sweep
+    # xdist names the case `<name>@<worker group>` in JUnit; the unit is a
+    # hash of the PLAIN nodeid, so the suffix must go before hashing.
+    assert browser_ci.nodeid_of("tests.test_responsive",
+                                "test_no_layout_defects_at_each_viewport[850x1000]@browser_sweep_2") == sweep
     units = browser_ci.durations_from(tmp_path)
     assert units["tests/test_ui_x.py"] == 6.5
     assert units[browser_ci.shard_unit(sweep)] == 30.0

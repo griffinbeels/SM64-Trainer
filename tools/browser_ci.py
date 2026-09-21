@@ -145,7 +145,9 @@ def release_gate(sha: str, *, wait: bool = True, timeout_minutes: float = 60,
 
 def nodeid_of(classname: str, name: str, root: Path = ROOT) -> str:
     """JUnit's dotted classname back to a pytest nodeid: the longest prefix
-    that is a file, then any class names."""
+    that is a file, then any class names. xdist's `@<worker group>` suffix is
+    dropped: a sweep case's unit is a hash of the plain nodeid."""
+    name = name.rsplit("@", 1)[0]
     parts = classname.split(".")
     for cut in range(len(parts), 0, -1):
         path = "/".join(parts[:cut]) + ".py"
@@ -249,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             measured = durations_from(folder)
             write_durations(measured, found)
             print(f"{len(measured)} units timed; wrote {DURATIONS_PATH.relative_to(ROOT)}")
+            return 0  # timings are worth keeping from a red run too
     except GhUnavailable as error:
         print(f"browser_ci: {error}", file=sys.stderr)
         return 3

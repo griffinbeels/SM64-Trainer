@@ -55,6 +55,17 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Add-Content $env:GITHUB_ENV "UILAB_PATH=$path"
 
+      # A few browser-lane modules also drive Preact components through Vitest,
+      # which needs Node 24.13+ (the runner image ships 22) and its lockfile.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tests/frontend/package-lock.json
+
+      - name: Install the component test runner
+        run: npm ci --prefix tests/frontend --ignore-scripts
+
       # The replay pages cut real clips (libx264, SVT-AV1); a missing ffmpeg is
       # a failure, never an inventory skip. Same GPL build line every run.
       - name: Cache ffmpeg
