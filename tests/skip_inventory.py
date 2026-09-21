@@ -51,6 +51,11 @@ ALLOWED = (
      "tools/run_tests.py always runs -- found 2026-09-18 by `release.py`, "
      "which runs a bare serial `pytest -q` instead of the project's gate.",
      "tests/test_worker_groups.py"),
+    ("only meaningful under --lane",
+     "A check that a lane collected nothing from the other lane; a bare "
+     "`pytest` picks no lane. Lifts under tools/run_tests.py, which always "
+     "names one for a whole run.",
+     "tests/test_test_lanes.py"),
     ("data/tracker.db not present",
      "The corpus check reads this machine's own practice database, which a "
      "fresh clone has not got. Its rules are covered by seeded tests; this "

@@ -1,14 +1,22 @@
 """One shared test budget across checkouts, including direct pytest invocations.
 
-An OS lock queues controllers BEFORE worker/browser creation; a crashed owner
-releases it automatically. CPU affinity is set on the owner before spawning and
-inherited by children. OBS opening during a run tightens the whole tree within
-two seconds and stays latched until that run ends (no oscillating budgets).
+Two kinds of run. A MERGE CHECK (a whole lane) takes one of two slots before
+any worker or browser exists, so at most two stand up at once and a third
+waits. A FOCUSED run (explicit targets, `--changed` selection) never queues:
+it is the inner loop, and waiting behind somebody's merge check is exactly the
+lost time this design removes. Both kinds are confined to the same CPU mask.
 
-The old 24-worker benchmark measured one suite, not five suites and an encoder.
-Normal uses 16 workers (within the measured speed tie); OBS uses at most eight
-workers on a quarter of the eligible CPUs. These are bounded defaults, not a
-claim about OBS dropped frames. See docs/testing.md for measurements and limits.
+Slot 0 is the lock file every earlier runner takes, so a runner from an older
+worktree still excludes -- and is excluded by -- the first merge check. A
+crashed owner releases its slot automatically (an OS lock, not a lockfile).
+
+The machine budget is 16 workers on 20 of 32 CPUs, or 8 workers on a quarter
+of the CPUs while OBS is open; each run gets half of it, so two concurrent
+merge checks together fill it and never exceed it. OBS opening mid-run
+tightens the whole tree within two seconds and stays latched until that run
+ends. On a dedicated CI machine there is no desktop to protect: every CPU,
+and a worker per two CPUs (a browser test is a page, a server and Chromium's
+own processes). See docs/testing.md for the measurements and limits.
 """
 from __future__ import annotations
 
@@ -30,6 +38,14 @@ LOCK_PATH = Path(tempfile.gettempdir()) / "SM64Trainer_tests.lock"
 OWNER_ENV = "SM64_TEST_OWNER"
 WORKERS_ENV = "SM64_TEST_WORKERS"
 POLL_SECONDS = 2.0
+SLOTS = 2
+MACHINE_WORKERS = {False: 16, True: 8}   # every concurrent run together; key: OBS open
+
+
+def slot_paths(path: Path = LOCK_PATH) -> list[Path]:
+    """Slot 0 IS the legacy lock; later slots sit beside it."""
+    return [path] + [path.with_name(f"{path.stem}.slot{index}{path.suffix}")
+                     for index in range(1, SLOTS)]
 
 
 def obs_is_open() -> bool:
@@ -37,18 +53,28 @@ def obs_is_open() -> bool:
                for proc in psutil.process_iter(["name"]))
 
 
-def budget(eligible: list[int], obs: bool, workers: int | None = None,
-           reserve: int | None = None) -> tuple[int, list[int]]:
-    """Return a worker ceiling and a subset of CPUs the caller already owns.
+def dedicated_machine() -> bool:
+    """A CI runner: nobody is using the desktop the reserve protects."""
+    return os.environ.get("GITHUB_ACTIONS") == "true"
 
-    Explicit workers/reserve may tighten the policy, never remove the OBS cap.
+
+def budget(eligible: list[int], obs: bool, workers: int | None = None,
+           reserve: int | None = None, *, dedicated: bool = False) -> tuple[int, list[int]]:
+    """Return one run's worker ceiling and a subset of CPUs the caller owns.
+
+    Explicit workers/reserve may tighten the policy, never loosen it.
     Zero workers means serial pytest; an affinity mask is never empty.
     """
     available = len(eligible)
-    count = max(1, available // 4 if obs else available - min(12, available // 2))
+    if dedicated:
+        count = available
+        ceiling = max(1, available // 2)
+    else:
+        count = max(1, available // 4 if obs else available - min(12, available // 2))
+        ceiling = max(1, min(MACHINE_WORKERS[obs], count) // SLOTS)
     if reserve is not None:
         count = min(count, max(1, available - reserve))
-    ceiling = min(8 if obs else 16, count)
+        ceiling = min(ceiling, count)
     return min(ceiling, workers) if workers is not None else ceiling, eligible[:count]
 
 
@@ -82,21 +108,24 @@ def effective_workers(transports: list[str]) -> int:
 
 
 class TestResources:
-    """Hold admission and the affinity monitor until all owned work is finished."""
+    """Hold a slot (merge check) and the affinity monitor until all owned work is finished."""
 
     __test__ = False
 
     def __init__(self, workers: int | None = None, reserve: int | None = None,
-                 *, path: Path = LOCK_PATH):
+                 *, admit: bool = True, path: Path = LOCK_PATH):
         self.requested_workers = workers
         self.reserve = reserve
+        self.admit = admit
         self.path = path
+        self.slot = None
         self.workers = 0
         self.handle = None
         self.process = psutil.Process()
         self.eligible = self.process.cpu_affinity()
         self.cpus = self.eligible
         self.obs = False
+        self.dedicated = dedicated_machine()
         self._stop = threading.Event()
         self._thread = None
         self._previous_owner = os.environ.get(OWNER_ENV)
@@ -107,27 +136,25 @@ class TestResources:
 
     def __enter__(self):
         started = time.monotonic()
-        announced = False
+        # Registered before anything else, focused runs included: an
+        # unregistered pytest is what a merge check waits for.
         self.registry.mkdir(parents=True, exist_ok=True)
         self.ticket.touch()
         try:
-            while self.handle is None:
-                self.handle = acquire_instance_lock(self.path)
-                if self.handle is None:
-                    if not announced:
-                        print("tests: queued behind another test run; no workers or browsers started", flush=True)
-                        announced = True
-                    time.sleep(0.25)
-            self._wait_for_older_runners()
+            if self.admit:
+                self._take_a_slot()
+                self._wait_for_older_runners()
             self.obs = obs_is_open()
-            self.workers, self.cpus = budget(self.eligible, self.obs,
-                                            self.requested_workers, self.reserve)
+            self.workers, self.cpus = budget(self.eligible, self.obs, self.requested_workers,
+                                             self.reserve, dedicated=self.dedicated)
             # Before Popen/xdist, not a sweep two seconds after the spawn storm.
             self.process.cpu_affinity(self.cpus)
             os.environ[OWNER_ENV] = f"{self.process.pid}:{self.process.create_time()}"
             os.environ[WORKERS_ENV] = str(self.workers)
-            print(f"tests: admitted after {time.monotonic() - started:.1f}s; "
-                  f"{'OBS open' if self.obs else 'normal'} budget: "
+            kind = "dedicated" if self.dedicated else "OBS open" if self.obs else "normal"
+            entry = (f"admitted after {time.monotonic() - started:.1f}s to slot {self.slot + 1}/{SLOTS}"
+                     if self.admit else "focused run, no queue")
+            print(f"tests: {entry}; {kind} budget: "
                   f"{self.workers or 'serial'} workers, {len(self.cpus)}/{len(self.eligible)} CPUs", flush=True)
             self._thread = threading.Thread(target=self._watch, daemon=True)
             self._thread.start()
@@ -135,6 +162,21 @@ class TestResources:
             self.__exit__(None, None, None)
             raise
         return self
+
+    def _take_a_slot(self):
+        announced = False
+        while self.handle is None:
+            # Slot 0 first, always: while any new merge check runs it holds
+            # the legacy lock, which is the only one an older runner reads.
+            for index, slot in enumerate(slot_paths(self.path)):
+                self.handle = acquire_instance_lock(slot)
+                if self.handle is not None:
+                    self.slot = index
+                    return
+            if not announced:
+                print(f"tests: queued behind {SLOTS} merge checks; no workers or browsers started", flush=True)
+                announced = True
+            time.sleep(0.25)
 
     def _wait_for_older_runners(self):
         reported = set()
@@ -157,7 +199,7 @@ class TestResources:
                 self.competitors[run["pid"]] = run
                 print(f"tests: PERFORMANCE COMPARISON CONTAMINATED by outside test "
                       f"PID {run['pid']} in {run['checkout']}; do not tune from this run", flush=True)
-        if not self.obs and obs_is_open():
+        if not self.obs and not self.dedicated and obs_is_open():
             self.obs = True
             _, self.cpus = budget(self.eligible, True, self.requested_workers, self.reserve)
             print(f"tests: OBS opened; limiting this run to {len(self.cpus)} CPUs "

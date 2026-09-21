@@ -1,14 +1,23 @@
-"""Require rendered-test dependencies before the existing integration runner."""
+"""The merge check as the harness's `full` lane, refusing only what it needs.
+
+The merge check starts no browser and no UI fixture server (tools/test_lanes.py),
+so it needs Node and the Vitest bridge but not uilab or Chromium: those belong
+to the browser run on GitHub. A missing component runner is refused here
+because the bridge would otherwise fail every component test with the same
+setup message, which reads as a code regression.
+"""
 import os
 import argparse
 import hashlib
 import importlib.metadata
 from pathlib import Path
 import runpy
+import shutil
 import sys
 
-from verify_lint import git
-from find_uilab import find_uilab
+# Measured runs of the whole merge lane take minutes; a run still going after
+# this many minutes of TESTING (queue time excluded) is hung, not slow.
+LIMIT_MINUTES = 30
 
 
 def prepare_environment() -> None:
@@ -29,42 +38,16 @@ def main() -> int:
     if not component_runner.is_file():
         print("full: unavailable: run npm ci --prefix tests/frontend --ignore-scripts", file=sys.stderr)
         return 2
-    if os.environ.get("UILAB_SKIP") == "1":
-        print("full: unavailable: UILAB_SKIP=1 disables required rendered checks", file=sys.stderr)
-        return 2
-    # Git owns checkout identity; native Codex and Claude worktree layouts both
-    # resolve to the same primary checkout without hard-coded folder depths.
-    common = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    sibling = common.parent.parent / "uilab"
-    if "UILAB_PATH" not in os.environ and (sibling / "uilab/__init__.py").is_file():
-        os.environ["UILAB_PATH"] = str(sibling)
-    missing = find_uilab()
-    if missing:
-        print(f"full: unavailable: {missing}", file=sys.stderr)
-        return 2
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as playwright:
-            browser = Path(playwright.chromium.executable_path)
-            if not browser.is_file():
-                print("full: unavailable: install Playwright Chromium", file=sys.stderr)
-                return 2
-    except ImportError as exc:
-        print(f"full: unavailable: {exc}", file=sys.stderr)
+    if shutil.which("node") is None:
+        print("full: unavailable: Node 24.13+ is not on PATH", file=sys.stderr)
         return 2
     if args.probe:
-        import uilab
-        digest = hashlib.sha256()
-        for source in sorted(Path(uilab.__file__).parent.rglob("*.py")):
-            digest.update(str(source).encode())
-            digest.update(source.read_bytes())
         packages = sorted((item.metadata["Name"], item.version)
                           for item in importlib.metadata.distributions())
-        print(f"uilab {digest.hexdigest()}\npackages {packages}\n"
-              f"chromium {browser} {browser.stat().st_size} {browser.stat().st_mtime_ns}\n"
+        print(f"packages {packages}\n"
               f"vitest {hashlib.sha256(component_runner.read_bytes()).hexdigest()}")
         return 0
-    sys.argv = [str(Path(__file__).with_name("run_tests.py"))]
+    sys.argv = [str(Path(__file__).with_name("run_tests.py")), "--limit-minutes", str(LIMIT_MINUTES)]
     if args.workers is not None:
         sys.argv.extend(['--workers', str(args.workers)])
     runpy.run_path(sys.argv[0], run_name="__main__")

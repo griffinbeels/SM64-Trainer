@@ -1,9 +1,9 @@
 """Session-wide test guards."""
 import asyncio
+import json
 import os
 import re
 import sys
-import zlib
 from pathlib import Path
 
 import pytest
@@ -24,6 +24,50 @@ from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
+from tools.test_lanes import (BROWSER_SWEEP_GROUPS, BROWSER_SWEEPS,  # noqa: F401 (tests read these here)
+                              LANE_ENV, LANES, browser_sweep_group, is_test_module,
+                              lane_of, load_durations, parse_shard, plan_shards,
+                              refusal, shard_unit)
+
+
+def pytest_addoption(parser):
+    group = parser.getgroup("sm64 lanes", "which half of the suite (tools/test_lanes.py)")
+    group.addoption("--lane", choices=LANES, default=None,
+                    help="merge: every test that starts no UI fixture server or browser "
+                         "(the local merge check); browser: the rest (the GitHub browser run)")
+    group.addoption("--shard", default=None, metavar="K/N",
+                    help="with --lane browser: run only job K of N, balanced by "
+                         "tests/browser_durations.json")
+
+
+def pytest_ignore_collect(collection_path, config):
+    """A lane never imports the other lane's modules: the merge check must not
+    need uilab or Chromium just to decide what it is skipping. Paths named on
+    the command line are never ignored, so an explicit target still runs."""
+    lane = config.getoption("lane", None)
+    if lane and is_test_module(collection_path) and lane_of(collection_path) != lane:
+        return True
+    return None
+
+
+def _arm_the_merge_check_tripwire() -> None:
+    """The merge check starts no browser. The classifier reads source, so a
+    launch it cannot see -- an importlib trick, a tool loaded by path -- would
+    otherwise make the local loop slow and flaky again without a word. Here it
+    fails the test that did it, naming the rule. The fixture server's half of
+    the tripwire is in `tools/ui_fixture.py::serve_ui_live`, keyed on the same
+    environment variable so subprocesses and xdist workers inherit it."""
+    os.environ[LANE_ENV] = "merge"
+    try:
+        from playwright.sync_api import BrowserType
+    except ImportError:
+        return
+
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError(refusal("launch a browser"))
+
+    for name in ("launch", "launch_persistent_context", "connect", "connect_over_cdp"):
+        setattr(BrowserType, name, refuse)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -33,6 +77,10 @@ def pytest_configure(config):
     Configure precedes xdist worker creation. Workers and runner-owned pytest
     inherit the live ancestor's budget and must never acquire it a second time.
     """
+    if config.getoption("shard") and config.getoption("lane") != "browser":
+        raise pytest.UsageError("--shard splits the browser lane; pass --lane browser")
+    if config.getoption("lane") == "merge":
+        _arm_the_merge_check_tripwire()
     # Browser waits get a bound that scales with the machine this run ACTUALLY
     # gets. uilab's 10s default suits one browser on an idle box; this suite
     # runs several servers, browsers and node drivers at once, and when OBS is
@@ -56,7 +104,8 @@ def pytest_configure(config):
     if inherited_owner():
         workers = min(requested, int(os.environ[WORKERS_ENV]))
     else:
-        resources = TestResources(requested)
+        # A whole-lane run takes a slot; a narrowed one never queues.
+        resources = TestResources(requested, admit=_whole_suite(config))
         resources.__enter__()
         config.add_cleanup(lambda: resources.__exit__(None, None, None))
         workers = resources.workers
@@ -87,46 +136,15 @@ SHARED_GROUPS = {
     "tests/test_layout_matches_report.py": "version_sync_report",
 }
 
-# `spread` says "these cases may leave their file". For most of them that is
-# free -- test_api.py is spread because it is hundreds of fast in-process
-# cases. For a VIEWPORT SWEEP it is not: every case boots its own uvicorn
-# fixture AND its own Chromium, so one group per case let ~20 browsers start
-# at once and the workers starved each other. Measured 2026-09-20 on the same
-# tree: 8 workers went 21, 10 and 19 failed across three full runs -- always
-# the sweep, always a different overlapping subset of widths, always the Rank
-# board still reading "Loading the leaderboard…" -- while 4 workers passed
-# 11016 twice. Cold `/api/leaderboard` is 1431 ms and warm 115 ms, so nothing
-# there is slow; the machine was starved.
-#
-# So the CONCURRENCY is bounded where it is actually expensive, rather than by
-# throttling the whole suite to 4 workers (which taxes ~10,900 in-process
-# tests to protect ~20) or by an agent remembering `--workers 4` (a flag
-# nobody had typed in this project's history before the day it was needed).
-# Same group -> same worker -> sequential under `--dist loadgroup`, so these
-# files share ONE pool of BROWSER_SWEEP_GROUPS groups and never put more than
-# that many sweep browsers up at once. The rest of the suite keeps every
-# worker it was given.
-#
-# Keyed on a stable hash of the nodeid, NEVER on collection index: testmon
-# selects subsets and reruns reorder, and an index would then move a case
-# between groups from run to run, which is a flake source rather than a fix.
-BROWSER_SWEEP_GROUPS = 4
-BROWSER_SWEEPS = (
-    "tests/test_responsive.py",
-    "tests/test_responsive_bowser.py",
-    "tests/test_responsive_subsections.py",
-)
-
-
-def browser_sweep_group(nodeid: str) -> str:
-    """The bounded group a viewport case belongs to. Pure, so
-    `tests/test_worker_groups.py` can prove the bound and the determinism
-    without a session."""
-    return f"browser_sweep_{zlib.crc32(nodeid.encode()) % BROWSER_SWEEP_GROUPS}"
+# The viewport sweeps' bounded pool (BROWSER_SWEEPS, BROWSER_SWEEP_GROUPS,
+# browser_sweep_group) lives in tools/test_lanes.py with its measurement,
+# because the GitHub browser run splits its jobs along the same groups.
+# Imported above; tests/test_worker_groups.py reads it from here.
+SHARD_UNIT = pytest.StashKey[str]()
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(config, items):
     """Every test carries a WORKER GROUP for pytest-xdist's `loadgroup`
     scheduler: its own file by default, so a module's one-server-one-browser
     fixture is built once and its tests keep their order -- exactly what
@@ -161,9 +179,14 @@ def pytest_collection_modifyitems(items):
     grouping (`reorder_items`, the thing that keeps both viewports of a
     module-scoped page together), so what a plugin does to the order can
     never reach the workers. `tests/test_worker_groups.py` compares the
-    live session's order against that recipe."""
+    live session's order against that recipe.
+
+    `--shard K/N` keeps one GitHub job's share of the browser lane. The unit
+    is read BEFORE the yield: xdist's worker appends `@<group>` to the nodeid
+    in its own impl, and a sweep case's group is a hash of the plain id."""
     for index, item in enumerate(items):
         item.stash[RAW_INDEX] = index
+        item.stash[SHARD_UNIT] = shard_unit(item.nodeid)
         if item.nodeid.split("::")[0] in BROWSER_SWEEPS:
             group = browser_sweep_group(item.nodeid)
         elif item.get_closest_marker("spread"):
@@ -173,6 +196,13 @@ def pytest_collection_modifyitems(items):
                                       item.nodeid.split("::")[0])
         item.add_marker(pytest.mark.xdist_group(group))
     yield
+    if config.getoption("shard"):
+        index, count = parse_shard(config.getoption("shard"))
+        plan = plan_shards([item.stash[SHARD_UNIT] for item in items], count, load_durations())
+        elsewhere = [item for item in items if plan[item.stash[SHARD_UNIT]] != index]
+        if elsewhere:
+            config.hook.pytest_deselected(items=elsewhere)
+            items[:] = [item for item in items if plan[item.stash[SHARD_UNIT]] == index]
     items.sort(key=lambda item: item.stash.get(RAW_INDEX, len(items)))
     items[:] = reorder_items(items)
 
@@ -306,6 +336,11 @@ def runtime_supervisor_exe(tmp_path_factory):
 # it did not run. Reports arrive here on the xdist CONTROLLER, so one list
 # holds every worker's skips.
 _SKIPS: list[tuple[str, str]] = []
+# The browser lane retries a SETUP failure once (tools/test_lanes.py). A test
+# that needed it is FLAKY, not green: said out loud, and handed to the job
+# summary, so a machine problem that recurs cannot hide behind the retry.
+_RERUNS: dict[str, str] = {}
+_FAILED: set[str] = set()
 
 
 def _skip_reason(report) -> str:
@@ -315,11 +350,22 @@ def _skip_reason(report) -> str:
     return str(longrepr or "")
 
 
+def _first_line(report) -> str:
+    crash = getattr(getattr(report, "longrepr", None), "reprcrash", None)
+    text = crash.message if crash is not None else str(getattr(report, "longrepr", "") or "")
+    return text.strip().splitlines()[0] if text.strip() else ""
+
+
 def pytest_runtest_logreport(report):
     # `wasxfail` also arrives as "skipped"; an xfail is a tracked defect with
     # its own reason on the mark, not an untested path.
     if report.skipped and not hasattr(report, "wasxfail"):
         _SKIPS.append((report.nodeid, _skip_reason(report)))
+    outcome = getattr(report, "outcome", None)
+    if outcome == "rerun":
+        _RERUNS.setdefault(report.nodeid, _first_line(report))
+    elif outcome == "failed":
+        _FAILED.add(report.nodeid)
 
 
 def pytest_collectreport(report):
@@ -343,8 +389,28 @@ def _whole_suite(config) -> bool:
         and not getattr(config.option, "keyword", "")
 
 
+def _report_reruns() -> None:
+    if not _RERUNS:
+        return
+    lines = [f"{'FAILED after rerun' if nodeid in _FAILED else 'FLAKY'} {nodeid}: {cause}"
+             for nodeid, cause in sorted(_RERUNS.items())]
+    print("\n" + "\n".join(lines))
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+            summary.write("".join(f"- {line}\n" for line in lines))
+    if os.environ.get("SM64_REPORT_DIR"):
+        report = Path(os.environ["SM64_REPORT_DIR"]) / "reruns.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps([
+            {"nodeid": nodeid, "cause": cause, "flaky": nodeid not in _FAILED}
+            for nodeid, cause in sorted(_RERUNS.items())], indent=1), encoding="utf-8")
+
+
 def pytest_sessionfinish(session, exitstatus):
-    if hasattr(session.config, "workerinput") or not _whole_suite(session.config):
+    if hasattr(session.config, "workerinput"):
+        return
+    _report_reruns()
+    if not _whole_suite(session.config):
         return
     import skip_inventory
     undocumented = [(nodeid, reason) for nodeid, reason in _SKIPS
@@ -361,7 +427,7 @@ def pytest_sessionfinish(session, exitstatus):
     session.exitstatus = 1
     shown = "\n".join(f"  {nodeid}\n    {reason}" for nodeid, reason in undocumented[:20])
     more = f"\n  ... and {len(undocumented) - 20} more" if len(undocumented) > 20 else ""
-    print(f"\nUNDOCUMENTED SKIPS ({len(undocumented)}): a whole-suite run must "
+    print(f"\nUNDOCUMENTED SKIPS ({len(undocumented)}): a whole-lane run must "
           f"account for every test it did not run.\n{shown}{more}\n"
           "Fix the cause, or add a row to tests/skip_inventory.py saying why "
           "this machine cannot run it and what would lift it.")

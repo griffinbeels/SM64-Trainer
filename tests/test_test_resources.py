@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import psutil
@@ -21,12 +22,31 @@ def isolated_activity(monkeypatch):
     monkeypatch.setattr(resources, "competing_runs", lambda _: [])
 
 
-@pytest.mark.parametrize("obs,workers,cpus", [(False, 16, 20), (True, 8, 8)])
-def test_budget_is_machine_sized_and_obs_has_a_lower_ceiling(obs, workers, cpus):
+@pytest.mark.parametrize("obs,workers,cpus", [(False, 8, 20), (True, 4, 8)])
+def test_each_run_gets_half_the_machine_budget_and_obs_has_a_lower_ceiling(obs, workers, cpus):
+    """Two merge checks may run at once; together they fill the old
+    single-run budget (16 workers normal, 8 with OBS) and never exceed it."""
     actual, mask = resources.budget(list(range(32)), obs)
     assert (actual, len(mask)) == (workers, cpus)
+    assert actual * resources.SLOTS == resources.MACHINE_WORKERS[obs]
     assert resources.budget(list(range(32)), obs, 100)[0] == workers
     assert resources.budget(list(range(32)), obs, 0)[0] == 0
+
+
+def test_a_dedicated_ci_machine_keeps_every_cpu_and_a_worker_per_two():
+    """A GitHub runner has no desktop to protect. A browser test is a page, a
+    server and Chromium's own processes, so a worker gets two of its CPUs."""
+    workers, mask = resources.budget(list(range(4)), False, dedicated=True)
+    assert (workers, mask) == (2, [0, 1, 2, 3])
+    assert resources.budget(list(range(4)), False, 1, dedicated=True)[0] == 1
+
+
+def test_slot_zero_is_the_lock_every_older_runner_takes():
+    """An older worktree's runner knows one lock file. Slot 0 must be it, or a
+    new merge check and an old full suite would never exclude each other."""
+    paths = resources.slot_paths()
+    assert paths[0] == resources.LOCK_PATH
+    assert len(paths) == resources.SLOTS == 2 and len(set(paths)) == 2
 
 
 def test_budget_respects_an_existing_non_contiguous_affinity_mask():
@@ -73,45 +93,82 @@ def _spawn(script, *args):
                             **quiet_spawn_kwargs())
 
 
-def test_five_controllers_queue_before_work_and_inherit_affinity(tmp_path):
-    script = tmp_path / "contender.py"
-    script.write_text('''
+HOLDER = '''
+import sys, time
+from pathlib import Path
+from sm64_events.storage.instance_lock import acquire_instance_lock
+handle = acquire_instance_lock(Path(sys.argv[1]))
+print("held" if handle else "busy", flush=True)
+time.sleep(60)
+'''
+
+CONTENDER = '''
 import json, sys, time, subprocess
 from pathlib import Path
 import psutil
 from tools import test_resources
 test_resources.competing_runs = lambda _: []
-TestResources = test_resources.TestResources
 from sm64_events.core.childproc import quiet_spawn_kwargs
-with TestResources(path=Path(sys.argv[1])):
-    start = time.time()
+admit = sys.argv[3] == "merge"
+with test_resources.TestResources(path=Path(sys.argv[1]), admit=admit) as lease:
     child = subprocess.run([sys.executable, "-c", "import psutil; print(psutil.Process().cpu_affinity())"],
                            capture_output=True, text=True, check=True, **quiet_spawn_kwargs())
-    time.sleep(0.1)
-    Path(sys.argv[2]).write_text(json.dumps([start, time.time(), psutil.Process().cpu_affinity(), json.loads(child.stdout)]))
-''', encoding="utf-8")
-    outputs = [tmp_path / f"result-{index}.json" for index in range(5)]
+    Path(sys.argv[2]).write_text(json.dumps([time.time(), lease.slot, psutil.Process().cpu_affinity(),
+                                             json.loads(child.stdout)]))
+'''
+
+
+@pytest.fixture
+def checkout_env():
     # Child scripts need this checkout, not the editable main install.
     previous = os.environ.get("PYTHONPATH", "")
     os.environ["PYTHONPATH"] = os.pathsep.join([str(ROOT), str(ROOT / "src"), previous])
-    children = []
+    yield
+    os.environ["PYTHONPATH"] = previous
+
+
+def _wait_for(path, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text():
+            return json.loads(path.read_text())
+        time.sleep(0.1)
+    return None
+
+
+def test_both_slots_held_a_focused_run_proceeds_and_a_third_merge_check_waits(tmp_path, checkout_env):
+    """Real processes, the whole admission rule: two holders take both slots;
+    a focused run starts at once anyway; a third merge check announces it is
+    queued and starts nothing until a slot frees; then it runs, inheriting its
+    CPU mask into the process it spawns."""
+    holder_script, contender_script = tmp_path / "holder.py", tmp_path / "contender.py"
+    holder_script.write_text(HOLDER, encoding="utf-8")
+    contender_script.write_text(CONTENDER, encoding="utf-8")
+    lock = tmp_path / "budget.lock"
+    holders = [_spawn(holder_script, slot) for slot in resources.slot_paths(lock)]
+    others = []
     try:
-        children = [_spawn(script, tmp_path / "shared.lock", result) for result in outputs]
-        logs = []
-        for child in children:
-            output, _ = child.communicate(timeout=30)
-            assert child.returncode == 0, output
-            logs.append(output)
+        assert [holder.stdout.readline().strip() for holder in holders] == ["held", "held"]
+        focused, third = tmp_path / "focused.json", tmp_path / "third.json"
+        others.append(_spawn(contender_script, lock, third, "merge"))
+        others.append(_spawn(contender_script, lock, focused, "focused"))
+        started = _wait_for(focused, 30)
+        assert started is not None, "a focused run must never wait for a merge-check slot"
+        assert started[1] is None, "a focused run holds no slot"
+        assert _wait_for(third, 3) is None, "a third merge check started while both slots were held"
+        holders[1].kill()
+        holders[1].wait()
+        admitted = _wait_for(third, 30)
+        assert admitted is not None and admitted[1] == 1, admitted
+        assert admitted[2] == admitted[3], "the spawned child must inherit the admitted CPU mask"
+        output, _ = others[0].communicate(timeout=30)
+        assert others[0].returncode == 0, output
+        assert "queued" in output, output
     finally:
-        os.environ["PYTHONPATH"] = previous
-        for child in children:
-            if child.poll() is None:
-                child.kill()
-                child.wait()
-    intervals = sorted(json.loads(result.read_text()) for result in outputs)
-    assert all(left[1] <= right[0] for left, right in zip(intervals, intervals[1:]))
-    assert any("queued" in log for log in logs)
-    assert all(parent == child for _, _, parent, child in intervals)
+        for process in [*holders, *others]:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
 
 
 def test_a_killed_owner_releases_the_os_lock(tmp_path):
