@@ -1,0 +1,75 @@
+# The browser run: every test that starts a UI fixture server or a browser
+# (tools/test_lanes.py decides), off the local machine. It runs on every push
+# to main and on demand, and it blocks only a release (tools/release.py).
+# Agents read it with `uv run python tools/browser_ci.py status|wait|failures`.
+name: browser run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # uilab is not in the lockfile (it is a shared dev module); the run uses
+  # exactly this commit of it. Bump it when a test needs a newer uilab.
+  UILAB_REPO: https://github.com/griffinbeels/uilab
+  UILAB_REF: 6689abbf05a9129c4da2f11986788826d354ad24
+  PYTHONUTF8: "1"
+
+jobs:
+  browser:
+    name: browser ${{ matrix.shard }}/${{ strategy.job-total }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The job count is this list's length; the jobs are balanced by
+        # tests/browser_durations.json (tools/browser_ci.py durations).
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      SM64_REPORT_DIR: ${{ github.workspace }}\test-artifacts
+      UILAB_PATH: ${{ runner.temp }}\uilab
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install the locked environment
+        run: uv sync --frozen
+
+      - name: Check out uilab at the pinned commit
+        shell: bash
+        run: |
+          git clone --quiet "$UILAB_REPO" "$UILAB_PATH"
+          git -C "$UILAB_PATH" checkout --quiet "$UILAB_REF"
+
+      - name: Cache Playwright's Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install Playwright's Chromium
+        run: uv run --frozen python -m playwright install chromium
+
+      - name: Browser lane, job ${{ matrix.shard }} of ${{ strategy.job-total }}
+        run: >
+          uv run --frozen python tools/run_tests.py --browser
+          --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+          --workers 2 --junitxml test-artifacts/junit-${{ matrix.shard }}.xml
+
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-${{ matrix.shard }}
+          path: test-artifacts
+          if-no-files-found: ignore
+          retention-days: 14

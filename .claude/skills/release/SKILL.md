@@ -48,10 +48,18 @@ git rev-parse --abbrev-ref HEAD    # must be: main
 git status --porcelain             # must be empty (clean tree)
 gh auth status                     # must be authenticated
 command -v ffmpeg                  # must be on PATH — it gets bundled into the exe
+uv run python tools/browser_ci.py status   # HEAD's browser run on GitHub must pass
 ```
 
 If the tree is dirty, stop and ask the user — don't release uncommitted work.
 If you're not on `main`, the work probably needs merging first.
+
+**The browser run gates the release.** The tests that start a UI fixture
+server or a browser run on GitHub Actions on every push to main, not locally.
+`tools/release.py` refuses unless the commit being released has a green browser
+run, and waits for one still running. No run yet means `main` was never pushed
+at this commit: a push starts one (~20 minutes). A red run:
+`uv run python tools/browser_ci.py failures` names the failing tests.
 
 ## Step 1 — find the last release and the changes since
 
@@ -158,7 +166,8 @@ uv run python tools/release.py <version> --notes-file internal_notes/release-not
 ```
 
 Run it **in the background** — the two PyInstaller builds + zipping the ~550 MB
-onedir tree take ~10-15 minutes. The script: runs the full test suite, bumps
+onedir tree take ~10-15 minutes. The script: runs the local merge check (or
+reuses its receipt), requires HEAD's green browser run on GitHub, bumps
 `core/version.py` + `pyproject.toml` (+ `uv.lock`), builds `--mode all`
 (onedir app with ffmpeg bundled + bootstrap), zips the tree
 (`tools/make_manifest.build_zip`), generates `manifest.json`, copies the
