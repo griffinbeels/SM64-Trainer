@@ -6,6 +6,7 @@ immutable recording bytes without another full file write. Recovery only
 touches validated destinations recorded beneath this save root.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -36,9 +37,46 @@ def _destination(root: Path, relative: str) -> Path:
     return path
 
 
+def _checked_ghost(path: Path, identity: dict) -> None:
+    from sm64_events.ghost.clip import HEADER_BYTES, MAX_RECORDS, RECORD_BYTES
+    if not isinstance(identity, dict):
+        raise ValueError("replay publication has no native ghost identity")
+    size = identity.get("bytes")
+    expected = identity.get("sha256")
+    if (type(size) is not int or not HEADER_BYTES <= size <= HEADER_BYTES + MAX_RECORDS * RECORD_BYTES
+            or not isinstance(expected, str) or len(expected) != 64 or path.stat().st_size != size):
+        raise ValueError("replay publication has incomplete native ghost data")
+    with path.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
+            raise ValueError("replay publication native ghost hash mismatch")
+
+
+def _stage_ghost(pending, ghost, metadata, reserve_bytes):
+    identity = metadata.get("native_ghost")
+    if ghost is None:
+        if identity is not None:
+            raise ValueError("replay publication is missing native ghost bytes")
+        return None
+    if not isinstance(identity, dict):
+        raise ValueError("replay publication is missing native ghost identity")
+    _checked_ghost(ghost, identity)
+    if shutil.disk_usage(pending).free - identity["bytes"] < reserve_bytes:
+        raise OSError("Not enough free storage to save native ghost poses; free space and retry Save replay.")
+    copying = pending / "ghost.copying"
+    try:
+        shutil.copyfile(ghost, copying)
+        _checked_ghost(copying, identity)
+        with copying.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        os.replace(copying, pending / "ghost.bin")
+    finally:
+        copying.unlink(missing_ok=True)
+    return identity
+
+
 def _finish(root: Path, pending: Path) -> Path:
     intent = json.loads((pending / "intent.json").read_text(encoding="utf-8"))
-    if intent.get("version") != 1:
+    if intent.get("version") not in (1, 2):
         raise ValueError("unknown replay publication version")
     destination = _destination(root, intent["destination"])
     staged = pending / "media.mp4"
@@ -47,6 +85,12 @@ def _finish(root: Path, pending: Path) -> Path:
         if not staged.is_file() or staged.stat().st_size != intent["media_bytes"]:
             raise ValueError("replay publication has no complete staged media")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if intent["version"] == 2:
+            ghost = pending / "ghost.bin"
+            target = destination.with_suffix(".ghost")
+            _checked_ghost(ghost if ghost.is_file() else target, intent["ghost"])
+            if ghost.is_file():
+                os.replace(ghost, target)
         for suffix, filename in ((".json", "metadata.json"), (".review.json", "review.json")):
             source = pending / filename
             target = destination.with_suffix(suffix)
@@ -56,7 +100,8 @@ def _finish(root: Path, pending: Path) -> Path:
                 raise ValueError("replay publication is missing metadata")
         os.replace(staged, destination)
     # All paths are explicit children of a validated pending directory.
-    for filename in ("media.mp4", "metadata.json", "review.json", "media.copying", "intent.json"):
+    for filename in ("media.mp4", "metadata.json", "review.json", "media.copying", "intent.json",
+                     "ghost.bin", "ghost.copying"):
         (pending / filename).unlink(missing_ok=True)
     pending.rmdir()
     return destination
@@ -71,7 +116,8 @@ def resume(root: Path, attempt_id: int) -> Path | None:
 
 
 def publish(root: Path, attempt_id: int, source, destination: Path,
-            metadata: dict, review: dict, *, reserve_bytes: int = 5 * 1024**3) -> Path:
+            metadata: dict, review: dict, *, reserve_bytes: int = 5 * 1024**3,
+            ghost: Path | None = None) -> Path:
     """Publish one serialized Save/PB. Retry/recovery resumes a staged copy."""
     root = root.resolve()
     destination = _destination(root, str(destination.resolve().relative_to(root)))
@@ -80,12 +126,15 @@ def publish(root: Path, attempt_id: int, source, destination: Path,
     if resumed is not None:
         return resumed
     pending.mkdir(parents=True, exist_ok=True)
+    ghost_identity = _stage_ghost(pending, ghost, metadata, reserve_bytes)
     # Archival evidence may contain non-finite values from old sidecars. Keep
     # those bytes interpretable; the service validates them before HTTP output.
     atomic_json(pending / "metadata.json", metadata, allow_nan=True)
     atomic_json(pending / "review.json", {"version": 1, "state": review})
-    atomic_json(pending / "intent.json", {"version": 1,
-        "destination": str(destination.relative_to(root)), "media_bytes": source.stat().st_size if isinstance(source, Path) else source.size})
+    atomic_json(pending / "intent.json", {"version": 2 if ghost_identity else 1,
+        "destination": str(destination.relative_to(root)),
+        "ghost": {key: ghost_identity[key] for key in ("bytes", "sha256")} if ghost_identity else None,
+        "media_bytes": source.stat().st_size if isinstance(source, Path) else source.size})
     staged = pending / "media.mp4"
     if not staged.exists():
         try:

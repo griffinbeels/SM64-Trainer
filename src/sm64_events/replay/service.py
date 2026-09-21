@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import re
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
@@ -908,7 +909,9 @@ class ReplayService:
         existing = resume_saved(self.cfg.save_root, attempt_id) or self.find_saved(attempt_id)
         if existing is not None:
             m = self._saved_meta(existing)
-            return {"path": str(existing), "truncated": m.get("truncated", False)}
+            return {"path": str(existing), "truncated": m.get("truncated", False),
+                    "native_ghost": m.get("native_ghost"),
+                    "native_ghost_reason": m.get("native_ghost_reason")}
         self._view(attempt_id, leases)  # caller holds the cut lock
         clip = self.clips_dir / _CLIP_NAME.format(id=attempt_id)
         ended_local = _parse_utc(a.ended_utc).astimezone()  # folder by local date
@@ -926,18 +929,51 @@ class ReplayService:
                       if a.star_id is not None and a.course_id is not None else "no-star")
         dest = dest_dir / slug_filename(a, c_name, s_name)
         m = json.loads(clip.with_suffix(".json").read_text())
+        ghost_path, ghost_manifest, ghost_reason = self._preserve_ghost(a, clip.with_suffix(".ghost"))
+        m["native_ghost"] = ({**ghost_manifest, "file": dest.with_suffix(".ghost").name}
+                             if ghost_manifest else None)
+        m["native_ghost_reason"] = ghost_reason
         # fps stamped at save time: the step buttons must match the clip's
         # actual encode rate even if cfg.fps changes in a future version.
-        with self.read_clip(clip.name) as media:
-            dest = publish_saved(self.cfg.save_root, attempt_id, media, dest,
-                          {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None))
+        try:
+            with self.read_clip(clip.name) as media:
+                dest = publish_saved(self.cfg.save_root, attempt_id, media, dest,
+                              {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None),
+                              ghost=ghost_path)
+        finally:
+            if ghost_path is not None:
+                ghost_path.unlink(missing_ok=True)
         forget = getattr(self.recorder.ring, "forget_temp", None)
         if forget is not None:
             forget(f"attempt:{attempt_id}", delete=True)
         else:
             clip.unlink(missing_ok=True)
             clip.with_suffix(".json").unlink(missing_ok=True)
-        return {"path": str(dest), "truncated": m["truncated"]}
+        return {"path": str(dest), "truncated": m["truncated"],
+                "native_ghost": m["native_ghost"], "native_ghost_reason": ghost_reason}
+
+    def _preserve_ghost(self, attempt, path):
+        from sm64_events.ghost.clip import ClipError
+        from sm64_events.ghost.source import _attempt_ends, _touch_frame
+        from sm64_events.inputs.service import entity_key_of
+        archive = getattr(self.recorder, "pose_archive", None)
+        if archive is None:
+            return None, None, "This recording has no native Mario poses."
+        ends = _attempt_ends(attempt)
+        if ends is None:
+            return None, None, "This attempt has no exact start and end frames."
+        database = getattr(self.tracker, "db", None)
+        events = getattr(database, "events_between", None)
+        touch = _touch_frame(attempt, events, ends[1])
+        end = touch[0] if touch is not None and ends[0] <= touch[0] <= ends[1] else ends[1]
+        kind, key = entity_key_of(attempt)
+        target = {"kind": kind, "entity_key": key, "strat": attempt.strat_tag}
+        try:
+            manifest = archive.export_attempt(attempt, path,
+                        end_frame=end, target=target)
+        except (ClipError, OSError, sqlite3.Error) as error:
+            return None, None, str(error)
+        return path, manifest, None
 
     def reveal(self, path_str: str) -> None:
         """Open Explorer with a SAVED clip selected. Only paths inside
