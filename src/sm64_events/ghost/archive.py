@@ -15,8 +15,9 @@ import sqlite3
 import threading
 from types import SimpleNamespace
 
+from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.clip import (
-    ELAPSED_VALID, RAW_VALID, CLOCK_KINDS, MAX_RECORDS,
+    ELAPSED_VALID, RAW_VALID, STAR_CLOCK, CLOCK_KINDS, MAX_RECORDS,
     ClipError, attempt_origin, frame_from_bytes, producer_values, write_clip,
 )
 
@@ -166,6 +167,8 @@ class PoseArchive:
             rows = db.execute("""SELECT data FROM poses WHERE producer=?
                 AND sequence BETWEEN ? AND ? ORDER BY sequence""", (identity, first, last)).fetchall()
         # The immutable copy survives pruning or recorder detach during publication.
+        if kind == STAR_CLOCK and frame_from_bytes(rows[0][0]).igt > NEAR_ZERO_IGT:
+            raise ClipError("star origin has no canonical near-zero native clock witness")
         manifest = write_clip(destination, tuple(row[0] for row in rows), SimpleNamespace(**source), clock_kind=kind)
         return {**manifest, "attempt_id": attempt.id, "session_id": attempt.session_id,
                 **origin,

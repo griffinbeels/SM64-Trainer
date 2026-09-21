@@ -1,6 +1,7 @@
 import pytest
 
 from ghost_native_fixture import attempt, frame, producer
+from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.archive import PoseArchive
 from sm64_events.ghost.clip import ClipError, attempt_origin, check_manifest, read_clip
 
@@ -87,6 +88,22 @@ def test_rebased_segment_trims_pre_origin_and_uses_explicit_owner_kind(tmp_path)
     assert [frame.sequence for frame in clip.frames] == [3, 4]
     assert list(clip.canonical_frames()) == [0, 1]
     assert result["native_clock_kind"] == "segment" and result["clock_kind"] == 2
+    archive.close()
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_star_export_requires_canonical_opener_but_segment_may_start_later(tmp_path, extra):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    raw = NEAR_ZERO_IGT + extra
+    archive.ingest(producer(), (frame(1, igt=raw), frame(2, igt=raw+1)))
+    if extra:
+        with pytest.raises(ClipError, match="near-zero"):
+            archive.export_attempt(attempt(end=102), tmp_path / "star.ghost")
+    else:
+        assert archive.export_attempt(attempt(end=102), tmp_path / "star.ghost")["origin_raw"] == raw
+    segment = archive.export_attempt(attempt(end=102, kind="segment"), tmp_path / "segment.ghost")
+    assert segment["origin_raw"] == raw
+    assert list(read_clip(tmp_path / "segment.ghost").canonical_frames()) == [0, 1]
     archive.close()
 
 

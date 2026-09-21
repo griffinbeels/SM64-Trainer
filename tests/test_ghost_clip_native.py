@@ -54,6 +54,12 @@ def test_python_and_native_acceptance_agree(tmp_path):
     host = ROOT / "tests/native/ghost_clip_host.cpp"
     source = native / "ghost_playback.cpp"
     target = tmp_path / "ghost_clip_host.exe"
+    inputs = [source, host, *(native / name for name in (
+        "ghost_clip.h", "ghost_capture.h", "ghost_playback.h", "ghost_origin.h", "ghost_clock.h", "ghost_pose.h")),
+        COMPONENTS / "renderer/model/model.h", COMPONENTS / "tools/build_plugin.py",
+        *(ROOT / name for name in ("src/sm64_events/ghost/clip.py", "tests/ghost_native_fixture.py",
+                                   "tests/test_ghost_clip.py", "tests/test_ghost_clip_native.py"))]
+    hashes = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
     build._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
         f"/I{native}", f"/I{COMPONENTS / 'renderer/model'}", str(source), str(host),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF",
@@ -72,11 +78,12 @@ def test_python_and_native_acceptance_agree(tmp_path):
     result = subprocess.run([str(target)], input="\n".join(paths) + "\n", cwd=tmp_path,
         capture_output=True, text=True, timeout=30, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
+    assert hashes == {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}, \
+        "codec or native playback source changed during the witness"
     actual = [int(value) for value in result.stdout.splitlines()]
     receipt = {"cases": len(expected), "accepted": sum(expected), "native": actual,
-               "python": expected, "source_sha256": {
-                   str(path): hashlib.sha256(path.read_bytes()).hexdigest()
-                   for path in (source, host, native / "ghost_clip.h", native / "ghost_capture.h")}}
+               "python": expected, "source_sha256": hashes,
+               "executable_sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
     (tmp_path / "codec-parity.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
     assert set(expected) == {0, 1}
     assert actual == expected, [(index, want, got) for index, (want, got)

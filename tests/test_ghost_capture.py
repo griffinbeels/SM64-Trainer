@@ -1,6 +1,8 @@
 """Compile and drive the actual allocation-free N64 capture reader, no emulator."""
 from dataclasses import replace
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import struct
 import subprocess
@@ -25,6 +27,12 @@ NATIVE = ROOT / "plugin/gfxwrap"
 @pytest.fixture(scope="module")
 def capture_host(tmp_path_factory):
     work = tmp_path_factory.mktemp("ghost_capture")
+    inputs = [NATIVE / name for name in ("ghost_capture.cpp", "ghost_capture.h", "ghost_clock.cpp", "ghost_clock.h")]
+    inputs += [ROOT / path for path in ("tests/native/ghost_capture_host.cpp", "tests/test_ghost_capture.py",
+        "src/sm64_events/memory/ghost_layout.py", "src/sm64_events/memory/layout.py",
+        "src/sm64_events/memory/addresses.py", "src/sm64_events/detectors/anchors.py",
+        "src/sm64_events/detectors/counter_epoch.py", "tools/build_plugin.py")]
+    hashes = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
     spec = importlib.util.spec_from_file_location("ghost_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
@@ -46,6 +54,11 @@ def capture_host(tmp_path_factory):
                       f"/Fo{work / 'header.obj'}"], work)
     config = work / "layout.bin"
     config.write_bytes(GhostLayout.from_layout(US).to_bytes())
+    assert hashes == {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}, \
+        "capture source changed during compilation"
+    (work / "capture-source.json").write_text(json.dumps({"source_sha256": hashes,
+        "executable_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        "layout_sha256": hashlib.sha256(config.read_bytes()).hexdigest()}, indent=2), encoding="utf-8")
     return target, config
 
 
