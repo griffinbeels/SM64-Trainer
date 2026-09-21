@@ -80,10 +80,15 @@ def test_a_browser_sweep_case_joins_a_BOUNDED_pool(request):
         "subsets and reruns cannot move a case between groups")
 
     for item in request.session.items:
-        if item.nodeid.split("::")[0] in BROWSER_SWEEPS:
+        # On a worker xdist has already rewritten the nodeid to
+        # `<nodeid>@<group>`, so recomputing from it asks about a string the
+        # hook never saw. Group names carry no `@` (the rule above), so the
+        # split is exact, and on the controller there is nothing to strip.
+        nodeid = item.nodeid.split("@")[0]
+        if nodeid.split("::")[0] in BROWSER_SWEEPS:
             mark = item.get_closest_marker("xdist_group")
-            assert mark is not None and mark.args[0] == browser_sweep_group(item.nodeid), (
-                f"{item.nodeid} carries {mark and mark.args} -- the hook is not "
+            assert mark is not None and mark.args[0] == browser_sweep_group(nodeid), (
+                f"{nodeid} carries {mark and mark.args} -- the hook is not "
                 "applying the bounded pool")
 
 
