@@ -73,3 +73,12 @@ def test_sequence_order_is_unsigned_and_clock_reset_is_not_hidden(tmp_path):
     with pytest.raises(ClipError, match="clock restarts"):
         archive.export_attempt(attempt(), tmp_path / "bad.ghost")
     archive.close()
+
+
+def test_size_only_recording_retention_still_has_a_hard_pose_ceiling(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite", retention_s=None, max_records=2)
+    archive.ingest(producer(), (frame(1, qpc=1000), frame(2, qpc=10000000)))
+    assert archive.status()["records"] == 2  # more than two hours is retained
+    archive.ingest(producer(), (frame(3, qpc=10000001),))
+    assert archive.status()["records"] == 2  # record ceiling remains mandatory
+    archive.close()

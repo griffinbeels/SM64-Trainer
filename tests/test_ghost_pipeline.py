@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -78,10 +79,19 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     for path in tmp_path.glob("*.ppm"):
         with Image.open(path) as image:
             image.save(path.with_suffix(".png"))
+    evidence = os.environ.get("SM64_GHOST_PIPELINE_EVIDENCE")
+    if evidence:
+        destination = Path(evidence)
+        destination.mkdir(parents=True, exist_ok=True)
+        for artifact in [tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
+                         *tmp_path.glob("*.png")]:
+            shutil.copyfile(artifact, destination / artifact.name)
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
     assert report["pipeline_gpu_completed"]["samples"] == report["including_swap"]["samples"] == 180
     print(f"Connected synthetic pipeline report: {tmp_path / 'pipeline-report.json'}")
+    print(json.dumps({key: report[key] for key in
+                     ("pipeline_gpu_completed", "blocking_swap", "including_swap", "gpu_renderer")}))
     # A functional pass cannot disguise exceeding the requested whole-frame budget.
     assert report["including_swap"]["over_budget"] == 0, report["including_swap"]

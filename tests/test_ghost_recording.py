@@ -100,8 +100,10 @@ def test_partial_native_start_keeps_failed_owner_until_joined(tmp_path):
     owner = rec._capture_retained["poses"]
     assert not owner.archive.status()["closed"]
     owner.source.joined = True
-    rec.stop()
+    rec.stop(cleanup=False)
     assert owner.archive.status()["closed"] and rec._rec_lock is None
+    rec.cleanup_scratch()
+    assert not owner.archive.path.exists()
 
 
 def test_service_preservation_uses_grab_and_refuses_outside_attempt(tmp_path):
