@@ -1,8 +1,11 @@
 # STROOP MappingJP.map @ dev, fetched 2026-08-15
+# gCurrentArea/gAreaUpdateCounter: STROOP @ 6771197ad0f50718d3d4a13387e01d1e6d9c0d1a, fetched 2026-09-21; candidates, not live verification
 0x8032c694	gGlobalTimer
 0x8032ce20	gLastCompletedCourseNum
 0x8032ce24	gLastCompletedStarNum
+0x8032ce6c	gCurrentArea
 0x8032ce98	gCurrLevelNum
+0x8032cfa8	gAreaUpdateCounter
 0x80339e00	gMarioStates
 0x80339ed8	sWarpDest
 0x80339ee2	sDelayedWarpOp
