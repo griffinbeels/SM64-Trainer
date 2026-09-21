@@ -673,12 +673,21 @@ class ReplayRecorder:
         if self._ghost_capture_factory is None:
             return
         from sm64_events.ghost.recording import PoseRecording
-        owner = PoseRecording(self._cfg.scratch_dir / self._pose_archive_name,
-                              self._ghost_capture_factory, producer_pid=win.pid,
-                              retention_s=self._cfg.retention_s,
-                              allowed=lambda: not self._session_paused)
-        self._pose_owner, self.pose_archive = owner, owner.archive
-        owner.start()
+        owner = None
+        try:
+            owner = PoseRecording(self._cfg.scratch_dir / self._pose_archive_name,
+                                  self._ghost_capture_factory, producer_pid=win.pid,
+                                  retention_s=self._cfg.retention_s,
+                                  allowed=lambda: not self._session_paused)
+            self._pose_owner, self.pose_archive = owner, owner.archive
+            owner.start()
+        except Exception:
+            log.exception("native ghost capture unavailable; keeping video recording")
+            if owner is not None:
+                # Cleanup failure must still retain ownership and block replacement.
+                owner.stop()
+            self._pose_owner = None
+            self.pose_archive = None
 
     def _teardown_capture(self, *, keep_owner: bool = False) -> None:
         with self._capture_lock:

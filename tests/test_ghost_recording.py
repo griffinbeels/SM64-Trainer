@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -71,6 +72,38 @@ def test_viewer_never_constructs_native_source_or_archive(tmp_path):
     rec.stop()
 
 
+def test_optional_native_initialization_failure_keeps_video_recording(tmp_path):
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+
+    def unavailable(**kwargs):
+        raise ValueError("unsupported native layout")
+
+    rec._ghost_capture_factory = unavailable
+    rec._begin_capture(WIN)
+    assert rec._recording and rec.ghost_capture is None and rec.pose_archive is None
+    rec.stop()
+
+
+def test_partial_native_start_keeps_failed_owner_until_joined(tmp_path):
+    class Partial(Source):
+        def start(self):
+            self.joined = False
+            raise RuntimeError("native start failed after acquiring ownership")
+
+    rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
+                        video_sink_factory=lambda *args: FakeAvSink())
+    rec._ghost_capture_factory = Partial
+    with pytest.raises(RuntimeError, match="cleanup pending"):
+        rec._begin_capture(WIN)
+    assert rec._capture_cleanup_failed and rec._rec_lock is not None
+    owner = rec._capture_retained["poses"]
+    assert not owner.archive.status()["closed"]
+    owner.source.joined = True
+    rec.stop()
+    assert owner.archive.status()["closed"] and rec._rec_lock is None
+
+
 def test_service_preservation_uses_grab_and_refuses_outside_attempt(tmp_path):
     seen = []
     archive = SimpleNamespace(export_attempt=lambda *args, **kw: seen.append(kw) or {"records": 3})
@@ -89,3 +122,87 @@ def test_service_preservation_uses_grab_and_refuses_outside_attempt(tmp_path):
     event.payload["grab_frame"] = 103
     service._preserve_ghost(row, tmp_path / "clip.ghost")
     assert seen[-1]["end_frame"] == 110
+
+
+def native_service(tmp_path):
+    from datetime import datetime, timedelta
+    from sm64_events.ghost.archive import PoseArchive
+    from test_replay_service import attempt as replay_attempt, make_service
+    sample = attempt()
+    row = replay_attempt(anchor_frame=sample.anchor_frame, rta_frames=sample.rta_frames,
+                         started_utc=sample.started_utc, ended_utc=sample.ended_utc)
+    service = make_service(tmp_path, [row], cov=(datetime.fromisoformat(row.started_utc) - timedelta(seconds=10),
+                                               datetime.fromisoformat(row.ended_utc) + timedelta(seconds=10)))
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    archive.ingest(producer(), tuple(frame(n) for n in (1, 2, 3)))
+    service.recorder.pose_archive = archive
+    return service, row, archive
+
+
+def test_template_pose_preservation_never_extracts_video_and_survives_detach(tmp_path, monkeypatch):
+    service, row, archive = native_service(tmp_path)
+    monkeypatch.setattr(service, "_view", lambda *args: pytest.fail("pose preservation requested video"))
+    result = service.preserve_native(row.id)
+    path, manifest = service.find_native(row.id)
+    assert str(path) == result["path"] and path.parent.name == "native"
+    assert manifest["attempt_id"] == row.id and manifest["records"] == 3
+    assert service.extractor.calls == [] and not list(service.cfg.save_root.rglob("*.mp4"))
+    archive.close()
+    service.recorder.pose_archive = None
+    assert service.preserve_native(row.id) == result
+
+
+def test_native_lookup_requires_committed_matching_identity_and_hash(tmp_path):
+    service, row, archive = native_service(tmp_path)
+    service.preserve_native(row.id)
+    path, manifest = service.find_native(row.id)
+    metadata = path.with_suffix(".json")
+    for key, value in (("session_id", row.session_id + 1), ("attempt_id", row.id + 1),
+                       ("target", {}), ("file", "../other.ghost"), ("configuration", 999)):
+        metadata.write_text(json.dumps({**manifest, key: value}), encoding="utf-8")
+        assert service.find_native(row.id) is None
+    metadata.unlink()
+    assert service.find_native(row.id) is None  # binary alone is not a commit
+    metadata.write_text(json.dumps(manifest), encoding="utf-8")
+    payload = bytearray(path.read_bytes())
+    payload[-1] ^= 1
+    path.write_bytes(payload)
+    assert service.find_native(row.id) is None
+    archive.close()
+
+
+def test_save_reuses_permanent_poses_without_deleting_original(tmp_path):
+    from pathlib import Path
+    service, row, archive = native_service(tmp_path)
+    original = service.preserve_native(row.id)
+    original_path = Path(original["path"])
+    archive.close()
+    service.recorder.pose_archive = None
+    saved = service.save(row.id)
+    assert original_path.is_file()
+    assert saved["native_ghost"]["clip_id"] == original["native_ghost"]["clip_id"]
+    original_path.with_suffix(".json").unlink()
+    path, manifest = service.find_native(row.id)
+    assert path == Path(saved["path"]).with_suffix(".ghost")
+    assert manifest["clip_id"] == original["native_ghost"]["clip_id"]
+
+
+def test_pose_only_unavailable_is_explicit_without_video_fallback(tmp_path):
+    from test_replay_service import attempt as replay_attempt, make_service
+    service = make_service(tmp_path, [replay_attempt()])
+    result = service.preserve_native(42)
+    assert result["path"] is None and result["native_ghost"] is None
+    assert "no native Mario poses" in result["native_ghost_reason"]
+    assert service.extractor.calls == []
+
+
+def test_pose_commit_protects_pruning_but_does_not_claim_video_availability(tmp_path):
+    from sm64_events.replay.service import saved_attempt_ids
+    service, row, archive = native_service(tmp_path)
+    service.preserve_native(row.id)
+    assert saved_attempt_ids(service.cfg.save_root) == {row.id}
+    assert service.saved_attempt_ids() == set()
+    path, _ = service.find_native(row.id)
+    path.write_bytes(b"corrupt native recording")
+    assert saved_attempt_ids(service.cfg.save_root) == set()
+    archive.close()

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import struct
 import tempfile
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO1", 1, 2
@@ -196,6 +197,32 @@ def read_clip(path: Path, expected_sha256: str | None = None) -> Clip:
     if expected_sha256 is not None and hashlib.sha256(data).hexdigest() != expected_sha256:
         raise ClipError("native ghost content hash does not match")
     return decode_clip(data)
+
+
+def check_manifest(path: Path, manifest: dict, *, attempt_id: int,
+                   session_id: int, target: dict) -> Clip:
+    """Bind durable bytes to their current attempt, rather than a filename alone."""
+    if (not isinstance(manifest, dict) or manifest.get("attempt_id") != attempt_id
+            or manifest.get("session_id") != session_id or manifest.get("target") != target
+            or manifest.get("file") != path.name):
+        raise ClipError("native ghost manifest belongs to another attempt")
+    digest = manifest.get("sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ClipError("native ghost manifest has no content hash")
+    source = producer_values(SimpleNamespace(**manifest["source"]))
+    clip = read_clip(path, digest)
+    first, last = clip.frames[0], clip.frames[-1]
+    expected = dict(version=VERSION, clip_id=clip.clip_id, bytes=path.stat().st_size,
+                    records=len(clip.frames), record_bytes=RECORD_BYTES, sample_version=SAMPLE_VERSION,
+                    configuration=clip.configuration, epoch=clip.epoch, level=clip.level, area=clip.area,
+                    first_sequence=first.sequence, last_sequence=last.sequence,
+                    first_global_timer=first.global_timer, last_global_timer=last.global_timer,
+                    first_igt=first.igt, last_igt=last.igt)
+    if (any(manifest.get(key) != value for key, value in expected.items())
+            or any(source[key] != getattr(clip, key)
+                   for key in ("configuration", "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor"))):
+        raise ClipError("native ghost manifest disagrees with its captured bytes")
+    return clip
 
 
 def write_clip(path: Path, frames, producer, *, clip_id: str | None = None) -> dict:

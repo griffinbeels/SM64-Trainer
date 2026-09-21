@@ -27,7 +27,7 @@ from sm64_events.replay.association import association_problem, valid_picture_ti
 from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
 from sm64_events.replay.reviewstate import ReviewStateStore
-from sm64_events.replay.publication import (publish as publish_saved, recover as recover_saved,
+from sm64_events.replay.publication import (atomic_json, publish as publish_saved, recover as recover_saved,
                                            resume as resume_saved)
 from sm64_events.replay.extract import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
@@ -41,8 +41,8 @@ _CLIP_NAME = "clip_attempt_{id}.mp4"
 _CLIP_RE = re.compile(r"clip_attempt_\d+\.mp4")
 
 
-def saved_attempt_ids(root: Path) -> set[int]:
-    """One walk of a save tree -> the attempt ids that have a saved clip.
+def saved_attempt_ids(root: Path, *, include_native: bool = True) -> set[int]:
+    """Attempt ids protected by saved video or validated standalone native poses.
 
     The FILENAME is the index (`attempt_<id>_...`, see ReplayService's class
     docstring), so nothing but the directory is needed to answer this. Bulk
@@ -58,7 +58,43 @@ def saved_attempt_ids(root: Path) -> set[int]:
         match = re.match(r"attempt_(\d+)_", path.name)
         if match:
             ids.add(int(match.group(1)))
+    if include_native:
+        ids.update(_native_attempt_ids(root))
     return ids
+
+
+def _native_manifest(path: Path) -> dict:
+    with path.open("rb") as stream:
+        data = stream.read(65537)
+    if len(data) > 65536:
+        raise ValueError("native ghost manifest exceeds its bound")
+    return json.loads(data)
+
+
+def _native_attempt_ids(root: Path) -> set[int]:
+    """Pruning evidence must contain a committed, hashed clip, not just a name."""
+    from sm64_events.ghost.clip import check_manifest
+    root = root.resolve()
+    identities = set()
+    for meta in (root / "native").glob("attempt_*.json"):
+        match = re.fullmatch(r"attempt_([1-9][0-9]{0,18})\.json", meta.name)
+        path = meta.with_suffix(".ghost")
+        if not match or not all(item.resolve().is_relative_to(root) for item in (path, meta)):
+            continue
+        try:
+            manifest = _native_manifest(meta)
+            session, target = manifest["session_id"], manifest["target"]
+            if (type(session) is not int or session <= 0 or not isinstance(target, dict)
+                    or target.get("kind") not in ("star", "segment")
+                    or not isinstance(target.get("entity_key"), str) or not target["entity_key"]
+                    or target.get("strat") is not None and not isinstance(target["strat"], str)):
+                continue
+            attempt_id = int(match.group(1))
+            check_manifest(path, manifest, attempt_id=attempt_id, session_id=session, target=target)
+            identities.add(attempt_id)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return identities
 
 
 # How many game frames LATER than its wall time a frame's picture appears in
@@ -388,8 +424,43 @@ class ReplayService:
         return matches[0] if matches else None
 
     def saved_attempt_ids(self) -> set[int]:
-        """This service's own save tree -> `saved_attempt_ids(root)`."""
-        return saved_attempt_ids(self.cfg.save_root)
+        """Video availability for Compare/compilation excludes pose-only saves."""
+        return saved_attempt_ids(self.cfg.save_root, include_native=False)
+
+    @staticmethod
+    def _native_target(attempt):
+        from sm64_events.inputs.service import entity_key_of
+        kind, key = entity_key_of(attempt)
+        return {"kind": kind, "entity_key": key, "strat": attempt.strat_tag}
+
+    def find_native(self, attempt_id: int) -> tuple[Path, dict] | None:
+        """Read a validated permanent pose clip, independent of video availability."""
+        from sm64_events.ghost.clip import check_manifest
+        from sm64_events.ghost.source import _attempt_ends
+        attempt = self._attempt(attempt_id)
+        root = self.cfg.save_root.resolve()
+        candidates = [(root / "native" / f"attempt_{attempt_id}.ghost", False)]
+        saved = self.find_saved(attempt_id)
+        if saved is not None:
+            candidates.append((saved.with_suffix(".ghost"), True))
+        for path, video_metadata in candidates:
+            try:
+                meta = path.with_suffix(".json")
+                if not all(item.resolve().is_relative_to(root) for item in (path, meta)):
+                    continue
+                manifest = (json.loads(meta.read_text(encoding="utf-8")) if video_metadata
+                            else _native_manifest(meta))
+                if video_metadata:
+                    manifest = manifest.get("native_ghost")
+                clip = check_manifest(path, manifest, attempt_id=attempt.id,
+                                      session_id=attempt.session_id, target=self._native_target(attempt))
+                ends = _attempt_ends(attempt)
+                if (ends is not None and clip.frames[0].global_timer == ends[0]
+                        and ends[0] <= clip.frames[-1].global_timer <= ends[1]):
+                    return path, manifest
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+        return None
 
     def available_attempt_ids(self) -> list[int]:
         """Attempt ids whose replay is obtainable RIGHT NOW: a saved clip on
@@ -876,19 +947,42 @@ class ReplayService:
         with self._session_gate.use():
             return self._preserve(attempt_id)
 
-    def _preserve(self, attempt_id: int) -> dict:
+    @contextmanager
+    def _saving(self):
         with self._save_guard:
             self._active_saves += 1
         try:
-            with self._cut_lock(attempt_id), self._pin_clip(attempt_id):
-                result = self._save(attempt_id)
-                self._review_state.promote(attempt_id, Path(result["path"]))
-                with self._save_guard:
-                    self._save_failures.pop(attempt_id, None)
-                return result
+            yield
         finally:
             with self._save_guard:
                 self._active_saves -= 1
+
+    def preserve_native(self, attempt_id: int) -> dict:
+        """Commit poses for a template mark without extracting or encoding video."""
+        with self._session_gate.use(), self._cut_lock(attempt_id), self._saving():
+            existing = self.find_native(attempt_id)
+            if existing is not None:
+                path, manifest = existing
+                return {"path": str(path), "native_ghost": manifest, "native_ghost_reason": None}
+            root = self.cfg.save_root.resolve()
+            destination = root / "native" / f"attempt_{attempt_id}.ghost"
+            if not all(path.resolve().is_relative_to(root) for path in
+                       (destination, destination.with_suffix(".json"))):
+                raise ValueError("native ghost destination is outside the save root")
+            path, manifest, reason = self._preserve_ghost(self._attempt(attempt_id), destination)
+            if path is not None:
+                # The JSON is the commit record. Orphan binary bytes are never discovered.
+                atomic_json(path.with_suffix(".json"), manifest)
+            return {"path": str(path) if path else None,
+                    "native_ghost": manifest, "native_ghost_reason": reason}
+
+    def _preserve(self, attempt_id: int) -> dict:
+        with self._saving(), self._cut_lock(attempt_id), self._pin_clip(attempt_id):
+            result = self._save(attempt_id)
+            self._review_state.promote(attempt_id, Path(result["path"]))
+            with self._save_guard:
+                self._save_failures.pop(attempt_id, None)
+            return result
 
     def _save(self, attempt_id: int) -> dict:
         # Hold the exact GOP/AAC dependencies from selection through publication.
@@ -929,7 +1023,9 @@ class ReplayService:
                       if a.star_id is not None and a.course_id is not None else "no-star")
         dest = dest_dir / slug_filename(a, c_name, s_name)
         m = json.loads(clip.with_suffix(".json").read_text())
-        ghost_path, ghost_manifest, ghost_reason = self._preserve_ghost(a, clip.with_suffix(".ghost"))
+        permanent = self.find_native(attempt_id)
+        ghost_path, ghost_manifest, ghost_reason = ((*permanent, None) if permanent else
+                                                  self._preserve_ghost(a, clip.with_suffix(".ghost")))
         m["native_ghost"] = ({**ghost_manifest, "file": dest.with_suffix(".ghost").name}
                              if ghost_manifest else None)
         m["native_ghost_reason"] = ghost_reason
@@ -941,7 +1037,7 @@ class ReplayService:
                               {**m, "fps": self.cfg.fps}, self._review_state.get(attempt_id, None),
                               ghost=ghost_path)
         finally:
-            if ghost_path is not None:
+            if ghost_path is not None and permanent is None:
                 ghost_path.unlink(missing_ok=True)
         forget = getattr(self.recorder.ring, "forget_temp", None)
         if forget is not None:
@@ -955,7 +1051,6 @@ class ReplayService:
     def _preserve_ghost(self, attempt, path):
         from sm64_events.ghost.clip import ClipError
         from sm64_events.ghost.source import _attempt_ends, _touch_frame
-        from sm64_events.inputs.service import entity_key_of
         archive = getattr(self.recorder, "pose_archive", None)
         if archive is None:
             return None, None, "This recording has no native Mario poses."
@@ -966,11 +1061,9 @@ class ReplayService:
         events = getattr(database, "events_between", None)
         touch = _touch_frame(attempt, events, ends[1])
         end = touch[0] if touch is not None and ends[0] <= touch[0] <= ends[1] else ends[1]
-        kind, key = entity_key_of(attempt)
-        target = {"kind": kind, "entity_key": key, "strat": attempt.strat_tag}
         try:
             manifest = archive.export_attempt(attempt, path,
-                        end_frame=end, target=target)
+                        end_frame=end, target=self._native_target(attempt))
         except (ClipError, OSError, sqlite3.Error) as error:
             return None, None, str(error)
         return path, manifest, None
