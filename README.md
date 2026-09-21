@@ -263,13 +263,16 @@ npm ci --prefix tests/frontend --ignore-scripts
 ```
 
 ```
-uv run python tools/run_tests.py tests/test_ui_components.py  # focused, no browser
-uv run python tools/run_tests.py                             # full integration gate
+uv run python tools/run_tests.py tests/test_ui_components.py  # focused, never queues
+uv run python tools/run_tests.py                             # the merge check
+uv run python tools/browser_ci.py status                     # the browser run on GitHub
 ```
 
-Use [the testing guide](docs/testing.md) to choose a focused check and share
-the machine budget across worktrees. The full suite must pass before integration;
-an identical tested tree reuses its evidence. Two live-only gates need PJ64 running:
+The merge check is every test that starts no browser; it must pass before
+integration, and an identical tested tree reuses its evidence. The tests that
+drive the real page in Chromium run on GitHub Actions on every push to main and
+must be green before a release. [The testing guide](docs/testing.md) explains
+the split and the machine budget. Two live-only gates need PJ64 running:
 
 ```
 uv run python tools/verify_addresses.py     # every memory address, against the real game

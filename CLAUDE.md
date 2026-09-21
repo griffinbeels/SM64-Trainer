@@ -24,18 +24,19 @@ not in this map.
 | Need | Command / reference |
 | --- | --- |
 | Dependencies | `uv sync` |
-| Automatic draft checks / local wrap verification | `python tools/verify.py quick` / `python tools/verify.py full`; [setup and scope](docs/local-verification.md). Full includes the existing integration runner. |
-| Focused check while editing | `uv run python tools/run_tests.py tests/test_<module>.py` |
+| Automatic draft checks / local wrap verification | `python tools/verify.py quick` / `python tools/verify.py full`; [setup and scope](docs/local-verification.md). Full includes the merge check. |
+| Focused check while editing (never queues; any file, browser ones too) | `uv run python tools/run_tests.py tests/test_<module>.py` |
 | Python coverage selection | `uv run python tools/run_tests.py --changed` |
-| Full integration gate | `uv run python tools/run_tests.py` |
-| Test scope, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
+| Merge check: every test that starts no browser or UI fixture server | `uv run python tools/run_tests.py` |
+| Browser run: the rest, on GitHub Actions for every push to main; gates releases | `uv run python tools/browser_ci.py status` (`wait`, `failures` for a red run's tests and first error lines); a branch: `gh workflow run browser.yml --ref <branch>` |
+| Test lanes, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
 | Run the app when authorized | `uv run python -m sm64_events.main` from repo root; data is cwd-relative |
 | Read back live play and the rendered UI | `uv run python tools/what_happened.py`; `--list` names all journals |
 | New memory address live gate | `uv run python tools/verify_addresses.py` with PJ64 + ROM |
 | Per-ROM verification | `uv run python tools/sync_version.py --version us`; [runbook](docs/version-sync.md) |
 | Import correctness | `uv run python tools/scorecard_parity.py`; successive runners must produce `+0.00` on every corresponding Scorecard tile |
 | Inspect one UI surface at supported widths | `uv run python tools/contact_sheet.py <selector>`; read UI rules for state-specific fixtures |
-| Legacy staged maintainability feedback | `uv run python tools/lint_changed.py`; [gate rationale](docs/agent-maintainability.md). Required verification uses the standalone commands above. |
+| Why each lint rule exists | [docs/agent-maintainability.md](docs/agent-maintainability.md); `python tools/verify_lint.py` enforces them |
 | API consumer | [docs/api.md](docs/api.md): `GET /state`, `GET /health`, `/ws/events` |
 | Cross-cutting domain evidence | [docs/architecture.md](docs/architecture.md) |
 | Older probe commands, incidents and rejected approaches | [archived guide](docs/history/agent-guide-2026-09-05.md), historical evidence only |
@@ -105,12 +106,13 @@ Coordinate these shared contracts before parallel edits: `core/events.py`,
 together when changing their shared Attempt contract. Land prerequisite contract
 changes before dependent work. Integrate with `--no-ff`.
 
-Choose the smallest meaningful check while editing. The full runner is the
-integration gate and owns the shared resource budget and child cleanup.
+Choose the smallest meaningful check while editing. The merge check is the
+integration gate and owns the shared resource budget and child cleanup; the
+browser run on GitHub covers responsive and rendered checks after the push.
 After appropriate checks pass, repeat or broaden only for changed inputs,
-failures, or unresolved concerns; the full suite already includes responsive
-checks. Preserve actual native exit codes; in PowerShell never pipe test output
-into `Select-Object` or use `2>&1` on native commands.
+failures, or unresolved concerns. Preserve actual native exit codes; in
+PowerShell never pipe test output into `Select-Object` or use `2>&1` on native
+commands.
 
 For UI changes, render and inspect the named surface with representative data
 at its supported widths (850px minimum, any height). Confirm the fixture reaches
@@ -122,8 +124,10 @@ failure, then reverting it. Tests alone do not establish visual correctness.
 
 ## Definition of done for integration
 
-- Full `tools/run_tests.py` gate passes for the integrated tree. An identical
-  tree reuses that evidence; record revision, command, result and skips.
+- The merge check (`tools/run_tests.py`) passes for the integrated tree. An
+  identical tree reuses that evidence; record revision, command, result and
+  skips. Changed browser tests were run locally by name; the browser run on
+  GitHub covers the rest after the push and must be green before a release.
 - Relevant behavior tests and, for visible changes, rendered evidence cover
   the change. New memory reads have human live verification.
 - Update the glossary for changed domain nouns, chain rules for moved value

@@ -2038,3 +2038,28 @@ cannot hold.
 - **Lives** — the chain files (`.claude/rules/chain-star-grab-time.md`) → the
   test running the machine-wide chain checker over them
   (`tests/test_chains.py`)
+
+### Merge check
+
+The part of the test suite that starts no browser and no UI fixture server,
+checked on this machine before a merge. The lane module reads each test
+file's source to decide which part it belongs to; the test door takes one of
+two slots for it, so a third merge check waits while a focused check never
+does.
+
+- **Lives** — the lane rule (`tools/test_lanes.py`) → the test door
+  (`tools/run_tests.py`)
+- **Not** — the [[browser run]], which holds every test the merge check leaves
+  out.
+
+### Browser run
+
+The part of the test suite that drives the real page in Chromium, executed by
+GitHub Actions on every push to main, split into parallel jobs. It blocks only
+a release: the release script refuses any commit it has not passed, and the
+reader prints its failing tests without anyone opening a log.
+
+- **Lives** — the workflow (`.github/workflows/browser.yml`) → the reader
+  (`tools/browser_ci.py`) → the release script (`tools/release.py`)
+- **Not** — the [[merge check]], which executes locally and must pass before a
+  merge.

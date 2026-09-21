@@ -1,115 +1,117 @@
-# Testing without occupying the whole computer
+# Testing
 
-For the local draft and wrap commands, see [local verification](local-verification.md).
-The shared `quick` lane runs pinned offline lint checks; `full` retains this
-document's integration runner and requires its rendered-test dependencies.
+The suite is split so the local loop never waits on a browser. For the
+`tools/verify.py quick|full` wrappers see [local verification](local-verification.md).
 
-Use the smallest check that can disprove the change, then stop when it passes.
-Run the full suite once for the integrated change, not after every edit, commit,
-review, and merge. Repeat it only if code, test inputs, dependencies, or the
-integrated result changed. A merge of the already-tested identical tree does
-not justify another full run. Record the revision, command, result, and skips.
+| Check | How | What it runs | Waits? |
+| --- | --- | --- | --- |
+| **Focused check** | `uv run python tools/run_tests.py tests/test_x.py` or `--changed` | the files you name (either lane), or testmon's pick inside the merge check | never |
+| **Merge check** | `uv run python tools/run_tests.py` | every test that starts no UI fixture server and no browser (~10,400) | for one of two slots |
+| **Browser run** | GitHub Actions, every push to main; `uv run python tools/browser_ci.py status` | every test that does (~700), in 8 parallel jobs | not on this machine |
 
-## Choose the scope before running
+The merge check gates a merge. The browser run gates only a release
+(`tools/release.py` waits for a green one on the commit it releases).
+
+Use the smallest check that can disprove the change, then stop. Run the merge
+check once for the integrated change; repeat it only if code, test inputs,
+dependencies or the integrated result changed. Record revision, command,
+result and skips.
 
 | Change | First check | Broaden when |
 | --- | --- | --- |
-| One Python module | `uv run python tools/run_tests.py tests/test_<module>.py` | A shared contract or a failure names another consumer |
-| Python changes with a current coverage map | `uv run python tools/run_tests.py --changed` | Before integration; testmon cannot see subprocess-only Python |
-| UI or API consumed by UI | Relevant behavior test and one headless render of the affected surface | Layout changed: relevant responsive cases; integration: full suite |
-| Docs, task notes, comments | Relevant doc/link/config check if one applies | Executable configuration or a documented contract changed |
-| Test infrastructure, shared contracts, final integration | `uv run python tools/run_tests.py` | Another change or unresolved failure warrants another run |
+| One Python module | the module's test file | a shared contract or a failure names another consumer |
+| Python changes with a current coverage map | `--changed` | before integration; testmon cannot see subprocess-only Python |
+| UI or API consumed by UI | the relevant behavior test and one render of the surface, by naming the browser file | layout changed: the responsive case; integration: merge check, then the browser run after the push |
+| Docs, comments | the relevant doc/link/config test, if one applies | an executable configuration or documented contract changed |
+| Test infrastructure, shared contracts, integration | the merge check | another change or unresolved failure |
 
-Explicit pytest targets/options select **focused** mode: serial by default,
-no testmon instrumentation, no full-run stamp. `--workers N` opts into bounded
-parallelism for several independent files. `--dry-run` explains selection
-without starting pytest. `--changed` and explicit targets cannot be combined.
-`--changed` still falls back to the full suite for any non-Python change; use an
-explicit focused scope for docs/UI work rather than pretending coverage sees it.
+Explicit targets are **focused**: serial by default (`--workers N` for a few
+independent files), no testmon, no stamp. `--changed` cannot be combined with
+targets and falls back to the whole merge check when any non-Python file
+changed. `--dry-run` prints the choice without starting pytest.
 
-Do not rerun responsive checks separately after a full run already executed
-them against the same inputs. Do not run five full suites to test queueing:
-the admission regression uses five tiny real processes instead.
+## Which lane a test is in
 
-## Browser-free component checks
+`tools/test_lanes.py` reads each module's source, never importing it. A module
+is in the **browser lane** when it imports `uilab` or `playwright`, names
+`serve_ui` / `serve_ui_live`, or imports a `tests/` or `tools/` helper that does
+so at module level. Everything else is the **merge check**. A new browser file
+lands in the browser lane with no marker to remember.
 
-Install Node 24.13+ on the 24.x line (or Node 26+) and run
-`npm ci --prefix tests/frontend --ignore-scripts` once per checkout. These are
-development dependencies only. Missing dependencies fail the component gate
-with the setup command; they never silently remove its coverage.
+Two guards keep it honest, both in `tests/test_test_lanes.py` and proved by
+mutation: an independent token scan that fails if any merge-check module names
+a browser entry point, and a tripwire. During the merge check a Chromium launch
+or a fixture-server boot the classifier missed fails that test and names the
+rule, instead of making the local loop slow again.
 
-Run `uv run python tools/run_tests.py tests/test_ui_components.py -s` for the
-TimeFields pilot. The pytest bridge is included in a normal full run, so there
-is no separate suite to remember. It invokes Vitest once in run mode, with one
-worker, no retries and no browser. It inherits the shared budget; on Windows,
-a nested job also closes its worker on completion, failure or timeout. Do not
-start standalone Vitest/watch processes outside the resource-owning runner.
+To run browser tests locally, name their files. `run_tests.py --browser` runs
+the whole browser lane here; it takes a slot and is rarely worth it.
 
-Vitest resolves the application's import map to its actual vendored Preact,
-hooks and htm modules, including inside the testing helpers. The real component
-runs in jsdom; props and DOM events are exercised without an app server.
-Use this for field edits, state changes and callback contracts. Layout, hit
-testing, paint, browser permissions and full application wiring remain real
-browser checks. Passing this lane does not prove desktop smoothness.
+## The browser run
 
-Pure logic can be cheaper still: `tests/test_ui_time_format.py` retains its
-eight Python assertions and batches their real JavaScript outputs through one
-short-lived Node process. It needs no npm packages. Do not move already-cheap
-logic into a DOM environment merely to use one framework everywhere.
+`.github/workflows/browser.yml` runs the browser lane on Windows runners:
+`uv sync --frozen`, Playwright's Chromium, and uilab cloned at the commit pinned
+in the workflow (bump `UILAB_REF` when a test needs a newer uilab; it must be
+pushed to github.com/griffinbeels/uilab first). Each job takes `--shard K/N`:
+whole files, viewport sweeps split along their bounded groups, balanced
+longest-first by `tests/browser_durations.json`, two workers per 4-CPU runner.
 
-See [the pilot findings](testing-pilot.md) for measured costs, inventory limits
-and the next candidates. No browser workflow coverage was removed by this pilot.
+Reading it, without raw logs:
+
+```
+uv run python tools/browser_ci.py status     # HEAD's run: one line, plus any job not green
+uv run python tools/browser_ci.py wait       # block until it finishes
+uv run python tools/browser_ci.py failures   # failing tests + first error line; artifacts in %TEMP%
+uv run python tools/browser_ci.py durations  # rebalance the jobs from a run's JUnit times
+gh workflow run browser.yml --ref <branch>   # a run for a branch before merging
+```
+
+**One retry, for setup errors only**, and only in this lane: fixture boot or
+seeding timeouts, `WinError 10055` / `ERR_NO_BUFFER_SPACE`, a closed or crashed
+browser (`SETUP_ERRORS` in `tools/test_lanes.py`). An `AssertionError` never
+reruns. A test that needed the retry is printed and put in the job summary as
+`FLAKY`; `failures` lists those too. The merge check has no retries.
 
 ## One budget across worktrees
 
-All updated runners and direct pytest controllers share an OS lock in the user
-temp directory. Waiting controllers sleep before creating workers or browsers.
-There is one active allocation regardless of whether one or five agents request
-tests. Admission is mutual exclusion, not FIFO; queued runs report that they
-are waiting. Killing a lock owner releases its lock automatically.
+A merge check (or `--browser`) takes one of two OS-lock slots before creating
+any worker or browser; a third waits. Slot 0 is `%TEMP%\SM64Trainer_tests.lock`,
+the lock older runners take, so a runner from a worktree without this change
+still excludes and is excluded. Focused runs and `--changed` never queue. A
+killed owner releases its slot. An unregistered outside test controller (a
+very old runner) is waited for, never stopped.
 
-On this 32-logical-CPU desktop:
+On this 32-CPU desktop each run gets half the machine budget, so two merge
+checks together fill it:
 
-| Mode | Maximum workers | CPUs available to tests |
+| Mode | Workers per run | CPUs all runs share |
 | --- | ---: | ---: |
-| Normal | 16 | 20 |
-| OBS process open | 8 | 8 |
-| Focused check, either mode | Serial | Same mode's CPU allocation |
+| Normal | 8 | 20 |
+| OBS process open | 4 | 8 |
+| GitHub runner (4 CPUs) | 2 | 4 |
 
-Budgets scale down on smaller/pre-restricted machines. Explicit worker counts
-and reserves may reduce these limits, never increase them. The runner sets
-affinity **before** spawning, then checks its descendants every two seconds.
-Opening OBS mid-run tightens existing processes; closing OBS does not expand
-that run again. xdist's worker count stays fixed until the next run. A child's
-deliberately narrower affinity is preserved.
+Explicit `--workers`/`--reserve` may tighten these, never loosen them. Affinity
+is set before spawning; OBS opening mid-run tightens the whole tree within two
+seconds and stays latched. The runner contains pytest and every descendant in a
+Windows job, closed on completion, interruption or runner death.
+`--limit-minutes` stops a run that long after admission, so queued time never
+cancels a run (`tools/verify_full.py` uses 30).
 
-OBS detection checks the process name, including idle OBS, without opening a
-window, contacting its WebSocket, or changing recording settings. This reserves
-CPU capacity and reduces browser/process churn; it is not a GPU, disk, memory,
-or encoder-frame guarantee. OBS rendering/encoding-lag counters during actual
-streaming are the acceptance signal for further tuning.
+## Skips
 
-Older worktrees without this change do not cooperate with the lock. The runner
-detects outside Python/pytest controllers regardless of whether Claude or Codex
-launched them, names their PID and checkout, and waits before starting. If an
-old runner appears later, it flags the performance comparison as contaminated;
-it never kills somebody else's run. Merge this change into older worktrees to
-make admission cooperative. Other ecosystems' runners are not detected.
+A whole-lane run (either lane, or one browser job) fails on a skip whose reason
+is not in `tests/skip_inventory.py`; a narrowed run may skip freely. Add a row
+only for something the machine genuinely cannot run, saying what would lift it.
+The browser lane refuses to start without uilab, because a missing uilab skips
+every module and would otherwise look green.
 
-## Failures and cleanup
+## Browser-free component checks
 
-No blanket retries. A failure remains visible; diagnose the named test once in
-its relevant context before widening scope. The earlier apparent load flake
-was traced to testmon reordering shared-page tests; the collection-order guard
-remains. Add a retry only for a demonstrated transient external boundary, with
-an explicit reason, rather than hiding deterministic failures globally.
-
-The runner contains pytest and all descendants in a Windows job before they
-can execute. Normal completion, interruption, and runner death close that job.
-It cannot terminate OBS, another session, or an unrelated ffmpeg. Direct pytest
-gets admission/affinity but the runner is required for this crash-containment
-backstop. There is no machine-wide deletion of browser profiles or orphaned
-processes: absence of a live parent does not establish ownership.
+`tests/test_ui_components.py` runs the real Preact components in jsdom through
+Vitest, inside the merge check. It needs Node 24.13+ and
+`npm ci --prefix tests/frontend --ignore-scripts` once per checkout; a missing
+install fails with the setup command rather than skipping. Layout, hit testing
+and paint stay browser tests. [Pilot findings](testing-pilot.md).
 
 ## What makes a test worth keeping
 
@@ -128,46 +130,9 @@ answering all four:
 4. **Does it fail only when the behaviour is wrong?** A test that goes red for
    load, a port collision or a missing tool teaches everyone to ignore red.
 
-Two failure shapes that look like coverage and are not, both found in the
-2026-09-17 audit:
-
-- **A test that cannot fail.** `test_ranks_api_marelo`'s two celebration tests
-  ran against a fixture that grades the FLOOR rank, so every celebration path
-  returned before deciding anything. They now seed a graded star first, and
-  each was proved by mutation.
-- **A skip that can never lift.** Both of those skipped on every machine since
-  the day they were written. A whole-suite run now FAILS on a skip whose
-  reason is not in `tests/skip_inventory.py`; a narrowed run may skip freely.
-  Add a row there only for something this machine genuinely cannot run, with
-  what would lift it -- never to silence a guard that should be firing.
-
-## Evidence and test deletion policy
-
-The September 1–2 measurements already answered the 32-worker question after
-the responsive sweep was split: at 12 reserved CPUs, 16/24/32 workers took
-212/204/206 seconds. Differences below roughly eight seconds were inside the
-observed spread. At zero reserve, 32 workers took 228 seconds and p99 scheduler
-wake delay reached 52.8 ms. Those measurements were of **one** suite, so they
-never established a safe budget for five concurrent suites plus streaming.
-The normal default uses 16 to avoid the extra processes inside that speed tie.
-
 Delete a test when its contract has been retired, or when another test proves
-the same failure and a mutation demonstrates the duplicate adds no protection.
-Do not delete behavior coverage merely because it is slow. Here, five obsolete
-tests of the removed global-orphan sweep and old affinity mechanism were
-removed with their implementation; resource ownership, crash cleanup and
-admission now have real-process checks. The fixture-reach and responsive
-tests retain their distinct jobs: populated state versus layout defects.
+the same failure and a mutation shows the duplicate adds no protection. Do not
+delete behavior coverage merely because it is slow: move it to the right lane.
 
-Reproduce the existing load probe with `tools/measure_run_load.py`; current
-runner policy caps requested configurations, so read the admitted budget in
-each log rather than treating the requested worker number as the actual one.
-Primary references: [xdist worker/scheduling options](https://pytest-xdist.readthedocs.io/en/stable/distribution.html)
-and [psutil affinity and process identity](https://psutil.readthedocs.io/stable/index.html).
-
-
-The shared runner pins its own imports and child `PYTHONPATH` to the selected
-checkout's `src` before importing project modules. This prevents a reused virtual
-environment's editable install from silently testing or serving another worktree.
-Direct one-off probes must set the same absolute source path and report module
-`__file__` when comparing candidates. A passing wrong-checkout run is not evidence.
+Measurements behind the earlier single-lock runner, and the 2026-09-17 audit
+examples, are in [the archived testing guide](history/testing-before-lanes-2026-09-21.md).
