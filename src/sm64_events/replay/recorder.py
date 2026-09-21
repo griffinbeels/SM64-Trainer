@@ -80,6 +80,21 @@ class AudioSource(Protocol):
     def stop(self) -> None: ...
 
 
+def _buffer_bytes(root: Path) -> int:
+    """Bytes under the scratch buffer right now; 0 when it cannot be walked."""
+    total = 0
+    try:
+        for path in root.rglob("*"):
+            try:
+                if path.is_file():
+                    total += path.stat().st_size
+            except OSError:
+                continue  # removed or locked between the walk and the stat
+    except OSError:
+        return 0
+    return total
+
+
 def _sink_has_room(sink) -> bool:
     """Whether the sink can still encode a picture. A sink that does not
     answer (the CFR fallback, a test's stand-in) is always willing."""
@@ -359,17 +374,35 @@ class ReplayRecorder:
         The protection callback is also honored during startup crash recovery.
         """
         with self._capture_lock:
-            if self._recording or not self._capture_closed or not self._scratch.owns():
+            # Say what happened either way. Two sessions in a row left their
+            # whole buffer behind and the log could not tell a stop that never
+            # ran from a cleanup that declined (2026-09-18).
+            refusal = ("still recording" if self._recording
+                       else "capture not proved closed" if not self._capture_closed
+                       else "buffer owned by another session" if not self._scratch.owns()
+                       else None)
+            if refusal is not None:
+                # stop() asks twice; the second call finds the marker already
+                # gone with the buffer. Only a buffer that still holds bytes
+                # is worth a line (his first clean close logged a false
+                # "owned by another session" right after "142.7 MB removed").
+                if _buffer_bytes(self._cfg.scratch_dir):
+                    log.info("replay buffer kept at stop: %s", refusal)
                 return False
             held = self._rec_lock
             if held is None:
                 held = self._recorder_lock_factory()
                 if held is None:
+                    log.info("replay buffer kept at stop: another recorder holds the lock")
                     return False
             try:
+                before = _buffer_bytes(self._cfg.scratch_dir)
                 cleaned = self._scratch.cleanup(self._protected_scratch())
                 if cleaned:
                     self.ring.prune_missing()
+                after = _buffer_bytes(self._cfg.scratch_dir)
+                log.info("replay buffer cleared at stop: %.1f MB removed, %.1f MB kept "
+                         "(in use or awaiting a save)", (before - after) / 2**20, after / 2**20)
                 return cleaned
             except Exception:
                 log.exception("replay scratch cleanup deferred")

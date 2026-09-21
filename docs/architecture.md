@@ -458,6 +458,58 @@ reader could act on.
   (b) enable door-scoped triggers in the builder ("you use the door at…").
   Needs one hunted+verified read (the usedObj offset). User-validated want.
 
+## Could the recorder encode AV1 directly? Measured 2026-09-20
+
+The compression pass exists because the recorder writes H.264. It need not, on
+newer hardware. One real saved replay (LLL 8-Coin, 514 pictures, 18.7 s)
+re-encoded with the ring's own settings, with realtime AV1, and with the
+archive setting we ship — VMAF against that source, so a RATIO not an absolute,
+and `x realtime` is the encoder alone with no game rendering beside it:
+
+| variant | MB | % of ring | x realtime | VMAF | worst 1% |
+|---|---|---|---|---|---|
+| ring today, `h264_nvenc` p4 cq20 | 32.6 | 100% | 16.9x | 99.8 | 96.8 |
+| ring as `av1_nvenc` p4 cq28 | 19.6 | 60% | 19.0x | 99.8 | 96.3 |
+| **ring as `av1_nvenc` p4 cq36** | **10.4** | **32%** | **19.0x** | **99.4** | **94.0** |
+| archive today, `av1_nvenc` p7 cq36 | 10.3 | 32% | 12.2x | 99.5 | 94.1 |
+
+Realtime AV1 lands where the OFFLINE archive pass lands and encodes FASTER than
+the H.264 the ring uses now. A recorder that wrote it would make Save publish
+already-small bytes, retiring the compression pass, the file swap and the close
+warning on that hardware.
+
+Two things stop it being a switch, and both are load-bearing:
+
+1. The recording encoder is H.264 **hardcoded in C++** —
+   `plugin/gfxwrap/gpu_bridge_encoder.cpp` names `NV_ENC_CODEC_H264_GUID` in
+   five places plus `NV_ENC_H264_PROFILE_HIGH_GUID` and
+   `encodeCodecConfig.h264Config`. Changing it is a DLL rebuild inside the
+   frame-exact capture chain, and hop 4 of
+   `.claude/rules/chain-input-timeline-frame.md` has to be re-proved.
+2. **AV1 NVENC needs RTX 40-series or newer.** A 20/30-series card has H.264
+   NVENC and no AV1, so that path and the compression pass stay for those users
+   regardless. This is an optimisation for newer cards, never a replacement.
+
+MEASURED 2026-09-20, the load-bearing half: **AV1 survives the ring's own
+transport with every picture on its exact original tick.** `codecprobe`'s own
+owned-BGRA pictures with unequal timestamps, through the ring's quality args,
+GOP, forced IDR, `-fps_mode passthrough`, `-enc_time_base demux` and
+`picture_duration_filter`, decoded back independently: one video stream, every
+picture, in order, at 90000/93000/93001/99000/100500/108000 — the input ticks
+unchanged — at 1431 bytes against H.264's 3255. It also encodes 1600x1200
+(a non-standard size) through the same chain at 44% of H.264's bytes. That is
+the property the frame map depends on, and it holds.
+
+**But `codecprobe.py` would reject AV1 today, and that is the probe's fault:**
+it validates through MPEG-TS, which has no usable AV1 mapping — the same
+pictures yield ZERO video streams there while passing in fragmented MP4, the
+container `ffmpeg_sink.py` and `packetmux.py` actually write. Any AV1 work
+starts by moving that probe off MPEG-TS; leaving it would read as "this GPU
+cannot encode AV1".
+
+STILL UNMEASURED: realtime AV1 while SM64 actually renders (both runs above
+were on an idle GPU).
+
 ## Replay capture (2026-06-11/12 live-audit marathon)
 
 The current SourceV2 renderer/worker/encoder architecture is documented in
