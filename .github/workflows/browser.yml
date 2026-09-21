@@ -50,6 +50,26 @@ jobs:
           git clone --quiet "$UILAB_REPO" "$UILAB_PATH"
           git -C "$UILAB_PATH" checkout --quiet "$UILAB_REF"
 
+      # The replay pages cut real clips (libx264, SVT-AV1); a missing ffmpeg is
+      # a failure, never an inventory skip. Same GPL build line every run.
+      - name: Cache ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\ffmpeg
+          key: ffmpeg-n8.1-win64-gpl
+
+      - name: Install ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip" -OutFile $zip
+          Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-unpacked"
+          Move-Item (Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-unpacked")[0].FullName "$env:RUNNER_TEMP\ffmpeg"
+
+      - name: Put ffmpeg on PATH
+        run: Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\ffmpeg\bin"
+
       - name: Cache Playwright's Chromium
         uses: actions/cache@v6
         with:

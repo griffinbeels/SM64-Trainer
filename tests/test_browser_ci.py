@@ -134,4 +134,5 @@ def test_a_refresh_keeps_units_this_run_did_not_time(tmp_path):
     browser_ci.write_durations({"tests/b.py": 25.04}, _run(), path)
     written = json.loads(path.read_text())
     assert written["units"] == {"tests/a.py": 10.0, "tests/b.py": 25.0}
+    assert b"\r\n" not in path.read_bytes(), "a tracked file stays LF on Windows"
     assert "7" in written["source"]

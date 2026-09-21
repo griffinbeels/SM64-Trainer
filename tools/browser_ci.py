@@ -208,10 +208,11 @@ def write_durations(measured: dict[str, float], found: dict, path: Path = DURATI
     except (OSError, ValueError, KeyError):
         existing = {}
     units = {**existing, **{unit: round(seconds, 1) for unit, seconds in measured.items()}}
-    path.write_text(json.dumps({
+    text = json.dumps({
         "source": (f"GitHub browser run {found['databaseId']} on {found['headSha'][:10]}, "
                    f"{datetime.now(timezone.utc):%Y-%m-%d}; refresh with tools/browser_ci.py durations"),
-        "units": dict(sorted(units.items()))}, indent=1) + "\n", encoding="utf-8")
+        "units": dict(sorted(units.items()))}, indent=1) + "\n"
+    path.write_bytes(text.encode("utf-8"))   # LF: it is tracked (tests/test_line_endings.py)
 
 
 def main(argv: list[str] | None = None) -> int:
