@@ -3,6 +3,7 @@
 #include <windows.h>
 #include "ghost_playback.h"
 #include "ghost_pose.h"
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -35,11 +36,11 @@ template<class T> struct Mailbox {
 enum ClipState : uint32_t { Empty, Building, Ready, Owned, Retired, Reclaiming };
 struct Clip {
     std::atomic<uint32_t> state{Empty};
-    uint32_t cancellation=0, index_count=0;
+    uint32_t cancellation=0, index_count=0, action_count=0;
     uint64_t allocation=0;
     gclip_header header{};
     gclip_frame *frames=nullptr;
-    uint32_t *index=nullptr;
+    uint32_t *actions=nullptr; // first canonical occurrence per action, sorted by action
 } clips[GP_CLIP_SLOTS];
 struct Model {
     std::atomic<uint32_t> state{GP_MODEL_EMPTY};
@@ -69,6 +70,8 @@ Clip *active_clip=nullptr;
 gp_request active_request{};
 gp_request timeline_request{};
 gp_status report{};
+uint64_t touch_revision=0, recorded_touch=0;
+bool have_recorded_touch=false;
 ghost_pose::Scratch scratch;
 
 int worker_enter() {
@@ -91,10 +94,10 @@ bool nonzero_id(const uint8_t *id) {
     uint8_t value=0; for(unsigned i=0;i<16;++i)value|=id[i]; return value!=0;
 }
 void free_clip(Clip& clip) {
-    delete[] clip.frames; delete[] clip.index;
+    delete[] clip.frames; delete[] clip.actions;
     resident_bytes.store(resident_bytes.load()-clip.allocation);
-    clip.frames=nullptr; clip.index=nullptr; clip.header={};
-    clip.allocation=0; clip.index_count=0;
+    clip.frames=nullptr; clip.actions=nullptr; clip.header={};
+    clip.allocation=0; clip.index_count=clip.action_count=0;
     clip.state.store(Empty,std::memory_order_release);
 }
 int reclaim_model() {
@@ -195,6 +198,24 @@ uint64_t clip_coordinate(const Clip& clip,uint32_t index) {
     return clip.frames[index].sample.clock.elapsed_frames-h.origin_elapsed
         +(h.clock_kind==GCLIP_STAR_CLOCK?h.origin_raw:0);
 }
+void recorded_boundary(const Clip& clip,const gp_request& request) {
+    have_recorded_touch=false;recorded_touch=0;touch_revision=request.revision;
+    if(request.mode!=GP_FOLLOW || !request.star_ends)return;
+    // Preparation indexed first occurrences once. A changed command needs at
+    // most GP_STAR_ACTIONS binary searches, never a render-thread clip scan.
+    for(uint32_t i=0;i<request.star_action_count;++i) {
+        uint32_t lo=0,hi=clip.action_count;
+        while(lo<hi) {
+            const uint32_t middle=lo+(hi-lo)/2;
+            if(clip.frames[clip.actions[middle]].sample.live_action<request.star_actions[i])lo=middle+1;
+            else hi=middle;
+        }
+        if(lo==clip.action_count || clip.frames[clip.actions[lo]].sample.live_action!=request.star_actions[i])continue;
+        const auto coordinate=clip_coordinate(clip,clip.actions[lo]);
+        if(!have_recorded_touch || coordinate<recorded_touch)recorded_touch=coordinate;
+        have_recorded_touch=true;
+    }
+}
 bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexed) {
     if(std::memcmp(h.magic,GCLIP_MAGIC,8) || h.version!=GCLIP_VERSION || h.bytes!=sizeof(h)
             || h.record_bytes!=sizeof(gclip_frame) || !h.record_count || h.record_count>GCLIP_MAX_RECORDS
@@ -279,13 +300,23 @@ int32_t __cdecl prepare_clip(const gclip_header *header,const gclip_frame *frame
         chosen->state.store(Empty); return worker_leave(GP_BUDGET);
     }
     auto *copy=new(std::nothrow) gclip_frame[header->record_count];
-    auto *index=new(std::nothrow) uint32_t[indexed];
-    if(!copy || !index) {
-        delete[] copy; delete[] index; chosen->state.store(Empty); return worker_leave(GP_BUDGET);
+    auto *actions=new(std::nothrow) uint32_t[indexed];
+    if(!copy || !actions) {
+        delete[] copy; delete[] actions; chosen->state.store(Empty); return worker_leave(GP_BUDGET);
     }
     std::memcpy(copy,frames,header->record_count*sizeof(*copy));
-    for(uint32_t i=0;i<indexed;++i)index[i]=i;
-    chosen->frames=copy; chosen->index=index; chosen->index_count=indexed;
+    uint32_t action_count=0;
+    for(uint32_t i=0;i<indexed;++i)
+        if(copy[i].sample.valid_fields&GC_VALID_ACTION)actions[action_count++]=i;
+    std::sort(actions,actions+action_count,[copy](uint32_t a,uint32_t b) {
+        const auto left=copy[a].sample.live_action,right=copy[b].sample.live_action;
+        return left<right || (left==right && a<b);
+    });
+    uint32_t unique=0;
+    for(uint32_t i=0;i<action_count;++i)
+        if(!unique || copy[actions[i]].sample.live_action!=copy[actions[unique-1]].sample.live_action)
+            actions[unique++]=actions[i];
+    chosen->frames=copy; chosen->actions=actions; chosen->index_count=indexed;chosen->action_count=unique;
     chosen->header=*header; chosen->allocation=allocation; chosen->cancellation=before;
     resident_bytes.store(resident_bytes.load()+allocation);
     chosen->state.store(before==cancellation.load()?Ready:Retired,std::memory_order_release);
@@ -356,6 +387,7 @@ void decision(uint32_t value) {
 void clear_timeline() {have_timeline=false;star_ended=false;timeline_request={};}
 void retire_clip() {
     if(active_clip) {active_clip->state.store(Retired,std::memory_order_release);active_clip=nullptr;}
+    touch_revision=recorded_touch=0;have_recorded_touch=false;
 }
 bool retire_model() {
     if(!have_model)return true;
@@ -425,6 +457,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(clip.cancellation==current_cancel && id_equal(clip.header.clip_id,next.clip_id)) {active_clip=&clip;break;}
         clip.state.store(clip.cancellation==current_cancel?Ready:Retired,std::memory_order_release);
     }
+    if(active_clip && touch_revision!=next.revision)recorded_boundary(*active_clip,next);
     decision(have_model && active_clip?GP_READY:GP_PREPARING);
 }
 bool atlas(sg_atlas_view *out,uint64_t *id) {
@@ -472,16 +505,20 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
             target+=amount;
         }
     }
-    const uint64_t first=clip_coordinate(*active_clip,active_clip->index[0]);
-    const uint64_t last=clip_coordinate(*active_clip,active_clip->index[active_clip->index_count-1]);
+    const uint64_t first=clip_coordinate(*active_clip,0);
+    const uint64_t last=clip_coordinate(*active_clip,active_clip->index_count-1);
+    // Before-start clamps to the first pose, including when that pose already
+    // carries a touch. Unlike the live-end latch, this moves with the nudge.
+    if(have_recorded_touch && (target>=recorded_touch || first>=recorded_touch))
+        {decision(GP_STAR_ENDED);return false;}
     if(target>last) {decision(GP_AFTER_END);return false;}
     uint32_t lo=0,hi=active_clip->index_count;
     while(lo<hi) {
         const uint32_t middle=lo+(hi-lo)/2;
-        if(clip_coordinate(*active_clip,active_clip->index[middle])<target)lo=middle+1;else hi=middle;
+        if(clip_coordinate(*active_clip,middle)<target)lo=middle+1;else hi=middle;
     }
-    const auto &selected=active_clip->frames[active_clip->index[lo]];
-    if(!below_zero && target>=first && clip_coordinate(*active_clip,active_clip->index[lo])!=target)
+    const auto &selected=active_clip->frames[lo];
+    if(!below_zero && target>=first && clip_coordinate(*active_clip,lo)!=target)
         {gaps.fetch_add(1);decision(GP_GAP);return false;}
     if(live.level!=selected.sample.level || live.area!=selected.sample.area) {decision(GP_WRONG_SCENE);return false;}
     report.selected_sequence_lo=uint32_t(selected.sample.sequence);

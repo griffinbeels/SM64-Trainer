@@ -125,8 +125,11 @@ bool atlas(sg_atlas_view *out, uint64_t *model_id);
  * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Select
  * first exact coordinate INCLUDING refused poses, then compare live scene.
  * Before-start clamps first; after-end/gaps/refusals hide. A star generation
- * change or star grab ends that origin; tuning the same origin cannot revive
- * it. A new continuity refuses, never subtracts across the gap.
+ * change or live star grab ends that origin; tuning the same origin cannot
+ * revive it. With star_ends, FOLLOW also hides at the first recorded valid
+ * star action coordinate after nudge (including duplicate/refused poses).
+ * This recorded cutoff moves with nudge; FIXED ignores both end policies.
+ * A new continuity refuses, never subtracts across the gap.
  * Clears outputs on failure.
  * Geometry stays borrowed until the next evaluate/safe_boundary/retire call. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
