@@ -242,6 +242,7 @@ bool prepare_extent(uint32_t width,uint32_t height) {
 }
 }
 void context_stopping() {
+    if(notice)notice({},0,false);
     osd_phase=false;
     const bool same_context=reinterpret_cast<uintptr_t>(wglGetCurrentContext())==owner.context;
     if(current) {
@@ -303,11 +304,12 @@ void after_osd() {
     else revalidate_image();
 }
 void swap_completed(bool success) {
-    if(!current)return;
     const auto image=pending_image(current);
-    swap_completed(current,success && clean_consumer() && identity_matches());
+    swap_completed(current,current && success && clean_consumer() && identity_matches());
     const auto clean=surface(current);
-    if(image.occurrence && notice)notice(image,clean.presentation_serial,success && clean.presentation_serial);
+    // A clean-only or refused presentation retires a previously visible ghost.
+    // Report every swap, including when the presentation context is unavailable.
+    if(notice)notice(image,clean.presentation_serial,image.occurrence && success && clean.presentation_serial);
 }
 bool clean_surface(CleanSurface* out) {
     if(out)*out={};
