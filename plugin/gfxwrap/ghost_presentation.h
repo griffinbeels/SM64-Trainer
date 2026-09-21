@@ -23,6 +23,7 @@ struct CleanSurface {
 struct Dispatch {
     ghost_compositor::Dispatch gl;
     void (GC_GL_CALL *CopyTexSubImage2D)(uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t)=nullptr;
+    void (GC_GL_CALL *DrawBuffers)(int32_t,const uint32_t*)=nullptr;
 };
 enum class DrawKind { gamma, vi };
 struct Draw {
