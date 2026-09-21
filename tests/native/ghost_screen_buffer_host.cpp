@@ -174,7 +174,7 @@ static FrameBuffer make_target(CachedTexture& texture,u32 w,u32 h,uint32_t* dept
     const auto& g=api_dispatch.gl;u32 fbo=0,tex=0;g.GenFramebuffers(1,&fbo);g.GenTextures(1,&tex);
     g.BindTexture(gl::TEXTURE_2D,tex);g.TexImage2D(gl::TEXTURE_2D,0,gl::RGBA8,w,h,0,gl::RGBA,gl::UNSIGNED_BYTE,nullptr);
     g.BindFramebuffer(gl::FRAMEBUFFER,fbo);g.FramebufferTexture2D(gl::FRAMEBUFFER,gl::COLOR_ATTACHMENT0,gl::TEXTURE_2D,tex,0);
-    if(depth){g.GenRenderbuffers(1,depth);g.BindRenderbuffer(gl::RENDERBUFFER,*depth);g.RenderbufferStorage(gl::RENDERBUFFER,gl::DEPTH24_STENCIL8,w,h);g.FramebufferRenderbuffer(gl::FRAMEBUFFER,gl::DEPTH_STENCIL_ATTACHMENT,gl::RENDERBUFFER,*depth);}
+    if(depth){g.GenRenderbuffers(1,depth);g.BindRenderbuffer(gl::RENDERBUFFER,*depth);g.RenderbufferStorage(gl::RENDERBUFFER,gl::DEPTH_COMPONENT24,w,h);g.FramebufferRenderbuffer(gl::FRAMEBUFFER,gl::DEPTH_ATTACHMENT,gl::RENDERBUFFER,*depth);}
     g.DrawBuffer(gl::COLOR_ATTACHMENT0);g.ReadBuffer(gl::COLOR_ATTACHMENT0);require(g.CheckFramebufferStatus(gl::FRAMEBUFFER)==gl::FRAMEBUFFER_COMPLETE,"screen FBO");
     texture={ObjectHandle(tex),w,h,CachedTexture::fbOneSample};return {ObjectHandle(fbo),&texture};
 }
