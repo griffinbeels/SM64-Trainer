@@ -177,7 +177,9 @@ class LibraryStore:
             from sm64_events.library.ladders import LADDER_MODEL_VERSION, fit_payload
             from sm64_events.ranks.policy import RankingPolicy
 
-            payload = deepcopy(selected)
+            # Just parsed from disk and held by nothing else, so the store owns
+            # it outright: no copy is needed before it is refitted or prepared.
+            payload = selected
             selected_date = _validated_revision(payload)
             current = self._current_payload()
             if current is not None and selected_date < _validated_revision(current):
