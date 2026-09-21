@@ -11,6 +11,7 @@ struct ViSource {
 struct GhostViImage {
     uint32_t texture, width, height, configuration, context_generation;
     uint64_t occurrence;
+    uint32_t framebuffer; // private display FBO; required for the screen-size blit route
 };
 using ImageProvider = bool (*)(const ViSource&, GhostViImage*);
 using ImageValidity = bool (*)(const GhostViImage&); // current command/configuration revision
@@ -29,6 +30,7 @@ enum class DrawKind { gamma, vi };
 struct Draw {
     DrawKind kind;
     uint32_t texture, framebuffer, width, height;
+    uint32_t source_framebuffer; // image FBO, or private gamma result for the VI draw
 };
 struct Raster {
     void* user;
@@ -78,5 +80,6 @@ bool clean_surface(CleanSurface*);
 struct FrameBuffer;
 namespace ghost_presentation {
 void draw_vi(const FrameBuffer&,const GraphicsDrawer::CopyRectParams&,uint32_t vi_origin,bool split);
+void draw_screen_vi(const FrameBuffer&,const GraphicsDrawer::BlitOrCopyRectParams&,uint32_t vi_origin);
 }
 #endif

@@ -119,8 +119,9 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
     if(!raster.begin_gpu())return false;
     bool drawn=false;
     try {
-        if(gamma)raster.draw(raster.user,{DrawKind::gamma,image.texture,p->fbos[1],image.width,image.height});
-        raster.draw(raster.user,{DrawKind::vi,gamma?p->textures[1]:image.texture,0,image.width,image.height});
+        if(gamma)raster.draw(raster.user,{DrawKind::gamma,image.texture,p->fbos[1],image.width,image.height,image.framebuffer});
+        raster.draw(raster.user,{DrawKind::vi,gamma?p->textures[1]:image.texture,0,image.width,image.height,
+            gamma?p->fbos[1]:image.framebuffer});
         drawn=true;
     }catch(...) {} // duplicate-only renderer diagnostics must still close our gateway
     const bool clean=raster.end_gpu();
@@ -204,11 +205,25 @@ renderer::Identity owner{};
 std::unique_ptr<graphics::ShaderProgram> gamma_program;
 uint32_t source_width=0,source_height=0;
 bool osd_phase=false;
-struct ViRaster { const GraphicsDrawer::CopyRectParams* params; const CachedTexture* source; };
+struct ViRaster {
+    const GraphicsDrawer::CopyRectParams* params;
+    const CachedTexture* source;
+    const GraphicsDrawer::BlitOrCopyRectParams* screen;
+};
 void raster_draw(void* user,const Draw& draw) {
     auto& drawer=dwnd().getDrawer();auto* vi=static_cast<ViRaster*>(user);
     CachedTexture texture=*vi->source;texture.name=graphics::ObjectHandle(draw.texture);
     texture.frameBufferTexture=CachedTexture::fbOneSample;texture.realWidth=draw.width;texture.realHeight=draw.height;
+    if(vi->screen && draw.kind==DrawKind::vi) {
+        // FBE-off presents pixel coordinates through the actual renderer blit,
+        // whose fallback uses its own texture coordinates. Keep both paths,
+        // including padded extents, flips and clipping, exactly as upstream.
+        auto params=*vi->screen;
+        params.readBuffer=graphics::ObjectHandle(draw.source_framebuffer);
+        params.drawBuffer=graphics::ObjectHandle(draw.framebuffer);
+        params.tex[0]=&texture;params.tex[1]=nullptr;
+        drawer.blitOrCopyTexturedRect(params);return;
+    }
     GraphicsDrawer::CopyRectParams params=*vi->params;
     if(draw.kind==DrawKind::gamma) {
         params={};params.srcX1=params.dstX1=draw.width;params.srcY1=params.dstY1=draw.height;
@@ -272,22 +287,31 @@ void context_ready() {
 void begin_update(uint64_t occurrence) {
     if(current)begin_update(current,occurrence);
 }
-void draw_vi(const FrameBuffer& source,const GraphicsDrawer::CopyRectParams& params,uint32_t origin,bool split) {
+static void draw_vi_image(const FrameBuffer& source,const GraphicsDrawer::CopyRectParams& params,
+                          uint32_t origin,bool split,const GraphicsDrawer::BlitOrCopyRectParams* screen) {
     if(!clean_consumer() || !current || !provider || !validity || !identity_matches() || split ||
-       config.frameBufferEmulation.enable==0 || config.frameBufferEmulation.enableOverscan ||
+       config.frameBufferEmulation.enableOverscan ||
        config.video.multisampling || config.video.fxaa || config.generalEmulation.enableBlitScreenWorkaround ||
        !source.m_pTexture || source.m_pTexture->frameBufferTexture!=CachedTexture::fbOneSample)return;
     // Upstream's postprocessor caches its result by width alone. A stale
     // height/scale must not map the ghost through a differently sized image.
-    if(params.srcWidth!=source.m_pTexture->realWidth || params.srcHeight!=source.m_pTexture->realHeight)return;
+    if(!params.tex[0] || params.tex[0]->realWidth!=source.m_pTexture->realWidth ||
+       params.tex[0]->realHeight!=source.m_pTexture->realHeight)return;
+    if(!screen && (params.srcWidth!=source.m_pTexture->realWidth || params.srcHeight!=source.m_pTexture->realHeight))return;
     ViSource input{uint32_t(source.m_FBO),uint32_t(source.m_pTexture->name),source.m_pTexture->realWidth,
         source.m_pTexture->realHeight,origin,owner.context_generation,owner.drawable_generation};
     GhostViImage image{};
-    if(!provider(input,&image) || !clean_consumer())return;
+    if(!provider(input,&image) || !clean_consumer() || (screen && !image.framebuffer))return;
     if((source_width!=input.width || source_height!=input.height) && !prepare_extent(input.width,input.height))return;
-    ViRaster vi{&params,source.m_pTexture};Raster raster{&vi,raster_draw,replay_gl::BeginCapture,replay_gl::EndCapture};
+    ViRaster vi{&params,source.m_pTexture,screen};Raster raster{&vi,raster_draw,replay_gl::BeginCapture,replay_gl::EndCapture};
     const bool gamma=((*REG.VI_STATUS & 8) | config.gammaCorrection.force)!=0;
     if(!replace_vi(current,image,origin,gamma,raster) && notice)notice(image,0,false);
+}
+void draw_vi(const FrameBuffer& source,const GraphicsDrawer::CopyRectParams& params,uint32_t origin,bool split) {
+    if(config.frameBufferEmulation.enable)draw_vi_image(source,params,origin,split,nullptr);
+}
+void draw_screen_vi(const FrameBuffer& source,const GraphicsDrawer::BlitOrCopyRectParams& params,uint32_t origin) {
+    if(!config.frameBufferEmulation.enable)draw_vi_image(source,params,origin,false,&params);
 }
 void before_swap() {
     if(!current)return;

@@ -14,6 +14,17 @@ def edits(source: Path, replace_once) -> dict[str, bytes]:
     data = replace_once(data, anchor, "\tdrawer.copyTexturedRect(blitParams);\n" + GUARD +
         "\tghost_presentation::draw_vi(*pBuffer, blitParams, rdpRes.vi_origin, pNextBuffer != nullptr);\n#endif\n\n"
         "\tif (pNextBuffer != nullptr)")
+    anchor = "\tdrawer.blitOrCopyTexturedRect(blitParams);\n\n\tgfxContext.bindFramebuffer(bufferTarget::READ_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);\n\n\twnd.swapBuffers();"
+    data = replace_once(data, anchor, "\tdrawer.blitOrCopyTexturedRect(blitParams);\n" + GUARD +
+        "\tghost_presentation::draw_screen_vi(*pBuffer, blitParams, *REG.VI_ORIGIN);\n#endif\n\n"
+        "\tgfxContext.bindFramebuffer(bufferTarget::READ_FRAMEBUFFER, ObjectHandle::defaultFramebuffer);\n\n\twnd.swapBuffers();")
+    result[path] = data
+
+    path = "src/FrameBuffer.h"
+    data = (source / path).read_bytes()
+    anchor = "\tFrameBuffer * getCurrent() const {return m_pCurrent;}"
+    data = replace_once(data, anchor, anchor + "\n" + GUARD +
+        "\tFrameBuffer * getScreenSizeBuffer() { return m_list.empty() ? nullptr : &m_list.back(); }\n#endif")
     result[path] = data
 
     path = "src/DisplayWindow.cpp"

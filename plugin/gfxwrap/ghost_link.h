@@ -2,7 +2,10 @@
  * preceding renderer commands finish; raster/lifetime calls run on renderer. */
 #pragma once
 #include <stdint.h>
+struct FrameBuffer;
 namespace ghost_link {
+// The real bound raster target; FBE-off uses GLideN64's screen-size FBO.
+FrameBuffer* raster_buffer();
 void rom(bool opened);
 void context_created();
 void context_lost();

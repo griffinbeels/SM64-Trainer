@@ -1,5 +1,6 @@
 #include "GLFunctions.h"
 #include "ghost_draw.h"
+#include "ghost_link.h"
 #include "ghost_compositor.h"
 #include "ghost_dispatch.h"
 #include "ghost_playback.h"
@@ -44,7 +45,7 @@ bool image_for_vi(const ghost_presentation::ViSource &source, ghost_presentation
             || source.drawable_generation != owner.drawable_generation) return false;
     const auto display = ghost_compositor::display(compositor);
     ghost_presentation::GhostViImage image{display.texture, display.width, display.height,
-        configuration, owner.context_generation, display.occurrence};
+        configuration, owner.context_generation, display.occurrence, display.framebuffer};
     if (!valid_image(image) || display.width != source.width || display.height != source.height) return false;
     *out = image; return true;
 }
@@ -143,7 +144,7 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
     if (!compositor || !model_id || !ghost_presentation::clean_consumer()
             || world.context_generation != owner.context_generation
             || world.target.width != prepared_width || world.target.height != prepared_height) return;
-    auto *buffer = frameBufferList().getCurrent();
+    auto *buffer = ghost_link::raster_buffer();
     if (!buffer || !buffer->m_pTexture || uint32_t(buffer->m_FBO) != world.target.color) return;
     ghost_compositor::Pose pose{};
     if (!ghost_playback::evaluate(sample, world, pose, draw_token) || !pose.count) return;
@@ -174,7 +175,7 @@ void finish(const ghost::WorldPass *world) {
 }
 bool begin_hud() {
     if (!provisional || hud) return false;
-    auto *buffer = frameBufferList().getCurrent();
+    auto *buffer = ghost_link::raster_buffer();
     if ((gSP.geometryMode & G_ZBUFFER) || !buffer || buffer->m_isDepthBuffer
             || uint32_t(buffer->m_FBO) != clean_fbo || !image_writes_disabled() || !no_color_feedback()) {
         cancel(); return false;

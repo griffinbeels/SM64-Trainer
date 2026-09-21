@@ -29,6 +29,13 @@ bool supported_rom() {
 }
 }
 namespace ghost_link {
+FrameBuffer* raster_buffer() {
+    auto& buffers = frameBufferList();
+    auto* buffer = config.frameBufferEmulation.enable ? buffers.getCurrent() : buffers.getScreenSizeBuffer();
+    if (!buffer || !buffer->m_pTexture || !uint32_t(buffer->m_FBO)) return nullptr;
+    GLint draw = 0; glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    return uint32_t(draw) == uint32_t(buffer->m_FBO) ? buffer : nullptr;
+}
 void rom(bool opened) {
     const bool practice = opened && supported_rom();
     observing = false; ghost_stream::rom(practice); ghost_ipc::rom(practice, practice ? HEADER : nullptr);
@@ -93,16 +100,12 @@ bool begin_hud() {
 void end_hud() { ghost_draw::end_hud(); }
 void triangles(uint32_t count) {
     if (!observing || !count || !(gSP.geometryMode & G_ZBUFFER)) return;
-    auto *buffer = frameBufferList().getCurrent();
+    auto *buffer = raster_buffer();
     ghost::RasterTarget target{};
     // Supported command-generation contract is deliberately specific. Missing
     // framebuffer/depth/ucode evidence becomes an invalid world, not a guess.
     if (!RSP.LLE && GBI.getMicrocodeType() == F3D && !GBI.isNoN() && buffer && buffer->m_pTexture
             && !buffer->m_isDepthBuffer && buffer->m_pDepthBuffer) {
-        GLint draw = 0; glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
-        if (static_cast<uint32_t>(draw) != static_cast<uint32_t>(buffer->m_FBO)) {
-            ghost_stream::triangles(target,count,true); return;
-        }
         const auto *depth = buffer->m_pDepthBuffer;
         target.color = static_cast<uint32_t>(buffer->m_FBO);
         target.depth = depth->m_pDepthBufferTexture
