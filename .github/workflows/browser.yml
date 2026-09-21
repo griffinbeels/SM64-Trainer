@@ -32,7 +32,6 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       SM64_REPORT_DIR: ${{ github.workspace }}\test-artifacts
-      UILAB_PATH: ${{ runner.temp }}\uilab
     steps:
       - uses: actions/checkout@v7
 
@@ -44,11 +43,15 @@ jobs:
       - name: Install the locked environment
         run: uv sync --frozen
 
+      # Outside the workspace, so pytest never collects uilab's own tests.
       - name: Check out uilab at the pinned commit
-        shell: bash
         run: |
-          git clone --quiet "$UILAB_REPO" "$UILAB_PATH"
-          git -C "$UILAB_PATH" checkout --quiet "$UILAB_REF"
+          $path = "$env:RUNNER_TEMP\uilab"
+          git clone --quiet $env:UILAB_REPO $path
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C $path checkout --quiet $env:UILAB_REF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_ENV "UILAB_PATH=$path"
 
       # The replay pages cut real clips (libx264, SVT-AV1); a missing ffmpeg is
       # a failure, never an inventory skip. Same GPL build line every run.
