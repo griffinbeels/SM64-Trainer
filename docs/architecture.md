@@ -550,10 +550,28 @@ disappearing, so the container is doing the work rather than a loosened check.
   reordered H.264 passed ffprobe and lost a clip's last 11 pictures in
   Chromium on 2026-09-18; a container diff would not have caught it.
 
-STILL UNMEASURED: realtime AV1 while SM64 actually renders (every run above was
-on an idle GPU). Take it from `/api/replay/status`'s `frame_source_health`
-(refused vs delivered) and the stage timings against the same numbers on
-H.264, on the first live session.
+### MEASURED LIVE 2026-09-21, the last thing an idle GPU could not answer
+
+Griffin played on the feature branch with the capture layer installed, and the
+numbers came off his own session rather than a bench:
+
+- **Both replays he saved are AV1 at 1600x1200** — 856 pictures / 14,083,845
+  bytes and 533 pictures / 11,898,536 bytes, read back with ffprobe.
+- **35% of H.264's bytes with the game rendering beside the encoder.**
+  22.3 KB per picture, against the H.264 ring's 63.4 KB per picture in the
+  table above (32.6 MB / 514 pictures). The idle-GPU prediction was 32%, so
+  SM64 rendering alongside costs a few points and nothing structural.
+- **No refusals, no backlog, no fault.** `frame_source: plugin`,
+  `frame_source_health.kind: gpu`, `state: recording`, `fault: null`,
+  `pending`/`offers`/`queued` all 0, `video_packets: 2333`,
+  `delivered: 2264`, `max_feed_ms: 27.6` whose slowest command was `pcm`, not
+  video. The AV1 encode never became the bottleneck.
+
+KNOWN GAP, deliberately not fixed on that branch: `/api/replay/status`'s
+`encoder` field reports the DESKTOP-grab codec (`h264_nvenc`) and says nothing
+about the GPU route, so nothing in the app tells a user which codec the
+recorder is actually writing — the live check above had to be made by reading
+the files. Worth exposing the negotiated codec there.
 
 ## Replay capture (2026-06-11/12 live-audit marathon)
 
@@ -1512,7 +1530,13 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-07 for installation onboarding: **55,045 lines,
+Latest reading, 2026-09-21 after AV1 at capture: **70,335 lines, 1,876 public
+names, 37.5 lines per public name, 82 pass-through (4.4%)**. That branch added
+no forwarding name: the codec travels as a field on values that already
+existed (`NativeFormat.codec`, `gbenc_options_v1.codec`) and its one new owner,
+`gpusettings.recording_codec`, answers a question nothing else could answer.
+
+Previous reading, 2026-09-07 for installation onboarding: **55,045 lines,
 1,357 public names, 40.6 lines per public name, 64 pass-through (4.7%)**.
 The new forwarding name is `SetupRecord.complete`, which gives the persisted
 completion write its domain meaning. Setup observations, readiness, navigation
