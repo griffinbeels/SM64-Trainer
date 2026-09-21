@@ -71,7 +71,7 @@ extern "C" void __cdecl RomOpen(){
 #endif
  opens++;rb_rom_open();}
 extern "C" void __cdecl RomClosed(){if(wrapper_value("TestGate")||clean_enabled)ExitProcess(91);closes++;rb_rom_closed();}
-extern "C" void __cdecl CloseDLL(){if(wrapper_value("TestGate"))ExitProcess(92);rb_close();}
+extern "C" void __cdecl CloseDLL(){if(wrapper_value("TestGate")||clean_enabled)ExitProcess(92);rb_close();}
 extern "C" void __cdecl TestCounts(unsigned*p){p[0]=lists;p[1]=updates;p[2]=opens;p[3]=closes;}
 extern "C" void __cdecl TestDelta(unsigned n){delta=n;}
 #define EMPTY(name) extern "C" void __cdecl name(){}

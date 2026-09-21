@@ -727,6 +727,14 @@ class TrackerService:
         rather than depending on a missed segment_disarmed/armed notice."""
         return self._projector.armed_arms()
 
+    def native_ghost_origin(self, kind: str, entity_key: str) -> dict | None:
+        """Only the current, recovered session can certify a live origin."""
+        if self.db is None or self.session_id is None or self._tracking_dirty:
+            return None
+        origin = self._projector.native_ghost_origin(kind, entity_key)
+        return (origin if origin is not None
+                and origin["session_id"] == self.session_id else None)
+
     def _require_db(self) -> Database:
         if self.db is None or self.session_id is None:
             raise RuntimeError("database unavailable")
