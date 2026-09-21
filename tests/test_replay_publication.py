@@ -14,6 +14,20 @@ def inputs(tmp_path):
     return source, root, destination
 
 
+def native_inputs(tmp_path, destination):
+    from ghost_native_fixture import attempt, frame, producer
+    from sm64_events.ghost.clip import STAR_CLOCK, attempt_origin, write_clip
+
+    row = attempt(end=101)
+    row.id = 42
+    target = {"kind": "star", "entity_key": "24-1"}
+    ghost = tmp_path / "scratch.ghost"
+    identity = write_clip(ghost, (frame(),), producer(), clock_kind=STAR_CLOCK)
+    identity.update(attempt_id=row.id, session_id=row.session_id, target=target,
+                    file=destination.with_suffix(".ghost").name, **attempt_origin(row))
+    return ghost, identity, row, target
+
+
 def test_publication_keeps_media_and_metadata_after_scratch_removed(tmp_path):
     source, root, destination = inputs(tmp_path)
     publication.publish(root, 42, source, destination, {"clock": [0, 0.0333]}, {"loop": None})
@@ -80,12 +94,9 @@ def test_recovery_refuses_outside_root_without_touching_target(tmp_path):
 
 
 def test_native_pose_sidecar_commits_with_video_and_recovers_without_scratch(tmp_path, monkeypatch):
-    from ghost_native_fixture import frame, producer
-    from sm64_events.ghost.clip import read_clip, write_clip
+    from sm64_events.ghost.clip import check_manifest
     source, root, destination = inputs(tmp_path)
-    ghost = tmp_path / "scratch.ghost"
-    identity = write_clip(ghost, (frame(),), producer())
-    identity["file"] = destination.with_suffix(".ghost").name
+    ghost, identity, row, target = native_inputs(tmp_path, destination)
     replace = publication.os.replace
 
     def interrupt(src, dst):
@@ -102,16 +113,18 @@ def test_native_pose_sidecar_commits_with_video_and_recovers_without_scratch(tmp
     ghost.unlink()
     monkeypatch.setattr(publication.os, "replace", replace)
     assert publication.recover(root) == []
-    assert read_clip(destination.with_suffix(".ghost"), identity["sha256"]).clip_id == identity["clip_id"]
-    assert json.loads(destination.with_suffix(".json").read_text())["native_ghost"] == identity
+    saved_identity = json.loads(destination.with_suffix(".json").read_text())["native_ghost"]
+    assert saved_identity == identity
+    recovered = check_manifest(destination.with_suffix(".ghost"), saved_identity,
+                               attempt=row, target=target)
+    assert recovered.clip_id == identity["clip_id"]
 
 
 def test_native_pose_tampering_or_missing_bytes_never_publishes_video(tmp_path):
-    from ghost_native_fixture import frame, producer
-    from sm64_events.ghost.clip import write_clip
+    from sm64_events.ghost.clip import check_manifest
     source, root, destination = inputs(tmp_path)
-    ghost = tmp_path / "scratch.ghost"
-    identity = write_clip(ghost, (frame(),), producer())
+    ghost, identity, row, target = native_inputs(tmp_path, destination)
+    check_manifest(ghost, {**identity, "file": ghost.name}, attempt=row, target=target)
     metadata = {"native_ghost": identity}
     with pytest.raises(ValueError, match="missing native ghost bytes"):
         publication.publish(root, 42, source, destination, metadata, {})
