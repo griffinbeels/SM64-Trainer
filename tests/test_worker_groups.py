@@ -30,6 +30,81 @@ def test_a_spread_test_is_its_own_group(request, case):
         "xdist splits `nodeid@group` on those characters")
 
 
+def test_a_browser_sweep_case_joins_a_BOUNDED_pool(request):
+    """A viewport case boots its own server AND its own Chromium, so `spread`
+    (one group per case) let ~20 browsers stand up at once and they starved
+    each other -- three full runs at 8 workers went 21, 10 and 19 failed,
+    always the sweep, while 4 workers passed 11016 twice (2026-09-20). These
+    files share one bounded pool so the ceiling holds however many workers the
+    run gets; the rest of the suite keeps all of them.
+
+    Two properties, and the SECOND is the one that would rot quietly: the pool
+    is bounded, and membership is a pure function of the nodeid. testmon
+    selects subsets and reruns reorder, so an assignment that depended on
+    collection order would move a case between groups from run to run -- a new
+    flake source wearing the shape of a fix.
+    """
+    from source_scan import strip_comments
+
+    from conftest import BROWSER_SWEEP_GROUPS, BROWSER_SWEEPS, browser_sweep_group
+
+    # Driven by a SYNTHETIC set, never by whatever this run happened to
+    # collect: the first version of this guard read the live items and passed
+    # against an unbounded mutation, because a two-case probe cannot exceed a
+    # bound of four. 112 cases are collected in a full gate and two in a
+    # focused one; the rule is the same and so is the proof.
+    sweep = BROWSER_SWEEPS[0]
+    synthetic = [f"{sweep}::test_no_layout_defects_at_each_viewport[{w}x1000]"
+                 for w in range(850, 900)]
+    groups = {browser_sweep_group(nodeid) for nodeid in synthetic}
+    assert len(groups) <= BROWSER_SWEEP_GROUPS, (
+        f"{len(synthetic)} sweep cases landed in {len(groups)} groups; the pool "
+        f"caps concurrent browsers at {BROWSER_SWEEP_GROUPS}")
+    assert all("@" not in name and "]" not in name for name in groups), (
+        "xdist splits `nodeid@group` on those characters")
+
+    # Order-independence: reversed, and a strided SUBSET (testmon's shape),
+    # must agree with the full map on every id they share.
+    full = {nodeid: browser_sweep_group(nodeid) for nodeid in synthetic}
+    for other in (list(reversed(synthetic)), synthetic[::3]):
+        assert all(full[nodeid] == browser_sweep_group(nodeid) for nodeid in other), (
+            "a sweep case moved group when the collection changed -- an "
+            "assignment that depends on order, not on the nodeid")
+
+    # And the hook APPLIES it, rather than deriving a group some other way.
+    # The source check is what keeps this honest in a focused run, where too
+    # few sweep cases are collected for the live marks to discriminate.
+    hook = strip_comments((REPO / "tests" / "conftest.py").read_text(encoding="utf-8"))
+    assert "browser_sweep_group(item.nodeid)" in hook, (
+        "the hook must assign from the pure nodeid function, so testmon's "
+        "subsets and reruns cannot move a case between groups")
+
+    for item in request.session.items:
+        if item.nodeid.split("::")[0] in BROWSER_SWEEPS:
+            mark = item.get_closest_marker("xdist_group")
+            assert mark is not None and mark.args[0] == browser_sweep_group(item.nodeid), (
+                f"{item.nodeid} carries {mark and mark.args} -- the hook is not "
+                "applying the bounded pool")
+
+
+def test_a_spread_file_that_boots_no_browser_is_not_bounded(request):
+    """The bound is paid for in wall time, so it goes only where browsers do.
+    `tests/test_api.py` is `spread` because it is hundreds of fast in-process
+    cases; folding it into the pool would serialise them behind each other for
+    nothing. A regression here costs minutes per gate and breaks no test, so
+    nothing else would report it."""
+    from conftest import BROWSER_SWEEPS
+
+    assert "tests/test_api.py" not in BROWSER_SWEEPS
+    assert all(path.startswith("tests/test_responsive") for path in BROWSER_SWEEPS), (
+        f"a non-sweep file joined the browser pool: {BROWSER_SWEEPS}")
+    for path in BROWSER_SWEEPS:
+        assert (REPO / path).exists(), f"{path} no longer exists; drop its row"
+        source = (REPO / path).read_text(encoding="utf-8")
+        assert "uilab_sweep_at" in source or "sweep" in source, (
+            f"{path} is in the browser pool but reads like no sweep")
+
+
 def test_under_loadgroup_the_group_reached_the_scheduler(request):
     """xdist rewrites the nodeid to `<nodeid>@<group>` on the worker, and only
     if the mark was there when ITS hook ran. Proves the hook order, which a

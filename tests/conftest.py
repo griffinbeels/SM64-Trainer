@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,43 @@ SHARED_GROUPS = {
     "tests/test_layout_matches_report.py": "version_sync_report",
 }
 
+# `spread` says "these cases may leave their file". For most of them that is
+# free -- test_api.py is spread because it is hundreds of fast in-process
+# cases. For a VIEWPORT SWEEP it is not: every case boots its own uvicorn
+# fixture AND its own Chromium, so one group per case let ~20 browsers start
+# at once and the workers starved each other. Measured 2026-09-20 on the same
+# tree: 8 workers went 21, 10 and 19 failed across three full runs -- always
+# the sweep, always a different overlapping subset of widths, always the Rank
+# board still reading "Loading the leaderboard…" -- while 4 workers passed
+# 11016 twice. Cold `/api/leaderboard` is 1431 ms and warm 115 ms, so nothing
+# there is slow; the machine was starved.
+#
+# So the CONCURRENCY is bounded where it is actually expensive, rather than by
+# throttling the whole suite to 4 workers (which taxes ~10,900 in-process
+# tests to protect ~20) or by an agent remembering `--workers 4` (a flag
+# nobody had typed in this project's history before the day it was needed).
+# Same group -> same worker -> sequential under `--dist loadgroup`, so these
+# files share ONE pool of BROWSER_SWEEP_GROUPS groups and never put more than
+# that many sweep browsers up at once. The rest of the suite keeps every
+# worker it was given.
+#
+# Keyed on a stable hash of the nodeid, NEVER on collection index: testmon
+# selects subsets and reruns reorder, and an index would then move a case
+# between groups from run to run, which is a flake source rather than a fix.
+BROWSER_SWEEP_GROUPS = 4
+BROWSER_SWEEPS = (
+    "tests/test_responsive.py",
+    "tests/test_responsive_bowser.py",
+    "tests/test_responsive_subsections.py",
+)
+
+
+def browser_sweep_group(nodeid: str) -> str:
+    """The bounded group a viewport case belongs to. Pure, so
+    `tests/test_worker_groups.py` can prove the bound and the determinism
+    without a session."""
+    return f"browser_sweep_{zlib.crc32(nodeid.encode()) % BROWSER_SWEEP_GROUPS}"
+
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_collection_modifyitems(items):
@@ -96,7 +134,10 @@ def pytest_collection_modifyitems(items):
     workers on the first try (2026-09-01). A test marked `spread` is its own
     group instead, so its cases leave the file and land on whichever worker
     is free: that is how a sweep parametrised per viewport stops being one
-    three-minute unit. Group names must carry no `@` or `]` -- xdist appends
+    three-minute unit. A file in `BROWSER_SWEEPS` is spread into a BOUNDED
+    pool instead -- same freedom to leave the file, a ceiling on how many of
+    its browsers stand up together; the reason is on that constant.
+    Group names must carry no `@` or `]` -- xdist appends
     `@<group>` to the nodeid and splits it back on those two characters.
     `tryfirst` because xdist's worker reads the marks in ITS hook of the same
     name, and this conftest registers before that worker plugin does -- so
@@ -123,7 +164,9 @@ def pytest_collection_modifyitems(items):
     live session's order against that recipe."""
     for index, item in enumerate(items):
         item.stash[RAW_INDEX] = index
-        if item.get_closest_marker("spread"):
+        if item.nodeid.split("::")[0] in BROWSER_SWEEPS:
+            group = browser_sweep_group(item.nodeid)
+        elif item.get_closest_marker("spread"):
             group = re.sub(r"[^A-Za-z0-9_./:-]", "_", item.nodeid)
         else:
             group = SHARED_GROUPS.get(item.nodeid.split("::")[0],
