@@ -684,6 +684,19 @@ MARIO_FORWARD_VEL_OFF = 0x54     # f32
 # speed of 43.14, 41.14 at 42.14, and so on down). Two independently decoded
 # fields of the same struct agreeing on his motion is what pins the offset.
 MARIO_POS_OFF = 0x3C             # Vec3f {x, y, z}, world units
+
+# Ghost capture live-gate offsets: original N64 types.h / graph_node.h.
+# VERIFY against the renderer-boundary capture before claiming pose fidelity.
+# Host libsm64 structs have modified field layouts and are not RAM decoders.
+MARIO_AREA_OFF = 0x90            # Area* in MarioState
+MARIO_GFX_ANIM_TIMER_OFF = 0x42  # u16 in Object.header.gfx.animInfo
+AREA_INDEX_OFF = 0x00           # s8
+AREA_FLAGS_OFF = 0x01           # active bit 0
+AREA_GRAPH_ROOT_OFF = 0x04      # GraphNodeRoot*
+AREA_CAMERA_OFF = 0x24          # Camera*
+GRAPH_NODE_TYPE_OFF = 0x00      # s16, GraphNodeRoot is type 1
+GRAPH_NODE_FLAGS_OFF = 0x02     # active bit 0
+GRAPH_ROOT_AREA_OFF = 0x14      # u8
 # The collision world is s16: every floor the game can find lies inside
 # +-32768, a level's own cells stop at +-8192 sideways, and the default
 # floor/ceiling are -11000/+20000. So this is four times a level's width and
