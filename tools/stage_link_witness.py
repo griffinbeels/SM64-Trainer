@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import shutil
 import tempfile
 from pathlib import Path
@@ -93,7 +94,30 @@ def verify_source(source: Path) -> None:
         raise ValueError("source tree differs from the complete pinned archive")
 
 
-def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | None = None, context_lifetime: bool = False) -> None:
+def _validate_modes(boundary: bool, context_lifetime: bool, ghost: bool) -> None:
+    if context_lifetime and not boundary:
+        raise ValueError('context lifetime requires the explicit source boundary')
+    if ghost and not context_lifetime:
+        raise ValueError('ghost capture requires the explicit source/context lifetime')
+
+
+def _stage_ghost(output: Path, enabled: bool) -> None:
+    if not enabled:
+        return
+    spec = importlib.util.spec_from_file_location("stage_ghost_renderer", ROOT / "tools/stage_ghost_renderer.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for relative, data in module.edits(output, replace_once).items():
+        (output / relative).write_bytes(data)
+    for name in ["ghost_capture.h", "ghost_capture.cpp", "ghost_pass.h", "ghost_pass.cpp",
+                 "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
+                 "ghost_pose.h", "ghost_pose.cpp", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h"]:
+        shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
+    shutil.copyfile(ROOT / "renderer/model/model.h", output / GL / "model.h")
+
+
+def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | None = None,
+            context_lifetime: bool = False, ghost: bool = False) -> None:
     source, output = source.resolve(), output.resolve()
     scratch = Path(tempfile.gettempdir()).resolve()
     allowed = [ROOT / ".iteration", scratch]
@@ -101,8 +125,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
         raise ValueError("staged output must be a new directory under .iteration or the temp folder")
     if output.exists() or output.is_relative_to(source) or source.is_relative_to(output):
         raise ValueError("source/output must be separate; output must not exist")
-    if context_lifetime and not boundary:
-        raise ValueError('context lifetime requires the explicit source boundary')
+    _validate_modes(boundary, context_lifetime, ghost)
     verify_source(source)
     edited = {}
     key = GL + "GLFunctions.h"
@@ -162,6 +185,7 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
     if boundary:
         for name in ["renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp"]:
             shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
+    _stage_ghost(output, ghost)
     print(f"Staged the capture overlay: {output}; pinned LINK {PIN}")
 
 
@@ -171,9 +195,11 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--context-lifetime", action="store_true", help="also stage protected context retirement; compile with SM64_REPLAY_CONTEXT_LIFETIME")
     parser.add_argument("--boundary", action="store_true", help="also stage the explicit command boundary API")
+    parser.add_argument("--ghost", action="store_true", help="stage GhostV1 per-DList pose/camera/world capture")
     parser.add_argument("--label", help="distinct test-only selector name; settings identity stays unchanged")
     args = parser.parse_args()
-    overlay(args.source, args.out, boundary=args.boundary, label=args.label, context_lifetime=args.context_lifetime)
+    overlay(args.source, args.out, boundary=args.boundary, label=args.label,
+            context_lifetime=args.context_lifetime, ghost=args.ghost)
 
 
 if __name__ == "__main__":
