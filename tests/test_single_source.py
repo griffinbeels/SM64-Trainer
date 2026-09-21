@@ -187,6 +187,28 @@ INVARIANTS = (
             "rendering them outside searchselect.js is building its own.",
     ),
     SingleSource(
+        concept="the list of saved replays being made smaller",
+        owners=frozenset({"compressionjobs.js"}),
+        tokens=("compression-job-name", "compression-job-status", "compression-meter"),
+        files=ui_js(),
+        why="2026-09-19: the close warning and the recording-dot panel show "
+            "the SAME jobs, and his brief for it was one implementation on "
+            "both. The classes ARE the row; a surface rendering them outside "
+            "compressionjobs.js has built a second list, and the two will "
+            "word a stage or move a bar differently within a release.",
+    ),
+    SingleSource(
+        concept="what a replay-compression stage is called on screen",
+        owners=frozenset({"compression.js"}),
+        tokens=('"Waiting its turn"', '"Kept at full size"',
+                '"Checking it matches the original"'),
+        files=ui_js(),
+        why="2026-09-19: a stage is described in the player's words, never "
+            "the technique's, and both surfaces must say the same thing about "
+            "the same job. ui/compression.js::jobStatus is the one place a "
+            "stage becomes a sentence (tests/frontend/compression.test.js).",
+    ),
+    SingleSource(
         concept="how a background child process is spawned",
         owners=frozenset({"childproc.py", "installer.py"}),
         tokens=("CREATE_NO_WINDOW", "0x08000000", "FORCEOFFFEEDBACK"),

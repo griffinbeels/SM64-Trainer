@@ -93,7 +93,11 @@ def _save_geometry(win) -> None:
         log.debug("could not persist window geometry", exc_info=True)
 
 
-def create(on_closed) -> "webview.Window":
+def create(on_closed, on_closing=None) -> "webview.Window":
+    """`on_closing()` runs on the GUI thread when the user asks to close; it
+    returns False to keep the window open (pywebview 6.2.1: a closing handler
+    that returns False sets the form's Cancel, verified in winforms.on_closing).
+    It must not call back into the window synchronously."""
     g = _load_geometry()
     win = webview.create_window(
         APP_DISPLAY_NAME, url=f"http://127.0.0.1:{server_port()}/",
@@ -102,6 +106,8 @@ def create(on_closed) -> "webview.Window":
     win.events.resized += lambda *a: _save_geometry(win)
     win.events.moved += lambda *a: _save_geometry(win)
     win.events.closed += lambda: on_closed()
+    if on_closing is not None:
+        win.events.closing += lambda: on_closing()
     return win
 
 
