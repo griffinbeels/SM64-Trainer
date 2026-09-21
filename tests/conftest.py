@@ -70,6 +70,42 @@ def _arm_the_merge_check_tripwire() -> None:
         setattr(BrowserType, name, refuse)
 
 
+# Pages a browser-lane test opened, so a failure can be photographed while the
+# page is still up. Only on the browser run (SM64_REPORT_DIR names where its
+# artifacts go); a local run keeps nothing.
+_OPEN_PAGES: list = []
+
+
+def _keep_failure_screenshots() -> None:
+    try:
+        from playwright.sync_api import Browser, BrowserContext
+    except ImportError:
+        return
+    for owner in (Browser, BrowserContext):
+        def new_page(self, *args, _original=owner.new_page, **kwargs):
+            page = _original(self, *args, **kwargs)
+            _OPEN_PAGES[:] = [kept for kept in _OPEN_PAGES if not kept.is_closed()][-5:]
+            _OPEN_PAGES.append(page)
+            return page
+        owner.new_page = new_page
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = (yield).get_result()
+    if not (report.failed and _OPEN_PAGES and os.environ.get("SM64_REPORT_DIR")):
+        return
+    folder = Path(os.environ["SM64_REPORT_DIR"]) / "screenshots"
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "_", item.nodeid)[-150:]
+    for index, page in enumerate(_OPEN_PAGES):
+        try:
+            if not page.is_closed():
+                folder.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(folder / f"{stem}-{report.when}-{index}.png"), timeout=5000)
+        except Exception as error:  # noqa: BLE001 -- a crashed browser gives no picture, never a second failure
+            report.sections.append(("screenshot", f"page {index} not captured: {error}"))
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
     """Direct pytest shares the runner's admission and CPU budget too.
@@ -81,6 +117,8 @@ def pytest_configure(config):
         raise pytest.UsageError("--shard splits the browser lane; pass --lane browser")
     if config.getoption("lane") == "merge":
         _arm_the_merge_check_tripwire()
+    elif config.getoption("lane") == "browser" and os.environ.get("SM64_REPORT_DIR"):
+        _keep_failure_screenshots()
     # Browser waits get a bound that scales with the machine this run ACTUALLY
     # gets. uilab's 10s default suits one browser on an idle box; this suite
     # runs several servers, browsers and node drivers at once, and when OBS is

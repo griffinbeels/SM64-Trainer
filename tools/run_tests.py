@@ -216,6 +216,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="additional CPU reserve; cannot weaken the automatic desktop/OBS budget")
     parser.add_argument("--dry-run", action="store_true", help="print selection without starting tests")
     args, extra = parser.parse_known_args(argv)
+    # A vitest failure prints characters the console's code page lacks; the
+    # relay must pass them on as '?' rather than die and hide every failure.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     if (args.workers is not None and args.workers < 0) or (args.reserve is not None and args.reserve < 0):
         parser.error("workers and reserve must be nonnegative")
     if args.changed and extra:
