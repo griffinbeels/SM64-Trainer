@@ -6,12 +6,13 @@
 #ifndef SM64_GHOST_CAPTURE_H
 #define SM64_GHOST_CAPTURE_H
 #include <stdint.h>
+#include "ghost_clock.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define GC_VERSION 2u
+#define GC_VERSION 3u
 #define GC_RAM_WORD_SWAPPED 1u
 #define GC_ROM_US 1u
 #define GC_GRAPH_NODE_LIMIT 256u
@@ -19,7 +20,7 @@ extern "C" {
 
 enum gc_valid {
     GC_VALID_CLOCK = 1u, GC_VALID_POSE = 2u, GC_VALID_CAMERA = 4u,
-    GC_VALID_ACTION = 8u
+    GC_VALID_ACTION = 8u, GC_VALID_WARP = 16u
 };
 enum gc_status {
     GC_OK = 0, GC_BAD_ARGUMENT = 1, GC_BAD_CONFIG = 2,
@@ -33,13 +34,16 @@ enum gc_root_kind { GC_ROOT_UNRESOLVED = 0, GC_ROOT_TRS = 1 };
 /* Addresses are N64 KSEG0 addresses from the selected Python Layout. No
  * arbitrary pointer programs or offsets cross this ABI. New fields remain
  * VERIFY until their live address gates pass. Only the US schema is enabled.
+ * Either warp root may be zero to declare unavailable raw warp evidence;
+ * nonzero roots must still be aligned and bounded inside RDRAM.
  */
 #pragma pack(push, 4)
 typedef struct gc_layout {
     uint32_t bytes, version, ram_order, rdram_bytes, rom_layout;
     uint32_t global_timer, mario_state, mario_object, current_area_pointer;
     uint32_t area_update_counter, current_level, current_area, igt_overall;
-    uint32_t object_pool, reserved[2];
+    uint32_t object_pool, pending_warp_op, delayed_warp_timer;
+    gcc_config clock;
 } gc_layout;
 
 typedef struct gc_pose {
@@ -84,6 +88,16 @@ typedef struct gc_sample {
     uint32_t live_action;
     gc_pose pose;
     gc_camera camera;
+    /* Independently valid raw game warp fields; no classifier runs here.
+     * Both clear if either Layout root is unavailable. The complete u16/i16
+     * ranges are preserved; a pending-op whitelist would discard evidence.
+     */
+    uint16_t pending_warp_op;
+    int16_t delayed_warp_timer;
+    /* Always zero from ghost_capture_read; the source-thread clock owner
+     * attaches derived evidence to this same immutable occurrence afterward.
+     */
+    gcc_output clock;
 } gc_sample;
 
 /* Zero-initialize or reset before use. One reader per serialized producer.
@@ -108,7 +122,7 @@ typedef struct gc_frame {
 
 void ghost_capture_reset(gc_reader *reader);
 uint32_t ghost_capture_validate_layout(const gc_layout *layout);
-/* Returns GC_OK only when all four components are valid. Output is cleared
+/* Returns GC_OK only when all five components are valid. Output is cleared
  * first, including on malformed arguments. Inspect valid_fields for partial
  * clock/camera/action evidence when the live Mario pose is unsupported.
  */
