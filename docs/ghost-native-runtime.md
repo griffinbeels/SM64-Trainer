@@ -141,12 +141,23 @@ evidence in one continuity, with monotonic occurrences and elapsed time;
 timing-invalid archive rows cannot form a playable clip. A final closing reset
 can remain as evidence, but a star index stops before the next generation.
 
+Recorded pose usability depends on the captured clock and pose components, not
+the recording's framebuffer qualification. The saved `world_status` remains
+unchanged diagnostic evidence. Playback builds geometry from that pose using
+the live camera and a separately qualified live world pass. A historical target
+refusal cannot discard otherwise valid poses; an invalid live target still
+prevents drawing. Unsupported pose occurrences remain in their original slots.
+The manifest's `invalid_records` counts unusable clock/pose components, not a
+historical world-target refusal.
+
 [ReplayService](../src/sm64_events/replay/service.py) can preserve a template as
 `native/attempt_<id>.ghost` plus its JSON commit record without encoding an MP4.
 Saved video can also carry the sidecar. Lookup validates path, content hash,
 attempt/session/target and all four persisted origin fields. The native session
 caches by this metadata identity and file fingerprints: reprojecting the same
 attempt invalidates its old asset without decoding a large clip on every check.
+An explicit preservation failure is retained for the matching attempt identity
+and shown by the ghost control; saving the input template can still succeed.
 
 ## Model, world depth and clean presentation
 
@@ -171,6 +182,12 @@ only after triangles and deferred rectangles flush. A later world pass, target
 change, interrupted/resumed list or stale command revokes the candidate. Ordinary
 GL depth and N64 R32F image depth use different mappings; unknown routes,
 multisampling and unsupported projection corrections are refused.
+
+With framebuffer emulation disabled, the pinned renderer still draws through
+its screen-size framebuffer. Its current emulated-framebuffer pointer is null
+in this mode. Target lookup must select the actual screen-size buffer and verify
+the bound draw framebuffer, and presentation must observe that buffer's separate
+screen-copy path. The normal emulated-framebuffer path cannot stand in for it.
 
 [ghost_draw.cpp](../plugin/gfxwrap/ghost_draw.cpp) builds a separate display branch.
 Private self-depth applies opacity once per visible Mario pixel; original game
@@ -199,6 +216,14 @@ loader, compositor and presentation modules. See
 [connected pipeline](../tests/test_ghost_pipeline.py). The portable parity host
 calls the real native loader with model calls forbidden; it proves acceptance
 parity, not rendered geometry.
+
+The [screen-buffer witness](../tests/test_ghost_screen_buffer.py) executes the
+staged screen-size presentation, target lookup and VI adapter against hidden
+OpenGL buffers. It covers blit and texture-copy fallback, gamma, padded source
+dimensions, zero/half/full opacity and clean recording. It requires both
+`SM64_TEST_GHOST_PRESENTATION=1` and `SM64_GHOST_WITNESS_SOURCE` pointing to a
+fresh retained renderer build. Its window/configuration shells and shader copy
+implementation are synthetic; it does not run Project64.
 
 The connected hidden-WGL proof used GC3/GS2/GP2/GCLIP2 and the actual native
 capture, clock, queue, model, compositor and presentation code with synthetic
