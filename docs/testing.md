@@ -7,7 +7,7 @@ The suite is split so the local loop never waits on a browser. For the
 | --- | --- | --- | --- |
 | **Focused check** | `uv run python tools/run_tests.py tests/test_x.py` or `--changed` | the files you name (either lane), or testmon's pick inside the merge check | never |
 | **Merge check** | `uv run python tools/run_tests.py` | every test that starts no UI fixture server and no browser (~10,400) | for one of two slots |
-| **Browser run** | GitHub Actions, every push to main; `uv run python tools/browser_ci.py status` | every test that does (~700), in 8 parallel jobs | not on this machine |
+| **Browser run** | GitHub Actions, every push to main; `uv run python tools/browser_ci.py status` | every test that does (~700), in 8 parallel jobs, about 10 minutes | not on this machine |
 
 The merge check gates a merge. The browser run gates only a release
 (`tools/release.py` waits for a green one on the commit it releases).

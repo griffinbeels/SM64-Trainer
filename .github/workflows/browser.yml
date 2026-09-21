@@ -6,9 +6,7 @@ name: browser run
 
 on:
   push:
-    # TEMPORARY: test-lanes proves this workflow before main has it (GitHub
-    # only dispatches workflows present on the default branch). Removed before merge.
-    branches: [main, test-lanes]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
