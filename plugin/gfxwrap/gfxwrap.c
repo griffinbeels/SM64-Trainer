@@ -324,6 +324,11 @@ EXPORT void CALL RomOpen(void) {
     /* Decided before the renderer opens the ROM, so no frame of a baseline
      * ROM ever reaches the stamp adapter. */
     g_practice_rom = g_have_gfx && loaded_rom_is_practice();
+    if (g_practice_rom && g_gfx.MemoryBswaped && g_gfx.RDRAM && g_gfx.VI_ORIGIN_REG)
+        g_runtime_ready = wr_configure(g_wrapped_module, &g_wrapped, runtime_vi, runtime_ram);
+    else {
+        wr_suspend(); g_runtime_ready = FALSE;
+    }
     plugin_logf("rom_open_begin", "initiated=%d practice_rom=%d", g_have_gfx, g_practice_rom);
     if (g_wrapped.RomOpen) g_wrapped.RomOpen();
     measure_rdram();                          /* the expansion pak is committed by now */
@@ -332,6 +337,9 @@ EXPORT void CALL RomOpen(void) {
 }
 
 EXPORT void CALL RomClosed(void) {
+    /* Revoke clean-source capability before the renderer tears its context
+     * down. A practice-ROM reopen renegotiates through the proven binding. */
+    wr_suspend(); g_runtime_ready = FALSE;
     control_rom(FALSE, FALSE);
     g_practice_rom = FALSE;
     sa_reset();
