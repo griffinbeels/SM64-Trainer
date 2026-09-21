@@ -65,6 +65,64 @@ def test_timeout_is_unavailable(monkeypatch):
         lint.run(["python"])
 
 
+@pytest.mark.parametrize("below_exact_fit", [0, 1])
+def test_batches_bound_quoted_utf16_command_and_preserve_every_argument(monkeypatch, below_exact_fit):
+    executable = r"C:\tool directory\lint.exe"
+    monkeypatch.setattr(lint.shutil, "which", lambda _: executable)
+    names = ["one file.py", "emoji\U0001f600.py", "backslash space\\\\", 'embedded"quote.py']
+    prefix = [executable, "check"]
+    limit = len(subprocess.list2cmdline([*prefix, *names[:2]]).encode("utf-16-le")) // 2 + 1 - below_exact_fit
+    monkeypatch.setattr(lint, "COMMAND_BUDGET", limit)
+    batches = lint.argument_batches(["lint", "check"], names)
+    assert batches[0] == [*prefix, *names[:2 - below_exact_fit]]
+    assert len(batches) > 1
+    assert [name for batch in batches for name in batch[len(prefix):]] == names
+    assert all(len(subprocess.list2cmdline(batch).encode("utf-16-le")) // 2 + 1 <= limit
+               for batch in batches)
+
+
+@pytest.mark.parametrize("fix", [False, True])
+def test_oversize_argument_refuses_before_any_lint_or_fix_runs(tmp_path, monkeypatch, fix):
+    monkeypatch.setattr(lint.shutil, "which", lambda _: "linter.exe")
+    monkeypatch.setattr(lint, "COMMAND_BUDGET", 500)
+    calls = []
+    monkeypatch.setattr(lint, "run", lambda *args: calls.append(args))
+    with pytest.raises(lint.Unavailable, match="single linter argument"):
+        lint.lint(["ordinary.py", "x" * 501 + ".py"], fix=fix, root=tmp_path)
+    assert calls == []
+
+
+@pytest.mark.parametrize("suffix", ["py", "js"])
+def test_all_batch_findings_survive_and_later_failures_are_not_hidden(project, monkeypatch, suffix):
+    names = [f"first.{suffix}", f"second.{suffix}"]
+    # Boundary arithmetic is tested above. Here each process returns its own
+    # report, including ESLint's distinct nonempty-but-diagnostic-free failure.
+    monkeypatch.setattr(lint, "argument_batches", lambda command, files: [[*command, name] for name in files])
+    fail_later = False
+    calls = []
+
+    def reports(argv, root):
+        name = argv[-1]
+        calls.append(name)
+        if fail_later and name == names[1]:
+            return subprocess.CompletedProcess(argv, 2 if suffix == "py" else 1,
+                "[]" if suffix == "py" else '[{"messages": []}]', "late crash")
+        if suffix == "py":
+            rows = [{"filename": str(root / name), "location": {"row": 1}, "code": "F821", "message": "undefined"}]
+        else:
+            rows = [{"filePath": str(root / name), "messages": [{"line": 1, "ruleId": "eqeqeq", "message": "use ==="}]}]
+        return subprocess.CompletedProcess(argv, 1, json.dumps(rows), "")
+
+    monkeypatch.setattr(lint, "run", reports)
+    assert [item["path"] for item in lint.lint(names, root=project)] == names
+    assert calls == names
+    calls.clear()
+    fail_later = True
+    with pytest.raises(lint.Unavailable, match="late crash|without diagnostics"):
+        lint.lint(names, root=project)
+    assert calls == names
+
+
 def test_baseline_is_scoped_and_counted(tmp_path):
     path = tmp_path / "a.py"
     path.write_text("before = 1\na = missing\nafter = 2\n", encoding="utf-8")
@@ -76,14 +134,18 @@ def test_baseline_is_scoped_and_counted(tmp_path):
     assert lint.new_findings([finding], baseline, tmp_path) == [finding]
 
 
-def test_fix_only_changes_explicit_owned_file(project):
+def test_fix_batches_only_change_explicit_owned_files(project, monkeypatch):
     owned = project / "owned.py"
+    second = project / "second_owned.py"
     other = project / "other.py"
     content = "import os\nanswer = 42\n"
     owned.write_text(content, encoding="utf-8")
+    second.write_text(content, encoding="utf-8")
     other.write_text(content, encoding="utf-8")
-    assert lint.lint([owned.name], fix=True, root=project) == []
+    monkeypatch.setattr(lint, "argument_batches", lambda command, files: [[*command, name] for name in files])
+    assert lint.lint([owned.name, second.name], fix=True, root=project) == []
     assert "import os" not in owned.read_text(encoding="utf-8")
+    assert "import os" not in second.read_text(encoding="utf-8")
     assert other.read_text(encoding="utf-8") == content
 
 
