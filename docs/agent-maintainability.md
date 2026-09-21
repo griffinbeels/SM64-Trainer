@@ -1,7 +1,7 @@
-# Agent-maintainability — the intention behind the lint gate
+# Agent-maintainability — the intention behind the lint rules
 
 This project is written entirely by agents, and every round builds on the last
-round's code. So the question this gate answers is narrow and specific:
+round's code. So the question these rules answer is narrow and specific:
 
 > **Does this change make the NEXT agent more likely to fail?**
 
@@ -11,37 +11,12 @@ style questions and they belong to review, not to a blocking gate. Every rule in
 has a failure story. A rule with no failure story is how a gate turns into a
 style preset nobody reads, and the first thing to do with one is delete it.
 
-The gate lives in `.claude/hooks/lint-gate.py` and fires on `git commit`. Run it
-by hand with `uv run python tools/lint_changed.py`.
-
----
-
-## The two design decisions, and what they cost
-
-**Diff-scoped, not whole-file.** Only findings on lines a commit ADDS can block
-it. When the gate shipped there were ~312 Python and ~93 JavaScript findings in
-the tree; a gate reporting those on every commit is noise on round one and
-ignored by round two. Scoping means the backlog costs nothing, new work cannot
-add to it, and there is no baseline file to drift out of date. The cost: the
-backlog never shrinks on its own. That is what `tools/lint_changed.py --all` is
-for — read it during a re-evaluation pass, not during a feature.
-
-**Fails open, always.** No ruff, no node, a linter that crashes or times out, an
-unparseable payload — every one of those allows the commit. A guard that can
-brick `git commit` in a checkout shared by concurrent sessions is worse than the
-mistake it prevents. The cost is real and it bit during construction: the
-JavaScript half was completely dead for its first hour (Windows will not launch a
-`.cmd` from a bare name) and fail-open turned that into a silent pass. That is
-why `tests/test_lint_gate_hook.py::test_javascript_half_is_alive` decides whether
-to skip WITHOUT consulting the gate.
-
-**It reads the pending `git add`, not just the index.** The hook fires *before*
-the command runs, so for `git add x.py && git commit -m msg` — the form
-`git-staging-guard.py` steers toward, and therefore the normal one here — the
-index does not yet hold what is about to be committed. The gate parses the
-chained add and reads those paths from the worktree instead. Missing this made
-it wave through a file tripping three rules while looking perfectly healthy;
-three tests pin it, all three proved by mutation.
+`python tools/verify_lint.py` enforces them: whole changed files against a
+reviewed baseline of older findings, in the `quick` verification lane
+([local verification](local-verification.md)). Until 2026-09-21 a fail-open
+commit hook (`.claude/hooks/lint-gate.py`, with `tools/lint_changed.py`) ran the
+same rules on added lines only; it duplicated that check and was removed. Its
+design notes are in git history.
 
 ---
 
@@ -140,7 +115,7 @@ The point of writing the intention down is that the field moves. **This is not a
 
 ### The pass
 
-1. **Read the backlog by family.** `uv run python tools/lint_changed.py --all`.
+1. **Read the backlog by family.** `uv run python tools/verify_lint.py --all`.
    A family growing while the gate is on means either the rule never fires at
    commit time or it is routinely bypassed — find out which.
 2. **Ask what the last few rounds actually cost.** Name the defects that reached
