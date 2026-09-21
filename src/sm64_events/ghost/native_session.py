@@ -31,6 +31,24 @@ class NativeGhost:
         except OSError:
             return None
 
+    def _preservation_failure(self, answer, attempt_id):
+        lookup = getattr(self._replay, "native_preservation_reason", None)
+        reason = lookup(attempt_id) if lookup is not None else None
+        if not reason:
+            return answer
+        if reason == "native ghost has no supported recorded poses":
+            detail = "this recording has no Mario poses supported by the renderer."
+        elif reason == "This recording has no native Mario poses.":
+            detail = "Mario poses were not recorded for this attempt."
+        elif "elapsed clock" in reason or "clock continuity" in reason:
+            detail = "this recording is missing a continuous game clock for Mario playback."
+        elif "endpoint" in reason or "origin" in reason:
+            detail = "this recording is missing an exact starting or ending frame for Mario playback."
+        else:
+            detail = "its Mario recording could not be saved."
+        return {**answer, "reason": "native_preservation_failed",
+                "reason_text": "The template was saved, but " + detail}
+
     def resolve(self, target, templates):
         self._asset = None
         answer = {"available": False, "reason": "no_native_poses",
@@ -54,7 +72,7 @@ class NativeGhost:
         try:
             identity = self._replay.native_identity(attempt_id)
         except ValueError:
-            return answer
+            return self._preservation_failure(answer, attempt_id)
         key = (template.id, template.origin, target["kind"], target["entity_key"], target.get("strat"), identity)
         if self._cached is not None:
             cached_key, asset, stamp, result = self._cached
@@ -63,7 +81,7 @@ class NativeGhost:
                 return dict(result)
         found = self._replay.find_native(attempt_id)
         if found is None:
-            return answer
+            return self._preservation_failure(answer, attempt_id)
         path, manifest = found
         self._asset = (path, manifest)
         result = {**answer, "available": True, "reason": None, "reason_text": None,

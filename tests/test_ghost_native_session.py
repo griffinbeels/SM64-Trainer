@@ -3,6 +3,8 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from sm64_events.ghost.native_session import NativeGhost
 from tests.test_ghost_session import a_session, mark
 
@@ -241,3 +243,188 @@ def test_poll_tick_skips_capture_lock_and_retries_unpublished_command(tmp_path):
         await session.stop()
 
     asyncio.run(check())
+
+
+def refused_recording(tmp_path):
+    from ghost_native_fixture import frame
+    from test_ghost_recording import native_service
+    from tests.test_ghost_session import a_store
+
+    service, row, archive = native_service(tmp_path, rows=tuple(frame(n, valid=29) for n in (1, 2, 3)))
+    store = a_store(tmp_path)
+    target = {"kind": "star", "entity_key": f"{row.course_id}-{row.star_id}", "strat": row.strat_tag}
+    return service, row, archive, store, target
+
+
+def test_real_export_refusal_reaches_saved_template_without_retrying_archive(tmp_path, monkeypatch, caplog):
+    from dataclasses import replace
+    from sm64_events.inputs.frame import InputFrame
+    from sm64_events.inputs.service import InputsService
+    from sm64_events.storage.db import Database
+
+    service, row, archive, _, target = refused_recording(tmp_path)
+    db = Database(tmp_path / "inputs.sqlite")
+    row = replace(row, session_id=db.insert_session(row.started_utc))
+    service.tracker.db._attempts = [row]
+    db.inputs.append(row.session_id, [(n, InputFrame(0, 0, 0, 0)) for n in (101, 102, 103)],
+                     row.started_utc, row.ended_utc)
+    results = []
+
+    def preserve(attempt_id):
+        result = service.preserve_native(attempt_id)
+        results.append(result)
+        return result
+
+    store = db.input_templates
+    inputs = InputsService(db.inputs, store, lambda: [row], preserve_native=preserve)
+    try:
+        saved = inputs.mark_template(row.id)
+        assert len(results) == 1
+        result = results[0]
+        assert result["native_ghost_reason"] == "native ghost has no supported recorded poses"
+        assert result["native_ghost_reason"] in caplog.text
+        monkeypatch.setattr(archive, "export_attempt", lambda *a, **k: pytest.fail("resolve retried export"))
+        ghost = NativeGhost(service)
+        for _ in range(3):
+            answer = ghost.resolve(target, store)
+            assert not answer["available"] and answer["reason"] == "native_preservation_failed"
+            assert answer["template_id"] == saved.id and answer["attempt_id"] == row.id
+            assert answer["reason_text"] == (
+                "The template was saved, but this recording has no Mario poses supported by the renderer.")
+        assert store.active_for(target["kind"], target["entity_key"], row.strat_tag).id == saved.id
+        assert not service.extractor.calls
+        assert not list(service.cfg.save_root.rglob("*.ghost"))
+    finally:
+        archive.close()
+        db.close()
+
+
+@pytest.mark.parametrize("changes", [
+    {"session_id": 99}, {"strat_tag": "reprojected"}, {"native_clock_frame": 102},
+    {"native_clock_utc": "2027-01-15T08:00:01+00:00"}, {"native_clock_kind": "segment"},
+    {"closed_frame": 104}, {"ended_utc": "2027-01-15T08:00:02+00:00"},
+])
+def test_preservation_refusal_does_not_survive_changed_attempt_identity(tmp_path, changes):
+    from dataclasses import replace
+
+    service, row, archive, _, _ = refused_recording(tmp_path)
+    try:
+        service.preserve_native(row.id)
+        assert service.native_preservation_reason(row.id)
+        service.tracker.db._attempts = [replace(row, **changes)]
+        assert service.native_preservation_reason(row.id) is None
+    finally:
+        archive.close()
+
+
+def test_successful_pose_commit_clears_the_prior_refusal(tmp_path):
+    from ghost_native_fixture import frame, producer
+    from sm64_events.ghost.archive import PoseArchive
+
+    service, row, archive, store, target = refused_recording(tmp_path)
+    good = PoseArchive(tmp_path / "supported.sqlite")
+    try:
+        service.preserve_native(row.id)
+        mark(store, entity_key=target["entity_key"], strat=row.strat_tag, attempt_id=row.id)
+        ghost = NativeGhost(service)
+        assert ghost.resolve(target, store)["reason"] == "native_preservation_failed"
+        good.ingest(producer(), tuple(frame(n) for n in (1, 2, 3)))
+        service.recorder.pose_archive = good
+        assert service.preserve_native(row.id)["native_ghost"] is not None
+        assert service.native_preservation_reason(row.id) is None
+        assert ghost.resolve(target, store)["available"]
+        path, _ = service.find_native(row.id)
+        path.with_suffix(".json").unlink()
+        assert ghost.resolve(target, store)["reason"] == "no_native_poses"
+    finally:
+        archive.close()
+        good.close()
+
+
+def test_refusal_lookup_does_not_wait_for_an_in_progress_export(tmp_path, monkeypatch):
+    service, row, archive, store, target = refused_recording(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    export, results = archive.export_attempt, []
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return export(*args, **kwargs)
+
+    monkeypatch.setattr(archive, "export_attempt", blocked)
+    mark(store, entity_key=target["entity_key"], strat=row.strat_tag, attempt_id=row.id)
+    thread = threading.Thread(target=lambda: results.append(service.preserve_native(row.id)))
+    try:
+        thread.start()
+        assert entered.wait(2)
+        ghost = NativeGhost(service)
+        assert ghost.resolve(target, store)["reason"] == "no_native_poses"
+    finally:
+        release.set()
+        thread.join(5)
+        archive.close()
+    assert not thread.is_alive() and len(results) == 1
+    assert results[0]["native_ghost_reason"] == "native ghost has no supported recorded poses"
+    assert ghost.resolve(target, store)["reason"] == "native_preservation_failed"
+
+
+def test_missing_origin_is_explained_and_refusal_history_is_bounded(tmp_path):
+    from test_replay_service import attempt, make_service
+    from tests.test_ghost_session import a_store
+
+    rows = [attempt(id=number) for number in range(130)]
+    service = make_service(tmp_path, rows)
+    for row in rows:
+        service.preserve_native(row.id)
+    assert service.native_preservation_reason(rows[0].id) is None
+    assert service.native_preservation_reason(rows[-1].id) == "This recording has no native Mario poses."
+    store = a_store(tmp_path)
+    mark(store, entity_key="2-2", strat=None, attempt_id=rows[-1].id)
+    answer = NativeGhost(service).resolve({"kind": "star", "entity_key": "2-2"}, store)
+    assert answer["reason"] == "native_preservation_failed"
+    assert "Mario poses were not recorded" in answer["reason_text"]
+
+
+def test_real_missing_origin_refusal_is_available_before_asset_identity(tmp_path):
+    from dataclasses import replace
+
+    service, row, archive, store, target = refused_recording(tmp_path)
+    service.tracker.db._attempts = [replace(row, native_clock_frame=None)]
+    try:
+        result = service.preserve_native(row.id)
+        assert result["native_ghost_reason"] == "attempt has no exact native frame endpoints or owner kind"
+        mark(store, entity_key=target["entity_key"], strat=row.strat_tag, attempt_id=row.id)
+        answer = NativeGhost(service).resolve(target, store)
+        assert answer["reason"] == "native_preservation_failed"
+        assert "exact starting or ending frame" in answer["reason_text"]
+    finally:
+        archive.close()
+
+
+def test_stale_lookup_cannot_erase_new_projection_refusal(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    service, row, archive, _, _ = refused_recording(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    key, results = service._native_preservation_key, []
+
+    def delayed(attempt):
+        identity = key(attempt)
+        if threading.current_thread() is query:
+            entered.set()
+            assert release.wait(5)
+        return identity
+
+    monkeypatch.setattr(service, "_native_preservation_key", delayed)
+    query = threading.Thread(target=lambda: results.append(service.native_preservation_reason(row.id)))
+    try:
+        query.start()
+        assert entered.wait(2)
+        service.tracker.db._attempts = [replace(row, strat_tag="new projection")]
+        refusal = service.preserve_native(row.id)["native_ghost_reason"]
+    finally:
+        release.set()
+        query.join(5)
+        archive.close()
+    assert not query.is_alive() and results == [None]
+    assert service.native_preservation_reason(row.id) == refusal

@@ -123,7 +123,7 @@ def test_service_preservation_uses_authoritative_attempt_instead_of_video_span(t
     assert seen[-1][0][0] is row and "end_frame" not in seen[-1][1]
 
 
-def native_service(tmp_path):
+def native_service(tmp_path, *, rows=None):
     from datetime import datetime, timedelta
     from sm64_events.ghost.archive import PoseArchive
     from test_replay_service import attempt as replay_attempt, make_service
@@ -136,7 +136,7 @@ def native_service(tmp_path):
     service = make_service(tmp_path, [row], cov=(datetime.fromisoformat(row.started_utc) - timedelta(seconds=10),
                                                datetime.fromisoformat(row.ended_utc) + timedelta(seconds=10)))
     archive = PoseArchive(tmp_path / "poses.sqlite")
-    archive.ingest(producer(), tuple(frame(n) for n in (1, 2, 3)))
+    archive.ingest(producer(), tuple(frame(n) for n in (1, 2, 3)) if rows is None else rows)
     service.recorder.pose_archive = archive
     return service, row, archive
 

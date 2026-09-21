@@ -8,6 +8,7 @@ Anything else (e.g. codec failure on a corrupt segment) is a genuine 500 —
 extract.py already guarantees no partial file survives those.
 """
 import asyncio
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext, ExitStack
 from sm64_events.replay.sessiongate import SessionGate
 import json
@@ -241,6 +242,8 @@ class ReplayService:
         self._session_gate = SessionGate()
         self._descriptors: dict[str, tuple[int, dict | None]] = {}  # sidecar name -> (mtime, descriptor)
         self._save_failures: dict[int, str] = {}
+        self._native_preservation_failures: OrderedDict[int, tuple[tuple, str]] = OrderedDict()
+        self._native_preservation_lock = threading.Lock()
         self._recovery_failures: list[str] = []
         self.recorder.scratch_protection = self._protected_scratch
         self.history = AttemptHistory(cfg.retention_attempts)
@@ -456,6 +459,7 @@ class ReplayService:
                 if video_metadata:
                     manifest = manifest.get("native_ghost")
                 check_manifest(path, manifest, attempt=attempt, target=self._native_target(attempt))
+                self._remember_native_preservation(self._native_preservation_key(attempt), None)
                 return path, manifest
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 continue
@@ -467,6 +471,46 @@ class ReplayService:
         attempt = self._attempt(attempt_id)
         return {"attempt_id": attempt.id, "session_id": attempt.session_id,
                 "target": self._native_target(attempt), **attempt_origin(attempt)}
+
+    def _native_preservation_key(self, attempt) -> tuple:
+        # Failure identity also permits missing/invalid origin fields: those are
+        # export refusals worth explaining, never valid playback identities.
+        target = self._native_target(attempt)
+        return (attempt.id, attempt.session_id, target["kind"], target["entity_key"], target["strat"],
+                *(getattr(attempt, name, None) for name in (
+                    "native_clock_frame", "native_clock_utc", "native_clock_kind",
+                    "closed_frame", "ended_utc")))
+
+    def _remember_native_preservation(self, identity: tuple, reason: str | None) -> None:
+        with self._native_preservation_lock:
+            previous = self._native_preservation_failures.get(identity[0])
+            if not reason and previous is not None and previous[0] != identity:
+                return  # An older successful lookup cannot clear a newer projection's refusal.
+            self._native_preservation_failures.pop(identity[0], None)
+            if reason:
+                self._native_preservation_failures[identity[0]] = identity, reason[:1024]
+                while len(self._native_preservation_failures) > 128:
+                    self._native_preservation_failures.popitem(last=False)
+        if reason:
+            log.warning("Native Mario preservation refused for attempt %s (session %s): %s",
+                        identity[0], identity[1], reason)
+
+    def native_preservation_reason(self, attempt_id: int) -> str | None:
+        """Last explicit preservation refusal for this exact projected attempt.
+
+        A lookup neither exports nor scans the archive. Refusals are bounded,
+        process-local diagnostics; they never become saved-asset metadata.
+        """
+        identity = self._native_preservation_key(self._attempt(attempt_id))
+        with self._native_preservation_lock:
+            previous = self._native_preservation_failures.get(attempt_id)
+            if previous is None:
+                return None
+            if previous[0] != identity:
+                # This caller may have read an older projection just before a
+                # concurrent preservation published the newer refusal.
+                return None
+            return previous[1]
 
     def available_attempt_ids(self) -> list[int]:
         """Attempt ids whose replay is obtainable RIGHT NOW: a saved clip on
@@ -975,10 +1019,17 @@ class ReplayService:
             if not all(path.resolve().is_relative_to(root) for path in
                        (destination, destination.with_suffix(".json"))):
                 raise ValueError("native ghost destination is outside the save root")
-            path, manifest, reason = self._preserve_ghost(self._attempt(attempt_id), destination)
+            attempt = self._attempt(attempt_id)
+            identity = self._native_preservation_key(attempt)
+            path, manifest, reason = self._preserve_ghost(attempt, destination)
             if path is not None:
                 # The JSON is the commit record. Orphan binary bytes are never discovered.
-                atomic_json(path.with_suffix(".json"), manifest)
+                try:
+                    atomic_json(path.with_suffix(".json"), manifest)
+                except OSError as error:
+                    self._remember_native_preservation(identity, str(error))
+                    raise
+            self._remember_native_preservation(identity, reason)
             return {"path": str(path) if path else None,
                     "native_ghost": manifest, "native_ghost_reason": reason}
 
