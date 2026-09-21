@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include "source_format.h"
+#include "source_descriptor3.h"
 
 #ifdef RB_BUILD_DLL
 #define RB_API __declspec(dllexport)
@@ -77,6 +78,11 @@ RB_API int rb_configure_images(rb_capture_image, rb_image_completed);
  * forwarded, including a refused/stale capture request. */
 typedef int (__cdecl *rb_source_surface)(rb_surface *);
 RB_API int rb_bind_source(rb_source_surface);
+/* V3 keeps its descriptor beside the slot, never in rb_record's V2 layout. */
+typedef int (__cdecl *rb_source_surface3)(rb_ticket,rb_surface*,rs_source_descriptor3*);
+RB_API int rb_bind_source3(rb_source_surface3);
+/* Only the renderer capture callback may query its currently rendering ticket. */
+RB_API int rb_read_source_descriptor3(rb_ticket,rs_source_descriptor3*);
 RB_API rb_ticket rb_source_begin(rb_ticket);
 RB_API void rb_source_end(rb_ticket);
 RB_API void rb_rom_open(void);

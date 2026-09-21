@@ -4,6 +4,7 @@
 namespace {
 sa_ops ops{};
 const rs_api *source=nullptr;
+const rs_api_v3 *source3=nullptr;
 bool attempted=false;
 std::atomic<bool> bound{false},exhausted{false};
 rb_stamp pending{}; // serialized original producer only
@@ -65,6 +66,12 @@ int __cdecl capture(const rb_record *record,rb_image *image){
     *image={};
     if(!record->epoch||record->epoch!=epoch()){image->status=SA_CANCELLED;return 1;}
     if(ops.surface)ops.surface(ops.user,record);
+    if(source3) {
+        rs_source_descriptor3 image_source{};
+        if(!source3->query({record->occurrence,record->slot},&image_source))return 0;
+        if(image_source.kind==RS_SOURCE_NO_NEW_PRESENTATION){image->status=SA_NO_SWAP;return 1;}
+        if(image_source.kind==RS_SOURCE_UNAVAILABLE)return 0;
+    }
     if(record->surface.post_vi_origin==record->stamp.vi_origin){image->status=SA_SAME_ORIGIN;return 1;}
     // The renderer swaps only when the origin changed AND no dialog/resize
     // returned early. An origin change with the same swap count means the
@@ -98,16 +105,20 @@ extern "C" int __cdecl sa_configure(HMODULE renderer,const sa_ops *provided){
             || !provided->vi_origin || !provided->read_ram || !provided->capture || !provided->completed)return 0;
     attempted=true;ops=*provided;
     using Query=const rs_api *(__cdecl *)(uint32_t,uint32_t);
+    using Query3=const rs_api_v3 *(__cdecl *)(uint32_t,uint32_t);
     const auto query=reinterpret_cast<Query>(GetProcAddress(renderer,"SM64ReplaySourceV2"));
-    if(!query)return 0;
-    const auto api=query(RS_ABI_V2,sizeof(rs_api));
+    const auto query3=reinterpret_cast<Query3>(GetProcAddress(renderer,"SM64ReplaySourceV3"));
+    if(!query && !query3)return 0;
+    const auto extended=query3 ? query3(RS_ABI_V3,sizeof(rs_api_v3)) : nullptr;
+    if(query3 && !rs_valid_v3(extended))return 0;
+    const auto api=extended ? &extended->boundary : query(RS_ABI_V2,sizeof(rs_api));
     if(!api || api->bytes!=sizeof(rs_api) || api->version!=RS_ABI_V2 || api->reserved
             || (api->capabilities&(RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT))!=(RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT)
             || !api->configure || !api->stage || !api->update || !api->finish || !api->activate
             || !api->disarm || !api->take || !api->release || !api->stats
             || !api->begin_capture || !api->end_capture)return 0;
     // Setup only; every delegate may outlive CloseDLL and its mutable API table.
-    const void *addresses[]={reinterpret_cast<const void*>(query),reinterpret_cast<const void*>(capture),
+    const void *addresses[]={query3 ? reinterpret_cast<const void*>(query3) : reinterpret_cast<const void*>(query),reinterpret_cast<const void*>(capture),
         reinterpret_cast<const void*>(complete),reinterpret_cast<const void*>(ops.process_dlist),
         reinterpret_cast<const void*>(ops.update_screen),reinterpret_cast<const void*>(ops.current_epoch),
         reinterpret_cast<const void*>(ops.vi_origin),reinterpret_cast<const void*>(ops.read_ram),
@@ -116,7 +127,7 @@ extern "C" int __cdecl sa_configure(HMODULE renderer,const sa_ops *provided){
     if(ops.surface&&!pin(reinterpret_cast<const void*>(ops.surface)))return 0;
     const rs_callbacks callbacks{sizeof(rs_callbacks),RS_ABI_V2,{0,0},capture,complete};
     if(!api->configure(&callbacks))return 0;
-    source=api;bound.store(true);return 1;
+    source=api;source3=extended;bound.store(true);return 1;
 }
 extern "C" int __cdecl sa_publish_table(const sa_table *input){
     if(!input || input->bytes!=sizeof(sa_table) || input->version!=SA_VERSION || input->reserved
