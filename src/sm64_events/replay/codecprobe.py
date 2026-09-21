@@ -3,6 +3,14 @@
 An encoder listed in a build may lack a compatible GPU/driver, or change our
 VFR picture clock. Require a real encode and independently decode its output.
 This small startup witness is not a throughput or visual-quality benchmark.
+
+IT VALIDATES THROUGH THE CONTAINER THE SINKS ACTUALLY WRITE. Until 2026-09-21
+this probe encoded into MPEG-TS, which has no usable AV1 mapping: the same
+pictures that pass in fragmented MP4 yield ZERO video streams there, so an
+AV1-capable GPU was reported as incapable by the probe's own transport
+(measured 2026-09-20, docs/architecture.md). `ffmpeg_sink.py` and
+`packetmux.py` write fragmented MP4 under `fragment_mux_options()`, and that
+is the only policy worth proving a codec against.
 """
 import io
 import logging
@@ -13,7 +21,8 @@ import numpy as np
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay.config import (
-    RING_MAXRATE, forced_idr_args, raw_picture_args, video_quality_args,
+    RING_MAXRATE, forced_idr_args, fragment_mux_options, raw_picture_args,
+    video_quality_args,
 )
 from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE, picture_duration_filter
 
@@ -52,9 +61,17 @@ def probe_input() -> bytes:
     return output.getvalue()
 
 
+def fragment_output_args() -> list[str]:
+    """The sinks' fragmented-MP4 policy as command-line flags, same source."""
+    flags = []
+    for name, value in fragment_mux_options().items():
+        flags += [f"-{name}", value]
+    return [*flags, "-f", "mp4", "pipe:1"]
+
+
 def validate_output(data: bytes) -> None:
     """Reject loss, reordering, retiming, scaling, flips and swapped channels."""
-    with av.open(io.BytesIO(data), format="mpegts") as container:
+    with av.open(io.BytesIO(data), format="mp4") as container:
         if len(container.streams.video) != 1:
             raise ValueError("expected one video stream")
         stream = container.streams.video[0]
@@ -89,8 +106,7 @@ def check_ffmpeg_codec(ffmpeg: str, codec: str, source: bytes) -> None:
             "-bf", "0", "-g", "60", "-force_key_frames", "expr:gte(t,n_forced*0.1)",
             *forced_idr_args(codec), "-fps_mode", "passthrough",
             "-enc_time_base", "demux", "-bsf:v", picture_duration_filter(),
-            "-avoid_negative_ts", "disabled", "-mpegts_copyts", "1",
-            "-f", "mpegts", "pipe:1"]
+            *fragment_output_args()]
     result = subprocess.run(args, input=source, capture_output=True, check=False,
                             timeout=_TIMEOUT_S, **quiet_spawn_kwargs())
     if result.returncode:

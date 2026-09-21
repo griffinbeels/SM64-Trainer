@@ -12,7 +12,7 @@ from sm64_events.replay.gpupublication import (
 )
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MediaRun
-from sm64_events.replay.packetmux import H264Format
+from sm64_events.replay.packetmux import NativeFormat
 from test_gpumedia import FakeMux, complete, media, sample, stamp
 from test_packetmux import Output, RATE, fixture_packets, pcm, verify_audio, verify_video
 
@@ -40,7 +40,7 @@ def worker(ledger=None, publish=None, **kwargs):
     options = dict(audio_rate=RATE, audio_bitrate=160000, packet_limit=1 << 20,
                    pcm_limit=384000, max_bytes=4 << 20, max_age=5, mux_factory=Mux)
     options.update(kwargs)
-    q = MediaWorker(H264Format(320, 240, 30), ledger or PictureLedger(),
+    q = MediaWorker(NativeFormat("h264", 320, 240, 30), ledger or PictureLedger(),
                     publish or (lambda run: NS(feed=lambda b: None, finish=lambda e: None)),
                     **options)
     wait(lambda: q.ready)

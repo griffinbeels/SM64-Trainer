@@ -106,7 +106,10 @@ extern "C" uint32_t GBENC_CALL SM64GpuEncoderOpenV1(const gbdll_config_v1*config
    D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};if(FAILED(s->device->CreateQuery(&query,&slot.completion)))return abandon_open(s,GBDLL_MEMORY);
   }
   if(!s->encoder.prepare(s->device.Get(),s->context.Get(),config->encoder,config->sink)){
-   if(s->encoder.state()==GBENC_QUARANTINED){*token=s->token;return quarantine(*s,GBDLL_ENCODER,E_FAIL);}return abandon_open(s,GBDLL_ENCODER);
+   if(s->encoder.state()==GBENC_QUARANTINED){*token=s->token;return quarantine(*s,GBDLL_ENCODER,E_FAIL);}
+   // A codec this adapter does not offer is a fact about the hardware, not a
+   // fault; the caller decides whether to ask for the other one.
+   return abandon_open(s,s->encoder.error()==GBENC_CODEC_UNAVAILABLE?GBDLL_CODEC:GBDLL_ENCODER);
   }
   *token=s->token;return GBDLL_OK;
  }catch(...){*token=s->token;return quarantine(*s,GBDLL_MEMORY,E_FAIL);}

@@ -29,10 +29,48 @@ from uilab_project import PROJECT, STORIES
 STORY = next(story for story in STORIES if story.name == "input-timeline")
 
 
-def tiny_video(path):
+def as_av1(source, target):
+    """The same pictures on the same ticks, encoded the way an AV1 GPU records.
+
+    Not a conversion for its own sake: since 2026-09-21 the recorder writes AV1
+    on a card that has an encoder for it, so the clip the drawer seeks through
+    is an `av01` track on that hardware. Reordered H.264 once passed ffprobe
+    and lost a clip's last 11 pictures in Chromium, so a new codec is judged by
+    stepping every slot in a real browser, never by a container diff.
+
+    Two AV1 NVENC constraints are measured, not assumed: it refuses an
+    all-intra GOP (it wants gopLength > b_frames + 1, so `-g 2` with every
+    picture forced), and `-g 1` fails as a DRIVER error rather than an
+    argument one.
+    """
+    import shutil
+    import subprocess
+
+    from sm64_events.core.paths import bundled_ffmpeg
+    from sm64_events.replay.config import (RING_MAXRATE, forced_idr_args,
+                                           video_quality_args)
+    ffmpeg = bundled_ffmpeg() or shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("ffmpeg required")
+    done = subprocess.run([
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-copyts",
+        "-i", str(source), "-c:v", "av1_nvenc",
+        *video_quality_args("av1_nvenc", "realtime", RING_MAXRATE),
+        "-bf", "0", "-g", "2", "-force_key_frames", "expr:1",
+        *forced_idr_args("av1_nvenc"), "-fps_mode", "passthrough",
+        "-enc_time_base", "demux", "-video_track_timescale", "90000",
+        "-movflags", "+faststart", "-y", str(target),
+    ], capture_output=True, text=True, timeout=120, check=False)
+    if done.returncode:
+        pytest.skip("av1_nvenc is not usable on this machine; this GPU records "
+                    "H.264 and the compression pass covers it")
+
+
+def tiny_video(path, codec="h264"):
     numbers = [0, 1, 2, 3, 3, 4, 5, 6]
     ticks = [0, 1, 2, 9000, 18000, 18001, 27000, 36000]
-    with av.open(str(path), "w", options={"movie_timescale": "90000"}) as container:
+    source = path.with_name("source_" + path.name) if codec == "av1" else path
+    with av.open(str(source), "w", options={"movie_timescale": "90000"}) as container:
         stream = container.add_stream("libx264", rate=30)
         stream.width, stream.height, stream.pix_fmt = 320, 96, "yuv420p"
         stream.time_base = stream.codec_context.time_base = Fraction(1, 90000)
@@ -44,15 +82,18 @@ def tiny_video(path):
                 container.mux(packet)
         for packet in stream.encode():
             container.mux(packet)
+    if codec == "av1":
+        as_av1(source, path)
     decoded = read_pictures(path)
     assert [number for _, number in decoded] == numbers
     assert [round(t * 90000) for t, _ in decoded] == ticks
     return [t for t, _ in decoded], numbers
 
 
-def test_drawer_steps_decoded_pictures_and_reads_the_presented_timer(tmp_path):
+@pytest.mark.parametrize("codec", ["h264", "av1"])
+def test_drawer_steps_decoded_pictures_and_reads_the_presented_timer(tmp_path, codec):
     path = tmp_path / "pictures.mp4"
-    times, numbers = tiny_video(path)
+    times, numbers = tiny_video(path, codec)
     replay = {"clip_url": "data:video/mp4;base64," + base64.b64encode(path.read_bytes()).decode(),
               "frame_times": [round(t, 6) for t in times], "picture_ids": numbers,
               "frame_map": [100,101,99,100,100,101,102,103],

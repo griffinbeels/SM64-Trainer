@@ -9,7 +9,7 @@ import pytest
 
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MediaRun
-from sm64_events.replay.packetmux import H264Format, PacketFragmentMux
+from sm64_events.replay.packetmux import NativeFormat, PacketFragmentMux
 from sm64_events.replay.pixels import SampledPicture
 from test_packetmux import (
     Output, RATE, decode_audio, fixture_packets, supply, verify_video,
@@ -121,7 +121,7 @@ def test_accept_row_archive_refusal_does_not_publish_cached_row():
 
 
 def make_mux(output, run):
-    return PacketFragmentMux(output, H264Format(320, 240, 30), run,
+    return PacketFragmentMux(output, NativeFormat("h264", 320, 240, 30), run,
                              audio_rate=RATE, audio_bitrate=160000,
                              packet_limit=1 << 20, pcm_limit=384000)
 

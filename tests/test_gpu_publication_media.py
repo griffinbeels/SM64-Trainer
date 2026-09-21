@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from sm64_events.replay.media import MediaRun
-from sm64_events.replay.packetmux import H264Format, PacketFragmentMux
+from sm64_events.replay.packetmux import NativeFormat, PacketFragmentMux
 from test_packetmux import RATE, fixture_packets
 
 
@@ -36,7 +36,7 @@ def test_real_mux_final_output_refusal_keeps_cause_and_proves_writer_exit():
 
     output = RefusingOutput()
     run = MediaRun("trailer-refusal", 1000.0)
-    mux = PacketFragmentMux(output, H264Format(320, 240, 30), run, audio_rate=RATE,
+    mux = PacketFragmentMux(output, NativeFormat("h264", 320, 240, 30), run, audio_rate=RATE,
                             audio_bitrate=160000, packet_limit=1 << 20, pcm_limit=384000)
     session = CaptureSession(NS(settings=GpuSettings(), end_audio=lambda h: None),
                              NS(request_stop=lambda reason: None))

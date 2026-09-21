@@ -187,9 +187,15 @@ manual. Unsaved footage shares a modest storage budget and is discarded when
 the session ends; storage pressure removes the oldest unsaved footage first.
 Explicitly saved replays remain on disk. See [replay storage](docs/replay-storage.md).
 
-Saving is instant, and afterwards the trainer makes the saved replay smaller
-in the background — around a third of its original size, in the same file,
-with the picture, the sound and the frame-by-frame input match all unchanged.
+On an RTX 40-series or newer card, the trainer records in AV1 and a saved
+replay is already about a third the size the moment you save it, with nothing
+left to do afterwards. It asks your card at the start of each recording and
+records H.264 when the card has no AV1 encoder.
+
+Saving is instant, and for an H.264 recording the trainer makes the saved
+replay smaller in the background afterwards — around a third of its original
+size, in the same file, with the picture, the sound and the frame-by-frame
+input match all unchanged.
 It checks the smaller version against the original before replacing it, and
 keeps the original if anything differs. Nothing waits on this: you can watch
 a replay, keep playing, or close the app, and an unfinished one is finished

@@ -9,8 +9,9 @@ from sm64_events.replay.gpuencoder import EncoderClient, EncoderFailure, Result,
 from sm64_events.replay.gpuencoder_options import from_replay_config, pod_options
 
 
-def options():
+def options(codec=a.CODEC_H264):
     return from_replay_config(
+        codec=codec,
         width=320,
         height=240,
         nominal_fps_num=30,

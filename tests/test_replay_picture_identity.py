@@ -71,6 +71,30 @@ def encoder(request):
     return ff, codec
 
 
+@pytest.fixture(scope="session")
+def av1_encoder():
+    """The AV1 encoder, or an honest skip naming what the machine lacks.
+
+    SEPARATE from `encoder` on purpose: that fixture is parametrized across
+    every H.264 vendor and twelve modules import it, so widening it would
+    re-run H.264-specific paths against a codec they do not describe. AV1
+    NVENC needs RTX 40-series or newer; every older card keeps H.264 plus the
+    compression pass, which is the whole shape of this feature.
+    """
+    ff = bundled_ffmpeg() or shutil.which("ffmpeg")
+    if not ff:
+        pytest.skip("ffmpeg required")
+    probe = subprocess.run(
+        [ff, "-v", "error", "-f", "lavfi", "-i", "color=size=640x480",
+         "-frames:v", "1", "-c:v", "av1_nvenc", "-f", "null", "-"],
+        capture_output=True, timeout=15, check=False, **quiet_spawn_kwargs())
+    if probe.returncode:
+        pytest.skip(f"av1_nvenc is not usable on this machine (ffmpeg exit "
+                    f"{probe.returncode}); this GPU has no AV1 encoder, so "
+                    "recording stays H.264 here and the archive pass covers it")
+    return ff, "av1_nvenc"
+
+
 def record_picture_schedule(sink, ledger, schedule):
     """Feed the independent identities through capture timing edge cases."""
     sink.start()
