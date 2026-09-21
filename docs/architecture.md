@@ -490,9 +490,25 @@ Two things stop it being a switch, and both are load-bearing:
    NVENC and no AV1, so that path and the compression pass stay for those users
    regardless. This is an optimisation for newer cards, never a replacement.
 
-UNMEASURED: realtime AV1 while SM64 actually renders (this was a transcode on
-an idle GPU), and whether `picture_duration_filter` and the fragment muxer take
-AV1 packets unchanged.
+MEASURED 2026-09-20, the load-bearing half: **AV1 survives the ring's own
+transport with every picture on its exact original tick.** `codecprobe`'s own
+owned-BGRA pictures with unequal timestamps, through the ring's quality args,
+GOP, forced IDR, `-fps_mode passthrough`, `-enc_time_base demux` and
+`picture_duration_filter`, decoded back independently: one video stream, every
+picture, in order, at 90000/93000/93001/99000/100500/108000 — the input ticks
+unchanged — at 1431 bytes against H.264's 3255. It also encodes 1600x1200
+(a non-standard size) through the same chain at 44% of H.264's bytes. That is
+the property the frame map depends on, and it holds.
+
+**But `codecprobe.py` would reject AV1 today, and that is the probe's fault:**
+it validates through MPEG-TS, which has no usable AV1 mapping — the same
+pictures yield ZERO video streams there while passing in fragmented MP4, the
+container `ffmpeg_sink.py` and `packetmux.py` actually write. Any AV1 work
+starts by moving that probe off MPEG-TS; leaving it would read as "this GPU
+cannot encode AV1".
+
+STILL UNMEASURED: realtime AV1 while SM64 actually renders (both runs above
+were on an idle GPU).
 
 ## Replay capture (2026-06-11/12 live-audit marathon)
 
