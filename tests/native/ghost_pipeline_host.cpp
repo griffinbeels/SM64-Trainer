@@ -3,14 +3,15 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #define main capture_fixture_program
-#include "ghost_capture_host.cpp"
+#include <ghost_capture_host.cpp>
 #undef main
 #define main compositor_fixture_program
-#include "ghost_compositor_host.cpp"
+#include <ghost_compositor_host.cpp>
 #undef main
 #include "ghost_playback.h"
 #include "ghost_pass.h"
 #include "ghost_presentation.h"
+#include "ghost_stream.h"
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -89,6 +90,16 @@ static void projection(float* out){
     std::memset(out,0,16*sizeof(float));out[0]=s/(float(W)/H);out[5]=s;
     out[10]=-(far_plane+near_plane)/(far_plane-near_plane);out[11]=-1;out[14]=-2*far_plane*near_plane/(far_plane-near_plane);
 }
+static gs_record capture_source(Fixture& f,const ghost::RasterTarget& target,const float* matrix,int64_t qpc){
+    require(ghost_stream::begin(f.ram.data(),uint32_t(f.ram.size()),1,qpc),"actual source begin");
+    ghost_stream::projection(matrix);ghost_stream::triangles(target,2,true);
+    require(ghost_stream::geometry(true,false),"source qualifies synthetic world end");
+    ghost_stream::end(true);gs_record out{};
+    require(ghost_stream::api()->read(&out,sizeof(out))==1 && out.world.status==GCLIP_WORLD_READY,"actual source queue occurrence");
+    require(out.sample.status==GC_OK && (out.sample.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
+        ==(GCC_RAW_VALID|GCC_ELAPSED_VALID),"source derives usable elapsed clock");
+    return out;
+}
 static void ppm(const std::filesystem::path& path,const std::vector<uint8_t>& rgba){
     std::ofstream file(path,std::ios::binary);file<<"P6\n"<<W<<' '<<H<<"\n255\n";
     for(int y=int(H)-1;y>=0;--y)for(unsigned x=0;x<W;++x)file.write(reinterpret_cast<const char*>(&rgba[(y*W+x)*4]),3);
@@ -111,8 +122,9 @@ struct Pipeline {
     present::Instance* presentation=nullptr;Fixture& fixture;unsigned frames=0,vertices=0;
     bool swap_interval_disabled=false;std::vector<uint8_t> clean,display_clean,last_visible,coverage;
     std::string gpu_vendor,gpu_renderer,gl_version;
-    std::vector<float> clean_depth;ghost::WorldPass world{};
-    explicit Pipeline(Fixture& f):g(dispatch()),scene(g,W,H),raster(g),fixture(f){
+    std::vector<float> clean_depth;ghost::WorldPass world{};uint32_t configuration=0;gcc_output origin_clock{};
+    explicit Pipeline(Fixture& f,const gs_record& first):g(dispatch()),scene(g,W,H),raster(g),fixture(f),
+        configuration(first.configuration),origin_clock(first.sample.clock){
         require(SetWindowPos(window.window,nullptr,0,0,W,H,SWP_NOACTIVATE|SWP_NOZORDER)!=0,"resize hidden drawable");
         require(!IsWindowVisible(window.window),"pipeline window remains hidden");
         RECT rect{};GetClientRect(window.window,&rect);require(rect.right==W && rect.bottom==H,"actual hidden extent");
@@ -121,7 +133,7 @@ struct Pipeline {
         gpu_vendor=reinterpret_cast<const char*>(glGetString(GL_VENDOR));
         gpu_renderer=reinterpret_cast<const char*>(glGetString(GL_RENDERER));
         gl_version=reinterpret_cast<const char*>(glGetString(GL_VERSION));
-        ghost_playback::safe_boundary(7,4);sg_atlas_view atlas{};uint64_t model=0;
+        ghost_playback::safe_boundary(7,configuration);sg_atlas_view atlas{};uint64_t model=0;
         require(ghost_playback::atlas(&atlas,&model) && model==1,"actual adopted model atlas");
         compositor=gc::create(g,1);require(compositor!=nullptr,"pipeline compositor");
         require(gc::prepare(compositor,W,H,SG_MODEL_MAX_VERTICES,atlas.rgba,atlas.width,atlas.height)==gc::Result::ok,"real atlas upload");
@@ -131,7 +143,7 @@ struct Pipeline {
         world.context_generation=1;world.target={scene.color,scene.depth,W,H,1,0,{0,0,int32_t(W),int32_t(H)},{.5f,.5f},{1,1}};
         projection(world.projection);background(false);glFinish();
     }
-    ~Pipeline(){present::destroy(presentation);gc::destroy(compositor);ghost_playback::retire_on_context_loss();}
+    ~Pipeline(){present::destroy(presentation);gc::destroy(compositor);ghost_playback::retire_on_context_loss();ghost_stream::rom(false);}
     void background(bool wall){
         ordinary_state(g,scene);std::vector<uint8_t> color(W*H*4);std::vector<float> z(W*H,1.f);
         for(unsigned y=0;y<H;++y)for(unsigned x=0;x<W;++x){const auto i=y*W+x;
@@ -165,10 +177,12 @@ struct Pipeline {
     Times frame(bool draw,bool evidence=false){
         const auto start=Clock::now();++frames;
         clock_word(fixture,fixture.config.global_timer,100+frames,4);
-        fixture.frame.qpc=1234+frames;fixture.frame.sequence=fixture.frame.dlist_serial=1+frames;
-        gc_sample live{};require(ghost_capture_read(&fixture.reader,&fixture.config,&fixture.frame,&live)==GC_OK,"per-frame capture");
-        world.epoch=live.epoch;world.list_serial=live.dlist_serial;
-        ghost_playback::safe_boundary(7,4);
+        const auto captured_source=capture_source(fixture,world.target,world.projection,1234+frames);
+        const auto& live=captured_source.sample;const auto* qualified=ghost_stream::candidate();
+        require(qualified && qualified->list_serial==live.dlist_serial,"world and source share exact occurrence");world=*qualified;
+        require(live.global_timer==100+frames && live.igt==10 && live.clock.elapsed_frames==origin_clock.elapsed_frames
+            && live.clock.continuity_id==origin_clock.continuity_id,"paused IGT stays at origin while global timer advances");
+        ghost_playback::safe_boundary(7,configuration);
         ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});
         present::begin_update(presentation,live.sequence);
         gc::Pose p{};gp_draw_token token{};
@@ -177,7 +191,7 @@ struct Pipeline {
             require(gc::begin(compositor,destination,p)==gc::Result::ok,"real compositor begin");
             require(gc::finalize(compositor,live.sequence)==gc::Result::ok && ghost_playback::current(token),"finalized current ghost");
             const auto image=gc::display(compositor);
-            const present::GhostViImage vi{image.texture,W,H,4,1,live.sequence};
+            const present::GhostViImage vi{image.texture,W,H,configuration,1,live.sequence};
             require(present::replace_vi(presentation,vi,0x1000,false,raster.api()),"real display/clean split");}
         require(present::before_swap(presentation,0x1000,raster.api()),"before swap");present::after_osd(presentation);
         glFinish();const auto completed=Clock::now();
@@ -204,17 +218,27 @@ int main(int argc,char** argv){
     std::ifstream file(argv[2],std::ios::binary);std::vector<uint8_t> rom((std::istreambuf_iterator<char>(file)),{});
     require(rom.size()==(8u<<20),"read-only supplied ROM");const auto* api=ghost_playback::api();
     const auto prepare_start=Clock::now();require(api->prepare_model(1,rom.data(),uint32_t(rom.size()))==GP_OK,"actual model preparation");
-    gclip_frame recorded{sizeof(recorded),GCLIP_VERSION,2,GCLIP_WORLD_READY,fixture.sample};
+    RenderOwner renderer;gs_record captured{};
+    require(ghost_stream::api()->configure(&fixture.config)==1,"configure real source clock");
+    renderer.run([&]{ghost_stream::rom(true);float matrix[16];projection(matrix);
+        const ghost::RasterTarget target{1,2,W,H,1,0,{0,0,int32_t(W),int32_t(H)},{.5f,.5f},{1,1}};
+        captured=capture_source(fixture,target,matrix,1234);});
+    const auto& first=captured.sample;
+    gclip_frame recorded{sizeof(recorded),GCLIP_VERSION,captured.configuration,captured.world.status,first};
     gclip_header header{};std::memcpy(header.magic,GCLIP_MAGIC,8);header.version=GCLIP_VERSION;header.bytes=sizeof(header);
     header.record_bytes=sizeof(recorded);header.record_count=1;header.rom_layout=GC_ROM_US;header.sample_version=GC_VERSION;
-    header.configuration=2;header.epoch=fixture.sample.epoch;header.clip_id[0]=1;header.qpc_frequency=1000;header.utc_anchor=1;
-    header.first_sequence=header.last_sequence=fixture.sample.sequence;header.first_global_timer=header.last_global_timer=fixture.sample.global_timer;
-    header.level=fixture.sample.level;header.area=fixture.sample.area;
+    header.configuration=captured.configuration;header.epoch=first.epoch;header.clip_id[0]=1;header.qpc_frequency=1000;header.utc_anchor=1;
+    header.first_sequence=header.last_sequence=first.sequence;header.first_global_timer=header.last_global_timer=first.global_timer;
+    header.level=first.level;header.area=first.area;header.clock_kind=GCLIP_SEGMENT_CLOCK;
+    header.origin_global_timer=first.global_timer;header.origin_raw=first.igt;header.origin_sequence=first.sequence;
+    header.origin_elapsed=first.clock.elapsed_frames;header.origin_continuity=first.clock.continuity_id;
     require(api->prepare_clip(&header,&recorded)==GP_OK,"actual captured clip validation");
     gp_request request{};request.bytes=sizeof(request);request.version=GP_VERSION;request.revision=1;request.enabled=1;
-    request.owner_token=1;request.model_id=1;request.rom_generation=7;request.configuration=4;request.clip_id[0]=1;request.opacity=1;
-    require(api->configure(&request)==GP_OK,"configure actual playback");RenderOwner renderer;std::unique_ptr<Pipeline> pipeline;
-    renderer.run([&]{pipeline=std::make_unique<Pipeline>(fixture);});const auto setup_ms=ms(prepare_start,Clock::now());
+    request.owner_token=1;request.model_id=1;request.rom_generation=7;request.configuration=captured.configuration;
+    request.clip_id[0]=1;request.opacity=1;
+    request.origin={GO_SEGMENT,first.epoch,first.sequence,first.clock.continuity_id,first.clock.elapsed_frames,first.clock.origin_id,first.igt,0};
+    require(api->configure(&request)==GP_OK,"configure exact-origin FOLLOW playback");std::unique_ptr<Pipeline> pipeline;
+    renderer.run([&]{pipeline=std::make_unique<Pipeline>(fixture,captured);});const auto setup_ms=ms(prepare_start,Clock::now());
     const std::filesystem::path out(argv[3]);std::filesystem::create_directories(out);
     std::vector<uint8_t> baseline,opaque,half,wall;std::vector<double> baseline_times,ghost_times,swap_times,total_times;
     unsigned silhouette=0,outside=0,alpha_errors=0,occlusion_errors=0;
@@ -242,10 +266,12 @@ int main(int argc,char** argv){
         require(!IsWindowVisible(pipeline->window.window),"no visible native window");});
     const auto vertex_count=pipeline->vertices;const auto swap_disabled=pipeline->swap_interval_disabled;
     const auto gpu_vendor=pipeline->gpu_vendor,gpu_renderer=pipeline->gpu_renderer,gl_version=pipeline->gl_version;
-    renderer.run([&]{pipeline.reset();});api->revoke(GP_DISABLED);require(api->collect()==GP_OK,"worker collects real retired model");
+    renderer.run([&]{pipeline.reset();});ghost_stream::api()->disable();api->revoke(GP_DISABLED);require(api->collect()==GP_OK,"worker collects real retired model");
     require(api->release_worker()==GP_OK,"worker releases real storage");require(GetForegroundWindow()==foreground,"foreground unchanged");
     std::printf("{\"ok\":true,\"synthetic\":true,\"live_gliden64\":false,\"width\":640,\"height\":480,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"setup_ms\":%.6f,\"swap_interval_disabled\":%s,",
         vertex_count,silhouette,outside,alpha_errors,occlusion_errors,setup_ms,swap_disabled?"true":"false");
+    std::printf("\"capture_version\":%u,\"clip_version\":%u,\"playback_version\":%u,\"follow_segment_origin\":true,\"paused_igt_ignores_global_timer\":true,",
+        GC_VERSION,GCLIP_VERSION,GP_VERSION);
     std::printf("\"gamma\":false,\"gpu_vendor\":");json_string(gpu_vendor);
     std::printf(",\"gpu_renderer\":");json_string(gpu_renderer);std::printf(",\"gl_version\":");json_string(gl_version);std::printf(",");
     statistics("baseline",baseline_times);std::printf(",");statistics("pipeline_gpu_completed",ghost_times);std::printf(",");

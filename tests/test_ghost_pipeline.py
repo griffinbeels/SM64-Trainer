@@ -11,7 +11,6 @@ import sys
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.memory.layout import US
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +24,26 @@ def tool(name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def layout_module():
+    # A borrowed component tree must use its matching capture ABI. Keep the
+    # normal test checkout's imports and queued tests entirely unchanged.
+    path = COMPONENTS / "src/sm64_events/memory/ghost_layout.py"
+    spec = importlib.util.spec_from_file_location("pipeline_ghost_layout", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def retain_artifacts(paths):
+    evidence = os.environ.get("SM64_GHOST_PIPELINE_EVIDENCE")
+    if evidence:
+        destination = Path(evidence)
+        destination.mkdir(parents=True, exist_ok=True)
+        for path in paths:
+            shutil.copyfile(path, destination / path.name)
 
 
 def test_connected_capture_model_gpu_pipeline(tmp_path):
@@ -46,10 +65,12 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     library = builder.build_model(tmp_path / "model", seed=seed, vcvars32=vcvars)
     native = COMPONENTS / "plugin/gfxwrap"
     sources = [native / f"{name}.cpp" for name in
-               ("ghost_capture", "ghost_playback", "ghost_pose", "ghost_compositor", "ghost_presentation")]
+               ("ghost_capture", "ghost_clock", "ghost_stream", "ghost_pass", "ghost_playback",
+                "ghost_pose", "ghost_compositor", "ghost_presentation")]
     host = ROOT / "tests/native/ghost_pipeline_host.cpp"
-    source_inputs = [*sources, host, Path(__file__), ROOT / "tests/native/ghost_capture_host.cpp",
-                     COMPONENTS / "tests/native/ghost_compositor_host.cpp"]
+    source_inputs = [*sources, host, Path(__file__), COMPONENTS / "tests/native/ghost_capture_host.cpp",
+                     COMPONENTS / "tests/native/ghost_compositor_host.cpp",
+                     COMPONENTS / "src/sm64_events/memory/ghost_layout.py"]
     source_inputs += sorted(native.glob("ghost_*.h"))
     receipt = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_inputs}
     target = tmp_path / "ghost_pipeline_host.exe"
@@ -59,10 +80,11 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
         "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'",
         *compiler.LIBS], tmp_path)
     layout = tmp_path / "layout.bin"
-    layout.write_bytes(GhostLayout.from_layout(US).to_bytes())
+    layout.write_bytes(layout_module().GhostLayout.from_layout(US).to_bytes())
     result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path)], cwd=tmp_path,
         capture_output=True, text=True, timeout=60, check=False, **quiet_spawn_kwargs())
     (tmp_path / "pipeline-output.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
+    retain_artifacts([tmp_path / "pipeline-output.txt"])
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest
@@ -71,7 +93,8 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     report.update(source_sha256=receipt, rom_sha1=digest, model=model_identity,
                   executable_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
                   library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(),
-                  fixture="Synthetic swizzled RDRAM and terrain, real native components, hidden WGL.",
+                  layout_sha256=hashlib.sha256(layout.read_bytes()).hexdigest(),
+                  fixture="Synthetic swizzled RDRAM and terrain, real source clock and native components, hidden WGL.",
                   excludes="Live emulator, GLideN64 terrain/VI shader, video encoding, IPC transport.",
                   timing="Capture through presentation clean/display copies and glFinish; swap measured separately.")
     (tmp_path / "pipeline-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -79,14 +102,11 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     for path in tmp_path.glob("*.ppm"):
         with Image.open(path) as image:
             image.save(path.with_suffix(".png"))
-    evidence = os.environ.get("SM64_GHOST_PIPELINE_EVIDENCE")
-    if evidence:
-        destination = Path(evidence)
-        destination.mkdir(parents=True, exist_ok=True)
-        for artifact in [tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
-                         *tmp_path.glob("*.png")]:
-            shutil.copyfile(artifact, destination / artifact.name)
+    retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
+                      *tmp_path.glob("*.png")])
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
+    assert report["capture_version"] == 3 and report["clip_version"] == report["playback_version"] == 2
+    assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
     assert report["pipeline_gpu_completed"]["samples"] == report["including_swap"]["samples"] == 180
