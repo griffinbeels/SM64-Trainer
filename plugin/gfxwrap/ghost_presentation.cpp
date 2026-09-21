@@ -9,6 +9,7 @@ struct Instance {
     Dispatch dispatch;
     uint32_t context_generation,drawable_generation=0,resource_generation=0;
     uint32_t width=0,height=0,source_width=0,source_height=0;
+    int32_t draw_buffers=0;
     uint32_t textures[2]={},fbos[2]={}; // clean drawable, gamma result
     uint64_t update=0,serial=0;
     uint32_t vi_origin=0;
@@ -61,21 +62,29 @@ void restore_back(Instance* p) {
     g.Disablei(gl::SCISSOR_TEST,0);g.Disable(gl::FRAMEBUFFER_SRGB);
     g.BindFramebuffer(gl::READ_FRAMEBUFFER,p->fbos[0]);g.ReadBuffer(gl::COLOR_ATTACHMENT0);
     g.BindFramebuffer(gl::DRAW_FRAMEBUFFER,0);
-    int32_t selector=0;g.GetIntegerv(gl::DRAW_BUFFER0,&selector);g.DrawBuffer(gl::BACK);
+    uint32_t selectors[16]={};bool multiple=false;
+    for(int32_t i=0;i<p->draw_buffers;++i) {
+        int32_t selector=0;g.GetIntegerv(gl::DRAW_BUFFER0+i,&selector);selectors[i]=uint32_t(selector);
+        if(i && selector)multiple=true;
+    }
+    g.DrawBuffer(gl::BACK);
     // Best-effort recovery also runs after the diagnostic gateway has refused.
     // No game framebuffer is touched, and no error is consumed here.
     g.BlitFramebuffer(0,0,p->width,p->height,0,0,p->width,p->height,gl::COLOR_BUFFER_BIT,gl::NEAREST);
-    g.DrawBuffer(selector);
+    if(multiple)p->dispatch.DrawBuffers(p->draw_buffers,selectors);
+    else g.DrawBuffer(selectors[0]); // also preserves aggregate FRONT/BACK selectors
 }
 }
 Instance* create(const Dispatch& d,uint32_t generation) {
-    if(!generation || !d.CopyTexSubImage2D)return nullptr;
+    if(!generation || !d.CopyTexSubImage2D || !d.DrawBuffers)return nullptr;
 #define GP_CHECK(result,name,args) if(!d.gl.name)return nullptr;
     GC_GL_FUNCTIONS(GP_CHECK)
 #undef GP_CHECK
     int32_t major=0,minor=0;d.gl.GetIntegerv(gl::MAJOR_VERSION,&major);d.gl.GetIntegerv(gl::MINOR_VERSION,&minor);
     if(major<4 || (major==4 && minor<3))return nullptr;
-    return new(std::nothrow) Instance(d,generation);
+    int32_t buffers=0;d.gl.GetIntegerv(0x8824,&buffers); // GL_MAX_DRAW_BUFFERS
+    if(buffers<1 || buffers>16)return nullptr;
+    auto* p=new(std::nothrow) Instance(d,generation);if(p)p->draw_buffers=buffers;return p;
 }
 bool prepare(Instance* p,uint32_t drawable,uint32_t width,uint32_t height,uint32_t sw,uint32_t sh) {
     if(!p)return false;
@@ -252,6 +261,7 @@ void context_ready() {
     Dispatch dispatch{};
     if(!ghost_dispatch::load(dispatch.gl))return;
     dispatch.CopyTexSubImage2D=reinterpret_cast<decltype(dispatch.CopyTexSubImage2D)>(glCopyTexSubImage2D);
+    dispatch.DrawBuffers=reinterpret_cast<decltype(dispatch.DrawBuffers)>(g_glDrawBuffers);
     if(!replay_gl::BeginCapture())return;
     current=create(dispatch,owner.context_generation);
     if(current)gamma_program.reset(gfxContext.createGammaCorrectionShader());

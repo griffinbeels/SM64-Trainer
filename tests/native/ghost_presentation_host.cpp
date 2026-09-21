@@ -45,7 +45,8 @@ static gp::Dispatch dispatch() {
 #define GP_LOAD(result,name,args) d.gl.name=reinterpret_cast<decltype(d.gl.name)>(load("gl" #name));require(d.gl.name!=nullptr,#name);
     GC_GL_FUNCTIONS(GP_LOAD)
 #undef GP_LOAD
-    d.CopyTexSubImage2D=glCopyTexSubImage2D;return d;
+    d.CopyTexSubImage2D=glCopyTexSubImage2D;
+    d.DrawBuffers=reinterpret_cast<decltype(d.DrawBuffers)>(load("glDrawBuffers"));return d;
 }
 static bool gpu_open=false,fail_begin=false,fail_end=false;
 static bool begin_gpu(){require(!gpu_open,"gateway not nested");if(fail_begin)return false;require(glGetError()==0,"clean before gateway");gpu_open=true;return true;}
@@ -140,6 +141,13 @@ static void run(uint32_t generation) {
     require(selector==gl::FRONT,"restore preserves default draw selector");g.DrawBuffer(gl::BACK);
     rgb(pixels(g,0),20,30,20,40,60,"revocation restores clean BACK");gp::swap_completed(p,true);
     require(!gp::surface(p).presentation_serial,"revocation invalidates descriptor");
+
+    background(g);gp::begin_update(p,207);require(gp::replace_vi(p,image,0x2000,false,raster.api()),"multiple selector candidate");
+    const uint32_t selectors[]={GL_FRONT_LEFT,GL_BACK_LEFT};d.DrawBuffers(2,selectors);
+    require(glGetError()==0,"multiple default draw selectors supported");gp::cancel_overlay(p);
+    int32_t first=0,second=0;g.GetIntegerv(gl::DRAW_BUFFER0,&first);g.GetIntegerv(gl::DRAW_BUFFER0+1,&second);
+    require(first==GL_FRONT_LEFT && second==GL_BACK_LEFT,"all default draw selectors restored");g.DrawBuffer(gl::BACK);
+    gp::swap_completed(p,true);
 
     background(g);gp::begin_update(p,206);require(gp::replace_vi(p,image,0x2000,false,raster.api()),"revision candidate");
     require(gp::before_swap(p,0x2000,raster.api()),"revision phase");
