@@ -925,6 +925,13 @@ return JSON.stringify({n: rows.length, ids: mine.map((r) => r.id),
                        triggers: mine[0].start_triggers});
 """ % json.dumps(row_name)))
     page.evaluate(_ASYNC("""
+// Stamp the editor standing BEHIND the modal. The replace is supposed to
+// remount it (keyed on the segment id, which the replace keeps), and a
+// remount is a NEW node -- so the stamp disappearing is the remount itself,
+// observable without reading any of the values this test asserts on. Waiting
+// on those values instead would pass whatever the Builder did.
+const open = document.querySelector('.segbuilder');
+if (open) open.setAttribute('data-pre-replace', '1');
 const saveBtn = Array.from(document.querySelectorAll(
   '.modal .builder-actions button'))
   .find((b) => b.textContent.includes('Replace segment'));
@@ -956,7 +963,15 @@ return JSON.stringify({n: rows.length, ids: mine.map((r) => r.id),
     # constants: the start clause's TYPE select, its `to` param when the
     # clause has one, and the Then section's step count.
     editor = json.loads(page.evaluate(_ASYNC("""
-await waitFor(() => !!document.querySelector('.segbuilder'), 5000);
+// The REMOUNT, not merely a `.segbuilder` -- the pre-replace editor is still
+// in the DOM the instant the modal closes, so waiting for the container read
+// its stale selects under load (2026-09-20, four full runs at 8 and 16
+// workers; green at 4). `SHELL_WAIT` because how long a remount takes is a
+// fact about the machine, and it is the one bound this suite scales.
+if (!await waitFor(
+    () => !!document.querySelector('.segbuilder:not([data-pre-replace])'),
+    SHELL_WAIT))
+  throw new Error('the editor never remounted after the replace');
 const start = document.querySelector('.seg-start');
 const selects = Array.from(start.querySelectorAll('select'))
   .map((s) => s.value);
