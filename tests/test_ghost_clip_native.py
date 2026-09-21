@@ -1,0 +1,83 @@
+"""Compare Python decoding with actual gp.prepare_clip, without model/ROM/GL."""
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import struct
+import subprocess
+import sys
+
+import pytest
+
+from ghost_native_fixture import frame
+from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, decode_clip
+from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded
+
+ROOT = Path(__file__).resolve().parents[1]
+COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
+
+
+def corpus():
+    base = encoded((frame(),))
+    values = [base, encoded((frame(),), SEGMENT_CLOCK),
+              encoded((frame(1, valid=29), frame(2))),
+              encoded((frame(1, igt=99, elapsed=100), frame(4, igt=1, elapsed=104, area=2))),
+              encoded((frame(1, origin=0), frame(2, origin=1))),
+              encoded((frame(1), frame(2, origin=2), frame(3, origin=2))),
+              encoded((frame(clock_valid=7, banked=30),)),
+              encoded((frame(1, elapsed=0), frame(2, elapsed=2**64-1)), SEGMENT_CLOCK),
+              base[:100], base[:-1], base + b"\0"]
+    for offset, value in [*BAD_HEADER_WORDS, *((160 + at, value) for at, value in BAD_CLOCK_WORDS),
+                           (160, 192), (164, 1), (180, 2), (188, 63),
+                           (160 + 72, 0), (160 + 76, 0x7fc00000), (160 + 184, 0x7f800000)]:
+        changed = bytearray(base)
+        struct.pack_into("<I", changed, offset, value)
+        values.append(bytes(changed))
+    for offset, value in [(32, 1), (40, 101), (48, 999), (56, 99), (244, 0), (252, 10)]:
+        changed = bytearray(encoded((frame(1), frame(2))))
+        struct.pack_into("<Q" if offset in (32, 40, 48, 244, 252) else "<I", changed, 420+offset, value)
+        values.append(bytes(changed))
+    return values
+
+
+def test_python_and_native_acceptance_agree(tmp_path):
+    if sys.platform != "win32":
+        pytest.skip("Win32 native playback component")
+    spec = importlib.util.spec_from_file_location("clip_build", COMPONENTS / "tools/build_plugin.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    vcvars = build.find_vcvars32()
+    assert vcvars, "native codec parity needs the x86 compiler"
+    native = COMPONENTS / "plugin/gfxwrap"
+    host = ROOT / "tests/native/ghost_clip_host.cpp"
+    source = native / "ghost_playback.cpp"
+    target = tmp_path / "ghost_clip_host.exe"
+    build._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
+        f"/I{native}", f"/I{COMPONENTS / 'renderer/model'}", str(source), str(host),
+        f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF",
+        "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *build.LIBS], tmp_path)
+    paths, expected = [], []
+    for index, data in enumerate(corpus()):
+        path = tmp_path / f"case-{index}.ghost"
+        path.write_bytes(data)
+        paths.append(str(path))
+        try:
+            decode_clip(data)
+        except ClipError:
+            expected.append(0)
+        else:
+            expected.append(1)
+    result = subprocess.run([str(target)], input="\n".join(paths) + "\n", cwd=tmp_path,
+        capture_output=True, text=True, timeout=30, check=False, **quiet_spawn_kwargs())
+    assert result.returncode == 0, result.stdout + result.stderr
+    actual = [int(value) for value in result.stdout.splitlines()]
+    receipt = {"cases": len(expected), "accepted": sum(expected), "native": actual,
+               "python": expected, "source_sha256": {
+                   str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in (source, host, native / "ghost_clip.h", native / "ghost_capture.h")}}
+    (tmp_path / "codec-parity.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+    assert set(expected) == {0, 1}
+    assert actual == expected, [(index, want, got) for index, (want, got)
+                                in enumerate(zip(expected, actual, strict=False)) if want != got]

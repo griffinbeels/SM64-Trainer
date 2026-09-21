@@ -16,7 +16,8 @@ import threading
 from types import SimpleNamespace
 
 from sm64_events.ghost.clip import (
-    CLOCK, MAX_RECORDS, ClipError, frame_from_bytes, producer_values, write_clip,
+    ELAPSED_VALID, RAW_VALID, CLOCK_KINDS, MAX_RECORDS,
+    ClipError, attempt_origin, frame_from_bytes, producer_values, write_clip,
 )
 
 
@@ -120,33 +121,42 @@ class PoseArchive:
                 self._db.close()
                 self._db = None
 
-    def export_attempt(self, attempt, destination: Path, *, end_frame: int | None = None,
-                       target: dict | None = None) -> dict:
-        start = getattr(attempt, "anchor_frame", None)
-        duration = getattr(attempt, "rta_frames", None)
-        if end_frame is None and type(start) is int and type(duration) is int:
-            end_frame = start + duration
-        if (type(start) is not int or type(end_frame) is not int
-                or not 0 <= start <= end_frame < 2**32):
-            raise ClipError("attempt has no exact native frame endpoints")
-        lo, hi = _utc(attempt.started_utc), _utc(attempt.ended_utc)
+    def export_attempt(self, attempt, destination: Path, *, target: dict | None = None) -> dict:
+        origin = attempt_origin(attempt)
+        start, end_frame = origin["native_clock_frame"], origin["closed_frame"]
+        kind = CLOCK_KINDS[origin["native_clock_kind"]]
+        lo, hi = _utc(origin["native_clock_utc"]), _utc(attempt.ended_utc)
         if hi < lo:
             raise ClipError("attempt UTC interval is reversed")
+
+        def endpoint(rows):
+            frames = [frame_from_bytes(row[1]) for row in rows]
+            if any(frame.clock.valid & (RAW_VALID | ELAPSED_VALID) != RAW_VALID | ELAPSED_VALID
+                   for frame in frames):
+                raise ClipError("attempt endpoint has no exact native elapsed clock")
+            coordinates = {(frame.epoch, frame.clock.continuity_id, frame.clock.elapsed_frames)
+                           for frame in frames}
+            if len(coordinates) != 1:
+                raise ClipError("attempt has ambiguous native endpoint coordinates")
+            return rows[0][0]  # first source occurrence, including a refused pose
+
         with self._reader() as db:
             candidates = db.execute("""SELECT DISTINCT producer FROM poses
-                WHERE captured BETWEEN ? AND ? AND timer IN (?,?) AND valid & ? != 0""",
-                (lo - self.boundary_slack_s, hi + self.boundary_slack_s, start, end_frame, CLOCK)).fetchall()
+                WHERE timer=? AND captured BETWEEN ? AND ?""",
+                (start, lo - self.boundary_slack_s, lo + self.boundary_slack_s)).fetchall()
             matches = []
             for (identity,) in candidates:
-                endpoints = db.execute("""SELECT sequence,timer FROM poses
-                    WHERE producer=? AND captured BETWEEN ? AND ?
-                    AND timer IN (?,?) AND valid & ? != 0 ORDER BY sequence""",
-                    (identity, lo - self.boundary_slack_s, hi + self.boundary_slack_s,
-                     start, end_frame, CLOCK)).fetchall()
-                starts = [sequence for sequence, timer in endpoints if timer == start]
-                ends = [sequence for sequence, timer in endpoints if timer == end_frame]
-                if starts and ends and starts[0] <= ends[-1]:
-                    matches.append((identity, starts[0], ends[-1]))
+                ends = db.execute("""SELECT sequence,data FROM poses WHERE producer=? AND timer=?
+                    AND captured BETWEEN ? AND ? ORDER BY sequence""",
+                    (identity, end_frame, hi - self.boundary_slack_s, hi + self.boundary_slack_s)).fetchall()
+                if not ends:
+                    continue
+                starts = db.execute("""SELECT sequence,data FROM poses WHERE producer=? AND timer=?
+                    AND captured BETWEEN ? AND ? ORDER BY sequence""",
+                    (identity, start, lo - self.boundary_slack_s, lo + self.boundary_slack_s)).fetchall()
+                first, last = endpoint(starts), endpoint(ends)
+                if first <= last:
+                    matches.append((identity, first, last))
             if len(matches) != 1:
                 raise ClipError("attempt has ambiguous native epochs" if matches else
                                 "attempt is missing exact native frame endpoints")
@@ -155,8 +165,9 @@ class PoseArchive:
             rows = db.execute("""SELECT data FROM poses WHERE producer=?
                 AND sequence BETWEEN ? AND ? ORDER BY sequence""", (identity, first, last)).fetchall()
         # The immutable copy survives pruning or recorder detach during publication.
-        manifest = write_clip(destination, tuple(row[0] for row in rows), SimpleNamespace(**source))
+        manifest = write_clip(destination, tuple(row[0] for row in rows), SimpleNamespace(**source), clock_kind=kind)
         return {**manifest, "attempt_id": attempt.id, "session_id": attempt.session_id,
+                **origin,
                 "target": dict(target) if target else None}
 
     def status(self) -> dict:
