@@ -11,6 +11,11 @@ import zipfile
 import pytest
 from import_fixture import make_client
 
+# Every test builds its own client over its own tmp db, so the cases are
+# independent; as one worker group this file was the merge check's long
+# pole (183 s serial, 2026-09-21). `spread` lets each case take any free worker.
+pytestmark = pytest.mark.spread
+
 
 def test_manual_import_lands_one_pb(tmp_path):
     with make_client(tmp_path) as (client, db, _svc):

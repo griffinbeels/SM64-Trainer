@@ -542,6 +542,17 @@ class RankStandards:
                 out.setdefault(ek, {}).setdefault(kind, {}).update(deepcopy(layers.get(kind, {})))
         return out
 
+    def calibration_inputs(self) -> dict:
+        """What a calibration preparation reads from this store, as data.
+
+        `library/calibration.py::prepare` consults exactly `clock_for` and
+        `sheet_layers`: the stored clocks (an unstored entity takes its key's
+        default) and the Sheet seed beneath any mapping. `Adoptions` compares
+        this value to decide whether a preparation it made is still current."""
+        entities = self._read_data()["entities"]
+        return {"clocks": {ek: entity.get("clock") for ek, entity in entities.items()},
+                "sheet": self.sheet_layers({})}
+
     def estimated_strategies(self, ek) -> dict:
         """Provisional Sheet cutoffs, with the evidence that supplied them."""
         return {name: estimate for name, estimate

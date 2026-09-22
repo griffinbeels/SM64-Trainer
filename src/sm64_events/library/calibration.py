@@ -14,7 +14,13 @@ from sm64_events.ranks.calibration import build_calibration
 
 
 def prepare(payload, assignments, definitions, standards, policy):
-    """Fit both regions, keyed locally but configured by stable star/seed identity."""
+    """Fit both regions, keyed locally but configured by stable star/seed identity.
+
+    `payload` must be detached: `LibraryStore` hands every preparation a
+    payload of its own, which may be refitted here and becomes the
+    calibration's payload. Everything else read from the arguments is keyed by
+    `Adoptions._calibration_inputs`, which skips a preparation it has already
+    made; a new read from `standards` belongs in its `calibration_inputs`."""
     from sm64_events.ranks.overall import fit_overall
     grouped = defaultdict(list)
     identities = {f"segment:{definition['id']}": definition.get("seed_key")
@@ -75,4 +81,4 @@ def prepare(payload, assignments, definitions, standards, policy):
     layers = standards.sheet_layers(library_ladders(payload, assignments))
     return build_calibration(payload, assignments, layers, overall,
                              {key: value for key, value in identities.items() if value},
-                             policy.revision, scoring_rows=grading_rows)
+                             policy.revision, scoring_rows=grading_rows, owned_payload=True)

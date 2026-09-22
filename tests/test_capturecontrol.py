@@ -52,6 +52,24 @@ def eventually(get, predicate=lambda x: bool(x), timeout=3):
     raise AssertionError(f"condition not reached: {last!r}")
 
 
+def test_eventually_waits_through_the_page_that_is_mapped_but_not_written():
+    """The race, reproduced without the host: map the page, leave the header
+    blank for a moment, then write it. The real client reports "not published"
+    in between; the helper must wait for the header, not fail on it."""
+    name = "sm64_control_test_" + uuid.uuid4().hex
+    with mmap.mmap(-1, C.PAGE_BYTES, tagname=name + C.SUFFIX) as page:
+        with pytest.raises(BlockingIOError, match="not published"):
+            C.CaptureControl(name)
+        writer = threading.Timer(0.2, C._STATUS.pack_into,
+                                 (page, 0, C.MAGIC, C.VERSION, C.PAGE_BYTES, *[0] * 12))
+        writer.start()
+        try:
+            control = eventually(lambda: C.CaptureControl(name))
+            control.close()
+        finally:
+            writer.join()
+
+
 @contextmanager
 def running(native, *, terminated=False, name=None):
     out, host, dll, *_ = native
@@ -123,7 +141,9 @@ def test_nonzero_invalid_producer_is_not_mistaken_for_unpublished(offset, value)
     with mmap.mmap(-1, C.PAGE_BYTES, tagname=name + C.SUFFIX) as page:
         page[offset] = value
         with pytest.raises(RuntimeError, match="protocol"):
-            C.CaptureControl(name)
+            # Malformed producer bytes are not a publication race; the retry
+            # helper must let this protocol refusal escape immediately.
+            eventually(lambda: C.CaptureControl(name))
 
 
 def test_discovery_is_small_and_passive_and_unavailable_is_truthful(native, monkeypatch):

@@ -127,6 +127,12 @@ publishes it once. A same-date observation correction or policy change can
 activate; identical content can be a no-op, and older Sheet data is refused.
 Fitting or write failure retains the active generation and saved snapshot.
 Assignment transactions also restore saved assignment bytes on failure.
+An assignment or definition sync skips preparation while the active generation
+is the one it prepared from identical inputs (assignments, definitions, policy,
+clocks and Sheet seed), so an app start prepares once although `create_app` and
+the service start both sync. The skip and each input's invalidation are tested
+in [test_living_rank_standards.py](../tests/test_living_rank_standards.py) and
+[test_library_adoptions.py](../tests/test_library_adoptions.py).
 
 Identical validated populations can reuse a completed Overall fit through the
 bounded process-local [fit cache](../src/sm64_events/ranks/fit_cache.py). Every

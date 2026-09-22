@@ -8,6 +8,7 @@ All consumers use sheet_strategy for the row's canonical strategy slot.
 import json
 import logging
 import re
+import weakref
 from pathlib import Path
 from sm64_events.library.assignment_transaction import atomic_assignment, atomic_bytes
 
@@ -279,6 +280,9 @@ class Adoptions:
         self.provision = provision
         self._automatic = {}
         self.policy = policy
+        # (weak reference to the last Calibration prepared here, key of the
+        # inputs that produced it) -- see `_calibration_is_current`.
+        self._prepared = None
         if standards is not None and hasattr(store, "calibrations"):
             standards.calibrations = store.calibrations
             store.prepare_calibration = self._prepare_calibration
@@ -321,23 +325,57 @@ class Adoptions:
 
     def _sync(self) -> None:
         if self.standards is not None and hasattr(self.store, "recalibrate"):
-            self.store.recalibrate()
+            if not self._calibration_is_current():
+                self.store.recalibrate()
             return
         if self.provision is not None:
             self._automatic = self.provision(self.store.payload, self._rows)
         if self.standards is not None:
             self.standards.apply_sheet_ladders(self.ladders())
 
-    def _prepare_calibration(self, payload):
-        from sm64_events.library.calibration import prepare
+    def _calibration_inputs(self, payload):
+        """Everything `prepare` receives besides `payload`, and a key naming it.
+
+        Provisioning runs here, so every sync still creates missing practice
+        entries even when the calibration itself is already current."""
+        from sm64_events.ranks.calibration import fingerprint
         from sm64_events.ranks.policy import RankingPolicy
         automatic = self.provision(payload, self._rows) if self.provision else {}
         assignments = self._resolved_rows(payload, automatic)
         definitions = list(self.segment_defs()) if self.segment_defs else []
-        policy = self.policy() if callable(self.policy) else self.policy
-        candidate = prepare(payload, assignments, definitions, self.standards,
-                            policy or RankingPolicy())
+        policy = (self.policy() if callable(self.policy) else self.policy) or RankingPolicy()
+        key = fingerprint([assignments, definitions, policy.revision,
+                           self.standards.calibration_inputs()])
+        return automatic, assignments, definitions, policy, key
+
+    def _calibration_is_current(self) -> bool:
+        """Whether the active calibration is the one these inputs produce.
+
+        App startup syncs twice -- `load()` at create_app, then the service's
+        `start()` -- and from 2026-09-10 the second sync prepared a whole new
+        calibration only to find it identical: ~0.8 s of a 2.3 s test-app
+        start (measured 2026-09-21). The skip holds only while the active
+        calibration is the very one prepared here, so its payload is the
+        observations that preparation fitted (a refresh publishes another),
+        and the other inputs fingerprint the same: `prepare` would receive
+        the same arguments. Anything else recalibrates."""
+        registry = self.store.calibrations
+        with registry.update_lock:
+            active, prepared = registry.active, self._prepared
+            if active is None or prepared is None or prepared[0]() is not active:
+                return False
+            automatic, *_arguments, key = self._calibration_inputs(active.payload)
+            self._automatic = automatic
+            return key == prepared[1]
+
+    def _prepare_calibration(self, payload):
+        from sm64_events.library.calibration import prepare
+        automatic, assignments, definitions, policy, key = self._calibration_inputs(payload)
+        candidate = prepare(payload, assignments, definitions, self.standards, policy)
         self._automatic = automatic
+        # Weak: an unpublished candidate is a whole Library copy, and one that
+        # is gone cannot be the active calibration anyway.
+        self._prepared = (weakref.ref(candidate), key)
         return candidate
 
     @atomic_assignment

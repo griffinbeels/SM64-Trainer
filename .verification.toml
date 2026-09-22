@@ -23,9 +23,10 @@ identity_command = ["{python}", "{project}/tools/verify_lint.py", "--probe"]
 timeout = 150
 
 [[checks]]
-name = "integration-tests"
+name = "merge-check"
 lanes = ["full"]
-command = ["uv", "run", "--offline", "--frozen", "python", "tools/verify_full.py", "--workers", "4"]
+command = ["uv", "run", "--offline", "--frozen", "python", "tools/verify_full.py"]
 identity_command = ["uv", "run", "--offline", "--frozen", "python", "tools/verify_full.py", "--probe"]
-# Includes admission behind other task-owned suites; observed predecessor 17min.
-timeout = 3600
+# An outer net only. verify_full stops the run 30 minutes after ADMISSION, so
+# time spent queued behind two other merge checks never cancels this one.
+timeout = 7200

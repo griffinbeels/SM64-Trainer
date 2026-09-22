@@ -8,7 +8,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_source_front_snapshot(tmp_path):
+def test_source_front_snapshot(tmp_path, modern_gl):
     spec = importlib.util.spec_from_file_location("source_snapshot_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)

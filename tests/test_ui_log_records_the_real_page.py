@@ -10,6 +10,7 @@ ui-core.md`). An instrument that records nothing is worse than none, because
 its silence reads as "nothing was on screen".
 """
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -26,10 +27,33 @@ if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
 from uilab import driver  # noqa: E402
+from uilab.driver import default_wait_ms  # noqa: E402
 
 from sm64_events.core import uilog  # noqa: E402
 
 SETTLE = "new Promise(r => setTimeout(r, 2500))"
+
+
+def _wait_for_records(page, log, recorded) -> None:
+    """Keep the page open until the log holds what `recorded(entries)` asks
+    for, within the run's browser wait bound; the assertions then say what is
+    missing. The page's posts are serialised (ui/uilog.js), and a loaded
+    runner had not landed all three halves after a fixed 2.5 s, even with the
+    test running alone (full run 35689212201)."""
+    deadline = time.monotonic() + default_wait_ms() / 1000
+    while not recorded(uilog.read(log)) and time.monotonic() < deadline:
+        page.wait_ms(100)
+
+
+def _all_three_halves_with_rows(entries) -> bool:
+    return ({entry["surface"] for entry in entries} >= {"selector", "target", "log"}
+            and any(log.get("rows") for entry in entries if entry["surface"] == "log"
+                    for log in entry["logs"]))
+
+
+def _labelled_recorder_rows(entries) -> bool:
+    return any(row["label"] for entry in entries if entry["surface"] == "recorder"
+               for row in entry.get("rows") or [])
 
 # Reaching the recorder is the setup's whole job: it is a modal on another tab,
 # so no plain page load ever renders it. Same walk `tools/uilab_project.py`'s
@@ -66,7 +90,7 @@ def test_loading_the_practice_page_records_what_it_painted(tmp_path, monkeypatch
     with serve_ui(tmp_path / "uilog-render.db") as base:
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
-            page.evaluate(SETTLE)
+            _wait_for_records(page, log, _all_three_halves_with_rows)
 
     entries = uilog.read(log)
     assert entries, (
@@ -163,9 +187,9 @@ def test_opening_the_recorder_records_the_rows_it_painted(tmp_path, monkeypatch)
     with serve_ui(tmp_path / "uilog-recorder.db") as base:
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
-            page.evaluate(SETTLE)
+            page.wait_for('button.nav-item[title="Segments"]')
             page.evaluate(_OPEN_RECORDER)
-            page.evaluate(SETTLE)
+            _wait_for_records(page, log, _labelled_recorder_rows)
 
     entries = [e for e in uilog.read(log) if e["surface"] == "recorder"]
     assert entries, (

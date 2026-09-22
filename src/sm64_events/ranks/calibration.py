@@ -56,14 +56,20 @@ class Calibration:
     scoring_rows: dict
 
 
-def build_calibration(payload, rows, layers, overall, identities, policy_revision="", scoring_rows=None):
-    """Detach a candidate from mutable fitter inputs before it becomes visible."""
+def build_calibration(payload, rows, layers, overall, identities, policy_revision="",
+                      scoring_rows=None, *, owned_payload=False):
+    """Detach a candidate from mutable fitter inputs before it becomes visible.
+
+    `owned_payload` hands over a payload nothing else holds -- the library
+    store's own detached copy -- which the calibration keeps rather than
+    copying the whole Library a second time."""
     data_revision = observation_fingerprint(payload)
     content = deepcopy({"rows": rows, "layers": layers, "overall": overall,
                         "identities": identities, "policy_revision": policy_revision,
                         "scoring_rows": rows if scoring_rows is None else scoring_rows})
     revision = fingerprint({"schema": 1, "observations": data_revision, **content})
-    return Calibration(revision, data_revision, deepcopy(payload), **content)
+    return Calibration(revision, data_revision,
+                       payload if owned_payload else deepcopy(payload), **content)
 
 
 class CalibrationRegistry:

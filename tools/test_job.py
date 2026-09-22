@@ -56,7 +56,7 @@ class TestJob:
             kwargs = quiet_spawn_kwargs()
             kwargs["creationflags"] |= 0x4  # CREATE_SUSPENDED: no spawn-before-assignment race
             self.child = subprocess.Popen(self.command, cwd=self.cwd, stdout=subprocess.PIPE,
-                                          stderr=subprocess.STDOUT, text=True, **kwargs)
+                                          stderr=subprocess.STDOUT, text=True, errors="replace", **kwargs)
             if not self.kernel.AssignProcessToJobObject(self.handle, wt.HANDLE(self.child._handle)):
                 raise ctypes.WinError(ctypes.get_last_error())
             psutil.Process(self.child.pid).resume()

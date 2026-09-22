@@ -21,7 +21,8 @@ def _build_host(out, *, lose_busy=False, resample_busy=False):
     spec = importlib.util.spec_from_file_location("delivery_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
-    vc = next(p for p in build.KNOWN_VCVARS if p.exists())
+    vc = build.find_vcvars32()   # vswhere first: any edition, any year
+    assert vc, "the x86 MSVC toolchain (vcvars32.bat) is required"
     def quiet_run(*args, **kwargs):
         kwargs.update(quiet_spawn_kwargs())
         return subprocess.run(*args, **kwargs)
@@ -293,7 +294,7 @@ def select(client, offer, serial):
     return bridge
 
 
-def test_real_delivery_selection_actual_key_custody_and_restart(host):
+def test_real_delivery_selection_actual_key_custody_and_restart(host, modern_gl):
     run = Running(host)
     client = None
     try:
@@ -337,7 +338,7 @@ def test_real_delivery_selection_actual_key_custody_and_restart(host):
         run.close()
 
 
-def test_prepare_cancellation_and_invalid_requests_never_activate(host):
+def test_prepare_cancellation_and_invalid_requests_never_activate(host, modern_gl):
     run = Running(host)
     client = None
     try:
@@ -357,7 +358,7 @@ def test_prepare_cancellation_and_invalid_requests_never_activate(host):
         run.close()
 
 
-def test_real_supervisor_accepts_before_worker_runs_and_after_prior_fault(host):
+def test_real_supervisor_accepts_before_worker_runs_and_after_prior_fault(host, modern_gl):
     run = Running(host)
     try:
         assert run.command("startuprace") == "startup race 2"
@@ -366,7 +367,7 @@ def test_real_supervisor_accepts_before_worker_runs_and_after_prior_fault(host):
         run.close()
 
 
-def test_pending_head_blocks_later_samples_and_frontier(host):
+def test_pending_head_blocks_later_samples_and_frontier(host, modern_gl):
     run = Running(host)
     client = None
     try:
@@ -402,7 +403,7 @@ def test_pending_head_blocks_later_samples_and_frontier(host):
         run.close()
 
 
-def test_prepared_channel_waits_for_explicit_encoder_readiness(host):
+def test_prepared_channel_waits_for_explicit_encoder_readiness(host, modern_gl):
     run = Running(host)
     client = None
     try:
@@ -426,7 +427,7 @@ def test_prepared_channel_waits_for_explicit_encoder_readiness(host):
         run.close()
 
 
-def test_abandoned_key_quarantines_fixed_pool_and_refuses_reallocation(host):
+def test_abandoned_key_quarantines_fixed_pool_and_refuses_reallocation(host, modern_gl):
     run = Running(host)
     client = None
     try:

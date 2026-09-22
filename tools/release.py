@@ -3,8 +3,9 @@
 
     uv run python tools/release.py 1.1.0 [--notes-file NOTES.md] [--dry-run]
 
-Refuses unless the tree is clean, you're on main, `gh` is authed, and the
-full test suite passes. Builds the onedir app + bootstrap installer via
+Refuses unless the tree is clean, you're on main, `gh` is authed, the local
+merge check passes, and the commit's full run on GitHub passed (it waits
+for one still running). Builds the onedir app + bootstrap installer via
 tools/build_exe.py (ffmpeg must be on PATH so it gets bundled), zips the
 onedir tree, emits the per-file update manifest, and publishes SIX assets
 the incremental updater + bootstrap consume:
@@ -30,6 +31,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "tools"))   # full_run, make_manifest
 
 from sm64_events.core.update_plan import (BOOTSTRAP_ASSET,  # noqa: E402
                                           MANIFEST_ASSET, PATCH_NOTES_MARKER,
@@ -135,11 +137,11 @@ def integration_command() -> list[str]:
     import tomllib
     config = tomllib.loads((REPO / ".verification.toml").read_text(encoding="utf-8"))
     for check in config.get("checks", []):
-        if check.get("name") == "integration-tests":
+        if check.get("name") == "merge-check":
             # Same placeholders the harness substitutes (harness/verification.py).
             return [arg.replace("{python}", sys.executable).replace("{project}", str(REPO))
                     for arg in check["command"]]
-    raise SystemExit("no integration-tests check in .verification.toml")
+    raise SystemExit("no merge-check check in .verification.toml")
 
 
 def _verify_tool() -> Path | None:
@@ -192,6 +194,28 @@ def _verify_or_run_gate(attempts: int = 6, pause: float = 30.0) -> None:
     sys.exit("refusing: verification never became available")
 
 
+def _require_full_run(dry_run: bool = False, gate=None) -> None:
+    """The whole suite runs on GitHub, not here: the merge check only covered
+    each change's blast radius. So the commit being released must have a green
+    full run; one still going is waited for. A dry run reports the verdict and
+    carries on, because it publishes nothing and usually stands on a worktree
+    commit GitHub has never seen."""
+    if gate is None:
+        from full_run import GhUnavailable, release_gate
+        try:
+            allowed, why = release_gate(_capture(["git", "rev-parse", "HEAD"]), wait=not dry_run)
+        except GhUnavailable as error:
+            allowed, why = False, f"could not read the full run: {error}"
+    else:
+        allowed, why = gate()
+    if allowed:
+        print(f"full run: {why}")
+    elif dry_run:
+        print(f"full run (dry run, not enforced): {why}")
+    else:
+        sys.exit(f"refusing: {why}")
+
+
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd))
     return subprocess.run(cmd, cwd=REPO, check=True, **kw)
@@ -236,6 +260,7 @@ def main() -> int:
 
     _preflight(args.dry_run)
     _verify_or_run_gate()
+    _require_full_run(args.dry_run)
 
     originals = snapshot_version_files()
     VERSION_PY.write_text(bump_version_py(VERSION_PY.read_text(), args.version))

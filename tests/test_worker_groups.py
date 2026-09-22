@@ -25,9 +25,11 @@ def test_a_spread_test_is_its_own_group(request, case):
     mark = request.node.get_closest_marker("xdist_group")
     assert mark is not None, "no worker group -- the conftest hook is gone"
     assert mark.args[0] == (
-        f"tests/test_worker_groups.py::test_a_spread_test_is_its_own_group_{case}_")
+        f"tests/test_worker_groups.py__test_a_spread_test_is_its_own_group_{case}_")
     assert "@" not in mark.args[0] and "]" not in mark.args[0], (
         "xdist splits `nodeid@group` on those characters")
+    assert "::" not in mark.args[0], (
+        "JUnit splits `nodeid@group` on `::`: the full run's report would name another test")
 
 
 def test_a_browser_sweep_case_joins_a_BOUNDED_pool(request):

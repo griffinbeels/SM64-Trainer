@@ -7,10 +7,17 @@ db + standards, and the coverage/pending flags the UI reads.
 """
 import threading
 
+import pytest
+
 from import_fixture import make_client
 from sm64_events.library.export_column import sheet_time
 from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.scorecard import SECRET_LABEL
+
+# Every test builds its own client over its own tmp db, so the cases are
+# independent; as one worker group this file was the merge check's long
+# pole (429 s serial, 2026-09-21). `spread` lets each case take any free worker.
+pytestmark = pytest.mark.spread
 
 
 def test_goal_round_trip(tmp_path):

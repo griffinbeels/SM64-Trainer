@@ -34,7 +34,9 @@ def native(tmp_path_factory):
 @pytest.mark.parametrize("mode", ["before", "between", "after", "stale", "capacity",
     "delete_failure", "unbind_failure", "simultaneous", "real_before", "real_after", "real_lists", "real_anchor",
     "production_anchor", "acquiring_before", "acquiring_after", "create_failure", "abi"])
-def test_lifetime(native, mode):
+def test_lifetime(native, mode, request):
+    if mode.startswith(("real_", "production_")):
+        request.getfixturevalue("modern_gl")   # these modes open a real WGL context
     target, module = native
     result = subprocess.run([str(target), mode, str(module)], capture_output=True, text=True,
                             timeout=30, cwd=target.parent, **quiet_spawn_kwargs(), check=False)

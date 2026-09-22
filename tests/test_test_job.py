@@ -56,3 +56,15 @@ with TestJob([sys.executable, "-c", "import time; time.sleep(30)"], ".") as chil
         runner.wait()
         outsider.kill()
         outsider.wait()
+
+
+def test_output_outside_the_console_code_page_reaches_the_reader(tmp_path):
+    """A failing Vitest prints U+276F; decoded strictly as cp1252 its UTF-8
+    bytes raised inside the runner's relay thread and hid every failure after
+    it. The reader must get the rest of the output."""
+    code = ("import sys; sys.stdout.buffer.write('\\u276f failed\\n'.encode('utf-8')); "
+            "print('after', flush=True)")
+    with TestJob([sys.executable, "-c", code], tmp_path) as child:
+        lines = child.stdout.read().splitlines()
+        assert child.wait(timeout=10) == 0
+    assert lines[-1] == "after" and "failed" in lines[0]

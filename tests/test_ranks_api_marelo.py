@@ -15,6 +15,11 @@ from sm64_events.library.build import SCHEMA_VERSION
 from sm64_events.ranks import classify, scoring
 from test_ranks_api import make_client as _make_client
 
+# Every test builds its own client over its own tmp db, so the cases are
+# independent; as one worker group this file was the merge check's long
+# pole (344 s serial, 2026-09-21). `spread` lets each case take any free worker.
+pytestmark = pytest.mark.spread
+
 
 def make_client(tmp_path, bundled_library=True):
     """The bundled library ON by default here: the leaderboard tests adopt

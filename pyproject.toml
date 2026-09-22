@@ -78,8 +78,8 @@ packages = ["src/sm64_events"]
 # that before adding or removing a rule — a rule with no failure story is how
 # this becomes a style preset nobody reads.
 #
-# The gate is DIFF-SCOPED (.claude/hooks/lint-gate.py): only findings on lines
-# a commit actually adds can block it. That is why a 312-finding backlog can
+# tools/verify_lint.py checks whole changed files against a reviewed baseline
+# of older findings (docs/local-verification.md), which is why a backlog can
 # sit here without anyone declaring bankruptcy.
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]

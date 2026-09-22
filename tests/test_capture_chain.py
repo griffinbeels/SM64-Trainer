@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="module")
-def native_build():
+def native_build(modern_gl):
     spec = importlib.util.spec_from_file_location("chain_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)

@@ -368,6 +368,15 @@ class FfmpegAvSink:
         if self._feeder is not None:
             self._feeder.join(timeout=10)
             self._feeder = None
+        if not self._picture:
+            # The CFR feed's audio pipe teardown flushes, and a flush waits
+            # for ffmpeg to READ the pipe -- which it stops doing while its
+            # scheduler waits on a video input that has not ended. Flushing
+            # first deadlocked stop() for good on a loaded GitHub runner
+            # (2026-09-21, faulthandler: FlushFileBuffers in
+            # _teardown_audio_pipe). End the video input first, as the
+            # comment above always said; the wait still comes last.
+            self._end_video_input()
         self._teardown_audio_pipe()
         self._stop_proc()
         for t in self._readers:
@@ -551,6 +560,14 @@ class FfmpegAvSink:
             return 0.0
         self._fail_streak = min(self._fail_streak + 1, 5)
         return min(2.0 ** self._fail_streak, 30.0)
+
+    def _end_video_input(self) -> None:
+        proc = self._proc
+        if proc is not None and proc.stdin:
+            try:
+                proc.stdin.close()
+            except OSError:
+                log.debug("ffmpeg stdin close failed (child gone?)", exc_info=True)
 
     def _stop_proc(self) -> None:
         proc = self._proc

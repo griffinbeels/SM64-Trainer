@@ -11,7 +11,7 @@ _MISSING = find_uilab()
 if _MISSING:
     pytest.skip(_MISSING, allow_module_level=True)
 
-from uilab.driver import get_driver
+from uilab.driver import default_wait_ms, get_driver
 from ui_fixture import serve_ui
 from uilab_project import _SETUP_SETUP
 from sm64_events.core.onboarding import JP_WARNING
@@ -44,10 +44,19 @@ def body(page):
 
 
 def click_text(page, text):
+    """Click the live (not inert) modal button with this label, once it is
+    there: a step's button can still be mid-swap after wait_step's fixed
+    360 ms on a loaded machine (full run 35685744845: no such button yet)."""
     import json
-    page.evaluate("Array.from(document.querySelectorAll('.setup-modal button'))"
-                  ".filter(b => !b.closest('[inert]'))"
-                  f".find(b => (b.getAttribute('aria-label') || b.textContent.trim()) === {json.dumps(text)}).click()")
+    import time
+    found = ("Array.from(document.querySelectorAll('.setup-modal button'))"
+             ".filter(b => !b.closest('[inert]'))"
+             f".find(b => (b.getAttribute('aria-label') || b.textContent.trim()) === {json.dumps(text)})")
+    deadline = time.monotonic() + default_wait_ms() / 1000
+    while not page.evaluate(f"!!{found}"):
+        assert time.monotonic() < deadline, f"no live {text!r} button in the setup modal"
+        page.wait_ms(50)
+    page.evaluate(f"{found}.click()")
 
 
 def connect(layer, observed):

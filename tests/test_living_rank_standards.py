@@ -224,3 +224,39 @@ def test_definition_changes_reach_assignments_only_through_real_sync(tmp_path):
     assignments.load()
     assert assignments.rows() == before
     assert not standards.ladders("segment:42")
+
+
+@pytest.mark.parametrize("change", ["nothing", "policy", "definitions", "assignment", "standards"])
+def test_a_sync_prepares_again_exactly_when_one_of_its_inputs_moved(tmp_path, monkeypatch, change):
+    """A sync that finds its preparation current skips it; each input that
+    `prepare` reads, when moved, must still reach a new calibration."""
+    import sm64_events.library.calibration as calibration
+    policy, definitions = [RankingPolicy()], []
+    store, standards, assignments = _open(tmp_path, _payload(), definitions=definitions,
+                                          policy=lambda: policy[0])
+    before, prepared, real = store.calibrations.active, [], calibration.prepare
+
+    def counting(*args, **kwargs):
+        prepared.append("prepare")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(calibration, "prepare", counting)
+    if change == "assignment":
+        target = store.payload["targets"][2]
+        item = target["approaches"][0]
+        assignments.adopt(row_key(target, item["name"], item["ids"]), "segment:42")
+    else:
+        if change == "policy":
+            policy[0] = RankingPolicy({"layers": {"strategy": {"patches": [{"target_id": KEY,
+                "version": "jp", "strategy": "Standard", "parameters": {"percentiles": {"Mario": 15.}}}]}}})
+        elif change == "definitions":
+            # Places no row, so only the definitions themselves can tell:
+            # its seed identity still joins the calibration.
+            definitions.append({"id": 77, "name": "Unrelated movement", "seed_key": "test:unrelated"})
+        elif change == "standards":
+            standards.sheet_path = tmp_path / "sheet_ladders.json"
+            standards.sheet_path.write_text(json.dumps({"entities": {
+                LEGACY: {"strategies": {"Sheet seed": LADDER}}}}), encoding="utf-8")
+        assignments.load()
+    assert len(prepared) == (change != "nothing")
+    assert (store.calibrations.active is before) == (change == "nothing")
