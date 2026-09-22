@@ -21,8 +21,16 @@ def save(store, attempt=7, *, kind="star", key="24-1", strat="10 coin", active=T
                       document=a_document(), active=active)
 
 
+def ghosts(number, pb=True):
+    return {"pb": pb, "templates": [] if number is None else [number]}
+
+
 def select(session, number, **changes):
-    return asyncio.run(session.update(template_id=number, target=session._read_target(), **changes))
+    return asyncio.run(session.update(ghosts=ghosts(number), target=session._read_target(), **changes))
+
+
+def chosen_ids(body):
+    return body["selection"]["ghosts"]["templates"]
 
 
 def test_choose_inactive_other_strategy_without_changing_input_template(tmp_path):
@@ -31,7 +39,7 @@ def test_choose_inactive_other_strategy_without_changing_input_template(tmp_path
     comparison = save(store)
     chosen = save(store, 8, strat="Other route", active=False)
     body = select(session, chosen.id, enabled=True)
-    assert body["selection"]["template_id"] == chosen.id
+    assert chosen_ids(body) == [chosen.id]
     assert body["source"]["attempt_id"] == 8
     assert store.active_for("star", "24-1", "10 coin").id == comparison.id
     assert parse_qs(urlsplit(windows[0].url).query)["template_id"] == [str(chosen.id)]
@@ -49,18 +57,18 @@ def test_choice_is_restored_per_target_and_strategy_after_restart(tmp_path):
     segment = save(store, 9, kind="segment", key="31", strat=None)
     select(session, second.id)
     tracker.strat_tag = "Other route"
-    assert drive(session)["selection"]["template_id"] is None
+    assert chosen_ids(drive(session)) == []
     select(session, first.id)
     tracker.target, tracker.strat_tag = ("segment", 31), None
     select(session, segment.id)
     tracker.target, tracker.strat_tag = ("star", 24, 1), "10 coin"
-    assert drive(session)["selection"]["template_id"] == second.id
+    assert chosen_ids(drive(session)) == [second.id]
     restored, _, restored_tracker, _ = a_session(tmp_path, db=db, store=store)
-    assert drive(restored)["selection"]["template_id"] == second.id
+    assert chosen_ids(drive(restored)) == [second.id]
     restored_tracker.target, restored_tracker.strat_tag = ("segment", 31), None
-    assert drive(restored)["selection"]["template_id"] == segment.id
+    assert chosen_ids(drive(restored)) == [segment.id]
     select(restored, None)
-    assert drive(restored)["selection"]["template_id"] is None
+    assert chosen_ids(drive(restored)) == []
 
 
 def test_deleted_choice_is_unavailable_instead_of_falling_back(tmp_path):
@@ -70,7 +78,7 @@ def test_deleted_choice_is_unavailable_instead_of_falling_back(tmp_path):
     select(session, chosen.id, enabled=True)
     store.delete(chosen.id)
     body = drive(session)
-    assert body["selection"]["template_id"] == chosen.id
+    assert chosen_ids(body) == [chosen.id]
     assert body["source"]["template_id"] == chosen.id
     assert body["source"]["reason"] == "selected_template_missing"
     assert not body["source"]["available"] and not windows[0].visible
@@ -97,10 +105,10 @@ def test_stale_or_foreign_selection_cannot_change_preferences(tmp_path):
     old_target = session._read_target()
     tracker.strat_tag = "Other route"
     with pytest.raises(ValueError, match="target changed"):
-        asyncio.run(session.update(template_id=same.id, target=old_target, enabled=True))
+        asyncio.run(session.update(ghosts=ghosts(same.id), target=old_target, enabled=True))
     assert not drive(session)["enabled"]
     with pytest.raises(ValueError, match="current practice target"):
-        asyncio.run(session.update(template_id=same.id))
+        asyncio.run(session.update(ghosts=ghosts(same.id)))
 
 
 def test_candidates_validate_files_without_changing_the_native_selection(tmp_path):
@@ -120,7 +128,7 @@ def test_candidates_validate_files_without_changing_the_native_selection(tmp_pat
         "frame": 100, "utc": "2026-09-21T08:00:00+00:00"})
     body = select(session, chosen.id, enabled=True, view="mario")
     session._native.note()
-    assert capture.commands[-1]["clip_path"] == str(assets[8][0])
+    assert [clip["clip_path"] for clip in capture.commands[-1]["clips"]] == [str(assets[8][0])]
     rows = {row["template_id"]: row for row in body["selection"]["candidates"]}
     assert rows[first.id]["native_available"] and rows[chosen.id]["native_available"]
     assert not rows[absent.id]["native_available"] and rows[absent.id]["native_reason_text"]
@@ -145,7 +153,7 @@ def test_source_api_and_switch_follow_same_choice_for_both_star_and_segment(tmp_
     app = FastAPI()
     app.include_router(create_ghost_router(session._inputs, replay, session))
     with TestClient(app) as client:
-        response = client.put("/api/ghost", json={"template_id": chosen.id, "target": session._read_target()})
+        response = client.put("/api/ghost", json={"ghosts": ghosts(chosen.id), "target": session._read_target()})
         assert response.status_code == 200
         params = {"kind": "star", "entity_key": "24-1", "strat": "10 coin"}
         assert client.get("/api/ghost/source", params=params).json()["attempt_id"] == 8
@@ -154,7 +162,7 @@ def test_source_api_and_switch_follow_same_choice_for_both_star_and_segment(tmp_
         assert client.get("/api/ghost/source", params={**params, "template_id": -1}).status_code == 422
         tracker.target, tracker.strat_tag = ("segment", 31), None
         segment = save(store, 8, kind="segment", key="31", strat=None)
-        response = client.put("/api/ghost", json={"template_id": segment.id, "target": session._read_target()})
+        response = client.put("/api/ghost", json={"ghosts": ghosts(segment.id), "target": session._read_target()})
         assert response.status_code == 200
         answer = client.get("/api/ghost/source", params={"kind": "segment", "entity_key": "31"}).json()
         assert answer["available"] and answer["attempt_id"] == 8
@@ -188,6 +196,6 @@ def test_real_saved_pose_corruption_revokes_only_that_candidate(tmp_path):
         assert not candidates[chosen.id]["native_available"]
         assert candidates[chosen.id]["native_reason_text"]
         assert candidates[kept.id]["native_available"]
-        assert body["selection"]["template_id"] == chosen.id
+        assert chosen_ids(body) == [chosen.id]
     finally:
         archive.close()

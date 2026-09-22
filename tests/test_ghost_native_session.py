@@ -9,6 +9,14 @@ from sm64_events.ghost.native_session import NativeGhost
 from tests.test_ghost_session import a_session, mark
 
 
+def default_ghosts(ghost, target, store):
+    """Resolve the target's default choice (PB box ticked, nothing else) the
+    way the session does, over a store with no PBs."""
+    from sm64_events.ghost.pb import GhostLibrary
+    from sm64_events.ghost.selection import DEFAULT_CHOICE, chosen_ghosts
+    return ghost.resolve(target, chosen_ghosts(DEFAULT_CHOICE, GhostLibrary(store, None), target)[0])
+
+
 class Capture:
     def __init__(self):
         self.commands = []
@@ -49,7 +57,7 @@ def test_native_switch_uses_pose_without_video_window_and_preserves_controls(tmp
         assert session.payload()["source"]["exactness"] == "native_pose"
         command = source.commands[-1]
         assert command["enabled"] and command["opacity"] == 1 and command["nudge"] == 9
-        assert command["tint_enabled"] and command["hue_degrees"] == 120
+        assert command["tint_enabled"] and [clip["hue_degrees"] for clip in command["clips"]] == [120]
         assert command["proximity_enabled"] and command["proximity_distance"] == 0
         assert command["stop_at_star"] and command["rom_path"] == ""
         assert command["origin"]["global_timer"] == 100
@@ -323,7 +331,7 @@ def test_real_export_refusal_reaches_saved_template_without_retrying_archive(tmp
         monkeypatch.setattr(archive, "export_attempt", lambda *a, **k: pytest.fail("resolve retried export"))
         ghost = NativeGhost(service)
         for _ in range(3):
-            answer = ghost.resolve(target, store)
+            answer = default_ghosts(ghost, target, store)
             assert not answer["available"] and answer["reason"] == "native_preservation_failed"
             assert answer["template_id"] == saved.id and answer["attempt_id"] == row.id
             assert answer["reason_text"] == (
@@ -364,15 +372,15 @@ def test_successful_pose_commit_clears_the_prior_refusal(tmp_path):
         service.preserve_native(row.id)
         mark(store, entity_key=target["entity_key"], strat=row.strat_tag, attempt_id=row.id)
         ghost = NativeGhost(service)
-        assert ghost.resolve(target, store)["reason"] == "native_preservation_failed"
+        assert default_ghosts(ghost, target, store)["reason"] == "native_preservation_failed"
         good.ingest(producer(), tuple(frame(n) for n in (1, 2, 3)))
         service.recorder.pose_archive = good
         assert service.preserve_native(row.id)["native_ghost"] is not None
         assert service.native_preservation_reason(row.id) is None
-        assert ghost.resolve(target, store)["available"]
+        assert default_ghosts(ghost, target, store)["available"]
         path, _ = service.find_native(row.id)
         path.with_suffix(".json").unlink()
-        assert ghost.resolve(target, store)["reason"] == "no_native_poses"
+        assert default_ghosts(ghost, target, store)["reason"] == "no_native_poses"
     finally:
         archive.close()
         good.close()
@@ -395,14 +403,14 @@ def test_refusal_lookup_does_not_wait_for_an_in_progress_export(tmp_path, monkey
         thread.start()
         assert entered.wait(2)
         ghost = NativeGhost(service)
-        assert ghost.resolve(target, store)["reason"] == "no_native_poses"
+        assert default_ghosts(ghost, target, store)["reason"] == "no_native_poses"
     finally:
         release.set()
         thread.join(5)
         archive.close()
     assert not thread.is_alive() and len(results) == 1
     assert results[0]["native_ghost_reason"] == "native ghost has no supported recorded poses"
-    assert ghost.resolve(target, store)["reason"] == "native_preservation_failed"
+    assert default_ghosts(ghost, target, store)["reason"] == "native_preservation_failed"
 
 
 def test_missing_origin_is_explained_and_refusal_history_is_bounded(tmp_path):
@@ -417,7 +425,7 @@ def test_missing_origin_is_explained_and_refusal_history_is_bounded(tmp_path):
     assert service.native_preservation_reason(rows[-1].id) == "This recording has no native Mario poses."
     store = a_store(tmp_path)
     mark(store, entity_key="2-2", strat=None, attempt_id=rows[-1].id)
-    answer = NativeGhost(service).resolve({"kind": "star", "entity_key": "2-2"}, store)
+    answer = default_ghosts(NativeGhost(service), {"kind": "star", "entity_key": "2-2"}, store)
     assert answer["reason"] == "native_preservation_failed"
     assert "Mario poses were not recorded" in answer["reason_text"]
 
@@ -431,7 +439,7 @@ def test_real_missing_origin_refusal_is_available_before_asset_identity(tmp_path
         result = service.preserve_native(row.id)
         assert result["native_ghost_reason"] == "attempt has no exact native frame endpoints or owner kind"
         mark(store, entity_key=target["entity_key"], strat=row.strat_tag, attempt_id=row.id)
-        answer = NativeGhost(service).resolve(target, store)
+        answer = default_ghosts(NativeGhost(service), target, store)
         assert answer["reason"] == "native_preservation_failed"
         assert "exact starting or ending frame" in answer["reason_text"]
     finally:
@@ -486,7 +494,7 @@ def test_older_pose_file_is_explained_kept_and_never_replaced(tmp_path):
         store = a_store(tmp_path)
         target = {"kind": "star", "entity_key": f"{row.course_id}-{row.star_id}", "strat": row.strat_tag}
         mark(store, entity_key=target["entity_key"], strat=row.strat_tag, attempt_id=row.id)
-        answer = NativeGhost(service).resolve(target, store)
+        answer = default_ghosts(NativeGhost(service), target, store)
         assert not answer["available"]
         assert (answer["reason"], answer["reason_text"]) == ("older_pose_format", OLDER_POSE_FORMAT_TEXT)
         # A newer archive must not silently overwrite his committed older recording.

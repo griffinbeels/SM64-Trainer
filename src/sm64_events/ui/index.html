@@ -8633,26 +8633,55 @@
      colour is the browser's to choose, or the highlighted row goes
      light-on-light. */
   .ghost-view { gap: .35rem; }
-  .ghost-view-select, .ghost-recording-select {
+  .ghost-view-select {
     background: #101f31; color: var(--text);
     border: 1px solid var(--border-soft); border-radius: 5px;
     font: inherit; font-size: .68rem; padding: 1px .3rem;
     min-height: 22px; cursor: pointer;
   }
-  .ghost-view-select option, .ghost-recording-select option { background-color: #101f31; }
-  .ghost-view-select:hover:not(:disabled), .ghost-recording-select:hover:not(:disabled) {
+  .ghost-view-select option { background-color: #101f31; }
+  .ghost-view-select:hover:not(:disabled) {
     border-color: var(--gold-soft);
   }
-  .ghost-view-select:focus-visible, .ghost-recording-select:focus-visible {
+  .ghost-view-select:focus-visible {
     outline: 2px solid var(--gold); outline-offset: 2px;
   }
-  .ghost-view-select:disabled, .ghost-recording-select:disabled { cursor: default; opacity: .65; }
+  .ghost-view-select:disabled { cursor: default; opacity: .65; }
   .ghost-recording-row {
     display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .75rem;
     min-width: 0;
   }
-  .ghost-recording { min-width: 0; max-width: 100%; flex: 0 1 32rem; }
-  .ghost-recording-select { min-width: 0; width: 100%; text-overflow: ellipsis; }
+  /* WHICH GHOSTS PLAY -- one pill per recording, his PB first. Pills wrap
+     rather than scroll: sixteen is the most that can play, and a hidden tick
+     is a ghost he cannot find to switch off. */
+  .ghost-recordings {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .4rem;
+    margin: 0; padding: 0; border: 0; min-width: 0; max-width: 100%;
+  }
+  .ghost-recordings > legend { float: left; padding: 0; margin-right: .35rem; }
+  .ghost-pick {
+    display: inline-flex; align-items: center; gap: .3rem; min-width: 0; max-width: 100%;
+    font-size: .68rem; color: var(--text); background: #101f31;
+    border: 1px solid var(--border-soft); border-radius: 999px;
+    padding: 1px .5rem 1px .3rem; cursor: pointer;
+  }
+  .ghost-pick:hover:not(.is-disabled) { border-color: var(--gold-soft); }
+  .ghost-pick:has(.ghost-pick-box:checked) {
+    border-color: var(--gold-soft); background: color-mix(in srgb, var(--gold) 12%, #101f31);
+  }
+  .ghost-pick:focus-within { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .ghost-pick.is-disabled { cursor: default; opacity: .6; }
+  .ghost-pick-box { margin: 0; accent-color: var(--gold); cursor: inherit; }
+  /* The colour this ghost is drawn in: his cap's red turned by its hue. */
+  .ghost-pick-hue {
+    flex: none; width: .6rem; height: .6rem; border-radius: 50%;
+    background: hsl(var(--ghost-hue) 85% 55%); box-shadow: 0 0 0 1px #0008;
+  }
+  .ghost-pick-name, .ghost-pick-why {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ghost-pick-why { color: var(--muted); }
+  .ghost-pick-why::before { content: "— "; }
   /* The reason takes its OWN ROW, beside the control groups rather than
      inside one: a whole sentence is not part of a control's box, and while it
      was in the group the group measured two lines tall -- which is exactly

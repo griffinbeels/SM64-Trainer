@@ -1,4 +1,12 @@
-"""A ghost choice belongs to the practice target, not its input comparison."""
+"""Which ghosts play belongs to the practice target, not its input comparison.
+
+A target's choice is a SET: his PB ghost (on by default, `ghost/pb.py`) plus
+any saved recordings he ticks. His words, 2026-09-22: *"it's a multiselector,
+with the PB ghost automatically selected. If the user disables the PB ghost,
+then their future PBs also shouldn't automatically appear."* So the PB box is
+remembered per target, and while it is ticked each new PB replaces the old one
+without any other change.
+"""
 from __future__ import annotations
 
 import json
@@ -8,6 +16,9 @@ from time import monotonic
 SELECTION_KEY = "ghost_templates"
 CANDIDATE_CACHE_S = 4.0
 MISSING_REASON = "The selected ghost was removed. Choose another saved ghost."
+#: Ghosts drawn at once; the native channel's `GIPC_GHOSTS`.
+MAX_GHOSTS = 16
+DEFAULT_CHOICE = {"pb": True, "templates": []}
 log = logging.getLogger("sm64.ghost")
 
 
@@ -27,6 +38,63 @@ def checked_template_id(value):
     if value is not None and (type(value) is not int or value <= 0):
         raise ValueError("Choose a saved ghost or follow the input template.")
     return value
+
+
+def checked_choice(value) -> dict:
+    """`{"pb": bool, "templates": [saved ghost ids]}`, or one readable refusal."""
+    if not isinstance(value, dict) or set(value) - {"pb", "templates"}:
+        raise ValueError("Choose which ghosts to show.")
+    pb = value.get("pb", True)
+    templates = value.get("templates", [])
+    if type(pb) is not bool or not isinstance(templates, list):
+        raise ValueError("Choose which ghosts to show.")
+    for number in templates:
+        checked_template_id(number)
+        if number is None:
+            raise ValueError("Choose a saved ghost.")
+    if len(set(templates)) != len(templates):
+        raise ValueError("Each saved ghost can be shown once.")
+    if len(templates) + pb > MAX_GHOSTS:
+        raise ValueError(f"Show at most {MAX_GHOSTS} ghosts at once.")
+    return {"pb": pb, "templates": list(templates)}
+
+
+def _stored_choice(value):
+    if type(value) is int and value > 0:
+        # Before 2026-09-22 a target held ONE picked recording.
+        return {"pb": True, "templates": [value]}
+    try:
+        return checked_choice(value)
+    except ValueError:
+        return None
+
+
+def chosen_ghosts(choice, library, target):
+    """The ghosts that play, PB first, and the ticked ids that no longer exist.
+
+    With the PB box ticked but no PB saved yet and nothing else ticked, the
+    active input template plays, as it did before PBs became ghosts.
+    """
+    kind, key, strat = target["kind"], target["entity_key"], target.get("strat")
+    ghosts, missing = [], []
+    pb = library.pb_for(kind, key, strat) if choice["pb"] else None
+    if pb is not None:
+        ghosts.append(pb)
+    for number in choice["templates"]:
+        try:
+            template = library.get(number)
+        except LookupError:
+            missing.append(number)
+            continue
+        if (template.kind, template.entity_key) != (kind, key):
+            missing.append(number)
+        elif all(template.origin != other.origin for other in ghosts):
+            ghosts.append(template)
+    if not ghosts and choice["pb"] and not choice["templates"]:
+        fallback = library.template_for(kind, key, strat)
+        if fallback is not None:
+            ghosts.append(fallback)
+    return ghosts, missing
 
 
 def target_key(target):
@@ -56,20 +124,22 @@ class GhostSelection:
             return
         stored = database.get_state(SELECTION_KEY, {})
         if isinstance(stored, dict):
-            self._choices = {key: value for key, value in stored.items()
-                             if isinstance(key, str) and type(value) is int and value > 0}
+            self._choices = {key: choice for key, value in stored.items()
+                             if isinstance(key, str) and (choice := _stored_choice(value)) is not None}
         self._loaded = True
 
     def chosen(self, target):
-        return self._choices.get(target_key(target)) if target else None
+        choice = self._choices.get(target_key(target)) if target else None
+        return {"pb": choice["pb"], "templates": list(choice["templates"])} if choice else dict(
+            DEFAULT_CHOICE, templates=[])
 
-    def choose(self, target, template_id):
+    def choose(self, target, choice):
         key = target_key(target)
-        if template_id is None:
+        if choice == DEFAULT_CHOICE:
             self._choices.pop(key, None)
         else:
-            self._choices[key] = template_id
-        return dict(self._choices)
+            self._choices[key] = checked_choice(choice)
+        return {name: dict(value) for name, value in self._choices.items()}
 
     def candidates(self, target, templates, video_of, native):
         from sm64_events.ghost.source import attempt_id_of

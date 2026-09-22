@@ -230,63 +230,80 @@ export function ghostControls(session, entityKey) {
   };
 }
 
-/** Saved recordings for this entity, qualified for the selected Show mode.
- * Selection is independent of the input-comparison template. The empty value
- * follows his current PB (`ghost/pb.py`), else that template; a removed
- * explicit choice stays visibly missing.
+/** WHICH GHOSTS PLAY: a set of ticks, his PB first (`ghost/selection.py`).
+ * The PB box stays tickable with no PB saved yet -- ticking it is what makes
+ * his NEXT PB appear. A saved recording that cannot show this Show mode can
+ * be unticked but not ticked; a ticked one that was deleted stays listed so
+ * it can be unticked rather than silently vanishing.
  */
-/** The empty choice plays his current PB when there is one (`ghost/pb.py`). */
-function pbDefault(pb, field) {
-  if (!pb) return { row: null, rows: [], reason: null, label: "Use input template" };
-  const reason = pb[`${field}_available`] ? null : pb[`${field}_reason_text`];
-  const label = `Your PB · Attempt #${pb.attempt_id}`;
-  return { row: pb, rows: [pb], reason, label: reason ? `${label} — ${reason}` : label };
-}
-
-function candidateOption(candidate, field, view) {
-  const available = Boolean(candidate[`${field}_available`]);
-  const reason = available ? null : candidate[`${field}_reason_text`]
-    || (view === "mario" ? "No saved Mario poses" : "No saved video");
-  const identity = candidate.attempt_id == null
-    ? `Saved #${candidate.template_id}` : `Attempt #${candidate.attempt_id}`;
-  const label = [identity, candidate.name, candidate.strat].filter(Boolean).join(" · ");
-  return {
-    value: String(candidate.template_id), disabled: !available,
-    label: reason ? `${label} — ${reason}` : label,
-  };
-}
-
-function savedReason(candidates, field, view) {
-  if (!candidates.length) return "No saved ghosts yet. Save a PB or mark an attempt as the template.";
-  return candidates.some((candidate) => candidate[`${field}_available`]) ? null
-    : `No saved ghosts can show ${view === "mario" ? "only Mario" : "the whole picture"} yet.`;
-}
-
 export function ghostRecordingOptions(selection, view, draft = {}) {
   if (!selection || !GHOST_VIEWS.includes(view)) return null;
-  const templateId = Object.hasOwn(draft, "template_id")
-    ? draft.template_id : selection.template_id;
-  const candidates = selection.candidates || [];
+  const choice = shownChoice(selection, draft);
   const field = view === "mario" ? "native" : "whole";
-  const options = candidates.map((candidate) => candidateOption(candidate, field, view));
-  const missing = templateId != null && !candidates.some(
-    (candidate) => candidate.template_id === templateId);
-  if (missing) options.unshift({
-    value: String(templateId), disabled: true,
-    label: `Saved ghost #${templateId} is unavailable`,
-  });
-  const pb = pbDefault(selection.pb, field);
-  options.unshift({ value: "", disabled: false, label: pb.label });
-  const reasonText = missing ? "The selected ghost is no longer saved. Choose another recording."
-    : pb.row && templateId == null ? pb.reason : savedReason(candidates, field, view);
-  const rows = [...pb.rows, ...candidates];
+  const candidates = selection.candidates || [];
+  const hues = new Map((selection.playing || []).map((row) => [row.key, row.hue_degrees]));
+  const items = [pbItem(selection.pb, choice.pb, field, hues)];
+  for (const candidate of candidates) {
+    items.push(candidateItem(candidate, choice.templates.includes(candidate.template_id), field, view, hues));
+  }
+  const missing = choice.templates.filter(
+    (id) => !candidates.some((candidate) => candidate.template_id === id));
+  for (const id of missing) {
+    items.push({ key: id, checked: true, disabled: false, hue: null,
+      label: `Saved ghost #${id}`, reason: "no longer saved" });
+  }
+  const rows = selection.pb ? [selection.pb, ...candidates] : candidates;
   return {
-    value: templateId == null ? "" : String(templateId), options, reasonText,
+    items, choice, reasonText: choiceReason(choice, missing, view),
+    toggle: (key) => toggled(choice, key),
     views: {
-      mario: rows.some((candidate) => candidate.native_available),
-      whole: rows.some((candidate) => candidate.whole_available),
+      mario: rows.some((row) => row.native_available),
+      whole: rows.some((row) => row.whole_available),
     },
   };
+}
+
+function shownChoice(selection, draft) {
+  const choice = Object.hasOwn(draft, "ghosts") ? draft.ghosts : selection.ghosts;
+  return { pb: choice?.pb !== false, templates: [...(choice?.templates || [])] };
+}
+
+function toggled(choice, key) {
+  if (key === "pb") return { ...choice, pb: !choice.pb };
+  const templates = choice.templates.includes(key)
+    ? choice.templates.filter((id) => id !== key) : [...choice.templates, key];
+  return { ...choice, templates };
+}
+
+function pbItem(pb, checked, field, hues) {
+  if (!pb) return { key: "pb", checked, disabled: false, hue: null,
+    label: "Your PB", reason: "none saved yet; your next PB appears here" };
+  const available = Boolean(pb[`${field}_available`]);
+  return { key: "pb", checked, disabled: false, hue: checked ? hues.get("pb") ?? null : null,
+    label: `Your PB · Attempt #${pb.attempt_id}`,
+    reason: available ? null : pb[`${field}_reason_text`] };
+}
+
+function candidateItem(candidate, checked, field, view, hues) {
+  const available = Boolean(candidate[`${field}_available`]);
+  const identity = candidate.attempt_id == null
+    ? `Saved #${candidate.template_id}` : `Attempt #${candidate.attempt_id}`;
+  return {
+    key: candidate.template_id, checked, disabled: !available && !checked,
+    hue: checked ? hues.get(candidate.template_id) ?? null : null,
+    label: [identity, candidate.name, candidate.strat].filter(Boolean).join(" · "),
+    reason: available ? null : candidate[`${field}_reason_text`]
+      || (view === "mario" ? "No saved Mario poses" : "No saved video"),
+  };
+}
+
+function choiceReason(choice, missing, view) {
+  if (missing.length) return "A ticked ghost is no longer saved. Untick it or choose another.";
+  if (!choice.pb && !choice.templates.length) return "Tick a ghost to race it here.";
+  if (view === "whole" && choice.pb + choice.templates.length > 1) {
+    return "Whole picture shows the first ticked ghost; Only Mario shows them all.";
+  }
+  return null;
 }
 
 /** Let another saved recording offer a mode the current source cannot show. */

@@ -74,7 +74,7 @@ def test_saving_a_pb_makes_it_the_playing_ghost_immediately(tmp_path):
         assert body["selection"]["pb"]["attempt_id"] == row.id
         assert body["selection"]["pb"]["native_available"]
         command = capture.commands[-1]
-        assert command["enabled"] and command["clip_path"].endswith(f"attempt_{row.id}.ghost")
+        assert command["enabled"] and [clip["clip_path"][-len(f"attempt_{row.id}.ghost"):] for clip in command["clips"]] == [f"attempt_{row.id}.ghost"]
         # Everything between his click and the renderer's command, measured.
         assert elapsed < 1.0, elapsed
         await session.stop()
@@ -107,22 +107,41 @@ def test_undoing_the_pb_removes_it_as_the_ghost(tmp_path):
         archive.close()
 
 
-def test_a_new_pb_replaces_an_explicit_pick_but_a_later_pick_still_wins(tmp_path):
-    session, _replay, row, archive, db, store, _capture = pb_world(tmp_path)
-    target_key = f"{row.course_id}-{row.star_id}"
-    picked = mark(store, entity_key=target_key, strat=row.strat_tag, attempt_id=999)
+def test_pb_plays_beside_ticked_recordings_and_unticking_it_ignores_future_pbs(tmp_path):
+    from dataclasses import replace
+
+    session, replay, row, archive, db, store, capture = pb_world(tmp_path)
+    other = replace(row, id=row.id + 1)
+    replay.tracker.db._attempts.append(other)
+    replay.preserve_native(other.id)
+    picked = mark(store, entity_key=f"{row.course_id}-{row.star_id}", strat=row.strat_tag,
+                  attempt_id=other.id)
+
+    def playing():
+        session._native.note()
+        return [clip["clip_path"].rsplit("attempt_", 1)[1] for clip in capture.commands[-1].get("clips", [])]
 
     async def check():
-        target = session.payload()["target"] or (await session.refresh())["target"]
-        await session.update({"template_id": picked.id, "target": target})
+        target = (await session.update({"enabled": True, "view": "mario"}))["target"]
+        await session.update({"ghosts": {"pb": True, "templates": [picked.id]}, "target": target})
+        assert playing() == [f"{other.id}.ghost"]
         save_pb(db, row)
         await session.pb_changed(row, True)
-        body = session.payload()
-        assert body["selection"]["template_id"] is None
-        assert body["source"]["attempt_id"] == row.id
-        assert db.get_state("ghost_templates", {}) == {}
-        body = await session.update({"template_id": picked.id, "target": target})
-        assert body["source"]["attempt_id"] == 999
+        assert playing() == [f"{row.id}.ghost", f"{other.id}.ghost"]  # PB first, pick kept
+        hues = [clip["hue_degrees"] for clip in capture.commands[-1]["clips"]]
+        assert len(set(hues)) == 2
+        body = await session.update({"ghosts": {"pb": False, "templates": [picked.id]}, "target": target})
+        assert body["selection"]["ghosts"] == {"pb": False, "templates": [picked.id]}
+        assert playing() == [f"{other.id}.ghost"]
+        newer = replace(row, id=row.id + 2)
+        replay.tracker.db._attempts.append(newer)
+        save_pb(db, newer)
+        await session.pb_changed(newer, True)
+        assert playing() == [f"{other.id}.ghost"]  # unticked: a new PB does not appear
+        await session.update({"ghosts": {"pb": False, "templates": []}, "target": target})
+        assert not capture.commands[-1]["enabled"]
+        body = await session.update({"ghosts": {"pb": True, "templates": []}, "target": target})
+        assert body["selection"]["pb"]["attempt_id"] == newer.id
         await session.stop()
 
     try:
