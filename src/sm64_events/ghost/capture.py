@@ -148,12 +148,12 @@ class NativeCapture:
                 self._stop.wait(0.016)
             except BlockingIOError:
                 self._stop.wait(0.016)
-            except RejectedControl as error:
+            except RejectedControl:
                 # 2026-09-22: a command the channel could not encode escaped as
                 # a KeyError and ended this thread, which silently stopped Mario
                 # POSE RECORDING too. Drop that one command, keep the channel
                 # and the recording, and say so.
-                log.exception("%s; Mario poses keep recording", error)
+                log.exception("ghost command rejected; Mario poses keep recording")
                 sent_revision = revision
                 self._stop.wait(0.016)
             except CleanupPending as error:
