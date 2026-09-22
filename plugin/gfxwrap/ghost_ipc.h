@@ -23,7 +23,7 @@ typedef struct gipc_request {
     int32_t nudge;
     float opacity;
     uint32_t stop_at_star;
-    uint32_t rom_generation, reserved;
+    uint32_t rom_generation, owner_suspended;
     uint64_t model_id;
     uint8_t clip_id[16];
     gc_layout layout;

@@ -117,10 +117,41 @@ def test_poll_markers_rebase_and_disarm_without_frame_pacing_or_file_reads(tmp_p
         assert source.commands[-1]["origin"]["arm_id"] == 99
         origin = None
         session._native.note()
-        assert source.commands[-1] == {"enabled": False}
+        assert source.commands[-1]["enabled"] and source.commands[-1]["owner_suspended"]
+        assert source.commands[-1]["origin"]["arm_id"] == 99
+        assert not session._native.state()["visible"]
+        origin = {"kind": "segment", "session_id": 1, "arm_id": 100,
+                  "frame": 130, "utc": "2026-09-21T08:00:02+00:00"}
+        session._native.note()
+        assert source.commands[-1]["enabled"] and not source.commands[-1]["owner_suspended"]
+        assert source.commands[-1]["origin"]["arm_id"] == 100
         await session.stop()
         session._native.note()
         assert source.commands[-1] == {"enabled": False}
+
+    asyncio.run(check())
+
+
+def test_rom_reopen_keeps_binding_until_new_producer_identity_arrives(tmp_path):
+    session, source, _, _ = native_session(tmp_path)
+    original_status = source.snapshot_status
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        session._native.note()
+        before = len(source.commands)
+        source.snapshot_status = lambda **_: {"available": False}
+        session._native.note()
+        assert len(source.commands) == before and source.commands[-1]["enabled"]
+        source.snapshot_status = lambda **_: {**original_status(),
+            "producer": SimpleNamespace(configuration=5, epoch=8)}
+        session._native.note()
+        assert source.commands[-1]["origin"]["configuration"] == 5
+        assert source.commands[-1]["origin"]["epoch"] == 8
+        source.snapshot_status = lambda **_: {"available": False}
+        await session.update({"enabled": False})
+        assert source.commands[-1] == {"enabled": False}
+        await session.stop()
 
     asyncio.run(check())
 

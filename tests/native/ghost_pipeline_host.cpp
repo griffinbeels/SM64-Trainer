@@ -236,7 +236,7 @@ int main(int argc,char** argv){
     gp_request request{};request.bytes=sizeof(request);request.version=GP_VERSION;request.revision=1;request.enabled=1;
     request.owner_token=1;request.model_id=1;request.rom_generation=7;request.configuration=captured.configuration;
     request.clip_id[0]=1;request.opacity=1;
-    request.origin={GO_SEGMENT,first.epoch,first.sequence,first.clock.continuity_id,first.clock.elapsed_frames,first.clock.origin_id,first.igt,0};
+    request.origin={GO_SEGMENT,first.epoch,first.sequence,first.clock.continuity_id,first.clock.elapsed_frames,first.clock.origin_id,0,0};
     require(api->configure(&request)==GP_OK,"configure exact-origin FOLLOW playback");std::unique_ptr<Pipeline> pipeline;
     renderer.run([&]{pipeline=std::make_unique<Pipeline>(fixture,captured);});const auto setup_ms=ms(prepare_start,Clock::now());
     const std::filesystem::path out(argv[3]);std::filesystem::create_directories(out);

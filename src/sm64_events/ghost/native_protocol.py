@@ -32,7 +32,7 @@ class Request(C.LittleEndianStructure):
         ("generation", U32), ("token", U64), ("revision", U64),
         ("heartbeat", U32), ("capture_enabled", U32), ("play_enabled", U32),
         ("mode", U32), ("seek_igt", U32), ("nudge", I32), ("opacity", C.c_float),
-        ("stop_at_star", U32), ("rom_generation", U32), ("reserved", U32),
+        ("stop_at_star", U32), ("rom_generation", U32), ("owner_suspended", U32),
         ("model_id", U64), ("clip_id", C.c_ubyte * 16),
         ("layout", C.c_ubyte * LAYOUT_BYTES), ("rom_path", C.c_uint16 * 520),
         ("clip_path", C.c_uint16 * 520), ("clip_sha256", C.c_ubyte * 32),

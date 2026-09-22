@@ -20,6 +20,7 @@ class NativeGhost:
         self._control_lock = threading.Lock()
         self._target = None
         self._origin = None
+        self._owner_suspended = False
         self._controls = None
         self._selected_asset = None
         self._requested = False
@@ -114,6 +115,7 @@ class NativeGhost:
             identity = (target["kind"], target["entity_key"]) if target else None
             if identity != self._target:
                 self._origin = None
+                self._owner_suspended = False
             self._target = identity
             self._selected_asset = self._asset
             self._requested = bool(enabled)
@@ -132,8 +134,14 @@ class NativeGhost:
         if not self._control_lock.acquire(blocking=False):
             return
         try:
-            self._origin = (self._origin_of(*self._target)
-                            if self._target and self._origin_of and self._requested else None)
+            origin = (self._origin_of(*self._target)
+                      if self._target and self._origin_of and self._requested else None)
+            # Completion or a restore can temporarily remove the tracker arm.
+            # Hide presentation while retaining native checkpoints. Explicit
+            # switch-off and target changes still revoke the binding.
+            self._owner_suspended = bool(origin is None and self._origin is not None and self._requested)
+            if origin is not None or not self._requested:
+                self._origin = origin
             self._send(blocking=False)
         finally:
             self._control_lock.release()
@@ -146,6 +154,12 @@ class NativeGhost:
             return
         producer = status.get("producer")
         origin = self._origin
+        if (self._requested and self._selected_asset is not None and origin is not None
+                and (producer is None or not producer.configuration or not producer.epoch)):
+            # RomClosed/RomOpen temporarily removes the producer namespace.
+            # Keep the requested binding through it; sending OFF here would
+            # erase the native recovery cache before the same ROM reopens.
+            return
         if (self._requested and self._selected_asset is not None and source is not None
                 and origin is not None and producer is not None
                 and producer.configuration and producer.epoch):
@@ -155,6 +169,7 @@ class NativeGhost:
                 self._origin = None
                 return self._send(blocking=blocking)
             command = {"enabled": True, "model_id": 1,
+                       "owner_suspended": self._owner_suspended,
                        "clip_id": bytes.fromhex(manifest["clip_id"]),
                        "clip_sha256": bytes.fromhex(manifest["sha256"]),
                        "clip_path": str(path), "rom_path": "",
@@ -171,13 +186,16 @@ class NativeGhost:
 
     def state(self):
         status = (self._source.snapshot_status() or {}) if self._source is not None else {}
-        ready = bool(self._enabled and status.get("available") and status.get("state") == 4)
+        ready = bool(self._enabled and not self._owner_suspended
+                     and status.get("available") and status.get("state") == 4)
         # A generated pose is not display evidence. Only the renderer's last
         # qualified swap can say this command reached the game window.
         visible = ready and bool(status.get("displayed"))
         reason = None
         if self._requested and not ready:
-            if status.get("reason") == 10:
+            if self._owner_suspended:
+                reason = "Waiting for the next attempt or a saved state."
+            elif status.get("reason") == 10:
                 reason = "Waiting for this attempt's recorded clock."
             elif not self._enabled and status.get("available"):
                 reason = "Waiting for the next attempt."
@@ -206,3 +224,4 @@ class NativeGhost:
         self._enabled = False
         self._requested = False
         self._origin = None
+        self._owner_suspended = False

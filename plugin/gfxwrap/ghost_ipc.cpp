@@ -12,6 +12,7 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace {
 std::atomic<uint32_t> opened{0}, lifetime{0};
@@ -63,6 +64,18 @@ bool same_command(gipc_request a, gipc_request b) {
     a.heartbeat = b.heartbeat = 0;
     return !std::memcmp(&a, &b, sizeof(a));
 }
+bool same_marker_owner(const go_marker &a,const go_marker &b) {
+    // Capture namespaces change on a state load. The tracker owner does not.
+    return a.kind==b.kind && a.session_id==b.session_id && a.arm_id==b.arm_id
+        && a.global_timer==b.global_timer && a.utc==b.utc;
+}
+struct RecoveryCache {
+    ghost_origin::Recovery timing;
+    gipc_request owner{};
+    go_marker marker{};
+    uint8_t rom_digest[32]{};
+    void clear(){timing.clear();owner={};marker={};std::memset(rom_digest,0,sizeof(rom_digest));}
+} recovery_cache; // Only the one active IPC worker accesses this bounded cache.
 bool read_live_rom(uint32_t generation, std::vector<uint8_t> &out) {
     const uintptr_t address = rom_header.load(std::memory_order_acquire);
     if (!address || !generation || opened.load(std::memory_order_acquire) != generation) return false;
@@ -94,6 +107,9 @@ struct Session {
     go_marker resolved_marker{};
     go_origin resolved_origin{};
     bool have_origin = false;
+    ghost_origin::Recovery recovery;
+    uint8_t cartridge_digest[32]{};
+    bool cartridge_verified = false;
     uint64_t qpc_frequency;
     int64_t qpc_anchor;
     double utc_anchor;
@@ -108,9 +124,37 @@ struct Session {
         if (!rom_bytes.empty()) SecureZeroMemory(rom_bytes.data(), rom_bytes.size());
         std::vector<uint8_t>().swap(rom_bytes);
         cached_rom_generation = 0;
+        cartridge_verified = false;
+        std::memset(cartridge_digest,0,sizeof(cartridge_digest));
     }
 
+    void restore_cache() {
+        if(!cartridge_verified || !recovery_cache.timing.bound())return;
+        const auto &old=recovery_cache.owner;
+        if(loaded.owner_pid==old.owner_pid && loaded.owner_created_lo==old.owner_created_lo
+                && loaded.owner_created_hi==old.owner_created_hi
+                && loaded.origin.session_id==recovery_cache.marker.session_id
+                && loaded.origin.kind==recovery_cache.marker.kind
+                && !std::memcmp(loaded.clip_id,old.clip_id,sizeof(old.clip_id))
+                && !std::memcmp(loaded.clip_sha256,old.clip_sha256,sizeof(old.clip_sha256))
+                && !std::memcmp(cartridge_digest,recovery_cache.rom_digest,sizeof(cartridge_digest))) {
+            recovery=std::move(recovery_cache.timing);recovery.suspend();
+            resolved_marker=recovery_cache.marker;have_origin=false;
+        }
+        recovery_cache.clear();
+    }
+
+    void park_recovery() {
+        if(cartridge_verified && recovery.bound()) {
+            recovery_cache.timing=std::move(recovery);recovery_cache.timing.suspend();
+            recovery_cache.owner=loaded;recovery_cache.marker=resolved_marker;
+            std::memcpy(recovery_cache.rom_digest,cartridge_digest,sizeof(cartridge_digest));
+        }
+    }
     void revoke(uint32_t why) {
+        if(why==GIPC_NO_ROM)park_recovery();
+        else if(previous.token) recovery_cache.clear();
+        recovery.clear();
         capture->disable();
         if (live || applied) play->revoke(why);
         live = false; applied = 0; configuration = 0; awaiting_configuration = false;
@@ -135,7 +179,7 @@ struct Session {
         }
         if (r.heartbeat != previous.heartbeat) renewed = now;
         if (identity && ((accepted.revision && (r.revision < accepted.revision ||
-                (r.revision == accepted.revision && !same_command(r, accepted)))) || r.reserved
+                (r.revision == accepted.revision && !same_command(r, accepted)))) || r.owner_suspended>1
                 || r.capture_enabled > 1 || r.play_enabled > 1 || r.mode > 1
                 || r.nudge < -600 || r.nudge > 600
                 || !(r.opacity >= 0 && r.opacity <= 1) || r.stop_at_star > 1
@@ -163,10 +207,15 @@ struct Session {
             revoke(GIPC_NO_ROM); previous = r; return false;
         }
         if (!live || rom != current_rom || std::memcmp(&r.layout, &previous.layout, sizeof(r.layout))) {
+            // A fast RomClosed/RomOpen pair can finish before the worker wakes.
+            // Its generation change must retain the same proof as the slow
+            // path which retires this Session and starts a replacement worker.
+            if(rom && rom!=current_rom)park_recovery();
             play->revoke(GP_WRONG_IDENTITY);
             clip_prepared = false;
             origins.clear();
             have_origin = false;
+            recovery.clear();
             prior_configuration = capture->stats().configuration;
             if (!capture->configure(&r.layout)) {
                 revoke(GIPC_LAYOUT); previous = r; return false;
@@ -183,6 +232,7 @@ struct Session {
                 play->revoke(GP_PREPARING); applied = 0;
                 attempted = r.revision;
                 loaded = r; assets_loaded = clip_prepared = false;
+                recovery.clear();have_origin=false;
                 state = GIPC_PREPARING; previous = r;
                 return true; // caller loads outside the page mutex, then revalidates the lease
             }
@@ -198,7 +248,11 @@ struct Session {
         }
         if (!r.play_enabled) {
             if (applied) play->withdraw();
+            recovery.clear();have_origin=false;
             applied = 0;
+        } else if(r.owner_suspended) {
+            if(applied)play->withdraw();
+            applied=0;state=GIPC_PREPARING;reason=GIPC_ORIGIN;
         } else if (assets_loaded && configuration) {
             if (applied != r.revision) play->withdraw();
             const int model = play->prepare_model(r.model_id, rom_bytes.data(), static_cast<uint32_t>(rom_bytes.size()));
@@ -209,10 +263,18 @@ struct Session {
                 if (applied != r.revision) {
                     gp_request command{};
                     if (r.mode == GP_FOLLOW) {
-                        const bool retained = have_origin
-                            && !std::memcmp(&r.origin, &resolved_marker, sizeof(r.origin));
-                        const auto resolved = retained ? GO_READY : origins.resolve(r.origin, qpc_frequency,
-                            qpc_anchor, utc_anchor, r.layout.clock.near_zero, resolved_origin);
+                        const bool same_owner= same_marker_owner(r.origin,resolved_marker);
+                        const bool handoff=r.origin.session_id==resolved_marker.session_id
+                            && r.origin.kind==resolved_marker.kind && r.origin.arm_id!=resolved_marker.arm_id
+                            && recovery.restored_near(r.origin,qpc_frequency,qpc_anchor,utc_anchor);
+                        go_result resolved=GO_MISSING;
+                        if(recovery.bound() && (same_owner || handoff)) {
+                            if(recovery.current(resolved_origin))resolved=GO_READY;
+                        } else {
+                            resolved=origins.resolve(r.origin,qpc_frequency,qpc_anchor,utc_anchor,
+                                r.layout.clock.near_zero,resolved_origin);
+                            if(resolved==GO_READY)recovery.bind(resolved_origin);
+                        }
                         if (r.origin.configuration != configuration || resolved != GO_READY) {
                             have_origin = false;
                             state = resolved == GO_MISSING ? GIPC_PREPARING : GIPC_REFUSED;
@@ -265,12 +327,17 @@ struct Session {
             clear_rom(); clip_bytes.clear(); failed = loaded.revision;
             reason = GIPC_ROM; state = GIPC_REFUSED; return;
         }
+        cartridge_verified=ghost_assets::sha256(rom_bytes,cartridge_digest);
+        if(!cartridge_verified) {
+            clear_rom();clip_bytes.clear();failed=loaded.revision;
+            reason=GIPC_ROM;state=GIPC_REFUSED;return;
+        }
         assets_loaded = ghost_assets::read(loaded.clip_path, GIPC_PATH_CHARS,
                 sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame), clip_bytes)
             && ghost_assets::clip(clip_bytes, loaded.clip_sha256, loaded.clip_id, clip_header);
         if (!assets_loaded) {
             clip_bytes.clear(); failed = loaded.revision; reason = GIPC_FILE; state = GIPC_REFUSED;
-        }
+        } else restore_cache();
     }
     void publish(gipc_page &page, const gipc_request &r) {
         auto &s = page.status;
@@ -297,9 +364,18 @@ struct Session {
         for (uint32_t count = 0; count < GS_SLOTS && capture->read(&record, sizeof(record)) == 1; ++count) {
             if (!live || !configuration || record.configuration != configuration) continue;
             origins.add(record.configuration, record.sample);
-            if (have_origin && (record.sample.epoch != resolved_origin.epoch
-                    || !(record.sample.clock.valid & GCC_ELAPSED_VALID)
-                    || record.sample.clock.continuity_id != resolved_origin.continuity)) have_origin = false;
+            const auto recovered=recovery.observe(record.sample,r.star_actions,r.stop_at_star?r.star_action_count:0);
+            if(recovery.bound()) {
+                go_origin next{};
+                if(recovered==GO_READY && recovery.current(next)) {
+                    if(!have_origin || std::memcmp(&next,&resolved_origin,sizeof(next))) {
+                        resolved_origin=next;have_origin=true;applied=0;
+                    }
+                } else if(have_origin) {
+                    have_origin=false;applied=0;play->withdraw();
+                    reason=GIPC_ORIGIN;state=GIPC_PREPARING;
+                }
+            }
             if (s.produced == UINT64_MAX) { revoke(GIPC_PROTOCOL); return; }
             if (s.produced - s.consumed == GIPC_SLOTS) { ++s.dropped; continue; }
             gclip_frame &out = page.records[s.produced % GIPC_SLOTS];

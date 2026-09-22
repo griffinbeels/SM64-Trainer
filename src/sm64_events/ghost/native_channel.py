@@ -140,6 +140,7 @@ class NativeChannel:
             raise ValueError("invalid native ghost opacity or timing nudge")
         request.play_enabled, request.opacity, request.nudge = enabled, opacity, nudge
         request.stop_at_star = bool(value.get("stop_at_star", True))
+        request.owner_suspended = bool(value.get("owner_suspended", False))
         request.tint_enabled = bool(value.get("tint_enabled", False))
         hue = value.get("hue_degrees", 0)
         if type(hue) is not int or not 0 <= hue <= 359:

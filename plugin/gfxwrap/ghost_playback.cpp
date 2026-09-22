@@ -335,7 +335,9 @@ bool valid_request(const gp_request& r) {
         if(i<r.star_action_count ? !r.star_actions[i] : r.star_actions[i]!=0) return false;
     if(r.mode==GP_FIXED) {const gp_origin zero{};if(std::memcmp(&r.origin,&zero,sizeof(zero)))return false;}
     else if((r.origin.kind!=GO_STAR && r.origin.kind!=GO_SEGMENT) || !r.origin.epoch
-            || !r.origin.sequence || !r.origin.continuity || r.origin.raw>UINT16_MAX || r.origin.reserved)return false;
+            || !r.origin.sequence || !r.origin.continuity || (r.origin.flags&~GO_RECOVERED)
+            || (!(r.origin.flags&GO_RECOVERED) && (r.origin.kind==GO_STAR
+                ? r.origin.offset>UINT16_MAX : r.origin.offset!=0)))return false;
     return true;
 }
 int32_t __cdecl configure(const gp_request *request) {
@@ -491,7 +493,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
                 !=(GCC_RAW_VALID|GCC_ELAPSED_VALID) || live.epoch!=origin.epoch
                 || live.sequence<origin.sequence || live.clock.continuity_id!=origin.continuity
                 || !elapsed_coordinate(live.clock.elapsed_frames,origin.elapsed,
-                    origin.kind==GO_STAR?origin.raw:0,target)) {decision(GP_NO_CLOCK);return false;}
+                    origin.offset,target)) {decision(GP_NO_CLOCK);return false;}
         if(origin.kind==GO_STAR && live.clock.origin_id!=origin.star_generation)star_ended=true;
         if(active_request.star_ends)for(uint32_t i=0;i<active_request.star_action_count;++i)
             if(live.live_action==active_request.star_actions[i])star_ended=true;

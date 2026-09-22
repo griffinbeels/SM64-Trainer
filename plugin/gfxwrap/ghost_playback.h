@@ -121,7 +121,7 @@ const gp_api *api();
 void safe_boundary(uint32_t rom_generation, uint32_t configuration);
 /* Borrowed until the next safe_boundary/retire call. Obtain only on renderer. */
 bool atlas(sg_atlas_view *out, uint64_t *model_id);
-/* FOLLOW uses exact elapsed-origin differences plus origin.raw for stars and
+/* FOLLOW uses exact elapsed-origin differences plus the resolved origin.offset and
  * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Select
  * first exact coordinate INCLUDING refused poses, then compare live scene.
  * Before-start clamps first; after-end/gaps/refusals hide. A star generation
@@ -129,7 +129,8 @@ bool atlas(sg_atlas_view *out, uint64_t *model_id);
  * revive it. With star_ends, FOLLOW also hides at the first recorded valid
  * star action coordinate after nudge (including duplicate/refused poses).
  * This recorded cutoff moves with nudge; FIXED ignores both end policies.
- * A new continuity refuses, never subtracts across the gap.
+ * A new continuity refuses until the worker binds a witnessed recovery offset;
+ * drawing never subtracts elapsed values across that gap.
  * Clears outputs on failure.
  * Geometry stays borrowed until the next evaluate/safe_boundary/retire call. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,

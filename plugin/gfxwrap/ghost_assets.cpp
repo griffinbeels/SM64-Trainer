@@ -35,6 +35,19 @@ bool read(const uint16_t *path, uint32_t capacity, uint32_t maximum,
     }
     return ok;
 }
+bool sha256(const std::vector<uint8_t> &data,uint8_t digest[32]) {
+    if(!digest || data.size()>UINT32_MAX)return false;
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    bool ok = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0;
+    if (ok) ok = BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0;
+    if (ok) ok = BCryptHashData(hash, const_cast<PUCHAR>(data.data()),
+                               static_cast<ULONG>(data.size()), 0) >= 0;
+    if (ok) ok = BCryptFinishHash(hash, digest, 32, 0) >= 0;
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    return ok;
+}
 bool clip(const std::vector<uint8_t> &data, const uint8_t expected[32],
           const uint8_t id[16], gclip_header &out) {
     out = {};
@@ -46,17 +59,8 @@ bool clip(const std::vector<uint8_t> &data, const uint8_t expected[32],
             || header.sample_version != GC_VERSION || header.rom_layout != GC_ROM_US
             || data.size() != sizeof(header) + static_cast<size_t>(header.record_count) * sizeof(gclip_frame)
             || std::memcmp(header.clip_id, id, 16)) return false;
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    BCRYPT_HASH_HANDLE hash = nullptr;
     uint8_t digest[32]{};
-    bool ok = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0;
-    if (ok) ok = BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0;
-    if (ok) ok = BCryptHashData(hash, const_cast<PUCHAR>(data.data()),
-                               static_cast<ULONG>(data.size()), 0) >= 0;
-    if (ok) ok = BCryptFinishHash(hash, digest, sizeof(digest), 0) >= 0;
-    if (hash) BCryptDestroyHash(hash);
-    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-    if (!ok || std::memcmp(digest, expected, sizeof(digest))) return false;
+    if (!sha256(data,digest) || std::memcmp(digest, expected, sizeof(digest))) return false;
     out = header; return true;
 }
 }

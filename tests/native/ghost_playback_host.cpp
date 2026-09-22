@@ -277,7 +277,7 @@ int main() {
         check(api->prepare_clip(&segment.header,segment.frames.data())==GP_OK,"segment spans level and raw counter reset");
         auto revision=r.revision+1;r=request(segment,revision);r.model_id=4;r.star_ends=0;
         live.epoch=world.epoch=7;live.level=9;live.valid_fields|=GC_VALID_ACTION|GC_VALID_WARP;
-        r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,4000,source_generation,42,0};elapsed_base=4000;
+        r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,4000,source_generation,0,0};elapsed_base=4000;
         check(api->configure(&r)==GP_OK,"segment exact origin preserves raw but starts at zero");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,true,GP_READY,1);
         live.level=24;++source_generation;live.live_action=r.star_actions[0];draw(3,true,GP_READY,5,2);

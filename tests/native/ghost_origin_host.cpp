@@ -26,7 +26,7 @@ int main() {
         check(resolve(ledger, mark, out) == GO_MISSING, "empty ledger cannot invent origin");
         ledger.add(2, sample(1, 100)); ledger.add(2, sample(2, 100));
         check(resolve(ledger, mark, out) == GO_READY && out.sequence == 1 && out.elapsed == 42
-            && out.raw == 1 && out.star_generation == 0 && out.continuity == 9,
+            && out.offset == 1 && out.star_generation == 0 && out.continuity == 9,
             "identical coordinate duplicates bind first even with absent pose and unknown star bank");
         mark.global_timer = 99;
         check(resolve(ledger, mark, out) == GO_MISSING && !out.sequence, "nearby frame is not exact");
@@ -54,7 +54,7 @@ int main() {
         ledger.clear(); auto late = sample(1, 100); late.igt = 80; ledger.add(2, late);
         check(resolve(ledger, mark, out) == GO_INVALID, "mid-leg raw counter cannot claim star opener");
         mark.kind = GO_SEGMENT;
-        check(resolve(ledger, mark, out) == GO_READY && out.raw == 80, "segment can start mid-leg");
+        check(resolve(ledger, mark, out) == GO_READY && out.offset == 0, "segment starts at zero mid-leg");
         ledger.clear(); mark = marker(); ledger.add(2, sample(1, 100));
         for (uint32_t i = 0; i < GO_HISTORY; ++i) ledger.add(2, sample(i + 2, i + 101, i + 43));
         check(resolve(ledger, mark, out) == GO_MISSING, "bounded history expires old exact origin");

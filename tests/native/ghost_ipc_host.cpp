@@ -71,12 +71,14 @@ int __cdecl capture_read(gs_record* out,uint32_t bytes) {
     }
     *out={};out->bytes=sizeof(*out);out->version=GS_VERSION;out->configuration=configured;
     auto& sample=out->sample;sample.bytes=sizeof(sample);sample.version=GC_VERSION;sample.epoch=1;
-    sample.sequence=sample.dlist_serial=++sample_sequence;sample.valid_fields=GC_VALID_CLOCK;
+    sample.sequence=sample.dlist_serial=++sample_sequence;
+    sample.valid_fields=GC_VALID_CLOCK|GC_VALID_ACTION|GC_VALID_WARP;
+    sample.live_action=0x0c400201;
     sample.global_timer=100;sample.igt=10;sample.level=9;sample.area=1;sample.status=GC_NO_CAMERA;
     LARGE_INTEGER now{};QueryPerformanceCounter(&now);sample.qpc=now.QuadPart;
     sample.clock.valid=GCC_RAW_VALID|GCC_ELAPSED_VALID;sample.clock.raw_igt=10;
     sample.clock.continuity_id=1;
-    if(continuation) {sample.global_timer=200+sample_sequence.load();sample.clock.elapsed_frames=sample_sequence.load();}
+    if(continuation)sample.global_timer=200+sample_sequence.load(); // Paused raw IGT holds elapsed too.
     out->world.status=GCLIP_WORLD_READY;return 1;
 }
 gs_stats __cdecl capture_stats() {
@@ -162,7 +164,7 @@ struct Page {
             "capture value copied into portable ring");
         const gc_pose zero{};
         check(frame.sample.sequence && frame.sample.bytes==sizeof(gc_sample) && frame.sample.version==GC_VERSION
-            && frame.sample.valid_fields==GC_VALID_CLOCK && frame.sample.igt==10
+            && frame.sample.valid_fields==(GC_VALID_CLOCK|GC_VALID_ACTION|GC_VALID_WARP) && frame.sample.igt==10
             && !std::memcmp(&frame.sample.pose,&zero,sizeof(zero)),"explicit invalid capture row preserved");
     }
     gipc_status wait(const std::function<bool(const gipc_status&)>& predicate,const char* why,DWORD milliseconds=2500) {
@@ -273,7 +275,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
             initial.utc_anchor+double(origin_now.QuadPart-initial.qpc_anchor)/double(initial.qpc_frequency),1,9};
         ready(page,r);
         check(last_command().origin.sequence && last_command().origin.continuity==1
-            && last_command().origin.raw==10,"worker binds exact source origin");
+            && last_command().origin.offset==10,"worker binds exact source origin");
         const auto bound_origin=last_command().origin.sequence;
         burst_records=GO_HISTORY+10;
         page.wait([](const gipc_status&){return burst_records.load()==0;},"origin ages out of bounded ledger");
