@@ -284,8 +284,11 @@ def retry_failures(junit: Path, *, run_focused=_run_focused, say=print,
 
 
 def flaky_rows(folder: Path) -> list[dict]:
-    return [row for path in sorted(folder.rglob(FLAKY_FILE))
-            for row in json.loads(path.read_text(encoding="utf-8"))]
+    """One row per test: a run's whole download holds each job's list twice
+    (in its report artifact and its own `flaky-*` one)."""
+    rows = {row["nodeid"]: row for path in sorted(folder.rglob(FLAKY_FILE))
+            for row in json.loads(path.read_text(encoding="utf-8"))}
+    return list(rows.values())
 
 
 def flaky_of(run_id: int, run=gh) -> list[dict]:

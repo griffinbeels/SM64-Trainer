@@ -113,9 +113,12 @@ def test_failures_name_the_test_and_its_first_error_line_and_the_flaky_ones(tmp_
         '<error message="TimeoutError: Locator.wait_for: Timeout 60000ms exceeded."/></testcase>'
         "</testsuite>"), encoding="utf-8")
     # test_z failed in the suite and passed alone: FLAKY, and not a failure.
-    (tmp_path / "browser-1" / "flaky.json").write_text(json.dumps([
-        {"nodeid": "tests/test_ui_y.py::test_z", "first_line": "fixture server failed to start"}]),
-        encoding="utf-8")
+    # The whole download holds the list twice (reports + the flaky artifact).
+    for folder in ("browser-1", "flaky-browser-1"):
+        (tmp_path / folder).mkdir(exist_ok=True)
+        (tmp_path / folder / "flaky.json").write_text(json.dumps([
+            {"nodeid": "tests/test_ui_y.py::test_z", "first_line": "fixture server failed to start"}]),
+            encoding="utf-8")
     lines = full_run.failures_report(tmp_path)
     assert lines == [
         "  FAILURE tests/test_ui_x.py::test_bad[900x1000] -- AssertionError: the card clipped",
