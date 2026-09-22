@@ -47,7 +47,19 @@ def corpus():
         values.append(bytes(changed))
     for offset, value in [(32, 1), (40, 101), (48, 999), (56, 99), (308, 0), (316, 10)]:
         changed = bytearray(encoded((frame(1), frame(2))))
-        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 484+offset, value)
+        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 160 + 652 + offset, value)
+        values.append(bytes(changed))
+    # Recorded shadow and sound: accepted shapes, then each native refusal.
+    evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,)),
+                        frame(2, sounds=tuple(range(1, 9)), overflow=True)))
+    values.append(evidence)
+    for offset, pack, value in [(160 + 128, "<I", 1), (160 + 324 + 60, "<f", 0.5),
+                                (160 + 324, "<I", 0x7fc00000), (160 + 324 + 163, "<B", 1),
+                                (160 + 616, "<B", 9), (160 + 652 + 617, "<B", 2),
+                                (160 + 616 + 1, "<B", 1), (160 + 620 + 4, "<I", 5),
+                                (160 + 652 + 324 + 8, "<I", 1), (160 + 652 + 620, "<I", 0)]:
+        changed = bytearray(evidence)
+        struct.pack_into(pack, changed, offset, value)
         values.append(bytes(changed))
     return values
 
@@ -64,14 +76,14 @@ def test_python_and_native_acceptance_agree(tmp_path):
     host = ROOT / "tests/native/ghost_clip_host.cpp"
     source = native / "ghost_playback.cpp"
     target = tmp_path / "ghost_clip_host.exe"
-    inputs = [source, host, *(native / name for name in (
+    inputs = [source, native / "ghost_origin.cpp", host, *(native / name for name in (
         "ghost_clip.h", "ghost_capture.h", "ghost_playback.h", "ghost_origin.h", "ghost_clock.h", "ghost_pose.h")),
         COMPONENTS / "renderer/model/model.h", COMPONENTS / "tools/build_plugin.py",
         *(ROOT / name for name in ("src/sm64_events/ghost/clip.py", "tests/ghost_native_fixture.py",
                                    "tests/test_ghost_clip.py", "tests/test_ghost_clip_native.py"))]
     hashes = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
     build._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
-        f"/I{native}", f"/I{COMPONENTS / 'renderer/model'}", str(source), str(host),
+        f"/I{native}", f"/I{COMPONENTS / 'renderer/model'}", str(source), str(native / "ghost_origin.cpp"), str(host),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF",
         "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *build.LIBS], tmp_path)
     paths, expected = [], []

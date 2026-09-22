@@ -13,9 +13,9 @@ from sm64_events.memory import addresses
 from sm64_events.memory.addresses import KSEG0_BASE
 from sm64_events.memory.layout import Layout, LayoutIncomplete
 
-_CONFIG = struct.Struct("<16I")
+_CONFIG = struct.Struct("<20I")
 _CLOCK_CONFIG = struct.Struct("<26I")
-VERSION = 4
+VERSION = 5
 RAM_WORD_SWAPPED = 1
 ROM_US = 1
 
@@ -55,6 +55,10 @@ class GhostLayout:
     object_pool: int
     pending_warp_op: int
     delayed_warp_timer: int
+    sound_code: int
+    sound_producer: int
+    sound_consumer: int
+    sound_ring: int
 
     def __post_init__(self) -> None:
         if any(type(getattr(self, field.name)) is not int for field in fields(self)):
@@ -68,6 +72,8 @@ class GhostLayout:
             ("current_area", 2, 2), ("igt_overall", 2, 2),
             ("object_pool", 240 * 0x260, 4),
             ("pending_warp_op", 2, 2), ("delayed_warp_timer", 2, 2),
+            ("sound_code", 48, 4), ("sound_producer", 1, 1),
+            ("sound_consumer", 1, 1), ("sound_ring", 256 * 8, 8),
         ):
             address = getattr(self, name)
             if (address % alignment or address < KSEG0_BASE
@@ -81,15 +87,17 @@ class GhostLayout:
             raise LayoutIncomplete("Native ghost capture supports only the US layout schema")
         names = ("global_timer", "mario_struct", "mario_object", "current_area_pointer",
                  "area_update_counter", "curr_level", "curr_area", "usamune_overall",
-                 "object_pool", "pending_warp_op", "delayed_warp_timer")
+                 "object_pool", "pending_warp_op", "delayed_warp_timer",
+                 "sound_code", "sound_producer", "sound_consumer", "sound_ring")
         layout.require(*names)
         return cls(rdram_bytes, *(layout.value(name) for name in names))
 
     def to_bytes(self) -> bytes:
-        """Exactly 168 bytes; compared against the compiled C reader in tests."""
+        """Exactly 184 bytes; compared against the compiled C reader in tests."""
         roots = (self.global_timer, self.mario_state, self.mario_object,
                  self.current_area_pointer, self.area_update_counter,
                  self.current_level, self.current_area, self.igt_overall,
-                 self.object_pool, self.pending_warp_op, self.delayed_warp_timer)
+                 self.object_pool, self.pending_warp_op, self.delayed_warp_timer,
+                 self.sound_code, self.sound_producer, self.sound_consumer, self.sound_ring)
         return _CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size, VERSION, RAM_WORD_SWAPPED,
                             self.rdram_bytes, ROM_US, *roots) + clock_config_bytes()

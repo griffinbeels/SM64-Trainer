@@ -4,6 +4,7 @@
 #include "ghost_playback.h"
 #include "ghost_proximity.h"
 #include "ghost_pose.h"
+#include "ghost_compositor.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -76,6 +77,21 @@ gp_status report{};
 uint64_t touch_revision=0, touch[GP_GHOSTS]{};
 bool have_touch[GP_GHOSTS]{};
 ghost_pose::Scratch scratch[GP_GHOSTS]; // one borrowed mesh per displayed ghost
+// The worker's recovery, repeated on the renderer from the same live samples,
+// so the frame a state loads can already draw at its restored coordinate.
+// The worker's next command confirms it (or replaces it with its own).
+struct LiveRecovery {
+    ghost_origin::Recovery timing;
+    gp_request owner{};          // request whose origin the timing was bound from
+    uint64_t restored=0;         // sequence of the last origin evaluate used
+    bool bound=false;
+    LiveRecovery() {timing.reserve();} // capacity before any renderer use
+    void clear() {timing.clear();owner={};restored=0;bound=false;}
+} live_recovery;
+struct ShadowScratch {
+    ghost_compositor::ShadowVertex vertices[24];
+    uint8_t texture[256];
+} shadows[GP_GHOSTS]; // borrowed shadow per displayed ghost
 
 int worker_enter() {
     if(worker_gate.test_and_set(std::memory_order_acquire)) return GP_BUSY;
@@ -220,6 +236,25 @@ bool recorded_touch(const Clip& clip,const gp_request& request,uint64_t& recorde
     }
     return found;
 }
+// A shadow rides only on a valid executed root; its texture is alpha only.
+bool valid_shadow(const gc_sample& s) {
+    const gc_shadow zero{};
+    if(!(s.valid_fields&GC_VALID_SHADOW))return !std::memcmp(&s.shadow,&zero,sizeof(zero));
+    const auto& m=s.shadow.matrix;
+    if(!(s.valid_fields&GC_VALID_POSE) || s.pose.root_kind!=GC_ROOT_SCALED_MODELVIEW
+            || s.shadow.reserved)return false;
+    for(float value:m)if(!std::isfinite(value))return false;
+    return m[3]==0 && m[7]==0 && m[11]==0 && m[15]==1;
+}
+bool valid_sound(const gc_sample& s) {
+    const gc_sound zero{};
+    if(!(s.valid_fields&GC_VALID_SOUND))return !std::memcmp(&s.sound,&zero,sizeof(zero));
+    const auto& d=s.sound;
+    if(d.count>GC_SOUND_EVENTS || (d.flags&~uint8_t(GC_SOUND_OVERFLOW))
+            || ((d.flags&GC_SOUND_OVERFLOW) && d.count!=GC_SOUND_EVENTS))return false;
+    for(uint32_t i=d.count;i<GC_SOUND_EVENTS;++i)if(d.bits[i])return false;
+    return true;
+}
 bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexed) {
     if(std::memcmp(h.magic,GCLIP_MAGIC,8) || h.version!=GCLIP_VERSION || h.bytes!=sizeof(h)
             || h.record_bytes!=sizeof(gclip_frame) || !h.record_count || h.record_count>GCLIP_MAX_RECORDS
@@ -236,15 +271,16 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
         const auto &f=frames[i]; const auto &s=f.sample;
         if(f.bytes!=sizeof(f) || f.version!=GCLIP_VERSION || f.configuration!=h.configuration
                 || s.bytes!=sizeof(s) || s.version!=GC_VERSION || s.epoch!=h.epoch
-                || s.sequence<=sequence || s.dlist_serial<=serial || (s.valid_fields&~31u)
+                || s.sequence<=sequence || s.dlist_serial<=serial || (s.valid_fields&~GC_VALID_ALL)
                 || s.status>GC_UNSUPPORTED_HEAD
-                || s.qpc<prior_qpc || (!s.status && s.valid_fields!=31)
+                || s.qpc<prior_qpc || (!s.status && (s.valid_fields&GC_VALID_REQUIRED)!=GC_VALID_REQUIRED)
                 || bool(s.valid_fields&GC_VALID_ACTION)!=bool(s.live_action)
                 || f.world_status>static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity)) return false;
         const gc_pose zero_pose{};const gc_camera zero_camera{};
         if(!(s.valid_fields&GC_VALID_POSE) && std::memcmp(&s.pose,&zero_pose,sizeof(s.pose)))return false;
         if(!(s.valid_fields&GC_VALID_CAMERA) && std::memcmp(&s.camera,&zero_camera,sizeof(s.camera)))return false;
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;
+        if(!valid_shadow(s) || !valid_sound(s))return false;
         if(s.valid_fields&GC_VALID_POSE)for(unsigned axis=0;axis<3;++axis)
             if(!std::isfinite(s.pose.position[axis]) || !std::isfinite(s.pose.scale[axis]))return false;
         if(s.valid_fields&GC_VALID_POSE) {
@@ -339,7 +375,8 @@ bool valid_request(const gp_request& r) {
     if(r.bytes!=sizeof(r) || r.version!=GP_VERSION || !r.revision
             || r.enabled>1 || r.tint_enabled>1 || r.clip_count>GP_GHOSTS || r.reserved1
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
-            || r.proximity_distance<0 || r.proximity_distance>400) return false;
+            || r.proximity_distance<0 || r.proximity_distance>400
+            || r.shadow_enabled>1 || r.reserved2) return false;
     const gp_clip unused{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         const auto &clip=r.clips[i];
@@ -475,6 +512,23 @@ bool renderer_owner() {return render_thread && render_thread==GetCurrentThreadId
 void next_boundary() {
     if(context_serial.fetch_add(1)>=UINT32_MAX-1) {exhausted.store(true);revoke(GP_EXHAUSTED);}
 }
+bool same_owner(const gp_request& a,const gp_request& b) {
+    return a.owner_token==b.owner_token && a.rom_generation==b.rom_generation
+        && a.configuration==b.configuration;
+}
+// A command's origin rebinds the live timing unless the renderer already
+// reached that same origin itself (the worker confirming a local restore).
+void adopt_recovery(const gp_request& next) {
+    auto& live=live_recovery;
+    if(next.mode!=GP_FOLLOW) {live.clear();return;}
+    const bool same=live.bound && same_owner(live.owner,next);
+    if(same && !std::memcmp(&live.owner.origin,&next.origin,sizeof(next.origin))) {live.owner=next;return;}
+    go_origin local{};
+    if(!(same && live.timing.current(local) && !std::memcmp(&local,&next.origin,sizeof(local)))) {
+        live.timing.bind(next.origin);live.restored=next.origin.sequence;
+    }
+    live.owner=next;live.bound=true;
+}
 uint32_t active_count() {uint32_t count=0;for(auto *clip:bound)count+=clip!=nullptr;return count;}
 struct Coordinate {uint64_t target;bool below_zero;};
 // One ghost against the shared live coordinate. Hides only this ghost.
@@ -517,6 +571,11 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
     out.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
+    if(active_request.shadow_enabled && (selected.sample.valid_fields&GC_VALID_SHADOW)
+            && !ghost_pose::shadow(model.value,selected.sample,out.view_projection,shadows[index].vertices,
+                                   shadows[index].texture,out.shadow)) {
+        out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
+    }
     rendered.fetch_add(1);
     return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
 }
@@ -536,7 +595,8 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         && published.cancellation==current_cancel
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
-        retire_clips();retire_model();have_request=false;clear_timeline();decide_all(GP_DISABLED);return;
+        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.clear();
+        decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
         // Withdrawal retains reusable assets, but an explicit worker model
@@ -544,7 +604,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
         decide_all(GP_DISABLED);return;
     }
-    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();}
+    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.clear();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
         clear_timeline();have_timeline=true;timeline_request=next;
     }
@@ -552,6 +612,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(!retire_model()) {decide_all(GP_PREPARING);return;}
     const bool changed=touch_revision!=next.revision;
     active_request=next;have_request=true;acquired_cancel=current_cancel;
+    adopt_recovery(next);
     report={};report.revision=next.revision;report.owner_token=next.owner_token;report.model_id=next.model_id;
     report.clip_count=next.clip_count;report.rom_generation=rom;report.configuration=configuration;
     if(!have_model) {
@@ -614,7 +675,16 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     Coordinate frame{active_request.seek_igt,false};
     sequence_reported=false;
     if(active_request.mode==GP_FOLLOW) {
-        const auto& origin=active_request.origin;
+        // Same refusals as the worker: an unresolved or ambiguous live restore
+        // hides the ghost; a resolved one draws on the frame it happened.
+        auto origin=active_request.origin;
+        if(live_recovery.bound) {
+            live_recovery.timing.observe(live,active_request.star_actions,
+                active_request.star_ends?active_request.star_action_count:0);
+            if(!live_recovery.timing.current(origin)) {decide_all(GP_NO_CLOCK);return false;}
+            // A restoration revives the run, exactly like the worker's new command.
+            if(origin.sequence!=live_recovery.restored) {star_ended=false;live_recovery.restored=origin.sequence;}
+        }
         if(!valid_clock(live) || (live.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
                 !=(GCC_RAW_VALID|GCC_ELAPSED_VALID) || live.epoch!=origin.epoch
                 || live.sequence<origin.sequence || live.clock.continuity_id!=origin.continuity

@@ -1165,6 +1165,13 @@ class ReplayService:
             manifest = archive.export_attempt(attempt, path, target=self._native_target(attempt))
         except (ClipError, OSError, sqlite3.Error) as error:
             return None, None, str(error)
+        from sm64_events.ghost.clip import pose_gaps
+        if pose_gaps(manifest):
+            # Loud on purpose: a hole is where the ghost blinks, and every later
+            # ghost feature hinges on extraction being complete.
+            log.warning("Mario position missing on %s of %s frames of attempt %s "
+                        "(%s refused, %s never captured)", pose_gaps(manifest), manifest.get("records"),
+                        attempt.id, manifest.get("invalid_records"), manifest.get("missing_occurrences"))
         return path, manifest, None
 
     def reveal(self, path_str: str) -> None:

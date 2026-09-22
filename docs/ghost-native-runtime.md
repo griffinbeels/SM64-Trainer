@@ -27,20 +27,21 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC4: layout 168, sample 308; executed root matrix, warp fields and derived clock | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308) and sound events (36 at 600) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
-| Renderer capture | GS3, exported as `SM64GhostSourceV3`; bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP4: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and overlap fade | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC4: status 256, request 18920 (16 clip entries of 1096), ring offset 20480, 512 records | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP3: header 160, record 324, maximum 240000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
+| Playback | GP5: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade and the `shadow_enabled` switch | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC5: status 256, request 18944 (16 clip entries of 1096, then `shadow_enabled`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP4: header 160, record 652, maximum 200000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
 Sizes are bytes. Native ghost versions are checked together; older native clips
 have no compatibility reader. Their files remain on disk; `OlderPoseFormat`
 provides a typed reason (`older_pose_format`) to record a new attempt. An older
 committed file keeps pruning protection and is never overwritten by a later
-export; a playable saved copy of the same attempt still wins. SourceV2 video
-capture retains its original contract.
+export; a playable saved copy of the same attempt still wins. GCLIP3/GC4 files
+and archive rows (no shadow or sound) are older formats in the same sense.
+SourceV2 video capture retains its original contract.
 GS advertises pose and world-pass capture, not `GS_CAP_RENDER`: its table is a
 capture interface. Rendering uses the separate playback/draw path and requires
 negotiated clean presentation. A capability bit or prepared model is not proof
@@ -130,6 +131,22 @@ to that coordinate. Paused clocks do not advance from wall time or Python poll
 cadence. A new star generation or configured star-grab action ends that origin;
 tuning the same origin cannot revive it. Explicit fixed seek is a separate mode.
 
+After a state load the renderer resolves the restore itself. The worker only
+reads a list's record after that list, so its recovered command can first
+apply to the next list. The renderer therefore runs the same
+`ghost_origin::Recovery` over each live sample it draws from (capacity
+reserved at load, never allocated while rendering). It binds to each command's
+origin unless it already reached that origin itself. A restore it resolves
+draws on the load frame at the restored coordinate and revives an ended star
+run, as the worker's new command would. An unresolved or ambiguous restore
+hides the ghost on that same frame. While the worker's own recovery is
+unresolved it keeps the applied command rather than withdrawing it, so a
+later restore is not delayed a frame. The
+[recovery witness](../tests/test_ghost_recovery.py) runs the worker one list
+behind the renderer: over 10 loads and 92 frames the previous path showed 8
+frames without a ghost and 1 at a wrong position (a forward load to an
+unwitnessed state); this path shows 0 and 0.
+
 ### Several ghosts
 
 One command displays a set of up to 16 saved recordings (the PB plus others)
@@ -200,8 +217,9 @@ Disabling or losing the active origin withdraws drawing while retaining prepared
 assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
 full set plus as many retiring copies) share a 128 MiB clip/index budget, and
-the worker's retained files obey the same bound. One maximum-size clip fits; two
-maximum-size clips do not with GC4. All resident slots count, so a replacement
+the worker's retained files obey the same bound. One maximum-size clip
+(200000 records, about 111 minutes at 30 Hz: 200000 x (652 + 4) bytes) fits;
+two maximum-size clips do not with GC5. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
 If a reader holds the status page during revocation, the worker retries that
@@ -289,7 +307,58 @@ A pose may carry the original shadow packet (at most 24 vertices, the 16x16
 IA8 texture and its own matrix). The compositor draws it as a decal over the
 frame's clean copy, before any Mario, against copied terrain depth with the
 renderer's decal offset (-3,-3) and LEQUAL; N64 image depth omits it rather
-than guessing delta-Z. No capture packet feeds it yet.
+than guessing delta-Z.
+
+### Recorded shadow
+
+Capture records the shadow the game executed, never an inferred disc. SM64
+allocates display-list memory downward in traversal order, and `mario_geo`
+processes GEO_SHADOW before GEO_SCALE and the alpha ASM, so a drawn Mario
+shadow is 9 `Vtx`, its 5-command list, its G_MTX and the scale G_MTX directly
+above the opaque alpha list the root proof already owns (list at alpha+144,
+matrix at +80, vertices at +184; n64decomp `shadow.c` `create_shadow_player`,
+`rendering_graph_node.c` `geo_process_shadow`/`geo_process_scale`,
+`mario_misc.c` `make_gfx_mario_alpha`). [ghost_root.cpp](../plugin/gfxwrap/ghost_root.cpp)
+accepts it only when, in one completed occurrence and after the root match:
+the master-list G_DL at the root's depth names that list once, preceded by a
+G_MTX load of that matrix equal to the renderer's modelview; the list is
+exactly circle call, `G_VTX` of those 9 vertices, triangle call, restore call;
+the three nested calls execute at the next depth and resolve through one
+segment base; the combiner/texture-load, triangle and restore lists match the
+US segment-2 words; every vertex shade is white; every texel has zero
+intensity; the matrix is rigid and within 1024 units of Mario's
+`cameraToObject`. Anything else (another object's shadow, none drawn, a
+repeated or interrupted list, a translucent or metal Mario whose root is
+refused) leaves the record without `GC_VALID_SHADOW`.
+
+The record keeps the executed matrix, raw vertex positions, S10.5 texture
+coordinates, per-vertex alpha and the texture's alpha nibbles. Playback
+([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp) `shadow`) removes the
+recorded camera exactly as for the root, expands the game's eight triangles,
+applies the half-texel shift for the 3-point filter, and hands the compositor
+world-space vertices under the body's live view-projection. Opacity and
+overlap fade apply through the pose; the shadow is black, so tint does not.
+`shadow_enabled` (GP5/GIPC5, default on; `NativeChannel` key
+`shadow_enabled`, a bool) removes every ghost's shadow without rebuilding it.
+
+### Sound events
+
+Capture reads the `play_sound` request ring at the same boundary as the pose
+([ghost_capture.cpp](../plugin/gfxwrap/ghost_capture.cpp) `capture_sound`).
+The layout supplies `play_sound`'s code, its u8 producer, the audio thread's
+u8 consumer and the 256-entry ring (VERIFY rows in
+[layout.py](../src/sm64_events/memory/layout.py) with `address.sound_*`
+gates). Before reading, the 12 instruction words must be the US leaf naming
+exactly that producer and ring (bits at +0, source at +4, producer published
+after both); a different build leaves sound unavailable. A record's sound is
+valid only when the previous captured frame is exactly one game frame
+earlier, so requests are attributed to one frame or not at all. It keeps, in
+issue order, up to 8 request bits whose source is Mario's object
+`gfx.cameraToObject`, with `GC_SOUND_OVERFLOW` when more were issued and the
+raw producer and consumer. More than 256 requests between two frames cannot
+be detected. Playback exposes them as data only (`Frame.sounds`); nothing
+plays them yet, and `sSoundMovingSpeed` or direct `stop_sound` state is not
+recorded.
 
 [ghost_presentation.cpp](../plugin/gfxwrap/ghost_presentation.cpp) preserves the
 clean drawable, applies the renderer's VI mapping/gamma to the display branch,
@@ -301,6 +370,13 @@ Clean/failed swaps and context loss clear visible telemetry; a generated mesh
 alone never reports that the ghost reached the game window.
 
 ## Verification boundaries
+
+**Every frame must carry Mario's position.** A committed clip counts refused
+and never-captured frames (`clip.py::pose_gaps`); a nonzero count is logged when
+the clip is saved and shown on that ghost's picker row, because the ghost blinks
+there. `tools/ghost_extraction_audit.py` audits every committed clip and the live
+pose archives (exit 1 on any hole). 2026-09-22: every post-fix clip was complete;
+the only pose-less archive records were a star-exit level load, outside attempts.
 
 Focused hosts exercise the actual capture reader, clock, origin ledger, playback
 loader, compositor and presentation modules. See
@@ -335,6 +411,15 @@ The same witness on GP4 (2026-09-22, RTX 5090, 640x480, 180 samples) also draws
 visible, no pixel outside their projected triangles changed. CPU plus GPU
 completion plus hidden swap measured p50 2.19 ms, p95 3.38 ms and max 3.81 ms
 (one ghost: p50 0.47 ms, p95 1.27 ms, max 2.05 ms). The same exclusions apply.
+
+On GC5/GCLIP4/GP5 (2026-09-22, same machine and sizes) the witness also
+executes Mario's shadow lists through the real source, records the shadow and
+draws it: 551 shadow-only pixels darkened evenly, zero pixels changed outside
+the ghost and its shadow, zero changes outside the shadow when the switch
+toggles, 50% opacity is one midpoint blend, and a nearer wall hides the decal.
+The fixture's texture is a synthetic quarter-circle ramp, not ROM texels.
+With every ghost's shadow drawn, one ghost measured p50 0.49 ms, p95 0.84 ms,
+max 2.07 ms and sixteen p50 2.13 ms, p95 3.28 ms, max 3.93 ms.
 
 For the actual staged RSP lifetime guard, stage a fresh pinned renderer with
 `tools/stage_link_witness.py --source <pinned-source> --out <temporary-output>

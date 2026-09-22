@@ -79,6 +79,17 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "u16 written at the grab with the EXACT displayed time"),
     LayoutRow("usamune_timer", None, "usamune_time",
               "u32 SECTION counter (diagnostics only; resets per area)"),
+    LayoutRow("sound_code", "play_sound", None,
+              "VERIFY: the 48-byte play_sound leaf; the native reader matches its "
+              "instructions against sound_producer/sound_ring before reading sounds"),
+    LayoutRow("sound_producer", "sSoundRequestCount", None,
+              "VERIFY: u8 producer of the 256-entry sound request ring, published "
+              "after each entry's bits (+0) and source pointer (+4)"),
+    LayoutRow("sound_consumer", "sNumProcessedSoundRequests", None,
+              "VERIFY: u8 count the audio thread has consumed from the ring"),
+    LayoutRow("sound_ring", "sSoundRequests", None,
+              "VERIFY: 256 x {u32 sound bits, u32 source}; Mario's source is his "
+              "object's gfx.cameraToObject (object + 0x54)"),
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
@@ -104,6 +115,10 @@ class Layout:
     mario_object: int | None = None
     current_area_pointer: int | None = None
     area_update_counter: int | None = None
+    sound_code: int | None = None
+    sound_producer: int | None = None
+    sound_consumer: int | None = None
+    sound_ring: int | None = None
     usamune_overall: int | None = None
     usamune_star_result: int | None = None
     usamune_timer: int | None = None
@@ -156,6 +171,13 @@ US = Layout(
                                     # new ghost read, not yet live gate verified.
     area_update_counter=0x8032DF08, # VERIFY: STROOP MappingUS.map gAreaUpdateCounter;
                                     # u16, distinct from gGlobalTimer.
+    # VERIFY: STROOP MappingUS.map symbols; tools/ghost_audio_spike/
+    # qualify_ring.py found identical play_sound code in stock and Usamune
+    # (SHA256 1c8030b6...) naming exactly this producer and ring, 2026-09-22.
+    sound_code=0x8031EB00,
+    sound_producer=0x80332F44,
+    sound_consumer=0x80332F40,
+    sound_ring=0x80361498,
     usamune_overall=0x80417C72,     # tools/hunt_value.py + watch session 2026-06-10
     usamune_star_result=0x80417C74,
     usamune_timer=0x8033D5DC,       # section counter; diagnostics only

@@ -58,7 +58,7 @@ class NativeChannel:
                 request.token = secrets.randbelow((1 << 64) - 1) + 1
                 request.revision = request.heartbeat = request.capture_enabled = 1
                 request.rom_generation = status.rom_generation
-                request.opacity = 0.5
+                request.opacity, request.shadow_enabled = 0.5, 1
                 request.layout[:] = layout
                 actions = sorted(STAR_GRAB_ACTIONS)
                 if len(actions) > 8:
@@ -160,6 +160,11 @@ class NativeChannel:
         request.proximity_enabled = proximity["enabled"]
         request.proximity_distance = proximity["extra_distance"]
         request.tint_enabled = bool(value.get("tint_enabled", False))
+        # The recorded-shadow A/B switch; absent means shadows draw.
+        shadow = value.get("shadow_enabled", True)
+        if type(shadow) is not bool:
+            raise ValueError("native ghost shadow_enabled must be a bool")
+        request.shadow_enabled = shadow
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")

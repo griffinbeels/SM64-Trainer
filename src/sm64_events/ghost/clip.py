@@ -1,7 +1,10 @@
 """Portable native ghost files; byte layout is plugin/gfxwrap/ghost_clip.h.
 
 Capture refusals remain records. A clip never fills a gap from a nearby pose,
-and its captured camera is evidence rather than the playback camera.
+and its captured camera is evidence rather than the playback camera. Each
+record may also carry the shadow the game drew under Mario and the sound
+requests Mario issued since the previous frame (`Frame.sounds`), each with
+its own validity bit.
 """
 from __future__ import annotations
 
@@ -16,10 +19,14 @@ import tempfile
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO3", 3, 4
-HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 324, 308
-MAX_RECORDS, WORLD_READY = 240000, 3
-CLOCK, POSE, CAMERA, ACTION, WARP = 1, 2, 4, 8, 16
+MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO4", 4, 5
+HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 652, 636
+MAX_RECORDS, WORLD_READY = 200000, 3
+CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND = 1, 2, 4, 8, 16, 32, 64
+REQUIRED, ALL_VALID = 31, 127
+SHADOW_AT, SOUND_AT = 16 + 308, 16 + 600  # record offsets of gc_shadow / gc_sound
+SHADOW_BYTES, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW = 292, 36, 8, 1
+OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
 STAR_CLOCK, SEGMENT_CLOCK = 1, 2
 CLOCK_KINDS = {"star": STAR_CLOCK, "segment": SEGMENT_CLOCK}
@@ -28,6 +35,7 @@ _PREFIX = struct.Struct("<4I")
 _SAMPLE = struct.Struct("<4I2QqI2H2h2I")
 _WARP = struct.Struct("<Hh")
 _CLOCK = struct.Struct("<4I6Q")
+_SOUND = struct.Struct("<4B8I")
 PRODUCER_FIELDS = ("pid", "created", "generation", "rom_generation", "configuration",
                    "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor")
 
@@ -100,6 +108,16 @@ class Frame:
     pending_warp_op: int
     delayed_warp_timer: int
     clock: Clock
+    sounds: tuple[int, ...] = ()  # Mario's play_sound bits this frame, in order
+    sound_overflow: bool = False  # more than SOUND_EVENTS were issued
+
+    @property
+    def has_shadow(self) -> bool:
+        return bool(self.valid_fields & SHADOW)
+
+    @property
+    def has_sound(self) -> bool:
+        return bool(self.valid_fields & SOUND)
 
     @property
     def playable(self) -> bool:
@@ -109,8 +127,10 @@ class Frame:
 
 
 def frame_from_bytes(data: bytes) -> Frame:
-    if (len(data) == 260 and struct.unpack_from("<2I", data) == (260, 2)
-            and struct.unpack_from("<2I", data, 16) == (244, 3)):
+    if ((len(data) == 260 and struct.unpack_from("<2I", data) == (260, 2)
+            and struct.unpack_from("<2I", data, 16) == (244, 3))
+            or (len(data) == 324 and struct.unpack_from("<2I", data) == (324, 3)
+                and struct.unpack_from("<2I", data, 16) == (308, 4))):
         raise OlderPoseFormat()
     if len(data) != RECORD_BYTES:
         raise ClipError("native ghost record has the wrong size")
@@ -120,10 +140,12 @@ def frame_from_bytes(data: bytes) -> Frame:
     sample_size, sample_version, epoch, valid = values[:4]
     if ((size, version, sample_size, sample_version) !=
             (RECORD_BYTES, VERSION, SAMPLE_BYTES, SAMPLE_VERSION)
-            or not configuration or not epoch or valid & ~31 or world > 11):
+            or not configuration or not epoch or valid & ~ALL_VALID or world > 11):
         raise ClipError("native ghost record schema is unsupported")
+    count, flags, _producer, _consumer, *bits = _SOUND.unpack_from(raw, SOUND_AT)
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
-                  *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)))
+                  *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)),
+                  tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW))
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
         raise ClipError("native ghost occurrence is invalid")
     if valid & CLOCK and not (4 <= frame.level <= 36 and 1 <= frame.area <= 8):
@@ -142,8 +164,10 @@ def frame_from_bytes(data: bytes) -> Frame:
     _validate_root(raw, valid)
     if not valid & WARP and (frame.pending_warp_op or frame.delayed_warp_timer):
         raise ClipError("native ghost refusal retains invalid warp bytes")
-    if frame.status == 0 and valid != 31:
+    if frame.status == 0 and valid & REQUIRED != REQUIRED:
         raise ClipError("native ghost success is missing a component")
+    _validate_shadow(raw, valid)
+    _validate_sound(count, flags, bits, raw, valid)
     _validate_clock(frame)
     return frame
 
@@ -163,6 +187,29 @@ def _validate_root(raw: bytes, valid: int) -> None:
             raise ClipError("native ghost root matrix is not affine")
     else:
         raise ClipError("native ghost root kind is unsupported")
+
+
+def _validate_shadow(raw: bytes, valid: int) -> None:
+    block = raw[SHADOW_AT:SHADOW_AT + SHADOW_BYTES]
+    if not valid & SHADOW:
+        if any(block):
+            raise ClipError("native ghost shadow refusal retains bytes")
+        return
+    matrix = struct.unpack_from("<16f", block)
+    if (not valid & POSE or struct.unpack_from("<I", raw, 128)[0] != 2 or block[163]
+            or not all(math.isfinite(value) for value in matrix)
+            or (matrix[3], matrix[7], matrix[11], matrix[15]) != (0, 0, 0, 1)):
+        raise ClipError("native ghost shadow has no executed root or an invalid matrix")
+
+
+def _validate_sound(count: int, flags: int, bits: list[int], raw: bytes, valid: int) -> None:
+    if not valid & SOUND:
+        if any(raw[SOUND_AT:SOUND_AT + SOUND_BYTES]):
+            raise ClipError("native ghost sound refusal retains bytes")
+        return
+    if (count > SOUND_EVENTS or flags & ~SOUND_OVERFLOW or any(bits[count:])
+            or (flags & SOUND_OVERFLOW and count != SOUND_EVENTS)):
+        raise ClipError("native ghost sound events are inconsistent")
 
 
 def _validate_clock(frame: Frame) -> None:
@@ -273,7 +320,7 @@ def _checked_frames(frames: tuple[Frame, ...], configuration: int, epoch: int,
 
 
 def decode_clip(data: bytes) -> Clip:
-    if data[:8] in (b"SM64GHO1", b"SM64GHO2"):
+    if data[:8] in OLDER_MAGICS:
         raise OlderPoseFormat()
     if not HEADER_BYTES <= len(data) <= HEADER_BYTES + MAX_RECORDS * RECORD_BYTES:
         raise ClipError("native ghost file size is outside its bound")
@@ -348,7 +395,7 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
             or manifest.get("target") != target
             or manifest.get("file") != path.name):
         raise ClipError("native ghost manifest belongs to another attempt")
-    if type(manifest.get("version")) is int and manifest["version"] in (1, 2):
+    if type(manifest.get("version")) is int and manifest["version"] in (1, 2, 3):
         raise OlderPoseFormat()
     digest = manifest.get("sha256")
     if not isinstance(digest, str) or len(digest) != 64:
@@ -371,6 +418,16 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
                    for key in ("configuration", "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor"))):
         raise ClipError("native ghost manifest disagrees with its captured bytes")
     return clip
+
+
+def pose_gaps(manifest) -> int:
+    """Frames inside a recording where Mario's position was not extracted:
+    refused poses plus capture occurrences that never arrived. Every later
+    ghost feature assumes this is zero (his ask, 2026-09-22: "future features
+    hinge on correct extraction"), so it is counted on every commit."""
+    if not isinstance(manifest, dict):
+        return 0
+    return int(manifest.get("invalid_records") or 0) + int(manifest.get("missing_occurrences") or 0)
 
 
 def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | None = None) -> dict:

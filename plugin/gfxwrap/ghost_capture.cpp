@@ -123,6 +123,55 @@ uint32_t capture_camera(Ram &ram, uint32_t area, int16_t area_index, gc_camera &
     return GC_OK;
 }
 
+// play_sound(bits, pos): the 48 bytes of the original US leaf function. The
+// two lui/addiu pairs must name exactly the configured producer and ring;
+// the rest proves an 8-byte stride, bits at +0, source at +4, and a u8
+// producer published after both stores. Another build refuses sound.
+bool sound_code_matches(Ram &ram, const gc_layout &layout) {
+    const auto upper = [](uint32_t address) { return (address + 0x8000u) >> 16; };
+    const auto lower = [](uint32_t address) { return address & 0xffffu; };
+    const uint32_t expected[12] = {
+        0x3c060000u | upper(layout.sound_producer), 0x24c60000u | lower(layout.sound_producer),
+        0x90c20000u,
+        0x3c0f0000u | upper(layout.sound_ring), 0x25ef0000u | lower(layout.sound_ring),
+        0x000270c0u, 0x01cf1821u, 0x24580001u, 0xac640000u, 0xac650004u, 0x03e00008u, 0xa0d80000u,
+    };
+    for (unsigned i = 0; i < 12; ++i)
+        if (ram.u32(layout.sound_code + 4*i) != expected[i]) return false;
+    return ram.ok;
+}
+
+// Mario's requests pass gMarioObject->header.gfx.cameraToObject as source.
+constexpr uint32_t sound_source_offset = 0x54;
+
+void capture_sound(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_sample &out) {
+    const bool baseline = reader.sound_baseline != 0;
+    const uint32_t previous_timer = reader.sound_timer, previous = reader.sound_producer;
+    reader.sound_baseline = 0;
+    if (!layout.sound_code || !sound_code_matches(ram, layout)) return;
+    const uint8_t producer = ram.u8(layout.sound_producer), consumer = ram.u8(layout.sound_consumer);
+    const uint32_t object = ram.u32(layout.mario_object);
+    if (!ram.ok) return;
+    reader.sound_baseline = 1; reader.sound_timer = out.global_timer; reader.sound_producer = producer;
+    // Requests between two captures belong to exactly one game frame only
+    // when that frame immediately follows; a skipped list has no attribution.
+    if (!baseline || out.global_timer != previous_timer + 1u
+            || object < layout.object_pool || (object - layout.object_pool) % object_size
+            || (object - layout.object_pool) / object_size >= object_count) return;
+    gc_sound sound{};
+    sound.producer = producer; sound.consumer = consumer;
+    const uint32_t issued = (producer - previous) & 0xffu;
+    for (uint32_t i = 0; i < issued; ++i) {
+        const uint32_t entry = layout.sound_ring + 8u * ((previous + i) & 0xffu);
+        const uint32_t bits = ram.u32(entry), source = ram.u32(entry + 4);
+        if (source != object + sound_source_offset) continue; // another object's sound
+        if (sound.count < GC_SOUND_EVENTS) sound.bits[sound.count++] = bits;
+        else sound.flags |= GC_SOUND_OVERFLOW;
+    }
+    if (!ram.ok) return;
+    out.sound = sound; out.valid_fields |= GC_VALID_SOUND;
+}
+
 bool unresolved_floor(uint32_t action) {
     // align_with_floor: crawling and common_slide_action, including their
     // same-call bonk/stop destinations. These are conservative refusals, not
@@ -207,6 +256,12 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     const uint32_t warps[] = {layout->pending_warp_op, layout->delayed_warp_timer};
     for (auto address : warps)
         if (address && !span(address, 2, layout->rdram_bytes, 2)) return GC_BAD_CONFIG;
+    if (layout->sound_code || layout->sound_producer || layout->sound_consumer || layout->sound_ring) {
+        if (!span(layout->sound_code, 48, layout->rdram_bytes)
+                || !span(layout->sound_producer, 1, layout->rdram_bytes, 1)
+                || !span(layout->sound_consumer, 1, layout->rdram_bytes, 1)
+                || !span(layout->sound_ring, 256 * 8, layout->rdram_bytes, 8)) return GC_BAD_CONFIG;
+    }
     gcc_clock validation{};
     if (!gcc_init(&validation, &layout->clock)) return GC_BAD_CONFIG;
     return GC_OK;
@@ -244,6 +299,9 @@ static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
     if (!ram.ok || out->level < 4 || out->level > 36 || out->area < 1 || out->area > 8)
         return out->status = GC_BAD_VALUE;
     out->valid_fields = GC_VALID_CLOCK;
+    // Sound needs the game clock of this and the previous captured frame.
+    capture_sound(ram, *layout, *reader, *out);
+    ram.ok = true;
     if (layout->pending_warp_op && layout->delayed_warp_timer) {
         out->pending_warp_op = ram.u16(layout->pending_warp_op);
         out->delayed_warp_timer = ram.s16(layout->delayed_warp_timer);
@@ -279,11 +337,16 @@ extern "C" uint32_t ghost_capture_begin(gc_reader *reader, const gc_layout *layo
     return capture_read(reader,layout,frame,out,probe);
 }
 
-static_assert(sizeof(gc_layout) == 168, "Ghost layout ABI changed");
+static_assert(sizeof(gc_layout) == 184, "Ghost layout ABI changed");
+static_assert(offsetof(gc_layout, sound_code) == 64, "Ghost sound layout ABI changed");
 static_assert(offsetof(gc_layout, pending_warp_op) == 56, "Ghost warp layout ABI changed");
 static_assert(offsetof(gc_layout, delayed_warp_timer) == 60, "Ghost countdown layout ABI changed");
-static_assert(offsetof(gc_layout, clock) == 64, "Ghost clock layout ABI changed");
-static_assert(sizeof(gc_sample) == 308, "Ghost sample ABI changed");
+static_assert(offsetof(gc_layout, clock) == 80, "Ghost clock layout ABI changed");
+static_assert(sizeof(gc_sample) == 636, "Ghost sample ABI changed");
+static_assert(sizeof(gc_shadow) == 292 && sizeof(gc_sound) == 36, "Ghost optional evidence ABI changed");
+static_assert(offsetof(gc_sample, shadow) == 308 && offsetof(gc_sample, sound) == 600, "Ghost optional evidence offsets");
+static_assert(offsetof(gc_shadow, position) == 64 && offsetof(gc_shadow, uv) == 118
+              && offsetof(gc_shadow, alpha) == 154 && offsetof(gc_shadow, texture) == 164, "Ghost shadow ABI changed");
 static_assert(offsetof(gc_sample, live_action) == 56, "Ghost action ABI changed");
 static_assert(offsetof(gc_sample, pose) == 60, "Ghost pose ABI changed");
 static_assert(offsetof(gc_sample, camera) == 204, "Ghost camera ABI changed");

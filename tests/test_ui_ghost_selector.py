@@ -99,9 +99,15 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 assert row["cardScroll"] <= row["cardClient"] + 1
                 shoot(page, screenshots / f"ticks-{width}.png")
 
+                # The shadow A/B switch sits beside the colour in Only Mario.
+                assert page.evaluate("document.querySelector('.ghost-shadow .ghost-switch').getAttribute('aria-checked')") == "true"
+                page.click(".ghost-shadow .ghost-switch")
+                assert settled(page, state, 4)[3] == {"shadow": False}
+                assert page.evaluate("document.querySelector('.ghost-shadow .ghost-switch').getAttribute('aria-checked')") == "false"
+
                 # Unticking his PB is remembered: the write says so explicitly.
                 tick(page, 0)
-                assert settled(page, state, 4)[3] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
+                assert settled(page, state, 5)[4] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
                                                       "target": target}
                 assert [item["checked"] for item in picks(page)["items"]] == [False, False, True, True]
                 assert page.problems() == []

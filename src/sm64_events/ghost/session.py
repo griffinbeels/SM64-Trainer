@@ -113,6 +113,12 @@ MAX_START_ATTEMPTS = 3
 ENABLED_KEY = "ghost_enabled"
 OPACITY_KEY = "ghost_opacity"
 TINT_ENABLED_KEY = "ghost_tint_enabled"
+#: THE GHOST'S SHADOW, on or off. His words, 2026-09-22: *"It should be the
+#: same type of shadow that follows mario ... and then make sure we can easily
+#: A/B test whether we like this or not."* On by default because the shadow is
+#: the game's own; a shipped preference, so no test pins the value.
+SHADOW_KEY = "ghost_shadow"
+DEFAULT_SHADOW = True
 TINT_HUE_KEY = "ghost_tint_hue"
 VIEW_KEY = "ghost_view"
 
@@ -137,7 +143,8 @@ NO_RECORDINGS = {
     "mario_boxes_reason_text": None}
 
 #: What a client may send to PUT /api/ghost.
-SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "ghosts", "target", "proximity")
+SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "ghosts", "target", "proximity",
+            "shadow")
 
 
 def template_store(inputs):
@@ -260,6 +267,10 @@ def validate_changes(changes: dict) -> dict:
         checked["nudge_frames"] = _checked_nudge(changes["nudge_frames"])
     if "tint" in changes:
         checked["tint"] = _checked_tint(changes["tint"])
+    if "shadow" in changes:
+        if type(changes["shadow"]) is not bool:
+            raise ValueError("The ghost's shadow is either on or off.")
+        checked["shadow"] = changes["shadow"]
     if "proximity" in changes:
         checked["proximity"] = checked_proximity(changes["proximity"])
     if "view" in changes:
@@ -300,6 +311,7 @@ class GhostSession:
         self._enabled = False
         self._opacity = DEFAULT_OPACITY
         self._tint = dict(DEFAULT_TINT)
+        self._shadow = DEFAULT_SHADOW
         self._proximity = dict(DEFAULT_PROXIMITY)
         self._view = DEFAULT_VIEW
         self._nudge = 0
@@ -339,6 +351,7 @@ class GhostSession:
         return {"enabled": self._enabled,
                 "opacity": self._opacity,
                 "tint": dict(self._tint),
+                "shadow": self._shadow,
                 "proximity": dict(self._proximity),
                 "view": self._view,
                 "nudge_frames": self._nudge,
@@ -582,7 +595,7 @@ class GhostSession:
         video = self._resolve_video_source(target, pb)
         native = self._native.probe(target, pb) if self._native is not None else {
             "available": False, "reason_text": "Mario playback is not available in this window."}
-        return {"attempt_id": pb.attempt_id, "frames": pb.frames,
+        return {"attempt_id": pb.attempt_id, "frames": pb.frames, "pose_gaps": native.get("pose_gaps", 0),
                 "native_available": bool(native["available"]),
                 "native_reason_text": native["reason_text"],
                 "whole_available": bool(video["available"]) and video.get("attempt_id") == pb.attempt_id,
@@ -702,6 +715,7 @@ class GhostSession:
             stored_hue = database.get_state(TINT_HUE_KEY,
                                             DEFAULT_TINT["hue_degrees"])
             stored_view = database.get_state(VIEW_KEY, DEFAULT_VIEW)
+            stored_shadow = database.get_state(SHADOW_KEY, DEFAULT_SHADOW)
             stored_proximity = database.get_state(PROXIMITY_KEY, DEFAULT_PROXIMITY)
             self._selection.load(database)
         except Exception:  # noqa: BLE001 - a preference must never block the app
@@ -721,6 +735,7 @@ class GhostSession:
             hue = DEFAULT_TINT["hue_degrees"]
         self._tint = {"enabled": bool(stored_tint_on), "hue_degrees": hue}
         self._proximity = saved_proximity(stored_proximity)
+        self._shadow = stored_shadow if type(stored_shadow) is bool else DEFAULT_SHADOW
         # A stored value from a build that knew another view name is not a
         # view: it falls back rather than leaving the page asking for
         # something nothing draws.
@@ -742,6 +757,9 @@ class GhostSession:
             self._tint = {**self._tint, **changes["tint"]}
             _remember(database, TINT_ENABLED_KEY, self._tint["enabled"])
             _remember(database, TINT_HUE_KEY, self._tint["hue_degrees"])
+        if "shadow" in changes:
+            self._shadow = changes["shadow"]
+            _remember(database, SHADOW_KEY, self._shadow)
         if "proximity" in changes:
             self._proximity = {**self._proximity, **changes["proximity"]}
             _remember(database, PROXIMITY_KEY, self._proximity)
@@ -811,7 +829,8 @@ class GhostSession:
             native_view = self._view == "mario"
             self._native.reconcile(enabled=native_view and self._enabled and self._source.get("available", False),
                                    opacity=self._opacity, nudge=self._nudge,
-                                   tint=self._tint, target=self._target, proximity=self._proximity)
+                                   tint=self._tint, target=self._target, proximity=self._proximity,
+                                   shadow=self._shadow)
             if native_view:
                 self._end_window()
                 return

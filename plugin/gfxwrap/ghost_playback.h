@@ -7,7 +7,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 4u
+#define GP_VERSION 5u
 #define GP_GHOSTS 16u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
@@ -60,6 +60,8 @@ typedef struct gp_request {
     /* Enabled: 1..GP_GHOSTS distinct nonzero ids, each already prepared. */
     uint32_t clip_count, reserved1;
     gp_clip clips[GP_GHOSTS];
+    /* Draw each visible ghost's recorded shadow (GC_VALID_SHADOW rows only). */
+    uint32_t shadow_enabled, reserved2;
 } gp_request;
 
 typedef struct gp_status {
@@ -150,8 +152,10 @@ bool atlas(sg_atlas_view *out, uint64_t *model_id);
  * hides each ghost at its own first recorded valid star action coordinate
  * after nudge (including duplicate/refused poses). This recorded cutoff moves
  * with nudge; FIXED ignores both end policies. A new continuity refuses until
- * the worker binds a witnessed recovery offset; drawing never subtracts
- * elapsed values across that gap.
+ * a witnessed recovery offset binds: the renderer runs the worker's same
+ * ghost_origin::Recovery over its live samples, so a state load it can resolve
+ * draws on its own frame, and the worker's next command confirms or replaces
+ * it. Drawing never subtracts elapsed values across that gap.
  * Writes visible poses into out[GP_GHOSTS] back to front (farthest root first)
  * and returns true when count > 0; clears outputs otherwise. Geometry stays
  * borrowed until the next evaluate/safe_boundary/retire call. */

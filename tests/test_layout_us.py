@@ -20,6 +20,8 @@ US_2026_08_15 = {
     "behaviour_base": 0x800EB180, "player1_controller": 0x8033AF90,
     # Source-backed candidates only; their new live gates remain VERIFY.
     "current_area_pointer": 0x8032DDCC, "area_update_counter": 0x8032DF08,
+    "sound_code": 0x8031EB00, "sound_producer": 0x80332F44,
+    "sound_consumer": 0x80332F40, "sound_ring": 0x80361498,
 }
 
 

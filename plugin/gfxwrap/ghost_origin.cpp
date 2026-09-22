@@ -69,7 +69,6 @@ bool Recovery::coordinate(const Checkpoint &s,uint32_t &out) const {
     out=origin_.offset+uint32_t(delta);return true;
 }
 void Recovery::remember(const Checkpoint &value) {
-    constexpr uint32_t limit=16384;
     auto copy=value;if(!coordinate(copy,copy.coordinate))return;
     if(copy.coordinate!=copy.raw || copy.level!=first_level_ || copy.area!=first_area_)
         direct_star_=false;
@@ -129,7 +128,13 @@ go_result Recovery::observe(const gc_sample &sample,const uint32_t *actions,uint
         && now.raw>previous.raw && now.raw-previous.raw>now.timer-previous.timer;
     const bool retry=origin_.kind==GO_STAR && now.star!=origin_.star_generation
         && now.raw<previous.raw && now.level==previous.level && now.area==previous.area;
-    if(pending_ || now.epoch!=origin_.epoch || now.continuity!=origin_.continuity || forward || retry) {
+    // The occurrence an origin was resolved from already is that origin. A
+    // second observer (the renderer) adopting the worker's origin sees it
+    // after its own previous sample and must not treat it as a new jump.
+    const bool origin_frame=now.sequence==origin_.sequence && now.epoch==origin_.epoch
+        && now.continuity==origin_.continuity && now.elapsed==origin_.elapsed;
+    if(!origin_frame && (pending_ || now.epoch!=origin_.epoch || now.continuity!=origin_.continuity
+            || forward || retry)) {
         pending_=true;const Checkpoint *found=nullptr;
         for(const auto &entry:history_) {
             if(entry.raw!=now.raw || entry.level!=now.level || entry.area!=now.area)continue;

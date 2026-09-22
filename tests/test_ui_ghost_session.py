@@ -454,3 +454,12 @@ def test_his_pb_leads_with_its_time_and_each_playing_ghost_wears_its_colour():
     assert answer["views"] == {"mario": True, "whole": True}
     whole = recording_options(selection, "whole")
     assert whole["items"][0]["reason"] == "This PB's video is still being saved."
+
+
+def test_a_run_with_missing_positions_says_where_the_ghost_will_blink():
+    selection = {"ghosts": ghosts(True, 4), "pb": {**PB, "pose_gaps": 1},
+                 "candidates": [{**saved_candidate(4), "pose_gaps": 12}]}
+    mario = recording_options(selection, "mario")
+    assert [item["reason"] for item in mario["items"]] == [
+        "blinks on 1 frame with no recorded position", "blinks on 12 frames with no recorded position"]
+    assert recording_options(selection, "whole")["items"][1]["reason"] is None

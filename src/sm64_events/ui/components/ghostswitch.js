@@ -193,6 +193,22 @@ function GhostSwitchButton({ on, canToggle, onToggle, labelId, reasonId,
  * nothing for it to act on, and the acceptance rule is to omit an action that
  * does not apply rather than to grey it out.
  */
+/**
+ * THE GHOST'S SHADOW, on or off -- his A/B switch for the game's own shadow
+ * under Ghost Mario (2026-09-22). Only Mario draws it; the whole picture
+ * already contains the recorded one.
+ */
+function GhostShadow({ shadow, draft, write }) {
+  const on = draft == null ? shadow : Boolean(draft);
+  const known = on != null;
+  return html`<div class="ghost-field ghost-shadow" role="group" aria-label="Ghost shadow">
+    <span class="ghost-field-name">Shadow</span>
+    <${GhostSwitchButton} on=${known && on} canToggle=${known} small=${true}
+      label=${known ? "Draw Mario's own shadow under the ghost" : "Waiting for the ghost's shadow setting"}
+      onToggle=${() => write({ shadow: !(known && on) })} />
+  </div>`;
+}
+
 function GhostColour({ tint, write, queue }) {
   const known = tint != null;
   return html`<div class="ghost-field ghost-colour" role="group"
@@ -298,7 +314,7 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue, showView = true }) {
+function GhostTuning({ opacity, tint, shadow, view, boxes, nudge, write, queue, showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -323,6 +339,7 @@ function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue, showView
       <span class="ghost-field-value">${opacityText(opacity)}</span>
     </label>
     <${GhostColour} tint=${tint} write=${write} queue=${queue} />
+    ${view === "mario" && html`<${GhostShadow} shadow=${shadow.value} draft=${shadow.draft} write=${write} />`}
     ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
@@ -401,6 +418,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     <${GhostRecording} recording=${recording} entityKey=${entityKey}
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
+      shadow=${{ value: controls.shadow, draft: held.shadow }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
     <${GhostProximity} active=${on} view=${view} value=${controls.proximity}

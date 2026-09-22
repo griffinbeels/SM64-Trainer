@@ -65,7 +65,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     library = builder.build_model(tmp_path / "model", seed=seed, vcvars32=vcvars)
     native = COMPONENTS / "plugin/gfxwrap"
     sources = [native / f"{name}.cpp" for name in
-               ("ghost_capture", "ghost_root", "ghost_clock", "ghost_stream", "ghost_pass", "ghost_playback",
+               ("ghost_capture", "ghost_root", "ghost_clock", "ghost_origin", "ghost_stream", "ghost_pass", "ghost_playback",
                 "ghost_pose", "ghost_compositor", "ghost_presentation")]
     host = ROOT / "tests/native/ghost_pipeline_host.cpp"
     source_inputs = [*sources, host, Path(__file__), COMPONENTS / "tests/native/ghost_capture_host.cpp",
@@ -106,7 +106,8 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
                       *tmp_path.glob("*.png")])
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
-    assert report["capture_version"] == 4 and report["clip_version"] == 3 and report["playback_version"] == 4
+    assert report["capture_version"] == 5 and report["clip_version"] == 4 and report["playback_version"] == 5
+    assert_recorded_shadow(report["shadow"])
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
@@ -117,6 +118,13 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     # A functional pass cannot disguise exceeding the requested whole-frame budget.
     assert report["including_swap"]["over_budget"] == 0, report["including_swap"]
     assert_full_ghost_set(report)
+
+
+def assert_recorded_shadow(shadow):
+    """The captured shadow darkens only its decal, scales with opacity and hides behind terrain."""
+    assert shadow["captured"] and shadow["pixels"] > 300 and shadow["would_occlude"] > 50
+    assert shadow["outside_pixels_changed"] == shadow["switch_errors"] == shadow["darkening_errors"] == 0
+    assert shadow["alpha_errors"] == shadow["occlusion_errors"] == 0
 
 
 def assert_full_ghost_set(report):

@@ -20,6 +20,17 @@ void multiply(const float *a, const float *b, float *out) {
             out[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1]
                 + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
 }
+// SM64 look-at is rigid: the recorded camera inverts by transpose.
+bool recorded_camera_inverse(sg_model *model, const gc_camera &camera, float inverse[16]) {
+    float view[16]{};
+    if(sg_model_view(model,camera.position,camera.focus,camera.roll,view)!=SG_OK) return false;
+    std::memset(inverse,0,16*sizeof(float));
+    for(unsigned c=0;c<3;++c)for(unsigned r=0;r<3;++r) inverse[4*c+r]=view[4*r+c];
+    inverse[15]=1;
+    for(unsigned r=0;r<3;++r)
+        inverse[12+r]=-(inverse[r]*view[12]+inverse[4+r]*view[13]+inverse[8+r]*view[14]);
+    return true;
+}
 bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
     const auto &p=sample.pose;
     if (p.root_kind==GC_ROOT_TRS) {
@@ -30,15 +41,10 @@ bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
     const auto *m=p.root_matrix;
     for(unsigned i=0;i<16;++i) if(!std::isfinite(m[i])) return false;
     if(m[3]!=0 || m[7]!=0 || m[11]!=0 || m[15]!=1) return false;
-    float view[16]{}, inverse[16]{}, world[16]{};
-    const auto &camera=sample.camera;
-    if(sg_model_view(model,camera.position,camera.focus,camera.roll,view)!=SG_OK) return false;
-    // SM64 look-at is rigid. Remove the RECORDED camera, then the geo .25 and
-    // gfx scales; sg_model_evaluate applies those scales exactly once again.
-    for(unsigned c=0;c<3;++c)for(unsigned r=0;r<3;++r) inverse[4*c+r]=view[4*r+c];
-    inverse[15]=1;
-    for(unsigned r=0;r<3;++r)
-        inverse[12+r]=-(inverse[r]*view[12]+inverse[4+r]*view[13]+inverse[8+r]*view[14]);
+    float inverse[16]{}, world[16]{};
+    // Remove the RECORDED camera, then the geo .25 and gfx scales;
+    // sg_model_evaluate applies those scales exactly once again.
+    if(!recorded_camera_inverse(model,sample.camera,inverse)) return false;
     multiply(inverse,m,world);
     for(unsigned c=0;c<3;++c) {
         if(!std::isfinite(p.scale[c]) || std::fabs(p.scale[c])<0.000001f) return false;
@@ -49,6 +55,35 @@ bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
     std::memcpy(pose.throw_matrix,world,sizeof(world));
     return true;
 }
+}
+bool shadow(sg_model *model, const gc_sample &recorded, const float view_projection[16],
+            ghost_compositor::ShadowVertex vertices[24], uint8_t texture[256],
+            ghost_compositor::Shadow &out) {
+    out = {};
+    const auto &s = recorded.shadow;
+    float inverse[16]{}, world[16]{};
+    if (!model || !(recorded.valid_fields & GC_VALID_SHADOW) || !(recorded.valid_fields & GC_VALID_CAMERA)
+            || !recorded_camera_inverse(model, recorded.camera, inverse)) return false;
+    multiply(inverse, s.matrix, world);
+    for (float value : world) if (!std::isfinite(value)) return false;
+    for (unsigned i = 0; i < 24; ++i) {
+        const unsigned v = gc_shadow_triangles[i];
+        auto &out_vertex = vertices[i];
+        const float x = s.position[v][0], y = s.position[v][1], z = s.position[v][2];
+        for (unsigned r = 0; r < 3; ++r)
+            out_vertex.position[r] = world[r]*x + world[4+r]*y + world[8+r]*z + world[12+r];
+        // Vtx tc is S10.5 texels under gSPTexture(0xFFFF); N64 texel centres
+        // sit on integers, GL's on halves: the shader's 3-point filter expects
+        // the half-texel shift applied here.
+        for (unsigned a = 0; a < 2; ++a)
+            out_vertex.uv[a] = (float(s.uv[v][a]) / 32.0f * (65535.0f / 65536.0f) + 0.5f) / 16.0f;
+        out_vertex.alpha = float(s.alpha[v]) / 255.0f;
+    }
+    for (unsigned i = 0; i < 256; ++i)
+        texture[i] = uint8_t((s.texture[i / 2] >> ((i & 1) ? 0 : 4)) & 15);
+    out.vertices = vertices; out.count = 24; out.texture_ia8 = texture;
+    std::memcpy(out.view_projection, view_projection, sizeof(out.view_projection));
+    return true;
 }
 Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
                 const ghost::WorldPass &world, float opacity, Scratch &scratch,

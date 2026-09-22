@@ -272,3 +272,45 @@ def test_the_saved_ghost_doors(tmp_path):
         asyncio.run(session.stop())
     finally:
         archive.close()
+
+
+def test_the_shadow_switch_is_remembered_and_reaches_the_renderer(tmp_path):
+    session, _replay, row, archive, db, _store, capture = pb_world(tmp_path)
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        save_pb(db, row)
+        await session.pb_changed(row, True)
+        session._native.note()
+        assert session.payload()["shadow"] is True and capture.commands[-1]["shadow_enabled"] is True
+        body = await session.update({"shadow": False})
+        session._native.note()
+        assert body["shadow"] is False and capture.commands[-1]["shadow_enabled"] is False
+        assert db.get_state("ghost_shadow", None) is False
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+    import pytest
+    with pytest.raises(ValueError, match="on or off"):
+        asyncio.run(session.update({"shadow": "yes"}))
+
+
+def test_a_recording_with_missing_positions_is_counted_and_said_out_loud(tmp_path, caplog):
+    from ghost_native_fixture import frame
+    from test_ghost_recording import native_service
+
+    replay, row, archive = native_service(tmp_path, rows=(frame(1), frame(2, valid=29), frame(3)))
+    try:
+        with caplog.at_level("WARNING", logger="sm64.replay"):
+            manifest = replay.preserve_native(row.id)["native_ghost"]
+        assert manifest["invalid_records"] == 1
+        assert "Mario position missing on 1 of 3 frames" in caplog.text
+        target = {"kind": "star", "entity_key": f"{row.course_id}-{row.star_id}", "strat": row.strat_tag}
+        from sm64_events.ghost.pb import AttemptGhost
+        answer = NativeGhost(replay).probe(target, AttemptGhost(row.id, "star", target["entity_key"], None))
+        assert answer["available"] and answer["pose_gaps"] == 1
+    finally:
+        archive.close()
