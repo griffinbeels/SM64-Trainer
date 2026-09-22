@@ -482,9 +482,15 @@ def _answer(source: GhostSource, kind: str, entity_key: str) -> GhostSource:
     return _with_place(_with_boxes(source), kind, entity_key)
 
 
+def missing_ghost(kind: str, entity_key: str) -> GhostSource:
+    """The answer when every ticked ghost for this target is gone: named,
+    never silently replaced by the default."""
+    return _answer(unavailable("selected_template_missing"), kind, entity_key)
+
+
 def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
                   templates, replay, attempts=None, events=None,
-                  template_id: int | None = None,
+                  template_id: int | None = None, template=None,
                   providers: tuple[Provider, ...] = PROVIDERS) -> GhostSource:
     """Is there a ghost for this star or segment, and where is its footage?
 
@@ -503,7 +509,10 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
     """
     if kind not in KINDS:
         raise ValueError("a ghost is for a star or a segment")
-    template = selected_template(templates, kind, entity_key, strat, template_id)
+    # `template` is an already-chosen ghost (`ghost/pb.py::AttemptGhost` or a
+    # template row); otherwise the store chooses.
+    if template is None:
+        template = selected_template(templates, kind, entity_key, strat, template_id)
     if template is None:
         reason = "selected_template_missing" if template_id is not None else "no_template"
         return _answer(unavailable(reason, template_id=template_id), kind, entity_key)
@@ -516,7 +525,7 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
                                template_id=template.id), kind, entity_key)
 
 
-__all__ = ["ATTEMPT_FRAMES", "BOX_REASONS", "EXACT", "GRAB_EVENT",
+__all__ = ["ATTEMPT_FRAMES", "BOX_REASONS", "EXACT", "GRAB_EVENT", "missing_ghost",
            "GRAB_EVENT_TYPE", "KINDS", "LEVEL_BY_COURSE", "PICTURE_TIMER",
            "PROVIDERS", "REASONS", "GhostSource", "GhostSpan", "attempt_id_of",
            "from_marked_attempt", "place_of", "resolve_ghost", "span_of",

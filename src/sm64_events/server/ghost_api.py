@@ -15,7 +15,7 @@ saying so.
 from fastapi import APIRouter, HTTPException, Query
 
 from sm64_events.ghost.session import template_store
-from sm64_events.ghost.source import resolve_ghost
+from sm64_events.ghost.source import missing_ghost, resolve_ghost
 
 
 def journal_door(replay):
@@ -60,6 +60,32 @@ def no_session_state() -> dict:
             "window": {"running": False, "visible": False}}
 
 
+def _mount_saved_ghosts(router, session, _session) -> None:
+    """The drawer's Save as ghost doors (`ghost/saved.py`)."""
+    @router.get("/saved-ghosts/{attempt_id}")
+    def saved_ghost(attempt_id: int):
+        """Whether this run is one of his saved ghosts (the drawer's button).
+        Answers without a session too, as `/api/ghost` does: every drawer asks,
+        and an error status would land in the page's own problem list."""
+        if session is None:
+            return {"attempt_id": attempt_id, "saved": False, "available": False}
+        return {"attempt_id": attempt_id, "saved": session.is_saved_ghost(attempt_id), "available": True}
+    
+    @router.post("/saved-ghosts/{attempt_id}")
+    async def save_ghost(attempt_id: int):
+        """Save this run as a ghost for its star or segment and tick it."""
+        try:
+            return await _session().save_ghost(attempt_id)
+        except LookupError as error:
+            raise HTTPException(404, "That attempt no longer exists.") from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+    
+    @router.delete("/saved-ghosts/{attempt_id}")
+    async def remove_ghost(attempt_id: int):
+        return await _session().remove_ghost(attempt_id)
+
+
 def create_ghost_router(inputs, replay, session=None) -> APIRouter:
     """`inputs` is the captured-input service or a callable returning it —
     resolved per request for the same reason `create_inputs_router` does it,
@@ -85,16 +111,19 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
             # so the span can be exact rather than read off the timer's shape.
             # `template_store` stays the one answer to "what is the store".
             service = inputs() if callable(inputs) else inputs
+            chosen = None
             if template_id is None and session is not None:
-                template_id = session.selected_template_id(
+                chosen, missing = session.selected_ghost(
                     {"kind": kind, "entity_key": entity_key, "strat": strat})
+                if missing:
+                    return missing_ghost(kind, entity_key).payload()
             templates = (session.library(service) if session is not None
                          else template_store(service))
             return resolve_ghost(kind, entity_key, strat,
                                  templates=templates,
                                  replay=replay,
                                  attempts=getattr(service, "attempt", None),
-                                 template_id=template_id,
+                                 template_id=template_id, template=chosen,
                                  events=journal_door(replay)).payload()
         except HTTPException:
             raise
@@ -119,6 +148,8 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
         if session is None:
             return no_session_state()
         return await session.refresh()
+
+    _mount_saved_ghosts(router, session, _session)
 
     @router.put("/ghost")
     async def set_ghost(body: dict):

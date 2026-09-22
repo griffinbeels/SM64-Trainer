@@ -21,17 +21,22 @@ PB_NAME = "Your PB"
 
 
 @dataclass(frozen=True)
-class PbGhost:
-    """Shaped like `inputs/templates.py::Template` where the ghost reads one.
+class AttemptGhost:
+    """One recorded attempt raced as a ghost: his PB, a saved ghost, or a
+    template's run. Shaped like `inputs/templates.py::Template` where the
+    ghost readers read one (`id`, `origin`, `kind`, `entity_key`).
 
-    `id` is the NEGATED attempt id: every real template id is positive, so a
-    PB can never be mistaken for, or persisted as, a saved choice.
+    `id` is the NEGATED attempt id: every real template id is positive, so an
+    attempt ghost can never be mistaken for a template row.
+    `frames` is the run's time on its own clock (IGT for a star, RTA for a
+    segment; the PB's saved clock for a PB), which is how the picker names it.
     """
     attempt_id: int
     kind: str
     entity_key: str
     strat_tag: str | None
-    timer_mode: str
+    frames: int | None = None
+    pb: bool = False
 
     @property
     def id(self) -> int:
@@ -41,10 +46,12 @@ class PbGhost:
     def origin(self) -> str:
         return f"attempt:{self.attempt_id}"
 
-    name = PB_NAME
+    @property
+    def name(self) -> str:
+        return PB_NAME if self.pb else f"attempt #{self.attempt_id}"
 
 
-def current_pb_ghost(db, kind: str, entity_key: str, strat: str | None) -> PbGhost | None:
+def current_pb_ghost(db, kind: str, entity_key: str, strat: str | None) -> AttemptGhost | None:
     """The latest visible PB save for this target and strategy, any timer.
 
     Latest save wins across IGT and RTA: the newest PB he validated is the run
@@ -68,16 +75,22 @@ def current_pb_ghost(db, kind: str, entity_key: str, strat: str | None) -> PbGho
     if not rows:
         return None
     row = max(rows, key=lambda item: item["id"])
-    return PbGhost(attempt_id=row["attempt_id"], kind=kind, entity_key=entity_key,
-                   strat_tag=row.get("strat_tag"), timer_mode=row["timer_mode"])
+    return AttemptGhost(attempt_id=row["attempt_id"], kind=kind, entity_key=entity_key,
+                        strat_tag=row.get("strat_tag"), frames=row["frames"], pb=True)
 
 
 class GhostLibrary:
-    """The template store as the ghost sees it: the PB first, then templates."""
+    """Every ghost a target can race, as the ghost sees them: his PB, his saved
+    ghosts (`ghost/saved.py`), and the runs his templates were marked from.
 
-    def __init__(self, templates, db):
+    `attempt_of(attempt_id)` returns the projected attempt row or raises; it
+    names each run by its own time.
+    """
+
+    def __init__(self, templates, db, attempt_of=None):
         self._templates = templates
         self._db = db
+        self._attempt_of = attempt_of
 
     def active_for(self, kind, entity_key, strat):
         return self.pb_for(kind, entity_key, strat) or self.template_for(kind, entity_key, strat)
@@ -93,3 +106,30 @@ class GhostLibrary:
 
     def list_for(self, kind, entity_key):
         return self._templates.list_for(kind, entity_key)
+
+    def ghosts_for(self, kind, entity_key) -> list[AttemptGhost]:
+        """Saved ghosts, then template runs, newest first; one per attempt."""
+        from sm64_events.ghost.saved import saved_for
+        from sm64_events.ghost.source import attempt_id_of
+
+        ids = {number: None for number in
+               (saved_for(self._db, kind, entity_key) if hasattr(self._db, "get_state") else [])}
+        for template in self._templates.list_for(kind, entity_key):
+            number = attempt_id_of(template.origin)
+            if number is not None and ids.get(number) is None:
+                ids[number] = template.strat_tag
+        return [self.attempt_ghost(number, kind, entity_key, strat) for number, strat in ids.items()]
+
+    def attempt_ghost(self, attempt_id, kind, entity_key, strat=None) -> AttemptGhost:
+        row = None
+        if self._attempt_of is not None:
+            try:
+                row = self._attempt_of(attempt_id)
+            except (LookupError, RuntimeError, ValueError):
+                row = None
+        frames = None
+        if row is not None:
+            frames = getattr(row, "rta_frames" if kind == "segment" else "igt_frames", None)
+        return AttemptGhost(attempt_id=attempt_id, kind=kind, entity_key=entity_key,
+                            strat_tag=getattr(row, "strat_tag", strat) if row is not None else strat,
+                            frames=frames)

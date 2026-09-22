@@ -343,7 +343,7 @@ class GhostSession:
                 "view": self._view,
                 "nudge_frames": self._nudge,
                 "target": dict(self._target) if self._target else None,
-                "selection": {"ghosts": self._selection.chosen(self._target),
+                "selection": {"ghosts": self._selection.chosen(self._target, self._library_or_none()),
                               "missing": list(self._missing),
                               "playing": self._playing(),
                               "pb": dict(self._pb) if self._pb else None,
@@ -358,7 +358,7 @@ class GhostSession:
         if self._view != "mario":
             return []
         ghosts = [ghost for ghost in self._native_answer.get("ghosts", []) if ghost["available"]]
-        return [{"key": "pb" if ghost["template_id"] < 0 else ghost["template_id"],
+        return [{"key": "pb" if ghost.get("pb") else ghost["attempt_id"],
                  "attempt_id": ghost["attempt_id"],
                  "hue_degrees": ghost_hue(self._tint["hue_degrees"], index) if self._tint["enabled"] else None}
                 for index, ghost in enumerate(ghosts)]
@@ -490,30 +490,37 @@ class GhostSession:
                 "strat": self._tracker.strat_tag}
 
     def _chosen(self, target):
-        """The ghosts that play here (PB first), ticked ids that are gone, and
-        the one saved id a whole-picture reader shows (None: the library's
-        default, which is the PB or the input template)."""
+        """The ghosts that play here (PB first), ticked attempts no longer
+        offered, and whether he unticked everything (then nothing plays, not
+        the default)."""
         if target is None:
-            return [], (), None
-        choice = self._selection.chosen(target)
-        if not choice["pb"] and not choice["templates"]:
-            return [], (), False  # he unticked everything: no ghost, not the default
-        ghosts, missing = chosen_ghosts(choice, self.library(), target)
-        saved = ghosts[0].id if ghosts and ghosts[0].id in choice["templates"] else None
-        if not ghosts and missing:
-            saved = missing[0]  # a removed pick is named, never replaced by the default
-        return ghosts, tuple(missing), saved
+            return [], (), False
+        library = self.library()
+        choice = self._selection.chosen(target, library)
+        if not choice["pb"] and not choice["attempts"]:
+            return [], (), True
+        ghosts, missing = chosen_ghosts(choice, library, target)
+        return ghosts, tuple(missing), False
+
+    def selected_ghost(self, target):
+        """What a one-recording (whole picture) reader shows for `target`:
+        `(first chosen ghost or None, whether a ticked ghost went missing)`.
+        None with nothing missing means the library's default."""
+        with self._lifecycle_lock:
+            self._selection.load(self._db())
+            ghosts, missing, _unticked = self._chosen(target)
+            return (ghosts[0] if ghosts else None), bool(missing and not ghosts)
 
     def _resolve_source(self, target: dict | None) -> dict:
-        ghosts, self._missing, saved = self._chosen(target)
+        ghosts, self._missing, unticked = self._chosen(target)
         # Whole picture shows ONE recording: the first chosen ghost.
-        if target is not None and not ghosts and (self._missing or saved is False):
-            video = ({**NO_TARGET, "reason": "selected_template_missing", "reason_text": MISSING_REASON,
-                      "template_id": self._missing[0]} if self._missing else
+        if target is not None and not ghosts and (self._missing or unticked):
+            video = ({**NO_TARGET, "reason": "selected_template_missing", "reason_text": MISSING_REASON}
+                     if self._missing else
                      {**NO_TARGET, "reason": "no_ghost_chosen",
                       "reason_text": "Tick a ghost to race for this star or segment."})
         else:
-            video = self._resolve_video_source(target, saved)
+            video = self._resolve_video_source(target, ghosts[0] if ghosts else None)
         if self._native is not None:
             try:
                 self._native_answer = self._native.resolve(target, ghosts, self._missing)
@@ -528,13 +535,13 @@ class GhostSession:
                     "whole_available": video["available"], "whole_reason_text": video["reason_text"]}
         return video
 
-    def _resolve_video_source(self, target: dict | None, template_id=None) -> dict:
+    def _resolve_video_source(self, target: dict | None, ghost=None) -> dict:
         if target is None:
             return dict(NO_TARGET)
         if self._replay is None:
             return dict(NO_RECORDINGS)
         try:
-            chosen = {"template_id": template_id} if template_id is not None else {}
+            chosen = {"template": ghost} if ghost is not None else {}
             answer = self._resolve(target["kind"], target["entity_key"],
                                    target["strat"],
                                    templates=self.library(),
@@ -556,7 +563,14 @@ class GhostSession:
         """Every ghost path's template store: his current PB first, then the
         active input template (`ghost/pb.py`). `inputs` lets the source route
         pass the service it already resolved for this request."""
-        return GhostLibrary(template_store(inputs if inputs is not None else self._inputs), self._db())
+        return GhostLibrary(template_store(inputs if inputs is not None else self._inputs), self._db(),
+                            attempt_of=getattr(self._replay, "attempt", None))
+
+    def _library_or_none(self):
+        try:
+            return self.library()
+        except RuntimeError:  # no captured-input service yet
+            return None
 
     def _refresh_pb(self, target):
         """What the picker's default option plays: the PB ghost and whether
@@ -565,10 +579,10 @@ class GhostSession:
         pb = library.pb_for(target["kind"], target["entity_key"], target["strat"]) if target else None
         if pb is None:
             return None
-        video = self._resolve_video_source(target, None)
+        video = self._resolve_video_source(target, pb)
         native = self._native.probe(target, pb) if self._native is not None else {
             "available": False, "reason_text": "Mario playback is not available in this window."}
-        return {"attempt_id": pb.attempt_id, "timer_mode": pb.timer_mode,
+        return {"attempt_id": pb.attempt_id, "frames": pb.frames,
                 "native_available": bool(native["available"]),
                 "native_reason_text": native["reason_text"],
                 "whole_available": bool(video["available"]) and video.get("attempt_id") == pb.attempt_id,
@@ -583,19 +597,70 @@ class GhostSession:
             self._pb = None
         try:
             self._candidates = self._selection.candidates(
-                target, template_store(self._inputs), self._resolve_video_source, self._native)
-            # The chosen asset is resolved on every explicit read. Do not let
-            # the catalogue's short cache hide a deletion or newly saved file.
+                target, self.library(), self._resolve_video_source, self._native)
+            # The chosen ghosts were resolved just now. Do not let the list's
+            # short cache hide a deletion or a newly saved file on them.
+            fresh = {ghost["attempt_id"]: ghost for ghost in self._native_answer.get("ghosts", [])}
             for row in self._candidates:
-                if row["template_id"] == self._source.get("template_id"):
-                    for mode in ("native", "whole"):
-                        for field in ("available", "reason_text"):
-                            key = f"{mode}_{field}"
-                            if key in self._source:
-                                row[key] = self._source[key]
+                if row["attempt_id"] in fresh:
+                    row["native_available"] = fresh[row["attempt_id"]]["available"]
+                    row["native_reason_text"] = fresh[row["attempt_id"]]["reason_text"]
         except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
             log.debug("ghost choices unavailable", exc_info=True)
             self._candidates = []
+
+    def is_saved_ghost(self, attempt_id: int) -> bool:
+        from sm64_events.ghost.saved import is_saved
+        return is_saved(self._db(), attempt_id)
+
+    async def save_ghost(self, attempt_id: int) -> dict:
+        """Save one run as a ghost for its star or segment, keep its Mario
+        poses while the recorder still holds them, and tick it so he races it
+        next. Returns the preservation outcome and the session."""
+        from sm64_events.ghost import saved
+        from sm64_events.inputs.service import entity_key_of
+
+        database = self._db()
+        if database is None or self._replay is None:
+            raise ValueError("Saving a ghost needs the trainer's recordings and database.")
+        attempt = await asyncio.to_thread(self._replay.attempt, attempt_id)
+        kind, key = entity_key_of(attempt)
+        if kind not in ("star", "segment"):
+            raise ValueError("Only a run on a star or a segment can be a ghost.")
+        kept = await asyncio.to_thread(self._replay.preserve_native, attempt_id)
+        target = {"kind": kind, "entity_key": key, "strat": attempt.strat_tag}
+
+        def remember():
+            with self._lifecycle_lock:
+                saved.save(database, attempt_id, kind, key)
+                self._selection.load(database)
+                choice = self._selection.chosen(target, self.library())
+                if attempt_id not in choice["attempts"] and len(choice["attempts"]) + choice["pb"] < 16:
+                    choice["attempts"].append(attempt_id)
+                    _remember(database, SELECTION_KEY, self._selection.choose(target, choice))
+        await asyncio.to_thread(remember)
+        body = await self.refresh(resolve=True)
+        return {"attempt_id": attempt_id, "saved": True,
+                "poses_reason": kept.get("native_ghost_reason"), "session": body}
+
+    async def remove_ghost(self, attempt_id: int) -> dict:
+        """Forget a saved ghost and untick it everywhere. A template's run
+        stays offered by its template."""
+        from sm64_events.ghost import saved
+
+        database = self._db()
+
+        def forget():
+            with self._lifecycle_lock:
+                if database is None:
+                    return
+                saved.remove(database, attempt_id)
+                self._selection.load(database)
+                self._selection.untick(attempt_id)
+                _remember(database, SELECTION_KEY, self._selection.stored())
+        await asyncio.to_thread(forget)
+        body = await self.refresh(resolve=True)
+        return {"attempt_id": attempt_id, "saved": False, "session": body}
 
     async def pb_changed(self, attempt, saved: bool) -> None:
         """A PB was just saved or undone: the ghost follows it NOW, not on
@@ -619,13 +684,6 @@ class GhostSession:
                     log.exception("PB %s Mario poses could not be kept", attempt.id)
         await self.refresh(resolve=True)
 
-    def selected_template_id(self, target):
-        """The one recording a whole-picture reader shows: the first chosen
-        ghost, or None for the library's default (the PB, else the input
-        template). The follower source uses the same persisted choice."""
-        with self._lifecycle_lock:
-            self._selection.load(self._db())
-            return self._chosen(target)[2] or None
 
     # -- the preference -------------------------------------------------------
 
@@ -721,13 +779,10 @@ class GhostSession:
         if "ghosts" in checked:
             if target is None or checked.pop("target") != target:
                 raise ValueError("The practice target changed. Choose a ghost for the current target.")
-            for number in checked["ghosts"]["templates"]:
-                try:
-                    template = template_store(self._inputs).get(number)
-                except LookupError as error:
-                    raise ValueError("That saved ghost no longer exists. Choose another ghost.") from error
-                if (template.kind, template.entity_key) != (target["kind"], target["entity_key"]):
-                    raise ValueError("Choose a ghost recorded for this star or segment.")
+            offered = {ghost.attempt_id for ghost in
+                       self.library().ghosts_for(target["kind"], target["entity_key"])}
+            if any(number not in offered for number in checked["ghosts"]["attempts"]):
+                raise ValueError("That ghost is not saved for this star or segment. Choose another ghost.")
         self._pending.update(checked)
 
     def _tell_clock(self) -> None:
@@ -770,8 +825,8 @@ class GhostSession:
             if controller is not None and controller.is_running():
                 controller.set_visible(False)
             return
-        url = follower_url(self._target, self._port,
-                           template_id=self.selected_template_id(self._target))
+        # The follower asks the session which recording plays (`selected_ghost`).
+        url = follower_url(self._target, self._port)
         if controller is None:
             controller = self._controller = self._factory(
                 url=url, opacity=self._opacity, visible=True,

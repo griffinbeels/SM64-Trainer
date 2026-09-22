@@ -359,29 +359,29 @@ def test_the_two_views_are_named_for_what_they_draw():
 # --- choosing a ghost independently of the input-comparison template --------
 
 
-def recording_options(selection, view="mario", draft=None):
+def recording_options(selection, view="mario", draft=None, strat=None):
     return run_node("ghostRecordingOptions",
                     f"ghostRecordingOptions({json.dumps(selection)}, "
-                    f"{json.dumps(view)}, {json.dumps(draft or {})})")
+                    f"{json.dumps(view)}, {json.dumps(draft or {})}, {json.dumps(strat)})")
 
 
-def saved_candidate(template_id, *, native=True, whole=True):
-    return {"template_id": template_id, "name": "Caged Island",
-            "attempt_id": 1200 + template_id, "strat": "TJ Owlless",
+def saved_candidate(attempt_id, *, native=True, whole=True, frames=None, strat="TJ Owlless"):
+    return {"attempt_id": attempt_id, "frames": 534 + attempt_id if frames is None else frames,
+            "strat": strat,
             "native_available": native, "whole_available": whole,
             "native_reason_text": None if native else "No saved Mario poses",
             "whole_reason_text": None if whole else "No saved video"}
 
 
-def ghosts(pb=True, *templates):
-    return {"pb": pb, "templates": list(templates)}
+def ghosts(pb=True, *attempts):
+    return {"pb": pb, "attempts": list(attempts)}
 
 
 def ticks(answer):
     return [(item["key"], item["checked"], item["disabled"]) for item in answer["items"]]
 
 
-PB = {"attempt_id": 1497, "timer_mode": "igt", "native_available": True,
+PB = {"attempt_id": 1906, "frames": 534, "native_available": True,
       "native_reason_text": None, "whole_available": False,
       "whole_reason_text": "This PB's video is still being saved."}
 
@@ -409,10 +409,9 @@ def test_each_recording_is_qualified_for_the_show_mode_and_the_pb_box_leads(view
 
 def test_a_ticked_recording_that_cannot_show_this_mode_can_still_be_unticked():
     answer = recording_options({"ghosts": ghosts(True, 4), "candidates": [
-        saved_candidate(4, native=False), saved_candidate(5)]})
+        saved_candidate(4, native=False), saved_candidate(5)]}, "mario", None, "TJ Owlless")
     assert ticks(answer) == [("pb", True, False), (4, True, False), (5, False, False)]
-    assert "Attempt #1204" in answer["items"][1]["label"]
-    assert "TJ Owlless" in answer["items"][2]["label"]
+    assert answer["items"][1]["label"] == '17"93' and answer["items"][2]["label"] == '17"96'
 
 
 def test_a_deleted_tick_stays_listed_until_unticked():
@@ -436,12 +435,21 @@ def test_nothing_ticked_says_so_and_whole_picture_names_its_limit():
     assert recording_options(both, "mario")["reasonText"] is None
 
 
-def test_his_pb_leads_with_its_attempt_and_each_playing_ghost_wears_its_colour():
+def test_runs_are_named_by_their_time_and_other_strategies_only_when_different():
+    answer = recording_options({"ghosts": ghosts(True, 1923), "pb": PB, "candidates": [
+        saved_candidate(1923, frames=538), saved_candidate(1950, frames=560, strat="Sideflip")]},
+        "mario", None, "TJ Owlless")
+    assert [item["label"] for item in answer["items"]] == ['Your PB · 17"80', '17"93', '18"66 · Sideflip']
+    minute = recording_options({"ghosts": ghosts(), "pb": {**PB, "frames": 1830}, "candidates": []})
+    assert minute["items"][0]["label"] == "Your PB · 1'01\"00"
+
+
+def test_his_pb_leads_with_its_time_and_each_playing_ghost_wears_its_colour():
     selection = {"ghosts": ghosts(True, 4), "pb": PB, "candidates": [saved_candidate(4), saved_candidate(5)],
-                 "playing": [{"key": "pb", "attempt_id": 1497, "hue_degrees": 120},
-                             {"key": 4, "attempt_id": 1204, "hue_degrees": 257}]}
+                 "playing": [{"key": "pb", "attempt_id": 1906, "hue_degrees": 120},
+                             {"key": 4, "attempt_id": 4, "hue_degrees": 257}]}
     answer = recording_options(selection)
-    assert answer["items"][0]["label"] == "Your PB · Attempt #1497"
+    assert answer["items"][0]["label"] == 'Your PB · 17"80'
     assert [item["hue"] for item in answer["items"]] == [120, 257, None]
     assert answer["views"] == {"mario": True, "whole": True}
     whole = recording_options(selection, "whole")

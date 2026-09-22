@@ -21,16 +21,21 @@ def save(store, attempt=7, *, kind="star", key="24-1", strat="10 coin", active=T
                       document=a_document(), active=active)
 
 
-def ghosts(number, pb=True):
-    return {"pb": pb, "templates": [] if number is None else [number]}
+def run_of(template):
+    """The attempt a template was marked from: what a tick names."""
+    return int(template.origin.split(":")[1]) if hasattr(template, "origin") else template
 
 
-def select(session, number, **changes):
-    return asyncio.run(session.update(ghosts=ghosts(number), target=session._read_target(), **changes))
+def ghosts(template, pb=True):
+    return {"pb": pb, "attempts": [] if template is None else [run_of(template)]}
+
+
+def select(session, template, **changes):
+    return asyncio.run(session.update(ghosts=ghosts(template), target=session._read_target(), **changes))
 
 
 def chosen_ids(body):
-    return body["selection"]["ghosts"]["templates"]
+    return body["selection"]["ghosts"]["attempts"]
 
 
 def test_choose_inactive_other_strategy_without_changing_input_template(tmp_path):
@@ -38,13 +43,13 @@ def test_choose_inactive_other_strategy_without_changing_input_template(tmp_path
     session, windows, _, store = a_session(tmp_path, replay=replay)
     comparison = save(store)
     chosen = save(store, 8, strat="Other route", active=False)
-    body = select(session, chosen.id, enabled=True)
-    assert chosen_ids(body) == [chosen.id]
+    body = select(session, chosen, enabled=True)
+    assert chosen_ids(body) == [run_of(chosen)]
     assert body["source"]["attempt_id"] == 8
     assert store.active_for("star", "24-1", "10 coin").id == comparison.id
-    assert parse_qs(urlsplit(windows[0].url).query)["template_id"] == [str(chosen.id)]
-    assert {row["template_id"] for row in body["selection"]["candidates"]} == {comparison.id, chosen.id}
-    assert next(row for row in body["selection"]["candidates"] if row["template_id"] == chosen.id)["strat"] == "Other route"
+    assert "template_id" not in parse_qs(urlsplit(windows[0].url).query)  # the follower asks the session
+    assert {row["attempt_id"] for row in body["selection"]["candidates"]} == {run_of(comparison), run_of(chosen)}
+    assert next(row for row in body["selection"]["candidates"] if row["attempt_id"] == run_of(chosen))["strat"] == "Other route"
     assert select(session, None)["source"]["attempt_id"] == 7
     assert "template_id" not in parse_qs(urlsplit(windows[0].url).query)
 
@@ -55,34 +60,34 @@ def test_choice_is_restored_per_target_and_strategy_after_restart(tmp_path):
     first = save(store)
     second = save(store, 8, active=False)
     segment = save(store, 9, kind="segment", key="31", strat=None)
-    select(session, second.id)
+    select(session, second)
     tracker.strat_tag = "Other route"
     assert chosen_ids(drive(session)) == []
-    select(session, first.id)
+    select(session, first)
     tracker.target, tracker.strat_tag = ("segment", 31), None
-    select(session, segment.id)
+    select(session, segment)
     tracker.target, tracker.strat_tag = ("star", 24, 1), "10 coin"
-    assert chosen_ids(drive(session)) == [second.id]
+    assert chosen_ids(drive(session)) == [run_of(second)]
     restored, _, restored_tracker, _ = a_session(tmp_path, db=db, store=store)
-    assert chosen_ids(drive(restored)) == [second.id]
+    assert chosen_ids(drive(restored)) == [run_of(second)]
     restored_tracker.target, restored_tracker.strat_tag = ("segment", 31), None
-    assert chosen_ids(drive(restored)) == [segment.id]
+    assert chosen_ids(drive(restored)) == [run_of(segment)]
     select(restored, None)
     assert chosen_ids(drive(restored)) == []
 
 
 def test_deleted_choice_is_unavailable_instead_of_falling_back(tmp_path):
-    session, windows, _, store = a_session(tmp_path)
+    replay = FakeReplay(saved=(7, 8), views={7: a_view(7), 8: a_view(8)})
+    session, windows, _, store = a_session(tmp_path, replay=replay)
     save(store)
-    chosen = save(store, active=False)
-    select(session, chosen.id, enabled=True)
+    chosen = save(store, 8, active=False)  # a run no other list offers
+    select(session, chosen, enabled=True)
     store.delete(chosen.id)
     body = drive(session)
-    assert chosen_ids(body) == [chosen.id]
-    assert body["source"]["template_id"] == chosen.id
+    assert chosen_ids(body) == [run_of(chosen)]
     assert body["source"]["reason"] == "selected_template_missing"
     assert not body["source"]["available"] and not windows[0].visible
-    assert chosen.id not in [row["template_id"] for row in body["selection"]["candidates"]]
+    assert run_of(chosen) not in [row["attempt_id"] for row in body["selection"]["candidates"]]
 
 
 @pytest.mark.parametrize("number", [True, False, 0, -1, 1.0, "1", [], {}])
@@ -97,18 +102,18 @@ def test_bad_selection_is_rejected_atomically(tmp_path, number):
 def test_stale_or_foreign_selection_cannot_change_preferences(tmp_path):
     session, _, tracker, store = a_session(tmp_path)
     same = save(store)
-    foreign = save(store, key="24-2")
+    foreign = save(store, 9, key="24-2")
     with pytest.raises(ValueError, match="this star or segment"):
-        select(session, foreign.id, enabled=True)
-    with pytest.raises(ValueError, match="no longer exists"):
+        select(session, foreign, enabled=True)
+    with pytest.raises(ValueError, match="this star or segment"):
         select(session, 999)
     old_target = session._read_target()
     tracker.strat_tag = "Other route"
     with pytest.raises(ValueError, match="target changed"):
-        asyncio.run(session.update(ghosts=ghosts(same.id), target=old_target, enabled=True))
+        asyncio.run(session.update(ghosts=ghosts(same), target=old_target, enabled=True))
     assert not drive(session)["enabled"]
     with pytest.raises(ValueError, match="current practice target"):
-        asyncio.run(session.update(ghosts=ghosts(same.id)))
+        asyncio.run(session.update(ghosts=ghosts(same)))
 
 
 def test_candidates_validate_files_without_changing_the_native_selection(tmp_path):
@@ -126,13 +131,13 @@ def test_candidates_validate_files_without_changing_the_native_selection(tmp_pat
     session._native = NativeGhost(replay, origin_of=lambda *_: {
         "kind": "star", "session_id": 1, "arm_id": 9,
         "frame": 100, "utc": "2026-09-21T08:00:00+00:00"})
-    body = select(session, chosen.id, enabled=True, view="mario")
+    body = select(session, chosen, enabled=True, view="mario")
     session._native.note()
     assert [clip["clip_path"] for clip in capture.commands[-1]["clips"]] == [str(assets[8][0])]
-    rows = {row["template_id"]: row for row in body["selection"]["candidates"]}
-    assert rows[first.id]["native_available"] and rows[chosen.id]["native_available"]
-    assert not rows[absent.id]["native_available"] and rows[absent.id]["native_reason_text"]
-    assert rows[first.id]["whole_available"] and not rows[chosen.id]["whole_available"]
+    rows = {row["attempt_id"]: row for row in body["selection"]["candidates"]}
+    assert rows[run_of(first)]["native_available"] and rows[run_of(chosen)]["native_available"]
+    assert not rows[run_of(absent)]["native_available"] and rows[run_of(absent)]["native_reason_text"]
+    assert rows[run_of(first)]["whole_available"] and not rows[run_of(chosen)]["whole_available"]
     for _ in range(10):
         drive(session)
     assert calls == [8, 9, 7]
@@ -141,7 +146,7 @@ def test_candidates_validate_files_without_changing_the_native_selection(tmp_pat
         "available": True, "state": 5, "reason": 11,
         "producer": SimpleNamespace(configuration=2, epoch=3)}
     body = drive(session)
-    assert next(row for row in body["selection"]["candidates"] if row["template_id"] == chosen.id)["native_available"]
+    assert next(row for row in body["selection"]["candidates"] if row["attempt_id"] == run_of(chosen))["native_available"]
     assert "game ROM" in body["window"]["reason"]
 
 
@@ -153,7 +158,7 @@ def test_source_api_and_switch_follow_same_choice_for_both_star_and_segment(tmp_
     app = FastAPI()
     app.include_router(create_ghost_router(session._inputs, replay, session))
     with TestClient(app) as client:
-        response = client.put("/api/ghost", json={"ghosts": ghosts(chosen.id), "target": session._read_target()})
+        response = client.put("/api/ghost", json={"ghosts": ghosts(chosen), "target": session._read_target()})
         assert response.status_code == 200
         params = {"kind": "star", "entity_key": "24-1", "strat": "10 coin"}
         assert client.get("/api/ghost/source", params=params).json()["attempt_id"] == 8
@@ -162,7 +167,7 @@ def test_source_api_and_switch_follow_same_choice_for_both_star_and_segment(tmp_
         assert client.get("/api/ghost/source", params={**params, "template_id": -1}).status_code == 422
         tracker.target, tracker.strat_tag = ("segment", 31), None
         segment = save(store, 8, kind="segment", key="31", strat=None)
-        response = client.put("/api/ghost", json={"ghosts": ghosts(segment.id), "target": session._read_target()})
+        response = client.put("/api/ghost", json={"ghosts": ghosts(segment), "target": session._read_target()})
         assert response.status_code == 200
         answer = client.get("/api/ghost/source", params={"kind": "segment", "entity_key": "31"}).json()
         assert answer["available"] and answer["attempt_id"] == 8
@@ -184,18 +189,18 @@ def test_real_saved_pose_corruption_revokes_only_that_candidate(tmp_path):
         kept = save(store, row.id, key="2-2", strat=None)
         chosen = save(store, other.id, key="2-2", strat=None, active=False)
         session._native = NativeGhost(replay)
-        body = select(session, chosen.id, view="mario")
+        body = select(session, chosen, view="mario")
         assert all(candidate["native_available"] for candidate in body["selection"]["candidates"])
         path, _ = replay.find_native(other.id)
         data = bytearray(path.read_bytes())
         data[-1] ^= 1
         path.write_bytes(data)
         body = drive(session)
-        candidates = {candidate["template_id"]: candidate for candidate in body["selection"]["candidates"]}
+        candidates = {candidate["attempt_id"]: candidate for candidate in body["selection"]["candidates"]}
         assert not body["source"]["available"]
-        assert not candidates[chosen.id]["native_available"]
-        assert candidates[chosen.id]["native_reason_text"]
-        assert candidates[kept.id]["native_available"]
-        assert chosen_ids(body) == [chosen.id]
+        assert not candidates[run_of(chosen)]["native_available"]
+        assert candidates[run_of(chosen)]["native_reason_text"]
+        assert candidates[run_of(kept)]["native_available"]
+        assert chosen_ids(body) == [run_of(chosen)]
     finally:
         archive.close()

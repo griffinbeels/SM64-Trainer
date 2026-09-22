@@ -18,7 +18,7 @@ CANDIDATE_CACHE_S = 4.0
 MISSING_REASON = "The selected ghost was removed. Choose another saved ghost."
 #: Ghosts drawn at once; the native channel's `GIPC_GHOSTS`.
 MAX_GHOSTS = 16
-DEFAULT_CHOICE = {"pb": True, "templates": []}
+DEFAULT_CHOICE = {"pb": True, "attempts": []}
 log = logging.getLogger("sm64.ghost")
 
 
@@ -41,36 +41,64 @@ def checked_template_id(value):
 
 
 def checked_choice(value) -> dict:
-    """`{"pb": bool, "templates": [saved ghost ids]}`, or one readable refusal."""
-    if not isinstance(value, dict) or set(value) - {"pb", "templates"}:
+    """`{"pb": bool, "attempts": [attempt ids]}`, or one readable refusal.
+
+    A ghost is a recorded ATTEMPT, whichever list offered it (a saved ghost or
+    a template's run), so the tick set names attempts.
+    """
+    if not isinstance(value, dict) or set(value) - {"pb", "attempts"}:
         raise ValueError("Choose which ghosts to show.")
     pb = value.get("pb", True)
-    templates = value.get("templates", [])
-    if type(pb) is not bool or not isinstance(templates, list):
+    attempts = value.get("attempts", [])
+    if type(pb) is not bool or not isinstance(attempts, list):
         raise ValueError("Choose which ghosts to show.")
-    for number in templates:
-        checked_template_id(number)
-        if number is None:
+    for number in attempts:
+        if type(number) is not int or number <= 0:
             raise ValueError("Choose a saved ghost.")
-    if len(set(templates)) != len(templates):
+    if len(set(attempts)) != len(attempts):
         raise ValueError("Each saved ghost can be shown once.")
-    if len(templates) + pb > MAX_GHOSTS:
+    if len(attempts) + pb > MAX_GHOSTS:
         raise ValueError(f"Show at most {MAX_GHOSTS} ghosts at once.")
-    return {"pb": pb, "templates": list(templates)}
+    return {"pb": pb, "attempts": list(attempts)}
 
 
 def _stored_choice(value):
+    """Stored choices, including the two older shapes: one template id (before
+    the tick set) and ticked TEMPLATE ids (its first build). Template ids are
+    kept aside and turned into attempts where a library is at hand."""
     if type(value) is int and value > 0:
-        # Before 2026-09-22 a target held ONE picked recording.
-        return {"pb": True, "templates": [value]}
+        return {"pb": True, "attempts": [], "templates": [value]}
+    if isinstance(value, dict) and "templates" in value and "attempts" not in value:
+        templates = value.get("templates")
+        if type(value.get("pb")) is bool and isinstance(templates, list) and all(
+                type(number) is int and number > 0 for number in templates):
+            return {"pb": value["pb"], "attempts": [], "templates": list(templates)}
+        return None
     try:
         return checked_choice(value)
     except ValueError:
         return None
 
 
+def upgraded_choice(choice, library):
+    """Replace legacy ticked template ids with their runs' attempt ids."""
+    from sm64_events.ghost.source import attempt_id_of
+
+    if not choice.get("templates"):
+        return {"pb": choice["pb"], "attempts": list(choice["attempts"])}
+    attempts = list(choice["attempts"])
+    for number in choice["templates"]:
+        try:
+            attempt = attempt_id_of(library.get(number).origin)
+        except LookupError:
+            continue
+        if attempt is not None and attempt not in attempts:
+            attempts.append(attempt)
+    return {"pb": choice["pb"], "attempts": attempts[:MAX_GHOSTS - choice["pb"]]}
+
+
 def chosen_ghosts(choice, library, target):
-    """The ghosts that play, PB first, and the ticked ids that no longer exist.
+    """The ghosts that play, PB first, and ticked attempts no longer offered.
 
     With the PB box ticked but no PB saved yet and nothing else ticked, the
     active input template plays, as it did before PBs became ghosts.
@@ -80,17 +108,13 @@ def chosen_ghosts(choice, library, target):
     pb = library.pb_for(kind, key, strat) if choice["pb"] else None
     if pb is not None:
         ghosts.append(pb)
-    for number in choice["templates"]:
-        try:
-            template = library.get(number)
-        except LookupError:
+    offered = {ghost.attempt_id: ghost for ghost in library.ghosts_for(kind, key)}
+    for number in choice["attempts"]:
+        if number not in offered:
             missing.append(number)
-            continue
-        if (template.kind, template.entity_key) != (kind, key):
-            missing.append(number)
-        elif all(template.origin != other.origin for other in ghosts):
-            ghosts.append(template)
-    if not ghosts and choice["pb"] and not choice["templates"]:
+        elif all(offered[number].origin != other.origin for other in ghosts):
+            ghosts.append(offered[number])
+    if not ghosts and choice["pb"] and not choice["attempts"]:
         fallback = library.template_for(kind, key, strat)
         if fallback is not None:
             ghosts.append(fallback)
@@ -128,10 +152,16 @@ class GhostSelection:
                              if isinstance(key, str) and (choice := _stored_choice(value)) is not None}
         self._loaded = True
 
-    def chosen(self, target):
-        choice = self._choices.get(target_key(target)) if target else None
-        return {"pb": choice["pb"], "templates": list(choice["templates"])} if choice else dict(
-            DEFAULT_CHOICE, templates=[])
+    def chosen(self, target, library=None):
+        """This target's tick set; legacy template ticks are upgraded (and the
+        upgrade kept) when a library is given."""
+        key = target_key(target) if target else None
+        choice = self._choices.get(key) if key else None
+        if choice is None:
+            return dict(DEFAULT_CHOICE, attempts=[])
+        if choice.get("templates") and library is not None:
+            choice = self._choices[key] = upgraded_choice(choice, library)
+        return {"pb": choice["pb"], "attempts": list(choice["attempts"])}
 
     def choose(self, target, choice):
         key = target_key(target)
@@ -139,28 +169,34 @@ class GhostSelection:
             self._choices.pop(key, None)
         else:
             self._choices[key] = checked_choice(choice)
+        return self.stored()
+
+    def untick(self, attempt_id):
+        for key, choice in list(self._choices.items()):
+            if attempt_id in choice.get("attempts", []):
+                self._choices[key] = {**choice, "attempts": [n for n in choice["attempts"] if n != attempt_id]}
+
+    def stored(self):
         return {name: dict(value) for name, value in self._choices.items()}
 
-    def candidates(self, target, templates, video_of, native):
-        from sm64_events.ghost.source import attempt_id_of
-
+    def candidates(self, target, library, video_of, native):
+        """Every run this target can race except his PB (the PB box is its own
+        row), named by time, each qualified for both Show modes."""
         if target is None:
             return []
-        rows = templates.list_for(target["kind"], target["entity_key"])
-        signature = (target_key(target), tuple(
-            (row.id, row.name, row.origin, row.strat_tag, row.created_utc) for row in rows))
+        ghosts = library.ghosts_for(target["kind"], target["entity_key"])
+        signature = (target_key(target), tuple((g.attempt_id, g.frames, g.strat_tag) for g in ghosts))
         now = monotonic()
         if self._cache is not None:
             key, until, candidates = self._cache
             if key == signature and now < until:
                 return [dict(row) for row in candidates]
         candidates = []
-        for row in rows:
-            video = video_of(target, row.id)
-            pose = _native_candidate(native, target, row)
-            candidates.append({"template_id": row.id, "name": row.name,
-                               "attempt_id": attempt_id_of(row.origin),
-                               "strat": row.strat_tag, "created_utc": row.created_utc,
+        for ghost in ghosts:
+            video = video_of(target, ghost)
+            pose = _native_candidate(native, target, ghost)
+            candidates.append({"attempt_id": ghost.attempt_id, "frames": ghost.frames,
+                               "strat": ghost.strat_tag,
                                "native_available": bool(pose["available"]),
                                "native_reason_text": pose["reason_text"],
                                "whole_available": bool(video["available"]),

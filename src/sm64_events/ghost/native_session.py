@@ -87,8 +87,9 @@ class NativeGhost:
         first = next((answer for answer in answers if answer["available"]), answers[0])
         return {**first, "ghosts": [
             {"template_id": answer["template_id"], "attempt_id": answer["attempt_id"],
+             "pb": bool(getattr(template, "pb", False)),
              "available": answer["available"], "reason_text": answer["reason_text"]}
-            for answer in answers]}
+            for template, answer in zip(ghosts, answers, strict=True)]}
 
     def probe(self, target, template):
         """Validate a candidate without changing the asset sent to the renderer."""
@@ -116,12 +117,14 @@ class NativeGhost:
             identity = self._replay.native_identity(attempt_id)
         except ValueError:
             return self._preservation_failure(answer, attempt_id), None
-        key = (template.id, template.origin, target["kind"], target["entity_key"], target.get("strat"), identity)
-        cached = self._cached.get(template.id)
+        # Keyed by the RUN, not the list that offered it: his PB, a saved ghost
+        # and a template can all name one attempt, and it is validated once.
+        key = (attempt_id, target["kind"], target["entity_key"], target.get("strat"), identity)
+        cached = self._cached.get(attempt_id)
         if cached is not None:
             cached_key, asset, stamp, result = cached
             if key == cached_key and stamp is not None and self._fingerprint(asset[0]) == stamp:
-                return dict(result), asset
+                return {**result, "template_id": template.id}, asset
         found = self._replay.find_native(attempt_id)
         if found is None:
             return self._preservation_failure(answer, attempt_id), None
@@ -129,7 +132,7 @@ class NativeGhost:
         asset = (path, manifest)
         result = {**answer, "available": True, "reason": None, "reason_text": None,
                   "exactness": "native_pose"}
-        self._cached[template.id] = key, asset, self._fingerprint(path), result
+        self._cached[attempt_id] = key, asset, self._fingerprint(path), result
         if len(self._cached) > 128:
             del self._cached[next(iter(self._cached))]
         return result, asset

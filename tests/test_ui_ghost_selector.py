@@ -10,20 +10,14 @@ from tests.test_ui_ghost_switch import (
 
 ROOT = Path(__file__).resolve().parents[1]
 PICKS = ".ghost-recordings"
-PB = {"attempt_id": 1497, "timer_mode": "igt", "native_available": True,
+PB = {"attempt_id": 1906, "frames": 534, "native_available": True,
       "native_reason_text": None, "whole_available": False,
       "whole_reason_text": "This PB's video is still being saved."}
 
 
-def tick(page, key):
-    """Click the real checkbox for `key` ("pb" or a template id)."""
-    page.evaluate("""(() => {
-      const items = Array.from(document.querySelectorAll('.ghost-pick'));
-      const name = %s;
-      const item = items.find(el => name === 'pb'
-        ? el.textContent.includes('Your PB') : el.textContent.includes('Attempt #' + (1200 + Number(name))));
-      item.querySelector('input').click();
-    })()""" % repr(str(key)))
+def tick(page, index):
+    """Click the real checkbox of the `index`th pill (0 is his PB)."""
+    page.evaluate("document.querySelectorAll('.ghost-pick input')[%d].click()" % index)
 
 
 def picks(page):
@@ -52,14 +46,15 @@ def selection_session(pb=PB):
     initial["source"].update(native_available=False, native_reason_text=OLDER_POSE_FORMAT_TEXT,
                               whole_available=False, whole_reason_text="No saved video",
                               reason_text=OLDER_POSE_FORMAT_TEXT)
-    initial["selection"] = {"ghosts": {"pb": True, "templates": []}, "missing": [],
+    strat = initial["target"]["strat"]
+    initial["selection"] = {"ghosts": {"pb": True, "attempts": []}, "missing": [],
                             "pb": dict(pb) if pb else None, "playing": [], "candidates": [
-        {"template_id": key, "attempt_id": 1200 + key,
-         "name": "Fall onto the Caged Island", "strat": "TJ Owlless",
+        {"attempt_id": attempt, "frames": frames, "strat": run_strat or strat,
          "native_available": native, "whole_available": not native,
          "native_reason_text": None if native else OLDER_POSE_FORMAT_TEXT,
          "whole_reason_text": "No saved video" if native else None}
-        for key, native in [(7, False), (8, True), (9, True)]
+        for attempt, frames, run_strat, native in [
+            (1907, 538, None, False), (1908, 540, None, True), (1909, 560, "Sideflip", True)]
     ]}
     return initial
 
@@ -80,16 +75,17 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 page.wait_for(PICKS)
                 shown = picks(page)
                 assert shown["legend"] == "Ghosts"
-                assert [(i["label"].split(" · ")[0], i["checked"], i["disabled"]) for i in shown["items"]] == [
-                    ("Your PB", True, False), ("Attempt #1207", False, True),
-                    ("Attempt #1208", False, False), ("Attempt #1209", False, False)]
+                # Named by the time each run achieved; a strategy only when it differs.
+                assert [(i["label"], i["checked"], i["disabled"]) for i in shown["items"]] == [
+                    ('Your PB · 17"80', True, False), ('17"93', False, True),
+                    ('18"00', False, False), ('18"66 · Sideflip', False, False)]
                 assert all(item["fits"] for item in shown["items"])
 
-                tick(page, 8)
+                tick(page, 2)
                 assert settled(page, state, 1) == [
-                    {"ghosts": {"pb": True, "templates": [8]}, "target": target}]
-                tick(page, 9)
-                assert settled(page, state, 2)[1] == {"ghosts": {"pb": True, "templates": [8, 9]},
+                    {"ghosts": {"pb": True, "attempts": [1908]}, "target": target}]
+                tick(page, 3)
+                assert settled(page, state, 2)[1] == {"ghosts": {"pb": True, "attempts": [1908, 1909]},
                                                       "target": target}
                 page.click(".ghost-row-head > .ghost-switch")
                 assert settled(page, state, 3)[2] == {"enabled": True}
@@ -104,8 +100,8 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 shoot(page, screenshots / f"ticks-{width}.png")
 
                 # Unticking his PB is remembered: the write says so explicitly.
-                tick(page, "pb")
-                assert settled(page, state, 4)[3] == {"ghosts": {"pb": False, "templates": [8, 9]},
+                tick(page, 0)
+                assert settled(page, state, 4)[3] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
                                                       "target": target}
                 assert [item["checked"] for item in picks(page)["items"]] == [False, False, True, True]
                 assert page.problems() == []

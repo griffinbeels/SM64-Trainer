@@ -1154,12 +1154,21 @@ the saved PBs on every read, never stored, and never changes the input compariso
 
 ### Ghost set
 
-Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any saved
-recordings you tick, up to 16. Only Mario draws them all at once, each tinted its
-own colour; Whole picture shows the first. With the PB box ticked, no PB saved and
-nothing else ticked, your active [[template track]] plays.
+Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]]
+or [[template track]] [[attempt]] you tick, up to 16, each named by the time it achieved.
+Only Mario draws them all at once, each tinted its own colour; Whole picture shows
+the first. With the PB box ticked, no PB saved and nothing else ticked, your active
+[[template track]] plays.
 
 - **Lives** — `src/sm64_events/ghost/selection.py`
+
+### Saved ghost
+
+An [[attempt]] you chose to race that is neither your [[personal best]] nor a
+[[template track]]. Its drawer's save button keeps its Mario poses and ticks it
+in the [[ghost set]]. It carries no inputs, so it never changes the input comparison.
+
+- **Lives** — `src/sm64_events/ghost/saved.py`
 
 ### Ghost window
 
