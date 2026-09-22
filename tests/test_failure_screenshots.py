@@ -31,7 +31,9 @@ def _server_that_never_answers_its_data(release: threading.Event):
             if self.path == "/stalled.json":
                 release.wait(30)   # the data the page renders from never comes
                 return
-            page = b"<p>shell</p><script>fetch('/stalled.json')</script>"
+            page = (b"<p>shell</p><script>fetch('/stalled.json');"
+                    b"console.error('the shell failed');"
+                    b"setTimeout(() => { throw new Error('boot threw'); });</script>")
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(page)))
@@ -71,4 +73,6 @@ def test_a_wait_that_times_out_records_its_page_and_what_it_still_waits_for(
     note = (tmp_path / "screenshots" / f"{stem}.txt").read_text(encoding="utf-8").splitlines()
     assert note[0] == "unanswered requests:"
     assert note[1].endswith("/stalled.json"), note
-    assert note[-1].startswith("document.readyState: "), note
+    assert note[2] == "what the page said:"
+    assert set(note[3:5]) == {"console error: the shell failed", "page error: boot threw"}, note
+    assert note[5].startswith("document.readyState: ") and note[6].startswith("body: <p>shell</p>"), note

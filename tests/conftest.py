@@ -137,30 +137,33 @@ def _keep_failure_screenshots() -> None:
             page = _original(self, *args, **kwargs)
             _OPEN_PAGES[:] = [kept for kept in _OPEN_PAGES if not kept.is_closed()][-5:]
             _OPEN_PAGES.append(page)
-            _track_requests(page)
+            _keep_a_page_log(page)
             return page
         owner.new_page = new_page
 
     # A wait inside a fixture fails with its page already closed by the time
     # the report exists (the fixture's `with` unwinds first), so a timed-out
-    # wait records its own page before raising: a picture, and the requests
-    # still unanswered. Full runs 35684991413 and 35686423614 each had a page
-    # that stayed blank for 60 s -- no nav, no cards, only the background --
-    # which a picture alone cannot explain.
+    # wait records its own page before raising: a picture, and what the page
+    # said. Full runs 35684991413, 35686423614 and 35687167501 each had a
+    # page that stayed blank for 60 s -- no nav, no cards, only the
+    # background -- with its document complete and no request unanswered.
     def wait_for(self, *args, _original=Locator.wait_for, **kwargs):
         try:
             return _original(self, *args, **kwargs)
         except PlaywrightTimeout:
             stem = _stem(os.environ.get("PYTEST_CURRENT_TEST", "unknown").rsplit(" ", 1)[0])
             _photograph(self.page, f"{stem}-wait-timeout")
-            _write_unanswered(self.page, f"{stem}-wait-timeout")
+            _write_page_log(self.page, f"{stem}-wait-timeout")
             raise
     Locator.wait_for = wait_for
 
 
-def _track_requests(page) -> None:
-    """URL -> requests sent and not yet finished or failed, on the page."""
+def _keep_a_page_log(page) -> None:
+    """What the page said while it was open: requests still unanswered (URL
+    -> count), and every failed request, error status, console error and
+    uncaught exception, in order."""
     pending: dict[str, int] = {}
+    said: list[str] = []
 
     def sent(request):
         pending[request.url] = pending.get(request.url, 0) + 1
@@ -170,24 +173,40 @@ def _track_requests(page) -> None:
             pending[request.url] -= 1
         else:
             pending.pop(request.url, None)
+
+    def failed(request):
+        settled(request)
+        said.append(f"request failed: {request.url} ({request.failure})")
+
+    def answered(response):
+        if response.status >= 400:
+            said.append(f"HTTP {response.status}: {response.url}")
+
+    def console(message):
+        if message.type == "error":
+            said.append(f"console error: {message.text}")
     page.on("request", sent)
     page.on("requestfinished", settled)
-    page.on("requestfailed", settled)
-    page._sm64_unanswered = pending
+    page.on("requestfailed", failed)
+    page.on("response", answered)
+    page.on("console", console)
+    page.on("pageerror", lambda error: said.append(f"page error: {getattr(error, 'message', error)}"))
+    page._sm64_log = (pending, said)
 
 
-def _write_unanswered(page, name: str) -> None:
+def _write_page_log(page, name: str) -> None:
     folder = Path(os.environ["SM64_REPORT_DIR"]) / "screenshots"
     folder.mkdir(parents=True, exist_ok=True)
-    pending = getattr(page, "_sm64_unanswered", None)
+    pending, said = getattr(page, "_sm64_log", (None, None))
     if pending is None:
-        lines = ["requests were not tracked on this page"]
+        lines = ["this page was not logged"]
     else:
-        lines = ["unanswered requests:", *sorted(pending)]
+        lines = ["unanswered requests:", *sorted(pending), "what the page said:", *said]
     try:
         lines.append(f"document.readyState: {page.evaluate('document.readyState')}")
+        lines.append(f"body: {page.evaluate('document.body.innerHTML.slice(0, 600)')}")
     except Exception as error:  # noqa: BLE001 -- a wedged page is the evidence, not a failure
-        lines.append(f"document.readyState unreadable: {error}")
+        lines.append(f"document unreadable: {error}")
     (folder / f"{name}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
