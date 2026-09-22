@@ -131,6 +131,22 @@ to that coordinate. Paused clocks do not advance from wall time or Python poll
 cadence. A new star generation or configured star-grab action ends that origin;
 tuning the same origin cannot revive it. Explicit fixed seek is a separate mode.
 
+After a state load the renderer resolves the restore itself. The worker only
+reads a list's record after that list, so its recovered command can first
+apply to the next list. The renderer therefore runs the same
+`ghost_origin::Recovery` over each live sample it draws from (capacity
+reserved at load, never allocated while rendering). It binds to each command's
+origin unless it already reached that origin itself. A restore it resolves
+draws on the load frame at the restored coordinate and revives an ended star
+run, as the worker's new command would. An unresolved or ambiguous restore
+hides the ghost on that same frame. While the worker's own recovery is
+unresolved it keeps the applied command rather than withdrawing it, so a
+later restore is not delayed a frame. The
+[recovery witness](../tests/test_ghost_recovery.py) runs the worker one list
+behind the renderer: over 10 loads and 92 frames the previous path showed 8
+frames without a ghost and 1 at a wrong position (a forward load to an
+unwitnessed state); this path shows 0 and 0.
+
 ### Several ghosts
 
 One command displays a set of up to 16 saved recordings (the PB plus others)

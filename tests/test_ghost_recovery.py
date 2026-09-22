@@ -36,3 +36,8 @@ def test_native_savestate_recovery(tmp_path):
     report = json.loads(result.stdout)
     assert report["ok"] and report["checks"] > 200
     assert report["render_allocations"] == report["render_frees"] == 0
+    # The frame a state loads already shows the ghost at its restored place,
+    # with the worker a list behind the renderer as it is live.
+    blink = report["blink"]
+    assert blink["loads"] == 10 and blink["frames"] > 80
+    assert blink["ghostless_frames"] == blink["wrong_frames"] == 0, blink
