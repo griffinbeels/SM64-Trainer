@@ -24,6 +24,21 @@ struct Handle {
 };
 unsigned checks=0;
 void check(bool value,const char* message) {++checks;if(!value)throw std::runtime_error(message);}
+struct CartridgeHeader {
+    uint8_t* allocation=nullptr;
+    uint8_t* value=nullptr;
+    explicit CartridgeHeader(const uint8_t* rom) {
+        SYSTEM_INFO info{};GetSystemInfo(&info);
+        allocation=static_cast<uint8_t*>(VirtualAlloc(nullptr,2*info.dwPageSize,
+            MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+        check(allocation!=nullptr,"header allocation");
+        DWORD old=0;
+        check(VirtualProtect(allocation+info.dwPageSize,info.dwPageSize,PAGE_NOACCESS,&old)!=0,
+            "header ends at an inaccessible page");
+        value=allocation+info.dwPageSize-64;std::memcpy(value,rom,64);
+    }
+    ~CartridgeHeader(){if(allocation)VirtualFree(allocation,0,MEM_RELEASE);}
+};
 std::atomic<DWORD> worker_owner{0};
 std::atomic<unsigned> wrong_thread{0},binds{0},releases{0},revokes{0},commands{0},models{0},withdrawals{0};
 std::atomic<uint32_t> configuration{0},model_state{GP_MODEL_EMPTY};
@@ -181,6 +196,12 @@ void refused(Page& page,gipc_request& r,uint32_t reason) {
 }
 namespace ghost_stream {const gs_api* api(){return &capture_api;}}
 namespace ghost_playback {const gp_api* api(){return &playback_api;}}
+// This IPC witness isolates the real worker from the model; test_native_model
+// exercises the actual asset validator, including while a model is render-owned.
+extern "C" int32_t sg_model_validate_rom(const uint8_t* bytes,size_t count) {
+    return count==(8u<<20) && bytes && !std::memcmp(bytes+(4u<<20),"ASSETROM",8)
+        ? SG_OK : SG_INVALID_ROM;
+}
 
 DWORD WINAPI ghost_witness_wait(DWORD count,const HANDLE* events,BOOL all,DWORD milliseconds) {
     if(intercept_wait.exchange(false)) {
@@ -213,12 +234,14 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(ghost_assets::read(rom_path,GIPC_PATH_CHARS,8u<<20,rom) && rom.size()==(8u<<20),"ROM fixture read");
         // The in-process cartridge fixture starts word-swapped, like Project64.
         for(size_t i=0;i<rom.size();i+=4){std::swap(rom[i],rom[i+3]);std::swap(rom[i+1],rom[i+2]);}
+        // Zilmar supplies only this copied 64-byte HEADER, not the ROM allocation.
+        CartridgeHeader header_only(rom.data());
         expiry_seen.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
         resume_expiry.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
         wait_seen.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
         resume_wait.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
         check(expiry_seen.value && resume_expiry.value && wait_seen.value && resume_wait.value,"expiry barriers");
-        Page page;ghost_ipc::rom(true,rom.data());
+        Page page;ghost_ipc::rom(true,header_only.value);
         auto initial=page.wait([](const gipc_status& s){return s.generation && s.version==GIPC_VERSION;},"worker publishes ABI");
         gipc_request r{};r.owner_pid=GetCurrentProcessId();FILETIME birth{},unused[3]{};
         check(GetProcessTimes(GetCurrentProcess(),&birth,unused,unused+1,unused+2)!=0,"owner birth");
@@ -267,6 +290,9 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.revision=7;r.play_enabled=0;const auto withdrawn=withdrawals.load();page.send(r);
         page.wait([&](const gipc_status& s){return s.ack_revision==7 && s.state==GIPC_CAPTURING;},"playback stop keeps capture");
         check(withdrawals.load()>withdrawn,"playback disable withdraws without discarding assets");
+        // Replacing a selected clip reuses this ROM generation's prepared copy.
+        // Removing the fixture image now would make a fresh discovery fail.
+        rom[0]=0;
         r.revision=8;r.play_enabled=1;r.clip_sha256[0]^=1;refused(page,r,GIPC_FILE);
         r.revision=9;r.clip_sha256[0]^=1;ready(page,r);
         r.revision=10;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
@@ -283,12 +309,13 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         page.wait([](const gipc_status& s){return s.state==GIPC_REFUSED && s.reason==GIPC_EXPIRED;},
             "unrenewed owner lease expires",GIPC_LEASE_MS+1500);
         r.revision=2;ready(page,r);
+        rom[0]=0x40;
         const auto original_generation=r.rom_generation,original_releases=releases.load();
         retirement_allowed=false;ghost_ipc::rom(false);
         page.wait([](const gipc_status& s){return !s.rom_open;},"closed ROM revokes identity");
         Sleep(50);check(releases.load()==original_releases,"worker retained until model retirement");
         retirement_allowed=true;page.stopped();check(releases.load()>original_releases,"worker released after retirement");
-        ghost_ipc::rom(true,rom.data());
+        ghost_ipc::rom(true,header_only.value);
         auto restarted=page.wait([&](const gipc_status& s){return s.generation>initial.generation;},"worker restarted");
         r.generation=restarted.generation;r.rom_generation=ghost_ipc::rom_generation();r.token=125;r.revision=1;
         check(r.rom_generation>original_generation,"ROM generation advances");ready(page,r);
@@ -301,6 +328,16 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         fail_model=false;r.revision=3;r.model_id=3;ready(page,r);
         // Explicit fixture path remains supported independently of live ROM copying.
         r.revision=4;r.model_id=4;std::memcpy(r.rom_path,rom_path,sizeof(rom_path));ready(page,r);
+        ghost_ipc::rom(false);page.stopped();
+        // A new ROM generation cannot inherit the prior generation's image.
+        rom[0]=0;ghost_ipc::rom(true,header_only.value);
+        const auto missing=page.wait([&](const gipc_status& s){return s.generation>restarted.generation;},
+            "missing cartridge starts a distinct producer");
+        r.generation=missing.generation;r.rom_generation=ghost_ipc::rom_generation();
+        r.token=126;r.revision=1;std::memset(r.rom_path,0,sizeof(r.rom_path));
+        refused(page,r,GIPC_ROM);
+        for(unsigned i=0;i<4;++i){Sleep(25);refused(page,r,GIPC_ROM);}
+        rom[0]=0x40;r.revision=2;ready(page,r);
         ghost_ipc::rom(false);page.stopped();
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
         std::printf("{\"ok\":true,\"checks\":%u,\"commands\":%u,\"bindings\":%u,\"releases\":%u}\n",

@@ -138,3 +138,24 @@ void sg_assets_free(struct sg_model *model)
         model->animations[i].values = NULL;
     }
 }
+
+#ifdef SG_MODEL_TESTING
+static volatile LONG fail_validation_allocation;
+void sg_model_test_validate_allocation_failure(int enabled)
+{ InterlockedExchange(&fail_validation_allocation, enabled); }
+#endif
+
+int32_t sg_model_validate_rom(const uint8_t *rom, size_t bytes)
+{
+    struct sg_model *temporary;
+    int status;
+#ifdef SG_MODEL_TESTING
+    if (InterlockedCompareExchange(&fail_validation_allocation, 0, 0)) return SG_OUT_OF_MEMORY;
+#endif
+    temporary = calloc(1, sizeof(*temporary));
+    if (!temporary) return SG_OUT_OF_MEMORY;
+    status = sg_assets_load(temporary, rom, bytes);
+    sg_assets_free(temporary);
+    free(temporary);
+    return status;
+}

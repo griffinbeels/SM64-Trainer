@@ -99,6 +99,10 @@ typedef struct sg_atlas_view {
  * validated here; caller additionally establishes desired ROM/version identity.
  */
 int32_t sg_model_open(const uint8_t *rom, size_t rom_bytes, sg_model **out);
+/* Validate only the bounded texture/animation assets, using temporary storage.
+ * No runtime binding, ownership gate, graph, or global rendering state is touched;
+ * this may run on the worker while an existing model belongs to the renderer. */
+int32_t sg_model_validate_rom(const uint8_t *rom, size_t rom_bytes);
 /* Ownership transfer only: no allocation, destruction, wait or graph mutation.
  * Detach requires the current owner and leaves the runtime without an owner.
  * Adopt claims a detached runtime for the calling thread; any existing owner,

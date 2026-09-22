@@ -27,7 +27,12 @@ bool read(const uint16_t *path, uint32_t capacity, uint32_t maximum,
             && got == out.size();
     }
     CloseHandle(file);
-    if (!ok) out.clear();
+    if (!ok) {
+        // A failed read may still have filled part of the initialized buffer.
+        // Do not leave a stale cartridge image in allocator-retained storage.
+        if (!out.empty()) SecureZeroMemory(out.data(), out.size());
+        out.clear();
+    }
     return ok;
 }
 bool clip(const std::vector<uint8_t> &data, const uint8_t expected[32],

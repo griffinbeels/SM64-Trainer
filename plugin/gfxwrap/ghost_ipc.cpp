@@ -1,9 +1,9 @@
 /* All IPC/files/model preparation live on this worker, never the renderer. */
 #include "ghost_ipc.h"
 #include "ghost_assets.h"
+#include "ghost_rom.h"
 #include "ghost_stream.h"
 #include "ghost_playback.h"
-#include "practice_rom.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -15,7 +15,7 @@
 
 namespace {
 std::atomic<uint32_t> opened{0}, lifetime{0};
-std::atomic<uintptr_t> rom_image{0};
+std::atomic<uintptr_t> rom_header{0};
 std::atomic<bool> running{false};
 std::atomic<HANDLE> lifecycle_signal{nullptr};
 std::atomic<uint64_t> displayed_revision{0};
@@ -64,24 +64,17 @@ bool same_command(gipc_request a, gipc_request b) {
     return !std::memcmp(&a, &b, sizeof(a));
 }
 bool read_live_rom(uint32_t generation, std::vector<uint8_t> &out) {
-    const uintptr_t address = rom_image.load(std::memory_order_acquire);
+    const uintptr_t address = rom_header.load(std::memory_order_acquire);
     if (!address || !generation || opened.load(std::memory_order_acquire) != generation) return false;
-    out.resize(8u << 20);
-    SIZE_T got = 0;
-    if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void *>(address),
-            out.data(), out.size(), &got) || got != out.size()
-            || opened.load(std::memory_order_acquire) != generation
-            || rom_image.load(std::memory_order_acquire) != address
-            || !practice_rom(out.data())) { out.clear(); return false; }
-    if (out[0] == 0x40) {
-        for (size_t at = 0; at < out.size(); at += 4) {
-            const uint8_t a = out[at], b = out[at + 1];
-            out[at] = out[at + 3]; out[at + 1] = out[at + 2];
-            out[at + 2] = b; out[at + 3] = a;
-        }
-    }
-    // The capture layout and stock model adapter currently support US only.
-    return out[0x3e] == 'E';
+    return ghost_rom::read(reinterpret_cast<const uint8_t*>(address), [=] {
+        return opened.load(std::memory_order_acquire) == generation
+            && rom_header.load(std::memory_order_acquire) == address;
+    }, out, [](const uint8_t* bytes, size_t count) {
+        const int result = sg_model_validate_rom(bytes, count);
+        return result == SG_OK ? ghost_rom::Validation::valid
+            : result == SG_INVALID_ROM ? ghost_rom::Validation::invalid
+            : ghost_rom::Validation::unavailable;
+    }) == ghost_rom::Result::ready;
 }
 
 struct Session {
@@ -95,6 +88,7 @@ struct Session {
     uint32_t last_dropped = 0;
     bool live = false, awaiting_configuration = false, assets_loaded = false, clip_prepared = false;
     std::vector<uint8_t> rom_bytes, clip_bytes;
+    uint32_t cached_rom_generation = 0;
     gclip_header clip_header{};
     ghost_origin::Ledger origins;
     go_marker resolved_marker{};
@@ -106,6 +100,15 @@ struct Session {
 
     explicit Session(const gipc_status &clock) : qpc_frequency(clock.qpc_frequency),
         qpc_anchor(clock.qpc_anchor), utc_anchor(clock.utc_anchor) {}
+    ~Session() { clear_rom(); }
+
+    void clear_rom() {
+        // Do not leave an old full cartridge in allocator-retained storage that
+        // a later generation's discovery could mistake for the live image.
+        if (!rom_bytes.empty()) SecureZeroMemory(rom_bytes.data(), rom_bytes.size());
+        std::vector<uint8_t>().swap(rom_bytes);
+        cached_rom_generation = 0;
+    }
 
     void revoke(uint32_t why) {
         capture->disable();
@@ -115,6 +118,9 @@ struct Session {
         origins.clear();
         have_origin = false;
         reason = why; state = why ? GIPC_REFUSED : GIPC_PASSIVE;
+        if (why == GIPC_NO_ROM) {
+            clear_rom();
+        }
     }
     bool demand(const gipc_request &r, uint32_t generation) {
         const uint32_t now = GetTickCount(), current_rom = opened.load(std::memory_order_acquire);
@@ -244,14 +250,27 @@ struct Session {
     }
     void load_assets() {
         // Any previously presented ghost was revoked before this potentially slow IO.
-        const bool rom_loaded = loaded.rom_path[0]
-            ? ghost_assets::read(loaded.rom_path, GIPC_PATH_CHARS, 8u << 20, rom_bytes)
-            : read_live_rom(loaded.rom_generation, rom_bytes);
-        assets_loaded = rom_loaded
-            && ghost_assets::read(loaded.clip_path, GIPC_PATH_CHARS,
+        bool rom_loaded = false;
+        if (loaded.rom_path[0]) {
+            clear_rom();
+            rom_loaded = ghost_assets::read(loaded.rom_path, GIPC_PATH_CHARS, 8u << 20, rom_bytes);
+        } else if (cached_rom_generation == loaded.rom_generation && !rom_bytes.empty()) {
+            rom_loaded = true;
+        } else {
+            cached_rom_generation = 0;
+            rom_loaded = read_live_rom(loaded.rom_generation, rom_bytes);
+            if (rom_loaded) cached_rom_generation = loaded.rom_generation;
+        }
+        if (!rom_loaded) {
+            clear_rom(); clip_bytes.clear(); failed = loaded.revision;
+            reason = GIPC_ROM; state = GIPC_REFUSED; return;
+        }
+        assets_loaded = ghost_assets::read(loaded.clip_path, GIPC_PATH_CHARS,
                 sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame), clip_bytes)
             && ghost_assets::clip(clip_bytes, loaded.clip_sha256, loaded.clip_id, clip_header);
-        if (!assets_loaded) { rom_bytes.clear(); clip_bytes.clear(); reason = GIPC_FILE; state = GIPC_REFUSED; }
+        if (!assets_loaded) {
+            clip_bytes.clear(); failed = loaded.revision; reason = GIPC_FILE; state = GIPC_REFUSED;
+        }
     }
     void publish(gipc_page &page, const gipc_request &r) {
         auto &s = page.status;
@@ -401,7 +420,7 @@ void start_worker() {
 }
 }
 namespace ghost_ipc {
-void rom(bool open, const uint8_t *image) {
+void rom(bool open, const uint8_t *header) {
     if (!open && !lifecycle_signal.load()) return;
     if (!lifecycle_signal.load()) {
         HANDLE created = CreateEventW(nullptr, FALSE, FALSE, nullptr), expected = nullptr;
@@ -411,13 +430,13 @@ void rom(bool open, const uint8_t *image) {
     if (open) {
         const uint32_t old = lifetime.load();
         if (old == UINT32_MAX) return;
-        rom_image.store(reinterpret_cast<uintptr_t>(image), std::memory_order_release);
+        rom_header.store(reinterpret_cast<uintptr_t>(header), std::memory_order_release);
         lifetime.store(old + 1); opened.store(old + 1, std::memory_order_release);
         start_worker();
     } else {
         displayed_revision.store(0, std::memory_order_release);
         opened.store(0, std::memory_order_release);
-        rom_image.store(0, std::memory_order_release);
+        rom_header.store(0, std::memory_order_release);
         ghost_stream::api()->disable(); ghost_playback::api()->revoke(GP_WRONG_IDENTITY);
     }
     SetEvent(lifecycle_signal.load());

@@ -1,0 +1,145 @@
+/* Real guarded process memory, no emulator or model. The header allocation
+ * matches the Zilmar ABI; all candidate cartridges are separately allocated. */
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include "ghost_rom.h"
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <stdexcept>
+#include <vector>
+
+namespace {
+unsigned checks = 0;
+void require(bool value, const char* message) {
+    ++checks;
+    if (!value) throw std::runtime_error(message);
+}
+struct Allocation {
+    uint8_t* bytes;
+    explicit Allocation(size_t count) : bytes(static_cast<uint8_t*>(VirtualAlloc(
+        nullptr, count, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) {
+        require(bytes != nullptr, "fixture allocation");
+    }
+    ~Allocation() { VirtualFree(bytes, 0, MEM_RELEASE); }
+};
+void header(uint8_t* bytes) {
+    std::memset(bytes, 0, 64);
+    const uint8_t magic[] = {0x80, 0x37, 0x12, 0x40};
+    std::memcpy(bytes, magic, 4);
+    std::memset(bytes + 0x20, ' ', 20);
+    std::memcpy(bytes + 0x20, "SM64 USAMUNE v1.93u", 19);
+    bytes[0x3e] = 'E';
+}
+void swap(uint8_t* bytes, size_t count) {
+    for (size_t at = 0; at < count; at += 4) {
+        std::swap(bytes[at], bytes[at + 3]);
+        std::swap(bytes[at + 1], bytes[at + 2]);
+    }
+}
+void image(uint8_t* bytes, bool swapped) {
+    std::memset(bytes, 0x55, ghost_rom::IMAGE_BYTES);
+    header(bytes);
+    for (size_t at : {size_t(1024), size_t(4u << 20), size_t(ghost_rom::IMAGE_BYTES - 4)}) {
+        bytes[at] = 0x12; bytes[at + 1] = 0x34; bytes[at + 2] = 0x56; bytes[at + 3] = 0x78;
+    }
+    if (swapped) swap(bytes, ghost_rom::IMAGE_BYTES);
+}
+void normalized(const std::vector<uint8_t>& bytes) {
+    uint8_t expected[64]; header(expected);
+    require(bytes.size() == ghost_rom::IMAGE_BYTES && !std::memcmp(bytes.data(), expected, 64),
+            "normalized image and exact header");
+    for (size_t at : {size_t(1024), size_t(4u << 20), size_t(ghost_rom::IMAGE_BYTES - 4)})
+        require(bytes[at] == 0x12 && bytes[at + 1] == 0x34 && bytes[at + 2] == 0x56
+            && bytes[at + 3] == 0x78, "whole image byte order, including last word");
+}
+}
+int main() {
+    using ghost_rom::Result;
+    try {
+        SYSTEM_INFO info{}; GetSystemInfo(&info);
+        Allocation small(2 * info.dwPageSize);
+        DWORD old = 0;
+        require(VirtualProtect(small.bytes + info.dwPageSize, info.dwPageSize, PAGE_NOACCESS, &old) != 0,
+                "header guard page");
+        uint8_t* copied_header = small.bytes + info.dwPageSize - 64;
+        header(copied_header); swap(copied_header, 64);
+        std::vector<uint8_t> out;
+        const auto current = [] { return true; };
+        // This host tests discovery; the real model parser has its own native
+        // witness. A header alone cannot satisfy this synthetic asset contract.
+        const auto validate = [](const uint8_t* bytes, size_t count) {
+            return count == ghost_rom::IMAGE_BYTES && bytes[100] == 0x55
+                && bytes[1024] == 0x12 && bytes[4u << 20] == 0x12
+                && bytes[ghost_rom::IMAGE_BYTES - 1] == 0x78
+                ? ghost_rom::Validation::valid : ghost_rom::Validation::invalid;
+        };
+        const auto discover = [&](const std::function<bool()>& alive, ghost_rom::Limits limits = {}) {
+            return ghost_rom::read(copied_header, alive, out, validate, limits);
+        };
+        require(discover(current) == Result::missing && out.empty(),
+                "a copied header alone is not an image");
+        for (bool swapped : {false, true}) {
+            // A cartridge may begin inside its allocation, across a scan-chunk
+            // boundary; the header copied by the emulator remains word-swapped.
+            const size_t offset = (1u << 20) - 31;
+            Allocation cartridge(ghost_rom::IMAGE_BYTES + offset);
+            image(cartridge.bytes + offset, swapped);
+            require(discover(current) == Result::ready,
+                    "complete cartridge discovered independently of header pointer/order");
+            normalized(out);
+            require(discover(current, {0, 2000}) == Result::exhausted
+                    && out.empty(), "byte budget refuses incomplete discovery");
+            require(ghost_rom::read(copied_header, current, out, [](const uint8_t*, size_t) {
+                return ghost_rom::Validation::unavailable;
+            }) == Result::exhausted && out.empty(), "unqualified resource failure cannot hide ambiguity");
+            unsigned calls = 0;
+            require(discover([&] { return ++calls < 3; }) == Result::changed
+                    && out.empty(), "generation cancellation discards candidate");
+            calls = 0;
+            require(discover([&] {
+                if (++calls == 3) copied_header[0x10] ^= 1;
+                return true;
+            }) == Result::changed && out.empty(), "header mutation cancels discovery");
+            copied_header[0x10] ^= 1;
+        }
+        require(discover(current) == Result::missing && out.empty(),
+                "released cartridge and owned scratch cannot satisfy discovery");
+        {
+            // Repeated first-byte matches must not repeatedly search the entire
+            // remainder for the absent alternate byte order (quadratic work).
+            Allocation dense(16u << 20);
+            std::memset(dense.bytes, 0x80, 16u << 20);
+            unsigned calls = 0;
+            require(discover([&] { return ++calls < 100; }) == Result::changed
+                    && out.empty(), "dense magic scan remains cancellable inside a chunk");
+            require(discover(current) == Result::missing && out.empty(),
+                    "dense decoy scan completes within its deadline");
+        }
+        {
+            Allocation a(ghost_rom::IMAGE_BYTES), b(ghost_rom::IMAGE_BYTES), decoy(16u << 20);
+            image(a.bytes, false); image(b.bytes, true);
+            std::memcpy(decoy.bytes + 1024, copied_header, 64);
+            require(discover(current) == Result::ready,
+                    "identical cartridges in different byte orders are unambiguous");
+            normalized(out);
+            b.bytes[200] ^= 1;
+            require(discover(current) == Result::ambiguous && out.empty(),
+                    "matching headers with different contents are refused");
+        }
+        {
+            Allocation decoy(ghost_rom::IMAGE_BYTES);
+            image(decoy.bytes, false);
+            require(VirtualProtect(decoy.bytes + 4u * 1024u * 1024u, info.dwPageSize,
+                    PAGE_NOACCESS, &old) != 0, "partial cartridge guard");
+            require(discover(current) == Result::missing && out.empty(),
+                    "header with incomplete readable image is refused");
+        }
+        std::printf("{\"ok\":true,\"checks\":%u,\"header_bytes\":64}\n", checks);
+        return 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "ROM discovery: %s (check %u)\n", error.what(), checks);
+        return 1;
+    }
+}

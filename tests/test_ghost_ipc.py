@@ -14,6 +14,33 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_native_ghost_rom_discovery(tmp_path):
+    if sys.platform != "win32":
+        pytest.skip("Win32 IPC worker")
+    spec = importlib.util.spec_from_file_location("build_plugin", ROOT / "tools/build_plugin.py")
+    compiler = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compiler)
+    vcvars = compiler.find_vcvars32()
+    assert vcvars, "x86 MSVC toolchain is required for this native witness"
+    inputs = [ROOT / path for path in (
+        "plugin/gfxwrap/ghost_rom.cpp", "plugin/gfxwrap/ghost_rom.h",
+        "plugin/gfxwrap/practice_rom.h", "tests/native/ghost_rom_host.cpp")]
+    hashes = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
+    target = tmp_path / "ghost_rom_host.exe"
+    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17",
+        f"/I{ROOT / 'plugin/gfxwrap'}", str(inputs[0]), str(inputs[-1]),
+        f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *compiler.LIBS], tmp_path)
+    result = subprocess.run([str(target)], cwd=tmp_path, capture_output=True, text=True,
+                            timeout=30, check=False, **quiet_spawn_kwargs())
+    (tmp_path / "rom-witness.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert hashes == {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
+    report = json.loads(result.stdout)
+    report["source_sha256"] = hashes
+    (tmp_path / "rom-receipt.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    assert report["ok"] and report["checks"] > 20 and report["header_bytes"] == 64
+
+
 def test_native_ghost_ipc_lifecycle(tmp_path):
     if sys.platform != "win32":
         pytest.skip("Win32 IPC worker")
@@ -24,6 +51,7 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
     assert vcvars, "x86 MSVC toolchain is required for this native witness"
     inputs = ["plugin/gfxwrap/ghost_ipc.cpp", "plugin/gfxwrap/ghost_ipc.h",
               "plugin/gfxwrap/ghost_assets.cpp", "plugin/gfxwrap/ghost_assets.h",
+              "plugin/gfxwrap/ghost_rom.cpp", "plugin/gfxwrap/ghost_rom.h", "plugin/gfxwrap/practice_rom.h",
               "plugin/gfxwrap/ghost_clip.h", "plugin/gfxwrap/ghost_playback.h",
               "plugin/gfxwrap/ghost_origin.h", "plugin/gfxwrap/ghost_origin.cpp",
               "tests/native/ghost_ipc_host.cpp", "tests/native/ghost_ipc_worker.cpp",
@@ -36,6 +64,7 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
         f"/I{ROOT / 'renderer/model'}", f"/I{ROOT / 'plugin/gfxwrap'}",
         str(ROOT / "tests/native/ghost_ipc_worker.cpp"), str(ROOT / "plugin/gfxwrap/ghost_assets.cpp"),
         str(ROOT / "plugin/gfxwrap/ghost_origin.cpp"),
+        str(ROOT / "plugin/gfxwrap/ghost_rom.cpp"),
         str(ROOT / "tests/native/ghost_ipc_host.cpp"), f"/Fe:{library}", f"/Fo{tmp_path}\\",
         "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'",
         *compiler.LIBS], tmp_path)
@@ -76,6 +105,7 @@ int wmain(int argc,wchar_t** argv) {
     rom[:4] = bytes.fromhex("80371240")
     rom[0x20:0x34] = b"SM64 USAMUNE v1.93u".ljust(20, b" ")
     rom[0x3e] = ord("E")
+    rom[4 << 20:(4 << 20) + 8] = b"ASSETROM"  # synthetic model-validator witness marker
     rom_path = tmp_path / "fixture.z64"
     rom_path.write_bytes(rom)
     result = subprocess.run([str(target), str(library), str(clip), hashlib.sha256(clip.read_bytes()).hexdigest(),

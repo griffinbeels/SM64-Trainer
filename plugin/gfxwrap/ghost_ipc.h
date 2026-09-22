@@ -13,7 +13,7 @@
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
-    GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY, GIPC_ORIGIN };
+    GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY, GIPC_ORIGIN, GIPC_ROM };
 #pragma pack(push, 4)
 typedef struct gipc_request {
     uint32_t owner_pid, owner_created_lo, owner_created_hi, generation;
@@ -60,9 +60,9 @@ static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 4096, "ghost ring offset");
 namespace ghost_ipc {
 // Serialized emulation lifecycle caller, outside any DList. Never joins.
-// HEADER is the emulator's immutable cartridge image, separate from RDRAM.
-// The worker copies through ReadProcessMemory and checks the ROM generation.
-void rom(bool opened, const uint8_t *rom_image = nullptr);
+// Zilmar HEADER contains only the first 64 bytes. The worker discovers and
+// copies the matching full cartridge through guarded reads for this generation.
+void rom(bool opened, const uint8_t *rom_header = nullptr);
 // Render-thread-safe atomic identity. A closed ROM has generation zero.
 uint32_t rom_generation();
 // Render-thread notice: zero for a clean/failed swap or lost context. Atomic,

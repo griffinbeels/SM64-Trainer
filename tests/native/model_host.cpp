@@ -18,6 +18,7 @@ extern "C" void sg_model_test_scratch_limit(size_t);
 extern "C" size_t sg_model_test_scratch_used(void);
 extern "C" int sg_model_test_enter(void);
 extern "C" void sg_model_test_leave(void);
+extern "C" void sg_model_test_validate_allocation_failure(int);
 
 static unsigned checks;
 static void check(bool ok, const char* message) {
@@ -65,6 +66,8 @@ static uint32_t be32(const uint8_t* p) {
 static void malformed(const std::vector<uint8_t>& original, size_t at, unsigned count, uint8_t value) {
     auto bytes = original;
     std::fill_n(bytes.begin()+at, count, value);
+    check(sg_model_validate_rom(bytes.data(), bytes.size()) == SG_INVALID_ROM,
+        "asset validation rejects malformed ROM");
     sg_model* model = nullptr;
     check(sg_model_open(bytes.data(), bytes.size(), &model) == SG_INVALID_ROM && !model, "malformed ROM accepted");
 }
@@ -150,6 +153,28 @@ static void ownership_transfer(sg_model* model, const sg_pose& p, const std::vec
         mesh.snapshot()==expected,"original thread re-adopts unchanged model");
 }
 
+static void independent_asset_validation(sg_model* model, const std::vector<uint8_t>& rom,
+        const sg_pose& p, const std::vector<float>& expected) {
+    auto damaged = rom;
+    damaged[1132368] = 0; // Existing MIO0 parser must reject a header-only/invalid asset image.
+    int valid = SG_BUSY, invalid = SG_BUSY, allocation = SG_OK;
+    check(sg_model_test_enter() == 1, "hold render model gate during worker validation");
+    std::thread worker([&] {
+        valid = sg_model_validate_rom(rom.data(), rom.size());
+        invalid = sg_model_validate_rom(damaged.data(), damaged.size());
+        sg_model_test_validate_allocation_failure(1);
+        allocation = sg_model_validate_rom(rom.data(), rom.size());
+        sg_model_test_validate_allocation_failure(0);
+    });
+    worker.join();
+    sg_model_test_leave();
+    check(valid == SG_OK && invalid == SG_INVALID_ROM && allocation == SG_OUT_OF_MEMORY,
+        "worker asset validation is independent of active renderer model and handles failures");
+    Mesh mesh;
+    check(sg_model_evaluate(model, &p, &mesh.out) == SG_OK && mesh.snapshot() == expected,
+        "valid, invalid and allocation-failed asset probes leave rendered geometry unchanged");
+}
+
 // Hidden WGL context plus FBO means window-system occlusion cannot mask output.
 // This is model-to-GL evidence only, not the renderer's live camera/depth path.
 struct HiddenGL {
@@ -215,6 +240,9 @@ int main(int argc, char** argv) {
         std::ifstream input(argv[1],std::ios::binary);
         std::vector<uint8_t> rom((std::istreambuf_iterator<char>(input)),{});
         check(rom.size()==8*1024*1024,"ROM size");
+        check(sg_model_validate_rom(nullptr,0)==SG_INVALID_ROM,"validation null ROM");
+        check(sg_model_validate_rom(rom.data(),rom.size()-1)==SG_INVALID_ROM,"validation short ROM");
+        check(sg_model_validate_rom(rom.data(),rom.size())==SG_OK,"validation before runtime binding");
         check(sg_model_open(nullptr,0,&model)==SG_INVALID_ROM && !model,"null ROM");
         check(sg_model_open(rom.data(),rom.size()-1,&model)==SG_INVALID_ROM && !model,"short ROM");
         malformed(rom,0,4,0);
@@ -241,6 +269,7 @@ int main(int argc, char** argv) {
             mesh.out.material+mesh.out.vertex_count,"solid body combiner");
         const unsigned vertices=mesh.out.vertex_count;
         const auto first_mesh=mesh.snapshot();
+        independent_asset_validation(model,rom,a,first_mesh);
         for(unsigned id=0; id<atlas.animation_count; ++id) {
             sg_pose sampled=a; sampled.animation_id=static_cast<int32_t>(id);
             const size_t entry=0x4ec000+be32(rom.data()+0x4ec008+id*8);
