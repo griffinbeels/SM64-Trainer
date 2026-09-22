@@ -1127,6 +1127,28 @@ practice card's switch calls it Ghost Overlay.
 - **Not** — the [[overlay layer]], which writes a video file you take into an
   editor.
 
+### Recorded shadow
+
+The round shadow the game actually drew under Mario on a recorded [[frame]],
+kept with that [[frame]]'s pose: its matrix, nine corners, fade and texture. A
+Mario-only [[ghost]] draws it under itself at its own opacity; the shadow
+switch turns every [[ghost]]'s shadow off for comparison. Where the game drew
+none, or capture cannot prove the shadow is Mario's, the recording keeps none
+and playback draws none.
+
+- **Lives** — `plugin/gfxwrap/ghost_root.cpp` captures it;
+  `plugin/gfxwrap/ghost_pose.cpp` places it for drawing
+
+### Ghost sound events
+
+The sound requests Mario issued on a recorded [[frame]] (up to eight, in
+order), kept with that [[frame]]'s pose so a [[ghost]] can later play his
+jumps, landings and voice. Capture drops other objects' sounds. Recorded
+only; nothing plays them yet.
+
+- **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
+  `src/sm64_events/ghost/clip.py` reads them back
+
 ### Ghost source
 
 Where a [[ghost]]'s pictures or poses come from, and how exact their timing is.
