@@ -32,6 +32,7 @@
  X(uint8_t, IsTexture, (uint32_t)) X(void, GetTexLevelParameteriv, (uint32_t,int32_t,uint32_t,int32_t*)) \
  X(void, TexParameteri, (uint32_t,uint32_t,int32_t)) \
  X(void, TexImage2D, (uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t,uint32_t,const void*)) \
+ X(void, TexSubImage2D, (uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t,uint32_t,const void*)) \
  X(void, BindSampler, (uint32_t,uint32_t)) X(void, PixelStorei, (uint32_t,int32_t)) \
  X(void, GenRenderbuffers, (int32_t,uint32_t*)) X(void, DeleteRenderbuffers, (int32_t,const uint32_t*)) \
  X(void, BindRenderbuffer, (uint32_t,uint32_t)) X(void, RenderbufferStorage, (uint32_t,uint32_t,int32_t,int32_t)) \
@@ -55,6 +56,7 @@
  X(void, ColorMaski, (uint32_t,uint8_t,uint8_t,uint8_t,uint8_t)) \
  X(void, BlendFuncSeparatei, (uint32_t,uint32_t,uint32_t,uint32_t,uint32_t)) X(void, BlendEquationSeparatei, (uint32_t,uint32_t,uint32_t)) \
  X(void, PolygonMode, (uint32_t,uint32_t)) \
+ X(void, PolygonOffset, (float,float)) \
  X(void, StencilFuncSeparate, (uint32_t,uint32_t,int32_t,uint32_t)) X(void, StencilOpSeparate, (uint32_t,uint32_t,uint32_t,uint32_t)) \
  X(void, StencilMaskSeparate, (uint32_t,uint32_t)) X(void, ClearBufferfi, (uint32_t,int32_t,float,int32_t)) \
  X(void, DrawArrays, (uint32_t,int32_t,int32_t)) X(void, MemoryBarrier, (uint32_t))
@@ -84,6 +86,13 @@ struct Target {
     int32_t viewport[4], scissor[4];
     float depth_scale, depth_translate; // N64 viewport Z mapping (usually .5,.5)
 };
+struct ShadowVertex { float position[3], uv[2], alpha; };
+struct Shadow {
+    const ShadowVertex* vertices;
+    uint32_t count;
+    const uint8_t* texture_ia8;
+    float view_projection[16];
+};
 struct Pose {
     const Vertex* vertices;
     uint32_t count; // unindexed triangle list, bounded at prepare()
@@ -92,6 +101,7 @@ struct Pose {
     float ambient, diffuse, opacity;
     uint32_t flip_y; // GLideN64 world triangle path requires 1
     float hue_degrees; // 0 retains the original model colors
+    Shadow shadow{}; // optional, at most 24 vertices; borrowed 16x16 IA8 texture
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;

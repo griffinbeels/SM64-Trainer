@@ -44,6 +44,7 @@ bool load(ghost_compositor::Dispatch& out) {
     d.GetTexLevelParameteriv=reinterpret_cast<decltype(d.GetTexLevelParameteriv)>(::glGetTexLevelParameteriv);
     d.TexParameteri=reinterpret_cast<decltype(d.TexParameteri)>(::glTexParameteri);
     d.TexImage2D=reinterpret_cast<decltype(d.TexImage2D)>(::glTexImage2D);
+    d.TexSubImage2D=reinterpret_cast<decltype(d.TexSubImage2D)>(::glTexSubImage2D);
     d.BindSampler=reinterpret_cast<decltype(d.BindSampler)>(extension("glBindSampler"));
     d.PixelStorei=reinterpret_cast<decltype(d.PixelStorei)>(::glPixelStorei);
     d.GenRenderbuffers=reinterpret_cast<decltype(d.GenRenderbuffers)>(g_glGenRenderbuffers);
@@ -90,6 +91,7 @@ bool load(ghost_compositor::Dispatch& out) {
     d.BlendFuncSeparatei=reinterpret_cast<decltype(d.BlendFuncSeparatei)>(extension("glBlendFuncSeparatei"));
     d.BlendEquationSeparatei=reinterpret_cast<decltype(d.BlendEquationSeparatei)>(extension("glBlendEquationSeparatei"));
     d.PolygonMode=reinterpret_cast<decltype(d.PolygonMode)>(::glPolygonMode);
+    d.PolygonOffset=reinterpret_cast<decltype(d.PolygonOffset)>(::glPolygonOffset);
     d.StencilFuncSeparate=reinterpret_cast<decltype(d.StencilFuncSeparate)>(extension("glStencilFuncSeparate"));
     d.StencilOpSeparate=reinterpret_cast<decltype(d.StencilOpSeparate)>(extension("glStencilOpSeparate"));
     d.StencilMaskSeparate=reinterpret_cast<decltype(d.StencilMaskSeparate)>(extension("glStencilMaskSeparate"));

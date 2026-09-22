@@ -31,4 +31,4 @@ def test_real_compositor(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     print(result.stdout.strip())
     assert "compositor passed:" in result.stdout
-    assert "coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2" in result.stdout
+    assert "shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2" in result.stdout

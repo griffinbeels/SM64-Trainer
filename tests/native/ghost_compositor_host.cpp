@@ -256,6 +256,47 @@ int main() {
     require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),overflow,4)==gc::Result::invalid &&
         !gc::display(compositor).texture,"batch aggregate capacity refuses stale display");
     require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),batch,0)==gc::Result::invalid,"empty batch refused");
+    // Authentic shadow decal: drawn over this frame's clean copy under every
+    // Mario, tested against copied terrain depth, never written to the game.
+    {
+        uint8_t ia8[256];for(auto& texel:ia8)texel=0x0f; // intensity 0, alpha 15
+        auto quad=[](float x0,float x1,float z,float alpha) {
+            std::vector<gc::ShadowVertex> out;
+            const float xy[6][2]={{x0,-1},{x1,-1},{x0,1},{x0,1},{x1,-1},{x1,1}};
+            for(auto& point:xy)out.push_back({{point[0],point[1],z},{.5f,.5f},alpha});
+            return out;
+        };
+        const auto behind=quad(-1,1,0,.5f), coplanar=quad(-1,0,-.5f,.25f);
+        auto hidden=pose(vertices,1);hidden.view_projection[14]=-4; // Mario near-clipped: shadow alone
+        auto shaded=[&](const std::vector<gc::ShadowVertex>& v) {
+            auto p=hidden;p.shadow.vertices=v.data();p.shadow.count=uint32_t(v.size());p.shadow.texture_ia8=ia8;
+            p.shadow.view_projection[0]=p.shadow.view_projection[5]=p.shadow.view_projection[10]=p.shadow.view_projection[15]=1;return p;
+        };
+        gc::Pose shadows[2]={shaded(behind),shaded(coplanar)};
+        hostile(g,scene,bindings);cgl::State shadow_before{};shadow_before.capture(g);
+        require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),shadows,2)==gc::Result::ok,"shadow begin");
+        equal_state(g,shadow_before,bindings);require(gc::finalize(compositor,77)==gc::Result::ok,"shadow finalize");
+        ordinary_state(g,scene);
+        const auto shadowed=pixels(g,gc::display(compositor).framebuffer,32,32);
+        for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+            const float keep=x<16 ? .75f : .5f; // left: terrain hides the far quad; coplanar decal passes
+            const float expected[4]={20*keep,40*keep,60*keep,255};
+            for(unsigned c=0;c<4;++c)require(std::abs(float(shadowed[(y*32+x)*4+c])-expected[c])<=1.1f,"shadow decal depth/alpha");
+        }
+        require(pixels(g,scene.fbo,32,32)==clean && depth(g,scene)==original_depth,"shadow leaves clean game untouched");
+        require(gc::begin_batch(compositor,target(scene,gc::Depth::n64_image),shadows,2)==gc::Result::ok &&
+            gc::finalize(compositor,77)==gc::Result::ok,"N64-image depth omits shadow");
+        ordinary_state(g,scene);require(pixels(g,gc::display(compositor).framebuffer,32,32)==clean,"no delta-Z shadow guess");
+        auto faded=shadows[0];faded.opacity=0;
+        require(gc::begin(compositor,target(scene,gc::Depth::ordinary),faded)==gc::Result::ok &&
+            gc::finalize(compositor,77)==gc::Result::ok,"faded shadow frame");
+        ordinary_state(g,scene);require(pixels(g,gc::display(compositor).framebuffer,32,32)==clean,"zero opacity hides shadow");
+        auto broken=shadows[0];broken.shadow.count=4;
+        require(gc::begin(compositor,target(scene,gc::Depth::ordinary),broken)==gc::Result::invalid,"partial shadow triangle refuses");
+        ia8[3]=0x1f;
+        require(gc::begin(compositor,target(scene,gc::Depth::ordinary),shadows[0])==gc::Result::invalid,"non-black shadow texel refuses");
+        ordinary_state(g,scene);
+    }
     // Original and display receive exactly the same HUD raster operation.
     for(float alpha:{1.f,.5f}) {
         require(gc::begin(compositor,target(scene,gc::Depth::ordinary),pose(vertices,1))==gc::Result::ok,"HUD begin frame");
@@ -368,6 +409,6 @@ int main() {
     }
     require(wglMakeCurrent(window.dc,window.context)!=0,"restore test context");
     require(GetForegroundWindow()==foreground,"foreground preserved");
-    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2");
+    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2");
     return 0;
 }

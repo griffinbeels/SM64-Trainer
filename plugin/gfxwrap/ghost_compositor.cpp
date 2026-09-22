@@ -1,4 +1,5 @@
 #include "ghost_compositor_gl.h"
+#include "ghost_shadow_gl.h"
 #include <cmath>
 #include <new>
 
@@ -76,8 +77,8 @@ uint32_t shader(const Dispatch& g,uint32_t type,const char* source) {
     int32_t compiled=0;g.GetShaderiv(id,COMPILE_STATUS,&compiled);
     if (!compiled) {g.DeleteShader(id);return 0;} return id;
 }
-uint32_t program(const Dispatch& g) {
-    const auto vs=shader(g,VERTEX_SHADER,vertex_shader), fs=shader(g,FRAGMENT_SHADER,fragment_shader);
+uint32_t program(const Dispatch& g,const char* vertex=vertex_shader,const char* fragment=fragment_shader) {
+    const auto vs=shader(g,VERTEX_SHADER,vertex), fs=shader(g,FRAGMENT_SHADER,fragment);
     if (!vs || !fs) {if(vs)g.DeleteShader(vs);if(fs)g.DeleteShader(fs);return 0;}
     const auto id=g.CreateProgram();
     if(id) {g.AttachShader(id,vs);g.AttachShader(id,fs);g.LinkProgram(id);}
@@ -130,6 +131,7 @@ struct Instance {
     uint32_t fbos[2]={}; // display/self depth; copied terrain depth
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
     int32_t uniforms[9]={};
+    shadow::Storage shadow;
     Target target{};
     bool ready=false,begun=false,finalized=false,hud=false;
     int32_t hud_draw_fbo=0;
@@ -171,6 +173,8 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
        !p->self_depth || !p->vao || !p->vbo)return Result::resources;
     g.BindBuffer(PIXEL_UNPACK_BUFFER,0);g.PixelStorei(UNPACK_ALIGNMENT,1);
     g.PixelStorei(UNPACK_ROW_LENGTH,0);g.PixelStorei(UNPACK_SKIP_ROWS,0);g.PixelStorei(UNPACK_SKIP_PIXELS,0);
+    if(!p->shadow.prepare(g,p->shadow.program?p->shadow.program:
+            program(g,shadow::vertex_shader,shadow::fragment_shader)))return Result::resources;
     g.ActiveTexture(TEXTURE0);
     texture(g,p->textures[0],RGBA8,RGBA,UNSIGNED_BYTE,width,height,nullptr);
     texture(g,p->textures[1],DEPTH_COMPONENT24,DEPTH_COMPONENT,UNSIGNED_INT,width,height,nullptr);
@@ -212,7 +216,7 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
        !finite(pose.view_projection,16) || !finite(pose.light_direction,3) ||
        !std::isfinite(pose.ambient) || !std::isfinite(pose.diffuse) || !std::isfinite(pose.opacity) ||
        pose.opacity<0 || pose.opacity>1 || pose.flip_y>1 || !std::isfinite(pose.hue_degrees) ||
-       pose.hue_degrees<0 || pose.hue_degrees>359)return Result::invalid;
+       pose.hue_degrees<0 || pose.hue_degrees>359 || !shadow::valid(pose.shadow))return Result::invalid;
     }
     if(t.samples!=1 || t.unsupported || (t.depth!=Depth::ordinary && t.depth!=Depth::n64_image))return Result::unsupported;
     if(t.depth==Depth::n64_image && (!t.n64_depth_texture || t.n64_depth_texture==p->textures[0] ||
@@ -257,6 +261,27 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.BlitFramebuffer(0,0,t.width,t.height,0,0,t.width,t.height,DEPTH_BUFFER_BIT,NEAREST);
     } else g.MemoryBarrier(SHADER_IMAGE_ACCESS_BARRIER_BIT|TEXTURE_FETCH_BARRIER_BIT);
     g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[0]);
+    // Original shadow geometry is a decal over THIS frame's clean copy, below
+    // every Mario. Attach the just-copied terrain depth so hardware applies the
+    // pinned GLideN64 offset and LEQUAL comparison; its depth is never written.
+    bool shadows=false;for(uint32_t i=0;i<count;++i)shadows|=poses[i].shadow.count>0;
+    if(shadows && t.depth==Depth::ordinary && t.depth_translate>=t.depth_scale &&
+            t.depth_translate+t.depth_scale<=1.0f) {
+        p->shadow.upload(g,poses,count);
+        g.FramebufferRenderbuffer(DRAW_FRAMEBUFFER,DEPTH_STENCIL_ATTACHMENT,RENDERBUFFER,0);
+        g.FramebufferTexture2D(DRAW_FRAMEBUFFER,DEPTH_ATTACHMENT,TEXTURE_2D,p->textures[1],0);
+        g.ViewportIndexedf(0,float(t.viewport[0]),float(t.viewport[1]),float(t.viewport[2]),float(t.viewport[3]));
+        g.ScissorIndexed(0,t.scissor[0],t.scissor[1],t.scissor[2],t.scissor[3]);g.Enablei(SCISSOR_TEST,0);
+        g.DepthRangeIndexed(0,t.depth_translate-t.depth_scale,t.depth_translate+t.depth_scale);
+        g.DepthMask(0);g.Enable(DEPTH_TEST);g.DepthFunc(LEQUAL);
+        g.Enable(POLYGON_OFFSET_FILL);g.PolygonOffset(-3.0f,-3.0f);
+        g.Enablei(BLEND,0);g.BlendFuncSeparatei(0,SRC_ALPHA,ONE_MINUS_SRC_ALPHA,ZERO,ONE);
+        g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);
+        for(uint32_t i=0;i<count;++i)p->shadow.draw(g,poses[i],i);
+        g.Disable(POLYGON_OFFSET_FILL);
+        g.FramebufferTexture2D(DRAW_FRAMEBUFFER,DEPTH_ATTACHMENT,TEXTURE_2D,0,0);
+        g.FramebufferRenderbuffer(DRAW_FRAMEBUFFER,DEPTH_STENCIL_ATTACHMENT,RENDERBUFFER,p->self_depth);
+    }
     // Upload disjoint ranges before issuing draws: avoid overwriting a range
     // still being consumed by the GPU for the preceding Mario.
     g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
@@ -319,6 +344,7 @@ Display display(const Instance* p) {
 }
 void destroy(Instance* p) {
     if(!p)return;abort(p);const auto& g=p->g;
+    p->shadow.destroy(g);
     g.DeleteTextures(3,p->textures);g.DeleteFramebuffers(2,p->fbos);g.DeleteRenderbuffers(1,&p->self_depth);
     g.DeleteVertexArrays(1,&p->vao);g.DeleteBuffers(1,&p->vbo);if(p->shader_program)g.DeleteProgram(p->shader_program);delete p;
 }

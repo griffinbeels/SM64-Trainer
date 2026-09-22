@@ -11,7 +11,7 @@ enum : uint32_t {
     TEXTURE_WIDTH=0x1000, TEXTURE_HEIGHT=0x1001, TEXTURE_INTERNAL_FORMAT=0x1003, R32F=0x822E,
     TEXTURE_MIN_FILTER=0x2801, TEXTURE_MAG_FILTER=0x2800, TEXTURE_WRAP_S=0x2802,
     TEXTURE_WRAP_T=0x2803, TEXTURE_COMPARE_MODE=0x884C, NEAREST=0x2600,
-    CLAMP_TO_EDGE=0x812F, RGBA=0x1908, RGBA8=0x8058, DEPTH_COMPONENT=0x1902,
+    CLAMP_TO_EDGE=0x812F, MIRRORED_REPEAT=0x8370, RGBA=0x1908, RGBA8=0x8058, DEPTH_COMPONENT=0x1902,
     DEPTH_COMPONENT24=0x81A6, DEPTH24_STENCIL8=0x88F0,
     READ_FRAMEBUFFER=0x8CA8, DRAW_FRAMEBUFFER=0x8CA9, FRAMEBUFFER=0x8D40,
     READ_FRAMEBUFFER_BINDING=0x8CAA, DRAW_FRAMEBUFFER_BINDING=0x8CA6,
@@ -44,7 +44,8 @@ enum : uint32_t {
     STENCIL_WRITEMASK=0xB98, STENCIL_BACK_FUNC=0x8800, STENCIL_BACK_FAIL=0x8801,
     STENCIL_BACK_PASS_DEPTH_FAIL=0x8802, STENCIL_BACK_PASS_DEPTH_PASS=0x8803,
     STENCIL_BACK_REF=0x8CA3, STENCIL_BACK_VALUE_MASK=0x8CA4, STENCIL_BACK_WRITEMASK=0x8CA5,
-    KEEP=0x1E00, INCR=0x1E02, EQUAL=0x202, LESS=0x201, ALWAYS=0x207,
+    KEEP=0x1E00, INCR=0x1E02, EQUAL=0x202, LESS=0x201, LEQUAL=0x203, ALWAYS=0x207,
+    POLYGON_OFFSET_FACTOR=0x8038, POLYGON_OFFSET_UNITS=0x2A00,
     DEPTH_STENCIL=0x84F9, TRANSFORM_FEEDBACK_ACTIVE=0x8E24, MAJOR_VERSION=0x821B,
     MINOR_VERSION=0x821C, CONTEXT_PROFILE_MASK=0x9126, CONTEXT_CORE_PROFILE_BIT=1,
     SHADER_IMAGE_ACCESS_BARRIER_BIT=0x20, TEXTURE_FETCH_BARRIER_BIT=8
@@ -68,6 +69,7 @@ struct State {
     int32_t read_fbo, draw_fbo, read_buffer, active_texture;
     int32_t textures[2], samplers[2], scissor[4], polygon[2];
     float viewport[4];
+    float polygon_offset[2];
     int32_t blend[6], stencil[2][7], depth_func, unpack[4];
     double depth_range[2];
     uint8_t depth_mask, color_mask[4], blend_enabled, scissor_enabled;
@@ -86,6 +88,7 @@ struct State {
         g.ActiveTexture(active_texture);
         g.GetFloati_v(VIEWPORT,0,viewport); g.GetIntegeri_v(SCISSOR_BOX,0,scissor);
         g.GetIntegerv(POLYGON_MODE,polygon); g.GetIntegerv(DEPTH_FUNC,&depth_func);
+        g.GetFloatv(POLYGON_OFFSET_FACTOR,polygon_offset);g.GetFloatv(POLYGON_OFFSET_UNITS,polygon_offset+1);
         // Core table 23.14 defines ONE polygon mode; compatibility has two.
         // Normalize core before restore, where separate FRONT/BACK is invalid.
         int32_t profile=0; g.GetIntegerv(CONTEXT_PROFILE_MASK,&profile);
@@ -109,6 +112,7 @@ struct State {
         g.ScissorIndexed(0,scissor[0],scissor[1],scissor[2],scissor[3]);
         if (polygon[0]==polygon[1]) g.PolygonMode(FRONT_AND_BACK,polygon[0]);
         else {g.PolygonMode(FRONT,polygon[0]);g.PolygonMode(BACK,polygon[1]);}
+        g.PolygonOffset(polygon_offset[0],polygon_offset[1]);
         g.DepthFunc(depth_func); g.DepthRangeIndexed(0,depth_range[0],depth_range[1]); g.DepthMask(depth_mask);
         g.ColorMaski(0,color_mask[0],color_mask[1],color_mask[2],color_mask[3]);
         g.BlendFuncSeparatei(0,blend[0],blend[1],blend[2],blend[3]); g.BlendEquationSeparatei(0,blend[4],blend[5]);
