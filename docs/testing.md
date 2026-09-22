@@ -153,7 +153,9 @@ worker or browser; a third waits. Slot 0 is `%TEMP%\SM64Trainer_tests.lock`,
 the lock older runners take, so a runner from a worktree without this change
 still excludes and is excluded. Focused checks never queue; an empty radius
 takes no slot. A killed owner releases its slot. An unregistered outside test
-controller is waited for, never stopped.
+controller is waited for, never stopped; one that starts mid-run is reported
+within 30 s. That scan is kept rare and reads each process once: run every two
+seconds it held the GIL a serial run's tests need for 14-34% of the time.
 
 | Mode | Workers per run | CPUs all runs share |
 | --- | ---: | ---: |
