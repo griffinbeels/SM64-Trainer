@@ -1,7 +1,17 @@
 """Old test runners cannot hide behind a different checkout or harness name."""
 from types import SimpleNamespace
 
+import pytest
+
 from tools import test_activity as activity
+
+
+@pytest.fixture(autouse=True)
+def _nothing_remembered(monkeypatch):
+    """What competing_runs remembers per process belongs to one machine's
+    processes; each test's fakes are a machine of their own."""
+    monkeypatch.setattr(activity, "_SEEN", {})
+    monkeypatch.setattr(activity, "_ANCESTRY", {})
 
 
 class Process:
@@ -43,3 +53,28 @@ def test_recycled_pid_does_not_make_an_old_runner_cooperative(tmp_path, monkeypa
     monkeypatch.setattr(activity.psutil, "Process", lambda pid=None: old if pid else current)
     monkeypatch.setattr(activity.psutil, "process_iter", lambda attrs: [old])
     assert activity.competing_runs(tmp_path)[0]["pid"] == 4
+
+
+def test_each_process_is_read_once_and_one_started_later_is_still_found(tmp_path, monkeypatch):
+    """The runner's watcher calls this every scan; reading every Python
+    process's command line and ancestry each time cost seconds of GIL on a
+    busy desktop. A process is read once while it lives; a new one is read
+    when it appears."""
+    reads = []
+
+    class Counted(Process):
+        def cmdline(self):
+            reads.append(self.pid)
+            return super().cmdline()
+
+    current = Process(1)
+    plain, early = Counted(6, ["python", "ordinary_script.py"]), Counted(2, ["python", "-m", "pytest"])
+    processes = [plain, early]
+    monkeypatch.setattr(activity.psutil, "Process", lambda pid=None: current)
+    monkeypatch.setattr(activity.psutil, "process_iter", lambda attrs: list(processes))
+    assert [run["pid"] for run in activity.competing_runs(tmp_path)] == [2]
+    assert [run["pid"] for run in activity.competing_runs(tmp_path)] == [2]
+    assert sorted(reads) == [2, 6], "a second scan read no process again"
+    processes.append(Counted(7, ["python", "-m", "pytest"]))
+    assert [run["pid"] for run in activity.competing_runs(tmp_path)] == [2, 7]
+    assert sorted(reads) == [2, 6, 7]
