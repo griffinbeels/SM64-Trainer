@@ -132,7 +132,9 @@ def test_no_technique_names_reach_the_player():
     source = GHOSTSWITCH_JS.read_text(encoding="utf-8")
     visible = " ".join(re.findall(r'title=[^>]*?"([^"]+)"', source)
                        + re.findall(r">([A-Z][A-Za-z ]+)<", source))
-    for banned in ("frame map", "nudge", "opacity", "template", "PJ64"):
+    # Template is an existing player-facing concept (Save as template), and
+    # the ghost recording picker now explicitly follows that input template.
+    for banned in ("frame map", "nudge", "opacity", "PJ64"):
         assert banned.lower() not in visible.lower(), (
             f"user-facing wording names the technique: {banned!r} in {visible!r}")
 

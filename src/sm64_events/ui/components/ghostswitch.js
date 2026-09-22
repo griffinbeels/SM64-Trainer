@@ -35,7 +35,8 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
-import { clampNudge, clampOpacity, ghostControls, hueText, newestGhostSession,
+import { clampNudge, clampOpacity, ghostControls, ghostRecordingOptions,
+         ghostViewChoices, hueText, newestGhostSession,
          nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
          GHOST_VIEWS, HUE_MAX, HUE_MIN, NUDGE_STEP,
          OPACITY_MAX, OPACITY_MIN, VIEW_LABELS } from "../ghostsession.js";
@@ -261,6 +262,30 @@ function GhostView({ view, boxes, choices = null, write }) {
   </div>`;
 }
 
+function GhostRecording({ recording, entityKey, target, write }) {
+  if (!recording) return null;
+  const reasonId = recording.reasonText ? idFor(entityKey, "recording-why") : null;
+  const selected = recording.options.find((option) => option.value === recording.value);
+  return html`<div class="ghost-recording-row">
+    <label class="ghost-field ghost-recording">
+      <span class="ghost-field-name">Ghost recording</span>
+      <select class="ghost-recording-select"
+        aria-label="Ghost recording" aria-describedby=${reasonId || undefined}
+        title=${selected?.label} value=${recording.value}
+        onchange=${(event) => write({
+          template_id: event.target.value === "" ? null : Number(event.target.value),
+          target,
+        })}>
+        ${recording.options.map((option) => html`<option key=${option.value}
+          value=${option.value} disabled=${option.disabled}>${option.label}</option>`)}
+      </select>
+    </label>
+    ${recording.reasonText && html`<span class="ghost-why" id=${reasonId}>
+      ${recording.reasonText}
+    </span>`}
+  </div>`;
+}
+
 /**
  * The four things worth reaching for while the ghost is up, and nothing else:
  * how solid it is drawn over the game, how it is coloured so the two pictures
@@ -347,6 +372,8 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   // arrive by different gestures -- so the merge is its own rule.
   const tint = shownTint(controls.tint, held.tint);
   const view = shownView(controls.view, held.view);
+  const recording = ghostRecordingOptions(controls.selection, view, held);
+  const nativeViews = ghostViewChoices(controls.nativeViews, recording);
   const labelId = idFor(entityKey, "label");
   const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;
 
@@ -356,12 +383,14 @@ export function GhostSwitch({ t, entityKey, active = true }) {
         labelId=${labelId} reasonId=${reasonId}
         onToggle=${() => write({ enabled: !on })} />
       <span class="ghost-label" id=${labelId}>Ghost Overlay</span>
-      ${controls.nativeViews && html`<${GhostView} view=${view}
-        boxes=${controls.marioBoxes} choices=${controls.nativeViews} write=${write} />`}
+      ${nativeViews && html`<${GhostView} view=${view}
+        boxes=${controls.marioBoxes} choices=${nativeViews} write=${write} />`}
       ${controls.reasonText && html`<span class="ghost-why" id=${reasonId}>
         ${controls.reasonText}
       </span>`}
     </div>
+    <${GhostRecording} recording=${recording} entityKey=${entityKey}
+      target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}

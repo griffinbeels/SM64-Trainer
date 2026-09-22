@@ -91,6 +91,24 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
     }
 
 
+def _select_recording(session: dict, body: dict, input_source: dict) -> None:
+    from fastapi import HTTPException
+
+    if body.get("target") != session["target"]:
+        raise HTTPException(422, "The practice target changed.")
+    selection = {**session["selection"], "template_id": body["template_id"]}
+    chosen = next((candidate for candidate in selection["candidates"]
+                   if candidate["template_id"] == body["template_id"]), None)
+    if chosen is None and body["template_id"] is not None:
+        raise HTTPException(422, "The selected ghost is no longer saved.")
+    session["selection"] = selection
+    session["source"] = dict(input_source)
+    if chosen:
+        for key in ("template_id", "attempt_id", "native_available",
+                    "native_reason_text", "whole_available", "whole_reason_text"):
+            session["source"][key] = chosen[key]
+
+
 def attach_ghost_routes(app, state: dict) -> None:
     """`GET|PUT /api/ghost` over one mutable dict.
 
@@ -112,6 +130,7 @@ def attach_ghost_routes(app, state: dict) -> None:
 
     app.router.routes = [route for route in app.router.routes
                          if getattr(route, "path", None) != "/api/ghost"]
+    input_source = dict(state["session"]["source"])
 
     @app.get("/api/ghost")
     def _ghost_get():
@@ -148,6 +167,8 @@ def attach_ghost_routes(app, state: dict) -> None:
                 raise HTTPException(422, "The ghost shows either the whole "
                                          "picture or only Mario.")
             session["view"] = body["view"]
+        if "template_id" in body:
+            _select_recording(session, body, input_source)
         if "native_available" in session["source"]:
             source = dict(session["source"])
             native = session["view"] == "mario"

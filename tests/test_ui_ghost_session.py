@@ -354,3 +354,79 @@ def test_the_two_views_are_named_for_what_they_draw():
     labels = run_node("GHOST_VIEWS, VIEW_LABELS",
                       "GHOST_VIEWS.map((name) => VIEW_LABELS[name])")
     assert labels == ["Whole picture", "Only Mario"]
+
+
+# --- choosing a ghost independently of the input-comparison template --------
+
+
+def recording_options(selection, view="mario", draft=None):
+    return run_node("ghostRecordingOptions",
+                    f"ghostRecordingOptions({json.dumps(selection)}, "
+                    f"{json.dumps(view)}, {json.dumps(draft or {})})")
+
+
+def saved_candidate(template_id, *, native=True, whole=True):
+    return {"template_id": template_id, "name": "Caged Island",
+            "attempt_id": 1200 + template_id, "strat": "TJ Owlless",
+            "native_available": native, "whole_available": whole,
+            "native_reason_text": None if native else "No saved Mario poses",
+            "whole_reason_text": None if whole else "No saved video"}
+
+
+def test_ghost_picker_never_borrows_candidates_from_another_target():
+    data = session(selection={"template_id": 4,
+                              "candidates": [saved_candidate(4)]})
+    assert controls(data, entity_key="star:22:0")["selection"] is None
+    assert controls(data)["selection"]["template_id"] == 4
+    assert recording_options(None) is None
+
+
+@pytest.mark.parametrize("view,disabled", [("mario", [True, False]),
+                                            ("whole", [False, True])])
+def test_picker_qualifies_each_recording_for_the_selected_show_mode(view, disabled):
+    answer = recording_options({"template_id": None, "candidates": [
+        saved_candidate(4, native=False), saved_candidate(5, whole=False),
+    ]}, view)
+    assert answer["options"][0] == {
+        "value": "", "label": "Use input template", "disabled": False}
+    assert [option["disabled"] for option in answer["options"][1:]] == disabled
+    refused = next(option for option in answer["options"] if option["disabled"])
+    assert ("No saved Mario poses" if view == "mario" else "No saved video") in refused["label"]
+    assert answer["views"] == {"mario": True, "whole": True}
+
+
+def test_picker_distinguishes_same_named_recordings_and_keeps_chosen_unusable_one():
+    answer = recording_options({"template_id": 4, "candidates": [
+        saved_candidate(4, native=False), saved_candidate(5),
+    ]})
+    assert answer["value"] == "4"
+    assert answer["options"][1]["disabled"] is True
+    assert "Attempt #1204" in answer["options"][1]["label"]
+    assert "Attempt #1205" in answer["options"][2]["label"]
+    assert "TJ Owlless" in answer["options"][2]["label"]
+
+
+def test_deleted_selection_is_named_instead_of_substituting_a_valid_ghost():
+    answer = recording_options({"template_id": 9, "candidates": [saved_candidate(4)]})
+    assert answer["value"] == "9"
+    missing = next(option for option in answer["options"] if option["value"] == "9")
+    assert missing["disabled"] and "unavailable" in missing["label"]
+    assert "no longer saved" in answer["reasonText"]
+
+
+def test_returning_to_input_template_is_an_explicit_optimistic_null_choice():
+    selection = {"template_id": 4, "candidates": [saved_candidate(4), saved_candidate(5)]}
+    assert recording_options(selection, draft={"template_id": None})["value"] == ""
+    assert recording_options(selection, draft={"template_id": 5})["value"] == "5"
+    assert recording_options(selection)["value"] == "4"
+
+
+def test_picker_survives_a_disabled_overlay_and_explains_empty_choices():
+    selection = {"template_id": None, "candidates": []}
+    data = session(enabled=False, source={"available": False}, selection=selection)
+    model = controls(data)
+    assert not model["canToggle"]
+    answer = recording_options(model["selection"])
+    assert "Save a recorded attempt" in answer["reasonText"]
+    assert answer["options"] == [
+        {"value": "", "label": "Use input template", "disabled": False}]

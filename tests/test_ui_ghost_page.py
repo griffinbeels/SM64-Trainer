@@ -725,6 +725,17 @@ def test_the_picture_is_mapped_rather_than_stretched():
         "whenever Project64 is not the shape the clip was recorded at")
 
 
+def test_the_overlay_page_preserves_an_explicit_ghost_recording_in_its_source_query(tmp_path):
+    with _Fixture(tmp_path / "unused.mp4") as fixture, get_driver().launch() as page:
+        fixture.available = False
+        page.goto(f"{fixture.url}/ui/ghost/index.html?kind=star&entity_key=LLL-1"
+                  "&strat=Standard&template_id=17")
+        page.wait_for('body[data-ghost="unavailable"]')
+        assert fixture.source_queries[-1] == {
+            "kind": "star", "entity_key": "LLL-1", "strat": "Standard", "template_id": "17"}
+        assert page.problems() == []
+
+
 def test_the_overlay_page_follows_a_clock_in_a_real_browser(tmp_path):
     clip = tmp_path / "ghost.mp4"
     _build_clip(clip)

@@ -205,6 +205,7 @@ export function ghostControls(session, entityKey) {
     // pretend to know -- see clampOpacity.
     showsTuning: false, opacity: null, tint: null, view: null,
     marioBoxes: { available: false, reasonText: null }, nudge: 0,
+    selection: null,
   };
   if (!session || typeof session !== "object") return waiting;
   const targetKey = ghostTargetKey(session.target);
@@ -224,6 +225,60 @@ export function ghostControls(session, entityKey) {
     view: GHOST_VIEWS.includes(session.view) ? session.view : null,
     ...viewAvailability(source),
     nudge: clampNudge(session.nudge_frames),
+    selection: session.selection || null,
+  };
+}
+
+/** Saved recordings for this entity, qualified for the selected Show mode.
+ * Selection is independent of the input-comparison template. The empty value
+ * follows that template; a removed explicit choice stays visibly missing.
+ */
+export function ghostRecordingOptions(selection, view, draft = {}) {
+  if (!selection || !GHOST_VIEWS.includes(view)) return null;
+  const templateId = Object.hasOwn(draft, "template_id")
+    ? draft.template_id : selection.template_id;
+  const candidates = selection.candidates || [];
+  const field = view === "mario" ? "native" : "whole";
+  const options = candidates.map((candidate) => {
+    const available = Boolean(candidate[`${field}_available`]);
+    const reason = available ? null : candidate[`${field}_reason_text`]
+      || (view === "mario" ? "No saved Mario poses" : "No saved video");
+    const identity = candidate.attempt_id == null
+      ? `Saved #${candidate.template_id}` : `Attempt #${candidate.attempt_id}`;
+    const label = [identity, candidate.name, candidate.strat].filter(Boolean).join(" · ");
+    return {
+      value: String(candidate.template_id), disabled: !available,
+      label: reason ? `${label} — ${reason}` : label,
+    };
+  });
+  const missing = templateId != null && !candidates.some(
+    (candidate) => candidate.template_id === templateId);
+  if (missing) options.unshift({
+    value: String(templateId), disabled: true,
+    label: `Saved ghost #${templateId} is unavailable`,
+  });
+  options.unshift({ value: "", label: "Use input template", disabled: false });
+  const reasonText = missing ? "The selected ghost is no longer saved. Choose another recording."
+    : !candidates.length ? "No saved ghosts yet. Save a recorded attempt as a template."
+    : !candidates.some((candidate) => candidate[`${field}_available`])
+      ? `No saved ghosts can show ${view === "mario" ? "only Mario" : "the whole picture"} yet.`
+      : null;
+  return {
+    value: templateId == null ? "" : String(templateId), options, reasonText,
+    views: {
+      mario: candidates.some((candidate) => candidate.native_available),
+      whole: candidates.some((candidate) => candidate.whole_available),
+    },
+  };
+}
+
+/** Let another saved recording offer a mode the current source cannot show. */
+export function ghostViewChoices(nativeViews, recording) {
+  if (!nativeViews || !recording) return nativeViews;
+  return {
+    ...nativeViews,
+    mario: nativeViews.mario || recording.views.mario,
+    whole: nativeViews.whole || recording.views.whole,
   };
 }
 

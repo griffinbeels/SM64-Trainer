@@ -696,7 +696,7 @@ async function reaskForBoxes() {
 
 async function start() {
   const query = new URLSearchParams();
-  for (const key of ["kind", "entity_key", "strat"]) {
+  for (const key of ["kind", "entity_key", "strat", "template_id"]) {
     const value = params.get(key);
     if (value) query.set(key, value);
   }
