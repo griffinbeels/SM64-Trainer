@@ -88,6 +88,29 @@ struct LiveRecovery {
     LiveRecovery() {timing.reserve();} // capacity before any renderer use
     void clear() {timing.clear();owner={};restored=0;bound=false;}
 } live_recovery;
+// Ghost sound: the last record each ghost displayed, so each record's
+// recorded sounds are handed over exactly once, as the ghost passes it.
+constexpr int64_t unheard=INT64_MIN;
+std::atomic<const ghost_playback::SoundSink*> sound_sink{nullptr};
+int64_t heard[GP_GHOSTS]{};           // last displayed record index, or unheard
+int64_t loudest[GP_GHOSTS]{};         // highest record whose sounds were handed over
+const Clip *heard_clip[GP_GHOSTS]{};
+bool heard_fresh[GP_GHOSTS]{};        // a new run: its first displayed record is newly passed
+bool loudest_reset[GP_GHOSTS]{};      // re-establish loudest at the next displayed record
+// run: a new attempt. restore: a state load (records ahead are newly passed
+// again). move: a nudge, seek or pause; records already heard stay silent.
+enum class Forget { run, restore, move };
+void forget_heard(Forget why) {
+    for(uint32_t i=0;i<GP_GHOSTS;++i) {
+        heard[i]=unheard;
+        if(why==Forget::move)continue;
+        heard_clip[i]=nullptr;heard_fresh[i]=why==Forget::run;loudest_reset[i]=true;
+    }
+}
+void sound_control(bool playing,float volume) {
+    const auto *sink=sound_sink.load(std::memory_order_acquire);
+    if(sink && sink->control)sink->control(playing?1u:0u,playing?volume:0.0f);
+}
 struct ShadowScratch {
     ghost_compositor::ShadowVertex vertices[24];
     uint8_t texture[256];
@@ -376,7 +399,8 @@ bool valid_request(const gp_request& r) {
             || r.enabled>1 || r.tint_enabled>1 || r.clip_count>GP_GHOSTS || r.reserved1
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
             || r.proximity_distance<0 || r.proximity_distance>400
-            || r.shadow_enabled>1 || r.reserved2) return false;
+            || r.shadow_enabled>1 || r.reserved2 || r.reserved3
+            || !std::isfinite(r.volume) || r.volume<0 || r.volume>1) return false;
     const gp_clip unused{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         const auto &clip=r.clips[i];
@@ -461,6 +485,8 @@ void decision(uint32_t value) {
     if(!reports.put(report)) {exhausted.store(true);revoke(GP_EXHAUSTED);}
 }
 void decide_all(uint32_t value) {
+    // Every ghost hidden: none hears records passed meanwhile.
+    for(auto &last:heard)last=unheard;
     report.visible=0;
     std::memset(report.clip_decisions,uint8_t(value),sizeof(report.clip_decisions));
     decision(value);
@@ -532,8 +558,30 @@ void adopt_recovery(const gp_request& next) {
 uint32_t active_count() {uint32_t count=0;for(auto *clip:bound)count+=clip!=nullptr;return count;}
 struct Coordinate {uint64_t target;bool below_zero;};
 // One ghost against the shared live coordinate. Hides only this ghost.
+// Visible ghost: hand over every record passed since its last drawn one.
+// Backward moves and long jumps only re-establish where it is.
+void hear(uint32_t index,const Clip& clip,uint32_t record,bool before_start) {
+    auto &last=heard[index];auto &high=loudest[index];
+    if(heard_clip[index]!=&clip) {last=unheard;heard_clip[index]=&clip;loudest_reset[index]=true;}
+    if(last==unheard) {
+        // Its time has not come before the start; a new run's first record is new.
+        last=before_start || heard_fresh[index]?int64_t(record)-1:int64_t(record);
+        if(loudest_reset[index]) {high=last;loudest_reset[index]=false;}
+        heard_fresh[index]=false;
+    }
+    if(before_start) {last=int64_t(record)-1;return;}
+    const auto *sink=sound_sink.load(std::memory_order_acquire);
+    if(int64_t(record)>last && int64_t(record)-last<=int64_t(GP_SOUND_CATCHUP) && sink && sink->cue)
+        for(int64_t at=std::max(last,high)+1;at<=int64_t(record);++at) {
+            const auto &sample=clip.frames[at].sample;
+            if(!(sample.valid_fields&GC_VALID_SOUND))continue;
+            for(uint32_t k=0;k<sample.sound.count && k<GC_SOUND_EVENTS;++k)sink->cue(sample.sound.bits[k]);
+        }
+    if(int64_t(record)>high)high=int64_t(record);
+    last=int64_t(record);
+}
 uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
-                ghost_compositor::Pose& out) {
+                ghost_compositor::Pose& out,uint32_t& record) {
     const Clip *clip=bound[index];
     if(!clip)return GP_PREPARING;
     const auto &h=clip->header;
@@ -576,13 +624,14 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
                                    shadows[index].texture,out.shadow)) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
-    rendered.fetch_add(1);
+    rendered.fetch_add(1);record=lo;
     return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
 }
 }
 
 namespace ghost_playback {
 const gp_api *api() {return &api_v2;}
+void set_sound_sink(const SoundSink *sink) {sound_sink.store(sink,std::memory_order_release);}
 void safe_boundary(uint32_t rom,uint32_t configuration) {
     const auto thread=GetCurrentThreadId();
     if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
@@ -596,13 +645,13 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
         retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.clear();
-        decide_all(GP_DISABLED);return;
+        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
         // Withdrawal retains reusable assets, but an explicit worker model
         // replacement must still be released at this safe render boundary.
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
-        decide_all(GP_DISABLED);return;
+        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.clear();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
@@ -611,7 +660,14 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     if(have_model && (model.id!=next.model_id || model.cancellation!=current_cancel || model.id!=desired_model.load()))
         if(!retire_model()) {decide_all(GP_PREPARING);return;}
     const bool changed=touch_revision!=next.revision;
+    // A new run starts fresh; a nudge or seek only moves where the ghost is.
+    // A restored origin (the worker confirming a load) keeps what was heard.
+    if(!have_request || (next.mode==GP_FOLLOW && !(next.origin.flags&GO_RECOVERED)
+            && std::memcmp(&next.origin,&active_request.origin,sizeof(next.origin))))forget_heard(Forget::run);
+    else if(next.nudge_frames!=active_request.nudge_frames || next.mode!=active_request.mode
+            || next.seek_igt!=active_request.seek_igt)forget_heard(Forget::move);
     active_request=next;have_request=true;acquired_cancel=current_cancel;
+    sound_control(true,next.volume);
     adopt_recovery(next);
     report={};report.revision=next.revision;report.owner_token=next.owner_token;report.model_id=next.model_id;
     report.clip_count=next.clip_count;report.rom_generation=rom;report.configuration=configuration;
@@ -636,6 +692,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         Clip *clip=i<next.clip_count?adopt(next.clips[i].clip_id,current_cancel):nullptr;
         if(clip)listed[clip-clips]=true;
+        if(clip!=bound[i])heard_clip[i]=nullptr; // a different recording: nothing heard yet
         if(changed || clip!=bound[i]) {
             bound[i]=clip;have_touch[i]=false;touch[i]=0;
             if(clip)have_touch[i]=recorded_touch(*clip,next,touch[i]);
@@ -683,7 +740,9 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
                 active_request.star_ends?active_request.star_action_count:0);
             if(!live_recovery.timing.current(origin)) {decide_all(GP_NO_CLOCK);return false;}
             // A restoration revives the run, exactly like the worker's new command.
-            if(origin.sequence!=live_recovery.restored) {star_ended=false;live_recovery.restored=origin.sequence;}
+            if(origin.sequence!=live_recovery.restored) {
+                star_ended=false;live_recovery.restored=origin.sequence;forget_heard(Forget::restore);
+            }
         }
         if(!valid_clock(live) || (live.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
                 !=(GCC_RAW_VALID|GCC_ELAPSED_VALID) || live.epoch!=origin.epoch
@@ -707,8 +766,8 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     uint32_t summary=GP_DISABLED;bool before_start=true;
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
-        ghost_compositor::Pose pose{};
-        const auto result=select(i,frame,live,world,pose);
+        ghost_compositor::Pose pose{};uint32_t record=0;
+        const auto result=select(i,frame,live,world,pose,record);
         if(!current(candidate)) {
             // A revocation during any evaluation discards the whole candidate.
             for(uint32_t j=0;j<GP_GHOSTS;++j)out[j]={};
@@ -716,7 +775,8 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         }
         report.clip_decisions[i]=uint8_t(result);
         if(!i)summary=result;
-        if(result!=GP_READY && result!=GP_BEFORE_START)continue;
+        if(result!=GP_READY && result!=GP_BEFORE_START) {heard[i]=unheard;continue;} // hidden: silent
+        hear(i,*bound[i],record,result==GP_BEFORE_START);
         before_start=before_start && result==GP_BEFORE_START;
         if(pose.count)out[count++]=pose;
     }
@@ -737,7 +797,7 @@ void retire_on_context_loss() {
     if(!renderer_owner())return;
     retire_clips();
     const bool released=retire_model();
-    have_request=false;clear_timeline();
+    have_request=false;clear_timeline();sound_control(false,0);forget_heard(Forget::move);
     next_boundary();
     decide_all(GP_CONTEXT_LOST);
     if(released)render_thread=0;

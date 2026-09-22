@@ -40,6 +40,13 @@ def patch(source: Path) -> None:
     edit("decomp/include/PR/libaudio.h", "} __attribute__((aligned (16))) ALSeqFile;", "} ALSeqFile;")
     edit("decomp/include/PR/libaudio.h", "typedef struct\n{\n    unsigned short  revision;",
          "typedef struct __declspec(align(16))\n{\n    unsigned short  revision;")
+    # Audio engine tables: GCC alignment attributes in MSVC form.
+    edit("decomp/tools/convTypes.h", "uintptr_t offset __attribute__((aligned (8)));",
+         "__declspec(align(8)) uintptr_t offset;")
+    edit("decomp/tools/convTypes.h", "unsigned int len __attribute__((aligned (8)));",
+         "__declspec(align(8)) unsigned int len;")
+    edit("decomp/tools/convTypes.h", "struct seqFile{", "struct __declspec(align(16)) seqFile{")
+    edit("decomp/tools/convTypes.h", "} __attribute__((aligned (16)));", "};")
     path = source / "src/gfx_adapter.h"
     path.write_text(path.read_text(encoding="utf-8").replace("({})", "((void)0)"), encoding="utf-8", newline="\n")
     edit("gfx_adapter_commands.h", "    GFXCMD_None = 0,", "    GFXCMD_None = 0,\n    GFXCMD_Material,")

@@ -9,9 +9,9 @@ import ctypes as C
 from dataclasses import dataclass
 from pathlib import Path
 
-MAGIC = b"SM64GIP5"
-VERSION = 5
-PREFIX = "Local\\sm64_trainer_ghost_v5_"
+MAGIC = b"SM64GIP6"
+VERSION = 6
+PREFIX = "Local\\sm64_trainer_ghost_v6_"
 SLOTS, RECORD_BYTES, RING_OFFSET = 512, 652, 20480
 LAYOUT_BYTES = 184
 GHOSTS, PATH_CHARS = 16, 520
@@ -50,6 +50,7 @@ class Request(C.LittleEndianStructure):
         ("origin", Origin), ("clip_count", U32), ("reserved1", U32),
         ("clips", Clip * GHOSTS),
         ("shadow_enabled", U32), ("reserved2", U32),
+        ("volume", C.c_float), ("reserved3", U32),
     ]
 
 
@@ -70,7 +71,7 @@ class Status(C.LittleEndianStructure):
     ]
 
 
-assert C.sizeof(Origin) == 40 and C.sizeof(Clip) == 1096 and C.sizeof(Request) == 18944
+assert C.sizeof(Origin) == 40 and C.sizeof(Clip) == 1096 and C.sizeof(Request) == 18952
 assert C.sizeof(Status) == 256 and 256 + C.sizeof(Request) <= RING_OFFSET
 assert Request.layout.offset == 80 and Status.consumed.offset == 96
 

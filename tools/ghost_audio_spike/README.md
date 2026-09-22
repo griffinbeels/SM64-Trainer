@@ -168,6 +168,9 @@ most 30 seconds. Silence or stationary play cannot verify moving-action capture.
 Item 1's per-frame capture of Mario's `play_sound` requests now ships with the
 native recording (GC5); its contract and limits are in
 [the runtime contracts](../../docs/ghost-native-runtime.md#sound-events).
+Playback now ships too, in Project64's process through waveOut with an owned,
+region-checked loader rather than items 3–4's cached-track/XAudio2 design:
+[ghost sound playback](../../docs/ghost-native-runtime.md#ghost-sound-playback).
 
 1. **Complete capture before UI.** A versioned event stream should bind ROM
    identity, clip identity, continuity/origin and monotonic capture sequence to
