@@ -11,6 +11,11 @@ from sm64_events.ghost import native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
+
+
+class RejectedControl(ValueError):
+    """A playback command that cannot be encoded. The live command and the
+    channel are untouched; the caller drops the command and keeps capturing."""
 from sm64_events.replay.ownedclose import close_after_error, release_many
 
 
@@ -108,7 +113,10 @@ class NativeChannel:
             if current.token != request.token:
                 raise RuntimeError("native ghost lease was replaced")
             if playback is not None:
-                self._set_playback(playback)
+                try:
+                    self._set_playback(playback)
+                except (KeyError, TypeError, ValueError, OverflowError) as error:
+                    raise RejectedControl(f"native ghost command rejected: {error!r}") from error
                 request = self._request
             if request.rom_generation != status.rom_generation:
                 request.rom_generation = status.rom_generation

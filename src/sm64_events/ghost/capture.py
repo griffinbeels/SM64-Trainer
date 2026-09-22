@@ -7,7 +7,7 @@ import threading
 from dataclasses import replace
 from typing import Callable
 
-from sm64_events.ghost.native_channel import NativeChannel
+from sm64_events.ghost.native_channel import NativeChannel, RejectedControl
 from sm64_events.ghost.native_protocol import RECORD_BYTES, Producer
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.replay.capturecontrol import CaptureControl
@@ -148,12 +148,22 @@ class NativeCapture:
                 self._stop.wait(0.016)
             except BlockingIOError:
                 self._stop.wait(0.016)
+            except RejectedControl as error:
+                # 2026-09-22: a command the channel could not encode escaped as
+                # a KeyError and ended this thread, which silently stopped Mario
+                # POSE RECORDING too. Drop that one command, keep the channel
+                # and the recording, and say so.
+                log.exception("%s; Mario poses keep recording", error)
+                sent_revision = revision
+                self._stop.wait(0.016)
             except CleanupPending as error:
                 self._pending_cleanup = error.owner
                 self._report(available=False, reason=str(error))
                 while not self._close_channel():
                     threading.Event().wait(0.25)
-            except (OSError, RuntimeError, ValueError) as error:
+            except Exception as error:  # noqa: BLE001 - this thread also records every attempt's poses
+                if not isinstance(error, (OSError, RuntimeError, ValueError)):
+                    log.exception("native ghost channel failed; reconnecting")
                 self._report(available=False, reason=str(error))
                 if not self._close_channel():
                     # A close failure may retain handles. Never acquire a new

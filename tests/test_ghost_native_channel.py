@@ -3,6 +3,7 @@ import ctypes as C
 from dataclasses import replace
 import struct
 import threading
+import time
 
 import pytest
 
@@ -238,3 +239,46 @@ def test_partial_constructor_owner_blocks_reacquisition_and_shutdown(monkeypatch
         release.set()
         assert source.stop(3)
     assert constructions == [1] and releases == ["ghost-pose-capture"]
+
+
+def test_an_unencodable_command_is_a_typed_rejection_that_changes_nothing(kernel):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        original = bytes(kernel.request)
+        # The live 2026-09-22 shape: a newer session's command, older channel.
+        with pytest.raises(channel.RejectedControl):
+            connection.poll({"enabled": True, "model_id": 1, "clips": [{}]})
+        assert bytes(kernel.request) == original
+        connection.poll(None)  # the lease still renews
+    finally:
+        connection.close()
+
+
+def test_a_rejected_command_never_stops_pose_recording(monkeypatch):
+    batches, polls, closed = [], [], []
+
+    class Source:
+        def __init__(self, *_): pass
+
+        def poll(self, control=None):
+            polls.append(control)
+            if control is not None and "clips" in control:
+                raise channel.RejectedControl("native ghost command rejected: KeyError('clip_id')")
+            return status(), (frame(len(polls), 7),)
+
+        def close(self): closed.append(1)
+
+    monkeypatch.setattr(capture, "NativeChannel", Source)
+    source = capture.NativeCapture(US, lambda *args: batches.append(args), producer_pid=123)
+    source.start()
+    try:
+        source.set_playback(enabled=True, clips=[{}])
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not (
+                any(p and "clips" in p for p in polls) and len(batches) >= 5):
+            time.sleep(0.01)
+        rejected = next(i for i, p in enumerate(polls) if p and "clips" in p)
+        assert len(polls) > rejected + 3 and all(p is None for p in polls[rejected + 1:])
+        assert source._thread.is_alive() and not closed
+    finally:
+        assert source.stop(3)
