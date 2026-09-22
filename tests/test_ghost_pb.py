@@ -272,3 +272,27 @@ def test_the_saved_ghost_doors(tmp_path):
         asyncio.run(session.stop())
     finally:
         archive.close()
+
+
+def test_the_shadow_switch_is_remembered_and_reaches_the_renderer(tmp_path):
+    session, _replay, row, archive, db, _store, capture = pb_world(tmp_path)
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        save_pb(db, row)
+        await session.pb_changed(row, True)
+        session._native.note()
+        assert session.payload()["shadow"] is True and capture.commands[-1]["shadow_enabled"] is True
+        body = await session.update({"shadow": False})
+        session._native.note()
+        assert body["shadow"] is False and capture.commands[-1]["shadow_enabled"] is False
+        assert db.get_state("ghost_shadow", None) is False
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+    import pytest
+    with pytest.raises(ValueError, match="on or off"):
+        asyncio.run(session.update({"shadow": "yes"}))

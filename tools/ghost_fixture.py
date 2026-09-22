@@ -69,6 +69,7 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
         "enabled": enabled,
         "opacity": opacity,
         "tint": {"enabled": True, "hue_degrees": 120} if tint is None else tint,
+        "shadow": True,
         "view": view,
         "nudge_frames": nudge_frames,
         "target": FIXTURE_TARGET if target is None else target,
@@ -182,6 +183,10 @@ def attach_ghost_routes(app, state: dict) -> None:
                 raise HTTPException(422, "The ghost's colour goes from 0 to "
                                          "359 degrees around the colour wheel.")
             session["tint"] = {**(session.get("tint") or {}), **asked}
+        if "shadow" in body:
+            if type(body["shadow"]) is not bool:
+                raise HTTPException(422, "The ghost's shadow is either on or off.")
+            session["shadow"] = body["shadow"]
         if "view" in body:
             if body["view"] not in ("whole", "mario"):
                 raise HTTPException(422, "The ghost shows either the whole "

@@ -205,7 +205,7 @@ export function ghostControls(session, entityKey) {
     reasonText: "Checking whether this has a run to play alongside you...",
     // Nobody has said how solid the ghost is drawn, so the control does not
     // pretend to know -- see clampOpacity.
-    showsTuning: false, opacity: null, tint: null, view: null, proximity: null,
+    showsTuning: false, opacity: null, tint: null, view: null, proximity: null, shadow: null,
     marioBoxes: { available: false, reasonText: null }, nudge: 0,
     selection: null,
   };
@@ -224,6 +224,9 @@ export function ghostControls(session, entityKey) {
     showsTuning: enabled,
     opacity: clampOpacity(session.opacity),
     tint: ghostTint(session.tint),
+    // Null until the server says, like the tint: an unknown switch is drawn
+    // unknown, never as off.
+    shadow: typeof session.shadow === "boolean" ? session.shadow : null,
     proximity: session.proximity || null,
     view: GHOST_VIEWS.includes(session.view) ? session.view : null,
     ...viewAvailability(source),
