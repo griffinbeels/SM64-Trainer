@@ -1143,14 +1143,23 @@ reports its own availability, with a sentence explaining every missing source.
 
 ### PB ghost
 
-The [[ghost]] you race by default: the [[attempt]] behind your current [[personal best]]
-for the practised [[target]] and [[strategy]]. Saving a PB makes it the [[ghost]] at once: the trainer keeps its
-Mario poses before it cuts the video, and replaces any recording you had picked;
-undoing or hiding that PB falls back to the previous save, then to your active
-[[template track]]. Derived from the saved PBs on every read, never stored, and
-never changes the input comparison.
+The [[ghost]] ticked by default: the [[attempt]] behind your current [[personal best]]
+for the practised [[target]] and [[strategy]]. While you keep its box ticked, saving a
+PB makes that [[attempt]] the [[ghost]] at once (the trainer keeps its Mario poses before it
+cuts the video); undoing or hiding that PB falls back to the previous save.
+The trainer remembers an untick for that [[target]], so later PBs stay off. Derived from
+the saved PBs on every read, never stored, and never changes the input comparison.
 
 - **Lives** — `src/sm64_events/ghost/pb.py`
+
+### Ghost set
+
+Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any saved
+recordings you tick, up to 16. Only Mario draws them all at once, each tinted its
+own colour; Whole picture shows the first. With the PB box ticked, no PB saved and
+nothing else ticked, your active [[template track]] plays.
+
+- **Lives** — `src/sm64_events/ghost/selection.py`
 
 ### Ghost window
 

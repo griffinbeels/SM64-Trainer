@@ -1,4 +1,4 @@
-"""The ghost recording picker stays usable when its current source is not."""
+"""The ghost ticks: his PB first, any saved recordings beside it, at every width."""
 from copy import deepcopy
 from pathlib import Path
 
@@ -9,28 +9,35 @@ from tests.test_ui_ghost_switch import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-SELECT = ".ghost-recording-select"
+PICKS = ".ghost-recordings"
+PB = {"attempt_id": 1497, "timer_mode": "igt", "native_available": True,
+      "native_reason_text": None, "whole_available": False,
+      "whole_reason_text": "This PB's video is still being saved."}
 
 
-def choose(page, selector, value):
-    import json
-
+def tick(page, key):
+    """Click the real checkbox for `key` ("pb" or a template id)."""
     page.evaluate("""(() => {
-      const pick = document.querySelector(%s);
-      pick.value = %s;
-      pick.dispatchEvent(new Event('change', {bubbles: true}));
-    })()""" % (json.dumps(selector), json.dumps(value)))
+      const items = Array.from(document.querySelectorAll('.ghost-pick'));
+      const name = %s;
+      const item = items.find(el => name === 'pb'
+        ? el.textContent.includes('Your PB') : el.textContent.includes('Attempt #' + (1200 + Number(name))));
+      item.querySelector('input').click();
+    })()""" % repr(str(key)))
 
 
-def picker(page):
+def picks(page):
     return page.evaluate("""(() => {
-      const pick = document.querySelector('.ghost-recording-select');
-      const row = pick.closest('.ghost-row');
-      return {value: pick.value, disabled: pick.disabled,
-        label: pick.getAttribute('aria-label'),
-        options: Array.from(pick.options, option => ({
-          value: option.value, disabled: option.disabled, label: option.textContent.trim()})),
-        fits: pick.getBoundingClientRect().right <= row.getBoundingClientRect().right};
+      const box = document.querySelector('.ghost-recordings');
+      const row = box.closest('.ghost-row');
+      const rowBox = row.getBoundingClientRect();
+      return {items: Array.from(box.querySelectorAll('.ghost-pick'), el => ({
+          label: el.querySelector('.ghost-pick-name').textContent.trim(),
+          checked: el.querySelector('input').checked,
+          disabled: el.querySelector('input').disabled,
+          hue: el.querySelector('.ghost-pick-hue') ? getComputedStyle(el.querySelector('.ghost-pick-hue')).backgroundColor : null,
+          fits: el.getBoundingClientRect().right <= rowBox.right + 0.5})),
+        legend: box.querySelector('legend').textContent.trim()};
     })()""")
 
 
@@ -39,27 +46,29 @@ def shoot(page, path):
     path.write_bytes(page.screenshot())
 
 
-def selection_session():
+def selection_session(pb=PB):
     initial = ghost_session(enabled=False, available=False, view="mario")
     # The real, longest native refusal: an older pose file he must re-record.
     initial["source"].update(native_available=False, native_reason_text=OLDER_POSE_FORMAT_TEXT,
                               whole_available=False, whole_reason_text="No saved video",
                               reason_text=OLDER_POSE_FORMAT_TEXT)
-    initial["selection"] = {"template_id": None, "candidates": [
+    initial["selection"] = {"ghosts": {"pb": True, "templates": []}, "missing": [],
+                            "pb": dict(pb) if pb else None, "playing": [], "candidates": [
         {"template_id": key, "attempt_id": 1200 + key,
          "name": "Fall onto the Caged Island", "strat": "TJ Owlless",
          "native_available": native, "whole_available": not native,
          "native_reason_text": None if native else OLDER_POSE_FORMAT_TEXT,
          "whole_reason_text": "No saved video" if native else None}
-        for key, native in [(7, False), (8, True)]
+        for key, native in [(7, False), (8, True), (9, True)]
     ]}
     return initial
 
 
-def test_recording_picker_is_independent_reachable_and_fits_supported_widths():
+def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
     initial = selection_session()
     screenshots = ROOT / ".iteration" / "ghost-selector-ui"
     screenshots.mkdir(parents=True, exist_ok=True)
+    target = initial["target"]
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:
@@ -68,64 +77,43 @@ def test_recording_picker_is_independent_reachable_and_fits_supported_widths():
                 state["writes"].clear()
                 page.set_viewport(width, 1200)
                 page.goto(base)
-                page.wait_for(SELECT)
-                # First prove an unrelated normal interaction updates this real app.
-                page.click('.app-sidebar .nav-item[title="Run"]')
-                page.wait_for('.app-sidebar .nav-item[title="Run"][aria-current="page"]')
-                page.click('.app-sidebar .nav-item[title="Practice"]')
-                page.wait_for(SELECT)
-                before = picker(page)
-                assert not before["disabled"] and before["value"] == ""
-                assert before["label"] == "Ghost recording" and before["fits"]
-                assert [option["disabled"] for option in before["options"]] == [False, True, False]
-                assert "older pose format" in before["options"][1]["label"]
-                shoot(page, screenshots / f"older-{width}.png")
-                assert page.evaluate(MEASURE)[0]["disabled"]
+                page.wait_for(PICKS)
+                shown = picks(page)
+                assert shown["legend"] == "Ghosts"
+                assert [(i["label"].split(" · ")[0], i["checked"], i["disabled"]) for i in shown["items"]] == [
+                    ("Your PB", True, False), ("Attempt #1207", False, True),
+                    ("Attempt #1208", False, False), ("Attempt #1209", False, False)]
+                assert all(item["fits"] for item in shown["items"])
 
-                choose(page, SELECT, "8")
-                expected = {"template_id": 8, "target": initial["target"]}
-                assert settled(page, state, 1) == [expected]
-                assert picker(page)["value"] == "8"
-                assert state["session"]["enabled"] is False
-                assert not page.evaluate(MEASURE)[0]["disabled"]
+                tick(page, 8)
+                assert settled(page, state, 1) == [
+                    {"ghosts": {"pb": True, "templates": [8]}, "target": target}]
+                tick(page, 9)
+                assert settled(page, state, 2)[1] == {"ghosts": {"pb": True, "templates": [8, 9]},
+                                                      "target": target}
                 page.click(".ghost-row-head > .ghost-switch")
-                assert settled(page, state, 2)[1] == {"enabled": True}
+                assert settled(page, state, 3)[2] == {"enabled": True}
                 page.wait_for(".ghost-opacity")
+                shown = picks(page)
+                assert [item["checked"] for item in shown["items"]] == [True, False, True, True]
+                hues = [item["hue"] for item in shown["items"] if item["checked"]]
+                assert None not in hues and len(set(hues)) == 3  # three ghosts, three colours
                 row = page.evaluate(MEASURE)[0]
                 assert row["rowScroll"] <= row["rowClient"] + 1
                 assert row["cardScroll"] <= row["cardClient"] + 1
-                shoot(page, screenshots / f"selected-{width}.png")
+                shoot(page, screenshots / f"ticks-{width}.png")
 
-                # A second recording supports Whole picture even though this one does not.
-                choose(page, ".ghost-view > select", "whole")
-                assert settled(page, state, 3)[2] == {"view": "whole"}
-                assert [option["disabled"] for option in picker(page)["options"]] == [False, False, True]
-                choose(page, SELECT, "7")
-                assert settled(page, state, 4)[3] == {"template_id": 7, "target": initial["target"]}
-                choose(page, SELECT, "")
-                assert settled(page, state, 5)[4] == {"template_id": None, "target": initial["target"]}
-                assert picker(page)["value"] == ""
-
-                # Deleting the saved choice cannot silently choose a different recording.
-                state["session"]["selection"]["template_id"] = 99
-                page.goto(base)
-                page.wait_for(SELECT)
-                missing = picker(page)
-                assert missing["value"] == "99" and not missing["disabled"]
-                assert "unavailable" in missing["options"][1]["label"]
+                # Unticking his PB is remembered: the write says so explicitly.
+                tick(page, "pb")
+                assert settled(page, state, 4)[3] == {"ghosts": {"pb": False, "templates": [8, 9]},
+                                                      "target": target}
+                assert [item["checked"] for item in picks(page)["items"]] == [False, False, True, True]
                 assert page.problems() == []
 
 
-def test_a_saved_pb_is_the_default_ghost_at_supported_widths():
-    initial = selection_session()
-    initial["source"].update(native_available=True, native_reason_text=None, reason_text=None,
-                             available=True, attempt_id=1497)
-    initial["selection"]["pb"] = {"attempt_id": 1497, "timer_mode": "igt",
-                                  "native_available": True, "native_reason_text": None,
-                                  "whole_available": False,
-                                  "whole_reason_text": "This PB's video is still being saved."}
+def test_no_pb_yet_keeps_the_box_ticked_for_the_next_one():
+    initial = selection_session(pb=None)
     screenshots = ROOT / ".iteration" / "ghost-selector-ui"
-    screenshots.mkdir(parents=True, exist_ok=True)
     with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
                              seed_editor_fixtures=True) as (base, state):
         with get_driver().launch() as page:
@@ -133,10 +121,10 @@ def test_a_saved_pb_is_the_default_ghost_at_supported_widths():
                 state["session"] = deepcopy(initial)
                 page.set_viewport(width, 1200)
                 page.goto(base)
-                page.wait_for(SELECT)
-                shown = picker(page)
-                assert shown["value"] == "" and shown["fits"]
-                assert shown["options"][0]["label"] == "Your PB · Attempt #1497"
-                assert not page.evaluate(MEASURE)[0]["disabled"]
-                shoot(page, screenshots / f"pb-{width}.png")
+                page.wait_for(PICKS)
+                first = picks(page)["items"][0]
+                assert first["label"] == "Your PB" and first["checked"] and not first["disabled"]
+                assert page.evaluate(
+                    "document.querySelector('.ghost-pick-why').textContent").endswith("next PB appears here")
+                shoot(page, screenshots / f"no-pb-{width}.png")
                 assert page.problems() == []

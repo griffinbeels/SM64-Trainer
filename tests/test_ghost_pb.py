@@ -8,6 +8,7 @@ from sm64_events.ghost.pb import current_pb_ghost
 from sm64_events.ghost.session import GhostSession
 from sm64_events.storage.db import Database
 from tests.test_ghost_native_session import Capture
+from tests.test_ghost_native_channel import kernel  # noqa: F401 - the real encoder's fixture
 from tests.test_ghost_session import FakeBroadcaster, FakeTracker, a_store, mark
 
 ORIGIN = {"kind": "star", "session_id": 1, "arm_id": 9, "frame": 100,
@@ -159,3 +160,46 @@ def test_without_a_pb_the_input_template_still_plays(tmp_path):
         asyncio.run(session.stop())
     finally:
         archive.close()
+
+
+def test_the_sessions_real_command_encodes_on_the_real_channel(tmp_path, kernel):
+    """The live 2026-09-22 failure: every session test used a stand-in channel
+    that accepted any command, so a shape the real channel rejected shipped.
+    Here the command the session actually built goes through the real encoder."""
+    from dataclasses import replace
+
+    from sm64_events.ghost import native_channel as channel
+    from sm64_events.memory.ghost_layout import GhostLayout
+    from sm64_events.memory.layout import US
+
+    session, replay, row, archive, db, store, capture = pb_world(tmp_path)
+    other = replace(row, id=row.id + 1)
+    replay.tracker.db._attempts.append(other)
+    replay.preserve_native(other.id)
+    picked = mark(store, entity_key=f"{row.course_id}-{row.star_id}", strat=row.strat_tag,
+                  attempt_id=other.id)
+
+    async def check():
+        target = (await session.update({"enabled": True, "view": "mario"}))["target"]
+        save_pb(db, row)
+        await session.pb_changed(row, True)
+        await session.update({"ghosts": {"pb": True, "templates": [picked.id]}, "target": target})
+        session._native.note()
+        await session.stop()
+        return capture.commands[-2]  # the last enabled command, before stop()
+
+    try:
+        command = asyncio.run(check())
+    finally:
+        archive.close()
+    assert command["enabled"] and len(command["clips"]) == 2
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        connection.poll(command)
+        encoded = kernel.request
+        assert encoded.play_enabled and encoded.clip_count == 2
+        assert [bytes(encoded.clips[i].clip_id) for i in range(2)] == [
+            clip["clip_id"] for clip in command["clips"]]
+        assert encoded.clips[0].hue_degrees != encoded.clips[1].hue_degrees
+    finally:
+        connection.close()
