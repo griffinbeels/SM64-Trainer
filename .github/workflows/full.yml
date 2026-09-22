@@ -36,7 +36,7 @@ permissions:
 env:
   # THE job count: tools/test_lanes.py splits it between browser jobs (two
   # workers) and the rest (four), by their recorded work per worker.
-  JOBS: ${{ inputs.jobs || 16 }}
+  JOBS: ${{ inputs.jobs || 20 }}
   # uilab is not in the lockfile (it is a shared dev module); the run uses
   # exactly this commit of it. Bump it when a test needs a newer uilab.
   UILAB_REPO: https://github.com/griffinbeels/uilab
