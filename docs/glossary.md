@@ -2045,7 +2045,9 @@ The tests one change can affect, chosen from the diff since the newest main
 commit whose [[full run]] passed: the tests that executed a Python code block
 the change altered, the tests naming a changed UI module, its importers, a
 class it renders or its page's tab, and for a stylesheet only the rules that
-changed. It prints the reason for every group it picks.
+changed. It prints the reason for every group it picks. Past 20 browser files
+it keeps the startup canary and the pages that name the change and leaves the
+rest to the [[full run]].
 
 - **Lives** — the radius rules (`tools/blast_radius.py`) → the test door, which
   lists them on request (`tools/run_tests.py`)

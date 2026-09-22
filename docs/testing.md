@@ -48,9 +48,22 @@ older than a baseline with a green full run, which supersedes it. The viewport s
 (`tests/test_responsive*.py`) are never picked: every case sweeps every page
 at every width. The full run covers them; name one to run it locally.
 
+**The browser cap.** A change that reaches more than 20 browser files runs the
+startup canary (`tests/test_fixture_reaches_the_real_page.py`, whole) and the
+pages that name it (they import the changed module, or name its file, class,
+export or tab), quickest first up to 20; the rest run on GitHub after the
+push, which blocks a release. Its plain tests, a changed test file and last
+run's failures always run here, and `--why` says how many pages were left and
+names the kept ones. At 20, the measured component, class and page changes
+(at most 20 files) are never capped; what is capped reaches every page: a
+`:root` token, or a core view or rank change (93 browser files, all through
+the first page load, because the app's store fetches the session view and
+MARELO whatever tab a test is about).
+
 `tests/test_blast_radius.py` pins the rules against the real tree (a Rank
 component and a Rank class reach the Rank page and not the Library, a global
-rule reaches every page), each proved by mutation. If the radius missed
+rule reaches every page and leaves them to GitHub, a change past the cap keeps
+its plain tests, the canary and the page naming it), each proved by mutation. If the radius missed
 something, the full run finds it after the push; widen the rule, not the habit.
 
 ## The full run
