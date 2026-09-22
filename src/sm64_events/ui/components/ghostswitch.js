@@ -209,21 +209,6 @@ function GhostShadow({ shadow, draft, write }) {
   </div>`;
 }
 
-/** HOW LOUD GHOST MARIO IS: his own action sounds, mixed under the game.
- * Unknown is drawn unknown, like the opacity: no thumb parked at a default. */
-function GhostVolume({ volume, draft, queue }) {
-  const value = draft == null ? volume : draft;
-  const known = value != null;
-  return html`<label class="ghost-field ghost-volume">
-    <span class="ghost-field-name">Volume</span>
-    <input class="ghost-volume-range" type="range" min="0" max="1" step="0.05"
-      value=${known ? value : null} disabled=${!known}
-      title=${known ? "How loud Ghost Mario's sounds play under the game" : "Waiting for the ghost's volume"}
-      oninput=${(event) => queue({ volume: Number(event.target.value) })} />
-    <span class="ghost-field-value">${known ? `${Math.round(value * 100)}%` : "--"}</span>
-  </label>`;
-}
-
 function GhostColour({ tint, write, queue }) {
   const known = tint != null;
   return html`<div class="ghost-field ghost-colour" role="group"
@@ -329,7 +314,7 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, shadow, volume, view, boxes, nudge, write, queue, showView = true }) {
+function GhostTuning({ opacity, tint, shadow, view, boxes, nudge, write, queue, showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -354,8 +339,7 @@ function GhostTuning({ opacity, tint, shadow, volume, view, boxes, nudge, write,
       <span class="ghost-field-value">${opacityText(opacity)}</span>
     </label>
     <${GhostColour} tint=${tint} write=${write} queue=${queue} />
-    ${view === "mario" && html`<${GhostShadow} shadow=${shadow.value} draft=${shadow.draft} write=${write} />
-      <${GhostVolume} volume=${volume.value} draft=${volume.draft} queue=${queue} />`}
+    ${view === "mario" && html`<${GhostShadow} shadow=${shadow.value} draft=${shadow.draft} write=${write} />`}
     ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
@@ -435,7 +419,6 @@ export function GhostSwitch({ t, entityKey, active = true }) {
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
       shadow=${{ value: controls.shadow, draft: held.shadow }}
-      volume=${{ value: controls.volume, draft: held.volume }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
     <${GhostProximity} active=${on} view=${view} value=${controls.proximity}

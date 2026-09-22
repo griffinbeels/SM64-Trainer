@@ -104,13 +104,10 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 page.click(".ghost-shadow .ghost-switch")
                 assert settled(page, state, 4)[3] == {"shadow": False}
                 assert page.evaluate("document.querySelector('.ghost-shadow .ghost-switch').getAttribute('aria-checked')") == "false"
-                page.evaluate("""(() => { const range = document.querySelector('.ghost-volume-range');
-                  range.value = '0.8'; range.dispatchEvent(new Event('input', {bubbles: true})); })()""")
-                assert settled(page, state, 5)[4] == {"volume": 0.8}
 
                 # Unticking his PB is remembered: the write says so explicitly.
                 tick(page, 0)
-                assert settled(page, state, 6)[5] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
+                assert settled(page, state, 5)[4] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
                                                       "target": target}
                 assert [item["checked"] for item in picks(page)["items"]] == [False, False, True, True]
                 assert page.problems() == []

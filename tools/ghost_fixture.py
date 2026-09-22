@@ -70,7 +70,6 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
         "opacity": opacity,
         "tint": {"enabled": True, "hue_degrees": 120} if tint is None else tint,
         "shadow": True,
-        "volume": 0.5,
         "view": view,
         "nudge_frames": nudge_frames,
         "target": FIXTURE_TARGET if target is None else target,
@@ -138,10 +137,6 @@ def _set_shadow(session: dict, body: dict) -> None:
         if type(body["shadow"]) is not bool:
             raise HTTPException(422, "The ghost's shadow is either on or off.")
         session["shadow"] = body["shadow"]
-    if "volume" in body:
-        if type(body["volume"]) not in (int, float) or not 0 <= body["volume"] <= 1:
-            raise HTTPException(422, "The ghost's volume is between silent and full.")
-        session["volume"] = float(body["volume"])
 
 
 def attach_ghost_routes(app, state: dict) -> None:
