@@ -1,0 +1,376 @@
+# The Library — where to change what — full reference
+
+The detail behind [`.claude/rules/library.md`](../../.claude/rules/library.md),
+moved here on 2026-09-22 so it no longer auto-loads on every edit. The
+rule file holds the contracts; this page holds the evidence, history and
+full explanations. Read it when a Library change needs the measurement,
+the ruling or the incident behind a contract, or the historical calibration record.
+
+Startup refresh uses `library/background.py`: inspect only Log column A first,
+skip unchanged revisions, then build/fit/stamp/compress newer workbooks in one
+quiet, lower-priority process. This keeps the workbook build out of the capture
+interpreter. The parent validates and atomically installs the compressed result,
+rechecks revision under the store's apply lock, then runs existing adoption and
+regrade notifications. The child never opens app data. Source uses the base
+Python executable with this checkout on PYTHONPATH; frozen builds dispatch via
+`gui_entry.py` before desktop startup. Timeout/cancel reaps the owned build
+worker; the existing off-thread download retains its network timeout.
+`ranks_api.absorb_after_regrade` prepares membership/entity scores once per
+sweep and uses the original scope aggregation; it does not build display
+labels or replay links for a watermark update. With 22 saved scopes, the old
+display path repeated 95 segment reads and 66 route reads (~550 ms); the
+batch took ~16 ms on the same scratch catalogue. No cache survives the call.
+Tests: `test_regrade_batch.py`,
+`test_library_background.py`, `test_library_store.py`, `test_library_refresh.py`.
+
+Phase 1 of spec `2026-08-04-ultimate-sheet-library-design.md`, which is a LOCAL
+working file: anything load-bearing from it belongs here or in the glossary
+before it goes away. Fitting, refresh, adoption, Library browsing and runner profiles are built.
+
+| To change... | Edit |
+|---|---|
+| Automatic movement and piece placement | `placements.py` resolves seed identities against live local IDs and exact piece names against their parent. `practice_catalog.py` creates missing movements and parented pieces as manual entries; its persisted registry preserves renamed/configured entries and remembers deletions. Explicit links win. No Sheet row supplies detection triggers. See `chain-sheet-standards.md`. |
+| Turning a runner's own column into times he can IMPORT | `library/import_runner.py::candidates_for(payload, runner)` — pure, so it runs against the bundled snapshot with no network. The sheet already speaks our vocabulary (each target carries our `entity_key`, and `adopt.py` has already paired most approaches with the vetted strategy they ARE), so this is a mapping, not a scrape. Three drops, every one returned as a NAMED ROW in the shared reject shape (`{text, reason}` — the target, the approach or piece, the sheet's own time; counted by kind until round 3, 2026-08-23, which hid exactly the rows he asked to review) because a drop nobody can see reads as an import that half-worked: **subsections** (a stretch inside a target — imported as a best, one would publish a 15.90s way of doing a 43s star; assigning one to a segment he built is `adoptions.py`'s job), **targets with no entity key** (the sheet's castle-movement rows, mostly — 23 of GTM's 33 drops — which `mapping.py` has not yet paired with the movements we seed), and **targets mapped to a `segment:` key that the caller cannot place** — 6 of the snapshot's 252 carry one (the three Bowser stages' Course = No Reds pipe entry, Battle = Bowser 1/2/3), and a segment id is LOCAL to the database that assigned it, so the reader never lands the number blind: the router's `resolve_segment` turns the key into THIS database's row for the same seeded movement via `mapping.py::segment_seed_key` (his correction, round 3, 2026-08-23), and only a movement he deleted still drops. Fixture numbers are MEASURED (2026-08-20, revision `2026-08-10T15:14:43`): DentoriousRed → 14 star times over 10 stars, 2 JP-tagged, plus 2 segment rows (landing since round 3) and 1 entity-less. A re-scrape moves them — re-measure with the snippet in `tests/test_import_runner.py`'s docstring rather than loosening the assertion. **Since round 28 those rows are HELD, not dropped** — each carries its `row_key`, `time_cs` and ROM so the service keeps the cell, and a fourth reason `real_time` covers the sheet's one real-time-clocked star row; the whole mechanism is `.claude/rules/import.md`'s held-time row. And the STRATEGY a row files under is `adoptions.py::sheet_strategy`, shared with the export — every worksheet row of one entity is its own slot |
+| Writing YOUR times back out as a sheet column (the reverse direction) | `library/export_column.py::column_lines` walks `read_rows` and the payload's `targets` IN LOCKSTEP — one `SheetRow.opens_target` row opens one BLOCK, so the two only ever need to agree on order, never on row numbers. A block is usually one target and is SEVERAL wherever `build.py::_apply_splits` carved a second entity out of one sheet heading: those carry `split_from` and have no opening row of their own, and counting them as blocks shifted every later row against its neighbour's target — 214 of 803 rows, the whole tail of the sheet, silently blank (round 19, 2026-08-31). Inside a block the row's own ids break a name tie (49 live rows share a name with a sibling; `audit.py::row_key` names the same problem), and a lone candidate still wins on name alone because a merged (JP)/(US) approach carries the UNION of its rows' ids. **A row that NAMES THE THING asks with no strategy at all** (round 25): `names_the_thing` reads `adoptions.py::strategy_name`, the IMPORT's own predicate for the same question, so a star's own row and every subsection print your best time on that entity however you set it while a named-strategy row still means only times set that way. Measured through the real endpoint on his live db (268 PBs, live sheet): 399 asks, **3** answers before, **44** after — the export had been asking for "Chip off Whomp's Block" where he had "Standard" and "Wall Kicks Will Work" where he had "Backflip WK", so a column he PLAYED came back blank while an IMPORTED one round-tripped fine. 117 of 118 star targets carry exactly one approach named after the target itself, and none carries two, so the test is available and unambiguous; "Slide Star (Under 21 Seconds)" is the exception and keeps the name match. **Round 28 narrowed the blind ask to the LEFTOVERS** — the fastest time filed under no name any other row of the block claims (`_claimed_names`, through `adoptions.py::sheet_strategy`, the same slot rule the import files under) — because the latest save on a star is a sibling row's time for an imported column, and the ten-runner sweep's whole `extra` column was that; and a row nothing answers prints its HELD TIME (`held=`, `scorecard_api.py::_held_lookup`). `tools/roundtrip_sheet.py` is the measurement: 11 runners, 3,041 cells, every one back where it came from, 6 `snapped`. It asks the same two questions in the same order `import_runner.py::candidates_for` asks them, through the same `server/import_api.py::sheet_row_placer`: `place` first, then a star approach under `matched_strategy or the sheet's own name` — that second fallback IS the import's own rule, and refusing the name half is what made a freshly imported column export 0 of 803 lines; it cannot print a wrong time, since a name this db never heard of resolves to None. `""` wherever nothing maps (a header/spacer row, a row naming nothing in its block, or the caller's `resolve`/`place` refusing). `sheet_time` is the sheet's own cell notation (`43.70`, `1:21.00`), round-tripping through `sheet.parse_time` unchanged; not `import_runner.py`'s `m'ss"cc` rejected-row notation. Served by `server/scorecard_api.py::get_column`, off a LIVE fetch (`_fetch_column_source` reads `read_rows` and `library/store.py::build_and_stamp` off the SAME bytes, so the two walks stay in step) — never the cached snapshot, because the row layout has to match the sheet you are about to paste into |
+| The sheet RENAMING a tab under us | `library/workbook.py::LOG_TABS` + `_first_present`. On 2026-08-20 the workbook carried `Log (Main)` / `Log (Extensions)` where it had carried `Log`, plus a new `Ultimate Sheet Extensions` tab — and `log_revision` RAISES rather than degrading, so that ONE rename took down every path that reads the live sheet at once: `POST /api/library/refresh`, `tools/scrape_sheet.py`, and the sheet import. Every test stayed green, because they all read the bundled snapshot. The tab is resolved by candidate now (historical name first) and a miss names what the workbook DOES have. Nothing else had drifted — the 2026-08-21 workbook still yields 252 targets, 448 runners, 44,952 entries. **A snapshot-backed suite cannot see upstream drift at all**, so run a sheet-reading change against the LIVE document once; the failure surfaced as a hung UI, not as anything resembling a parse error. Full story: `.claude/rules/import.md` |
+| A cell's FILL, and a runner's platform legend (round 29 item 2) | `workbook.py::Cell.fill_rgb` (rgb, or a `theme=` index through `_theme_palette` -- Excel's order swaps the first two pairs, 0 = lt1, 1 = dk1, 8 = accent5, and the live export uses exactly those two forms: 257 rgb, 6 theme); `sheet.py::runner_legends` / `platform_for_fill` turn a column's rows-2/3 legend ("Emu"/"N64" in two fills) into a platform per timed cell by nearest fill within `LEGEND_FILL_TOLERANCE`; `build.py::_entries` carries it as `platform`. Detail and the measurement: `.claude/rules/import.md` |
+| The sheet-fitted rank standards FOLLOW the library (round 33, 2026-09-05) | `library/adoptions.py::library_ladders(payload, rows, qualified)` — every star approach with a fitted ladder, under `sheet_strategy`'s slot (the star's own row → Standard; a matched row → its vetted twin's name; an unmatched row → its own), plus the user's adoption rows; `Adoptions.ladders()` returns it and `Adoptions.load()` applies it through `RankStandards.apply_sheet_ladders`, so vetted ladders still win on read. It replaced the bundled 45-entity `sheet_ladders.seed.json` as the real source (that file stays a harmless floor): `adopt.adoptable` skipped every approach the ladder matcher paired with a vetted twin, and the star's own row is exactly such a pairing (A-Maze-Ing Emergency Exit's row matched Rightside at 182 samples) while round 28 files it under Standard — 95 star rows' fitted ladders never reached the store. **`store.build_and_stamp` fits BEFORE it stamps**: the matcher compares ladders, and stamping first lost every vetted pairing on a live refresh (measured on the live workbook: 270 unmatched, zero vetted names), which is how an import named strategies "Left side TJ" / "Singlestar strat" beside the vetted "Leftside" / "SS". `LibraryStore.absorb(payload)` is refresh's tail on its own, so the column export refreshes from the bytes it already holds. Every door re-derives after an applied refresh: the manual route, the import (`import_api._resync_standards`, on the loop), the column job (`_column_work`'s `resync`), and `server/app.py::_refresh_library_quietly` once at startup when `create_app(refresh_library_on_start=True)` (main.py only; a failure is one info line). Gates: `tests/test_library_refresh.py`, `test_library_adoptions.py::test_the_whole_library_reaches_the_sheet_layer_under_the_import_slots`, `test_library_store.py::test_a_build_fits_before_it_stamps_so_a_live_refresh_keeps_the_vetted_pairing` |
+| WHICH ROM a sheet entry belongs to (round 35, 2026-09-05) | `library/sheet.py::entry_version(entry)` — the entry's OWN worksheet row's declared version, `None` meaning both. One door, read by `import_runner.candidates_for` (the stamp on an imported PB and on a held row) and by `ratings._entries_set_on` (what a runner GOAL offers per region), so the two can never disagree about a time's ROM. His words: *"if a row doesn't include a distinction between US/JP, we should assume that it's the same for both, so we should have an entry for both US and JP being the same."* The TARGET's version is deliberately NOT a fallback: the payload merges a "(JP)"/"(US)" pair into one target that keeps one of the two labels, so inheriting it stamped 3,123 entries on 68 rows (Big Bob-omb's "Warp fadeout", 67 more) with a ROM the sheet never claimed for them. `_visible_entries` keeps its looser rule for what the Library page DRAWS in a mode. Gates: `tests/test_scorecard_parity.py` (the walk under us, jp and both), `tests/test_import_runner.py` |
+| Reading the `.xlsx` export | `library/workbook.py` — stdlib only, deliberately: the server owns this parse from phase 3, so a dependency here ships in the exe, and openpyxl cannot reach `HYPERLINK()` formula targets and cached values in one load (its formula and cached-value modes are exclusive). Videos live in BOTH cell forms — 3,833 relationship hyperlinks and 3,164 formulas, measured 2026-08-04 — and dropping either silently halves the library. **Attribute ORDER is the trap, twice:** the live export writes `<sheet state="visible" name=...>` and `<hyperlink r:id=... ref=...>`, so a regex anchoring the attribute it wants to the tag opener matches NOTHING and reports a clean empty parse. Both are parsed per-tag now. Column A is a FORMULA cell (`t="str"` with a cached `<v>`) referencing `'Best Time(Raw)'`, not a shared string — mutating a label for a test means editing the worksheet, not `sharedStrings.xml` |
+| Where a target BEGINS | `library/sheet.py` — the **id lineage restart**, not the styling: a non-grey row that either opens a section or re-introduces `[1]` alone after 1 has been used. Bold was the authority until 2026-08-05, when the sheet unbolted all nine of Cool Cool Mountain's target rows between two revisions — same 702 rows, same ids, all 147 grey fonts untouched — and bold-as-authority silently lost nine targets with their approaches. The restart rule reproduces all 252 targets on BOTH revisions and agreed with bold EXACTLY on the day bold was still complete (252 = 252, zero disagreement either way). The grey veto is what keeps it honest: WF's `[1] Whomp text Xcam` reuses lineage 1 as a subsection, and without it the restart rule opens a target there. Bold survives on `SheetRow.bold` and every disagreement lands in the payload's `styling_drift`, so the next decay is visible instead of silent |
+| The row grammar, and approach-vs-subsection | `library/sheet.py` — THE classification, and the one error that would poison everything downstream. Four rules, in order: (0) a row named **`… star Xcam`** is an APPROACH whatever its ids say — it times a star GRAB, so it is a whole-target time for the star its target maps to. It carries the union of several approaches' ids (`[1|2]`), so rule 1 called all 25 of them subsections and the human corrected every one by hand (2026-08-05). The pattern matches those 25 exactly and nothing else: every other Xcam row times a door, a text box or an entry (`Whomp text Xcam`, `Attic door Xcam`, `Cannon entry Xcam`), which genuinely are parts. `tests/test_library_seed.py` pins BOTH halves — no `star Xcam` left as a subsection, and at least 15 ordinary Xcam rows still subsections, so the first assertion cannot pass by the rule swallowing everything. (1) **already-seen ids ⇒ subsection**, one-way and definitive; a NEW id proves nothing, and today's sheet holding no counterexample is not the same as the rule being sound (user's correction, 2026-08-04). (2) the grey column-A font `FF434343`; styling, so one vote only. (3) a **veto** at `SUBSECTION_VETO_RATIO` = 0.70 of the row's basis — the best of its OWN ids, falling back to the target's best so far. The floor is measured, not chosen: "faster than its basis" alone flags 8 legitimate approaches, while 0.70 flags none of the 268 non-RTA approach rows (slowest 0.770) and still catches 77% of the 147 subsections (median 0.507, max 0.940). Stage RTA rows are EXEMPT because a 70-star route is legitimately a third of the full-stage route beside it (THI 96.40 against 314.74) — those six rows are the entire reason a naive ratio test fails. A disagreement RAISES naming the row. `PLACEHOLDER_CS` refuses `9:59.96`, verbatim the format example on the sheet's rules tab and carried by one live row against a 66.9s target. Column A's FILL colour is banding and does NOT track target boundaries — only 38 of 252 target rows carry a header fill; **bold** is the boundary. Headers nest two deep (`Castle Movements (Lobby)` then `★ BoB`), so `SheetRow` carries `group` as well as `section` — keeping only the innermost threw 113 movement rows into `unknown` |
+| A sheet name → an entity key | `library/mapping.py` — misses are OUTPUT, not an error path. `route` (15), `castle_movement` (113) and `not_a_target` (1, with its reason in `KNOWN_NON_TARGETS`) are expected; anything else is `unknown`, which `tests/test_library_seed.py` asserts is empty. **A stage RTA is a ROUTE**, in this project's own glossary sense: its sibling rows pick a different SERIES of stars, not a different way of doing one star, so they span many targets and belong to no single one (user, 2026-08-05). The reason was called `stage_rta` until then. Every **`+ 100c` row is the course's 100-COIN star** ending on the star it names — the exit-star variant model `ranks/standards.py` already carries — so four CCM rows share `star:4:6` while the plain `Slip Slidin' Away` beside them stays `star:4:0`. That also explains the eight main-course red-coin stars mapping to nothing: the community only times them together with 100 coins, so they are absent from the sheet rather than missed by us. Bowser reds need their own clause (the sheet says "Red Coins", our registry says "8 Red Coins") — leaving exactly this unmapped dropped every Bowser reds ladder from the rank seed in 2026-07 |
+| One sheet target that is TWO of ours | `library/mapping.py::TARGET_SPLITS` + `library/build.py::_apply_splits` (2026-08-31, his report). The Princess's Secret Slide is ONE heading holding both slide stars — `[1]` the box star, `[2]` "Under 21", `[3]` a strat for the box star, `[4]` the same strat for U21 — because the sheet models them as variants of one row. The game does not: 19:0 and 19:1 are separate stars with separate published standards, so every U21 approach filed under the box star and **151 runners' U21 times reached nothing** (measured live; best 20"60). Neither existing mechanism can split it: the ids INTERLEAVE, so no "this row opens a target" rule reaches them, and `_normalize` strips a trailing parenthetical, so "Slide Star (Under 21 Seconds)" collapses onto "Slide Star" and name matching cannot tell them apart either. So the split is STATED — which approaches of which target belong to which other entity, matched on the marker the sheet itself uses — and applied after the target is assembled, keeping the carved-out target immediately after its parent so the page order still follows the sheet. A SHARED piece stays with the heading it was written under: both "Slide time" rows span `[1|2]` and `[3|4]`, and a piece timing both stars belongs to neither alone. Guarded in `tests/test_library_build.py`, mutation-proved by pointing the rule at a label that never matches |
+| The payload shape, JP/US pairing, coverage counts | `library/build.py` — two version fields answering different questions: `schema_version` is ours and forces a rebuild; `sheet_revision` is the sheet's OWN newest Log entry, which is what makes "newest wins" answerable from the source rather than from fetch time. A row only merges into a (JP)/(US) sibling that does not already carry its version — two same-version rows under one name are different approaches whose labels collide, and merging them would drop one with its entries. **The version is a comma-separated TOKEN in the trailing parenthetical, not a bare suffix** (`sheet.py::version_of`/`base_name`, which owns the whole label grammar): 163 rows write `(JP)` alone but 58 write it beside other words — `(Toad, US)`, `(☆15 MIPS Clip, JP)`, `(120 star file, US)` — and anchoring on the bare form read all 58 as version-less until 2026-08-09. That cost three things at once, and only the third was ever reported: their halves never paired, their entries carried no version so the target page's mode toggle could not render, and **14 targets sat in the browse grid wearing their JP row's name** with nothing saying a US row existed ("I don't see the HMC Door Mips Clip US version in our library" — it was there, one click in, under a JP name). Pairing drops ONLY that token and keeps every other word, which is what stops `(MIPS, JP)` merging with `(☆50 MIPS, US)`: those name two different setups, not two versions of one. Several sheet targets share one entity on purpose; they stay separate targets, because collapsing four CCM routes into one list is unreadable |
+| The audit view, and the human's corrections | `library/audit.py` + `tools/audit_library.py` + `tools/audit_library.html` — the human's verdict OUTRANKS ours and `build.py` applies it, so a correction is an input rather than a patch. Keys are by NAME, never by row number, and both need a discriminator that cost a real bug: a target key carries its ROM version (BBH opens two targets both called "Go on a Ghost Hunt") and a row key carries its bracket ids ("Warp fadeout" appears twice under Big Bob-omb, and 19 targets repeat a row name). `tests/test_library_seed.py` asserts both are unique on the real snapshot — a collision means one correction silently rules on two things, which is the very failure the audit exists to catch. A row-kind override MOVES the row between `approaches` and `subsections` rather than stamping a field, so a consumer reading only one list cannot miss it. The server binds an OS-chosen free port, so it can never collide with the one he plays on |
+| Fitting a row's rank ladder | `library/ladders.py` model 4 keeps all eight cutoffs and 45 reachable subdivisions. Mario I uses a supported fast peak, with the elite percentile as fallback; a widely shared record can be Mario I. Narrow ranges extend slower by one frame per subdivision. `ranks/timecurve.py` and its JS twin interpolate in frames. The exact fitting/Capless contract is in `docs/sheet-rank-standards.md`. |
+| Sparse rows and estimates | Every nonempty US, JP or untagged population fits independently, without a fill-rate floor. Empty rows use a published best/ideal or an audited related-row estimate, retaining actual sample count zero and explicit provenance. New observations replace estimates. Every generated ladder retains every tier. |
+| Which approaches become practiceable strategies | Every current row contributes through `adoptions.library_ladders` and `placements.row_identity`. `strategy_signature.py` supplies the stable calibrated profile for `adopt.match_vetted`, independently of grading. `sheet_strategy` retains canonical and variant-qualified names. |
+| Serving a fitted ladder to the ranker | `RankStandards.apply_sheet_ladders` replaces the Sheet foundation on refresh. Unchanged seed defaults yield; legacy edits and explicit US/JP per-cutoff overrides survive. Library decoration and Practice read the same resolved ladders. See `docs/sheet-rank-standards.md` and `chain-sheet-standards.md`. |
+| Which copy of the library a running app reads | `library/store.py` — THE newest-sheet-revision-wins rule, and it matters in BOTH directions: a refresh must survive an app update built earlier, and a newer release must still replace a stale local copy. Answerable only because a snapshot carries the sheet's OWN newest Log timestamp rather than our fetch time. `schema_version` is checked FIRST and independently — a copy written by an older build of this code is discarded whatever its revision claims. A refresh landing on an older sheet is `{applied: false}` rather than an error, and writes nothing |
+| The library's REST surface | `server/library_api.py`, documented in `docs/api.md`. Mounted unconditionally in `server/app.py` — reference data needs no tracker service, so a broadcast-only second instance still serves it. The refresh runs in a worker thread: it downloads ~5.6 MB and re-fits 617 ladders, and the POLLER shares this process, so a blocked event loop is a dropped star grab. An entity nobody has timed is a 200 with an empty list, never a 404 — but **a LINK counts as a mapping** (2026-08-14, his blank-page report: "once there's a connection to a library page, we should be brought there automatically"): the entity door resolves an unmapped entity to the target(s) whose rows are adopted onto it (piece links stamp `focus_row_key`, and `librarytarget.js`'s `focusRow` effect opens that piece centered on his standing band), else to its name match. Own mapping always wins; the sheet-mapped fixture segments are why the UI gate needed a rewriting proxy (`test_ui_library_link.py`) |
+| Serving the [[Rank board]] (every runner + you, one scope, MARELO-descending; one runner's breakdown widened against you) | `library/board.py` (task 3 of spec 2026-08-20-ranked-leaderboard), routed at `/api/leaderboard*` in `server/ranks_api.py` (never `/api/library/*` — this is MARELO's scope surface pointed at the sheet, not a library-browsing route). Consumes `library.ratings.rate_runners` (Task 2) and never re-grades a time itself — `tests/test_single_source.py`'s "a sheet entry's time graded against a standards ladder" row would catch a second `scoring.best_ladder`/`progress_for_time` call anywhere else in this zone, which is why the ladder lookup routes through `tracking.marelo.entity_ladders` instead. **Per-entity tier/division/next_tier/next_division/gain classification is `tracking.marelo.classify_entity`** — extracted in fix round 1 (2026-08-20) from `server/ranks_api.py::_score_scope`'s own inline copy, which called it inline for the user's own MARELO breakdown; both now share the one function (its own `tests/test_single_source.py` row: "the entity breakdown shape", tokens `division_for`/`gain_for`, owner `marelo.py`), so the user's numbers and a runner's can never derive this shape two different ways. `RatingsCache` (one instance per running app, held in `create_ranks_router`'s closure) holds the current `RatedSheet` -- every runner's times and scores, and the three readings the UI draws as its methods (`leaderboard`, `runner_breakdown`, `runner_summary`; a new reading such as the ghost is one more method here) -- rebuilding it on four inputs — library revision, adoptions map, grading version, and a hash of the WHOLE vetted standards store (`ranks_store.to_json()["version"]` is the bundled seed's version and never moves on an edit; see the module docstring). Grading is PB-basis always, whatever `rank_mode` says. **Exclusions APPLY** since round 1's third read (2026-08-23, reversing the design session's "a runner's denominator must not shrink because of the user's own choices" — his words: "excluded for all of the fake leaderboards & their pages as well"): `_scope_groups` resolves with his real exclusion set, the per-scope row memo keys on the resolved groups so a toggle reaches the next fetch without re-rating anyone, and the board's basis note no longer has an exclusion caveat. `RatedRunners.videos` carries the video of the entry that set each best time (`ratings.best_entries`), and the breakdown ships it as `video` so the runner page can play it beneath the row. **`/api/leaderboard`'s `omitted` field counts every runner left off `rows` for having no time in this scope** — the drop stays silent nowhere; a board that hides most of the sheet without a count reads as "this is everyone". All three routes are plain `def` so FastAPI threadpools them whole: scoring 448 runners measures ~29ms for the map, ~46ms to aggregate Overall, both past a 33ms game frame. **`star:15:1` (Rainbow Ride's Big House in the Sky) is a known scoring floor, not a bug**: it is one of only 2 of 252 sheet targets whose rows mention pause at all, and the only one where its TARGET label itself carries the `(PAUSE TIME INCLUDED)` convention marker (`library/mapping.py`'s trailing-parenthetical strip) — so its best real community time (35.23s, ikori) sits at 3.52× its ladder's Mario cutoff (10.00s), against a corpus median of 0.98× over the other 111 entities; every runner scores near the bottom there for a reason that is not skill, and it is left uncorrected on purpose rather than silently dropped from the board |
+| The player-click door (task 5): a runner's name inside the Library opens their [[Runner page]] | `librarytarget.js` — an `onOpenRunner` prop threaded from `library.js`'s own `openRunner` (app.js's cross-tab door, `.claude/rules/ui-ranks.md`'s Runner page row) down through `LibraryTarget` → `Section`/`PiecesList` → `DivisionGroup`/`LeaderboardList`/`LeaderboardRow` → `ExampleCard`/`PlainEntry` — the SAME two row components every entry already draws through in both the ladder view and [[Leaderboard mode]], and inside them ONE `RunnerName` component, so a runner's name reads and behaves identically wherever it appears. **Since the fifth read (2026-08-23) a [[Leaderboard mode]] row is ONE condensed line** — `LeaderboardRow`: position, rank cap, `RunnerName`, time, and the practice log's ▶ `icon-button` where the entry has a video, folding `ExampleMedia` open beneath the line through `Disclose` (closed by default; the tray "+" stays on the Ladder reading's cards — he listed the four things a leaderboard row holds). `ExampleMedia` is the media half of `ExampleCard`, exported, and is the ONE player for a sheet entry: the ladder's cards, this list and the Rank tab's runner page all play through it. `RunnerName` draws a `<button class="library-runner-link textlink">` (`.textlink` = index.html's one look for navigating text: link blue, underlined at rest, gold on hover) only when `onOpenRunner` is supplied; the synthetic "You" row (`entry._isYou`, [[Leaderboard mode]]'s own PB insert) never gets one — it has no runner behind it. **The reverse trip (round 1, 2026-08-22)**: the [[Runner page]] opens this page on a runner's exact entry through the Library intent's `runner` + `timeCs` keys (`library.js` → `LibraryTarget`'s `focusRunner`/`focusTimeCs`); the arrival effect resolves WHICH approach holds that time itself (`visibleEntriesFor`, the same mode filter `ratings.py` grades by) and lands on the `[data-runner][data-time-cs]` element — stamped on `ExampleCard` AND `PlainEntry`, because 37k of 44k entries have no video and the old `data-video` key could not find them. And the reader's OWN standing (his Rank tab's names, 2026-08-23): the intent's `you: true` → `focusYou`, and the open `Section` auto-opens the `.library-division.is-you` group, scrolls it to centre and blinks it. Detail in `.claude/rules/ui-ranks.md`'s Runner page section |
+| Assigning a library row to a segment the user BUILT | `library/adoptions.py` — a star approach adopts itself at scrape time (`adopt.py`), a movement cannot: the sheet is finer than our segments (113 rows against 63) and its subsections have no segment at all, so the user builds one and points a row at it rather than us inventing 113 (user's ruling, 2026-08-05). An assignment is the USER's fact — it lives in their data dir, keyed by the row's stable name so a refresh keeps it — and must not be confused with `library_overrides.json`, which is a correction to our READING of the sheet, is committed, and is the same for everybody. An approach contributes its own name unless that merely repeats its target; a subsection ALWAYS contributes `Standard`, because the row names the piece being practised rather than a distinct way to perform that piece (Volcano Entry, 2026-08-12). Adopted ladders merge into the SAME sheet-derived layer as the bundled ones, and `apply_sheet_ladders` re-merges from scratch on every change, which is what makes an unadopt actually remove a strategy. Every refusal names its reason (409, not 400 — the request is well formed and the refusal is about the world): a silent no-op is indistinguishable from success until a rank fails to appear |
+| Where the sheet is fetched from | `library/source.py` — one place, because the tool and the server both need it now |
+| Library entries as example clips for the standards table | `library/examples.py` — `example_clips(payload, adoption_rows, entity, has_jp_ladder)`, the join behind the practice log's threshold links (task 0098; see the BUILT section below). Wired in `server/ranks_api.py::create_ranks_router(service, library=, adoptions=)` from app.py |
+| The **sheet best** for a strategy — the standards table's bottom row | `library/examples.py::sheet_best`, sharing `strategy_entries` with `example_clips` so a strategy's fastest time and its example videos come from the SAME rows (two resolutions of "which sheet rows are this strategy's" is the divergent-duplication class). ONE difference, and it is the point: an entry with **no video still counts**, because the question is what the fastest recorded time IS — a videoless faster run beats a slower filmed one and `video` is simply null. Ties keep the sheet's own answer (`Multiple [3]`) rather than inventing a winner. Served as `sheet_best` on `GET /api/ranks/standards?entity=`, where a **dead video costs the LINK and never the row** (`sheet_best(..., dead_urls=)`, the same liveness verdicts `cutoff_videos` takes) — the opposite trade from `cutoff_videos`, where the link IS the payload; the reason sits on the function that makes the trade. Drawn by `ui/components/standards.js` (`.claude/rules/ui-ranks.md`) |
+| Whether an example video is still watchable | `library/videocheck.py` (probe/classify/staleness/dead-set, network injected) + `tools/check_videos.py` (the sweep; also runs after `tools/scrape_sheet.py`, incremental via the committed verdicts) + `data/video_checks.seed.json.gz` (`core/paths.py::bundled_video_checks`, shipped in the exe). The standards API filters every example pool through `dead_urls`; user-attached override URLs are exempt — a hand-picked example is his fact. See the "Not every video link resolves" section below for the superseded ruling |
+| Refreshing the bundled snapshot | `tools/scrape_sheet.py` — and **READ the `unknown:` list it prints**; that list is the deliverable, because a target we cannot name looks identical to a target the sheet does not have. `--from <file.xlsx>` re-derives offline. Output is gzipped with `mtime=0`: 4.51 MB of JSON becomes 0.42 MB for 7 ms of load (26 ms against 19 ms), the exe ships it as-is, and an unchanged sheet produces a byte-identical file |
+| The WIKI MARK beside a target's name (Ukikipedia's Ukiki face → its RTA Guide page) | `ui/components/librarytarget.js` draws it from the server's `ukikipedia` field (`server/library_api.py::decorated`), which `links.py::ukikipedia_url` resolves against the wiki's own page list — see `.claude/rules/ui-practice.md`'s links row for the resolver, the aliases and the scraper. Null → no mark, never a dead one; the art is `ui/assets/ukikipedia.png`, the wiki's own favicon (256px, transparent) trimmed to 96px. Render-gated in `tests/test_ui_library_target.py` (present + painted + on the h3's row for a star; absent for a door-to-door lobby movement) |
+| The Library tab's own rules (section order, bands + subdivisions, the scoring twin, the video-provider registry, the grid math, the trim→import mapping) | `ui/components/librarymodel.js` — import-free of Preact/the DOM on purpose (caps.js and format.js, both themselves import-free, are the only imports), so `tests/test_library_model_js.py` drives every one of these under node with no browser. `sectionOrder` is a SECOND door beside `ladderorder.js::slowestFirst` on purpose, not an unpinned duplicate of it: that one orders a standings TABLE's columns (a run getting faster on one already-chosen strategy), this one orders a PAGE's sections (which strategy a climbing reader meets first) — an unproven approach sorts LAST here and FIRST there, and neither reads the other's ladder key. **The floor tier is the registry key `Iron`** (round 1, 2026-08-07 — "it's the CAPLESS rank", rendered via `capName`), never a third name. **The scoring twin** (`SCORE_ANCHORS`/`scoreFor`/`divisionWithin`/`timeForScore`, mirroring `ranks/scoring.py`) is what lets `bandsOf` split every tier band into five subdivision shells with time brackets — a deliberate duplicate of a curve the browser cannot round-trip for (44k entries re-banded per JP/US flip), so it carries the standing remedy: `tests/test_cross_language_parity.py` drives BOTH real implementations over real ladders and every division edge, mutation-proved. Python's `round()` is half-even; the twin's `pyRound` matches it. **`videoSource(url, parentHost)`** names a player per format (census 2026-08-07: YouTube 6,579 · Twitch 397 · X 384 · bsky 22 · files/images · link-out fallback); Twitch players refuse to load without `parent=` matching the embedding host, and embed.bsky.app takes only a DID — a handle URL ships `embed: null` and the card resolves it on click. `trayToImport` is the tray→`POST /api/compare/import` translation (below) |
+| SEARCHING the library — the box on the landing grid, and what a hit means | `ui/librarysearch.js` (`searchTargets`/`resultSub`/`fold`, import-free so node drives the RULE — `tests/test_library_search.py`) + `ui/components/librarynav.js`, which draws the box above whichever layer is showing. Round 12, his words: *"when you type the search query, it automatically finds the segment/star that you want to find… show the terminal nodes within this library (e.g., the segments / stars that we'd click into)"*. Three decisions, each his, each a fork offered and answered rather than guessed: **a result row is always a TARGET**, matched on its own label AND on its approaches' names (so "LBLJ" finds the target that documents it and the row's second line says which approach matched — the rejected alternative listed targets and approaches as two kinds of row, which gives one click two destinations); **the results REPLACE the grid** rather than floating over a dimmed one, so the page never holds two scrolling regions; and searching never touches `openGroupKey`, so clearing the box puts back exactly the layer you were on. Matching is prefix-per-word and AND-ed over a fold that turns punctuation into spaces — "bob omb" finds "Bob-omb", "cage tock" finds "Tick Tock Clock — Roll Into the Cage". **THREE things are searched, in a fixed order of increasing coarseness, and each only gets a target the ones before it did not claim**: the target's own name (with its course), its approaches' names, then WHO has a time on it (2026-08-10, his ask the moment the round landed). A runner shares the word list with the target's name, so "cheese05 ttc" narrows a prolific name to one course instead of returning all 324 targets they appear on; candidate runners are those at least one word touches, which keeps an ordinary query from walking 448 names across every target. The names ride `GET /api/library`'s `approach_names` (`library/store.py::index`, 631 names / 15.9 KB) and its `runners` ROSTER — `{name: [target position]}`, measured at 139 KB deduped against 340 KB for the obvious per-target shape, which is why the roster and not symmetry with `approach_names` — so nothing fetches per keystroke; an older index without that key degrades to label-only rather than throwing. `.library-find*`/`.library-result*` are their OWN classes — `.library-search` and `.library-target-search` each belong to another surface, and index.html's own comment records what sharing one cost. `.library-result` names `justify-content` explicitly: a bare `display:flex` on a `<button>` centres its children in Chromium, which drew every row floating in the middle of its card. Sweep story: `library-search` in `tools/uilab_project.py`, which has to back OUT of auto-open's target page first, because the box lives on the grid |
+| Browsing — course grid → a group's target grid | `ui/components/librarynav.js` — two layers like the target picker's own depth=2 (`entitymodal.js`), but inline PAGE state (`openGroupKey`), never a second `PickerDialog` mounted over the tab: the Library's nav IS the page, and a dialog with nowhere to close to was the wrong reuse. Renders the picker's own `PracticeCell` grid so a course looks identical wherever you pick one from. A target with no entity to look up by (a Castle Movement, a stage RTA) hands back its numeric `index` into the fetched `/api/library` body instead of an entity key — `library.js` resolves either door to the one full-target shape `librarytarget.js` needs |
+| The target page — one section per [[approach]], each a [[rank]]-banded, [[division]]-subdivided standings surface over real [[entry]] rows | `ui/components/librarytarget.js` — `Section` is a single-open accordion (the parent owns `open`, never each section), auto-expanding on whatever [[matched strategy]] you are currently graded on (`librarymodel.js::autoExpandName`) or the beginner-most section otherwise. **Each tier band holds five `DivisionGroup`s, collapsed by default** (round 1, 2026-08-07: "find the exact subdivision I want to look at") — header carries the winged numbered cap, the time bracket, counts, and the ◀ you marker at division precision; an EMPTY subdivision is a dimmed plain row, never a button that expands to nothing. Entries WITH videos draw big `ExampleCard`s (thumb/branded tile → embed on click, native `<video>` for files, honest "watch on <site>" for the unembeddable); entries WITHOUT draw compact `PlainEntry` chips — 37,268 of 44,701 entries carry no video, and rendering them as players was round 1's "the videos don't load". **Anchor ids are `lib-band-<targetIndex>-<slug>-<slug(tier)>`, never just the strategy name** — `matched_strategy || name` collides 10 times across 8 real entities, so every anchor is scoped to its OWN `_targetIndex` as well. **The JP/US control is a MODE that FILTERS** (round 1 item 4): entries tagged with the other version disappear, untagged entries show in both, bands/counts compute AFTER the filter; the `ladder_version` chip renders independently beside it. **Round 24: a SET, defaulting to BOTH, each tagged entry wearing its flag — see the JP-standards section below**. Nothing here decides which ladder an ATTEMPT grades on (the JP-standards section above — console-support branch). `entryTrayKey` (the tray item identity a `+` click sends downstream) lives here, not in `librarytray.js`, because only this file knows an entry's owning [[approach]]. Tests that need cards on screen expand the subdivisions first (`EXPAND_DIVISIONS` in each UI test file). **Round 5 — the link door lives here too**: `LinkControl` (button → segment menu → `POST /api/library/adopt` → linked chip + Unlink; refusals show the server's own 409 detail where the click landed) renders inside a movement approach's open section and on every piece (the sheet's subsections — compact rows at first; since task 0100 each piece is a FULL `Section` under the Pieces heading, same bands/subdivisions/examples as a strategy, joining the page's single-open accordion, identity keyed on `row_key` because 19 targets repeat a row name; the door renders via `Section`'s `door` prop, outside the fold and outside the head button, and the strategy-order guard scopes to `:not(.library-piece-section)`); eligibility is `librarymodel.js::linkable` (entity-less approaches + all subsections, `row_key` required), rows arrive decorated with `row_key`/`adopted`/`adoptable` from BOTH full-target doors (`library_api.py::decorated`), one `/api/segments` fetch serves menu options and chip names, and a success calls `library.js::reloadRows` so `adopted` is always re-read from the server, never guessed client-side. The fixture passes `adoptions_path` into `create_app` so render tests clicking adopt write scratch, never `data/library_adoptions.json`. **Round 6 — an association SHOWS, and some make themselves**: `adoptions.py::auto_match` pairs an entity-less target with a live segment by normalized NAME equality (ladder proximity was measured structurally unable: the corpus hand-seeded 3-tier Standard rows never reach `_distance`'s 4-shared-tier floor; 184 rows × 18 vetted strategies scored zero), served as `matched_segment` per request (`segment_names` callable, wired in app.py off the live db) so a segment built mid-session pairs on next load; an explicit adoption outranks it, and a matched row hides the offer strip (the chip says it). The vetted-name-collision refusal is GONE — the assignment lands, the vetted ladder keeps grading (read-merge). Standing: `librarymodel.js::standingOn` grades the segment's best `pb_cs` (new on `/api/target/strategies`) by the ROW's own displayed ladder — the same walk that files entries, so the ◀ you pin and the chip cannot disagree on this page; no PB → Capless verbatim ("if there are no times, it's capless"). One `useAssocStandings` fetch per distinct segment; pieces associate only by their own link, never by the target's match (a part must not wear the whole's PB). **Round 7 — the door is TARGET-level**: `TargetLinkControl` sits beside the page's own name (his ask: "moved near the top … as an 'overarching' thing") and one click adopts EVERY laddered approach (`adoptions.py::adopt_target` → `POST /api/library/adopt_target`, one save + one sync so a half-linked target is unreachable; `unadopt_target` reverses the batch); approaches carry NO row-level strip any more, pieces keep theirs (`LinkDoor` is the shared chrome). The menu OVERLAYS (absolute under the button, page height measured byte-identical open/closed) per his 2026-07-26 overlay ruling. **Round 8 — the REVERSE door**: the segment builder (`ui/components/segments.js`, `builder-liblink` row beside the origin row) drives the SAME adopt_target/unadopt_target endpoints — an existing segment links immediately, a NEW one holds the pick and applies it right after Save mints the id (the segment saves even when the link fails; the error reports beside Save); `GET /api/library/adoptions` grew the two reverse views it reads (`by_entity` from approach assignments only, `matched_by_name` so the editor never contradicts the Library chip with "Not linked"). **Task 0096 — the RECORD door**: every unlinked link door (pieces AND whole-target) offers "Record a segment…" — the Segments tab's own recorder, pre-named after the row, parented to its entity, self-linking on save; mechanics and traps in `.claude/rules/recorder.md`'s library row |
+| A runner search on the TARGET page — which sections survive it, and which open | `ui/components/librarytarget.js` — his report, 2026-08-31: *"it should automatically expand all of the dropdowns that are relevant, and hide any dropdowns that are not relevant"*. Round 4 already did this to bands and subdivisions; this is the SAME rule one level up. A section holding no match for the live query does not render at all; every section that holds one is FORCED open (`effectiveOpen` — `expanded` is never written, so his manual accordion choice is exactly where he left it the moment the box clears). `OverallStandards` stands down for the query's duration: it holds no runner times, so it can never be a result. The page says "No runner here matches" ONCE rather than per section, which is why `LeaderboardList`'s old search-blame sentence is DELETED rather than left dead — a section that survives the query always holds the match that saved it, so its own list can only be empty when the board itself is (the L6 test now asserts the section disappears instead). `hasRunnerMatch` is the ONE predicate both the section and the page read, so they can never disagree about whether anything is on screen; it is deliberately not derived from `shownBands`, though the two are equivalent by construction — `bandsOf` files every entry into some band |
+| The **Overall Rank Standards** section at the top of a target page | `ui/components/overallstandards.js` reads `/api/ranks/standards?entity=&version=`: authoritative `overall_curve`, separate `overall_overrides`, and `calibration_revision`. `librarymodel.js::overallCurveOf`, `curveBands` and `curveStandingOn` evaluate its full nodes through `ui/timecurve.js`; eight cutoffs cannot reconstruct generated Overall, and no strategy owns its tiers. Only an older payload without `overall_curve` uses the legacy adapter; malformed compiled data fails visibly. The page resolves its local grading entity from its own key, explicit association or name match; an unlinked movement retains the explanation beside its link door. The section opens independently of strategy accordions for comparison. Generated curves show **nine bands, easiest first from Capless to Mario, each with five indented divisions** (45 total), cap art, shared range labels, and the current/next markers. A reader with no saved time sits at Capless V; an unrankable curve stays unranked. The current editor sends seconds to `PUT /api/ranks/overall/{entity}/{rank}?version={version}`; Reset sends `DELETE /api/ranks/overall/{entity}?version={version}`, affecting the displayed US/JP region. Fixed cutoffs are labeled, invalid saves keep an error visible, and reset returns to current generated Overall without editing Strategy. Compatible new observations can move unpinned cutoffs; the basis text distinguishes Sheet population/family evidence, estimates, and an inherited-pin legacy fallback. Revision changes refetch the payload; identity/version switches discard the old editor state. Guards: `tests/test_overall_model_js.py` (full nodes, all 45 attained ranges, malformed payloads), `tests/frontend/overallstandards.test.js` (actual editor, region, error and reset behavior), and `tests/test_ui_overall_refresh.py` (refresh without remount). [Living rank calibration](../ranking-calibration.md) owns fitting, tuning and activation. |
+| The [[tray]] and the "vibes grid" it can open | `ui/components/librarytray.js` — TWO tiers on purpose, and this file only ever builds the first: several YouTube embeds playing roughly together, honestly labelled (`HONESTY_LINE`) as not frame-synced, because an iframe `start=` param is not a shared clock. `onStudy` is a prop — this file places the "Study in Compare" button and reports `studying`; `library.js`'s `studyInCompare` owns what the click actually does (the second tier). The grid overlay is a plain fixed backdrop, not the shared `Modal`, because every `Modal` call site snaps open/closed and this surface was named as one that must animate both ways (`.claude/rules/ui-core.md`'s state-change-animates law) — it reuses the practice log's own tuned `feedTuning()`/`curve()` rather than inventing a new tunable |
+| Compare's fold-in — WHY `compare.js` itself is untouched | `ui/components/library.js::studyInCompare` — Compare's own nav entry is gone (`app.js`'s `NAV_GROUPS`), replaced by the Library, but the `Compare` component, its props (`{t, intent, clearIntent, active}`) and its own state are byte-for-byte what they were: the pane never moved, only the door into it did. "Study in Compare" imports every tray item under its own `entity_key` via `POST /api/compare/import` (one item failing never sinks the batch — each still gets its own import + optional trim PUT), then calls the SAME `enterCompare`/`openIds` door an attempt row's own Compare button already used, landing on the first imported item's (entity, strat) pane with every OTHER entity's import still reachable from Compare's own "load existing" dropdown (never silently dropped, just not shown at once — Compare's own one-pane-at-a-time limit, not a new one this added) |
+
+## "Subsection" is the `subsection-tracking` branch's word, not ours
+
+This zone calls a sheet row a **subsection** and will keep doing so, but the
+NOUN belongs to `subsection-tracking`, whose definition is the better one and
+is the one in `docs/glossary.md`:
+
+> A piece of a [[star]] or of a [[segment]], practiced on its own — the climb
+> rather than the whole star. A subsection IS a segment, and names the target
+> it belongs to, so it carries its own personal best, its own ladder and its
+> own rows in the practice log.
+
+That branch also owns **moment** (`detectors/moment.py`) — something Mario
+does that a subsection can start or end on, read off his own action byte
+rather than off where he stands, which is why a subsection can begin and end
+inside one course. This zone had briefly written a competing `### Subsection`
+row about sheet rows; it was removed on 2026-08-05 rather than merged, at the
+user's ruling, because two definitions of one noun is exactly what the
+glossary exists to prevent.
+
+The two fit together, and that is the point rather than a compromise: the
+sheet's 122 subsection rows ARE subsections in their sense — pieces of a star
+practiced on their own — and each already carries a fitted ladder off real
+community times. Adoption is the join.
+
+**Do not build moment detection, live moment feeds, or subsection triggers
+here.** That work is theirs, is further along, and touches
+`tracking/segments.py`, `tracking/eventlabel.py`, `tracking/synthesize.py`,
+`server/api.py` and `main.py` — all of which this branch also touches, so
+whichever lands second reconciles.
+
+## JP standards: registered, resolved by one rule, the game version setting decides which
+
+User's rule, 2026-08-07: **a JP time gets its own standard only where a
+difference is ANNOTATED; everywhere else the base ladder is COMBINED and
+applies to both modes.** Two sources annotate differently and ONE rule resolves
+both — `ranks/standards.py::ladder_cs(ek, strat, version="jp")` overlays the
+annotated JP values rank-by-rank onto the base:
+
+- **Vetted** — `rank_standards.seed.json` `jp_strategies` is SPARSE (only the
+  ranks whose JP time differs; 79 strategies / 617 cells, emitted by
+  `tools/scrape_ranks.py` since the beginning and unread until 2026-08-07).
+- **Sheet** — `sheet_ladders.seed.json` v2 mirrors the vetted two-layer shape
+  (`strategies` + `jp_strategies`), a FULL fitted JP ladder where a row's JP
+  population clears the feasibility floor on its own (58 library rows qualify;
+  6 of the adopted grading strategies carry one). `fit_payload` stamps it as
+  `ladder_jp`, and it rides adoption (`adopt.py` and user `adoptions.py` both).
+
+**WHICH version an attempt grades on is decided by the game version setting,
+not here** (2026-08-15, superseding "console-support's N64-mode spec decides
+it"): `core/modes.py::effective_version` resolves Auto-detect/JP/US and the
+standards store's `grading_version` is what every unversioned `ladder_cs`
+read inherits — see `.claude/rules/ranks.md`. This zone's contract is the
+DATA: `has_jp_ladder(ek, strat)` says a split exists, `ladder_jp` rides the
+payload. **The Library's JP/US control is ONE page-level [[region switch]]
+in the hero** (`ui/components/versionswitch.js::RegionSwitch`, mounted by
+`library.js`, threaded to every `Section` as a prop; the per-section
+`library-jp-toggle` chip was retired 2026-08-15 — "just have a single page
+switch"). Since round 24 it holds a SET and **defaults to BOTH regions**,
+and it still grades nothing. At least one region stays on, enforced inside
+the control (the sole segment is `disabled`, so the reason lands where the
+click does) rather than in each of the two pages that mount it. The LADDER
+the bands are cut from is still one region and still follows the effective
+version (`primaryRegion`), so the Overall Rank Standards block refetches
+`?version=` on that; the hero note names the state either way — "Both
+regions shown" by default, "JP only · you are graded on US" once narrowed.
+
+**What round 24 changed inside a Section.** `visibleEntriesFor(item,
+versions)` takes an array now — a bare string still works, so
+`ratings.py`'s genuinely single-region contract reads here unchanged — and
+`Section` splits ONE question into two: `shownVersions` decides which
+ENTRIES are listed, `version` decides which LADDER the bands are cut from.
+So in both-mode a JP-tagged entry sits in a band cut from the US ladder.
+That is stated, never silent, in two places: every TAGGED entry wears its
+country's flag through `RunnerName` — the ONE door all three entry
+renderers (ExampleCard, PlainEntry, LeaderboardRow) draw their name
+through — and a row that HAS two ladders wears a chip naming which one cut
+the bands. An UNTAGGED entry wears no flag on purpose: it is real in both
+regions (`visibleEntriesFor` shows it in either mode), so a flag would
+claim a distinction the sheet never made. The flags themselves are
+`ui/components/regionflag.js` — the flag-icons 4x3 SVGs held verbatim, never
+the emoji (Windows renders a flag emoji as the two letters) and never hand
+drawn; `tests/test_single_source.py`'s "a game region drawn as a flag" row
+keeps the asset paths in that one file. TRUE RECTANGLES and NO CSS around
+them: the round shipped Twemoji's rounded-in-a-square flags on a white
+backing plate for an hour and he rejected both in one line — "Both flags
+should be rectangular, since that's what flag shaped means. No white borders
+like that." A
+MATCHED strategy's standing is the SERVED one at the graded version and is
+re-walked against the section's displayed ladder only when the page shows
+the other (`librarymodel.js::matchedStanding`, node-proved) — the sheet's
+fitted ladder differs from the grading ladder for every matched approach, so
+an unconditional re-walk contradicted the practice card's medal (review
+2026-08-15). Do not build mode detection in this zone.
+
+## Owed on the Overall Rank Standards section, both measured 2026-08-10
+
+**1. "Set by" does not say whether that ladder is VETTED or SHEET-FITTED, and
+it needs to.** Measured, not guessed: on **41 of 117 entities carrying a
+ladder, a sheet-fitted strategy sets at least one overall cutoff.** This zone's
+own standing rule is that a fitted ladder is labelled and never presented as a
+Daily Star standard (39–42% same-tier accuracy against a real vetted one), and
+this surface currently names the strategy with nothing beside it. The
+ingredient is already in the payload the section fetches —
+`fitted_strategies`, a sibling list on `/api/ranks/standards?entity=` — so this
+is a display decision rather than a data one. Re-derive the number with
+`scoring.best_ladder_owners` over the two seeds rather than trusting this
+sentence.
+
+**2. Nothing on the Library page refetches, and the section inherits it.**
+`useEntityStrategies`, `useAssocStandings` and `OverallStandards`'s own fetch
+all key on the entity alone, so a cutoff edited in the practice log's
+standards panel, or a PB saved mid-session, does not move this page until it
+remounts — and the Library stays MOUNTED behind `display:none` when you leave
+the tab (`.claude/rules/ui-core.md`'s scoping note). Pre-existing rather than
+introduced by the section; one revision counter threaded through all three
+hooks fixes them together, and `store.js`'s `REFRESH_ON` already carries
+`rank_standards_changed` for the session view to key off.
+
+**The guard-shaped lesson, for whatever lands here next:** every render guard
+on this page rode the fixture's own seeded star, which always has a PB — so
+the whole no-time state was unreachable by the gates while looking fully
+covered. `tests/test_ui_library_target.py` now browses to a star the fixture
+seeds nothing for. Before trusting this file's guards on a NEW state, ask
+which fixture entity can actually reach it.
+
+## Every standard links to its own examples — BUILT (task 0098, 2026-08-14)
+
+The 2026-08-05 ask ("what are all the examples of achieving this rank?"), and
+his 0098 wording answered the open question this section used to carry: an
+example belongs to the threshold whose band holds its time — *"within Waluigi,
+we would show an example closest to the next highest tier of 12"60 here, so
+between 12"60 and 12"96"* — which is exactly `classify.resolve_cutoff_videos`'s
+existing fastest-in-band rule, so the build only widened the clip SOURCES.
+`library/examples.py::example_clips` files every library entry carrying a time
+and a video under the strategy its row grades as (the same three doors that
+give a strategy its ladder: explicit adoption → matched/own-name approach on
+the target's entity; an unadopted subsection never reaches its target's
+entity, and a JP entry drops only where `has_jp_ladder` annotates a
+difference). `ranks_api.py::get_standards` merges those into `cutoff_videos`
+and ships the raw pool as `clips`, which `standards.js` bands into per-
+subdivision examples through `librarymodel.js::bandsOf` — the Library page's
+own filing walk, so the two surfaces cannot disagree about a clip's division.
+Measured on the bundled data: linked tier cells 330/3069 → 1500/3069; the
+residue is 802 cells whose strategy has no sheet row at all and 767 whose band
+holds no published video — his "(if it exists)" case, not a join bug.
+
+## Two facts about the data that are not bugs
+
+**A row can belong to a different entity than its target.** Under
+`Bowser in the Dark World Red Coins` the `Red coin star Xcam` rows are the
+8-red-coin STAR, while the longer parent rows include the travel to the pipe
+and belong to the pipe segment; the same shape holds for every `+ 100c` target,
+where the `100 coin star Xcam` row is the 100-coin star itself and the parent
+row is the combined reds-and-coins run (user, 2026-08-05). `library/audit.py`
+lets a row carry its own `entity_key`, inheriting its target's when it does
+not. **Phase 2 must fit a ladder against a row's OWN entity**, or star:16:0
+gets a ladder built from pipe-inclusive times.
+
+**Not every video link resolves — and since round 2 of task 0098 the
+verdicts are CHECKED where a single link is THE example.** Sheet entries go
+private, get deleted, or are purged from their host, and nothing on the sheet
+marks them. The 2026-08-05 ruling ("a dead link is a nuisance… do not build
+link-checking") held for the Library page, where a row shows tens of entries;
+he superseded it himself on 2026-08-14 for the standards table, where one
+video is the example for a cutoff: *"this is actually a big problem when we
+have a specific video as the example standard in the table."*
+`library/videocheck.py` + `tools/check_videos.py` sweep every example URL
+through per-platform probes (YouTube/X oEmbed, direct-file status;
+Twitch/bsky have no cheap unauthenticated probe and are never marked dead —
+only an explicitly dead-shaped status may kill a link, a timeout never), and
+the standards API filters every example pool through the verdicts, so a dead
+example falls back to the next eligible one via the existing fastest-in-band
+rule, or to no link. The Library page's own entry cards still render
+unfiltered — tens of entries per row, the original ruling's premise — and
+`dead_urls` is available if that ever changes. Still true: never treat a 404
+as a data bug.
+
+## Numbers this zone is pinned against
+
+Measured 2026-08-04 and asserted as FLOORS in `tests/test_library_seed.py`, never
+as equalities — the sheet gains rows daily and an exact count would go red for
+the community doing exactly what we want.
+
+252 targets · 123 mapped onto 112 entities · 495 approaches · 122 subsections ·
+44,749 entries · 7,452 videos · 448 runners · 0 unknown.
+
+(The sheet grows daily: entries and videos both moved overnight between
+2026-08-04 and 2026-08-05. Approaches and subsections moved by exactly 25 when
+the `star Xcam` rule landed. **Approaches FELL, 509 → 495, on 2026-08-10** when
+the version token started being read inside compound parentheticals and 14
+JP/US pairs finally merged — a floor is the right shape for a count the
+community grows, and the wrong shape for one a parser fix corrects downward,
+so re-derive it rather than assuming a drop is a loss.)
+
+**Every row of the sheet is accounted for, and that is checkable rather than
+believed** (2026-08-09): 790 worksheet rows → 702 bracketed data rows → 702
+`SheetRow`s → 617 library rows, the other 88 being 48 section headers and 39
+blanks. The audit that answers "did we miss anything" cannot be a diff of our
+output against our output; it walks column A and asks what became of each cell.
+Two header rows (`7. Lethal Lava Land`, `★ SL`) carry a stray time in one
+runner column and are correctly ignored — they have no bracket id and no name.
+
+## Proving the classification guard
+
+Mutation-proved against the real workbook, three ways, and the first one is the
+surprise:
+
+1. **Repaint every grey font black** → still parses, all 147 subsections found.
+   The id rule carries it, so the font is NOT load-bearing on its own — which
+   means a font-only mutation cannot prove this guard has teeth.
+2. **Give one subsection a NEW id AND a black font** → REFUSED by name. Only
+   the temporal veto is left, so this is the mutation that proves it.
+3. **Give it a new id and leave it grey** → parses as a subsection. That is the
+   case with no counterexample on today's sheet, and it must keep working.
+
+The general shape, which cost a wrong step in the plan: **a mutation that two
+guards both catch proves neither of them.** To prove guard N has teeth, disable
+every OTHER guard in the same mutant.
+
+The same trap in a second form, found 2026-08-05: deleting the `star Xcam`
+rule left `test_every_star_xcam_row_is_an_approach` GREEN, because that test
+reads the shipped snapshot and the snapshot had the human's overrides applied
+to it. A test over the ARTIFACT cannot guard the RULE that produced it. What
+closes it is `test_no_correction_is_load_bearing_without_a_reason`:
+`apply_overrides` stamps `overridden` only on rows it actually MOVED, so a
+correction the parser now makes unaided leaves no stamp, and a correction that
+still moves something must carry a written reason. Delete the rule and all 25
+become load-bearing at once — mutation-proved in both directions.
+
+## Historical calibration evidence — 2026-08-05
+
+The following records describe the earlier model, retained for the calibrated
+identity matcher in `strategy_signature.py`. Task 0126 superseded its grading,
+coverage, seed precedence and adoption policies. The current contract is
+`docs/sheet-rank-standards.md`; the historical constraints below are not current
+implementation instructions.
+
+The spec is a local file; this is the committed record.
+
+**A LADDER BELONGS TO A LIBRARY ROW, NOT TO AN ENTITY.** This is the design and
+it is the thing a session gets wrong: asked which *entities* would gain a
+ladder, the answer is ZERO — all 112 entities the sheet maps to already carry a
+vetted Daily Star ladder — and that reads as phase 2 having nothing to do. It
+is the wrong denominator. Every one of the ~617 library rows (495 approaches +
+122 subsections) has its own distribution and takes its own fitted ladder,
+whether or not we currently map it to anything. A Castle Movement row keeps its
+ladder in the library for however long it takes a segment to exist for it.
+User's correction, 2026-08-05: *"if we have an approach in the library, it
+should have rank standards derived and ready to go for adoption"*.
+
+**The model is the percentile, and it is now the DEFINITION rather than an
+approximation of Daily Star.** Fitted cutoffs sit at these percentiles of the
+row's own distribution, median over 204 vetted ladders matched to sheet
+approaches:
+
+| Mario | Grandmaster | Master | Diamond | Platinum | Gold | Silver | Bronze |
+|---|---|---|---|---|---|---|---|
+| 6.7 | 21.7 | 45.0 | 65.2 | 80.4 | 89.3 | 94.0 | 98.2 |
+
+**It cannot reproduce a vetted ladder tier-for-tier, and that is structural
+rather than fixable.** Held out, a fitted ladder gives a real recorded time the
+same tier 39–42% of the time and lands within ONE tier 75–78%. The reason: the
+median gap between adjacent tiers in the vetted ladders is **2.72%** — only
+1.32% between Mario and Grandmaster, 1.88% to Master — while the model's median
+time error is 1.5–2%. The error is the size of a tier, so no model fitted from
+20–150 community times can resolve them. Do not re-litigate this by trying
+another model form: bucketing by duration (2.04% vs 2.07%), scaling by the
+distribution's spread (2.22%) and a canonical shape off the sheet best (which
+collapses to 23% same-tier) were all measured and none helped. The user's
+ruling on that measurement was to **adopt the percentiles as the definition**
+and label a fitted ladder as sheet-derived, never as vetted.
+
+**Fitted ladders GRADE for real** (user, 2026-08-05) — a sheet-derived ladder
+becomes the real ladder wherever the community publishes none. Vetted Daily
+Star ladders are still never touched, and that invariant is best kept
+STRUCTURAL (a separate file the vetted store falls back to) rather than by a
+test over one merged file.
+
+**Error scales with sample size**, which is what a feasibility floor should be
+set from: 20–49 entries → 4.19% median error, 50–149 → 1.94%, 150+ → 1.46%.
+The user explicitly DECLINED an accuracy floor; a floor may only exist because
+a distribution is too small to define eight tiers at all.
+
+**Adoption, and the duplicate it would otherwise create.** Star approaches
+auto-adopt as strategies so they are in the picker with a ladder ready;
+subsections do NOT (they would clutter the segment list) and wait for the user;
+Castle Movements wait for a segment definition. Auto-adoption must dedupe,
+because the sheet's "Mario Wings to the Sky" and our vetted "Skyjump" are one
+strategy under two names — match a vetted ladder to a sheet approach by how
+close its Mario cutoff is to the approach's sheet best, which paired 204 at a
+median 0.33s and is the same matcher the fit measurement uses. The vetted
+ladder wins on a match; only unmatched approaches are adopted (~35 today).
+
+**A row's OWN entity is what a ladder fits against** — see the Bowser and
+`+ 100c` note above, or star:16:0 gets a ladder built from pipe-inclusive
+times.
+
+**Clusters feed the fitter, not only the display**: a percentile-placed cutoff
+landing inside a valley mints a rank band nobody can occupy, so it moves to the
+valley's slow edge. Multi-modality COUNTS are bandwidth artefacts (3–15%) and
+must not be quoted; which approaches surface is stable — Into the Igloo, Time
+stopped, Log firsty, Navigating the Toxic Maze, the 100-coin red-coin runs.
+
+**The user will audit every approach and subsection himself eventually**, since
+validity often cannot be read off a name without playing the star. Build for
+that: the audit page is the surface, and a fitted ladder should be visible
+there beside the row it came from.
