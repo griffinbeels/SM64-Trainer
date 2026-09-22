@@ -16,6 +16,8 @@ import { InlineState } from "./states.js";
 import { RecordingLink } from "./recordinglink.js";
 import { ExternalVideo, attachSharedVolume } from "./externalvideo.js";
 import { ReplayTransport } from "./replaytransport.js";
+import { CompressionJobs, useCompression } from "./compressionjobs.js";
+import { listSummary } from "../compression.js";
 
 const html = htm.bind(h);
 
@@ -322,6 +324,25 @@ function PaddingControls({preS, setPreS, postS, setPostS}) {
       </div>`}`;
 }
 
+// Saved replays being made smaller in the background, visible whenever the
+// panel is open -- a browser tab has no app close to intercept, so this is
+// where that work can be seen there. Same list and same poller as the close
+// warning (closewarning.js); it polls only while this panel is mounted.
+function CompressionSection() {
+  const state = useCompression(true);
+  if (!state || !state.loaded) return null;
+  return html`<div class="compression-section">
+    <div class="compression-section-head">
+      <div><b>Making saved replays smaller</b>
+        ${state.jobs.length ? html`<span>${listSummary(state.jobs)}</span>` : null}</div>
+      <small>Happens in the background after a save. The replay stays saved the whole time.</small>
+    </div>
+    ${state.jobs.length
+      ? html`<${CompressionJobs} jobs=${state.jobs} />`
+      : html`<p class="compression-section-empty">Nothing is waiting right now.</p>`}
+  </div>`;
+}
+
 // Unsaved replay history: attempt/time windows plus the shared disk cap.
 function BufferSettings({ st, refresh, close }) {
   const [info, setInfo] = useState(null);
@@ -414,6 +435,7 @@ function BufferSettings({ st, refresh, close }) {
       <${Icon} name="save" size=${15} />
       <span>Saved replays are permanent · ${fmtGB(info.saved_bytes)} GB</span>
     </div>`}
+    <${CompressionSection} />
     <div class="popover-actions">
       ${msg && html`<span class="meta">${msg}</span>`}
       <button onclick=${close}>Close</button>

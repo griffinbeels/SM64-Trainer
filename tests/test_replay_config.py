@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
+from sm64_events.replay import config
 from sm64_events.replay.config import (CLIP_MAXRATE, RING_MAXRATE,
                                        ReplayConfig, apply_settings_file,
-                                       save_settings, validate_settings,
-                                       video_quality_args)
+                                       forced_idr_args, save_settings,
+                                       validate_settings, video_quality_args)
 
 
 def test_defaults_wire_paths_and_stay_coherent():
@@ -72,7 +73,8 @@ def test_every_stage_pins_a_quality_target():
     back to ffmpeg's ~2 Mbps default, which crushed every saved clip no matter
     how good its ring segment was (12.5 Mbps in -> 2.1 Mbps out, measured
     2026-07-23). Every supported codec and stage must name a quality target."""
-    for codec, quality_flag in (("h264_nvenc", "-cq"), ("libx264", "-crf"),
+    for codec, quality_flag in (("h264_nvenc", "-cq"), ("av1_nvenc", "-cq"),
+                                ("libx264", "-crf"),
                                 ("h264_amf", "-qp_p"), ("h264_qsv", "-global_quality")):
         for stage, maxrate in (("realtime", RING_MAXRATE),
                                ("offline", CLIP_MAXRATE)):
@@ -103,3 +105,25 @@ def test_offline_stage_may_spend_more_time_than_realtime():
 
 def test_unknown_codec_adds_no_flags():
     assert video_quality_args("hevc_qsv", "offline", CLIP_MAXRATE) == []
+
+
+def test_the_ring_and_the_archive_own_their_av1_targets_separately(monkeypatch):
+    """Recording in AV1 and re-encoding a saved replay in AV1 are independent
+    decisions that currently agree on 36. Re-tuning the ring must not drag the
+    archive with it, and both numbers must be read at the call rather than
+    frozen into a table at import (the 2026-09-20 registry regression)."""
+    monkeypatch.setattr(config, "VIDEO_AV1_CQ", 30)
+    monkeypatch.setattr(config, "ARCHIVE_AV1_CQ", 44)
+    ring = video_quality_args("av1_nvenc", "realtime", RING_MAXRATE)
+    archive = video_quality_args("av1_nvenc", "archive", CLIP_MAXRATE)
+    assert ring[ring.index("-cq") + 1] == "30"
+    assert archive[archive.index("-cq") + 1] == "44"
+
+
+def test_both_nvenc_codecs_force_idr_with_nvidias_own_spelling():
+    """A forced key picture must be an independent start for the fragment
+    muxer. AMF and QSV spell the option `-forced_idr`; both NVENC encoders
+    spell it `-forced-idr`, and av1_nvenc was silently getting neither."""
+    assert forced_idr_args("av1_nvenc") == ["-forced-idr", "1"]
+    assert forced_idr_args("h264_nvenc") == ["-forced-idr", "1"]
+    assert forced_idr_args("libx264") == []

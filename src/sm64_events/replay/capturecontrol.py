@@ -126,13 +126,21 @@ class CaptureControl:
             before = _U32.unpack(C.string_at(self._view + 16, 4))[0]
             if before & 1:
                 continue
-            values = _STATUS.unpack(C.string_at(self._view, _STATUS.size))
-            build_id = C.string_at(self._view + 256, 80).split(b"\0", 1)[0].decode("ascii", "replace")
+            raw_status = C.string_at(self._view, REQUEST_OFFSET)
+            values = _STATUS.unpack_from(raw_status)
+            raw_build = C.string_at(self._view + 256, 80)
             after = _U32.unpack(C.string_at(self._view + 16, 4))[0]
             if before != after:
                 continue
             if values[:3] != (MAGIC, VERSION, PAGE_BYTES):
+                # The named mapping exists before the worker can mark its
+                # first publication odd. Only zero producer bytes mean retry;
+                # nonzero incompatible data remains a protocol error. The
+                # independently owned client request may already be populated.
+                if not any(raw_status) and not any(raw_build):
+                    raise BlockingIOError("capture control status is not published")
                 raise RuntimeError("capture control protocol is not ready or supported")
+            build_id = raw_build.split(b"\0", 1)[0].decode("ascii", "replace")
             status = CaptureStatus(*values[4:11], bool(values[11]), *values[12:14], build_id,
                                    bool(values[14]))
             if _process_creation(self._k, status.producer_pid) != (

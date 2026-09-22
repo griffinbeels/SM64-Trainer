@@ -33,7 +33,7 @@ from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpusettings import GpuSettings
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MediaRun
-from sm64_events.replay.packetmux import H264Format, PacketFragmentMux
+from sm64_events.replay.packetmux import NativeFormat, PacketFragmentMux
 from sm64_events.replay.pixels import SampledPicture
 from test_gpu_delivery import Running, eventually
 
@@ -194,7 +194,7 @@ class Pipeline:
         assert self.reply.metadata["result"] == 0 and not self.reply.metadata["error"], self.reply
         self.evidence["native_identity"] = self.reply.metadata.get("identity")
         if self.isolated:
-            self.sink = MediaWorker(H264Format(*self.dimensions, 30), self.ledger, lambda run: self.archive,
+            self.sink = MediaWorker(NativeFormat("h264", *self.dimensions, 30), self.ledger, lambda run: self.archive,
                 **self.options, max_bytes=4 << 20, max_blocks=256, max_age=2)
             eventually(self.sink_ready, timeout=5)
 
@@ -214,7 +214,7 @@ class Pipeline:
         self.run = MediaRun(self.label, decoder.timestamp(initial[0].boundary_qpc))
         media_ledger, media_options = self.ledger, {}
         if self.sink is None:
-            self.mux = PacketFragmentMux(self.archive, H264Format(*self.dimensions, 30), self.run, **self.options)
+            self.mux = PacketFragmentMux(self.archive, NativeFormat("h264", *self.dimensions, 30), self.run, **self.options)
         else:
             self.sink.bind(self.run)
             self.mux = self.sink

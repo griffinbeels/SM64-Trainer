@@ -5647,7 +5647,7 @@
     z-index: 20;
     left: 0; right: auto; bottom: calc(100% + 8px); top: auto;
     width: min(450px,calc(100vw - 32px)); min-width: 0;
-    max-height: min(76vh,640px); overflow: auto; padding: .8rem;
+    max-height: min(86vh,780px); overflow: auto; padding: .8rem;
     text-align: left;
     border-color: #42617e; background: #0b1929;
     box-shadow: 0 20px 60px rgba(0,0,0,.5);
@@ -5700,9 +5700,120 @@
     flex-wrap: wrap; gap: .4rem; margin-top: .7rem;
   }
   .popover-actions .meta { margin-right: auto; }
+  /* Apply stays in reach however long the panel grows: the list of replays
+     being made smaller sits above it and can hold eight rows. Pinned to the
+     panel's own bottom edge, so the negative margins cancel its padding. */
+  .replay-settings-popover .popover-actions {
+    position: sticky; bottom: -.8rem; z-index: 1;
+    margin: .7rem -.8rem -.8rem; padding: .6rem .8rem;
+    border-top: 1px solid var(--border-soft); background: #0b1929;
+  }
   .icon-button { width: 34px; min-width: 34px; padding-inline: 0; }
   .primary-button { color: #1b1607; background: var(--gold); border-color: var(--gold-soft); font-weight: 750; }
   .primary-button:hover { background: var(--gold-soft); }
+
+  /* Saved replays being made smaller: ONE list (compressionjobs.js) drawn on
+     two surfaces -- the close warning and the recording-dot panel. Rows are
+     hairline-separated, not cards: they already sit inside a modal or a
+     popover, and a third border level is the nested-card sprawl the design
+     contract rejects. */
+  .compression-jobs { list-style: none; margin: 0; padding: 0; display: grid; }
+  .compression-job {
+    min-width: 0; display: grid; gap: .24rem; padding: .55rem 0;
+    border-top: 1px solid var(--border-soft);
+    animation: compression-job-in .24s ease-out both;
+  }
+  .compression-job-head {
+    min-width: 0; display: flex; align-items: baseline;
+    justify-content: space-between; gap: .7rem;
+  }
+  .compression-job-name { min-width: 0; font-size: .78rem; font-weight: 650; overflow-wrap: anywhere; }
+  .compression-job-time {
+    flex: 0 0 auto; color: var(--muted); font-size: .72rem;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Tabular numerals: "Compressing 41%" changes twice a second, and a
+     proportional 1 would nudge the words beside it every time. */
+  .compression-job-status {
+    min-height: 1.1rem; display: flex; align-items: center; gap: .3rem;
+    color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums;
+  }
+  .compression-job.is-compressing .compression-job-status,
+  .compression-job.is-checking .compression-job-status { color: var(--text); }
+  .compression-job.is-done .compression-job-status,
+  .compression-job.is-in_use .compression-job-status { color: var(--green); }
+  .compression-job-status .ui-icon { flex: 0 0 auto; animation: compression-check-in .25s ease-out both; }
+  .compression-meter { height: 6px; overflow: hidden; border-radius: 99px; background: #14263a; }
+  /* The list is read twice a second, so each new width is reached over a
+     little more than one poll at constant speed: the bar glides instead of
+     stepping, and one segment hands straight into the next. Only the two ends
+     ease -- a row's first growth from empty starts from rest, and the last
+     stretch to full comes to rest. */
+  .compression-meter > div {
+    height: 100%; border-radius: inherit; background: var(--gold);
+    transition: width .56s linear, background-color .3s ease;
+  }
+  .compression-job.is-arriving .compression-meter > div { transition-timing-function: ease-in, ease; }
+  .compression-job.is-done .compression-meter > div,
+  .compression-job.is-in_use .compression-meter > div {
+    background: var(--green); transition-timing-function: ease-out, ease;
+  }
+  /* Kept at full size is an honest outcome, not a success: a full bar in the
+     lane's own muted colour, beside words that say so. */
+  .compression-job.is-kept .compression-meter > div {
+    background: #3e5670; transition-timing-function: ease-out, ease;
+  }
+  @keyframes compression-job-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes compression-check-in { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
+
+  .compression-section {
+    display: grid; gap: .3rem; margin-top: .7rem; padding-top: .65rem;
+    border-top: 1px solid var(--border-soft);
+  }
+  .compression-section-head { display: grid; gap: .08rem; }
+  .compression-section-head > div {
+    display: flex; align-items: baseline; justify-content: space-between; gap: .6rem;
+  }
+  .compression-section-head span {
+    flex: 0 0 auto; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums;
+  }
+  .compression-section-head small, .compression-section-empty { color: var(--muted); font-size: .63rem; }
+  .compression-section-empty { margin: 0; }
+  /* Three rows and the top of a fourth, then the list scrolls inside itself:
+     the cut row says the list continues, and at the panel's full height this
+     is what fits above Apply without the panel scrolling too. */
+  .compression-section .compression-jobs { max-height: 256px; overflow: auto; scrollbar-width: thin; }
+  .compression-section .compression-job:first-child { border-top: 0; }
+
+  /* The close warning (closewarning.js). The shared modal shell has no motion
+     of its own, so this one's arrival and departure are keyed off its body
+     with :has() rather than by teaching every modal a new prop. */
+  .close-warning { display: grid; gap: .75rem; }
+  /* The words above the list change when the last replay finishes, which is
+     exactly when he is watching the list: four lines of copy and the wait line
+     are held open, and the wait line keeps the bottom, so nothing under them
+     moves. (The warning is 600px wide at every supported width, so the line
+     count does not depend on the window.) */
+  .close-warning-lead { min-height: 6.65rem; display: flex; flex-direction: column; gap: .45rem; }
+  .close-warning-lead p.close-warning-wait { margin-top: auto; }
+  .close-warning-lead p { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
+  .close-warning-lead b { color: var(--text); font-weight: 650; }
+  .close-warning-lead p.close-warning-wait { font-size: .74rem; }
+  .close-warning-lead p.close-warning-wait.is-waiting { color: var(--gold-soft); font-weight: 650; }
+  .modal-actions .close-warning-keep { margin-right: auto; }
+  /* Pressing Wait hands focus to the dialog itself (closewarning.js); a ring
+     round the whole panel would read as an alarm on the calmest choice. */
+  .modal:has(.close-warning):focus-visible { outline: none; }
+  .close-warning-error { color: var(--coral); font-size: .72rem; }
+  .modal-backdrop:has(.close-warning) { animation: close-warning-veil-in .2s ease-out both; }
+  .modal:has(.close-warning) { animation: close-warning-in .26s cubic-bezier(.2,.7,.2,1) both; }
+  .modal-backdrop:has(.close-warning.is-leaving) { animation: close-warning-veil-out .18s ease-in both; }
+  .modal:has(.close-warning.is-leaving) { animation: close-warning-out .18s ease-in both; }
+  @keyframes close-warning-veil-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes close-warning-veil-out { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes close-warning-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes close-warning-out { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(8px) scale(.985); } }
+
   .settings-head, .settings-section-head {
     display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   }

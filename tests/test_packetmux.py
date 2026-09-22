@@ -3,7 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import av, numpy as np, pytest
-from sm64_events.replay.packetmux import EncodedPicture, PacketFragmentMux, H264Format
+from sm64_events.replay.packetmux import EncodedPicture, PacketFragmentMux, NativeFormat
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay.ffmpeg_sink import FfmpegAvSink, PICTURE_TIME_BASE
 from sm64_events.replay.fragmentstore import FragmentArchive
@@ -192,7 +192,7 @@ def test_progressive_gpu_packets_and_audio(tmp_path, mutation, native_format):
         assert assigned == [p.pts for p in expected_packets]
         mux = PacketFragmentMux(
             out,
-            H264Format(320, 240, 30) if native_format else source_video,
+            NativeFormat("h264", 320, 240, 30) if native_format else source_video,
             run,
             audio_rate=RATE,
             audio_bitrate=160000,

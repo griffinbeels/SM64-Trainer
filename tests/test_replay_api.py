@@ -11,6 +11,10 @@ from sm64_events.server.replay_api import ReplayClipResponse
 class FakeReplayService:
     def __init__(self, tmp_path: Path):
         self.tmp = tmp_path
+    def compression_status(self):
+        return {"active": True, "jobs": [{"attempt_id": 42, "stage": "compressing",
+                                          "fraction": 0.4}]}
+
     def status(self):
         return {"enabled": True, "recording": True, "window_found": True,
                 "audio_mode": "process", "encoder": "libx264",
@@ -226,3 +230,8 @@ def test_reveal_endpoint(tmp_path):
     assert r.status_code == 200 and r.json() == {"ok": True}
     r = c.post("/api/replay/reveal", json={"path": "BAD"})
     assert r.status_code == 404
+
+
+def test_compression_progress_is_served_as_the_service_reports_it(tmp_path):
+    body = make_client(tmp_path).get("/api/replay/compression").json()
+    assert body["active"] is True and body["jobs"][0]["stage"] == "compressing"

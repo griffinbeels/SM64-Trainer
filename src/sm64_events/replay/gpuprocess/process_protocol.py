@@ -1,4 +1,5 @@
-"""Bounded versioned framing. Metadata is strict JSON; payload is compressed H264."""
+"""Bounded versioned framing. Metadata is strict JSON; payload is a compressed
+native picture -- H264 or AV1, whichever the recording GPU encodes."""
 
 import json
 import struct

@@ -28,6 +28,7 @@ from sm64_events.replay.association import association_problem, valid_picture_ti
 from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.navigation import captured_input_span, attempt_start_slot
 from sm64_events.replay.reviewstate import ReviewStateStore
+from sm64_events.replay.compress import SavedReplayCompressor
 from sm64_events.replay.publication import (atomic_json, publish as publish_saved, recover as recover_saved,
                                            resume as resume_saved)
 from sm64_events.replay.extract import frame_times_of, video_start_of
@@ -245,6 +246,8 @@ class ReplayService:
         self._native_preservation_failures: OrderedDict[int, tuple[tuple, str]] = OrderedDict()
         self._native_preservation_lock = threading.Lock()
         self._recovery_failures: list[str] = []
+        # Shrinks what Save/PB publishes, after the fact (replay/compress.py).
+        self.compressor: SavedReplayCompressor | None = None
         self.recorder.scratch_protection = self._protected_scratch
         self.history = AttemptHistory(cfg.retention_attempts)
         if self.tracker is not None:
@@ -1039,7 +1042,33 @@ class ReplayService:
             self._review_state.promote(attempt_id, Path(result["path"]))
             with self._save_guard:
                 self._save_failures.pop(attempt_id, None)
+            if self.compressor is not None:
+                self.compressor.enqueue(Path(result["path"]), attempt_id=attempt_id,
+                                        **self._replay_name(attempt_id))
             return result
+
+    def _replay_name(self, attempt_id: int) -> dict:
+        """What the compression progress list calls this replay: the same
+        course/star (or segment) and time its filename is built from."""
+        try:
+            a = self._attempt(attempt_id)
+        except (LookupError, ValueError):
+            return {"label": None, "time_text": None}
+        if a.segment_id is not None:
+            label = next((d.name for d in self.tracker.segment_defs if d.id == a.segment_id),
+                         f"Segment {a.segment_id}")
+        elif a.course_id is not None and a.star_id is not None:
+            label = f"{course_name(a.course_id)}: {star_name(a.course_id, a.star_id)}"
+        else:
+            label = course_name(a.course_id) if a.course_id is not None else None
+        frames = a.igt_frames if a.igt_frames is not None else a.rta_frames
+        return {"label": label, "time_text": format_igt(frames) if frames is not None else None}
+
+    def compression_status(self) -> dict:
+        """`GET /api/replay/compression`; empty when compression is off."""
+        if self.compressor is None:
+            return {"active": False, "jobs": []}
+        return self.compressor.status()
 
     def _save(self, attempt_id: int) -> dict:
         # Hold the exact GOP/AAC dependencies from selection through publication.
@@ -1140,6 +1169,9 @@ class ReplayService:
             saved = self.find_saved(int(name.removeprefix("clip_attempt_").removesuffix(".mp4")))
             if saved is None:
                 raise LookupError("no such clip")
+            if self.compressor is not None:
+                # The pre-Save URL is still an active reader after promotion.
+                self.compressor.touch(saved)
             return saved
         return p
 
@@ -1197,6 +1229,9 @@ class ReplayService:
         p = self.find_saved(attempt_id)
         if p is None:
             raise LookupError("no saved replay for this attempt")
+        if self.compressor is not None:
+            # A player is reading this clip: do not swap its bytes under it.
+            self.compressor.touch(p)
         return p
 
     # -- lifecycle (called from app lifespan) --------------------------------
@@ -1211,6 +1246,10 @@ class ReplayService:
         self._recovery_failures = recover_saved(self.cfg.save_root)
         for failure in self._recovery_failures:
             log.error("%s", failure)
+        ffmpeg = getattr(self.extractor, "ffmpeg", None)
+        if self.cfg.compress_saved and ffmpeg and self.compressor is None:
+            self.compressor = SavedReplayCompressor(ffmpeg, self.cfg.save_root)
+            self.compressor.start()
         # Start recorder first; it may wipe scratch_dir contents on init.
         # clips_dir is created after so a future recursive wipe doesn't
         # evict a directory we made first.
@@ -1223,6 +1262,9 @@ class ReplayService:
                 self.recorder.stop()
             finally:
                 self._review_state.clear()
+                if self.compressor is not None:
+                    self.compressor.stop()
+                    self.compressor = None
 
     async def session_ended(self) -> None:
         """A user session switch ends scratch retention; resets and pauses do not."""

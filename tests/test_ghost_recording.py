@@ -144,6 +144,8 @@ def native_service(tmp_path, *, rows=None):
 def test_template_pose_preservation_never_extracts_video_and_survives_detach(tmp_path, monkeypatch):
     service, row, archive = native_service(tmp_path)
     monkeypatch.setattr(service, "_view", lambda *args: pytest.fail("pose preservation requested video"))
+    service.compressor = SimpleNamespace(
+        enqueue=lambda *args, **kwargs: pytest.fail("pose preservation queued video compression"))
     result = service.preserve_native(row.id)
     path, manifest = service.find_native(row.id)
     assert str(path) == result["path"] and path.parent.name == "native"
@@ -175,12 +177,25 @@ def test_native_lookup_requires_committed_matching_identity_and_hash(tmp_path):
 
 def test_save_reuses_permanent_poses_without_deleting_original(tmp_path):
     from pathlib import Path
+    from sm64_events.ghost.clip import check_manifest
     service, row, archive = native_service(tmp_path)
+    queued = []
+
+    def enqueue(path, **named):
+        metadata = json.loads(path.with_suffix(".json").read_text())
+        check_manifest(path.with_suffix(".ghost"), metadata["native_ghost"],
+                       attempt=row, target=metadata["native_ghost"]["target"])
+        queued.append((path, named))
+
+    service.compressor = SimpleNamespace(enqueue=enqueue)
     original = service.preserve_native(row.id)
+    assert queued == []
     original_path = Path(original["path"])
     archive.close()
     service.recorder.pose_archive = None
     saved = service.save(row.id)
+    assert len(queued) == 1 and queued[0][0] == Path(saved["path"])
+    assert queued[0][1]["attempt_id"] == row.id
     assert original_path.is_file()
     assert saved["native_ghost"]["clip_id"] == original["native_ghost"]["clip_id"]
     original_path.with_suffix(".json").unlink()

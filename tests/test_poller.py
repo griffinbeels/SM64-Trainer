@@ -1,6 +1,7 @@
 # tests/test_poller.py
 import asyncio
 from datetime import datetime, timezone
+from time import monotonic
 
 from sm64_events.core.events import Event
 from sm64_events.core.snapshot import GameSnapshot
@@ -361,7 +362,13 @@ def test_swapping_roms_in_one_session_needs_no_restart():
         gaps.append(reason)
 
     async def until(condition):
-        for _ in range(400):
+        # The deadline is a TIME, never a count of sleeps. Python 3.12's
+        # monotonic clock ticks every 15.6 ms on Windows and asyncio runs a
+        # timer due inside one tick at once, so 400 "5 ms" sleeps elapse in
+        # under a tick: too short for the 50 ms header re-read below (3.13
+        # reads a finer clock, which is why only some checkouts went red).
+        deadline = monotonic() + 10
+        while monotonic() < deadline:
             if condition():
                 return
             await asyncio.sleep(0.005)

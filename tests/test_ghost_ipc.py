@@ -26,14 +26,15 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
               "plugin/gfxwrap/ghost_assets.cpp", "plugin/gfxwrap/ghost_assets.h",
               "plugin/gfxwrap/ghost_clip.h", "plugin/gfxwrap/ghost_playback.h",
               "plugin/gfxwrap/ghost_origin.h", "plugin/gfxwrap/ghost_origin.cpp",
-              "tests/native/ghost_ipc_host.cpp", "tests/test_ghost_ipc.py"]
+              "tests/native/ghost_ipc_host.cpp", "tests/native/ghost_ipc_worker.cpp",
+              "tests/test_ghost_ipc.py"]
     (tmp_path / "ipc-inputs.json").write_text(json.dumps({path: hashlib.sha256(
         (ROOT / path).read_bytes()).hexdigest() for path in inputs}, indent=2), encoding="utf-8")
     library = tmp_path / "ghost_ipc_witness.dll"
     target = tmp_path / "ghost_ipc_host.exe"
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy", "/LD",
         f"/I{ROOT / 'renderer/model'}", f"/I{ROOT / 'plugin/gfxwrap'}",
-        str(ROOT / "plugin/gfxwrap/ghost_ipc.cpp"), str(ROOT / "plugin/gfxwrap/ghost_assets.cpp"),
+        str(ROOT / "tests/native/ghost_ipc_worker.cpp"), str(ROOT / "plugin/gfxwrap/ghost_assets.cpp"),
         str(ROOT / "plugin/gfxwrap/ghost_origin.cpp"),
         str(ROOT / "tests/native/ghost_ipc_host.cpp"), f"/Fe:{library}", f"/Fo{tmp_path}\\",
         "/link", "/OPT:REF", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'",

@@ -1,7 +1,21 @@
 """Explicit resolved options; replay.config remains the sole quality owner."""
 
 import re
-from .gpuencoder_abi import Options, initialize
+from .gpuencoder_abi import CODEC_AV1, CODEC_H264, Options, initialize
+
+# Which ffmpeg encoder row in the quality registry describes each native codec,
+# and which of its flags the native encoder can actually represent. AV1 NVENC
+# has exactly one profile, so the registry never spells `-profile:v` for it and
+# the resolver supplies the codec's own constant rather than a quality choice.
+NVENC_ENCODER = {CODEC_H264: "h264_nvenc", CODEC_AV1: "av1_nvenc"}
+QUALITY_FLAGS = {
+    CODEC_H264: {"-preset", "-tune", "-profile:v", "-rc", "-cq", "-b:v",
+                 "-maxrate", "-bufsize"},
+    CODEC_AV1: {"-preset", "-tune", "-rc", "-cq", "-b:v", "-maxrate",
+                "-bufsize"},
+}
+H264_PROFILES = {"high": 100}
+AV1_MAIN_PROFILE = 0  # AV1 seq_profile 0; NVENC encodes no other.
 
 
 def uint(value, bits, name, *, positive=False):
@@ -31,6 +45,7 @@ def pod_options(resolved):
 
 def from_replay_config(
     *,
+    codec,
     width,
     height,
     nominal_fps_num,
@@ -52,21 +67,15 @@ def from_replay_config(
     # Caller must resolve structural/rate/conversion values from qualified evidence.
     from sm64_events.replay import config
 
-    args = config.video_quality_args("h264_nvenc", "realtime", config.RING_MAXRATE)
+    if codec not in NVENC_ENCODER:
+        raise ValueError("unsupported native codec")
+    args = config.video_quality_args(
+        NVENC_ENCODER[codec], "realtime", config.RING_MAXRATE
+    )
     if len(args) % 2:
         raise ValueError("unsupported quality argument shape")
     quality = dict(zip(args[::2], args[1::2], strict=True))
-    required = {
-        "-preset",
-        "-tune",
-        "-profile:v",
-        "-rc",
-        "-cq",
-        "-b:v",
-        "-maxrate",
-        "-bufsize",
-    }
-    if set(quality) != required or quality["-b:v"] != "0":
+    if set(quality) != QUALITY_FLAGS[codec] or quality["-b:v"] != "0":
         raise ValueError(
             "native encoder cannot represent current quality configuration"
         )
@@ -79,6 +88,7 @@ def from_replay_config(
 
     try:
         resolved = dict(
+            codec=codec,
             width=width,
             height=height,
             nominal_fps_num=nominal_fps_num,
@@ -98,7 +108,11 @@ def from_replay_config(
             max_packet_bytes=max_packet_bytes,
             preset={"p4": 4}[quality["-preset"]],
             tuning={"hq": 1}[quality["-tune"]],
-            profile={"high": 100}[quality["-profile:v"]],
+            profile=(
+                H264_PROFILES[quality["-profile:v"]]
+                if codec == CODEC_H264
+                else AV1_MAIN_PROFILE
+            ),
             rate_control={"vbr": 1}[quality["-rc"]],
             cq=int(quality["-cq"]),
             max_bitrate=bitrate(quality["-maxrate"]),

@@ -1493,9 +1493,12 @@ def _nothing_is_left_behind_at_the_edge(page, viewport, ratio):
     """
     # FOUND rather than computed: which picture a counter value lands on runs
     # through the template, the seek and the decoder, and a test that assumed
-    # the arithmetic asked for the wrong one.
+    # the arithmetic asked for the wrong one. Use backward state loads so each
+    # input requests a paused seek: ordinary one-frame increments briefly play,
+    # and the follower's allowed one-frame hold tolerance can skip a corner.
+    # This is a geometry/clear witness, not a score of that playback tolerance.
     corner = None
-    for igt in range(60, 76):
+    for igt in range(75, 59, -1):
         corner = _trace(page, [igt] * 5)
         if corner["mario_picture"] is not None and corner["mario_picture"] % 5 == 4:
             break
@@ -1503,17 +1506,17 @@ def _nothing_is_left_behind_at_the_edge(page, viewport, ratio):
         f"no corner box was reached: {corner}")
     assert page.evaluate(PAINTED)["painted"] > 0, corner
 
-    # Stepped until the PICTURE changes, not the counter: neighbouring counter
-    # values can land on the same picture, and moving the clock is not the
-    # same as moving the cut-out.
+    # Step backward until an INTERIOR box is painted. A different picture can
+    # still be another corner box in this repeating pattern and cover residue.
     away = None
     for step in range(1, 8):
-        away = _trace(page, [corner["sample"]["igt"] + step] * 5)
-        if away["mario_picture"] != corner["mario_picture"]:
+        away = _trace(page, [corner["sample"]["igt"] - step] * 5)
+        if away["mario_picture"] is not None and away["mario_picture"] % 5 != 4:
             break
-    assert away and away["mario_picture"] != corner["mario_picture"], (
+    assert away and away["mario_picture"] is not None and away["mario_picture"] % 5 != 4, (
         f"the ghost never left the corner box: {away}")
     painted = page.evaluate(PAINTED)
+    assert painted["painted"] > 0, away
     assert painted["outside"] == 0, (
         f"{viewport} at {ratio}x: {painted['outside']} pixels of the corner "
         "cut-out survived the clear")

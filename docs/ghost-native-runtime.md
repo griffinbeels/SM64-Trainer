@@ -125,6 +125,9 @@ assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Three slots share a
 128 MiB clip/index budget, enough for two maximum-size replacements; all resident
 slots count, so another replacement can defer.
+If a reader holds the status page during revocation, the worker retries that
+publication before sleeping indefinitely. An expired owner cannot leave the
+mapped page reporting ready merely because the final nonblocking lock was busy.
 
 [PoseRecording](../src/sm64_events/ghost/recording.py) binds source and SQLite
 archive lifetime to the machine's recorder owner. Late callbacks cannot write
@@ -158,6 +161,13 @@ caches by this metadata identity and file fingerprints: reprojecting the same
 attempt invalidates its old asset without decoding a large clip on every check.
 An explicit preservation failure is retained for the matching attempt identity
 and shown by the ghost control; saving the input template can still succeed.
+
+Video codec choice is independent of native pose preservation. AV1/H.264
+recording and saved-video compression keep the native companion bytes and
+manifest unchanged. A successful video Save queues compression only after its
+native companion is committed; marking a native-only template never queues
+video work. Playback through either the saved URL or its original pre-Save URL
+marks the saved video in use so compression defers replacing its bytes.
 
 ## Model, world depth and clean presentation
 

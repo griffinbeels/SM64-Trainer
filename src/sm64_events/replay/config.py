@@ -43,6 +43,10 @@ class ReplayConfig:
     attach_poll_s: float = 2.0            # window-hunt interval
     extract_wait_s: float = 5.0           # bounded wait for the tail segment
     settings_path: Path = field(default_factory=replay_settings_path)
+    # Shrink a saved replay in the background once Save/PB has published it
+    # (replay/compress.py). Only what is saved from now on: a replay already
+    # on disk is never rewritten without being asked.
+    compress_saved: bool = True
 
 
 # -- video encode QUALITY (ONE authoritative place: ring sink + clip extract) -
@@ -81,13 +85,59 @@ QSV_ICQ = 18
 RING_MAXRATE = "30M"       # ring: bounded so the disk cap stays predictable
 CLIP_MAXRATE = "60M"       # saved clip: one file on disk, quality wins
 
+# THE ARCHIVE STAGE (replay/compress.py): a saved replay re-encoded in the
+# background for size. Measured 2026-09-18 on two of his saved replays against
+# the saved clip itself (VMAF mean / worst 1 % of pictures, size vs saved):
+#   av1_nvenc p7 cq36       99.1 / 85-94   26 %   2 s per 18 s clip
+#   h264_nvenc p7 cq28      99.1 / 89-93   41 %   2.5 s
+#   libx264 slow crf24      99.2 / 84-91   35 %   9 s on 8 threads
+# cq40 / crf42 reached 20 % but dropped the worst pictures to 77; SVT-AV1 on
+# the CPU was no smaller than hardware AV1 and worse on the worst pictures.
+# Tried in this order; the first the machine's ffmpeg can open AND whose output
+# proves interchangeable wins. All run without picture reordering.
+ARCHIVE_CODECS = ("av1_nvenc", "h264_nvenc", "libx264")
+ARCHIVE_AV1_CQ = 36
+ARCHIVE_H264_CQ = 28
+ARCHIVE_CRF = 24
+
+# THE RING IN AV1 (RTX 40-series and later). Measured 2026-09-20 on one real
+# saved replay re-encoded with the ring's own settings, VMAF against that
+# source, `x realtime` with no game rendering beside it:
+#   ring today, h264_nvenc p4 cq20   100 %   16.9x   VMAF 99.8 / worst 1 % 96.8
+#   av1_nvenc p4 cq28                 60 %   19.0x        99.8 / 96.3
+#   av1_nvenc p4 cq36                 32 %   19.0x        99.4 / 94.0   <- this
+# Realtime AV1 lands where the OFFLINE archive pass lands and encodes FASTER
+# than the H.264 the ring uses now, so a recorder that writes it makes Save
+# publish already-small bytes. Deliberately its own constant rather than a
+# reuse of ARCHIVE_AV1_CQ: the two stages are independent decisions that
+# currently agree, and re-tuning the ring must not move the archive.
+VIDEO_AV1_CQ = 36
+
 # Encoder speed per stage. The ring runs REALTIME (must beat 1/fps per frame,
 # measured ~8x headroom at p4); clip extraction is offline, so it can afford a
 # slower preset for the same quality target.
-_NVENC_PRESET = {"realtime": "p4", "offline": "p6"}
-_X264_PRESET = {"realtime": "ultrafast", "offline": "veryfast"}
+_NVENC_PRESET = {"realtime": "p4", "offline": "p6", "archive": "p7"}
+_X264_PRESET = {"realtime": "ultrafast", "offline": "veryfast", "archive": "slow"}
 _AMF_QUALITY = {"realtime": "balanced", "offline": "quality"}
 _QSV_PRESET = {"realtime": "medium", "offline": "slow"}
+
+
+# The quality NUMBERS are read at the call, never captured in a per-stage table.
+# A table built at import froze VIDEO_CQ at its module-load value, so the ring
+# and the clip stopped following the constant they are defined by — invisible
+# in normal use (the value rarely changes) and caught by
+# tests/test_gpuencoder_client.py, which sets VIDEO_CQ and asks the native
+# encoder's options what it got (2026-09-20).
+def _nvenc_cq(stage: str) -> int:
+    return ARCHIVE_H264_CQ if stage == "archive" else VIDEO_CQ
+
+
+def _av1_cq(stage: str) -> int:
+    return ARCHIVE_AV1_CQ if stage == "archive" else VIDEO_AV1_CQ
+
+
+def _x264_crf(stage: str) -> int:
+    return ARCHIVE_CRF if stage == "archive" else VIDEO_CRF
 
 
 def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
@@ -100,10 +150,17 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
                 "-profile:v", "high",
                 # -b:v 0 is REQUIRED: with a bitrate set, NVENC treats cq as a
                 # cap-with-target and the average bitrate wins instead.
-                "-rc", "vbr", "-cq", str(VIDEO_CQ), "-b:v", "0",
+                "-rc", "vbr", "-cq", str(_nvenc_cq(stage)), "-b:v", "0",
+                "-maxrate", maxrate, "-bufsize", maxrate]
+    if codec == "av1_nvenc":
+        # RTX 40-series and later encode AV1; every other GPU keeps H.264 and
+        # the compression pass. Same cq-not-bitrate reasoning as H.264 above;
+        # the scales are not comparable. No -profile:v: AV1 NVENC has one.
+        return ["-preset", _NVENC_PRESET[stage], "-tune", "hq",
+                "-rc", "vbr", "-cq", str(_av1_cq(stage)), "-b:v", "0",
                 "-maxrate", maxrate, "-bufsize", maxrate]
     if codec == "libx264":
-        return ["-preset", _X264_PRESET[stage], "-crf", str(VIDEO_CRF)]
+        return ["-preset", _X264_PRESET[stage], "-crf", str(_x264_crf(stage))]
     if codec == "h264_amf":
         return ["-usage", "transcoding", "-quality", _AMF_QUALITY[stage],
                 "-profile:v", "high", "-rc", "cqp",
@@ -117,7 +174,7 @@ def video_quality_args(codec: str, stage: str, maxrate: str) -> list[str]:
 
 def forced_idr_args(codec: str) -> list[str]:
     """Forced I pictures must be independent starts for the segment muxer."""
-    if codec == "h264_nvenc":
+    if codec in ("h264_nvenc", "av1_nvenc"):
         return ["-forced-idr", "1"]
     if codec in ("h264_amf", "h264_qsv"):
         return ["-forced_idr", "1"]

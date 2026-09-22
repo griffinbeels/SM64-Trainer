@@ -20,6 +20,15 @@ replays/
 !data/version_sync/
 data/replay_buffer/
 .claude/worktrees/
+# The same rule for the other orchestrator's trees. The harness gives each one
+# a home by owner -- Claude under .claude/worktrees/, Codex under
+# .codex/<feature> -- but only the first was ignored, so a live Codex worktree
+# showed up as untracked in the primary checkout and the merge gate, which
+# refuses to integrate into a checkout that is not clean, blocked every OTHER
+# session's merge until that tree went away (2026-09-20, two of them at once).
+# A directory pattern, so the tracked .codex/hooks.json beside them stays
+# tracked.
+.codex/*/
 _dbg/
 internal_notes/
 .planning/

@@ -13,15 +13,21 @@ from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
 from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpuaudio import GpuAudio
 from sm64_events.replay.gpudiagnostics import CaptureTimings, failure_snapshot
+from sm64_events.replay.gpuencoder import Result
+from sm64_events.replay.gpuencoder_abi import CODEC_STREAM_NAMES
 from sm64_events.replay.gpupublication import PublicationError, PublicationWriteError
 from sm64_events.replay.gpumediaworker import MediaWorker
+from sm64_events.replay.gpusettings import note_codec_unavailable, recording_codec
 from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpuprocess.process_controller import Controller
 from sm64_events.replay.media import MediaRun
-from sm64_events.replay.packetmux import H264Format
+from sm64_events.replay.packetmux import NativeFormat
 from sm64_events.replay.ownedclose import CleanupPending
 
 log = logging.getLogger("sm64.replay")
+
+# Distinct from None (stop) and from a successful open tuple.
+_RETRY_OTHER_CODEC = object()
 
 
 class CaptureSession:
@@ -41,6 +47,7 @@ class CaptureSession:
             controller_factory,
         )
         self.channel = self.controller = self.media = self.adapter = None
+        self.codec = None  # set by the Open that actually succeeded
         self.audio = self.archive = self.handoff = self.mux = None
         self.output = None
         self._output_joined = False
@@ -98,9 +105,7 @@ class CaptureSession:
 
     def _open_encoder(self):
         header = self.channel.header
-        options = self.settings.encoder(
-            header, self.owner.cfg, nominal_rate=self.owner.nominal_rate
-        )
+        luid = (header.luid_high, header.luid_low)
         dll = bundled_encoder_dll()
         if dll is None:
             raise RuntimeError("this build carries no SM64GpuEncoderV1.dll; run tools/build_plugin.py")
@@ -109,20 +114,44 @@ class CaptureSession:
             helper=Path(__file__).resolve().parent / "gpuprocess/helper_bootstrap.py",
             limits=self.settings.helper(),
         )
+        # ONE startup budget across both attempts. An adapter without an AV1
+        # encoder refuses by codec before touching pixels, so the fallback
+        # costs a round trip, not a second startup window -- and it is
+        # remembered per adapter, so only the first capture pays it.
+        deadline = time.monotonic() + self.settings.startup_s
+        while True:
+            codec = recording_codec(luid)
+            opened = self._attempt_open(dll, header, luid, codec, deadline)
+            if opened is not _RETRY_OTHER_CODEC:
+                return opened
+
+    def _attempt_open(self, dll, header, luid, codec, deadline):
         command = dict(
             op="Open",
             dll_path=str(dll),
             adapter_luid=[header.luid_high, header.luid_low],
             names=list(self.channel.texture_names),
-            options=options,
+            options=self.settings.encoder(
+                header, self.owner.cfg,
+                nominal_rate=self.owner.nominal_rate, codec=codec,
+            ),
         )
         request_id = self.controller.enqueue(command)
         if type(request_id) is not int:
             raise RuntimeError("encoder bootstrap admission refused")
-        deadline = time.monotonic() + self.settings.startup_s
         while self._continue():
             reply = self.controller.take_result()
             if reply is not None:
+                if (
+                    reply.request_id == request_id
+                    and reply.metadata["result"] == Result.CODEC
+                    and not reply.metadata["worker_disposal_required"]
+                    and note_codec_unavailable(luid, codec)
+                ):
+                    # This adapter has no encoder for that codec. A fact about
+                    # the hardware, typed apart from every real fault, so the
+                    # session asks for the other one instead of failing.
+                    return _RETRY_OTHER_CODEC
                 if (
                     reply.request_id != request_id
                     or reply.metadata["result"] != 0
@@ -132,6 +161,7 @@ class CaptureSession:
                     raise RuntimeError(
                         reply.metadata["error"] or "GPU encoder Open failed"
                     )
+                self.codec = CODEC_STREAM_NAMES[codec]
                 # Native has names/contexts ready but has captured no pixels yet.
                 # Cold AAC/filter/format preparation must finish before source
                 # admission. Its pool holds milliseconds, not a startup backlog.
@@ -150,7 +180,8 @@ class CaptureSession:
     def _prepare_sink(self):
         h, cfg, limits = self.channel.header, self.owner.cfg, self.settings
         self.output = MediaWorker(
-            H264Format(h.even_width, h.even_height, self.owner.nominal_rate),
+            NativeFormat(self.codec, h.even_width, h.even_height,
+                         self.owner.nominal_rate),
             self.owner.ledger,
             lambda run: self.owner.publish(run, (h.even_width, h.even_height)),
             audio_rate=cfg.audio_rate, audio_bitrate=160000,

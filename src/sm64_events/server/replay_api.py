@@ -93,6 +93,13 @@ def _media_routes(router, replay):
             raise _http(e)
         return FileResponse(path, media_type="video/mp4")  # native Range/206
 
+    # Which saved replays are being shrunk right now and how far along each
+    # is: the close warning and the recording panel poll this. A read of the
+    # worker's own table; it never starts, waits for or touches a job.
+    @router.get("/replay/compression")
+    def compression():
+        return replay.compression_status()
+
 
 
 def create_replay_router(replay) -> APIRouter:

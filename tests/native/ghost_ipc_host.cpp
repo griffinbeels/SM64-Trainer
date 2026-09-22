@@ -18,6 +18,10 @@
 #include <vector>
 
 namespace {
+struct Handle {
+    HANDLE value=nullptr;
+    ~Handle(){if(value && value!=INVALID_HANDLE_VALUE)CloseHandle(value);}
+};
 unsigned checks=0;
 void check(bool value,const char* message) {++checks;if(!value)throw std::runtime_error(message);}
 std::atomic<DWORD> worker_owner{0};
@@ -26,6 +30,10 @@ std::atomic<uint32_t> configuration{0},model_state{GP_MODEL_EMPTY};
 std::atomic<uint32_t> pending_record{0},sample_sequence{0};
 std::atomic<uint32_t> burst_records{0};
 std::atomic<bool> capture_enabled{false},retirement_allowed{true},fail_model{false};
+std::atomic<bool> intercept_expiry{false},intercept_wait{false},barrier_failed{false};
+// The worker pins this DLL until retirement, including a failed witness. Keep
+// barriers alive for that whole lifetime rather than closing a pending wait.
+Handle expiry_seen,resume_expiry,wait_seen,resume_wait;
 std::mutex command_mutex;
 gp_request command{};
 uint64_t last_revision=0;
@@ -77,7 +85,13 @@ int32_t __cdecl configure(const gp_request* value) {
     if(!value || value->revision<=last_revision)return GP_INVALID;
     last_revision=value->revision;command=*value;++commands;model_state=GP_MODEL_RENDER_OWNED;return GP_OK;
 }
-void __cdecl revoke(uint32_t) {++revokes;if(model_state.load()!=GP_MODEL_EMPTY)model_state=GP_MODEL_RETIRED;}
+void __cdecl revoke(uint32_t why) {
+    ++revokes;if(model_state.load()!=GP_MODEL_EMPTY)model_state=GP_MODEL_RETIRED;
+    if(why==GIPC_EXPIRED && intercept_expiry.exchange(false)) {
+        SetEvent(expiry_seen.value);
+        if(WaitForSingleObject(resume_expiry.value,2500)!=WAIT_OBJECT_0)barrier_failed=true;
+    }
+}
 void __cdecl withdraw() {++withdrawals;}
 int32_t __cdecl collect() {
     if(!enter_worker())return GP_WRONG_THREAD;
@@ -103,10 +117,6 @@ const gs_api capture_api={sizeof(gs_api),GS_VERSION,GS_CAP_POSE|GS_CAP_WORLD_PAS
 const gp_api playback_api={sizeof(gp_api),GP_VERSION,{0,0},prepare_model,prepare_clip,
     configure,revoke,collect,release_worker,playback_status,withdraw};
 
-struct Handle {
-    HANDLE value=nullptr;
-    ~Handle(){if(value && value!=INVALID_HANDLE_VALUE)CloseHandle(value);}
-};
 struct Page {
     Handle mapping,mutex,wake,producer;
     gipc_page* value=nullptr;
@@ -172,6 +182,14 @@ void refused(Page& page,gipc_request& r,uint32_t reason) {
 namespace ghost_stream {const gs_api* api(){return &capture_api;}}
 namespace ghost_playback {const gp_api* api(){return &playback_api;}}
 
+DWORD WINAPI ghost_witness_wait(DWORD count,const HANDLE* events,BOOL all,DWORD milliseconds) {
+    if(intercept_wait.exchange(false)) {
+        SetEvent(wait_seen.value);
+        if(WaitForSingleObject(resume_wait.value,2500)!=WAIT_OBJECT_0)barrier_failed=true;
+    }
+    return WaitForMultipleObjects(count,events,all,milliseconds);
+}
+
 #pragma comment(linker,"/EXPORT:GhostIpcWitness=_ghost_ipc_witness")
 extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
     try {
@@ -195,6 +213,11 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(ghost_assets::read(rom_path,GIPC_PATH_CHARS,8u<<20,rom) && rom.size()==(8u<<20),"ROM fixture read");
         // The in-process cartridge fixture starts word-swapped, like Project64.
         for(size_t i=0;i<rom.size();i+=4){std::swap(rom[i],rom[i+3]);std::swap(rom[i+1],rom[i+2]);}
+        expiry_seen.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        resume_expiry.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        wait_seen.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        resume_wait.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+        check(expiry_seen.value && resume_expiry.value && wait_seen.value && resume_wait.value,"expiry barriers");
         Page page;ghost_ipc::rom(true,rom.data());
         auto initial=page.wait([](const gipc_status& s){return s.generation && s.version==GIPC_VERSION;},"worker publishes ABI");
         gipc_request r{};r.owner_pid=GetCurrentProcessId();FILETIME birth{},unused[3]{};
@@ -248,6 +271,15 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.revision=9;r.clip_sha256[0]^=1;ready(page,r);
         r.revision=10;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
+        // Reproduce the reader owning the page exactly when lease expiry must
+        // be published. No new request/event wakes the worker after this race.
+        const auto before_expiry=revokes.load();intercept_expiry=true;
+        check(WaitForSingleObject(expiry_seen.value,GIPC_LEASE_MS+1500)==WAIT_OBJECT_0,"lease revokes without a heartbeat");
+        check(!capture_enabled.load() && revokes.load()>before_expiry,"expired owner stopped internally");
+        page.lock();intercept_wait=true;SetEvent(resume_expiry.value);
+        const DWORD reached_wait=WaitForSingleObject(wait_seen.value,2500);
+        ReleaseMutex(page.mutex.value);SetEvent(resume_wait.value);
+        check(reached_wait==WAIT_OBJECT_0 && !barrier_failed.load(),"publication raced a held page lock");
         page.wait([](const gipc_status& s){return s.state==GIPC_REFUSED && s.reason==GIPC_EXPIRED;},
             "unrenewed owner lease expires",GIPC_LEASE_MS+1500);
         r.revision=2;ready(page,r);
@@ -273,6 +305,8 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
         std::printf("{\"ok\":true,\"checks\":%u,\"commands\":%u,\"bindings\":%u,\"releases\":%u}\n",
             checks,commands.load(),binds.load(),releases.load());return 0;
-    }catch(const std::exception& error){ghost_ipc::rom(false);
+    }catch(const std::exception& error){
+        intercept_expiry=false;intercept_wait=false;
+        SetEvent(resume_expiry.value);SetEvent(resume_wait.value);ghost_ipc::rom(false);
         std::fprintf(stderr,"IPC witness: %s (check %u)\n",error.what(),checks);return 1;}
 }

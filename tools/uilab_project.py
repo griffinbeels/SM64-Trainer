@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import os
 import sys
 from pathlib import Path
 
@@ -116,12 +117,38 @@ const waitFor = async (pred, maxMs = 3000, stepMs = 40) => {
   }
   return false;
 };
+const SHELL_WAIT = %d;
 """
+
+
+def shell_wait_ms() -> int:
+    """How long a story waits for the APP SHELL to finish a cold fetch.
+
+    The same bound `tests/conftest.py` gives uilab's own waits, read from the
+    same place, because it answers the same question: how loaded is the machine
+    this run actually got. Consistency is the whole reason -- eight story waits
+    had been hand-bumped to 15s (2026-09-17) while b15f16d0 was scaling every
+    other wait from one variable, which is the drift that commit retired. A
+    bound is not a timing assertion: a page that never renders still fails, and
+    a story that means "within 400ms" still passes its own explicit maxMs.
+
+    It does NOT fix a starving sweep, and nothing here should be read as
+    claiming it does. Measured 2026-09-20: raising these eight from 15s to 60s
+    moved a full gate from 21 failures to 10, then 19 on the next run. The axis
+    is `tools/test_resources.py::budget`'s WORKER COUNT -- `test_responsive.py`
+    is `spread`, so each of ~20 viewports boots its own uvicorn fixture and its
+    own Chromium, and eight at once starve each other on this hardware while
+    four pass (11016 green at 4 workers, twice; red 3/3 at 8).
+
+    Read here rather than baked in: conftest sets the variable in
+    pytest_configure, which precedes the collection that imports this module.
+    """
+    return int(os.environ.get("UILAB_WAIT_MS") or 30000)
 
 
 def _script(body: str) -> str:
     """One idempotent, awaited setup script, `_ASYNC_HELPERS` included."""
-    return "(async () => {" + _ASYNC_HELPERS + body + "})()"
+    return "(async () => {" + _ASYNC_HELPERS % shell_wait_ms() + body + "})()"
 
 
 # `app.js`'s tabs UNMOUNT the page they leave (a ternary chain, not a
@@ -338,9 +365,9 @@ if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') {
 // full parallel sweep, and an unchecked false result does not fail here -- it
 // falls through to `null.scrollIntoView` further down and reports a layout
 // "defect" naming no element (measured 2026-09-17, twice in five full runs).
-if (!await waitFor(() => !!document.querySelector('.rank-page .scorecard-card'), 15000))
+if (!await waitFor(() => !!document.querySelector('.rank-page .scorecard-card'), SHELL_WAIT))
   throw new Error('Rank tab did not render the scorecard card');
-if (!await waitFor(() => !!document.querySelector('.rank-page .score-line'), 15000))
+if (!await waitFor(() => !!document.querySelector('.rank-page .score-line'), SHELL_WAIT))
   throw new Error('Scorecard card rendered no score lines');
 if (!document.querySelector('.rank-page .scorecard-card .score-gap.good, '
     + '.rank-page .scorecard-card .score-gap.bad')) {
@@ -530,21 +557,21 @@ if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
 // A preceding story may have opened a runner inside the already-active
 // Rank tab. Return through its actual back door before opening the board.
 if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head')
-  || !!document.querySelector('.runner-page .entity-back'), 15000))
+  || !!document.querySelector('.runner-page .entity-back'), SHELL_WAIT))
   throw new Error('Rank page did not finish loading before leaderboard setup');
 const runnerBack = document.querySelector('.runner-page .entity-back');
 if (runnerBack) runnerBack.click();
 // The board is its own card between the scope chips and the MARELO card,
 // CLOSED by default (fourth read, 2026-08-23) -- open it, then wait for
 // the rows its first open fetches.
-if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head'), 15000))
+if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head'), SHELL_WAIT))
   throw new Error('Returning from the runner did not render the Rank page');
 const head = document.querySelector('.leaderboard-card-head');
 if (head.getAttribute('aria-expanded') !== 'true') head.click();
 // The header mounts before the cold community ratings request finishes.
 // A full parallel sweep can outlast the generic three-second wait; its
 // false result must never become a null.scrollIntoView layout "defect".
-if (!await waitFor(() => !!document.querySelector('.leaderboard-row'), 15000))
+if (!await waitFor(() => !!document.querySelector('.leaderboard-row'), SHELL_WAIT))
   throw new Error('Leaderboard rows did not load: '
     + (document.querySelector('.leaderboard-card-body')?.textContent || 'body absent'));
 document.querySelector('.leaderboard').scrollIntoView({block: 'start'});
@@ -563,12 +590,12 @@ if (rankBtn && rankBtn.getAttribute('aria-current') !== 'page') rankBtn.click();
 // Rank waits for scopes, summary, history and ratings before mounting its
 // cards. A timed-out wait must fail here, not dereference a nonexistent card.
 if (!await waitFor(() => !!document.querySelector('.leaderboard-card-head')
-  || !!document.querySelector('.runner-page'), 15000))
+  || !!document.querySelector('.runner-page'), SHELL_WAIT))
   throw new Error('Rank page did not finish loading before runner setup');
 if (!document.querySelector('.runner-page')) {
   const head = document.querySelector('.leaderboard-card-head');
   if (head.getAttribute('aria-expanded') !== 'true') head.click();   // closed by default
-  if (!await waitFor(() => !!document.querySelector('.leaderboard-row'), 15000))
+  if (!await waitFor(() => !!document.querySelector('.leaderboard-row'), SHELL_WAIT))
     throw new Error('Leaderboard rows did not load before runner setup: '
       + (document.querySelector('.leaderboard-card-body')?.textContent || 'body absent'));
   const row = Array.from(document.querySelectorAll('.leaderboard-row'))
@@ -578,7 +605,7 @@ if (!document.querySelector('.runner-page')) {
 // Scope chips and the selected rating come from independent requests.
 // The story is ready only when its actual breakdown has mounted too.
 if (!await waitFor(() => !!document.querySelector('.runner-page .scope-chip')
-  && !!document.querySelector('.runner-page .rank-breakdown th'), 15000))
+  && !!document.querySelector('.runner-page .rank-breakdown th'), SHELL_WAIT))
   throw new Error('Runner summary and breakdown did not load: '
     + (document.querySelector('.runner-page')?.textContent || 'runner page absent'));
 """)

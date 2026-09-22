@@ -22,7 +22,7 @@ NVENC helper. Why they are built this way, and what failed on the way:
 | Native Mario ghost, exact attempt clocks and clean SourceV3 presentation | `ghost_capture.*`, `ghost_clock.*`, `ghost_origin.*`, `ghost_playback.*`, `ghost_draw.*`, `ghost_presentation.*`; worker transport in `ghost_ipc.*`, Python ownership in `ghost/capture.py` and `ghost/native_session.py`. [Runtime contracts](../../docs/ghost-native-runtime.md) own format versions, timing, refusal policy and live verification limits |
 | Delivery worker, GPU bridge, selection sample | `gpu_delivery*`, `gpu_bridge*`, `gpu_selection*`; doc `replay-gpu-bridge.md` |
 | Control page and capture lease | `control.h`, `control_worker.h`, `runtime_control.*`; Python reads the page by offset in `replay/capturecontrol.py`; doc `replay-capture-control.md` |
-| The NVENC helper | `gpu_encoder_dll.*`, `gpu_bridge_encoder*`; Python side `replay/gpuencoder*.py` and `replay/gpuprocess/` |
+| The NVENC helper | `gpu_encoder_dll.*`, `gpu_bridge_encoder*`; Python side `replay/gpuencoder*.py` and `replay/gpuprocess/`. It encodes H264 or AV1, named by `gbenc_options_v1.codec` (H264 is 0, taken from the checked-zero reserved words so old callers and old DLLs still mean H264). AV1 needs `repeatSeqHdr` for the same reason H264 needs `repeatSPSPPS`: the mux builds its sample description from the first key picture and never decodes. |
 
 - **Build ids hash the sources.** Any edit here changes the wrapper and
   encoder ids (`tools/build_plugin.py`); an overlay edit also changes the

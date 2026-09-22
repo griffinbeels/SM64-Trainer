@@ -2,10 +2,12 @@
 #pragma once
 #include "gpu_bridge_encoder_api.h"
 #include <stdio.h>
-static gbenc_options_v1 bridge_test_options(unsigned width,unsigned height) {
+static gbenc_options_v1 bridge_test_options(unsigned width,unsigned height,uint32_t codec=GBENC_CODEC_H264) {
     gbenc_options_v1 s{};s.struct_size=sizeof(s);s.version=GBENC_ABI_V1;
     s.width=width;s.height=height;s.nominal_fps_num=30;s.nominal_fps_den=1;
-    s.profile=GBENC_H264_HIGH;s.preset=GBENC_PRESET_P4;s.tuning=GBENC_TUNE_HQ;s.rate_control=GBENC_RC_VBR;s.b_frames=0;
+    s.codec=codec;
+    s.profile=codec==GBENC_CODEC_AV1?GBENC_AV1_MAIN:GBENC_H264_HIGH;
+    s.preset=GBENC_PRESET_P4;s.tuning=GBENC_TUNE_HQ;s.rate_control=GBENC_RC_VBR;s.b_frames=0;
     s.cq=20;s.max_bitrate=30000000;s.vbv_buffer_bits=30000000;s.gop_frames=60;
     s.initial_qp_p=26;s.initial_qp_i=21;s.initial_qp_b=34;s.idr_interval_ticks=180000;
     s.input_format=GBENC_INPUT_RGBA8;s.signal_color=1;s.full_range=0;s.matrix=5;s.primaries=2;s.transfer=2;s.max_packet_bytes=1024*1024;

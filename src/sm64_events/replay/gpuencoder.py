@@ -30,6 +30,10 @@ class Result(IntEnum):
     QUARANTINE = 13
     STATE = 14
     MEMORY = 15
+    # This adapter has no encoder for the requested codec. A fact about the
+    # hardware, not a fault: the caller may retry the same adapter with the
+    # other codec, and may infer nothing else from it.
+    CODEC = 16
 
 
 @dataclass(frozen=True)

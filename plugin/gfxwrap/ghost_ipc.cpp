@@ -338,14 +338,16 @@ DWORD WINAPI worker(void *argument) {
                 Session session(source_clock);
                 while (generation) {
                     gipc_request request{};
-                    bool received = false;
+                    bool received = false, published = false;
                     { Lock guard(mutex.value); if (guard.held) { request = view.page->request; received = true; } }
                     if (received) {
                         const bool load = session.demand(request, generation);
                         session.play->collect();
                         { Lock guard(mutex.value);
-                            if (guard.held && same_command(request, view.page->request))
+                            if (guard.held && same_command(request, view.page->request)) {
                                 session.publish(*view.page, request);
+                                published = true;
+                            }
                         }
                         if (load) { session.load_assets(); continue; }
                     }
@@ -354,8 +356,10 @@ DWORD WINAPI worker(void *argument) {
                         if (session.play->release_worker() == GP_OK) break;
                     }
                     HANDLE events[2] = {wake.value, lifecycle_signal.load()};
+                    // Revocation can make the session idle before a reader
+                    // releases the page. Retry its status before sleeping forever.
                     WaitForMultipleObjects(2, events, FALSE,
-                        !received || session.live || !opened.load() ? 16 : INFINITE);
+                        !received || !published || session.live || !opened.load() ? 16 : INFINITE);
                 }
                 // Publish closure before releasing producer ownership. Clients
                 // cannot mistake retained named storage for a live producer.

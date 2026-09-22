@@ -458,6 +458,121 @@ reader could act on.
   (b) enable door-scoped triggers in the builder ("you use the door at…").
   Needs one hunted+verified read (the usedObj offset). User-validated want.
 
+## Could the recorder encode AV1 directly? Measured 2026-09-20
+
+The compression pass exists because the recorder writes H.264. It need not, on
+newer hardware. One real saved replay (LLL 8-Coin, 514 pictures, 18.7 s)
+re-encoded with the ring's own settings, with realtime AV1, and with the
+archive setting we ship — VMAF against that source, so a RATIO not an absolute,
+and `x realtime` is the encoder alone with no game rendering beside it:
+
+| variant | MB | % of ring | x realtime | VMAF | worst 1% |
+|---|---|---|---|---|---|
+| ring today, `h264_nvenc` p4 cq20 | 32.6 | 100% | 16.9x | 99.8 | 96.8 |
+| ring as `av1_nvenc` p4 cq28 | 19.6 | 60% | 19.0x | 99.8 | 96.3 |
+| **ring as `av1_nvenc` p4 cq36** | **10.4** | **32%** | **19.0x** | **99.4** | **94.0** |
+| archive today, `av1_nvenc` p7 cq36 | 10.3 | 32% | 12.2x | 99.5 | 94.1 |
+
+Realtime AV1 lands where the OFFLINE archive pass lands and encodes FASTER than
+the H.264 the ring uses now. A recorder that wrote it would make Save publish
+already-small bytes, retiring the compression pass, the file swap and the close
+warning on that hardware.
+
+Two things stop it being a switch, and both are load-bearing:
+
+1. The recording encoder is H.264 **hardcoded in C++** —
+   `plugin/gfxwrap/gpu_bridge_encoder.cpp` names `NV_ENC_CODEC_H264_GUID` in
+   five places plus `NV_ENC_H264_PROFILE_HIGH_GUID` and
+   `encodeCodecConfig.h264Config`. Changing it is a DLL rebuild inside the
+   frame-exact capture chain, and hop 4 of
+   `.claude/rules/chain-input-timeline-frame.md` has to be re-proved.
+2. **AV1 NVENC needs RTX 40-series or newer.** A 20/30-series card has H.264
+   NVENC and no AV1, so that path and the compression pass stay for those users
+   regardless. This is an optimisation for newer cards, never a replacement.
+
+MEASURED 2026-09-20, the load-bearing half: **AV1 survives the ring's own
+transport with every picture on its exact original tick.** `codecprobe`'s own
+owned-BGRA pictures with unequal timestamps, through the ring's quality args,
+GOP, forced IDR, `-fps_mode passthrough`, `-enc_time_base demux` and
+`picture_duration_filter`, decoded back independently: one video stream, every
+picture, in order, at 90000/93000/93001/99000/100500/108000 — the input ticks
+unchanged — at 1431 bytes against H.264's 3255. It also encodes 1600x1200
+(a non-standard size) through the same chain at 44% of H.264's bytes. That is
+the property the frame map depends on, and it holds.
+
+**`codecprobe.py` rejected AV1, and that was the probe's fault:** it validated
+through MPEG-TS, which has no usable AV1 mapping — the same pictures yield ZERO
+video streams there while passing in fragmented MP4, the container
+`ffmpeg_sink.py` and `packetmux.py` actually write. The probe now validates
+through `fragment_mux_options()`, the sinks' own policy from its one owner;
+`tests/test_replay_codecprobe.py` puts MPEG-TS back and shows the stream
+disappearing, so the container is doing the work rather than a loosened check.
+
+### Built 2026-09-21: the recorder writes AV1 where the adapter can
+
+- **The archive carries it with no decoder.** `PacketFragmentMux` takes a
+  `NativeFormat` that names its codec instead of assuming H.264, and
+  `delay_moov` builds an `av01` sample entry from the first key picture's
+  repeated sequence header exactly as it builds `avc1` from repeated SPS/PPS.
+  Measured on real `av1_nvenc` packets and again on the native encoder's own:
+  muxed unchanged, read back through `fragmentindex`, every picture decoded on
+  its exact source tick. `fragmentindex` admits `av01` beside `avc1` and
+  `extract.py`'s native packet index admits `av1` beside `h264`; `virtualmp4`
+  copies the sample description verbatim and needed nothing.
+- **The adapter is asked, not the model name.** `gpu_bridge_encoder.cpp` takes
+  a codec in the ABI's first reserved word (H264 is zero, so an older caller
+  or an older DLL still means H.264) and checks `nvEncGetEncodeGUIDs` before
+  configuring anything. An adapter without AV1 refuses with `GBDLL_CODEC`,
+  typed apart from every real fault; `gpusettings.py` remembers that per
+  adapter, so the extra open happens once per adapter per launch and every
+  later capture goes straight to H.264.
+- **The compression pass steps aside rather than being removed.** `shrink`
+  reads the saved clip's codec and settles a clip already in the archive's own
+  codec without encoding, so an AV1 recording is small at Save and is never
+  queued, re-encoded, or named in the close warning. Every GPU without an AV1
+  encoder keeps the pass exactly as it was.
+- Ring AV1 quality is its own constant (`VIDEO_AV1_CQ`), read at the call like
+  every other row. It equals `ARCHIVE_AV1_CQ` today; they are independent
+  decisions and re-tuning the ring must not move the archive. `forced_idr_args`
+  now gives `av1_nvenc` NVIDIA's `-forced-idr` spelling, which it was silently
+  missing.
+- **Three AV1 facts measured on the way, none of them guessable.** NVENC
+  reports a forced AV1 key picture as `NV_ENC_PIC_TYPE_IDR`, the value the
+  packet's keyframe flag is derived from. AV1 NVENC refuses an all-intra GOP
+  (`gopLength` must exceed `b_frames + 1`) and returns that from
+  `InitializeEncoder` as a driver error, so `prepare` rejects `gop_frames < 2`
+  up front where the cause is legible. And libav's `codec_context.name`
+  answers `libdav1d` for an AV1 stream — the decoder it chose, not what was
+  written — so codec assertions read the `av01`/`avc1` sample entry instead.
+- The browser steps every slot of an AV1 clip forwards and backwards, reading
+  each picture's painted identity and its timer
+  (`test_ui_replay_picture_steps.py`, per codec). That check exists because
+  reordered H.264 passed ffprobe and lost a clip's last 11 pictures in
+  Chromium on 2026-09-18; a container diff would not have caught it.
+
+### MEASURED LIVE 2026-09-21, the last thing an idle GPU could not answer
+
+Griffin played on the feature branch with the capture layer installed, and the
+numbers came off his own session rather than a bench:
+
+- **Both replays he saved are AV1 at 1600x1200** — 856 pictures / 14,083,845
+  bytes and 533 pictures / 11,898,536 bytes, read back with ffprobe.
+- **35% of H.264's bytes with the game rendering beside the encoder.**
+  22.3 KB per picture, against the H.264 ring's 63.4 KB per picture in the
+  table above (32.6 MB / 514 pictures). The idle-GPU prediction was 32%, so
+  SM64 rendering alongside costs a few points and nothing structural.
+- **No refusals, no backlog, no fault.** `frame_source: plugin`,
+  `frame_source_health.kind: gpu`, `state: recording`, `fault: null`,
+  `pending`/`offers`/`queued` all 0, `video_packets: 2333`,
+  `delivered: 2264`, `max_feed_ms: 27.6` whose slowest command was `pcm`, not
+  video. The AV1 encode never became the bottleneck.
+
+KNOWN GAP, deliberately not fixed on that branch: `/api/replay/status`'s
+`encoder` field reports the DESKTOP-grab codec (`h264_nvenc`) and says nothing
+about the GPU route, so nothing in the app tells a user which codec the
+recorder is actually writing — the live check above had to be made by reading
+the files. Worth exposing the negotiated codec there.
+
 ## Replay capture (2026-06-11/12 live-audit marathon)
 
 The current SourceV2 renderer/worker/encoder architecture is documented in
@@ -1456,7 +1571,13 @@ as a relocation that disarms — and is deliberately not folded in here.
 
 ## Module depth (measured 2026-08-04)
 
-Latest reading, 2026-09-07 for installation onboarding: **55,045 lines,
+Latest reading, 2026-09-21 after AV1 at capture: **70,335 lines, 1,876 public
+names, 37.5 lines per public name, 82 pass-through (4.4%)**. That branch added
+no forwarding name: the codec travels as a field on values that already
+existed (`NativeFormat.codec`, `gbenc_options_v1.codec`) and its one new owner,
+`gpusettings.recording_codec`, answers a question nothing else could answer.
+
+Previous reading, 2026-09-07 for installation onboarding: **55,045 lines,
 1,357 public names, 40.6 lines per public name, 64 pass-through (4.7%)**.
 The new forwarding name is `SetupRecord.complete`, which gives the persisted
 completion write its domain meaning. Setup observations, readiness, navigation

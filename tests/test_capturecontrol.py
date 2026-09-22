@@ -80,6 +80,52 @@ def command(process, text):
     assert process.stdout.readline().strip() == "ok"
 
 
+@pytest.mark.parametrize("seed_request", [False, True])
+def test_unpublished_producer_is_retryable_and_closes_discovery_handles(
+        native, monkeypatch, seed_request):
+    name = "sm64_control_unpublished_" + uuid.uuid4().hex
+    kernel = C._kernel()
+    released = []
+
+    class Recording:
+        def __getattr__(self, attribute):
+            return getattr(kernel, attribute)
+
+        def UnmapViewOfFile(self, view):
+            released.append("view")
+            return kernel.UnmapViewOfFile(view)
+
+        def CloseHandle(self, handle):
+            released.append("handle")
+            return kernel.CloseHandle(handle)
+
+    # CreateFileMapping exposes these zero producer bytes before the worker
+    # can mark publication odd. Hold that real discovery window deliberately.
+    with mmap.mmap(-1, C.PAGE_BYTES, tagname=name + C.SUFFIX) as page:
+        if seed_request:
+            C._U32.pack_into(page, C.REQUEST_OFFSET, 2)
+        with monkeypatch.context() as patch:
+            patch.setattr(C, "_kernel", Recording)
+            with pytest.raises(BlockingIOError, match="not published"):
+                C.CaptureControl(name)
+        assert released == ["view", "handle"]
+        # The same named mapping becomes discoverable after actual native
+        # publication; no Python-created valid producer status stands in for it.
+        with running(native, name=name) as (process, control, _):
+            assert eventually(control.status).producer_pid == process.pid
+
+
+@pytest.mark.parametrize("offset,value", [
+    (0, 1), (8, 2), (12, 1), (16, 2), (20, 1), (80, 1), (256, 1), (257, 1),
+])
+def test_nonzero_invalid_producer_is_not_mistaken_for_unpublished(offset, value):
+    name = "sm64_control_invalid_" + uuid.uuid4().hex
+    with mmap.mmap(-1, C.PAGE_BYTES, tagname=name + C.SUFFIX) as page:
+        page[offset] = value
+        with pytest.raises(RuntimeError, match="protocol"):
+            C.CaptureControl(name)
+
+
 def test_discovery_is_small_and_passive_and_unavailable_is_truthful(native, monkeypatch):
     with pytest.raises(FileNotFoundError):
         C.CaptureControl("absent_" + uuid.uuid4().hex)

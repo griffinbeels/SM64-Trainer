@@ -2,8 +2,15 @@
 
 Synchronous media-worker component. Never call from renderer/audio callbacks.
 The coordinator owns bounded pending media and ordering; this class retains no
-raw video and never invokes a video encoder or decoder. A validated H264 stream
-header describes the native encoder; assigned packet intervals pass unchanged.
+raw video and never invokes a video encoder or decoder. A validated native
+stream header describes the encoder; assigned packet intervals pass unchanged.
+
+THE CODEC IS CARRIED, NEVER ASSUMED. The native encoder writes AV1 on a GPU
+that has an AV1 encoder and H.264 everywhere else, so the mux is told which
+one it is holding rather than inferring it. Both are ordered, reordering-free
+and self-describing in band -- H.264 repeats SPS/PPS on every IDR, AV1 repeats
+its sequence header -- which is what lets `delay_moov` build the sample
+description from the first packet with no decoder in the recording path.
 """
 
 from dataclasses import dataclass
@@ -26,17 +33,30 @@ class EncodedPicture:
     data: bytes
 
 
-@dataclass(frozen=True)
-class H264Format:
-    """Pinned native format; its first AnnexB IDR carries the encoder's SPS/PPS."""
+# The codecs the native encoder can produce, by their libav stream names. Both
+# carry their own decoder configuration in the first key picture, so neither
+# needs a probe or a decode to be muxed; anything else would.
+NATIVE_CODECS = ("h264", "av1")
 
+
+@dataclass(frozen=True)
+class NativeFormat:
+    """Pinned native format; its first key picture carries the decoder config.
+
+    `codec` is the libav stream name ("h264" or "av1"), not the ffmpeg encoder
+    name -- the encoder is a choice made once by the capture session, and what
+    reaches the archive is the bitstream it produced.
+    """
+
+    codec: str
     width: int
     height: int
     nominal_rate: int
 
     def __post_init__(self):
         if (
-            any(
+            self.codec not in NATIVE_CODECS
+            or any(
                 type(v) is not int for v in (self.width, self.height, self.nominal_rate)
             )
             or not 2 <= self.width <= 8192
@@ -45,7 +65,7 @@ class H264Format:
             or self.height % 2
             or not 1 <= self.nominal_rate <= 1000
         ):
-            raise ValueError("invalid native H264 format")
+            raise ValueError("invalid native video format")
 
 
 class PacketFragmentMux:
@@ -70,10 +90,12 @@ class PacketFragmentMux:
     ):
         if min(audio_rate, audio_bitrate, packet_limit, pcm_limit) <= 0:
             raise ValueError("positive packet mux limits required")
-        if not isinstance(template, H264Format) and (
-            template.codec_context.name != "h264" or template.codec_context.has_b_frames
+        if not isinstance(template, NativeFormat) and (
+            template.codec_context.name not in NATIVE_CODECS
+            or template.codec_context.has_b_frames
         ):
-            raise ValueError("packet mux requires ordered H264 without B-frames")
+            raise ValueError("packet mux requires an ordered native stream "
+                             "without B-frames")
         self.run, self.rate = run, audio_rate
         self.timings = timings
         self.packet_limit, self.pcm_limit = packet_limit, pcm_limit
@@ -84,11 +106,15 @@ class PacketFragmentMux:
         self.closed = self.failed = False
         self.mux = av.open(output, "w", format="mp4", options=fragment_mux_options())
         try:
-            if isinstance(template, H264Format):
+            if isinstance(template, NativeFormat):
                 # No demux probe, video codec context, CPU decode or second encoder.
-                # delay_moov obtains codec extradata from the first native AnnexB IDR.
+                # delay_moov obtains codec extradata from the first native key
+                # picture: H.264's repeated SPS/PPS, or AV1's repeated sequence
+                # header. Measured 2026-09-21 -- real av1_nvenc packets muxed
+                # this way produce an `av01` sample entry and decode back with
+                # every source tick intact.
                 self.video = self.mux.add_mux_stream(
-                    "h264",
+                    template.codec,
                     width=template.width,
                     height=template.height,
                     rate=template.nominal_rate,

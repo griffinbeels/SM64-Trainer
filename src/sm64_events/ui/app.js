@@ -12,6 +12,7 @@ import { Run } from "./components/runview.js";
 import { Compare } from "./components/compare.js";
 import { Library } from "./components/library.js";
 import { UpdatePopup } from "./components/update.js";
+import { CloseWarning } from "./components/closewarning.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
@@ -299,6 +300,9 @@ function App() {
     <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)}
       tab=${tab} setTab=${setTab} openSettings=${() => setSettingsOpen(true)} />
     <${UpdatePopup} t=${t} />
+    ${/* Root-mounted like the update popup: the desktop shell can ask to close
+         from any tab, and a browser tab simply never receives the event. */""}
+    <${CloseWarning} />
     ${/* Mounted at root, not inside the Rank tab: a rank-up earned while on
          the Practice page must still celebrate, and rule 10 (browser<->GUI
          parity) means the desktop window and the browser tab agree on this

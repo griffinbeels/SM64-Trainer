@@ -23,9 +23,10 @@ def native_build():
         pytest.skip("x86/x64 MSVC unavailable for real GPU bridge witness")
     return build, vc32
 
-@pytest.mark.parametrize("mode", ["pixels", "omit-copy", "nvenc"])
+@pytest.mark.parametrize("mode", ["pixels", "omit-copy", "nvenc", "nvenc-av1"])
 def test_gpu_bridge(tmp_path, native_build, mode):
     omit_copy = mode == "omit-copy"
+    nvenc = mode.startswith("nvenc")
     build, vc32 = native_build
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
     flags += ["/std:c++17", "/EHsc", f"/I{SOURCE}", f"/I{ROOT / 'plugin/gfxwrap'}"]
@@ -36,10 +37,12 @@ def test_gpu_bridge(tmp_path, native_build, mode):
         (consumer, "gpu_bridge_consumer.cpp", vc32.with_name("vcvars64.bat"), []),
     ]:
         defines = ["/DGPU_BRIDGE_OMIT_COPY"] if omit_copy else []
-        if mode == "nvenc":
+        if nvenc:
             defines += ["/DGPU_BRIDGE_LARGE"]
-        if mode == "nvenc" and target == consumer:
+        if nvenc and target == consumer:
             defines += ["/DGPU_BRIDGE_NVENC", f"/I{SOURCE / 'vendor'}"]
+            if mode == "nvenc-av1":
+                defines += ["/DGPU_BRIDGE_AV1"]
             extra += [str(SOURCE / "gpu_bridge_encoder.cpp")]
         build._cl(vc, flags + defines + [str(SOURCE / "gpu_bridge.cpp"), str(SOURCE / host), *extra,
             f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *build.LIBS, "d3d11.lib", "dxgi.lib"], tmp_path)
@@ -66,25 +69,90 @@ def test_gpu_bridge(tmp_path, native_build, mode):
     assert "source_gpu_progress=completed consumer_still_stalled=yes" in output
     if not omit_copy:
         assert "producer passed: pictures=6" in output
-        expected_bytes = 1843200 if mode == "nvenc" else 1152
+        expected_bytes = 1843200 if nvenc else 1152
         assert f"bits=64 pictures=6 bytes_checked={expected_bytes}" in result.stdout
 
-    if mode == "nvenc":
-        assert_nvenc_output(tmp_path, result.stdout)
+    if nvenc:
+        assert_nvenc_output(tmp_path, result.stdout,
+                            "av1" if mode == "nvenc-av1" else "h264")
 
 
-def assert_nvenc_output(tmp_path, output):
+def video_sample_entry(data: bytes) -> bytes:
+    """The four characters the video track's sample description carries."""
+    from sm64_events.replay.fragmentindex import boxes, child
+    for kind, moov, _, _ in boxes(data):
+        if kind != b"moov":
+            continue
+        for trak_kind, trak, _, _ in boxes(moov):
+            if trak_kind != b"trak":
+                continue
+            mdia = child(trak, b"mdia")
+            if bytes(child(mdia, b"hdlr")[8:12]) != b"vide":
+                continue
+            stsd = child(child(child(mdia, b"minf"), b"stbl"), b"stsd")
+            return bytes(list(boxes(stsd[8:]))[0][0])
+    raise AssertionError("no video track in the muxed fragments")
+
+
+def assert_nvenc_output(tmp_path, output, codec):
+    """The native encoder's OWN packets, through the archive that stores them.
+
+    The bytes are never decoded on the way in: they are sliced back out of the
+    witness stream by the packet sizes the encoder reported, muxed by
+    `PacketFragmentMux` exactly as the recorder would, and only then decoded.
+    That is what makes this a witness for AV1 as well as H.264 -- the question
+    is not whether NVENC can encode, it is whether the fragment archive can
+    carry what NVENC emitted with no decoder in the recording path."""
     assert "drained submitted=6 completed=6 eos=yes" in output
     import av
     import csv
+    import io
     import numpy as np
+    from sm64_events.replay.media import MediaRun
+    from sm64_events.replay.packetmux import (EncodedPicture, NativeFormat,
+                                              PacketFragmentMux)
     with (tmp_path / "packets.csv").open() as source:
         packets = list(csv.DictReader(source))
     assert [int(row["pts"]) for row in packets] == [0, 3001, 3002, 90000, 91000, 180000]
     assert [int(row["duration"]) for row in packets] == [3001, 1, 86998, 1000, 89000, 9000]
     assert [int(row["idr"]) for row in packets] == [1, 0, 0, 1, 0, 1]
-    with av.open(str(tmp_path / "witness.h264")) as video:
-        frames = [frame.to_ndarray(format="rgb24") for frame in video.decode(video=0)]
+
+    stream = (tmp_path / f"witness.{codec}").read_bytes()
+    assert sum(int(row["bytes"]) for row in packets) == len(stream)
+    output_mp4 = io.BytesIO()
+    mux = PacketFragmentMux(output_mp4, NativeFormat(codec, 320, 240, 30),
+                            MediaRun(f"gpu-bridge-{codec}", 1000.0),
+                            audio_rate=48000, audio_bitrate=160000,
+                            packet_limit=1 << 20, pcm_limit=384000)
+    at = 0
+    try:
+        for row in packets:
+            size = int(row["bytes"])
+            mux.write_video(EncodedPicture(
+                int(row["occurrence"]), int(row["pts"]), int(row["duration"]),
+                int(row["idr"]) == 1, stream[at:at + size]))
+            at += size
+        mux.close()
+    finally:
+        if not mux.closed:
+            mux.abort()
+    (tmp_path / f"witness-{codec}.mp4").write_bytes(output_mp4.getvalue())
+
+    # The sample entry, not the decoder's name: libav answers `libdav1d` for an
+    # AV1 stream, which says which decoder it chose and nothing about what the
+    # archive wrote. `avc1`/`av01` is what `fragmentindex.tracks_of` admits and
+    # what a browser dispatches on.
+    assert video_sample_entry(output_mp4.getvalue()) == {
+        "h264": b"avc1", "av1": b"av01"}[codec]
+
+    with av.open(io.BytesIO(output_mp4.getvalue())) as video:
+        video_stream = video.streams.video[0]
+        ticks = []
+        frames = []
+        for frame in video.decode(video_stream):
+            ticks.append(int(frame.pts * frame.time_base * 90000))
+            frames.append(frame.to_ndarray(format="rgb24"))
+    assert ticks == [0, 3001, 3002, 90000, 91000, 180000]
     assert len(frames) == 6
     ys, xs = np.indices((240, 320)); xs = xs + 1; ys = 240 - 1 - ys + 2
     references = []

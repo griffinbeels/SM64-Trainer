@@ -26,7 +26,7 @@ from sm64_events.replay.fragmentmedia import FragmentMedia
 from sm64_events.replay.gpucapture import GpuCapture
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MEDIA_TIME_BASE, MediaRun
-from sm64_events.replay.packetmux import EncodedPicture, H264Format, PacketFragmentMux
+from sm64_events.replay.packetmux import EncodedPicture, NativeFormat, PacketFragmentMux
 from sm64_events.replay.recorder import ReplayRecorder
 from sm64_events.replay.ring import SegmentRing
 from sm64_events.replay.window import WindowInfo
@@ -217,7 +217,7 @@ class Recording:
         self.archive = self.rec.fragments.create(self.run, (WIDTH, HEIGHT))
         self.reference_archive = self.reference.create(self.run, (WIDTH, HEIGHT))
         self.output = ForkOutput(self.archive, self.reference_archive)
-        self.mux = PacketFragmentMux(self.output, H264Format(WIDTH, HEIGHT, 30), self.run,
+        self.mux = PacketFragmentMux(self.output, NativeFormat("h264", WIDTH, HEIGHT, 30), self.run,
                                     audio_rate=RATE, audio_bitrate=128000,
                                     packet_limit=64 * 1024, pcm_limit=960 * 4)
         self.encoder = fixture_encoder()
