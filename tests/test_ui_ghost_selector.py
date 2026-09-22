@@ -2,6 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 
+from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
 from tests.test_ui_ghost_switch import (
     FIXTURE_SEGMENT, MEASURE, WIDTHS, get_driver, ghost_session,
     serve_ui_with_ghost, settled,
@@ -33,16 +34,22 @@ def picker(page):
     })()""")
 
 
+def shoot(page, path):
+    page.evaluate("document.querySelector('.ghost-row').scrollIntoView({block:'center'})")
+    path.write_bytes(page.screenshot())
+
+
 def selection_session():
     initial = ghost_session(enabled=False, available=False, view="mario")
-    initial["source"].update(native_available=False, native_reason_text="No saved Mario poses",
+    # The real, longest native refusal: an older pose file he must re-record.
+    initial["source"].update(native_available=False, native_reason_text=OLDER_POSE_FORMAT_TEXT,
                               whole_available=False, whole_reason_text="No saved video",
-                              reason_text="No saved Mario poses")
+                              reason_text=OLDER_POSE_FORMAT_TEXT)
     initial["selection"] = {"template_id": None, "candidates": [
         {"template_id": key, "attempt_id": 1200 + key,
          "name": "Fall onto the Caged Island", "strat": "TJ Owlless",
          "native_available": native, "whole_available": not native,
-         "native_reason_text": None if native else "No saved Mario poses",
+         "native_reason_text": None if native else OLDER_POSE_FORMAT_TEXT,
          "whole_reason_text": "No saved video" if native else None}
         for key, native in [(7, False), (8, True)]
     ]}
@@ -71,7 +78,8 @@ def test_recording_picker_is_independent_reachable_and_fits_supported_widths():
                 assert not before["disabled"] and before["value"] == ""
                 assert before["label"] == "Ghost recording" and before["fits"]
                 assert [option["disabled"] for option in before["options"]] == [False, True, False]
-                assert "No saved Mario poses" in before["options"][1]["label"]
+                assert "older pose format" in before["options"][1]["label"]
+                shoot(page, screenshots / f"older-{width}.png")
                 assert page.evaluate(MEASURE)[0]["disabled"]
 
                 choose(page, SELECT, "8")
@@ -86,8 +94,7 @@ def test_recording_picker_is_independent_reachable_and_fits_supported_widths():
                 row = page.evaluate(MEASURE)[0]
                 assert row["rowScroll"] <= row["rowClient"] + 1
                 assert row["cardScroll"] <= row["cardClient"] + 1
-                page.evaluate("document.querySelector('.ghost-row').scrollIntoView({block:'center'})")
-                (screenshots / f"selected-{width}.png").write_bytes(page.screenshot())
+                shoot(page, screenshots / f"selected-{width}.png")
 
                 # A second recording supports Whole picture even though this one does not.
                 choose(page, ".ghost-view > select", "whole")

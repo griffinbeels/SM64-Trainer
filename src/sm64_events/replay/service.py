@@ -75,7 +75,7 @@ def _native_manifest(path: Path) -> dict:
 
 def _native_attempt_ids(root: Path) -> set[int]:
     """Pruning evidence must contain a committed, hashed clip, not just a name."""
-    from sm64_events.ghost.clip import check_manifest
+    from sm64_events.ghost.clip import OlderPoseFormat, check_manifest
     from types import SimpleNamespace
     root = root.resolve()
     identities = set()
@@ -96,7 +96,10 @@ def _native_attempt_ids(root: Path) -> set[int]:
             # This protects a saved source from pruning before the database is
             # available. Playback separately compares the current projected row.
             recorded = SimpleNamespace(**{**manifest, "id": attempt_id})
-            check_manifest(path, manifest, attempt=recorded, target=target)
+            try:
+                check_manifest(path, manifest, attempt=recorded, target=target)
+            except OlderPoseFormat:
+                pass  # Unplayable today, still his committed recording: never prune it.
             identities.add(attempt_id)
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
@@ -445,8 +448,17 @@ class ReplayService:
 
     def find_native(self, attempt_id: int) -> tuple[Path, dict] | None:
         """Read a validated permanent pose clip, independent of video availability."""
-        from sm64_events.ghost.clip import check_manifest
+        return self._find_native(attempt_id)[0]
+
+    def _find_native(self, attempt_id: int) -> tuple[tuple[Path, dict] | None, str | None]:
+        """The first playable candidate wins; otherwise name an older-format file.
+
+        An older-format commit is recorded as this attempt's preservation
+        refusal so the selector explains it, and callers must not replace it.
+        """
+        from sm64_events.ghost.clip import OlderPoseFormat, check_manifest
         attempt = self._attempt(attempt_id)
+        older = None
         root = self.cfg.save_root.resolve()
         candidates = [(root / "native" / f"attempt_{attempt_id}.ghost", False)]
         saved = self.find_saved(attempt_id)
@@ -463,10 +475,14 @@ class ReplayService:
                     manifest = manifest.get("native_ghost")
                 check_manifest(path, manifest, attempt=attempt, target=self._native_target(attempt))
                 self._remember_native_preservation(self._native_preservation_key(attempt), None)
-                return path, manifest
+                return (path, manifest), None
+            except OlderPoseFormat as error:
+                older = older or str(error)
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 continue
-        return None
+        if older is not None:
+            self._remember_native_preservation(self._native_preservation_key(attempt), older)
+        return None, older
 
     def native_identity(self, attempt_id: int) -> dict:
         """Cheap projected ownership key; reprojected origins invalidate cached clips."""
@@ -1013,10 +1029,12 @@ class ReplayService:
     def preserve_native(self, attempt_id: int) -> dict:
         """Commit poses for a template mark without extracting or encoding video."""
         with self._session_gate.use(), self._cut_lock(attempt_id), self._saving():
-            existing = self.find_native(attempt_id)
+            existing, older = self._find_native(attempt_id)
             if existing is not None:
                 path, manifest = existing
                 return {"path": str(path), "native_ghost": manifest, "native_ghost_reason": None}
+            if older is not None:  # Keep the committed older file byte-for-byte.
+                return {"path": None, "native_ghost": None, "native_ghost_reason": older}
             root = self.cfg.save_root.resolve()
             destination = root / "native" / f"attempt_{attempt_id}.ghost"
             if not all(path.resolve().is_relative_to(root) for path in

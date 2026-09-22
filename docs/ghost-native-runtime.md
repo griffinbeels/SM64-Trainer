@@ -30,15 +30,17 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC4: layout 168, sample 308; executed root matrix, warp fields and derived clock | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS3, exported as `SM64GhostSourceV3`; bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP2: immutable preloaded clips and revisioned owner origins | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Playback | GP3: immutable preloaded clips, revisioned owner origins and overlap-fade controls | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
 | Ghost IPC | GIPC3: status 256, request 2468, ring offset 4096, 512 records | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP3: header 160, record 324, maximum 240000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
 Sizes are bytes. Native ghost versions are checked together; older native clips
 have no compatibility reader. Their files remain on disk; `OlderPoseFormat`
-provides a typed reason to record a new attempt. SourceV2 video capture retains
-its original contract.
+provides a typed reason (`older_pose_format`) to record a new attempt. An older
+committed file keeps pruning protection and is never overwritten by a later
+export; a playable saved copy of the same attempt still wins. SourceV2 video
+capture retains its original contract.
 GS advertises pose and world-pass capture, not `GS_CAP_RENDER`: its table is a
 capture interface. Rendering uses the separate playback/draw path and requires
 negotiated clean presentation. A capability bit or prepared model is not proof
@@ -251,6 +253,12 @@ color, terrain depth and framebuffer writeback stay clean. The compositor uses
 the installed dispatch and renderer error gateway rather than consuming
 `glGetError` itself. HUD duplication is qualified against the current target and
 state, preserving draw order or refusing the branch.
+
+A pose may carry the original shadow packet (at most 24 vertices, the 16x16
+IA8 texture and its own matrix). The compositor draws it as a decal over the
+frame's clean copy, before any Mario, against copied terrain depth with the
+renderer's decal offset (-3,-3) and LEQUAL; N64 image depth omits it rather
+than guessing delta-Z. No capture packet feeds it yet.
 
 [ghost_presentation.cpp](../plugin/gfxwrap/ghost_presentation.cpp) preserves the
 clean drawable, applies the renderer's VI mapping/gamma to the display branch,

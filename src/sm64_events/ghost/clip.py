@@ -36,8 +36,17 @@ class ClipError(ValueError):
     """The recording cannot establish the requested native state."""
 
 
+OLDER_POSE_FORMAT_TEXT = "This Mario recording uses an older pose format. Record a new attempt to use it."
+
+
 class OlderPoseFormat(ClipError):
-    """A preserved recording predates effective graphics-root capture."""
+    """A preserved recording predates effective graphics-root capture.
+
+    Its bytes stay on disk and keep pruning protection; only playback refuses.
+    """
+
+    def __init__(self, message: str = OLDER_POSE_FORMAT_TEXT):
+        super().__init__(message)
 
 
 def attempt_origin(attempt) -> dict:
@@ -102,7 +111,7 @@ class Frame:
 def frame_from_bytes(data: bytes) -> Frame:
     if (len(data) == 260 and struct.unpack_from("<2I", data) == (260, 2)
             and struct.unpack_from("<2I", data, 16) == (244, 3)):
-        raise OlderPoseFormat("This Mario recording uses an older pose format. Record a new attempt to use it.")
+        raise OlderPoseFormat()
     if len(data) != RECORD_BYTES:
         raise ClipError("native ghost record has the wrong size")
     raw = bytes(data)
@@ -265,7 +274,7 @@ def _checked_frames(frames: tuple[Frame, ...], configuration: int, epoch: int,
 
 def decode_clip(data: bytes) -> Clip:
     if data[:8] in (b"SM64GHO1", b"SM64GHO2"):
-        raise OlderPoseFormat("This Mario recording uses an older pose format. Record a new attempt to use it.")
+        raise OlderPoseFormat()
     if not HEADER_BYTES <= len(data) <= HEADER_BYTES + MAX_RECORDS * RECORD_BYTES:
         raise ClipError("native ghost file size is outside its bound")
     values = _HEADER.unpack_from(data)
@@ -340,7 +349,7 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
             or manifest.get("file") != path.name):
         raise ClipError("native ghost manifest belongs to another attempt")
     if type(manifest.get("version")) is int and manifest["version"] in (1, 2):
-        raise OlderPoseFormat("This Mario recording uses an older pose format. Record a new attempt to use it.")
+        raise OlderPoseFormat()
     digest = manifest.get("sha256")
     if not isinstance(digest, str) or len(digest) != 64:
         raise ClipError("native ghost manifest has no content hash")

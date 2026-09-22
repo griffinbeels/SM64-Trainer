@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 import threading
 
+from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.source import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON, selected_template
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
@@ -39,6 +40,8 @@ class NativeGhost:
         reason = lookup(attempt_id) if lookup is not None else None
         if not reason:
             return answer
+        if reason == OLDER_POSE_FORMAT_TEXT:
+            return {**answer, "reason": "older_pose_format", "reason_text": reason}
         if reason == "native ghost has no supported recorded poses":
             detail = "this recording has no Mario poses supported by the renderer."
         elif reason == "This recording has no native Mario poses.":

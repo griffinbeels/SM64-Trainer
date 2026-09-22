@@ -465,3 +465,54 @@ def test_stale_lookup_cannot_erase_new_projection_refusal(tmp_path, monkeypatch)
         archive.close()
     assert not query.is_alive() and results == [None]
     assert service.native_preservation_reason(row.id) == refusal
+
+
+def test_older_pose_file_is_explained_kept_and_never_replaced(tmp_path):
+    import json
+    from ghost_native_fixture import frame, producer
+    from sm64_events.ghost.archive import PoseArchive
+    from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
+    from sm64_events.replay.service import saved_attempt_ids
+    from test_ghost_recording import native_service
+    from tests.test_ghost_session import a_store
+
+    service, row, archive = native_service(tmp_path)
+    fresh = PoseArchive(tmp_path / "fresh.sqlite")
+    try:
+        service.preserve_native(row.id)
+        path, manifest = service.find_native(row.id)
+        path.with_suffix(".json").write_text(json.dumps({**manifest, "version": 2}), encoding="utf-8")
+        before = {item: item.read_bytes() for item in (path, path.with_suffix(".json"))}
+        store = a_store(tmp_path)
+        target = {"kind": "star", "entity_key": f"{row.course_id}-{row.star_id}", "strat": row.strat_tag}
+        mark(store, entity_key=target["entity_key"], strat=row.strat_tag, attempt_id=row.id)
+        answer = NativeGhost(service).resolve(target, store)
+        assert not answer["available"]
+        assert (answer["reason"], answer["reason_text"]) == ("older_pose_format", OLDER_POSE_FORMAT_TEXT)
+        # A newer archive must not silently overwrite his committed older recording.
+        fresh.ingest(producer(), tuple(frame(n) for n in (1, 2, 3)))
+        service.recorder.pose_archive = fresh
+        assert service.preserve_native(row.id) == {
+            "path": None, "native_ghost": None, "native_ghost_reason": OLDER_POSE_FORMAT_TEXT}
+        assert {item: item.read_bytes() for item in before} == before
+        assert saved_attempt_ids(service.cfg.save_root) == {row.id}  # pruning keeps it
+    finally:
+        archive.close()
+        fresh.close()
+
+
+def test_playable_saved_copy_wins_over_an_older_permanent_file(tmp_path):
+    import json
+    from pathlib import Path
+    from test_ghost_recording import native_service
+
+    service, row, archive = native_service(tmp_path)
+    service.compressor = SimpleNamespace(enqueue=lambda *args, **kwargs: None)
+    original = service.preserve_native(row.id)
+    saved = service.save(row.id)
+    archive.close()
+    permanent = Path(original["path"]).with_suffix(".json")
+    permanent.write_text(json.dumps({**original["native_ghost"], "version": 1}), encoding="utf-8")
+    path, _ = service.find_native(row.id)
+    assert path == Path(saved["path"]).with_suffix(".ghost")
+    assert service.native_preservation_reason(row.id) is None
