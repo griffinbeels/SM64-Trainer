@@ -18,7 +18,13 @@ wrappers see [local verification](local-verification.md).
 | **Full run** | GitHub Actions, every push to main; `uv run python tools/full_run.py status` | the whole suite, browser tests included, split across parallel jobs | not on this machine |
 
 The merge check gates a merge; the full run gates a release (`tools/release.py`
-waits for a green one on the commit it releases). A failure reruns as a focused
+waits for a green one on the commit it releases). **Wrap runs the merge check
+once; don't run it yourself first.** A direct `run_tests.py` run leaves no
+receipt, so wrap runs the same tests again (5m42s twice, 2026-09-22). To see
+it before wrap, run `python tools/verify.py full`: its receipt is keyed on the
+tree's content, so wrap reuses it from any checkout, unless merging main
+changed the tree. While working, run focused checks; `--why --dry-run` shows
+what the merge check would pick without running it. A failure reruns as a focused
 check: `tools/full_run.py failures` prints the ready-to-paste command for a red
 full run, and the merge check reruns last run's failures by itself.
 
