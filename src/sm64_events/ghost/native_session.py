@@ -6,6 +6,7 @@ import threading
 
 from sm64_events.ghost.source import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON, selected_template
+from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 
 
 class NativeGhost:
@@ -106,7 +107,8 @@ class NativeGhost:
             del self._cached[next(iter(self._cached))]
         return result, asset
 
-    def reconcile(self, *, enabled, opacity, nudge, tint, target):
+    def reconcile(self, *, enabled, opacity, nudge, tint, target, proximity=None):
+        proximity = {**DEFAULT_PROXIMITY, **checked_proximity(proximity or {})}
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         with self._control_lock:
             if source is not self._source:
@@ -120,6 +122,8 @@ class NativeGhost:
             self._selected_asset = self._asset
             self._requested = bool(enabled)
             self._controls = {"opacity": opacity, "nudge": nudge,
+                              "proximity_enabled": proximity["enabled"],
+                              "proximity_distance": proximity["extra_distance"],
                               "tint_enabled": tint["enabled"], "hue_degrees": tint["hue_degrees"],
                               "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
             self._send()

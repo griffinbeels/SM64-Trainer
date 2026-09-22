@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "ghost_playback.h"
+#include "ghost_proximity.h"
 #include "ghost_pose.h"
 #include <algorithm>
 #include <atomic>
@@ -337,7 +338,8 @@ int32_t __cdecl prepare_clip(const gclip_header *header,const gclip_frame *frame
 bool valid_request(const gp_request& r) {
     if(r.bytes!=sizeof(r) || r.version!=GP_VERSION || !r.revision
             || r.enabled>1 || r.tint_enabled>1 || r.hue_degrees>359
-            || r.reserved0 || r.reserved[0] || r.reserved[1]) return false;
+            || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
+            || r.proximity_distance<0 || r.proximity_distance>400) return false;
     if(!r.enabled) return true;
     if(!r.owner_token || !r.model_id || !r.rom_generation || !r.configuration || !nonzero_id(r.clip_id)
             || r.mode>GP_FIXED || r.nudge_frames < -600 || r.nudge_frames>600
@@ -544,7 +546,11 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     recorded.configuration=selected.configuration;recorded.sample=selected.sample;
     recorded.world.status=selected.world_status;
     evaluations.fetch_add(1);
-    const auto result=ghost_pose::evaluate(model.value,recorded,live,world,active_request.opacity,scratch,out);
+    float opacity=active_request.opacity;
+    if(active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE))
+        opacity*=ghost_proximity::factor(live.pose.position,live.pose.scale,
+            selected.sample.pose.position,selected.sample.pose.scale,active_request.proximity_distance);
+    const auto result=ghost_pose::evaluate(model.value,recorded,live,world,opacity,scratch,out);
     if(result!=ghost_pose::Result::ok || !current(candidate)) {
         out={};refusals.fetch_add(1);decision(GP_POSE_REFUSED);return false;
     }

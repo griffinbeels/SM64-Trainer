@@ -90,6 +90,15 @@ def test_invalid_control_does_not_partly_publish(kernel):
         with pytest.raises(ValueError):
             connection.poll({"enabled": True, "opacity": float("nan")})
         assert bytes(kernel.request) == original
+        for changes in ({"proximity_enabled": 1}, {"proximity_distance": float("nan")},
+                        {"proximity_distance": 401}, {"proximity_distance": -1}):
+            with pytest.raises(ValueError):
+                connection.poll(changes)
+            assert bytes(kernel.request) == original
+        connection.poll({"proximity_enabled": True, "proximity_distance": 120})
+        assert kernel.request.proximity_enabled == 1 and kernel.request.proximity_distance == 120
+        connection.poll({"proximity_enabled": False, "proximity_distance": 120})
+        assert kernel.request.proximity_enabled == 0 and kernel.request.proximity_distance == 120
     finally:
         connection.close()
 

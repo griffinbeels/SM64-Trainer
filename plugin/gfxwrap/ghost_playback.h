@@ -6,7 +6,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 2u
+#define GP_VERSION 3u
 #define GP_CLIP_SLOTS 3u
 #define GP_CLIP_BUDGET (128u * 1024u * 1024u)
 #define GP_STAR_ACTIONS 8u
@@ -47,7 +47,8 @@ typedef struct gp_request {
     uint32_t star_ends, star_action_count;
     uint32_t star_actions[GP_STAR_ACTIONS];
     uint32_t tint_enabled, hue_degrees;
-    uint32_t reserved[2];
+    uint32_t proximity_enabled;
+    float proximity_distance;
     /* FOLLOW binds an exact owner occurrence; FIXED requires all zero. */
     gp_origin origin;
 } gp_request;

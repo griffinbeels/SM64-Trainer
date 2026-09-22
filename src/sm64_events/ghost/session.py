@@ -663,7 +663,7 @@ class GhostSession:
             native_view = self._view == "mario"
             self._native.reconcile(enabled=native_view and self._enabled and self._source.get("available", False),
                                    opacity=self._opacity, nudge=self._nudge,
-                                   tint=self._tint, target=self._target)
+                                   tint=self._tint, target=self._target, proximity=self._proximity)
             if native_view:
                 self._end_window()
                 return

@@ -184,6 +184,8 @@ struct Session {
                 || r.nudge < -600 || r.nudge > 600
                 || !(r.opacity >= 0 && r.opacity <= 1) || r.stop_at_star > 1
                 || r.star_action_count > 8 || r.tint_enabled > 1 || r.hue_degrees > 359
+                || r.proximity_enabled > 1 || !std::isfinite(r.proximity_distance)
+                || r.proximity_distance < 0 || r.proximity_distance > 400
                 || (r.play_enabled && !r.model_id))) {
             revoke(GIPC_PROTOCOL); previous = r; return false;
         }
@@ -294,6 +296,8 @@ struct Session {
                     command.star_ends = r.stop_at_star; command.star_action_count = r.star_action_count;
                     std::memcpy(command.star_actions, r.star_actions, sizeof(r.star_actions));
                     command.tint_enabled = r.tint_enabled; command.hue_degrees = r.hue_degrees;
+                    command.proximity_enabled = r.proximity_enabled;
+                    command.proximity_distance = r.proximity_distance;
                     if (play->configure(&command) != GP_OK) {
                         state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else { applied = r.revision; state = GIPC_READY; }

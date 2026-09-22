@@ -50,12 +50,18 @@ def test_native_switch_uses_pose_without_video_window_and_preserves_controls(tmp
         command = source.commands[-1]
         assert command["enabled"] and command["opacity"] == 1 and command["nudge"] == 9
         assert command["tint_enabled"] and command["hue_degrees"] == 120
+        assert command["proximity_enabled"] and command["proximity_distance"] == 0
         assert command["stop_at_star"] and command["rom_path"] == ""
         assert command["origin"]["global_timer"] == 100
         assert command["origin"]["configuration"] == 2 and command["origin"]["epoch"] == 3
         count = len(source.commands)
         await session.refresh(resolve=False)
         assert len(source.commands) == count
+        await session.update({"proximity": {"extra_distance": 120}})
+        assert source.commands[-1]["proximity_distance"] == 120
+        await session.update({"proximity": {"enabled": False}})
+        assert not source.commands[-1]["proximity_enabled"]
+        assert source.commands[-1]["proximity_distance"] == 120
         await session.update({"view": "whole"})
         assert not source.commands[-1]["enabled"] and windows[-1].visible
         await session.stop()

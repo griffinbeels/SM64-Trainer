@@ -8,6 +8,7 @@ import secrets
 from contextlib import contextmanager
 
 from sm64_events.ghost import native_protocol as P
+from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
 from sm64_events.replay.ownedclose import close_after_error, release_many
@@ -141,6 +142,12 @@ class NativeChannel:
         request.play_enabled, request.opacity, request.nudge = enabled, opacity, nudge
         request.stop_at_star = bool(value.get("stop_at_star", True))
         request.owner_suspended = bool(value.get("owner_suspended", False))
+        proximity = checked_proximity({
+            "enabled": value.get("proximity_enabled", DEFAULT_PROXIMITY["enabled"]),
+            "extra_distance": value.get("proximity_distance", DEFAULT_PROXIMITY["extra_distance"]),
+        })
+        request.proximity_enabled = proximity["enabled"]
+        request.proximity_distance = proximity["extra_distance"]
         request.tint_enabled = bool(value.get("tint_enabled", False))
         hue = value.get("hue_degrees", 0)
         if type(hue) is not int or not 0 <= hue <= 359:

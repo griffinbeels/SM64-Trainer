@@ -250,6 +250,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.owner_created_lo=birth.dwLowDateTime;r.owner_created_hi=birth.dwHighDateTime;r.generation=initial.generation;
         r.token=123;r.revision=1;r.capture_enabled=r.play_enabled=1;r.rom_generation=ghost_ipc::rom_generation();
         r.model_id=1;r.clip_id[0]=1;r.opacity=0.75f;r.tint_enabled=1;r.hue_degrees=217;
+        r.proximity_enabled=1;r.proximity_distance=120;
         r.mode=GP_FIXED;
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
@@ -260,6 +261,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(first.rom_generation==r.rom_generation && first.owner_token==r.token && first.opacity==0.75f
             && first.tint_enabled==1 && first.hue_degrees==217 && first.star_actions[0]==0x1302,"command fields transported");
         check(first.configuration && first.revision,"capture and playback identities acknowledged");
+        check(first.proximity_enabled==1 && first.proximity_distance==120,"proximity crosses actual IPC worker");
         check(!page.status().displayed,"ready pose is not presentation evidence");
         ghost_ipc::presented(first.revision);
         page.wait([](const gipc_status& s){return s.displayed==1;},"actual matching presentation acknowledged");
