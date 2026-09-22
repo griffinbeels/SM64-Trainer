@@ -6,7 +6,7 @@
 #include "ghost_capture.h"
 #include <stdint.h>
 
-#define GS_VERSION 2u
+#define GS_VERSION 3u
 #define GS_SLOTS 128u
 #define GS_CAP_POSE 1u
 #define GS_CAP_WORLD_PASS 2u
@@ -63,6 +63,7 @@ void projection(const float matrix[16]);
 void triangles(const ghost::RasterTarget &, uint32_t count, bool zbuffer);
 bool geometry(bool was_zbuffer, bool is_zbuffer);
 void color_target_changed();
+void display_list(uint32_t pc, uint32_t dl, uint32_t physical_dl, uint32_t depth, const float *matrix);
 void end(bool completed);
 const gc_sample *sample();
 const ghost::WorldPass *candidate();

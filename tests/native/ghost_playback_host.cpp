@@ -335,9 +335,18 @@ int main() {
         r.origin={GO_STAR,7,live.sequence+1,source_continuity,6000,source_generation,0,0};elapsed_base=6000;
         check(api->configure(&r)==GP_OK,"before-start clamp must not reveal an already touched first pose");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_STAR_ENDED);
-        Clip large(2,GCLIP_MAX_RECORDS);
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
-        check(api->prepare_clip(&large.header,large.frames.data())==GP_OK,"largest supported clip");
+        {
+            Clip maximum(12,GCLIP_MAX_RECORDS);
+            check(api->prepare_clip(&maximum.header,maximum.frames.data())==GP_OK,"largest supported clip");
+        }
+        // Two 40%-budget clips fit; a third cannot. Derive the count from
+        // the frame and action-index cost so format growth preserves the test.
+        constexpr uint32_t budget_count=uint32_t(uint64_t(GP_CLIP_BUDGET)*2/5
+            /(sizeof(gclip_frame)+sizeof(uint32_t)));
+        static_assert(budget_count<GCLIP_MAX_RECORDS);
+        Clip large(2,budget_count);
+        check(api->prepare_clip(&large.header,large.frames.data())==GP_OK,"first budget-sized clip ready");
         revision=r.revision+1;r=request(large,revision);r.model_id=4;check(api->configure(&r)==GP_OK,"own first large clip");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         auto next=large.header;next.clip_id[0]=3;

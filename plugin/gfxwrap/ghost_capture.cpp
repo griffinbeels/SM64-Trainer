@@ -1,4 +1,5 @@
 #include "ghost_capture.h"
+#include "ghost_root.h"
 #include <cstddef>
 #include <cmath>
 #include <cstring>
@@ -135,7 +136,7 @@ bool unresolved_floor(uint32_t action) {
 }
 
 uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
-                      int16_t area_index, uint16_t visual_frame, gc_pose &out) {
+                      int16_t area_index, uint16_t visual_frame, gc_pose &out, bool deferred) {
     const uint32_t state = layout.mario_state;
     const uint32_t object = ram.u32(layout.mario_object);
     if (!ram.has(state, 0xa0) || !ram.has(object, object_size)
@@ -149,9 +150,9 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
     out.mario_flags = ram.u32(state + 4);
     out.gfx_flags = ram.u16(object + 2);
     if (ram.u32(state + 0x7c) || ram.u32(state + 0x84)) return GC_UNSUPPORTED_HELD;
-    if (unresolved_floor(out.action) || unresolved_floor(out.body_action)
-            || (out.gfx_flags & billboard) || (ram.u32(object + 0x8c) & 0xa00)
-            || ram.u32(object + 0x50)) return GC_UNSUPPORTED_ROOT;
+    if ((out.gfx_flags & billboard) || ram.u32(object + 0x50)
+            || (!deferred && (unresolved_floor(out.action) || unresolved_floor(out.body_action)
+                             || (ram.u32(object + 0x8c) & 0xa00)))) return GC_UNSUPPORTED_ROOT;
     const uint32_t camera = ram.u32(area + area_camera);
     if (!ram.has(camera, 1, 1)) return GC_BAD_POINTER;
     if (ram.u8(camera) == 6) return GC_UNSUPPORTED_HEAD;
@@ -183,7 +184,7 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
             || out.cap_state > 3 || out.eye_state > 8 || out.hand_state > 5
             || out.wing_flutter > 1 || out.model_state > 0x3ff || out.grab_position > 3
             || (out.punch_state >> 6) > 2 || (out.punch_state & 0x3f) > 5) return GC_BAD_VALUE;
-    out.root_kind = GC_ROOT_TRS;
+    out.root_kind = deferred && !out.hidden ? GC_ROOT_UNRESOLVED : GC_ROOT_TRS;
     return GC_OK;
 }
 } // namespace
@@ -211,8 +212,9 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     return GC_OK;
 }
 
-extern "C" uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layout,
-                                      const gc_frame *frame, gc_sample *out) {
+static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
+                            const gc_frame *frame, gc_sample *out, gc_root_probe *probe) {
+    if (probe) *probe = {};
     if (!out) return GC_BAD_ARGUMENT;
     std::memset(out, 0, sizeof(*out)); out->bytes = sizeof(*out); out->version = GC_VERSION;
     if (frame) {
@@ -261,21 +263,31 @@ extern "C" uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layou
     else if (!out->status) out->status = camera_status;
     ram.ok = true;
     gc_pose pose{};
-    const uint32_t pose_status = capture_pose(ram, *layout, area, out->area, out->area_update_counter, pose);
+    const uint32_t pose_status = capture_pose(ram, *layout, area, out->area, out->area_update_counter, pose, probe != nullptr);
     if (pose_status == GC_OK) { out->pose = pose; out->valid_fields |= GC_VALID_POSE; }
     else if (!out->status) out->status = pose_status;
+    if (probe) ghost_root_prepare(*probe, *frame, ram.u32(layout->mario_object), layout->object_pool, *out);
     return out->status;
+}
+
+extern "C" uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layout,
+                                      const gc_frame *frame, gc_sample *out) {
+    return capture_read(reader,layout,frame,out,nullptr);
+}
+extern "C" uint32_t ghost_capture_begin(gc_reader *reader, const gc_layout *layout,
+                                       const gc_frame *frame, gc_sample *out, gc_root_probe *probe) {
+    return capture_read(reader,layout,frame,out,probe);
 }
 
 static_assert(sizeof(gc_layout) == 168, "Ghost layout ABI changed");
 static_assert(offsetof(gc_layout, pending_warp_op) == 56, "Ghost warp layout ABI changed");
 static_assert(offsetof(gc_layout, delayed_warp_timer) == 60, "Ghost countdown layout ABI changed");
 static_assert(offsetof(gc_layout, clock) == 64, "Ghost clock layout ABI changed");
-static_assert(sizeof(gc_sample) == 244, "Ghost sample ABI changed");
+static_assert(sizeof(gc_sample) == 308, "Ghost sample ABI changed");
 static_assert(offsetof(gc_sample, live_action) == 56, "Ghost action ABI changed");
 static_assert(offsetof(gc_sample, pose) == 60, "Ghost pose ABI changed");
-static_assert(offsetof(gc_sample, camera) == 140, "Ghost camera ABI changed");
-static_assert(offsetof(gc_sample, pending_warp_op) == 176, "Ghost warp ABI changed");
-static_assert(offsetof(gc_sample, delayed_warp_timer) == 178, "Ghost countdown ABI changed");
-static_assert(offsetof(gc_sample, clock) == 180, "Ghost clock evidence ABI changed");
+static_assert(offsetof(gc_sample, camera) == 204, "Ghost camera ABI changed");
+static_assert(offsetof(gc_sample, pending_warp_op) == 240, "Ghost warp ABI changed");
+static_assert(offsetof(gc_sample, delayed_warp_timer) == 242, "Ghost countdown ABI changed");
+static_assert(offsetof(gc_sample, clock) == 244, "Ghost clock evidence ABI changed");
 static_assert(sizeof(float) == 4, "Ghost capture requires IEEE binary32");

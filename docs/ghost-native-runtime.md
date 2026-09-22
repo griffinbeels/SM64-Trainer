@@ -27,16 +27,18 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC3: layout 168, sample 244; raw warp fields and independent derived clock | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC4: layout 168, sample 308; executed root matrix, warp fields and derived clock | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
-| Renderer capture | GS2, exported as `SM64GhostSourceV2`; bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
+| Renderer capture | GS3, exported as `SM64GhostSourceV3`; bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP2: immutable preloaded clips and revisioned owner origins | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC2: status 256, request 2460, ring offset 4096, 512 records | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP2: header 160, record 260, maximum 240000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Ghost IPC | GIPC3: status 256, request 2468, ring offset 4096, 512 records | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP3: header 160, record 324, maximum 240000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
 Sizes are bytes. Native ghost versions are checked together; older native clips
-have no compatibility reader. SourceV2 video capture retains its original contract.
+have no compatibility reader. Their files remain on disk; `OlderPoseFormat`
+provides a typed reason to record a new attempt. SourceV2 video capture retains
+its original contract.
 GS advertises pose and world-pass capture, not `GS_CAP_RENDER`: its table is a
 capture interface. Rendering uses the separate playback/draw path and requires
 negotiated clean presentation. A capability bit or prepared model is not proof
@@ -46,7 +48,8 @@ of a displayed ghost.
 
 [ghost_link.cpp](../plugin/gfxwrap/ghost_link.cpp) captures inside the serialized
 renderer display-list command. [ghost_capture.cpp](../plugin/gfxwrap/ghost_capture.cpp)
-reads bounded, validated N64 memory without writes or retained RAM pointers.
+reads bounded, validated N64 memory without writes. The root probe borrows the
+renderer-owned RAM only within one serialized display-list occurrence.
 The US layout comes from [ghost_layout.py](../src/sm64_events/memory/ghost_layout.py);
 new camera/graphics addresses retain their live verification gates. JP is not
 configured for this path. The product path targets Windows x86 Project64 and
@@ -60,6 +63,27 @@ explicit refusals. Clock, pose, camera, action and warp validity are independent
 missing pose evidence does not erase a usable clock or camera. The capture reader
 clears derived clock output; [ghost_stream.cpp](../plugin/gfxwrap/ghost_stream.cpp)
 fills it before publication and drawing.
+
+Visible roots use [ghost_root.cpp](../plugin/gfxwrap/ghost_root.cpp). SM64 clears
+the object's transient `throwMatrix` after traversing its graphics graph;
+floor-aligned actions therefore cannot be reconstructed reliably from that
+pointer or the action alone. Capture follows the persistent Mario model graph
+to its selected first body display list, then observes the actual admitted F3D
+calls for the opaque generated-alpha list and that body. Their adjacent matrix
+loads, stack depth, fixed-point matrix bytes and the object's fresh
+`cameraToObject` must agree. A second active object sharing that model, duplicate
+matches, stale animation, interrupted execution or unknown graph shape refuses
+the pose. Freed master-list nodes never establish ownership.
+
+The stored pre-animation model-view matrix includes gfx scale and Mario's .25
+geo scale. Playback removes the recorded camera and these scales before passing
+the effective world root to the model's throw-matrix route, which applies scale
+once. The current camera then projects the model. Values preserve the actual
+N64 16.16 draw matrix, including its quantization; they do not recover unrecorded
+float precision. Tests execute the pinned staged `gSPDisplayList` and x86 matrix
+loader, and cover floor tilt, nonuniform scale, camera motion and ownership
+refusals. A new live recording remains the acceptance check for the installed
+practice ROM's complete graph and emitted command sequence.
 
 The native classifier follows the existing `EpochTracker`/`IgtClock` transition
 rules for levels, retries, area warps and teleports. Python encodes configuration
@@ -122,7 +146,7 @@ Per-row scenes allow coherent cross-area clips.
 ## Recording, preservation and ownership
 
 [NativeCapture](../src/sm64_events/ghost/capture.py) owns a separate leased channel
-named `Local\sm64_trainer_ghost_v2_<PID>`. Process birth, producer/ROM generations,
+named `Local\sm64_trainer_ghost_v3_<PID>`. Process birth, producer/ROM generations,
 configuration, epoch and one QPC/UTC anchor identify its batches. The native
 worker and Python client use a named mutex for mapped-page access; the render
 thread never touches that page. File/hash checks, ROM asset preparation and clip
@@ -144,8 +168,9 @@ ROM failure nor renderer readiness changes saved-recording eligibility.
 Disabling or losing the active origin withdraws drawing while retaining prepared
 assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Three slots share a
-128 MiB clip/index budget, enough for two maximum-size replacements; all resident
-slots count, so another replacement can defer.
+128 MiB clip/index budget. One maximum-size clip fits; two maximum-size clips do
+not with GC4. All resident slots count, so a replacement may defer until the
+previous owner's storage is retired and collected.
 If a reader holds the status page during revocation, the worker retries that
 publication before sleeping indefinitely. An expired owner cannot leave the
 mapped page reporting ready merely because the final nonblocking lock was busy.

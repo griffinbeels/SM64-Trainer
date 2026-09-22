@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
     if (mode == "basic") {
         check(f.run() == GC_OK && f.sample.valid_fields == 31, "valid capture failed");
         const auto &s = f.sample;
-        check(s.version == 3 && s.live_action == 0x0c400201 && s.pose.action == s.live_action, "live action endian");
+        check(s.version == GC_VERSION && s.live_action == 0x0c400201 && s.pose.action == s.live_action, "live action endian");
         check(s.global_timer == 0x12345678 && s.area_update_counter == 0x8123 && s.igt == 0xffe1, "clock endian");
         check(s.pose.angles[0] == -15 && s.pose.angles[1] == 12345 && s.pose.angles[2] == -32767, "angle endian");
         check(s.pose.position[2] == 22 && s.pose.scale[1] == 1.25f, "float order");

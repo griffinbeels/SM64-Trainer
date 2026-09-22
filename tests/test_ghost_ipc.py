@@ -88,17 +88,17 @@ int wmain(int argc,wchar_t** argv) {
 ''', encoding="utf-8")
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17",
         str(launcher), f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *compiler.LIBS], tmp_path)
-    header = struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO2", 2, 160, 260, 1,
-                         1, 3, 1, 1, bytes([1]) + bytes(15), 10_000_000, 0, 1.0,
+    header = struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO3", 3, 160, 324, 1,
+                         1, 4, 1, 1, bytes([1]) + bytes(15), 10_000_000, 0, 1.0,
                          1, 1, 100, 100, 9, 1, 1, 100, 10, 0, 1, 0, 1, 0, 0)
-    frame = bytearray(260)
-    struct.pack_into("<8IQQqIHHhhII", frame, 0, 260, 2, 1, 3, 244, 3, 1, 3,
+    frame = bytearray(324)
+    struct.pack_into("<8IQQqIHHhhII", frame, 0, 324, 3, 1, 3, 308, 4, 1, 3,
                      1, 1, 0, 100, 0, 10, 9, 1, 8, 0)
     struct.pack_into("<3f", frame, 88, 1.0, 1.0, 1.0)  # gc_pose.scale
     struct.pack_into("<h", frame, 106, 197)  # idle animation
     struct.pack_into("<2I", frame, 116, 0x0c400201, 0x0c400201)  # action/body_action
     struct.pack_into("<I", frame, 128, 1)  # GC_ROOT_TRS
-    struct.pack_into("<4I6Q", frame, 196, 5, 1, 0, 10, 0, 0, 0, 1, 0, 1)
+    struct.pack_into("<4I6Q", frame, 260, 5, 1, 0, 10, 0, 0, 0, 1, 0, 1)
     clip = tmp_path / "fixture.ghost"
     clip.write_bytes(header + frame)
     rom = bytearray(8 << 20)

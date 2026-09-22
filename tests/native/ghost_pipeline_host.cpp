@@ -5,6 +5,7 @@
 #define main capture_fixture_program
 #include <ghost_capture_host.cpp>
 #undef main
+#include "ghost_root_fixture.h"
 #define main compositor_fixture_program
 #include <ghost_compositor_host.cpp>
 #undef main
@@ -80,6 +81,8 @@ static void configure_fixture(Fixture& f){
     const float eye[3]={0,100,600},focus[3]={0,100,0};
     for(unsigned i=0;i<3;++i){f.putfloat(Fixture::camera+0x1c+4*i,eye[i]);f.putfloat(Fixture::camera+0x28+4*i,focus[i]);}
     f.put16(Fixture::camera+0x38,0);f.put16(Fixture::camera+0x3a,0);
+    const float root[16]={.25f,0,0,0,0,.25f,0,0,0,0,.25f,0,0,-100,-600,1};
+    configure_root_scene(f,root);
     check(f.run()==GC_OK,"pipeline fixture capture");
 }
 static void clock_word(Fixture& f,uint32_t address,uint32_t value,unsigned width){
@@ -92,6 +95,9 @@ static void projection(float* out){
 }
 static gs_record capture_source(Fixture& f,const ghost::RasterTarget& target,const float* matrix,int64_t qpc){
     require(ghost_stream::begin(f.ram.data(),uint32_t(f.ram.size()),1,qpc),"actual source begin");
+    const float root[16]={.25f,0,0,0,0,.25f,0,0,0,0,.25f,0,0,-100,-600,1};
+    ghost_stream::display_list(root_dl+8,alpha_dl,alpha_dl,1,root);
+    ghost_stream::display_list(root_dl+24,body_dl,0x40080,1,root);
     ghost_stream::projection(matrix);ghost_stream::triangles(target,2,true);
     require(ghost_stream::geometry(true,false),"source qualifies synthetic world end");
     ghost_stream::end(true);gs_record out{};

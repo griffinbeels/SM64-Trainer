@@ -4,8 +4,8 @@
 #include "ghost_capture.h"
 #include <stddef.h>
 #include <stdint.h>
-#define GCLIP_VERSION 2u
-#define GCLIP_MAGIC "SM64GHO2"
+#define GCLIP_VERSION 3u
+#define GCLIP_MAGIC "SM64GHO3"
 #define GCLIP_MAX_RECORDS 240000u
 #define GCLIP_WORLD_READY 3u
 enum gclip_clock_kind { GCLIP_STAR_CLOCK = 1u, GCLIP_SEGMENT_CLOCK = 2u };
@@ -35,5 +35,5 @@ static_assert(sizeof(gclip_header) == 160, "portable ghost header");
 static_assert(offsetof(gclip_header, clock_kind) == 112, "portable clock kind");
 static_assert(offsetof(gclip_header, origin_sequence) == 128, "portable origin sequence");
 static_assert(offsetof(gclip_header, origin_continuity) == 144, "portable continuity");
-static_assert(sizeof(gclip_frame) == 260, "portable ghost record");
+static_assert(sizeof(gclip_frame) == 324, "portable ghost record");
 #endif

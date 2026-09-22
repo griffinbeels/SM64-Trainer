@@ -10,7 +10,7 @@ extern "C" void ghost_capture_reset(gc_reader *r) { *r = {}; }
 extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *c) {
     return c && c->bytes == sizeof(*c) && c->version == GC_VERSION ? GC_OK : GC_BAD_CONFIG;
 }
-extern "C" uint32_t ghost_capture_read(gc_reader *,const gc_layout *c,const gc_frame *f,gc_sample *s) {
+extern "C" uint32_t ghost_capture_begin(gc_reader *,const gc_layout *c,const gc_frame *f,gc_sample *s,gc_root_probe *) {
     *s = {}; s->bytes=sizeof(*s); s->version=GC_VERSION; s->epoch=f->epoch;
     s->sequence=f->sequence; s->dlist_serial=f->dlist_serial; s->qpc=f->qpc;
     s->global_timer=c->global_timer;

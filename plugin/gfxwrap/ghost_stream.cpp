@@ -1,4 +1,5 @@
 #include "ghost_stream.h"
+#include "ghost_root.h"
 #include <atomic>
 #include <cstring>
 #include <limits>
@@ -21,6 +22,8 @@ gc_reader reader{};
 gcc_clock source_clock{};
 gc_layout layout{};
 gc_sample current{};
+gc_sample drawing_sample{};
+gc_root_probe root_probe{};
 ghost::Pass pass;
 
 void __cdecl disable() { configured.store(0, std::memory_order_release); }
@@ -105,12 +108,12 @@ const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WOR
 namespace ghost_stream {
 const gs_api *api() { return &capture_api; }
 bool requested() { return rom_open && configured.load(std::memory_order_acquire) != 0; }
-void cancel() { active = false; current = {}; pass.reset(); }
+void cancel() { active = false; current = {}; root_probe = {}; pass.reset(); }
 void rom(bool opened) {
-    active = false; current = {}; pass.reset(); rom_open = opened; new_epoch();
+    active = false; current = {}; root_probe = {}; pass.reset(); rom_open = opened; new_epoch();
 }
 bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc) {
-    active = false; current = {}; pass.reset();
+    active = false; current = {}; root_probe = {}; pass.reset();
     uint32_t revision = 0;
     if (!rom_open || !generation || !read_config(layout, revision)) return false;
     if (revision != observed_config) {
@@ -120,7 +123,7 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc)
     if (!rom_open || serial == std::numeric_limits<uint64_t>::max()) { disable(); return false; }
     ++serial;
     gc_frame frame{ram,bytes,epoch.load(std::memory_order_relaxed),serial,serial,qpc};
-    ghost_capture_read(&reader, &layout, &frame, &current);
+    ghost_capture_begin(&reader, &layout, &frame, &current, &root_probe);
     gcc_input timing{};
     timing.fields = ((current.valid_fields & GC_VALID_CLOCK) ? GCC_CLOCK : 0)
         | ((current.valid_fields & GC_VALID_ACTION) ? GCC_ACTION : 0)
@@ -148,9 +151,14 @@ bool geometry(bool was_zbuffer, bool is_zbuffer) {
     return active && pass.geometry(was_zbuffer,is_zbuffer);
 }
 void color_target_changed() { if (active) pass.color_target_changed(); }
+void display_list(uint32_t pc, uint32_t dl, uint32_t physical_dl, uint32_t depth, const float *matrix) {
+    if (active) ghost_root_display_list(root_probe,pc,dl,physical_dl,depth,matrix);
+}
 void end(bool completed) {
     if (!active) return;
-    pass.end(completed && configured.load(std::memory_order_acquire) == observed_config);
+    const bool valid = completed && configured.load(std::memory_order_acquire) == observed_config;
+    pass.end(valid);
+    ghost_root_finish(root_probe,valid,current);
     gs_record out{};
     out.bytes = sizeof(out); out.version = GS_VERSION; out.configuration = observed_config;
     out.sample = current; out.world.status = static_cast<uint32_t>(pass.status());
@@ -168,7 +176,12 @@ void end(bool completed) {
     }
     publish(out); active = false;
 }
-const gc_sample *sample() { return active ? &current : nullptr; }
+const gc_sample *sample() {
+    if (!active) return nullptr;
+    drawing_sample=current;
+    ghost_root_candidate(root_probe,drawing_sample);
+    return &drawing_sample;
+}
 const ghost::WorldPass *candidate() {
     return requested() && configured.load(std::memory_order_acquire) == observed_config
         ? pass.candidate() : nullptr;

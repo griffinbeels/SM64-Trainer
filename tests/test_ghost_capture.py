@@ -27,7 +27,7 @@ NATIVE = ROOT / "plugin/gfxwrap"
 @pytest.fixture(scope="module")
 def capture_host(tmp_path_factory):
     work = tmp_path_factory.mktemp("ghost_capture")
-    inputs = [NATIVE / name for name in ("ghost_capture.cpp", "ghost_capture.h", "ghost_clock.cpp", "ghost_clock.h")]
+    inputs = [NATIVE / name for name in ("ghost_capture.cpp", "ghost_capture.h", "ghost_root.cpp", "ghost_root.h", "ghost_clock.cpp", "ghost_clock.h")]
     inputs += [ROOT / path for path in ("tests/native/ghost_capture_host.cpp", "tests/test_ghost_capture.py",
         "src/sm64_events/memory/ghost_layout.py", "src/sm64_events/memory/layout.py",
         "src/sm64_events/memory/addresses.py", "src/sm64_events/detectors/anchors.py",
@@ -42,7 +42,7 @@ def capture_host(tmp_path_factory):
     flags += ["/std:c++17", "/EHsc", f"/I{NATIVE}"]
     target = work / "ghost_capture_host.exe"
     build._cl(vcvars, flags + [
-        str(NATIVE / "ghost_capture.cpp"), str(NATIVE / "ghost_clock.cpp"),
+        str(NATIVE / "ghost_capture.cpp"), str(NATIVE / "ghost_root.cpp"), str(NATIVE / "ghost_clock.cpp"),
         str(ROOT / "tests/native/ghost_capture_host.cpp"),
         f"/Fe:{target}", f"/Fo{work}\\",
     ], work)
@@ -73,7 +73,7 @@ def test_compiled_capture(capture_host, scenario):
         capture_output=True, text=True, timeout=15, check=False, **quiet_spawn_kwargs(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"ghost capture passed: {scenario}; config=168 sample=244" in result.stdout
+    assert f"ghost capture passed: {scenario}; config=168 sample=308" in result.stdout
 
 
 def test_semantic_config_resolves_selected_layout():
@@ -84,7 +84,7 @@ def test_semantic_config_resolves_selected_layout():
     assert config.pending_warp_op == US.pending_warp_op
     assert config.delayed_warp_timer == US.delayed_warp_timer
     assert len(config.to_bytes()) == 168
-    assert struct.unpack_from("<II", config.to_bytes()) == (168, 3)
+    assert struct.unpack_from("<II", config.to_bytes()) == (168, 4)
     assert struct.unpack_from("<II", config.to_bytes(), 56) == (US.pending_warp_op, US.delayed_warp_timer)
     with pytest.raises(LayoutIncomplete, match="US layout"):
         GhostLayout.from_layout(JP)

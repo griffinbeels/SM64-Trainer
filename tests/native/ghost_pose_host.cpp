@@ -2,12 +2,17 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 static sg_pose applied{};
 static float camera_x=0;
 extern "C" int32_t sg_model_view(sg_model *,const float *position,const float *,int16_t,float *out) {
     camera_x=position[0];
     const float identity[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     std::memcpy(out,identity,sizeof(identity));
+    if(position[0]==-5) {
+        const float turned[16]={0,0,-1,0,0,1,0,0,1,0,0,0,10,20,30,1};
+        std::memcpy(out,turned,sizeof(turned));
+    }
     return SG_OK;
 }
 extern "C" int32_t sg_model_evaluate(sg_model *,const sg_pose *pose,sg_mesh *mesh) {
@@ -74,5 +79,28 @@ int main() {
     world.context_generation=2;
     assert(ghost_pose::evaluate(nullptr,record,live,world,1.1f,scratch,pose)==Result::unsupported_pose);
     assert(!pose.vertices && !pose.count);
+    saved.valid_fields|=GC_VALID_CAMERA;
+    saved.camera.position[0]=-5;
+    saved.pose.root_kind=GC_ROOT_SCALED_MODELVIEW;
+    for(unsigned i=0;i<3;++i)saved.pose.scale[i]=float(i+1);
+    const float executed[16]={0,0,-.25f,0,.3f,.4f,0,0,.6f,-.45f,0,0,310,220,-70,1};
+    const float expected[16]={1,0,0,0,0,.8f,.6f,0,0,-.6f,.8f,0,100,200,300,1};
+    std::memcpy(saved.pose.root_matrix,executed,sizeof(executed));
+    assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::ok);
+    assert(applied.fields&SG_POSE_THROW_MATRIX);
+    for(unsigned i=0;i<16;++i)assert(std::fabs(applied.throw_matrix[i]-expected[i])<.00001f);
+    assert(applied.scale[1]==2 && applied.scale[2]==3 && camera_x==42);
+    // Changing the LIVE view must not change the recovered world root.
+    live.camera.position[0]=43;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::ok);
+    for(unsigned i=0;i<16;++i)assert(std::fabs(applied.throw_matrix[i]-expected[i])<.00001f);
+    assert(camera_x==43);
+    saved.valid_fields&=~GC_VALID_CAMERA;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::unsupported_pose);
+    assert(!pose.vertices && !pose.count);
+    saved.valid_fields|=GC_VALID_CAMERA;saved.pose.scale[0]=0;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::unsupported_pose);
+    saved.pose.scale[0]=1;saved.pose.root_matrix[15]=0;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::unsupported_pose);
     std::puts("recorded pose to live camera mapping passed");
 }

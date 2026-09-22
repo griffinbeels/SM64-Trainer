@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define GC_VERSION 3u
+#define GC_VERSION 4u
 #define GC_RAM_WORD_SWAPPED 1u
 #define GC_ROM_US 1u
 #define GC_GRAPH_NODE_LIMIT 256u
@@ -29,7 +29,12 @@ enum gc_status {
     GC_UNSUPPORTED_ROOT = 9, GC_UNSUPPORTED_HELD = 10,
     GC_STALE_SEQUENCE = 11, GC_RESET_REQUIRED = 12, GC_UNSUPPORTED_HEAD = 13
 };
-enum gc_root_kind { GC_ROOT_UNRESOLVED = 0, GC_ROOT_TRS = 1 };
+enum gc_root_kind {
+    GC_ROOT_UNRESOLVED = 0, GC_ROOT_TRS = 1,
+    /* Executed F3D pre-animation matrix: gfx scale and Mario's .25 geo
+     * scale, followed by the recorded camera. Never an unqualified pointer. */
+    GC_ROOT_SCALED_MODELVIEW = 2
+};
 
 /* Addresses are N64 KSEG0 addresses from the selected Python Layout. No
  * arbitrary pointer programs or offsets cross this ABI. New fields remain
@@ -59,6 +64,7 @@ typedef struct gc_pose {
     uint16_t model_state;
     uint8_t cap_state, eye_state, hand_state, wing_flutter;
     uint8_t punch_state, grab_position, hidden, reserved;
+    float root_matrix[16]; /* zero for TRS; native Mat4 order, translation 12..14 */
 } gc_pose;
 
 typedef struct gc_camera {
@@ -128,6 +134,11 @@ uint32_t ghost_capture_validate_layout(const gc_layout *layout);
  */
 uint32_t ghost_capture_read(gc_reader *reader, const gc_layout *layout,
                            const gc_frame *frame, gc_sample *out);
+struct gc_root_probe;
+/* Same reader, with deferred root evidence supplied only by the executing
+ * renderer. Until root_finish succeeds, unsupported roots remain cleared. */
+uint32_t ghost_capture_begin(gc_reader *reader, const gc_layout *layout,
+                            const gc_frame *frame, gc_sample *out, struct gc_root_probe *probe);
 
 #ifdef __cplusplus
 }

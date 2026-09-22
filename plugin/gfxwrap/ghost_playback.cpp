@@ -243,6 +243,18 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;
         if(s.valid_fields&GC_VALID_POSE)for(unsigned axis=0;axis<3;++axis)
             if(!std::isfinite(s.pose.position[axis]) || !std::isfinite(s.pose.scale[axis]))return false;
+        if(s.valid_fields&GC_VALID_POSE) {
+            const auto &p=s.pose;
+            if(p.root_kind==GC_ROOT_TRS) {
+                const float empty[16]{};
+                if(std::memcmp(p.root_matrix,empty,sizeof(empty)))return false;
+            } else if(p.root_kind==GC_ROOT_SCALED_MODELVIEW) {
+                if(!(s.valid_fields&GC_VALID_CAMERA))return false;
+                for(float value:p.root_matrix)if(!std::isfinite(value))return false;
+                if(p.root_matrix[3]!=0 || p.root_matrix[7]!=0 || p.root_matrix[11]!=0
+                        || p.root_matrix[15]!=1)return false;
+            } else return false;
+        }
         if(s.valid_fields&GC_VALID_CAMERA) {
             for(unsigned axis=0;axis<3;++axis)
                 if(!std::isfinite(s.camera.position[axis]) || !std::isfinite(s.camera.focus[axis]))return false;

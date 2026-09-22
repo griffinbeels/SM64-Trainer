@@ -5,7 +5,7 @@ import pytest
 
 from ghost_native_fixture import frame, producer
 from sm64_events.ghost.clip import (
-    STAR_CLOCK, SEGMENT_CLOCK, ClipError, decode_clip, encode_clip,
+    STAR_CLOCK, SEGMENT_CLOCK, ClipError, OlderPoseFormat, decode_clip, encode_clip,
     frame_from_bytes, read_clip, write_clip,
 )
 
@@ -14,14 +14,63 @@ def encoded(rows, kind=STAR_CLOCK):
     return encode_clip(rows, producer(), clock_kind=kind)
 
 
+def matrix_frame():
+    raw = bytearray(frame())
+    struct.pack_into("<I", raw, 128, 2)
+    struct.pack_into("<16f", raw, 156, .25, 0, 0, 0, 0, .2, .15, 0,
+                     0, -.15, .2, 0, 100, 200, -300, 1)
+    return bytes(raw)
+
+
+def test_effective_root_preserves_matrix_and_requires_its_recorded_camera():
+    raw = matrix_frame()
+    assert decode_clip(encoded((raw,))).frames[0].raw == raw
+    for offset, value in ((128, 3), (168, 1), (216, 0), (156, 0x7fc00000)):
+        invalid = bytearray(raw)
+        struct.pack_into("<I", invalid, offset, value)
+        with pytest.raises(ClipError):
+            frame_from_bytes(invalid)
+    invalid = bytearray(frame(valid=27))
+    struct.pack_into("<I", invalid, 128, 2)
+    invalid[156:220] = raw[156:220]
+    with pytest.raises(ClipError, match="camera"):
+        frame_from_bytes(invalid)
+    invalid = bytearray(frame())
+    invalid[156:220] = raw[156:220]
+    with pytest.raises(ClipError, match="TRS"):
+        frame_from_bytes(invalid)
+
+
+@pytest.mark.parametrize("magic", [b"SM64GHO1", b"SM64GHO2"])
+def test_old_pose_format_has_typed_rerecord_reason_and_preserves_file(tmp_path, magic):
+    path = tmp_path / "old.ghost"
+    original = magic + bytes(400)
+    path.write_bytes(original)
+    with pytest.raises(OlderPoseFormat, match="Record a new attempt"):
+        read_clip(path)
+    assert path.read_bytes() == original
+
+
+def test_old_archive_row_has_typed_reason_only_with_its_explicit_schema():
+    raw = bytearray(260)
+    struct.pack_into("<2I", raw, 0, 260, 2)
+    struct.pack_into("<2I", raw, 16, 244, 3)
+    with pytest.raises(OlderPoseFormat, match="Record a new attempt"):
+        frame_from_bytes(raw)
+    raw[20] = 0
+    with pytest.raises(ClipError) as error:
+        frame_from_bytes(raw)
+    assert not isinstance(error.value, OlderPoseFormat)
+
+
 def test_portable_offsets_and_lossless_refusal_rows(tmp_path):
     rows = (frame(1), frame(2, valid=29), frame(4))
     path = tmp_path / "attempt.ghost"
     manifest = write_clip(path, rows, producer(), clock_kind=STAR_CLOCK,
                           clip_id="112233445566778899aabbccddeeff00")
     raw = path.read_bytes()
-    assert raw[:8] == b"SM64GHO2"
-    assert struct.unpack_from("<8I", raw, 8) == (2, 160, 260, 3, 1, 3, 4, 5)
+    assert raw[:8] == b"SM64GHO3"
+    assert struct.unpack_from("<8I", raw, 8) == (3, 160, 324, 3, 1, 4, 4, 5)
     assert raw[40:56].hex() == manifest["clip_id"]
     assert struct.unpack_from("<Qqd", raw, 56) == (30, 1000, 1800000000.0)
     assert struct.unpack_from("<2Q2I2i", raw, 80) == (1, 4, 101, 104, 24, 1)
@@ -112,8 +161,8 @@ def test_corrupted_header_is_not_accepted(offset, value):
         decode_clip(data)
 
 
-BAD_CLOCK_WORDS = [(196, 13), (200, 1024), (204, 7), (208, 2),
-                   (212, 1), (220, 1), (236, 0), (252, 0)]
+BAD_CLOCK_WORDS = [(260, 13), (264, 1024), (268, 7), (272, 2),
+                   (276, 1), (284, 1), (300, 0), (316, 0)]
 
 
 @pytest.mark.parametrize("offset,value", BAD_CLOCK_WORDS)
@@ -138,7 +187,7 @@ def test_truncation_trailing_data_nonfinite_and_invalid_components():
     with pytest.raises(ClipError, match="retains"):
         frame_from_bytes(raw)
     raw = bytearray(frame(valid=15))
-    raw[192] = 1
+    raw[256] = 1
     with pytest.raises(ClipError, match="warp"):
         frame_from_bytes(raw)
 

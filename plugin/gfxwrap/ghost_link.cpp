@@ -74,6 +74,12 @@ void end_list(bool completed) {
 void projection() {
     if (observing) ghost_stream::projection(&gSP.matrix.projection[0][0]);
 }
+void display_list(uint32_t dl, uint32_t physical_dl) {
+    if (observing && !RSP.LLE && GBI.getMicrocodeType()==F3D && !GBI.isNoN()
+            && RSP.PC[RSP.PCi]>=8)
+        ghost_stream::display_list(RSP.PC[RSP.PCi]-8,dl,physical_dl,RSP.PCi,
+                                  &gSP.matrix.modelView[gSP.matrix.modelViewi][0][0]);
+}
 void geometry(uint32_t before, uint32_t after) {
     if (!observing) return;
     if ((before & G_ZBUFFER) && !(after & G_ZBUFFER)) {
@@ -152,7 +158,7 @@ void triangles(uint32_t count) {
 }
 }
 
-#pragma comment(linker,"/EXPORT:SM64GhostSourceV2=_SM64GhostSourceV2")
-extern "C" const gs_api *__cdecl SM64GhostSourceV2(uint32_t version, uint32_t bytes) {
+#pragma comment(linker,"/EXPORT:SM64GhostSourceV3=_SM64GhostSourceV3")
+extern "C" const gs_api *__cdecl SM64GhostSourceV3(uint32_t version, uint32_t bytes) {
     return version == GS_VERSION && bytes == sizeof(gs_api) ? ghost_stream::api() : nullptr;
 }

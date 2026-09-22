@@ -9,10 +9,10 @@ import ctypes as C
 from dataclasses import dataclass
 from pathlib import Path
 
-MAGIC = b"SM64GIP2"
-VERSION = 2
-PREFIX = "Local\\sm64_trainer_ghost_v2_"
-SLOTS, RECORD_BYTES, RING_OFFSET = 512, 260, 4096
+MAGIC = b"SM64GIP3"
+VERSION = 3
+PREFIX = "Local\\sm64_trainer_ghost_v3_"
+SLOTS, RECORD_BYTES, RING_OFFSET = 512, 324, 4096
 LAYOUT_BYTES = 168
 PAGE_BYTES = RING_OFFSET + SLOTS * RECORD_BYTES
 U32, U64, I32 = C.c_uint32, C.c_uint64, C.c_int32
@@ -38,6 +38,7 @@ class Request(C.LittleEndianStructure):
         ("clip_path", C.c_uint16 * 520), ("clip_sha256", C.c_ubyte * 32),
         ("star_action_count", U32), ("star_actions", U32 * 8),
         ("tint_enabled", U32), ("hue_degrees", U32),
+        ("proximity_enabled", U32), ("proximity_distance", C.c_float),
         ("origin", Origin),
     ]
 
@@ -58,7 +59,7 @@ class Status(C.LittleEndianStructure):
     ]
 
 
-assert C.sizeof(Origin) == 40 and C.sizeof(Request) == 2460 and C.sizeof(Status) == 256
+assert C.sizeof(Origin) == 40 and C.sizeof(Request) == 2468 and C.sizeof(Status) == 256
 assert Request.layout.offset == 96 and Status.consumed.offset == 96
 
 

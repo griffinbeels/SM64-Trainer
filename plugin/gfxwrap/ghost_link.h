@@ -12,6 +12,7 @@ void context_lost();
 bool begin_list();
 void end_list(bool completed);
 void projection();
+void display_list(uint32_t dl, uint32_t physical_dl);
 void geometry(uint32_t before, uint32_t after);
 void color_target_changed();
 void triangles(uint32_t count);

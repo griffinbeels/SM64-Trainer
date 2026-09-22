@@ -20,6 +20,35 @@ void multiply(const float *a, const float *b, float *out) {
             out[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1]
                 + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
 }
+bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
+    const auto &p=sample.pose;
+    if (p.root_kind==GC_ROOT_TRS) {
+        const float zero[16]{};
+        return std::memcmp(p.root_matrix,zero,sizeof(zero))==0;
+    }
+    if (p.root_kind!=GC_ROOT_SCALED_MODELVIEW || !(sample.valid_fields&GC_VALID_CAMERA)) return false;
+    const auto *m=p.root_matrix;
+    for(unsigned i=0;i<16;++i) if(!std::isfinite(m[i])) return false;
+    if(m[3]!=0 || m[7]!=0 || m[11]!=0 || m[15]!=1) return false;
+    float view[16]{}, inverse[16]{}, world[16]{};
+    const auto &camera=sample.camera;
+    if(sg_model_view(model,camera.position,camera.focus,camera.roll,view)!=SG_OK) return false;
+    // SM64 look-at is rigid. Remove the RECORDED camera, then the geo .25 and
+    // gfx scales; sg_model_evaluate applies those scales exactly once again.
+    for(unsigned c=0;c<3;++c)for(unsigned r=0;r<3;++r) inverse[4*c+r]=view[4*r+c];
+    inverse[15]=1;
+    for(unsigned r=0;r<3;++r)
+        inverse[12+r]=-(inverse[r]*view[12]+inverse[4+r]*view[13]+inverse[8+r]*view[14]);
+    multiply(inverse,m,world);
+    for(unsigned c=0;c<3;++c) {
+        if(!std::isfinite(p.scale[c]) || std::fabs(p.scale[c])<0.000001f) return false;
+        for(unsigned r=0;r<3;++r) world[4*c+r]/=0.25f*p.scale[c];
+    }
+    for(float value:world)if(!std::isfinite(value))return false;
+    pose.fields|=SG_POSE_THROW_MATRIX;
+    std::memcpy(pose.throw_matrix,world,sizeof(world));
+    return true;
+}
 }
 Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
                 const ghost::WorldPass &world, float opacity, Scratch &scratch,
@@ -36,7 +65,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     if (world.epoch != live.epoch || world.list_serial != live.dlist_serial
             || !world.context_generation) return Result::wrong_occurrence;
     const auto &p = recorded.pose;
-    if (p.root_kind != GC_ROOT_TRS || !std::isfinite(opacity) || opacity < 0 || opacity > 1)
+    if (!std::isfinite(opacity) || opacity < 0 || opacity > 1)
         return Result::unsupported_pose;
     // The first material route is ordinary Mario. The source component carries
     // unsupported state explicitly; it cannot quietly render metal as cloth.
@@ -59,6 +88,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     pose.cap_state = p.cap_state; pose.eye_state = p.eye_state; pose.hand_state = p.hand_state;
     pose.wing_flutter = p.wing_flutter; pose.punch_state = p.punch_state;
     pose.grab_position = p.grab_position;
+    if (!restore_root(model,recorded,pose)) return Result::unsupported_pose;
     float view[16]{};
     if (sg_model_view(model,live.camera.position,live.camera.focus,live.camera.roll,view) != SG_OK)
         return Result::invalid_camera;

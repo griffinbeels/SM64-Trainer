@@ -1,8 +1,15 @@
-"""Source-only GhostV2 seams on the pinned renderer; never install or run it."""
+"""Source-only GhostV3 seams on the pinned renderer; never install or run it."""
 from pathlib import Path
 
 GUARD = "#if defined(OS_WINDOWS) && defined(SM64_GHOST_RENDERER)\n"
 INCLUDE = GUARD + '#include "Graphics/OpenGLContext/ghost_link.h"\n#endif\n'
+
+
+def display_list_edit(data: bytes, replace_once) -> bytes:
+    """Observe only admitted pushes, before upstream changes PC stack identity."""
+    return replace_once(data, '\t\tDebugMsg(DEBUG_NORMAL, "gSPDisplayList( 0x%08X ) push\\n", dl);',
+        GUARD + '\t\tghost_link::display_list(dl, address);\n#endif\n'
+        '\t\tDebugMsg(DEBUG_NORMAL, "gSPDisplayList( 0x%08X ) push\\n", dl);')
 
 
 def edits(source: Path, replace_once) -> dict[str, bytes]:
@@ -35,6 +42,7 @@ def edits(source: Path, replace_once) -> dict[str, bytes]:
     ]:
         data = replace_once(data, "\n" + anchor, "\n" + GUARD +
             f"\tghost_link::geometry(gSP.geometryMode, {after});\n#endif\n" + anchor)
+    data = display_list_edit(data, replace_once)
     result[path] = data
     path = "src/gDP.cpp"
     data = (source / path).read_bytes()

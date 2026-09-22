@@ -179,7 +179,7 @@ struct Session {
         }
         if (r.heartbeat != previous.heartbeat) renewed = now;
         if (identity && ((accepted.revision && (r.revision < accepted.revision ||
-                (r.revision == accepted.revision && !same_command(r, accepted)))) || r.owner_suspended>1
+                (r.revision == accepted.revision && !same_command(r, accepted)))) || r.owner_suspended > 1
                 || r.capture_enabled > 1 || r.play_enabled > 1 || r.mode > 1
                 || r.nudge < -600 || r.nudge > 600
                 || !(r.opacity >= 0 && r.opacity <= 1) || r.stop_at_star > 1

@@ -4,12 +4,12 @@
 #include "ghost_clip.h"
 #include "ghost_origin.h"
 #include <stddef.h>
-#define GIPC_VERSION 2u
-#define GIPC_MAGIC "SM64GIP2"
+#define GIPC_VERSION 3u
+#define GIPC_MAGIC "SM64GIP3"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v2_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v3_"
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
@@ -31,6 +31,8 @@ typedef struct gipc_request {
     uint8_t clip_sha256[32];
     uint32_t star_action_count, star_actions[8];
     uint32_t tint_enabled, hue_degrees;
+    uint32_t proximity_enabled;
+    float proximity_distance;
     go_marker origin;
 } gipc_request;
 typedef struct gipc_status {
@@ -55,7 +57,7 @@ typedef struct gipc_page {
 #pragma pack(pop)
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
-static_assert(sizeof(gipc_request) == 2460, "ghost request bytes");
+static_assert(sizeof(gipc_request) == 2468, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 4096, "ghost ring offset");
 namespace ghost_ipc {

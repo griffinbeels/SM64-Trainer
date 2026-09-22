@@ -13,7 +13,7 @@ import pytest
 from ghost_native_fixture import frame
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, decode_clip
-from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded
+from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded, matrix_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
@@ -21,7 +21,7 @@ COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
 
 def corpus():
     base = encoded((frame(),))
-    values = [base, encoded((frame(),), SEGMENT_CLOCK),
+    values = [base, encoded((matrix_frame(),)), encoded((frame(),), SEGMENT_CLOCK),
               encoded((frame(1, valid=29), frame(2))),
               encoded((frame(1, igt=99, elapsed=100), frame(4, igt=1, elapsed=104, area=2))),
               encoded((frame(1, origin=0), frame(2, origin=1))),
@@ -29,6 +29,10 @@ def corpus():
               encoded((frame(clock_valid=7, banked=30),)),
               encoded((frame(1, elapsed=0), frame(2, elapsed=2**64-1)), SEGMENT_CLOCK),
               base[:100], base[:-1], base + b"\0"]
+    for offset, value in ((128, 3), (168, 1), (216, 0), (156, 0x7fc00000)):
+        changed = bytearray(encoded((matrix_frame(),)))
+        struct.pack_into("<I", changed, 160 + offset, value)
+        values.append(bytes(changed))
     for status in range(12):
         values.append(encoded((frame(world=status),)))
         # Timing and origin are unchanged; absent pose remains a refusal even
@@ -37,13 +41,13 @@ def corpus():
     for offset, value in [*BAD_HEADER_WORDS, *((160 + at, value) for at, value in BAD_CLOCK_WORDS),
                            (160, 192), (164, 1), (180, 2), (188, 63),
                            (172, 12),
-                           (160 + 72, 0), (160 + 76, 0x7fc00000), (160 + 184, 0x7f800000)]:
+                           (160 + 72, 0), (160 + 76, 0x7fc00000), (160 + 248, 0x7f800000)]:
         changed = bytearray(base)
         struct.pack_into("<I", changed, offset, value)
         values.append(bytes(changed))
-    for offset, value in [(32, 1), (40, 101), (48, 999), (56, 99), (244, 0), (252, 10)]:
+    for offset, value in [(32, 1), (40, 101), (48, 999), (56, 99), (308, 0), (316, 10)]:
         changed = bytearray(encoded((frame(1), frame(2))))
-        struct.pack_into("<Q" if offset in (32, 40, 48, 244, 252) else "<I", changed, 420+offset, value)
+        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 484+offset, value)
         values.append(bytes(changed))
     return values
 

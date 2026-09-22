@@ -16,8 +16,8 @@ import tempfile
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO2", 2, 3
-HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 260, 244
+MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO3", 3, 4
+HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 324, 308
 MAX_RECORDS, WORLD_READY = 240000, 3
 CLOCK, POSE, CAMERA, ACTION, WARP = 1, 2, 4, 8, 16
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
@@ -34,6 +34,10 @@ PRODUCER_FIELDS = ("pid", "created", "generation", "rom_generation", "configurat
 
 class ClipError(ValueError):
     """The recording cannot establish the requested native state."""
+
+
+class OlderPoseFormat(ClipError):
+    """A preserved recording predates effective graphics-root capture."""
 
 
 def attempt_origin(attempt) -> dict:
@@ -96,6 +100,9 @@ class Frame:
 
 
 def frame_from_bytes(data: bytes) -> Frame:
+    if (len(data) == 260 and struct.unpack_from("<2I", data) == (260, 2)
+            and struct.unpack_from("<2I", data, 16) == (244, 3)):
+        raise OlderPoseFormat("This Mario recording uses an older pose format. Record a new attempt to use it.")
     if len(data) != RECORD_BYTES:
         raise ClipError("native ghost record has the wrong size")
     raw = bytes(data)
@@ -107,28 +114,46 @@ def frame_from_bytes(data: bytes) -> Frame:
             or not configuration or not epoch or valid & ~31 or world > 11):
         raise ClipError("native ghost record schema is unsupported")
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
-                  *_WARP.unpack_from(raw, 192), Clock(*_CLOCK.unpack_from(raw, 196)))
+                  *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)))
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
         raise ClipError("native ghost occurrence is invalid")
     if valid & CLOCK and not (4 <= frame.level <= 36 and 1 <= frame.area <= 8):
         raise ClipError("native ghost place is invalid")
     if bool(valid & ACTION) != bool(frame.live_action):
         raise ClipError("native ghost action validity disagrees with its value")
-    for bit, lo, hi in ((POSE, 76, 156), (CAMERA, 156, 192)):
+    for bit, lo, hi in ((POSE, 76, 220), (CAMERA, 220, 256)):
         if not valid & bit and any(raw[lo:hi]):
             raise ClipError("native ghost refusal retains invalid component bytes")
         if valid & bit:
             floats = struct.unpack_from("<6f", raw, lo)
             if not all(math.isfinite(value) for value in floats):
                 raise ClipError("native ghost component contains a nonfinite value")
-    if valid & CAMERA and not math.isfinite(struct.unpack_from("<f", raw, 184)[0]):
+    if valid & CAMERA and not math.isfinite(struct.unpack_from("<f", raw, 248)[0]):
         raise ClipError("native ghost camera contains a nonfinite value")
+    _validate_root(raw, valid)
     if not valid & WARP and (frame.pending_warp_op or frame.delayed_warp_timer):
         raise ClipError("native ghost refusal retains invalid warp bytes")
     if frame.status == 0 and valid != 31:
         raise ClipError("native ghost success is missing a component")
     _validate_clock(frame)
     return frame
+
+
+def _validate_root(raw: bytes, valid: int) -> None:
+    if not valid & POSE:
+        return
+    root_kind = struct.unpack_from("<I", raw, 128)[0]
+    matrix = struct.unpack_from("<16f", raw, 156)
+    if root_kind == 1:
+        if any(raw[156:220]):
+            raise ClipError("native ghost TRS root retains matrix bytes")
+    elif root_kind == 2:
+        if not valid & CAMERA or not all(math.isfinite(value) for value in matrix):
+            raise ClipError("native ghost matrix root has no valid recorded camera")
+        if (matrix[3], matrix[7], matrix[11], matrix[15]) != (0, 0, 0, 1):
+            raise ClipError("native ghost root matrix is not affine")
+    else:
+        raise ClipError("native ghost root kind is unsupported")
 
 
 def _validate_clock(frame: Frame) -> None:
@@ -239,6 +264,8 @@ def _checked_frames(frames: tuple[Frame, ...], configuration: int, epoch: int,
 
 
 def decode_clip(data: bytes) -> Clip:
+    if data[:8] in (b"SM64GHO1", b"SM64GHO2"):
+        raise OlderPoseFormat("This Mario recording uses an older pose format. Record a new attempt to use it.")
     if not HEADER_BYTES <= len(data) <= HEADER_BYTES + MAX_RECORDS * RECORD_BYTES:
         raise ClipError("native ghost file size is outside its bound")
     values = _HEADER.unpack_from(data)
@@ -312,6 +339,8 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
             or manifest.get("target") != target
             or manifest.get("file") != path.name):
         raise ClipError("native ghost manifest belongs to another attempt")
+    if type(manifest.get("version")) is int and manifest["version"] in (1, 2):
+        raise OlderPoseFormat("This Mario recording uses an older pose format. Record a new attempt to use it.")
     digest = manifest.get("sha256")
     if not isinstance(digest, str) or len(digest) != 64:
         raise ClipError("native ghost manifest has no content hash")
