@@ -32,6 +32,6 @@ def test_a_wait_that_times_out_leaves_a_picture_of_its_page(tmp_path, monkeypatc
     with driver.get_driver().launch(headless=True) as page:
         page.goto("data:text/html,<p>the card never comes</p>")
         with pytest.raises(PlaywrightTimeout):
-            page.wait_for(".log-list-card", timeout_ms=300)
+            page.wait_for(".a-card-that-never-comes", timeout_ms=300)
     shots = sorted(path.name for path in (tmp_path / "screenshots").glob("*.png"))
     assert shots == [f"{conftest._stem(request.node.nodeid)}-wait-timeout.png"]
