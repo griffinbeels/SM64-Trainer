@@ -44,7 +44,13 @@ def page(request):
         opened.evaluate(STORY.setup)
         opened.wait_for(".input-lanes")
         yield opened
-        problems = opened.problems()
+        # The overlay test's reload can abort the UI log's POST in flight
+        # (full run 35686423614). That log drops an observation rather than
+        # ever block its page (ui/uilog.js), so the abort is this test's own
+        # doing; every other failed request still counts.
+        problems = [problem for problem in opened.problems()
+                    if not (problem.startswith("requestfailed: ")
+                            and problem.endswith("/api/uilog (net::ERR_ABORTED)"))]
         assert problems == [], "\n".join(problems)
 
 

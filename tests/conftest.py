@@ -137,21 +137,58 @@ def _keep_failure_screenshots() -> None:
             page = _original(self, *args, **kwargs)
             _OPEN_PAGES[:] = [kept for kept in _OPEN_PAGES if not kept.is_closed()][-5:]
             _OPEN_PAGES.append(page)
+            _track_requests(page)
             return page
         owner.new_page = new_page
 
     # A wait inside a fixture fails with its page already closed by the time
     # the report exists (the fixture's `with` unwinds first), so a timed-out
-    # wait photographs its own page before raising. Full run 35684991413 lost
-    # exactly that picture: the Rank tab never showed `.log-list-card`.
+    # wait records its own page before raising: a picture, and the requests
+    # still unanswered. Full runs 35684991413 and 35686423614 each had a page
+    # that stayed blank for 60 s -- no nav, no cards, only the background --
+    # which a picture alone cannot explain.
     def wait_for(self, *args, _original=Locator.wait_for, **kwargs):
         try:
             return _original(self, *args, **kwargs)
         except PlaywrightTimeout:
-            test = os.environ.get("PYTEST_CURRENT_TEST", "unknown").rsplit(" ", 1)[0]
-            _photograph(self.page, f"{_stem(test)}-wait-timeout")
+            stem = _stem(os.environ.get("PYTEST_CURRENT_TEST", "unknown").rsplit(" ", 1)[0])
+            _photograph(self.page, f"{stem}-wait-timeout")
+            _write_unanswered(self.page, f"{stem}-wait-timeout")
             raise
     Locator.wait_for = wait_for
+
+
+def _track_requests(page) -> None:
+    """URL -> requests sent and not yet finished or failed, on the page."""
+    pending: dict[str, int] = {}
+
+    def sent(request):
+        pending[request.url] = pending.get(request.url, 0) + 1
+
+    def settled(request):
+        if pending.get(request.url, 0) > 1:
+            pending[request.url] -= 1
+        else:
+            pending.pop(request.url, None)
+    page.on("request", sent)
+    page.on("requestfinished", settled)
+    page.on("requestfailed", settled)
+    page._sm64_unanswered = pending
+
+
+def _write_unanswered(page, name: str) -> None:
+    folder = Path(os.environ["SM64_REPORT_DIR"]) / "screenshots"
+    folder.mkdir(parents=True, exist_ok=True)
+    pending = getattr(page, "_sm64_unanswered", None)
+    if pending is None:
+        lines = ["requests were not tracked on this page"]
+    else:
+        lines = ["unanswered requests:", *sorted(pending)]
+    try:
+        lines.append(f"document.readyState: {page.evaluate('document.readyState')}")
+    except Exception as error:  # noqa: BLE001 -- a wedged page is the evidence, not a failure
+        lines.append(f"document.readyState unreadable: {error}")
+    (folder / f"{name}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @pytest.hookimpl(hookwrapper=True)
