@@ -276,7 +276,7 @@ def plan_shards(units: list[str], count: int,
 
 # A browser worker is a page, a server and Chromium's processes: two per
 # 4-CPU runner. The rest is plain CPU work: one worker per CPU.
-LANE_WORKERS = {"browser": 2, "nonbrowser": 4}
+LANE_WORKERS = {"browser": 3, "nonbrowser": 4}
 # What those workers actually buy: serial test seconds over the suite step's
 # wall, pytest's startup and collection included. Measured on the 16- and
 # 20-job runs 35684469976 / 35684991413 (browser 1.86 / 1.82, the rest 3.08
