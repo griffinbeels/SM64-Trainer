@@ -13,6 +13,9 @@ from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
 
 
+DEFAULT_VOLUME = 0.5
+
+
 class RejectedControl(ValueError):
     """A playback command that cannot be encoded. The live command and the
     channel are untouched; the caller drops the command and keeps capturing."""
@@ -58,7 +61,7 @@ class NativeChannel:
                 request.token = secrets.randbelow((1 << 64) - 1) + 1
                 request.revision = request.heartbeat = request.capture_enabled = 1
                 request.rom_generation = status.rom_generation
-                request.opacity, request.shadow_enabled = 0.5, 1
+                request.opacity, request.shadow_enabled, request.volume = 0.5, 1, DEFAULT_VOLUME
                 request.layout[:] = layout
                 actions = sorted(STAR_GRAB_ACTIONS)
                 if len(actions) > 8:
@@ -160,11 +163,7 @@ class NativeChannel:
         request.proximity_enabled = proximity["enabled"]
         request.proximity_distance = proximity["extra_distance"]
         request.tint_enabled = bool(value.get("tint_enabled", False))
-        # The recorded-shadow A/B switch; absent means shadows draw.
-        shadow = value.get("shadow_enabled", True)
-        if type(shadow) is not bool:
-            raise ValueError("native ghost shadow_enabled must be a bool")
-        request.shadow_enabled = shadow
+        request.shadow_enabled, request.volume = _shadow_and_volume(value)
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")
@@ -212,6 +211,18 @@ class NativeChannel:
 
 
 CLIP_KEYS = {"clip_id", "clip_sha256", "clip_path", "hue_degrees"}
+
+
+def _shadow_and_volume(value: dict) -> tuple[bool, float]:
+    """The recorded-shadow A/B switch (absent: on) and ghost sound loudness
+    (absent: half; 0 is exact silence natively)."""
+    shadow = value.get("shadow_enabled", True)
+    if type(shadow) is not bool:
+        raise ValueError("native ghost shadow_enabled must be a bool")
+    volume = value.get("volume", DEFAULT_VOLUME)
+    if type(volume) not in (int, float) or not math.isfinite(volume) or not 0 <= volume <= 1:
+        raise ValueError("native ghost volume must be a number in 0..1")
+    return shadow, float(volume)
 
 
 def _bytes(value) -> bytes:

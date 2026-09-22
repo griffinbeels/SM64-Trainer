@@ -217,6 +217,32 @@ def test_session_shaped_command_carries_the_shadow_switch(kernel, tmp_path):
         connection.close()
 
 
+def test_session_shaped_command_carries_the_ghost_volume(kernel, tmp_path):
+    """`volume`: absent is half, 0 is kept exactly, anything outside 0..1 changes nothing."""
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    assert kernel.request.volume == 0.5
+    command = {"enabled": True, "model_id": 1, "owner_suspended": False,
+               "clips": [clip(tmp_path, b"a", 10)], "rom_path": "", "opacity": 0.5, "nudge": 0,
+               "proximity_enabled": False, "proximity_distance": 0.0, "tint_enabled": False,
+               "stop_at_star": True, "mode": 0, "shadow_enabled": True,
+               "origin": {"kind": 1, "configuration": 4, "epoch": 5, "global_timer": 1234,
+                          "utc": 1000.0, "session_id": 7, "arm_id": 8}}
+    try:
+        connection.poll(command)
+        assert kernel.request.volume == 0.5
+        connection.poll({**command, "volume": 0})
+        assert kernel.request.volume == 0.0 and kernel.request.reserved3 == 0
+        connection.poll({**command, "volume": 0.8})
+        assert abs(kernel.request.volume - 0.8) < 1e-6
+        before = bytes(kernel.request)
+        for value in (-0.01, 1.01, float("nan"), float("inf"), True, "0.5", None):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({**command, "volume": value})
+            assert bytes(kernel.request) == before
+    finally:
+        connection.close()
+
+
 def test_clip_set_is_encoded_in_order_with_per_ghost_hue(kernel, tmp_path):
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
     controls = {"enabled": True, "model_id": 1, "mode": 1,

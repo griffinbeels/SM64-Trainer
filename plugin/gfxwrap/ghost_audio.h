@@ -1,0 +1,53 @@
+/* Ghost sound effects inside Project64. The render thread only hands over
+ * recorded sound requests and the playback switch/volume, lock-free; one
+ * audio thread owns SM64's audio engine (renderer/model/audio.h) and the
+ * output device. Contract and limits: docs/ghost-native-runtime.md. */
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+
+namespace ghost_audio {
+constexpr uint32_t queue_slots = 256;
+constexpr uint32_t low_water_frames = 544; // synthesize the next tick at or below this
+constexpr uint32_t tick_capacity = 1088;   // SA_TICK_MAX_FRAMES
+
+/* Render thread only: bounded single-producer queue; never waits/allocates.
+ * A full queue drops the request and counts it. */
+void cue(uint32_t sound_bits);
+/* Render thread only. playing=false (disabled, suspended, switched off) stops
+ * every sound at the next audio tick and discards queued requests. Volume
+ * is an exact output scale: 0 writes true silence. */
+void control(bool playing, float volume);
+
+/* Output seam: waveOut in the renderer, a captured buffer in tests. All
+ * calls come from the audio thread. */
+struct Output {
+    void *owner;
+    bool (*open)(void *owner, uint32_t rate);
+    uint32_t (*queued)(void *owner);              // frames written, not yet played
+    bool (*write)(void *owner, const int16_t *stereo, uint32_t frames);
+    void (*wait)(void *owner, uint32_t milliseconds); // until space frees or timeout
+    void (*close)(void *owner);
+};
+Output wave_out(); // shared-mode waveOut, event driven, no window or focus
+}
+namespace ghost_playback { struct SoundSink; }
+namespace ghost_audio {
+/* cue/control as the renderer's playback sink (ghost_link registers it). */
+const ghost_playback::SoundSink *sink();
+
+enum class Start { ok, busy, invalid_rom, engine, device, thread };
+/* Worker thread. Checks the ROM's audio regions against known SM64 US audio
+ * data, copies them, and starts the audio thread (engine + device). */
+Start start(const uint8_t *rom, size_t bytes, const Output &output);
+bool known_audio(const uint8_t *rom, size_t bytes);
+/* Worker thread: stops and joins the audio thread; closes engine and device. */
+void stop();
+
+struct Stats {
+    uint64_t cues, dropped, played, discarded, ticks, silent_ticks;
+    double last_latency_ms, max_latency_ms; // request to its first audible sample
+    uint32_t running;
+};
+Stats stats();
+}

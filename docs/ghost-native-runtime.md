@@ -30,8 +30,8 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308) and sound events (36 at 600) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP5: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade and the `shadow_enabled` switch | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC5: status 256, request 18944 (16 clip entries of 1096, then `shadow_enabled`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP6: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch and sound `volume` | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP4: header 160, record 652, maximum 200000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -338,7 +338,7 @@ recorded camera exactly as for the root, expands the game's eight triangles,
 applies the half-texel shift for the 3-point filter, and hands the compositor
 world-space vertices under the body's live view-projection. Opacity and
 overlap fade apply through the pose; the shadow is black, so tint does not.
-`shadow_enabled` (GP5/GIPC5, default on; `NativeChannel` key
+`shadow_enabled` (GP5/GIPC5 onward, default on; `NativeChannel` key
 `shadow_enabled`, a bool) removes every ghost's shadow without rebuilding it.
 
 ### Sound events
@@ -356,9 +356,58 @@ earlier, so requests are attributed to one frame or not at all. It keeps, in
 issue order, up to 8 request bits whose source is Mario's object
 `gfx.cameraToObject`, with `GC_SOUND_OVERFLOW` when more were issued and the
 raw producer and consumer. More than 256 requests between two frames cannot
-be detected. Playback exposes them as data only (`Frame.sounds`); nothing
-plays them yet, and `sSoundMovingSpeed` or direct `stop_sound` state is not
-recorded.
+be detected. Python reads them as `Frame.sounds`. `sSoundMovingSpeed` and
+direct `stop_sound` state are not recorded, so slide/flight pitch changes and
+the snore stop are not reproduced.
+
+### Ghost sound playback
+
+Ghost sounds play inside Project64 from SM64's own audio engine (the pinned
+libsm64 copy, [audio.c](../renderer/model/audio.c), built into the model
+library). When a visible ghost's displayed record advances, the renderer
+([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `hear`) hands that
+ghost's recorded requests for every record passed since its last drawn frame to
+the sound sink, ghosts in request order, each record's requests in issue
+order. A frame the renderer did not draw still sounds on the next one, up to
+`GP_SOUND_CATCHUP` (90) records; a longer jump only re-establishes position.
+A per-ghost high-water record keeps a nudge or seek backwards from replaying
+anything: re-passed records stay silent. A new run (a new, non-restored origin)
+starts fresh and sounds its first record; a state load re-bases at the restored
+record and sounds what the ghost passes from there. Hidden ghosts (star end,
+wrong scene, after end, refusals) sound nothing and replay nothing on return;
+before its start a ghost is silent and sounds its first record when it begins.
+
+[ghost_audio.cpp](../plugin/gfxwrap/ghost_audio.cpp) owns the rest. The render
+thread only writes a bounded 256-entry single-producer queue (full drops and
+counts) and two atomics, so it never waits or allocates (the playback witness
+counts zero render allocations). One audio thread owns the engine and a
+shared-mode waveOut device (event driven, no window or focus). It synthesizes
+one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever the device
+holds 544 frames or fewer, so requests start after at most three blocks.
+`volume` (GP6/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
+scales the engine output exactly; 0 writes zeros. Disabled or withdrawn
+playback, including the owner-suspended pause, stops every ghost sound and
+discards queued requests at the next tick. All ghosts share one engine, one
+centred, undistanced source and SM64's own per-bank channel limits: two ghosts
+making the same sound at once can cut each other off, as in the game.
+
+The IPC worker starts the engine from its verified ROM bytes and stops it
+(joining the thread) when the ROM closes. Before the engine parses anything,
+the CTL, TBL and SEQ regions must match the SHA-256 of SM64 US audio data (the
+same in stock and Usamune US) and the bank-set table one of the two known
+versions; `sa_open` also bounds every seq header, owns its ROM copy and frees
+every parse on close. Any other ROM, or no audio device, leaves ghosts drawing
+silently.
+
+The [audio witness](../tests/test_ghost_audio.py) drives the real queue,
+thread and engine into a captured buffer: each cue sounds within the next
+tick and nothing before it, 0.5 is exactly half of every sample (energy ratio
+0.250001), 0 is all zeros, switching off silences within one tick, altered
+audio data never reaches the parser, and a full queue drops. Its waveOut
+smoke plays silence only when a device exists: on this machine (2026-09-22)
+request-to-device latency measured at most 49.9 ms (host-driven capture
+13.1 ms). That excludes Windows' own mixer and output delay, and nobody has
+yet listened to it.
 
 [ghost_presentation.cpp](../plugin/gfxwrap/ghost_presentation.cpp) preserves the
 clean drawable, applies the renderer's VI mapping/gamma to the display branch,

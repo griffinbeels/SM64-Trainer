@@ -49,12 +49,14 @@ OVERLAY_SOURCES = (
     "ghost_clip.h", "ghost_assets.h", "ghost_assets.cpp", "ghost_rom.h", "ghost_rom.cpp", "ghost_ipc.h", "ghost_ipc.cpp",
     "ghost_draw.h", "ghost_draw.cpp", "ghost_playback.h", "ghost_playback.cpp",
     "ghost_dispatch.h", "ghost_dispatch.cpp", "ghost_presentation.h", "ghost_presentation.cpp",
+    "ghost_audio.h", "ghost_audio.cpp",
 )
 OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp",
                    "ghost_capture.cpp", "ghost_root.cpp", "ghost_clock.cpp", "ghost_origin.cpp",
                    "ghost_pass.cpp", "ghost_stream.cpp", "ghost_link.cpp",
                    "ghost_pose.cpp", "ghost_compositor.cpp", "ghost_assets.cpp", "ghost_rom.cpp", "ghost_ipc.cpp",
-                   "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp")
+                   "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp",
+                   "ghost_audio.cpp")
 DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;SM64_GHOST_RENDERER;"
 RECIPE_VERSION = "3"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -199,7 +201,8 @@ def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: st
 def stage_model_library(staged: Path, library: Path) -> None:
     """Link the C component without leaking decomp types into renderer units."""
     gl = staged / witness.GL
-    shutil.copyfile(REPO / "renderer/model/model.h", gl / "model.h")
+    for header in ("model.h", "audio.h"):
+        shutil.copyfile(REPO / "renderer/model" / header, gl / header)
     msvc = staged / "projects/msvc"
     target = msvc / "bin/Win32/Release/lib/sm64_model.lib"
     shutil.copyfile(library, target)

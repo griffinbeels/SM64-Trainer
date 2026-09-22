@@ -106,7 +106,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
                       *tmp_path.glob("*.png")])
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
-    assert report["capture_version"] == 5 and report["clip_version"] == 4 and report["playback_version"] == 5
+    assert report["capture_version"] == 5 and report["clip_version"] == 4 and report["playback_version"] == 6
     assert_recorded_shadow(report["shadow"])
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
