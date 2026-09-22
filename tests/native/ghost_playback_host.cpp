@@ -214,17 +214,23 @@ int main() {
         uint64_t source_generation=7,source_continuity=77,elapsed_base=2000;
         Renderer renderer;
         auto draw=[&](uint64_t time,bool expected,uint32_t why,uint64_t sequence=0,int area=1) {
-            live.igt=uint16_t(time);live.area=int16_t(area);
+            // The game clock moves with IGT, as in play: the renderer's live
+            // recovery treats IGT outrunning it as a forward state load.
+            live.igt=uint16_t(time);live.area=int16_t(area);live.global_timer=uint32_t(5000+time);
             ++live.sequence;++live.dlist_serial;world.list_serial=live.dlist_serial;
             live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                 0,0,source_generation,1,elapsed_base+time,source_continuity};
             renderer.run([&] {
-                check(ghost_playback::evaluate(live,world,poses,count,token)==expected,"selection result");
+                const bool drawn=ghost_playback::evaluate(live,world,poses,count,token);
+                if(drawn!=expected)std::fprintf(stderr,"time %llu drew %d, expected %d\n",
+                    static_cast<unsigned long long>(time),int(drawn),int(expected));
+                check(drawn==expected,"selection result");
                 if(expected)check(count==1 && selected_sequence==sequence && ghost_playback::current(token),"selected occurrence identity");
                 else check(!pose.vertices && !pose.count && !count && !token.revision,"refusal clears candidate");
             });
             gp_status status{};const bool reported=api->status(&status,sizeof(status))==GP_OK;
-            if(status.decision!=why)std::fprintf(stderr,"decision %u, expected %u\n",status.decision,why);
+            if(status.decision!=why)std::fprintf(stderr,"time %llu decision %u, expected %u\n",
+                static_cast<unsigned long long>(time),status.decision,why);
             check(reported && status.decision==why,"selection reason");
         };
         renderer.run([&] {ghost_playback::safe_boundary(7,4);sg_atlas_view atlas{};uint64_t id=0;
@@ -239,9 +245,15 @@ int main() {
         draw(11,false,GP_INVALID_FRAME);draw(11,false,GP_WRONG_SCENE,0,2);
         draw(12,false,GP_GAP);draw(13,false,GP_WRONG_SCENE);
         draw(13,true,GP_READY,5,2);draw(17,false,GP_AFTER_END);
+        // An invalid clock frame leaves the live timing unresolved (as on the
+        // worker) until a witnessed checkpoint names the next state again: the
+        // live pose is that witness here.
+        live.valid_fields|=GC_VALID_POSE;draw(10,true,GP_READY,1);
         live.valid_fields&=~GC_VALID_ACTION;draw(10,false,GP_NO_CLOCK);live.valid_fields|=GC_VALID_ACTION;
         live.live_action=r.star_actions[0];draw(10,false,GP_STAR_ENDED);
-        live.live_action=1;draw(15,false,GP_STAR_ENDED);draw(0,false,GP_STAR_ENDED);
+        // Elapsed never runs backward inside one continuity, so the latch is
+        // checked later in the same timeline.
+        live.live_action=1;draw(15,false,GP_STAR_ENDED);draw(16,false,GP_STAR_ENDED);
         ++r.revision;r.opacity=0.25f;
         check(api->configure(&r)==GP_OK,"same-origin tuning revision");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(10,false,GP_STAR_ENDED);
@@ -429,6 +441,7 @@ int main() {
             auto frame=[&](uint64_t time,std::initializer_list<float> rows,uint32_t why,
                            std::initializer_list<uint32_t> each) {
                 live.igt=uint16_t(time);live.area=1;++live.sequence;++live.dlist_serial;
+                live.global_timer=uint32_t(9000+time); // the game clock moves with IGT
                 world.list_serial=live.dlist_serial;
                 live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                     0,0,source_generation,1,elapsed_base+time,source_continuity};

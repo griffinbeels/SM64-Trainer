@@ -65,7 +65,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     library = builder.build_model(tmp_path / "model", seed=seed, vcvars32=vcvars)
     native = COMPONENTS / "plugin/gfxwrap"
     sources = [native / f"{name}.cpp" for name in
-               ("ghost_capture", "ghost_root", "ghost_clock", "ghost_stream", "ghost_pass", "ghost_playback",
+               ("ghost_capture", "ghost_root", "ghost_clock", "ghost_origin", "ghost_stream", "ghost_pass", "ghost_playback",
                 "ghost_pose", "ghost_compositor", "ghost_presentation")]
     host = ROOT / "tests/native/ghost_pipeline_host.cpp"
     source_inputs = [*sources, host, Path(__file__), COMPONENTS / "tests/native/ghost_capture_host.cpp",

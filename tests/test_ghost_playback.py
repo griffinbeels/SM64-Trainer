@@ -23,7 +23,7 @@ def test_native_playback_ownership_and_selection(tmp_path):
     target = tmp_path / "ghost_playback_host.exe"
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
         f"/I{ROOT / 'renderer/model'}", f"/I{ROOT / 'plugin/gfxwrap'}",
-        str(ROOT / "plugin/gfxwrap/ghost_playback.cpp"),
+        str(ROOT / "plugin/gfxwrap/ghost_playback.cpp"), str(ROOT / "plugin/gfxwrap/ghost_origin.cpp"),
         str(ROOT / "tests/native/ghost_playback_host.cpp"),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF",
         "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *compiler.LIBS], tmp_path)

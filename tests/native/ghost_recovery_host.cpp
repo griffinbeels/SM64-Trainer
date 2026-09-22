@@ -45,6 +45,12 @@ struct Run {
     uint64_t sequence=0;
     uint32_t timer=1000,rom=7;
     gc_sample last{};
+    // Real order: the renderer draws a list from its own live sample; the
+    // worker reads that record only after the list, so its command can first
+    // apply to the NEXT list. Counted: frames that should show a ghost but
+    // show none.
+    bool worker_after_render=false;
+    unsigned ghostless=0,wrong=0,frames=0;
     explicit Run(bool segment=false,bool legs=false):clip(segment?72:71,401) {
         clip.header.level=24;clip.header.origin_raw=segment?20:0;
         clip.header.clock_kind=segment?GCLIP_SEGMENT_CLOCK:GCLIP_STAR_CLOCK;
@@ -98,13 +104,24 @@ struct Run {
             gcc_step(&source_clock,&input,&live.clock);
             gs_record record{};record.bytes=sizeof(record);record.version=GS_VERSION;
             record.configuration=fixture::configuration;record.sample=live;
-            fixture::queue.push_back(record);session->publish(*page,demand);
-            ++demand.heartbeat;session->demand(demand,demand.generation);
+            const auto worker=[&]{
+                fixture::queue.push_back(record);session->publish(*page,demand);
+                ++demand.heartbeat;session->demand(demand,demand.generation);
+            };
+            if(!worker_after_render)worker();
             ghost::WorldPass world{};world.epoch=live.epoch;world.context_generation=1;world.list_serial=live.dlist_serial;
             bool drawn=false;ghost_compositor::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
             renderer.run([&]{ghost_playback::safe_boundary(rom,fixture::configuration);
                 drawn=ghost_playback::evaluate(live,world,poses,count,token);});
+            if(worker_after_render)worker();
             gp_status status{};ghost_playback::api()->status(&status,sizeof(status));
+            ++frames;
+            if(worker_after_render && (drawn!=(expected>=0) || (drawn && selected_x!=float(expected)))) {
+                // Counted rather than thrown, so the old path's numbers are measurable.
+                std::fprintf(stderr,"%s: raw=%u expected=%d selected=%.0f playback=%u\n",
+                    drawn?"wrong":"ghostless",raw,expected,drawn?selected_x:-1.0f,status.decision);
+                ++(drawn?wrong:ghostless);last=live;return;
+            }
             if(drawn!=(expected>=0) || (drawn && selected_x!=float(expected))) {
                 std::fprintf(stderr,"raw=%u expected=%d drawn=%d selected=%.0f IPC=%u/%u playback=%u continuity=%llu\n",
                     raw,expected,drawn,selected_x,session->state,session->reason,status.decision,
@@ -204,7 +221,34 @@ int main() {
                 check(!run.session->have_origin,"unrelated state cannot rebind timing");
             }
         }
-        std::printf("{\"ok\":true,\"checks\":%u,\"render_allocations\":%u,\"render_frees\":%u}\n",
-            checks,allocations.load(),destructions.load());return 0;
+        unsigned blink_loads=0,blink_frames=0,blink_ghostless=0,blink_wrong=0;
+        for(bool segment:{false,true}) {
+            // State loads with the worker a list behind the renderer, as live.
+            Run run(segment);const int start=segment?20:0;
+            for(int raw=start;raw<=start+200;++raw)run.step(uint16_t(raw),raw-start);
+            run.worker_after_render=true;run.ghostless=run.wrong=run.frames=0;
+            const auto load=[&](int raw,int hold) {
+                ++blink_loads;
+                for(int i=0;i<=hold;++i)run.step(uint16_t(raw+i),raw+i-start);
+            };
+            load(start+150,3);  // rewind to an earlier state
+            load(start+120,0);  // again, straight away
+            load(start+180,3);  // forward to a state seen before the rewinds
+            load(start+150,30); // the same state again, then play on
+            if(!segment) {
+                // A star grab ends the run; loading back revives it at once.
+                run.step(uint16_t(start+181),-1,1,0x1302);run.step(uint16_t(start+182),-1);
+                load(start+150,3);
+            } else {
+                // A forward load to a state never witnessed stays hidden on
+                // the renderer too; a known state afterwards draws at once.
+                run.step(uint16_t(start+300),-1);run.step(uint16_t(start+301),-1);
+                load(start+150,3);
+            }
+            blink_frames+=run.frames;blink_ghostless+=run.ghostless;blink_wrong+=run.wrong;
+        }
+        std::printf("{\"ok\":true,\"checks\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
+            "\"blink\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u}}\n",
+            checks,allocations.load(),destructions.load(),blink_loads,blink_frames,blink_ghostless,blink_wrong);return 0;
     } catch(const std::exception& e) {std::fprintf(stderr,"%s\n",e.what());return 1;}
 }

@@ -77,6 +77,17 @@ gp_status report{};
 uint64_t touch_revision=0, touch[GP_GHOSTS]{};
 bool have_touch[GP_GHOSTS]{};
 ghost_pose::Scratch scratch[GP_GHOSTS]; // one borrowed mesh per displayed ghost
+// The worker's recovery, repeated on the renderer from the same live samples,
+// so the frame a state loads can already draw at its restored coordinate.
+// The worker's next command confirms it (or replaces it with its own).
+struct LiveRecovery {
+    ghost_origin::Recovery timing;
+    gp_request owner{};          // request whose origin the timing was bound from
+    uint64_t restored=0;         // sequence of the last origin evaluate used
+    bool bound=false;
+    LiveRecovery() {timing.reserve();} // capacity before any renderer use
+    void clear() {timing.clear();owner={};restored=0;bound=false;}
+} live_recovery;
 struct ShadowScratch {
     ghost_compositor::ShadowVertex vertices[24];
     uint8_t texture[256];
@@ -501,6 +512,23 @@ bool renderer_owner() {return render_thread && render_thread==GetCurrentThreadId
 void next_boundary() {
     if(context_serial.fetch_add(1)>=UINT32_MAX-1) {exhausted.store(true);revoke(GP_EXHAUSTED);}
 }
+bool same_owner(const gp_request& a,const gp_request& b) {
+    return a.owner_token==b.owner_token && a.rom_generation==b.rom_generation
+        && a.configuration==b.configuration;
+}
+// A command's origin rebinds the live timing unless the renderer already
+// reached that same origin itself (the worker confirming a local restore).
+void adopt_recovery(const gp_request& next) {
+    auto& live=live_recovery;
+    if(next.mode!=GP_FOLLOW) {live.clear();return;}
+    const bool same=live.bound && same_owner(live.owner,next);
+    if(same && !std::memcmp(&live.owner.origin,&next.origin,sizeof(next.origin))) {live.owner=next;return;}
+    go_origin local{};
+    if(!(same && live.timing.current(local) && !std::memcmp(&local,&next.origin,sizeof(local)))) {
+        live.timing.bind(next.origin);live.restored=next.origin.sequence;
+    }
+    live.owner=next;live.bound=true;
+}
 uint32_t active_count() {uint32_t count=0;for(auto *clip:bound)count+=clip!=nullptr;return count;}
 struct Coordinate {uint64_t target;bool below_zero;};
 // One ghost against the shared live coordinate. Hides only this ghost.
@@ -567,7 +595,8 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         && published.cancellation==current_cancel
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
-        retire_clips();retire_model();have_request=false;clear_timeline();decide_all(GP_DISABLED);return;
+        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.clear();
+        decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
         // Withdrawal retains reusable assets, but an explicit worker model
@@ -575,7 +604,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
         decide_all(GP_DISABLED);return;
     }
-    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();}
+    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.clear();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
         clear_timeline();have_timeline=true;timeline_request=next;
     }
@@ -583,6 +612,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(!retire_model()) {decide_all(GP_PREPARING);return;}
     const bool changed=touch_revision!=next.revision;
     active_request=next;have_request=true;acquired_cancel=current_cancel;
+    adopt_recovery(next);
     report={};report.revision=next.revision;report.owner_token=next.owner_token;report.model_id=next.model_id;
     report.clip_count=next.clip_count;report.rom_generation=rom;report.configuration=configuration;
     if(!have_model) {
@@ -645,7 +675,16 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     Coordinate frame{active_request.seek_igt,false};
     sequence_reported=false;
     if(active_request.mode==GP_FOLLOW) {
-        const auto& origin=active_request.origin;
+        // Same refusals as the worker: an unresolved or ambiguous live restore
+        // hides the ghost; a resolved one draws on the frame it happened.
+        auto origin=active_request.origin;
+        if(live_recovery.bound) {
+            live_recovery.timing.observe(live,active_request.star_actions,
+                active_request.star_ends?active_request.star_action_count:0);
+            if(!live_recovery.timing.current(origin)) {decide_all(GP_NO_CLOCK);return false;}
+            // A restoration revives the run, exactly like the worker's new command.
+            if(origin.sequence!=live_recovery.restored) {star_ended=false;live_recovery.restored=origin.sequence;}
+        }
         if(!valid_clock(live) || (live.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
                 !=(GCC_RAW_VALID|GCC_ELAPSED_VALID) || live.epoch!=origin.epoch
                 || live.sequence<origin.sequence || live.clock.continuity_id!=origin.continuity

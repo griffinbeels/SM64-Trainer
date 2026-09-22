@@ -54,6 +54,9 @@ public:
     void clear();
     void bind(const go_origin &);
     void suspend();
+    /* Capacity for the whole checkpoint history, off the render thread;
+     * afterwards clear/bind/observe keep it and never allocate. */
+    void reserve() { history_.reserve(limit); }
     bool bound() const { return origin_.sequence != 0; }
     bool current(go_origin &) const;
     bool restored_near(const go_marker &, uint64_t frequency, int64_t anchor, double utc) const;
@@ -68,6 +71,7 @@ private:
         int16_t angles[3]{},animation=0,animation_frame=0;
         uint32_t action=0,coordinate=0;
     } latest_{}, restoration_{};
+    static constexpr uint32_t limit = 16384;
     std::vector<Checkpoint> history_;
     uint32_t next_=0;
     go_origin origin_{};

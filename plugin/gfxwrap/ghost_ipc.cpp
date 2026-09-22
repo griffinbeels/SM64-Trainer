@@ -473,7 +473,11 @@ struct Session {
                         resolved_origin=next;have_origin=true;applied=0;
                     }
                 } else if(have_origin) {
-                    have_origin=false;applied=0;play->withdraw();
+                    // The renderer's live recovery refuses this same sample
+                    // itself. Keep the applied command: withdrawing or
+                    // re-resolving it would also hide the first frame of a
+                    // later restore the renderer can already draw.
+                    have_origin=false;
                     reason=GIPC_ORIGIN;state=GIPC_PREPARING;
                 }
             }
