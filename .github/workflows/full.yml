@@ -164,6 +164,15 @@ jobs:
         if: matrix.lane == 'browser' && steps.chromium.outputs.cache-hit != 'true'
         run: uv run --frozen python -m playwright install chromium
 
+      # Every browser page load fetches ~100 script modules over fresh local
+      # connections, and Windows' default ephemeral range (16,384 ports, each
+      # held ~2 min after closing) runs dry under 2 workers of fixture churn:
+      # one module then fails with ERR_NO_BUFFER_SPACE and the app never
+      # mounts. The 2026-09-22 capture: htm.module.js, blank page, 11 FLAKY.
+      - name: Widen the ephemeral port range
+        if: matrix.lane == 'browser'
+        run: netsh int ipv4 set dynamicport tcp start=10000 num=55535
+
       # No retries inside the suite. Its failures get ONE retry below.
       - name: Suite, ${{ matrix.lane }} job ${{ matrix.shard }} of ${{ matrix.of }}
         id: suite

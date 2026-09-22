@@ -23,7 +23,7 @@ not in this map.
 
 | Need | Command / reference |
 | --- | --- |
-| Dependencies | `uv sync` |
+| Dependencies (once per new worktree; the merge check refuses without them) | `uv sync`, `npm ci --prefix tools/verification --ignore-scripts`, `npm ci --prefix tests/frontend --ignore-scripts` |
 | Draft checks / wrap verification | `python tools/verify.py quick` (lint, types) / `python tools/verify.py full` (adds the merge check). Wrap runs `full` once, reusing a content-keyed receipt from any checkout; [setup and scope](docs/local-verification.md) |
 | Focused check: exactly these tests, browser ones too; never queues | `uv run python tools/run_tests.py tests/test_<module>.py "tests/test_x.py::test_y"` |
 | Merge check: the blast radius of this change since the last green full run | `uv run python tools/run_tests.py`; `--why` lists what it picks and why. No local full-suite runs |
