@@ -132,7 +132,11 @@ is the one it prepared from identical inputs (assignments, definitions, policy,
 clocks and Sheet seed), so an app start prepares once although `create_app` and
 the service start both sync. The skip and each input's invalidation are tested
 in [test_living_rank_standards.py](../tests/test_living_rank_standards.py) and
-[test_library_adoptions.py](../tests/test_library_adoptions.py).
+[test_library_adoptions.py](../tests/test_library_adoptions.py). Activating a
+payload equal to the local snapshot the store read or last wrote, while that
+file is unchanged, leaves it untouched; a fresh data dir still writes its first
+copy, and a stale, refitted or replaced copy is rewritten
+([test_library_calibration_store.py](../tests/test_library_calibration_store.py)).
 
 Identical validated populations can reuse a completed Overall fit through the
 bounded process-local [fit cache](../src/sm64_events/ranks/fit_cache.py). Every
