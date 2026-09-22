@@ -81,11 +81,16 @@ jobs:
             tests/frontend/package-lock.json
             tools/verification/package-lock.json
 
-      - name: Install the pinned Node tools
+      # tools/verify_lint.py runs Ruff offline from uv's cache; prime it with
+      # the version that script pins.
+      - name: Install the pinned lint and test tools
         run: |
           npm ci --prefix tests/frontend --ignore-scripts
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm ci --prefix tools/verification --ignore-scripts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $ruff = uv run --frozen python -c "import sys; sys.path.insert(0, 'tools'); import verify_lint; print(verify_lint.RUFF)"
+          uvx "ruff==$ruff" --version
 
       # The replay tests cut real clips (libx264, SVT-AV1); a missing ffmpeg is
       # a failure, never an inventory skip. Same GPL build line every run.

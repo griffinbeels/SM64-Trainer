@@ -186,7 +186,12 @@ def test_av_sink_produces_synced_av_segments(tmp_path):
     # test_replay_picture_feed.py (one frame per picture, ~30/s).
     cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, picture_feed=False)
     segs = []
-    sink = FfmpegAvSink(cfg, segs.append, ffmpeg=_ffmpeg())
+    # The codec the recorder would pick on THIS machine, never the
+    # constructor's h264_nvenc default: without an NVIDIA encoder that child
+    # dies at birth and the sink writes nothing (a GitHub runner, 2026-09-21).
+    from sm64_events.replay.encoder import pick_video_codec
+    ffmpeg = _ffmpeg()
+    sink = FfmpegAvSink(cfg, segs.append, ffmpeg=ffmpeg, codec=pick_video_codec(ffmpeg))
     sink.start()
     frame = np.zeros((240, 320, 4), dtype=np.uint8)
     rate = 48000
