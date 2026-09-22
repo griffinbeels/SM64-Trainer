@@ -277,6 +277,12 @@ def plan_shards(units: list[str], count: int,
 # A browser worker is a page, a server and Chromium's processes: two per
 # 4-CPU runner. The rest is plain CPU work: one worker per CPU.
 LANE_WORKERS = {"browser": 2, "nonbrowser": 4}
+# What those workers actually buy: serial test seconds over the suite step's
+# wall, pytest's startup and collection included. Measured on the 16- and
+# 20-job runs 35684469976 / 35684991413 (browser 1.86 / 1.82, the rest 3.08
+# both times). Splitting by worker count instead gave the rest a job too few:
+# its four jobs ran 5 minutes while sixteen browser jobs ran 2-4.
+LANE_SPEEDUP = {"browser": 1.84, "nonbrowser": 3.08}
 
 
 def lane_of_unit(unit: str) -> str:
@@ -284,12 +290,13 @@ def lane_of_unit(unit: str) -> str:
 
 
 def job_matrix(jobs: int, durations: dict[str, float] | None = None) -> list[dict]:
-    """The full run's jobs from ONE number: split between the two lanes by
-    their recorded work per worker, at least one job each."""
+    """The full run's jobs from ONE number: split between the two lanes so
+    their jobs take equally long (recorded work over the lane's measured
+    speedup), at least one job each."""
     durations = load_durations() if durations is None else durations
-    per_worker = {lane: sum(s for u, s in durations.items() if lane_of_unit(u) == lane) / workers
-                  for lane, workers in LANE_WORKERS.items()}
-    browser = min(jobs - 1, max(1, round(jobs * per_worker["browser"] / sum(per_worker.values()))))
+    job_seconds = {lane: sum(s for u, s in durations.items() if lane_of_unit(u) == lane) / speedup
+                   for lane, speedup in LANE_SPEEDUP.items()}
+    browser = min(jobs - 1, max(1, round(jobs * job_seconds["browser"] / sum(job_seconds.values()))))
     counts = {"browser": browser, "nonbrowser": jobs - browser}
     return [{"lane": lane, "shard": index, "of": count, "workers": LANE_WORKERS[lane]}
             for lane, count in counts.items() for index in range(1, count + 1)]

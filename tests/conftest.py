@@ -109,9 +109,27 @@ def pytest_runtest_protocol(item, nextitem):
 _OPEN_PAGES: list = []
 
 
+def _photograph(page, name: str) -> str | None:
+    """One screenshot into the full run's artifacts; the error text when the
+    page could not give one (a crashed browser), never a second failure."""
+    folder = Path(os.environ["SM64_REPORT_DIR"]) / "screenshots"
+    try:
+        if not page.is_closed():
+            folder.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(folder / f"{name}.png"), timeout=5000)
+    except Exception as error:  # noqa: BLE001
+        return str(error)
+    return None
+
+
+def _stem(nodeid: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", nodeid)[-150:]
+
+
 def _keep_failure_screenshots() -> None:
     try:
-        from playwright.sync_api import Browser, BrowserContext
+        from playwright.sync_api import Browser, BrowserContext, Locator
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
     except ImportError:
         return
     for owner in (Browser, BrowserContext):
@@ -122,21 +140,28 @@ def _keep_failure_screenshots() -> None:
             return page
         owner.new_page = new_page
 
+    # A wait inside a fixture fails with its page already closed by the time
+    # the report exists (the fixture's `with` unwinds first), so a timed-out
+    # wait photographs its own page before raising. Full run 35684991413 lost
+    # exactly that picture: the Rank tab never showed `.log-list-card`.
+    def wait_for(self, *args, _original=Locator.wait_for, **kwargs):
+        try:
+            return _original(self, *args, **kwargs)
+        except PlaywrightTimeout:
+            test = os.environ.get("PYTEST_CURRENT_TEST", "unknown").rsplit(" ", 1)[0]
+            _photograph(self.page, f"{_stem(test)}-wait-timeout")
+            raise
+    Locator.wait_for = wait_for
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     report = (yield).get_result()
     if not (report.failed and _OPEN_PAGES and os.environ.get("SM64_REPORT_DIR")):
         return
-    folder = Path(os.environ["SM64_REPORT_DIR"]) / "screenshots"
-    stem = re.sub(r"[^A-Za-z0-9_.-]", "_", item.nodeid)[-150:]
     for index, page in enumerate(_OPEN_PAGES):
-        try:
-            if not page.is_closed():
-                folder.mkdir(parents=True, exist_ok=True)
-                page.screenshot(path=str(folder / f"{stem}-{report.when}-{index}.png"), timeout=5000)
-        except Exception as error:  # noqa: BLE001 -- a crashed browser gives no picture, never a second failure
-            report.sections.append(("screenshot", f"page {index} not captured: {error}"))
+        if problem := _photograph(page, f"{_stem(item.nodeid)}-{report.when}-{index}"):
+            report.sections.append(("screenshot", f"page {index} not captured: {problem}"))
 
 
 @pytest.hookimpl(tryfirst=True)

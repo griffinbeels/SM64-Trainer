@@ -210,3 +210,14 @@ def test_one_number_sets_the_full_runs_jobs_for_both_lanes(jobs):
         mine = [job for job in matrix if job["lane"] == lane]
         assert mine and sorted(job["shard"] for job in mine) == list(range(1, len(mine) + 1))
         assert all(job["of"] == len(mine) and job["workers"] == lanes.LANE_WORKERS[lane] for job in mine)
+
+
+def test_the_lanes_get_jobs_in_proportion_to_their_work_over_what_a_job_achieves():
+    """Equal job lengths, not equal worker loads: a lane whose jobs achieve
+    half the speedup needs twice the jobs for the same work."""
+    browser, other = "tests/test_ui_leaderboard.py", "tests/test_api.py"
+    work = {browser: 1000.0 * lanes.LANE_SPEEDUP["browser"],
+            other: 1000.0 * lanes.LANE_SPEEDUP["nonbrowser"]}
+    counts = {lane: sum(job["lane"] == lane for job in lanes.job_matrix(40, work))
+              for lane in ("browser", "nonbrowser")}
+    assert counts == {"browser": 20, "nonbrowser": 20}
