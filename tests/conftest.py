@@ -38,6 +38,9 @@ def pytest_addoption(parser):
     group.addoption("--shard", default=None, metavar="K/N",
                     help="run only job K of N of the whole suite, balanced by "
                          "tests/test_durations.json")
+    group.addoption("--lane", default=None, choices=("browser", "nonbrowser"),
+                    help="only the modules tools/test_lanes.py puts in this lane: the full "
+                         "run gives browser tests and the rest their own jobs and worker counts")
 
 
 SELECTION = pytest.StashKey[dict]()
@@ -59,6 +62,9 @@ def pytest_ignore_collect(collection_path, config):
         relative = collection_path.relative_to(config.rootpath).as_posix()
         if relative not in selection:
             return True
+    lane = config.getoption("lane", None)
+    if lane and is_test_module(collection_path) and lane_of(collection_path) != lane:
+        return True
     return None
 
 
@@ -154,7 +160,10 @@ def pytest_configure(config):
     # fails, and a test that means "within 200 ms" still passes its own
     # timeout_ms. What it must not do is report a busy machine as a defect.
     from tools.test_resources import obs_is_open
-    os.environ.setdefault("UILAB_WAIT_MS", "60000" if obs_is_open() else "30000")
+    # A GitHub runner is the slow machine too: four CPUs shared by a page, its
+    # server and Chromium's processes (a 30 s wait timed out there, 2026-09-21).
+    from tools.test_resources import dedicated_machine
+    os.environ.setdefault("UILAB_WAIT_MS", "60000" if obs_is_open() or dedicated_machine() else "30000")
     from tools.test_resources import TestResources, WORKERS_ENV, effective_workers, inherited_owner
 
     if hasattr(config, "workerinput"):
@@ -508,6 +517,11 @@ def pytest_sessionfinish(session, exitstatus):
     if not undocumented:
         return
     session.exitstatus = 1
+    if os.environ.get("SM64_REPORT_DIR"):
+        report = Path(os.environ["SM64_REPORT_DIR"]) / "undocumented-skips.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps([{"nodeid": n, "reason": r} for n, r in undocumented], indent=1),
+                          encoding="utf-8")
     shown = "\n".join(f"  {nodeid}\n    {reason}" for nodeid, reason in undocumented[:20])
     more = f"\n  ... and {len(undocumented) - 20} more" if len(undocumented) > 20 else ""
     print(f"\nUNDOCUMENTED SKIPS ({len(undocumented)}): a whole-suite run must "

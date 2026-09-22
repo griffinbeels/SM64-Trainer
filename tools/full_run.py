@@ -203,6 +203,9 @@ def failures_report(folder: Path) -> list[str]:
         for row in json.loads(reruns.read_text(encoding="utf-8")):
             if row["flaky"]:
                 lines.append(f"  FLAKY {row['nodeid']} -- {row['cause']}")
+    for skips in sorted(folder.rglob("undocumented-skips.json")):
+        for row in json.loads(skips.read_text(encoding="utf-8")):
+            lines.append(f"  UNDOCUMENTED SKIP {row['nodeid']} -- {row['reason'][:120]}")
     if failed:
         lines.append(rerun_command(failed))
     return lines

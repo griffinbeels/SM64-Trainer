@@ -184,3 +184,15 @@ def test_the_retry_covers_setup_errors_and_never_an_assertion():
     assert not any(matches(text) and not excluded(text) for text in kept)
     args = lanes.rerun_args()
     assert args[:2] == ["--reruns", "1"] and "--rerun-except" in args
+
+
+@pytest.mark.parametrize("jobs", [2, 8, 12, 20])
+def test_one_number_sets_the_full_runs_jobs_for_both_lanes(jobs):
+    """The workflow's single variable: every job gets a lane, a shard of that
+    lane and its lane's worker count; neither lane is ever left without a job."""
+    matrix = lanes.job_matrix(jobs, _durations() | {"tests/test_ui_leaderboard.py": 400.0})
+    assert len(matrix) == jobs
+    for lane in ("browser", "nonbrowser"):
+        mine = [job for job in matrix if job["lane"] == lane]
+        assert mine and sorted(job["shard"] for job in mine) == list(range(1, len(mine) + 1))
+        assert all(job["of"] == len(mine) and job["workers"] == lanes.LANE_WORKERS[lane] for job in mine)

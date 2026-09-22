@@ -15,15 +15,28 @@ on:
     - cron: "17 10 * * *"   # nightly, main: the run that records the coverage map
   workflow_dispatch:
     inputs:
+      jobs:
+        description: "How many runners to split the suite across"
+        type: number
       record_coverage:
         description: "Also record the coverage map the blast radius reads (about twice as slow)"
         type: boolean
         default: false
 
+# A newer push to main contains the older one, so the older run stops; the
+# release gate reads the release commit's own run. The nightly run and runs
+# on other branches never cancel anything.
+concurrency:
+  group: full-run-${{ github.ref }}-${{ github.event_name == 'schedule' && 'nightly' || 'push' }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+
 permissions:
   contents: read
 
 env:
+  # THE job count: tools/test_lanes.py splits it between browser jobs (two
+  # workers) and the rest (four), by their recorded work per worker.
+  JOBS: ${{ inputs.jobs || 8 }}
   # uilab is not in the lockfile (it is a shared dev module); the run uses
   # exactly this commit of it. Bump it when a test needs a newer uilab.
   UILAB_REPO: https://github.com/griffinbeels/uilab
@@ -32,18 +45,28 @@ env:
   RECORD_COVERAGE: ${{ github.event_name == 'schedule' || inputs.record_coverage == true }}
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: plan
+        run: echo "matrix=$(python3 tools/test_lanes.py matrix "$JOBS")" >> "$GITHUB_OUTPUT"
+
   suite:
-    name: full ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: plan
+    name: ${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }}
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        # The job count is this list's length; the jobs are balanced by
-        # tests/test_durations.json (tools/full_run.py durations).
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       SM64_REPORT_DIR: ${{ github.workspace }}\test-artifacts
+      # A test still running after five minutes prints every thread's stack,
+      # so a hang names itself instead of eating the job's whole timeout.
+      PYTEST_ADDOPTS: -o faulthandler_timeout=300
     steps:
       # Byte-exact checks (the natives' build ids, the line-ending guard, the
       # seed builder) read files as committed; the runner's git would add CR.
@@ -63,6 +86,7 @@ jobs:
       # Beside the checkout, where tools/find_uilab.py looks on every machine,
       # and outside it, so pytest never collects uilab's own tests.
       - name: Check out uilab at the pinned commit
+        if: matrix.lane == 'browser'
         run: |
           $path = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) "uilab"
           git clone --quiet $env:UILAB_REPO $path
@@ -70,25 +94,34 @@ jobs:
           git -C $path checkout --quiet $env:UILAB_REF
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-      # The component tests drive Preact through Vitest, which needs Node
-      # 24.13+ (the runner image ships 22); the lint and type checks' own tests
-      # need the pinned ESLint, Pyright and TypeScript.
+      # Vitest (component tests, in both lanes) needs Node 24.13+; the runner
+      # image ships 22. The lint and type checks' tests need the pinned ESLint,
+      # Pyright and TypeScript; both installs are cached whole.
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            tests/frontend/package-lock.json
-            tools/verification/package-lock.json
 
-      # tools/verify_lint.py runs Ruff offline from uv's cache; prime it with
-      # the version that script pins.
-      - name: Install the pinned lint and test tools
+      - name: Cache the pinned Node tools
+        id: node-modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            tests/frontend/node_modules
+            tools/verification/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('tests/frontend/package-lock.json', 'tools/verification/package-lock.json') }}
+
+      - name: Install the pinned Node tools
+        if: steps.node-modules.outputs.cache-hit != 'true'
         run: |
           npm ci --prefix tests/frontend --ignore-scripts
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm ci --prefix tools/verification --ignore-scripts
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # tools/verify_lint.py runs Ruff offline from uv's cache; prime it with
+      # the version that script pins.
+      - name: Prime the pinned Ruff
+        if: matrix.lane == 'nonbrowser'
+        run: |
           $ruff = uv run --frozen python -c "import sys; sys.path.insert(0, 'tools'); import verify_lint; print(verify_lint.RUFF)"
           uvx "ruff==$ruff" --version
 
@@ -112,34 +145,39 @@ jobs:
       - name: Put ffmpeg on PATH
         run: Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\ffmpeg\bin"
 
+      # Only browser jobs start Chromium (the tripwire fails any other test
+      # that tries).
       - name: Cache Playwright's Chromium
+        if: matrix.lane == 'browser'
+        id: chromium
         uses: actions/cache@v6
         with:
           path: ~\AppData\Local\ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
 
       - name: Install Playwright's Chromium
+        if: matrix.lane == 'browser' && steps.chromium.outputs.cache-hit != 'true'
         run: uv run --frozen python -m playwright install chromium
 
-      - name: Suite, job ${{ matrix.shard }} of ${{ strategy.job-total }}
+      - name: Suite, ${{ matrix.lane }} job ${{ matrix.shard }} of ${{ matrix.of }}
         run: >
-          uv run --frozen python tools/run_tests.py --all
+          uv run --frozen python tools/run_tests.py --all --lane ${{ matrix.lane }}
           ${{ env.RECORD_COVERAGE == 'true' && '--record-coverage' || '' }}
-          --shard ${{ matrix.shard }}/${{ strategy.job-total }}
-          --workers 2 --junitxml test-artifacts/junit-${{ matrix.shard }}.xml
+          --shard ${{ matrix.shard }}/${{ matrix.of }} --workers ${{ matrix.workers }}
+          --junitxml test-artifacts/junit-${{ matrix.lane }}-${{ matrix.shard }}.xml
 
       - name: Publish this job's coverage map
         if: always() && env.RECORD_COVERAGE == 'true' && hashFiles('.testmondata') != ''
         run: >
           uv run --frozen python tools/full_run.py export-coverage .testmondata
-          coverage/coverage-map-${{ matrix.shard }}.json
-          "full run ${{ github.run_id }} job ${{ matrix.shard }}"
+          coverage/coverage-map-${{ matrix.lane }}-${{ matrix.shard }}.json
+          "full run ${{ github.run_id }} ${{ matrix.lane }} job ${{ matrix.shard }}"
 
       - name: Keep the reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: full-${{ matrix.shard }}
+          name: full-${{ matrix.lane }}-${{ matrix.shard }}
           path: test-artifacts
           if-no-files-found: ignore
           retention-days: 14
@@ -148,7 +186,7 @@ jobs:
         if: always() && env.RECORD_COVERAGE == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-${{ matrix.shard }}
+          name: coverage-${{ matrix.lane }}-${{ matrix.shard }}
           path: coverage
           if-no-files-found: ignore
           retention-days: 30

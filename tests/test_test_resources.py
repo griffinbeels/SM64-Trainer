@@ -33,12 +33,13 @@ def test_each_run_gets_half_the_machine_budget_and_obs_has_a_lower_ceiling(obs, 
     assert resources.budget(list(range(32)), obs, 0)[0] == 0
 
 
-def test_a_dedicated_ci_machine_keeps_every_cpu_and_a_worker_per_two():
-    """A GitHub runner has no desktop to protect. A browser test is a page, a
-    server and Chromium's own processes, so a worker gets two of its CPUs."""
+def test_a_dedicated_ci_machine_keeps_every_cpu_for_the_job_to_divide():
+    """A GitHub runner has no desktop to protect: every CPU, at most a worker
+    per CPU, and the job names its lane's count (two for browser jobs)."""
     workers, mask = resources.budget(list(range(4)), False, dedicated=True)
-    assert (workers, mask) == (2, [0, 1, 2, 3])
-    assert resources.budget(list(range(4)), False, 1, dedicated=True)[0] == 1
+    assert (workers, mask) == (4, [0, 1, 2, 3])
+    assert resources.budget(list(range(4)), False, 2, dedicated=True)[0] == 2
+    assert resources.budget(list(range(4)), False, 9, dedicated=True)[0] == 4
 
 
 def test_slot_zero_is_the_lock_every_older_runner_takes():

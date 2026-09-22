@@ -113,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--all", action="store_true",
                         help="the whole suite (the full run on GitHub does this on every push to main)")
     parser.add_argument("--shard", metavar="K/N", help="with --all: only job K of N")
+    parser.add_argument("--lane", choices=("browser", "nonbrowser"),
+                        help="with --all: only the browser modules, or only the rest")
     parser.add_argument("--record-coverage", action="store_true",
                         help="with --all: keep a pytest-testmon map for the blast radius to read")
     parser.add_argument("--junitxml", metavar="PATH", help="also write a JUnit XML report")
@@ -131,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     refuse_contradictions(parser, args, extra)
     mode = "focused" if extra else "all" if args.all else "merge"
     options = [*(["--shard", args.shard] if args.shard else []),
+               *(["--lane", args.lane] if args.lane else []),
                *(["--junitxml", args.junitxml] if args.junitxml else [])]
     chosen = None
     if mode == "merge":
@@ -138,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         if chosen is None:
             return outcome
         options.append(f"--select-from={chosen}")
-    if mode == "all" and (missing := find_uilab()) is not None:
+    if mode == "all" and args.lane != "nonbrowser" and (missing := find_uilab()) is not None:
         print(f"run_tests: the whole suite needs uilab for its browser tests. {missing}", flush=True)
         return 2
     workers = args.workers if args.workers is not None else (0 if mode == "focused" else None)
@@ -158,8 +161,8 @@ def main(argv: list[str] | None = None) -> int:
 def refuse_contradictions(parser, args, extra: list[str]) -> None:
     if (args.workers is not None and args.workers < 0) or (args.reserve is not None and args.reserve < 0):
         parser.error("workers and reserve must be nonnegative")
-    if (args.shard or args.record_coverage) and not args.all:
-        parser.error("--shard and --record-coverage split or map the whole suite; add --all")
+    if (args.shard or args.record_coverage or args.lane) and not args.all:
+        parser.error("--shard, --lane and --record-coverage split or map the whole suite; add --all")
     if args.all and (extra or args.why or args.base):
         parser.error("--all runs the whole suite; name tests to run a few, or drop --all for the blast radius")
     if (args.why or args.base) and extra:

@@ -238,6 +238,27 @@ def plan_shards(units: list[str], count: int,
     return plan
 
 
+# A browser worker is a page, a server and Chromium's processes: two per
+# 4-CPU runner. The rest is plain CPU work: one worker per CPU.
+LANE_WORKERS = {"browser": 2, "nonbrowser": 4}
+
+
+def lane_of_unit(unit: str) -> str:
+    return "browser" if unit.startswith("browser_sweep_") or lane_of(ROOT / unit) == "browser" else "nonbrowser"
+
+
+def job_matrix(jobs: int, durations: dict[str, float] | None = None) -> list[dict]:
+    """The full run's jobs from ONE number: split between the two lanes by
+    their recorded work per worker, at least one job each."""
+    durations = load_durations() if durations is None else durations
+    per_worker = {lane: sum(s for u, s in durations.items() if lane_of_unit(u) == lane) / workers
+                  for lane, workers in LANE_WORKERS.items()}
+    browser = min(jobs - 1, max(1, round(jobs * per_worker["browser"] / sum(per_worker.values()))))
+    counts = {"browser": browser, "nonbrowser": jobs - browser}
+    return [{"lane": lane, "shard": index, "of": count, "workers": LANE_WORKERS[lane]}
+            for lane, count in counts.items() for index in range(1, count + 1)]
+
+
 def parse_shard(text: str) -> tuple[int, int]:
     index, _, count = text.partition("/")
     if not (index.isdecimal() and count.isdecimal()) or not 1 <= int(index) <= int(count):
@@ -267,3 +288,12 @@ def rerun_args() -> list[str]:
     for pattern in NEVER_RERUN:
         args += ["--rerun-except", pattern]
     return args
+
+
+if __name__ == "__main__":
+    import sys
+    # `python tools/test_lanes.py matrix 16`: the workflow's job list, as JSON.
+    if len(sys.argv) == 3 and sys.argv[1] == "matrix":
+        print(json.dumps({"include": job_matrix(int(sys.argv[2]))}))
+    else:
+        raise SystemExit("usage: test_lanes.py matrix <jobs>")

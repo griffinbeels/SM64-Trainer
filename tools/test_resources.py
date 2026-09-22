@@ -15,8 +15,7 @@ of the CPUs while OBS is open; each run gets half of it, so two concurrent
 merge checks together fill it and never exceed it. OBS opening mid-run
 tightens the whole tree within two seconds and stays latched until that run
 ends. On a dedicated CI machine there is no desktop to protect: every CPU,
-and a worker per two CPUs (a browser test is a page, a server and Chromium's
-own processes). See docs/testing.md for the measurements and limits.
+a worker per CPU at most, and the job names its lane's count. See docs/testing.md for the measurements and limits.
 """
 from __future__ import annotations
 
@@ -67,8 +66,10 @@ def budget(eligible: list[int], obs: bool, workers: int | None = None,
     """
     available = len(eligible)
     if dedicated:
+        # The workflow names each lane's workers (tools/test_lanes.py
+        # LANE_WORKERS); the machine only caps them at one per CPU.
         count = available
-        ceiling = max(1, available // 2)
+        ceiling = available
     else:
         count = max(1, available // 4 if obs else available - min(12, available // 2))
         ceiling = max(1, min(MACHINE_WORKERS[obs], count) // SLOTS)

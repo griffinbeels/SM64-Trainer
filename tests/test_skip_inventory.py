@@ -90,3 +90,13 @@ def test_an_xfail_is_not_counted_as_an_untested_path():
     session = _session()
     conftest.pytest_sessionfinish(session, 0)
     assert session.exitstatus == 0
+
+
+def test_a_runner_only_reason_passes_on_a_runner_and_fails_here():
+    """A GitHub runner has no machine-level harness; this desktop must, and a
+    guard that skips here for that reason is a hole, not a gap."""
+    reason = "the shared harness is not installed at /home/runner/.claude/harness/skills"
+    assert skip_inventory.allowed_for(reason, runner=True) is not None
+    assert skip_inventory.allowed_for(reason, runner=False) is None
+    for pattern, why, where in skip_inventory.RUNNER_ONLY:
+        assert pattern.strip() and len(why) > 30 and where.strip(), pattern

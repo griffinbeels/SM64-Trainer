@@ -44,7 +44,7 @@ def test_only_a_full_run_that_asks_for_it_records_coverage():
         assert "--no-testmon" in run_tests.pytest_args(mode, 2, [])
 
 
-@pytest.mark.parametrize("argv", [["--shard", "1/4"], ["--record-coverage"],
+@pytest.mark.parametrize("argv", [["--shard", "1/4"], ["--record-coverage"], ["--lane", "browser"],
                                   ["--all", "tests/test_x.py"], ["--all", "--why"],
                                   ["--all", "--shard", "5/4"], ["--why", "tests/test_x.py"],
                                   ["-n", "4", "tests/test_x.py"]])
