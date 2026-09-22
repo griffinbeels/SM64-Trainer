@@ -207,6 +207,18 @@ def test_status_names_the_flaky_tests_and_the_ones_that_keep_needing_the_retry(t
     assert sorted(downloads) == [1, 2, 3], "a run's flaky list is fetched once, even when it has none"
 
 
+def test_a_run_folder_made_for_its_flaky_list_still_gets_the_reports(tmp_path, monkeypatch):
+    """`status` fetches only the flaky lists into the run's folder; `failures`
+    afterwards must still download the reports (run 35689212201 printed "no
+    failing test" for a job that had one)."""
+    monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
+    (tmp_path / "7" / "flaky").mkdir(parents=True)
+    calls = []
+    full_run.download(_run(run_id=7), run=lambda *args: calls.append(args) or "")
+    full_run.download(_run(run_id=7), run=lambda *args: calls.append(args) or "")
+    assert [call[:3] for call in calls] == [("run", "download", "7")]
+
+
 def test_junit_names_map_back_to_nodeids_and_units_for_rebalancing(tmp_path):
     (tmp_path / "junit-1.xml").write_text(JUNIT, encoding="utf-8")
     sweep = "tests/test_responsive.py::test_no_layout_defects_at_each_viewport[850x1000]"

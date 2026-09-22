@@ -196,10 +196,15 @@ def junit_cases_in(report: Path) -> list[dict]:
 
 
 def download(found: dict, run=gh) -> Path:
+    """Every artifact of the run, once. Marked when complete: the run's folder
+    also holds the flaky lists and coverage parts fetched on their own, so its
+    existence says nothing about the reports."""
     target = DOWNLOADS / str(found["databaseId"])
-    if not target.exists():
-        target.mkdir(parents=True)
+    done = target / ".downloaded"
+    if not done.exists():
+        target.mkdir(parents=True, exist_ok=True)
         run("run", "download", str(found["databaseId"]), "--dir", str(target))
+        done.touch()
     return target
 
 
@@ -452,7 +457,8 @@ def main(argv: list[str] | None = None) -> int:
         jobs = jobs_of(found) if found else []
         print(describe(found, jobs, label))
         if found and state in (PASSED, FAILED) and args.command in ("status", "wait"):
-            print("\n".join(flaky_report(found)) or "  no FLAKY test in this run or its branch's recent runs")
+            print("\n".join(flaky_report(found)) or f"  no FLAKY test in this run, and none twice in the "
+                                                    f"last {FLAKY_HISTORY} on its branch")
         if args.command == "failures" and state == FAILED:
             folder = download(found)
             print("\n".join(failures_report(folder)) or "  no failing test in the JUnit reports: "
