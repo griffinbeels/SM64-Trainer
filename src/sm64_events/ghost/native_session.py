@@ -5,6 +5,7 @@ from datetime import datetime
 import threading
 
 from sm64_events.ghost.source import attempt_id_of
+from sm64_events.ghost.selection import MISSING_REASON, selected_template
 
 
 class NativeGhost:
@@ -14,7 +15,7 @@ class NativeGhost:
         self._source = None
         self._sent = None
         self._enabled = False
-        self._cached = None
+        self._cached = {}
         self._origin_of = origin_of
         self._control_lock = threading.Lock()
         self._target = None
@@ -49,45 +50,60 @@ class NativeGhost:
         return {**answer, "reason": "native_preservation_failed",
                 "reason_text": "The template was saved, but " + detail}
 
-    def resolve(self, target, templates):
+    def resolve(self, target, templates, template_id=None):
         self._asset = None
+        template = (selected_template(templates, target["kind"], target["entity_key"],
+                                      target.get("strat"), template_id) if target else None)
+        result, asset = self._resolve_template(target, template)
+        if template is None and template_id is not None:
+            return {**result, "reason": "selected_template_missing",
+                    "reason_text": MISSING_REASON, "template_id": template_id}
+        self._asset = asset
+        return result
+
+    def probe(self, target, template):
+        """Validate a candidate without changing the asset sent to the renderer."""
+        return self._resolve_template(target, template)[0]
+
+    def _resolve_template(self, target, template):
         answer = {"available": False, "reason": "no_native_poses",
                   "reason_text": "Record a new attempt and mark it as the template to show Mario in the game.",
                   "template_id": None, "attempt_id": None, "exactness": None}
         if not self._supported:
             return {**answer, "reason": "unsupported_rom",
-                    "reason_text": "Mario in the game currently supports the US practice ROM."}
+                    "reason_text": "Mario in the game currently supports the US practice ROM."}, None
         if target is None:
             return {**answer, "reason": "no_target",
-                    "reason_text": "Pick a star or a segment to practise."}
-        template = templates.active_for(target["kind"], target["entity_key"], target.get("strat"))
+                    "reason_text": "Pick a star or a segment to practise."}, None
         if template is None:
             return {**answer, "reason": "no_template",
-                    "reason_text": "Mark an attempt as the template for this target."}
+                    "reason_text": "Mark an attempt as the template for this target."}, None
         answer["template_id"] = template.id
         attempt_id = attempt_id_of(template.origin)
         answer["attempt_id"] = attempt_id
         if attempt_id is None or self._replay is None:
-            return answer
+            return answer, None
         try:
             identity = self._replay.native_identity(attempt_id)
         except ValueError:
-            return self._preservation_failure(answer, attempt_id)
+            return self._preservation_failure(answer, attempt_id), None
         key = (template.id, template.origin, target["kind"], target["entity_key"], target.get("strat"), identity)
-        if self._cached is not None:
-            cached_key, asset, stamp, result = self._cached
+        cached = self._cached.get(template.id)
+        if cached is not None:
+            cached_key, asset, stamp, result = cached
             if key == cached_key and stamp is not None and self._fingerprint(asset[0]) == stamp:
-                self._asset = asset
-                return dict(result)
+                return dict(result), asset
         found = self._replay.find_native(attempt_id)
         if found is None:
-            return self._preservation_failure(answer, attempt_id)
+            return self._preservation_failure(answer, attempt_id), None
         path, manifest = found
-        self._asset = (path, manifest)
+        asset = (path, manifest)
         result = {**answer, "available": True, "reason": None, "reason_text": None,
                   "exactness": "native_pose"}
-        self._cached = key, self._asset, self._fingerprint(path), result
-        return result
+        self._cached[template.id] = key, asset, self._fingerprint(path), result
+        if len(self._cached) > 128:
+            del self._cached[next(iter(self._cached))]
+        return result, asset
 
     def reconcile(self, *, enabled, opacity, nudge, tint, target):
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
@@ -172,7 +188,8 @@ class NativeGhost:
                           5: "This practice ROM does not provide the required Mario poses.",
                           6: "The saved Mario poses could not be loaded.",
                           7: "Mario's model could not be loaded from this ROM.",
-                          8: "The saved Mario poses could not be played."}.get(
+                          8: "The saved Mario poses could not be played.",
+                          11: "The game ROM could not be read for Mario. Reopen the game with the Trainer graphics plugin."}.get(
                               status.get("reason"), "Mario playback is unavailable; try switching it off and on.")
             else:
                 reason = "Start the game with the trainer's GLideN64 renderer."

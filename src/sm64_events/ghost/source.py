@@ -91,6 +91,7 @@ from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.mariobox import MarioBoxList
 from sm64_events.ghost.mariobox import REASONS as BOX_REASONS
 from sm64_events.ghost.mariobox import read_box_list
+from sm64_events.ghost.selection import MISSING_REASON, selected_template
 from sm64_events.memory.addresses import (CASTLE_SECRET_STAR_AREAS,
                                           COURSE_BY_LEVEL, LEVEL_CASTLE_INSIDE)
 
@@ -99,6 +100,7 @@ KINDS = ("star", "segment")
 # One sentence per unavailable case, in the words a player would use. No
 # technique names: the practice card shows this straight to him.
 REASONS: dict[str, str] = {
+    "selected_template_missing": MISSING_REASON,
     "no_template":
         "You have not set a template for this yet, so there is no run to "
         "play alongside you.",
@@ -482,6 +484,7 @@ def _answer(source: GhostSource, kind: str, entity_key: str) -> GhostSource:
 
 def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
                   templates, replay, attempts=None, events=None,
+                  template_id: int | None = None,
                   providers: tuple[Provider, ...] = PROVIDERS) -> GhostSource:
     """Is there a ghost for this star or segment, and where is its footage?
 
@@ -500,9 +503,10 @@ def resolve_ghost(kind: str, entity_key: str, strat: str | None = None, *,
     """
     if kind not in KINDS:
         raise ValueError("a ghost is for a star or a segment")
-    template = templates.active_for(kind, entity_key, strat)
+    template = selected_template(templates, kind, entity_key, strat, template_id)
     if template is None:
-        return _answer(unavailable("no_template"), kind, entity_key)
+        reason = "selected_template_missing" if template_id is not None else "no_template"
+        return _answer(unavailable(reason, template_id=template_id), kind, entity_key)
     for provider in providers:
         answer = provider(template, replay=replay)
         if answer is not None:

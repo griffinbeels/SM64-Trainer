@@ -49,6 +49,7 @@ from urllib.parse import urlencode
 from sm64_events.core import paths
 from sm64_events.core.events import Event
 from sm64_events.ghost.source import resolve_ghost
+from sm64_events.ghost.selection import GhostSelection, SELECTION_KEY, checked_template_id
 
 log = logging.getLogger("sm64.ghost")
 
@@ -129,7 +130,7 @@ NO_RECORDINGS = {
     "mario_boxes_reason_text": None}
 
 #: What a client may send to PUT /api/ghost.
-SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view")
+SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "template_id", "target")
 
 
 def template_store(inputs):
@@ -141,7 +142,7 @@ def template_store(inputs):
     return service.templates
 
 
-def follower_url(target: dict, port: int | None = None) -> str:
+def follower_url(target: dict, port: int | None = None, *, template_id=None) -> str:
     """The overlay page for this target, on this server's own port.
 
     `core/paths.py::server_port()` is the one port source -- the overlay is
@@ -157,6 +158,8 @@ def follower_url(target: dict, port: int | None = None) -> str:
     params = {"kind": target["kind"], "entity_key": target["entity_key"]}
     if target.get("strat"):
         params["strat"] = target["strat"]
+    if template_id is not None:
+        params["template_id"] = template_id
     chosen = paths.server_port() if port is None else port
     return f"http://127.0.0.1:{chosen}{PAGE_PATH}?{urlencode(params)}"
 
@@ -252,6 +255,13 @@ def validate_changes(changes: dict) -> dict:
         checked["tint"] = _checked_tint(changes["tint"])
     if "view" in changes:
         checked["view"] = _checked_view(changes["view"])
+    if "template_id" in changes:
+        checked["template_id"] = checked_template_id(changes["template_id"])
+        if not isinstance(changes.get("target"), dict):
+            raise ValueError("Choose a ghost for the current practice target.")
+        checked["target"] = dict(changes["target"])
+    elif "target" in changes:
+        raise ValueError("The ghost target follows the current practice target.")
     return checked
 
 
@@ -273,6 +283,8 @@ class GhostSession:
         self._period_s = period_s
         self._native = native
         self._native_answer = {}
+        self._selection = GhostSelection()
+        self._candidates = []
 
         self._enabled = False
         self._opacity = DEFAULT_OPACITY
@@ -318,6 +330,8 @@ class GhostSession:
                 "view": self._view,
                 "nudge_frames": self._nudge,
                 "target": dict(self._target) if self._target else None,
+                "selection": {"template_id": self._selection.chosen(self._target),
+                              "candidates": [dict(row) for row in self._candidates]},
                 "source": dict(self._source),
                 "window": self._window_state()}
 
@@ -416,6 +430,7 @@ class GhostSession:
         self._tell_clock()
         if resolve:
             self._source = self._resolve_source(target)
+            self._refresh_candidates(target)
         try:
             self._reconcile()
         except Exception:  # noqa: BLE001 - a window that will not open is not a reason to stop practising
@@ -447,10 +462,12 @@ class GhostSession:
                 "strat": self._tracker.strat_tag}
 
     def _resolve_source(self, target: dict | None) -> dict:
-        video = self._resolve_video_source(target)
+        template_id = self._selection.chosen(target)
+        video = self._resolve_video_source(target, template_id)
         if self._native is not None:
             try:
-                self._native_answer = self._native.resolve(target, template_store(self._inputs))
+                chosen = {"template_id": template_id} if template_id is not None else {}
+                self._native_answer = self._native.resolve(target, template_store(self._inputs), **chosen)
             except Exception:  # noqa: BLE001 - selection failure must revoke the prior target
                 log.exception("native ghost source unavailable")
                 self._native_answer = {"available": False, "reason": "native_unavailable",
@@ -462,16 +479,17 @@ class GhostSession:
                     "whole_available": video["available"], "whole_reason_text": video["reason_text"]}
         return video
 
-    def _resolve_video_source(self, target: dict | None) -> dict:
+    def _resolve_video_source(self, target: dict | None, template_id=None) -> dict:
         if target is None:
             return dict(NO_TARGET)
         if self._replay is None:
             return dict(NO_RECORDINGS)
         try:
+            chosen = {"template_id": template_id} if template_id is not None else {}
             answer = self._resolve(target["kind"], target["entity_key"],
                                    target["strat"],
                                    templates=template_store(self._inputs),
-                                   replay=self._replay)
+                                   replay=self._replay, **chosen)
         except Exception:  # noqa: BLE001 - a db hiccup may not disable the switch silently
             log.debug("ghost source unavailable", exc_info=True)
             return dict(NO_RECORDINGS)
@@ -484,6 +502,29 @@ class GhostSession:
         # sentence: can this ghost be drawn as Mario alone, and if not, why.
         answer["mario_boxes_available"] = answer["mario_boxes"] is not None
         return {key: answer[key] for key in NO_TARGET}
+
+    def _refresh_candidates(self, target):
+        try:
+            self._candidates = self._selection.candidates(
+                target, template_store(self._inputs), self._resolve_video_source, self._native)
+            # The chosen asset is resolved on every explicit read. Do not let
+            # the catalogue's short cache hide a deletion or newly saved file.
+            for row in self._candidates:
+                if row["template_id"] == self._source.get("template_id"):
+                    for mode in ("native", "whole"):
+                        for field in ("available", "reason_text"):
+                            key = f"{mode}_{field}"
+                            if key in self._source:
+                                row[key] = self._source[key]
+        except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
+            log.debug("ghost choices unavailable", exc_info=True)
+            self._candidates = []
+
+    def selected_template_id(self, target):
+        """The follower source uses the same persisted choice as the switch."""
+        with self._lifecycle_lock:
+            self._selection.load(self._db())
+            return self._selection.chosen(target)
 
     # -- the preference -------------------------------------------------------
 
@@ -502,6 +543,7 @@ class GhostSession:
             stored_hue = database.get_state(TINT_HUE_KEY,
                                             DEFAULT_TINT["hue_degrees"])
             stored_view = database.get_state(VIEW_KEY, DEFAULT_VIEW)
+            self._selection.load(database)
         except Exception:  # noqa: BLE001 - a preference must never block the app
             log.debug("ghost preference unreadable", exc_info=True)
             return
@@ -546,6 +588,10 @@ class GhostSession:
             # Never persisted: it belongs to the target, and the target is
             # gone by the next session.
             self._nudge = changes["nudge_frames"]
+        if "template_id" in changes:
+            choices = self._selection.choose(self._target, changes["template_id"])
+            _remember(database, SELECTION_KEY, choices)
+            self._starts = 0
 
     async def update(self, changes: dict | None = None, **named) -> dict:
         """Apply what a client asked for, or refuse the whole request with the
@@ -553,8 +599,31 @@ class GhostSession:
         door) or as keyword arguments (everyone else's)."""
         asked = dict(changes or {})
         asked.update(named)
-        self._pending.update(validate_changes(asked))
-        return await self.refresh(resolve=True)
+        checked = validate_changes(asked)
+        async with self._lock:
+            target = self._read_target()
+            await asyncio.to_thread(self._queue_update, checked, target)
+            await asyncio.to_thread(self._cycle, target, True)
+            body = self.payload()
+            changed = body != self._published
+            self._published = body
+        if changed:
+            await self._publish(body)
+        return body
+
+    def _queue_update(self, checked, target):
+        if "template_id" in checked:
+            if target is None or checked.pop("target") != target:
+                raise ValueError("The practice target changed. Choose a ghost for the current target.")
+            number = checked["template_id"]
+            if number is not None:
+                try:
+                    template = template_store(self._inputs).get(number)
+                except LookupError as error:
+                    raise ValueError("That saved ghost no longer exists. Choose another ghost.") from error
+                if (template.kind, template.entity_key) != (target["kind"], target["entity_key"]):
+                    raise ValueError("Choose a ghost recorded for this star or segment.")
+        self._pending.update(checked)
 
     def _tell_clock(self) -> None:
         """Publish the nudge, the colour and the view to whoever is following
@@ -596,7 +665,8 @@ class GhostSession:
             if controller is not None and controller.is_running():
                 controller.set_visible(False)
             return
-        url = follower_url(self._target, self._port)
+        url = follower_url(self._target, self._port,
+                           template_id=self._selection.chosen(self._target))
         if controller is None:
             controller = self._controller = self._factory(
                 url=url, opacity=self._opacity, visible=True,

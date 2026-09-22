@@ -12,7 +12,7 @@ tell — no recordings this run, or a boot that has not attached its database
 yet — because disabling the switch for a reason that is false is worse than
 saying so.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from sm64_events.ghost.session import template_store
 from sm64_events.ghost.source import resolve_ghost
@@ -48,6 +48,7 @@ def no_session_state() -> dict:
     shows unknown as unknown."""
     return {"enabled": False, "opacity": None, "tint": None, "view": None,
             "nudge_frames": 0, "target": None,
+            "selection": {"template_id": None, "candidates": []},
             "source": {"available": False, "reason": "no_session",
                        "reason_text": "The ghost overlay is not available in "
                                       "this window.",
@@ -72,7 +73,8 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
     router = APIRouter(prefix="/api")
 
     @router.get("/ghost/source")
-    def source(kind: str, entity_key: str, strat: str | None = None):
+    def source(kind: str, entity_key: str, strat: str | None = None,
+               template_id: int | None = Query(default=None, gt=0)):
         if replay is None:
             raise HTTPException(503, "recordings are unavailable")
         try:
@@ -82,10 +84,14 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
             # so the span can be exact rather than read off the timer's shape.
             # `template_store` stays the one answer to "what is the store".
             service = inputs() if callable(inputs) else inputs
+            if template_id is None and session is not None:
+                template_id = session.selected_template_id(
+                    {"kind": kind, "entity_key": entity_key, "strat": strat})
             return resolve_ghost(kind, entity_key, strat,
                                  templates=template_store(service),
                                  replay=replay,
                                  attempts=getattr(service, "attempt", None),
+                                 template_id=template_id,
                                  events=journal_door(replay)).payload()
         except HTTPException:
             raise

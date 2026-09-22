@@ -195,7 +195,7 @@ def test_every_unavailable_case_carries_a_readable_sentence(templates):
         seen.add(reason)
         assert text.endswith(".") and len(text.split()) >= 8, reason
         assert text[0].isupper(), reason
-    assert seen == {"no_template", "template_has_no_attempt",
+    assert seen == {"no_template", "template_has_no_attempt", "selected_template_missing",
                     "recording_not_saved", "recording_has_no_frame_map"}
 
 
