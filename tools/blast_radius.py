@@ -12,9 +12,10 @@ The diff is taken between this working tree (uncommitted and untracked files
 included) and the BASELINE: the newest ancestor of HEAD whose full run on main
 passed, else the merge-base with main. What a changed file selects:
 
-  Python       the tests whose recorded coverage executed it (the full run's
-               coverage map, else a local pytest-testmon database); a file no
-               map has seen falls back to the tests that import it
+  Python       pytest-testmon's rule on a recorded map: the tests that executed
+               a code block no longer as it was (the baseline run's map, else
+               the newest nightly one, else a local testmon database); a file
+               no map has seen falls back to the tests that import it
   UI script    everything that imports it, up to the app shell; then every test
                naming one of those files, a CamelCase export, a class name one
                of them renders, or the tab (`title="Rank"`) whose page it is

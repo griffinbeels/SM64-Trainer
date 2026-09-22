@@ -2042,8 +2042,8 @@ cannot hold.
 ### Blast radius
 
 The tests one change can affect, chosen from the diff since the newest main
-commit whose [[full run]] passed: the tests whose recorded coverage executed a
-changed Python file, the tests naming a changed UI module, its importers, a
+commit whose [[full run]] passed: the tests that executed a Python code block
+the change altered, the tests naming a changed UI module, its importers, a
 class it renders or its page's tab, and for a stylesheet only the rules that
 changed. It prints the reason for every group it picks.
 
@@ -2068,8 +2068,8 @@ never does.
 The whole test suite, browser tests included, executed by GitHub Actions on
 every push to main and split into parallel jobs. It blocks only a release: the
 release script refuses any commit it has not passed. Its newest green result on
-main is where the next [[blast radius]] starts, and each job publishes its part
-of the coverage map the radius reads.
+main is where the next [[blast radius]] starts, and its nightly scheduled
+execution records the coverage map the radius reads.
 
 - **Lives** — the workflow (`.github/workflows/full.yml`) → the reader
   (`tools/full_run.py`) → the release script (`tools/release.py`)

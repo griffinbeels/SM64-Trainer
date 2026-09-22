@@ -30,7 +30,7 @@ on main passed, else the merge-base with main (the output says which). Then:
 
 | Changed | Selects |
 | --- | --- |
-| Python | the tests whose recorded coverage executed that file: the full run's published map, else the best local pytest-testmon database, else the tests importing it |
+| Python | pytest-testmon's rule, read off a recorded map: the tests that executed a code block that is no longer as it was. The map is the baseline run's, else the newest nightly one, else a local testmon database; a file no map has seen selects the tests importing it |
 | UI script | the module plus everything importing it up to the app shell; then every test naming one of those files, a CamelCase export, a class one of them renders, or the tab (`title="Rank"`) whose page it is |
 | Stylesheet | the **rules** that changed, not the file: their class names, then the components rendering them, as above. Only an element selector, `:root` tokens, `@font-face` or widely used keyframes select every browser test |
 | Test file | itself |
@@ -48,14 +48,15 @@ something, the full run finds it after the push; widen the rule, not the habit.
 
 ## The full run
 
-`.github/workflows/full.yml` runs `run_tests.py --all --shard K/12
---record-coverage` on Windows runners: `uv sync --frozen`, Node 24, ffmpeg,
-Playwright's Chromium, and uilab cloned at the commit pinned in the workflow
-(bump `UILAB_REF` after pushing uilab). Jobs are balanced by
-`tests/test_durations.json` (files whole, sweeps by their bounded groups);
-`full_run.py durations` refreshes it. Each job uploads JUnit XML, the rerun
-list, failure screenshots, and its piece of the coverage map the next blast
-radius reads.
+`.github/workflows/full.yml` runs `run_tests.py --all --shard K/12` on
+Windows runners: `uv sync --frozen`, Node 24 and the pinned Node tools, ffmpeg,
+Playwright's Chromium, and uilab cloned beside the checkout at the commit
+pinned in the workflow (bump `UILAB_REF` after pushing uilab). Jobs are
+balanced by `tests/test_durations.json` (files whole, sweeps by their bounded
+groups); `full_run.py durations` refreshes it. Each job uploads JUnit XML, the
+rerun list and failure screenshots. The nightly scheduled run (or a dispatch
+with `record_coverage`) also records the coverage map the blast radius reads;
+recording doubles a job's time, so a push's run does not.
 
 ```
 uv run python tools/full_run.py status     # HEAD's run: one line, plus any job not green
@@ -63,6 +64,10 @@ uv run python tools/full_run.py wait       # block until it finishes
 uv run python tools/full_run.py failures   # failing tests, first error line, rerun command
 gh workflow run full.yml --ref <branch>    # a run for a branch before merging
 ```
+
+What a runner cannot do skips there with an inventory reason: the GL
+witnesses need an OpenGL 3.3+ driver (`tests/gl_probe.py`), hardware encoders
+need their vendor's GPU, and the GPU witnesses are opt-in everywhere.
 
 **One retry, for setup errors only**, and only in the full run: fixture boot or
 seeding timeouts, `WinError 10055` / `ERR_NO_BUFFER_SPACE`, a closed or crashed
