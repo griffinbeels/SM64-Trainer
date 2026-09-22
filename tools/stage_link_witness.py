@@ -118,14 +118,11 @@ def _stage_ghost(output: Path, enabled: bool) -> None:
     spec.loader.exec_module(module)
     for relative, data in module.edits(output, replace_once).items():
         (output / relative).write_bytes(data)
-    for name in ["ghost_capture.h", "ghost_capture.cpp", "ghost_pass.h", "ghost_pass.cpp",
-                 "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
-                 "ghost_clock.h", "ghost_clock.cpp", "ghost_origin.h", "ghost_origin.cpp",
-                 "ghost_pose.h", "ghost_pose.cpp", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h",
-                 "ghost_clip.h", "ghost_assets.h", "ghost_assets.cpp", "ghost_rom.h", "ghost_rom.cpp", "ghost_ipc.h", "ghost_ipc.cpp",
-                 "ghost_draw.h", "ghost_draw.cpp", "ghost_playback.h", "ghost_playback.cpp",
-                 "ghost_dispatch.h", "ghost_dispatch.cpp", "ghost_presentation.h", "ghost_presentation.cpp"]:
-        shutil.copyfile(ROOT / "plugin/gfxwrap" / name, output / GL / name)
+    # Every ghost source ships in the renderer. A hand list silently missed
+    # ghost_root/ghost_proximity/ghost_shadow_gl and broke the bundle build.
+    for path in sorted((ROOT / "plugin/gfxwrap").glob("ghost_*")):
+        if path.suffix in (".h", ".cpp"):
+            shutil.copyfile(path, output / GL / path.name)
     shutil.copyfile(ROOT / "renderer/model/model.h", output / GL / "model.h")
 
 
