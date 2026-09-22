@@ -302,6 +302,13 @@ alone never reports that the ghost reached the game window.
 
 ## Verification boundaries
 
+**Every frame must carry Mario's position.** A committed clip counts refused
+and never-captured frames (`clip.py::pose_gaps`); a nonzero count is logged when
+the clip is saved and shown on that ghost's picker row, because the ghost blinks
+there. `tools/ghost_extraction_audit.py` audits every committed clip and the live
+pose archives (exit 1 on any hole). 2026-09-22: every post-fix clip was complete;
+the only pose-less archive records were a star-exit level load, outside attempts.
+
 Focused hosts exercise the actual capture reader, clock, origin ledger, playback
 loader, compositor and presentation modules. See
 [capture](../tests/test_ghost_capture.py), [clock](../tests/test_native_ghost_clock.py),

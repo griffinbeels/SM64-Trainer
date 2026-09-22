@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 import threading
 
-from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
+from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT, pose_gaps
 from sm64_events.ghost.source import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
@@ -131,7 +131,7 @@ class NativeGhost:
         path, manifest = found
         asset = (path, manifest)
         result = {**answer, "available": True, "reason": None, "reason_text": None,
-                  "exactness": "native_pose"}
+                  "exactness": "native_pose", "pose_gaps": pose_gaps(manifest)}
         self._cached[attempt_id] = key, asset, self._fingerprint(path), result
         if len(self._cached) > 128:
             del self._cached[next(iter(self._cached))]

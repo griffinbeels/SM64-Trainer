@@ -199,6 +199,7 @@ class GhostSelection:
                                "strat": ghost.strat_tag,
                                "native_available": bool(pose["available"]),
                                "native_reason_text": pose["reason_text"],
+                               "pose_gaps": pose.get("pose_gaps", 0),
                                "whole_available": bool(video["available"]),
                                "whole_reason_text": video["reason_text"]})
         self._cache = signature, now + CANDIDATE_CACHE_S, candidates

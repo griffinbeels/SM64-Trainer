@@ -595,7 +595,7 @@ class GhostSession:
         video = self._resolve_video_source(target, pb)
         native = self._native.probe(target, pb) if self._native is not None else {
             "available": False, "reason_text": "Mario playback is not available in this window."}
-        return {"attempt_id": pb.attempt_id, "frames": pb.frames,
+        return {"attempt_id": pb.attempt_id, "frames": pb.frames, "pose_gaps": native.get("pose_gaps", 0),
                 "native_available": bool(native["available"]),
                 "native_reason_text": native["reason_text"],
                 "whole_available": bool(video["available"]) and video.get("attempt_id") == pb.attempt_id,

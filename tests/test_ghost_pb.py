@@ -296,3 +296,21 @@ def test_the_shadow_switch_is_remembered_and_reaches_the_renderer(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="on or off"):
         asyncio.run(session.update({"shadow": "yes"}))
+
+
+def test_a_recording_with_missing_positions_is_counted_and_said_out_loud(tmp_path, caplog):
+    from ghost_native_fixture import frame
+    from test_ghost_recording import native_service
+
+    replay, row, archive = native_service(tmp_path, rows=(frame(1), frame(2, valid=29), frame(3)))
+    try:
+        with caplog.at_level("WARNING", logger="sm64.replay"):
+            manifest = replay.preserve_native(row.id)["native_ghost"]
+        assert manifest["invalid_records"] == 1
+        assert "Mario position missing on 1 of 3 frames" in caplog.text
+        target = {"kind": "star", "entity_key": f"{row.course_id}-{row.star_id}", "strat": row.strat_tag}
+        from sm64_events.ghost.pb import AttemptGhost
+        answer = NativeGhost(replay).probe(target, AttemptGhost(row.id, "star", target["entity_key"], None))
+        assert answer["available"] and answer["pose_gaps"] == 1
+    finally:
+        archive.close()

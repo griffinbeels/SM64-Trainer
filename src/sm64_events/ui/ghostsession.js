@@ -286,7 +286,14 @@ function pbItem(pb, checked, field, hues) {
   const available = Boolean(pb[`${field}_available`]);
   return { key: "pb", checked, disabled: false, hue: checked ? hues.get("pb") ?? null : null,
     label: `Your PB · ${runName(pb)}`,
-    reason: available ? null : pb[`${field}_reason_text`] };
+    reason: available ? gapReason(pb, field) : pb[`${field}_reason_text`] };
+}
+
+/** Frames where Mario's position was not recorded: the ghost blinks there.
+ * Only Mario reads positions, so only that view says so. */
+function gapReason(run, field) {
+  const gaps = field === "native" ? run.pose_gaps || 0 : 0;
+  return gaps ? `blinks on ${gaps} frame${gaps === 1 ? "" : "s"} with no recorded position` : null;
 }
 
 /** A run is named by the time it achieved -- `17"80` -- which is what he
@@ -304,7 +311,7 @@ function candidateItem(candidate, checked, field, view, hues, strat) {
     key: candidate.attempt_id, checked, disabled: !available && !checked,
     hue: checked ? hues.get(candidate.attempt_id) ?? null : null,
     label: [runName(candidate), other].filter(Boolean).join(" · "),
-    reason: available ? null : candidate[`${field}_reason_text`]
+    reason: available ? gapReason(candidate, field) : candidate[`${field}_reason_text`]
       || (view === "mario" ? "No saved Mario poses" : "No saved video"),
   };
 }

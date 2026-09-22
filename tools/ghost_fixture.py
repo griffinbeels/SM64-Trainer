@@ -130,6 +130,15 @@ def _select_ghosts(session: dict, body: dict, input_source: dict) -> None:
             session["source"][key] = first[key]
 
 
+def _set_shadow(session: dict, body: dict) -> None:
+    from fastapi import HTTPException
+
+    if "shadow" in body:
+        if type(body["shadow"]) is not bool:
+            raise HTTPException(422, "The ghost's shadow is either on or off.")
+        session["shadow"] = body["shadow"]
+
+
 def attach_ghost_routes(app, state: dict) -> None:
     """`GET|PUT /api/ghost` over one mutable dict.
 
@@ -183,10 +192,7 @@ def attach_ghost_routes(app, state: dict) -> None:
                 raise HTTPException(422, "The ghost's colour goes from 0 to "
                                          "359 degrees around the colour wheel.")
             session["tint"] = {**(session.get("tint") or {}), **asked}
-        if "shadow" in body:
-            if type(body["shadow"]) is not bool:
-                raise HTTPException(422, "The ghost's shadow is either on or off.")
-            session["shadow"] = body["shadow"]
+        _set_shadow(session, body)
         if "view" in body:
             if body["view"] not in ("whole", "mario"):
                 raise HTTPException(422, "The ghost shows either the whole "

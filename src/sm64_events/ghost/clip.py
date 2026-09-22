@@ -373,6 +373,16 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
     return clip
 
 
+def pose_gaps(manifest) -> int:
+    """Frames inside a recording where Mario's position was not extracted:
+    refused poses plus capture occurrences that never arrived. Every later
+    ghost feature assumes this is zero (his ask, 2026-09-22: "future features
+    hinge on correct extraction"), so it is counted on every commit."""
+    if not isinstance(manifest, dict):
+        return 0
+    return int(manifest.get("invalid_records") or 0) + int(manifest.get("missing_occurrences") or 0)
+
+
 def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | None = None) -> dict:
     """Atomically write one clip; the replay publisher owns its durable commit."""
     data = encode_clip(frames, producer, clock_kind=clock_kind, clip_id=clip_id)
