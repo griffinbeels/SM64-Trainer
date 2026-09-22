@@ -61,7 +61,7 @@ def fixtures(tmp_path_factory):
 def build():
     spec = importlib.util.spec_from_file_location("selection_build", ROOT / "tools/build_plugin.py")
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    vc = next((path for path in module.KNOWN_VCVARS if path.exists()), None)
+    vc = module.find_vcvars32()   # vswhere first: any edition, any year
     assert vc is not None, "explicit native witness needs the existing x86 MSVC compiler"
     # Reuse the build command owner while also suppressing background cursor feedback.
     def run(*args, **kwargs):

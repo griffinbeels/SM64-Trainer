@@ -1,8 +1,9 @@
 # The full run: the whole test suite, browser tests included, off the local
 # machine. Locally only a change's blast radius runs (tools/blast_radius.py);
 # this covers the rest on every push to main and on demand, and it blocks a
-# release (tools/release.py). Each job also publishes the coverage map the next
-# blast radius reads. Agents read it with `uv run python tools/full_run.py`.
+# release (tools/release.py). The nightly run also records the coverage map the
+# blast radius reads; recording roughly doubles a job's time, so a push does
+# not. Agents read it with `uv run python tools/full_run.py`.
 name: full run
 
 on:
@@ -10,7 +11,14 @@ on:
     # TEMPORARY: test-lanes proves this workflow before main has it (GitHub
     # only dispatches workflows present on the default branch). Removed before merge.
     branches: [main, test-lanes]
+  schedule:
+    - cron: "17 10 * * *"   # nightly, main: the run that records the coverage map
   workflow_dispatch:
+    inputs:
+      record_coverage:
+        description: "Also record the coverage map the blast radius reads (about twice as slow)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,6 +29,7 @@ env:
   UILAB_REPO: https://github.com/griffinbeels/uilab
   UILAB_REF: 6689abbf05a9129c4da2f11986788826d354ad24
   PYTHONUTF8: "1"
+  RECORD_COVERAGE: ${{ github.event_name == 'schedule' || inputs.record_coverage == true }}
 
 jobs:
   suite:
@@ -36,6 +45,11 @@ jobs:
     env:
       SM64_REPORT_DIR: ${{ github.workspace }}\test-artifacts
     steps:
+      # Byte-exact checks (the natives' build ids, the line-ending guard, the
+      # seed builder) read files as committed; the runner's git would add CR.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v10.2.0
@@ -46,26 +60,32 @@ jobs:
       - name: Install the locked environment
         run: uv sync --frozen
 
-      # Outside the workspace, so pytest never collects uilab's own tests.
+      # Beside the checkout, where tools/find_uilab.py looks on every machine,
+      # and outside it, so pytest never collects uilab's own tests.
       - name: Check out uilab at the pinned commit
         run: |
-          $path = "$env:RUNNER_TEMP\uilab"
+          $path = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) "uilab"
           git clone --quiet $env:UILAB_REPO $path
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git -C $path checkout --quiet $env:UILAB_REF
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Add-Content $env:GITHUB_ENV "UILAB_PATH=$path"
 
       # The component tests drive Preact through Vitest, which needs Node
-      # 24.13+ (the runner image ships 22) and its lockfile.
+      # 24.13+ (the runner image ships 22); the lint and type checks' own tests
+      # need the pinned ESLint, Pyright and TypeScript.
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: tests/frontend/package-lock.json
+          cache-dependency-path: |
+            tests/frontend/package-lock.json
+            tools/verification/package-lock.json
 
-      - name: Install the component test runner
-        run: npm ci --prefix tests/frontend --ignore-scripts
+      - name: Install the pinned Node tools
+        run: |
+          npm ci --prefix tests/frontend --ignore-scripts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm ci --prefix tools/verification --ignore-scripts
 
       # The replay tests cut real clips (libx264, SVT-AV1); a missing ffmpeg is
       # a failure, never an inventory skip. Same GPL build line every run.
@@ -98,12 +118,13 @@ jobs:
 
       - name: Suite, job ${{ matrix.shard }} of ${{ strategy.job-total }}
         run: >
-          uv run --frozen python tools/run_tests.py --all --record-coverage
+          uv run --frozen python tools/run_tests.py --all
+          ${{ env.RECORD_COVERAGE == 'true' && '--record-coverage' || '' }}
           --shard ${{ matrix.shard }}/${{ strategy.job-total }}
           --workers 2 --junitxml test-artifacts/junit-${{ matrix.shard }}.xml
 
       - name: Publish this job's coverage map
-        if: always() && hashFiles('.testmondata') != ''
+        if: always() && env.RECORD_COVERAGE == 'true' && hashFiles('.testmondata') != ''
         run: >
           uv run --frozen python tools/full_run.py export-coverage .testmondata
           coverage/coverage-map-${{ matrix.shard }}.json
@@ -119,7 +140,7 @@ jobs:
           retention-days: 14
 
       - name: Keep the coverage map
-        if: always()
+        if: always() && env.RECORD_COVERAGE == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.shard }}

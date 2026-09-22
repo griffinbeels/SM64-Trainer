@@ -363,28 +363,46 @@ class UiGraph:
 
 # --- the coverage map (Python) ------------------------------------------------------
 
-def coverage_from_testmon(db: Path) -> dict[str, set[str]]:
-    """source file -> the tests whose recorded run executed it."""
+# source file -> [(checksums of the code blocks a group of tests executed there, those tests)]
+Coverage = dict[str, list[tuple[tuple[int, ...], set[str]]]]
+
+
+def coverage_from_testmon(db: Path) -> Coverage:
+    """pytest-testmon's record, read directly: per source file, each distinct
+    fingerprint (the blocks a test executed there) and the tests holding it."""
+    from testmon.process_code import blob_to_checksums
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         rows = con.execute(
-            "select f.filename, te.test_name from test_execution te "
+            "select f.filename, f.method_checksums, te.test_name from test_execution te "
             "join test_execution_file_fp link on link.test_execution_id = te.id "
             "join file_fp f on f.id = link.fingerprint_id")
-        covered: dict[str, set[str]] = collections.defaultdict(set)
-        for filename, test in rows:
-            covered[filename.replace("\\", "/")].add(plain_nodeid(test))
-        return covered
+        grouped: dict[tuple[str, bytes], set[str]] = collections.defaultdict(set)
+        for filename, checksums, test in rows:
+            grouped[(filename.replace("\\", "/"), bytes(checksums or b""))].add(plain_nodeid(test))
     finally:
         con.close()
+    covered: Coverage = collections.defaultdict(list)
+    for (filename, blob), tests in grouped.items():
+        covered[filename].append((tuple(blob_to_checksums(blob)) if blob else (), tests))
+    return covered
 
 
-def load_coverage(root: Path = ROOT, published: Path | None = None) -> tuple[dict[str, set[str]], str]:
+def affected_tests(entries, source: str | None) -> set[str]:
+    """pytest-testmon's own rule: a test is affected when a block it executed
+    no longer exists as it was (a deleted file keeps none)."""
+    from testmon.process_code import Module
+    current = set(Module(source_code=source).checksums) if source is not None else set()
+    return {test for checksums, tests in entries if set(checksums) - current for test in tests}
+
+
+def load_coverage(root: Path = ROOT, published: Path | None = None) -> tuple[Coverage, str]:
     """The best coverage map available, and where it came from."""
     if published is not None and published.is_file():
         data = json.loads(published.read_text(encoding="utf-8"))
         tests = data["tests"]
-        return ({path: {tests[i] for i in indexes} for path, indexes in data["files"].items()},
+        return ({path: [(tuple(checksums), {tests[i] for i in indexes}) for checksums, indexes in entries]
+                 for path, entries in data["files"].items()},
                 f"the full run's coverage map ({data.get('source', published.name)})")
     candidates = [root / ".testmondata"]
     try:
@@ -400,7 +418,7 @@ def load_coverage(root: Path = ROOT, published: Path | None = None) -> tuple[dic
             covered = coverage_from_testmon(db)
         except sqlite3.DatabaseError:
             continue
-        count = len({test for tests in covered.values() for test in tests})
+        count = len({test for entries in covered.values() for _, tests in entries for test in tests})
         if count > best_count:
             best, best_count, best_db = covered, count, db
     if best_db is None:
@@ -416,9 +434,11 @@ class Radius:
     base_why: str
     coverage: str
     changed: dict[str, str]
+    root: Path = ROOT
     whole: dict[str, list[str]] = field(default_factory=lambda: collections.defaultdict(list))
     nodes: dict[str, set[str]] = field(default_factory=lambda: collections.defaultdict(set))
     reasons: list[tuple[str, str, str, set[str]]] = field(default_factory=list)  # kind, source, what, files
+    quiet: list[str] = field(default_factory=list)   # changed, yet no recorded test executed what changed
     left_to_github: list[str] = field(default_factory=list)
 
     def pick_files(self, kind: str, source: str, what: str, files: set[str]):
@@ -444,7 +464,7 @@ class Radius:
         for test_file, ids in self.nodes.items():
             if test_file not in chosen:
                 chosen[test_file] = sorted(ids)
-        return {f: ids for f, ids in sorted(chosen.items()) if (ROOT / f).is_file()}
+        return {f: ids for f, ids in sorted(chosen.items()) if (self.root / f).is_file()}
 
 
 def _fingerprint(paths) -> tuple:
@@ -491,7 +511,7 @@ def select(root: Path = ROOT, base: str | None = None, runs=None,
         base, base_why, run_id = base or "HEAD", "given", None
     coverage, coverage_why = coverage or _coverage_for(root, run_id, published)
     before = before or (lambda path: old_text(base, path, root))
-    radius = Radius(base, base_why, coverage_why, changed)
+    radius = Radius(base, base_why, coverage_why, changed, root)
     _route_changes(radius, root, changed, before, coverage)
     radius.pick_nodes("failed", "", "failed in this checkout's last run",
                       _last_failed(root) if last_failed is None else last_failed)
@@ -499,10 +519,14 @@ def select(root: Path = ROOT, base: str | None = None, runs=None,
 
 
 def _coverage_for(root: Path, run_id: int | None, published: Path | None):
-    if published is None and run_id is not None:
-        from full_run import GhUnavailable, coverage_map
+    """The baseline's own map when its run recorded one, else the newest map
+    main published (nightly), else a local pytest-testmon database."""
+    if published is None:
+        from full_run import GhUnavailable, coverage_map, newest_coverage_map
         try:
-            published = coverage_map(run_id)
+            published = coverage_map(run_id) if run_id is not None else None
+            if published is None and (newest := newest_coverage_map()) is not None:
+                published = newest[0]
         except (GhUnavailable, OSError, ValueError):
             published = None
     return load_coverage(root, published)
@@ -574,11 +598,16 @@ class _SourceTexts:
         return [path for path, mentioned in self._names.items() if mentioned & names]
 
 
-def _python(radius: Radius, coverage: dict[str, set[str]], tests: dict[str, FileRefs],
+def _python(radius: Radius, coverage: Coverage, tests: dict[str, FileRefs],
             path: str, source: str):
     via = "" if source == path else f" (names {Path(source).name})"
     if coverage.get(path):
-        radius.pick_nodes("python", source, f"{path}{via}", coverage[path])
+        file = radius.root / path
+        text = file.read_text(encoding="utf-8", errors="replace") if file.is_file() else None
+        affected = affected_tests(coverage[path], text)
+        radius.pick_nodes("python", source, f"{path}{via}: tests whose executed blocks changed", affected)
+        if not affected:
+            radius.quiet.append(path)
         return
     module = path.removesuffix(".py").replace("/", ".")
     names = {module, module.removeprefix("src."), Path(path).stem, f"tools.{Path(path).stem}"}
@@ -693,7 +722,9 @@ def why(radius: Radius, limit: int = 8) -> str:
         more = f" (+{len(files) - limit})" if len(files) > limit else ""
         lines.append(f"  {kind:7} {what} -> {len(files)} files: {shown}{more}")
     selecting = {source for _, source, _, _ in radius.reasons}
-    unmatched = [p for p in radius.changed if p not in selecting]
+    unmatched = [p for p in radius.changed if p not in selecting and p not in radius.quiet]
+    if radius.quiet:
+        lines.append(f"  python  no recorded test executed the changed code in: {', '.join(sorted(radius.quiet)[:limit])}")
     if unmatched:
         lines.append(f"  no tests name: {', '.join(sorted(unmatched)[:limit])}"
                      + (f" (+{len(unmatched) - limit})" if len(unmatched) > limit else ""))

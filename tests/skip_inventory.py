@@ -51,6 +51,14 @@ ALLOWED = (
      "tools/run_tests.py always runs -- found 2026-09-18 by `release.py`, "
      "which runs a bare serial `pytest -q` instead of the project's gate.",
      "tests/test_worker_groups.py"),
+    ("no OpenGL 3.3+ driver",
+     "The native GL witnesses (snapshot, context lifetime, capture chain, "
+     "source snapshot) need a real OpenGL driver; a GitHub runner has only "
+     "Windows' GDI OpenGL 1.1. They run on any machine with a GPU driver, and "
+     "in the blast radius of any change to their native sources. Lifts on the "
+     "runner with a software GL 3.3+ (Mesa's opengl32.dll beside the host).",
+     "tests/test_gl_snapshot.py, test_context_lifetime.py, test_capture_chain.py, "
+     "test_source_snapshot.py"),
     ("data/tracker.db not present",
      "The corpus check reads this machine's own practice database, which a "
      "fresh clone has not got. Its rules are covered by seeded tests; this "

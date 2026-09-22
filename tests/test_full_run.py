@@ -164,11 +164,28 @@ def test_a_jobs_coverage_parts_merge_into_one_map(tmp_path, monkeypatch):
     parts = tmp_path / "7" / "coverage" / "coverage-1"
     parts.mkdir(parents=True)
     (parts / "coverage-map-1.json").write_text(json.dumps(
-        {"tests": ["tests/test_a.py::t"], "files": {"src/x.py": [0]}}))
+        {"tests": ["tests/test_a.py::t"], "files": {"src/x.py": [[[1, 2], [0]]]}}))
     (parts / "coverage-map-2.json").write_text(json.dumps(
-        {"tests": ["tests/test_b.py::t"], "files": {"src/x.py": [0], "src/y.py": [0]}}))
+        {"tests": ["tests/test_b.py::t"], "files": {"src/x.py": [[[1, 3], [0]]], "src/y.py": [[[5], [0]]]}}))
     monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
     merged = json.loads(full_run.coverage_map(7, run=lambda *a: pytest.fail("cached")).read_text())
     tests = merged["tests"]
-    assert {tests[i] for i in merged["files"]["src/x.py"]} == {"tests/test_a.py::t", "tests/test_b.py::t"}
-    assert [tests[i] for i in merged["files"]["src/y.py"]] == ["tests/test_b.py::t"]
+    assert [(blocks, [tests[i] for i in ids]) for blocks, ids in merged["files"]["src/x.py"]] == [
+        ([1, 2], ["tests/test_a.py::t"]), ([1, 3], ["tests/test_b.py::t"])]
+    assert [tests[i] for i in merged["files"]["src/y.py"][0][1]] == ["tests/test_b.py::t"]
+
+
+def test_the_newest_recorded_map_is_the_nightly_one(tmp_path, monkeypatch):
+    """A push run records no map; the reader skips it for the newest run that
+    did, whatever its verdict."""
+    listing = [{"databaseId": 9, "event": "push", "createdAt": "2026-09-22T12:00:00Z"},
+               {"databaseId": 8, "event": "schedule", "createdAt": "2026-09-22T10:17:00Z"},
+               {"databaseId": 7, "event": "schedule", "createdAt": "2026-09-21T10:17:00Z"}]
+    parts = tmp_path / "8" / "coverage" / "coverage-1"
+    parts.mkdir(parents=True)
+    (parts / "coverage-map-1.json").write_text(json.dumps(
+        {"tests": ["tests/test_a.py::t"], "files": {"src/x.py": [[[1], [0]]]}}))
+    (tmp_path / "9" / "coverage").mkdir(parents=True)   # a push run: nothing published
+    monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
+    found, run_id = full_run.newest_coverage_map(run=lambda *a: json.dumps(listing))
+    assert run_id == 8 and found.is_file()

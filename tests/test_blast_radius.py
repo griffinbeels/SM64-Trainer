@@ -42,14 +42,27 @@ def before_editing(rule: str):
     return lambda path: today.replace(rule, rule + " outline: 0;", 1)
 
 
-def test_a_python_change_picks_the_tests_its_coverage_recorded():
-    coverage = ({"src/sm64_events/core/timefmt.py": {f"{PLAIN_TEST}::test_recorded"}}, "test map")
-    picked = chosen({"src/sm64_events/core/timefmt.py": "M"}, coverage=coverage)
-    assert picked == {PLAIN_TEST: [f"{PLAIN_TEST}::test_recorded"]}
+TIMEFMT = "src/sm64_events/core/timefmt.py"
+
+
+def _blocks_today(path: str) -> tuple[int, ...]:
+    from testmon.process_code import Module
+    return tuple(Module(source_code=(ROOT / path).read_text(encoding="utf-8")).checksums)
+
+
+def test_a_python_change_picks_only_tests_whose_executed_code_changed():
+    """pytest-testmon's rule, read straight off its record: a test is in the
+    radius when a block it executed is no longer there as it was. One test
+    ran only blocks that still exist; the other ran one that changed."""
+    today = _blocks_today(TIMEFMT)
+    coverage = ({TIMEFMT: [(today[:3], {f"{PLAIN_TEST}::test_untouched"}),
+                           ((*today[:3], 123456789), {f"{PLAIN_TEST}::test_touched"})]}, "test map")
+    picked = chosen({TIMEFMT: "M"}, coverage=coverage)
+    assert picked == {PLAIN_TEST: [f"{PLAIN_TEST}::test_touched"]}
 
 
 def test_a_python_change_no_map_has_seen_picks_the_tests_importing_it():
-    picked = chosen({"src/sm64_events/core/timefmt.py": "M"})
+    picked = chosen({TIMEFMT: "M"})
     assert PLAIN_TEST in picked
     assert RANK_TEST not in picked and LIBRARY_TEST not in picked
 

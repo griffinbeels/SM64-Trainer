@@ -362,6 +362,17 @@ def service(tmp_path):
 
 
 @pytest.fixture(scope="session")
+def modern_gl():
+    """The native GL witnesses need an OpenGL 3.3+ driver: a GitHub runner has
+    none, only Windows' GDI OpenGL 1.1, and every witness would fail inside its
+    host on the loader assertion. Skips with the reason `tests/gl_probe.py`
+    measured, which tests/skip_inventory.py lists."""
+    from gl_probe import missing_modern_gl
+    if (why := missing_modern_gl()) is not None:
+        pytest.skip(why)
+
+
+@pytest.fixture(scope="session")
 def runtime_supervisor_exe(tmp_path_factory):
     """`runtime_supervisor_host.c` over the four real runtime objects.
 

@@ -17,7 +17,8 @@ def hosts(tmp_path_factory):
     spec = importlib.util.spec_from_file_location("native_lifecycle_build", ROOT / "tools/build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
-    vc = next(p for p in build.KNOWN_VCVARS if p.exists())
+    vc = build.find_vcvars32()   # vswhere first: any edition, any year
+    assert vc, "the x86 MSVC toolchain (vcvars32.bat) is required"
 
     def quiet_run(*args, **kwargs):
         kwargs.update(quiet_spawn_kwargs())

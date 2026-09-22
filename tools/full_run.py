@@ -221,14 +221,32 @@ def export_coverage(testmon_db: Path, target: Path, label: str) -> int:
     paths and no environment, so a map made on a runner serves any checkout."""
     from blast_radius import coverage_from_testmon
     covered = coverage_from_testmon(testmon_db)
-    tests = sorted({test for names in covered.values() for test in names})
+    tests = sorted({test for entries in covered.values() for _, names in entries for test in names})
     index = {test: position for position, test in enumerate(tests)}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(json.dumps({
         "source": label, "tests": tests,
-        "files": {path: sorted(index[t] for t in names) for path, names in sorted(covered.items())},
+        # path -> [[checksums of the executed blocks], [the tests that executed exactly those]]
+        "files": {path: [[list(checksums), sorted(index[t] for t in names)] for checksums, names in entries]
+                  for path, entries in sorted(covered.items())},
     }, separators=(",", ":")).encode("utf-8"))
     return len(tests)
+
+
+def newest_coverage_map(run=gh, tries: int = 3) -> tuple[Path, int] | None:
+    """The newest map main published: the nightly run records one (a push
+    does not; recording doubles a job's time). Any conclusion will do -- a
+    red test still recorded what it executed."""
+    runs = json.loads(run("run", "list", "--workflow", WORKFLOW, "--branch", "main",
+                          "--status", "completed", "--json", "databaseId,event,createdAt",
+                          "--limit", "30") or "[]")
+    candidates = [item for item in sorted(runs, key=lambda item: item["createdAt"], reverse=True)
+                  if item["event"] in ("schedule", "workflow_dispatch")]
+    for item in candidates[:tries]:
+        found = coverage_map(item["databaseId"], run=run)
+        if found is not None:
+            return found, item["databaseId"]
+    return None
 
 
 def coverage_map(run_id: int, run=gh) -> Path | None:
@@ -246,13 +264,14 @@ def coverage_map(run_id: int, run=gh) -> Path | None:
         except GhUnavailable:
             return None
     tests: list[str] = []
-    files: dict[str, list[int]] = {}
+    files: dict[str, list] = {}
     for part in sorted(parts_folder.rglob("coverage-map-*.json")):
         data = json.loads(part.read_text(encoding="utf-8"))
         offset = len(tests)
         tests += data["tests"]
-        for path, indexes in data["files"].items():
-            files.setdefault(path, []).extend(offset + i for i in indexes)
+        for path, entries in data["files"].items():
+            files.setdefault(path, []).extend(
+                [checksums, [offset + i for i in indexes]] for checksums, indexes in entries)
     if not tests:
         return None
     merged.write_bytes(json.dumps({"source": f"full run {run_id}", "tests": tests, "files": files},
