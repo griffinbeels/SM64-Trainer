@@ -4,6 +4,8 @@
 #include "ghost_stream.h"
 #include "ghost_draw.h"
 #include "ghost_ipc.h"
+#include "ghost_audio.h"
+#include "ghost_playback.h"
 #include "link_dispatch.h"
 #include "practice_rom.h"
 #include "N64.h"
@@ -19,6 +21,16 @@
 #include "Graphics/Context.h"
 
 namespace {
+// Ghost sound: playback hands recorded sounds to the audio thread, whose
+// engine the IPC worker starts from its verified ROM and waveOut.
+bool __cdecl audio_start(const uint8_t *rom, size_t bytes) {
+    return ghost_audio::start(rom, bytes, ghost_audio::wave_out()) == ghost_audio::Start::ok;
+}
+void __cdecl audio_stop() { ghost_audio::stop(); }
+const ghost_ipc::AudioHooks audio_hooks{audio_start, audio_stop};
+const struct AudioWiring {
+    AudioWiring() { ghost_playback::set_sound_sink(ghost_audio::sink()); ghost_ipc::set_audio(&audio_hooks); }
+} audio_wiring;
 uint32_t context_generation = 0;
 bool context_current = false, observing = false;
 bool supported_rom() {

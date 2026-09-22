@@ -42,6 +42,13 @@ struct CartridgeHeader {
 std::atomic<DWORD> worker_owner{0};
 std::atomic<unsigned> wrong_thread{0},binds{0},releases{0},revokes{0},commands{0},models{0},withdrawals{0};
 std::atomic<unsigned> prepared_ids[256]{},released_ids[256]{},rom_validations{0};
+// Ghost sound engine lifetime: started from the verified ROM, stopped with it.
+std::atomic<unsigned> audio_starts{0},audio_stops{0};
+bool __cdecl fake_audio_start(const uint8_t *rom,size_t bytes) {
+    if(rom && bytes==(8u<<20))++audio_starts;return rom && bytes==(8u<<20);
+}
+void __cdecl fake_audio_stop() {++audio_stops;}
+const ghost_ipc::AudioHooks fake_audio{fake_audio_start,fake_audio_stop};
 std::atomic<uint32_t> configuration{0},model_state{GP_MODEL_EMPTY};
 std::atomic<uint32_t> pending_record{0},sample_sequence{0};
 std::atomic<uint32_t> burst_records{0};
@@ -208,7 +215,7 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(nudge) X(opacity) X(stop_at_star) X(rom_generation) X(owner_suspended) X(model_id) \
     X(layout) X(rom_path) X(star_action_count) X(star_actions) X(tint_enabled) \
     X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips) \
-    X(shadow_enabled) X(reserved2)
+    X(shadow_enabled) X(reserved2) X(volume) X(reserved3)
 #define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path)
 #define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
     X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
@@ -289,6 +296,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         wait_seen.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
         resume_wait.value=CreateEventW(nullptr,FALSE,FALSE,nullptr);
         check(expiry_seen.value && resume_expiry.value && wait_seen.value && resume_wait.value,"expiry barriers");
+        ghost_ipc::set_audio(&fake_audio);
         Page page;ghost_ipc::rom(true,header_only.value);
         auto initial=page.wait([](const gipc_status& s){return s.generation && s.version==GIPC_VERSION;},"worker publishes ABI");
         gipc_request r{};r.owner_pid=GetCurrentProcessId();FILETIME birth{},unused[3]{};
@@ -296,19 +304,20 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.owner_created_lo=birth.dwLowDateTime;r.owner_created_hi=birth.dwHighDateTime;r.generation=initial.generation;
         r.token=123;r.revision=1;r.capture_enabled=r.play_enabled=1;r.rom_generation=ghost_ipc::rom_generation();
         r.model_id=1;r.clip_count=1;set_clip(r.clips[0],1,argv[1],argv[2],217);r.opacity=0.75f;r.tint_enabled=1;
-        r.proximity_enabled=1;r.proximity_distance=120;r.shadow_enabled=1;
+        r.proximity_enabled=1;r.proximity_distance=120;r.shadow_enabled=1;r.volume=0.625f;
         r.mode=GP_FIXED;
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
         r.layout.clock.near_zero=30;
         ready(page,r);auto first=last_command();
+        check(audio_starts.load()==1 && !audio_stops.load(),"sound engine starts once from the verified ROM");
         page.consume_record();
         check(first.rom_generation==r.rom_generation && first.owner_token==r.token && first.opacity==0.75f
             && first.tint_enabled==1 && first.clip_count==1 && first.clips[0].clip_id[0]==1
             && first.clips[0].hue_degrees==217 && first.star_actions[0]==0x1302,"command fields transported");
         check(first.configuration && first.revision,"capture and playback identities acknowledged");
         check(first.proximity_enabled==1 && first.proximity_distance==120,"proximity crosses actual IPC worker");
-        check(first.shadow_enabled==1,"shadow switch crosses actual IPC worker");
+        check(first.shadow_enabled==1 && first.volume==0.625f,"shadow switch and volume cross actual IPC worker");
         check(!page.status().displayed,"ready pose is not presentation evidence");
         ghost_ipc::presented(first.revision);
         page.wait([](const gipc_status& s){return s.displayed==1;},"actual matching presentation acknowledged");
@@ -380,8 +389,10 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         bad=r;bad.revision=18;bad.clips[1].reserved=1;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=19;bad.shadow_enabled=2;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=20;bad.reserved2=1;refused(page,bad,GIPC_PROTOCOL);
-        r.revision=21;ready(page,r);
-        r.revision=22;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
+        bad=r;bad.revision=21;bad.volume=1.25f;refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=22;bad.reserved3=1;refused(page,bad,GIPC_PROTOCOL);
+        r.revision=23;ready(page,r);
+        r.revision=24;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
         // Reproduce the reader owning the page exactly when lease expiry must
         // be published. No new request/event wakes the worker after this race.
@@ -426,6 +437,8 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         rom[0]=0x40;r.revision=2;ready(page,r);
         ghost_ipc::rom(false);page.stopped();
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
+        check(audio_starts.load()>=1 && audio_stops.load()==audio_starts.load(),"every sound engine stopped with its ROM");
+        ghost_ipc::set_audio(nullptr);
         std::printf("{\"ok\":true,\"checks\":%u,\"commands\":%u,\"bindings\":%u,\"releases\":%u,",
             checks,commands.load(),binds.load(),releases.load());
         std::printf("\"multi\":{\"ghosts\":3,\"added_prepares\":%u,\"existing_reprepares\":%u,\"released\":%u},",

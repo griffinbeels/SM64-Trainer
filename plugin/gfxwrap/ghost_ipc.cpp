@@ -20,6 +20,7 @@ std::atomic<uintptr_t> rom_header{0};
 std::atomic<bool> running{false};
 std::atomic<HANDLE> lifecycle_signal{nullptr};
 std::atomic<uint64_t> displayed_revision{0};
+std::atomic<const ghost_ipc::AudioHooks *> audio_hooks{nullptr};
 uint64_t playback_revision = 0; // one worker at a time, never reset on reconnect
 
 struct Handle {
@@ -71,7 +72,8 @@ bool same_controls(gipc_request a, gipc_request b) {
 }
 bool valid_set(const gipc_request &r) {
     if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)
-            || r.shadow_enabled > 1 || r.reserved2) return false;
+            || r.shadow_enabled > 1 || r.reserved2 || r.reserved3
+            || !(r.volume >= 0 && r.volume <= 1)) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
         if (clip.hue_degrees > 359 || clip.reserved) return false;
@@ -181,7 +183,9 @@ struct Session {
     }
     void withdraw() { play->withdraw(); applied = 0; }
 
+    bool audio_running = false; // the sound engine holds a copy of rom_bytes
     void clear_rom() {
+        if (audio_running) { if (const auto *hooks = audio_hooks.load()) hooks->stop(); audio_running = false; }
         // Do not leave an old full cartridge in allocator-retained storage that
         // a later generation's discovery could mistake for the live image.
         if (!rom_bytes.empty()) SecureZeroMemory(rom_bytes.data(), rom_bytes.size());
@@ -373,7 +377,7 @@ struct Session {
                     command.tint_enabled = r.tint_enabled;
                     command.proximity_enabled = r.proximity_enabled;
                     command.proximity_distance = r.proximity_distance;
-                    command.shadow_enabled = r.shadow_enabled;
+                    command.shadow_enabled = r.shadow_enabled; command.volume = r.volume;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else { applied = r.revision; applied_request = r; state = GIPC_READY; }
@@ -435,6 +439,9 @@ struct Session {
             reason=GIPC_ROM;state=GIPC_REFUSED;return;
         }
         rom_ready = true;
+        // Ghost sound is optional: a refused engine or device leaves drawing intact.
+        if (const auto *hooks = audio_hooks.load(); hooks && !audio_running)
+            audio_running = hooks->start(rom_bytes.data(), rom_bytes.size());
     }
     void publish(gipc_page &page, const gipc_request &r) {
         auto &s = page.status;
@@ -624,4 +631,5 @@ void rom(bool open, const uint8_t *header) {
 }
 uint32_t rom_generation() { return opened.load(std::memory_order_acquire); }
 void presented(uint64_t revision) { displayed_revision.store(revision, std::memory_order_release); }
+void set_audio(const AudioHooks *hooks) { audio_hooks.store(hooks, std::memory_order_release); }
 }

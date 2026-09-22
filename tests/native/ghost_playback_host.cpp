@@ -70,6 +70,12 @@ static float selected_x=0;
 static bool refuse_shadow=false;
 static unsigned shadow_calls=0;
 static uint64_t shadow_sequence=0;
+// Sound sink: fixed storage, since the renderer must never allocate.
+static uint32_t sound_log[256];static unsigned sound_count=0;
+static uint32_t last_playing=2;static float last_volume=-1;
+static void __cdecl test_cue(uint32_t bits) {if(sound_count<256)sound_log[sound_count++]=bits;}
+static void __cdecl test_control(uint32_t playing,float volume) {last_playing=playing;last_volume=volume;}
+static const ghost_playback::SoundSink test_sink{test_cue,test_control};
 extern "C" int32_t sg_model_open(const uint8_t*,size_t,sg_model **out) {
     if(fake_model)return SG_BUSY;
     *out=fake_model=new sg_model{GetCurrentThreadId()};++opens;return SG_OK;
@@ -504,6 +510,74 @@ int main() {
             live.live_action=0x1302;frame(7,{},GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED});
             live.live_action=1;frame(8,{},GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED});
         }
+        {
+            // Ghost sound: each record's recorded requests reach the sink once,
+            // in ghost order then record order, as the displayed record passes.
+            Clip s1=Clip::linear(30,200,UINT32_MAX,5),s2=Clip::linear(31,200,UINT32_MAX,9);
+            for(auto [clip,tag]:{std::pair<Clip*,uint32_t>{&s1,1000},{&s2,2000}})
+                for(uint32_t i=0;i<200;++i) {
+                    auto &s=clip->frames[i].sample;s.valid_fields|=GC_VALID_SOUND;
+                    s.sound.count=1;s.sound.bits[0]=tag+i;
+                }
+            s1.frames[5].sample.sound.count=2;s1.frames[5].sample.sound.bits[1]=1905;
+            s2.frames[7].sample.valid_fields&=~GC_VALID_SOUND;s2.frames[7].sample.sound={};
+            check(api->prepare_clip(&s1.header,s1.frames.data())==GP_OK && api->prepare_clip(&s2.header,s2.frames.data())==GP_OK,
+                  "prepare clips carrying sounds");
+            ghost_playback::set_sound_sink(&test_sink);sound_count=0;
+            revision=r.revision+1;r=request(s1,revision);r.model_id=4;r.clip_count=2;
+            std::memcpy(r.clips[1].clip_id,s2.header.clip_id,16);r.star_ends=0;r.star_action_count=0;r.star_actions[0]=0;
+            r.volume=.75f;r.origin={GO_STAR,7,live.sequence+1,source_continuity,8000,source_generation,0,0};
+            elapsed_base=8000;live.level=9;live.live_action=1;live.area=1;
+            check(api->configure(&r)==GP_OK,"configure two ghosts with sound");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(last_playing==1 && last_volume==.75f,"volume reaches the sink");
+            auto step=[&](uint64_t time,std::initializer_list<uint32_t> expected,bool shown=true) {
+                live.igt=uint16_t(time);++live.sequence;++live.dlist_serial;world.list_serial=live.dlist_serial;
+                live.global_timer=uint32_t(12000+time);
+                live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
+                    0,0,source_generation,1,elapsed_base+time,source_continuity};
+                sound_count=0;
+                renderer.run([&]{check(ghost_playback::evaluate(live,world,poses,count,token)==shown,"sound frame drawn");});
+                const std::vector<uint32_t> want(expected),heard(sound_log,sound_log+sound_count);
+                if(heard!=want) {
+                    std::fprintf(stderr,"time %llu heard",static_cast<unsigned long long>(time));
+                    for(auto bits:heard)std::fprintf(stderr," %u",bits);
+                    std::fprintf(stderr,"\n");
+                }
+                check(heard==want,"exactly the passed records' sounds");
+            };
+            step(0,{1000,2000});                      // a new run: its first record is newly passed
+            step(1,{1001,2001});
+            step(4,{1002,1003,1004,2002,2003,2004});  // frames not drawn still sound, in order
+            step(4,{});                                // a paused ghost repeats nothing
+            step(5,{1005,1905,2005});                  // several requests of one record keep their order
+            step(8,{1006,1007,1008,2006,2008});        // a record without sound adds none
+            ++r.revision;r.nudge_frames=-3;check(api->configure(&r)==GP_OK,"nudge back");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            step(9,{});step(11,{});step(12,{1009,2009}); // re-passed records stay silent
+            ++r.revision;r.nudge_frames=0;check(api->configure(&r)==GP_OK,"nudge forward");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            step(20,{});step(21,{1021,2021});          // the jump itself sounds nothing
+            step(21+GP_SOUND_CATCHUP+1,{});            // a long gap is not replayed as a burst
+            step(21+GP_SOUND_CATCHUP+2,{1000+23+GP_SOUND_CATCHUP,2000+23+GP_SOUND_CATCHUP});
+            ++r.revision;r.clip_count=1;r.clips[1]={};check(api->configure(&r)==GP_OK,"one ghost left");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            step(114,{1114});                          // a removed ghost is silent
+            live.area=2;step(116,{},false);live.area=1; // hidden frames sound nothing,
+            step(117,{});step(118,{1118});             // and reappearing replays none
+            ++r.revision;r.volume=0;check(api->configure(&r)==GP_OK,"volume zero");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(last_playing==1 && last_volume==0,"exact zero volume reaches the sink");
+            api->withdraw();renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(last_playing==0,"withdrawn playback stops sound");
+            // A new run nudged earlier: silent before its start, then its first record.
+            ++r.revision;r.volume=.5f;r.nudge_frames=-2;r.origin.sequence=live.sequence+1;
+            r.origin.elapsed=elapsed_base=9000;check(api->configure(&r)==GP_OK,"new run before its start");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(last_playing==1 && last_volume==.5f,"resumed playback restores sound");
+            step(0,{});step(1,{});step(2,{1000});step(3,{1001});
+            ghost_playback::set_sound_sink(nullptr);
+        }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
         {
             Clip maximum(12,GCLIP_MAX_RECORDS);
@@ -547,7 +621,10 @@ int main() {
         r.proximity_distance=0;
         r.shadow_enabled=2;check(api->configure(&r)==GP_INVALID,"shadow flag bounded");
         r.shadow_enabled=1;r.reserved2=1;check(api->configure(&r)==GP_INVALID,"shadow reserved word checked");
-        r.reserved2=0;
+        r.reserved2=0;r.volume=1.5f;check(api->configure(&r)==GP_INVALID,"volume bounded");
+        r.volume=std::numeric_limits<float>::quiet_NaN();check(api->configure(&r)==GP_INVALID,"volume NaN refused");
+        r.volume=.5f;r.reserved3=1;check(api->configure(&r)==GP_INVALID,"sound reserved word checked");
+        r.reserved3=0;
         r.origin.continuity=0;check(api->configure(&r)==GP_INVALID,"follow requires resolved origin");
         r.origin.continuity=1;r.mode=GP_FIXED;
         check(api->configure(&r)==GP_INVALID,"fixed must not accidentally retain a live origin");

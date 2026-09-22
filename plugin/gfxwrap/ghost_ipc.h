@@ -4,12 +4,12 @@
 #include "ghost_clip.h"
 #include "ghost_origin.h"
 #include <stddef.h>
-#define GIPC_VERSION 5u
-#define GIPC_MAGIC "SM64GIP5"
+#define GIPC_VERSION 6u
+#define GIPC_MAGIC "SM64GIP6"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v5_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v6_"
 #define GIPC_GHOSTS 16u
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
@@ -47,6 +47,9 @@ typedef struct gipc_request {
     gipc_clip clips[GIPC_GHOSTS];
     /* 0 draws no recorded shadow for any ghost (the A/B switch). */
     uint32_t shadow_enabled, reserved2;
+    /* Ghost sound loudness 0..1; 0 is exact silence. */
+    float volume;
+    uint32_t reserved3;
 } gipc_request;
 typedef struct gipc_status {
     char magic[8];
@@ -74,7 +77,7 @@ typedef struct gipc_page {
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
 static_assert(sizeof(gipc_clip) == 1096, "ghost clip entry bytes");
-static_assert(sizeof(gipc_request) == 18944, "ghost request bytes");
+static_assert(sizeof(gipc_request) == 18952, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {
@@ -87,5 +90,9 @@ uint32_t rom_generation();
 // Render-thread notice: zero for a clean/failed swap or lost context. Atomic,
 // with no mapped-page access; the worker qualifies it against current playback.
 void presented(uint64_t playback_revision);
+/* Ghost sound engine lifetime, bound to the worker's verified ROM bytes.
+ * The renderer glue registers it; hosts without audio leave it unset. */
+struct AudioHooks { bool (__cdecl *start)(const uint8_t *rom, size_t bytes); void (__cdecl *stop)(); };
+void set_audio(const AudioHooks *);
 }
 #endif

@@ -20,6 +20,16 @@ SOURCE_FILES = (
     "src/decomp/game/object_stuff.c", "src/decomp/game/behavior_actions.c", "src/decomp/mario/geo.inc.c",
     "src/decomp/mario/model.inc.c", "src/gfx_adapter.c",
 )
+# Ghost sound effects: SM64's own audio engine, driven by renderer/model/audio.c.
+AUDIO_FILES = (
+    *(f"src/decomp/audio/{name}.c" for name in (
+        "data", "effects", "external", "globals_start", "heap", "load", "load_dat", "load_sh",
+        "playback", "port_eu", "port_sh", "seqplayer", "shindou_debug_prints", "synthesis",
+        "synthesis_sh")),
+    "src/load_audio_data.c", "src/play_sound.c",
+    "src/debug_print.c", "src/decomp/pc/mixer.c", "src/decomp/pc/ultra_reimplementation.c",
+    "src/decomp/pc/alBnkfNew.c", "src/decomp/tools/convUtils.c", "src/conversion.c",
+)
 
 
 def _module(name: str, path: Path):
@@ -99,7 +109,24 @@ def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
     for name, text in generated.items():
         (destination / name).write_text(text, encoding="utf-8", newline="\n")
     _module("model_patches", MODEL / "patches.py").patch(source)
+    # convUtils needs two helpers from utils.c, whose remainder is filesystem code.
+    utilities = (source / "src/decomp/tools/utils.c").read_text(encoding="utf-8")
+    text = '#include <stdint.h>\n#include "decomp/tools/utils.h"\n'
+    for name in ("read_s16_be", "read_f32_be"):
+        text += _function(utilities, name)
+    (source / "src/conversion.c").write_text(text, encoding="utf-8", newline="\n")
     return source
+
+
+def _function(source: str, name: str) -> str:
+    """One exact upstream function body, unmodified."""
+    start = source.rfind("\n", 0, source.index(name + "(")) + 1
+    end = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end] + "\n"
 
 
 def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None = None,
@@ -118,8 +145,8 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
     source = stage_model(staging, cache, seed)
     output = staging / "objects"
     output.mkdir(exist_ok=True)
-    sources = [source / name for name in SOURCE_FILES]
-    sources += [MODEL / name for name in ("model.c", "assets.c", "memory.c")]
+    sources = [source / name for name in (*SOURCE_FILES, *AUDIO_FILES)]
+    sources += [MODEL / name for name in ("model.c", "assets.c", "memory.c", "audio.c")]
     flags = ["/nologo", "/O2", "/W3", "/TC", "/std:c17", "/MT", "/Gy", "/Gw",
              "/D_CRT_SECURE_NO_WARNINGS", "/DSM64_LIB_STATIC", "/DGBI_FLOATS", "/DVERSION_US", "/DNO_SEGMENTED_MEMORY"]
     if testing:

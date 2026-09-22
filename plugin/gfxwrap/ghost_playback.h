@@ -7,7 +7,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 5u
+#define GP_VERSION 6u
 #define GP_GHOSTS 16u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
@@ -62,6 +62,9 @@ typedef struct gp_request {
     gp_clip clips[GP_GHOSTS];
     /* Draw each visible ghost's recorded shadow (GC_VALID_SHADOW rows only). */
     uint32_t shadow_enabled, reserved2;
+    /* Ghost sound loudness, 0..1; 0 is exact silence. */
+    float volume;
+    uint32_t reserved3;
 } gp_request;
 
 typedef struct gp_status {
@@ -161,6 +164,17 @@ bool atlas(sg_atlas_view *out, uint64_t *model_id);
  * borrowed until the next evaluate/safe_boundary/retire call. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
               ghost_compositor::Pose *out, uint32_t &count, gp_draw_token &token);
+/* Ghost sound: the renderer hands each visible ghost's recorded sound
+ * requests to the sink once, as its displayed record passes them (every
+ * record since the last drawn frame, at most GP_SOUND_CATCHUP), and the
+ * playback switch/volume at each boundary. A hidden ghost, a nudge or seek,
+ * or a restored/rebound timeline passes nothing. Null discards. */
+#define GP_SOUND_CATCHUP 90u
+struct SoundSink {
+    void (__cdecl *cue)(uint32_t sound_bits);
+    void (__cdecl *control)(uint32_t playing, float volume);
+};
+void set_sound_sink(const SoundSink *);
 /* Recheck immediately before final presentation; cancellation/configuration
  * during a list must not present an older provisional candidate. */
 bool current(const gp_draw_token &);

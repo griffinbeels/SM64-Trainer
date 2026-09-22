@@ -44,7 +44,9 @@ staging. `component_hash()` covers the recipe, owned files and pinned hashes in
 `inputs.json`. Downloads are checked before extraction/import. No ROM is
 downloaded or copied into the source tree. The recipe compiles only graph,
 animation traversal, math, geometry adaptation and necessary transform
-helpers; audio, input simulation, collision, filesystem utilities and image
+helpers, plus SM64's audio engine for ghost sounds behind `audio.h` (an owned
+loader replacing libsm64's leaking one; see its header for the region
+contract); input simulation, collision, filesystem utilities and image
 encoders are excluded. The original libsm64 global initializer is not called.
 
 Set `SM64_MODEL_ROM` to an explicitly supplied local ROM and optionally
