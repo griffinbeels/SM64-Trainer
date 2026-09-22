@@ -57,8 +57,11 @@ SHELL = {f"{UI}/index.html", f"{UI}/app.js"}   # every page loads these; never a
 GLOBAL_INPUTS = {
     "pyproject.toml", "uv.lock", "tests/conftest.py", "tests/skip_inventory.py",
     "tools/run_tests.py", "tools/test_lanes.py", "tools/test_resources.py",
-    "tools/test_job.py", "tools/test_activity.py", "tools/blast_radius.py",
+    "tools/test_job.py", "tools/test_activity.py",
 }
+# This module is not one: it changes WHICH tests run, never how any test
+# behaves, so its own guards (tests/test_blast_radius.py) are its radius and
+# the full run on GitHub covers the rest.
 # A test that globs one of these ("*.md", "*.js") scans the whole kind, so
 # any file of it is in its radius. Data globs ("*.json") point at fixtures.
 SCANNED_SUFFIXES = {"md", "js", "css", "html", "toml"}
@@ -514,8 +517,11 @@ def select(root: Path = ROOT, base: str | None = None, runs=None,
     before = before or (lambda path: old_text(base, path, root))
     radius = Radius(base, base_why, coverage_why, changed, root)
     _route_changes(radius, root, changed, before, coverage)
+    # A failure recorded before the baseline commit existed is superseded by
+    # that commit's green full run; only a merge-base fallback keeps it.
+    since = _commit_time(base, root) if run_id is not None else None
     radius.pick_nodes("failed", "", "failed in this checkout's last run",
-                      _last_failed(root) if last_failed is None else last_failed)
+                      _last_failed(root, since) if last_failed is None else last_failed)
     return radius
 
 
@@ -533,12 +539,25 @@ def _coverage_for(root: Path, run_id: int | None, published: Path | None):
     return load_coverage(root, published)
 
 
-def _last_failed(root: Path) -> set[str]:
+def _last_failed(root: Path, since: float | None = None) -> set[str]:
+    """pytest's last-failed record, unless it predates `since` (the baseline
+    commit's time). The primary checkout carried 80 failures from a contended
+    2026-09-20 run into every merge check after main went green on GitHub,
+    so an empty diff selected 70 test files."""
+    path = root / ".pytest_cache" / "v" / "cache" / "lastfailed"
     try:
-        return {plain_nodeid(n) for n in json.loads(
-            (root / ".pytest_cache" / "v" / "cache" / "lastfailed").read_text(encoding="utf-8"))}
+        if since is not None and path.stat().st_mtime < since:
+            return set()
+        return {plain_nodeid(n) for n in json.loads(path.read_text(encoding="utf-8"))}
     except (OSError, ValueError):
         return set()
+
+
+def _commit_time(rev: str, root: Path) -> float | None:
+    try:
+        return float(git("show", "-s", "--format=%ct", rev, root=root).strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return None
 
 
 def _route_changes(radius: Radius, root: Path, changed: dict[str, str], before, coverage):

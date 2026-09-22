@@ -35,9 +35,10 @@ on main passed, else the merge-base with main (the output says which). Then:
 | Stylesheet | the **rules** that changed, not the file: their class names, then the components rendering them, as above. Only an element selector, `:root` tokens, `@font-face` or widely used keyframes select every browser test |
 | Test file | itself |
 | Anything else | tests and modules whose code (not comments) names the file |
-| Runner, lock file, `conftest.py` | every test that starts no browser; GitHub covers the rest |
+| Runner, lock file, `conftest.py` | every test that starts no browser; GitHub covers the rest (the selector itself is not one: it changes which tests run, not how they behave) |
 
-Plus every test that failed in this checkout's last run. The viewport sweeps
+Plus every test that failed in this checkout's last run, unless that record is
+older than a baseline with a green full run, which supersedes it. The viewport sweeps
 (`tests/test_responsive*.py`) are never picked: every case sweeps every page
 at every width. The full run covers them; name one to run it locally.
 
