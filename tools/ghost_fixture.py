@@ -167,6 +167,10 @@ def attach_ghost_routes(app, state: dict) -> None:
                 raise HTTPException(422, "The ghost shows either the whole "
                                          "picture or only Mario.")
             session["view"] = body["view"]
+        if "proximity" in body:
+            from sm64_events.ghost.proximity import checked_proximity
+            session["proximity"] = {**session.get("proximity", {}),
+                                    **checked_proximity(body["proximity"])}
         if "template_id" in body:
             _select_recording(session, body, input_source)
         if "native_available" in session["source"]:

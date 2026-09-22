@@ -235,6 +235,27 @@ int main() {
         require(pixels(g,scene.fbo,32,32)==clean,"clean scene unchanged");require(depth(g,scene)==original_depth,"game depth unchanged");
         require(image_depth(g,scene)==original_image_depth,"N64 image depth unchanged");
     }
+    // Independent translucent bodies share one clean copy. A second begin()
+    // would erase blue, and one shared stencil pass would suppress red.
+    auto blue=vertices;
+    for(auto& vertex:blue){vertex.color[0]=vertex.color[1]=0;vertex.color[2]=1;}
+    gc::Pose batch[2]={pose(blue,.5f),pose(vertices,.5f)};
+    hostile(g,scene,bindings);cgl::State batch_before{};batch_before.capture(g);
+    require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),batch,2)==gc::Result::ok,"batch begin");
+    equal_state(g,batch_before,bindings);
+    require(gc::finalize(compositor,77)==gc::Result::ok,"batch finalize");
+    ordinary_state(g,scene);
+    const auto layered=pixels(g,gc::display(compositor).framebuffer,32,32);
+    for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+        const bool covered=x>=16 && x<24 && y>=8 && y<24;
+        const float expected[4]={covered ? 132.5f:20.f,covered ? 10.f:40.f,covered ? 78.75f:60.f,255.f};
+        for(unsigned c=0;c<4;++c)require(std::abs(float(layered[(y*32+x)*4+c])-expected[c])<=1.1f,"batch layers preserved");
+    }
+    require(pixels(g,scene.fbo,32,32)==clean && depth(g,scene)==original_depth,"batch clean unchanged");
+    gc::Pose overflow[4]={batch[0],batch[1],batch[0],batch[1]};
+    require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),overflow,4)==gc::Result::invalid &&
+        !gc::display(compositor).texture,"batch aggregate capacity refuses stale display");
+    require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),batch,0)==gc::Result::invalid,"empty batch refused");
     // Original and display receive exactly the same HUD raster operation.
     for(float alpha:{1.f,.5f}) {
         require(gc::begin(compositor,target(scene,gc::Depth::ordinary),pose(vertices,1))==gc::Result::ok,"HUD begin frame");

@@ -8604,6 +8604,18 @@
   .ghost-tune {
     display: flex; align-items: center; gap: .5rem 1rem; flex-wrap: wrap;
   }
+  .ghost-proximity { font-size: .72rem; color: var(--muted); }
+  .ghost-proximity summary { width: fit-content; cursor: pointer; }
+  .ghost-proximity summary:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 3px;
+  }
+  .ghost-proximity-body {
+    margin: .5rem 0 0 1rem; display: flex; flex-wrap: wrap;
+    align-items: center; gap: .5rem 1rem;
+  }
+  .ghost-proximity-body .ghost-field { flex-wrap: wrap; }
+  .ghost-proximity-help { margin: 0; flex-basis: 100%; max-width: 45rem; line-height: 1.5; }
+  .ghost-distance { width: 120px; min-width: 0; accent-color: var(--gold); }
   .ghost-field { display: flex; align-items: center; gap: .35rem; }
   /* The one fallback this row keeps instead of a breakpoint: if a longer
      readout ever arrives, the timing group wraps within itself rather than

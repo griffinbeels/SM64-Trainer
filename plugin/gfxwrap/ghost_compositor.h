@@ -104,6 +104,12 @@ Instance* create(const Dispatch&, uint64_t generation);
 Result prepare(Instance*, uint32_t width, uint32_t height, uint32_t max_vertices,
                const uint8_t* atlas_rgba, uint32_t atlas_width, uint32_t atlas_height);
 Result begin(Instance*, const Target&, const Pose&); // copies clean color, draws once
+/* Bounded multi-ghost experiment: copy the clean surface once and draw each
+ * body with its own self-depth/stencil pass. Caller supplies back-to-front
+ * order and live borrowed vertices; prepare capacity is the TOTAL vertices.
+ * Body sorting is approximate for interpenetrating translucent ghosts.
+ * No allocations; invalid input refuses the entire candidate before drawing. */
+Result begin_batch(Instance*, const Target&, const Pose*, uint32_t count);
 /* Root establishes semantic HUD safety (no image writes / framebuffer feedback).
  * This scope additionally refuses depth/stencil/raster side effects. Mirror the
  * SAME raster call, then end_hud. No emulation command or state update is replayed. */

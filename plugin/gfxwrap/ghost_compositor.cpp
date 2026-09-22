@@ -157,7 +157,7 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
                const uint8_t* atlas,uint32_t aw,uint32_t ah) {
     if(!p)return Result::invalid;
     abort(p);p->ready=false;
-    if(!width || !height || width>8192 || height>8192 || !capacity || capacity>30000 ||
+    if(!width || !height || width>8192 || height>8192 || !capacity || capacity>64u*30000u ||
        !atlas || !aw || !ah || aw>8192 || ah>8192)return Result::invalid;
     const auto& g=p->g;Guard guard(g);
     if(!p->shader_program) {
@@ -194,21 +194,32 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
 }
 
 Result begin(Instance* p,const Target& t,const Pose& pose) {
+    return begin_batch(p,t,&pose,1);
+}
+
+Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count) {
     if(!p)return Result::invalid;
     abort(p);
+    if(!poses || !count || count>64)return Result::invalid;
     if(!p->ready || t.generation!=p->generation || !t.occurrence || !t.framebuffer ||
        t.framebuffer==p->fbos[0] || t.framebuffer==p->fbos[1] || t.width!=p->width || t.height!=p->height ||
        !rectangle(t.viewport,t.width,t.height) || !rectangle(t.scissor,t.width,t.height) ||
-       !std::isfinite(t.depth_scale) || !std::isfinite(t.depth_translate) || t.depth_scale<=0 ||
-       !pose.vertices || !pose.count || pose.count>p->capacity || pose.count%3 ||
+       !std::isfinite(t.depth_scale) || !std::isfinite(t.depth_translate) || t.depth_scale<=0)return Result::invalid;
+    uint64_t total_vertices=0;
+    for(uint32_t index=0;index<count;++index) {
+      const auto& pose=poses[index];total_vertices+=pose.count;
+      if(!pose.vertices || !pose.count || total_vertices>p->capacity || pose.count%3 ||
        !finite(pose.view_projection,16) || !finite(pose.light_direction,3) ||
        !std::isfinite(pose.ambient) || !std::isfinite(pose.diffuse) || !std::isfinite(pose.opacity) ||
        pose.opacity<0 || pose.opacity>1 || pose.flip_y>1 || !std::isfinite(pose.hue_degrees) ||
        pose.hue_degrees<0 || pose.hue_degrees>359)return Result::invalid;
+    }
     if(t.samples!=1 || t.unsupported || (t.depth!=Depth::ordinary && t.depth!=Depth::n64_image))return Result::unsupported;
     if(t.depth==Depth::n64_image && (!t.n64_depth_texture || t.n64_depth_texture==p->textures[0] ||
         t.n64_depth_texture==p->textures[2]))return Result::invalid;
-    for(uint32_t i=0;i<pose.count;i+=3) {
+    for(uint32_t index=0;index<count;++index) {
+      const auto& pose=poses[index];
+      for(uint32_t i=0;i<pose.count;i+=3) {
         const auto material=pose.vertices[i].material;
         if(uint32_t(material)>uint32_t(Material::modulate_rgba))return Result::unsupported;
         for(uint32_t j=0;j<3;++j) {
@@ -216,6 +227,7 @@ Result begin(Instance* p,const Target& t,const Pose& pose) {
             if(!finite(v.position,3)||!finite(v.normal,3)||!finite(v.color,3)||!finite(v.uv,2))return Result::invalid;
             if(v.material!=material)return Result::invalid;
         }
+      }
     }
     const auto& g=p->g;uint8_t feedback=0;g.GetBooleanv(TRANSFORM_FEEDBACK_ACTIVE,&feedback);
     if(feedback)return Result::state;
@@ -245,14 +257,25 @@ Result begin(Instance* p,const Target& t,const Pose& pose) {
         g.BlitFramebuffer(0,0,t.width,t.height,0,0,t.width,t.height,DEPTH_BUFFER_BIT,NEAREST);
     } else g.MemoryBarrier(SHADER_IMAGE_ACCESS_BARRIER_BIT|TEXTURE_FETCH_BARRIER_BIT);
     g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[0]);
-    g.DepthMask(1);g.StencilMaskSeparate(FRONT_AND_BACK,0xff);
-    g.ClearBufferfi(DEPTH_STENCIL,0,1.0f,0);
+    // Upload disjoint ranges before issuing draws: avoid overwriting a range
+    // still being consumed by the GPU for the preceding Mario.
+    g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
+    uint32_t first=0;
+    for(uint32_t index=0;index<count;++index) {
+        const auto& pose=poses[index];
+        g.BufferSubData(ARRAY_BUFFER,ptrdiff_t(first)*sizeof(Vertex),ptrdiff_t(pose.count)*sizeof(Vertex),pose.vertices);
+        first+=pose.count;
+    }
+    first=0;
+    for(uint32_t index=0;index<count;++index) {
+      const auto& pose=poses[index];
+      g.Disablei(SCISSOR_TEST,0);g.Disablei(BLEND,0);g.Disable(STENCIL_TEST);
+      g.DepthMask(1);g.StencilMaskSeparate(FRONT_AND_BACK,0xff);
+      g.ClearBufferfi(DEPTH_STENCIL,0,1.0f,0);
     if(pose.opacity>0) {
         g.ViewportIndexedf(0,float(t.viewport[0]),float(t.viewport[1]),float(t.viewport[2]),float(t.viewport[3]));
         g.ScissorIndexed(0,t.scissor[0],t.scissor[1],t.scissor[2],t.scissor[3]);g.Enablei(SCISSOR_TEST,0);
         g.DepthRangeIndexed(0,0.0,1.0);g.Enable(DEPTH_TEST);g.DepthFunc(LESS);
-        g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
-        g.BufferSubData(ARRAY_BUFFER,0,ptrdiff_t(pose.count)*sizeof(Vertex),pose.vertices);
         g.UseProgram(p->shader_program);
         g.UniformMatrix4fv(p->uniforms[0],1,0,pose.view_projection);g.Uniform1i(p->uniforms[1],pose.flip_y);
         g.Uniform3fv(p->uniforms[2],1,pose.light_direction);g.Uniform2f(p->uniforms[3],pose.ambient,pose.diffuse);
@@ -263,12 +286,14 @@ Result begin(Instance* p,const Target& t,const Pose& pose) {
         g.ActiveTexture(TEXTURE0+1);g.BindTexture(TEXTURE_2D,t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture);g.BindSampler(1,0);
         // Private nearest-surface prepass, then exactly one color contribution
         // per pixel, including coplanar model seams and overlapping triangles.
-        g.ColorMaski(0,0,0,0,0);g.DrawArrays(TRIANGLES,0,pose.count);
+        g.ColorMaski(0,0,0,0,0);g.DrawArrays(TRIANGLES,first,pose.count);
         g.ColorMaski(0,1,1,1,1);g.DepthMask(0);g.DepthFunc(EQUAL);
         g.Enable(STENCIL_TEST);g.StencilFuncSeparate(FRONT_AND_BACK,EQUAL,0,0xff);
         g.StencilOpSeparate(FRONT_AND_BACK,KEEP,KEEP,INCR);
         g.Enablei(BLEND,0);g.BlendFuncSeparatei(0,SRC_ALPHA,ONE_MINUS_SRC_ALPHA,ZERO,ONE);
-        g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);g.DrawArrays(TRIANGLES,0,pose.count);
+        g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);g.DrawArrays(TRIANGLES,first,pose.count);
+    }
+      first+=pose.count;
     }
     p->target=t;p->begun=true;return Result::ok;
 }

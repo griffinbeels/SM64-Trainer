@@ -50,6 +50,9 @@ from sm64_events.core import paths
 from sm64_events.core.events import Event
 from sm64_events.ghost.source import resolve_ghost
 from sm64_events.ghost.selection import GhostSelection, SELECTION_KEY, checked_template_id
+from sm64_events.ghost.proximity import (
+    DEFAULT_PROXIMITY, PROXIMITY_KEY, checked_proximity, saved_proximity,
+)
 
 log = logging.getLogger("sm64.ghost")
 
@@ -130,7 +133,7 @@ NO_RECORDINGS = {
     "mario_boxes_reason_text": None}
 
 #: What a client may send to PUT /api/ghost.
-SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "template_id", "target")
+SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "template_id", "target", "proximity")
 
 
 def template_store(inputs):
@@ -253,6 +256,8 @@ def validate_changes(changes: dict) -> dict:
         checked["nudge_frames"] = _checked_nudge(changes["nudge_frames"])
     if "tint" in changes:
         checked["tint"] = _checked_tint(changes["tint"])
+    if "proximity" in changes:
+        checked["proximity"] = checked_proximity(changes["proximity"])
     if "view" in changes:
         checked["view"] = _checked_view(changes["view"])
     if "template_id" in changes:
@@ -289,6 +294,7 @@ class GhostSession:
         self._enabled = False
         self._opacity = DEFAULT_OPACITY
         self._tint = dict(DEFAULT_TINT)
+        self._proximity = dict(DEFAULT_PROXIMITY)
         self._view = DEFAULT_VIEW
         self._nudge = 0
         self._loaded = False
@@ -327,6 +333,7 @@ class GhostSession:
         return {"enabled": self._enabled,
                 "opacity": self._opacity,
                 "tint": dict(self._tint),
+                "proximity": dict(self._proximity),
                 "view": self._view,
                 "nudge_frames": self._nudge,
                 "target": dict(self._target) if self._target else None,
@@ -543,6 +550,7 @@ class GhostSession:
             stored_hue = database.get_state(TINT_HUE_KEY,
                                             DEFAULT_TINT["hue_degrees"])
             stored_view = database.get_state(VIEW_KEY, DEFAULT_VIEW)
+            stored_proximity = database.get_state(PROXIMITY_KEY, DEFAULT_PROXIMITY)
             self._selection.load(database)
         except Exception:  # noqa: BLE001 - a preference must never block the app
             log.debug("ghost preference unreadable", exc_info=True)
@@ -560,6 +568,7 @@ class GhostSession:
         except (TypeError, ValueError):
             hue = DEFAULT_TINT["hue_degrees"]
         self._tint = {"enabled": bool(stored_tint_on), "hue_degrees": hue}
+        self._proximity = saved_proximity(stored_proximity)
         # A stored value from a build that knew another view name is not a
         # view: it falls back rather than leaving the page asking for
         # something nothing draws.
@@ -581,6 +590,9 @@ class GhostSession:
             self._tint = {**self._tint, **changes["tint"]}
             _remember(database, TINT_ENABLED_KEY, self._tint["enabled"])
             _remember(database, TINT_HUE_KEY, self._tint["hue_degrees"])
+        if "proximity" in changes:
+            self._proximity = {**self._proximity, **changes["proximity"]}
+            _remember(database, PROXIMITY_KEY, self._proximity)
         if "view" in changes:
             self._view = changes["view"]
             _remember(database, VIEW_KEY, self._view)

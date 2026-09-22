@@ -35,6 +35,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
+import { GhostProximity } from "./ghostproximity.js";
 import { clampNudge, clampOpacity, ghostControls, ghostRecordingOptions,
          ghostViewChoices, hueText, newestGhostSession,
          nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
@@ -394,5 +395,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
+    <${GhostProximity} active=${on} view=${view} value=${controls.proximity}
+      draft=${held.proximity} write=${write} queue=${queue} />
   </div>`;
 }
