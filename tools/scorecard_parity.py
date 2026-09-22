@@ -108,6 +108,14 @@ def open_app(scratch: Path, library_path: Path):
     return app, service
 
 
+def import_body(runner: str) -> dict:
+    """The sheet door's request for one runner, read from the store's own
+    snapshot. The door's `refresh` defaults to downloading the live sheet
+    first -- ~5.6 MB and a whole rebuild per step, and a document newer than
+    the snapshot this walk picked its runners from."""
+    return {"runner": runner, "refresh": False}
+
+
 def goal_for(runners: list[str]) -> dict:
     if len(runners) == 1:
         return {"kind": "runner", "runner": runners[0]}
@@ -246,7 +254,7 @@ def run(runners: list[str], payload: dict, library_path: Path, scope: str,
         assert client.put("/api/scorecard/regions",
                           json={"regions": regions}).status_code == 200
         for step, runner in enumerate(runners, 1):
-            landed = client.post("/api/import/sheet", json={"runner": runner})
+            landed = client.post("/api/import/sheet", json=import_body(runner))
             if landed.status_code != 200:
                 raise SystemExit(f"import of {runner!r} failed: {landed.text[:300]}")
             body = landed.json()

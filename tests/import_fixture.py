@@ -20,6 +20,7 @@ from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
+from calibration_reuse import reusing_calibrations
 
 
 class OfflineMemory:
@@ -52,15 +53,18 @@ def make_client(tmp_path):
     # (`adoptions_path`), and the default resolves to the REAL dev data dir,
     # so a test that links a row would otherwise write it into the next dev
     # server -- and a link he made in dev would change what these tests land.
-    app = create_app(poller, broadcaster, service=service,
-                     adoptions_path=tmp_path / "library_adoptions.json",
-                     mode_path=tmp_path / "tracker_mode.json",
-                     # Scratch (absent) so the library resolves to the
-                     # BUNDLED snapshot: the default is the real dev data
-                     # dir, and a live sheet refresh writes a NEWER local
-                     # snapshot right there -- which moved the sheet under
-                     # two of these tests the night of 2026-08-23. Same
-                     # reason as adoptions_path above.
-                     library_path=tmp_path / "sheet_library.json.gz")
+    # The build's calibration is the same in every test of a worker; each app
+    # still gets its own copy (calibration_reuse.py).
+    with reusing_calibrations():
+        app = create_app(poller, broadcaster, service=service,
+                         adoptions_path=tmp_path / "library_adoptions.json",
+                         mode_path=tmp_path / "tracker_mode.json",
+                         # Scratch (absent) so the library resolves to the
+                         # BUNDLED snapshot: the default is the real dev data
+                         # dir, and a live sheet refresh writes a NEWER local
+                         # snapshot right there -- which moved the sheet under
+                         # two of these tests the night of 2026-08-23. Same
+                         # reason as adoptions_path above.
+                         library_path=tmp_path / "sheet_library.json.gz")
     with TestClient(app) as client:
         yield client, db, service
