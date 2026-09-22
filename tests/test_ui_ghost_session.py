@@ -427,6 +427,22 @@ def test_picker_survives_a_disabled_overlay_and_explains_empty_choices():
     model = controls(data)
     assert not model["canToggle"]
     answer = recording_options(model["selection"])
-    assert "Save a recorded attempt" in answer["reasonText"]
+    assert "Save a PB" in answer["reasonText"]
     assert answer["options"] == [
         {"value": "", "label": "Use input template", "disabled": False}]
+
+
+def test_the_default_choice_plays_his_current_pb_and_says_so():
+    pb = {"attempt_id": 1497, "timer_mode": "igt", "native_available": True,
+          "native_reason_text": None, "whole_available": False,
+          "whole_reason_text": "This PB's video is still being saved."}
+    answer = recording_options({"template_id": None, "pb": pb, "candidates": []})
+    assert answer["options"] == [
+        {"value": "", "label": "Your PB · Attempt #1497", "disabled": False}]
+    assert answer["reasonText"] is None and answer["views"] == {"mario": True, "whole": False}
+    whole = recording_options({"template_id": None, "pb": pb, "candidates": []}, "whole")
+    assert whole["reasonText"] == "This PB's video is still being saved."
+    assert whole["options"][0]["label"].endswith("still being saved.")
+    # An explicit pick keeps its own explanation; the PB stays one choice away.
+    chosen = recording_options({"template_id": 4, "pb": pb, "candidates": [saved_candidate(4)]})
+    assert chosen["value"] == "4" and chosen["options"][0]["label"].startswith("Your PB")

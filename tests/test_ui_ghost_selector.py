@@ -114,3 +114,29 @@ def test_recording_picker_is_independent_reachable_and_fits_supported_widths():
                 assert missing["value"] == "99" and not missing["disabled"]
                 assert "unavailable" in missing["options"][1]["label"]
                 assert page.problems() == []
+
+
+def test_a_saved_pb_is_the_default_ghost_at_supported_widths():
+    initial = selection_session()
+    initial["source"].update(native_available=True, native_reason_text=None, reason_text=None,
+                             available=True, attempt_id=1497)
+    initial["selection"]["pb"] = {"attempt_id": 1497, "timer_mode": "igt",
+                                  "native_available": True, "native_reason_text": None,
+                                  "whole_available": False,
+                                  "whole_reason_text": "This PB's video is still being saved."}
+    screenshots = ROOT / ".iteration" / "ghost-selector-ui"
+    screenshots.mkdir(parents=True, exist_ok=True)
+    with serve_ui_with_ghost(initial, arm_segment=FIXTURE_SEGMENT,
+                             seed_editor_fixtures=True) as (base, state):
+        with get_driver().launch() as page:
+            for width in WIDTHS:
+                state["session"] = deepcopy(initial)
+                page.set_viewport(width, 1200)
+                page.goto(base)
+                page.wait_for(SELECT)
+                shown = picker(page)
+                assert shown["value"] == "" and shown["fits"]
+                assert shown["options"][0]["label"] == "Your PB · Attempt #1497"
+                assert not page.evaluate(MEASURE)[0]["disabled"]
+                shoot(page, screenshots / f"pb-{width}.png")
+                assert page.problems() == []

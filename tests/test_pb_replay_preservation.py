@@ -74,3 +74,60 @@ def test_only_explicit_session_switch_rotates_replay_lifetime(tmp_path):
     assert rotations == [True]  # Re-selecting the current session is a no-op.
     asyncio.run(tracker.continue_session(first_session))
     assert rotations == [True, True] and saved.exists()
+
+
+def test_the_ghost_hears_a_pb_before_its_video_is_saved_and_on_undo(tmp_path):
+    db, tracker, replay, aid = setup(tmp_path)
+    heard = []
+
+    async def ghost(attempt, saved):
+        heard.append((attempt.id, saved, len(replay.extractor.calls), bool(db.pbs())))
+
+    tracker.on_pb_changed = ghost
+    save_pb(tracker, db, aid, "igt")
+    assert heard == [(aid, True, 0, True)]  # PB row committed, video not yet cut
+    assert replay.extractor.calls
+    undo_pb(tracker, db, aid, "igt")
+    assert heard[-1] == (aid, False, len(replay.extractor.calls), False)
+
+
+def test_a_ghost_failure_never_undoes_the_pb_or_its_video(tmp_path):
+    db, tracker, replay, aid = setup(tmp_path)
+
+    async def broken(_attempt, _saved):
+        raise RuntimeError("renderer gone")
+
+    tracker.on_pb_changed = broken
+    assert save_pb(tracker, db, aid, "igt")["replay_save"]["status"] == "saved"
+    assert db.pbs()
+
+
+def test_the_app_wiring_re_points_the_ghost_before_and_after_the_video(tmp_path):
+    from sm64_events.main import _ghost_follows_pb
+    db, tracker, replay, aid = setup(tmp_path)
+    calls = []
+
+    class Ghost:
+        async def pb_changed(self, attempt, saved):
+            calls.append(("pb", attempt.id, saved, len(replay.extractor.calls)))
+
+        async def refresh(self, *, resolve):
+            calls.append(("refresh", resolve, len(replay.extractor.calls)))
+
+    _ghost_follows_pb(tracker, Ghost())
+    save_pb(tracker, db, aid, "igt")
+    assert calls[0] == ("pb", aid, True, 0)
+    assert calls[-1][0] == "refresh" and calls[-1][2] > 0
+
+
+def test_hiding_the_pb_run_tells_the_ghost(tmp_path):
+    db, tracker, replay, aid = setup(tmp_path)
+    save_pb(tracker, db, aid, "igt")
+    heard = []
+
+    async def ghost(attempt, saved):
+        heard.append((attempt, saved, bool(db.pbs())))
+
+    tracker.on_pb_changed = ghost
+    asyncio.run(tracker.clear_attempt(aid))
+    assert heard and heard[-1] == (None, False, False)

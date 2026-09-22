@@ -48,6 +48,7 @@ from urllib.parse import urlencode
 
 from sm64_events.core import paths
 from sm64_events.core.events import Event
+from sm64_events.ghost.pb import GhostLibrary
 from sm64_events.ghost.source import resolve_ghost
 from sm64_events.ghost.selection import GhostSelection, SELECTION_KEY, checked_template_id
 from sm64_events.ghost.proximity import (
@@ -290,6 +291,7 @@ class GhostSession:
         self._native_answer = {}
         self._selection = GhostSelection()
         self._candidates = []
+        self._pb = None
 
         self._enabled = False
         self._opacity = DEFAULT_OPACITY
@@ -338,6 +340,7 @@ class GhostSession:
                 "nudge_frames": self._nudge,
                 "target": dict(self._target) if self._target else None,
                 "selection": {"template_id": self._selection.chosen(self._target),
+                              "pb": dict(self._pb) if self._pb else None,
                               "candidates": [dict(row) for row in self._candidates]},
                 "source": dict(self._source),
                 "window": self._window_state()}
@@ -474,7 +477,7 @@ class GhostSession:
         if self._native is not None:
             try:
                 chosen = {"template_id": template_id} if template_id is not None else {}
-                self._native_answer = self._native.resolve(target, template_store(self._inputs), **chosen)
+                self._native_answer = self._native.resolve(target, self.library(), **chosen)
             except Exception:  # noqa: BLE001 - selection failure must revoke the prior target
                 log.exception("native ghost source unavailable")
                 self._native_answer = {"available": False, "reason": "native_unavailable",
@@ -495,7 +498,7 @@ class GhostSession:
             chosen = {"template_id": template_id} if template_id is not None else {}
             answer = self._resolve(target["kind"], target["entity_key"],
                                    target["strat"],
-                                   templates=template_store(self._inputs),
+                                   templates=self.library(),
                                    replay=self._replay, **chosen)
         except Exception:  # noqa: BLE001 - a db hiccup may not disable the switch silently
             log.debug("ghost source unavailable", exc_info=True)
@@ -510,7 +513,35 @@ class GhostSession:
         answer["mario_boxes_available"] = answer["mario_boxes"] is not None
         return {key: answer[key] for key in NO_TARGET}
 
+    def library(self, inputs=None) -> GhostLibrary:
+        """Every ghost path's template store: his current PB first, then the
+        active input template (`ghost/pb.py`). `inputs` lets the source route
+        pass the service it already resolved for this request."""
+        return GhostLibrary(template_store(inputs if inputs is not None else self._inputs), self._db())
+
+    def _refresh_pb(self, target):
+        """What the picker's default option plays: the PB ghost and whether
+        each Show mode can draw it. Never a saved choice."""
+        library = self.library()
+        pb = library.pb_for(target["kind"], target["entity_key"], target["strat"]) if target else None
+        if pb is None:
+            return None
+        video = self._resolve_video_source(target, None)
+        native = self._native.probe(target, pb) if self._native is not None else {
+            "available": False, "reason_text": "Mario playback is not available in this window."}
+        return {"attempt_id": pb.attempt_id, "timer_mode": pb.timer_mode,
+                "native_available": bool(native["available"]),
+                "native_reason_text": native["reason_text"],
+                "whole_available": bool(video["available"]) and video.get("attempt_id") == pb.attempt_id,
+                "whole_reason_text": (video["reason_text"] if video.get("attempt_id") == pb.attempt_id
+                                      else "This PB's video is still being saved.")}
+
     def _refresh_candidates(self, target):
+        try:
+            self._pb = self._refresh_pb(target)
+        except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
+            log.debug("PB ghost unavailable", exc_info=True)
+            self._pb = None
         try:
             self._candidates = self._selection.candidates(
                 target, template_store(self._inputs), self._resolve_video_source, self._native)
@@ -526,6 +557,39 @@ class GhostSession:
         except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
             log.debug("ghost choices unavailable", exc_info=True)
             self._candidates = []
+
+    async def pb_changed(self, attempt, saved: bool) -> None:
+        """A PB was just saved or undone: the ghost follows it NOW, not on
+        the watch's next resolve (seconds later).
+
+        His loop, 2026-09-22: *"play runs versus current ghost, beat ghost,
+        validate the PB, ghost is automatically generated and ready to go ...
+        I want to get back to playing immediately, against my new ghost."*
+        A save commits the run's Mario poses first -- only the recorder's
+        short archive still holds them, and nothing here waits on the video --
+        then drops this target's explicit pick, so the new PB is what plays.
+        An undo needs no work of its own: the PB ghost is derived, so the
+        previous save (or the input template) is already the answer.
+        """
+        if saved:
+            preserve = getattr(self._replay, "preserve_native", None)
+            if preserve is not None:
+                try:
+                    await asyncio.to_thread(preserve, attempt.id)
+                except Exception:  # noqa: BLE001 - the PB itself is saved; say why in the picker
+                    log.exception("PB %s Mario poses could not be kept", attempt.id)
+            await asyncio.to_thread(self._follow_pb, attempt)
+        await self.refresh(resolve=True)
+
+    def _follow_pb(self, attempt):
+        from sm64_events.inputs.service import entity_key_of
+        kind, key = entity_key_of(attempt)
+        target = {"kind": kind, "entity_key": key, "strat": attempt.strat_tag}
+        with self._lifecycle_lock:
+            database = self._db()
+            self._selection.load(database)
+            if self._selection.chosen(target) is not None:
+                _remember(database, SELECTION_KEY, self._selection.choose(target, None))
 
     def selected_template_id(self, target):
         """The follower source uses the same persisted choice as the switch."""

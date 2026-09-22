@@ -1141,6 +1141,17 @@ reports its own availability, with a sentence explaining every missing source.
 - **Lives** — `src/sm64_events/ghost/source.py`, one function per kind of
   source
 
+### PB ghost
+
+The [[ghost]] you race by default: the [[attempt]] behind your current [[personal best]]
+for the practised [[target]] and [[strategy]]. Saving a PB makes it the [[ghost]] at once: the trainer keeps its
+Mario poses before it cuts the video, and replaces any recording you had picked;
+undoing or hiding that PB falls back to the previous save, then to your active
+[[template track]]. Derived from the saved PBs on every read, never stored, and
+never changes the input comparison.
+
+- **Lives** — `src/sm64_events/ghost/pb.py`
+
 ### Ghost window
 
 The see-through window the trainer draws a whole-picture [[ghost]] in: no border, no taskbar

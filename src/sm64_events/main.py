@@ -212,6 +212,22 @@ def _replay_service(cfg, recorder, codec, tracker):
     return replay
 
 
+def _ghost_follows_pb(service, ghost):
+    """A saved or undone PB re-points the ghost at once (`ghost/pb.py`)."""
+    service.on_pb_changed = ghost.pb_changed
+    if service.on_pb_saved is None:
+        return
+    save_media = service.on_pb_saved
+
+    async def save_pb_media(attempt_id):
+        # Whole picture follows the PB once its video exists, not a watch later.
+        try:
+            return await save_media(attempt_id)
+        finally:
+            await ghost.refresh(resolve=True)
+    service.on_pb_saved = save_pb_media
+
+
 def _build_tracker(broadcaster):
     global _instance_lock
     db_file = db_path()
@@ -485,6 +501,7 @@ def build():
     ghost = GhostSession(tracker=service, inputs=inputs.get_service,
                          replay=replay, broadcaster=broadcaster,
                          native=native_ghost)
+    _ghost_follows_pb(service, ghost)
     if replay is not None:
         # A real run on vanilla SM64, another hack or another game records
         # nothing; unknown (no header read yet) keeps the old behaviour.

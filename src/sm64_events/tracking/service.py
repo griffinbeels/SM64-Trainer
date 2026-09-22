@@ -310,6 +310,10 @@ class TrackerService:
     # Optional async media preservation after the user's validated PB command.
     # The composition root owns recording; projection/replay never calls this.
     on_pb_saved = None
+    # The ghost follows the PB: awaited with (attempt, saved) as soon as a PB
+    # row is written or deleted, BEFORE the slow media save above. `attempt`
+    # is None after a reprojection, which may have removed PB rows in bulk.
+    on_pb_changed = None
     on_session_ended = None
     on_replay_history = None  # bounded metadata only; file expiry runs on recorder maintenance
 
@@ -2104,6 +2108,9 @@ class TrackerService:
             await self.publish(Event(type="target_changed", frame=0,
                                      timestamp_utc=_now(),
                                      payload=self.target_payload()))
+        # Hiding a run, a wipe and a session delete all remove PB rows and end
+        # here: the ghost re-reads which PB it follows rather than trailing it.
+        await self._pb_changed(None, saved=False)
 
     def pb_action(self, attempt, timer_mode: str) -> tuple[str | None, dict | None]:
         """`pbaction.pb_action` asked of the DATABASE for one attempt: the
@@ -2164,6 +2171,7 @@ class TrackerService:
                    "frames": frames, "attempt_id": attempt_id}
         await self.publish(Event(type="pb_saved", frame=0,
                                  timestamp_utc=_now(), payload=payload))
+        await self._pb_changed(attempt, saved=True)
         if self.on_pb_saved is not None:
             payload = {**payload, "replay_save": await self.on_pb_saved(attempt_id)}
         return payload
@@ -2204,7 +2212,16 @@ class TrackerService:
                        restored["attempt_id"] if restored else None}
         await self.publish(Event(type="pb_undone", frame=0,
                                  timestamp_utc=_now(), payload=payload))
+        await self._pb_changed(attempt, saved=False)
         return payload
+
+    async def _pb_changed(self, attempt, *, saved: bool) -> None:
+        if self.on_pb_changed is None:
+            return
+        try:
+            await self.on_pb_changed(attempt, saved)
+        except Exception:  # noqa: BLE001 - the PB row is committed; the ghost is best effort
+            log.exception("the ghost could not follow PB attempt %s", getattr(attempt, "id", None))
 
     def recording_link(self, attempt_id: int) -> dict:
         """Public recording attached to this exact practice attempt."""

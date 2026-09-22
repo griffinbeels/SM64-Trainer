@@ -87,8 +87,10 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
             if template_id is None and session is not None:
                 template_id = session.selected_template_id(
                     {"kind": kind, "entity_key": entity_key, "strat": strat})
+            templates = (session.library(service) if session is not None
+                         else template_store(service))
             return resolve_ghost(kind, entity_key, strat,
-                                 templates=template_store(service),
+                                 templates=templates,
                                  replay=replay,
                                  attempts=getattr(service, "attempt", None),
                                  template_id=template_id,

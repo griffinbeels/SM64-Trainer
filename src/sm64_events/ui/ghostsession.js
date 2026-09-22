@@ -232,43 +232,59 @@ export function ghostControls(session, entityKey) {
 
 /** Saved recordings for this entity, qualified for the selected Show mode.
  * Selection is independent of the input-comparison template. The empty value
- * follows that template; a removed explicit choice stays visibly missing.
+ * follows his current PB (`ghost/pb.py`), else that template; a removed
+ * explicit choice stays visibly missing.
  */
+/** The empty choice plays his current PB when there is one (`ghost/pb.py`). */
+function pbDefault(pb, field) {
+  if (!pb) return { row: null, rows: [], reason: null, label: "Use input template" };
+  const reason = pb[`${field}_available`] ? null : pb[`${field}_reason_text`];
+  const label = `Your PB · Attempt #${pb.attempt_id}`;
+  return { row: pb, rows: [pb], reason, label: reason ? `${label} — ${reason}` : label };
+}
+
+function candidateOption(candidate, field, view) {
+  const available = Boolean(candidate[`${field}_available`]);
+  const reason = available ? null : candidate[`${field}_reason_text`]
+    || (view === "mario" ? "No saved Mario poses" : "No saved video");
+  const identity = candidate.attempt_id == null
+    ? `Saved #${candidate.template_id}` : `Attempt #${candidate.attempt_id}`;
+  const label = [identity, candidate.name, candidate.strat].filter(Boolean).join(" · ");
+  return {
+    value: String(candidate.template_id), disabled: !available,
+    label: reason ? `${label} — ${reason}` : label,
+  };
+}
+
+function savedReason(candidates, field, view) {
+  if (!candidates.length) return "No saved ghosts yet. Save a PB or mark an attempt as the template.";
+  return candidates.some((candidate) => candidate[`${field}_available`]) ? null
+    : `No saved ghosts can show ${view === "mario" ? "only Mario" : "the whole picture"} yet.`;
+}
+
 export function ghostRecordingOptions(selection, view, draft = {}) {
   if (!selection || !GHOST_VIEWS.includes(view)) return null;
   const templateId = Object.hasOwn(draft, "template_id")
     ? draft.template_id : selection.template_id;
   const candidates = selection.candidates || [];
   const field = view === "mario" ? "native" : "whole";
-  const options = candidates.map((candidate) => {
-    const available = Boolean(candidate[`${field}_available`]);
-    const reason = available ? null : candidate[`${field}_reason_text`]
-      || (view === "mario" ? "No saved Mario poses" : "No saved video");
-    const identity = candidate.attempt_id == null
-      ? `Saved #${candidate.template_id}` : `Attempt #${candidate.attempt_id}`;
-    const label = [identity, candidate.name, candidate.strat].filter(Boolean).join(" · ");
-    return {
-      value: String(candidate.template_id), disabled: !available,
-      label: reason ? `${label} — ${reason}` : label,
-    };
-  });
+  const options = candidates.map((candidate) => candidateOption(candidate, field, view));
   const missing = templateId != null && !candidates.some(
     (candidate) => candidate.template_id === templateId);
   if (missing) options.unshift({
     value: String(templateId), disabled: true,
     label: `Saved ghost #${templateId} is unavailable`,
   });
-  options.unshift({ value: "", label: "Use input template", disabled: false });
+  const pb = pbDefault(selection.pb, field);
+  options.unshift({ value: "", disabled: false, label: pb.label });
   const reasonText = missing ? "The selected ghost is no longer saved. Choose another recording."
-    : !candidates.length ? "No saved ghosts yet. Save a recorded attempt as a template."
-    : !candidates.some((candidate) => candidate[`${field}_available`])
-      ? `No saved ghosts can show ${view === "mario" ? "only Mario" : "the whole picture"} yet.`
-      : null;
+    : pb.row && templateId == null ? pb.reason : savedReason(candidates, field, view);
+  const rows = [...pb.rows, ...candidates];
   return {
     value: templateId == null ? "" : String(templateId), options, reasonText,
     views: {
-      mario: candidates.some((candidate) => candidate.native_available),
-      whole: candidates.some((candidate) => candidate.whole_available),
+      mario: rows.some((candidate) => candidate.native_available),
+      whole: rows.some((candidate) => candidate.whole_available),
     },
   };
 }
