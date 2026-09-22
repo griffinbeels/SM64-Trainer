@@ -5,6 +5,7 @@
 #include <fstream>
 #include <new>
 #include <string>
+#include <initializer_list>
 #include <vector>
 
 static bool inside_reader = false;
@@ -284,6 +285,67 @@ int main(int argc, char **argv) {
         check(f.run() == GC_BAD_VALUE && zero(f.sample.pose), "area mismatch retained data");
         f.put16(f.config.current_area, 1); f.put16(f.config.object_pool+2, 0x31);
         check(f.run() == GC_OK && f.sample.pose.hidden == 1, "hidden flag lost");
+    } else if (mode == "sound") {
+        // The US play_sound words the spike qualified in both stock and Usamune.
+        const uint32_t code[12] = {0x3c068033, 0x24c62f44, 0x90c20000, 0x3c0f8036, 0x25ef1498,
+            0x000270c0, 0x01cf1821, 0x24580001, 0xac640000, 0xac650004, 0x03e00008, 0xa0d80000};
+        check(f.config.sound_code == 0x8031eb00 && f.config.sound_producer == 0x80332f44
+              && f.config.sound_ring == 0x80361498 && f.config.sound_consumer == 0x80332f40,
+              "Python layout lost the sound roots");
+        for (unsigned i = 0; i < 12; ++i) f.put32(f.config.sound_code + 4*i, code[i]);
+        const gc_layout roots = f.config; // the scenario later disables config roots
+        const uint32_t mario = f.config.object_pool + 0x54, other = f.config.object_pool + 0x260 + 0x54;
+        uint32_t timer = 0x12345678, producer = 250;
+        const auto request = [&](uint32_t bits, uint32_t source) {
+            f.put32(roots.sound_ring + 8*(producer & 255), bits);
+            f.put32(roots.sound_ring + 8*(producer & 255) + 4, source);
+            f.put8(roots.sound_producer, uint8_t(++producer));
+        };
+        const auto frame = [&](uint32_t step = 1) {
+            timer += step; f.put32(f.config.global_timer, timer); f.put8(roots.sound_consumer, 3);
+            check(f.run() == GC_OK, "sound changed the pose status");
+        };
+        const auto sounds = [&](std::initializer_list<uint32_t> expected) {
+            const auto &s = f.sample.sound;
+            if (!(f.sample.valid_fields & GC_VALID_SOUND) || s.count != expected.size()) return false;
+            unsigned i = 0; for (auto bits : expected) if (s.bits[i++] != bits) return false;
+            for (; i < GC_SOUND_EVENTS; ++i) if (s.bits[i]) return false;
+            return true;
+        };
+        f.put8(f.config.sound_producer, uint8_t(producer)); f.put32(f.config.global_timer, timer);
+        check(f.run() == GC_OK && f.sample.valid_fields == 31 && zero(f.sample.sound), "first frame has no baseline");
+        request(0x24228080, mario); request(0x11111111, other); request(0x30008081, mario);
+        frame();
+        check(sounds({0x24228080, 0x30008081}) && f.sample.sound.producer == 253
+              && f.sample.sound.consumer == 3 && !f.sample.sound.flags, "Mario's requests in issue order");
+        frame(); check(sounds({}), "silent frame is valid and empty");
+        request(0x44440000, other); frame(); check(sounds({}), "another object's sound was kept");
+        // Producer wraps through zero inside one frame.
+        request(0x1, mario); request(0x2, mario); request(0x3, mario); request(0x4, mario);
+        frame(); check(sounds({1, 2, 3, 4}) && f.sample.sound.producer == 2, "ring wrap lost order");
+        request(0x5, mario); frame(2);
+        check(!(f.sample.valid_fields & GC_VALID_SOUND) && zero(f.sample.sound), "skipped frame attributed sounds");
+        frame(); check(sounds({}), "baseline did not recover after a gap");
+        for (uint32_t i = 0; i < 10; ++i) request(0x100 + i, mario);
+        frame();
+        check(sounds({0x100, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107})
+              && f.sample.sound.flags == GC_SOUND_OVERFLOW, "overflow not bounded and flagged");
+        f.put32(f.config.sound_code + 4, 0x24c62f48); request(0x6, mario); frame();
+        check(!(f.sample.valid_fields & GC_VALID_SOUND) && zero(f.sample.sound), "different producer code accepted");
+        f.put32(f.config.sound_code + 4, code[1]); frame();
+        check(!(f.sample.valid_fields & GC_VALID_SOUND), "requalified code reused an old baseline");
+        frame(); check(sounds({}), "requalified code did not recover");
+        f.put32(f.config.mario_object, f.config.object_pool + 1); request(0x7, mario);
+        timer += 1; f.put32(f.config.global_timer, timer); f.run();
+        check(!(f.sample.valid_fields & GC_VALID_SOUND), "sound attributed without Mario's object");
+        f.put32(f.config.mario_object, f.config.object_pool); frame(); check(sounds({}), "recovered after Mario returned");
+        const auto layout = roots;
+        f.config.sound_code = f.config.sound_producer = f.config.sound_consumer = f.config.sound_ring = 0;
+        request(0x8, mario); frame(); check(!(f.sample.valid_fields & GC_VALID_SOUND), "unavailable sound reported valid");
+        f.config = layout; f.config.sound_ring += 4;
+        check(f.run() == GC_BAD_CONFIG, "misaligned ring accepted");
+        f.config = layout; f.config.sound_code = 0;
+        check(f.run() == GC_BAD_CONFIG, "partial sound configuration accepted");
     } else if (mode == "arguments") {
         f.config.version = GC_VERSION - 1;
         check(f.run() == GC_BAD_CONFIG && f.sample.valid_fields == 0 && f.sample.live_action == 0,

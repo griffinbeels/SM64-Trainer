@@ -41,7 +41,7 @@ def test_effective_root_preserves_matrix_and_requires_its_recorded_camera():
         frame_from_bytes(invalid)
 
 
-@pytest.mark.parametrize("magic", [b"SM64GHO1", b"SM64GHO2"])
+@pytest.mark.parametrize("magic", [b"SM64GHO1", b"SM64GHO2", b"SM64GHO3"])
 def test_old_pose_format_has_typed_rerecord_reason_and_preserves_file(tmp_path, magic):
     path = tmp_path / "old.ghost"
     original = magic + bytes(400)
@@ -61,6 +61,58 @@ def test_old_archive_row_has_typed_reason_only_with_its_explicit_schema():
     with pytest.raises(ClipError) as error:
         frame_from_bytes(raw)
     assert not isinstance(error.value, OlderPoseFormat)
+    # GC4/GCLIP3 rows (no shadow or sound) are older too.
+    raw = bytearray(324)
+    struct.pack_into("<2I", raw, 0, 324, 3)
+    struct.pack_into("<2I", raw, 16, 308, 4)
+    with pytest.raises(OlderPoseFormat, match="Record a new attempt"):
+        frame_from_bytes(raw)
+
+
+def test_shadow_and_sound_round_trip_with_their_own_validity():
+    rows = (frame(1, shadow=True, sounds=(0x24228080, 0x30008081)), frame(2, sounds=()),
+            frame(3, valid=29), frame(4, sounds=tuple(range(1, 9)), overflow=True))
+    clip = decode_clip(encoded(rows))
+    assert tuple(item.raw for item in clip.frames) == rows
+    first, second, refused, flooded = clip.frames
+    assert first.has_shadow and first.playable and first.sounds == (0x24228080, 0x30008081)
+    assert not second.has_shadow and second.has_sound and second.sounds == ()
+    assert not refused.has_sound and refused.sounds == ()
+    assert flooded.sound_overflow and len(flooded.sounds) == 8
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda raw: struct.pack_into("<I", raw, 128, 1),               # shadow without executed root
+    lambda raw: struct.pack_into("<f", raw, 324 + 60, 0.5),        # non-affine shadow matrix
+    lambda raw: struct.pack_into("<f", raw, 324, float("nan")),    # nonfinite shadow matrix
+    lambda raw: raw.__setitem__(324 + 163, 1),                     # reserved shadow byte
+])
+def test_invalid_recorded_shadow_refuses(mutate):
+    raw = bytearray(frame(shadow=True))
+    mutate(raw)
+    with pytest.raises(ClipError):
+        frame_from_bytes(bytes(raw))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda raw: raw.__setitem__(616, 9),                           # more than eight events
+    lambda raw: raw.__setitem__(617, 1),                           # overflow before eight
+    lambda raw: raw.__setitem__(617, 2),                           # unknown flag
+    lambda raw: struct.pack_into("<I", raw, 620 + 4 * 3, 5),       # bits past the count
+])
+def test_invalid_sound_events_refuse(mutate):
+    raw = bytearray(frame(sounds=(1, 2)))
+    mutate(raw)
+    with pytest.raises(ClipError, match="sound"):
+        frame_from_bytes(bytes(raw))
+
+
+@pytest.mark.parametrize("at, name", [(324 + 4, "shadow"), (620, "sound")])
+def test_refused_optional_evidence_keeps_no_bytes(at, name):
+    raw = bytearray(frame())
+    raw[at] = 1
+    with pytest.raises(ClipError, match=name):
+        frame_from_bytes(bytes(raw))
 
 
 def test_portable_offsets_and_lossless_refusal_rows(tmp_path):
@@ -69,8 +121,8 @@ def test_portable_offsets_and_lossless_refusal_rows(tmp_path):
     manifest = write_clip(path, rows, producer(), clock_kind=STAR_CLOCK,
                           clip_id="112233445566778899aabbccddeeff00")
     raw = path.read_bytes()
-    assert raw[:8] == b"SM64GHO3"
-    assert struct.unpack_from("<8I", raw, 8) == (3, 160, 324, 3, 1, 4, 4, 5)
+    assert raw[:8] == b"SM64GHO4"
+    assert struct.unpack_from("<8I", raw, 8) == (4, 160, 652, 3, 1, 5, 4, 5)
     assert raw[40:56].hex() == manifest["clip_id"]
     assert struct.unpack_from("<Qqd", raw, 56) == (30, 1000, 1800000000.0)
     assert struct.unpack_from("<2Q2I2i", raw, 80) == (1, 4, 101, 104, 24, 1)

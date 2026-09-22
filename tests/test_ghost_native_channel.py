@@ -190,6 +190,33 @@ def test_exact_origin_transport_and_full_width_seek(kernel, tmp_path):
         connection.close()
 
 
+def test_session_shaped_command_carries_the_shadow_switch(kernel, tmp_path):
+    """The exact keys NativeGhostSession._send publishes, plus shadow_enabled."""
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    assert kernel.request.shadow_enabled == 1  # the lease starts with shadows on
+    command = {"enabled": True, "model_id": 1, "owner_suspended": False,
+               "clips": [clip(tmp_path, b"a", 10), clip(tmp_path, b"b", 130)], "rom_path": "",
+               "opacity": 0.5, "nudge": 0, "proximity_enabled": True, "proximity_distance": 40.0,
+               "tint_enabled": True, "stop_at_star": True, "mode": 0,
+               "origin": {"kind": 1, "configuration": 4, "epoch": 5, "global_timer": 1234,
+                          "utc": 1000.0, "session_id": 7, "arm_id": 8}}
+    try:
+        connection.poll(command)  # a session that predates the key
+        assert kernel.request.shadow_enabled == 1 and kernel.request.clip_count == 2
+        connection.poll({**command, "shadow_enabled": False})
+        assert kernel.request.shadow_enabled == 0 and kernel.request.reserved2 == 0
+        assert kernel.request.opacity == 0.5 and kernel.request.origin.global_timer == 1234
+        before = bytes(kernel.request)
+        for value in (1, "yes", None):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({**command, "shadow_enabled": value})
+            assert bytes(kernel.request) == before
+        connection.poll({**command, "shadow_enabled": True})
+        assert kernel.request.shadow_enabled == 1
+    finally:
+        connection.close()
+
+
 def test_clip_set_is_encoded_in_order_with_per_ghost_hue(kernel, tmp_path):
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
     controls = {"enabled": True, "model_id": 1, "mode": 1,

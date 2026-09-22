@@ -7,7 +7,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 4u
+#define GP_VERSION 5u
 #define GP_GHOSTS 16u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
@@ -60,6 +60,8 @@ typedef struct gp_request {
     /* Enabled: 1..GP_GHOSTS distinct nonzero ids, each already prepared. */
     uint32_t clip_count, reserved1;
     gp_clip clips[GP_GHOSTS];
+    /* Draw each visible ghost's recorded shadow (GC_VALID_SHADOW rows only). */
+    uint32_t shadow_enabled, reserved2;
 } gp_request;
 
 typedef struct gp_status {

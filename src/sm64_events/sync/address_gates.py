@@ -322,6 +322,112 @@ register(Gate(
 ))
 
 
+# --- the ghost sound ring: sound_code / sound_producer / sound_ring / sound_consumer
+
+SOUND_REQUEST_TIMEOUT_S = 20.0
+SOUND_REQUESTS_WANTED = 3
+MARIO_SOUND_SOURCE_OFF = 0x54  # gfx.cameraToObject, play_sound's source for Mario
+
+
+def sound_code_words(producer: int, ring: int) -> tuple[int, ...]:
+    """play_sound's 12 instruction words naming this producer and ring.
+
+    The same derivation the native reader checks (ghost_capture.cpp)."""
+    upper, lower = (lambda a: (a + 0x8000) >> 16), (lambda a: a & 0xFFFF)
+    return (0x3C060000 | upper(producer), 0x24C60000 | lower(producer), 0x90C20000,
+            0x3C0F0000 | upper(ring), 0x25EF0000 | lower(ring),
+            0x000270C0, 0x01CF1821, 0x24580001, 0xAC640000, 0xAC650004,
+            0x03E00008, 0xA0D80000)
+
+
+def _check_sound_code(ctx) -> Verdict:
+    code, producer, ring = (ctx.candidate(name) for name in ("sound_code", "sound_producer", "sound_ring"))
+    if code is None or producer is None or ring is None:
+        return Verdict("missing", evidence="play_sound or its ring candidates missing")
+    mem = ctx.raw()
+    actual = tuple(mem.read_u32(code + 4 * i) for i in range(12))
+    if actual != sound_code_words(producer, ring):
+        return Verdict("failed", measured={"words": [f"{word:08x}" for word in actual]},
+                       evidence="play_sound's instructions do not name this producer and ring")
+    return Verdict("verified", value=code,
+                   evidence="play_sound stores bits then source into 8-byte entries of this ring "
+                            "and publishes this u8 producer after both")
+
+
+def _observe_mario_sounds(ctx) -> tuple[str, dict]:
+    """Watch play_sound requests while he jumps; count Mario-sourced entries."""
+    producer, ring, consumer = (ctx.candidate(n) for n in ("sound_producer", "sound_ring", "sound_consumer"))
+    mario, pool = ctx.candidate("mario_object"), ctx.candidate("object_pool")
+    if None in (producer, ring, consumer, mario, pool):
+        return "missing", {}
+    mem, start = ctx.raw(), ctx.now()
+    previous = mem.read_u8(producer)
+    seen = {"advances": 0, "mario_requests": 0, "foreign_requests": 0, "consumer_caught_up": 0}
+    while ctx.now() - start < SOUND_REQUEST_TIMEOUT_S:
+        obj = mem.read_u32(mario)
+        if not pool_contains(pool, obj, slot_size=A.OBJECT_SIZE, slots=A.OBJECT_COUNT):
+            return "failed", seen | {"reason": "Mario object left the verified pool"}
+        current = mem.read_u8(producer)
+        issued = (current - previous) & 0xFF
+        if issued:
+            seen["advances"] += 1
+            for index in range(previous, previous + issued):
+                source = mem.read_u32(ring + 8 * (index & 0xFF) + 4)
+                bits = mem.read_u32(ring + 8 * (index & 0xFF))
+                if source == obj + MARIO_SOUND_SOURCE_OFF and bits:
+                    seen["mario_requests"] += 1
+                else:
+                    seen["foreign_requests"] += 1
+            previous = current
+        elif mem.read_u8(consumer) == current and seen["advances"]:
+            seen["consumer_caught_up"] += 1
+        if seen["mario_requests"] >= SOUND_REQUESTS_WANTED and seen["consumer_caught_up"]:
+            return "verified", seen
+        ctx.sleep(POLL_INTERVAL_S)
+    return "failed", seen
+
+
+def _sound_gate(name: str, proven: str):
+    def check(ctx) -> Verdict:
+        status, measured = _observe_mario_sounds(ctx)
+        if status == "missing":
+            return Verdict("missing", evidence="sound ring candidates or Mario object missing")
+        if status == "failed":
+            return Verdict("failed", measured=measured,
+                           evidence="never saw three Mario-sourced requests and the audio thread "
+                                    "consume them within the timeout")
+        return Verdict("verified", value=ctx.candidate(name), measured=measured, evidence=proven)
+    return check
+
+
+_check_sound_producer = _sound_gate(
+    "sound_producer", "the producer advanced as Mario made sounds")
+_check_sound_ring = _sound_gate(
+    "sound_ring", "each new entry's source was Mario's gfx.cameraToObject with nonzero bits")
+_check_sound_consumer = _sound_gate(
+    "sound_consumer", "the consumer reached the producer after Mario's requests")
+
+register(Gate(
+    id="address.sound_code", feature="version", kind="address", auto=True,
+    needs=("version.rom",),
+    instruction="No action needed — reads play_sound's instructions.",
+    proves="play_sound's code names exactly the candidate producer and ring (8-byte entries, "
+           "bits then source, producer published last).",
+    check=_check_sound_code,
+))
+for _field, _check, _proves in (
+        ("sound_producer", _check_sound_producer, "sSoundRequestCount advances with Mario's own sound requests."),
+        ("sound_ring", _check_sound_ring, "sSoundRequests entries carry Mario's sound bits and his source pointer."),
+        ("sound_consumer", _check_sound_consumer, "sNumProcessedSoundRequests catches up with the producer.")):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address",
+        needs=("address.sound_code", "address.mario_object", "address.object_pool"),
+        timeout_s=SOUND_REQUEST_TIMEOUT_S + 5,
+        instruction="Jump three times (each jump plays Mario's voice and a landing sound).",
+        proves=_proves, check=_check,
+    ))
+
+
 def _check_behaviour_base(ctx) -> Verdict:
     mario_object = ctx.candidate("mario_object")
     if mario_object is None:

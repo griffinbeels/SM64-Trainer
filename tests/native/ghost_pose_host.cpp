@@ -102,5 +102,38 @@ int main() {
     assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::unsupported_pose);
     saved.pose.scale[0]=1;saved.pose.root_matrix[15]=0;
     assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::unsupported_pose);
+    // Shadow: executed G_MTX = translate(100,200,300) under the RECORDED turned
+    // camera; its vertices land in world space under the live projection.
+    {
+        sg_model *model=reinterpret_cast<sg_model*>(&applied); // any non-null handle
+        saved.valid_fields|=GC_VALID_SHADOW;
+        const float shadow_executed[16]={0,0,-1,0, 0,1,0,0, 1,0,0,0, 310,220,-70,1};
+        std::memcpy(saved.shadow.matrix,shadow_executed,sizeof(shadow_executed));
+        for(unsigned v=0;v<9;++v){saved.shadow.position[v][0]=int16_t(v);saved.shadow.alpha[v]=uint8_t(v*20);}
+        saved.shadow.position[0][0]=-25;saved.shadow.position[0][1]=-3;saved.shadow.position[0][2]=40;
+        saved.shadow.uv[3][0]=480;saved.shadow.uv[3][1]=-480;saved.shadow.alpha[4]=180;
+        saved.shadow.texture[0]=0x7e;saved.shadow.texture[127]=0x0f;
+        ghost_compositor::ShadowVertex vertices[24]{};uint8_t texture[256]{};ghost_compositor::Shadow shadow{};
+        float projection[16]{};projection[0]=7;projection[15]=1;
+        assert(ghost_pose::shadow(model,saved,projection,vertices,texture,shadow));
+        assert(camera_x==-5 && shadow.count==24 && shadow.vertices==vertices && shadow.texture_ia8==texture);
+        assert(shadow.view_projection[0]==7 && shadow.view_projection[15]==1);
+        const auto &corner=vertices[0]; // triangle 0 starts at vertex 0
+        assert(std::fabs(corner.position[0]-75)<1e-4f && std::fabs(corner.position[1]-197)<1e-4f
+               && std::fabs(corner.position[2]-340)<1e-4f);
+        assert(std::fabs(vertices[1].position[0]-103)<1e-4f); // triangle 0's second vertex is 3
+        assert(std::fabs(vertices[1].uv[0]-(15.0f*65535.0f/65536.0f+.5f)/16.0f)<1e-6f);
+        assert(std::fabs(vertices[1].uv[1]-(-15.0f*65535.0f/65536.0f+.5f)/16.0f)<1e-6f);
+        assert(std::fabs(vertices[2].alpha-180.0f/255.0f)<1e-6f); // centre vertex 4
+        for(unsigned i=0;i<24;++i)assert(vertices[i].alpha==float(saved.shadow.alpha[gc_shadow_triangles[i]])/255.0f);
+        assert(texture[0]==7 && texture[1]==14 && texture[254]==0 && texture[255]==15);
+        saved.valid_fields&=~GC_VALID_CAMERA;
+        assert(!ghost_pose::shadow(model,saved,projection,vertices,texture,shadow) && !shadow.count);
+        saved.valid_fields|=GC_VALID_CAMERA;saved.shadow.matrix[0]=NAN;
+        assert(!ghost_pose::shadow(model,saved,projection,vertices,texture,shadow) && !shadow.vertices);
+        saved.shadow.matrix[0]=0;saved.valid_fields&=~GC_VALID_SHADOW;
+        assert(!ghost_pose::shadow(model,saved,projection,vertices,texture,shadow));
+        assert(!ghost_pose::shadow(nullptr,saved,projection,vertices,texture,shadow));
+    }
     std::puts("recorded pose to live camera mapping passed");
 }
