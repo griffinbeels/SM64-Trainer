@@ -30,8 +30,8 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC4: layout 168, sample 308; executed root matrix, warp fields and derived clock | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS3, exported as `SM64GhostSourceV3`; bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP3: immutable preloaded clips, revisioned owner origins and overlap-fade controls | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC3: status 256, request 2468, ring offset 4096, 512 records | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP4: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and overlap fade | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC4: status 256, request 18920 (16 clip entries of 1096), ring offset 20480, 512 records | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP3: header 160, record 324, maximum 240000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -123,12 +123,41 @@ elapsed, raw IGT, star generation or clock validity is ambiguous. Star origins
 must satisfy the canonical near-zero threshold. Missing or expired origins hide
 the ghost. Resolution is retained for the immutable command.
 
-[ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) preloads the clip and
+[ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) preloads each clip and
 selects at the renderer boundary using live elapsed minus owner-origin elapsed.
 A star adds its origin raw IGT; a segment starts at zero. The timing nudge applies
 to that coordinate. Paused clocks do not advance from wall time or Python poll
 cadence. A new star generation or configured star-grab action ends that origin;
 tuning the same origin cannot revive it. Explicit fixed seek is a separate mode.
+
+### Several ghosts
+
+One command displays a set of up to 16 saved recordings (the PB plus others)
+against the same live origin and the same opacity, nudge, tint switch, overlap
+fade and star-end policy. Hue is per recording. Each ghost selects its own row
+from the shared coordinate: before-start clamps, and after-end, gaps, wrong
+scene, refused poses and its own recorded touch hide only that ghost. A live
+star grab or star generation change ends every ghost. Overlap fade compares
+live Mario with each ghost separately. The renderer evaluates all ghosts into
+one borrowed mesh each, sorts them farthest root first and draws them with one
+`begin_batch`: one clean copy and per-body self-depth. A frame with no visible
+ghost behaves like the former hidden ghost; clean output, HUD and presentation
+guarantees are unchanged.
+
+The worker identifies a recording by clip id plus SHA-256. Changing the set
+reads and prepares only recordings not already held; an applied command whose
+other controls are unchanged keeps drawing during that read, so adding a new PB
+costs one file read and one preparation. A recording that leaves the set is
+released: a pending copy retires immediately and a drawn copy stops at the next
+render boundary. Re-adding it before that retirement waits one boundary for a
+fresh copy. The renderer holds exactly the listed set after each boundary.
+Savestate recovery belongs to the live origin, so set changes keep it; only a
+new ROM identity clears it. An unreadable or oversized recording refuses the
+whole set (`GIPC_FILE`/`GIPC_CLIP`) and hides every ghost until a corrected set
+arrives. An enabled request with no clips, more than 16, a zero or repeated id,
+a hue above 359 or a nonzero reserved word is a protocol refusal. The status
+page reports `clips_requested`, `clips_prepared` and, while `displayed` is set,
+`clips_visible`.
 
 For star FOLLOW, the recorded template's own first touch also ends its display,
 even when the timed landing occurs later. The worker prepares a first-occurrence
@@ -148,7 +177,7 @@ Per-row scenes allow coherent cross-area clips.
 ## Recording, preservation and ownership
 
 [NativeCapture](../src/sm64_events/ghost/capture.py) owns a separate leased channel
-named `Local\sm64_trainer_ghost_v3_<PID>`. Process birth, producer/ROM generations,
+named `Local\sm64_trainer_ghost_v4_<PID>`. Process birth, producer/ROM generations,
 configuration, epoch and one QPC/UTC anchor identify its batches. The native
 worker and Python client use a named mutex for mapped-page access; the render
 thread never touches that page. File/hash checks, ROM asset preparation and clip
@@ -169,10 +198,12 @@ ROM failure nor renderer readiness changes saved-recording eligibility.
 
 Disabling or losing the active origin withdraws drawing while retaining prepared
 assets for later use. Lease/ROM shutdown revokes playback and retires assets;
-worker collection and release establish storage cleanup. Three slots share a
-128 MiB clip/index budget. One maximum-size clip fits; two maximum-size clips do
-not with GC4. All resident slots count, so a replacement may defer until the
-previous owner's storage is retired and collected.
+worker collection and release establish storage cleanup. Thirty-two slots (a
+full set plus as many retiring copies) share a 128 MiB clip/index budget, and
+the worker's retained files obey the same bound. One maximum-size clip fits; two
+maximum-size clips do not with GC4. All resident slots count, so a replacement
+may defer until the previous owner's storage is retired and collected. Nothing
+displaces a pending clip; the worker releases what it no longer lists.
 If a reader holds the status page during revocation, the worker retries that
 publication before sleeping indefinitely. An expired owner cannot leave the
 mapped page reporting ready merely because the final nonblocking lock was busy.
@@ -298,6 +329,12 @@ unchanged pixels outside Mario, clean recording and wall occlusion. That receipt
 binds its actual source hashes and executable. Paused IGT with advancing global
 timer leaves the selected pose unchanged. This excludes live GLideN64 terrain/VI
 work, IPC and video encoding; it is not the full live gameplay budget.
+
+The same witness on GP4 (2026-09-22, RTX 5090, 640x480, 180 samples) also draws
+16 ghosts in one batch from 16 prepared clips: 36096 vertices, every ghost
+visible, no pixel outside their projected triangles changed. CPU plus GPU
+completion plus hidden swap measured p50 2.19 ms, p95 3.38 ms and max 3.81 ms
+(one ghost: p50 0.47 ms, p95 1.27 ms, max 2.05 ms). The same exclusions apply.
 
 For the actual staged RSP lifetime guard, stage a fresh pinned renderer with
 `tools/stage_link_witness.py --source <pinned-source> --out <temporary-output>
