@@ -13,6 +13,51 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 
 
+PRINTER = """
+def pytest_collection_finish(session):
+    for item in session.items:
+        mark = item.get_closest_marker("xdist_group")
+        print("GROUP", item.nodeid.split("::")[0], mark.args[0] if mark else None)
+"""
+
+
+def test_a_long_file_is_spread_across_local_workers_and_a_paged_one_is_not(tmp_path):
+    """The real conftest on a local (unsharded) collection: a file over
+    SPLIT_FILE_SECONDS that shares no fixture and is not already `spread`
+    gets a group per test, so the merge check's workers share it; a long
+    file with a module-scoped page stays one group. The files are whichever
+    the recorded durations make long today."""
+    import os
+    import subprocess
+    import sys
+    from sm64_events.core.childproc import quiet_spawn_kwargs
+    from tools import test_lanes as lanes
+    totals = lanes.file_totals(lanes.load_durations())
+    long_files = [f for f, seconds in sorted(totals.items()) if seconds > lanes.SPLIT_FILE_SECONDS
+                  and (REPO / f).is_file() and f not in lanes.BROWSER_SWEEPS
+                  and "spread" not in (REPO / f).read_text(encoding="utf-8")]
+    split = next(f for f in long_files if not lanes.shares_a_fixture(REPO / f))
+    paged = next(f for f in long_files if lanes.shares_a_fixture(REPO / f))
+    (tmp_path / "group_printer.py").write_text(PRINTER, encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), os.environ.get("PYTHONPATH", "")])}
+    env.pop("PYTEST_ADDOPTS", None)
+    result = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "group_printer",
+                             "-p", "no:cacheprovider", "--no-testmon", split, paged,
+                             lanes.BROWSER_SWEEPS[0]],
+                            cwd=REPO, env=env, capture_output=True, text=True, timeout=180,
+                            **quiet_spawn_kwargs())
+    groups: dict[str, set] = {}
+    for line in result.stdout.splitlines():
+        if line.startswith("GROUP "):
+            _, path, group = line.split(" ", 2)
+            groups.setdefault(path, set()).add(group)
+    assert split in groups and paged in groups, result.stdout[-2000:] + result.stderr[-2000:]
+    assert len(groups[split]) > 1, f"{split} ran as one worker group: {groups[split]}"
+    assert groups[paged] == {paged}, f"{paged} left its page's worker: {groups[paged]}"
+    pool = {f"browser_sweep_{k}" for k in range(lanes.BROWSER_SWEEP_GROUPS)}
+    assert groups[lanes.BROWSER_SWEEPS[0]] <= pool, "locally the sweeps keep their bounded pool"
+
+
 def test_a_plain_test_stays_with_its_file(request):
     mark = request.node.get_closest_marker("xdist_group")
     assert mark is not None, "no worker group -- the conftest hook is gone"
@@ -76,8 +121,12 @@ def test_a_browser_sweep_case_joins_a_BOUNDED_pool(request):
     # And the hook APPLIES it, rather than deriving a group some other way.
     # The source check is what keeps this honest in a focused run, where too
     # few sweep cases are collected for the live marks to discriminate.
+    import inspect
+
+    from tools import test_lanes
     hook = strip_comments((REPO / "tests" / "conftest.py").read_text(encoding="utf-8"))
-    assert "browser_sweep_group(item.nodeid)" in hook, (
+    rule = strip_comments(inspect.getsource(test_lanes.worker_group))
+    assert "worker_group(" in hook and "browser_sweep_group(nodeid)" in rule, (
         "the hook must assign from the pure nodeid function, so testmon's "
         "subsets and reruns cannot move a case between groups")
 

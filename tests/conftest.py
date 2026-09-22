@@ -25,9 +25,9 @@ from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
 from tools.test_lanes import (BROWSER_SWEEP_GROUPS, BROWSER_SWEEPS,  # noqa: F401 (tests read these here)
-                              LANE_ENV, browser_sweep_group, file_totals,
+                              LANE_ENV, SHARED_GROUPS, browser_sweep_group, file_totals,
                               is_test_module, lane_of, load_durations, parse_shard,
-                              plan_shards, refusal, shard_unit)
+                              plan_shards, refusal, shard_unit, worker_group)
 
 
 def pytest_addoption(parser):
@@ -272,29 +272,6 @@ def pytest_configure(config):
 # touches the list, so the order can be put back afterwards (below).
 RAW_INDEX = pytest.StashKey[int]()
 
-# Files that touch ONE REAL file on disk and so may never run beside each
-# other, whatever worker is free. A file's own name is its group otherwise.
-#
-# `test_ui_sync_page.py` is the one test in this project that writes a real
-# PUT into `data/version_sync/jp.json` (it backs the file up and restores it,
-# by design -- the dashboard has to be driven against the real store), and
-# `test_layout_matches_report.py` READS that same path to catch layout drift,
-# skipping when it is absent. Under 24 workers those overlapped: the reader
-# found the writer's throwaway report mid-run and went red on a `failed`
-# verdict for a gate the layout ships, then the file vanished and the failure
-# could not be reproduced alone (2026-09-05). One group, no overlap.
-def _own_group(nodeid: str) -> str:
-    """A worker group for one test. xdist appends `@<group>` to the nodeid,
-    and JUnit splits that on `::`, so a group holding `::` read back from a
-    full run's report as a different test; `@`, `[`, `]` break xdist itself."""
-    return re.sub(r"[^A-Za-z0-9_./-]", "_", nodeid)
-
-
-SHARED_GROUPS = {
-    "tests/test_ui_sync_page.py": "version_sync_report",
-    "tests/test_layout_matches_report.py": "version_sync_report",
-}
-
 # The viewport sweeps' bounded pool (BROWSER_SWEEPS, BROWSER_SWEEP_GROUPS,
 # browser_sweep_group) lives in tools/test_lanes.py with its measurement,
 # because the GitHub browser run splits its jobs along the same groups.
@@ -316,6 +293,9 @@ def pytest_collection_modifyitems(config, items):
     its browsers stand up together; the reason is on that constant.
     Group names must carry no `@` or `]` -- xdist appends
     `@<group>` to the nodeid and splits it back on those two characters.
+    A file longer than SPLIT_FILE_SECONDS whose tests share no fixture is
+    split the same way, locally as on a full-run job (`worker_group` in
+    tools/test_lanes.py), so it is not one worker's whole merge check.
     `tryfirst` because xdist's worker reads the marks in ITS hook of the same
     name, and this conftest registers before that worker plugin does -- so
     without it the marks arrive one hook too late and every file spreads.
@@ -358,18 +338,9 @@ def pytest_collection_modifyitems(config, items):
     for index, item in enumerate(items):
         item.stash[RAW_INDEX] = index
         item.stash[SHARD_UNIT] = shard_unit(item.nodeid, totals)
-        if sharded and item.stash[SHARD_UNIT] == item.nodeid:
-            # A split file's test (a sweep case among them): either of the
-            # job's workers may take it; the job's two workers are the bound.
-            group = _own_group(item.nodeid)
-        elif item.nodeid.split("::")[0] in BROWSER_SWEEPS:
-            group = browser_sweep_group(item.nodeid)
-        elif item.get_closest_marker("spread"):
-            group = _own_group(item.nodeid)
-        else:
-            group = SHARED_GROUPS.get(item.nodeid.split("::")[0],
-                                      item.nodeid.split("::")[0])
-        item.add_marker(pytest.mark.xdist_group(group))
+        item.add_marker(pytest.mark.xdist_group(worker_group(
+            item.nodeid, item.stash[SHARD_UNIT], sharded=sharded,
+            spread=item.get_closest_marker("spread") is not None)))
     yield
     if config.getoption("shard"):
         index, count = parse_shard(config.getoption("shard"))

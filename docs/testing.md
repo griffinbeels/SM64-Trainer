@@ -78,7 +78,10 @@ over each lane's measured speedup, `LANE_SPEEDUP`). Each job runs
 `tests/test_durations.json`, the runners' own times (`full_run.py durations
 --run <id>` refreshes it). A file is one unit, except that a file over 120 s
 whose tests share no fixture splits into its tests: one long file on one
-worker set the whole run's wall.
+worker set the whole run's wall. Local runs split the same files across
+their workers (`worker_group` in `tools/test_lanes.py`); a file with a
+module-scoped page stays on one worker, and the viewport sweeps keep their
+bounded pool.
 
 | Jobs (browser + rest) | Units | Wall | Suite step per job |
 | --- | --- | ---: | ---: |
