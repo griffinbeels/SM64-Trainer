@@ -15,7 +15,7 @@ wrappers see [local verification](local-verification.md).
 | --- | --- | --- | --- |
 | **Focused check** | `uv run python tools/run_tests.py tests/test_x.py "tests/test_y.py::test_z"` | exactly what you name, browser tests included | never |
 | **Merge check** | `uv run python tools/run_tests.py` (`--why` shows the selection) | the **blast radius**: the tests this change can affect | for one of two slots |
-| **Full run** | GitHub Actions, every push to main; `uv run python tools/full_run.py status` | the whole suite, browser tests included, in 12 parallel jobs | not on this machine |
+| **Full run** | GitHub Actions, every push to main; `uv run python tools/full_run.py status` | the whole suite, browser tests included, split across parallel jobs | not on this machine |
 
 The merge check gates a merge; the full run gates a release (`tools/release.py`
 waits for a green one on the commit it releases). A failure reruns as a focused
@@ -48,15 +48,43 @@ something, the full run finds it after the push; widen the rule, not the habit.
 
 ## The full run
 
-`.github/workflows/full.yml` runs `run_tests.py --all --shard K/12` on
-Windows runners: `uv sync --frozen`, Node 24 and the pinned Node tools, ffmpeg,
-Playwright's Chromium, and uilab cloned beside the checkout at the commit
-pinned in the workflow (bump `UILAB_REF` after pushing uilab). Jobs are
-balanced by `tests/test_durations.json` (files whole, sweeps by their bounded
-groups); `full_run.py durations` refreshes it. Each job uploads JUnit XML, the
-rerun list and failure screenshots. The nightly scheduled run (or a dispatch
-with `record_coverage`) also records the coverage map the blast radius reads;
-recording doubles a job's time, so a push's run does not.
+`.github/workflows/full.yml` splits the suite across `JOBS` Windows runners,
+one number (`jobs` on a dispatch). It is 20, every runner the account has, so
+a second run waits for the first. A plan job turns it into the job list
+(`tools/test_lanes.py matrix N`): browser jobs run two workers, the rest
+four, and the lanes split the jobs so both finish together (recorded work
+over each lane's measured speedup, `LANE_SPEEDUP`). Each job runs
+`run_tests.py --all --lane L --shard K/N`, balanced by
+`tests/test_durations.json`, the runners' own times (`full_run.py durations
+--run <id>` refreshes it). A file is one unit, except that a file over 120 s
+whose tests share no fixture splits into its tests: one long file on one
+worker set the whole run's wall.
+
+| Jobs (browser + rest) | Units | Wall | Suite step per job |
+| --- | --- | ---: | ---: |
+| 8 (6 + 2) | files whole, four sweep groups | 11.8 min | 7.4-10.8 min |
+| 12 (10 + 2) | same | 10.3 min | 4.7-9.2 min |
+| 16 (12 + 4) | long files split | 7.3 min | 2.8-6.1 min |
+| 20 (15 + 5) | same, lanes by speedup | 5.5 min | 2.7-4.3 min |
+
+Measured 2026-09-22 (runs 35682161165, 35682940350, 35684469976,
+35687662916); setup was 30-60 s a job throughout. Three browser workers
+instead of two cut the median browser job by 11% and not the wall
+(35687167501). What remains is the largest whole files, whose tests share a
+page (about three minutes each), plus setup.
+
+Per job: `uv sync --frozen` from uv's cache, Node 24 and the pinned Node tools
+(cached), ffmpeg (the gyan.dev build the desktop app bundles, pinned by
+`FFMPEG_BUILD`, cached: a newer build broke the CFR sink's audio), and on
+browser jobs only Chromium (cached) and uilab at `UILAB_REF` (bump it after
+pushing uilab). A test running past five minutes prints every thread's stack.
+A newer push to main cancels an older run on main; nightly runs and other
+branches never cancel. Each job uploads JUnit XML, the rerun list and failure
+screenshots; a wait that timed out also leaves a note beside its picture:
+the requests still unanswered, every failed request, error status, console
+error and uncaught exception, and the start of the page's body. The nightly run (or a dispatch with `record_coverage`) also
+records the coverage map the blast radius reads; recording doubles a job's
+time, so a push's run does not.
 
 ```
 uv run python tools/full_run.py status     # HEAD's run: one line, plus any job not green
@@ -67,7 +95,10 @@ gh workflow run full.yml --ref <branch>    # a run for a branch before merging
 
 What a runner cannot do skips there with an inventory reason: the GL
 witnesses need an OpenGL 3.3+ driver (`tests/gl_probe.py`), hardware encoders
-need their vendor's GPU, and the GPU witnesses are opt-in everywhere.
+need their vendor's GPU, and the GPU witnesses are opt-in everywhere. The
+`RUNNER_ONLY` rows in `tests/skip_inventory.py` (the shared harness, the
+knowledge repo's chain checker, NVENC, a live journal) count only on a
+runner, so the same skip on this desktop still fails the audit.
 
 **One retry, for setup errors only**, and only in the full run: fixture boot or
 seeding timeouts, `WinError 10055` / `ERR_NO_BUFFER_SPACE`, a closed or crashed
@@ -98,7 +129,7 @@ controller is waited for, never stopped.
 | --- | ---: | ---: |
 | Normal (32-CPU desktop) | 8 | 20 |
 | OBS process open | 4 | 8 |
-| GitHub runner (4 CPUs) | 2 | 4 |
+| GitHub runner (4 CPUs, one job each) | the job's: 2 browser, 4 other | 4 |
 
 Explicit `--workers`/`--reserve` may tighten these, never loosen them. Affinity
 is set before spawning; OBS opening mid-run tightens the whole tree within two
