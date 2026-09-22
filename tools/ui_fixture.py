@@ -51,6 +51,10 @@ from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
 from sm64_events.tracking.defaults import reconcile_defaults
 from sm64_events.tracking.service import TrackerService
+try:  # the test harness's calibration memo; a single CLI boot needs none
+    from calibration_reuse import reusing_calibrations
+except ImportError:
+    reusing_calibrations = contextlib.nullcontext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_lanes import refuse_outside_browser_modules  # noqa: E402
@@ -1465,21 +1469,23 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
                         "warning": None},
                 "checks": {key: layer.state == "active" for key in
                            ("plugin", "pictures", "inputs", "game")}}
-    app = create_app(poller, broadcaster, service=service, compare=compare,
-                     inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
-                     adoptions_path=scratch_path
-                     / "library_adoptions.json",
-                     mode_path=scratch_path / "tracker_mode.json",
-                     # Scratch for the same reason as adoptions_path: the
-                     # default local sheet snapshot is the real dev data dir,
-                     # and a live refresh writes a newer snapshot there, so a
-                     # sweep would measure a page built from whatever the
-                     # sheet said last night rather than the bundled data.
-                     library_path=scratch_path
-                     / "sheet_library.json.gz",
-                     library_bundled_path=(None if bundled_library else
-                                           scratch_path
-                                           / "no-library.json.gz"))
+    # Identical in every boot of a test worker; each app keeps its own copy.
+    with reusing_calibrations():
+        app = create_app(poller, broadcaster, service=service, compare=compare,
+                         inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
+                         adoptions_path=scratch_path
+                         / "library_adoptions.json",
+                         mode_path=scratch_path / "tracker_mode.json",
+                         # Scratch for the same reason as adoptions_path: the
+                         # default local sheet snapshot is the real dev data dir,
+                         # and a live refresh writes a newer snapshot there, so a
+                         # sweep would measure a page built from whatever the
+                         # sheet said last night rather than the bundled data.
+                         library_path=scratch_path
+                         / "sheet_library.json.gz",
+                         library_bundled_path=(None if bundled_library else
+                                               scratch_path
+                                               / "no-library.json.gz"))
 
     return app, service
 

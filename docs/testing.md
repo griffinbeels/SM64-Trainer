@@ -183,6 +183,17 @@ in jsdom through Vitest. They need Node 24.13+ and
 install fails with the setup command rather than skipping. Layout, hit testing
 and paint stay browser tests. [Pilot findings](testing-pilot.md).
 
+## In-process app builds
+
+Every test that builds the real app (`tests/import_fixture.py::make_client`,
+`tests/test_ranks_api.py::make_client`, the parity walk's `open_app`, the UI
+fixture) prepares the same rank calibration in every test of a worker. While
+an app is built, `tests/calibration_reuse.py` answers a repeat from a
+per-process memo keyed by every argument `prepare` receives, and hands each app
+its own deep copy; a test body's own recalibrations, and any test that replaces
+`prepare`, run the real one. `tests/test_calibration_reuse.py` fails if one
+app's changes reach the next or a changed input is served a stale result.
+
 ## What makes a test worth keeping
 
 These tests exist to stop an agent changing behaviour nobody asked it to
