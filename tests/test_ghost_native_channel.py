@@ -163,10 +163,14 @@ def test_queued_epoch_transition_uses_record_identity():
                        (replace(producer, configuration=4, epoch=9), frames[3:])]
 
 
+def clip(tmp_path, key: bytes, hue=0):
+    return {"clip_id": key * 16, "clip_sha256": b"b" * 32,
+            "clip_path": tmp_path / f"{key.decode()}.ghost", "hue_degrees": hue}
+
+
 def test_exact_origin_transport_and_full_width_seek(kernel, tmp_path):
     connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
-    controls = {"enabled": True, "model_id": 1, "clip_id": b"a" * 16,
-                "clip_sha256": b"b" * 32, "clip_path": tmp_path / "poses.ghost",
+    controls = {"enabled": True, "model_id": 1, "clips": [clip(tmp_path, b"a")],
                 "origin": {"kind": 2, "configuration": 4, "epoch": 5,
                            "global_timer": 1234, "utc": 1000.0, "session_id": 7, "arm_id": 8}}
     try:
@@ -182,6 +186,79 @@ def test_exact_origin_transport_and_full_width_seek(kernel, tmp_path):
         assert bytes(kernel.request) == before
         connection.poll({**controls, "mode": 1, "seek_igt": 100000})
         assert kernel.request.seek_igt == 100000 and not any(bytes(kernel.request.origin))
+    finally:
+        connection.close()
+
+
+def test_clip_set_is_encoded_in_order_with_per_ghost_hue(kernel, tmp_path):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    controls = {"enabled": True, "model_id": 1, "mode": 1,
+                "clips": [clip(tmp_path, b"a", 10), clip(tmp_path, b"c", 200), clip(tmp_path, b"d", 359)]}
+    try:
+        connection.poll(controls)
+        request = kernel.request
+        assert request.clip_count == 3
+        assert [bytes(entry.clip_id) for entry in request.clips[:3]] == [b"a" * 16, b"c" * 16, b"d" * 16]
+        assert [entry.hue_degrees for entry in request.clips[:3]] == [10, 200, 359]
+        text = bytes(request.clips[1].clip_path).decode("utf-16-le").rstrip("\0")
+        assert text == str((tmp_path / "c.ghost").resolve())
+        assert not any(any(bytes(entry)) for entry in request.clips[3:])
+        connection.poll({**controls, "clips": controls["clips"][1:2]})
+        assert kernel.request.clip_count == 1 and bytes(kernel.request.clips[0].clip_id) == b"c" * 16
+        assert not any(bytes(kernel.request.clips[1]))
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("change", [
+    {"clips": []},
+    {"clips": None},
+    {"clips": "one"},
+    {"clips": ["a"] * 17},
+    {"duplicate": True},
+    {"zero_id": True},
+    {"short_digest": True},
+    {"hue": 360},
+    {"hue": True},
+    {"extra_key": True},
+    {"clip_id": b"a" * 16},
+    {"hue_degrees": 5},
+])
+def test_invalid_clip_set_never_mutates_the_live_command(kernel, tmp_path, change):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    good = {"enabled": True, "model_id": 1, "mode": 1, "clips": [clip(tmp_path, b"a"), clip(tmp_path, b"c")]}
+    try:
+        connection.poll(good)
+        before = bytes(kernel.request)
+        controls = {**good, "clips": [dict(entry) for entry in good["clips"]]}
+        entry = controls["clips"][1]
+        if change.get("duplicate"):
+            entry["clip_id"] = b"a" * 16
+        elif change.get("zero_id"):
+            entry["clip_id"] = bytes(16)
+        elif change.get("short_digest"):
+            entry["clip_sha256"] = b"b" * 31
+        elif "hue" in change:
+            entry["hue_degrees"] = change["hue"]
+        elif change.get("extra_key"):
+            entry["attempt_id"] = 4
+        else:
+            controls.update(change)
+        with pytest.raises(ValueError):
+            connection.poll(controls)
+        assert bytes(kernel.request) == before
+    finally:
+        connection.close()
+
+
+def test_disabled_playback_needs_no_clips(kernel, tmp_path):
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    try:
+        connection.poll({"enabled": True, "model_id": 1, "mode": 1, "clips": [clip(tmp_path, b"a")]})
+        connection.poll({"enabled": False})
+        assert not kernel.request.play_enabled and kernel.request.clip_count == 1
+        connection.poll({"enabled": False, "clips": []})
+        assert kernel.request.clip_count == 0
     finally:
         connection.close()
 

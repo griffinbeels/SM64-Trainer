@@ -125,7 +125,7 @@ static void json_string(const std::string& value){
 struct Times {double pipeline=0,swap=0;};
 struct Pipeline {
     Window window;gc::Dispatch g;Scene scene;ViRaster raster;gc::Instance* compositor=nullptr;
-    present::Instance* presentation=nullptr;Fixture& fixture;unsigned frames=0,vertices=0;
+    present::Instance* presentation=nullptr;Fixture& fixture;unsigned frames=0,vertices=0,visible=0;
     bool swap_interval_disabled=false;std::vector<uint8_t> clean,display_clean,last_visible,coverage;
     std::string gpu_vendor,gpu_renderer,gl_version;
     std::vector<float> clean_depth;ghost::WorldPass world{};uint32_t configuration=0;gcc_output origin_clock{};
@@ -142,7 +142,8 @@ struct Pipeline {
         ghost_playback::safe_boundary(7,configuration);sg_atlas_view atlas{};uint64_t model=0;
         require(ghost_playback::atlas(&atlas,&model) && model==1,"actual adopted model atlas");
         compositor=gc::create(g,1);require(compositor!=nullptr,"pipeline compositor");
-        require(gc::prepare(compositor,W,H,SG_MODEL_MAX_VERTICES,atlas.rgba,atlas.width,atlas.height)==gc::Result::ok,"real atlas upload");
+        require(gc::prepare(compositor,W,H,GP_GHOSTS*SG_MODEL_MAX_VERTICES,atlas.rgba,atlas.width,atlas.height)==gc::Result::ok,
+            "real atlas upload with one vertex range per ghost");
         present::Dispatch d{};d.gl=g;d.CopyTexSubImage2D=glCopyTexSubImage2D;
         d.DrawBuffers=reinterpret_cast<decltype(d.DrawBuffers)>(load("glDrawBuffers"));
         presentation=present::create(d,1);require(presentation && present::prepare(presentation,1,W,H,W,H),"pipeline clean presentation");
@@ -162,9 +163,9 @@ struct Pipeline {
         display_clean.resize(clean.size());
         for(unsigned y=0;y<H;++y)std::memcpy(&display_clean[y*W*4],&clean[(H-1-y)*W*4],W*4);
     }
-    void geometry_mask(const gc::Pose& p){
+    void geometry_mask(const gc::Pose* poses,uint32_t count){
         coverage.assign(W*H,0);
-        for(unsigned at=0;at<p.count;at+=3){float v[3][2]{};bool visible=true;
+        for(uint32_t ghost=0;ghost<count;++ghost)for(unsigned at=0;at<poses[ghost].count;at+=3){const auto& p=poses[ghost];float v[3][2]{};bool visible=true;
             for(unsigned n=0;n<3;++n){const auto& q=p.vertices[at+n].position;float clip[4]{};
                 for(unsigned r=0;r<4;++r)clip[r]=p.view_projection[r]*q[0]+p.view_projection[4+r]*q[1]+p.view_projection[8+r]*q[2]+p.view_projection[12+r];
                 // The VI shader flips the top-left N64 image into the drawable.
@@ -191,17 +192,18 @@ struct Pipeline {
         ghost_playback::safe_boundary(7,configuration);
         ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});
         present::begin_update(presentation,live.sequence);
-        gc::Pose p{};gp_draw_token token{};
-        if(draw){require(ghost_playback::evaluate(live,world,p,token) && p.count>1800,"actual playback/model geometry");vertices=p.count;
+        gc::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
+        if(draw){require(ghost_playback::evaluate(live,world,poses,count,token) && poses[0].count>1800,"actual playback/model geometry");
+            vertices=0;for(uint32_t i=0;i<count;++i)vertices+=poses[i].count;visible=count;
             auto destination=target(scene,gc::Depth::ordinary);destination.occurrence=live.sequence;
-            require(gc::begin(compositor,destination,p)==gc::Result::ok,"real compositor begin");
+            require(gc::begin_batch(compositor,destination,poses,count)==gc::Result::ok,"real compositor batch");
             require(gc::finalize(compositor,live.sequence)==gc::Result::ok && ghost_playback::current(token),"finalized current ghost");
             const auto image=gc::display(compositor);
             const present::GhostViImage vi{image.texture,W,H,configuration,1,live.sequence};
             require(present::replace_vi(presentation,vi,0x1000,false,raster.api()),"real display/clean split");}
         require(present::before_swap(presentation,0x1000,raster.api()),"before swap");present::after_osd(presentation);
         glFinish();const auto completed=Clock::now();
-        if(evidence){last_visible=back_pixels(g);if(draw)geometry_mask(p);
+        if(evidence){last_visible=back_pixels(g);if(draw)geometry_mask(poses,count);
             else require(last_visible==display_clean,"normal VI orientation and clean pixels");
             require(pixels(g,scene.fbo,W,H)==clean && depth(g,scene)==clean_depth,"source scene color/depth unmodified");}
         const auto swap_start=Clock::now();const bool swapped=SwapBuffers(window.dc)!=FALSE;
@@ -241,13 +243,18 @@ int main(int argc,char** argv){
     require(api->prepare_clip(&header,&recorded)==GP_OK,"actual captured clip validation");
     gp_request request{};request.bytes=sizeof(request);request.version=GP_VERSION;request.revision=1;request.enabled=1;
     request.owner_token=1;request.model_id=1;request.rom_generation=7;request.configuration=captured.configuration;
-    request.clip_id[0]=1;request.opacity=1;
+    request.clip_count=1;request.clips[0].clip_id[0]=1;request.opacity=1;
     request.origin={GO_SEGMENT,first.epoch,first.sequence,first.clock.continuity_id,first.clock.elapsed_frames,first.clock.origin_id,0,0};
     require(api->configure(&request)==GP_OK,"configure exact-origin FOLLOW playback");std::unique_ptr<Pipeline> pipeline;
+    // The same captured pose, shifted in view space: a grid of distinct ghosts.
+    for(uint32_t i=1;i<GP_GHOSTS;++i){auto h=header;h.clip_id[0]=uint8_t(1+i);auto f=recorded;
+        f.sample.pose.root_matrix[12]+=(float(i%4)-1.5f)*70.f;f.sample.pose.root_matrix[13]+=(float(i/4)-1.5f)*45.f;
+        require(api->prepare_clip(&h,&f)==GP_OK,"prepare one of several ghosts");}
     renderer.run([&]{pipeline=std::make_unique<Pipeline>(fixture,captured);});const auto setup_ms=ms(prepare_start,Clock::now());
     const std::filesystem::path out(argv[3]);std::filesystem::create_directories(out);
     std::vector<uint8_t> baseline,opaque,half,wall;std::vector<double> baseline_times,ghost_times,swap_times,total_times;
-    unsigned silhouette=0,outside=0,alpha_errors=0,occlusion_errors=0;
+    std::vector<double> multi_times,multi_swap_times,multi_total_times;
+    unsigned silhouette=0,outside=0,alpha_errors=0,occlusion_errors=0,multi_silhouette=0,multi_outside=0,multi_visible=0,multi_vertices=0;
     renderer.run([&]{pipeline->frame(false,true);baseline=pipeline->last_visible;ppm(out/"baseline.ppm",baseline);
         pipeline->frame(true,true);opaque=pipeline->last_visible;ppm(out/"opacity100.ppm",opaque);
         silhouette=changed(baseline,opaque);require(silhouette>1000,"real Mario silhouette");
@@ -270,6 +277,20 @@ int main(int argc,char** argv){
             else{base=pipeline->frame(false);ghost=pipeline->frame(true);}
             baseline_times.push_back(base.pipeline);ghost_times.push_back(ghost.pipeline);swap_times.push_back(ghost.swap);total_times.push_back(ghost.pipeline+ghost.swap);}
         require(!IsWindowVisible(pipeline->window.window),"no visible native window");});
+    // Every ghost in one batch: one clean copy, per-body depth, one presentation.
+    request.clip_count=GP_GHOSTS;request.tint_enabled=1;
+    for(uint32_t i=0;i<GP_GHOSTS;++i){request.clips[i].clip_id[0]=uint8_t(1+i);request.clips[i].hue_degrees=(i*22)%360;}
+    ++request.revision;require(api->configure(&request)==GP_OK,"configure the full ghost set");
+    renderer.run([&]{pipeline->frame(true,true);multi_visible=pipeline->visible;multi_vertices=pipeline->vertices;
+        ppm(out/"multi-ghosts.ppm",pipeline->last_visible);
+        multi_silhouette=changed(baseline,pipeline->last_visible);
+        for(size_t i=0;i<W*H;++i)if(!pipeline->coverage[i] && std::memcmp(&baseline[4*i],&pipeline->last_visible[4*i],3))++multi_outside;
+        require(multi_visible==GP_GHOSTS && multi_silhouette>2*silhouette && multi_outside==0,"every ghost drawn, nothing else changed");
+        for(unsigned i=0;i<20;++i){pipeline->frame(false);pipeline->frame(true);}
+        for(unsigned i=0;i<180;++i){Times base{},ghost{};if(i&1){ghost=pipeline->frame(true);base=pipeline->frame(false);}
+            else{base=pipeline->frame(false);ghost=pipeline->frame(true);}
+            multi_times.push_back(ghost.pipeline);multi_swap_times.push_back(ghost.swap);multi_total_times.push_back(ghost.pipeline+ghost.swap);}
+        require(pipeline->visible==GP_GHOSTS,"full set stays visible");});
     const auto vertex_count=pipeline->vertices;const auto swap_disabled=pipeline->swap_interval_disabled;
     const auto gpu_vendor=pipeline->gpu_vendor,gpu_renderer=pipeline->gpu_renderer,gl_version=pipeline->gl_version;
     renderer.run([&]{pipeline.reset();});ghost_stream::api()->disable();api->revoke(GP_DISABLED);require(api->collect()==GP_OK,"worker collects real retired model");
@@ -281,5 +302,9 @@ int main(int argc,char** argv){
     std::printf("\"gamma\":false,\"gpu_vendor\":");json_string(gpu_vendor);
     std::printf(",\"gpu_renderer\":");json_string(gpu_renderer);std::printf(",\"gl_version\":");json_string(gl_version);std::printf(",");
     statistics("baseline",baseline_times);std::printf(",");statistics("pipeline_gpu_completed",ghost_times);std::printf(",");
-    statistics("blocking_swap",swap_times);std::printf(",");statistics("including_swap",total_times);std::printf("}\n");return 0;
+    statistics("blocking_swap",swap_times);std::printf(",");statistics("including_swap",total_times);
+    std::printf(",\"multi\":{\"ghosts\":%u,\"visible\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,",
+        unsigned(GP_GHOSTS),multi_visible,multi_vertices,multi_silhouette,multi_outside);
+    statistics("pipeline_gpu_completed",multi_times);std::printf(",");statistics("blocking_swap",multi_swap_times);
+    std::printf(",");statistics("including_swap",multi_total_times);std::printf("}}\n");return 0;
 }

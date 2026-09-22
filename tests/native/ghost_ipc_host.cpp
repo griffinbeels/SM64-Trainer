@@ -41,6 +41,7 @@ struct CartridgeHeader {
 };
 std::atomic<DWORD> worker_owner{0};
 std::atomic<unsigned> wrong_thread{0},binds{0},releases{0},revokes{0},commands{0},models{0},withdrawals{0};
+std::atomic<unsigned> prepared_ids[256]{},released_ids[256]{},rom_validations{0};
 std::atomic<uint32_t> configuration{0},model_state{GP_MODEL_EMPTY};
 std::atomic<uint32_t> pending_record{0},sample_sequence{0};
 std::atomic<uint32_t> burst_records{0};
@@ -94,7 +95,13 @@ int32_t __cdecl prepare_model(uint64_t id,const uint8_t* bytes,uint32_t size) {
 }
 int32_t __cdecl prepare_clip(const gclip_header* h,const gclip_frame* frame) {
     if(!enter_worker())return GP_WRONG_THREAD;
+    if(h)++prepared_ids[h->clip_id[0]];
     return h && frame && h->record_count==1 && frame->bytes==sizeof(*frame)?GP_OK:GP_INVALID;
+}
+int32_t __cdecl release_clip(const uint8_t* id) {
+    if(!enter_worker())return GP_WRONG_THREAD;
+    if(!id)return GP_INVALID;
+    ++released_ids[id[0]];return GP_OK;
 }
 int32_t __cdecl configure(const gp_request* value) {
     if(!enter_worker())return GP_WRONG_THREAD;
@@ -132,7 +139,7 @@ int32_t __cdecl playback_status(gp_status* out,uint32_t bytes) {
 const gs_api capture_api={sizeof(gs_api),GS_VERSION,GS_CAP_POSE|GS_CAP_WORLD_PASS,0,
     capture_configure,capture_disable,capture_read,capture_stats};
 const gp_api playback_api={sizeof(gp_api),GP_VERSION,{0,0},prepare_model,prepare_clip,
-    configure,revoke,collect,release_worker,playback_status,withdraw};
+    configure,revoke,collect,release_worker,playback_status,withdraw,release_clip};
 
 struct Page {
     Handle mapping,mutex,wake,producer;
@@ -184,6 +191,40 @@ void path(uint16_t* out,const wchar_t* value) {
     check(std::wcslen(value)<GIPC_PATH_CHARS,"fixture path bound");
     std::memcpy(out,value,(std::wcslen(value)+1)*sizeof(wchar_t));
 }
+void digest_of(uint8_t* out,const wchar_t* hex) {
+    check(std::wcslen(hex)==64,"SHA argument length");
+    for(unsigned i=0;i<32;++i){unsigned byte=0;check(swscanf_s(hex+2*i,L"%2x",&byte)==1,"SHA argument");out[i]=uint8_t(byte);}
+}
+void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,uint32_t hue) {
+    clip={};clip.clip_id[0]=id;digest_of(clip.clip_sha256,hex);path(clip.clip_path,file);clip.hue_degrees=hue;
+}
+// Every field offset, so Python can compare its ctypes mirror to this compiler.
+#define GIPC_REQUEST_FIELDS(X) X(owner_pid) X(owner_created_lo) X(owner_created_hi) X(generation) \
+    X(token) X(revision) X(heartbeat) X(capture_enabled) X(play_enabled) X(mode) X(seek_igt) \
+    X(nudge) X(opacity) X(stop_at_star) X(rom_generation) X(owner_suspended) X(model_id) \
+    X(layout) X(rom_path) X(star_action_count) X(star_actions) X(tint_enabled) \
+    X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips)
+#define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path)
+#define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
+    X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
+    X(configuration) X(epoch) X(record_bytes) X(capabilities) X(qpc_frequency) X(qpc_anchor) \
+    X(utc_anchor) X(produced) X(consumed) X(dropped) X(ack_revision) X(ack_token) \
+    X(playback_state) X(playback_reason) X(displayed) X(clips_requested) X(clips_prepared) \
+    X(clips_visible) X(reserved)
+void field(const char* name,size_t offset) {std::printf("\"%s\":%u,",name,unsigned(offset));}
+void print_layout() {
+    std::printf("\"layout\":{\"page\":%u,\"ring\":%u,\"request\":{",unsigned(sizeof(gipc_page)),
+        unsigned(offsetof(gipc_page,records)));
+#define REQUEST(name) field(#name,offsetof(gipc_request,name));
+#define CLIP(name) field(#name,offsetof(gipc_clip,name));
+#define STATUS(name) field(#name,offsetof(gipc_status,name));
+    GIPC_REQUEST_FIELDS(REQUEST) std::printf("\"$bytes\":%u},\"clip\":{",unsigned(sizeof(gipc_request)));
+    GIPC_CLIP_FIELDS(CLIP) std::printf("\"$bytes\":%u},\"status\":{",unsigned(sizeof(gipc_clip)));
+    GIPC_STATUS_FIELDS(STATUS) std::printf("\"$bytes\":%u}},",unsigned(sizeof(gipc_status)));
+#undef REQUEST
+#undef CLIP
+#undef STATUS
+}
 gp_request last_command(){std::lock_guard<std::mutex> lock(command_mutex);return command;}
 void ready(Page& page,gipc_request& r) {
     page.send(r);page.wait([&](const gipc_status& s){return s.ack_token==r.token && s.ack_revision==r.revision
@@ -201,6 +242,7 @@ namespace ghost_playback {const gp_api* api(){return &playback_api;}}
 // This IPC witness isolates the real worker from the model; test_native_model
 // exercises the actual asset validator, including while a model is render-owned.
 extern "C" int32_t sg_model_validate_rom(const uint8_t* bytes,size_t count) {
+    ++rom_validations;
     return count==(8u<<20) && bytes && !std::memcmp(bytes+(4u<<20),"ASSETROM",8)
         ? SG_OK : SG_INVALID_ROM;
 }
@@ -216,9 +258,8 @@ DWORD WINAPI ghost_witness_wait(DWORD count,const HANDLE* events,BOOL all,DWORD 
 #pragma comment(linker,"/EXPORT:GhostIpcWitness=_ghost_ipc_witness")
 extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
     try {
-        check(argc==4,"clip, digest and ROM fixture arguments");
-        uint8_t digest[32]{};check(std::wcslen(argv[2])==64,"SHA argument length");
-        for(unsigned i=0;i<32;++i){unsigned byte=0;check(swscanf_s(argv[2]+2*i,L"%2x",&byte)==1,"SHA argument");digest[i]=uint8_t(byte);}
+        check(argc==8,"clip, digest, ROM and two more clip fixture arguments");
+        uint8_t digest[32]{};digest_of(digest,argv[2]);
         uint16_t clip_path[GIPC_PATH_CHARS]{},rom_path[GIPC_PATH_CHARS]{};
         path(clip_path,argv[1]);path(rom_path,argv[3]);
         std::vector<uint8_t> bytes;gclip_header header{};
@@ -249,17 +290,17 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(GetProcessTimes(GetCurrentProcess(),&birth,unused,unused+1,unused+2)!=0,"owner birth");
         r.owner_created_lo=birth.dwLowDateTime;r.owner_created_hi=birth.dwHighDateTime;r.generation=initial.generation;
         r.token=123;r.revision=1;r.capture_enabled=r.play_enabled=1;r.rom_generation=ghost_ipc::rom_generation();
-        r.model_id=1;r.clip_id[0]=1;r.opacity=0.75f;r.tint_enabled=1;r.hue_degrees=217;
+        r.model_id=1;r.clip_count=1;set_clip(r.clips[0],1,argv[1],argv[2],217);r.opacity=0.75f;r.tint_enabled=1;
         r.proximity_enabled=1;r.proximity_distance=120;
         r.mode=GP_FIXED;
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
         r.layout.clock.near_zero=30;
-        std::memcpy(r.clip_sha256,digest,32);std::memcpy(r.clip_path,clip_path,sizeof(clip_path));
         ready(page,r);auto first=last_command();
         page.consume_record();
         check(first.rom_generation==r.rom_generation && first.owner_token==r.token && first.opacity==0.75f
-            && first.tint_enabled==1 && first.hue_degrees==217 && first.star_actions[0]==0x1302,"command fields transported");
+            && first.tint_enabled==1 && first.clip_count==1 && first.clips[0].clip_id[0]==1
+            && first.clips[0].hue_degrees==217 && first.star_actions[0]==0x1302,"command fields transported");
         check(first.configuration && first.revision,"capture and playback identities acknowledged");
         check(first.proximity_enabled==1 && first.proximity_distance==120,"proximity crosses actual IPC worker");
         check(!page.status().displayed,"ready pose is not presentation evidence");
@@ -297,9 +338,40 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         // Replacing a selected clip reuses this ROM generation's prepared copy.
         // Removing the fixture image now would make a fresh discovery fail.
         rom[0]=0;
-        r.revision=8;r.play_enabled=1;r.clip_sha256[0]^=1;refused(page,r,GIPC_FILE);
-        r.revision=9;r.clip_sha256[0]^=1;ready(page,r);
-        r.revision=10;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
+        r.revision=8;r.play_enabled=1;r.clips[0].clip_sha256[0]^=1;refused(page,r,GIPC_FILE);
+        r.revision=9;r.clips[0].clip_sha256[0]^=1;ready(page,r);
+        // Several ghosts: adding one reads and prepares only that clip, while
+        // the applied set keeps drawing (no withdrawal) and the ROM stays cached.
+        const unsigned prepared_one=prepared_ids[1].load(),validations=rom_validations.load();
+        const unsigned shown=withdrawals.load(),released_one=released_ids[1].load();
+        r.revision=10;r.clip_count=2;set_clip(r.clips[1],2,argv[4],argv[5],40);ready(page,r);
+        auto set=last_command();
+        check(set.clip_count==2 && set.clips[0].clip_id[0]==1 && set.clips[1].clip_id[0]==2
+            && set.clips[0].hue_degrees==217 && set.clips[1].hue_degrees==40,"ordered set and per-ghost hue");
+        check(prepared_ids[1]==prepared_one && prepared_ids[2]==1,"adding a clip prepares only the new clip");
+        check(rom_validations==validations,"adding a clip never re-reads the cartridge");
+        check(withdrawals==shown,"applied ghosts keep drawing while a new clip loads");
+        auto readiness=page.status();
+        check(readiness.clips_requested==2 && readiness.clips_prepared==2,"set readiness published");
+        r.revision=11;r.clip_count=3;set_clip(r.clips[2],3,argv[6],argv[7],300);ready(page,r);
+        check(prepared_ids[1]==prepared_one && prepared_ids[2]==1 && prepared_ids[3]==1,"third clip alone prepared");
+        r.revision=12;r.clips[0]=r.clips[1];r.clips[1]=r.clips[2];r.clips[2]={};r.clip_count=2;ready(page,r);
+        set=last_command();
+        check(released_ids[1]==released_one+1 && !released_ids[2] && !released_ids[3]
+            && set.clip_count==2 && set.clips[0].clip_id[0]==2 && set.clips[1].clip_id[0]==3,"removed ghost released");
+        check(prepared_ids[2]==1 && prepared_ids[3]==1 && withdrawals==shown,"remaining ghosts retained and shown");
+        const unsigned added_prepares=prepared_ids[2]+prepared_ids[3],reprepares=prepared_ids[1]-prepared_one;
+        const unsigned removed=released_ids[1]-released_one;
+        // Set protocol refusals, each at a fresh revision.
+        auto bad=r;bad.revision=13;std::memcpy(bad.clips[1].clip_id,bad.clips[0].clip_id,16);
+        refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=14;std::memset(bad.clips[1].clip_id,0,16);refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=15;bad.clip_count=0;refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=16;bad.clip_count=GIPC_GHOSTS+1;refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=17;bad.clips[1].hue_degrees=360;refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=18;bad.clips[1].reserved=1;refused(page,bad,GIPC_PROTOCOL);
+        r.revision=19;ready(page,r);
+        r.revision=20;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
         // Reproduce the reader owning the page exactly when lease expiry must
         // be published. No new request/event wakes the worker after this race.
@@ -344,8 +416,11 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         rom[0]=0x40;r.revision=2;ready(page,r);
         ghost_ipc::rom(false);page.stopped();
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
-        std::printf("{\"ok\":true,\"checks\":%u,\"commands\":%u,\"bindings\":%u,\"releases\":%u}\n",
-            checks,commands.load(),binds.load(),releases.load());return 0;
+        std::printf("{\"ok\":true,\"checks\":%u,\"commands\":%u,\"bindings\":%u,\"releases\":%u,",
+            checks,commands.load(),binds.load(),releases.load());
+        std::printf("\"multi\":{\"ghosts\":3,\"added_prepares\":%u,\"existing_reprepares\":%u,\"released\":%u},",
+            added_prepares,reprepares,removed);
+        print_layout();std::printf("\"end\":true}\n");return 0;
     }catch(const std::exception& error){
         intercept_expiry=false;intercept_wait=false;
         SetEvent(resume_expiry.value);SetEvent(resume_wait.value);ghost_ipc::rom(false);

@@ -106,7 +106,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
                       *tmp_path.glob("*.png")])
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
-    assert report["capture_version"] == 4 and report["clip_version"] == 3 and report["playback_version"] == 3
+    assert report["capture_version"] == 4 and report["clip_version"] == 3 and report["playback_version"] == 4
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
@@ -116,3 +116,14 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
                      ("pipeline_gpu_completed", "blocking_swap", "including_swap", "gpu_renderer")}))
     # A functional pass cannot disguise exceeding the requested whole-frame budget.
     assert report["including_swap"]["over_budget"] == 0, report["including_swap"]
+    assert_full_ghost_set(report)
+
+
+def assert_full_ghost_set(report):
+    """Sixteen prepared clips drawn in one batch, inside the same frame budget."""
+    multi = report["multi"]
+    assert multi["ghosts"] == multi["visible"] == 16 and multi["outside_pixels_changed"] == 0
+    assert multi["vertices"] > 16 * 1800 and multi["silhouette_pixels"] > 2 * report["silhouette_pixels"]
+    assert multi["including_swap"]["samples"] == 180
+    print(json.dumps({"multi": {key: multi[key] for key in ("ghosts", "pipeline_gpu_completed", "including_swap")}}))
+    assert multi["including_swap"]["over_budget"] == 0, multi["including_swap"]

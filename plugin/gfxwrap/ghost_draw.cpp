@@ -127,7 +127,8 @@ void begin(uint32_t rom, uint32_t config_id) {
     }
     if (compositor && width && height && (width != prepared_width || height != prepared_height || model_id != wanted_model)) {
         if (!replay_gl::BeginCapture()) return;
-        const auto result = ghost_compositor::prepare(compositor, width, height, SG_MODEL_MAX_VERTICES,
+        // One vertex range per displayed ghost; begin_batch shares the buffer.
+        const auto result = ghost_compositor::prepare(compositor, width, height, GP_GHOSTS * SG_MODEL_MAX_VERTICES,
                                                      atlas.rgba, atlas.width, atlas.height);
         const bool clean = replay_gl::EndCapture();
         if (result == ghost_compositor::Result::ok && clean) {
@@ -146,8 +147,9 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
             || world.target.width != prepared_width || world.target.height != prepared_height) return;
     auto *buffer = ghost_link::raster_buffer();
     if (!buffer || !buffer->m_pTexture || uint32_t(buffer->m_FBO) != world.target.color) return;
-    ghost_compositor::Pose pose{};
-    if (!ghost_playback::evaluate(sample, world, pose, draw_token) || !pose.count) return;
+    // Zero visible ghosts leaves this frame exactly as a hidden single ghost did.
+    ghost_compositor::Pose poses[GP_GHOSTS]{}; uint32_t count = 0;
+    if (!ghost_playback::evaluate(sample, world, poses, count, draw_token)) return;
     ghost_compositor::Target target{};
     target.occurrence = world.list_serial; target.generation = world.context_generation;
     target.framebuffer = world.target.color; target.width = world.target.width; target.height = world.target.height;
@@ -158,7 +160,7 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
     std::memcpy(target.viewport, world.target.viewport, sizeof(target.viewport));
     glGetIntegerv(GL_SCISSOR_BOX, target.scissor);
     if (!replay_gl::BeginCapture()) return;
-    const auto result = ghost_compositor::begin(compositor, target, pose);
+    const auto result = ghost_compositor::begin_batch(compositor, target, poses, count);
     const bool clean = replay_gl::EndCapture();
     provisional = result == ghost_compositor::Result::ok && clean;
     if (provisional) {
