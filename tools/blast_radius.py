@@ -27,6 +27,10 @@ passed, else the merge-base with main. What a changed file selects:
   last run     the tests that failed in this checkout's last run
   runner/lock  (the global inputs below) every test that starts no browser
 
+Past BROWSER_CAP browser files, only the startup canary and the pages that
+name the change run here (quickest first, up to the cap); the full run after
+the push takes the rest.
+
 The viewport sweeps are never picked here: each case sweeps every page at
 every width, so any UI change would pick all of them. The full run covers them;
 name one to run it locally.
@@ -48,7 +52,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from test_lanes import BROWSER_SWEEPS, is_test_module, lane_of  # noqa: E402
+from test_lanes import (BROWSER_SWEEPS, file_totals, is_test_module, lane_of,  # noqa: E402
+                        load_durations)
 
 UI = "src/sm64_events/ui"
 SHELL = {f"{UI}/index.html", f"{UI}/app.js"}   # every page loads these; never a narrowing token
@@ -66,6 +71,19 @@ GLOBAL_INPUTS = {
 # any file of it is in its radius. Data globs ("*.json") point at fixtures.
 SCANNED_SUFFIXES = {"md", "js", "css", "html", "toml"}
 SPECIFIC_CLASS_FILES = 3      # a class rendered by more files than this is shared chrome, not a clue
+
+# The local browser budget. A change that reaches more browser files than this
+# runs, here, its non-browser tests, the startup canary and the pages that
+# NAME what changed, quickest first up to the cap; the rest run in the full
+# run after the push, which blocks a release. Measured 2026-09-22: a core
+# Python change (40d109ee, 1a1aa15e) reached 93 browser files, all through the
+# app's first page load (ui/store.js fetches the session view and MARELO on
+# every page, whatever tab a test is about). Griffin: "The *FULL* test suite
+# should be run on GitHub"; five minutes fixing a rare miss beats verifying
+# every page on every core change.
+BROWSER_CAP = 20
+CANARIES = ("tests/test_fixture_reaches_the_real_page.py",)   # boots the app, visits every page
+UNCAPPED = ("test", "failed")   # a changed test file and last run's failures always run here
 REFERENCE_SUFFIXES = ("js", "mjs", "css", "html", "json", "md", "toml", "txt", "csv", "yaml",
                       "yml", "ini", "bat", "png", "svg", "ico", "wav", "mp4", "db", "lock", "c",
                       "cpp", "h")
@@ -444,21 +462,30 @@ class Radius:
     reasons: list[tuple[str, str, str, set[str]]] = field(default_factory=list)  # kind, source, what, files
     quiet: list[str] = field(default_factory=list)   # changed, yet no recorded test executed what changed
     left_to_github: list[str] = field(default_factory=list)
+    # Files a rule picked because they NAME what changed (they import it, or
+    # name its file, class, export or tab), as against "every page" or
+    # "executed it": the ones a capped browser selection keeps.
+    naming: set[str] = field(default_factory=set)
+    deferred: list[str] = field(default_factory=list)   # browser files over the cap, left to GitHub
 
-    def pick_files(self, kind: str, source: str, what: str, files: set[str]):
+    def pick_files(self, kind: str, source: str, what: str, files: set[str], *, broad: bool = False):
         files = {f for f in files if f not in BROWSER_SWEEPS}
         for test_file in files:
             self.whole[test_file].append(kind)
+        if not broad:
+            self.naming |= files
         if files:
             self.reasons.append((kind, source, what, files))
 
-    def pick_nodes(self, kind: str, source: str, what: str, nodeids: set[str]):
+    def pick_nodes(self, kind: str, source: str, what: str, nodeids: set[str], *, broad: bool = False):
         by_file = collections.defaultdict(set)
         for nodeid in nodeids:
             by_file[nodeid.split("::")[0]].add(nodeid)
         by_file = {f: ids for f, ids in by_file.items() if f not in BROWSER_SWEEPS}
         for test_file, ids in by_file.items():
             self.nodes[test_file] |= ids
+        if not broad:
+            self.naming |= set(by_file)
         if by_file:
             self.reasons.append((kind, source, what, set(by_file)))
 
@@ -522,7 +549,36 @@ def select(root: Path = ROOT, base: str | None = None, runs=None,
     since = _commit_time(base, root) if run_id is not None else None
     radius.pick_nodes("failed", "", "failed in this checkout's last run",
                       _last_failed(root, since) if last_failed is None else last_failed)
+    _cap_browser_files(radius, {name for name in _test_index(root) if lane_of(root / name) == "browser"})
     return radius
+
+
+def _cap_browser_files(radius: Radius, browser_files: set[str], cap: int | None = None) -> None:
+    """Over BROWSER_CAP browser files: keep the uncapped picks, the canary and
+    the naming picks (quickest first) up to the cap; defer the rest."""
+    cap = BROWSER_CAP if cap is None else cap
+    picked = set(radius.selection()) & browser_files
+    if len(picked) <= cap:
+        return
+    keep = {f for kind, _, _, files in radius.reasons if kind in UNCAPPED for f in files} & picked
+    canaries = {c for c in CANARIES if (radius.root / c).is_file()}
+    keep |= canaries
+    totals = file_totals(load_durations())
+    for test_file in sorted((picked & radius.naming) - keep, key=lambda f: (totals.get(f, 0.0), f)):
+        if len(keep) >= cap:
+            break
+        keep.add(test_file)
+    radius.deferred = sorted(picked - keep)
+    for test_file in radius.deferred:
+        radius.whole.pop(test_file, None)
+        radius.nodes.pop(test_file, None)
+    # Whole, even when a rule picked some of it: it is the proof the app boots.
+    radius.pick_files("canary", "", "the startup canary: the app boots and serves every page",
+                      canaries)
+    kept = ", ".join(sorted(Path(f).name for f in keep))
+    radius.left_to_github.append(
+        f"{len(radius.deferred)} of {len(picked)} browser files: over the local cap of {cap}, "
+        f"they run in the full run after the push; kept here: {kept}")
 
 
 def _coverage_for(root: Path, run_id: int | None, published: Path | None):
@@ -625,21 +681,30 @@ def _python(radius: Radius, coverage: Coverage, tests: dict[str, FileRefs],
         file = radius.root / path
         text = file.read_text(encoding="utf-8", errors="replace") if file.is_file() else None
         affected = affected_tests(coverage[path], text)
-        radius.pick_nodes("python", source, f"{path}{via}: tests whose executed blocks changed", affected)
+        radius.pick_nodes("python", source, f"{path}{via}: tests whose executed blocks changed", affected,
+                          broad=True)
+        # Executing it is not naming it: every page's first load executes the
+        # core views. The files that import it or name its file do name it.
+        radius.naming |= {test.split("::")[0] for test in affected} & (
+            _importers(tests, path) | {name for name, refs in tests.items()
+                                       if refs.basenames & {Path(path).name}})
         if not affected:
             radius.quiet.append(path)
         return
+    radius.pick_files("python", source, f"{path}{via}, not in the coverage map: its importers",
+                      _importers(tests, path))
+
+
+def _importers(tests: dict[str, FileRefs], path: str) -> set[str]:
     module = path.removesuffix(".py").replace("/", ".")
     names = {module, module.removeprefix("src."), Path(path).stem, f"tools.{Path(path).stem}"}
-    importers = {name for name, refs in tests.items() if refs.imports & names}
-    radius.pick_files("python", source, f"{path}{via}, not in the coverage map: its importers",
-                      importers)
+    return {name for name, refs in tests.items() if refs.imports & names}
 
 
 def _ui_module(radius, graph, naming, browser_files, path):
     if path in SHELL:
         radius.pick_files("ui", path, f"{Path(path).name} is the app shell: every page",
-                          set(browser_files))
+                          set(browser_files), broad=True)
         return
     modules = graph.upward(path)
     words, basenames, titles = graph.tokens(modules)
@@ -655,7 +720,7 @@ def _stylesheet(radius, graph, naming, browser_files, path, text_before, root):
                                     if (root / path).is_file() else "")
     if path.endswith(".html") and before_page != after_page:
         radius.pick_files("ui", path, f"{Path(path).name} outside its styles: every page",
-                          set(browser_files))
+                          set(browser_files), broad=True)
     old, new = collections.Counter(css_rules(before)), collections.Counter(css_rules(after))
     changed_rules = list((old - new) + (new - old))
     if not changed_rules:
@@ -679,7 +744,7 @@ def _stylesheet(radius, graph, naming, browser_files, path, text_before, root):
     if global_rules:
         radius.pick_files("css", path, f"global rule {global_rules[0]!r}"
                           + (f" (+{len(global_rules) - 1})" if len(global_rules) > 1 else ""),
-                          set(browser_files))
+                          set(browser_files), broad=True)
     if names:
         modules = set()
         for name in names:
