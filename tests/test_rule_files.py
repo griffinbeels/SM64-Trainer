@@ -21,12 +21,14 @@
      cardinalities it states are parsed back out and checked against the
      corpus modules below — see CORPUS_CLAIMS.
 
-The budget is deliberately generous — these files carry hard-won evidence and
-the answer to crowding is another sub-zone file, not deletion. It fails only
-when a file has grown past the point where a reader would still scan it whole.
-When it fires, split by path (a narrower `paths:` list), do not summarize:
-`docs/architecture.md` is where cross-cutting knowledge goes, and the four
-`ui-*.md` files are the worked example of the split.
+The budget was lowered on 2026-09-22, when the largest rules (ui-core,
+tracking-storage, memory-detectors, library, ui-ranks, ui-practice, ui-climb,
+recorder) moved their evidence, history and long rationale verbatim into
+`docs/rules/<name>.md` (and `docs/ui-verification.md`), each linked from its
+rule. ui-core.md alone had loaded 49 times in 24 sessions at ~17k tokens. A
+rule file keeps the contracts an editor must obey on every edit; nothing is
+deleted. When the budget fires, move narrative to the rule's docs page or
+split by path (a narrower `paths:` list) — do not drop a rule.
 """
 import json
 import re
@@ -41,9 +43,10 @@ REPO = Path(__file__).resolve().parents[1]
 RULES = REPO / ".claude" / "rules"
 TOOLS = REPO / "tools"
 
-# Chars, not tokens (~4 chars/token). 80k ≈ 20k tokens: comfortably above every
-# current file, far below the 103k that made ui.md unreadable.
-MAX_CHARS = 80_000
+# Chars, not tokens (~4 chars/token). 45k ≈ 11k tokens: above the largest
+# current file (hundred-coin.md), a quarter under the 80k ceiling this replaced
+# on 2026-09-22 when the eight largest rules moved their narrative to docs/rules/.
+MAX_CHARS = 45_000
 
 # One table ROW. Above this it stops being a map entry: three rows of 11k–18k
 # were lifted into `## sections` below their own tables on 2026-07-28, which is
@@ -82,9 +85,9 @@ def test_no_rule_file_is_too_large_to_read(path):
     assert size <= MAX_CHARS, (
         f"{path.name} is {size:,} chars (~{size // 4:,} tokens) and auto-loads "
         f"whenever one of its files is opened; the ceiling is {MAX_CHARS:,}. "
-        "Split it by path into a narrower sub-zone rule — see the four "
-        "ui-*.md files, which came out of one 103k-char file on 2026-07-28. "
-        "Do NOT summarize: the evidence in these files is the point.")
+        "Move evidence, history and long rationale verbatim to its "
+        "docs/rules/<name>.md page and link it, or split it by path into a "
+        "narrower sub-zone rule. Keep every contract line in the rule.")
 
 
 @pytest.mark.parametrize("path", rule_files(), ids=lambda p: p.name)
@@ -100,10 +103,9 @@ def test_no_single_table_row_is_unskimmable(path):
             if text.startswith("| ") and len(text) > MAX_ROW_CHARS]
     assert not over, (
         f"{path.name} has table rows over {MAX_ROW_CHARS:,} chars — too long "
-        f"to skim (line, chars): {over}. Lift the narrative into its own "
-        "`## section` under the table and leave the row as a pointer to it "
-        "(`— **full detail below: [Title](#title)**`), the shape the three "
-        "lifted rows already use. Do not summarize to fit.")
+        f"to skim (line, chars): {over}. Keep the row's contract as a short "
+        "clause and move the narrative verbatim to the rule's docs/rules/ "
+        "page, linked from the rule.")
 
 
 def test_rule_index_matches_scoped_metadata():
@@ -203,7 +205,8 @@ def corpus_counts() -> dict[str, int]:
     return counts
 
 
-RULE = ".claude/rules/tracking-storage.md"
+# The corpus sentences moved with tracking-storage.md's narrative (2026-09-22).
+RULE = "docs/rules/tracking-storage.md"
 
 CORPUS_CLAIMS = [
     ("rule file: segment corpus", RULE,
@@ -233,7 +236,7 @@ CORPUS_CLAIMS = [
      r"silence across all (\d+) other walks", ("other_walks",)),
     ("architecture.md: route scoping", "docs/architecture.md",
      r"all (\d+) seeded movements carry", ("movements",)),
-    ("ui-practice.md: practicedHere sweep", ".claude/rules/ui-practice.md",
+    ("ui-practice.md: practicedHere sweep", "docs/rules/ui-practice.md",
      r"all (\d+) seeded definitions × \d+ destination levels", ("segments",)),
     # --- the "exits omitting `to`" family. Five files, five phrasings, one
     # fact: it is the reason start_origin exists, so each states it as live
