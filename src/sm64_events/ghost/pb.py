@@ -8,10 +8,10 @@ answer again, with nothing to keep in step.
 
 It is not an input template. Templates also drive the input comparison, and a
 template he imported from another player must keep driving it after he sets a
-PB. So the PB reaches the ghost through `GhostLibrary`, which answers the one
-question every ghost path already asks -- `active_for` -- with the PB first and
-the active input template second. An explicit pick from the saved recordings
-still wins over both (`selection.py::selected_template`).
+PB. So the PB reaches the ghost through `GhostLibrary`: `pb_for` is the PB box
+in the ghost picker (`selection.py::chosen_ghosts`), and `active_for` -- the
+one-recording question whole-picture readers ask -- answers with the PB first
+and the active input template second.
 """
 from __future__ import annotations
 
@@ -80,7 +80,10 @@ class GhostLibrary:
         self._db = db
 
     def active_for(self, kind, entity_key, strat):
-        return self.pb_for(kind, entity_key, strat) or self._templates.active_for(kind, entity_key, strat)
+        return self.pb_for(kind, entity_key, strat) or self.template_for(kind, entity_key, strat)
+
+    def template_for(self, kind, entity_key, strat):
+        return self._templates.active_for(kind, entity_key, strat)
 
     def pb_for(self, kind, entity_key, strat):
         return current_pb_ghost(self._db, kind, entity_key, strat)

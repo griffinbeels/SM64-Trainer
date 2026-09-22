@@ -34,7 +34,8 @@ template<class T> struct Mailbox {
         return false;
     }
 };
-enum ClipState : uint32_t { Empty, Building, Ready, Owned, Retired, Reclaiming };
+// Unwanted: renderer-held storage the worker released; it retires at the next boundary.
+enum ClipState : uint32_t { Empty, Building, Ready, Owned, Retired, Reclaiming, Unwanted };
 struct Clip {
     std::atomic<uint32_t> state{Empty};
     uint32_t cancellation=0, index_count=0, action_count=0;
@@ -61,19 +62,20 @@ struct PublishedRequest {gp_request value{};uint32_t cancellation=0,reserved=0;}
 Mailbox<PublishedRequest> requests;
 Mailbox<gp_status> reports;
 uint64_t last_revision=0;
-gp_request last_worker_request{};
 
 // Everything below is renderer-owned until context loss releases the binding.
 DWORD render_thread=0;
 uint32_t live_rom=0, live_configuration=0, acquired_cancel=0;
 bool have_model=false, have_request=false, have_timeline=false, star_ended=false;
-Clip *active_clip=nullptr;
+bool sequence_reported=false;
+bool held[GP_CLIP_SLOTS]{};          // this renderer owns the slot (Owned or Unwanted)
+Clip *bound[GP_GHOSTS]{};            // request order; null until adopted
 gp_request active_request{};
 gp_request timeline_request{};
 gp_status report{};
-uint64_t touch_revision=0, recorded_touch=0;
-bool have_recorded_touch=false;
-ghost_pose::Scratch scratch;
+uint64_t touch_revision=0, touch[GP_GHOSTS]{};
+bool have_touch[GP_GHOSTS]{};
+ghost_pose::Scratch scratch[GP_GHOSTS]; // one borrowed mesh per displayed ghost
 
 int worker_enter() {
     if(worker_gate.test_and_set(std::memory_order_acquire)) return GP_BUSY;
@@ -199,9 +201,9 @@ uint64_t clip_coordinate(const Clip& clip,uint32_t index) {
     return clip.frames[index].sample.clock.elapsed_frames-h.origin_elapsed
         +(h.clock_kind==GCLIP_STAR_CLOCK?h.origin_raw:0);
 }
-void recorded_boundary(const Clip& clip,const gp_request& request) {
-    have_recorded_touch=false;recorded_touch=0;touch_revision=request.revision;
-    if(request.mode!=GP_FOLLOW || !request.star_ends)return;
+bool recorded_touch(const Clip& clip,const gp_request& request,uint64_t& recorded) {
+    bool found=false;recorded=0;
+    if(request.mode!=GP_FOLLOW || !request.star_ends)return false;
     // Preparation indexed first occurrences once. A changed command needs at
     // most GP_STAR_ACTIONS binary searches, never a render-thread clip scan.
     for(uint32_t i=0;i<request.star_action_count;++i) {
@@ -213,9 +215,10 @@ void recorded_boundary(const Clip& clip,const gp_request& request) {
         }
         if(lo==clip.action_count || clip.frames[clip.actions[lo]].sample.live_action!=request.star_actions[i])continue;
         const auto coordinate=clip_coordinate(clip,clip.actions[lo]);
-        if(!have_recorded_touch || coordinate<recorded_touch)recorded_touch=coordinate;
-        have_recorded_touch=true;
+        if(!found || coordinate<recorded)recorded=coordinate;
+        found=true;
     }
+    return found;
 }
 bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexed) {
     if(std::memcmp(h.magic,GCLIP_MAGIC,8) || h.version!=GCLIP_VERSION || h.bytes!=sizeof(h)
@@ -291,18 +294,15 @@ int32_t __cdecl prepare_clip(const gclip_header *header,const gclip_frame *frame
     const auto before=cancellation.load(); collect_impl();
     for(auto &clip:clips) {
         const auto state=clip.state.load(std::memory_order_acquire);
-        if((state==Ready || state==Owned) && clip.cancellation==before && id_equal(clip.header.clip_id,header->clip_id))
+        if((state!=Ready && state!=Owned && state!=Unwanted) || !id_equal(clip.header.clip_id,header->clip_id))continue;
+        // A released copy the renderer still holds cannot be revived safely.
+        if(state==Unwanted)return worker_leave(GP_DEFERRED);
+        if(clip.cancellation==before)
             return worker_leave(std::memcmp(&clip.header,header,sizeof(*header)) ||
                 std::memcmp(clip.frames,frames,header->record_count*sizeof(*frames))?GP_INVALID:GP_OK);
     }
+    // Owned/retired storage counts until its real release; nothing is displaced.
     const uint64_t allocation=uint64_t(header->record_count)*sizeof(gclip_frame)+uint64_t(indexed)*sizeof(uint32_t);
-    // Pending clips never selected by the current command may be displaced
-    // on the worker. Owned/retired storage still counts until its real release.
-    for(auto &clip:clips) {
-        if(clip.state.load()!=Ready || id_equal(clip.header.clip_id,last_worker_request.clip_id))continue;
-        uint32_t expected=Ready;
-        if(clip.state.compare_exchange_strong(expected,Reclaiming))free_clip(clip);
-    }
     Clip *chosen=nullptr;
     for(auto &clip:clips) {
         uint32_t expected=Empty;
@@ -337,11 +337,20 @@ int32_t __cdecl prepare_clip(const gclip_header *header,const gclip_frame *frame
 }
 bool valid_request(const gp_request& r) {
     if(r.bytes!=sizeof(r) || r.version!=GP_VERSION || !r.revision
-            || r.enabled>1 || r.tint_enabled>1 || r.hue_degrees>359
+            || r.enabled>1 || r.tint_enabled>1 || r.clip_count>GP_GHOSTS || r.reserved1
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
             || r.proximity_distance<0 || r.proximity_distance>400) return false;
+    const gp_clip unused{};
+    for(uint32_t i=0;i<GP_GHOSTS;++i) {
+        const auto &clip=r.clips[i];
+        if(i>=r.clip_count) {if(std::memcmp(&clip,&unused,sizeof(clip)))return false;continue;}
+        if(clip.hue_degrees>359 || clip.reserved)return false;
+        if(!r.enabled)continue;
+        if(!nonzero_id(clip.clip_id))return false;
+        for(uint32_t j=0;j<i;++j)if(id_equal(clip.clip_id,r.clips[j].clip_id))return false;
+    }
     if(!r.enabled) return true;
-    if(!r.owner_token || !r.model_id || !r.rom_generation || !r.configuration || !nonzero_id(r.clip_id)
+    if(!r.owner_token || !r.model_id || !r.rom_generation || !r.configuration || !r.clip_count
             || r.mode>GP_FIXED || r.nudge_frames < -600 || r.nudge_frames>600
             || !std::isfinite(r.opacity) || r.opacity<0 || r.opacity>1 || r.star_ends>1
             || r.star_action_count>GP_STAR_ACTIONS || (r.star_ends && !r.star_action_count)) return false;
@@ -364,7 +373,6 @@ int32_t __cdecl configure(const gp_request *request) {
     if(exhausted.load()) return worker_leave(GP_EXHAUSTED);
     if(request->revision<=last_revision) return worker_leave(GP_INVALID);
     if(!request->enabled) revoke(GP_DISABLED);
-    last_worker_request=*request;
     if(!requests.put(PublishedRequest{*request,request->enabled?before:cancellation.load(),0})) {
         exhausted.store(true); revoke(GP_EXHAUSTED); return worker_leave(GP_EXHAUSTED);
     }
@@ -388,22 +396,70 @@ int32_t __cdecl status(gp_status *out,uint32_t bytes) {
     for(const auto &clip:clips) {
         const auto s=clip.state.load();
         out->clips_ready+=s==Ready;out->clips_owned+=s==Owned;
-        out->clips_retired+=s==Retired || s==Reclaiming;
+        out->clips_retired+=s==Retired || s==Reclaiming || s==Unwanted;
     }
     out->evaluations=evaluations.load();out->rendered=rendered.load();out->gaps=gaps.load();
     out->refusals=refusals.load();out->adoption_busy=adoption_busy.load();out->model_error=model_error.load();
     return GP_OK;
 }
-const gp_api api_v2={sizeof(gp_api),GP_VERSION,{0,0},prepare_model,prepare_clip,configure,revoke,collect,release_worker,status,withdraw};
+int32_t __cdecl release_clip(const uint8_t *id) {
+    const int entered=worker_enter(); if(entered!=GP_OK)return entered;
+    if(!id || !nonzero_id(id))return worker_leave(GP_INVALID);
+    for(auto &clip:clips) {
+        // The renderer only moves Ready->Owned->Ready transiently while it
+        // inspects a slot, so this settles within a few attempts.
+        for(unsigned attempt=0;attempt<64;++attempt) {
+            auto state=clip.state.load(std::memory_order_acquire);
+            if((state!=Ready && state!=Owned) || !id_equal(clip.header.clip_id,id))break;
+            if(clip.state.compare_exchange_strong(state,state==Ready?Retired:Unwanted))break;
+        }
+    }
+    collect_impl();return worker_leave(GP_OK);
+}
+const gp_api api_v2={sizeof(gp_api),GP_VERSION,{0,0},prepare_model,prepare_clip,configure,revoke,collect,
+    release_worker,status,withdraw,release_clip};
 
 void decision(uint32_t value) {
     report.bytes=sizeof(report);report.version=GP_VERSION;report.decision=value;
     if(!reports.put(report)) {exhausted.store(true);revoke(GP_EXHAUSTED);}
 }
+void decide_all(uint32_t value) {
+    report.visible=0;
+    std::memset(report.clip_decisions,uint8_t(value),sizeof(report.clip_decisions));
+    decision(value);
+}
 void clear_timeline() {have_timeline=false;star_ended=false;timeline_request={};}
-void retire_clip() {
-    if(active_clip) {active_clip->state.store(Retired,std::memory_order_release);active_clip=nullptr;}
-    touch_revision=recorded_touch=0;have_recorded_touch=false;
+void unbind() {
+    for(auto &clip:bound)clip=nullptr;
+    touch_revision=0;std::memset(have_touch,0,sizeof(have_touch));
+}
+void retire_clips() {
+    for(uint32_t i=0;i<GP_CLIP_SLOTS;++i)
+        if(held[i]) {clips[i].state.store(Retired,std::memory_order_release);held[i]=false;}
+    unbind();
+}
+// The worker released these ids; stop drawing them before this list starts.
+void retire_unwanted() {
+    for(uint32_t i=0;i<GP_CLIP_SLOTS;++i) {
+        uint32_t expected=Unwanted;
+        if(!held[i] || !clips[i].state.compare_exchange_strong(expected,Retired))continue;
+        held[i]=false;
+        for(auto &clip:bound)if(clip==&clips[i])clip=nullptr;
+    }
+}
+Clip *adopt(const uint8_t *id,uint32_t current_cancel) {
+    for(uint32_t i=0;i<GP_CLIP_SLOTS;++i)
+        if(held[i] && id_equal(clips[i].header.clip_id,id))return &clips[i];
+    for(uint32_t i=0;i<GP_CLIP_SLOTS;++i) {
+        auto &clip=clips[i];uint32_t expected=Ready;
+        // Claim before reading: the worker may reclaim an unclaimed Ready slot.
+        if(!clip.state.compare_exchange_strong(expected,Owned))continue;
+        if(clip.cancellation==current_cancel && id_equal(clip.header.clip_id,id)) {held[i]=true;return &clip;}
+        expected=Owned;
+        if(!clip.state.compare_exchange_strong(expected,clip.cancellation==current_cancel?Ready:Retired))
+            clip.state.store(Retired,std::memory_order_release); // released while claimed
+    }
+    return nullptr;
 }
 bool retire_model() {
     if(!have_model)return true;
@@ -419,6 +475,51 @@ bool renderer_owner() {return render_thread && render_thread==GetCurrentThreadId
 void next_boundary() {
     if(context_serial.fetch_add(1)>=UINT32_MAX-1) {exhausted.store(true);revoke(GP_EXHAUSTED);}
 }
+uint32_t active_count() {uint32_t count=0;for(auto *clip:bound)count+=clip!=nullptr;return count;}
+struct Coordinate {uint64_t target;bool below_zero;};
+// One ghost against the shared live coordinate. Hides only this ghost.
+uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
+                ghost_compositor::Pose& out) {
+    const Clip *clip=bound[index];
+    if(!clip)return GP_PREPARING;
+    const auto &h=clip->header;
+    if(active_request.mode==GP_FOLLOW && active_request.origin.kind!=h.clock_kind)return GP_WRONG_IDENTITY;
+    const auto target=frame.target;
+    const uint64_t first=clip_coordinate(*clip,0);
+    const uint64_t last=clip_coordinate(*clip,clip->index_count-1);
+    // Before-start clamps to the first pose, including when that pose already
+    // carries a touch. Unlike the live-end latch, this moves with the nudge.
+    if(have_touch[index] && (target>=touch[index] || first>=touch[index]))return GP_STAR_ENDED;
+    if(target>last)return GP_AFTER_END;
+    uint32_t lo=0,hi=clip->index_count;
+    while(lo<hi) {
+        const uint32_t middle=lo+(hi-lo)/2;
+        if(clip_coordinate(*clip,middle)<target)lo=middle+1;else hi=middle;
+    }
+    const auto &selected=clip->frames[lo];
+    if(!frame.below_zero && target>=first && clip_coordinate(*clip,lo)!=target) {gaps.fetch_add(1);return GP_GAP;}
+    if(live.level!=selected.sample.level || live.area!=selected.sample.area)return GP_WRONG_SCENE;
+    if(!sequence_reported) {
+        report.selected_sequence_lo=uint32_t(selected.sample.sequence);
+        report.selected_sequence_hi=uint32_t(selected.sample.sequence>>32);
+        sequence_reported=true;
+    }
+    if(!(selected.sample.valid_fields&GC_VALID_POSE)) {refusals.fetch_add(1);return GP_INVALID_FRAME;}
+    gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
+    recorded.configuration=selected.configuration;recorded.sample=selected.sample;
+    recorded.world.status=selected.world_status;
+    evaluations.fetch_add(1);
+    float opacity=active_request.opacity;
+    if(active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE))
+        opacity*=ghost_proximity::factor(live.pose.position,live.pose.scale,
+            selected.sample.pose.position,selected.sample.pose.scale,active_request.proximity_distance);
+    if(ghost_pose::evaluate(model.value,recorded,live,world,opacity,scratch[index],out)!=ghost_pose::Result::ok) {
+        out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
+    }
+    out.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
+    rendered.fetch_add(1);
+    return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
+}
 }
 
 namespace ghost_playback {
@@ -428,30 +529,31 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
     render_thread=thread;live_rom=rom;live_configuration=configuration;
     next_boundary();
+    retire_unwanted();
     PublishedRequest published{};const bool received=requests.get(published);
     const auto &next=published.value; const auto current_cancel=cancellation.load();
     const bool wanted=!exhausted.load() && rom && configuration && received && next.enabled
         && published.cancellation==current_cancel
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
-        retire_clip();retire_model();have_request=false;clear_timeline();decision(GP_DISABLED);return;
+        retire_clips();retire_model();have_request=false;clear_timeline();decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
         // Withdrawal retains reusable assets, but an explicit worker model
         // replacement must still be released at this safe render boundary.
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
-        decision(GP_DISABLED);return;
+        decide_all(GP_DISABLED);return;
     }
-    if(acquired_cancel!=current_cancel)clear_timeline();
+    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
         clear_timeline();have_timeline=true;timeline_request=next;
     }
-    if(active_clip && (acquired_cancel!=current_cancel || !id_equal(active_clip->header.clip_id,next.clip_id)))retire_clip();
     if(have_model && (model.id!=next.model_id || model.cancellation!=current_cancel || model.id!=desired_model.load()))
-        if(!retire_model()) {decision(GP_PREPARING);return;}
+        if(!retire_model()) {decide_all(GP_PREPARING);return;}
+    const bool changed=touch_revision!=next.revision;
     active_request=next;have_request=true;acquired_cancel=current_cancel;
     report={};report.revision=next.revision;report.owner_token=next.owner_token;report.model_id=next.model_id;
-    std::memcpy(report.clip_id,next.clip_id,16);report.rom_generation=rom;report.configuration=configuration;
+    report.clip_count=next.clip_count;report.rom_generation=rom;report.configuration=configuration;
     if(!have_model) {
         uint32_t expected=GP_MODEL_READY;
         if(model.state.compare_exchange_strong(expected,GP_MODEL_RENDER_OWNED)) {
@@ -467,14 +569,23 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
             }
         }
     }
-    if(!active_clip) for(auto &clip:clips) {
-        uint32_t expected=Ready;
-        if(!clip.state.compare_exchange_strong(expected,Owned))continue;
-        if(clip.cancellation==current_cancel && id_equal(clip.header.clip_id,next.clip_id)) {active_clip=&clip;break;}
-        clip.state.store(clip.cancellation==current_cancel?Ready:Retired,std::memory_order_release);
+    // Bind request order to held storage, then retire held clips the new
+    // command no longer lists: the renderer holds exactly the displayed set.
+    bool listed[GP_CLIP_SLOTS]{};
+    for(uint32_t i=0;i<GP_GHOSTS;++i) {
+        Clip *clip=i<next.clip_count?adopt(next.clips[i].clip_id,current_cancel):nullptr;
+        if(clip)listed[clip-clips]=true;
+        if(changed || clip!=bound[i]) {
+            bound[i]=clip;have_touch[i]=false;touch[i]=0;
+            if(clip)have_touch[i]=recorded_touch(*clip,next,touch[i]);
+        }
+        report.clip_decisions[i]=uint8_t(i>=next.clip_count?GP_DISABLED:clip?GP_READY:GP_PREPARING);
     }
-    if(active_clip && touch_revision!=next.revision)recorded_boundary(*active_clip,next);
-    decision(have_model && active_clip?GP_READY:GP_PREPARING);
+    for(uint32_t i=0;i<GP_CLIP_SLOTS;++i)
+        if(held[i] && !listed[i]) {clips[i].state.store(Retired,std::memory_order_release);held[i]=false;}
+    touch_revision=next.revision;
+    report.clips_active=active_count();
+    decision(have_model && report.clips_active==next.clip_count?GP_READY:GP_PREPARING);
 }
 bool atlas(sg_atlas_view *out,uint64_t *id) {
     if(out)*out={};if(id)*id=0;
@@ -483,87 +594,82 @@ bool atlas(sg_atlas_view *out,uint64_t *id) {
     *id=model.id;return true;
 }
 bool current(const gp_draw_token& token) {
-    return renderer_owner() && have_request && have_model && active_clip && !exhausted.load()
+    return renderer_owner() && have_request && have_model && active_count() && !exhausted.load()
         && token.revision && enabled_revision.load()==token.revision && active_request.revision==token.revision
         && cancellation.load()==token.cancellation && acquired_cancel==token.cancellation
         && context_serial.load()==token.context_serial && model.id==desired_model.load()
         && active_request.rom_generation==live_rom && active_request.configuration==live_configuration;
 }
 bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
-              ghost_compositor::Pose& out,gp_draw_token& token) {
-    out={};token={};
+              ghost_compositor::Pose *out,uint32_t& count,gp_draw_token& token) {
+    count=0;token={};
+    if(!out)return false;
+    for(uint32_t i=0;i<GP_GHOSTS;++i)out[i]={};
     if(!renderer_owner())return false;
     next_boundary();
     gp_draw_token candidate{active_request.revision,acquired_cancel,context_serial.load()};
-    if(!current(candidate)) {decision(GP_WRONG_IDENTITY);return false;}
-    const auto &h=active_clip->header;
+    if(!current(candidate)) {decide_all(GP_WRONG_IDENTITY);return false;}
     if(live.bytes!=sizeof(live) || live.version!=GC_VERSION || !live.epoch || !live.sequence
-            || !live.dlist_serial || !(live.valid_fields&GC_VALID_CLOCK)) {decision(GP_NO_CLOCK);return false;}
-    uint64_t target=active_request.seek_igt;bool below_zero=false;
+            || !live.dlist_serial || !(live.valid_fields&GC_VALID_CLOCK)) {decide_all(GP_NO_CLOCK);return false;}
+    Coordinate frame{active_request.seek_igt,false};
+    sequence_reported=false;
     if(active_request.mode==GP_FOLLOW) {
         const auto& origin=active_request.origin;
-        if(origin.kind!=h.clock_kind) {decision(GP_WRONG_IDENTITY);return false;}
         if(!valid_clock(live) || (live.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
                 !=(GCC_RAW_VALID|GCC_ELAPSED_VALID) || live.epoch!=origin.epoch
                 || live.sequence<origin.sequence || live.clock.continuity_id!=origin.continuity
                 || !elapsed_coordinate(live.clock.elapsed_frames,origin.elapsed,
-                    origin.offset,target)) {decision(GP_NO_CLOCK);return false;}
+                    origin.offset,frame.target)) {decide_all(GP_NO_CLOCK);return false;}
         if(origin.kind==GO_STAR && live.clock.origin_id!=origin.star_generation)star_ended=true;
         if(active_request.star_ends)for(uint32_t i=0;i<active_request.star_action_count;++i)
             if(live.live_action==active_request.star_actions[i])star_ended=true;
-        if(star_ended) {decision(GP_STAR_ENDED);return false;}
+        if(star_ended) {decide_all(GP_STAR_ENDED);return false;}
         if(active_request.nudge_frames<0) {
             const auto amount=uint32_t(-active_request.nudge_frames);
-            if(target<amount){below_zero=true;target=0;}else target-=amount;
+            if(frame.target<amount){frame.below_zero=true;frame.target=0;}else frame.target-=amount;
         } else {
             const auto amount=uint32_t(active_request.nudge_frames);
-            if(target>UINT64_MAX-amount){decision(GP_NO_CLOCK);return false;}
-            target+=amount;
+            if(frame.target>UINT64_MAX-amount){decide_all(GP_NO_CLOCK);return false;}
+            frame.target+=amount;
         }
     }
-    const uint64_t first=clip_coordinate(*active_clip,0);
-    const uint64_t last=clip_coordinate(*active_clip,active_clip->index_count-1);
-    // Before-start clamps to the first pose, including when that pose already
-    // carries a touch. Unlike the live-end latch, this moves with the nudge.
-    if(have_recorded_touch && (target>=recorded_touch || first>=recorded_touch))
-        {decision(GP_STAR_ENDED);return false;}
-    if(target>last) {decision(GP_AFTER_END);return false;}
-    uint32_t lo=0,hi=active_clip->index_count;
-    while(lo<hi) {
-        const uint32_t middle=lo+(hi-lo)/2;
-        if(clip_coordinate(*active_clip,middle)<target)lo=middle+1;else hi=middle;
+    report.visible=0;
+    uint32_t summary=GP_DISABLED;bool before_start=true;
+    for(uint32_t i=0;i<GP_GHOSTS;++i) {
+        if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
+        ghost_compositor::Pose pose{};
+        const auto result=select(i,frame,live,world,pose);
+        if(!current(candidate)) {
+            // A revocation during any evaluation discards the whole candidate.
+            for(uint32_t j=0;j<GP_GHOSTS;++j)out[j]={};
+            count=0;refusals.fetch_add(1);decide_all(GP_POSE_REFUSED);return false;
+        }
+        report.clip_decisions[i]=uint8_t(result);
+        if(!i)summary=result;
+        if(result!=GP_READY && result!=GP_BEFORE_START)continue;
+        before_start=before_start && result==GP_BEFORE_START;
+        if(pose.count)out[count++]=pose;
     }
-    const auto &selected=active_clip->frames[lo];
-    if(!below_zero && target>=first && clip_coordinate(*active_clip,lo)!=target)
-        {gaps.fetch_add(1);decision(GP_GAP);return false;}
-    if(live.level!=selected.sample.level || live.area!=selected.sample.area) {decision(GP_WRONG_SCENE);return false;}
-    report.selected_sequence_lo=uint32_t(selected.sample.sequence);
-    report.selected_sequence_hi=uint32_t(selected.sample.sequence>>32);
-    if(!(selected.sample.valid_fields&GC_VALID_POSE)) {
-        refusals.fetch_add(1);decision(GP_INVALID_FRAME);return false;
+    // begin_batch draws in array order: farthest root first. Insertion sort
+    // keeps equal depths in request order and never allocates.
+    for(uint32_t i=1;i<count;++i) {
+        const auto value=out[i];uint32_t j=i;
+        for(;j && out[j-1].view_projection[15]<value.view_projection[15];--j)out[j]=out[j-1];
+        out[j]=value;
     }
-    gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
-    recorded.configuration=selected.configuration;recorded.sample=selected.sample;
-    recorded.world.status=selected.world_status;
-    evaluations.fetch_add(1);
-    float opacity=active_request.opacity;
-    if(active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE))
-        opacity*=ghost_proximity::factor(live.pose.position,live.pose.scale,
-            selected.sample.pose.position,selected.sample.pose.scale,active_request.proximity_distance);
-    const auto result=ghost_pose::evaluate(model.value,recorded,live,world,opacity,scratch,out);
-    if(result!=ghost_pose::Result::ok || !current(candidate)) {
-        out={};refusals.fetch_add(1);decision(GP_POSE_REFUSED);return false;
-    }
-    out.hue_degrees=active_request.tint_enabled?float(active_request.hue_degrees):0.0f;
-    token=candidate;rendered.fetch_add(1);decision(below_zero || target<first?GP_BEFORE_START:GP_READY);return true;
+    report.visible=count;
+    if(count)summary=before_start?GP_BEFORE_START:GP_READY;
+    decision(summary);
+    if(count)token=candidate;
+    return count!=0;
 }
 void retire_on_context_loss() {
     if(!renderer_owner())return;
-    retire_clip();
+    retire_clips();
     const bool released=retire_model();
     have_request=false;clear_timeline();
     next_boundary();
-    decision(GP_CONTEXT_LOST);
+    decide_all(GP_CONTEXT_LOST);
     if(released)render_thread=0;
 }
 }

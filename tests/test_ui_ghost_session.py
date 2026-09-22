@@ -373,76 +373,76 @@ def saved_candidate(template_id, *, native=True, whole=True):
             "whole_reason_text": None if whole else "No saved video"}
 
 
+def ghosts(pb=True, *templates):
+    return {"pb": pb, "templates": list(templates)}
+
+
+def ticks(answer):
+    return [(item["key"], item["checked"], item["disabled"]) for item in answer["items"]]
+
+
+PB = {"attempt_id": 1497, "timer_mode": "igt", "native_available": True,
+      "native_reason_text": None, "whole_available": False,
+      "whole_reason_text": "This PB's video is still being saved."}
+
+
 def test_ghost_picker_never_borrows_candidates_from_another_target():
-    data = session(selection={"template_id": 4,
-                              "candidates": [saved_candidate(4)]})
+    data = session(selection={"ghosts": ghosts(True, 4), "candidates": [saved_candidate(4)]})
     assert controls(data, entity_key="star:22:0")["selection"] is None
-    assert controls(data)["selection"]["template_id"] == 4
+    assert controls(data)["selection"]["ghosts"] == ghosts(True, 4)
     assert recording_options(None) is None
 
 
 @pytest.mark.parametrize("view,disabled", [("mario", [True, False]),
                                             ("whole", [False, True])])
-def test_picker_qualifies_each_recording_for_the_selected_show_mode(view, disabled):
-    answer = recording_options({"template_id": None, "candidates": [
+def test_each_recording_is_qualified_for_the_show_mode_and_the_pb_box_leads(view, disabled):
+    answer = recording_options({"ghosts": ghosts(), "candidates": [
         saved_candidate(4, native=False), saved_candidate(5, whole=False),
     ]}, view)
-    assert answer["options"][0] == {
-        "value": "", "label": "Use input template", "disabled": False}
-    assert [option["disabled"] for option in answer["options"][1:]] == disabled
-    refused = next(option for option in answer["options"] if option["disabled"])
-    assert ("No saved Mario poses" if view == "mario" else "No saved video") in refused["label"]
+    assert answer["items"][0]["key"] == "pb" and answer["items"][0]["checked"]
+    assert "next PB" in answer["items"][0]["reason"]  # tickable before any PB exists
+    assert [item["disabled"] for item in answer["items"][1:]] == disabled
+    refused = next(item for item in answer["items"] if item["disabled"])
+    assert refused["reason"] == ("No saved Mario poses" if view == "mario" else "No saved video")
     assert answer["views"] == {"mario": True, "whole": True}
 
 
-def test_picker_distinguishes_same_named_recordings_and_keeps_chosen_unusable_one():
-    answer = recording_options({"template_id": 4, "candidates": [
-        saved_candidate(4, native=False), saved_candidate(5),
-    ]})
-    assert answer["value"] == "4"
-    assert answer["options"][1]["disabled"] is True
-    assert "Attempt #1204" in answer["options"][1]["label"]
-    assert "Attempt #1205" in answer["options"][2]["label"]
-    assert "TJ Owlless" in answer["options"][2]["label"]
+def test_a_ticked_recording_that_cannot_show_this_mode_can_still_be_unticked():
+    answer = recording_options({"ghosts": ghosts(True, 4), "candidates": [
+        saved_candidate(4, native=False), saved_candidate(5)]})
+    assert ticks(answer) == [("pb", True, False), (4, True, False), (5, False, False)]
+    assert "Attempt #1204" in answer["items"][1]["label"]
+    assert "TJ Owlless" in answer["items"][2]["label"]
 
 
-def test_deleted_selection_is_named_instead_of_substituting_a_valid_ghost():
-    answer = recording_options({"template_id": 9, "candidates": [saved_candidate(4)]})
-    assert answer["value"] == "9"
-    missing = next(option for option in answer["options"] if option["value"] == "9")
-    assert missing["disabled"] and "unavailable" in missing["label"]
+def test_a_deleted_tick_stays_listed_until_unticked():
+    answer = recording_options({"ghosts": ghosts(False, 9), "candidates": [saved_candidate(4)]})
+    assert ticks(answer)[-1] == (9, True, False)
     assert "no longer saved" in answer["reasonText"]
 
 
-def test_returning_to_input_template_is_an_explicit_optimistic_null_choice():
-    selection = {"template_id": 4, "candidates": [saved_candidate(4), saved_candidate(5)]}
-    assert recording_options(selection, draft={"template_id": None})["value"] == ""
-    assert recording_options(selection, draft={"template_id": 5})["value"] == "5"
-    assert recording_options(selection)["value"] == "4"
+def test_the_optimistic_draft_is_the_whole_set():
+    selection = {"ghosts": ghosts(True, 4), "candidates": [saved_candidate(4), saved_candidate(5)]}
+    assert recording_options(selection, draft={"ghosts": ghosts(False, 5)})["choice"] == ghosts(False, 5)
+    assert recording_options(selection)["choice"] == ghosts(True, 4)
 
 
-def test_picker_survives_a_disabled_overlay_and_explains_empty_choices():
-    selection = {"template_id": None, "candidates": []}
+def test_nothing_ticked_says_so_and_whole_picture_names_its_limit():
+    selection = {"ghosts": ghosts(False), "candidates": [saved_candidate(4)]}
     data = session(enabled=False, source={"available": False}, selection=selection)
-    model = controls(data)
-    assert not model["canToggle"]
-    answer = recording_options(model["selection"])
-    assert "Save a PB" in answer["reasonText"]
-    assert answer["options"] == [
-        {"value": "", "label": "Use input template", "disabled": False}]
+    assert "Tick a ghost" in recording_options(controls(data)["selection"])["reasonText"]
+    both = {"ghosts": ghosts(True, 4), "pb": PB, "candidates": [saved_candidate(4)]}
+    assert "first ticked ghost" in recording_options(both, "whole")["reasonText"]
+    assert recording_options(both, "mario")["reasonText"] is None
 
 
-def test_the_default_choice_plays_his_current_pb_and_says_so():
-    pb = {"attempt_id": 1497, "timer_mode": "igt", "native_available": True,
-          "native_reason_text": None, "whole_available": False,
-          "whole_reason_text": "This PB's video is still being saved."}
-    answer = recording_options({"template_id": None, "pb": pb, "candidates": []})
-    assert answer["options"] == [
-        {"value": "", "label": "Your PB · Attempt #1497", "disabled": False}]
-    assert answer["reasonText"] is None and answer["views"] == {"mario": True, "whole": False}
-    whole = recording_options({"template_id": None, "pb": pb, "candidates": []}, "whole")
-    assert whole["reasonText"] == "This PB's video is still being saved."
-    assert whole["options"][0]["label"].endswith("still being saved.")
-    # An explicit pick keeps its own explanation; the PB stays one choice away.
-    chosen = recording_options({"template_id": 4, "pb": pb, "candidates": [saved_candidate(4)]})
-    assert chosen["value"] == "4" and chosen["options"][0]["label"].startswith("Your PB")
+def test_his_pb_leads_with_its_attempt_and_each_playing_ghost_wears_its_colour():
+    selection = {"ghosts": ghosts(True, 4), "pb": PB, "candidates": [saved_candidate(4), saved_candidate(5)],
+                 "playing": [{"key": "pb", "attempt_id": 1497, "hue_degrees": 120},
+                             {"key": 4, "attempt_id": 1204, "hue_degrees": 257}]}
+    answer = recording_options(selection)
+    assert answer["items"][0]["label"] == "Your PB · Attempt #1497"
+    assert [item["hue"] for item in answer["items"]] == [120, 257, None]
+    assert answer["views"] == {"mario": True, "whole": True}
+    whole = recording_options(selection, "whole")
+    assert whole["items"][0]["reason"] == "This PB's video is still being saved."

@@ -1,13 +1,16 @@
-/* One preloaded native ghost. Worker calls own storage; renderer calls only
- * select/evaluate borrowed values. No file access, IPC, GL, physics or waits. */
+/* Up to GP_GHOSTS preloaded native ghosts sharing one live origin and one set
+ * of controls. Worker calls own storage; renderer calls only select/evaluate
+ * borrowed values. No file access, IPC, GL, physics or waits. */
 #pragma once
 #include "ghost_clip.h"
 #include "ghost_origin.h"
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 3u
-#define GP_CLIP_SLOTS 3u
+#define GP_VERSION 4u
+#define GP_GHOSTS 16u
+/* A full displayed set plus as many retiring/pending clips. */
+#define GP_CLIP_SLOTS (2u * GP_GHOSTS)
 #define GP_CLIP_BUDGET (128u * 1024u * 1024u)
 #define GP_STAR_ACTIONS 8u
 #ifndef __cdecl
@@ -34,35 +37,46 @@ enum gp_decision {
 
 #pragma pack(push, 4)
 typedef go_origin gp_origin;
+typedef struct gp_clip {
+    uint8_t clip_id[16];
+    uint32_t hue_degrees, reserved;
+} gp_clip;
 typedef struct gp_request {
     uint32_t bytes, version;
     uint64_t revision;
     uint32_t enabled, reserved0;
     uint64_t owner_token, model_id;
     uint32_t rom_generation, configuration;
-    uint8_t clip_id[16];
     uint32_t mode, seek_igt;
     int32_t nudge_frames;
     float opacity;
     uint32_t star_ends, star_action_count;
     uint32_t star_actions[GP_STAR_ACTIONS];
-    uint32_t tint_enabled, hue_degrees;
+    uint32_t tint_enabled;
     uint32_t proximity_enabled;
     float proximity_distance;
     /* FOLLOW binds an exact owner occurrence; FIXED requires all zero. */
     gp_origin origin;
+    /* Enabled: 1..GP_GHOSTS distinct nonzero ids, each already prepared. */
+    uint32_t clip_count, reserved1;
+    gp_clip clips[GP_GHOSTS];
 } gp_request;
 
 typedef struct gp_status {
     uint32_t bytes, version, decision, reserved;
     uint64_t revision;
     uint64_t owner_token, model_id;
-    uint8_t clip_id[16];
+    /* clips_active: requested clips the renderer holds for this command;
+     * visible: poses produced by the latest evaluate. */
+    uint32_t clip_count, clips_active, visible, reserved1;
     uint32_t rom_generation, configuration, selected_sequence_lo, selected_sequence_hi;
     uint32_t model_state, clips_ready, clips_owned, clips_retired;
     uint64_t resident_clip_bytes;
     uint32_t evaluations, rendered, gaps, refusals, adoption_busy;
     int32_t model_error;
+    /* Per requested clip, in request order. decision summarizes the set:
+     * READY/BEFORE_START when any ghost is visible, else the first clip's. */
+    uint8_t clip_decisions[GP_GHOSTS];
 } gp_status;
 
 typedef struct gp_draw_token {
@@ -81,13 +95,14 @@ typedef struct gp_api {
     int32_t (__cdecl *prepare_model)(uint64_t model_id, const uint8_t *rom, uint32_t bytes);
     /* Copies/validates the entire portable clip and its index on the worker.
      * IDs identify immutable content. Budget includes ready/owned/retired clips;
-     * no caller buffer or pointer survives this call. */
+     * no caller buffer or pointer survives this call. Never displaces another
+     * clip: the worker releases clips it no longer wants. */
     int32_t (__cdecl *prepare_clip)(const gclip_header *, const gclip_frame *);
     /* Revision strictly increases for the module lifetime, including worker
      * replacement and stop/seek/opacity changes; UINT64_MAX fails closed. A
      * request binds the validated owner token, ROM session, layout, model and
-     * clip. A changed capture epoch refuses the old live origin while the
-     * preloaded clip remains available for a newly resolved origin.
+     * clips. A changed capture epoch refuses the old live origin while the
+     * preloaded clips remain available for a newly resolved origin.
      * star_actions comes from the application's canonical action registry. */
     int32_t (__cdecl *configure)(const gp_request *);
     /* Any lifecycle/watchdog thread: atomically cancel, never close/free/wait.
@@ -109,6 +124,10 @@ typedef struct gp_api {
      * A later strictly newer configure resumes them. Lease/ROM shutdown uses
      * revoke instead; withdraw does not authorize worker/module shutdown. */
     void (__cdecl *withdraw)(void);
+    /* Worker only: this clip left the displayed set. A pending copy retires
+     * now; a renderer-held copy stops drawing and retires at its next safe
+     * boundary. Preparing the same id before then returns DEFERRED. */
+    int32_t (__cdecl *release_clip)(const uint8_t clip_id[16]);
 } gp_api;
 
 #ifdef __cplusplus
@@ -123,19 +142,21 @@ void safe_boundary(uint32_t rom_generation, uint32_t configuration);
 /* Borrowed until the next safe_boundary/retire call. Obtain only on renderer. */
 bool atlas(sg_atlas_view *out, uint64_t *model_id);
 /* FOLLOW uses exact elapsed-origin differences plus the resolved origin.offset and
- * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Select
- * first exact coordinate INCLUDING refused poses, then compare live scene.
- * Before-start clamps first; after-end/gaps/refusals hide. A star generation
- * change or live star grab ends that origin; tuning the same origin cannot
- * revive it. With star_ends, FOLLOW also hides at the first recorded valid
- * star action coordinate after nudge (including duplicate/refused poses).
- * This recorded cutoff moves with nudge; FIXED ignores both end policies.
- * A new continuity refuses until the worker binds a witnessed recovery offset;
- * drawing never subtracts elapsed values across that gap.
- * Clears outputs on failure.
- * Geometry stays borrowed until the next evaluate/safe_boundary/retire call. */
+ * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Each clip
+ * then selects its first exact coordinate INCLUDING refused poses and compares
+ * live scene: before-start clamps; after-end/gaps/refusals hide only that ghost.
+ * A star generation change or live star grab ends the shared origin and every
+ * ghost; tuning the same origin cannot revive it. With star_ends, FOLLOW also
+ * hides each ghost at its own first recorded valid star action coordinate
+ * after nudge (including duplicate/refused poses). This recorded cutoff moves
+ * with nudge; FIXED ignores both end policies. A new continuity refuses until
+ * the worker binds a witnessed recovery offset; drawing never subtracts
+ * elapsed values across that gap.
+ * Writes visible poses into out[GP_GHOSTS] back to front (farthest root first)
+ * and returns true when count > 0; clears outputs otherwise. Geometry stays
+ * borrowed until the next evaluate/safe_boundary/retire call. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
-              ghost_compositor::Pose &out, gp_draw_token &token);
+              ghost_compositor::Pose *out, uint32_t &count, gp_draw_token &token);
 /* Recheck immediately before final presentation; cancellation/configuration
  * during a list must not present an older provisional candidate. */
 bool current(const gp_draw_token &);

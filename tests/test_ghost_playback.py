@@ -33,4 +33,6 @@ def test_native_playback_ownership_and_selection(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert report["ok"] and report["checks"] > 50 and report["models"] >= 3
+    # Several ghosts shared one origin; each clip was prepared exactly once per copy.
+    assert report["multi"] == {"ghosts": 3, "max_visible": 3, "prepares": 5}
     assert report["render_allocations"] == report["render_frees"] == 0

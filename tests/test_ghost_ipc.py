@@ -1,6 +1,7 @@
 """Real hidden IPC worker/page and asset reader with isolated renderer interfaces."""
 import hashlib
 import importlib.util
+import ctypes as C
 import json
 from pathlib import Path
 import struct
@@ -10,6 +11,7 @@ import sys
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost import native_protocol as P
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,7 +76,7 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
 #include <windows.h>
 #include <cstdio>
 int wmain(int argc,wchar_t** argv) {
-    if(argc!=5)return 90;
+    if(argc!=9)return 90;
     HMODULE module=LoadLibraryW(argv[1]);if(!module)return 91;
     auto run=reinterpret_cast<int (__cdecl *)(int,wchar_t**)>(GetProcAddress(module,"GhostIpcWitness"));
     if(!run){FreeLibrary(module);return 92;}
@@ -88,9 +90,10 @@ int wmain(int argc,wchar_t** argv) {
 ''', encoding="utf-8")
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17",
         str(launcher), f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *compiler.LIBS], tmp_path)
-    header = struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO3", 3, 160, 324, 1,
-                         1, 4, 1, 1, bytes([1]) + bytes(15), 10_000_000, 0, 1.0,
-                         1, 1, 100, 100, 9, 1, 1, 100, 10, 0, 1, 0, 1, 0, 0)
+    def header(clip_id):
+        return struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO3", 3, 160, 324, 1,
+                           1, 4, 1, 1, bytes([clip_id]) + bytes(15), 10_000_000, 0, 1.0,
+                           1, 1, 100, 100, 9, 1, 1, 100, 10, 0, 1, 0, 1, 0, 0)
     frame = bytearray(324)
     struct.pack_into("<8IQQqIHHhhII", frame, 0, 324, 3, 1, 3, 308, 4, 1, 3,
                      1, 1, 0, 100, 0, 10, 9, 1, 8, 0)
@@ -99,8 +102,11 @@ int wmain(int argc,wchar_t** argv) {
     struct.pack_into("<2I", frame, 116, 0x0c400201, 0x0c400201)  # action/body_action
     struct.pack_into("<I", frame, 128, 1)  # GC_ROOT_TRS
     struct.pack_into("<4I6Q", frame, 260, 5, 1, 0, 10, 0, 0, 0, 1, 0, 1)
-    clip = tmp_path / "fixture.ghost"
-    clip.write_bytes(header + frame)
+    clips = []
+    for clip_id in (1, 2, 3):
+        clip = tmp_path / f"fixture{clip_id}.ghost"
+        clip.write_bytes(header(clip_id) + frame)
+        clips += [str(clip), hashlib.sha256(clip.read_bytes()).hexdigest()]
     rom = bytearray(8 << 20)
     rom[:4] = bytes.fromhex("80371240")
     rom[0x20:0x34] = b"SM64 USAMUNE v1.93u".ljust(20, b" ")
@@ -108,11 +114,25 @@ int wmain(int argc,wchar_t** argv) {
     rom[4 << 20:(4 << 20) + 8] = b"ASSETROM"  # synthetic model-validator witness marker
     rom_path = tmp_path / "fixture.z64"
     rom_path.write_bytes(rom)
-    result = subprocess.run([str(target), str(library), str(clip), hashlib.sha256(clip.read_bytes()).hexdigest(),
-                             str(rom_path)], cwd=tmp_path, capture_output=True, text=True,
+    result = subprocess.run([str(target), str(library), *clips[:2], str(rom_path), *clips[2:]],
+                            cwd=tmp_path, capture_output=True, text=True,
                             timeout=35, check=False, **quiet_spawn_kwargs())
     (tmp_path / "ipc-witness.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert report["ok"] and report["checks"] > 60
     assert report["commands"] >= 8 and report["bindings"] == report["releases"] >= 2
+    # The set grew to three and shrank to two: only added clips were prepared.
+    assert report["multi"] == {"ghosts": 3, "added_prepares": 2, "existing_reprepares": 0,
+                               "released": 1}, report["multi"]
+    assert_python_mirror(report["layout"])
+
+
+def assert_python_mirror(layout):
+    """The ctypes mirror must match the compiled worker field by field."""
+    assert layout["page"] == P.PAGE_BYTES
+    assert layout["ring"] == P.RING_OFFSET
+    for name, mirror in (("request", P.Request), ("clip", P.Clip), ("status", P.Status)):
+        native = dict(layout[name])
+        assert native.pop("$bytes") == C.sizeof(mirror), name
+        assert native == {field: getattr(mirror, field).offset for field, *_ in mirror._fields_}, name

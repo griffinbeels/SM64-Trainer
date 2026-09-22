@@ -6,8 +6,17 @@ import threading
 
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.source import attempt_id_of
-from sm64_events.ghost.selection import MISSING_REASON, selected_template
+from sm64_events.ghost.selection import MISSING_REASON
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
+
+#: Hue step between simultaneous ghosts: the golden angle, so any number of
+#: them stay as far apart on the colour wheel as the count allows.
+HUE_STEP_DEGREES = 137
+
+
+def ghost_hue(base: int, index: int) -> int:
+    """The first ghost (his PB) keeps his chosen colour; the rest step away."""
+    return (base + index * HUE_STEP_DEGREES) % 360
 
 
 class NativeGhost:
@@ -55,16 +64,31 @@ class NativeGhost:
         return {**answer, "reason": "native_preservation_failed",
                 "reason_text": "The template was saved, but " + detail}
 
-    def resolve(self, target, templates, template_id=None):
+    def resolve(self, target, ghosts, missing=()):
+        """Every chosen ghost's answer; the renderer receives the playable ones.
+
+        The top-level answer is the first playable ghost's (else the first
+        ghost's), so a single-ghost reader sees what it always saw; `ghosts`
+        lists each one, PB first.
+        """
         self._asset = None
-        template = (selected_template(templates, target["kind"], target["entity_key"],
-                                      target.get("strat"), template_id) if target else None)
-        result, asset = self._resolve_template(target, template)
-        if template is None and template_id is not None:
-            return {**result, "reason": "selected_template_missing",
-                    "reason_text": MISSING_REASON, "template_id": template_id}
-        self._asset = asset
-        return result
+        if not ghosts:
+            result, _ = self._resolve_template(target, None)
+            if missing and target is not None and self._supported:
+                result = {**result, "reason": "selected_template_missing", "reason_text": MISSING_REASON}
+            return {**result, "ghosts": []}
+        answers, assets = [], []
+        for template in ghosts:
+            result, asset = self._resolve_template(target, template)
+            answers.append(result)
+            if asset is not None:
+                assets.append(asset)
+        self._asset = tuple(assets) or None
+        first = next((answer for answer in answers if answer["available"]), answers[0])
+        return {**first, "ghosts": [
+            {"template_id": answer["template_id"], "attempt_id": answer["attempt_id"],
+             "available": answer["available"], "reason_text": answer["reason_text"]}
+            for answer in answers]}
 
     def probe(self, target, template):
         """Validate a candidate without changing the asset sent to the renderer."""
@@ -170,17 +194,20 @@ class NativeGhost:
         if (self._requested and self._selected_asset is not None and source is not None
                 and origin is not None and producer is not None
                 and producer.configuration and producer.epoch):
-            path, manifest = self._selected_asset
             instant = datetime.fromisoformat(origin["utc"].replace("Z", "+00:00"))
             if instant.tzinfo is None:
                 self._origin = None
                 return self._send(blocking=blocking)
+            controls = dict(self._controls)
+            hue = controls.pop("hue_degrees")
+            clips = [{"clip_id": bytes.fromhex(manifest["clip_id"]),
+                      "clip_sha256": bytes.fromhex(manifest["sha256"]),
+                      "clip_path": str(path), "hue_degrees": ghost_hue(hue, index)}
+                     for index, (path, manifest) in enumerate(self._selected_asset)]
             command = {"enabled": True, "model_id": 1,
                        "owner_suspended": self._owner_suspended,
-                       "clip_id": bytes.fromhex(manifest["clip_id"]),
-                       "clip_sha256": bytes.fromhex(manifest["sha256"]),
-                       "clip_path": str(path), "rom_path": "",
-                       **self._controls,
+                       "clips": clips, "rom_path": "",
+                       **controls,
                        "origin": {"kind": 1 if origin["kind"] == "star" else 2,
                                   "configuration": producer.configuration, "epoch": producer.epoch,
                                   "global_timer": origin["frame"], "utc": instant.timestamp(),

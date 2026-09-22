@@ -48,7 +48,8 @@ def no_session_state() -> dict:
     shows unknown as unknown."""
     return {"enabled": False, "opacity": None, "tint": None, "view": None,
             "nudge_frames": 0, "target": None,
-            "selection": {"template_id": None, "candidates": []},
+            "selection": {"ghosts": {"pb": True, "templates": []}, "missing": [],
+                          "pb": None, "candidates": []},
             "source": {"available": False, "reason": "no_session",
                        "reason_text": "The ghost overlay is not available in "
                                       "this window.",

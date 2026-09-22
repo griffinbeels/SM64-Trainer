@@ -63,24 +63,28 @@ struct Run {
         demand.token=123;demand.revision=1;demand.heartbeat=1;demand.capture_enabled=1;
         demand.rom_generation=rom;demand.layout.clock=fixture::config();
         session->demand(demand,1);session->demand(demand,1);
-        session->rom_bytes.resize(8u<<20);session->clip_header=clip.header;
-        session->clip_bytes.resize(sizeof(clip.header)+sizeof(gclip_frame)*clip.frames.size());
-        std::memcpy(session->clip_bytes.data(),&clip.header,sizeof(clip.header));
-        std::memcpy(session->clip_bytes.data()+sizeof(clip.header),clip.frames.data(),sizeof(gclip_frame)*clip.frames.size());
+        session->rom_bytes.resize(8u<<20);
+        std::vector<uint8_t> clip_bytes(sizeof(clip.header)+sizeof(gclip_frame)*clip.frames.size());
+        std::memcpy(clip_bytes.data(),&clip.header,sizeof(clip.header));
+        std::memcpy(clip_bytes.data()+sizeof(clip.header),clip.frames.data(),sizeof(gclip_frame)*clip.frames.size());
         demand.play_enabled=1;demand.model_id=1;demand.opacity=1;demand.stop_at_star=!segment;
-        demand.star_action_count=1;demand.star_actions[0]=0x1302;demand.clip_id[0]=segment?72:71;
+        demand.star_action_count=1;demand.star_actions[0]=0x1302;
+        demand.clip_count=1;demand.clips[0].clip_id[0]=segment?72:71;
         demand.origin={uint32_t(segment?GO_SEGMENT:GO_STAR),fixture::configuration,fixture::epoch,1000,1000,1,9};
         check(ghost_assets::sha256(session->rom_bytes,session->cartridge_digest),"hash original ROM");
         session->cartridge_verified=true;
-        check(ghost_assets::sha256(session->clip_bytes,demand.clip_sha256),"hash clip file");
+        check(ghost_assets::sha256(clip_bytes,demand.clips[0].clip_sha256),"hash clip file");
         wchar_t path[GIPC_PATH_CHARS]{};
         check(GetFullPathNameW(L"recovery.rom",GIPC_PATH_CHARS,path,nullptr)!=0,"private ROM path");
         std::memcpy(demand.rom_path,path,sizeof(path));
         std::ofstream(path,std::ios::binary).write(reinterpret_cast<const char*>(session->rom_bytes.data()),session->rom_bytes.size());
         check(GetFullPathNameW(L"recovery.ghost",GIPC_PATH_CHARS,path,nullptr)!=0,"private clip path");
-        std::memcpy(demand.clip_path,path,sizeof(path));
-        std::ofstream(path,std::ios::binary).write(reinterpret_cast<const char*>(session->clip_bytes.data()),session->clip_bytes.size());
-        demand.revision=2;session->loaded=demand;session->assets_loaded=true;
+        std::memcpy(demand.clips[0].clip_path,path,sizeof(path));
+        std::ofstream(path,std::ios::binary).write(reinterpret_cast<const char*>(clip_bytes.data()),clip_bytes.size());
+        demand.revision=2;session->loaded=demand;session->rom_ready=true;
+        Session::Asset asset;asset.header=clip.header;asset.bytes=std::move(clip_bytes);
+        std::memcpy(asset.id,demand.clips[0].clip_id,16);std::memcpy(asset.sha256,demand.clips[0].clip_sha256,32);
+        session->assets.push_back(std::move(asset));
         auto config=fixture::config();check(gcc_init(&source_clock,&config)!=0,"source clock init");
     }
     void step(uint16_t raw,int expected,int area=1,uint32_t action=1,float pose_tag=-1) {
@@ -97,9 +101,9 @@ struct Run {
             fixture::queue.push_back(record);session->publish(*page,demand);
             ++demand.heartbeat;session->demand(demand,demand.generation);
             ghost::WorldPass world{};world.epoch=live.epoch;world.context_generation=1;world.list_serial=live.dlist_serial;
-            bool drawn=false;ghost_compositor::Pose pose{};gp_draw_token token{};
+            bool drawn=false;ghost_compositor::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
             renderer.run([&]{ghost_playback::safe_boundary(rom,fixture::configuration);
-                drawn=ghost_playback::evaluate(live,world,pose,token);});
+                drawn=ghost_playback::evaluate(live,world,poses,count,token);});
             gp_status status{};ghost_playback::api()->status(&status,sizeof(status));
             if(drawn!=(expected>=0) || (drawn && selected_x!=float(expected))) {
                 std::fprintf(stderr,"raw=%u expected=%d drawn=%d selected=%.0f IPC=%u/%u playback=%u continuity=%llu\n",
@@ -131,7 +135,9 @@ struct Run {
         if(!same_session)++demand.origin.session_id;
         demand.play_enabled=1;++demand.revision;
         check(session->demand(demand,demand.generation),"reopen requests actual asset reload");
-        session->load_assets();check(session->assets_loaded,"reopen validates actual clip/ROM files");
+        session->load_assets();
+        check(session->rom_ready && session->assets.size()==1 && session->failed!=demand.revision,
+            "reopen validates actual clip/ROM files");
         session->demand(demand,demand.generation);
     }
     ~Run(){retire(GIPC_OK);}

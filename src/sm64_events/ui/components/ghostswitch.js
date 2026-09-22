@@ -263,24 +263,27 @@ function GhostView({ view, boxes, choices = null, write }) {
   </div>`;
 }
 
+/** WHICH GHOSTS PLAY: one tick per recording, his PB first. A tick writes
+ * the whole set at once; each ticked ghost wears the colour dot it is drawn
+ * in, so several Marios on screen can be told apart. */
 function GhostRecording({ recording, entityKey, target, write }) {
   if (!recording) return null;
   const reasonId = recording.reasonText ? idFor(entityKey, "recording-why") : null;
-  const selected = recording.options.find((option) => option.value === recording.value);
   return html`<div class="ghost-recording-row">
-    <label class="ghost-field ghost-recording">
-      <span class="ghost-field-name">Ghost recording</span>
-      <select class="ghost-recording-select"
-        aria-label="Ghost recording" aria-describedby=${reasonId || undefined}
-        title=${selected?.label} value=${recording.value}
-        onchange=${(event) => write({
-          template_id: event.target.value === "" ? null : Number(event.target.value),
-          target,
-        })}>
-        ${recording.options.map((option) => html`<option key=${option.value}
-          value=${option.value} disabled=${option.disabled}>${option.label}</option>`)}
-      </select>
-    </label>
+    <fieldset class="ghost-recordings" aria-describedby=${reasonId || undefined}>
+      <legend class="ghost-field-name">Ghosts</legend>
+      ${recording.items.map((item) => html`<label key=${item.key}
+        class="ghost-pick ${item.disabled ? "is-disabled" : ""}"
+        title=${item.reason ? `${item.label} — ${item.reason}` : item.label}>
+        <input type="checkbox" class="ghost-pick-box" checked=${item.checked}
+          disabled=${item.disabled}
+          onchange=${() => write({ ghosts: recording.toggle(item.key), target })} />
+        ${item.hue != null && html`<span class="ghost-pick-hue" aria-hidden="true"
+          style=${`--ghost-hue: ${item.hue}deg`}></span>`}
+        <span class="ghost-pick-name">${item.label}</span>
+        ${item.reason && html`<span class="ghost-pick-why">${item.reason}</span>`}
+      </label>`)}
+    </fieldset>
     ${recording.reasonText && html`<span class="ghost-why" id=${reasonId}>
       ${recording.reasonText}
     </span>`}

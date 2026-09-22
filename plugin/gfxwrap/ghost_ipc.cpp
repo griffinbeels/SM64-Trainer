@@ -53,16 +53,34 @@ bool same_owner(const gipc_request &a, const gipc_request &b) {
         && a.owner_created_lo == b.owner_created_lo && a.owner_created_hi == b.owner_created_hi
         && a.generation == b.generation;
 }
-bool same_assets(const gipc_request &a, const gipc_request &b) {
-    return a.model_id == b.model_id && a.rom_generation == b.rom_generation
-        && !std::memcmp(a.clip_id, b.clip_id, 16)
-        && !std::memcmp(a.clip_sha256, b.clip_sha256, 32)
-        && !std::memcmp(a.rom_path, b.rom_path, sizeof(a.rom_path))
-        && !std::memcmp(a.clip_path, b.clip_path, sizeof(a.clip_path));
+bool same_rom(const gipc_request &a, const gipc_request &b) {
+    return a.rom_generation == b.rom_generation
+        && !std::memcmp(a.rom_path, b.rom_path, sizeof(a.rom_path));
 }
 bool same_command(gipc_request a, gipc_request b) {
     a.heartbeat = b.heartbeat = 0;
     return !std::memcmp(&a, &b, sizeof(a));
+}
+// Everything except the displayed set: an applied command with the same
+// controls may keep drawing its clips while a changed set loads.
+bool same_controls(gipc_request a, gipc_request b) {
+    a.heartbeat = b.heartbeat = 0; a.revision = b.revision = 0;
+    a.clip_count = b.clip_count = 0;
+    std::memset(a.clips, 0, sizeof(a.clips)); std::memset(b.clips, 0, sizeof(b.clips));
+    return !std::memcmp(&a, &b, sizeof(a));
+}
+bool valid_set(const gipc_request &r) {
+    if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)) return false;
+    for (uint32_t i = 0; i < r.clip_count; ++i) {
+        const auto &clip = r.clips[i];
+        if (clip.hue_degrees > 359 || clip.reserved) return false;
+        if (!r.play_enabled) continue;
+        uint8_t any = 0; for (auto byte : clip.clip_id) any |= byte;
+        if (!any) return false;
+        for (uint32_t j = 0; j < i; ++j)
+            if (!std::memcmp(clip.clip_id, r.clips[j].clip_id, 16)) return false;
+    }
+    return true;
 }
 bool same_marker_owner(const go_marker &a,const go_marker &b) {
     // Capture namespaces change on a state load. The tracker owner does not.
@@ -99,10 +117,22 @@ struct Session {
     uint32_t reason = GIPC_OK, state = GIPC_PASSIVE;
     uint64_t applied = 0, attempted = 0, failed = 0;
     uint32_t last_dropped = 0;
-    bool live = false, awaiting_configuration = false, assets_loaded = false, clip_prepared = false;
-    std::vector<uint8_t> rom_bytes, clip_bytes;
+    bool live = false, awaiting_configuration = false, rom_ready = false;
+    std::vector<uint8_t> rom_bytes;
     uint32_t cached_rom_generation = 0;
-    gclip_header clip_header{};
+    // One validated file per listed clip, keyed by id+SHA. Its playback copy
+    // survives set changes; only a removed clip is released.
+    struct Asset {
+        uint8_t id[16]{}, sha256[32]{};
+        gclip_header header{};
+        std::vector<uint8_t> bytes;
+        bool prepared = false;
+        const gclip_frame *frames() const {
+            return reinterpret_cast<const gclip_frame *>(bytes.data() + sizeof(gclip_header));
+        }
+    };
+    std::vector<Asset> assets;
+    gipc_request applied_request{};
     ghost_origin::Ledger origins;
     go_marker resolved_marker{};
     go_origin resolved_origin{};
@@ -118,12 +148,44 @@ struct Session {
         qpc_anchor(clock.qpc_anchor), utc_anchor(clock.utc_anchor) {}
     ~Session() { clear_rom(); }
 
+    Asset *find(const gipc_clip &clip) {
+        for (auto &asset : assets)
+            if (!std::memcmp(asset.id, clip.clip_id, 16) && !std::memcmp(asset.sha256, clip.clip_sha256, 32))
+                return &asset;
+        return nullptr;
+    }
+    void forget_prepared() { for (auto &asset : assets) asset.prepared = false; }
+    uint32_t prepared_count(const gipc_request &r) {
+        uint32_t count = 0;
+        for (uint32_t i = 0; i < r.clip_count; ++i) { auto *asset = find(r.clips[i]); count += asset && asset->prepared; }
+        return count;
+    }
+    bool needs_load(const gipc_request &r) {
+        if (!rom_ready || !same_rom(r, loaded)) return true;
+        for (uint32_t i = 0; i < r.clip_count; ++i) if (!find(r.clips[i])) return true;
+        return false;
+    }
+    // A clip that left the set stops drawing at the next render boundary;
+    // the others keep their prepared copies.
+    void release_unlisted(const gipc_request &r) {
+        for (size_t i = 0; i < assets.size();) {
+            bool listed = false;
+            for (uint32_t k = 0; k < r.clip_count && !listed; ++k)
+                listed = !std::memcmp(assets[i].id, r.clips[k].clip_id, 16)
+                    && !std::memcmp(assets[i].sha256, r.clips[k].clip_sha256, 32);
+            if (listed) { ++i; continue; }
+            play->release_clip(assets[i].id);
+            assets.erase(assets.begin() + static_cast<ptrdiff_t>(i));
+        }
+    }
+    void withdraw() { play->withdraw(); applied = 0; }
+
     void clear_rom() {
         // Do not leave an old full cartridge in allocator-retained storage that
         // a later generation's discovery could mistake for the live image.
         if (!rom_bytes.empty()) SecureZeroMemory(rom_bytes.data(), rom_bytes.size());
         std::vector<uint8_t>().swap(rom_bytes);
-        cached_rom_generation = 0;
+        cached_rom_generation = 0; rom_ready = false;
         cartridge_verified = false;
         std::memset(cartridge_digest,0,sizeof(cartridge_digest));
     }
@@ -135,8 +197,6 @@ struct Session {
                 && loaded.owner_created_hi==old.owner_created_hi
                 && loaded.origin.session_id==recovery_cache.marker.session_id
                 && loaded.origin.kind==recovery_cache.marker.kind
-                && !std::memcmp(loaded.clip_id,old.clip_id,sizeof(old.clip_id))
-                && !std::memcmp(loaded.clip_sha256,old.clip_sha256,sizeof(old.clip_sha256))
                 && !std::memcmp(cartridge_digest,recovery_cache.rom_digest,sizeof(cartridge_digest))) {
             recovery=std::move(recovery_cache.timing);recovery.suspend();
             resolved_marker=recovery_cache.marker;have_origin=false;
@@ -158,7 +218,7 @@ struct Session {
         capture->disable();
         if (live || applied) play->revoke(why);
         live = false; applied = 0; configuration = 0; awaiting_configuration = false;
-        clip_prepared = false;
+        forget_prepared();
         origins.clear();
         have_origin = false;
         reason = why; state = why ? GIPC_REFUSED : GIPC_PASSIVE;
@@ -183,7 +243,7 @@ struct Session {
                 || r.capture_enabled > 1 || r.play_enabled > 1 || r.mode > 1
                 || r.nudge < -600 || r.nudge > 600
                 || !(r.opacity >= 0 && r.opacity <= 1) || r.stop_at_star > 1
-                || r.star_action_count > 8 || r.tint_enabled > 1 || r.hue_degrees > 359
+                || r.star_action_count > 8 || r.tint_enabled > 1 || !valid_set(r)
                 || r.proximity_enabled > 1 || !std::isfinite(r.proximity_distance)
                 || r.proximity_distance < 0 || r.proximity_distance > 400
                 || (r.play_enabled && !r.model_id))) {
@@ -214,7 +274,7 @@ struct Session {
             // path which retires this Session and starts a replacement worker.
             if(rom && rom!=current_rom)park_recovery();
             play->revoke(GP_WRONG_IDENTITY);
-            clip_prepared = false;
+            forget_prepared();
             origins.clear();
             have_origin = false;
             recovery.clear();
@@ -229,24 +289,27 @@ struct Session {
         if (awaiting_configuration && stats.configuration != prior_configuration) {
             awaiting_configuration = false; configuration = stats.configuration;
         }
-        if (r.play_enabled && (!assets_loaded || !same_assets(r, loaded))) {
-            if (attempted != r.revision || changed) {
-                play->revoke(GP_PREPARING); applied = 0;
-                attempted = r.revision;
-                loaded = r; assets_loaded = clip_prepared = false;
-                recovery.clear();have_origin=false;
-                state = GIPC_PREPARING; previous = r;
-                return true; // caller loads outside the page mutex, then revalidates the lease
+        if (r.play_enabled) release_unlisted(r);
+        if (r.play_enabled && needs_load(r) && (attempted != r.revision || changed)) {
+            // Only a new clip is read. Unchanged clips keep drawing under an
+            // applied command with the same controls; a new ROM rebuilds all.
+            if (!(applied && same_controls(r, applied_request))) withdraw();
+            if (!same_rom(r, loaded)) {
+                if (rom_ready) { play->revoke(GP_PREPARING); applied = 0; forget_prepared(); rom_ready = false; }
+                recovery.clear(); have_origin = false;
             }
+            attempted = r.revision; loaded = r;
+            state = GIPC_PREPARING; previous = r;
+            return true; // caller loads outside the page mutex, then revalidates the lease
         }
         if (r.play_enabled && failed == r.revision) {
-            state = GIPC_REFUSED; previous = r; return false;
+            withdraw(); state = GIPC_REFUSED; previous = r; return false;
         }
         reason = GIPC_OK; state = configuration ? GIPC_CAPTURING : GIPC_PREPARING;
         gp_status playback{};
         if (applied && play->status(&playback, sizeof(playback)) == GP_OK
                 && (playback.decision == GP_CONTEXT_LOST || playback.model_state == GP_MODEL_EMPTY)) {
-            applied = 0; clip_prepared = false;
+            applied = 0; forget_prepared();
         }
         if (!r.play_enabled) {
             if (applied) play->withdraw();
@@ -255,12 +318,19 @@ struct Session {
         } else if(r.owner_suspended) {
             if(applied)play->withdraw();
             applied=0;state=GIPC_PREPARING;reason=GIPC_ORIGIN;
-        } else if (assets_loaded && configuration) {
-            if (applied != r.revision) play->withdraw();
+        } else if (!needs_load(r) && configuration) {
             const int model = play->prepare_model(r.model_id, rom_bytes.data(), static_cast<uint32_t>(rom_bytes.size()));
-            const int clip = clip_prepared ? GP_OK : play->prepare_clip(&clip_header,
-                reinterpret_cast<const gclip_frame *>(clip_bytes.data() + sizeof(gclip_header)));
-            clip_prepared = clip == GP_OK;
+            int clip = GP_OK;
+            for (uint32_t i = 0; i < r.clip_count; ++i) {
+                auto *asset = find(r.clips[i]);
+                if (asset->prepared) continue;
+                const int result = play->prepare_clip(&asset->header, asset->frames());
+                asset->prepared = result == GP_OK;
+                if (result != GP_OK && (clip == GP_OK || result == GP_INVALID)) clip = result;
+            }
+            // The old command may keep drawing only while it means the same thing.
+            if ((model != GP_OK || clip != GP_OK) && applied != r.revision
+                    && !(applied && same_controls(r, applied_request))) withdraw();
             if (model == GP_OK && clip == GP_OK) {
                 if (applied != r.revision) {
                     gp_request command{};
@@ -278,7 +348,7 @@ struct Session {
                             if(resolved==GO_READY)recovery.bind(resolved_origin);
                         }
                         if (r.origin.configuration != configuration || resolved != GO_READY) {
-                            have_origin = false;
+                            have_origin = false; withdraw();
                             state = resolved == GO_MISSING ? GIPC_PREPARING : GIPC_REFUSED;
                             reason = GIPC_ORIGIN; previous = r; return false;
                         }
@@ -290,17 +360,21 @@ struct Session {
                     command.revision = ++playback_revision; command.enabled = 1;
                     command.owner_token = r.token; command.model_id = r.model_id;
                     command.rom_generation = rom; command.configuration = configuration;
-                    std::memcpy(command.clip_id, r.clip_id, 16);
+                    command.clip_count = r.clip_count;
+                    for (uint32_t i = 0; i < r.clip_count; ++i) {
+                        std::memcpy(command.clips[i].clip_id, r.clips[i].clip_id, 16);
+                        command.clips[i].hue_degrees = r.clips[i].hue_degrees;
+                    }
                     command.mode = r.mode; command.seek_igt = r.seek_igt;
                     command.nudge_frames = r.nudge; command.opacity = r.opacity;
                     command.star_ends = r.stop_at_star; command.star_action_count = r.star_action_count;
                     std::memcpy(command.star_actions, r.star_actions, sizeof(r.star_actions));
-                    command.tint_enabled = r.tint_enabled; command.hue_degrees = r.hue_degrees;
+                    command.tint_enabled = r.tint_enabled;
                     command.proximity_enabled = r.proximity_enabled;
                     command.proximity_distance = r.proximity_distance;
                     if (play->configure(&command) != GP_OK) {
-                        state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
-                    } else { applied = r.revision; state = GIPC_READY; }
+                        withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
+                    } else { applied = r.revision; applied_request = r; state = GIPC_READY; }
                 } else state = GIPC_READY;
             } else {
                 state = GIPC_PREPARING;
@@ -309,13 +383,35 @@ struct Session {
                 if (model == GP_MODEL_ERROR || model == GP_INVALID || clip == GP_INVALID)
                     failed = r.revision;
             }
-        } else if (r.play_enabled && !assets_loaded && attempted == r.revision) {
-            state = GIPC_REFUSED; reason = GIPC_FILE;
         }
         previous = r; return false;
     }
     void load_assets() {
-        // Any previously presented ghost was revoked before this potentially slow IO.
+        // A retained command may still draw unchanged clips during this IO.
+        if (!rom_ready) load_rom();
+        if (!rom_ready) return;
+        uint64_t total = 0;
+        for (const auto &asset : assets) total += asset.bytes.size();
+        for (uint32_t i = 0; i < loaded.clip_count; ++i) {
+            const auto &clip = loaded.clips[i];
+            if (find(clip)) continue;
+            Asset asset;
+            std::memcpy(asset.id, clip.clip_id, 16); std::memcpy(asset.sha256, clip.clip_sha256, 32);
+            if (!ghost_assets::read(clip.clip_path, GIPC_PATH_CHARS,
+                    sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame), asset.bytes)
+                    || !ghost_assets::clip(asset.bytes, clip.clip_sha256, clip.clip_id, asset.header)) {
+                failed = loaded.revision; reason = GIPC_FILE; state = GIPC_REFUSED; return;
+            }
+            // Retained files are bounded like their resident playback copies.
+            total += asset.bytes.size();
+            if (total > GP_CLIP_BUDGET + uint64_t(GIPC_GHOSTS) * sizeof(gclip_header)) {
+                failed = loaded.revision; reason = GIPC_CLIP; state = GIPC_REFUSED; return;
+            }
+            assets.push_back(std::move(asset));
+        }
+        restore_cache();
+    }
+    void load_rom() {
         bool rom_loaded = false;
         if (loaded.rom_path[0]) {
             clear_rom();
@@ -328,20 +424,15 @@ struct Session {
             if (rom_loaded) cached_rom_generation = loaded.rom_generation;
         }
         if (!rom_loaded) {
-            clear_rom(); clip_bytes.clear(); failed = loaded.revision;
+            clear_rom(); failed = loaded.revision;
             reason = GIPC_ROM; state = GIPC_REFUSED; return;
         }
         cartridge_verified=ghost_assets::sha256(rom_bytes,cartridge_digest);
         if(!cartridge_verified) {
-            clear_rom();clip_bytes.clear();failed=loaded.revision;
+            clear_rom();failed=loaded.revision;
             reason=GIPC_ROM;state=GIPC_REFUSED;return;
         }
-        assets_loaded = ghost_assets::read(loaded.clip_path, GIPC_PATH_CHARS,
-                sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame), clip_bytes)
-            && ghost_assets::clip(clip_bytes, loaded.clip_sha256, loaded.clip_id, clip_header);
-        if (!assets_loaded) {
-            clip_bytes.clear(); failed = loaded.revision; reason = GIPC_FILE; state = GIPC_REFUSED;
-        } else restore_cache();
+        rom_ready = true;
     }
     void publish(gipc_page &page, const gipc_request &r) {
         auto &s = page.status;
@@ -355,11 +446,15 @@ struct Session {
         s.state = state; s.reason = reason; s.ack_token = r.token; s.ack_revision = r.revision;
         gp_status playback{};
         s.displayed = 0;
+        s.clips_requested = r.play_enabled ? r.clip_count : 0;
+        s.clips_prepared = r.play_enabled ? prepared_count(r) : 0;
+        s.clips_visible = 0;
         if (play->status(&playback, sizeof(playback)) == GP_OK) {
             s.playback_state = playback.model_state; s.playback_reason = playback.decision;
             s.displayed = state == GIPC_READY && applied == r.revision
                 && playback.owner_token == r.token && playback.revision != 0
                 && displayed_revision.load(std::memory_order_acquire) == playback.revision;
+            if (s.displayed) s.clips_visible = playback.visible;
         }
         if (s.consumed > s.produced || s.produced - s.consumed > GIPC_SLOTS) {
             revoke(GIPC_PROTOCOL); s.consumed = s.produced; return;

@@ -91,22 +91,42 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
     }
 
 
-def _select_recording(session: dict, body: dict, input_source: dict) -> None:
+def _select_ghosts(session: dict, body: dict, input_source: dict) -> None:
+    """The real session's rules, over fixture rows: PB first, ticked saved
+    recordings after it, the source is the first of them, and each playable
+    one wears the hue the native command would give it."""
     from fastapi import HTTPException
+
+    from sm64_events.ghost.native_session import ghost_hue
+    from sm64_events.ghost.selection import checked_choice
 
     if body.get("target") != session["target"]:
         raise HTTPException(422, "The practice target changed.")
-    selection = {**session["selection"], "template_id": body["template_id"]}
-    chosen = next((candidate for candidate in selection["candidates"]
-                   if candidate["template_id"] == body["template_id"]), None)
-    if chosen is None and body["template_id"] is not None:
-        raise HTTPException(422, "The selected ghost is no longer saved.")
+    try:
+        choice = checked_choice(body["ghosts"])
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    selection = dict(session["selection"])
+    rows = {candidate["template_id"]: candidate for candidate in selection["candidates"]}
+    if any(number not in rows for number in choice["templates"]):
+        raise HTTPException(422, "That saved ghost no longer exists. Choose another ghost.")
+    pb = selection.get("pb")
+    chosen = ([("pb", {**pb, "template_id": -pb["attempt_id"]})] if choice["pb"] and pb else [])
+    chosen += [(number, rows[number]) for number in choice["templates"]]
+    selection["ghosts"] = choice
+    native = [(key, row) for key, row in chosen if row["native_available"]]
+    tint = session["tint"]
+    selection["playing"] = [] if session["view"] != "mario" else [
+        {"key": key, "attempt_id": row["attempt_id"],
+         "hue_degrees": ghost_hue(tint["hue_degrees"], index) if tint["enabled"] else None}
+        for index, (key, row) in enumerate(native)]
     session["selection"] = selection
     session["source"] = dict(input_source)
     if chosen:
+        first = chosen[0][1]
         for key in ("template_id", "attempt_id", "native_available",
                     "native_reason_text", "whole_available", "whole_reason_text"):
-            session["source"][key] = chosen[key]
+            session["source"][key] = first[key]
 
 
 def attach_ghost_routes(app, state: dict) -> None:
@@ -171,8 +191,8 @@ def attach_ghost_routes(app, state: dict) -> None:
             from sm64_events.ghost.proximity import checked_proximity
             session["proximity"] = {**session.get("proximity", {}),
                                     **checked_proximity(body["proximity"])}
-        if "template_id" in body:
-            _select_recording(session, body, input_source)
+        if "ghosts" in body:
+            _select_ghosts(session, body, input_source)
         if "native_available" in session["source"]:
             source = dict(session["source"])
             native = session["view"] == "mario"
