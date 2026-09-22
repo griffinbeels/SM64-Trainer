@@ -148,3 +148,13 @@ def test_a_test_that_failed_last_time_is_picked_again():
     picked = radius.select(ROOT, "HEAD", changed={}, coverage=NO_MAP,
                            last_failed={f"{PLAIN_TEST}::test_x"}).selection()
     assert picked == {PLAIN_TEST: [f"{PLAIN_TEST}::test_x"]}
+
+
+def test_a_failure_recorded_before_the_green_baseline_is_not_picked(tmp_path):
+    cache = tmp_path / ".pytest_cache" / "v" / "cache"
+    cache.mkdir(parents=True)
+    (cache / "lastfailed").write_text(f'{{"{PLAIN_TEST}::test_x": true}}', encoding="utf-8")
+    recorded = (cache / "lastfailed").stat().st_mtime
+    assert radius._last_failed(tmp_path, since=recorded + 60) == set()
+    assert radius._last_failed(tmp_path, since=recorded - 60) == {f"{PLAIN_TEST}::test_x"}
+    assert radius._last_failed(tmp_path) == {f"{PLAIN_TEST}::test_x"}
