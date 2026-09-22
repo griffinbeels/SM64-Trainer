@@ -15,6 +15,10 @@ struct Ram {
         if (!has(p,4)) return 0;
         uint32_t v; std::memcpy(&v,data+p-base,4); return v;
     }
+    uint8_t byte(uint32_t p) {
+        if (!has(p,1,1)) return 0;
+        return data[(p-base)^3];
+    }
     uint16_t half(uint32_t p) {
         if (!has(p,2,2)) return 0;
         return uint16_t(uint16_t(data[(p-base)^3])<<8 | data[(p-base+1)^3]);
@@ -79,6 +83,132 @@ bool matrix_at(Ram &ram, uint32_t command, const float *matrix) {
     return ram.ok && det!=0 && std::isfinite(det)
         && matrix[3]==0 && matrix[7]==0 && matrix[11]==0 && matrix[15]==1;
 }
+
+// SM64 allocates display-list memory downward from gGfxPoolEnd in traversal
+// order. For Mario (mario_geo: GEO_SHADOW -> GEO_SCALE -> culling ASM ->
+// alpha ASM) a drawn shadow is: 9 Vtx, its 5-command list, its G_MTX, the
+// scale G_MTX, then the opaque alpha list (n64decomp shadow.c
+// create_shadow_player, rendering_graph_node.c geo_process_shadow/scale,
+// mario_misc.c make_gfx_mario_alpha). The root proof already owns that alpha
+// list, so Mario's shadow sits at fixed offsets from it; any other object's
+// shadow, or none, cannot satisfy them together with the exact list shapes.
+constexpr uint32_t shadow_list_offset = 144, shadow_matrix_offset = 80, shadow_vertex_offset = 184;
+struct Command { uint32_t w0, w1; };
+constexpr Command shadow_begin[] = {{0xe7000000u,0},{0xb6000000u,0x00022000u},
+    {0xfc121824u,0xff33ffffu},{0xbb000001u,0xffffffffu},{0xb8000000u,0}};
+constexpr Command shadow_end[] = {{0xe7000000u,0},{0xbb000000u,0xffffffffu},
+    {0xb7000000u,0x00022000u},{0xfcffffffu,0xfffe793cu},{0xb8000000u,0}};
+// dl_shadow_circle after its begin call and SETTIMG: 16x16 IA8 render tile,
+// mirrored on both axes with mask 4 (the compositor's sampler contract).
+constexpr Command shadow_circle_tail[] = {{0xf5700000u,0x07050140u},{0xe6000000u,0},
+    {0xf3000000u,0x0707f400u},{0xe7000000u,0},{0xf5680400u,0x00050140u},
+    {0xf2000000u,0x0003c03cu},{0xb8000000u,0}};
+bool commands(Ram &ram, uint32_t physical, const Command *expected, unsigned count) {
+    if (physical >= ram.size || !ram.has(base+physical, 8*count, 8)) return false;
+    for (unsigned i=0;i<count;++i)
+        if (ram.word(base+physical+8*i)!=expected[i].w0 || ram.word(base+physical+8*i+4)!=expected[i].w1)
+            return false;
+    return ram.ok;
+}
+bool triangles(Ram &ram, uint32_t physical) {
+    Command expected[9]{};
+    for (unsigned t=0;t<8;++t)
+        expected[t]={0xbf000000u, uint32_t(gc_shadow_triangles[3*t]*10)<<16
+            | uint32_t(gc_shadow_triangles[3*t+1]*10)<<8 | uint32_t(gc_shadow_triangles[3*t+2]*10)};
+    expected[8]={0xb8000000u,0};
+    return commands(ram,physical,expected,9);
+}
+// Segmented operand -> physical, using the base the renderer just resolved.
+bool translate(uint32_t segmented, uint32_t segment_base, uint32_t segment, uint32_t &physical) {
+    if ((segmented>>24)!=segment) return false;
+    physical=segment_base+(segmented&0x00ffffffu); return true;
+}
+// Master-list call: G_MTX (its own allocation) + G_DL to the shadow list.
+bool shadow_master(gc_root_probe &p, Ram &ram, uint32_t pc, uint32_t physical, const float *matrix) {
+    const uint32_t alpha=p.mario_alpha;
+    if (physical!=alpha+shadow_list_offset || !matrix_at(ram,pc,matrix)
+            || ram.word(base+pc-4)!=alpha+shadow_matrix_offset) return false;
+    const uint32_t list=base+physical, vertices=alpha+shadow_vertex_offset;
+    if (!ram.has(list,40,8) || ram.word(list)!=0x06000000u || ram.word(list+8)!=0x04800090u
+            || ram.word(list+12)!=(base|vertices) || ram.word(list+16)!=0x06000000u
+            || ram.word(list+24)!=0x06000000u || ram.word(list+32)!=0xb8000000u || ram.word(list+36))
+        return false;
+    // The camera look-at is rigid, and the shadow sits within its animation
+    // offset of Mario. A sanity bound, not the ownership proof above.
+    for (unsigned i=0;i<3;++i) {
+        double offset=0;
+        for (unsigned j=0;j<3;++j) {
+            double dot=0;
+            for (unsigned k=0;k<3;++k) dot+=double(matrix[4*i+k])*matrix[4*j+k];
+            if (std::fabs(dot-(i==j?1.0:0.0))>0.002) return false;
+            offset+=double(matrix[12+j]-p.camera_to_object[j])*matrix[4*i+j];
+        }
+        if (std::fabs(offset)>1024) return false;
+    }
+    gc_shadow shadow{};
+    std::memcpy(shadow.matrix,matrix,sizeof(shadow.matrix));
+    for (unsigned v=0;v<GC_SHADOW_VERTICES;++v) {
+        const uint32_t at=base+vertices+16*v;
+        if (!ram.has(at,16,8)) return false;
+        for (unsigned a=0;a<3;++a) shadow.position[v][a]=int16_t(ram.half(at+2*a));
+        for (unsigned a=0;a<2;++a) shadow.uv[v][a]=int16_t(ram.half(at+8+2*a));
+        // make_shadow_vertex_at_xyz: white shade, per-vertex solidity alpha.
+        if (ram.byte(at+12)!=255 || ram.byte(at+13)!=255 || ram.byte(at+14)!=255) return false;
+        shadow.alpha[v]=ram.byte(at+15);
+    }
+    if (!ram.ok) return false;
+    p.shadow=shadow;
+    p.shadow_nested[0]=ram.word(list+4); p.shadow_nested[1]=ram.word(list+20);
+    p.shadow_nested[2]=ram.word(list+28);
+    return true;
+}
+// Nested calls inside the shadow list, in executed order at list depth.
+bool shadow_nested(gc_root_probe &p, Ram &ram, uint32_t dl, uint32_t physical) {
+    const uint32_t step=p.shadow_step-1;
+    if (dl!=p.shadow_nested[step] || physical>=ram.size) return false;
+    const uint32_t segment=dl>>24, segment_base=physical-(dl&0x00ffffffu);
+    // Every nested list and the texture come from one segment (segment 2),
+    // resolved through the one base the circle call established.
+    if (step==0) p.shadow_segment_base=segment_base;
+    else if (segment_base!=p.shadow_segment_base) return false;
+    for (unsigned i=0;i<3;++i) {
+        uint32_t expected=0;
+        if (!translate(p.shadow_nested[i],segment_base,segment,expected)) return false;
+    }
+    if (step==0) {
+        const uint32_t circle=base+physical;
+        uint32_t begin=0,texture=0;
+        if (!ram.has(circle,72,8) || ram.word(circle)!=0x06000000u || ram.word(circle+8)!=0xfd700000u
+                || !translate(ram.word(circle+4),segment_base,segment,begin)
+                || !translate(ram.word(circle+12),segment_base,segment,texture)
+                || !commands(ram,begin,shadow_begin,5) || !commands(ram,physical+16,shadow_circle_tail,7)
+                || texture>=ram.size || !ram.has(base+texture,256,8)) return false;
+        for (unsigned i=0;i<256;++i) {
+            const uint8_t texel=ram.byte(base+texture+i);
+            if (texel&0xf0) return false; // shadows are black: intensity zero
+            p.shadow.texture[i/2]|=uint8_t((texel&15)<<((i&1)?0:4));
+        }
+        return ram.ok;
+    }
+    return step==1 ? triangles(ram,physical) : commands(ram,physical,shadow_end,5);
+}
+void shadow_call(gc_root_probe &p, Ram &ram, uint32_t pc, uint32_t dl, uint32_t physical,
+                 uint32_t depth, const float *matrix) {
+    if (!p.mario_alpha || p.shadow_calls>1) return;
+    const uint32_t list=p.mario_alpha+shadow_list_offset;
+    if (dl==physical && physical==list) {
+        // A second execution of the list cannot be attributed to one frame;
+        // the master list runs every layer at the depth that ran the body.
+        if (++p.shadow_calls>1 || depth!=p.depth || !shadow_master(p,ram,pc,physical,matrix)) {
+            p.shadow_step=0; return;
+        }
+        p.shadow_depth=depth; p.shadow_step=1; return;
+    }
+    if (!p.shadow_step || p.shadow_step>3 || depth!=p.shadow_depth+1) return;
+    static constexpr uint32_t offsets[3]={0,16,24};
+    if (pc!=list+offsets[p.shadow_step-1]) return;
+    p.shadow_step=shadow_nested(p,ram,dl,physical) ? p.shadow_step+1 : 0;
+}
 }
 
 void ghost_root_prepare(gc_root_probe &p, const gc_frame &frame, uint32_t object,
@@ -130,7 +260,9 @@ void ghost_root_display_list(gc_root_probe &p, uint32_t pc, uint32_t dl,
     if (p.armed && command && pc==p.alpha_pc+16 && depth==p.depth && dl==p.body_dl
             && matrix_at(ram,pc,matrix)) {
         if (p.matches<2) ++p.matches;
+        if (p.matches==1) p.mario_alpha=p.alpha_dl;
     }
+    if (command) shadow_call(p,ram,pc,dl,physical_dl,depth,matrix);
     p.armed=false;
     // make_gfx_mario_alpha: opaque Mario has exactly ENVCOLOR + ENDDL.
     // Translucent/metal material support is deliberately outside this route.
@@ -142,7 +274,7 @@ void ghost_root_display_list(gc_root_probe &p, uint32_t pc, uint32_t dl,
     for (unsigned i=0;i<3;++i)
         if (std::fabs(matrix[12+i]-p.camera_to_object[i])>1.0f/32768.0f) return;
     if (!p.matches) std::memcpy(p.matrix,matrix,sizeof(p.matrix));
-    p.alpha_pc=pc; p.depth=depth; p.armed=true;
+    p.alpha_pc=pc; p.alpha_dl=physical_dl; p.depth=depth; p.armed=true;
 }
 
 bool ghost_root_candidate(const gc_root_probe &p, gc_sample &sample) {
@@ -157,6 +289,10 @@ bool ghost_root_candidate(const gc_root_probe &p, gc_sample &sample) {
     return false;
 }
 void ghost_root_finish(gc_root_probe &p, bool completed, gc_sample &sample) {
-    if (completed) ghost_root_candidate(p,sample);
+    // The shadow publishes only beside the root it was proven through, after
+    // its master call and all three nested calls executed exactly once.
+    if (completed && ghost_root_candidate(p,sample) && p.shadow_calls==1 && p.shadow_step==4) {
+        sample.shadow=p.shadow; sample.valid_fields|=GC_VALID_SHADOW;
+    }
     p={};
 }

@@ -18,6 +18,11 @@ from sm64_events.memory.layout import JP, US, LayoutIncomplete
 from sm64_events.sync.address_gates import (
     _check_area_update_counter,
     _check_current_area_pointer,
+    _check_sound_code,
+    _check_sound_consumer,
+    _check_sound_producer,
+    _check_sound_ring,
+    sound_code_words,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +70,7 @@ def capture_host(tmp_path_factory):
 @pytest.mark.parametrize("scenario", [
     "basic", "swizzle", "bounds", "graph", "duplicate", "limits",
     "skip_objects", "values", "unsupported", "action", "warp", "epochs", "transitions", "arguments",
+    "sound",
 ])
 def test_compiled_capture(capture_host, scenario):
     target, config = capture_host
@@ -73,7 +79,7 @@ def test_compiled_capture(capture_host, scenario):
         capture_output=True, text=True, timeout=15, check=False, **quiet_spawn_kwargs(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"ghost capture passed: {scenario}; config=168 sample=308" in result.stdout
+    assert f"ghost capture passed: {scenario}; config=184 sample=636" in result.stdout
 
 
 def test_semantic_config_resolves_selected_layout():
@@ -83,8 +89,8 @@ def test_semantic_config_resolves_selected_layout():
     assert config.area_update_counter == US.area_update_counter
     assert config.pending_warp_op == US.pending_warp_op
     assert config.delayed_warp_timer == US.delayed_warp_timer
-    assert len(config.to_bytes()) == 168
-    assert struct.unpack_from("<II", config.to_bytes()) == (168, 4)
+    assert len(config.to_bytes()) == 184
+    assert struct.unpack_from("<II", config.to_bytes()) == (184, 5)
     assert struct.unpack_from("<II", config.to_bytes(), 56) == (US.pending_warp_op, US.delayed_warp_timer)
     with pytest.raises(LayoutIncomplete, match="US layout"):
         GhostLayout.from_layout(JP)
@@ -95,7 +101,7 @@ def test_semantic_config_resolves_selected_layout():
 
 
 def test_clock_encoder_uses_existing_registries_in_native_field_order():
-    words = struct.unpack_from("<26I", GhostLayout.from_layout(US).to_bytes(), 64)
+    words = struct.unpack_from("<26I", GhostLayout.from_layout(US).to_bytes(), 80)
     castles, warps = sorted(A.CASTLE_LEVELS), sorted(counter_epoch.AREA_WARP_OPS)
     assert words[:10] == (1, NEAR_ZERO_IGT, counter_epoch.AREA_LOAD_WINDOW,
                          counter_epoch.TELEPORT_WINDOW, counter_epoch.LEVEL_LOAD_TAIL_FRAMES,
@@ -169,6 +175,65 @@ class GateContext:
         if address in (self.area_pointer + A.AREA_INDEX_OFF, self.root + A.GRAPH_ROOT_AREA_OFF):
             return self.area_index
         return 1 if address == self.area_pointer + A.AREA_FLAGS_OFF else 0
+
+
+class SoundContext:
+    """play_sound, its ring and Mario, as the live gates read them."""
+
+    def __init__(self, sources=("mario",) * 3, words=None):
+        self.time, self.producer, self.issued = 0.0, 250, 0
+        self.pending = list(sources)
+        self.ring = {}
+        self.words = list(words or sound_code_words(US.sound_producer, US.sound_ring))
+
+    def candidate(self, name):
+        return US.value(name)
+
+    def now(self):
+        return self.time
+
+    def sleep(self, seconds):
+        self.time += seconds
+        if self.pending and int(self.time * 30) % 10 == 0:  # a jump now and then
+            source = self.pending.pop(0)
+            owner = US.object_pool + (0 if source == "mario" else A.OBJECT_SIZE)
+            self.ring[self.producer & 0xFF] = (0x24228080, owner + 0x54)
+            self.producer += 1
+
+    def raw(self):
+        return self
+
+    def read_u8(self, address):
+        if address in (US.sound_producer, US.sound_consumer):
+            return self.producer & 0xFF
+        return 0
+
+    def read_u32(self, address):
+        if address == US.mario_object:
+            return US.object_pool
+        if US.sound_code <= address < US.sound_code + 48:
+            return self.words[(address - US.sound_code) // 4]
+        if US.sound_ring <= address < US.sound_ring + 2048:
+            bits, source = self.ring.get((address - US.sound_ring) // 8, (0, 0))
+            return source if (address - US.sound_ring) % 8 else bits
+        return 0
+
+
+def test_sound_code_gate_matches_the_qualified_play_sound_words():
+    assert sound_code_words(US.sound_producer, US.sound_ring) == (
+        0x3C068033, 0x24C62F44, 0x90C20000, 0x3C0F8036, 0x25EF1498, 0x000270C0,
+        0x01CF1821, 0x24580001, 0xAC640000, 0xAC650004, 0x03E00008, 0xA0D80000)
+    assert _check_sound_code(SoundContext()).status == "verified"
+    changed = list(sound_code_words(US.sound_producer, US.sound_ring))
+    changed[1] += 4  # a producer four bytes away
+    assert _check_sound_code(SoundContext(words=changed)).status == "failed"
+
+
+def test_sound_ring_gates_need_marios_own_requests():
+    for check in (_check_sound_producer, _check_sound_ring, _check_sound_consumer):
+        assert check(SoundContext()).status == "verified"
+        assert check(SoundContext(sources=("other",) * 5)).status == "failed"
+        assert check(SoundContext(sources=())).status == "failed"
 
 
 def test_area_pointer_gate_checks_independent_identity():

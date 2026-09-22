@@ -71,6 +71,9 @@ struct ViRaster {
     present::Raster api(){return {this,draw,begin_gpu,end_gpu};}
 };
 
+// Mario's shadow G_MTX: translate to his feet (world origin, floor y=0) under
+// the same look-at camera as his root: eye (0,100,600), focus (0,100,0).
+static const float feet[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,-100,-600,1};
 static void configure_fixture(Fixture& f){
     const auto obj=f.config.object_pool;
     f.put32(f.config.global_timer,100);f.put16(f.config.igt_overall,10);f.put16(f.config.area_update_counter,1);
@@ -83,6 +86,7 @@ static void configure_fixture(Fixture& f){
     f.put16(Fixture::camera+0x38,0);f.put16(Fixture::camera+0x3a,0);
     const float root[16]={.25f,0,0,0,0,.25f,0,0,0,0,.25f,0,0,-100,-600,1};
     configure_root_scene(f,root);
+    realistic_shadow(f,feet);
     check(f.run()==GC_OK,"pipeline fixture capture");
 }
 static void clock_word(Fixture& f,uint32_t address,uint32_t value,unsigned width){
@@ -98,10 +102,17 @@ static gs_record capture_source(Fixture& f,const ghost::RasterTarget& target,con
     const float root[16]={.25f,0,0,0,0,.25f,0,0,0,0,.25f,0,0,-100,-600,1};
     ghost_stream::display_list(root_dl+8,alpha_dl,alpha_dl,1,root);
     ghost_stream::display_list(root_dl+24,body_dl,0x40080,1,root);
+    // Later master-list layer: the game's own shadow list and its nested calls.
+    ghost_stream::display_list(root_dl+40,shadow_list,shadow_list,1,feet);
+    ghost_stream::display_list(shadow_list,seg_circle,physical2(seg_circle),2,feet);
+    ghost_stream::display_list(physical2(seg_circle),seg_begin,physical2(seg_begin),3,feet);
+    ghost_stream::display_list(shadow_list+16,seg_tris,physical2(seg_tris),2,feet);
+    ghost_stream::display_list(shadow_list+24,seg_end,physical2(seg_end),2,feet);
     ghost_stream::projection(matrix);ghost_stream::triangles(target,2,true);
     require(ghost_stream::geometry(true,false),"source qualifies synthetic world end");
     ghost_stream::end(true);gs_record out{};
     require(ghost_stream::api()->read(&out,sizeof(out))==1 && out.world.status==GCLIP_WORLD_READY,"actual source queue occurrence");
+    require(out.sample.valid_fields&GC_VALID_SHADOW,"source captures Mario's executed shadow");
     require(out.sample.status==GC_OK && (out.sample.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
         ==(GCC_RAW_VALID|GCC_ELAPSED_VALID),"source derives usable elapsed clock");
     return out;
@@ -163,13 +174,23 @@ struct Pipeline {
         display_clean.resize(clean.size());
         for(unsigned y=0;y<H;++y)std::memcpy(&display_clean[y*W*4],&clean[(H-1-y)*W*4],W*4);
     }
+    std::vector<uint8_t> body_coverage,shadow_coverage;
+    // coverage = bodies and their shadows; the two parts are also kept apart.
     void geometry_mask(const gc::Pose* poses,uint32_t count){
-        coverage.assign(W*H,0);
-        for(uint32_t ghost=0;ghost<count;++ghost)for(unsigned at=0;at<poses[ghost].count;at+=3){const auto& p=poses[ghost];float v[3][2]{};bool visible=true;
-            for(unsigned n=0;n<3;++n){const auto& q=p.vertices[at+n].position;float clip[4]{};
-                for(unsigned r=0;r<4;++r)clip[r]=p.view_projection[r]*q[0]+p.view_projection[4+r]*q[1]+p.view_projection[8+r]*q[2]+p.view_projection[12+r];
+        coverage.assign(W*H,0);body_coverage.assign(W*H,0);shadow_coverage.assign(W*H,0);
+        for(uint32_t ghost=0;ghost<count;++ghost){const auto& p=poses[ghost];
+            cover(body_coverage,&p.vertices[0].position[0],sizeof(gc::Vertex),p.count,p.view_projection,p.flip_y);
+            if(p.shadow.count)cover(shadow_coverage,&p.shadow.vertices[0].position[0],sizeof(gc::ShadowVertex),
+                p.shadow.count,p.shadow.view_projection,p.flip_y);}
+        for(size_t i=0;i<coverage.size();++i)coverage[i]=body_coverage[i]|shadow_coverage[i];
+    }
+    static void cover(std::vector<uint8_t>& mask,const float* first,size_t stride,uint32_t count,const float* vp,uint32_t flip){
+        const auto position=[&](unsigned index){return reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(first)+index*stride);};
+        for(unsigned at=0;at<count;at+=3){float v[3][2]{};bool visible=true;
+            for(unsigned n=0;n<3;++n){const auto* q=position(at+n);float clip[4]{};
+                for(unsigned r=0;r<4;++r)clip[r]=vp[r]*q[0]+vp[4+r]*q[1]+vp[8+r]*q[2]+vp[12+r];
                 // The VI shader flips the top-left N64 image into the drawable.
-                if(clip[3]<=0){visible=false;break;}v[n][0]=(clip[0]/clip[3]+1)*W/2;v[n][1]=((p.flip_y?1:-1)*clip[1]/clip[3]+1)*H/2;}
+                if(clip[3]<=0){visible=false;break;}v[n][0]=(clip[0]/clip[3]+1)*W/2;v[n][1]=((flip?1:-1)*clip[1]/clip[3]+1)*H/2;}
             if(!visible)continue;
             const int lo_x=std::max(0,int(std::floor(std::min({v[0][0],v[1][0],v[2][0]})))-1);
             const int hi_x=std::min(int(W)-1,int(std::ceil(std::max({v[0][0],v[1][0],v[2][0]})))+1);
@@ -179,7 +200,7 @@ struct Pipeline {
                 for(unsigned edge=0;edge<3;++edge){const auto next=(edge+1)%3;float dx=v[next][0]-v[edge][0],dy=v[next][1]-v[edge][1];
                     const float cross=dx*(y+.5f-v[edge][1])-dy*(x+.5f-v[edge][0]);const float tolerance=std::sqrt(dx*dx+dy*dy);
                     pos=pos && cross>=-tolerance;neg=neg && cross<=tolerance;}
-                if(pos||neg)coverage[y*W+x]=1;}}
+                if(pos||neg)mask[y*W+x]=1;}}
     }
     Times frame(bool draw,bool evidence=false){
         const auto start=Clock::now();++frames;
@@ -244,11 +265,14 @@ int main(int argc,char** argv){
     gp_request request{};request.bytes=sizeof(request);request.version=GP_VERSION;request.revision=1;request.enabled=1;
     request.owner_token=1;request.model_id=1;request.rom_generation=7;request.configuration=captured.configuration;
     request.clip_count=1;request.clips[0].clip_id[0]=1;request.opacity=1;
+    request.shadow_enabled=0; // body-only proofs first; the shadow has its own section
+    require(first.valid_fields&GC_VALID_SHADOW,"recorded pose carries its shadow");
     request.origin={GO_SEGMENT,first.epoch,first.sequence,first.clock.continuity_id,first.clock.elapsed_frames,first.clock.origin_id,0,0};
     require(api->configure(&request)==GP_OK,"configure exact-origin FOLLOW playback");std::unique_ptr<Pipeline> pipeline;
     // The same captured pose, shifted in view space: a grid of distinct ghosts.
     for(uint32_t i=1;i<GP_GHOSTS;++i){auto h=header;h.clip_id[0]=uint8_t(1+i);auto f=recorded;
         f.sample.pose.root_matrix[12]+=(float(i%4)-1.5f)*70.f;f.sample.pose.root_matrix[13]+=(float(i/4)-1.5f)*45.f;
+        f.sample.shadow.matrix[12]+=(float(i%4)-1.5f)*70.f;f.sample.shadow.matrix[13]+=(float(i/4)-1.5f)*45.f;
         require(api->prepare_clip(&h,&f)==GP_OK,"prepare one of several ghosts");}
     renderer.run([&]{pipeline=std::make_unique<Pipeline>(fixture,captured);});const auto setup_ms=ms(prepare_start,Clock::now());
     const std::filesystem::path out(argv[3]);std::filesystem::create_directories(out);
@@ -265,13 +289,49 @@ int main(int argc,char** argv){
         for(size_t i=0;i<half.size();++i)if(i%4!=3 && std::abs(int(half[i])*2-int(baseline[i])-int(opaque[i]))>2)++alpha_errors;
         require(alpha_errors==0,"per-fragment opacity is one midpoint blend");});
     request.opacity=1;++request.revision;require(api->configure(&request)==GP_OK,"opaque request restored");
+    // The recorded shadow: switched on, it darkens only its own decal, never
+    // outside the ghost and the shadow; switched off it is the frame above.
+    unsigned shadow_pixels=0,shadow_outside=0,shadow_switch_errors=0,shadow_darkening_errors=0;
+    unsigned shadow_alpha_errors=0,shadow_occlusion_errors=0,shadow_would_occlude=0;
+    request.shadow_enabled=1;++request.revision;require(api->configure(&request)==GP_OK,"shadow switch on");
+    std::vector<uint8_t> shadowed;
+    renderer.run([&]{pipeline->frame(true,true);shadowed=pipeline->last_visible;ppm(out/"shadow100.ppm",shadowed);
+        const auto& body=pipeline->body_coverage;const auto& shadow=pipeline->shadow_coverage;
+        for(size_t i=0;i<W*H;++i){const auto* now=&shadowed[4*i];const auto* was=&baseline[4*i];
+            const bool moved=std::memcmp(now,was,3)!=0;
+            if(!pipeline->coverage[i] && moved)++shadow_outside;
+            if(!shadow[i] && std::memcmp(now,&opaque[4*i],3))++shadow_switch_errors;
+            if(shadow[i] && !body[i] && moved){++shadow_pixels;
+                // Black decal over grey terrain: every channel darkens equally.
+                if(now[0]>was[0] || now[0]!=now[1] || now[1]!=now[2])++shadow_darkening_errors;}}
+        require(shadow_pixels>300 && shadow_outside==0 && shadow_switch_errors==0 && shadow_darkening_errors==0,
+            "recorded shadow darkens only its own decal");});
+    request.opacity=.5f;++request.revision;require(api->configure(&request)==GP_OK,"shadow opacity50");
+    renderer.run([&]{pipeline->frame(true,true);const auto half_shadow=pipeline->last_visible;ppm(out/"shadow50.ppm",half_shadow);
+        for(size_t i=0;i<W*H;++i)if(pipeline->shadow_coverage[i] && !pipeline->body_coverage[i])
+            for(unsigned c=0;c<3;++c)if(std::abs(int(half_shadow[4*i+c])*2-int(baseline[4*i+c])-int(shadowed[4*i+c]))>2)++shadow_alpha_errors;
+        require(shadow_alpha_errors==0,"ghost opacity scales its shadow once");});
+    request.opacity=1;++request.revision;require(api->configure(&request)==GP_OK,"shadow opacity restored");
+    renderer.run([&]{pipeline->background(true);pipeline->frame(false,true);const auto wall_baseline=pipeline->last_visible;
+        pipeline->frame(true,true);ppm(out/"shadow-wall.ppm",pipeline->last_visible);
+        for(unsigned y=0;y<H;++y)for(unsigned x=0;x<W;++x){const auto i=y*W+x;
+            if(!pipeline->shadow_coverage[i] || pipeline->body_coverage[i])continue;
+            if(x<W/2){shadow_would_occlude+=std::memcmp(&shadowed[4*i],&baseline[4*i],3)!=0;
+                if(std::memcmp(&pipeline->last_visible[4*i],&wall_baseline[4*i],3))++shadow_occlusion_errors;}
+            else if(std::memcmp(&pipeline->last_visible[4*i],&shadowed[4*i],3))++shadow_occlusion_errors;}
+        require(shadow_would_occlude>50 && shadow_occlusion_errors==0,"nearer terrain hides the shadow decal");
+        pipeline->background(false);});
+    request.shadow_enabled=0;++request.revision;require(api->configure(&request)==GP_OK,"body-only wall proof");
     renderer.run([&]{pipeline->background(true);pipeline->frame(false,true);ppm(out/"wall-baseline.ppm",pipeline->last_visible);
         const auto wall_baseline=pipeline->last_visible;pipeline->frame(true,true);wall=pipeline->last_visible;ppm(out/"wall-opacity100.ppm",wall);
         unsigned would_occlude=0;for(unsigned y=0;y<H;++y)for(unsigned x=0;x<W;++x){const auto i=(y*W+x)*4;
             if(x<W/2){would_occlude+=std::memcmp(&baseline[i],&opaque[i],3)!=0;if(std::memcmp(&wall[i],&wall_baseline[i],3))++occlusion_errors;}
             else if(std::memcmp(&wall[i],&opaque[i],3))++occlusion_errors;}
         require(would_occlude>100 && occlusion_errors==0,"independent foreground depth occludes only covered Mario");
-        pipeline->background(false);
+        pipeline->background(false);});
+    // Timing and the full set draw every ghost with its shadow.
+    request.shadow_enabled=1;++request.revision;require(api->configure(&request)==GP_OK,"shadows for timing");
+    renderer.run([&]{
         for(unsigned i=0;i<20;++i){pipeline->frame(false);pipeline->frame(true);}
         for(unsigned i=0;i<180;++i){Times base{},ghost{};if(i&1){ghost=pipeline->frame(true);base=pipeline->frame(false);}
             else{base=pipeline->frame(false);ghost=pipeline->frame(true);}
@@ -303,6 +363,10 @@ int main(int argc,char** argv){
     std::printf(",\"gpu_renderer\":");json_string(gpu_renderer);std::printf(",\"gl_version\":");json_string(gl_version);std::printf(",");
     statistics("baseline",baseline_times);std::printf(",");statistics("pipeline_gpu_completed",ghost_times);std::printf(",");
     statistics("blocking_swap",swap_times);std::printf(",");statistics("including_swap",total_times);
+    std::printf(",\"shadow\":{\"captured\":true,\"pixels\":%u,\"outside_pixels_changed\":%u,\"switch_errors\":%u,"
+        "\"darkening_errors\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"would_occlude\":%u}",
+        shadow_pixels,shadow_outside,shadow_switch_errors,shadow_darkening_errors,shadow_alpha_errors,
+        shadow_occlusion_errors,shadow_would_occlude);
     std::printf(",\"multi\":{\"ghosts\":%u,\"visible\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,",
         unsigned(GP_GHOSTS),multi_visible,multi_vertices,multi_silhouette,multi_outside);
     statistics("pipeline_gpu_completed",multi_times);std::printf(",");statistics("blocking_swap",multi_swap_times);

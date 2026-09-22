@@ -1,4 +1,5 @@
-"""Independent byte fixture for portable v3/capture v4, including source timing."""
+"""Independent byte fixture for portable v4/capture v5, including source timing,
+Mario's recorded shadow and his sound requests."""
 from datetime import datetime, timezone
 import struct
 from types import SimpleNamespace
@@ -9,16 +10,21 @@ def producer(**changes):
         configuration=4, epoch=5, qpc_frequency=30, qpc_anchor=1000, utc_anchor=1800000000.0), **changes})
 
 
+IDENTITY = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+
+
 def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=4,
           epoch=5, qpc=None, level=24, area=1, elapsed=None, continuity=9,
-          origin=1, clock_valid=None, refusal=None, transition=1, banked=0):
+          origin=1, clock_valid=None, refusal=None, transition=1, banked=0,
+          shadow=False, sounds=None, overflow=False):
     raw_igt = sequence if igt is None else igt
-    raw = bytearray(324)
-    struct.pack_into("<4I", raw, 0, 324, 3, configuration, world)
-    struct.pack_into("<4I2QqI2H2h2I", raw, 16, 308, 4, epoch, valid,
+    valid |= (32 if shadow else 0) | (64 if sounds is not None else 0)
+    raw = bytearray(652)
+    struct.pack_into("<4I", raw, 0, 652, 4, configuration, world)
+    struct.pack_into("<4I2QqI2H2h2I", raw, 16, 636, 5, epoch, valid,
         sequence, sequence + 100, 1000 + sequence if qpc is None else qpc,
         100 + sequence if timer is None else timer, sequence & 0xffff,
-        raw_igt, level, area, 0 if valid == 31 else 9,
+        raw_igt, level, area, 0 if valid & 31 == 31 else 9,
         0x0c400201 if valid & 8 else 0)
     if valid & 2:
         struct.pack_into("<6f", raw, 76, 10, 20, 30, 1, 1, 1)
@@ -36,6 +42,17 @@ def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=
                      banked + raw_igt if progress_valid else 0, origin if raw_valid else 0,
                      1 if raw_valid else 0, (sequence if elapsed is None else elapsed) if elapsed_valid else 0,
                      continuity if elapsed_valid else 0)
+    if shadow:  # an executed root, and the shadow matrix drawn beside it
+        struct.pack_into("<I", raw, 128, 2)
+        struct.pack_into("<16f", raw, 156, *IDENTITY)
+        struct.pack_into("<16f", raw, 324, *IDENTITY[:12], 5, -2, 7, 1)
+        struct.pack_into("<3h", raw, 324 + 64, -25, -3, 40)
+        raw[324 + 154:324 + 163] = bytes(range(100, 109))
+        raw[324 + 164:324 + 292] = bytes(range(128))
+    if sounds is not None:
+        struct.pack_into("<4B", raw, 616, len(sounds), 1 if overflow else 0, 7, 5)
+        if sounds:
+            struct.pack_into(f"<{len(sounds)}I", raw, 620, *sounds)
     return bytes(raw)
 
 

@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define GC_VERSION 4u
+#define GC_VERSION 5u
 #define GC_RAM_WORD_SWAPPED 1u
 #define GC_ROM_US 1u
 #define GC_GRAPH_NODE_LIMIT 256u
@@ -20,8 +20,20 @@ extern "C" {
 
 enum gc_valid {
     GC_VALID_CLOCK = 1u, GC_VALID_POSE = 2u, GC_VALID_CAMERA = 4u,
-    GC_VALID_ACTION = 8u, GC_VALID_WARP = 16u
+    GC_VALID_ACTION = 8u, GC_VALID_WARP = 16u,
+    /* Optional evidence: never part of GC_OK. */
+    GC_VALID_SHADOW = 32u, GC_VALID_SOUND = 64u
 };
+#define GC_VALID_REQUIRED 31u
+#define GC_VALID_ALL 127u
+#define GC_SHADOW_VERTICES 9u
+#define GC_SHADOW_TEXTURE_BYTES 128u /* 16x16 IA8 alpha nibbles, two per byte */
+#define GC_SOUND_EVENTS 8u
+enum gc_sound_flags { GC_SOUND_OVERFLOW = 1u };
+/* dl_shadow_9_verts: the game's eight triangles over the nine vertices.
+ * Capture refuses any other executed list; playback draws this order. */
+static const uint8_t gc_shadow_triangles[24] = {
+    0,3,4, 0,4,1, 1,4,2, 2,4,5, 3,6,4, 4,6,7, 4,7,8, 4,8,5 };
 enum gc_status {
     GC_OK = 0, GC_BAD_ARGUMENT = 1, GC_BAD_CONFIG = 2,
     GC_BAD_POINTER = 3, GC_BAD_VALUE = 4, GC_BAD_GRAPH = 5,
@@ -48,6 +60,10 @@ typedef struct gc_layout {
     uint32_t global_timer, mario_state, mario_object, current_area_pointer;
     uint32_t area_update_counter, current_level, current_area, igt_overall;
     uint32_t object_pool, pending_warp_op, delayed_warp_timer;
+    /* play_sound's code, its u8 producer, the audio thread's u8 consumer and
+     * the 256-entry request ring. All zero declares sound unavailable; any
+     * nonzero set must be complete. The code must match the ring layout. */
+    uint32_t sound_code, sound_producer, sound_consumer, sound_ring;
     gcc_config clock;
 } gc_layout;
 
@@ -66,6 +82,28 @@ typedef struct gc_pose {
     uint8_t punch_state, grab_position, hidden, reserved;
     float root_matrix[16]; /* zero for TRS; native Mat4 order, translation 12..14 */
 } gc_pose;
+
+/* The shadow the game actually drew under Mario this frame: its executed
+ * G_MTX (same Mat4 order as root_matrix), the nine executed Vtx values
+ * (positions relative to that matrix, S10.5 texture coordinates, alpha) and
+ * the IA8 texture it sampled. Intensity is proven zero, so only alpha
+ * nibbles are kept. Zero unless GC_VALID_SHADOW. */
+typedef struct gc_shadow {
+    float matrix[16];
+    int16_t position[GC_SHADOW_VERTICES][3];
+    int16_t uv[GC_SHADOW_VERTICES][2];
+    uint8_t alpha[GC_SHADOW_VERTICES];
+    uint8_t reserved;
+    uint8_t texture[GC_SHADOW_TEXTURE_BYTES];
+} gc_shadow;
+
+/* play_sound requests whose source is Mario's own object, issued since the
+ * previous captured frame (global timer exactly one earlier). producer and
+ * consumer are the raw ring counters at this boundary. */
+typedef struct gc_sound {
+    uint8_t count, flags, producer, consumer;
+    uint32_t bits[GC_SOUND_EVENTS];
+} gc_sound;
 
 typedef struct gc_camera {
     float position[3], focus[3];
@@ -104,6 +142,8 @@ typedef struct gc_sample {
      * attaches derived evidence to this same immutable occurrence afterward.
      */
     gcc_output clock;
+    gc_shadow shadow;
+    gc_sound sound;
 } gc_sample;
 
 /* Zero-initialize or reset before use. One reader per serialized producer.
@@ -113,6 +153,8 @@ typedef struct gc_sample {
 typedef struct gc_reader {
     uint32_t epoch, last_global_timer, have_clock, reset_required;
     uint64_t last_sequence, last_dlist_serial;
+    /* Sound baseline: the producer seen at global timer sound_timer. */
+    uint32_t sound_baseline, sound_timer, sound_producer, reserved;
 } gc_reader;
 #pragma pack(pop)
 
@@ -128,7 +170,8 @@ typedef struct gc_frame {
 
 void ghost_capture_reset(gc_reader *reader);
 uint32_t ghost_capture_validate_layout(const gc_layout *layout);
-/* Returns GC_OK only when all five components are valid. Output is cleared
+/* Returns GC_OK only when all five required components are valid; shadow
+ * and sound are optional evidence with their own bits. Output is cleared
  * first, including on malformed arguments. Inspect valid_fields for partial
  * clock/camera/action evidence when the live Mario pose is unsupported.
  */

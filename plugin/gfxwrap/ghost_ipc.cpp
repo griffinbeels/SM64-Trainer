@@ -70,7 +70,8 @@ bool same_controls(gipc_request a, gipc_request b) {
     return !std::memcmp(&a, &b, sizeof(a));
 }
 bool valid_set(const gipc_request &r) {
-    if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)) return false;
+    if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)
+            || r.shadow_enabled > 1 || r.reserved2) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
         if (clip.hue_degrees > 359 || clip.reserved) return false;
@@ -372,6 +373,7 @@ struct Session {
                     command.tint_enabled = r.tint_enabled;
                     command.proximity_enabled = r.proximity_enabled;
                     command.proximity_distance = r.proximity_distance;
+                    command.shadow_enabled = r.shadow_enabled;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else { applied = r.revision; applied_request = r; state = GIPC_READY; }

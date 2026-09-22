@@ -21,4 +21,11 @@ struct Scratch {
 Result evaluate(sg_model *, const gs_record &recorded, const gc_sample &live,
                 const ghost::WorldPass &, float opacity, Scratch &,
                 ghost_compositor::Pose &out);
+/* The recorded shadow in world space under the same live view_projection as
+ * its body: removes the RECORDED camera from the executed shadow matrix,
+ * expands the game's triangle order and unpacks the IA8 texture into the
+ * caller's storage. False (out cleared) for invalid evidence. */
+bool shadow(sg_model *, const gc_sample &recorded, const float view_projection[16],
+            ghost_compositor::ShadowVertex vertices[24], uint8_t texture[256],
+            ghost_compositor::Shadow &out);
 }

@@ -67,6 +67,9 @@ static bool refuse_adoption=false,refuse_close=false,revoke_evaluation=false;
 static uint64_t selected_sequence=0;
 static uint32_t selected_world=0;
 static float selected_x=0;
+static bool refuse_shadow=false;
+static unsigned shadow_calls=0;
+static uint64_t shadow_sequence=0;
 extern "C" int32_t sg_model_open(const uint8_t*,size_t,sg_model **out) {
     if(fake_model)return SG_BUSY;
     *out=fake_model=new sg_model{GetCurrentThreadId()};++opens;return SG_OK;
@@ -111,6 +114,17 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     out.view_projection[0]=recorded.sample.pose.position[0];
     out.view_projection[15]=recorded.sample.pose.position[2];return Result::ok;
 }
+// Conversion math has the pose witness; this proves which row's shadow is used.
+bool shadow(sg_model *p,const gc_sample& recorded,const float view_projection[16],
+            ghost_compositor::ShadowVertex vertices[24],uint8_t texture[256],ghost_compositor::Shadow& out) {
+    out={};++shadow_calls;
+    if(refuse_shadow || !p || !(recorded.valid_fields&GC_VALID_SHADOW))return false;
+    shadow_sequence=recorded.sequence;
+    for(unsigned i=0;i<24;++i)vertices[i]={{recorded.shadow.matrix[12],0,0},{0,0},1};
+    texture[0]=recorded.shadow.texture[0];
+    out.vertices=vertices;out.count=24;out.texture_ia8=texture;
+    std::memcpy(out.view_projection,view_projection,sizeof(out.view_projection));return true;
+}
 }
 
 struct Clip {
@@ -142,6 +156,14 @@ struct Clip {
             frames[3].sample.pose={};
             frames[2].sample.area=2;
             for(unsigned i=4;i<8;++i)frames[i].sample.area=2;
+            // Row 6 drew the game's shadow beside an executed root.
+            auto& shadowed=frames[5].sample;
+            shadowed.valid_fields|=GC_VALID_SHADOW|GC_VALID_CAMERA;
+            shadowed.pose.root_kind=GC_ROOT_SCALED_MODELVIEW;
+            shadowed.pose.root_matrix[0]=shadowed.pose.root_matrix[5]=shadowed.pose.root_matrix[10]=1;
+            shadowed.pose.root_matrix[15]=shadowed.shadow.matrix[15]=1;
+            shadowed.shadow.matrix[0]=shadowed.shadow.matrix[5]=shadowed.shadow.matrix[10]=1;
+            shadowed.shadow.matrix[12]=42;shadowed.shadow.texture[0]=0x5a;
         }
         header.origin_raw=frames[0].sample.igt;
         for(auto& f:frames) {
@@ -166,7 +188,7 @@ static gp_request request(const Clip& clip,uint64_t revision) {
     gp_request r{};r.bytes=sizeof(r);r.version=GP_VERSION;r.revision=revision;r.enabled=1;
     r.owner_token=123;r.model_id=1;r.rom_generation=7;r.configuration=4;
     r.clip_count=1;std::memcpy(r.clips[0].clip_id,clip.header.clip_id,16);r.opacity=1;r.star_ends=1;
-    r.star_action_count=1;r.star_actions[0]=0x1302;
+    r.star_action_count=1;r.star_actions[0]=0x1302;r.shadow_enabled=1;
     r.origin={GO_STAR,5,50,77,2000,7,0,0};return r;
 }
 int main() {
@@ -201,7 +223,9 @@ int main() {
                 if(expected)check(count==1 && selected_sequence==sequence && ghost_playback::current(token),"selected occurrence identity");
                 else check(!pose.vertices && !pose.count && !count && !token.revision,"refusal clears candidate");
             });
-            gp_status status{};check(api->status(&status,sizeof(status))==GP_OK && status.decision==why,"selection reason");
+            gp_status status{};const bool reported=api->status(&status,sizeof(status))==GP_OK;
+            if(status.decision!=why)std::fprintf(stderr,"decision %u, expected %u\n",status.decision,why);
+            check(reported && status.decision==why,"selection reason");
         };
         renderer.run([&] {ghost_playback::safe_boundary(7,4);sg_atlas_view atlas{};uint64_t id=0;
             check(ghost_playback::atlas(&atlas,&id) && id==1 && atlas.rgba,"renderer adopted atlas");});
@@ -228,6 +252,7 @@ int main() {
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"opacity forwarded");
         check(pose.hue_degrees==217.0f,"hue forwarded");
+        check(!pose.shadow.count && !pose.shadow.vertices && !shadow_calls,"row without a recorded shadow draws none");
         ++r.revision;r.proximity_enabled=1;
         check(api->configure(&r)==GP_OK,"enable overlap fading");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
@@ -266,6 +291,19 @@ int main() {
         live.valid_fields&=~(GC_VALID_ACTION|GC_VALID_WARP);
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,true,GP_READY,6,2);
         check(pose.hue_degrees==0.0f,"disabled tint bypassed");
+        check(pose.shadow.count==24 && shadow_sequence==6 && pose.shadow.vertices[0].position[0]==42
+              && pose.shadow.texture_ia8 && pose.shadow.texture_ia8[0]==0x5a,"recorded shadow reaches its ghost");
+        check(!std::memcmp(pose.shadow.view_projection,pose.view_projection,sizeof(pose.view_projection)),
+              "shadow shares its body's live projection");
+        refuse_shadow=true;draw(0,false,GP_POSE_REFUSED,0,2);refuse_shadow=false;
+        const auto shadow_before=shadow_calls;
+        ++r.revision;r.shadow_enabled=0;check(api->configure(&r)==GP_OK,"shadow A/B switch off");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,true,GP_READY,6,2);
+        check(!pose.shadow.count && !pose.shadow.vertices && shadow_calls==shadow_before,
+              "switched-off shadow is never built or drawn");
+        ++r.revision;r.shadow_enabled=1;check(api->configure(&r)==GP_OK,"shadow A/B switch on");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,true,GP_READY,6,2);
+        check(pose.shadow.count==24,"shadow returns with the switch");
         check(api->configure(&r)==GP_INVALID,"stale revision rejected");
         const gp_draw_token old=token;
         renderer.run([&]{ghost_playback::safe_boundary(7,4);check(!ghost_playback::current(old),"list boundary revokes older draw");});
@@ -494,6 +532,9 @@ int main() {
         check(api->configure(&r)==GP_INVALID,"proximity NaN refused");
         r.proximity_distance=401;check(api->configure(&r)==GP_INVALID,"proximity distance bounded");
         r.proximity_distance=0;
+        r.shadow_enabled=2;check(api->configure(&r)==GP_INVALID,"shadow flag bounded");
+        r.shadow_enabled=1;r.reserved2=1;check(api->configure(&r)==GP_INVALID,"shadow reserved word checked");
+        r.reserved2=0;
         r.origin.continuity=0;check(api->configure(&r)==GP_INVALID,"follow requires resolved origin");
         r.origin.continuity=1;r.mode=GP_FIXED;
         check(api->configure(&r)==GP_INVALID,"fixed must not accidentally retain a live origin");

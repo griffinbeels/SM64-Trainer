@@ -79,6 +79,9 @@ int __cdecl capture_read(gs_record* out,uint32_t bytes) {
     LARGE_INTEGER now{};QueryPerformanceCounter(&now);sample.qpc=now.QuadPart;
     sample.clock.valid=GCC_RAW_VALID|GCC_ELAPSED_VALID;sample.clock.raw_igt=10;
     sample.clock.continuity_id=1;
+    // Mario's sound requests ride the same portable row.
+    sample.valid_fields|=GC_VALID_SOUND;sample.sound.count=2;sample.sound.producer=9;
+    sample.sound.bits[0]=0x24228080;sample.sound.bits[1]=0x30008081;
     if(continuation)sample.global_timer=200+sample_sequence.load(); // Paused raw IGT holds elapsed too.
     out->world.status=GCLIP_WORLD_READY;return 1;
 }
@@ -171,7 +174,8 @@ struct Page {
             "capture value copied into portable ring");
         const gc_pose zero{};
         check(frame.sample.sequence && frame.sample.bytes==sizeof(gc_sample) && frame.sample.version==GC_VERSION
-            && frame.sample.valid_fields==(GC_VALID_CLOCK|GC_VALID_ACTION|GC_VALID_WARP) && frame.sample.igt==10
+            && frame.sample.valid_fields==(GC_VALID_CLOCK|GC_VALID_ACTION|GC_VALID_WARP|GC_VALID_SOUND) && frame.sample.igt==10
+            && frame.sample.sound.count==2 && frame.sample.sound.bits[1]==0x30008081 && frame.sample.sound.producer==9
             && !std::memcmp(&frame.sample.pose,&zero,sizeof(zero)),"explicit invalid capture row preserved");
     }
     gipc_status wait(const std::function<bool(const gipc_status&)>& predicate,const char* why,DWORD milliseconds=2500) {
@@ -203,7 +207,8 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(token) X(revision) X(heartbeat) X(capture_enabled) X(play_enabled) X(mode) X(seek_igt) \
     X(nudge) X(opacity) X(stop_at_star) X(rom_generation) X(owner_suspended) X(model_id) \
     X(layout) X(rom_path) X(star_action_count) X(star_actions) X(tint_enabled) \
-    X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips)
+    X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips) \
+    X(shadow_enabled) X(reserved2)
 #define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path)
 #define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
     X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
@@ -291,7 +296,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.owner_created_lo=birth.dwLowDateTime;r.owner_created_hi=birth.dwHighDateTime;r.generation=initial.generation;
         r.token=123;r.revision=1;r.capture_enabled=r.play_enabled=1;r.rom_generation=ghost_ipc::rom_generation();
         r.model_id=1;r.clip_count=1;set_clip(r.clips[0],1,argv[1],argv[2],217);r.opacity=0.75f;r.tint_enabled=1;
-        r.proximity_enabled=1;r.proximity_distance=120;
+        r.proximity_enabled=1;r.proximity_distance=120;r.shadow_enabled=1;
         r.mode=GP_FIXED;
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
@@ -303,6 +308,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
             && first.clips[0].hue_degrees==217 && first.star_actions[0]==0x1302,"command fields transported");
         check(first.configuration && first.revision,"capture and playback identities acknowledged");
         check(first.proximity_enabled==1 && first.proximity_distance==120,"proximity crosses actual IPC worker");
+        check(first.shadow_enabled==1,"shadow switch crosses actual IPC worker");
         check(!page.status().displayed,"ready pose is not presentation evidence");
         ghost_ipc::presented(first.revision);
         page.wait([](const gipc_status& s){return s.displayed==1;},"actual matching presentation acknowledged");
@@ -322,7 +328,9 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         const auto bound_origin=last_command().origin.sequence;
         burst_records=GO_HISTORY+10;
         page.wait([](const gipc_status&){return burst_records.load()==0;},"origin ages out of bounded ledger");
-        r.revision=3;r.opacity=0.6f;ready(page,r);
+        r.revision=3;r.opacity=0.6f;r.shadow_enabled=0;ready(page,r);
+        check(last_command().shadow_enabled==0,"shadow A/B off crosses actual IPC worker");
+        r.shadow_enabled=1;
         check(last_command().origin.sequence==bound_origin,"tuning reuses resolved origin after history eviction");
         r.revision=4;r.mode=GP_FIXED;r.origin={};ready(page,r);
         const auto before=commands.load();ready(page,r);check(commands.load()==before,"heartbeat is not semantic mutation");
@@ -370,8 +378,10 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         bad=r;bad.revision=16;bad.clip_count=GIPC_GHOSTS+1;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=17;bad.clips[1].hue_degrees=360;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=18;bad.clips[1].reserved=1;refused(page,bad,GIPC_PROTOCOL);
-        r.revision=19;ready(page,r);
-        r.revision=20;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
+        bad=r;bad.revision=19;bad.shadow_enabled=2;refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=20;bad.reserved2=1;refused(page,bad,GIPC_PROTOCOL);
+        r.revision=21;ready(page,r);
+        r.revision=22;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
         // Reproduce the reader owning the page exactly when lease expiry must
         // be published. No new request/event wakes the worker after this race.

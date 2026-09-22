@@ -16,6 +16,8 @@ extern "C" int32_t sg_model_get_atlas(sg_model*,sg_atlas_view*) {std::abort();}
 namespace ghost_pose {
 Result evaluate(sg_model*,const gs_record&,const gc_sample&,const ghost::WorldPass&,
                 float,Scratch&,ghost_compositor::Pose&) {std::abort();}
+bool shadow(sg_model*,const gc_sample&,const float*,ghost_compositor::ShadowVertex*,uint8_t*,
+            ghost_compositor::Shadow&) {std::abort();}
 }
 
 static bool accepted(const std::string& path) {
