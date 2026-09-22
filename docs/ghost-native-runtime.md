@@ -7,6 +7,15 @@ opacity, timing nudge and tint controls; switching to Mario closes the overlay
 window. See [session.py](../src/sm64_events/ghost/session.py) and
 [native_session.py](../src/sm64_events/ghost/native_session.py).
 
+The **Ghost recording** selector lists saved templates for the current star or
+segment. An explicit choice is stored per target and strategy without changing
+the input-comparison template; **Use input template** restores that relationship.
+Each recording is qualified separately for Mario poses and whole-picture video.
+A removed choice stays unavailable until the user chooses another recording.
+The selection update includes its target so a delayed request cannot choose a
+ghost for a different practice target. See
+[selection.py](../src/sm64_events/ghost/selection.py).
+
 The source connects capture, archive publication, native playback, compositing
 and clean video recording. This describes that integration, not a successful
 release build or live acceptance result. New native recordings are required;
@@ -119,6 +128,18 @@ worker and Python client use a named mutex for mapped-page access; the render
 thread never touches that page. File/hash checks, ROM asset preparation and clip
 allocation belong to the worker. Drawing uses copied commands and borrowed
 immutable buffers, with model adoption/retirement at renderer boundaries.
+
+Zilmar's `GFX_INFO.HEADER` supplies only the first 64 cartridge bytes, not a
+pointer to the full ROM. [ghost_rom.cpp](../plugin/gfxwrap/ghost_rom.cpp) discovers
+the matching full image on the worker using bounded, guarded reads of committed
+memory. It matches the entire normalized header, validates the model assets
+without binding a model, rejects differing duplicate images, excludes its own
+buffers, and rechecks header/lifecycle identity. A copied header inside a large
+readable allocation does not qualify as a cartridge. The
+immutable result is cached by ROM generation separately from the chosen clip.
+No ROM scan or file read runs on the render thread. A ROM acquisition refusal
+uses `GIPC_ROM` (11); `GIPC_FILE` (6) describes clip acquisition. Neither a shared
+ROM failure nor renderer readiness changes saved-recording eligibility.
 
 Disabling or losing the active origin withdraws drawing while retaining prepared
 assets for later use. Lease/ROM shutdown revokes playback and retires assets;
