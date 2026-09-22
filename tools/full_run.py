@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from test_lanes import DURATIONS_PATH, shard_unit  # noqa: E402
+from test_lanes import DURATIONS_PATH, file_totals, shard_unit  # noqa: E402
 
 WORKFLOW = "full.yml"
 RUN_FIELDS = "databaseId,status,conclusion,headSha,headBranch,event,createdAt,updatedAt,url"
@@ -155,7 +155,7 @@ def release_gate(sha: str, *, wait: bool = True, timeout_minutes: float = 60,
 def nodeid_of(classname: str, name: str, root: Path = ROOT) -> str:
     """JUnit's dotted classname back to a pytest nodeid: the longest prefix
     that is a file, then any class names. xdist's `@<worker group>` suffix is
-    dropped: a sweep case's unit is a hash of the plain nodeid."""
+    dropped: a test's shard unit and rerun command use the plain nodeid."""
     name = name.rsplit("@", 1)[0]
     parts = classname.split(".")
     for cut in range(len(parts), 0, -1):
@@ -282,20 +282,30 @@ def coverage_map(run_id: int, run=gh) -> Path | None:
     return merged
 
 
-def durations_from(folder: Path) -> dict[str, float]:
+def durations_from(folder: Path, root: Path = ROOT) -> dict[str, float]:
+    """Seconds per shard unit. A file's own total this run decides whether
+    it is timed whole or as its tests, as the next run will split it."""
+    cases = list(junit_cases(folder))
+    totals = file_totals({case["nodeid"]: case["time"] for case in cases})
     units: dict[str, float] = {}
-    for case in junit_cases(folder):
-        unit = shard_unit(case["nodeid"])
+    for case in cases:
+        unit = shard_unit(case["nodeid"], totals, root)
         units[unit] = units.get(unit, 0.0) + case["time"]
     return units
 
 
-def write_durations(measured: dict[str, float], found: dict, path: Path = DURATIONS_PATH) -> None:
+def write_durations(measured: dict[str, float], found: dict, path: Path = DURATIONS_PATH,
+                    root: Path = ROOT) -> None:
+    """Measured files replace every entry they had (whole or as tests); a file
+    this run did not time keeps its old ones, unless it no longer exists."""
     try:
         existing = json.loads(path.read_text(encoding="utf-8"))["units"]
     except (OSError, ValueError, KeyError):
         existing = {}
-    units = {**existing, **{unit: round(seconds, 1) for unit, seconds in measured.items()}}
+    measured_files = {unit.split("::")[0] for unit in measured}
+    kept = {unit: seconds for unit, seconds in existing.items()
+            if (file := unit.split("::")[0]) not in measured_files and (root / file).is_file()}
+    units = {**kept, **{unit: round(seconds, 1) for unit, seconds in measured.items()}}
     text = json.dumps({
         "source": (f"GitHub full run {found['databaseId']} on {found['headSha'][:10]}, "
                    f"{datetime.now(timezone.utc):%Y-%m-%d}; refresh with tools/full_run.py durations"),

@@ -49,7 +49,8 @@ SERVER_NAMES = ("serve_ui", "serve_ui_live")
 # So the CONCURRENCY is bounded where it is actually expensive. Same group ->
 # same worker -> sequential under `--dist loadgroup`, so these files share
 # ONE pool of BROWSER_SWEEP_GROUPS groups and never put more than that many
-# sweep browsers up at once. The same groups are the units a GitHub job takes.
+# sweep browsers up at once. A full-run job needs no pool: its two workers are
+# the bound, so there a sweep case is a unit of its own (shard_unit).
 #
 # Keyed on a stable hash of the nodeid, NEVER on collection index: testmon
 # selects subsets and reruns reorder, and an index would then move a case
@@ -194,12 +195,47 @@ def is_test_module(path: Path) -> bool:
 
 # --- splitting the full run across GitHub jobs -------------------------------
 
-def shard_unit(nodeid: str) -> str:
-    """The piece a job takes whole. A file, because its module-scoped server
-    and browser are built once per file; a sweep case goes with its bounded
-    group instead, because each case builds its own."""
+# A file is one unit because its module-scoped server and browser are built
+# once per file. A file that alone outlasts a job's share cannot be balanced
+# whole: on the 12-job run 35682940350 the three jobs holding
+# test_ui_scorecard.py (58 tests, 490 s on one worker) and the two largest
+# sweep groups (538 s, 492 s) ran 8-9 minutes while the other nine ran 5. Past
+# this many seconds a file splits into its tests -- unless it defines a
+# fixture wider than one test: those tests share a page or a server, and
+# some assume the state the test before them left (tests/conftest.py's
+# collection hook has the fixture-reach case), so a subset could fail.
+SPLIT_FILE_SECONDS = 120.0
+SHARED_SCOPES = {"class", "module", "package", "session"}
+
+
+@functools.lru_cache(maxsize=None)
+def shares_a_fixture(path: Path) -> bool:
+    """Whether the module declares a fixture that outlives one test."""
+    try:
+        tree = _parse(path.read_text(encoding="utf-8"), str(path))
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return True   # unreadable: keep it whole, collection reports it
+    return any(isinstance(node, ast.keyword) and node.arg == "scope"
+               and isinstance(node.value, ast.Constant) and node.value.value in SHARED_SCOPES
+               for node in ast.walk(tree))
+
+
+def file_totals(durations: dict[str, float]) -> dict[str, float]:
+    """Seconds per test file, whether it was timed whole or as its tests."""
+    totals: dict[str, float] = {}
+    for unit, seconds in durations.items():
+        path = unit.split("::")[0]
+        totals[path] = totals.get(path, 0.0) + seconds
+    return totals
+
+
+def shard_unit(nodeid: str, totals: dict[str, float], root: Path = ROOT) -> str:
+    """The piece a job takes whole: the file, or the test itself when the
+    file is longer than SPLIT_FILE_SECONDS (`totals` from file_totals) and
+    shares no fixture between its tests."""
     path = nodeid.split("::")[0]
-    return browser_sweep_group(nodeid) if path in BROWSER_SWEEPS else path
+    split = totals.get(path, 0.0) > SPLIT_FILE_SECONDS and not shares_a_fixture(root / path)
+    return nodeid if split else path
 
 
 def load_durations(path: Path = DURATIONS_PATH) -> dict[str, float]:
@@ -215,7 +251,7 @@ def default_duration(durations: dict[str, float]) -> float:
     A new browser file is usually one server and a few pages."""
     if not durations:
         return 30.0
-    ordered = sorted(durations.values())
+    ordered = sorted(file_totals(durations).values())
     return ordered[len(ordered) // 2]
 
 
@@ -244,7 +280,7 @@ LANE_WORKERS = {"browser": 2, "nonbrowser": 4}
 
 
 def lane_of_unit(unit: str) -> str:
-    return "browser" if unit.startswith("browser_sweep_") or lane_of(ROOT / unit) == "browser" else "nonbrowser"
+    return lane_of(ROOT / unit.split("::")[0])
 
 
 def job_matrix(jobs: int, durations: dict[str, float] | None = None) -> list[dict]:

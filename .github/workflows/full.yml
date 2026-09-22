@@ -36,11 +36,13 @@ permissions:
 env:
   # THE job count: tools/test_lanes.py splits it between browser jobs (two
   # workers) and the rest (four), by their recorded work per worker.
-  JOBS: ${{ inputs.jobs || 12 }}
+  JOBS: ${{ inputs.jobs || 16 }}
   # uilab is not in the lockfile (it is a shared dev module); the run uses
   # exactly this commit of it. Bump it when a test needs a newer uilab.
   UILAB_REPO: https://github.com/griffinbeels/uilab
   UILAB_REF: 6689abbf05a9129c4da2f11986788826d354ad24
+  # The gyan.dev build on Griffin's machine, which the desktop app bundles.
+  FFMPEG_BUILD: 2025-10-09-git-469aad3897
   PYTHONUTF8: "1"
   RECORD_COVERAGE: ${{ github.event_name == 'schedule' || inputs.record_coverage == true }}
 
@@ -126,20 +128,24 @@ jobs:
           uvx "ruff==$ruff" --version
 
       # The replay tests cut real clips (libx264, SVT-AV1); a missing ffmpeg is
-      # a failure, never an inventory skip. Same GPL build line every run.
+      # a failure, never an inventory skip. It is the build the desktop app
+      # bundles (tools/build_exe.py takes the one on PATH), never "latest": the
+      # CFR sink's wall-clock audio came out 1266 s long in a 2 s segment under
+      # BtbN n8.1.3 and 2.005 s under this one (2026-09-21).
       - name: Cache ffmpeg
         id: ffmpeg-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}\ffmpeg
-          key: ffmpeg-n8.1-win64-gpl
+          key: ffmpeg-${{ env.FFMPEG_BUILD }}-full
 
       - name: Install ffmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: |
-          $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
-          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip" -OutFile $zip
-          Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-unpacked"
+          $archive = "$env:RUNNER_TEMP\ffmpeg.7z"
+          Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/$env:FFMPEG_BUILD/ffmpeg-$env:FFMPEG_BUILD-full_build.7z" -OutFile $archive
+          7z x $archive "-o$env:RUNNER_TEMP\ffmpeg-unpacked" -bso0
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Move-Item (Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-unpacked")[0].FullName "$env:RUNNER_TEMP\ffmpeg"
 
       - name: Put ffmpeg on PATH

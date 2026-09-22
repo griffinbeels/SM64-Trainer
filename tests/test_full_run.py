@@ -129,15 +129,32 @@ def test_junit_names_map_back_to_nodeids_and_units_for_rebalancing(tmp_path):
     assert full_run.nodeid_of("tests.test_responsive",
                                 "test_no_layout_defects_at_each_viewport[850x1000]@browser_sweep_2") == sweep
     units = full_run.durations_from(tmp_path)
-    assert units["tests/test_ui_x.py"] == 6.5
-    assert units[full_run.shard_unit(sweep)] == 30.0
+    assert units == {"tests/test_ui_x.py": 6.5, "tests/test_responsive.py": 30.0}
+
+
+def test_a_file_longer_than_a_jobs_share_is_timed_as_its_tests(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_long.py").write_text("def test_a():\n    pass\n")
+    (tmp_path / "junit-1.xml").write_text(
+        '<testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_long" name="test_a[1]" time="100.0"/>'
+        '<testcase classname="tests.test_long" name="test_a[2]@tests/test_long.py__test_a_2_" time="50.0"/>'
+        '</testsuite></testsuites>', encoding="utf-8")
+    assert full_run.durations_from(tmp_path, root=tmp_path) == {
+        "tests/test_long.py::test_a[1]": 100.0, "tests/test_long.py::test_a[2]": 50.0}
 
 
 def test_a_refresh_keeps_units_this_run_did_not_time(tmp_path):
+    (tmp_path / "tests").mkdir()
+    for name in ("a", "b"):
+        (tmp_path / "tests" / f"{name}.py").write_text("")
     path = tmp_path / "durations.json"
-    path.write_text(json.dumps({"source": "old", "units": {"tests/a.py": 10.0, "tests/b.py": 20.0}}))
-    full_run.write_durations({"tests/b.py": 25.04}, _run(), path)
+    path.write_text(json.dumps({"source": "old", "units": {
+        "tests/a.py": 10.0, "tests/b.py::test_1": 20.0, "tests/b.py::test_2": 20.0,
+        "tests/deleted.py": 99.0}}))
+    full_run.write_durations({"tests/b.py": 25.04}, _run(), path, root=tmp_path)
     written = json.loads(path.read_text())
+    # b's split entries are replaced by its new whole one; a deleted file's go.
     assert written["units"] == {"tests/a.py": 10.0, "tests/b.py": 25.0}
     assert b"\r\n" not in path.read_bytes(), "a tracked file stays LF on Windows"
     assert "7" in written["source"]

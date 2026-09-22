@@ -123,7 +123,8 @@ def test_the_tripwire_fails_a_launch_the_classifier_missed(tmp_path):
 
 def _durations():
     return {"tests/a.py": 300.0, "tests/b.py": 200.0, "tests/c.py": 100.0,
-            "browser_sweep_0": 250.0, "tests/d.py": 50.0}
+            "tests/test_responsive.py::test_no_layout_defects_at_each_viewport[850x1000]": 250.0,
+            "tests/d.py": 50.0}
 
 
 def test_every_unit_lands_in_exactly_one_job_and_the_jobs_are_balanced():
@@ -151,10 +152,23 @@ def test_a_new_unit_costs_the_median_until_it_has_been_timed():
     assert lanes.default_duration({}) > 0
 
 
-def test_a_sweep_case_travels_with_its_bounded_group_and_a_file_stays_whole():
-    sweep = f"{lanes.BROWSER_SWEEPS[0]}::test_no_layout_defects_at_each_viewport[900x1000]"
-    assert lanes.shard_unit(sweep) == lanes.browser_sweep_group(sweep)
-    assert lanes.shard_unit("tests/test_ui_scorecard.py::test_x[a]") == "tests/test_ui_scorecard.py"
+def test_a_long_file_splits_into_its_tests_unless_they_share_a_fixture(tmp_path):
+    """A file longer than a job's share cannot be balanced whole; one whose
+    tests share a page or server stays whole, since a subset could fail."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_long.py").write_text("def test_x():\n    pass\n")
+    (tmp_path / "tests" / "test_shared.py").write_text(
+        "import pytest\n\n@pytest.fixture(scope='module')\ndef page():\n    return 1\n")
+    long_time = lanes.SPLIT_FILE_SECONDS + 1
+    totals = {"tests/test_long.py": long_time, "tests/test_shared.py": long_time,
+              "tests/test_short.py": lanes.SPLIT_FILE_SECONDS - 1}
+    unit = lambda nodeid: lanes.shard_unit(nodeid, totals, tmp_path)  # noqa: E731
+    assert unit("tests/test_long.py::test_x[a]") == "tests/test_long.py::test_x[a]"
+    assert unit("tests/test_shared.py::test_y") == "tests/test_shared.py"
+    assert unit("tests/test_short.py::test_z") == "tests/test_short.py"
+    # Timed as its tests, a file's total is still the sum: it stays split.
+    assert lanes.file_totals({"tests/test_long.py::test_x[a]": 70.0,
+                              "tests/test_long.py::test_x[b]": 60.0}) == {"tests/test_long.py": 130.0}
 
 
 def test_the_recorded_durations_cover_the_suite():

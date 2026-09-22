@@ -25,9 +25,9 @@ from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
 from tools.test_lanes import (BROWSER_SWEEP_GROUPS, BROWSER_SWEEPS,  # noqa: F401 (tests read these here)
-                              LANE_ENV, browser_sweep_group, is_test_module,
-                              lane_of, load_durations, parse_shard, plan_shards,
-                              refusal, shard_unit)
+                              LANE_ENV, browser_sweep_group, file_totals,
+                              is_test_module, lane_of, load_durations, parse_shard,
+                              plan_shards, refusal, shard_unit)
 
 
 def pytest_addoption(parser):
@@ -202,6 +202,13 @@ RAW_INDEX = pytest.StashKey[int]()
 # found the writer's throwaway report mid-run and went red on a `failed`
 # verdict for a gate the layout ships, then the file vanished and the failure
 # could not be reproduced alone (2026-09-05). One group, no overlap.
+def _own_group(nodeid: str) -> str:
+    """A worker group for one test. xdist appends `@<group>` to the nodeid,
+    and JUnit splits that on `::`, so a group holding `::` read back from a
+    full run's report as a different test; `@`, `[`, `]` break xdist itself."""
+    return re.sub(r"[^A-Za-z0-9_./-]", "_", nodeid)
+
+
 SHARED_GROUPS = {
     "tests/test_ui_sync_page.py": "version_sync_report",
     "tests/test_layout_matches_report.py": "version_sync_report",
@@ -254,7 +261,7 @@ def pytest_collection_modifyitems(config, items):
 
     `--shard K/N` keeps one GitHub job's share of the whole suite. The unit
     is read BEFORE the yield: xdist's worker appends `@<group>` to the nodeid
-    in its own impl, and a sweep case's group is a hash of the plain id."""
+    in its own impl, and the unit is a function of the plain id."""
     selection = _selection(config)
     if selection is not None:
         outside = [item for item in items
@@ -264,13 +271,20 @@ def pytest_collection_modifyitems(config, items):
             config.hook.pytest_deselected(items=outside)
             dropped = set(map(id, outside))
             items[:] = [item for item in items if id(item) not in dropped]
+    sharded = bool(config.getoption("shard"))
+    durations = load_durations()
+    totals = file_totals(durations)
     for index, item in enumerate(items):
         item.stash[RAW_INDEX] = index
-        item.stash[SHARD_UNIT] = shard_unit(item.nodeid)
-        if item.nodeid.split("::")[0] in BROWSER_SWEEPS:
+        item.stash[SHARD_UNIT] = shard_unit(item.nodeid, totals)
+        if sharded and item.stash[SHARD_UNIT] == item.nodeid:
+            # A split file's test (a sweep case among them): either of the
+            # job's workers may take it; the job's two workers are the bound.
+            group = _own_group(item.nodeid)
+        elif item.nodeid.split("::")[0] in BROWSER_SWEEPS:
             group = browser_sweep_group(item.nodeid)
         elif item.get_closest_marker("spread"):
-            group = re.sub(r"[^A-Za-z0-9_./:-]", "_", item.nodeid)
+            group = _own_group(item.nodeid)
         else:
             group = SHARED_GROUPS.get(item.nodeid.split("::")[0],
                                       item.nodeid.split("::")[0])
@@ -278,7 +292,7 @@ def pytest_collection_modifyitems(config, items):
     yield
     if config.getoption("shard"):
         index, count = parse_shard(config.getoption("shard"))
-        plan = plan_shards([item.stash[SHARD_UNIT] for item in items], count, load_durations())
+        plan = plan_shards([item.stash[SHARD_UNIT] for item in items], count, durations)
         elsewhere = [item for item in items if plan[item.stash[SHARD_UNIT]] != index]
         if elsewhere:
             config.hook.pytest_deselected(items=elsewhere)
