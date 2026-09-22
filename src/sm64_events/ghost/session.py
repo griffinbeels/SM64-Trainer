@@ -119,6 +119,12 @@ TINT_ENABLED_KEY = "ghost_tint_enabled"
 #: the game's own; a shipped preference, so no test pins the value.
 SHADOW_KEY = "ghost_shadow"
 DEFAULT_SHADOW = True
+#: HOW LOUD GHOST MARIO IS. His words, 2026-09-22: *"it would be nice if Ghost
+#: mario also played sound effects whenever he did his actions in game ... We
+#: should have a volume slider to adjust the ghost volume."* Half by default so
+#: the ghost never drowns out the live game; a shipped preference.
+VOLUME_KEY = "ghost_volume"
+DEFAULT_VOLUME = 0.5
 TINT_HUE_KEY = "ghost_tint_hue"
 VIEW_KEY = "ghost_view"
 
@@ -144,7 +150,7 @@ NO_RECORDINGS = {
 
 #: What a client may send to PUT /api/ghost.
 SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "ghosts", "target", "proximity",
-            "shadow")
+            "shadow", "volume")
 
 
 def template_store(inputs):
@@ -271,6 +277,11 @@ def validate_changes(changes: dict) -> dict:
         if type(changes["shadow"]) is not bool:
             raise ValueError("The ghost's shadow is either on or off.")
         checked["shadow"] = changes["shadow"]
+    if "volume" in changes:
+        volume = changes["volume"]
+        if type(volume) not in (int, float) or not 0 <= volume <= 1:
+            raise ValueError("The ghost's volume is between silent and full.")
+        checked["volume"] = float(volume)
     if "proximity" in changes:
         checked["proximity"] = checked_proximity(changes["proximity"])
     if "view" in changes:
@@ -312,6 +323,7 @@ class GhostSession:
         self._opacity = DEFAULT_OPACITY
         self._tint = dict(DEFAULT_TINT)
         self._shadow = DEFAULT_SHADOW
+        self._volume = DEFAULT_VOLUME
         self._proximity = dict(DEFAULT_PROXIMITY)
         self._view = DEFAULT_VIEW
         self._nudge = 0
@@ -352,6 +364,7 @@ class GhostSession:
                 "opacity": self._opacity,
                 "tint": dict(self._tint),
                 "shadow": self._shadow,
+                "volume": self._volume,
                 "proximity": dict(self._proximity),
                 "view": self._view,
                 "nudge_frames": self._nudge,
@@ -716,6 +729,7 @@ class GhostSession:
                                             DEFAULT_TINT["hue_degrees"])
             stored_view = database.get_state(VIEW_KEY, DEFAULT_VIEW)
             stored_shadow = database.get_state(SHADOW_KEY, DEFAULT_SHADOW)
+            stored_volume = database.get_state(VOLUME_KEY, DEFAULT_VOLUME)
             stored_proximity = database.get_state(PROXIMITY_KEY, DEFAULT_PROXIMITY)
             self._selection.load(database)
         except Exception:  # noqa: BLE001 - a preference must never block the app
@@ -736,6 +750,10 @@ class GhostSession:
         self._tint = {"enabled": bool(stored_tint_on), "hue_degrees": hue}
         self._proximity = saved_proximity(stored_proximity)
         self._shadow = stored_shadow if type(stored_shadow) is bool else DEFAULT_SHADOW
+        try:
+            self._volume = min(1.0, max(0.0, float(stored_volume)))
+        except (TypeError, ValueError):
+            self._volume = DEFAULT_VOLUME
         # A stored value from a build that knew another view name is not a
         # view: it falls back rather than leaving the page asking for
         # something nothing draws.
@@ -760,6 +778,9 @@ class GhostSession:
         if "shadow" in changes:
             self._shadow = changes["shadow"]
             _remember(database, SHADOW_KEY, self._shadow)
+        if "volume" in changes:
+            self._volume = changes["volume"]
+            _remember(database, VOLUME_KEY, self._volume)
         if "proximity" in changes:
             self._proximity = {**self._proximity, **changes["proximity"]}
             _remember(database, PROXIMITY_KEY, self._proximity)
@@ -830,7 +851,7 @@ class GhostSession:
             self._native.reconcile(enabled=native_view and self._enabled and self._source.get("available", False),
                                    opacity=self._opacity, nudge=self._nudge,
                                    tint=self._tint, target=self._target, proximity=self._proximity,
-                                   shadow=self._shadow)
+                                   shadow=self._shadow, volume=self._volume)
             if native_view:
                 self._end_window()
                 return
