@@ -1,0 +1,217 @@
+# The full run: the whole test suite, browser tests included, off the local
+# machine. Locally only a change's blast radius runs (tools/blast_radius.py);
+# this covers the rest on every push to main and on demand, and it blocks a
+# release (tools/release.py). The nightly run also records the coverage map the
+# blast radius reads; recording roughly doubles a job's time, so a push does
+# not. Agents read it with `uv run python tools/full_run.py`.
+name: full run
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 10 * * *"   # nightly, main: the run that records the coverage map
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "How many runners to split the suite across"
+        type: number
+      record_coverage:
+        description: "Also record the coverage map the blast radius reads (about twice as slow)"
+        type: boolean
+        default: false
+
+# A newer push to main contains the older one, so the older run stops; the
+# release gate reads the release commit's own run. The nightly run and runs
+# on other branches never cancel anything.
+concurrency:
+  group: full-run-${{ github.ref }}-${{ github.event_name == 'schedule' && 'nightly' || 'push' }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+
+permissions:
+  contents: read
+
+env:
+  # THE job count: tools/test_lanes.py splits it between browser jobs (two
+  # workers) and the rest (four) so both finish together. 20 is every runner
+  # the account has: 5.0 minutes, against 7.3 at 16 (docs/testing.md).
+  JOBS: ${{ inputs.jobs || 20 }}
+  # uilab is not in the lockfile (it is a shared dev module); the run uses
+  # exactly this commit of it. Bump it when a test needs a newer uilab.
+  UILAB_REPO: https://github.com/griffinbeels/uilab
+  UILAB_REF: 6689abbf05a9129c4da2f11986788826d354ad24
+  # The gyan.dev build on Griffin's machine, which the desktop app bundles.
+  FFMPEG_BUILD: 2025-10-09-git-469aad3897
+  PYTHONUTF8: "1"
+  RECORD_COVERAGE: ${{ github.event_name == 'schedule' || inputs.record_coverage == true }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: plan
+        run: echo "matrix=$(python3 tools/test_lanes.py matrix "$JOBS")" >> "$GITHUB_OUTPUT"
+
+  suite:
+    needs: plan
+    name: ${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      SM64_REPORT_DIR: ${{ github.workspace }}\test-artifacts
+      # A test still running after five minutes prints every thread's stack,
+      # so a hang names itself instead of eating the job's whole timeout.
+      PYTEST_ADDOPTS: -o faulthandler_timeout=300
+    steps:
+      # Byte-exact checks (the natives' build ids, the line-ending guard, the
+      # seed builder) read files as committed; the runner's git would add CR.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install the locked environment
+        run: uv sync --frozen
+
+      # Beside the checkout, where tools/find_uilab.py looks on every machine,
+      # and outside it, so pytest never collects uilab's own tests.
+      - name: Check out uilab at the pinned commit
+        if: matrix.lane == 'browser'
+        run: |
+          $path = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) "uilab"
+          git clone --quiet $env:UILAB_REPO $path
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C $path checkout --quiet $env:UILAB_REF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # Vitest (component tests, in both lanes) needs Node 24.13+; the runner
+      # image ships 22. The lint and type checks' tests need the pinned ESLint,
+      # Pyright and TypeScript; both installs are cached whole.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Cache the pinned Node tools
+        id: node-modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            tests/frontend/node_modules
+            tools/verification/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('tests/frontend/package-lock.json', 'tools/verification/package-lock.json') }}
+
+      - name: Install the pinned Node tools
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        run: |
+          npm ci --prefix tests/frontend --ignore-scripts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm ci --prefix tools/verification --ignore-scripts
+
+      # tools/verify_lint.py runs Ruff offline from uv's cache; prime it with
+      # the version that script pins.
+      - name: Prime the pinned Ruff
+        if: matrix.lane == 'nonbrowser'
+        run: |
+          $ruff = uv run --frozen python -c "import sys; sys.path.insert(0, 'tools'); import verify_lint; print(verify_lint.RUFF)"
+          uvx "ruff==$ruff" --version
+
+      # The replay tests cut real clips (libx264, SVT-AV1); a missing ffmpeg is
+      # a failure, never an inventory skip. It is the build the desktop app
+      # bundles (tools/build_exe.py takes the one on PATH), never "latest": the
+      # CFR sink's wall-clock audio came out 1266 s long in a 2 s segment under
+      # BtbN n8.1.3 and 2.005 s under this one (2026-09-21).
+      - name: Cache ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\ffmpeg
+          key: ffmpeg-${{ env.FFMPEG_BUILD }}-full
+
+      - name: Install ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          $archive = "$env:RUNNER_TEMP\ffmpeg.7z"
+          Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/$env:FFMPEG_BUILD/ffmpeg-$env:FFMPEG_BUILD-full_build.7z" -OutFile $archive
+          7z x $archive "-o$env:RUNNER_TEMP\ffmpeg-unpacked" -bso0
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Move-Item (Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-unpacked")[0].FullName "$env:RUNNER_TEMP\ffmpeg"
+
+      - name: Put ffmpeg on PATH
+        run: Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\ffmpeg\bin"
+
+      # Only browser jobs start Chromium (the tripwire fails any other test
+      # that tries).
+      - name: Cache Playwright's Chromium
+        if: matrix.lane == 'browser'
+        id: chromium
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install Playwright's Chromium
+        if: matrix.lane == 'browser' && steps.chromium.outputs.cache-hit != 'true'
+        run: uv run --frozen python -m playwright install chromium
+
+      # No retries inside the suite. Its failures get ONE retry below.
+      - name: Suite, ${{ matrix.lane }} job ${{ matrix.shard }} of ${{ matrix.of }}
+        id: suite
+        continue-on-error: true
+        run: >
+          uv run --frozen python tools/run_tests.py --all --lane ${{ matrix.lane }}
+          ${{ env.RECORD_COVERAGE == 'true' && '--record-coverage' || '' }}
+          --shard ${{ matrix.shard }}/${{ matrix.of }} --workers ${{ matrix.workers }}
+          --junitxml test-artifacts/junit-${{ matrix.lane }}-${{ matrix.shard }}.xml
+
+      # Exactly the failed tests, alone, after the suite: a test that passes
+      # here is FLAKY (job summary, annotation, the flaky artifact) and the job
+      # is green; a real break fails twice. The job's verdict is this step's.
+      - name: Retry the failed tests alone
+        if: steps.suite.outcome == 'failure'
+        run: uv run --frozen python tools/full_run.py retry test-artifacts/junit-${{ matrix.lane }}-${{ matrix.shard }}.xml
+
+      - name: Publish this job's coverage map
+        if: always() && env.RECORD_COVERAGE == 'true' && hashFiles('.testmondata') != ''
+        run: >
+          uv run --frozen python tools/full_run.py export-coverage .testmondata
+          coverage/coverage-map-${{ matrix.lane }}-${{ matrix.shard }}.json
+          "full run ${{ github.run_id }} ${{ matrix.lane }} job ${{ matrix.shard }}"
+
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: full-${{ matrix.lane }}-${{ matrix.shard }}
+          path: test-artifacts
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Small and long-lived: `tools/full_run.py status` reads the last ten
+      # runs' lists to name a test that keeps needing the retry.
+      - name: Keep the flaky list
+        if: always() && hashFiles('test-artifacts/flaky.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: flaky-${{ matrix.lane }}-${{ matrix.shard }}
+          path: test-artifacts/flaky.json
+          retention-days: 90
+
+      - name: Keep the coverage map
+        if: always() && env.RECORD_COVERAGE == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.lane }}-${{ matrix.shard }}
+          path: coverage
+          if-no-files-found: ignore
+          retention-days: 30

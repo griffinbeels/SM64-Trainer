@@ -159,8 +159,12 @@ def test_the_warning_shows_each_replay_moving_and_exit_anyway_closes_the_app():
         assert "Compressing 63%" in rows.nth(0).inner_text()
         assert abs(travel[0] - 0.41) < 0.01 and abs(travel[-1] - 0.63) < 0.01, (travel[0], travel[-1])
         assert all(later >= earlier - 1e-6 for earlier, later in pairwise(travel)), "the bar moved backwards"
+        # A step shows NO width in between; a transition shows several, as
+        # many as the machine paints frames. A loaded GitHub runner painted 7
+        # over this travel where the desktop paints dozens (2026-09-21), so
+        # the bound asks for motion, not for this desktop's frame rate.
         between = {round(width, 4) for width in travel if 0.42 < width < 0.62}
-        assert len(between) >= 8, f"the bar stepped instead of moving: {sorted(between)}"
+        assert len(between) >= 4, f"the bar stepped instead of moving: {sorted(between)}"
 
         exit_anyway.click()
         page.wait_for_function("document.querySelector('.modal-actions').textContent.includes('Closing')")

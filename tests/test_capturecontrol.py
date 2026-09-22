@@ -48,8 +48,35 @@ def eventually(get, predicate=lambda x: bool(x), timeout=3):
                 return last
         except (FileNotFoundError, BlockingIOError):
             pass
+        except RuntimeError as error:
+            # The host maps the control page before it writes the header, so a
+            # read in between reports "not ready". Under a loaded machine that
+            # window was wide enough to fail a merge check (2026-09-21). Any
+            # other RuntimeError is a real failure; an unsupported protocol
+            # still fails, at the deadline, with the same message.
+            if "not ready" not in str(error):
+                raise
+            last = error
         time.sleep(0.01)
     raise AssertionError(f"condition not reached: {last!r}")
+
+
+def test_eventually_waits_through_the_page_that_is_mapped_but_not_written():
+    """The race, reproduced without the host: map the page, leave the header
+    blank for a moment, then write it. The real client reports "not ready"
+    in between; the helper must wait for the header, not fail on it."""
+    name = "sm64_control_test_" + uuid.uuid4().hex
+    with mmap.mmap(-1, C.PAGE_BYTES, tagname=name + C.SUFFIX) as page:
+        with pytest.raises(RuntimeError, match="not ready"):
+            C.CaptureControl(name)
+        writer = threading.Timer(0.2, C._STATUS.pack_into,
+                                 (page, 0, C.MAGIC, C.VERSION, C.PAGE_BYTES, *[0] * 12))
+        writer.start()
+        try:
+            control = eventually(lambda: C.CaptureControl(name))
+            control.close()
+        finally:
+            writer.join()
 
 
 @contextmanager

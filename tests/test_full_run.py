@@ -1,0 +1,308 @@
+"""Reading the GitHub full run, and the release gate built on it, with `gh`
+stubbed. The real `gh` is exercised by dispatching the workflow; these pin
+the decisions an agent and a release act on."""
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+import full_run  # noqa: E402
+
+SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+
+
+def _run(status="completed", conclusion="success", created="2026-09-21T10:00:00Z", run_id=7):
+    return {"databaseId": run_id, "status": status, "conclusion": conclusion, "headSha": SHA,
+            "headBranch": "main", "event": "push", "createdAt": created,
+            "updatedAt": "2026-09-21T10:18:30Z", "url": f"https://github.com/x/y/actions/runs/{run_id}"}
+
+
+class Gh:
+    """Answers `gh run list` from a queue of snapshots, one per call."""
+
+    def __init__(self, *snapshots):
+        self.snapshots = list(snapshots)
+        self.calls = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        if args[:2] == ("run", "list"):
+            current = self.snapshots.pop(0) if len(self.snapshots) > 1 else self.snapshots[0]
+            return json.dumps(current)
+        raise AssertionError(f"unexpected gh call {args}")
+
+
+def test_the_newest_run_for_a_commit_is_the_verdict():
+    """A re-run supersedes the red run before it."""
+    gh = Gh([_run(conclusion="failure", created="2026-09-21T09:00:00Z", run_id=1),
+             _run(created="2026-09-21T10:00:00Z", run_id=2)])
+    found = full_run.find_run(sha=SHA, run=gh)
+    assert found["databaseId"] == 2 and full_run.verdict(found) == full_run.PASSED
+    assert ("--commit", SHA) == gh.calls[0][-2:]
+
+
+def test_a_release_proceeds_on_a_green_run():
+    allowed, why = full_run.release_gate(SHA, run=Gh([_run()]), sleep=lambda _: None)
+    assert allowed and "passed" in why
+
+
+def test_a_release_refuses_a_red_run_and_says_how_to_read_it():
+    allowed, why = full_run.release_gate(SHA, run=Gh([_run(conclusion="failure")]),
+                                           sleep=lambda _: None)
+    assert not allowed
+    assert "failures --sha" in why and SHA[:10] in why
+
+
+def test_a_release_refuses_a_commit_github_never_ran_and_says_how_to_start_one():
+    allowed, why = full_run.release_gate(SHA, run=Gh([]), sleep=lambda _: None)
+    assert not allowed and "Push this commit to main" in why
+
+
+def test_a_release_waits_for_a_run_still_going_then_takes_its_verdict():
+    gh = Gh([_run(status="in_progress", conclusion="")], [_run(status="queued", conclusion="")],
+            [_run()])
+    waits = []
+    allowed, _ = full_run.release_gate(SHA, run=gh, sleep=waits.append, say=lambda _: None)
+    assert allowed and len(waits) == 2
+
+
+def test_a_run_that_never_finishes_is_a_refusal_not_a_hang():
+    clock = iter(range(0, 10_000, 600))
+    allowed, why = full_run.release_gate(
+        SHA, run=Gh([_run(status="in_progress", conclusion="")]), timeout_minutes=30,
+        sleep=lambda _: None, clock=lambda: next(clock), say=lambda _: None)
+    assert not allowed and "still in_progress" in why
+
+
+def test_no_wait_asked_means_no_wait():
+    allowed, why = full_run.release_gate(
+        SHA, wait=False, run=Gh([_run(status="in_progress", conclusion="")]),
+        sleep=lambda _: pytest.fail("slept"))
+    assert not allowed and "still" in why
+
+
+def test_the_status_line_is_short_and_names_only_the_jobs_that_are_not_green():
+    jobs = [{"name": f"browser {n}/3", "status": "completed",
+             "conclusion": "failure" if n == 2 else "success",
+             "startedAt": "2026-09-21T10:00:00Z", "completedAt": "2026-09-21T10:12:05Z"}
+            for n in (1, 2, 3)]
+    text = full_run.describe(_run(conclusion="failure"), jobs)
+    lines = text.splitlines()
+    assert len(lines) == 3, text
+    assert "1 of 3 jobs not green" in lines[0] and "browser 2/3: failure (12m05s)" in lines[2]
+    assert "no full run" in full_run.describe(None, [], "abc")
+
+
+JUNIT = """<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" tests="3">
+ <testcase classname="tests.test_ui_x" name="test_ok" time="4.5"/>
+ <testcase classname="tests.test_ui_x" name="test_bad[900x1000]" time="2.0">
+  <failure message="AssertionError: the card clipped&#10;second line">long trace</failure></testcase>
+ <testcase classname="tests.test_responsive" name="test_no_layout_defects_at_each_viewport[850x1000]@browser_sweep_2" time="30.0"/>
+</testsuite></testsuites>
+"""
+
+
+def test_failures_name_the_test_and_its_first_error_line_and_the_flaky_ones(tmp_path):
+    (tmp_path / "browser-1").mkdir()
+    (tmp_path / "browser-1" / "junit-1.xml").write_text(JUNIT.replace(
+        "</testsuite>", '<testcase classname="tests.test_ui_y" name="test_z" time="60.0">'
+        '<error message="TimeoutError: Locator.wait_for: Timeout 60000ms exceeded."/></testcase>'
+        "</testsuite>"), encoding="utf-8")
+    # test_z failed in the suite and passed alone: FLAKY, and not a failure.
+    # The whole download holds the list twice (reports + the flaky artifact).
+    for folder in ("browser-1", "flaky-browser-1"):
+        (tmp_path / folder).mkdir(exist_ok=True)
+        (tmp_path / folder / "flaky.json").write_text(json.dumps([
+            {"nodeid": "tests/test_ui_y.py::test_z", "first_line": "fixture server failed to start"}]),
+            encoding="utf-8")
+    lines = full_run.failures_report(tmp_path)
+    assert lines == [
+        "  FAILURE tests/test_ui_x.py::test_bad[900x1000] -- AssertionError: the card clipped",
+        "  FLAKY tests/test_ui_y.py::test_z -- fixture server failed to start",
+        'rerun: uv run python tools/run_tests.py "tests/test_ui_x.py::test_bad[900x1000]"']
+
+
+def _junit(path: Path, cases: dict[str, str]) -> Path:
+    """name -> "passed" | "failure" | "error", all in tests/test_ui_x.py."""
+    rows = "".join(
+        f'<testcase classname="tests.test_ui_x" name="{name}@tests/test_ui_x.py" time="1.0">'
+        + ("" if outcome == "passed" else f'<{outcome} message="{name} broke&#10;trace"/>')
+        + "</testcase>" for name, outcome in cases.items())
+    path.write_text(f'<testsuites><testsuite name="pytest">{rows}</testsuite></testsuites>',
+                    encoding="utf-8")
+    return path
+
+
+def test_the_retry_runs_exactly_the_failed_tests_alone_and_names_the_flaky_ones(tmp_path):
+    junit = _junit(tmp_path / "junit-browser-3.xml",
+                   {"test_ok": "passed", "test_wait": "error", "test_value": "failure"})
+    asked, said = [], []
+
+    def run_focused(nodeids, report):
+        asked.append((nodeids, report.name))
+        _junit(report, {"test_wait": "passed", "test_value": "failure"})
+        return 1
+    summary = tmp_path / "summary.md"
+    code = full_run.retry_failures(junit, run_focused=run_focused, say=said.append, summary=str(summary))
+    assert code == 1, "a test that fails twice keeps the job red"
+    assert asked == [(["tests/test_ui_x.py::test_wait", "tests/test_ui_x.py::test_value"],
+                      "retry-browser-3.xml")]
+    assert json.loads((tmp_path / "flaky.json").read_text()) == [
+        {"nodeid": "tests/test_ui_x.py::test_wait", "first_line": "test_wait broke"}]
+    assert "FLAKY tests/test_ui_x.py::test_wait" in summary.read_text()
+    assert "retry: FAILED TWICE tests/test_ui_x.py::test_value" in said
+    # The retry's own report never counts twice when the run is read back.
+    assert [case["nodeid"] for case in full_run.junit_cases(tmp_path)] == [
+        "tests/test_ui_x.py::test_ok", "tests/test_ui_x.py::test_wait", "tests/test_ui_x.py::test_value"]
+
+
+def test_a_job_whose_failures_all_pass_alone_is_green(tmp_path):
+    junit = _junit(tmp_path / "junit-browser-1.xml", {"test_wait": "error"})
+    code = full_run.retry_failures(
+        junit, run_focused=lambda nodeids, report: (_junit(report, {"test_wait": "passed"}), 0)[1],
+        say=lambda line: None, summary=str(tmp_path / "summary.md"))
+    assert code == 0
+
+
+def test_nothing_to_retry_or_too_much_to_retry_stays_red(tmp_path):
+    def must_not_run(nodeids, report):
+        raise AssertionError("no retry was due")
+    said = []
+    # The suite failed with every test green: an undocumented skip, a
+    # collection error or a timeout. Retrying nothing must not turn it green.
+    quiet = _junit(tmp_path / "junit-a-1.xml", {"test_ok": "passed"})
+    assert full_run.retry_failures(quiet, run_focused=must_not_run, say=said.append) == 1
+    broken = _junit(tmp_path / "junit-a-2.xml",
+                    {f"test_{n}": "failure" for n in range(full_run.RETRY_LIMIT + 1)})
+    assert full_run.retry_failures(broken, run_focused=must_not_run, say=said.append) == 1
+    assert "nothing to retry" in said[0] and "a break, not flakiness" in said[1]
+
+
+def test_status_names_the_flaky_tests_and_the_ones_that_keep_needing_the_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
+    flaky = {1: ["tests/a.py::test_wait", "tests/b.py::test_once"], 2: ["tests/a.py::test_wait"], 3: []}
+    downloads = []
+
+    def gh(*args):
+        if args[:2] == ("run", "list"):
+            return json.dumps([{"databaseId": run_id, "createdAt": "x"} for run_id in flaky])
+        run_id, folder = int(args[2]), Path(args[args.index("--dir") + 1])
+        downloads.append(run_id)
+        if not flaky[run_id]:
+            raise full_run.GhUnavailable("no artifact matches any of the names or patterns provided")
+        (folder / "flaky-browser-1").mkdir()
+        (folder / "flaky-browser-1" / "flaky.json").write_text(json.dumps(
+            [{"nodeid": nodeid, "first_line": "Timeout 60000ms exceeded"} for nodeid in flaky[run_id]]))
+        return ""
+    lines = full_run.flaky_report(_run(run_id=1), run=gh)
+    assert lines == [
+        "  FLAKY tests/a.py::test_wait -- Timeout 60000ms exceeded",
+        "  FLAKY tests/b.py::test_once -- Timeout 60000ms exceeded",
+        "  NEEDS A FIX tests/a.py::test_wait -- FLAKY in 2 of the last 3 runs on main"]
+    assert full_run.flaky_report(_run(run_id=1), run=gh) == lines
+    assert sorted(downloads) == [1, 2, 3], "a run's flaky list is fetched once, even when it has none"
+
+
+def test_a_run_folder_made_for_its_flaky_list_still_gets_the_reports(tmp_path, monkeypatch):
+    """`status` fetches only the flaky lists into the run's folder; `failures`
+    afterwards must still download the reports (run 35689212201 printed "no
+    failing test" for a job that had one)."""
+    monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
+    (tmp_path / "7" / "flaky").mkdir(parents=True)
+    calls = []
+    full_run.download(_run(run_id=7), run=lambda *args: calls.append(args) or "")
+    full_run.download(_run(run_id=7), run=lambda *args: calls.append(args) or "")
+    assert [call[:3] for call in calls] == [("run", "download", "7")]
+
+
+def test_junit_names_map_back_to_nodeids_and_units_for_rebalancing(tmp_path):
+    (tmp_path / "junit-1.xml").write_text(JUNIT, encoding="utf-8")
+    sweep = "tests/test_responsive.py::test_no_layout_defects_at_each_viewport[850x1000]"
+    assert full_run.nodeid_of("tests.test_responsive",
+                                "test_no_layout_defects_at_each_viewport[850x1000]") == sweep
+    # xdist names the case `<name>@<worker group>` in JUnit; the unit is a
+    # hash of the PLAIN nodeid, so the suffix must go before hashing.
+    assert full_run.nodeid_of("tests.test_responsive",
+                                "test_no_layout_defects_at_each_viewport[850x1000]@browser_sweep_2") == sweep
+    units = full_run.durations_from(tmp_path)
+    assert units == {"tests/test_ui_x.py": 6.5, "tests/test_responsive.py": 30.0}
+
+
+def test_a_file_longer_than_a_jobs_share_is_timed_as_its_tests(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_long.py").write_text("def test_a():\n    pass\n")
+    (tmp_path / "junit-1.xml").write_text(
+        '<testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_long" name="test_a[1]" time="100.0"/>'
+        '<testcase classname="tests.test_long" name="test_a[2]@tests/test_long.py__test_a_2_" time="50.0"/>'
+        '</testsuite></testsuites>', encoding="utf-8")
+    assert full_run.durations_from(tmp_path, root=tmp_path) == {
+        "tests/test_long.py::test_a[1]": 100.0, "tests/test_long.py::test_a[2]": 50.0}
+
+
+def test_a_refresh_keeps_units_this_run_did_not_time(tmp_path):
+    (tmp_path / "tests").mkdir()
+    for name in ("a", "b"):
+        (tmp_path / "tests" / f"{name}.py").write_text("")
+    path = tmp_path / "durations.json"
+    path.write_text(json.dumps({"source": "old", "units": {
+        "tests/a.py": 10.0, "tests/b.py::test_1": 20.0, "tests/b.py::test_2": 20.0,
+        "tests/deleted.py": 99.0}}))
+    full_run.write_durations({"tests/b.py": 25.04}, _run(), path, root=tmp_path)
+    written = json.loads(path.read_text())
+    # b's split entries are replaced by its new whole one; a deleted file's go.
+    assert written["units"] == {"tests/a.py": 10.0, "tests/b.py": 25.0}
+    assert b"\r\n" not in path.read_bytes(), "a tracked file stays LF on Windows"
+    assert "7" in written["source"]
+
+
+def test_the_baseline_candidates_are_green_runs_on_main_newest_first():
+    listing = [{"headSha": "old", "databaseId": 1, "createdAt": "2026-09-20T10:00:00Z"},
+               {"headSha": "new", "databaseId": 2, "createdAt": "2026-09-21T10:00:00Z"}]
+    calls = []
+
+    def gh(*args):
+        calls.append(args)
+        return json.dumps(listing)
+
+    assert full_run.green_runs_on_main(run=gh) == [("new", 2), ("old", 1)]
+    query = calls[0]
+    assert query[query.index("--branch") + 1] == "main"
+    assert query[query.index("--status") + 1] == "success"
+
+
+def test_a_jobs_coverage_parts_merge_into_one_map(tmp_path, monkeypatch):
+    """Each job publishes the map of the tests IT ran; the reader joins them
+    without re-numbering collisions."""
+    parts = tmp_path / "7" / "coverage" / "coverage-1"
+    parts.mkdir(parents=True)
+    (parts / "coverage-map-1.json").write_text(json.dumps(
+        {"tests": ["tests/test_a.py::t"], "files": {"src/x.py": [[[1, 2], [0]]]}}))
+    (parts / "coverage-map-2.json").write_text(json.dumps(
+        {"tests": ["tests/test_b.py::t"], "files": {"src/x.py": [[[1, 3], [0]]], "src/y.py": [[[5], [0]]]}}))
+    monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
+    merged = json.loads(full_run.coverage_map(7, run=lambda *a: pytest.fail("cached")).read_text())
+    tests = merged["tests"]
+    assert [(blocks, [tests[i] for i in ids]) for blocks, ids in merged["files"]["src/x.py"]] == [
+        ([1, 2], ["tests/test_a.py::t"]), ([1, 3], ["tests/test_b.py::t"])]
+    assert [tests[i] for i in merged["files"]["src/y.py"][0][1]] == ["tests/test_b.py::t"]
+
+
+def test_the_newest_recorded_map_is_the_nightly_one(tmp_path, monkeypatch):
+    """A push run records no map; the reader skips it for the newest run that
+    did, whatever its verdict."""
+    listing = [{"databaseId": 9, "event": "push", "createdAt": "2026-09-22T12:00:00Z"},
+               {"databaseId": 8, "event": "schedule", "createdAt": "2026-09-22T10:17:00Z"},
+               {"databaseId": 7, "event": "schedule", "createdAt": "2026-09-21T10:17:00Z"}]
+    parts = tmp_path / "8" / "coverage" / "coverage-1"
+    parts.mkdir(parents=True)
+    (parts / "coverage-map-1.json").write_text(json.dumps(
+        {"tests": ["tests/test_a.py::t"], "files": {"src/x.py": [[[1], [0]]]}}))
+    (tmp_path / "9" / "coverage").mkdir(parents=True)   # a push run: nothing published
+    monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
+    found, run_id = full_run.newest_coverage_map(run=lambda *a: json.dumps(listing))
+    assert run_id == 8 and found.is_file()

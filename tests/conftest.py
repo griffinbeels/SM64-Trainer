@@ -1,9 +1,9 @@
 """Session-wide test guards."""
 import asyncio
+import json
 import os
 import re
 import sys
-import zlib
 from pathlib import Path
 
 import pytest
@@ -24,6 +24,200 @@ from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
+from tools.test_lanes import (BROWSER_SWEEP_GROUPS, BROWSER_SWEEPS,  # noqa: F401 (tests read these here)
+                              LANE_ENV, browser_sweep_group, file_totals,
+                              is_test_module, lane_of, load_durations, parse_shard,
+                              plan_shards, refusal, shard_unit)
+
+
+def pytest_addoption(parser):
+    group = parser.getgroup("sm64 selection", "what this run covers (tools/run_tests.py)")
+    group.addoption("--select-from", default=None, metavar="FILE",
+                    help="JSON {'files': {test file: null | [nodeids]}} -- the merge check's "
+                         "blast radius (tools/blast_radius.py); nothing else is collected")
+    group.addoption("--shard", default=None, metavar="K/N",
+                    help="run only job K of N of the whole suite, balanced by "
+                         "tests/test_durations.json")
+    group.addoption("--lane", default=None, choices=("browser", "nonbrowser"),
+                    help="only the modules tools/test_lanes.py puts in this lane: the full "
+                         "run gives browser tests and the rest their own jobs and worker counts")
+
+
+SELECTION = pytest.StashKey[dict]()
+
+
+def _selection(config) -> dict | None:
+    if SELECTION not in config.stash:
+        path = config.getoption("select_from", None)
+        config.stash[SELECTION] = (json.loads(Path(path).read_text(encoding="utf-8"))["files"]
+                                   if path else None)
+    return config.stash[SELECTION]
+
+
+def pytest_ignore_collect(collection_path, config):
+    """A blast-radius run never imports a test module outside the radius. Paths
+    named on the command line are never ignored."""
+    selection = _selection(config)
+    if selection is not None and is_test_module(collection_path):
+        relative = collection_path.relative_to(config.rootpath).as_posix()
+        if relative not in selection:
+            return True
+    lane = config.getoption("lane", None)
+    if lane and is_test_module(collection_path) and lane_of(collection_path) != lane:
+        return True
+    return None
+
+
+def _arm_the_browser_tripwire() -> None:
+    """Only a module tools/test_lanes.py puts in the browser set may start a
+    browser or the UI fixture server. The classifier reads source, so a launch
+    it cannot see -- an importlib trick, a tool loaded by path -- would put
+    Chromium where the blast radius and the fallback set promise there is none.
+    The launch fails that test instead, naming the rule. The per-test lane rides
+    in an environment variable (set around each test below) so subprocesses
+    and the fixture server's own check in `tools/ui_fixture.py` see it too."""
+    try:
+        from playwright.sync_api import BrowserType
+    except ImportError:
+        return
+    for name in ("launch", "launch_persistent_context", "connect", "connect_over_cdp"):
+        original = getattr(BrowserType, name)
+
+        def guarded(self, *args, _original=original, **kwargs):
+            if os.environ.get(LANE_ENV) == "nonbrowser":
+                raise RuntimeError(refusal("launch a browser"))
+            return _original(self, *args, **kwargs)
+        setattr(BrowserType, name, guarded)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    previous = os.environ.get(LANE_ENV)
+    os.environ[LANE_ENV] = "browser" if lane_of(Path(str(item.path))) == "browser" else "nonbrowser"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(LANE_ENV, None)
+        else:
+            os.environ[LANE_ENV] = previous
+
+
+# Pages a test opened, so a failure can be photographed while the page is
+# still up. Only on the full run (SM64_REPORT_DIR names where its artifacts
+# go); a local run keeps nothing.
+_OPEN_PAGES: list = []
+
+
+def _photograph(page, name: str) -> str | None:
+    """One screenshot into the full run's artifacts; the error text when the
+    page could not give one (a crashed browser), never a second failure."""
+    folder = Path(os.environ["SM64_REPORT_DIR"]) / "screenshots"
+    try:
+        if not page.is_closed():
+            folder.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(folder / f"{name}.png"), timeout=5000)
+    except Exception as error:  # noqa: BLE001
+        return str(error)
+    return None
+
+
+def _stem(nodeid: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", nodeid)[-150:]
+
+
+def _keep_failure_screenshots() -> None:
+    try:
+        from playwright.sync_api import Browser, BrowserContext, Locator
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    except ImportError:
+        return
+    for owner in (Browser, BrowserContext):
+        def new_page(self, *args, _original=owner.new_page, **kwargs):
+            page = _original(self, *args, **kwargs)
+            _OPEN_PAGES[:] = [kept for kept in _OPEN_PAGES if not kept.is_closed()][-5:]
+            _OPEN_PAGES.append(page)
+            _keep_a_page_log(page)
+            return page
+        owner.new_page = new_page
+
+    # A wait inside a fixture fails with its page already closed by the time
+    # the report exists (the fixture's `with` unwinds first), so a timed-out
+    # wait records its own page before raising: a picture, and what the page
+    # said. Full runs 35684991413, 35686423614 and 35687167501 each had a
+    # page that stayed blank for 60 s -- no nav, no cards, only the
+    # background -- with its document complete and no request unanswered.
+    def wait_for(self, *args, _original=Locator.wait_for, **kwargs):
+        try:
+            return _original(self, *args, **kwargs)
+        except PlaywrightTimeout:
+            stem = _stem(os.environ.get("PYTEST_CURRENT_TEST", "unknown").rsplit(" ", 1)[0])
+            _photograph(self.page, f"{stem}-wait-timeout")
+            _write_page_log(self.page, f"{stem}-wait-timeout")
+            raise
+    Locator.wait_for = wait_for
+
+
+def _keep_a_page_log(page) -> None:
+    """What the page said while it was open: requests still unanswered (URL
+    -> count), and every failed request, error status, console error and
+    uncaught exception, in order."""
+    pending: dict[str, int] = {}
+    said: list[str] = []
+
+    def sent(request):
+        pending[request.url] = pending.get(request.url, 0) + 1
+
+    def settled(request):
+        if pending.get(request.url, 0) > 1:
+            pending[request.url] -= 1
+        else:
+            pending.pop(request.url, None)
+
+    def failed(request):
+        settled(request)
+        said.append(f"request failed: {request.url} ({request.failure})")
+
+    def answered(response):
+        if response.status >= 400:
+            said.append(f"HTTP {response.status}: {response.url}")
+
+    def console(message):
+        if message.type == "error":
+            said.append(f"console error: {message.text}")
+    page.on("request", sent)
+    page.on("requestfinished", settled)
+    page.on("requestfailed", failed)
+    page.on("response", answered)
+    page.on("console", console)
+    page.on("pageerror", lambda error: said.append(f"page error: {getattr(error, 'message', error)}"))
+    page._sm64_log = (pending, said)
+
+
+def _write_page_log(page, name: str) -> None:
+    folder = Path(os.environ["SM64_REPORT_DIR"]) / "screenshots"
+    folder.mkdir(parents=True, exist_ok=True)
+    pending, said = getattr(page, "_sm64_log", (None, None))
+    if pending is None:
+        lines = ["this page was not logged"]
+    else:
+        lines = ["unanswered requests:", *sorted(pending), "what the page said:", *said]
+    try:
+        lines.append(f"document.readyState: {page.evaluate('document.readyState')}")
+        lines.append(f"body: {page.evaluate('document.body.innerHTML.slice(0, 600)')}")
+    except Exception as error:  # noqa: BLE001 -- a wedged page is the evidence, not a failure
+        lines.append(f"document unreadable: {error}")
+    (folder / f"{name}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = (yield).get_result()
+    if not (report.failed and _OPEN_PAGES and os.environ.get("SM64_REPORT_DIR")):
+        return
+    for index, page in enumerate(_OPEN_PAGES):
+        if problem := _photograph(page, f"{_stem(item.nodeid)}-{report.when}-{index}"):
+            report.sections.append(("screenshot", f"page {index} not captured: {problem}"))
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -33,6 +227,9 @@ def pytest_configure(config):
     Configure precedes xdist worker creation. Workers and runner-owned pytest
     inherit the live ancestor's budget and must never acquire it a second time.
     """
+    _arm_the_browser_tripwire()
+    if os.environ.get("SM64_REPORT_DIR"):
+        _keep_failure_screenshots()
     # Browser waits get a bound that scales with the machine this run ACTUALLY
     # gets. uilab's 10s default suits one browser on an idle box; this suite
     # runs several servers, browsers and node drivers at once, and when OBS is
@@ -44,7 +241,10 @@ def pytest_configure(config):
     # fails, and a test that means "within 200 ms" still passes its own
     # timeout_ms. What it must not do is report a busy machine as a defect.
     from tools.test_resources import obs_is_open
-    os.environ.setdefault("UILAB_WAIT_MS", "60000" if obs_is_open() else "30000")
+    # A GitHub runner is the slow machine too: four CPUs shared by a page, its
+    # server and Chromium's processes (a 30 s wait timed out there, 2026-09-21).
+    from tools.test_resources import dedicated_machine
+    os.environ.setdefault("UILAB_WAIT_MS", "60000" if obs_is_open() or dedicated_machine() else "30000")
     from tools.test_resources import TestResources, WORKERS_ENV, effective_workers, inherited_owner
 
     if hasattr(config, "workerinput"):
@@ -56,7 +256,8 @@ def pytest_configure(config):
     if inherited_owner():
         workers = min(requested, int(os.environ[WORKERS_ENV]))
     else:
-        resources = TestResources(requested)
+        # A whole-lane run takes a slot; a narrowed one never queues.
+        resources = TestResources(requested, admit=_whole_suite(config))
         resources.__enter__()
         config.add_cleanup(lambda: resources.__exit__(None, None, None))
         workers = resources.workers
@@ -82,51 +283,27 @@ RAW_INDEX = pytest.StashKey[int]()
 # found the writer's throwaway report mid-run and went red on a `failed`
 # verdict for a gate the layout ships, then the file vanished and the failure
 # could not be reproduced alone (2026-09-05). One group, no overlap.
+def _own_group(nodeid: str) -> str:
+    """A worker group for one test. xdist appends `@<group>` to the nodeid,
+    and JUnit splits that on `::`, so a group holding `::` read back from a
+    full run's report as a different test; `@`, `[`, `]` break xdist itself."""
+    return re.sub(r"[^A-Za-z0-9_./-]", "_", nodeid)
+
+
 SHARED_GROUPS = {
     "tests/test_ui_sync_page.py": "version_sync_report",
     "tests/test_layout_matches_report.py": "version_sync_report",
 }
 
-# `spread` says "these cases may leave their file". For most of them that is
-# free -- test_api.py is spread because it is hundreds of fast in-process
-# cases. For a VIEWPORT SWEEP it is not: every case boots its own uvicorn
-# fixture AND its own Chromium, so one group per case let ~20 browsers start
-# at once and the workers starved each other. Measured 2026-09-20 on the same
-# tree: 8 workers went 21, 10 and 19 failed across three full runs -- always
-# the sweep, always a different overlapping subset of widths, always the Rank
-# board still reading "Loading the leaderboard…" -- while 4 workers passed
-# 11016 twice. Cold `/api/leaderboard` is 1431 ms and warm 115 ms, so nothing
-# there is slow; the machine was starved.
-#
-# So the CONCURRENCY is bounded where it is actually expensive, rather than by
-# throttling the whole suite to 4 workers (which taxes ~10,900 in-process
-# tests to protect ~20) or by an agent remembering `--workers 4` (a flag
-# nobody had typed in this project's history before the day it was needed).
-# Same group -> same worker -> sequential under `--dist loadgroup`, so these
-# files share ONE pool of BROWSER_SWEEP_GROUPS groups and never put more than
-# that many sweep browsers up at once. The rest of the suite keeps every
-# worker it was given.
-#
-# Keyed on a stable hash of the nodeid, NEVER on collection index: testmon
-# selects subsets and reruns reorder, and an index would then move a case
-# between groups from run to run, which is a flake source rather than a fix.
-BROWSER_SWEEP_GROUPS = 4
-BROWSER_SWEEPS = (
-    "tests/test_responsive.py",
-    "tests/test_responsive_bowser.py",
-    "tests/test_responsive_subsections.py",
-)
-
-
-def browser_sweep_group(nodeid: str) -> str:
-    """The bounded group a viewport case belongs to. Pure, so
-    `tests/test_worker_groups.py` can prove the bound and the determinism
-    without a session."""
-    return f"browser_sweep_{zlib.crc32(nodeid.encode()) % BROWSER_SWEEP_GROUPS}"
+# The viewport sweeps' bounded pool (BROWSER_SWEEPS, BROWSER_SWEEP_GROUPS,
+# browser_sweep_group) lives in tools/test_lanes.py with its measurement,
+# because the GitHub browser run splits its jobs along the same groups.
+# Imported above; tests/test_worker_groups.py reads it from here.
+SHARD_UNIT = pytest.StashKey[str]()
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(config, items):
     """Every test carries a WORKER GROUP for pytest-xdist's `loadgroup`
     scheduler: its own file by default, so a module's one-server-one-browser
     fixture is built once and its tests keep their order -- exactly what
@@ -161,18 +338,46 @@ def pytest_collection_modifyitems(items):
     grouping (`reorder_items`, the thing that keeps both viewports of a
     module-scoped page together), so what a plugin does to the order can
     never reach the workers. `tests/test_worker_groups.py` compares the
-    live session's order against that recipe."""
+    live session's order against that recipe.
+
+    `--shard K/N` keeps one GitHub job's share of the whole suite. The unit
+    is read BEFORE the yield: xdist's worker appends `@<group>` to the nodeid
+    in its own impl, and the unit is a function of the plain id."""
+    selection = _selection(config)
+    if selection is not None:
+        outside = [item for item in items
+                   if (chosen := selection.get(item.nodeid.split("::")[0])) is not None
+                   and item.nodeid not in chosen]
+        if outside:
+            config.hook.pytest_deselected(items=outside)
+            dropped = set(map(id, outside))
+            items[:] = [item for item in items if id(item) not in dropped]
+    sharded = bool(config.getoption("shard"))
+    durations = load_durations()
+    totals = file_totals(durations)
     for index, item in enumerate(items):
         item.stash[RAW_INDEX] = index
-        if item.nodeid.split("::")[0] in BROWSER_SWEEPS:
+        item.stash[SHARD_UNIT] = shard_unit(item.nodeid, totals)
+        if sharded and item.stash[SHARD_UNIT] == item.nodeid:
+            # A split file's test (a sweep case among them): either of the
+            # job's workers may take it; the job's two workers are the bound.
+            group = _own_group(item.nodeid)
+        elif item.nodeid.split("::")[0] in BROWSER_SWEEPS:
             group = browser_sweep_group(item.nodeid)
         elif item.get_closest_marker("spread"):
-            group = re.sub(r"[^A-Za-z0-9_./:-]", "_", item.nodeid)
+            group = _own_group(item.nodeid)
         else:
             group = SHARED_GROUPS.get(item.nodeid.split("::")[0],
                                       item.nodeid.split("::")[0])
         item.add_marker(pytest.mark.xdist_group(group))
     yield
+    if config.getoption("shard"):
+        index, count = parse_shard(config.getoption("shard"))
+        plan = plan_shards([item.stash[SHARD_UNIT] for item in items], count, durations)
+        elsewhere = [item for item in items if plan[item.stash[SHARD_UNIT]] != index]
+        if elsewhere:
+            config.hook.pytest_deselected(items=elsewhere)
+            items[:] = [item for item in items if plan[item.stash[SHARD_UNIT]] == index]
     items.sort(key=lambda item: item.stash.get(RAW_INDEX, len(items)))
     items[:] = reorder_items(items)
 
@@ -261,6 +466,17 @@ def service(tmp_path):
 
 
 @pytest.fixture(scope="session")
+def modern_gl():
+    """The native GL witnesses need an OpenGL 3.3+ driver: a GitHub runner has
+    none, only Windows' GDI OpenGL 1.1, and every witness would fail inside its
+    host on the loader assertion. Skips with the reason `tests/gl_probe.py`
+    measured, which tests/skip_inventory.py lists."""
+    from gl_probe import missing_modern_gl
+    if (why := missing_modern_gl()) is not None:
+        pytest.skip(why)
+
+
+@pytest.fixture(scope="session")
 def runtime_supervisor_exe(tmp_path_factory):
     """`runtime_supervisor_host.c` over the four real runtime objects.
 
@@ -340,11 +556,14 @@ def _whole_suite(config) -> bool:
     if os.environ.get("SM64_SKIP_AUDIT") == "1":
         return True
     return not getattr(config.option, "file_or_dir", None) \
-        and not getattr(config.option, "keyword", "")
+        and not getattr(config.option, "keyword", "") \
+        and not getattr(config.option, "select_from", None)
 
 
 def pytest_sessionfinish(session, exitstatus):
-    if hasattr(session.config, "workerinput") or not _whole_suite(session.config):
+    if hasattr(session.config, "workerinput"):
+        return
+    if not _whole_suite(session.config):
         return
     import skip_inventory
     undocumented = [(nodeid, reason) for nodeid, reason in _SKIPS
@@ -359,6 +578,11 @@ def pytest_sessionfinish(session, exitstatus):
     if not undocumented:
         return
     session.exitstatus = 1
+    if os.environ.get("SM64_REPORT_DIR"):
+        report = Path(os.environ["SM64_REPORT_DIR"]) / "undocumented-skips.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps([{"nodeid": n, "reason": r} for n, r in undocumented], indent=1),
+                          encoding="utf-8")
     shown = "\n".join(f"  {nodeid}\n    {reason}" for nodeid, reason in undocumented[:20])
     more = f"\n  ... and {len(undocumented) - 20} more" if len(undocumented) > 20 else ""
     print(f"\nUNDOCUMENTED SKIPS ({len(undocumented)}): a whole-suite run must "

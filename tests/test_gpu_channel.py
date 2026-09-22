@@ -36,7 +36,7 @@ def native(tmp_path_factory):
     )
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
-    vc = next((v for v in build.KNOWN_VCVARS if v.exists()), None)
+    vc = build.find_vcvars32()   # vswhere first: any edition, any year
     assert vc, "bounded native tests require the existing x86 MSVC toolchain"
 
     def run(*args, **kwargs):

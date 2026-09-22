@@ -1,8 +1,10 @@
 # Local verification
 
 `python tools/verify.py quick` invokes the shared harness verifier using this
-checkout's `.verification.toml`. `full` includes quick and the existing
-resource-aware integration test runner. `fix --files <owned paths>` permits
+checkout's `.verification.toml`. `full` includes quick and the merge check,
+this checkout's blast radius ([testing](testing.md)); the whole suite runs on
+GitHub, not here.
+`fix --files <owned paths>` permits
 only explicit file ownership. The installed harness is resolved through
 `~/.claude/harness`; `HARNESS_ROOT` can select a harness worktree for development.
 
@@ -20,8 +22,8 @@ Ruff uses uv's machine cache offline; ESLint and its transitive dependencies use
 the committed npm lockfile and checkout-local node_modules. The ESLint version
 was selected from the existing cache for the pilot. It is deprecated upstream;
 an upgrade requires a deliberate compatibility review rather than a floating
-version inside the draft loop. Browser binaries and the shared UI harness remain
-separate requirements documented in [testing](testing.md).
+version inside the draft loop. A blast radius that holds browser tests also
+needs uilab and Playwright's Chromium ([testing](testing.md)).
 
 ## Standalone lint contract
 
@@ -35,7 +37,6 @@ scope to all source so unchanged files cannot escape a changed rule set.
 Exit 0 means no new findings; 1 means actionable findings; 2 means required
 evidence is unavailable (including missing tools, timeout, malformed output or
 invalid scope). Each finding includes the file, line, rule and diagnostic.
-This standalone gate does not import the legacy fail-open commit hook.
 
 The initial baseline records pre-existing findings from the named source commit,
 with exact tool versions, diagnostics, and counted hashes of path, rule, message
@@ -65,10 +66,6 @@ used exclusively for registration side effects before requesting that fix; mark
 intentional imports explicitly. No ESLint automatic fixes are enabled in this
 pilot. Files outside the checkout and implicit whole-tree fixes are refused.
 
-The legacy `tools/lint_changed.py` and commit hook retain their staged-content
-semantics for compatibility. The standalone verifier is the required workflow
-boundary; their fail-open results cannot supply its successful evidence.
-
 The draft lane adds no test-writing requirement. It enforces the existing
 curated lint rules plus a narrow strict type pilot: Pyright 1.1.405 checks
 `core/timefmt.py`, and TypeScript 5.9.3 checks `ui/timecurve.js` through JSDoc.
@@ -78,23 +75,16 @@ or the rest of the application. The Python checker uses the project's .venv,
 avoiding accidental analysis against the machine's different Python version.
 Type tools install through the same npm lockfile; `python tools/verify_types.py`
 runs the pilot directly. Additional ecosystem adapters are separate adoption
-work. Full verification retains the existing integration
-suite. No live recorder or server is restarted by these commands.
-The full entry point refuses `UILAB_SKIP=1`, missing uilab, and missing
-Playwright Chromium before invoking that runner, which otherwise allows some
-rendered tests to skip. Other legitimate platform-specific skips remain visible
-in the test report; this pilot does not claim that every skip is a failure.
-The full wrapper removes inherited `PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, and
-`PYTEST_DISABLE_PLUGIN_AUTOLOAD` before both dependency probing and execution,
-so shell settings cannot silently select a partial suite or disable its plugins.
-CPU/resource configuration remains controlled by the existing runner.
-The full integration check has a 3600-second budget including shared admission:
-a measured preceding task held the allocation for about 17 minutes during this
-pilot. This avoids cancelling a newly admitted suite near its completion merely
-because it spent its budget queued. Quick-check timeouts remain unchanged, and
-the longer budget neither bypasses admission nor skips required tests.
-The integration command caps workers at four within the shared resource budget.
-During onboarding integration, eight workers produced seven leaderboard-loading
-timeouts; the same failing viewport passed unchanged in isolation. The full
-wrapper accepts only a worker ceiling and its identity probe, never pytest
-selection arguments. Every test and responsive viewport still runs.
+work. No live recorder or server is restarted by these commands.
+
+The `full` lane's `merge-check` runs `tools/verify_full.py`: the blast radius
+of this checkout against the newest green full run on main. It refuses a
+missing Vitest bridge (`npm ci --prefix tests/frontend --ignore-scripts`) or
+Node up front; `run_tests.py` refuses a radius holding browser tests when uilab
+is missing. It removes inherited `PYTEST_ADDOPTS`,
+`PYTEST_PLUGINS` and `PYTEST_DISABLE_PLUGIN_AUTOLOAD` so shell settings cannot
+select a partial suite, accepts only a worker ceiling and its identity probe,
+and leaves the worker count to the runner's budget (8, or 4 with OBS open).
+It stops the run 30 minutes after admission; the lane's 7200-second timeout is
+only an outer net, so time queued behind two other merge checks never cancels
+a run. An empty radius passes without running anything.

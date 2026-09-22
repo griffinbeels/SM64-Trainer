@@ -6,6 +6,7 @@ wall-clock-stamped + aresample=async-locked to the same master.
 import io
 import shutil
 import subprocess
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -126,6 +127,75 @@ def test_mux_initialization_failure_closes_its_child_and_leaves_no_feed(tmp_path
     assert events == ["waited"]
 
 
+class _ReadsAudioOnlyAfterVideo:
+    """A child that services the audio pipe only once its video stdin has
+    ended -- what ffmpeg does when its scheduler waits on the video input. On
+    a loaded runner the real one did, and stop() hung in the pipe's flush."""
+
+    def __init__(self, args, **_kwargs):
+        pipe = next(arg for arg in args if arg.startswith("\\\\.\\pipe\\"))
+        self.video_ended, self.exited = threading.Event(), threading.Event()
+        child = self
+
+        class Stdin:
+            closed = False
+
+            def write(self, data):
+                return len(data)
+
+            def flush(self):
+                pass
+
+            def close(self):
+                self.closed = True
+                child.video_ended.set()
+
+        self.stdin, self.stdout, self.stderr = Stdin(), io.BytesIO(), io.BytesIO()
+        opened = threading.Event()
+
+        def serve():
+            with open(pipe, "rb", buffering=0) as audio:   # connects the pipe
+                opened.set()
+                self.video_ended.wait()
+                try:
+                    while audio.read(65536):
+                        pass
+                except OSError:
+                    pass   # the sink disconnected its end: EOF
+            self.exited.set()
+        threading.Thread(target=serve, daemon=True).start()
+        opened.wait(5)
+
+    def poll(self):
+        return 0 if self.exited.is_set() else None
+
+    def wait(self, timeout=None):
+        if not self.exited.wait(timeout):
+            raise subprocess.TimeoutExpired("fake ffmpeg", timeout)
+        return 0
+
+    def kill(self):
+        self.video_ended.set()
+
+
+def test_stop_ends_the_video_before_flushing_audio_the_child_reads_last(tmp_path, monkeypatch):
+    from sm64_events.replay import ffmpeg_sink
+    monkeypatch.setattr(ffmpeg_sink.subprocess, "Popen", _ReadsAudioOnlyAfterVideo)
+    monkeypatch.setattr(ffmpeg_sink, "_assign_kill_on_close", lambda proc: None)
+    sink = FfmpegAvSink(ReplayConfig(scratch_dir=tmp_path, fps=30, picture_feed=False),
+                        lambda seg: None, ffmpeg="ffmpeg", codec="libx264")
+    sink.start()
+    frame = np.zeros((240, 320, 4), np.uint8)
+    for _ in range(15):
+        sink.submit(frame)
+        sink.submit_audio(np.zeros((1600, 2), np.int16).tobytes())
+        time.sleep(1 / 30)
+    stopper = threading.Thread(target=sink.stop, daemon=True)
+    stopper.start()
+    stopper.join(10)
+    assert not stopper.is_alive(), "stop() is waiting on an audio flush the child will never read"
+
+
 def test_respawn_backoff_scales_with_young_deaths_and_resets(tmp_path):
     """A child that dies young (encoder init failure, full disk) must not be
     respawned per write attempt — that ran 331 restarts in one sitting
@@ -186,7 +256,12 @@ def test_av_sink_produces_synced_av_segments(tmp_path):
     # test_replay_picture_feed.py (one frame per picture, ~30/s).
     cfg = ReplayConfig(scratch_dir=tmp_path, fps=60, picture_feed=False)
     segs = []
-    sink = FfmpegAvSink(cfg, segs.append, ffmpeg=_ffmpeg())
+    # The codec the recorder would pick on THIS machine, never the
+    # constructor's h264_nvenc default: without an NVIDIA encoder that child
+    # dies at birth and the sink writes nothing (a GitHub runner, 2026-09-21).
+    from sm64_events.replay.encoder import pick_video_codec
+    ffmpeg = _ffmpeg()
+    sink = FfmpegAvSink(cfg, segs.append, ffmpeg=ffmpeg, codec=pick_video_codec(ffmpeg))
     sink.start()
     frame = np.zeros((240, 320, 4), dtype=np.uint8)
     rate = 48000

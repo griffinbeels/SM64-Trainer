@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from import_fixture import make_client
 from sm64_events.library import adoptions as ad
 from sm64_events.library.audit import row_key
 from sm64_events.library.build import SCHEMA_VERSION
@@ -400,3 +401,23 @@ def test_a_loaded_store_grades_standard_from_the_star_row(tmp_path):
     assert ladders["Standard"]["Mario"] == 11.36 and standards.is_fitted("star:6:4", "Standard")
     assert ladders["Leftside"] == {"Mario": 11.00, "Bronze": 14.95}
     assert standards.is_fitted("star:6:4", "Leftside")
+
+
+def test_an_app_start_prepares_the_calibration_once(tmp_path, monkeypatch):
+    """create_app loads the adoptions and the lifespan's service start syncs
+    them again; the second sync must find the calibration current. From
+    2026-09-10 it prepared a whole second calibration, doubling every app
+    start. The forced recalibration is the skip's soundness on the bundled
+    Library: a full preparation from the same inputs publishes nothing new."""
+    import sm64_events.library.calibration as calibration
+    prepared = []
+    real = calibration.prepare
+
+    def counting(*args, **kwargs):
+        prepared.append("prepare")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(calibration, "prepare", counting)
+    with make_client(tmp_path) as (client, _db, _service):
+        assert len(prepared) == 1
+        assert not client.app.state.library.recalibrate()["applied"]

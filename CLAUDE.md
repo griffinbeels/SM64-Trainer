@@ -24,18 +24,18 @@ not in this map.
 | Need | Command / reference |
 | --- | --- |
 | Dependencies | `uv sync` |
-| Automatic draft checks / local wrap verification | `python tools/verify.py quick` / `python tools/verify.py full`; [setup and scope](docs/local-verification.md). Full includes the existing integration runner. |
-| Focused check while editing | `uv run python tools/run_tests.py tests/test_<module>.py` |
-| Python coverage selection | `uv run python tools/run_tests.py --changed` |
-| Full integration gate | `uv run python tools/run_tests.py` |
-| Test scope, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
+| Draft checks / wrap verification | `python tools/verify.py quick` (lint, types) / `python tools/verify.py full` (adds the merge check). Wrap runs `full` once, reusing a content-keyed receipt from any checkout; [setup and scope](docs/local-verification.md) |
+| Focused check: exactly these tests, browser ones too; never queues | `uv run python tools/run_tests.py tests/test_<module>.py "tests/test_x.py::test_y"` |
+| Merge check: the blast radius of this change since the last green full run | `uv run python tools/run_tests.py`; `--why` lists what it picks and why. No local full-suite runs |
+| Full run: the whole suite on GitHub for every push to main; gates releases | `uv run python tools/full_run.py status` (`wait`; `failures` prints failing tests, first error lines and the rerun command); a branch: `gh workflow run full.yml --ref <branch>` |
+| Test selection, shared machine budget, evidence reuse | [docs/testing.md](docs/testing.md) |
 | Run the app when authorized | `uv run python -m sm64_events.main` from repo root; data is cwd-relative |
 | Read back live play and the rendered UI | `uv run python tools/what_happened.py`; `--list` names all journals |
 | New memory address live gate | `uv run python tools/verify_addresses.py` with PJ64 + ROM |
 | Per-ROM verification | `uv run python tools/sync_version.py --version us`; [runbook](docs/version-sync.md) |
 | Import correctness | `uv run python tools/scorecard_parity.py`; successive runners must produce `+0.00` on every corresponding Scorecard tile |
 | Inspect one UI surface at supported widths | `uv run python tools/contact_sheet.py <selector>`; read UI rules for state-specific fixtures |
-| Legacy staged maintainability feedback | `uv run python tools/lint_changed.py`; [gate rationale](docs/agent-maintainability.md). Required verification uses the standalone commands above. |
+| Why each lint rule exists | [docs/agent-maintainability.md](docs/agent-maintainability.md); `python tools/verify_lint.py` enforces them |
 | API consumer | [docs/api.md](docs/api.md): `GET /state`, `GET /health`, `/ws/events` |
 | Cross-cutting domain evidence | [docs/architecture.md](docs/architecture.md) |
 | Older probe commands, incidents and rejected approaches | [archived guide](docs/history/agent-guide-2026-09-05.md), historical evidence only |
@@ -105,12 +105,13 @@ Coordinate these shared contracts before parallel edits: `core/events.py`,
 together when changing their shared Attempt contract. Land prerequisite contract
 changes before dependent work. Integrate with `--no-ff`.
 
-Choose the smallest meaningful check while editing. The full runner is the
-integration gate and owns the shared resource budget and child cleanup.
-After appropriate checks pass, repeat or broaden only for changed inputs,
-failures, or unresolved concerns; the full suite already includes responsive
-checks. Preserve actual native exit codes; in PowerShell never pipe test output
-into `Select-Object` or use `2>&1` on native commands.
+Choose the smallest meaningful check while editing: rerun a failure by name,
+never the whole suite. The merge check (the blast radius) is the integration
+gate and owns the shared resource budget and child cleanup; the full run on
+GitHub runs everything after the push. Repeat or broaden only for changed
+inputs, failures, or unresolved concerns. Preserve actual native exit codes; in
+PowerShell never pipe test output into `Select-Object` or use `2>&1` on native
+commands.
 
 For UI changes, render and inspect the named surface with representative data
 at its supported widths (850px minimum, any height). Confirm the fixture reaches
@@ -122,8 +123,10 @@ failure, then reverting it. Tests alone do not establish visual correctness.
 
 ## Definition of done for integration
 
-- Full `tools/run_tests.py` gate passes for the integrated tree. An identical
-  tree reuses that evidence; record revision, command, result and skips.
+- The merge check (`tools/run_tests.py`, the blast radius) passes for the
+  integrated tree. An identical tree reuses that evidence; record revision,
+  command, result and skips. The full run on GitHub covers the whole suite
+  after the push and must be green before a release.
 - Relevant behavior tests and, for visible changes, rendered evidence cover
   the change. New memory reads have human live verification.
 - Update the glossary for changed domain nouns, chain rules for moved value

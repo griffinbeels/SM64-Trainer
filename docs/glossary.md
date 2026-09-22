@@ -2038,3 +2038,42 @@ cannot hold.
 - **Lives** — the chain files (`.claude/rules/chain-star-grab-time.md`) → the
   test running the machine-wide chain checker over them
   (`tests/test_chains.py`)
+
+### Blast radius
+
+The tests one change can affect, chosen from the diff since the newest main
+commit whose [[full run]] passed: the tests that executed a Python code block
+the change altered, the tests naming a changed UI module, its importers, a
+class it renders or its page's tab, and for a stylesheet only the rules that
+changed. It prints the reason for every group it picks.
+
+- **Lives** — the radius rules (`tools/blast_radius.py`) → the test door, which
+  lists them on request (`tools/run_tests.py`)
+- **Not** — the whole suite, which only the [[full run]] executes.
+
+### Merge check
+
+The local check before a merge: the [[blast radius]] of the change, and
+nothing else. The test door takes one of two slots for it, so a third merge
+check waits while a focused check, which executes exactly the tests it names,
+never does.
+
+- **Lives** — the test door (`tools/run_tests.py`) → the wrapper the harness
+  calls before a merge (`tools/verify_full.py`)
+- **Not** — the [[full run]], which covers everything the merge check leaves
+  out.
+
+### Full run
+
+The whole test suite, browser tests included, executed by GitHub Actions on
+every push to main and split into parallel jobs. It blocks only a release: the
+release script refuses any commit it has not passed. Its newest green result on
+main is where the next [[blast radius]] starts, and its nightly scheduled
+execution records the coverage map the radius reads. A test that fails there
+gets one more try, alone, after the suite; passing it makes the test FLAKY,
+reported rather than red.
+
+- **Lives** — the workflow (`.github/workflows/full.yml`) → the reader
+  (`tools/full_run.py`) → the release script (`tools/release.py`)
+- **Not** — the [[merge check]], which executes locally and must pass before a
+  merge.
