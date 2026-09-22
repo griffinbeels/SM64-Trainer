@@ -345,6 +345,11 @@ function GhostTuning({ opacity, tint, view, boxes, nudge, write, queue, showView
   </div>`;
 }
 
+/** The strategy being practised; the picker names a run's strategy only when it differs. */
+function practisedStrat(session) {
+  return session?.target?.strat ?? null;
+}
+
 /**
  * The row itself. `entityKey` is the hosting card's own key -- the control
  * refuses to speak for a session that names a different entity (see
@@ -376,7 +381,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   // arrive by different gestures -- so the merge is its own rule.
   const tint = shownTint(controls.tint, held.tint);
   const view = shownView(controls.view, held.view);
-  const recording = ghostRecordingOptions(controls.selection, view, held);
+  const recording = ghostRecordingOptions(controls.selection, view, held, practisedStrat(session));
   const nativeViews = ghostViewChoices(controls.nativeViews, recording);
   const labelId = idFor(entityKey, "label");
   const reasonId = controls.reasonText ? idFor(entityKey, "why") : null;

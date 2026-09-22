@@ -1,8 +1,8 @@
 // src/sm64_events/ui/ghostsession.js
 //
 // The rules behind the practice card's Ghost Overlay control. No DOM, no
-// fetch, no preact -- import-free, so node drives every rule below directly
-// (tests/test_ui_ghost_session.py) instead of a browser having to prove them.
+// fetch, no preact -- only the shared time format -- so node drives every rule
+// below directly (tests/test_ui_ghost_session.py) instead of a browser.
 //
 // The server side is ONE session for the whole app (interface I5): it knows
 // whether the overlay is on, how solid it is drawn, how many game frames the
@@ -25,6 +25,8 @@
 
 // The game's own clock, for turning a nudge in frames into a readable
 // duration. 30 fps is this project's primary clock everywhere.
+import { fmtIgtShort } from "./format.js";
+
 export const GAME_FPS = 30;
 
 // A ghost you cannot see through is not a ghost, and one at zero is a
@@ -236,7 +238,7 @@ export function ghostControls(session, entityKey) {
  * be unticked but not ticked; a ticked one that was deleted stays listed so
  * it can be unticked rather than silently vanishing.
  */
-export function ghostRecordingOptions(selection, view, draft = {}) {
+export function ghostRecordingOptions(selection, view, draft = {}, strat = null) {
   if (!selection || !GHOST_VIEWS.includes(view)) return null;
   const choice = shownChoice(selection, draft);
   const field = view === "mario" ? "native" : "whole";
@@ -244,13 +246,13 @@ export function ghostRecordingOptions(selection, view, draft = {}) {
   const hues = new Map((selection.playing || []).map((row) => [row.key, row.hue_degrees]));
   const items = [pbItem(selection.pb, choice.pb, field, hues)];
   for (const candidate of candidates) {
-    items.push(candidateItem(candidate, choice.templates.includes(candidate.template_id), field, view, hues));
+    items.push(candidateItem(candidate, choice.attempts.includes(candidate.attempt_id), field, view, hues, strat));
   }
-  const missing = choice.templates.filter(
-    (id) => !candidates.some((candidate) => candidate.template_id === id));
+  const missing = choice.attempts.filter(
+    (id) => !candidates.some((candidate) => candidate.attempt_id === id));
   for (const id of missing) {
     items.push({ key: id, checked: true, disabled: false, hue: null,
-      label: `Saved ghost #${id}`, reason: "no longer saved" });
+      label: "Removed ghost", reason: "no longer saved" });
   }
   const rows = selection.pb ? [selection.pb, ...candidates] : candidates;
   return {
@@ -265,14 +267,14 @@ export function ghostRecordingOptions(selection, view, draft = {}) {
 
 function shownChoice(selection, draft) {
   const choice = Object.hasOwn(draft, "ghosts") ? draft.ghosts : selection.ghosts;
-  return { pb: choice?.pb !== false, templates: [...(choice?.templates || [])] };
+  return { pb: choice?.pb !== false, attempts: [...(choice?.attempts || [])] };
 }
 
 function toggled(choice, key) {
   if (key === "pb") return { ...choice, pb: !choice.pb };
-  const templates = choice.templates.includes(key)
-    ? choice.templates.filter((id) => id !== key) : [...choice.templates, key];
-  return { ...choice, templates };
+  const attempts = choice.attempts.includes(key)
+    ? choice.attempts.filter((id) => id !== key) : [...choice.attempts, key];
+  return { ...choice, attempts };
 }
 
 function pbItem(pb, checked, field, hues) {
@@ -280,18 +282,25 @@ function pbItem(pb, checked, field, hues) {
     label: "Your PB", reason: "none saved yet; your next PB appears here" };
   const available = Boolean(pb[`${field}_available`]);
   return { key: "pb", checked, disabled: false, hue: checked ? hues.get("pb") ?? null : null,
-    label: `Your PB · Attempt #${pb.attempt_id}`,
+    label: `Your PB · ${runName(pb)}`,
     reason: available ? null : pb[`${field}_reason_text`] };
 }
 
-function candidateItem(candidate, checked, field, view, hues) {
+/** A run is named by the time it achieved -- `17"80` -- which is what he
+ * remembers it by (his ask, 2026-09-22: "Attempt #1906 means nothing"). */
+function runName(run) {
+  return run.frames == null ? `Attempt #${run.attempt_id}` : fmtIgtShort(run.frames);
+}
+
+function candidateItem(candidate, checked, field, view, hues, strat) {
   const available = Boolean(candidate[`${field}_available`]);
-  const identity = candidate.attempt_id == null
-    ? `Saved #${candidate.template_id}` : `Attempt #${candidate.attempt_id}`;
+  // The strategy only when it is not the one being practised: every row on
+  // this card already is, and repeating it is noise.
+  const other = candidate.strat && candidate.strat !== strat ? candidate.strat : null;
   return {
-    key: candidate.template_id, checked, disabled: !available && !checked,
-    hue: checked ? hues.get(candidate.template_id) ?? null : null,
-    label: [identity, candidate.name, candidate.strat].filter(Boolean).join(" · "),
+    key: candidate.attempt_id, checked, disabled: !available && !checked,
+    hue: checked ? hues.get(candidate.attempt_id) ?? null : null,
+    label: [runName(candidate), other].filter(Boolean).join(" · "),
     reason: available ? null : candidate[`${field}_reason_text`]
       || (view === "mario" ? "No saved Mario poses" : "No saved video"),
   };
@@ -299,8 +308,8 @@ function candidateItem(candidate, checked, field, view, hues) {
 
 function choiceReason(choice, missing, view) {
   if (missing.length) return "A ticked ghost is no longer saved. Untick it or choose another.";
-  if (!choice.pb && !choice.templates.length) return "Tick a ghost to race it here.";
-  if (view === "whole" && choice.pb + choice.templates.length > 1) {
+  if (!choice.pb && !choice.attempts.length) return "Tick a ghost to race it here.";
+  if (view === "whole" && choice.pb + choice.attempts.length > 1) {
     return "Whole picture shows the first ticked ghost; Only Mario shows them all.";
   }
   return null;

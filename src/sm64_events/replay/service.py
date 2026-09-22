@@ -404,6 +404,10 @@ class ReplayService:
         self._maintain_history()
         return self.settings()
 
+    def attempt(self, attempt_id: int):
+        """The projected attempt row; LookupError when there is none."""
+        return self._attempt(attempt_id)
+
     def _attempt(self, attempt_id: int):
         db = self.tracker.db
         if db is None:

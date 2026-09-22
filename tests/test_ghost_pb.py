@@ -47,7 +47,7 @@ def test_latest_visible_save_is_the_pb_ghost_across_clocks(tmp_path):
     assert current_pb_ghost(db, "star", "24-1", None).attempt_id == 6
     db.delete_pb(newer)
     pb = current_pb_ghost(db, "star", "24-1", None)
-    assert (pb.attempt_id, pb.timer_mode, pb.id, pb.origin) == (5, "igt", -5, "attempt:5")
+    assert (pb.attempt_id, pb.frames, pb.id, pb.origin, pb.pb) == (5, 300, -5, "attempt:5", True)
     # Another strategy's PB is not this strategy's ghost.
     save_pb(db, SimpleNamespace(id=7, course_id=24, star_id=1), strat="TJ Owlless")
     assert current_pb_ghost(db, "star", "24-1", "TJ Owlless").attempt_id == 7
@@ -115,7 +115,7 @@ def test_pb_plays_beside_ticked_recordings_and_unticking_it_ignores_future_pbs(t
     other = replace(row, id=row.id + 1)
     replay.tracker.db._attempts.append(other)
     replay.preserve_native(other.id)
-    picked = mark(store, entity_key=f"{row.course_id}-{row.star_id}", strat=row.strat_tag,
+    mark(store, entity_key=f"{row.course_id}-{row.star_id}", strat=row.strat_tag,
                   attempt_id=other.id)
 
     def playing():
@@ -124,24 +124,24 @@ def test_pb_plays_beside_ticked_recordings_and_unticking_it_ignores_future_pbs(t
 
     async def check():
         target = (await session.update({"enabled": True, "view": "mario"}))["target"]
-        await session.update({"ghosts": {"pb": True, "templates": [picked.id]}, "target": target})
+        await session.update({"ghosts": {"pb": True, "attempts": [other.id]}, "target": target})
         assert playing() == [f"{other.id}.ghost"]
         save_pb(db, row)
         await session.pb_changed(row, True)
         assert playing() == [f"{row.id}.ghost", f"{other.id}.ghost"]  # PB first, pick kept
         hues = [clip["hue_degrees"] for clip in capture.commands[-1]["clips"]]
         assert len(set(hues)) == 2
-        body = await session.update({"ghosts": {"pb": False, "templates": [picked.id]}, "target": target})
-        assert body["selection"]["ghosts"] == {"pb": False, "templates": [picked.id]}
+        body = await session.update({"ghosts": {"pb": False, "attempts": [other.id]}, "target": target})
+        assert body["selection"]["ghosts"] == {"pb": False, "attempts": [other.id]}
         assert playing() == [f"{other.id}.ghost"]
         newer = replace(row, id=row.id + 2)
         replay.tracker.db._attempts.append(newer)
         save_pb(db, newer)
         await session.pb_changed(newer, True)
         assert playing() == [f"{other.id}.ghost"]  # unticked: a new PB does not appear
-        await session.update({"ghosts": {"pb": False, "templates": []}, "target": target})
+        await session.update({"ghosts": {"pb": False, "attempts": []}, "target": target})
         assert not capture.commands[-1]["enabled"]
-        body = await session.update({"ghosts": {"pb": True, "templates": []}, "target": target})
+        body = await session.update({"ghosts": {"pb": True, "attempts": []}, "target": target})
         assert body["selection"]["pb"]["attempt_id"] == newer.id
         await session.stop()
 
@@ -176,14 +176,14 @@ def test_the_sessions_real_command_encodes_on_the_real_channel(tmp_path, kernel)
     other = replace(row, id=row.id + 1)
     replay.tracker.db._attempts.append(other)
     replay.preserve_native(other.id)
-    picked = mark(store, entity_key=f"{row.course_id}-{row.star_id}", strat=row.strat_tag,
+    mark(store, entity_key=f"{row.course_id}-{row.star_id}", strat=row.strat_tag,
                   attempt_id=other.id)
 
     async def check():
         target = (await session.update({"enabled": True, "view": "mario"}))["target"]
         save_pb(db, row)
         await session.pb_changed(row, True)
-        await session.update({"ghosts": {"pb": True, "templates": [picked.id]}, "target": target})
+        await session.update({"ghosts": {"pb": True, "attempts": [other.id]}, "target": target})
         session._native.note()
         await session.stop()
         return capture.commands[-2]  # the last enabled command, before stop()
@@ -203,3 +203,72 @@ def test_the_sessions_real_command_encodes_on_the_real_channel(tmp_path, kernel)
         assert encoded.clips[0].hue_degrees != encoded.clips[1].hue_degrees
     finally:
         connection.close()
+
+
+def test_saving_any_run_as_a_ghost_ticks_it_without_touching_templates(tmp_path):
+    from dataclasses import replace
+
+    session, replay, row, archive, db, store, capture = pb_world(tmp_path)
+    other = replace(row, id=row.id + 1)
+    replay.tracker.db._attempts.append(other)
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        answer = await session.save_ghost(other.id)  # poses kept here, not earlier
+        assert answer["saved"] and answer["poses_reason"] is None
+        body = answer["session"]
+        assert body["selection"]["ghosts"] == {"pb": True, "attempts": [other.id]}
+        assert [row["attempt_id"] for row in body["selection"]["candidates"]] == [other.id]
+        assert body["selection"]["candidates"][0]["frames"] == other.igt_frames
+        assert session.is_saved_ghost(other.id) and store.list_for("star", "2-2") == []
+        session._native.note()
+        assert [clip["clip_path"].endswith(f"attempt_{other.id}.ghost") for clip in capture.commands[-1]["clips"]] == [True]
+        body = (await session.remove_ghost(other.id))["session"]
+        assert body["selection"]["ghosts"]["attempts"] == [] and body["selection"]["candidates"] == []
+        assert not session.is_saved_ghost(other.id)
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+
+
+def test_a_ticked_template_from_the_first_build_becomes_its_run(tmp_path):
+    session, _replay, row, archive, db, store, _capture = pb_world(tmp_path)
+    template = mark(store, entity_key=f"{row.course_id}-{row.star_id}", strat=row.strat_tag, attempt_id=row.id)
+    target = {"kind": "star", "entity_key": f"{row.course_id}-{row.star_id}", "strat": row.strat_tag}
+    from sm64_events.ghost.selection import SELECTION_KEY, target_key
+    db.set_state(SELECTION_KEY, {target_key(target): {"pb": False, "templates": [template.id]}})
+    try:
+        body = asyncio.run(session.refresh())
+        assert body["selection"]["ghosts"] == {"pb": False, "attempts": [row.id]}
+        assert body["source"]["attempt_id"] == row.id
+        asyncio.run(session.stop())
+    finally:
+        archive.close()
+
+
+def test_the_saved_ghost_doors(tmp_path):
+    from dataclasses import replace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from sm64_events.server.ghost_api import create_ghost_router
+
+    session, replay, row, archive, db, store, _capture = pb_world(tmp_path)
+    other = replace(row, id=row.id + 1)
+    replay.tracker.db._attempts.append(other)
+    app = FastAPI()
+    app.include_router(create_ghost_router(session._inputs, replay, session))
+    try:
+        with TestClient(app) as client:
+            assert client.get(f"/api/saved-ghosts/{other.id}").json()["saved"] is False
+            assert client.post(f"/api/saved-ghosts/{other.id}").json()["saved"] is True
+            assert client.get(f"/api/saved-ghosts/{other.id}").json()["saved"] is True
+            assert client.post("/api/saved-ghosts/999999").status_code == 404
+            assert client.delete(f"/api/saved-ghosts/{other.id}").json()["saved"] is False
+        asyncio.run(session.stop())
+    finally:
+        archive.close()

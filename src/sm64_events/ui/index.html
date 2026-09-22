@@ -5248,6 +5248,9 @@
     display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
     margin-top: .5rem;
   }
+  /* The ghost button's sentence goes to the end of the row, so saving never
+     splits the buttons around it. */
+  .attempt-drawer-tools .save-ghost-note { order: 10; flex-basis: 100%; }
   .attempt-drawer-tools .button-link {
     display: inline-flex; align-items: center; gap: .3rem;
     padding: .28rem .55rem; border: 1px solid #2d465e; border-radius: 7px;

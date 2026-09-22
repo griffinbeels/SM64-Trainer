@@ -107,12 +107,12 @@ def _select_ghosts(session: dict, body: dict, input_source: dict) -> None:
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     selection = dict(session["selection"])
-    rows = {candidate["template_id"]: candidate for candidate in selection["candidates"]}
-    if any(number not in rows for number in choice["templates"]):
-        raise HTTPException(422, "That saved ghost no longer exists. Choose another ghost.")
+    rows = {candidate["attempt_id"]: candidate for candidate in selection["candidates"]}
+    if any(number not in rows for number in choice["attempts"]):
+        raise HTTPException(422, "That ghost is not saved for this star or segment. Choose another ghost.")
     pb = selection.get("pb")
     chosen = ([("pb", {**pb, "template_id": -pb["attempt_id"]})] if choice["pb"] and pb else [])
-    chosen += [(number, rows[number]) for number in choice["templates"]]
+    chosen += [(number, {**rows[number], "template_id": -number}) for number in choice["attempts"]]
     selection["ghosts"] = choice
     native = [(key, row) for key, row in chosen if row["native_available"]]
     tint = session["tint"]
