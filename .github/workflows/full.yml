@@ -8,9 +8,7 @@ name: full run
 
 on:
   push:
-    # TEMPORARY: test-lanes proves the retry step before main has it (GitHub
-    # only dispatches workflows present on the default branch). Removed before merge.
-    branches: [main, test-lanes]
+    branches: [main]
   schedule:
     - cron: "17 10 * * *"   # nightly, main: the run that records the coverage map
   workflow_dispatch:
@@ -36,7 +34,7 @@ permissions:
 env:
   # THE job count: tools/test_lanes.py splits it between browser jobs (two
   # workers) and the rest (four) so both finish together. 20 is every runner
-  # the account has: 5.5 minutes, against 7.3 at 16 (docs/testing.md).
+  # the account has: 5.0 minutes, against 7.3 at 16 (docs/testing.md).
   JOBS: ${{ inputs.jobs || 20 }}
   # uilab is not in the lockfile (it is a shared dev module); the run uses
   # exactly this commit of it. Bump it when a test needs a newer uilab.

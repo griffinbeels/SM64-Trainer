@@ -70,8 +70,9 @@ worker set the whole run's wall.
 Measured 2026-09-22 (runs 35682161165, 35682940350, 35684469976,
 35687662916); setup was 30-60 s a job throughout. Three browser workers
 instead of two cut the median browser job by 11% and not the wall
-(35687167501). What remains is the largest whole files, whose tests share a
-page (about three minutes each), plus setup.
+(35687167501). The app's faster start (one rank calibration per start) took
+20 jobs to 5.0 minutes (35689782910). What remains is the largest whole
+files, whose tests share a page (about three minutes each), plus setup.
 
 Per job: `uv sync --frozen` from uv's cache, Node 24 and the pinned Node tools
 (cached), ffmpeg (the gyan.dev build the desktop app bundles, pinned by
