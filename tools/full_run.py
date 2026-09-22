@@ -4,6 +4,7 @@
     uv run python tools/full_run.py wait      [... ] [--timeout-minutes 60]
     uv run python tools/full_run.py failures  [...]   # failing tests, first error line, rerun command
     uv run python tools/full_run.py durations [...]   # rebalance the jobs from a run's JUnit times
+    uv run python tools/full_run.py retry <junit.xml>  # a job's one retry (the workflow runs it)
 
 The full run is the whole test suite, browser tests included, on GitHub
 Actions for every push to main and on demand (`gh workflow run full.yml --ref
@@ -12,15 +13,19 @@ and its newest green run on main is the baseline the local merge check diffs
 against (tools/blast_radius.py). With no target these read the newest run for
 this checkout's HEAD commit.
 
-`failures` downloads the run's artifacts (JUnit XML per job, the rerun list,
+`failures` downloads the run's artifacts (JUnit XML per job, the flaky list,
 failure screenshots) to a temp folder and prints each failing test with its
 first error line, then the command that reruns exactly those tests here.
+`status` and `wait` also name the run's FLAKY tests, and any test FLAKY in
+two or more of the branch's last ten runs as needing a fix.
 Exit codes: 0 passed, 1 failed, 2 no run or still running, 3 `gh` unavailable.
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -166,22 +171,27 @@ def nodeid_of(classname: str, name: str, root: Path = ROOT) -> str:
 
 
 def junit_cases(folder: Path) -> list[dict]:
+    """Every case of the suite steps' reports (`junit-*.xml`); a retry's own
+    report (`retry-*.xml`) is read by the retry, never counted twice."""
+    return [case for report in sorted(folder.rglob("junit-*.xml")) for case in junit_cases_in(report)]
+
+
+def junit_cases_in(report: Path) -> list[dict]:
+    try:
+        tree = ET.parse(report)
+    except (ET.ParseError, OSError):
+        return []
     cases = []
-    for report in sorted(folder.rglob("*.xml")):
-        try:
-            tree = ET.parse(report)
-        except ET.ParseError:
-            continue
-        for case in tree.iter("testcase"):
-            problem = case.find("failure")
-            if problem is None:
-                problem = case.find("error")
-            message = "" if problem is None else (problem.get("message") or problem.text or "")
-            cases.append({"nodeid": nodeid_of(case.get("classname", ""), case.get("name", "")),
-                          "time": float(case.get("time") or 0),
-                          "outcome": "passed" if problem is None else problem.tag,
-                          "skipped": case.find("skipped") is not None,
-                          "first_line": message.strip().splitlines()[0] if message.strip() else ""})
+    for case in tree.iter("testcase"):
+        problem = case.find("failure")
+        if problem is None:
+            problem = case.find("error")
+        message = "" if problem is None else (problem.get("message") or problem.text or "")
+        cases.append({"nodeid": nodeid_of(case.get("classname", ""), case.get("name", "")),
+                      "time": float(case.get("time") or 0),
+                      "outcome": "passed" if problem is None else problem.tag,
+                      "skipped": case.find("skipped") is not None,
+                      "first_line": message.strip().splitlines()[0] if message.strip() else ""})
     return cases
 
 
@@ -195,14 +205,13 @@ def download(found: dict, run=gh) -> Path:
 
 def failures_report(folder: Path) -> list[str]:
     lines, failed = [], []
+    flaky = flaky_rows(folder)
+    passed_on_retry = {row["nodeid"] for row in flaky}
     for case in junit_cases(folder):
-        if case["outcome"] in ("failure", "error"):
+        if case["outcome"] in ("failure", "error") and case["nodeid"] not in passed_on_retry:
             lines.append(f"  {case['outcome'].upper()} {case['nodeid']} -- {case['first_line']}")
             failed.append(case["nodeid"])
-    for reruns in sorted(folder.rglob("reruns.json")):
-        for row in json.loads(reruns.read_text(encoding="utf-8")):
-            if row["flaky"]:
-                lines.append(f"  FLAKY {row['nodeid']} -- {row['cause']}")
+    lines += [f"  FLAKY {row['nodeid']} -- {row['first_line']}" for row in flaky]
     for skips in sorted(folder.rglob("undocumented-skips.json")):
         for row in json.loads(skips.read_text(encoding="utf-8")):
             lines.append(f"  UNDOCUMENTED SKIP {row['nodeid']} -- {row['reason'][:120]}")
@@ -214,6 +223,99 @@ def failures_report(folder: Path) -> list[str]:
 def rerun_command(nodeids: list[str]) -> str:
     """Exactly these tests, here: a focused run, which never queues."""
     return "rerun: uv run python tools/run_tests.py " + " ".join(f'"{n}"' for n in dict.fromkeys(nodeids))
+
+
+# --- the full run's one retry ------------------------------------------------
+# A job's suite runs with no retries. If it fails, exactly the tests that
+# failed run again ALONE, one at a time, after the suite has finished: a test
+# that fails only under the job's load passes there and the job is green,
+# with that test reported FLAKY; a real break fails twice and stays red.
+# Planner decision 2026-09-22, after four runs in a row (35684991413 to
+# 35687167501) each went red on ONE different browser wait, about one in 700
+# per run, which the old list of retryable setup errors did not cover.
+RETRY_LIMIT = 20   # more failures than this in one job is a break, not flakiness
+FLAKY_FILE = "flaky.json"
+FLAKY_HISTORY = 10
+NEEDS_A_FIX = 2
+
+
+def _run_focused(nodeids: list[str], junit: Path) -> int:
+    """Exactly these tests through the runner's focused door: no queue, one
+    worker, no retry of its own."""
+    return subprocess.run([sys.executable, str(ROOT / "tools" / "run_tests.py"), *nodeids,
+                           "--junitxml", str(junit)], cwd=ROOT, check=False).returncode
+
+
+def retry_failures(junit: Path, *, run_focused=_run_focused, say=print,
+                   summary: str | None = None) -> int:
+    """A job's one retry, read from its suite's JUnit report. 0 when every
+    failed test passed alone (those go to flaky.json beside the report, the
+    job summary and a warning annotation); 1 otherwise."""
+    cases = [case for case in junit_cases_in(junit) if case["outcome"] in ("failure", "error")]
+    failed = list(dict.fromkeys(case["nodeid"] for case in cases))
+    if not failed:
+        say("retry: the suite failed with no failing test in its report (an undocumented skip, "
+            "a collection error or a timeout): nothing to retry; read the suite step's log")
+        return 1
+    if len(failed) > RETRY_LIMIT:
+        say(f"retry: {len(failed)} tests failed, more than {RETRY_LIMIT}: a break, not flakiness")
+        return 1
+    say(f"retry: {len(failed)} failed test(s) again, alone, after the suite")
+    retried = junit.with_name(junit.name.replace("junit-", "retry-", 1))
+    code = run_focused(failed, retried)
+    after = {case["nodeid"]: case for case in junit_cases_in(retried)}
+    first_line = {case["nodeid"]: case["first_line"] for case in cases}
+    flaky = [{"nodeid": nodeid, "first_line": first_line[nodeid]} for nodeid in failed
+             if after.get(nodeid, {}).get("outcome") == "passed" and not after[nodeid]["skipped"]]
+    if flaky:
+        (junit.parent / FLAKY_FILE).write_bytes(json.dumps(flaky, indent=1).encode("utf-8"))
+        lines = [f"FLAKY {row['nodeid']} -- failed in the suite, passed alone: {row['first_line']}"
+                 for row in flaky]
+        for line in lines:
+            say(f"::warning title=FLAKY::{line}")
+        summary = summary or os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as out:
+                out.write("".join(f"- {line}\n" for line in lines))
+    still = [nodeid for nodeid in failed if nodeid not in {row["nodeid"] for row in flaky}]
+    for nodeid in still:
+        say(f"retry: FAILED TWICE {nodeid}")
+    return 0 if code == 0 and not still else 1
+
+
+def flaky_rows(folder: Path) -> list[dict]:
+    return [row for path in sorted(folder.rglob(FLAKY_FILE))
+            for row in json.loads(path.read_text(encoding="utf-8"))]
+
+
+def flaky_of(run_id: int, run=gh) -> list[dict]:
+    """The run's FLAKY tests, from its small `flaky-*` artifacts (only a job
+    that needed the retry uploads one). Cached per run once it is known."""
+    folder = DOWNLOADS / str(run_id) / "flaky"
+    if not folder.exists():
+        folder.mkdir(parents=True)
+        try:
+            run("run", "download", str(run_id), "--dir", str(folder), "--pattern", "flaky-*")
+        except GhUnavailable as error:
+            if "no artifact matches" not in str(error):
+                folder.rmdir()   # not known yet: ask again next time
+                return []
+    return flaky_rows(folder)
+
+
+def flaky_report(found: dict, run=gh) -> list[str]:
+    """This run's FLAKY tests, then every test FLAKY in NEEDS_A_FIX or more of
+    the branch's last FLAKY_HISTORY completed runs: a retry that keeps being
+    needed is a defect, not weather."""
+    lines = [f"  FLAKY {row['nodeid']} -- {row['first_line']}" for row in flaky_of(found["databaseId"], run)]
+    runs = json.loads(run("run", "list", "--workflow", WORKFLOW, "--branch", found["headBranch"],
+                          "--status", "completed", "--json", "databaseId,createdAt",
+                          "--limit", str(FLAKY_HISTORY)) or "[]")
+    seen = collections.Counter(nodeid for item in runs for nodeid in
+                               {row["nodeid"] for row in flaky_of(item["databaseId"], run)})
+    lines += [f"  NEEDS A FIX {nodeid} -- FLAKY in {count} of the last {len(runs)} runs on "
+              f"{found['headBranch']}" for nodeid, count in sorted(seen.items()) if count >= NEEDS_A_FIX]
+    return lines
 
 
 # --- the coverage map the full run publishes -------------------------------------
@@ -315,8 +417,10 @@ def write_durations(measured: dict[str, float], found: dict, path: Path = DURATI
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", choices=("status", "wait", "failures", "durations", "export-coverage"))
-    parser.add_argument("paths", nargs="*", help="export-coverage: <.testmondata> <map.json> <label>")
+    parser.add_argument("command", choices=("status", "wait", "failures", "durations",
+                                            "export-coverage", "retry"))
+    parser.add_argument("paths", nargs="*", help="export-coverage: <.testmondata> <map.json> <label>; "
+                                                 "retry: <the suite's junit.xml>")
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--sha")
     target.add_argument("--ref")
@@ -327,6 +431,8 @@ def main(argv: list[str] | None = None) -> int:
         db, target, label = args.paths
         print(f"coverage map: {export_coverage(Path(db), Path(target), label)} tests -> {target}")
         return 0
+    if args.command == "retry":
+        return retry_failures(Path(args.paths[0]))
     sha = args.sha or (None if args.ref or args.run else head_sha())
     label = args.ref or args.run or sha[:10]
     try:
@@ -342,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
         state = verdict(found)
         jobs = jobs_of(found) if found else []
         print(describe(found, jobs, label))
+        if found and state in (PASSED, FAILED) and args.command in ("status", "wait"):
+            print("\n".join(flaky_report(found)) or "  no FLAKY test in this run or its branch's recent runs")
         if args.command == "failures" and state == FAILED:
             folder = download(found)
             print("\n".join(failures_report(folder)) or "  no failing test in the JUnit reports: "

@@ -79,7 +79,7 @@ Per job: `uv sync --frozen` from uv's cache, Node 24 and the pinned Node tools
 browser jobs only Chromium (cached) and uilab at `UILAB_REF` (bump it after
 pushing uilab). A test running past five minutes prints every thread's stack.
 A newer push to main cancels an older run on main; nightly runs and other
-branches never cancel. Each job uploads JUnit XML, the rerun list and failure
+branches never cancel. Each job uploads JUnit XML, its flaky list and failure
 screenshots; a wait that timed out also leaves a note beside its picture:
 the requests still unanswered, every failed request, error status, console
 error and uncaught exception, and the start of the page's body. The nightly run (or a dispatch with `record_coverage`) also
@@ -100,11 +100,17 @@ need their vendor's GPU, and the GPU witnesses are opt-in everywhere. The
 knowledge repo's chain checker, NVENC, a live journal) count only on a
 runner, so the same skip on this desktop still fails the audit.
 
-**One retry, for setup errors only**, and only in the full run: fixture boot or
-seeding timeouts, `WinError 10055` / `ERR_NO_BUFFER_SPACE`, a closed or crashed
-browser (`SETUP_ERRORS` in `tools/test_lanes.py`). An `AssertionError` never
-reruns. A retried test is printed and put in the job summary as `FLAKY`. Local
-runs have no retries.
+**One retry, in the full run only.** A job's suite runs with no retries. If
+it fails, a second step reruns exactly the tests that failed (read from its
+JUnit report), alone and one at a time, after the suite (`tools/full_run.py
+retry`). The job is green when they all pass there; a real break fails twice
+and stays red, and a job with more than 20 failures, or a red suite with no
+failing test, is not retried. A test that passed only alone is `FLAKY`: in the
+job summary, a warning annotation and a small `flaky-*` artifact, and
+`full_run.py status` lists it, then names any test `FLAKY` in two or more of
+the branch's last ten runs as needing a fix. Before this every run went red on
+one different browser wait, about one test in 700 (runs 35684991413 to
+35687167501). Local runs have no retries.
 
 ## Browser tests
 

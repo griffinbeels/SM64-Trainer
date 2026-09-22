@@ -108,15 +108,100 @@ JUNIT = """<?xml version="1.0" encoding="utf-8"?>
 
 def test_failures_name_the_test_and_its_first_error_line_and_the_flaky_ones(tmp_path):
     (tmp_path / "browser-1").mkdir()
-    (tmp_path / "browser-1" / "junit-1.xml").write_text(JUNIT, encoding="utf-8")
-    (tmp_path / "browser-1" / "reruns.json").write_text(json.dumps([
-        {"nodeid": "tests/test_ui_y.py::test_z", "cause": "fixture server failed to start",
-         "flaky": True}]), encoding="utf-8")
+    (tmp_path / "browser-1" / "junit-1.xml").write_text(JUNIT.replace(
+        "</testsuite>", '<testcase classname="tests.test_ui_y" name="test_z" time="60.0">'
+        '<error message="TimeoutError: Locator.wait_for: Timeout 60000ms exceeded."/></testcase>'
+        "</testsuite>"), encoding="utf-8")
+    # test_z failed in the suite and passed alone: FLAKY, and not a failure.
+    (tmp_path / "browser-1" / "flaky.json").write_text(json.dumps([
+        {"nodeid": "tests/test_ui_y.py::test_z", "first_line": "fixture server failed to start"}]),
+        encoding="utf-8")
     lines = full_run.failures_report(tmp_path)
     assert lines == [
         "  FAILURE tests/test_ui_x.py::test_bad[900x1000] -- AssertionError: the card clipped",
         "  FLAKY tests/test_ui_y.py::test_z -- fixture server failed to start",
         'rerun: uv run python tools/run_tests.py "tests/test_ui_x.py::test_bad[900x1000]"']
+
+
+def _junit(path: Path, cases: dict[str, str]) -> Path:
+    """name -> "passed" | "failure" | "error", all in tests/test_ui_x.py."""
+    rows = "".join(
+        f'<testcase classname="tests.test_ui_x" name="{name}@tests/test_ui_x.py" time="1.0">'
+        + ("" if outcome == "passed" else f'<{outcome} message="{name} broke&#10;trace"/>')
+        + "</testcase>" for name, outcome in cases.items())
+    path.write_text(f'<testsuites><testsuite name="pytest">{rows}</testsuite></testsuites>',
+                    encoding="utf-8")
+    return path
+
+
+def test_the_retry_runs_exactly_the_failed_tests_alone_and_names_the_flaky_ones(tmp_path):
+    junit = _junit(tmp_path / "junit-browser-3.xml",
+                   {"test_ok": "passed", "test_wait": "error", "test_value": "failure"})
+    asked, said = [], []
+
+    def run_focused(nodeids, report):
+        asked.append((nodeids, report.name))
+        _junit(report, {"test_wait": "passed", "test_value": "failure"})
+        return 1
+    summary = tmp_path / "summary.md"
+    code = full_run.retry_failures(junit, run_focused=run_focused, say=said.append, summary=str(summary))
+    assert code == 1, "a test that fails twice keeps the job red"
+    assert asked == [(["tests/test_ui_x.py::test_wait", "tests/test_ui_x.py::test_value"],
+                      "retry-browser-3.xml")]
+    assert json.loads((tmp_path / "flaky.json").read_text()) == [
+        {"nodeid": "tests/test_ui_x.py::test_wait", "first_line": "test_wait broke"}]
+    assert "FLAKY tests/test_ui_x.py::test_wait" in summary.read_text()
+    assert "retry: FAILED TWICE tests/test_ui_x.py::test_value" in said
+    # The retry's own report never counts twice when the run is read back.
+    assert [case["nodeid"] for case in full_run.junit_cases(tmp_path)] == [
+        "tests/test_ui_x.py::test_ok", "tests/test_ui_x.py::test_wait", "tests/test_ui_x.py::test_value"]
+
+
+def test_a_job_whose_failures_all_pass_alone_is_green(tmp_path):
+    junit = _junit(tmp_path / "junit-browser-1.xml", {"test_wait": "error"})
+    code = full_run.retry_failures(
+        junit, run_focused=lambda nodeids, report: (_junit(report, {"test_wait": "passed"}), 0)[1],
+        say=lambda line: None, summary=str(tmp_path / "summary.md"))
+    assert code == 0
+
+
+def test_nothing_to_retry_or_too_much_to_retry_stays_red(tmp_path):
+    def must_not_run(nodeids, report):
+        raise AssertionError("no retry was due")
+    said = []
+    # The suite failed with every test green: an undocumented skip, a
+    # collection error or a timeout. Retrying nothing must not turn it green.
+    quiet = _junit(tmp_path / "junit-a-1.xml", {"test_ok": "passed"})
+    assert full_run.retry_failures(quiet, run_focused=must_not_run, say=said.append) == 1
+    broken = _junit(tmp_path / "junit-a-2.xml",
+                    {f"test_{n}": "failure" for n in range(full_run.RETRY_LIMIT + 1)})
+    assert full_run.retry_failures(broken, run_focused=must_not_run, say=said.append) == 1
+    assert "nothing to retry" in said[0] and "a break, not flakiness" in said[1]
+
+
+def test_status_names_the_flaky_tests_and_the_ones_that_keep_needing_the_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_run, "DOWNLOADS", tmp_path)
+    flaky = {1: ["tests/a.py::test_wait", "tests/b.py::test_once"], 2: ["tests/a.py::test_wait"], 3: []}
+    downloads = []
+
+    def gh(*args):
+        if args[:2] == ("run", "list"):
+            return json.dumps([{"databaseId": run_id, "createdAt": "x"} for run_id in flaky])
+        run_id, folder = int(args[2]), Path(args[args.index("--dir") + 1])
+        downloads.append(run_id)
+        if not flaky[run_id]:
+            raise full_run.GhUnavailable("no artifact matches any of the names or patterns provided")
+        (folder / "flaky-browser-1").mkdir()
+        (folder / "flaky-browser-1" / "flaky.json").write_text(json.dumps(
+            [{"nodeid": nodeid, "first_line": "Timeout 60000ms exceeded"} for nodeid in flaky[run_id]]))
+        return ""
+    lines = full_run.flaky_report(_run(run_id=1), run=gh)
+    assert lines == [
+        "  FLAKY tests/a.py::test_wait -- Timeout 60000ms exceeded",
+        "  FLAKY tests/b.py::test_once -- Timeout 60000ms exceeded",
+        "  NEEDS A FIX tests/a.py::test_wait -- FLAKY in 2 of the last 3 runs on main"]
+    assert full_run.flaky_report(_run(run_id=1), run=gh) == lines
+    assert sorted(downloads) == [1, 2, 3], "a run's flaky list is fetched once, even when it has none"
 
 
 def test_junit_names_map_back_to_nodeids_and_units_for_rebalancing(tmp_path):

@@ -183,23 +183,6 @@ def test_a_malformed_shard_is_refused(text):
         lanes.parse_shard(text)
 
 
-def test_the_retry_covers_setup_errors_and_never_an_assertion():
-    """pytest-rerunfailures matches "<Type>: <message>" against these."""
-    import re
-    retried = ["RuntimeError: fixture server failed to start after 30.00s",
-               "OSError: [WinError 10055] An operation on a socket could not be performed",
-               "playwright._impl._errors.Error: net::ERR_NO_BUFFER_SPACE at http://127.0.0.1",
-               "Error: Target page, context or browser has been closed"]
-    kept = ["AssertionError: fixture server failed to start",
-            "TimeoutError: Timeout 30000ms exceeded waiting for .log-card"]
-    matches = lambda text: any(re.search(p, text) for p in lanes.SETUP_ERRORS)  # noqa: E731
-    excluded = lambda text: any(re.search(p, text) for p in lanes.NEVER_RERUN)  # noqa: E731
-    assert all(matches(text) and not excluded(text) for text in retried)
-    assert not any(matches(text) and not excluded(text) for text in kept)
-    args = lanes.rerun_args()
-    assert args[:2] == ["--reruns", "1"] and "--rerun-except" in args
-
-
 @pytest.mark.parametrize("jobs", [2, 8, 12, 20])
 def test_one_number_sets_the_full_runs_jobs_for_both_lanes(jobs):
     """The workflow's single variable: every job gets a lane, a shard of that

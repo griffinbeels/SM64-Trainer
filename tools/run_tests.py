@@ -33,12 +33,14 @@ os.environ["PYTHONPATH"] = os.pathsep.join(
                 if p and p != _SOURCE]])
 
 from find_uilab import find_uilab  # noqa: E402
-from test_lanes import lane_of, parse_shard, rerun_args  # noqa: E402
+from test_lanes import lane_of, parse_shard  # noqa: E402
 from test_resources import TestResources  # noqa: E402
 from test_job import TestJob  # noqa: E402
 
 TIMED_OUT = 124
 PYTEST = [sys.executable, "-m", "pytest"]
+# No run through this door retries. The full run's one retry is its own step
+# after the suite, the failed tests alone (tools/full_run.py retry).
 NO_RERUNS = ["--reruns", "0"]
 ADMITTED_MODES = ("merge", "all")   # a focused run never waits for a slot
 
@@ -51,9 +53,8 @@ def base_args(workers: int) -> list[str]:
 
 def pytest_args(mode: str, workers: int, extra: list[str], *, record_coverage: bool = False) -> list[str]:
     if mode == "all":
-        # The one mode with a retry, and only for setup errors (test_lanes.py).
         coverage = ["--testmon-noselect"] if record_coverage else ["--no-testmon"]
-        return [*base_args(workers), *rerun_args(), *coverage, *extra]
+        return [*base_args(workers), *NO_RERUNS, *coverage, *extra]
     if mode in ("merge", "focused"):
         return [*base_args(workers), *NO_RERUNS, "--no-testmon", *extra]
     raise ValueError(mode)

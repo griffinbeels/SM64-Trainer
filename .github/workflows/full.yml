@@ -8,7 +8,9 @@ name: full run
 
 on:
   push:
-    branches: [main]
+    # TEMPORARY: test-lanes proves the retry step before main has it (GitHub
+    # only dispatches workflows present on the default branch). Removed before merge.
+    branches: [main, test-lanes]
   schedule:
     - cron: "17 10 * * *"   # nightly, main: the run that records the coverage map
   workflow_dispatch:
@@ -164,12 +166,22 @@ jobs:
         if: matrix.lane == 'browser' && steps.chromium.outputs.cache-hit != 'true'
         run: uv run --frozen python -m playwright install chromium
 
+      # No retries inside the suite. Its failures get ONE retry below.
       - name: Suite, ${{ matrix.lane }} job ${{ matrix.shard }} of ${{ matrix.of }}
+        id: suite
+        continue-on-error: true
         run: >
           uv run --frozen python tools/run_tests.py --all --lane ${{ matrix.lane }}
           ${{ env.RECORD_COVERAGE == 'true' && '--record-coverage' || '' }}
           --shard ${{ matrix.shard }}/${{ matrix.of }} --workers ${{ matrix.workers }}
           --junitxml test-artifacts/junit-${{ matrix.lane }}-${{ matrix.shard }}.xml
+
+      # Exactly the failed tests, alone, after the suite: a test that passes
+      # here is FLAKY (job summary, annotation, the flaky artifact) and the job
+      # is green; a real break fails twice. The job's verdict is this step's.
+      - name: Retry the failed tests alone
+        if: steps.suite.outcome == 'failure'
+        run: uv run --frozen python tools/full_run.py retry test-artifacts/junit-${{ matrix.lane }}-${{ matrix.shard }}.xml
 
       - name: Publish this job's coverage map
         if: always() && env.RECORD_COVERAGE == 'true' && hashFiles('.testmondata') != ''
@@ -186,6 +198,16 @@ jobs:
           path: test-artifacts
           if-no-files-found: ignore
           retention-days: 14
+
+      # Small and long-lived: `tools/full_run.py status` reads the last ten
+      # runs' lists to name a test that keeps needing the retry.
+      - name: Keep the flaky list
+        if: always() && hashFiles('test-artifacts/flaky.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: flaky-${{ matrix.lane }}-${{ matrix.shard }}
+          path: test-artifacts/flaky.json
+          retention-days: 90
 
       - name: Keep the coverage map
         if: always() && env.RECORD_COVERAGE == 'true'

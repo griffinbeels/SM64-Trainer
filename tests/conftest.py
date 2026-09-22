@@ -522,11 +522,6 @@ def runtime_supervisor_exe(tmp_path_factory):
 # it did not run. Reports arrive here on the xdist CONTROLLER, so one list
 # holds every worker's skips.
 _SKIPS: list[tuple[str, str]] = []
-# The full run retries a SETUP failure once (tools/test_lanes.py). A test
-# that needed it is FLAKY, not green: said out loud, and handed to the job
-# summary, so a machine problem that recurs cannot hide behind the retry.
-_RERUNS: dict[str, str] = {}
-_FAILED: set[str] = set()
 
 
 def _skip_reason(report) -> str:
@@ -536,22 +531,11 @@ def _skip_reason(report) -> str:
     return str(longrepr or "")
 
 
-def _first_line(report) -> str:
-    crash = getattr(getattr(report, "longrepr", None), "reprcrash", None)
-    text = crash.message if crash is not None else str(getattr(report, "longrepr", "") or "")
-    return text.strip().splitlines()[0] if text.strip() else ""
-
-
 def pytest_runtest_logreport(report):
     # `wasxfail` also arrives as "skipped"; an xfail is a tracked defect with
     # its own reason on the mark, not an untested path.
     if report.skipped and not hasattr(report, "wasxfail"):
         _SKIPS.append((report.nodeid, _skip_reason(report)))
-    outcome = getattr(report, "outcome", None)
-    if outcome == "rerun":
-        _RERUNS.setdefault(report.nodeid, _first_line(report))
-    elif outcome == "failed":
-        _FAILED.add(report.nodeid)
 
 
 def pytest_collectreport(report):
@@ -576,27 +560,9 @@ def _whole_suite(config) -> bool:
         and not getattr(config.option, "select_from", None)
 
 
-def _report_reruns() -> None:
-    if not _RERUNS:
-        return
-    lines = [f"{'FAILED after rerun' if nodeid in _FAILED else 'FLAKY'} {nodeid}: {cause}"
-             for nodeid, cause in sorted(_RERUNS.items())]
-    print("\n" + "\n".join(lines))
-    if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-            summary.write("".join(f"- {line}\n" for line in lines))
-    if os.environ.get("SM64_REPORT_DIR"):
-        report = Path(os.environ["SM64_REPORT_DIR"]) / "reruns.json"
-        report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(json.dumps([
-            {"nodeid": nodeid, "cause": cause, "flaky": nodeid not in _FAILED}
-            for nodeid, cause in sorted(_RERUNS.items())], indent=1), encoding="utf-8")
-
-
 def pytest_sessionfinish(session, exitstatus):
     if hasattr(session.config, "workerinput"):
         return
-    _report_reruns()
     if not _whole_suite(session.config):
         return
     import skip_inventory

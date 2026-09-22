@@ -309,30 +309,6 @@ def parse_shard(text: str) -> tuple[int, int]:
     return int(index), int(count)
 
 
-# --- the full run's one retry ------------------------------------------------
-# Only failures that say the MACHINE could not stand the page up, never what
-# the page showed. pytest-rerunfailures matches each pattern against
-# "<ExceptionType>: <message>"; every AssertionError is excluded outright, so a
-# wrong value is never retried however its message reads.
-SETUP_ERRORS = (
-    r"fixture server failed to (start|stop)",           # tools/ui_fixture.py boot
-    r"urlopen error timed out|TimeoutError: timed out",  # fixture seeding POSTs
-    r"WinError 10055|ERR_NO_BUFFER_SPACE",              # socket buffers exhausted
-    r"Target page, context or browser has been closed|Browser has been closed"
-    r"|browser has disconnected|Target crashed|Page crashed",
-)
-NEVER_RERUN = (r"^AssertionError",)
-
-
-def rerun_args() -> list[str]:
-    args = ["--reruns", "1"]
-    for pattern in SETUP_ERRORS:
-        args += ["--only-rerun", pattern]
-    for pattern in NEVER_RERUN:
-        args += ["--rerun-except", pattern]
-    return args
-
-
 if __name__ == "__main__":
     import sys
     # `python tools/test_lanes.py matrix 16`: the workflow's job list, as JSON.

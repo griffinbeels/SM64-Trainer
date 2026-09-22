@@ -2069,7 +2069,9 @@ The whole test suite, browser tests included, executed by GitHub Actions on
 every push to main and split into parallel jobs. It blocks only a release: the
 release script refuses any commit it has not passed. Its newest green result on
 main is where the next [[blast radius]] starts, and its nightly scheduled
-execution records the coverage map the radius reads.
+execution records the coverage map the radius reads. A test that fails there
+runs once more alone after the suite; passing that makes it FLAKY, reported
+rather than red.
 
 - **Lives** — the workflow (`.github/workflows/full.yml`) → the reader
   (`tools/full_run.py`) → the release script (`tools/release.py`)

@@ -25,15 +25,14 @@ def test_every_mode_shares_the_scheduler_flags():
         assert args[:4] == ["-n", "8", "--dist", "loadgroup"]
 
 
-def test_only_the_full_run_retries_and_only_setup_errors():
-    whole = run_tests.pytest_args("all", 2, ["--shard", "1/12"])
-    assert whole[whole.index("--reruns") + 1] == "1"
-    assert "--only-rerun" in whole and "--rerun-except" in whole
-    assert whole[-2:] == ["--shard", "1/12"]
-    for mode in ("merge", "focused"):
-        args = run_tests.pytest_args(mode, 2, [])
-        assert args[args.index("--reruns") + 1] == "0", "a local failure is never hidden by a retry"
+def test_no_run_through_the_runner_retries():
+    """A local failure is never hidden by a retry, and the full run's one
+    retry is its own step after the suite (tools/full_run.py retry)."""
+    for mode in ("merge", "focused", "all"):
+        args = run_tests.pytest_args(mode, 2, ["--shard", "1/12"])
+        assert args[args.index("--reruns") + 1] == "0"
         assert "--only-rerun" not in args
+        assert args[-2:] == ["--shard", "1/12"]
 
 
 def test_only_a_full_run_that_asks_for_it_records_coverage():
