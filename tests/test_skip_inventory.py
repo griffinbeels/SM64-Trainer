@@ -28,7 +28,11 @@ def _session(file_or_dir=(), keyword=""):
 
 
 @pytest.fixture(autouse=True)
-def clean_skip_log():
+def clean_skip_log(monkeypatch):
+    # These drive the real sessionfinish with a fake session: on the full run
+    # its report folder would publish the planted skips as the job's own.
+    monkeypatch.delenv("SM64_REPORT_DIR", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     saved = list(conftest._SKIPS)
     conftest._SKIPS.clear()
     yield
