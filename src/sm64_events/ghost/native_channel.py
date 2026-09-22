@@ -135,6 +135,9 @@ class NativeChannel:
     def _set_playback(self, value: dict):
         # Construct first: rejected controls cannot partly mutate a live command.
         request = P.Request.from_buffer_copy(bytes(self._request))
+        retired = sorted(set(value) & {"clip_id", "clip_sha256", "clip_path", "hue_degrees"})
+        if retired:
+            raise ValueError(f"native ghost clips are a list; retired keys: {retired}")
         enabled = bool(value.get("enabled", False))
         opacity, nudge = float(value.get("opacity", 0.5)), int(value.get("nudge", 0))
         if not 0 <= opacity <= 1 or not -600 <= nudge <= 600:
@@ -149,10 +152,6 @@ class NativeChannel:
         request.proximity_enabled = proximity["enabled"]
         request.proximity_distance = proximity["extra_distance"]
         request.tint_enabled = bool(value.get("tint_enabled", False))
-        hue = value.get("hue_degrees", 0)
-        if type(hue) is not int or not 0 <= hue <= 359:
-            raise ValueError("invalid native ghost hue")
-        request.hue_degrees = hue
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")
@@ -177,14 +176,10 @@ class NativeChannel:
             if type(model_id) is not int or not 0 < model_id < 2**64:
                 raise ValueError("native ghost model identity is invalid")
             request.model_id = model_id
-            clip_id, digest = bytes(value["clip_id"]), bytes(value["clip_sha256"])
-            if not request.model_id or len(clip_id) != 16 or not any(clip_id) or len(digest) != 32:
-                raise ValueError("native ghost asset identity is missing")
-            request.clip_id[:], request.clip_sha256[:] = clip_id, digest
-            for field in ("rom_path", "clip_path"):
-                units = (() if field == "rom_path" and not value.get(field)
-                         else P.path_units(value[field]))
-                getattr(request, field)[:] = units + (0,) * (520 - len(units))
+            units = P.path_units(value["rom_path"]) if value.get("rom_path") else ()
+            request.rom_path[:] = units + (0,) * (P.PATH_CHARS - len(units))
+        if enabled or "clips" in value:
+            _set_clips(request, value.get("clips"), enabled)
         if request.revision == (1 << 64) - 1:
             raise OverflowError("native ghost command identity exhausted")
         self._request = request
@@ -201,3 +196,33 @@ class NativeChannel:
             self._request = None
         release_many(self, (("_view", "UnmapViewOfFile"), ("_map", "CloseHandle"),
                             ("_wake", "CloseHandle"), ("_mutex", "CloseHandle")))
+
+
+CLIP_KEYS = {"clip_id", "clip_sha256", "clip_path", "hue_degrees"}
+
+
+def _bytes(value) -> bytes:
+    return bytes(value) if isinstance(value, (bytes, bytearray, memoryview)) else b""
+
+
+def _set_clips(request, clips, enabled: bool):
+    """Encode the displayed set in request order; every entry is checked first."""
+    if not isinstance(clips, (list, tuple)) or not (1 if enabled else 0) <= len(clips) <= P.GHOSTS:
+        raise ValueError(f"native ghost set needs 1..{P.GHOSTS} clips")
+    encoded, seen = [], set()
+    for entry in clips:
+        if not isinstance(entry, dict) or set(entry) != CLIP_KEYS:
+            raise ValueError(f"native ghost clip needs exactly {sorted(CLIP_KEYS)}")
+        clip_id, digest, hue = _bytes(entry["clip_id"]), _bytes(entry["clip_sha256"]), entry["hue_degrees"]
+        if len(clip_id) != 16 or not any(clip_id) or len(digest) != 32 or clip_id in seen:
+            raise ValueError("native ghost clip identity is missing or repeated")
+        if type(hue) is not int or not 0 <= hue <= 359:
+            raise ValueError("invalid native ghost hue")
+        seen.add(clip_id)
+        clip = P.Clip()
+        clip.clip_id[:], clip.clip_sha256[:], clip.hue_degrees = clip_id, digest, hue
+        units = P.path_units(entry["clip_path"])
+        clip.clip_path[:] = units + (0,) * (P.PATH_CHARS - len(units))
+        encoded.append(clip)
+    request.clips[:] = encoded + [P.Clip() for _ in range(P.GHOSTS - len(encoded))]
+    request.clip_count = len(encoded)

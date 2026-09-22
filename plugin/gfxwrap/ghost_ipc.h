@@ -4,17 +4,27 @@
 #include "ghost_clip.h"
 #include "ghost_origin.h"
 #include <stddef.h>
-#define GIPC_VERSION 3u
-#define GIPC_MAGIC "SM64GIP3"
+#define GIPC_VERSION 4u
+#define GIPC_MAGIC "SM64GIP4"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v3_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v4_"
+#define GIPC_GHOSTS 16u
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
     GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY, GIPC_ORIGIN, GIPC_ROM };
 #pragma pack(push, 4)
+/* One saved recording in the displayed set. Hue is per ghost; tint_enabled
+ * stays global. id+SHA is the identity the worker reuses across set changes. */
+typedef struct gipc_clip {
+    uint8_t clip_id[16];
+    uint8_t clip_sha256[32];
+    uint32_t hue_degrees;
+    uint32_t reserved;
+    uint16_t clip_path[GIPC_PATH_CHARS];
+} gipc_clip;
 typedef struct gipc_request {
     uint32_t owner_pid, owner_created_lo, owner_created_hi, generation;
     uint64_t token, revision;
@@ -25,15 +35,16 @@ typedef struct gipc_request {
     uint32_t stop_at_star;
     uint32_t rom_generation, owner_suspended;
     uint64_t model_id;
-    uint8_t clip_id[16];
     gc_layout layout;
-    uint16_t rom_path[GIPC_PATH_CHARS], clip_path[GIPC_PATH_CHARS];
-    uint8_t clip_sha256[32];
+    uint16_t rom_path[GIPC_PATH_CHARS];
     uint32_t star_action_count, star_actions[8];
-    uint32_t tint_enabled, hue_degrees;
+    uint32_t tint_enabled;
     uint32_t proximity_enabled;
     float proximity_distance;
     go_marker origin;
+    /* play_enabled requires 1..GIPC_GHOSTS nonzero, distinct clip ids. */
+    uint32_t clip_count, reserved1;
+    gipc_clip clips[GIPC_GHOSTS];
 } gipc_request;
 typedef struct gipc_status {
     char magic[8];
@@ -46,20 +57,24 @@ typedef struct gipc_status {
     uint64_t produced, consumed, dropped, ack_revision, ack_token;
     uint32_t playback_state, playback_reason;
     uint32_t displayed; /* Most recent SwapBuffers contains this command's ghost. */
-    uint8_t reserved[116];
+    /* Set readiness: listed, prepared for playback, and drawn in the frame
+     * that set displayed (zero while displayed is zero). */
+    uint32_t clips_requested, clips_prepared, clips_visible;
+    uint8_t reserved[104];
 } gipc_status;
 typedef struct gipc_page {
     gipc_status status;
     gipc_request request;
-    uint8_t reserved[4096 - sizeof(gipc_status) - sizeof(gipc_request)];
+    uint8_t reserved[20480 - sizeof(gipc_status) - sizeof(gipc_request)];
     gclip_frame records[GIPC_SLOTS];
 } gipc_page;
 #pragma pack(pop)
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
-static_assert(sizeof(gipc_request) == 2468, "ghost request bytes");
+static_assert(sizeof(gipc_clip) == 1096, "ghost clip entry bytes");
+static_assert(sizeof(gipc_request) == 18920, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
-static_assert(offsetof(gipc_page, records) == 4096, "ghost ring offset");
+static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {
 // Serialized emulation lifecycle caller, outside any DList. Never joins.
 // Zilmar HEADER contains only the first 64 bytes. The worker discovers and

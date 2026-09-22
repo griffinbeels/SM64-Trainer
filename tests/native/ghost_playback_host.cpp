@@ -30,7 +30,7 @@ void operator delete(void *p) noexcept {if(rendering && p)destructions.fetch_add
 void operator delete[](void *p) noexcept {::operator delete(p);}
 void operator delete(void *p,size_t) noexcept {::operator delete(p);}
 void operator delete[](void *p,size_t) noexcept {::operator delete(p);}
-static unsigned checks=0;
+static unsigned checks=0,multi_ghosts=0,multi_visible=0,multi_prepares=0;
 static void check(bool ok,const char *message) {++checks;if(!ok)throw std::runtime_error(message);}
 struct RenderScope {RenderScope(){rendering=true;}~RenderScope(){rendering=false;}};
 class Renderer {
@@ -106,7 +106,10 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     selected_x=recorded.sample.pose.position[0];
     if(revoke_evaluation)ghost_playback::api()->revoke(GP_DISABLED);
     static const ghost_compositor::Vertex triangle[3]{};
-    out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.opacity=opacity;return Result::ok;
+    out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.opacity=opacity;
+    // Identify the recorded row and its depth in the otherwise opaque matrix.
+    out.view_projection[0]=recorded.sample.pose.position[0];
+    out.view_projection[15]=recorded.sample.pose.position[2];return Result::ok;
 }
 }
 
@@ -147,11 +150,22 @@ struct Clip {
                 0,0,7,1,1000u+s.igt-header.origin_raw,23};
         }
     }
+    // One row per coordinate 0..count-1; x names the clip and row, z its depth.
+    static Clip linear(uint8_t id,uint32_t count,uint32_t touch_at,float depth) {
+        Clip clip(id,count);
+        for(uint32_t i=0;i<count;++i) {
+            auto& s=clip.frames[i].sample;s.igt=uint16_t(i);
+            s.pose.position[0]=float(id*100u+i);s.pose.position[2]=depth;
+            if(i==touch_at)s.live_action=0x1302;
+            s.clock.raw_igt=s.igt;s.clock.elapsed_frames=1000u+i;
+        }
+        clip.header.origin_raw=0;return clip;
+    }
 };
 static gp_request request(const Clip& clip,uint64_t revision) {
     gp_request r{};r.bytes=sizeof(r);r.version=GP_VERSION;r.revision=revision;r.enabled=1;
     r.owner_token=123;r.model_id=1;r.rom_generation=7;r.configuration=4;
-    std::memcpy(r.clip_id,clip.header.clip_id,16);r.opacity=1;r.star_ends=1;
+    r.clip_count=1;std::memcpy(r.clips[0].clip_id,clip.header.clip_id,16);r.opacity=1;r.star_ends=1;
     r.star_action_count=1;r.star_actions[0]=0x1302;
     r.origin={GO_STAR,5,50,77,2000,7,0,0};return r;
 }
@@ -173,7 +187,8 @@ int main() {
         gc_sample live=clip.frames[0].sample;live.epoch=5;live.sequence=live.dlist_serial=50;
         live.valid_fields=GC_VALID_CLOCK|GC_VALID_CAMERA|GC_VALID_ACTION|GC_VALID_WARP;live.live_action=1;
         ghost::WorldPass world{};world.epoch=5;world.context_generation=2;world.list_serial=50;
-        ghost_compositor::Pose pose{};gp_draw_token token{};
+        ghost_compositor::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
+        auto &pose=poses[0];
         uint64_t source_generation=7,source_continuity=77,elapsed_base=2000;
         Renderer renderer;
         auto draw=[&](uint64_t time,bool expected,uint32_t why,uint64_t sequence=0,int area=1) {
@@ -182,9 +197,9 @@ int main() {
             live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                 0,0,source_generation,1,elapsed_base+time,source_continuity};
             renderer.run([&] {
-                check(ghost_playback::evaluate(live,world,pose,token)==expected,"selection result");
-                if(expected)check(selected_sequence==sequence && ghost_playback::current(token),"selected occurrence identity");
-                else check(!pose.vertices && !pose.count && !token.revision,"refusal clears candidate");
+                check(ghost_playback::evaluate(live,world,poses,count,token)==expected,"selection result");
+                if(expected)check(count==1 && selected_sequence==sequence && ghost_playback::current(token),"selected occurrence identity");
+                else check(!pose.vertices && !pose.count && !count && !token.revision,"refusal clears candidate");
             });
             gp_status status{};check(api->status(&status,sizeof(status))==GP_OK && status.decision==why,"selection reason");
         };
@@ -208,7 +223,7 @@ int main() {
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(10,false,GP_STAR_ENDED);
         ++r.revision;r.origin.sequence=live.sequence+1;r.origin.elapsed=elapsed_base=3000;
         r.nudge_frames=3;
-        r.tint_enabled=1;r.hue_degrees=217;
+        r.tint_enabled=1;r.clips[0].hue_degrees=217;
         check(api->configure(&r)==GP_OK,"new exact origin resumes with nudge");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"opacity forwarded");
@@ -316,7 +331,7 @@ int main() {
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_AFTER_END);
         Clip closing(9);closing.frames.back().sample.clock.origin_id=8;
         check(api->prepare_clip(&closing.header,closing.frames.data())==GP_OK,"star retains final closing reset as evidence");
-        ++r.revision;std::memcpy(r.clip_id,closing.header.clip_id,16);r.seek_igt=16;
+        ++r.revision;std::memcpy(r.clips[0].clip_id,closing.header.clip_id,16);r.seek_igt=16;
         check(api->configure(&r)==GP_OK,"select star ending before reset row");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_AFTER_END);
         ++r.revision;r.seek_igt=15;check(api->configure(&r)==GP_OK,"last star coordinate precedes closing generation");
@@ -352,14 +367,98 @@ int main() {
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,true,GP_READY,8,2);
         Clip touched_first(11);touched_first.frames[0].sample.live_action=0x1302;
         check(api->prepare_clip(&touched_first.header,touched_first.frames.data())==GP_OK,"clip begins on recorded touch");
-        ++r.revision;std::memcpy(r.clip_id,touched_first.header.clip_id,16);r.mode=GP_FOLLOW;r.nudge_frames=-600;
+        ++r.revision;std::memcpy(r.clips[0].clip_id,touched_first.header.clip_id,16);r.mode=GP_FOLLOW;r.nudge_frames=-600;
         r.origin={GO_STAR,7,live.sequence+1,source_continuity,6000,source_generation,0,0};elapsed_base=6000;
         check(api->configure(&r)==GP_OK,"before-start clamp must not reveal an already touched first pose");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_STAR_ENDED);
+        {
+            // Three ghosts on one live origin. Each ends on its own recorded
+            // touch or length; a live grab ends them all.
+            Clip a=Clip::linear(20,30,20,5),b=Clip::linear(21,30,8,50),c=Clip::linear(22,10,UINT32_MAX,20);
+            for(auto *ghost:{&a,&b,&c}) {
+                check(api->prepare_clip(&ghost->header,ghost->frames.data())==GP_OK,"prepare one ghost of the set");
+                ++multi_prepares;
+            }
+            revision=r.revision+1;r=request(a,revision);r.model_id=4;r.tint_enabled=1;
+            r.clip_count=3;r.clips[0].hue_degrees=10;
+            std::memcpy(r.clips[1].clip_id,b.header.clip_id,16);r.clips[1].hue_degrees=200;
+            std::memcpy(r.clips[2].clip_id,c.header.clip_id,16);r.clips[2].hue_degrees=300;
+            r.origin={GO_STAR,7,live.sequence+1,source_continuity,7000,source_generation,0,0};elapsed_base=7000;
+            live.level=9;live.live_action=1;
+            check(api->configure(&r)==GP_OK,"configure three ghosts on one origin");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            multi_ghosts=r.clip_count;
+            auto frame=[&](uint64_t time,std::initializer_list<float> rows,uint32_t why,
+                           std::initializer_list<uint32_t> each) {
+                live.igt=uint16_t(time);live.area=1;++live.sequence;++live.dlist_serial;
+                world.list_serial=live.dlist_serial;
+                live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
+                    0,0,source_generation,1,elapsed_base+time,source_continuity};
+                renderer.run([&] {
+                    const bool drawn=ghost_playback::evaluate(live,world,poses,count,token);
+                    check(drawn==(rows.size()>0) && count==rows.size(),"visible ghost count");
+                    unsigned k=0;
+                    for(float row:rows)check(poses[k++].view_projection[0]==row,"ghost, row and back-to-front order");
+                    for(k=count;k<GP_GHOSTS;++k)check(!poses[k].vertices && !poses[k].count,"unused outputs cleared");
+                    check(drawn==(token.revision!=0) && (!drawn || ghost_playback::current(token)),"one batch token");
+                });
+                if(count>multi_visible)multi_visible=count;
+                gp_status status{};
+                check(api->status(&status,sizeof(status))==GP_OK && status.decision==why
+                    && status.visible==count && status.clip_count==r.clip_count,"set summary decision");
+                unsigned k=0;for(auto value:each)check(status.clip_decisions[k++]==value,"per-ghost decision");
+            };
+            // Depth order is b (z 50), c (z 20), a (z 5).
+            frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
+            check(poses[0].hue_degrees==200 && poses[1].hue_degrees==300 && poses[2].hue_degrees==10,
+                "hue follows its own ghost");
+            frame(8,{2208,2008},GP_READY,{GP_READY,GP_STAR_ENDED,GP_READY});
+            frame(9,{2209,2009},GP_READY,{GP_READY,GP_STAR_ENDED,GP_READY});
+            frame(10,{2010},GP_READY,{GP_READY,GP_STAR_ENDED,GP_AFTER_END});
+            frame(19,{2019},GP_READY,{GP_READY,GP_STAR_ENDED,GP_AFTER_END});
+            frame(20,{},GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED,GP_AFTER_END});
+            ++r.revision;r.nudge_frames=-3;check(api->configure(&r)==GP_OK,"one nudge moves every ghost");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(11,{2208,2008},GP_READY,{GP_READY,GP_STAR_ENDED,GP_READY});
+            ++r.revision;r.nudge_frames=0;r.proximity_enabled=1;check(api->configure(&r)==GP_OK,"per-ghost fade");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=2005;live.pose.position[1]=0;live.pose.position[2]=5;
+            frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
+            check(poses[0].opacity==1 && poses[1].opacity==1 && poses[2].opacity==0,"only the coincident ghost fades");
+            live.valid_fields&=~GC_VALID_POSE;
+            ++r.revision;r.proximity_enabled=0;check(api->configure(&r)==GP_OK,"fade off");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            // Removing one ghost hides it at the next boundary; the others play on.
+            gp_status before{};check(api->status(&before,sizeof(before))==GP_OK && before.clips_owned==3,"set held");
+            check(api->release_clip(b.header.clip_id)==GP_OK,"release one ghost");
+            check(api->prepare_clip(&b.header,b.frames.data())==GP_DEFERRED,"held released copy is not revived");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(5,{2205,2005},GP_READY,{GP_READY,GP_PREPARING,GP_READY});
+            check(api->collect()==GP_OK,"collect released ghost");
+            gp_status after{};check(api->status(&after,sizeof(after))==GP_OK && after.clips_owned==2
+                && after.resident_clip_bytes<before.resident_clip_bytes,"released storage reclaimed");
+            check(api->prepare_clip(&b.header,b.frames.data())==GP_OK,"fresh copy after retirement");++multi_prepares;
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
+            // Replacing the set keeps a and adds a segment-clock clip: only the
+            // mismatched ghost refuses. Unlisted held clips retire.
+            Clip mixed=Clip::linear(23,30,UINT32_MAX,1);mixed.header.clock_kind=GCLIP_SEGMENT_CLOCK;
+            check(api->prepare_clip(&mixed.header,mixed.frames.data())==GP_OK,"prepare added ghost");++multi_prepares;
+            ++r.revision;r.clip_count=2;std::memcpy(r.clips[1].clip_id,mixed.header.clip_id,16);r.clips[2]={};
+            check(api->configure(&r)==GP_OK,"replace the displayed set");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            frame(6,{2006},GP_READY,{GP_READY,GP_WRONG_IDENTITY});
+            check(api->collect()==GP_OK && api->status(&after,sizeof(after))==GP_OK && after.clips_owned==2
+                && !after.clips_ready,"renderer holds exactly the listed set");
+            live.live_action=0x1302;frame(7,{},GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED});
+            live.live_action=1;frame(8,{},GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED});
+        }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
         {
             Clip maximum(12,GCLIP_MAX_RECORDS);
             check(api->prepare_clip(&maximum.header,maximum.frames.data())==GP_OK,"largest supported clip");
+            // Nothing displaces a pending clip; the worker releases what it dropped.
+            check(api->release_clip(maximum.header.clip_id)==GP_OK,"release unselected pending clip");
         }
         // Two 40%-budget clips fit; a third cannot. Derive the count from
         // the frame and action-index cost so format growth preserves the test.
@@ -372,15 +471,23 @@ int main() {
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         auto next=large.header;next.clip_id[0]=3;
         check(api->prepare_clip(&next,large.frames.data())==GP_OK,"second large clip ready");
-        ++r.revision;r.clip_id[0]=3;check(api->configure(&r)==GP_OK,"protect selected pending clip");
+        ++r.revision;r.clips[0].clip_id[0]=3;check(api->configure(&r)==GP_OK,"protect selected pending clip");
         next.clip_id[0]=4;
         check(api->prepare_clip(&next,large.frames.data())==GP_BUDGET,"active and ready clips count against one budget");
         check(api->status(&status,sizeof(status))==GP_OK && status.resident_clip_bytes<=GP_CLIP_BUDGET
             && status.clips_owned==1 && status.clips_ready==1,"resident budget accounts for both owners");
         api->revoke(GP_DISABLED);renderer.run([&]{ghost_playback::retire_on_context_loss();});
         check(api->collect()==GP_OK && api->release_worker()==GP_OK,"large clips reclaimed off renderer");
-        ++r.revision;r.hue_degrees=360;check(api->configure(&r)==GP_INVALID,"hue range bounded");
-        r.hue_degrees=0;r.tint_enabled=2;check(api->configure(&r)==GP_INVALID,"tint flag bounded");
+        ++r.revision;r.clips[0].hue_degrees=360;check(api->configure(&r)==GP_INVALID,"hue range bounded");
+        r.clips[0].hue_degrees=0;r.tint_enabled=2;check(api->configure(&r)==GP_INVALID,"tint flag bounded");
+        r.tint_enabled=0;r.clip_count=0;check(api->configure(&r)==GP_INVALID,"enabled set needs a clip");
+        r.clip_count=GP_GHOSTS+1;check(api->configure(&r)==GP_INVALID,"set size bounded");
+        r.clip_count=2;r.clips[1]=r.clips[0];check(api->configure(&r)==GP_INVALID,"duplicate clip refused");
+        r.clips[1].clip_id[0]=0;check(api->configure(&r)==GP_INVALID,"zero clip id refused");
+        r.clips[1].clip_id[1]=9;r.clips[1].reserved=1;check(api->configure(&r)==GP_INVALID,"clip reserved word checked");
+        r.clips[1]={};r.clip_count=1;r.clips[1].hue_degrees=5;
+        check(api->configure(&r)==GP_INVALID,"entries past the set are zero");
+        r.clips[1]={};
         r.tint_enabled=0;
         r.proximity_enabled=2;check(api->configure(&r)==GP_INVALID,"proximity flag bounded");
         r.proximity_enabled=1;r.proximity_distance=std::numeric_limits<float>::quiet_NaN();
@@ -395,8 +502,9 @@ int main() {
         check(api->release_worker()==GP_OK,"final worker release");
         check(allocations.load()==0 && destructions.load()==0,"render path never allocates or destroys storage");
         check(opens==closes && !fake_model,"all model lifetimes reclaimed");
-        std::printf("{\"ok\":true,\"checks\":%u,\"models\":%u,\"render_allocations\":%u,\"render_frees\":%u}\n",
-            checks,opens,allocations.load(),destructions.load());return 0;
+        std::printf("{\"ok\":true,\"checks\":%u,\"models\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
+            "\"multi\":{\"ghosts\":%u,\"max_visible\":%u,\"prepares\":%u}}\n",
+            checks,opens,allocations.load(),destructions.load(),multi_ghosts,multi_visible,multi_prepares);return 0;
     } catch(const std::exception& error) {
         std::fprintf(stderr,"playback witness: %s (check %u)\n",error.what(),checks);return 1;
     }
