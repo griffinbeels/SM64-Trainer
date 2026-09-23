@@ -10,6 +10,7 @@ extract.py already guarantees no partial file survives those.
 import asyncio
 from collections import OrderedDict
 from contextlib import contextmanager, nullcontext, ExitStack
+from sm64_events.replay.savedindex import SavedClipIndex
 from sm64_events.replay.sessiongate import SessionGate
 import json
 import logging
@@ -233,6 +234,12 @@ class ReplayService:
         self._cut_locks: dict[int, tuple[threading.Lock, int]] = {}
         self._cut_locks_guard = threading.Lock()
         self._review_state = ReviewStateStore()
+        # Saved clips by attempt, from one walk of the save root, and each
+        # saved clip's parsed sidecar while its bytes are unchanged -- the two
+        # costs the ghost picker paid per candidate (savedindex.py).
+        self._saved_index = SavedClipIndex(cfg.save_root)
+        self._saved_meta_cache: OrderedDict = OrderedDict()
+        self._saved_meta_lock = threading.Lock()
         # clips_dir lives inside scratch_dir; it is created in lifecycle_start
         # AFTER recorder.start() so any future recursive wipe by the recorder
         # doesn't evict a directory we created first.
@@ -445,15 +452,16 @@ class ReplayService:
         """Locate an attempt's saved clip anywhere under save_root (the
         filename is the index — see class docstring). First match in
         sorted order wins if the user duplicated a file manually."""
-        root = self.cfg.save_root
-        if not root.exists():
-            return None
-        matches = sorted(root.rglob(f"attempt_{attempt_id:04d}_*.mp4"))
-        return matches[0] if matches else None
+        return self._saved_index.find(attempt_id)
+
+    @property
+    def saved_generation(self) -> int:
+        """Moves whenever which attempts have a saved clip can have changed."""
+        return self._saved_index.generation
 
     def saved_attempt_ids(self) -> set[int]:
         """Video availability for Compare/compilation excludes pose-only saves."""
-        return saved_attempt_ids(self.cfg.save_root, include_native=False)
+        return self._saved_index.ids()
 
     @staticmethod
     def _native_target(attempt):
@@ -582,16 +590,38 @@ class ReplayService:
                 out.append(a.id)
         return out
 
-    @staticmethod
-    def _saved_meta(saved: Path) -> dict:
+    #: Parsed saved-clip sidecars kept, newest used last out.
+    SAVED_META_CACHE = 64
+
+    def _saved_meta(self, saved: Path) -> dict:
         """Sidecar metadata for a saved clip. Files saved before sidecars
         existed (pre 2026-06-12) have none: degrade to unknown duration and
         no truncation banner — the <video> element learns the real duration
-        itself once loaded."""
+        itself once loaded.
+
+        Parsed once per version of the file: a sidecar carries the clip's
+        whole picture map (152 KB on his PB clips, 5.6 ms to parse) and the
+        ghost picker read it on every resolve. Keyed on size and mtime, so a
+        rewrite (the compressor, a review promotion) is read fresh. A copy is
+        handed out because callers fill in fields."""
         meta = saved.with_suffix(".json")
-        if not meta.exists():
+        try:
+            stat = meta.stat()
+        except FileNotFoundError:
             return {}
-        return json.loads(meta.read_text())
+        key = (str(meta), stat.st_size, stat.st_mtime_ns)
+        with self._saved_meta_lock:
+            cached = self._saved_meta_cache.get(str(meta))
+            if cached is not None and cached[0] == key:
+                self._saved_meta_cache.move_to_end(str(meta))
+                return dict(cached[1])
+        parsed = json.loads(meta.read_text())
+        with self._saved_meta_lock:
+            self._saved_meta_cache[str(meta)] = (key, parsed)
+            self._saved_meta_cache.move_to_end(str(meta))
+            while len(self._saved_meta_cache) > self.SAVED_META_CACHE:
+                self._saved_meta_cache.popitem(last=False)
+        return dict(parsed)
 
     @measured("replay.view")
     def view(self, attempt_id: int) -> dict:
@@ -1076,6 +1106,7 @@ class ReplayService:
     def _preserve(self, attempt_id: int) -> dict:
         with self._saving(), self._cut_lock(attempt_id), self._pin_clip(attempt_id):
             result = self._save(attempt_id)
+            self._saved_index.add(Path(result["path"]))
             self._review_state.promote(attempt_id, Path(result["path"]))
             with self._save_guard:
                 self._save_failures.pop(attempt_id, None)
