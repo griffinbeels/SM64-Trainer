@@ -198,7 +198,7 @@ static int valid_pose(const sg_pose *pose)
 {
     int i;
     if (!pose || (pose->fields & SG_POSE_REQUIRED) != SG_POSE_REQUIRED ||
-        (pose->fields & ~127u) || pose->animation_frame < 0 ||
+        (pose->fields & ~255u) || pose->animation_frame < 0 ||
         pose->cap_state > 3 || pose->eye_state > 8 ||
         (pose->eye_state >= 4 && pose->eye_state <= 7) ||
         pose->hand_state > 5 || pose->wing_flutter > 1 || pose->grab_position > 3 ||
@@ -208,6 +208,7 @@ static int valid_pose(const sg_pose *pose)
         if (!finite_bound(pose->position[i], 10000000.0f) ||
             !finite_bound(pose->scale[i], 100.0f) ||
             (pose->scale[i] > -0.000001f && pose->scale[i] < 0.000001f)) return 0;
+    if ((pose->fields & SG_POSE_HELD_RELEASED) && !(pose->fields & SG_POSE_HELD)) return 0;
     if (pose->fields & SG_POSE_HELD) {
         if (pose->held_kind == SG_HELD_NONE || pose->held_kind >= SG_HELD_KINDS ||
             pose->held_animation_id < -1 || pose->held_animation_frame < 0) return 0;

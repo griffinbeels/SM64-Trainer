@@ -335,7 +335,8 @@ void ghost_root_finish(gc_root_probe &p, bool completed, gc_sample &sample, gc_r
     const bool proven=completed && ghost_root_candidate(p,sample);
     // A held object without an animation was drawn only if Mario's body was:
     // it rides a root proven by this frame's lists, never a carried or TRS one.
-    if (!proven && (sample.valid_fields&GC_VALID_HELD) && sample.held.animation_id==-1) {
+    // Released, its own node drew it at its own transform.
+    if (!proven && (sample.valid_fields&GC_VALID_HELD) && sample.held.animation_id==-1 && !sample.held.released) {
         sample.held={}; sample.valid_fields&=~GC_VALID_HELD;
     }
     if (proven) {

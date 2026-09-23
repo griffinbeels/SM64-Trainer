@@ -1294,7 +1294,9 @@ a cork box), recorded as what it is (its behaviour), its animation state,
 and where his hand drew it in that [[frame]]. Captured only when the game
 provably drew it from his hand in that [[frame]]. A [[ghost]] draws the kinds
 its model knows (the Bob-omb, the small penguin, King Bob-omb, Chuckya, the
-cork and crazy boxes) in his hand and leaves the others out.
+cork and crazy boxes) in his hand and leaves the others out. Once he throws
+or drops it, capture follows the same object where the game drew it, for up
+to 10 s, until it explodes, its slot holds another object, or he grabs it again.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` (capture); decoded in
   `src/sm64_events/ghost/clip.py`; drawn by `renderer/model/held.c`

@@ -244,6 +244,11 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         pose.held_anim_y_translation = held.anim_y_translation; pose.held_anim_state = held.anim_state;
         std::memcpy(pose.held_position,held.holp,sizeof(pose.held_position));
         std::memcpy(pose.held_scale,held.scale,sizeof(pose.held_scale));
+        // Out of his hand: where it flies, by its own node's transform.
+        if (held.released) {
+            pose.fields |= SG_POSE_HELD_RELEASED;
+            std::memcpy(pose.held_angles,held.angles,sizeof(pose.held_angles));
+        }
         std::memcpy(pose.view,view,sizeof(pose.view));
         pose.roll = live.camera.roll;
         pose.held_global_timer = recorded.global_timer;

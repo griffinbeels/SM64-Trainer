@@ -491,7 +491,7 @@ int main(int argc,char** argv){
     {
         std::ifstream saved(argv[4],std::ios::binary);
         std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(saved)),{});
-        require(bytes.size()>8 && !std::memcmp(bytes.data(),"SM64GHO4",8) && ghost_clip::upgrade_v4(bytes),"real GCLIP4 clip read as GCLIP5");
+        require(bytes.size()>8 && !std::memcmp(bytes.data(),"SM64GHO4",8) && ghost_clip::upgrade(bytes),"real GCLIP4 clip read as the current version");
         gclip_header h{};std::memcpy(&h,bytes.data(),sizeof(h));saved_records=h.record_count;
         const auto* rows=reinterpret_cast<const gclip_frame*>(bytes.data()+sizeof(h));
         require(api->prepare_clip(&h,rows)==GP_OK,"real GCLIP4 clip prepared for playback");

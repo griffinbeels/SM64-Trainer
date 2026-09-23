@@ -8,8 +8,9 @@ import pytest
 
 from ghost_native_fixture import frame, producer
 from sm64_events.ghost.native_layout import (
-    CLIP_MAGIC, CLIP_VERSION, HEADER_BYTES, HELD_AT, PARTICLES_AT, PARTICLES_ENTRIES_AT, ROOT_KIND_AT,
-    SAMPLE_VERSION, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
+    CLIP_MAGIC, CLIP_VERSION, HEADER_BYTES, HELD_ANGLES_AT, HELD_AT, HELD_RELEASED_AT, PARTICLES_AT,
+    PARTICLES_ENTRIES_AT, ROOT_KIND_AT, SAMPLE_VERSION, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
+    V5_MAGIC, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION, V5_VERSION,
 )
 from sm64_events.ghost.clip import (
     PARTICLES, RECORD_BYTES, STAR_CLOCK, SEGMENT_CLOCK, ClipError, OlderPoseFormat, check_manifest,
@@ -270,6 +271,44 @@ def test_held_object_rides_a_pose_with_a_segment_0x13_behaviour():
     raw[HELD_AT] = 1
     with pytest.raises(ClipError, match="held-object refusal"):
         frame_from_bytes(bytes(raw))
+    # Released (thrown or dropped): its own angle; in his hand it has none.
+    assert frame_from_bytes(frame(held=(0x13003174, 1, 12, 0x1234))).held_behaviour == 0x13003174
+    in_hand_with_angle = bytearray(frame(held=(0x13003174, 1, 12)))
+    struct.pack_into("<h", in_hand_with_angle, HELD_AT + HELD_ANGLES_AT + 2, 0x1234)
+    released_twice = bytearray(frame(held=(0x13003174, 1, 12, 0x1234)))
+    struct.pack_into("<H", released_twice, HELD_AT + HELD_RELEASED_AT, 2)
+    for broken in (in_hand_with_angle, released_twice):
+        with pytest.raises(ClipError, match="held object"):
+            frame_from_bytes(bytes(broken))
+
+
+def as_gclip5(data: bytes) -> bytes:
+    """A current clip as GCLIP5 wrote it: 1268-byte GC6 records, no released angle."""
+    header = bytearray(data[:HEADER_BYTES])
+    header[:8] = V5_MAGIC
+    struct.pack_into("<3I", header, 8, V5_VERSION, HEADER_BYTES, V5_RECORD_BYTES)
+    struct.pack_into("<I", header, 28, V5_SAMPLE_VERSION)
+    records = []
+    for at in range(HEADER_BYTES, len(data), RECORD_BYTES):
+        record = bytearray(data[at:at + V5_RECORD_BYTES])
+        struct.pack_into("<2I", record, 0, V5_RECORD_BYTES, V5_VERSION)
+        struct.pack_into("<2I", record, 16, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION)
+        records.append(bytes(record))
+    return bytes(header) + b"".join(records)
+
+
+def test_a_clip_saved_before_released_objects_still_loads():
+    """His GCLIP5 ghosts, held Bob-ombs included, read as GCLIP6 with nothing
+    released; so do the pose archive's GC6 rows."""
+    current = encoded((frame(1, held=(0x13003174, 1, 12)), frame(2)))
+    older = as_gclip5(current)
+    assert len(older) == HEADER_BYTES + 2 * V5_RECORD_BYTES
+    clip = decode_clip(older)
+    assert clip.file_version == V5_VERSION and [f.raw for f in clip.frames] == [
+        f.raw for f in decode_clip(current).frames]
+    assert clip.frames[0].held_behaviour == 0x13003174
+    row = older[HEADER_BYTES:HEADER_BYTES + V5_RECORD_BYTES]
+    assert frame_from_bytes(row).raw == decode_clip(current).frames[0].raw
 
 
 def test_truncation_trailing_data_nonfinite_and_invalid_components():

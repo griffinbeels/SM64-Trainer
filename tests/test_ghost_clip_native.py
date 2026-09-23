@@ -14,11 +14,11 @@ from ghost_native_fixture import frame, producer
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip, hidden_refusals
 from sm64_events.ghost.native_layout import (
-    CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT, PARTICLE_TRANSLATION_AT,
-    PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT, ROOT_KIND_AT, SHADOW_AT,
-    SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
+    CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, HELD_RELEASED_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT,
+    PARTICLE_TRANSLATION_AT, PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT,
+    ROOT_KIND_AT, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
 )
-from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded, matrix_frame
+from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, as_gclip5, encoded, matrix_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
@@ -65,22 +65,7 @@ def corpus():
         changed = bytearray(encoded((frame(1, valid=29, pose_refusal=19), frame(2))))
         changed[offset] = value
         values.append(bytes(changed))
-    # A held object: accepted on a pose; refused without one, outside
-    # segment 0x13, or as stray bytes on a record without the bit.
-    values.append(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
-    # A box: no animation, id -1 at frame 0 only.
-    values.append(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
-    for offset, value in ((H + HELD_AT + 6, 3), (H + HELD_AT + 4, 0xfe)):  # frame 3; id -2
-        changed = bytearray(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
-        changed[offset] = value
-        values.append(bytes(changed))
-    for offset, value in ((H + HELD_AT + 3, 0x80), (H + HELD_AT + 30, 0)):
-        changed = bytearray(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
-        changed[offset] = value
-        values.append(bytes(changed))
-    stray = bytearray(encoded((frame(1), frame(2))))
-    stray[H + HELD_AT] = 1
-    values.append(bytes(stray))
+    values.extend(held_cases())
     # Recorded shadow and sound: accepted shapes, then each native refusal.
     evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,), particles=((0x0401DD60, (1, 2, -300)),)),
                         frame(2, sounds=tuple(range(1, 9)), overflow=True, particles=())))
@@ -110,6 +95,38 @@ def corpus():
         struct.pack_into("<I", broken, offset, value)
         values.append(bytes(broken))
     return values
+
+
+def held_cases():
+    """The held block, in his hand and released, and a GCLIP5 file from before release."""
+    cases = []
+    # A held object: accepted on a pose; refused without one, outside
+    # segment 0x13, or as stray bytes on a record without the bit.
+    cases.append(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+    # A box: no animation, id -1 at frame 0 only.
+    cases.append(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
+    for offset, value in ((H + HELD_AT + 6, 3), (H + HELD_AT + 4, 0xfe)):  # frame 3; id -2
+        changed = bytearray(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
+        changed[offset] = value
+        cases.append(bytes(changed))
+    for offset, value in ((H + HELD_AT + 3, 0x80), (H + HELD_AT + 30, 0)):
+        changed = bytearray(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+        changed[offset] = value
+        cases.append(bytes(changed))
+    stray = bytearray(encoded((frame(1), frame(2))))
+    stray[H + HELD_AT] = 1
+    cases.append(bytes(stray))
+    # Released: its own angle; in his hand none, and released is 0 or 1.
+    thrown = encoded((frame(1, held=(0x13003174, 1, 12, 0x1234)), frame(2)))
+    cases.append(thrown)
+    for offset, value in ((H + HELD_AT + HELD_RELEASED_AT, 0), (H + HELD_AT + HELD_RELEASED_AT, 2)):
+        changed = bytearray(thrown)
+        changed[offset] = value
+        cases.append(bytes(changed))
+    # A GCLIP5 file (GC6 records, before released objects) plays; a torn one does not.
+    older = as_gclip5(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+    cases.extend((older, older[:-1], older[:8] + b"\x04" + older[9:]))
+    return cases
 
 
 def refusal_runs():

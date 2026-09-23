@@ -20,7 +20,10 @@ enum sg_status {
 enum sg_pose_fields {
     SG_POSE_TRANSFORM = 1u, SG_POSE_ANIMATION = 2u, SG_POSE_BODY = 4u,
     SG_POSE_HEAD_ROTATION = 8u, SG_POSE_REQUIRED = 15u,
-    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u
+    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u,
+    /* With SG_POSE_HELD: the object has left his hand (thrown or dropped)
+     * and is drawn by its own node, TRS(held_position, held_angles). */
+    SG_POSE_HELD_RELEASED = 128u
 };
 
 /* Objects the model can draw in Mario's hand (SG_POSE_HELD). */
@@ -68,6 +71,8 @@ typedef struct sg_pose {
     int16_t roll;
     /* The recorded frame's gGlobalTimer: the penguin's blink reads it. */
     uint32_t held_global_timer;
+    /* SG_POSE_HELD_RELEASED: the object's own gfx angle. */
+    int16_t held_angles[3];
 } sg_pose;
 
 enum sg_mesh_errors {

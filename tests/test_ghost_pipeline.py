@@ -108,7 +108,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
                       *tmp_path.glob("*.png")])
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
-    assert report["capture_version"] == 6 and report["clip_version"] == 5 and report["playback_version"] == 7
+    assert report["capture_version"] == 7 and report["clip_version"] == 6 and report["playback_version"] == 7
     assert_scene_effects(report)  # the timing below runs with the player-first fade on
     assert_saved_ghost_plays(report["saved_gclip4"])
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]

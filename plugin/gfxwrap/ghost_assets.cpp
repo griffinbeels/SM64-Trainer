@@ -55,11 +55,11 @@ bool clip(std::vector<uint8_t> &data, const uint8_t expected[32],
           const uint8_t id[16], gclip_header &out, bool *out_of_memory) {
     out = {};
     if (data.size() < sizeof(out)) return false;
-    // The digest names the file as saved; a GCLIP4 file is then read as GCLIP5.
+    // The digest names the file as saved; an older file is then read as current.
     uint8_t digest[32]{};
     if (!sha256(data,digest) || std::memcmp(digest, expected, sizeof(digest))) return false;
     bool upgrade_memory = false;
-    ghost_clip::upgrade_v4(data, &upgrade_memory);
+    ghost_clip::upgrade(data, &upgrade_memory);
     if (upgrade_memory) { if (out_of_memory) *out_of_memory = true; return false; }
     gclip_header header{}; std::memcpy(&header, data.data(), sizeof(header));
     if (std::memcmp(header.magic, GCLIP_MAGIC, 8) || header.version != GCLIP_VERSION

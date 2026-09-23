@@ -40,7 +40,7 @@ static bool accepted(const std::string& path) {
     file.seekg(0);std::vector<uint8_t> bytes(static_cast<size_t>(length));
     file.read(reinterpret_cast<char*>(bytes.data()),bytes.size());
     if(!file)std::exit(2);
-    ghost_clip::upgrade_v4(bytes); // the worker's own GCLIP4 reading (ghost_assets::clip)
+    ghost_clip::upgrade(bytes); // the worker's own reading of older clips (ghost_assets::clip)
     gclip_header header{};std::memcpy(&header,bytes.data(),sizeof(header));
     // File-length checks protect the pointer passed to the real native validator.
     if(!header.record_count || header.record_count>GCLIP_MAX_RECORDS ||

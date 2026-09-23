@@ -15,7 +15,7 @@ from sm64_events.memory.layout import Layout, LayoutIncomplete
 
 _CONFIG = struct.Struct("<20I")
 _CLOCK_CONFIG = struct.Struct("<26I")
-VERSION = 6
+VERSION = 7
 RAM_WORD_SWAPPED = 1
 ROM_US = 1
 
