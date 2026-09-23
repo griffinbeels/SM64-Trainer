@@ -1201,6 +1201,18 @@ never carry one.
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
   `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
 
+### Translucent world layer
+
+The game's water surfaces, and any other see-through world geometry, as they
+would fall over a [[ghost]] standing behind them. The [[renderer]] repeats each
+such game draw into the layer, keeping its color, how much it lets through and
+its nearest depth; the compositor then gives every [[ghost]] pixel behind that
+depth the same blend the game gave the scene there, so a submerged [[ghost]]
+takes the water's color. The game's own picture stays untouched.
+
+- **Lives** — `plugin/gfxwrap/ghost_compositor.cpp`; the [[renderer]]'s
+  repeat is staged by `tools/stage_ghost_renderer.py`
+
 ### Ghost sound events
 
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in

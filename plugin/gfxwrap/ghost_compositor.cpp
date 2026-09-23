@@ -1,5 +1,6 @@
 #include "ghost_compositor_gl.h"
 #include "ghost_shadow_gl.h"
+#include <algorithm>
 #include <cmath>
 #include <new>
 
@@ -37,6 +38,9 @@ uniform sampler2D terrain;
 uniform vec2 depthMapping;
 uniform float opacity;
 uniform float hueDegrees;
+uniform sampler2D layerColor;
+uniform sampler2D layerDepth;
+uniform int layerEnabled;
 in vec3 vertexColor;
 in vec2 texCoord;
 in float illumination;
@@ -67,6 +71,13 @@ void main() {
         rgb=vec3(dot(rgb,vec3(.213+.787*c-.213*s,.715-.715*c-.715*s,.072-.072*c+.928*s)),
                  dot(rgb,vec3(.213-.213*c+.143*s,.715+.285*c+.140*s,.072-.072*c-.283*s)),
                  dot(rgb,vec3(.213-.213*c-.787*s,.715-.715*c+.715*s,.072+.928*c+.072*s)));
+    }
+    // Behind the game's translucent world layer (a water surface seen from
+    // either side), take the same blend the game gave the pixels behind it:
+    // its premultiplied color plus what it lets through.
+    if(layerEnabled!=0 && depth>texelFetch(layerDepth,ivec2(gl_FragCoord.xy),0).r) {
+        vec4 surface=texelFetch(layerColor,ivec2(gl_FragCoord.xy),0);
+        rgb=surface.rgb+clamp(rgb,0.0,1.0)*surface.a;
     }
     outputColor=vec4(clamp(rgb,0.0,1.0),opacity*material.a);
 })";
@@ -127,11 +138,20 @@ struct Instance {
     Dispatch g;
     uint64_t generation;
     uint32_t width=0,height=0,capacity=0;
-    uint32_t textures[3]={}; // display color, copied ordinary depth, atlas
-    uint32_t fbos[2]={}; // display/self depth; copied terrain depth
+    uint32_t textures[5]={}; // display color, copied ordinary depth, atlas, layer color, layer depth
+    uint32_t fbos[4]={}; // display/self depth; copied terrain depth; layer color; layer depth
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
-    int32_t uniforms[9]={};
+    int32_t uniforms[12]={};
     shadow::Storage shadow;
+    struct Layer {
+        bool open=false,broken=false,active=false;
+        LayerPass pass=LayerPass::color;
+        uint32_t source=0;
+        // The game's state this mirror replaced, restored exactly at end_layer.
+        int32_t draw_fbo=0,blend[6]={};
+        uint8_t color_mask[4]={},depth_mask=0;
+    } layer;
+    LayerStats layer_stats{};
     Target target{};
     bool ready=false,begun=false,finalized=false,hud=false;
     int32_t hud_draw_fbo=0;
@@ -164,13 +184,16 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     const auto& g=p->g;Guard guard(g);
     if(!p->shader_program) {
         p->shader_program=program(g);if(!p->shader_program)return Result::resources;
-        constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain","hueDegrees"};
-        for(size_t i=0;i<9;++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
-        g.GenTextures(3,p->textures);g.GenFramebuffers(2,p->fbos);
+        constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain","hueDegrees",
+            "layerColor","layerDepth","layerEnabled"};
+        for(size_t i=0;i<12;++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
+        g.GenTextures(5,p->textures);g.GenFramebuffers(4,p->fbos);
         g.GenRenderbuffers(1,&p->self_depth);g.GenVertexArrays(1,&p->vao);g.GenBuffers(1,&p->vbo);
     }
-    if(!p->textures[0] || !p->textures[1] || !p->textures[2] || !p->fbos[0] || !p->fbos[1] ||
-       !p->self_depth || !p->vao || !p->vbo)return Result::resources;
+    for(auto id:p->textures)if(!id)return Result::resources;
+    for(auto id:p->fbos)if(!id)return Result::resources;
+    if(!p->self_depth || !p->vao || !p->vbo)return Result::resources;
+    p->layer=Instance::Layer{};
     g.BindBuffer(PIXEL_UNPACK_BUFFER,0);g.PixelStorei(UNPACK_ALIGNMENT,1);
     g.PixelStorei(UNPACK_ROW_LENGTH,0);g.PixelStorei(UNPACK_SKIP_ROWS,0);g.PixelStorei(UNPACK_SKIP_PIXELS,0);
     if(!p->shadow.prepare(g,p->shadow.program?p->shadow.program:
@@ -179,6 +202,8 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     texture(g,p->textures[0],RGBA8,RGBA,UNSIGNED_BYTE,width,height,nullptr);
     texture(g,p->textures[1],DEPTH_COMPONENT24,DEPTH_COMPONENT,UNSIGNED_INT,width,height,nullptr);
     texture(g,p->textures[2],RGBA8,RGBA,UNSIGNED_BYTE,aw,ah,atlas);
+    texture(g,p->textures[3],RGBA8,RGBA,UNSIGNED_BYTE,width,height,nullptr);
+    texture(g,p->textures[4],DEPTH_COMPONENT24,DEPTH_COMPONENT,UNSIGNED_INT,width,height,nullptr);
     g.BindRenderbuffer(RENDERBUFFER,p->self_depth);g.RenderbufferStorage(RENDERBUFFER,DEPTH24_STENCIL8,width,height);
     g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[0]);
     g.FramebufferTexture2D(DRAW_FRAMEBUFFER,COLOR_ATTACHMENT0,TEXTURE_2D,p->textures[0],0);
@@ -187,6 +212,17 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     if(g.CheckFramebufferStatus(DRAW_FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)return Result::resources;
     g.BindFramebuffer(FRAMEBUFFER,p->fbos[1]);
     g.FramebufferTexture2D(FRAMEBUFFER,DEPTH_ATTACHMENT,TEXTURE_2D,p->textures[1],0);
+    g.DrawBuffer(ZERO);g.ReadBuffer(ZERO);
+    if(g.CheckFramebufferStatus(FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)return Result::resources;
+    // Layer color tests against the same copied scene depth; layer depth
+    // keeps the nearest translucent surface (initialized to that copy).
+    g.BindFramebuffer(FRAMEBUFFER,p->fbos[2]);
+    g.FramebufferTexture2D(FRAMEBUFFER,COLOR_ATTACHMENT0,TEXTURE_2D,p->textures[3],0);
+    g.FramebufferTexture2D(FRAMEBUFFER,DEPTH_ATTACHMENT,TEXTURE_2D,p->textures[1],0);
+    g.DrawBuffer(COLOR_ATTACHMENT0);g.ReadBuffer(COLOR_ATTACHMENT0);
+    if(g.CheckFramebufferStatus(FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)return Result::resources;
+    g.BindFramebuffer(FRAMEBUFFER,p->fbos[3]);
+    g.FramebufferTexture2D(FRAMEBUFFER,DEPTH_ATTACHMENT,TEXTURE_2D,p->textures[4],0);
     g.DrawBuffer(ZERO);g.ReadBuffer(ZERO);
     if(g.CheckFramebufferStatus(FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)return Result::resources;
     g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
@@ -206,7 +242,8 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
     abort(p);
     if(!poses || !count || count>64)return Result::invalid;
     if(!p->ready || t.generation!=p->generation || !t.occurrence || !t.framebuffer ||
-       t.framebuffer==p->fbos[0] || t.framebuffer==p->fbos[1] || t.width!=p->width || t.height!=p->height ||
+       t.framebuffer==p->fbos[0] || t.framebuffer==p->fbos[1] || t.framebuffer==p->fbos[2] || t.framebuffer==p->fbos[3] ||
+       t.width!=p->width || t.height!=p->height ||
        !rectangle(t.viewport,t.width,t.height) || !rectangle(t.scissor,t.width,t.height) ||
        !std::isfinite(t.depth_scale) || !std::isfinite(t.depth_translate) || t.depth_scale<=0)return Result::invalid;
     uint64_t total_vertices=0;
@@ -250,6 +287,8 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
     for(auto cap:enables)g.Disable(cap);
     g.Disablei(SCISSOR_TEST,0);
     g.Disablei(BLEND,0);g.ColorMaski(0,1,1,1,1);g.PolygonMode(FRONT_AND_BACK,FILL);
+    const bool layered=p->layer.open && !p->layer.broken && !p->layer.active &&
+        p->layer.source==t.framebuffer && t.depth==Depth::ordinary;
     g.BindFramebuffer(READ_FRAMEBUFFER,t.framebuffer);
     if(g.CheckFramebufferStatus(READ_FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)return Result::resources;
     int32_t source_selector=0;g.GetIntegerv(READ_BUFFER,&source_selector);g.ReadBuffer(COLOR_ATTACHMENT0);
@@ -307,8 +346,11 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.Uniform2f(p->uniforms[4],t.depth_scale,t.depth_translate);g.Uniform1f(p->uniforms[5],pose.opacity);
         g.Uniform1i(p->uniforms[6],0);g.Uniform1i(p->uniforms[7],1);
         g.Uniform1f(p->uniforms[8],pose.hue_degrees);
+        g.Uniform1i(p->uniforms[9],2);g.Uniform1i(p->uniforms[10],3);g.Uniform1i(p->uniforms[11],layered ? 1 : 0);
         g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,p->textures[2]);g.BindSampler(0,0);
         g.ActiveTexture(TEXTURE0+1);g.BindTexture(TEXTURE_2D,t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture);g.BindSampler(1,0);
+        g.ActiveTexture(TEXTURE0+2);g.BindTexture(TEXTURE_2D,p->textures[3]);g.BindSampler(2,0);
+        g.ActiveTexture(TEXTURE0+3);g.BindTexture(TEXTURE_2D,p->textures[4]);g.BindSampler(3,0);
         // Private nearest-surface prepass, then exactly one color contribution
         // per pixel, including coplanar model seams and overlapping triangles.
         g.ColorMaski(0,0,0,0,0);g.DrawArrays(TRIANGLES,first,pose.count);
@@ -320,8 +362,82 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
     }
       first+=pose.count;
     }
+    if(layered)++p->layer_stats.applied;
     p->target=t;p->begun=true;return Result::ok;
 }
+
+Result begin_layer(Instance* p,const Target& t,LayerPass pass) {
+    if(!p || !p->ready || p->layer.active || uint32_t(pass)>uint32_t(LayerPass::depth))return Result::invalid;
+    if(p->layer.broken)return Result::state;
+    if(t.generation!=p->generation || !t.framebuffer || t.width!=p->width || t.height!=p->height ||
+       t.framebuffer==p->fbos[0] || t.framebuffer==p->fbos[1] || t.framebuffer==p->fbos[2] || t.framebuffer==p->fbos[3])
+        return Result::invalid;
+    if(t.samples!=1 || t.unsupported || t.depth!=Depth::ordinary)return Result::unsupported;
+    if(p->layer.open && p->layer.source!=t.framebuffer)return Result::invalid;
+    const auto& g=p->g;
+    int32_t draw=0;g.GetIntegerv(DRAW_FRAMEBUFFER_BINDING,&draw);
+    if(uint32_t(draw)!=t.framebuffer)return Result::state;
+    // Mirror only a draw that composites over what lies behind it and leaves
+    // depth alone: the game's own dst = 1 - src alpha with a source factor
+    // that never reads the destination. Anything else stays out of the layer.
+    int32_t blend[6]={};uint8_t blending=0,depth_mask=1;
+    g.GetBooleani_v(BLEND,0,&blending);g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
+    for(size_t i=0;i<6;++i)g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
+    if(!blending || depth_mask || !g.IsEnabled(DEPTH_TEST) || blend[4]!=int32_t(FUNC_ADD) ||
+       blend[1]!=int32_t(ONE_MINUS_SRC_ALPHA) || (blend[0]!=int32_t(ONE) && blend[0]!=int32_t(SRC_ALPHA))) {
+        if(pass==LayerPass::color)++p->layer_stats.skipped_blend;
+        return Result::unsupported;
+    }
+    if(!p->layer.open) {
+        if(!source_format(g,Depth::ordinary))return Result::unsupported;
+        // Scissor applies to blits and clears; the game's value is restored below.
+        uint8_t scissor=0;g.GetBooleani_v(SCISSOR_TEST,0,&scissor);
+        int32_t read=0;g.GetIntegerv(READ_FRAMEBUFFER_BINDING,&read);
+        uint8_t mask[4]={};g.GetBooleani_v(COLOR_WRITEMASK,0,mask);
+        g.Disablei(SCISSOR_TEST,0);
+        g.BindFramebuffer(READ_FRAMEBUFFER,t.framebuffer);
+        for(uint32_t fbo:{p->fbos[1],p->fbos[3]}) {
+            g.BindFramebuffer(DRAW_FRAMEBUFFER,fbo);
+            g.BlitFramebuffer(0,0,t.width,t.height,0,0,t.width,t.height,DEPTH_BUFFER_BIT,NEAREST);
+        }
+        g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[2]);g.ColorMaski(0,1,1,1,1);
+        const float clear[4]={0,0,0,1}; // nothing in front yet: no color, everything let through
+        g.ClearBufferfv(COLOR,0,clear);
+        g.ColorMaski(0,mask[0],mask[1],mask[2],mask[3]);
+        g.BindFramebuffer(READ_FRAMEBUFFER,read);g.BindFramebuffer(DRAW_FRAMEBUFFER,t.framebuffer);
+        if(scissor)g.Enablei(SCISSOR_TEST,0);
+        p->layer.open=true;p->layer.source=t.framebuffer;++p->layer_stats.opened;
+    }
+    auto& l=p->layer;
+    l.draw_fbo=draw;std::copy(blend,blend+6,l.blend);l.depth_mask=depth_mask;
+    g.GetBooleani_v(COLOR_WRITEMASK,0,l.color_mask);
+    if(pass==LayerPass::color) {
+        g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[2]);g.ColorMaski(0,1,1,1,1);
+        g.BlendFuncSeparatei(0,blend[0],blend[1],ZERO,ONE_MINUS_SRC_ALPHA);
+        g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);
+    } else {
+        g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[3]);g.DepthMask(1);
+    }
+    l.active=true;l.pass=pass;return Result::ok;
+}
+void end_layer(Instance* p) {
+    if(!p || !p->layer.active)return;
+    const auto& g=p->g;const auto& l=p->layer;
+    g.BindFramebuffer(DRAW_FRAMEBUFFER,l.draw_fbo);
+    g.BlendFuncSeparatei(0,l.blend[0],l.blend[1],l.blend[2],l.blend[3]);
+    g.BlendEquationSeparatei(0,l.blend[4],l.blend[5]);
+    g.ColorMaski(0,l.color_mask[0],l.color_mask[1],l.color_mask[2],l.color_mask[3]);
+    g.DepthMask(l.depth_mask);
+    if(l.pass==LayerPass::color)++p->layer_stats.mirrored;
+    p->layer.active=false;
+}
+void clear_layer(Instance* p) {
+    if(!p)return;end_layer(p);p->layer.open=p->layer.broken=false;p->layer.source=0;
+}
+void break_layer(Instance* p) {
+    if(p && p->layer.open && !p->layer.broken) {p->layer.broken=true;++p->layer_stats.broken;}
+}
+LayerStats layer_stats(const Instance* p) {return p ? p->layer_stats : LayerStats{};}
 
 Result begin_hud(Instance* p,uint64_t occurrence) {
     if(!p || !p->begun || p->finalized || p->hud || p->target.occurrence!=occurrence) {abort(p);return Result::invalid;}
@@ -345,7 +461,8 @@ Display display(const Instance* p) {
 void destroy(Instance* p) {
     if(!p)return;abort(p);const auto& g=p->g;
     p->shadow.destroy(g);
-    g.DeleteTextures(3,p->textures);g.DeleteFramebuffers(2,p->fbos);g.DeleteRenderbuffers(1,&p->self_depth);
+    end_layer(p);
+    g.DeleteTextures(5,p->textures);g.DeleteFramebuffers(4,p->fbos);g.DeleteRenderbuffers(1,&p->self_depth);
     g.DeleteVertexArrays(1,&p->vao);g.DeleteBuffers(1,&p->vbo);if(p->shader_program)g.DeleteProgram(p->shader_program);delete p;
 }
 void abandon(Instance* p) {delete p;}

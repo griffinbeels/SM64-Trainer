@@ -18,5 +18,9 @@ void color_target_changed();
 void triangles(uint32_t count);
 bool begin_hud();
 void end_hud();
+// Translucent world layer: after a world triangle draw, mirror it once per
+// pass (0 color, 1 depth) while begin_layer returns true; see ghost_compositor.
+bool begin_layer(uint32_t pass);
+void end_layer();
 void clear_target();
 }

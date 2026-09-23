@@ -400,6 +400,55 @@ overlap fade apply through the pose; the shadow is black, so tint does not.
 `shadow_enabled` (GP5/GIPC5 onward, default on; `NativeChannel` key
 `shadow_enabled`, a bool) removes every ghost's shadow without rebuilding it.
 
+### Translucent world layer (water over the ghost)
+
+The ghost is drawn after the whole world pass against copied terrain depth.
+The game's water surfaces (SM64 movtex in the transparent layer, render mode
+`G_RM_AA_ZB_XLU_SURF`) test depth but never write it, so the ghost used to be
+drawn over them: a submerged ghost read through the water untinted. Live Mario
+is drawn before them and blended under them.
+
+The staged `ContextImpl::drawTriangles` seam
+([stage_ghost_renderer.py](../tools/stage_ghost_renderer.py)) repeats each
+world triangle draw ([ghost_link.cpp](../plugin/gfxwrap/ghost_link.cpp)
+`begin_layer`) whose N64 render mode compares but does not update depth, with
+the renderer's own program, textures, depth function and polygon offset, twice
+([ghost_compositor.cpp](../plugin/gfxwrap/ghost_compositor.cpp)
+`begin_layer`). The first layer draw opens the layer: it copies the game's depth
+and clears the layer to no color and full transmittance. Pass 0 keeps the
+game's RGB blend factors and replaces alpha with (ZERO, ONE_MINUS_SRC_ALPHA),
+so the layer holds the accumulated premultiplied color and the fraction let
+through. Pass 1 writes the nearest surface depth. Each pass restores the exact
+draw framebuffer, blend, color mask and depth mask. The ghost fragment shader
+then replaces a fragment behind that depth with `layer.rgb + ghost * layer.a`
+before its opacity blend. The result equals the game blending that surface
+over a ghost standing there, and a ghost in front of the surface is unchanged.
+It needs no captured colors and no format change. The camera below the
+surface works the same way, since SM64 draws water from both sides.
+
+The layer takes only a draw whose GL blend is dst `ONE_MINUS_SRC_ALPHA` with
+source `ONE` or `SRC_ALPHA`, depth test on and depth writes off. Other blends
+(additive, destination-reading) are counted (`skipped_blend`) and stay out. A
+depth-writing world draw after the layer opened, a failed depth pass or a GL
+error drops the layer for that list (`broken`); the ghost then draws as before.
+N64 image depth and multisampling never open it. The layer composes several
+surfaces in draw order but keeps one nearest depth, so a ghost between two
+translucent surfaces takes both. Level fog on the ghost's own body is not
+reproduced; that would need the frame's fog state, not this layer.
+
+The [water witness](../tests/test_ghost_water.py) (`SM64_TEST_GHOST_COMPOSITOR=1`)
+plays the renderer with two water bands, one in front of and one behind the
+ghost: pixels behind the near band equal the analytic water blend at 100% and
+50% opacity, pixels in front and outside the ghost are unchanged, the game frame
+is bit-identical with and without the repeated draws, state restores exactly,
+and a broken or refused layer draws as before. Removing the shader tint, the
+depth comparison, the alpha override, the depth pass or the depth-mask restore
+each turns it red. The connected pipeline witness draws real Mario behind a
+water plane at his waist: 5535 pixels take the water blend exactly, 4437 above
+it and every pixel outside him are unchanged (2026-09-23, RTX 5090). Live GLideN64
+has not run it; which SM64 draws qualify is known from the decomp render
+modes and the pinned blend code, not from a live frame.
+
 ### Sound events
 
 Capture reads the `play_sound` request ring at the same boundary as the pose
