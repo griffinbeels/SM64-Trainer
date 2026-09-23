@@ -26,6 +26,10 @@ uint32_t configuration = 0, clean_fbo = 0, clean_texture = 0;
 uint64_t model_id = 0, particle_model = 0, occurrence = 0;
 gp_draw_token draw_token{};
 bool provisional = false, hud = false, ready = false, layer = false;
+// This list can draw a ghost: playback is drawing on the prepared model. The
+// translucent world layer (every XLU draw again plus two depth blits) runs
+// only then, so a retired or hidden-by-request playback costs nothing.
+bool drawing = false;
 using GetUniform = void (APIENTRY *)(GLuint, GLint, GLint*);
 GetUniform get_uniform = nullptr;
 
@@ -94,11 +98,11 @@ void context_lost() {
         else ghost_compositor::abandon(compositor);
     }
     compositor = nullptr; owner = {}; presentation_owner = {}; dispatch = {};
-    model_id = particle_model = 0; prepared_width = prepared_height = width = height = 0;
+    model_id = particle_model = 0; prepared_width = prepared_height = width = height = 0; drawing = false;
     get_uniform = nullptr;
 }
 void begin(uint32_t rom, uint32_t config_id) {
-    cancel();
+    cancel(); drawing = false;
     ghost_compositor::clear_layer(compositor);
     ghost_playback::safe_boundary(rom, config_id);
     configuration = config_id;
@@ -145,6 +149,7 @@ void begin(uint32_t rom, uint32_t config_id) {
                                                               particles.atlas_width, particles.atlas_height);
         if (replay_gl::EndCapture() && result == ghost_compositor::Result::ok) particle_model = model_id;
     }
+    drawing = compositor && model_id && model_id == wanted_model && ghost_playback::drawing();
 }
 void observe(const ghost::RasterTarget &target) {
     if (target.width && target.height && target.width <= 8192 && target.height <= 8192) {
@@ -186,25 +191,26 @@ void finish(const ghost::WorldPass *world) {
     if (!ready) cancel();
 }
 bool begin_layer(uint32_t pass, uint32_t framebuffer) {
-    if (layer || !compositor || !model_id || pass > 1 || !ghost_presentation::clean_consumer()
+    if (layer || !drawing || !compositor || !model_id || pass > 1 || !ghost_presentation::clean_consumer()
             || width != prepared_width || height != prepared_height) return false;
     ghost_compositor::Target target{};
     target.generation = owner.context_generation; target.framebuffer = framebuffer;
     target.width = width; target.height = height; target.samples = 1;
     target.unsupported = config.video.multisampling > 0;
     target.depth = ghost_compositor::Depth::ordinary;
-    if (!replay_gl::BeginCapture()) return false;
+    if (!replay_gl::BeginLayer()) return false;
     layer = ghost_compositor::begin_layer(compositor, target, ghost_compositor::LayerPass(pass))
         == ghost_compositor::Result::ok;
     // A surface whose color entered the layer without its depth would tint
     // nothing behind it consistently: drop the layer for this list instead.
-    if (!layer && (!replay_gl::EndCapture() || pass == 1)) ghost_compositor::break_layer(compositor);
+    if (!layer && (!replay_gl::EndLayer() || pass == 1)) ghost_compositor::break_layer(compositor);
     return layer;
 }
 void end_layer() {
     if (!layer) return;
     ghost_compositor::end_layer(compositor); layer = false;
-    if (!replay_gl::EndCapture()) ghost_compositor::break_layer(compositor);
+    // The layer's own GL error drops the layer for this list, never the source.
+    if (!replay_gl::EndLayer()) ghost_compositor::break_layer(compositor);
 }
 void break_layer() { ghost_compositor::break_layer(compositor); }
 bool begin_hud() {

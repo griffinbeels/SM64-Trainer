@@ -11,7 +11,20 @@
 #define GP_GHOSTS 16u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
-#define GP_CLIP_BUDGET (128u * 1024u * 1024u)
+/* Sized so a full set of long ghosts can be replaced by another full set in
+ * flight: GP_CLIP_SLOTS copies of GP_LONG_GHOST_FRAMES records with their
+ * action index (static_assert in ghost_playback.cpp). GC6 records are about
+ * twice GC5's (particles, and the held object), so 128 MiB would have cut a
+ * swappable set to under two minutes a ghost; his longest raced segment,
+ * WDW 100 coins at 1m51, is 3,321 records with its dance. The ceiling is
+ * held down by the host: his Project64 1.6 (wermi's build v7) is 32-bit and
+ * NOT large-address-aware (checked 2026-09-23), so the emulator, GLideN64,
+ * its texture caches, the worker's retained files and these copies share
+ * 2 GiB. 192 MiB keeps 2m40 a ghost swappable, and about 5m20 unswapped.
+ * A ceiling, never a reservation: storage follows the clips actually loaded,
+ * and a refusal withholds the set with GIPC_CLIP rather than failing. */
+#define GP_CLIP_BUDGET (192u * 1024u * 1024u)
+#define GP_LONG_GHOST_FRAMES 4800u /* 2m40 at 30 Hz */
 #define GP_STAR_ACTIONS 8u
 #ifndef __cdecl
 #if !defined(_MSC_VER)
@@ -207,6 +220,11 @@ void set_sound_sink(const SoundSink *);
 /* Recheck immediately before final presentation; cancellation/configuration
  * during a list must not present an older provisional candidate. */
 bool current(const gp_draw_token &);
+/* A displayed request holds clips for the prepared model on this renderer:
+ * the only state in which a frame can draw a ghost. current() is this plus
+ * the token; work done for a ghost before evaluate (the translucent world
+ * layer) runs only while this holds. */
+bool drawing();
 /* Actual renderer owner before its context/thread goes away. Detaches and
  * retires storage for worker reclamation; no GL or resource destruction. */
 void retire_on_context_loss();

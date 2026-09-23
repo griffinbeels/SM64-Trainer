@@ -261,13 +261,37 @@ int main(int argc, char** argv) {
         check(sg_model_get_atlas(model,&atlas)==SG_OK && atlas.animation_count==209 && atlas.rgba,"atlas");
         check(atlas.width==SG_ATLAS_CELLS*64 && atlas.height==64,"atlas dimensions");
         {
-            // Mario's particle models read from the same segment: every frame one
-            // textured quad, bubble first, splash frames 32x64.
+            // Mario's particle models: 58 textured quads (bubble first, splash
+            // frames 32x64), then 12 lit meshes (stars, punch dirt, the cap).
             sg_particle_view particles{};
-            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==58 &&
-                particles.vertex_count==348 && particles.atlas_rgba,"particle frames");
-            for(uint32_t i=0;i<particles.frame_count;++i)
+            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==70 &&
+                particles.atlas_rgba,"particle frames");
+            for(uint32_t i=0;i<58;++i)
                 check(particles.frames[i].vertex_count==6 && particles.frames[i].first_vertex==6*i,"one quad per particle frame");
+            std::fprintf(stderr,"particle vertices %u; lit frames:",particles.vertex_count);
+            for(uint32_t i=58;i<particles.frame_count;++i)std::fprintf(stderr," %08x=%u",particles.frames[i].display_list,particles.frames[i].vertex_count);
+            std::fprintf(stderr,"\n");
+            {
+                // A lit cartoon star: 8 triangles lit by its list's own light.
+                const auto& star=particles.frames[58];
+                const auto& v=particles.vertices[star.first_vertex];
+                check(star.display_list==0x0302C298u && star.vertex_count==24 && (v.mode&SG_PARTICLE_LIT)
+                    && v.light_dir[0]==0x28 && v.normal[0]*v.normal[0]+v.normal[1]*v.normal[1]+v.normal[2]*v.normal[2]>0.5f,
+                    "lit star mesh");
+                // The star the game draws (oAnimState 4): unlit, every vertex flat yellow,
+                // as his ground-pound footage shows (255,253,0 decoded).
+                const auto& drawn=particles.frames[62];
+                bool yellow=drawn.display_list==0x0302C318u && drawn.vertex_count==24;
+                for(uint32_t i=0;yellow && i<drawn.vertex_count;++i){const auto& d=particles.vertices[drawn.first_vertex+i];
+                    yellow=!(d.mode&SG_PARTICLE_LIT) && d.rgba[0]==255 && d.rgba[1]==255 && d.rgba[2]==0 && d.rgba[3]==255;}
+                check(yellow,"drawn star is unlit yellow");
+                // The cap: shade mixed toward its logo, alpha by the object's opacity.
+                const auto& cap=particles.frames[69];
+                bool mixes=false;
+                for(uint32_t i=0;i<cap.vertex_count;++i)mixes|=(particles.vertices[cap.first_vertex+i].mode&SG_PARTICLE_MIX)!=0;
+                check(cap.display_list==0x03022F48u && cap.fade==1 && cap.vertex_count>60 && mixes,"knocked-off cap mesh");
+                check(particles.vertex_count<=SG_PARTICLE_MAX_VERTICES,"vertex budget");
+            }
             check(particles.frames[0].display_list==0x0401DD60u && particles.frames[0].layer==SG_PARTICLE_CUTOUT,"bubble frame");
             // The lava flame (common1) is shaded by its environment colour, not vertices.
             const auto& flame=particles.vertices[particles.frames[45].first_vertex].rgba;

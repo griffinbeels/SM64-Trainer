@@ -237,4 +237,21 @@ bool __cdecl EndCapture() {
     if (error != GL_NO_ERROR) { saved_error = error; invalidate(); return false; }
     return nominal;
 }
+bool __cdecl BeginLayer() { return BeginCapture(); }
+bool __cdecl EndLayer() {
+    if (!capture_open || GetCurrentThreadId() != identity.owner_thread) return false;
+    capture_open = false;
+    bool clean = true;
+    // One flag per error kind at most, so a bounded drain empties it; none is
+    // left for the next capture to mistake for the renderer's.
+    for (unsigned i = 0; i < 8; ++i) {
+        const GLenum error = ::glGetError();
+        if (error == GL_NO_ERROR) return clean && nominal;
+        if (error == GL_OUT_OF_MEMORY || error == 0x0507 /* GL_CONTEXT_LOST */) {
+            saved_error = error; invalidate(); return false;
+        }
+        clean = false;
+    }
+    invalidate(); return false;
+}
 }

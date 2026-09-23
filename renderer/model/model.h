@@ -101,12 +101,21 @@ typedef struct sg_mesh {
  * model-local triangles; uv lies inside rect, the frame's clamped atlas cell;
  * rgba is the combiner's shade factor (white for decal frames). CUTOUT draws
  * texels with alpha, BLEND blends texture alpha times vertex alpha. */
-enum { SG_PARTICLE_FRAMES = 64, SG_PARTICLE_MAX_VERTICES = 384, SG_PARTICLE_CELLS = 64,
+enum { SG_PARTICLE_FRAMES = 80, SG_PARTICLE_MAX_VERTICES = 1024, SG_PARTICLE_CELLS = 64,
        SG_PARTICLE_ATLAS_WIDTH = 512, SG_PARTICLE_ATLAS_HEIGHT = 256 };
-enum sg_particle_layer { SG_PARTICLE_CUTOUT = 1, SG_PARTICLE_BLEND = 2 };
+/* The game's layer: CUTOUT texture edge (alpha test at .5), BLEND
+ * translucent, OPAQUE opaque (alpha ignored). CUTOUT and OPAQUE write depth. */
+enum sg_particle_layer { SG_PARTICLE_CUTOUT = 1, SG_PARTICLE_BLEND = 2, SG_PARTICLE_OPAQUE = 3 };
+/* LIT: rgb is the game's lighting of normal (model space) by the list's own
+ * directional light (dir in view space, as F3D takes it) plus its ambient,
+ * computed at placement. MIX: rgb = mix(rgba, texture, texture alpha) (the
+ * cap's BLENDRGBFADEA) instead of texture times rgba. */
+enum sg_particle_vertex_mode { SG_PARTICLE_LIT = 1, SG_PARTICLE_MIX = 2 };
 typedef struct sg_particle_vertex {
-    float position[3], uv[2], rect[4];
+    float position[3], uv[2], rect[4], normal[3];
     uint8_t rgba[4];
+    uint8_t mode, light_ambient[3], light_diffuse[3];
+    int8_t light_dir[3];
 } sg_particle_vertex;
 /* fade: the frame's alpha is the object's opacity (environment alpha set by
  * the game's generated list), which the recording carries per particle. */

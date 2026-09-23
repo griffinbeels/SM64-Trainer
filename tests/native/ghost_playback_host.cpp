@@ -349,8 +349,11 @@ int main() {
         check(!pose.occlusion.enabled && !pose.occlusion.has_player,"switched-off fade reaches no pose");
         perspective=false;live.pose.position[0]=live.pose.position[2]=0;
         live.valid_fields&=~GC_VALID_POSE;
+        // The translucent world layer runs only while playback is drawing.
+        renderer.run([&]{check(ghost_playback::drawing(),"a displayed request is drawing");});
         const auto displayed=token;api->withdraw();
         renderer.run([&]{check(!ghost_playback::current(displayed),"withdraw cancels candidate immediately");
+            check(!ghost_playback::drawing(),"withdrawn playback draws nothing: no layer");
             ghost_playback::safe_boundary(7,4);});
         gp_status suspended{};check(api->status(&suspended,sizeof(suspended))==GP_OK
             && suspended.model_state==GP_MODEL_RENDER_OWNED && suspended.clips_owned==1
@@ -385,7 +388,8 @@ int main() {
         draw(0,true,GP_READY,6,2);
         api->withdraw();
         check(api->prepare_model(2,rom.data(),uint32_t(rom.size()))==GP_DEFERRED,"withdrawn model replacement waits for retirement");
-        renderer.run([&]{check(!ghost_playback::current(token),"replacement cancels displayed candidate");ghost_playback::safe_boundary(7,4);});
+        renderer.run([&]{check(!ghost_playback::current(token),"replacement cancels displayed candidate");
+            ghost_playback::safe_boundary(7,4);check(!ghost_playback::drawing(),"retired playback draws nothing: no layer");});
         refuse_adoption=true;check(api->collect()==GP_DEFERRED,"busy background adoption deferred");refuse_adoption=false;
         refuse_close=true;check(api->collect()==GP_DEFERRED,"busy close retains worker custody");refuse_close=false;
         check(api->collect()==GP_OK && closes==1 && last_close==worker,"worker retries actual close");
