@@ -166,17 +166,31 @@ int main(int argc, char **argv) {
 
         // Optional device smoke: silence only, skipped (stated) without a device.
         const bool device = waveOutGetNumDevs() > 0;
-        double smoke_latency = -1;
+        double smoke_latency = -1, fed_rate = 0;
+        uint64_t smoke_underruns = 0;
         if (device) {
             const auto before = ghost_audio::stats();
             ghost_audio::control(true, 0.0f);
+            LARGE_INTEGER frequency{}, begin{}, end{};
+            QueryPerformanceFrequency(&frequency);
             check(ghost_audio::start(rom.data(), rom.size(), ghost_audio::wave_out()) == ghost_audio::Start::ok, "waveOut opens");
-            for (int i = 0; i < 30; ++i) { Sleep(33); ghost_audio::cue(SOUND_ACTION_TERRAIN_LANDING); }
-            Sleep(150);
-            const auto stats = ghost_audio::stats();
+            const auto opened = ghost_audio::stats();
+            QueryPerformanceCounter(&begin);
+            for (int i = 0; i < 90; ++i) { Sleep(33); ghost_audio::cue(SOUND_ACTION_TERRAIN_LANDING); }
+            QueryPerformanceCounter(&end);
+            const auto at_end = ghost_audio::stats();
+            Sleep(100); // the last request reaches its tick
+            auto stats = ghost_audio::stats();
+            stats.ticks = at_end.ticks;
             ghost_audio::stop();
-            check(stats.played - before.played >= 30 && stats.silent_ticks - before.silent_ticks > 20,
+            check(stats.played - before.played >= 90 && stats.silent_ticks - before.silent_ticks > 60,
                   "device fed real ticks of silence");
+            // The device never runs dry, and is fed at its own rate (~32000 frames/s).
+            smoke_underruns = stats.underruns - before.underruns;
+            fed_rate = double(stats.ticks - opened.ticks) * 1076.0
+                / (double(end.QuadPart - begin.QuadPart) / double(frequency.QuadPart));
+            check(smoke_underruns == 0, "device never runs dry between ticks");
+            check(fed_rate > 30000 && fed_rate < 34500, "device fed in real time");
             smoke_latency = stats.max_latency_ms;
         }
         // The queue is bounded and never blocks its producer (no audio thread now).
@@ -185,9 +199,10 @@ int main(int argc, char **argv) {
         check(ghost_audio::stats().dropped - before.dropped == 300 - ghost_audio::queue_slots, "full queue drops and counts");
         std::printf("{\"ok\":true,\"checks\":%u,\"cues\":%zu,\"nonzero_samples\":%zu,"
             "\"half_energy_ratio\":%.6f,\"capture_max_latency_ms\":%.3f,\"device\":%s,\"device_max_latency_ms\":%.3f,"
-            "\"stale_samples_when_left_on\":%zu}\n",
+            "\"stale_samples_when_left_on\":%zu,\"device_underruns\":%llu,\"device_fed_frames_per_second\":%.0f}\n",
             checks, full.cue_at.size(), nonzero, half_energy / full_energy, full.stats.max_latency_ms,
-            device ? "true" : "false", smoke_latency, stale_full);
+            device ? "true" : "false", smoke_latency, stale_full,
+            static_cast<unsigned long long>(smoke_underruns), fed_rate);
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "audio witness: %s (check %u)\n", error.what(), checks);

@@ -54,6 +54,6 @@ def test_ghost_sound_engine_queue_and_volume(tmp_path):
     assert 0.24 < report["half_energy_ratio"] < 0.26
     # Request to first audible sample, with the device a tick deep.
     assert report["stale_samples_when_left_on"] > 1000  # the resume check is not vacuous
-    assert report["capture_max_latency_ms"] < 60
+    assert report["capture_max_latency_ms"] < 80
     if report["device"]:
-        assert report["device_max_latency_ms"] < 60, report
+        assert report["device_underruns"] == 0 and report["device_max_latency_ms"] < 80, report

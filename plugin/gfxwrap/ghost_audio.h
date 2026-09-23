@@ -8,7 +8,7 @@
 
 namespace ghost_audio {
 constexpr uint32_t queue_slots = 256;
-constexpr uint32_t low_water_frames = 544; // synthesize the next tick at or below this
+constexpr uint32_t low_water_frames = 1088; // synthesize the next tick at or below this (34 ms)
 constexpr uint32_t tick_capacity = 1088;   // SA_TICK_MAX_FRAMES
 
 /* Render thread only: bounded single-producer queue; never waits/allocates.
@@ -48,6 +48,7 @@ struct Stats {
     uint64_t cues, dropped, played, discarded, ticks, silent_ticks;
     double last_latency_ms, max_latency_ms; // request to its first audible sample
     uint32_t running;
+    uint64_t underruns; // ticks written after the device had already run dry
 };
 Stats stats();
 }
