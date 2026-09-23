@@ -88,6 +88,38 @@ loader, and cover floor tilt, nonuniform scale, camera motion and ownership
 refusals. A new live recording remains the acceptance check for the installed
 practice ROM's complete graph and emitted command sequence.
 
+### Cap effects (vanish and metal)
+
+`geo_switch_mario_cap_effect` picks Mario's body from `modelState >> 8`: 0
+ordinary, 1 vanish, 2 metal, 3 metal vanish. The root walk already follows
+the selected case. `geo_mirror_mario_set_alpha` builds the alpha list from
+`modelState`. With `0x100 | alpha` below 255 (the vanish cap's
+`MODEL_STATE_NOISE_ALPHA` 0x180, or a warp fade), the list is
+`gDPSetAlphaCompare(G_AC_DITHER)`, `gDPSetEnvColor(255,255,255,alpha)` and the
+end (24 bytes, transparent layer); otherwise it is the opaque envcolor and the
+end (16 bytes). Capture expects exactly the list the recorded `model_state`
+implies, alpha included ([ghost_root.cpp](../plugin/gfxwrap/ghost_root.cpp)).
+A mismatch is not Mario's alpha. No capture field changed: `model_state`
+already carries both effects.
+
+Playback ([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp)) multiplies the
+user's opacity by the recorded alpha (0x80 for the vanish cap, about half).
+The game's dithered transparency becomes an even blend. The model draws the
+metal body from the ROM's own metal lists. Those lists switch on
+`G_TEXTURE_GEN`, which the model now reports per triangle
+(`SG_MATERIAL_TEXGEN`; [patches.py](../renderer/model/patches.py)). Playback
+replaces those vertices' coordinates the way the live renderer computes them
+for SM64's F3D lists. SM64 sends no `gSPLookAt`, so GLideN64 takes the unit
+eye-space normal's x and y, `(n + 1) * 512`, scaled by
+`gSPTexture(0x0F80, 0x07C0)`. That gives 0..62 x 0..31 texels of the ROM's
+64x32 metal texture, under the live view. The metal body is fully
+environment mapped (2256 of 2256 vertices on the US ROM). Metal with the wing
+cap references wing textures libsm64 does not load, so the model refuses it
+(`SG_MESH_UNSUPPORTED_MATERIAL`) and that ghost hides rather than guessing.
+Remaining approximations: the dither pattern, and the lookat assumption. If
+a title-screen `gSPLookAt` left GLideN64's lookat enabled, the live mapping
+would rotate; only a live comparison settles that.
+
 ### Pose refusals and the gaps they closed
 
 Every refused pose names its one failing check in `gc_pose.refusal` (the
@@ -124,8 +156,7 @@ causes, each fixed at its source:
   scale) and the record says `GC_ROOT_TRS`. A floor-aligned Mario that moved
   while culled stays refused (`not_drawn_floor`: the tilt is unknown). A
   Mario whose alpha list executed without his body (`body_mismatch`), a
-  duplicate, an interrupted list, a shared model or a translucent/metal
-  Mario is never carried. The star-spawn freeze starts after Mario's own
+  duplicate, an interrupted list or a shared model is never carried. The star-spawn freeze starts after Mario's own
   update that frame, so its first culled frame has already moved off the
   last drawn one; route (2) covers it. Culled frames carry no shadow unless
   route (1) applies.
@@ -438,7 +469,8 @@ the model's C ABI and reuses caller-owned mesh storage. Evaluation does not run
 physics or advance animation. `area_update_counter` drives visual callbacks;
 body action stays separate from Mario action, and raw head angles map to graph
 XYZ as `[1], [2], [0]`. Explicit per-vertex material codes come from actual N64
-combiner commands, not a UV heuristic. Unsupported model state is refused.
+combiner commands, not a UV heuristic. [Cap effects](#cap-effects-vanish-and-metal)
+describes the vanish and metal material routes.
 
 The camera comes from bounded lookup of the active graph camera matching the
 area camera, including persistent position/focus/roll. It is not the final
@@ -493,8 +525,9 @@ segment base; the combiner/texture-load, triangle and restore lists match the
 US segment-2 words; every vertex shade is white; every texel has zero
 intensity; the matrix is rigid and within 1024 units of Mario's
 `cameraToObject`. Anything else (another object's shadow, none drawn, a
-repeated or interrupted list, a translucent or metal Mario whose root is
-refused) leaves the record without `GC_VALID_SHADOW`.
+repeated or interrupted list, a root that was not proven) leaves the record
+without `GC_VALID_SHADOW`. A vanish-cap alpha list is 24 bytes, not 16, so the
+shadow's offsets count from the end of the alpha list the root proof owns.
 
 The record keeps the executed matrix, raw vertex positions, S10.5 texture
 coordinates, per-vertex alpha and the texture's alpha nibbles. Playback

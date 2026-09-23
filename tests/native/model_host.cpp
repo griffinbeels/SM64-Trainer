@@ -292,6 +292,34 @@ int main(int argc, char** argv) {
         for(unsigned i=0;i<mesh.out.vertex_count;i+=3)
             check(mesh.out.material[i]==mesh.out.material[i+1] && mesh.out.material[i]==mesh.out.material[i+2],
                 "triangle material agreement");
+        {
+            // Cap effects: geo_switch_mario_cap_effect picks the vanish,
+            // metal or metal-vanish body from modelState. Metal's lists turn
+            // on G_TEXTURE_GEN, which the model marks per triangle.
+            const auto texgen=[&]{
+                unsigned count=0;
+                for(unsigned i=0;i<mesh.out.vertex_count;++i)count+=(mesh.out.material[i]&SG_MATERIAL_TEXGEN)!=0;
+                return count;
+            };
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && texgen()==0,
+                "ordinary Mario has no generated texture coordinates");
+            b=a; b.model_state=0x180;
+            check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.out.vertex_count>1800 && texgen()==0,
+                "vanish-cap body");
+            b=a; b.model_state=0x200;
+            check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.out.vertex_count>1800,"metal body");
+            const unsigned metal=texgen();
+            check(metal==mesh.out.vertex_count,"every metal triangle is environment mapped");
+            for(unsigned i=0;i<mesh.out.vertex_count;++i)
+                check((mesh.out.material[i]&~uint32_t(SG_MATERIAL_TEXGEN))<=SG_MATERIAL_MODULATE_RGBA,"metal material code");
+            b=a; b.model_state=0x340;
+            check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && texgen()>1000,"metal vanish-cap body");
+            b=a; b.model_state=0x200; b.cap_state=2;
+            const int32_t winged=sg_model_evaluate(model,&b,&mesh.out);
+            // Metal wings reference textures libsm64 does not load: refused, not guessed.
+            check(winged!=SG_OK && (mesh.out.error_flags&SG_MESH_UNSUPPORTED_MATERIAL),"metal wing cap refused explicitly");
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"cap effect independence");
+        }
         b=a; b.head_rotation[1]=8192;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.snapshot()!=first_mesh,"effective head rotation");
         b=a; b.body_action=0x04000440; b.torso_angles[0]=4000; // ACT_WALKING.

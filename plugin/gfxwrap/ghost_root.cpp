@@ -87,12 +87,13 @@ bool matrix_at(Ram &ram, uint32_t command, const float *matrix) {
 // SM64 allocates display-list memory downward from gGfxPoolEnd in traversal
 // order. For Mario (mario_geo: GEO_SHADOW -> GEO_SCALE -> culling ASM ->
 // alpha ASM) a drawn shadow is: 9 Vtx, its 5-command list, its G_MTX, the
-// scale G_MTX, then the opaque alpha list (n64decomp shadow.c
-// create_shadow_player, rendering_graph_node.c geo_process_shadow/scale,
-// mario_misc.c make_gfx_mario_alpha). The root proof already owns that alpha
-// list, so Mario's shadow sits at fixed offsets from it; any other object's
-// shadow, or none, cannot satisfy them together with the exact list shapes.
-constexpr uint32_t shadow_list_offset = 144, shadow_matrix_offset = 80, shadow_vertex_offset = 184;
+// scale G_MTX, then the alpha list (n64decomp shadow.c create_shadow_player,
+// rendering_graph_node.c geo_process_shadow/scale, mario_misc.c
+// make_gfx_mario_alpha). The root proof already owns that alpha list, so
+// Mario's shadow sits at fixed offsets past its end (16 bytes opaque, 24
+// translucent); any other object's shadow, or none, cannot satisfy them
+// together with the exact list shapes.
+constexpr uint32_t shadow_list_offset = 128, shadow_matrix_offset = 64, shadow_vertex_offset = 168;
 struct Command { uint32_t w0, w1; };
 constexpr Command shadow_begin[] = {{0xe7000000u,0},{0xb6000000u,0x00022000u},
     {0xfc121824u,0xff33ffffu},{0xbb000001u,0xffffffffu},{0xb8000000u,0}};
@@ -125,7 +126,7 @@ bool translate(uint32_t segmented, uint32_t segment_base, uint32_t segment, uint
 }
 // Master-list call: G_MTX (its own allocation) + G_DL to the shadow list.
 bool shadow_master(gc_root_probe &p, Ram &ram, uint32_t pc, uint32_t physical, const float *matrix) {
-    const uint32_t alpha=p.mario_alpha;
+    const uint32_t alpha=p.mario_alpha+p.alpha_bytes;
     if (physical!=alpha+shadow_list_offset || !matrix_at(ram,pc,matrix)
             || ram.word(base+pc-4)!=alpha+shadow_matrix_offset) return false;
     const uint32_t list=base+physical, vertices=alpha+shadow_vertex_offset;
@@ -195,7 +196,7 @@ bool shadow_nested(gc_root_probe &p, Ram &ram, uint32_t dl, uint32_t physical) {
 void shadow_call(gc_root_probe &p, Ram &ram, uint32_t pc, uint32_t dl, uint32_t physical,
                  uint32_t depth, const float *matrix) {
     if (!p.mario_alpha || p.shadow_calls>1) return;
-    const uint32_t list=p.mario_alpha+shadow_list_offset;
+    const uint32_t list=p.mario_alpha+p.alpha_bytes+shadow_list_offset;
     if (dl==physical && physical==list) {
         // A second execution of the list cannot be attributed to one frame;
         // the master list runs every layer at the depth that ran the body.
@@ -273,9 +274,16 @@ void ghost_root_prepare(gc_root_probe &p, const gc_frame &frame, uint32_t object
     // writers of Mario's throwMatrix; otherwise his root is plain TRS.
     p.floor_aligned=ghost_floor_aligned(p.pose.action) || ghost_floor_aligned(p.pose.body_action)
         || (ram.word(object+0x8c)&0xa00u) || !ram.ok;
-    // Translucent or metal Mario draws a different alpha list; unsupported,
-    // and never mistaken for a Mario the camera culled.
-    if (p.prepared) p.reason=uint8_t((p.pose.model_state&0x300u) ? GC_REFUSED_MATERIAL : GC_REFUSED_NONE);
+    if (p.prepared) p.reason=GC_REFUSED_NONE;
+    // geo_mirror_mario_set_alpha: the vanish cap (and a warp fade) sets
+    // modelState 0x100 | alpha. Metal (0x200) keeps the opaque list; the
+    // cap-effect switch already chose the variant body walked above.
+    const uint32_t fade=(p.pose.model_state&0x100u) ? (p.pose.model_state&0xffu) : 255u;
+    const uint32_t opaque[]={0xfb000000u,0xffffffffu,0xb8000000u,0};
+    // gDPSetAlphaCompare(G_AC_DITHER), gDPSetEnvColor(255,255,255,alpha), end.
+    const uint32_t translucent[]={0xb9000002u,3u,0xfb000000u,0xffffff00u|fade,0xb8000000u,0};
+    p.alpha_bytes=fade==255u ? sizeof(opaque) : sizeof(translucent);
+    std::memcpy(p.alpha_words,fade==255u ? opaque : translucent,p.alpha_bytes);
 }
 
 void ghost_root_display_list(gc_root_probe &p, uint32_t pc, uint32_t dl,
@@ -290,13 +298,13 @@ void ghost_root_display_list(gc_root_probe &p, uint32_t pc, uint32_t dl,
     }
     if (command) shadow_call(p,ram,pc,dl,physical_dl,depth,matrix);
     p.armed=false;
-    // make_gfx_mario_alpha: opaque Mario has exactly ENVCOLOR + ENDDL.
-    // Translucent/metal material support is deliberately outside this route.
-    if (!command || (p.pose.model_state&0x300u) || dl!=physical_dl
-            || physical_dl>=p.ram_bytes || !ram.has(base+physical_dl,16,8)
-            || ram.word(base+physical_dl)!=0xfb000000u || ram.word(base+physical_dl+4)!=0xffffffffu
-            || ram.word(base+physical_dl+8)!=0xb8000000u || ram.word(base+physical_dl+12)
-            || !matrix_at(ram,pc,matrix)) return;
+    // make_gfx_mario_alpha: opaque Mario has exactly ENVCOLOR + ENDDL; a
+    // translucent one (vanish cap) sets dithered alpha compare first. The
+    // recorded modelState names which, and its alpha must be the executed one.
+    if (!command || dl!=physical_dl || physical_dl>=p.ram_bytes
+            || !ram.has(base+physical_dl,p.alpha_bytes,8) || !matrix_at(ram,pc,matrix)) return;
+    for (unsigned i=0;i<p.alpha_bytes/4;++i)
+        if (ram.word(base+physical_dl+4*i)!=p.alpha_words[i]) return;
     for (unsigned i=0;i<3;++i)
         if (std::fabs(matrix[12+i]-p.camera_to_object[i])>1.0f/32768.0f) return;
     p.alpha_seen=true;

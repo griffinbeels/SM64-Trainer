@@ -62,7 +62,7 @@ enum gc_refusal {
     GC_REFUSED_SHARED_MODEL = 15,   /* another active object uses Mario's model */
     GC_REFUSED_GRAPH = 16,          /* shadow/scale/ASM node shape differs */
     GC_REFUSED_BODY_GRAPH = 17,     /* selected body branch not walkable */
-    GC_REFUSED_MATERIAL = 18,       /* translucent/metal alpha list */
+    GC_REFUSED_MATERIAL = 18,       /* retired 2026-09-23: cap effects are proven */
     GC_REFUSED_NOT_DRAWN = 19,      /* no Mario alpha list executed (culled) */
     GC_REFUSED_NOT_DRAWN_FLOOR = 20,/* not drawn while floor-aligned and moved: tilt unknown */
     GC_REFUSED_BODY_MISMATCH = 21,  /* alpha executed, body did not follow */

@@ -5,6 +5,7 @@
 #include <cmath>
 static sg_pose applied{};
 static float camera_x=0;
+static float fake_normal[3]={0,1,0};static uint32_t fake_flags=0;
 extern "C" int32_t sg_model_view(sg_model *,const float *position,const float *,int16_t,float *out) {
     camera_x=position[0];
     const float identity[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
@@ -19,10 +20,10 @@ extern "C" int32_t sg_model_evaluate(sg_model *,const sg_pose *pose,sg_mesh *mes
     applied=*pose; assert(mesh->vertex_capacity>=3);
     for(unsigned i=0;i<3;++i) {
         mesh->position[3*i]=float(i+1); mesh->position[3*i+1]=2; mesh->position[3*i+2]=3;
-        mesh->normal[3*i]=0; mesh->normal[3*i+1]=1; mesh->normal[3*i+2]=0;
+        mesh->normal[3*i]=fake_normal[0]; mesh->normal[3*i+1]=fake_normal[1]; mesh->normal[3*i+2]=fake_normal[2];
         mesh->color[3*i]=1; mesh->color[3*i+1]=0; mesh->color[3*i+2]=0;
         mesh->uv[2*i]=0.25f; mesh->uv[2*i+1]=0.5f;
-        mesh->material[i]=SG_MATERIAL_ALPHA_MIX;
+        mesh->material[i]=SG_MATERIAL_ALPHA_MIX|fake_flags;
     }
     mesh->vertex_count=3; mesh->error_flags=0; return SG_OK;
 }
@@ -71,6 +72,28 @@ int main() {
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(!pose.count && !applied.fields && pose.opacity==0.5f);
     saved.pose.hidden=0;saved.pose.animation_frame=0;
+    // Vanish cap: the recorded envcolor alpha (modelState 0x100 | alpha)
+    // multiplies the user's opacity; metal alone does not.
+    saved.pose.model_state=0x180;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.count==3 && std::fabs(pose.opacity-0.5f*128.0f/255.0f)<1e-6f && applied.model_state==0x180);
+    saved.pose.model_state=0x200;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.opacity==0.5f && applied.model_state==0x200);
+    // Metal: texture-generated coordinates follow the LIVE view's eye-space
+    // normal exactly as GLideN64 does for G_TEXTURE_GEN on the 64x32 metal
+    // texture (atlas cell 0 of 11); the model's own uv is replaced.
+    fake_flags=SG_MATERIAL_TEXGEN;fake_normal[0]=1;fake_normal[1]=0;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.vertices[0].material==ghost_compositor::Material::alpha_mix);
+    assert(std::fabs(pose.vertices[0].uv[0]-62.0f/64.0f/11.0f)<1e-6f && std::fabs(pose.vertices[0].uv[1]-15.5f/64.0f)<1e-6f);
+    live.camera.position[0]=-5; // the fake turns this view: +x now faces -z
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(std::fabs(pose.vertices[0].uv[0]-31.0f/64.0f/11.0f)<1e-6f && std::fabs(pose.vertices[0].uv[1]-15.5f/64.0f)<1e-6f);
+    live.camera.position[0]=42;fake_flags=0;fake_normal[0]=0;fake_normal[1]=1;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.vertices[0].uv[0]==0.25f); // untextured-generation vertices keep their uv
+    saved.pose.model_state=0;
     saved.valid_fields&=~GC_VALID_POSE;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::missing_pose);
     assert(!pose.vertices && !pose.count);

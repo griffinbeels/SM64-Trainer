@@ -31,6 +31,24 @@ bool recorded_camera_inverse(sg_model *model, const gc_camera &camera, float inv
         inverse[12+r]=-(inverse[r]*view[12]+inverse[4+r]*view[13]+inverse[8+r]*view[14]);
     return true;
 }
+// G_TEXTURE_GEN as the live renderer computes it for SM64's F3D lists (no
+// gSPLookAt, so GLideN64 takes the normal through the modelview): the unit
+// eye-space normal's x/y, (n+1)*512 scaled by gSPTexture(0x0F80, 0x07C0),
+// is 0..62 x 0..31 texels of the 64x32 metal texture, atlas cell 0 in the
+// model's 11-cell atlas (libsm64 load_tex_data). The live view stands in for
+// the camera the game would have drawn the ghost with.
+bool environment_uv(const float view[16], const float normal[3], float uv[2]) {
+    float eye[3];
+    for (unsigned r = 0; r < 3; ++r)
+        eye[r] = view[r]*normal[0] + view[4+r]*normal[1] + view[8+r]*normal[2];
+    const float length = std::sqrt(eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2]);
+    if (!std::isfinite(length) || length <= 0) return false;
+    const float s = (eye[0]/length + 1.0f) * 512.0f * (0x0F80 / 65536.0f);
+    const float t = (eye[1]/length + 1.0f) * 512.0f * (0x07C0 / 65536.0f);
+    uv[0] = s / 64.0f / 11.0f;
+    uv[1] = t / 64.0f;
+    return true;
+}
 bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
     const auto &p=sample.pose;
     if (p.root_kind==GC_ROOT_TRS) {
@@ -110,9 +128,10 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     const auto &p = recorded.pose;
     if (!std::isfinite(opacity) || opacity < 0 || opacity > 1)
         return Result::unsupported_pose;
-    // The first material route is ordinary Mario. The source component carries
-    // unsupported state explicitly; it cannot quietly render metal as cloth.
-    if (p.model_state & 0x300u) return Result::unsupported_pose;
+    // Vanish cap (and a warp fade): modelState 0x100 | alpha, the executed
+    // envcolor alpha. The ghost shows it on top of the user's opacity; the
+    // game's dither becomes an even blend. Metal (0x200) is its own variant.
+    if (p.model_state & 0x100u) opacity *= float(p.model_state & 0xffu) / 255.0f;
     sg_pose pose{};
     pose.fields = SG_POSE_REQUIRED | (p.hidden ? SG_POSE_HIDDEN : 0);
     pose.action = p.action; pose.body_action = p.body_action;
@@ -145,13 +164,18 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         return Result::model_failed;
     ghost_compositor::Pose built{};
     for (uint32_t i = 0; i < mesh.vertex_count; ++i) {
-        if (scratch.material[i] > SG_MATERIAL_MODULATE_RGBA) return Result::model_failed;
+        const uint32_t material = scratch.material[i] & ~uint32_t(SG_MATERIAL_TEXGEN);
+        if (material > SG_MATERIAL_MODULATE_RGBA) return Result::model_failed;
         auto &v = scratch.vertices[i];
         std::memcpy(v.position,scratch.position+3*i,sizeof(v.position));
         std::memcpy(v.normal,scratch.normal+3*i,sizeof(v.normal));
         std::memcpy(v.color,scratch.color+3*i,sizeof(v.color));
         std::memcpy(v.uv,scratch.uv+2*i,sizeof(v.uv));
-        v.material = static_cast<ghost_compositor::Material>(scratch.material[i]);
+        // Metal Mario's environment map follows the live view, as the game's
+        // would from this camera.
+        if ((scratch.material[i] & SG_MATERIAL_TEXGEN) && !environment_uv(view,v.normal,v.uv))
+            return Result::model_failed;
+        v.material = static_cast<ghost_compositor::Material>(material);
     }
     multiply(world.projection,view,built.view_projection);
     for (unsigned c = 0; c < 4; ++c) {

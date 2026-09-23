@@ -65,7 +65,13 @@ enum sg_mesh_errors {
 enum sg_material {
     SG_MATERIAL_SOLID = 0, SG_MATERIAL_ALPHA_MIX = 1,
     SG_MATERIAL_DECAL_RGBA = 2, SG_MATERIAL_DECAL_RGB = 3,
-    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5
+    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5,
+    /* Flag on a material code: the triangle's texture coordinates are
+     * generated from its normal (G_TEXTURE_GEN, the metal cap's environment
+     * map), so the vertex uv is meaningless and the caller computes it under
+     * its own view. Only the 64x32 metal texture at scale 0x0F80/0x07C0 is
+     * admitted; anything else is SG_MESH_UNSUPPORTED_MATERIAL. */
+    SG_MATERIAL_TEXGEN = 0x100
 };
 
 enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = 704,
