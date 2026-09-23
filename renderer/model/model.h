@@ -65,11 +65,21 @@ enum sg_mesh_errors {
 enum sg_material {
     SG_MATERIAL_SOLID = 0, SG_MATERIAL_ALPHA_MIX = 1,
     SG_MATERIAL_DECAL_RGBA = 2, SG_MATERIAL_DECAL_RGB = 3,
-    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5
+    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5,
+    /* Flag on a material code: the triangle's texture coordinates are
+     * generated from its normal (G_TEXTURE_GEN, the metal cap's environment
+     * map), so the vertex uv is meaningless and the caller computes it under
+     * its own view. Only the 64x32 metal texture at scale 0x0F80/0x07C0 is
+     * admitted; anything else is SG_MESH_UNSUPPORTED_MATERIAL. */
+    SG_MATERIAL_TEXGEN = 0x100
 };
 
-enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = 704,
-       SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = 180224 };
+/* The atlas is one 64-pixel cell per Mario texture, left to right in
+ * libsm64's MarioTextures order: metal (cell 0) ... wing tip, then the metal
+ * wing and wing tip (cells 11, 12). */
+enum { SG_ATLAS_CELLS = 13 };
+enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
+       SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
 
 /* Arrays are caller-owned, nonoverlapping: 3 floats per vertex for position,
  * normal and color; 2 floats per vertex for UV; one material per vertex, with

@@ -149,6 +149,7 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc)
     return true;
 }
 void projection(const float matrix[16]) { if (active) pass.projection(matrix); }
+void lookat(const ghost::Lookat &value) { if (active) pass.lookat(value); }
 void triangles(const ghost::RasterTarget &target, uint32_t count, bool zbuffer) {
     if (active) pass.triangles(target,count,zbuffer);
 }

@@ -238,10 +238,20 @@ class GpuMedia:
                     raise RuntimeError(packet.reason)
                 # Bound video lead too: absent PCM cannot make libav accumulate
                 # an entire practice session. One long VFR hold is one packet.
+                # Audio is covered up to a waiting block's start as well: PCM
+                # arrives in source order, so a gap before it is final. Audio
+                # may only be written up to the committed video end, so gating
+                # on written audio alone deadlocks both streams at any gap
+                # wider than the lead (a stop-the-world pause of the audio
+                # callback: the live "pending age limit", 2026-09-19..23).
+                covered = self.audio_end
+                waiting = self.pcm.head_ticks
+                if waiting is not None and waiting > covered:
+                    covered = waiting
                 if (
                     not final
                     and self.video_end is not None
-                    and packet.pts > self.audio_end + self.lead_ticks
+                    and packet.pts > covered + self.lead_ticks
                 ):
                     break
                 picture = EncodedPicture(

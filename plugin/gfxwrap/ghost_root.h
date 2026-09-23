@@ -15,6 +15,9 @@ struct gc_root_probe {
     bool alpha_seen = false;
     bool floor_aligned = false; // this frame may have set throwMatrix (tilt)
     uint8_t reason = GC_REFUSED_NONE; // why prepare could not arm the proof
+    // The alpha list the recorded modelState implies: 16 bytes opaque, 24
+    // translucent (vanish cap), words in executed order.
+    uint32_t alpha_bytes = 16, alpha_words[6]{};
     // Mario's shadow: owned through allocation adjacency to the alpha list
     // that proved the root. step counts verified master + nested calls.
     uint32_t alpha_dl = 0, mario_alpha = 0, shadow_depth = 0, shadow_calls = 0, shadow_step = 0;

@@ -206,23 +206,23 @@ def _parse(text: str, clip_name: str, pictures: int | None):
 
 
 @lru_cache(maxsize=8)
-def _parsed(path_str: str, stamp: tuple, clip_name: str, pictures: int | None):
-    """The parse, remembered against the FILE'S OWN identity.
+def _parsed(data: bytes, clip_name: str, pictures: int | None):
+    """The parse, remembered against the file's own BYTES.
 
-    `stamp` is (mtime_ns, size), so the memo answers again only while the file
-    on disk is byte-for-byte the one it read. A rewrite, a touch or a delete
-    all miss it, which keeps the promise this module opens with -- re-validated
-    on every read -- while not re-parsing thousands of rectangles every four
-    seconds. A 1m44 segment is about 3,200 pictures and longer ones exist, and
+    The memo answers again only while the file on disk is byte-for-byte the
+    one it parsed. A rewrite or a delete misses it, which keeps the promise this
+    module opens with -- re-validated on every read -- while not re-parsing
+    thousands of rectangles every four seconds. Reading the bytes is cheap; the
+    parse is not. It was keyed on (mtime_ns, size) until 2026-09-23: a
+    same-size rewrite inside one timestamp tick came back from the memo, which
+    the rewrite test caught under a loaded merge check. A 1m44 segment is about 3,200 pictures and longer ones exist, and
     the ghost session re-resolves on a timer whether or not anything moved.
 
-    Bounded at eight entries because the key includes the stamp: without a
-    bound, a file he rewrites in a loop would grow the memo forever. The value
-    is a frozen dataclass over a tuple, so sharing one is safe.
+    Bounded at eight entries because the key is the content: without a bound,
+    a file he rewrites in a loop would grow the memo forever. The value is a
+    frozen dataclass over a tuple, so sharing one is safe.
     """
-    del stamp  # in the key for its identity, not read here
-    return _parse(Path(path_str).read_text(encoding="utf-8-sig"),
-                  clip_name, pictures)
+    return _parse(data.decode("utf-8-sig"), clip_name, pictures)
 
 
 def read_box_list(clip: Path, *, pictures: int | None = None):
@@ -240,17 +240,8 @@ def read_box_list(clip: Path, *, pictures: int | None = None):
     """
     path = box_list_path(clip)
     try:
-        info = path.stat()
+        return _parsed(path.read_bytes(), clip.name, pictures)
     except FileNotFoundError:
-        return None, "no_box_list"
-    except OSError:
-        log.debug("ghost mario boxes unreadable: %s", path, exc_info=True)
-        return None, "box_list_unreadable"
-    try:
-        return _parsed(str(path), (info.st_mtime_ns, info.st_size),
-                       clip.name, pictures)
-    except FileNotFoundError:
-        # Deleted between the stat and the read.
         return None, "no_box_list"
     except (OSError, UnicodeDecodeError):
         log.debug("ghost mario boxes unreadable: %s", path, exc_info=True)

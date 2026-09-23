@@ -176,6 +176,40 @@ eight synthetic frozen seconds with no failure. With continuous real
 callbacks (proctap zeros) the PCM capacity (about 5.5 s) still ends the run
 explicitly; a typed paused-frontier seal remains the next step.
 
+A stall of the whole interpreter must not deadlock the two streams. PCM is
+written only up to the committed video end, and a video packet muxes only up to
+the audio end plus the 100 ms lead (`lead_ticks`). Callbacks are stamped at
+arrival, so a stop-the-world pause of the audio callback leaves a gap in the
+PCM timeline. When that gap was at least the lead, the next PCM block straddled
+the video end and the next picture sat past the audio end, and neither could
+move. The head picture then hit the 2 s "pending age limit" and recording
+stopped. That was every such failure in the live log from 2026-09-19 to
+2026-09-23 (14 of 14 came 1 to 3 s after the recorder's forced gen-2
+collection, `_gcwatch.py`, which pauses for 54 to 139 ms), and the picture
+ledger shows 30 fps feeds up to 2.0 s before each failure. PCM arrives in
+source order, so a waiting block proves the gap before it is final: the video
+gate now counts audio as covered up to that block's start
+(`PcmBuffer.head_ticks`). `test_an_interpreter_stall_does_not_deadlock_video_against_audio`
+drives 30 fps pictures and 10 ms callbacks through stalls of 50 to 500 ms;
+before the fix the 140, 300 and 500 ms cases failed with the live error.
+
+The same stall used to leave audio late for the rest of the recording. The
+first chunk after the stall opened the gap at its arrival time, the buffered
+chunks were laid out after it, and placement only moves forward, so audio
+stayed stamped late by the stall: 144 ms after a 140 ms stall, 504 ms after
+500 ms, adding up with every forced collection. A chunk cannot end after it
+arrived, so `AudioPlacement` now pulls back by dropping a chunk's oldest
+samples until it ends on arrival. It never moves a chunk earlier than audio
+already written, so nothing overlaps or reorders. It pulls back at once when
+a chunk is more than 50 ms late (the stall's backlog), and otherwise when
+every chunk in the last 0.5 s was more than one callback (10 ms) late. That
+second case covers what a burst leaves behind, and also a device clock that
+runs fast against the wall clock. The stall costs its own audio instead of
+shifting what follows. `test_a_callback_stall_does_not_leave_audio_late`
+ends within one callback after 140 and 500 ms stalls, and
+`test_ordinary_callback_jitter_is_never_trimmed` keeps 30 s of 0-20 ms
+delivery jitter whole.
+
 ## Startup, idle and failure
 
 The paired GPU sink is bound before audio startup, but GPU demand starts only
