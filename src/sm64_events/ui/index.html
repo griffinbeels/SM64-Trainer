@@ -6957,10 +6957,13 @@
      celebrations should happen right on top of that display"). */
   .log-card-head .goal-plate {
     grid-area: pb; justify-self: end; position: relative;
-    display: grid; grid-template-rows: 18px 18px 10px; row-gap: 1px;
+    display: grid; grid-template-rows: 1fr 1fr 6px; row-gap: 0;
+    /* The head keeps the unassigned card's height (icon + padding), so the
+       plate is exactly as tall as the course icon beside it. */
+    height: var(--log-icon-size, 40px); box-sizing: border-box; line-height: 1;
     min-width: var(--goal-plate-width, 196px);
     margin-left: var(--log-pb-offset, 0px);
-    padding: 3px 10px 3px; border-radius: 8px;
+    padding: 1px 10px; border-radius: 8px;
     background: rgba(5,14,24,.55); border: 1px solid var(--border-soft);
     font-variant-numeric: tabular-nums;
   }
@@ -6971,7 +6974,7 @@
   .goal-plate-trigger {
     min-height: 0; display: flex; align-items: center; gap: .4rem; width: 100%;
     padding: 0; border: 0; background: none; color: inherit; cursor: pointer;
-    font: inherit; text-align: left; min-width: 0;
+    font: inherit; text-align: left; min-width: 0; justify-content: flex-start;
   }
   .goal-plate-trigger:hover .goal-plate-time,
   .goal-plate-trigger:focus-visible .goal-plate-time { text-decoration: underline; }
@@ -6991,7 +6994,7 @@
   .goal-plate-count { gap: .5rem; }
   .goal-pips { display: flex; gap: 3px; align-items: center; }
   .goal-pip {
-    width: 7px; height: 7px; border-radius: 50%;
+    width: 5px; height: 5px; border-radius: 50%;
     background: rgba(240,189,50,.18); box-shadow: inset 0 0 0 1px rgba(240,189,50,.45);
     transition: background .25s ease, box-shadow .25s ease;
   }
@@ -7037,6 +7040,17 @@
   .goal-picker-time input { flex: 1 1 8rem; min-width: 0; }
   .goal-picker-mode .quiet-button.is-selected { color: var(--gold); border-color: rgba(240,189,50,.55); }
   .search-menu-footer { display: grid; gap: .4rem; border-top: 1px solid var(--border-soft); padding-top: .45rem; }
+  /* A narrow Practice pane cannot spare the source words beside the goal:
+     at 900-913px they took the ~20px the longest star names need. The
+     source stays in the picker and the Scorecard; the plate keeps PB, GOAL
+     and the count, which is what a stream crop is for. */
+  @container (max-width: 1000px) {
+    .log-card-head .goal-plate { min-width: var(--goal-plate-narrow-width, 100px); padding: 1px 7px; }
+    .log-card-head .goal-plate .goal-plate-row { gap: .3rem; }
+    .log-card-head .goal-plate .goal-plate-word { flex-basis: 2.1rem; }
+    .log-card-head .goal-plate .goal-plate-clock { display: none; }
+    .log-card-head .goal-plate .goal-plate-source { display: none; }
+  }
   /* The empty state names the strategy IN FULL, and the track GROWS to fit
      it, pushing the strategy picker left (his call, 2026-08-22: "the text for
      'no PB - Single J...' should expand horizontally so that the full
