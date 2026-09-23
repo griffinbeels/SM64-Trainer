@@ -22,6 +22,15 @@ command = ["{python}", "{project}/tools/verify_lint.py", "--all"]
 identity_command = ["{python}", "{project}/tools/verify_lint.py", "--probe"]
 timeout = 150
 
+# Before the merge check: the bundled natives are build outputs, and wrap must
+# prove they build from the integrated sources (tools/build_natives.py). It
+# fills the shared cache too, so the next launch of any checkout is instant.
+[[checks]]
+name = "natives"
+lanes = ["full"]
+command = ["uv", "run", "--offline", "--frozen", "python", "tools/build_natives.py", "--strict"]
+timeout = 900
+
 [[checks]]
 name = "merge-check"
 lanes = ["full"]

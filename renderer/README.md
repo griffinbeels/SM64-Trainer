@@ -46,7 +46,8 @@ directly in Project64.
 
 ## Building
 
-    uv run python tools/build_renderer.py
+    uv run python tools/build_natives.py      # all three natives, only what is out of date
+    uv run python tools/build_renderer.py     # this one, always
 
 The tool downloads the pinned upstream archive into the build cache
 (`%LOCALAPPDATA%\SM64Trainer\build-cache\renderer`), verifies it, stages the
@@ -56,6 +57,8 @@ and nothing else. The DLL carries a build id
 (`SM64TrainerRendererIdentity`, a digest of the inputs above), which is how
 the setup screen decides whether an installed renderer is this build's and
 how `tests/test_bundled_natives.py` checks the bundled file matches the tree.
+The DLL is a build output that git ignores; `tools/build_natives.py` keeps
+built copies by id in `%LOCALAPPDATA%\SM64Trainer\build-cache\natives`.
 
 ### The three prebuilt libraries
 

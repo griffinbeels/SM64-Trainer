@@ -1,4 +1,7 @@
-"""The three bundled native files are the ones built from THESE sources.
+"""A built bundled native is the one built from THESE sources.
+
+The three are build outputs, never tracked (tools/build_natives.py builds them
+at launch, wrap and release). Where a checkout has one, it must match.
 
 The setup screen compares an installed file with the bundled one by embedded
 build id (core/capturelayer.py::_files_match). A bundle older than the tree
@@ -11,8 +14,7 @@ tree ships code the tests never saw. Each id names the exact sources:
 - the renderer carries tools/build_renderer.py's digest of the pinned upstream
   tree, the overlay sources, the staging tool and the recipe.
 
-No toolchain is needed to check; rebuilding is `tools/build_plugin.py` and
-`tools/build_renderer.py`.
+No toolchain is needed to check; rebuilding is `tools/build_natives.py`.
 """
 import importlib.util
 from pathlib import Path
@@ -23,6 +25,7 @@ from sm64_events.core.capturelayer import _build_identity
 from sm64_events.core.paths import bundled_encoder_dll, bundled_plugin_dll, bundled_renderer_dll
 
 ROOT = Path(__file__).resolve().parents[1]
+NOT_BUILT = "native not built in this checkout (tools/build_natives.py)"
 
 
 def _tool(name):
@@ -33,13 +36,14 @@ def _tool(name):
 
 
 @pytest.mark.parametrize("bundled, expected, rebuild", [
-    (bundled_plugin_dll, lambda: _tool("build_plugin").wrapper_build_id() + "-gpu-runtime", "tools/build_plugin.py"),
-    (bundled_encoder_dll, lambda: _tool("build_plugin").helper_build_id(), "tools/build_plugin.py"),
-    (bundled_renderer_dll, lambda: _tool("build_renderer").renderer_build_id(), "tools/build_renderer.py"),
+    (bundled_plugin_dll, lambda: _tool("build_plugin").wrapper_build_id() + "-gpu-runtime", "tools/build_natives.py"),
+    (bundled_encoder_dll, lambda: _tool("build_plugin").helper_build_id(), "tools/build_natives.py"),
+    (bundled_renderer_dll, lambda: _tool("build_renderer").renderer_build_id(), "tools/build_natives.py"),
 ], ids=["wrapper", "encoder-helper", "renderer"])
 def test_the_bundled_native_was_built_from_these_sources(bundled, expected, rebuild):
     path = bundled()
-    assert path is not None, f"{bundled.__name__} is not built: run {rebuild}"
+    if path is None:
+        pytest.skip(f"{bundled.__name__}: {NOT_BUILT}")
     actual = _build_identity(path)
     assert actual == expected().encode(), (
         f"{path.name} was built from other sources (id {actual!r}): run {rebuild}")
