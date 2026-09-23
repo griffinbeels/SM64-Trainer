@@ -64,14 +64,15 @@ go_result Ledger::resolve(const go_marker &marker, uint64_t frequency,
     const uint32_t required = GCC_RAW_VALID | GCC_ELAPSED_VALID;
     if (!(first->valid & GC_VALID_CLOCK) || (first->clock_valid & required) != required || !first->continuity
             || (marker.kind == GO_STAR && first->raw > near_zero)) return GO_INVALID;
+    const uint32_t zero = marker.kind == GO_SEGMENT && first->raw <= near_zero ? GO_ZERO_CLOCK : 0;
     out = {marker.kind, marker.epoch, first->sequence, first->continuity,
-        first->elapsed, first->star_generation, marker.kind == GO_STAR ? first->raw : 0, 0};
+        first->elapsed, first->star_generation, marker.kind == GO_STAR ? first->raw : 0, zero};
     return GO_READY;
 }
 
 void Recovery::clear() {
     history_.clear();next_=0;origin_={};latest_={};restoration_={};
-    pending_=ended_=absolute_timer_=direct_star_=false;
+    pending_=ended_=absolute_timer_=direct_=direct_known_=false;direct_offset_=0;
     first_level_=first_area_=0;
 }
 void Recovery::suspend(bool absolute_timer) {if(bound()){pending_=true;absolute_timer_=absolute_timer;}}
@@ -84,8 +85,12 @@ bool Recovery::coordinate(const Checkpoint &s,uint32_t &out) const {
 }
 void Recovery::remember(const Checkpoint &value) {
     auto copy=value;if(!coordinate(copy,copy.coordinate))return;
-    if(copy.coordinate!=copy.raw || copy.level!=first_level_ || copy.area!=first_area_)
-        direct_star_=false;
+    const int64_t relation=int64_t(copy.coordinate)-int64_t(copy.raw);
+    if(!direct_known_) {
+        direct_known_=true;direct_offset_=relation;first_level_=copy.level;first_area_=copy.area;
+        direct_=origin_.kind==GO_STAR ? relation==0 : (origin_.flags&GO_ZERO_CLOCK)!=0;
+    } else if(relation!=direct_offset_ || copy.level!=first_level_ || copy.area!=first_area_)
+        direct_=false;
     // Repeated display lists/pause observations must not evict a long run.
     if(!history_.empty()) {
         const auto &last=history_[(next_+uint32_t(history_.size())-1)%history_.size()];
@@ -102,8 +107,7 @@ void Recovery::bind(const go_origin &origin,bool same_run) {
     origin_=origin;restoration_={};
     pending_=ended_=absolute_timer_=false;
     first_level_=latest_.level;first_area_=latest_.area;
-    uint32_t value=0;
-    direct_star_=origin.kind==GO_STAR && coordinate(latest_,value) && value==latest_.raw;
+    direct_=direct_known_=false;direct_offset_=0;
     remember(latest_);
 }
 bool Recovery::current(go_origin &out) const {
@@ -164,12 +168,17 @@ go_result Recovery::observe(const gc_sample &sample,const uint32_t *actions,uint
             found=&entry;
         }
         // Before any banked area/level transition, a star's coordinate is raw
-        // Usamune IGT. It also names states saved before the ghost was enabled.
-        // Segments and banked clocks require a unique witnessed LIVE checkpoint.
-        const bool direct=direct_star_ && now.level==first_level_ && now.area==first_area_;
+        // Usamune IGT, and so is a segment's that began at Usamune's zero (less
+        // its origin's raw IGT). That also names states saved in an earlier
+        // attempt or before the ghost was enabled: his practice loads a state
+        // saved earlier, also after a reset (round 10). Any other clock needs
+        // a unique witnessed LIVE checkpoint, which is always tried first.
+        const int64_t named=int64_t(now.raw)+direct_offset_;
+        const bool direct=direct_ && now.level==first_level_ && now.area==first_area_
+            && named>=0 && named<=int64_t(UINT32_MAX);
         if(!found && !direct)return GO_MISSING;
         origin_={origin_.kind,now.epoch,now.sequence,now.continuity,now.elapsed,now.star,
-            found?found->coordinate:now.raw,GO_RECOVERED};
+            found?found->coordinate:uint32_t(named),GO_RECOVERED|(origin_.flags&GO_ZERO_CLOCK)};
         restoration_=now;pending_=ended_=absolute_timer_=false;
         remember(now);return GO_READY;
     }

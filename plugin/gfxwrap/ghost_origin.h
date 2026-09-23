@@ -5,7 +5,11 @@
 
 enum go_kind { GO_NONE, GO_STAR, GO_SEGMENT };
 enum go_result { GO_READY, GO_MISSING, GO_AMBIGUOUS, GO_INVALID };
-enum go_flags { GO_RECOVERED = 1u };
+/* GO_ZERO_CLOCK: a segment whose origin occurrence read Usamune's own zero
+ * (raw IGT at most the layout's near-zero), so raw IGT keeps naming its
+ * coordinate, as a star's does, until the scene or the IGT/elapsed relation
+ * changes. Survives a restore of the same run. */
+enum go_flags { GO_RECOVERED = 1u, GO_ZERO_CLOCK = 2u };
 #define GO_HISTORY 4096u
 #define GO_UTC_WINDOW 1.0
 /* How far (units, per axis) a loaded state's drawn root may sit from the
@@ -86,7 +90,13 @@ private:
     std::vector<Checkpoint> history_;
     uint32_t next_=0;
     go_origin origin_{};
-    bool pending_=false,ended_=false,absolute_timer_=false,direct_star_=false;
+    bool pending_=false,ended_=false,absolute_timer_=false;
+    // Raw IGT names the coordinate (coordinate = raw + direct_offset_): a star
+    // (offset 0) or a GO_ZERO_CLOCK segment, until the scene or relation
+    // changes. Settled by the first checkpoint on the origin's timeline, which
+    // for the renderer can come after its bind.
+    bool direct_=false,direct_known_=false;
+    int64_t direct_offset_=0;
     int16_t first_level_=0,first_area_=0;
     bool coordinate(const Checkpoint &, uint32_t &) const;
     void remember(const Checkpoint &);
