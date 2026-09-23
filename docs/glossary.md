@@ -1257,15 +1257,14 @@ Mario** switch turns it off for comparison.
 ### Held object (ghost)
 
 The object Mario holds on a recorded [[frame]] (a Bob-omb, a baby penguin,
-Bowser's tail), recorded as what it is (its behaviour), how it is animated,
-and where his hand drew it that frame. Captured only when the game provably
-drew it from his hand on that frame. The ghost draws the kinds its model
-knows (the Bob-omb, the small penguin, King Bob-omb, Chuckya) in his hand
-and leaves the others out.
+Bowser's tail), recorded as what it is (its behaviour), its animation state,
+and where his hand drew it in that [[frame]]. Captured only when the game
+provably drew it from his hand in that [[frame]]. A [[ghost]] draws the kinds
+its model knows (the Bob-omb, the small penguin, King Bob-omb, Chuckya) in
+his hand and leaves the others out.
 
-- **Lives** — `plugin/gfxwrap/ghost_capture.cpp` (`capture_held`); decoded as
-  `Frame.held_behaviour` in `src/sm64_events/ghost/clip.py`; drawn by
-  `renderer/model/held.c`
+- **Lives** — `plugin/gfxwrap/ghost_capture.cpp` (capture); decoded in
+  `src/sm64_events/ghost/clip.py`; drawn by `renderer/model/held.c`
 
 ### Ghost sound events
 
