@@ -147,8 +147,8 @@ typedef struct gc_sound {
 /* Mario's particles as executed this frame (ghost_particle_capture.h): each
  * object's first pushed display list (segmented, e.g. 0x0401DD60 bubble) and
  * its executed modelview: basis columns in 4.12 fixed point, translation in
- * view space. Count may be zero; OVERFLOW when more were drawn. Zero unless
- * GC_VALID_PARTICLES. */
+ * view space. Count may be zero; beyond 16 the nearest Mario are kept, nearest
+ * first, with OVERFLOW set. Zero unless GC_VALID_PARTICLES. */
 typedef struct gc_particle {
     uint32_t display_list;
     int16_t basis[9]; /* column-major 3x3 */

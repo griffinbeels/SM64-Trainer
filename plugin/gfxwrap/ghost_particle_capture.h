@@ -4,7 +4,9 @@
  * sparkles, flames): its first display list pushed with a modelview whose
  * translation is that object's fresh cameraToObject is recorded with the
  * executed matrix. Another object's bubble or a coin's sparkle never
- * matches. Reads RAM only; no GL, allocation or model knowledge. */
+ * matches. When more than GC_PARTICLES were drawn, the ones nearest Mario
+ * are kept (nearest first), OVERFLOW is set and the rest are counted.
+ * Reads RAM only; no GL, allocation or model knowledge. */
 #pragma once
 #include "ghost_capture.h"
 
@@ -13,10 +15,13 @@ struct gc_particle_probe {
     uint32_t ram_bytes = 0;
     uint32_t count = 0; // Mario-descended objects found this occurrence
     uint32_t objects[64]{};
-    float camera_to_object[64][3]{};
+    float camera_to_object[64][3]{}, mario[3]{};
     bool recorded[64]{};
     bool prepared = false, overflow = false;
-    gc_particles particles{};
+    uint32_t drawn = 0; // matched candidates this occurrence
+    gc_particle candidates[64]{};
+    float distance[64]{};
+    uint32_t dropped = 0; // set by finish: drawn but not kept
 };
 
 /* mario_object is the Layout's gMarioObject variable, object_pool the first

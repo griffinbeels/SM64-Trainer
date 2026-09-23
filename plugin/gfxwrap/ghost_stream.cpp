@@ -15,7 +15,7 @@ std::atomic_flag control_writer = ATOMIC_FLAG_INIT;
 std::atomic_flag consumer = ATOMIC_FLAG_INIT;
 std::atomic<uint32_t> config_sequence{0}, configured{0};
 std::atomic<uint32_t> config_words[sizeof(gc_layout) / sizeof(uint32_t)];
-std::atomic<uint32_t> epoch{0}, configuration{0}, offered{0}, dropped{0}, taken{0}, busy{0};
+std::atomic<uint32_t> epoch{0}, configuration{0}, offered{0}, dropped{0}, taken{0}, busy{0}, particles_dropped{0};
 bool rom_open = false, active = false;
 uint32_t observed_config = 0;
 uint64_t serial = 0;
@@ -103,7 +103,8 @@ int __cdecl read(gs_record *out, uint32_t bytes) {
 }
 gs_stats __cdecl stats() {
     return {sizeof(gs_stats), GS_VERSION, epoch.load(), configuration.load(),
-        offered.load(), dropped.load(), taken.load(), busy.load(), configured.load() ? 1u : 0u};
+        offered.load(), dropped.load(), taken.load(), busy.load(), configured.load() ? 1u : 0u,
+        particles_dropped.load()};
 }
 const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WORLD_PASS, 0,
     configure, disable, read, stats};
@@ -165,6 +166,7 @@ void end(bool completed) {
     pass.end(valid);
     ghost_root_finish(root_probe,valid,current,&root_memory);
     ghost_particles_finish(particle_probe,valid,current);
+    particles_dropped.fetch_add(particle_probe.dropped, std::memory_order_relaxed);
     gs_record out{};
     out.bytes = sizeof(out); out.version = GS_VERSION; out.configuration = observed_config;
     out.sample = current; out.world.status = static_cast<uint32_t>(pass.status());

@@ -137,9 +137,10 @@ static gs_record capture_source(Fixture& f,const ghost::RasterTarget& target,con
     require(out.sample.valid_fields&GC_VALID_SHADOW,"source captures Mario's executed shadow");
     const auto& recorded=out.sample.particles;
     require((out.sample.valid_fields&GC_VALID_PARTICLES) && recorded.count==3 && !recorded.flags
-        && recorded.entries[0].display_list==0x0401DD60u && recorded.entries[1].display_list==0x04032A18u
-        && recorded.entries[2].display_list==0x04032670u && recorded.entries[1].basis[0]==6144
-        && recorded.entries[0].translation[0]==150,"source records Mario's particles, not another object's");
+        // Nearest Mario (feet at view 0,-100,-600) first: splash 151, bubble 175, droplet 241 units.
+        && recorded.entries[0].display_list==0x04032670u && recorded.entries[1].display_list==0x0401DD60u
+        && recorded.entries[2].display_list==0x04032A18u && recorded.entries[2].basis[0]==6144
+        && recorded.entries[1].translation[0]==150,"source records Mario's particles, not another object's");
     require(out.sample.status==GC_OK && (out.sample.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
         ==(GCC_RAW_VALID|GCC_ELAPSED_VALID),"source derives usable elapsed clock");
     return out;

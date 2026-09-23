@@ -1,12 +1,15 @@
 import hashlib
+import json
+from pathlib import Path
 import struct
+from types import SimpleNamespace
 
 import pytest
 
 from ghost_native_fixture import frame, producer
 from sm64_events.ghost.clip import (
-    STAR_CLOCK, SEGMENT_CLOCK, ClipError, OlderPoseFormat, decode_clip, encode_clip,
-    frame_from_bytes, read_clip, write_clip,
+    PARTICLES, RECORD_BYTES, STAR_CLOCK, SEGMENT_CLOCK, ClipError, OlderPoseFormat, check_manifest,
+    decode_clip, encode_clip, frame_from_bytes, read_clip, write_clip,
 )
 
 
@@ -272,3 +275,29 @@ def test_progress_must_match_raw_and_have_no_refusal():
     assert frame_from_bytes(frame(clock_valid=7, banked=30)).clock.progress_frames == 31
     with pytest.raises(ClipError, match="progress"):
         frame_from_bytes(frame(clock_valid=7, banked=30, refusal=1))
+
+
+def test_a_real_clip_saved_before_particles_still_loads():
+    """His saved and PB ghosts from before GC6 (GCLIP4, 652-byte records) still
+    bind to their attempt and play, read as having no particles."""
+    fixtures = Path(__file__).parent / "fixtures"
+    path = fixtures / "attempt_2549_whomps-fortress_shoot-into-the-wild-blue_0m10s66.ghost"
+    manifest = json.loads(path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+    attempt = SimpleNamespace(id=manifest["attempt_id"], session_id=manifest["session_id"],
+                              **{key: manifest[key] for key in ("native_clock_frame", "native_clock_utc",
+                                                                "native_clock_kind", "closed_frame")})
+    clip = check_manifest(path, manifest, attempt=attempt, target=manifest["target"])
+    assert path.read_bytes()[:8] == b"SM64GHO4" and clip.file_version == 4
+    assert len(clip.frames) == 320 and all(frame.playable for frame in clip.frames)
+    assert all(frame.particles == 0 and not frame.valid_fields & PARTICLES for frame in clip.frames)
+    assert all(len(frame.raw) == RECORD_BYTES for frame in clip.frames)
+
+
+def test_archive_rows_saved_before_particles_still_read():
+    """The pose archive keeps raw ring records; a GC5 row (652 bytes) reads as
+    the same frame without particles, so an attempt spanning the upgrade exports."""
+    saved = (Path(__file__).parent / "fixtures/attempt_2549_whomps-fortress_shoot-into-the-wild-blue_0m10s66.ghost")
+    row = saved.read_bytes()[160:160 + 652]
+    frame = frame_from_bytes(row)
+    assert frame.playable and frame.particles == 0 and len(frame.raw) == RECORD_BYTES
+    assert frame.raw[:16][8:] == row[8:16] and frame.raw[24:652] == row[24:652]

@@ -32,6 +32,7 @@ typedef struct gs_record {
 typedef struct gs_stats {
     uint32_t bytes, version, epoch, configuration;
     uint32_t offered, dropped, taken, busy, enabled;
+    uint32_t particles_dropped; /* Mario's particles drawn beyond the 16 kept */
 } gs_stats;
 #pragma pack(pop)
 

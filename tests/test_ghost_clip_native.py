@@ -18,6 +18,8 @@ from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded, matrix_f
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
 
+REAL_GCLIP4 = Path(__file__).parent / "fixtures/attempt_2549_whomps-fortress_shoot-into-the-wild-blue_0m10s66.ghost"
+
 
 def corpus():
     base = encoded((frame(),))
@@ -78,6 +80,13 @@ def corpus():
     segment_tail = bytearray(encoded((frame(),), SEGMENT_CLOCK))
     struct.pack_into("<I", segment_tail, 124, 1)
     values.append(bytes(segment_tail))
+    # A real GCLIP4 recording saved before particles plays; a broken one does not.
+    saved = REAL_GCLIP4.read_bytes()
+    values.append(saved)
+    for offset, value in ((20, 321), (160, 653), (160 + 20, 637), (160 + 28, 128)):
+        broken = bytearray(saved)
+        struct.pack_into("<I", broken, offset, value)
+        values.append(bytes(broken))
     return values
 
 
@@ -94,7 +103,8 @@ def test_python_and_native_acceptance_agree(tmp_path):
     source = native / "ghost_playback.cpp"
     target = tmp_path / "ghost_clip_host.exe"
     inputs = [source, native / "ghost_origin.cpp", host, *(native / name for name in (
-        "ghost_clip.h", "ghost_capture.h", "ghost_playback.h", "ghost_origin.h", "ghost_clock.h", "ghost_pose.h")),
+        "ghost_clip.h", "ghost_clip_upgrade.h", "ghost_capture.h", "ghost_playback.h", "ghost_origin.h",
+        "ghost_clock.h", "ghost_pose.h")),
         COMPONENTS / "renderer/model/model.h", COMPONENTS / "tools/build_plugin.py",
         *(ROOT / name for name in ("src/sm64_events/ghost/clip.py", "tests/ghost_native_fixture.py",
                                    "tests/test_ghost_clip.py", "tests/test_ghost_clip_native.py"))]
@@ -125,5 +135,6 @@ def test_python_and_native_acceptance_agree(tmp_path):
                "executable_sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
     (tmp_path / "codec-parity.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
     assert set(expected) == {0, 1}
+    assert expected[-5:] == actual[-5:] == [1, 0, 0, 0, 0], "a saved GCLIP4 clip plays; broken ones do not"
     assert actual == expected, [(index, want, got) for index, (want, got)
                                 in enumerate(zip(expected, actual, strict=False)) if want != got]

@@ -35,13 +35,19 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Portable clip | GCLIP5: header 160, record 1232, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP4 (record 652) still loads, read as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
-Sizes are bytes. Native ghost versions are checked together; older native clips
-have no compatibility reader. Their files remain on disk; `OlderPoseFormat`
-provides a typed reason (`older_pose_format`) to record a new attempt. An older
-committed file keeps pruning protection and is never overwritten by a later
-export; a playable saved copy of the same attempt still wins. GCLIP3/GC4 files
-and archive rows (no shadow or sound), and GCLIP4/GC5 (no particles), are older
-formats in the same sense.
+Sizes are bytes. Native ghost versions are checked together. GCLIP4 (GC5,
+652-byte records, the saved and PB ghosts recorded before particles) is the one
+format read by a compatibility step: the worker, after checking the saved
+file's SHA-256, and `clip.py` both rewrite it as GCLIP5 with every sample byte
+kept and no particle block ([ghost_clip_upgrade.h](../plugin/gfxwrap/ghost_clip_upgrade.h),
+`upgrade_record`), so it binds to its attempt and plays exactly as before
+(tested on a real saved clip, `tests/fixtures/attempt_2549_*`); a GCLIP4 clip
+longer than 100000 records is refused. Older native clips have no
+compatibility reader. Their files remain on disk; `OlderPoseFormat` provides a
+typed reason (`older_pose_format`) to record a new attempt. An older committed
+file keeps pruning protection and is never overwritten by a later export; a
+playable saved copy of the same attempt still wins. GCLIP3/GC4 files and
+archive rows (no shadow or sound) are older formats in the same sense.
 SourceV2 video capture retains its original contract.
 GS advertises pose and world-pass capture, not `GS_CAP_RENDER`: its table is a
 capture interface. Rendering uses the separate playback/draw path and requires
@@ -570,8 +576,11 @@ walks the object pool once per list for active, rendered objects whose
 In the same display-list hook as the root probe, it records each such object's
 first pushed display list whose modelview translation equals that object's
 fresh `cameraToObject` (0.05 units), with the executed 3x3 in 4.12 fixed point
-and the view-space translation: up to 16 per frame, `GC_PARTICLES_OVERFLOW`
-beyond. Another object's bubble, a coin's sparkle or a particle whose spawner
+and the view-space translation. Up to 16 are kept per frame: when more were
+drawn (a shallow splash throws 18 droplets), the 16 nearest Mario, nearest
+first, with `GC_PARTICLES_OVERFLOW` set; the rest are counted in the source's
+`gs_stats.particles_dropped` and the IPC status page's `particles_dropped`.
+Another object's bubble, a coin's sparkle or a particle whose spawner
 slot was already reused is not recorded. No new RAM address is read.
 
 The model library reads the frames' geometry and textures from the same
@@ -605,7 +614,10 @@ behind the body and behind terrain, the clean frame and GL state; removing the
 draw, the body depth test, the terrain test or the cutout each turns it red.
 The model witness checks all 53 frames decode to one quad each (17063 visible
 segment-4 texels, the flame's environment colour) on both the US and the
-Usamune US ROM. The connected pipeline records a bubble, a droplet (two hops) and a
+Usamune US ROM. The [probe witness](../tests/test_ghost_particle_capture.py) keeps the 16
+nearest of 21 drawn (5 counted), skips nested calls, another object's bubble and
+inactive objects, and publishes nothing for an interrupted list. The connected
+pipeline records a bubble, a droplet (two hops) and a
 splash frame while ignoring another object's bubble, and draws them from the
 real ROM atlas (19740 pixels, 0 outside); ignoring the parent chain or the
 position match, dropping the stream hook or the playback placement each turns

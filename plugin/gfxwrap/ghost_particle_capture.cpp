@@ -35,6 +35,7 @@ void ghost_particles_prepare(gc_particle_probe &p, const uint8_t *ram, uint32_t 
     const uint32_t mario = r.u32(mario_object);
     if (!r.has(mario, object_size) || !r.has(pool, object_size * object_count)) return;
     p.ram = ram; p.ram_bytes = bytes;
+    for (uint32_t i = 0; i < 3; ++i) p.mario[i] = r.f32(mario + camera_to_object + 4 * i);
     for (uint32_t slot = 0; slot < object_count; ++slot) {
         const uint32_t object = pool + slot * object_size;
         if (object == mario || !(r.u16(object + active_flags) & 1u) || !(r.u16(object + node_flags) & 1u)) continue;
@@ -66,7 +67,6 @@ void ghost_particles_display_list(gc_particle_probe &p, uint32_t dl, const float
         // First push at this object's position is its geo display list; the
         // frame lists' own nested calls reuse the same matrix and are skipped.
         p.recorded[i] = true;
-        if (p.particles.count == GC_PARTICLES) { p.particles.flags |= GC_PARTICLES_OVERFLOW; return; }
         gc_particle entry{};
         entry.display_list = dl;
         for (uint32_t column = 0; column < 3; ++column)
@@ -76,7 +76,11 @@ void ghost_particles_display_list(gc_particle_probe &p, uint32_t dl, const float
                 entry.basis[column * 3 + row] = int16_t(std::lround(value));
             }
         for (uint32_t row = 0; row < 3; ++row) entry.translation[row] = matrix[12 + row];
-        p.particles.entries[p.particles.count++] = entry;
+        float squared = 0;
+        for (uint32_t row = 0; row < 3; ++row) {
+            const float d = entry.translation[row] - p.mario[row]; squared += d * d;
+        }
+        p.candidates[p.drawn] = entry; p.distance[p.drawn] = squared; ++p.drawn;
         return;
     }
 }
@@ -84,8 +88,21 @@ void ghost_particles_display_list(gc_particle_probe &p, uint32_t dl, const float
 void ghost_particles_finish(gc_particle_probe &p, bool completed, gc_sample &out) {
     out.particles = {};
     out.valid_fields &= ~GC_VALID_PARTICLES;
+    p.dropped = 0;
     if (!completed || !p.prepared) return;
-    out.particles = p.particles;
-    if (p.overflow) out.particles.flags |= GC_PARTICLES_OVERFLOW;
+    // Keep the GC_PARTICLES nearest Mario (a bounded selection over <= 64).
+    bool taken[64]{};
+    while (out.particles.count < GC_PARTICLES && out.particles.count < p.drawn) {
+        uint32_t best = p.drawn;
+        for (uint32_t i = 0; i < p.drawn; ++i)
+            if (!taken[i] && (best == p.drawn || p.distance[i] < p.distance[best])) best = i;
+        taken[best] = true;
+        out.particles.entries[out.particles.count++] = p.candidates[best];
+    }
+    p.dropped = p.drawn - out.particles.count;
+    if (p.dropped || p.overflow) out.particles.flags |= GC_PARTICLES_OVERFLOW;
+    // OVERFLOW means the block is full; an object-table overflow below 16 is only counted.
+    if (out.particles.count < GC_PARTICLES) out.particles.flags &= uint8_t(~GC_PARTICLES_OVERFLOW);
+    if (p.overflow) ++p.dropped;
     out.valid_fields |= GC_VALID_PARTICLES;
 }
