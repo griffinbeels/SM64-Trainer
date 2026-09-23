@@ -151,6 +151,20 @@ A whole-suite run (each full-run job) fails on a skip whose reason is not in
 `tests/skip_inventory.py`; a narrowed run may skip freely. Add a row only for
 something the machine genuinely cannot run, saying what would lift it.
 
+## Native host builds
+
+Every test that compiles a native host goes through `tools/build_plugin.py::_cl`,
+which, under the suite (`tests/conftest.py` sets `SM64_NATIVE_BUILD_CACHE`),
+reuses an identical earlier compile from
+`%LOCALAPPDATA%/SM64Trainer/build-cache/test-hosts`, shared by every worktree.
+The key is the command line with each input's content hash, and a hit also
+needs every header `/showIncludes` reported to hash the same, so any source or
+header edit rebuilds exactly the hosts that read it. A miss captures the MSVC
+environment once per process (not about 1.4 s of `vcvars32.bat` per compile)
+and compiles several sources in parallel. `SM64_NATIVE_BUILD_CACHE=0` turns it
+off; shipped builds never use it. How it works and its one limit:
+`tools/native_build_cache.py`.
+
 ## Native ghost witnesses
 
 The ordinary suite covers portable clips, recording ownership, IPC, frame

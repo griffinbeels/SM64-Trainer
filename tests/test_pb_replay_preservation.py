@@ -108,6 +108,9 @@ def test_the_app_wiring_re_points_the_ghost_before_and_after_the_video(tmp_path)
     calls = []
 
     class Ghost:
+        def video_pending(self, attempt_id, pending):
+            calls.append(("pending", attempt_id, pending, len(replay.extractor.calls)))
+
         async def pb_changed(self, attempt, saved):
             calls.append(("pb", attempt.id, saved, len(replay.extractor.calls)))
 
@@ -116,7 +119,11 @@ def test_the_app_wiring_re_points_the_ghost_before_and_after_the_video(tmp_path)
 
     _ghost_follows_pb(tracker, Ghost())
     save_pb(tracker, db, aid, "igt")
-    assert calls[0] == ("pb", aid, True, 0)
+    # The picker may say "still being saved" exactly while the save runs:
+    # pending before the ghost follows the PB, cleared once the video exists.
+    assert calls[0] == ("pending", aid, True, 0)
+    assert calls[1] == ("pb", aid, True, 0)
+    assert calls[-2][:3] == ("pending", aid, False) and calls[-2][3] > 0
     assert calls[-1][0] == "refresh" and calls[-1][2] > 0
 
 

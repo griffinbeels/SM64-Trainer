@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define GC_VERSION 1u
+#define GC_CHANNEL_VERSION 1u /* the GPU channel wire; GC_VERSION is the ghost capture sample (ghost_capture.h) */
 #define GC_HEADER_BYTES 2048u
 #define GC_MAX_OFFERS 8u
 #define GC_BRIDGES 2u

@@ -111,7 +111,10 @@ struct Run {
             record.configuration=fixture::configuration;record.sample=live;
             const auto worker=[&]{
                 fixture::queue.push_back(record);session->publish(*page,demand);
-                ++demand.heartbeat;session->demand(demand,demand.generation);
+                ++demand.heartbeat;
+                // As the worker loop does: a demand that asks for files loads them
+                // (a switched-off set was released) and is asked again at once.
+                if(session->demand(demand,demand.generation)){session->load_assets();session->demand(demand,demand.generation);}
             };
             if(!worker_after_render)worker();
             ghost::WorldPass world{};world.epoch=live.epoch;world.context_generation=1;world.list_serial=live.dlist_serial;

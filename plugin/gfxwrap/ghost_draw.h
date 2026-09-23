@@ -14,4 +14,6 @@ bool begin_layer(uint32_t pass, uint32_t framebuffer);
 void end_layer();
 void break_layer();
 void context_lost();
+// This list can draw a ghost (playback drawing on the prepared model).
+bool drawing();
 }

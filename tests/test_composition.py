@@ -26,6 +26,7 @@ def _isolate_machine(monkeypatch, tmp_path):
         def __init__(self, **kwargs):
             self.header = None
             self.auto_refresh = kwargs["auto_refresh"]
+            self.installer = kwargs["installer"]
             self.refresh_calls = 0
             self.refresh_threads = 0
             layers.append(self)
@@ -73,15 +74,21 @@ def _isolate_machine(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("frozen", [False, True])
-def test_only_packaged_builds_automatically_refresh_the_shared_plugin(
+def test_every_build_refreshes_only_as_its_own_installer(
         monkeypatch, _isolate_machine, frozen):
+    # The frozen app and each source checkout refresh the shared plugin by
+    # themselves, each only its own kind of install (core/plugin_ownership.py).
     from sm64_events.main import _build_capture_layer
 
     monkeypatch.setattr("sm64_events.core.paths.is_frozen", lambda: frozen)
     layer, _ = _build_capture_layer(None, None)
-    assert layer.auto_refresh is frozen
-    assert layer.refresh_calls == int(frozen)
-    assert layer.refresh_threads == int(frozen)
+    assert layer.auto_refresh is True
+    if frozen:
+        assert layer.installer["kind"] == "frozen" and layer.installer["version"]
+    else:
+        assert layer.installer == {"kind": "checkout", "path": str(Path(sm64_events.__file__).resolve().parents[2])}
+    assert layer.refresh_calls == 1
+    assert layer.refresh_threads == 1
     assert _isolate_machine == [layer]
 
 

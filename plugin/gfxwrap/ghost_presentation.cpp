@@ -42,11 +42,26 @@ bool allocate(Instance* p,uint32_t index,uint32_t width,uint32_t height) {
     g.ReadBuffer(gl::COLOR_ATTACHMENT0);g.DrawBuffer(gl::COLOR_ATTACHMENT0);
     return g.CheckFramebufferStatus(gl::FRAMEBUFFER)==gl::FRAMEBUFFER_COMPLETE;
 }
+// save_back changes exactly these: the read framebuffer, unit 0's 2D texture
+// and the active unit (the default framebuffer's read selector it restores
+// inline). The full gl::Guard queried and restored ~77 values every frame for
+// them (~25 of its ~30 us); this saves three and restores three.
+struct CopyGuard {
+    const ghost_compositor::Dispatch& g; int32_t read_fbo=0,unit=0,texture=0;
+    explicit CopyGuard(const ghost_compositor::Dispatch& d):g(d) {
+        g.GetIntegerv(gl::READ_FRAMEBUFFER_BINDING,&read_fbo);g.GetIntegerv(gl::ACTIVE_TEXTURE,&unit);
+        g.ActiveTexture(gl::TEXTURE0);g.GetIntegerv(gl::TEXTURE_BINDING_2D,&texture);
+    }
+    ~CopyGuard() {
+        g.ActiveTexture(gl::TEXTURE0);g.BindTexture(gl::TEXTURE_2D,uint32_t(texture));
+        g.ActiveTexture(uint32_t(unit));g.BindFramebuffer(gl::READ_FRAMEBUFFER,uint32_t(read_fbo));
+    }
+};
 bool save_back(Instance* p) {
     p->published={};p->qualified=false;
     if(!p->raster.begin_gpu())return false;
     {
-        const auto& g=p->dispatch.gl;gl::Guard guard(g);
+        const auto& g=p->dispatch.gl;CopyGuard guard(g);
         g.BindFramebuffer(gl::READ_FRAMEBUFFER,0);
         int32_t selector=0;g.GetIntegerv(gl::READ_BUFFER,&selector);g.ReadBuffer(gl::BACK);
         g.ActiveTexture(gl::TEXTURE0);g.BindTexture(gl::TEXTURE_2D,p->textures[0]);

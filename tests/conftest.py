@@ -20,6 +20,12 @@ _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.append(_REPO_ROOT)
 
+# Every native host compile goes through tools/build_plugin.py::_cl, which then
+# reuses an identical earlier compile from this shared folder (all worktrees)
+# instead of paying vcvars and cl again. SM64_NATIVE_BUILD_CACHE=0 opts out.
+os.environ.setdefault("SM64_NATIVE_BUILD_CACHE", str(
+    Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "SM64Trainer/build-cache/test-hosts"))
+
 from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
@@ -210,6 +216,27 @@ def _write_page_log(page, name: str) -> None:
     (folder / f"{name}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _retry_an_aborted_first_navigation() -> None:
+    """A fresh page's FIRST navigation can come back `net::ERR_ABORTED` on a
+    loaded machine while the fixture server is up and answering (stress run
+    2026-09-23: 16 workers beside a 32-process CPU hog, one of 24 pages; the
+    same test passes on retry). Only that error is retried, and only once; a
+    second abort, or any other navigation failure, still fails the test."""
+    try:
+        from playwright.sync_api import Error, Page
+    except ImportError:
+        return
+
+    def goto(self, url, *args, _original=Page.goto, **kwargs):
+        try:
+            return _original(self, url, *args, **kwargs)
+        except Error as error:
+            if "net::ERR_ABORTED" not in str(error):
+                raise
+            return _original(self, url, *args, **kwargs)
+    Page.goto = goto
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     report = (yield).get_result()
@@ -228,6 +255,7 @@ def pytest_configure(config):
     inherit the live ancestor's budget and must never acquire it a second time.
     """
     _arm_the_browser_tripwire()
+    _retry_an_aborted_first_navigation()
     if os.environ.get("SM64_REPORT_DIR"):
         _keep_failure_screenshots()
     # Browser waits get a bound that scales with the machine this run ACTUALLY

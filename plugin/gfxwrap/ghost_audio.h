@@ -5,12 +5,13 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "ghost_tuning.h"
 
 namespace ghost_audio {
 constexpr uint32_t queue_slots = 256;
 constexpr uint32_t low_water_frames = 1088; // synthesize the next tick at or below this (34 ms)
 constexpr uint32_t tick_capacity = 1088;   // SA_TICK_MAX_FRAMES
-constexpr uint32_t sources = 16;           // SA_SOURCES: one per ghost
+constexpr uint32_t sources = GP_GHOSTS;    // one per ghost; SA_SOURCES matches (ghost_audio.cpp)
 /* After this much silent output (3 s at 32 kHz) the audio thread closes the
  * device and stops ticking until a request can be heard; it reopens on that
  * request, which sounds in the first tick written. */

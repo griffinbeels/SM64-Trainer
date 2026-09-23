@@ -230,6 +230,26 @@ int main(int argc, char **argv) {
     cached.bind(graphics::Parameter(GL_READ_FRAMEBUFFER),graphics::ObjectHandle(fbos[0]));
     glDeleteFramebuffers(1,fbos); check_bindings(0,0,GL_FRONT);
     cached.reset(); textures.reset(); check_bindings(0,0,GL_FRONT);
+    // The raster state the ghost hooks read on every draw: the renderer's own
+    // dispatched binds, viewport and depth range, no driver query, and equal
+    // to what the driver holds.
+    {
+        replay_gl::RasterState raster{};
+        CHECK(replay_gl::Raster(&raster) && raster.draw_known && raster.depth_known && !raster.viewport_known
+            && raster.depth_range[0]==0.f && raster.depth_range[1]==1.f);
+        cached.bind(graphics::Parameter(GL_DRAW_FRAMEBUFFER),graphics::ObjectHandle(fbos[1]));
+        glViewport(3,5,70,90); g_glDepthRangef(0.25f,0.75f);
+        CHECK(replay_gl::Raster(&raster) && raster.draw_known && raster.draw_framebuffer==fbos[1]
+            && raster.viewport_known && raster.viewport[0]==3 && raster.viewport[1]==5 && raster.viewport[2]==70
+            && raster.viewport[3]==90 && raster.depth_range[0]==0.25f && raster.depth_range[1]==0.75f);
+        GLint draw=0,viewport[4]{};GLfloat range[2]{};
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);glGetIntegerv(GL_VIEWPORT,viewport);glGetFloatv(GL_DEPTH_RANGE,range);
+        CHECK(GLuint(draw)==raster.draw_framebuffer && viewport[0]==3 && viewport[3]==90 && range[1]==0.75f);
+        glDeleteFramebuffers(1,fbos+1); // deleting the bound draw FBO binds the default one
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
+        CHECK(replay_gl::Raster(&raster) && raster.draw_framebuffer==0 && draw==0);
+        g_glDepthRangef(0.f,1.f); cached.reset();
+    }
     CHECK(replay_gl::CandidateBindings(&identity,&witness));
     const auto old_identity=identity;
     replay_gl::DrawableChanged(); check_bindings(0,0,GL_FRONT);

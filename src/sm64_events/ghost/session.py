@@ -43,6 +43,7 @@ import logging
 import threading
 from contextlib import suppress
 from datetime import datetime, timezone
+from time import monotonic
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -52,10 +53,11 @@ from sm64_events.ghost.native_session import ghost_hue
 from sm64_events.ghost.pb import GhostLibrary
 from sm64_events.ghost.source import resolve_ghost
 from sm64_events.ghost.selection import (
-    MISSING_REASON, SELECTION_KEY, GhostSelection, checked_choice, chosen_ghosts,
+    MAX_GHOSTS, MISSING_REASON, SELECTION_KEY, GhostSelection, checked_choice, chosen_ghosts,
 )
-from sm64_events.ghost.proximity import (
-    DEFAULT_PROXIMITY, PROXIMITY_KEY, checked_proximity, saved_proximity,
+from sm64_events.ghost import settings
+from sm64_events.ghost.settings import (
+    DEFAULT_OPACITY, DEFAULT_TINT, DEFAULT_VIEW, GHOST_VIEWS, HUE_LIMIT_DEGREES, NUDGE_LIMIT_FRAMES,
 )
 
 log = logging.getLogger("sm64.ghost")
@@ -65,75 +67,28 @@ log = logging.getLogger("sm64.ghost")
 #: behind it at all -- this is live UI state, like the segment notices.
 EVENT_TYPE = "ghost_changed"
 
-#: How see-through the ghost is the FIRST time it is ever switched on. A
-#: shipped preference, so its exact value is his to move and no test pins it --
-#: what matters is that a first switch-on is see-through, because a solid
-#: overlay is indistinguishable from the emulator having vanished (which is
-#: what it looked like on 2026-09-19). A value he has already chosen wins:
-#: `_load_persisted` only falls back to this one.
-DEFAULT_OPACITY = 0.5
-#: HOW THE GHOST IS COLOURED, so it cannot be mistaken for the live picture.
-#: His words, 2026-09-19: *"It feels really hard to understand which one is the
-#: ACTUAL LIVE GAMEPLAY and which one is the GHOST gameplay... Maybe we can have
-#: a color picker... and then apply a color filter to the entire picture? e.g.
-#: 'Hue Adjustment: Shift the hue angle by +120 degrees'... The user can disable
-#: the color shift if they want."* So: on by default, a third of the way round
-#: the colour wheel, and his to move or switch off. A shipped preference like
-#: the opacity above, so no test pins these two numbers -- what is pinned is
-#: that they are a coherent, reachable choice.
-DEFAULT_TINT = {"enabled": True, "hue_degrees": 120}
-#: One full turn of the colour wheel. 0 and 360 are the same colour, so the
-#: control offers the half-open range and 360 is refused rather than silently
-#: meaning "off".
-HUE_LIMIT_DEGREES = 359
-#: WHAT THE GHOST SHOWS. His words, 2026-09-20: *"let's do tight rectangles on
-#: our existing ghosts, let's try it."* The whole recorded screen is what the
-#: ghost has always been, and his complaint about it is that two cameras' worth
-#: of scenery overlap; "mario" draws only the rectangle Mario is in, in the
-#: place the footage has him. Default "whole", because that is the ghost he
-#: already knows and most clips have no boxes to draw the other one from.
-GHOST_VIEWS = ("whole", "mario")
-DEFAULT_VIEW = "whole"
-#: How far the ghost may be nudged, in game frames. 600 is twenty seconds at
-#: 30 fps -- past the length of most of the stars this is used on, so the limit
-#: only ever catches a typo or a stuck key.
-NUDGE_LIMIT_FRAMES = 600
 #: How often the watch re-reads the world. Slow on purpose: everything it
 #: catches is human-paced, and the live clock the overlay actually follows
 #: arrives on its own socket.
 WATCH_PERIOD_S = 0.5
-#: Re-resolving asks the template store and looks for the clip on disk, so it
-#: runs every Nth tick rather than every tick -- a target change re-resolves
-#: immediately whatever this says.
-RESOLVE_EVERY = 8
+#: RESOLVING -- which ghosts exist for the target and whether each can play --
+#: reads the template store, the saved-clip index and every candidate's
+#: sidecar, 86 ms of CPU on his PB (2026-09-23). It used to run every 4 s
+#: whatever happened, switch off included. It now runs when something that
+#: decides the answer moves: the target, the templates (`TemplateStore.
+#: generation`), the saved clips (`ReplayService.saved_generation`), the
+#: database, a PB save or undo, a saved-ghost change, and a PUT that changes
+#: which ghosts or which view. This interval is the backstop for anything
+#: that moves some other way, and it runs only while the switch is on: with
+#: it off nothing is drawn, and turning it on resolves at once.
+SAFETY_RESOLVE_S = 45.0
+#: The PUT fields that change what the resolve answers: the settings rows
+#: marked `resolves` (the switch, the view) and the ticked ghost set. Every
+#: other setting rides the clock feed or the native command and never needs one.
+RESOLVING_CHANGES = frozenset({*settings.resolving(), "ghosts"})
 #: A child that will not stay up is not retried forever; a crash loop spawning
 #: a process twice a second is worse than no overlay.
 MAX_START_ATTEMPTS = 3
-
-ENABLED_KEY = "ghost_enabled"
-OPACITY_KEY = "ghost_opacity"
-TINT_ENABLED_KEY = "ghost_tint_enabled"
-#: THE GHOST'S SHADOW, on or off. His words, 2026-09-22: *"It should be the
-#: same type of shadow that follows mario ... and then make sure we can easily
-#: A/B test whether we like this or not."* On by default because the shadow is
-#: the game's own; a shipped preference, so no test pins the value.
-SHADOW_KEY = "ghost_shadow"
-DEFAULT_SHADOW = True
-#: THE GHOST NEVER BLOCKS THE PLAYER, on or off (the player-first fade). His
-#: words, 2026-09-23: *"if the ghost is blocking the player in any way, we
-#: prioritize rendering the player, not the ghost, which means we decrease
-#: opacity for the ghost."* On by default; the switch is his A/B comparison.
-#: A shipped preference, so no test pins the value.
-OCCLUSION_FADE_KEY = "ghost_occlusion_fade"
-DEFAULT_OCCLUSION_FADE = True
-#: HOW LOUD GHOST MARIO IS. His words, 2026-09-22: *"it would be nice if Ghost
-#: mario also played sound effects whenever he did his actions in game ... We
-#: should have a volume slider to adjust the ghost volume."* Half by default so
-#: the ghost never drowns out the live game; a shipped preference.
-VOLUME_KEY = "ghost_volume"
-DEFAULT_VOLUME = 0.5
-TINT_HUE_KEY = "ghost_tint_hue"
-VIEW_KEY = "ghost_view"
 
 PAGE_PATH = "/ui/ghost/index.html"
 
@@ -155,9 +110,9 @@ NO_RECORDINGS = {
     "mario_boxes_available": False, "mario_boxes_reason": None,
     "mario_boxes_reason_text": None}
 
-#: What a client may send to PUT /api/ghost.
-SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "ghosts", "target", "proximity",
-            "shadow", "occlusion_fade", "volume")
+#: What a client may send to PUT /api/ghost: every registry row, plus the
+#: ticked ghost set and the target it is for.
+SETTABLE = (*settings.BY_NAME, "ghosts", "target")
 
 
 def template_store(inputs):
@@ -191,89 +146,6 @@ def follower_url(target: dict, port: int | None = None, *, template_id=None) -> 
     return f"http://127.0.0.1:{chosen}{PAGE_PATH}?{urlencode(params)}"
 
 
-def _checked_opacity(value) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("How see-through the ghost is has to be a number "
-                         "between 0 and 1.")
-    if not 0.0 <= float(value) <= 1.0:
-        raise ValueError("How see-through the ghost is has to be between 0 "
-                         "(invisible) and 1 (solid).")
-    return float(value)
-
-
-def _checked_nudge(value) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("The nudge is a whole number of game frames.")
-    if abs(value) > NUDGE_LIMIT_FRAMES:
-        raise ValueError(
-            f"The ghost can only be nudged up to {NUDGE_LIMIT_FRAMES} frames "
-            "(about twenty seconds) either way.")
-    return value
-
-
-def _checked_enabled(value) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError("The ghost overlay is either on or off.")
-    return value
-
-
-def _checked_tint(value) -> dict:
-    """The colour treatment, as a PARTIAL: a client may send either half.
-
-    Sending only the angle must not switch the treatment off and sending only
-    the switch must not throw away the angle he chose, so this returns exactly
-    the fields it was given and `_apply` merges them over what is already set.
-    """
-    if not isinstance(value, dict):
-        raise ValueError("The ghost's colour is a switch and an angle.")
-    unknown = sorted(set(value) - {"enabled", "hue_degrees"})
-    if unknown:
-        raise ValueError(
-            f"The ghost's colour has no setting called {unknown[0]!r}.")
-    checked = {}
-    if "enabled" in value:
-        if not isinstance(value["enabled"], bool):
-            raise ValueError("The ghost's colour shift is either on or off.")
-        checked["enabled"] = value["enabled"]
-    if "hue_degrees" in value:
-        hue = value["hue_degrees"]
-        if isinstance(hue, bool) or not isinstance(hue, int):
-            raise ValueError("The ghost's colour is a whole number of degrees "
-                             "around the colour wheel.")
-        if not 0 <= hue <= HUE_LIMIT_DEGREES:
-            raise ValueError(
-                f"The ghost's colour goes from 0 to {HUE_LIMIT_DEGREES} "
-                "degrees around the colour wheel.")
-        checked["hue_degrees"] = hue
-    return checked
-
-
-def _checked_view(value) -> str:
-    """Which of the ghost's views he asked for.
-
-    Asking for "mario" on a ghost whose clip has no boxes is NOT an error: the
-    setting is app-wide and he walks between stars, so refusing it would make
-    the control jam on the first ghost without boxes. The page falls back to
-    the whole picture and says why in `ghostStatus()`; the switch row gets the
-    same reason from the source.
-    """
-    if value not in GHOST_VIEWS:
-        raise ValueError("The ghost shows either the whole picture or only "
-                         "Mario.")
-    return value
-
-
-def _checked_volume(volume) -> float:
-    if type(volume) not in (int, float) or not 0 <= volume <= 1:
-        raise ValueError("The ghost's volume is between silent and full.")
-    return float(volume)
-
-
-#: The Only Mario on/off settings, and what a value that is not a bool hears.
-SWITCHES = {"shadow": "The ghost's shadow is either on or off.",
-            "occlusion_fade": "Fading the ghost in front of Mario is either on or off."}
-
-
 def validate_changes(changes: dict) -> dict:
     """What a client asked for, or the one sentence saying why it cannot have
     it. Raises ValueError; nothing is applied until every value passes, so a
@@ -282,26 +154,7 @@ def validate_changes(changes: dict) -> dict:
     if unknown:
         raise ValueError(
             f"The ghost overlay has no setting called {unknown[0]!r}.")
-    checked = {}
-    if "enabled" in changes:
-        checked["enabled"] = _checked_enabled(changes["enabled"])
-    if "opacity" in changes:
-        checked["opacity"] = _checked_opacity(changes["opacity"])
-    if "nudge_frames" in changes:
-        checked["nudge_frames"] = _checked_nudge(changes["nudge_frames"])
-    if "tint" in changes:
-        checked["tint"] = _checked_tint(changes["tint"])
-    for name, sentence in SWITCHES.items():
-        if name in changes:
-            if type(changes[name]) is not bool:
-                raise ValueError(sentence)
-            checked[name] = changes[name]
-    if "volume" in changes:
-        checked["volume"] = _checked_volume(changes["volume"])
-    if "proximity" in changes:
-        checked["proximity"] = checked_proximity(changes["proximity"])
-    if "view" in changes:
-        checked["view"] = _checked_view(changes["view"])
+    checked = settings.validated(changes)
     if "ghosts" in changes:
         checked["ghosts"] = checked_choice(changes["ghosts"])
         if not isinstance(changes.get("target"), dict):
@@ -330,20 +183,20 @@ class GhostSession:
         self._period_s = period_s
         self._native = native
         self._native_answer = {}
+        # When the last resolve ran, and what the world it read looked like
+        # (`_world`): a change there is itself the event that re-resolves.
+        self._resolved_at: float | None = None
+        self._world = None
+        # PBs whose video save has been asked for and not finished: the only
+        # time "still being saved" is true (`video_pending`, wired in main.py).
+        self._videos_pending: set[int] = set()
         self._selection = GhostSelection()
         self._candidates = []
         self._pb = None
         self._missing = ()
 
-        self._enabled = False
-        self._opacity = DEFAULT_OPACITY
-        self._tint = dict(DEFAULT_TINT)
-        self._shadow = DEFAULT_SHADOW
-        self._occlusion_fade = DEFAULT_OCCLUSION_FADE
-        self._volume = DEFAULT_VOLUME
-        self._proximity = dict(DEFAULT_PROXIMITY)
-        self._view = DEFAULT_VIEW
-        self._nudge = 0
+        #: Every registry setting's current value (`ghost/settings.py`).
+        self._values = settings.defaults()
         self._loaded = False
         self._pending: dict = {}
 
@@ -377,15 +230,8 @@ class GhostSession:
     def payload(self) -> dict:
         """The whole frozen shape: what the switch is, what it is pointed at,
         whether there is anything to show, and what the window is doing."""
-        return {"enabled": self._enabled,
-                "opacity": self._opacity,
-                "tint": dict(self._tint),
-                "shadow": self._shadow,
-                "occlusion_fade": self._occlusion_fade,
-                "volume": self._volume,
-                "proximity": dict(self._proximity),
-                "view": self._view,
-                "nudge_frames": self._nudge,
+        return {**{name: settings.copied(value) for name, value in self._values.items()},
+                "limits": settings.limits(),
                 "target": dict(self._target) if self._target else None,
                 "selection": {"ghosts": self._selection.chosen(self._target, self._library_or_none()),
                               "missing": list(self._missing),
@@ -399,16 +245,16 @@ class GhostSession:
         """Which ticked ghosts Only Mario draws, in order, with the colour each
         is tinted (None when the tint is off) -- the same order and hues the
         native command carries (`native_session.py::ghost_hue`)."""
-        if self._view != "mario":
+        if self._values["view"] != "mario":
             return []
         ghosts = [ghost for ghost in self._native_answer.get("ghosts", []) if ghost["available"]]
         return [{"key": "pb" if ghost.get("pb") else ghost["attempt_id"],
                  "attempt_id": ghost["attempt_id"],
-                 "hue_degrees": ghost_hue(self._tint["hue_degrees"], index) if self._tint["enabled"] else None}
+                 "hue_degrees": ghost_hue(self._values["tint"]["hue_degrees"], index) if self._values["tint"]["enabled"] else None}
                 for index, ghost in enumerate(ghosts)]
 
     def _window_state(self) -> dict:
-        if self._view == "mario" and self._native is not None:
+        if self._values["view"] == "mario" and self._native is not None:
             return self._native.state()
         controller = self._controller
         running = controller is not None and controller.is_running()
@@ -448,16 +294,32 @@ class GhostSession:
                 self._native.stop()
 
     async def _watch(self) -> None:
-        tick = 0
         while True:
             await asyncio.sleep(self._period_s)
-            tick += 1
             try:
-                await self.refresh(resolve=tick % RESOLVE_EVERY == 0)
+                await self.refresh(resolve=self._safety_resolve_due())
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - one bad cycle must not end the watch
                 log.exception("ghost session cycle failed")
+
+    def _safety_resolve_due(self) -> bool:
+        """The backstop resolve (`SAFETY_RESOLVE_S`), only while drawing."""
+        return (self._values["enabled"] and self._resolved_at is not None
+                and monotonic() - self._resolved_at >= SAFETY_RESOLVE_S)
+
+    def _world_now(self):
+        """Everything a resolve reads that can change without an event
+        reaching this session: which database, which templates, which saved
+        clips. Each is a counter, so asking costs nothing."""
+        database = self._db()
+        try:
+            store = template_store(self._inputs)
+            templates = (id(store), getattr(store, "generation", None))
+        except Exception:  # noqa: BLE001 - no input service yet is a world too
+            templates = None
+        return (id(database) if database is not None else None, templates,
+                getattr(self._replay, "saved_generation", None))
 
     # -- the cycle ------------------------------------------------------------
 
@@ -489,13 +351,15 @@ class GhostSession:
         if target != self._target:
             # His timing offset is about ONE thing he is practising; carrying
             # it onto the next star would put that ghost silently out of step.
-            self._target, self._nudge, self._starts = target, 0, 0
+            self._target, self._values["nudge_frames"], self._starts = target, 0, 0
             resolve = True
         self._load_persisted()
         if self._pending:
-            resolve = resolve or "view" in self._pending
+            resolve = resolve or bool(RESOLVING_CHANGES & set(self._pending))
             self._apply(self._pending)
             self._pending = {}
+        world = self._world_now()
+        resolve = resolve or world != self._world or self._resolved_at is None
         # Every cycle, not only the ones that changed it: a feed attached late,
         # or a session whose watch reset the nudge on a target change, converges
         # here rather than waiting for the next press.
@@ -503,6 +367,7 @@ class GhostSession:
         if resolve:
             self._source = self._resolve_source(target)
             self._refresh_candidates(target)
+            self._world, self._resolved_at = world, monotonic()
         try:
             self._reconcile()
         except Exception:  # noqa: BLE001 - a window that will not open is not a reason to stop practising
@@ -572,7 +437,7 @@ class GhostSession:
                 log.exception("native ghost source unavailable")
                 self._native_answer = {"available": False, "reason": "native_unavailable",
                                        "reason_text": "The template's Mario poses could not be read."}
-            selected = self._native_answer if self._view == "mario" else video
+            selected = self._native_answer if self._values["view"] == "mario" else video
             return {**NO_TARGET, **selected,
                     "native_available": self._native_answer.get("available", False),
                     "native_reason_text": self._native_answer.get("reason_text"),
@@ -616,38 +481,75 @@ class GhostSession:
         except RuntimeError:  # no captured-input service yet
             return None
 
-    def _refresh_pb(self, target):
+    def video_pending(self, attempt_id: int, pending: bool) -> None:
+        """A PB's video save was asked for (True) or has finished (False)."""
+        if pending:
+            self._videos_pending.add(attempt_id)
+        else:
+            self._videos_pending.discard(attempt_id)
+
+    def _row_video(self):
+        """How the picker's rows learn whether the WHOLE PICTURE can play.
+
+        Only Mario draws poses, so there a row's whole-picture answer decides
+        one thing -- whether switching to Whole picture is offered at all --
+        and one playable recording settles that. Each answer reads a clip's
+        sidecar and checks its picture map, so after the first yes (the
+        current source's own counts) the rest are left unasked (`None`);
+        switching views resolves again and asks them properly."""
+        if self._values["view"] != "mario":
+            return self._resolve_video_source
+        found = [bool(self._source.get("whole_available"))]
+
+        def video_of(target, ghost):
+            if found[0]:
+                return {"available": None, "reason_text": None}
+            answer = self._resolve_video_source(target, ghost)
+            found[0] = bool(answer["available"])
+            return answer
+        return video_of
+
+    def _refresh_pb(self, target, video_of):
         """What the picker's default option plays: the PB ghost and whether
         each Show mode can draw it. Never a saved choice."""
         library = self.library()
         pb = library.pb_for(target["kind"], target["entity_key"], target["strat"]) if target else None
         if pb is None:
             return None
-        video = self._resolve_video_source(target, pb)
+        video = video_of(target, pb)
         native = self._native.probe(target, pb) if self._native is not None else {
             "available": False, "reason_text": "Mario playback is not available in this window."}
-        return {"attempt_id": pb.attempt_id, "frames": pb.frames, "pose_gaps": native.get("pose_gaps", 0),
-                "native_available": bool(native["available"]),
-                "native_reason_text": native["reason_text"],
-                "whole_available": bool(video["available"]) and video.get("attempt_id") == pb.attempt_id,
-                "whole_reason_text": (video["reason_text"] if video.get("attempt_id") == pb.attempt_id
-                                      else "This PB's video is still being saved.")}
+        row = {"attempt_id": pb.attempt_id, "frames": pb.frames, "pose_gaps": native.get("pose_gaps", 0),
+               "native_available": bool(native["available"]),
+               "native_reason_text": native["reason_text"]}
+        if video["available"] is None:
+            return {**row, "whole_available": None, "whole_reason_text": None}
+        mine = video.get("attempt_id") == pb.attempt_id
+        # "Still being saved" only while a save really is running; a PB whose
+        # footage was never kept says so instead of promising it.
+        waiting = ("This PB's video is still being saved." if pb.attempt_id in self._videos_pending
+                   else "There is no saved video for this PB.")
+        return {**row, "whole_available": bool(video["available"]) and mine,
+                "whole_reason_text": video["reason_text"] if mine else waiting}
 
     def _refresh_candidates(self, target):
+        video_of = self._row_video()
         try:
-            self._pb = self._refresh_pb(target)
+            self._pb = self._refresh_pb(target, video_of)
         except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
             log.debug("PB ghost unavailable", exc_info=True)
             self._pb = None
         try:
             self._candidates = self._selection.candidates(
-                target, self.library(), self._resolve_video_source, self._native)
+                target, self.library(), video_of, self._native,
+                variant=(self._values["view"], self._world_now()))
             # The chosen ghosts were resolved just now. Do not let the list's
             # short cache hide a deletion or a newly saved file on them.
             fresh = {ghost["attempt_id"]: ghost for ghost in self._native_answer.get("ghosts", [])}
             for row in self._candidates:
                 if row["attempt_id"] in fresh:
                     row["native_available"] = fresh[row["attempt_id"]]["available"]
+                    row["native_reason"] = fresh[row["attempt_id"]].get("reason")
                     row["native_reason_text"] = fresh[row["attempt_id"]]["reason_text"]
         except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
             log.debug("ghost choices unavailable", exc_info=True)
@@ -679,7 +581,7 @@ class GhostSession:
                 saved.save(database, attempt_id, kind, key)
                 self._selection.load(database)
                 choice = self._selection.chosen(target, self.library())
-                if attempt_id not in choice["attempts"] and len(choice["attempts"]) + choice["pb"] < 16:
+                if attempt_id not in choice["attempts"] and len(choice["attempts"]) + choice["pb"] < MAX_GHOSTS:
                     choice["attempts"].append(attempt_id)
                     _remember(database, SELECTION_KEY, self._selection.choose(target, choice))
         await asyncio.to_thread(remember)
@@ -739,81 +641,25 @@ class GhostSession:
         if self._loaded or database is None:
             return
         try:
-            stored_enabled = database.get_state(ENABLED_KEY, False)
-            stored_opacity = database.get_state(OPACITY_KEY, DEFAULT_OPACITY)
-            stored_tint_on = database.get_state(TINT_ENABLED_KEY,
-                                                DEFAULT_TINT["enabled"])
-            stored_hue = database.get_state(TINT_HUE_KEY,
-                                            DEFAULT_TINT["hue_degrees"])
-            stored_view = database.get_state(VIEW_KEY, DEFAULT_VIEW)
-            stored_shadow = database.get_state(SHADOW_KEY, DEFAULT_SHADOW)
-            stored_fade = database.get_state(OCCLUSION_FADE_KEY, DEFAULT_OCCLUSION_FADE)
-            stored_volume = database.get_state(VOLUME_KEY, DEFAULT_VOLUME)
-            stored_proximity = database.get_state(PROXIMITY_KEY, DEFAULT_PROXIMITY)
+            stored = {row.name: row.read(database) for row in settings.ROWS if row.remembered()}
             self._selection.load(database)
         except Exception:  # noqa: BLE001 - a preference must never block the app
             log.debug("ghost preference unreadable", exc_info=True)
             return
-        self._enabled = bool(stored_enabled)
-        # Coerced rather than trusted: a stored value is whatever the last
-        # version of this code wrote, and a nonsense one must not make the
-        # window unopenable.
-        try:
-            self._opacity = min(1.0, max(0.0, float(stored_opacity)))
-        except (TypeError, ValueError):
-            self._opacity = DEFAULT_OPACITY
-        try:
-            hue = int(stored_hue) % (HUE_LIMIT_DEGREES + 1)
-        except (TypeError, ValueError):
-            hue = DEFAULT_TINT["hue_degrees"]
-        self._tint = {"enabled": bool(stored_tint_on), "hue_degrees": hue}
-        self._proximity = saved_proximity(stored_proximity)
-        self._shadow = stored_shadow if type(stored_shadow) is bool else DEFAULT_SHADOW
-        self._occlusion_fade = stored_fade if type(stored_fade) is bool else DEFAULT_OCCLUSION_FADE
-        try:
-            self._volume = min(1.0, max(0.0, float(stored_volume)))
-        except (TypeError, ValueError):
-            self._volume = DEFAULT_VOLUME
-        # A stored value from a build that knew another view name is not a
-        # view: it falls back rather than leaving the page asking for
-        # something nothing draws.
-        self._view = (stored_view if stored_view in GHOST_VIEWS
-                      else DEFAULT_VIEW)
+        self._values.update(stored)
         self._loaded = True
 
     def _apply(self, changes: dict) -> None:
         database = self._db()
+        for name, checked in changes.items():
+            row = settings.BY_NAME.get(name)
+            if row is None:
+                continue
+            self._values[name] = settings.applied(self._values[name], row, checked)
+            if row.remembered():
+                _remember_setting(database, row, self._values[name])
         if "enabled" in changes:
-            self._enabled = changes["enabled"]
             self._starts = 0
-            _remember(database, ENABLED_KEY, self._enabled)
-        if "opacity" in changes:
-            self._opacity = changes["opacity"]
-            _remember(database, OPACITY_KEY, self._opacity)
-        if "tint" in changes:
-            # Merged, not replaced: the control sends the half he touched.
-            self._tint = {**self._tint, **changes["tint"]}
-            _remember(database, TINT_ENABLED_KEY, self._tint["enabled"])
-            _remember(database, TINT_HUE_KEY, self._tint["hue_degrees"])
-        if "shadow" in changes:
-            self._shadow = changes["shadow"]
-            _remember(database, SHADOW_KEY, self._shadow)
-        if "occlusion_fade" in changes:
-            self._occlusion_fade = changes["occlusion_fade"]
-            _remember(database, OCCLUSION_FADE_KEY, self._occlusion_fade)
-        if "volume" in changes:
-            self._volume = changes["volume"]
-            _remember(database, VOLUME_KEY, self._volume)
-        if "proximity" in changes:
-            self._proximity = {**self._proximity, **changes["proximity"]}
-            _remember(database, PROXIMITY_KEY, self._proximity)
-        if "view" in changes:
-            self._view = changes["view"]
-            _remember(database, VIEW_KEY, self._view)
-        if "nudge_frames" in changes:
-            # Never persisted: it belongs to the target, and the target is
-            # gone by the next session.
-            self._nudge = changes["nudge_frames"]
         if "ghosts" in changes:
             choices = self._selection.choose(self._target, changes["ghosts"])
             _remember(database, SELECTION_KEY, choices)
@@ -829,7 +675,10 @@ class GhostSession:
         async with self._lock:
             target = self._read_target()
             await asyncio.to_thread(self._queue_update, checked, target)
-            await asyncio.to_thread(self._cycle, target, True)
+            # A slider dragged through fifteen values is fifteen PUTs; only a
+            # change to which ghosts, which view or the switch itself asks the
+            # resolve anything new (`RESOLVING_CHANGES`).
+            await asyncio.to_thread(self._cycle, target, False)
             body = self.payload()
             changed = body != self._published
             self._published = body
@@ -845,7 +694,13 @@ class GhostSession:
                        self.library().ghosts_for(target["kind"], target["entity_key"])}
             if any(number not in offered for number in checked["ghosts"]["attempts"]):
                 raise ValueError("That ghost is not saved for this star or segment. Choose another ghost.")
-        self._pending.update(checked)
+        # Queued changes FOLD the way applied ones merge: two halves of the
+        # colour (or of the overlap fade) queued before one cycle both land.
+        for name, value in checked.items():
+            row = settings.BY_NAME.get(name)
+            if row is not None and row.merge and name in self._pending:
+                value = {**self._pending[name], **value}
+            self._pending[name] = value
 
     def _tell_clock(self) -> None:
         """Publish the nudge, the colour and the view to whoever is following
@@ -860,9 +715,9 @@ class GhostSession:
         if self._clock is None:
             return
         try:
-            self._clock.set_nudge(self._nudge)
-            self._clock.set_tint(self._tint)
-            self._clock.set_view(self._view)
+            self._clock.set_nudge(self._values["nudge_frames"])
+            self._clock.set_tint(self._values["tint"])
+            self._clock.set_view(self._values["view"])
         except Exception:  # noqa: BLE001 - the overlay's timing is not worth the app
             log.debug("the ghost clock would not take the nudge", exc_info=True)
 
@@ -870,17 +725,14 @@ class GhostSession:
 
     def _reconcile(self) -> None:
         if self._native is not None:
-            native_view = self._view == "mario"
-            self._native.reconcile(enabled=native_view and self._enabled and self._source.get("available", False),
-                                   opacity=self._opacity, nudge=self._nudge,
-                                   tint=self._tint, target=self._target, proximity=self._proximity,
-                                   shadow=self._shadow, occlusion_fade=self._occlusion_fade,
-                                   volume=self._volume)
+            native_view = self._values["view"] == "mario"
+            self._native.reconcile(enabled=native_view and self._values["enabled"] and self._source.get("available", False),
+                                   target=self._target, controls=settings.native_controls(self._values))
             if native_view:
                 self._end_window()
                 return
         controller = self._controller
-        if not self._enabled:
+        if not self._values["enabled"]:
             self._end_window()
             return
         if self._target is None or not self._source.get("available"):
@@ -893,26 +745,26 @@ class GhostSession:
         url = follower_url(self._target, self._port)
         if controller is None:
             controller = self._controller = self._factory(
-                url=url, opacity=self._opacity, visible=True,
+                url=url, opacity=self._values["opacity"], visible=True,
                 on_event=self._child_said)
         if not controller.is_running():
             if self._starts >= MAX_START_ATTEMPTS:
                 return
             self._starts += 1
-            self._diag("window_starting", url=url, opacity=self._opacity,
+            self._diag("window_starting", url=url, opacity=self._values["opacity"],
                        attempt=self._starts)
             # Set first, start second: a value handed to a stopped controller
             # is carried into the next start (ghost/window/controller.py).
             controller.set_url(url)
-            controller.set_opacity(self._opacity)
+            controller.set_opacity(self._values["opacity"])
             controller.set_visible(True)
             controller.start()
             return
         self._starts = 0
         if controller.url != url:
             controller.set_url(url)
-        if controller.opacity != self._opacity:
-            controller.set_opacity(self._opacity)
+        if controller.opacity != self._values["opacity"]:
+            controller.set_opacity(self._values["opacity"])
         if not controller.visible:
             controller.set_visible(True)
 
@@ -961,10 +813,19 @@ class GhostSession:
 
 
 def _remember(database, key: str, value) -> None:
+    _saving(database, lambda: database.set_state(key, value))
+
+
+def _remember_setting(database, row, value) -> None:
+    """A registry setting, under its own key(s) (`ghost/settings.py`)."""
+    _saving(database, lambda: row.write(database, value))
+
+
+def _saving(database, save) -> None:
     if database is None:
         return
     try:
-        database.set_state(key, value)
+        save()
     except Exception:  # noqa: BLE001 - failing to remember must not fail the flip
         log.debug("ghost preference could not be saved", exc_info=True)
 

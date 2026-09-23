@@ -13,11 +13,13 @@ import json
 import logging
 from time import monotonic
 
+from sm64_events.ghost.native_layout import GHOSTS
+
 SELECTION_KEY = "ghost_templates"
 CANDIDATE_CACHE_S = 4.0
 MISSING_REASON = "The selected ghost was removed. Choose another saved ghost."
-#: Ghosts drawn at once; the native channel's `GIPC_GHOSTS`.
-MAX_GHOSTS = 16
+#: Ghosts drawn at once (the renderer's GP_GHOSTS).
+MAX_GHOSTS = GHOSTS
 DEFAULT_CHOICE = {"pb": True, "attempts": []}
 log = logging.getLogger("sm64.ghost")
 
@@ -179,13 +181,20 @@ class GhostSelection:
     def stored(self):
         return {name: dict(value) for name, value in self._choices.items()}
 
-    def candidates(self, target, library, video_of, native):
+    def candidates(self, target, library, video_of, native, variant=None):
         """Every run this target can race except his PB (the PB box is its own
-        row), named by time, each qualified for both Show modes."""
+        row), named by time, each qualified for both Show modes.
+
+        `variant` joins the cache key: the session passes what else decides a
+        row (the view, and the world its resolve read), so a cached list can
+        never outlive a saved clip or a view switch. A `video_of` answer of
+        `available: None` means the whole picture was not asked (Only Mario
+        needs it for no row) and is kept as unknown."""
         if target is None:
             return []
         ghosts = library.ghosts_for(target["kind"], target["entity_key"])
-        signature = (target_key(target), tuple((g.attempt_id, g.frames, g.strat_tag) for g in ghosts))
+        signature = (target_key(target), tuple((g.attempt_id, g.frames, g.strat_tag) for g in ghosts),
+                     variant)
         now = monotonic()
         if self._cache is not None:
             key, until, candidates = self._cache
@@ -198,9 +207,11 @@ class GhostSelection:
             candidates.append({"attempt_id": ghost.attempt_id, "frames": ghost.frames,
                                "strat": ghost.strat_tag,
                                "native_available": bool(pose["available"]),
+                               "native_reason": pose.get("reason"),
                                "native_reason_text": pose["reason_text"],
                                "pose_gaps": pose.get("pose_gaps", 0),
-                               "whole_available": bool(video["available"]),
+                               "whole_available": (None if video["available"] is None
+                                                   else bool(video["available"])),
                                "whole_reason_text": video["reason_text"]})
         self._cache = signature, now + CANDIDATE_CACHE_S, candidates
         return [dict(row) for row in candidates]

@@ -73,7 +73,7 @@ uint64_t process_birth(HANDLE process) {
 }
 
 bool layout(gc_header &h) {
-    h.version = GC_VERSION; memcpy(h.magic, magic, 8); h.header_bytes = GC_HEADER_BYTES;
+    h.version = GC_CHANNEL_VERSION; memcpy(h.magic, magic, 8); h.header_bytes = GC_HEADER_BYTES;
     h.even_width = h.width & ~1u; h.even_height = h.height & ~1u;
     h.format = GC_FORMAT_BGRA8; h.sample_stride = 8; h.stamp_capacity = GC_STAMP_BYTES;
     h.bridge_count = GC_BRIDGES;
@@ -98,7 +98,7 @@ bool layout(gc_header &h) {
 }
 
 bool validate(const gc_header &h, uint64_t mapped_bytes) {
-    if ((h.seq & 1) || !h.seq || h.version != GC_VERSION || memcmp(h.magic, magic, 8)
+    if ((h.seq & 1) || !h.seq || h.version != GC_CHANNEL_VERSION || memcmp(h.magic, magic, 8)
         || h.header_bytes != GC_HEADER_BYTES || h.total_bytes > mapped_bytes
         || !header_config(h)) return false;
     gc_header expected = h;

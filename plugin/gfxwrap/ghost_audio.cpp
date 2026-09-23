@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+
+static_assert(SA_SOURCES == ghost_audio::sources, "one engine source per displayed ghost");
 #pragma comment(lib, "winmm.lib")
 
 namespace ghost_audio {

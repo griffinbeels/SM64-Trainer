@@ -854,11 +854,14 @@ def _stub_workbook():
 RANK_WAIT_MS = 15000
 
 
-def _wait_until(page, expression, timeout_ms=15000, step_ms=100):
+def _wait_until(page, expression, timeout_ms=None, step_ms=100):
     """Poll a JS predicate. uilab's own `wait_for` takes a SELECTOR, and what
     round 26's polled copy needs to wait on is a value on `window` -- a fixed
-    `wait_ms` here is the coin-flip this file has already paid for once."""
-    deadline = time.monotonic() + timeout_ms / 1000
+    `wait_ms` here is the coin-flip this file has already paid for once. The
+    bound is the run's (UILAB_WAIT_MS): a fixed 15 s ran out under a loaded
+    merge check (2026-09-23)."""
+    from uilab.driver import default_wait_ms
+    deadline = time.monotonic() + default_wait_ms(timeout_ms) / 1000
     while time.monotonic() < deadline:
         if page.evaluate(expression):
             return
@@ -965,6 +968,20 @@ def test_copy_sheet_column_writes_every_line_to_the_clipboard(monkeypatch):
             f"the confirmation must be transient, still reads {label_later!r}")
 
 
+_LABEL_IS = ("document.querySelector('.scorecard-copy-column')"
+             ".textContent.trim() === {label!r}")
+# Records every label the copy button shows from now on, in order.
+_RECORD_LABELS = """(() => {
+  const label = () => document.querySelector('.scorecard-copy-column').textContent.trim();
+  window.__copyLabels = [label()];
+  new MutationObserver(() => {
+    const now = label();
+    if (window.__copyLabels.at(-1) !== now) window.__copyLabels.push(now);
+  }).observe(document.querySelector('.scorecard-exports'), {childList: true, subtree: true, characterData: true});
+  return true;
+})()"""
+
+
 def _read_copy_label(page) -> str:
     return page.evaluate(
         "document.querySelector('.scorecard-copy-column').textContent.trim()")
@@ -999,7 +1016,8 @@ def test_a_column_built_while_he_is_away_waits_on_the_page(monkeypatch):
             page.evaluate("document.querySelector('.scorecard-copy-column').click()")
             _wait_until(page, "document.querySelector('.scorecard-exports')"
                               ".dataset.held === 'true'")
-            page.wait_ms(200)
+            _wait_until(page, _LABEL_IS.format(label="Ready to copy"))
+            page.wait_ms(200)  # nothing more may reach the clipboard or the error slot
             copied_while_away = page.evaluate("window.__scorecardCopied.length")
             errors_while_away = page.count(".rank-page .scorecard-exports .inline-state.error")
             label_while_away = _read_copy_label(page)
@@ -1012,18 +1030,24 @@ def test_a_column_built_while_he_is_away_waits_on_the_page(monkeypatch):
             shown_text = page.evaluate(
                 "document.querySelector('.modal .scorecard-column-view').value")
             page.evaluate("document.querySelector('.modal-close').click()")
-            page.wait_ms(100)
+            _wait_until(page, "!document.querySelector('.modal')")
             modal_left = page.count(".modal") == 0
 
             # Then grabs it: the held text, no second download.
             page.evaluate("document.hasFocus = () => true")
+            # Every label the button shows from the click on: the 1.5 s
+            # "Copied ✓" flash can fall between two polls on a loaded machine.
+            page.evaluate(_RECORD_LABELS)
             page.evaluate("document.querySelector('.scorecard-copy-column').click()")
             _wait_until(page, "window.__scorecardCopied.length > 0")
-            label_after_copy = _read_copy_label(page)
             copied = page.evaluate("window.__scorecardCopied")
             posts_after_copy = page.evaluate("window.__columnPosts")
-            page.wait_ms(1600)
-            label_settled = _read_copy_label(page)
+            _wait_until(page, "window.__copyLabels.length > 2"
+                              " && window.__copyLabels.at(-1) === 'Ready to copy'")
+            labels = page.evaluate("window.__copyLabels")
+            # What the click showed (the flash, if it flashed) and what it settled to.
+            label_after_copy = "Copied ✓" if "Copied ✓" in labels[1:] else labels[1]
+            label_settled = labels[-1]
 
     assert copied_while_away == 0, "the clipboard was written while the page had no focus"
     assert errors_while_away == 0, "an unfocused finish must not read as a failure"

@@ -33,6 +33,10 @@ typedef struct gs_stats {
     uint32_t bytes, version, epoch, configuration;
     uint32_t offered, dropped, taken, busy, enabled;
     uint32_t particles_dropped; /* Mario's particles drawn beyond the 16 kept */
+    /* The last completed list's render hooks: driver state queries they made
+     * (zero once the dispatch has observed the raster state) and the
+     * microseconds spent inside them on the emulation thread. */
+    uint32_t hook_gl_queries, hook_micros;
 } gs_stats;
 #pragma pack(pop)
 
@@ -67,6 +71,8 @@ bool geometry(bool was_zbuffer, bool is_zbuffer);
 void color_target_changed();
 void display_list(uint32_t pc, uint32_t dl, uint32_t physical_dl, uint32_t depth, const float *matrix);
 void end(bool completed);
+// Renderer thread, once per list: the hooks' own cost for that list.
+void hooks(uint32_t gl_queries, uint32_t micros);
 const gc_sample *sample();
 const ghost::WorldPass *candidate();
 }

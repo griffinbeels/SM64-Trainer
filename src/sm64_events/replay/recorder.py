@@ -710,7 +710,6 @@ class ReplayRecorder:
         try:
             owner = PoseRecording(self._cfg.scratch_dir / self._pose_archive_name,
                                   self._ghost_capture_factory, producer_pid=win.pid,
-                                  retention_s=self._cfg.retention_s,
                                   allowed=lambda: not self._session_paused)
             self._pose_owner, self.pose_archive = owner, owner.archive
             owner.start()

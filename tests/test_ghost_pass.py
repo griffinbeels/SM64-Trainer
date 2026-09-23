@@ -58,3 +58,16 @@ def test_actual_staged_list_lifetime(tmp_path):
     end = rsp.index(b"\t} ghostList;", start) + len(b"\t} ghostList;")
     (tmp_path / "actual_ghost_list.inc").write_bytes(rsp[start:end])
     _build_host(tmp_path, "ghost_list", [], [tmp_path])
+
+
+def test_render_hooks_query_the_driver_only_through_the_counted_fallback():
+    """The per-draw hooks read the draw FBO, viewport and depth range from the
+    dispatch's tracked state; a driver query is only the fallback before the
+    dispatch has seen one, and every such query is counted for the status page
+    (hook_gl_queries). An uncounted glGet here is a per-draw sync nobody sees."""
+    import re
+    source = (ROOT / "plugin/gfxwrap/ghost_link.cpp").read_text(encoding="utf-8")
+    source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S)
+    queries = [line.strip() for line in source.splitlines() if "glGet" in line]
+    assert queries, "the fallback queries are still present"
+    assert all("++hook_queries" in line for line in queries), queries
