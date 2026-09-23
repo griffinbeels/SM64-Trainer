@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
         check(sg_model_open(rom.data(),rom.size(),&model)==SG_BUSY && model,"single runtime");
         sg_atlas_view atlas{};
         check(sg_model_get_atlas(model,&atlas)==SG_OK && atlas.animation_count==209 && atlas.rgba,"atlas");
-        check(atlas.width==704 && atlas.height==64,"atlas dimensions");
+        check(atlas.width==SG_ATLAS_CELLS*64 && atlas.height==64,"atlas dimensions");
         {
             // Mario's particle models read from the same segment: every frame one
             // textured quad, bubble first, splash frames 32x64.
@@ -342,8 +342,11 @@ int main(int argc, char** argv) {
             check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && texgen()>1000,"metal vanish-cap body");
             b=a; b.model_state=0x200; b.cap_state=2;
             const int32_t winged=sg_model_evaluate(model,&b,&mesh.out);
-            // Metal wings reference textures libsm64 does not load: refused, not guessed.
-            check(winged!=SG_OK && (mesh.out.error_flags&SG_MESH_UNSUPPORTED_MATERIAL),"metal wing cap refused explicitly");
+            // Metal wings sample the ROM's metal wing textures (atlas cells 11 and 12).
+            unsigned metal_wing=0;
+            for(unsigned i=0;i<mesh.out.vertex_count;++i)
+                metal_wing+=!(mesh.out.material[i]&SG_MATERIAL_TEXGEN) && mesh.out.uv[2*i]>=11.0f/SG_ATLAS_CELLS;
+            check(winged==SG_OK && metal_wing>=12,"metal wing cap draws its metal wings");
             check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"cap effect independence");
         }
         b=a; b.head_rotation[1]=8192;

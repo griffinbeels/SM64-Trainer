@@ -36,8 +36,8 @@ namespace {
 // G_TEXTURE_GEN as the live renderer computes it for SM64's F3D lists (no
 // gSPLookAt, so GLideN64 takes the normal through the modelview): the unit
 // eye-space normal's x/y, (n+1)*512 scaled by gSPTexture(0x0F80, 0x07C0),
-// is 0..62 x 0..31 texels of the 64x32 metal texture, atlas cell 0 in the
-// model's 11-cell atlas (libsm64 load_tex_data). The live view stands in for
+// is 0..62 x 0..31 texels of the 64x32 metal texture, atlas cell 0 of the
+// model's SG_ATLAS_CELLS. The live view stands in for
 // the camera the game would have drawn the ghost with.
 bool environment_uv(const float view[16], const float normal[3], float uv[2]) {
     float eye[3];
@@ -47,7 +47,7 @@ bool environment_uv(const float view[16], const float normal[3], float uv[2]) {
     if (!std::isfinite(length) || length <= 0) return false;
     const float s = (eye[0]/length + 1.0f) * 512.0f * (0x0F80 / 65536.0f);
     const float t = (eye[1]/length + 1.0f) * 512.0f * (0x07C0 / 65536.0f);
-    uv[0] = s / 64.0f / 11.0f;
+    uv[0] = s / 64.0f / float(SG_ATLAS_CELLS);
     uv[1] = t / 64.0f;
     return true;
 }

@@ -121,8 +121,9 @@ eye-space normal's x and y, `(n + 1) * 512`, scaled by
 `gSPTexture(0x0F80, 0x07C0)`. That gives 0..62 x 0..31 texels of the ROM's
 64x32 metal texture, under the live view. The metal body is fully
 environment mapped (2256 of 2256 vertices on the US ROM). Metal with the wing
-cap references wing textures libsm64 does not load, so the model refuses it
-(`SG_MESH_UNSUPPORTED_MATERIAL`) and that ghost hides rather than guessing.
+cap draws `mario_metal_cap_wings` from the ROM's metal wing textures
+(segment 4 0x0400A090 and 0x0400B090). Upstream libsm64 leaves them out, so the
+model adds them as atlas cells 11 and 12 (`SG_ATLAS_CELLS` 13).
 Remaining approximations: the dither pattern, and the lookat assumption. If
 a title-screen `gSPLookAt` left GLideN64's lookat enabled, the live mapping
 would rotate; only a live comparison settles that.
