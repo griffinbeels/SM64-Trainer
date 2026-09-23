@@ -7,7 +7,7 @@
 #include <cmath>
 
 namespace ghost_compositor::shadow {
-constexpr uint32_t max_vertices=24, max_ghosts=64;
+constexpr uint32_t max_vertices=24, max_ghosts=max_poses;
 constexpr const char* vertex_shader=R"(#version 430 core
 layout(location=0) in vec3 position;
 layout(location=1) in vec2 uv;

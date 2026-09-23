@@ -5,6 +5,7 @@
 #pragma once
 #include "ghost_clip.h"
 #include <cstring>
+#include <new>
 #include <vector>
 
 namespace ghost_clip {
@@ -14,7 +15,7 @@ static_assert(offsetof(gc_sample, particles) == v4_sample_bytes, "GC5 is GC6 wit
 /* True when data holds a structurally sized GCLIP4 file and it was rewritten
  * in place as GCLIP5; false leaves data untouched (not GCLIP4, or malformed:
  * the ordinary GCLIP5 validation then refuses it). */
-inline bool upgrade_v4(std::vector<uint8_t> &data) {
+inline bool upgrade_v4(std::vector<uint8_t> &data, bool *out_of_memory = nullptr) {
     if (data.size() < sizeof(gclip_header) || std::memcmp(data.data(), "SM64GHO4", 8)) return false;
     gclip_header header{}; std::memcpy(&header, data.data(), sizeof(header));
     if (header.version != v4_version || header.bytes != sizeof(header) || header.record_bytes != v4_record_bytes
@@ -23,6 +24,7 @@ inline bool upgrade_v4(std::vector<uint8_t> &data) {
             || data.size() != sizeof(header) + uint64_t(header.record_count) * v4_record_bytes) return false;
     std::vector<uint8_t> out;
     try { out.assign(sizeof(header) + size_t(header.record_count) * sizeof(gclip_frame), 0); }
+    catch (const std::bad_alloc &) { if (out_of_memory) *out_of_memory = true; return false; }
     catch (...) { return false; }
     std::memcpy(header.magic, GCLIP_MAGIC, 8);
     header.version = GCLIP_VERSION; header.record_bytes = sizeof(gclip_frame); header.sample_version = GC_VERSION;

@@ -426,10 +426,12 @@ struct Session {
             if (find(clip)) continue;
             Asset asset;
             std::memcpy(asset.id, clip.clip_id, 16); std::memcpy(asset.sha256, clip.clip_sha256, 32);
+            // Memory running out while reading or upgrading is room, not a bad file.
+            bool memory = false;
             if (!ghost_assets::read(clip.clip_path, GIPC_PATH_CHARS,
-                    sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame), asset.bytes)
-                    || !ghost_assets::clip(asset.bytes, clip.clip_sha256, clip.clip_id, asset.header)) {
-                failed = loaded.revision; reason = GIPC_FILE; state = GIPC_REFUSED; return;
+                    sizeof(gclip_header) + GCLIP_MAX_RECORDS * sizeof(gclip_frame), asset.bytes, &memory)
+                    || !ghost_assets::clip(asset.bytes, clip.clip_sha256, clip.clip_id, asset.header, &memory)) {
+                failed = loaded.revision; reason = memory ? GIPC_BUDGET : GIPC_FILE; state = GIPC_REFUSED; return;
             }
             // Retained files are bounded like their resident playback copies.
             total += asset.bytes.size();

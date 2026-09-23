@@ -272,7 +272,7 @@ Result begin(Instance* p,const Target& t,const Pose& pose) {
 Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count) {
     if(!p)return Result::invalid;
     abort(p);
-    if(!poses || !count || count>64)return Result::invalid;
+    if(!poses || !count || count>max_poses)return Result::invalid;
     if(!p->ready || t.generation!=p->generation || !t.occurrence || !t.framebuffer ||
        t.framebuffer==p->fbos[0] || t.framebuffer==p->fbos[1] || t.framebuffer==p->fbos[2] || t.framebuffer==p->fbos[3] ||
        t.width!=p->width || t.height!=p->height ||

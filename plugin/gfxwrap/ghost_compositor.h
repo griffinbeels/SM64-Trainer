@@ -113,6 +113,10 @@ struct Shadow {
  * the shade; cutout 1 keeps texels with alpha >= .5, 2 is opaque (alpha
  * ignored), 0 blends; mix 1 mixes
  * rgba toward the texel by its alpha (the cap's logo) instead of modulating. */
+/* Ghosts in one batch: GP_GHOSTS (ghost_playback.cpp asserts they agree).
+ * Sizes each per-ghost GPU range (particles 16 x 768 x 60 B = 737 KB) in
+ * PJ64's 2 GiB, 32-bit address space; a larger batch is refused. */
+constexpr uint32_t max_poses=16;
 constexpr uint32_t particle_vertices=768; // 16 particles: a knocked-off cap (156) and 15 stars (24)
 struct ParticleVertex { float position[3], uv[2], rect[4], rgba[4], cutout, mix; };
 struct Particles {
