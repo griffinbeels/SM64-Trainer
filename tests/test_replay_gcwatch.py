@@ -127,8 +127,11 @@ def test_backstop_walks_only_new_survivors_and_a_full_collection_reclaims_frozen
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     print(json.dumps(report))
-    walked = report["walked"]
-    assert all(value < 1.2 * walked[1] for value in walked[1:]), walked  # never the whole pile
-    assert walked[-1] < 200_000 and sum(walked) > 900_000
-    assert max(report["pauses"][1:]) < 3 * min(report["pauses"][1:]) + 5  # ms, flat
+    # Flatness is asserted on containers walked, which is deterministic; pause
+    # ms is wall-clock noise under a loaded merge check (a 3x+5 ms bound
+    # flaked at 3.5..17.5 ms), so it only gets a loose sanity ceiling.
+    walked = report["walked"][1:]
+    assert max(walked) < 1.2 * min(walked), walked  # flat: only each round's arrivals
+    assert walked[-1] < 200_000 and sum(report["walked"]) > 900_000  # never the whole pile
+    assert all(ms < 200 for ms in report["pauses"]), report["pauses"]
     assert report["cycle_after_survivors"] and not report["cycle_after_full"]
