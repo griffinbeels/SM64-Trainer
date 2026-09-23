@@ -15,7 +15,9 @@ from types import SimpleNamespace
 import pytest
 
 import sm64_events.ghost.session as session_module
-from sm64_events.ghost.session import SAFETY_RESOLVE_S
+from sm64_events.ghost import settings
+from sm64_events.ghost.session import RESOLVING_CHANGES, SAFETY_RESOLVE_S, validate_changes
+from test_ghost_settings import sample
 
 from tests.test_ghost_session import a_session, mark
 
@@ -112,6 +114,48 @@ def test_a_slider_put_does_not_resolve_but_a_view_or_the_switch_does(tmp_path, c
     assert len(session._replay.viewed) == before
     asyncio.run(session.update(enabled=True))
     assert len(session._replay.viewed) > before
+    # Only Mario asks different questions of each ghost than the whole picture.
+    before = len(session._replay.viewed)
+    asyncio.run(session.update(view="mario"))
+    assert len(session._replay.viewed) > before
+
+
+@pytest.mark.parametrize("row", settings.ROWS, ids=lambda row: row.name)
+def test_every_setting_put_resolves_exactly_when_its_row_says_so(tmp_path, clock, row):
+    """Every PUT goes through its registry row; only the rows marked
+    `resolves` (the switch, the view) ask the resolve anything new, so a new
+    setting cannot silently start -- or stop -- re-reading the ghosts."""
+    session, _made, _tracker, store = a_session(tmp_path)
+    mark(store)
+    tick(session, clock)
+    before = len(session._replay.viewed)
+    changed, _refused = sample(row)
+    body = asyncio.run(session.update({row.name: changed}))
+    assert body[row.name] == settings.applied(settings.BY_NAME[row.name].default, row, row.check(changed))
+    assert (len(session._replay.viewed) > before) is (row.name in RESOLVING_CHANGES)
+    assert body["limits"] == settings.limits()
+
+
+def test_the_resolving_puts_are_registry_rows_and_the_ghost_set():
+    assert RESOLVING_CHANGES == settings.resolving() | {"ghosts"}
+    assert settings.resolving() <= set(settings.BY_NAME)
+
+
+def test_queued_halves_of_a_partial_setting_fold_before_they_apply(tmp_path):
+    """Two halves of the colour, or of the overlap fade, queued before one
+    cycle both land -- the queue merges exactly as applying does."""
+    session, _made, _tracker, _store = a_session(tmp_path)
+    for half in ({"tint": {"enabled": False}}, {"tint": {"hue_degrees": 200}},
+                 {"proximity": {"enabled": False}}, {"proximity": {"extra_distance": 80}}):
+        session._queue_update(validate_changes(half), None)
+    body = asyncio.run(session.refresh(resolve=False))
+    assert body["tint"] == {"enabled": False, "hue_degrees": 200}
+    assert body["proximity"] == {"enabled": False, "extra_distance": 80.0}
+
+
+def test_the_empty_session_publishes_the_same_limits():
+    from sm64_events.server.ghost_api import no_session_state
+    assert no_session_state()["limits"] == settings.limits()
 
 
 # -- what a resolve asks -------------------------------------------------------

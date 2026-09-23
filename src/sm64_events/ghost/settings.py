@@ -75,6 +75,9 @@ class Setting:
     limits: dict | None = None
     merge: bool = False
     switch: bool = False
+    #: A change to it moves what the ghost resolve answers (which ghosts can
+    #: play); the rest ride the clock feed or the native command and never do.
+    resolves: bool = False
     #: Custom persistence for a value kept under more than one key.
     load: Callable[[Any], Any] | None = None
     store: Callable[[Any, Any], None] | None = None
@@ -207,7 +210,7 @@ def _native_proximity(value: dict) -> dict:
 #: through the session itself, which decides what "enabled" means for the
 #: current target and view, so its row carries no native field.
 ROWS = (
-    Setting("enabled", False, _checked_bool("The ghost overlay is either on or off."),
+    Setting("enabled", False, _checked_bool("The ghost overlay is either on or off."), resolves=True,
             key="ghost_enabled", restore=bool),
     Setting("opacity", DEFAULT_OPACITY, checked_opacity, key="ghost_opacity",
             restore=_clamped(DEFAULT_OPACITY), native=lambda value: {"opacity": value},
@@ -232,7 +235,7 @@ ROWS = (
             limits={"min": 0.0, "max": MAX_EXTRA_DISTANCE, "step": 10, "floor": OVERLAP_FLOOR}),
     # A stored value from a build that knew another view name is not a view:
     # it falls back rather than leaving the page asking for what nothing draws.
-    Setting("view", DEFAULT_VIEW, checked_view, key="ghost_view",
+    Setting("view", DEFAULT_VIEW, checked_view, key="ghost_view", resolves=True,
             restore=lambda stored: stored if stored in GHOST_VIEWS else DEFAULT_VIEW),
     # Never remembered: it belongs to the target, gone by the next session.
     Setting("nudge_frames", 0, checked_nudge, native=lambda value: {"nudge": value},
@@ -269,6 +272,11 @@ def native_controls(values: dict) -> dict:
         if row.native is not None:
             controls.update(row.native(values[row.name]))
     return controls
+
+
+def resolving() -> frozenset:
+    """The settings whose change asks the ghost resolve again."""
+    return frozenset(row.name for row in ROWS if row.resolves)
 
 
 def native_switches() -> dict:
