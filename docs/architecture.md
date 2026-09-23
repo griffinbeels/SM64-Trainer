@@ -796,7 +796,12 @@ instantly. Three compounding causes, each fixed:
    `_gcwatch._Gen2Collector` runs `gc.collect(2)` OPPORTUNISTICALLY while the
    recorder is idle (a stop-the-world pause is invisible when footage is
    discarded), with a 5-minute force backstop for never-idle sessions. The
-   glitch mitigation is intact; the leak is closed.
+   glitch mitigation is intact; the leak is closed. Since 2026-09-23 every
+   manual collection freezes its survivors, so the 5-minute backstop walks
+   only what was allocated since (about 1 ms, flat) instead of everything
+   since startup (54-177 ms live); cycles among frozen objects are reclaimed
+   by a full collection when capture is idle and at least hourly. Reasons and
+   measurements: `replay/_gcwatch.py`'s docstring.
 3. *Disk could fill, and a near-full volume thrashes everything.* The historical 20 GiB
    scratch cap with `retention_s=None` can be approached over long ACTIVE play
    (idle discards, so the ring only grows while recording). A full system disk
