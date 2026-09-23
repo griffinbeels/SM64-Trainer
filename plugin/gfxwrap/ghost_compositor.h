@@ -118,7 +118,7 @@ struct Pose {
     float hue_degrees; // 0 retains the original model colors
     Shadow shadow{}; // optional, at most 24 vertices; borrowed 16x16 IA8 texture
     Particles particles{}; // optional, at most particle_vertices; needs prepare_particles
-    // Player-first fade for this body and its shadow; zero draws as before.
+    // Player-first fade for this body, its shadow and its particles; zero draws as before.
     ghost_occlusion::Region occlusion{};
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };

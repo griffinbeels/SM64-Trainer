@@ -745,8 +745,8 @@ it red (2026-09-23).
 ### Player-first fade
 
 A ghost never blocks live Mario or the camera. [ghost_occlusion.h](../plugin/gfxwrap/ghost_occlusion.h)
-owns the rule and every tuning constant; the body and shadow shaders share its
-GLSL, so a shadow fades exactly like its body. Per fragment, on top of the
+owns the rule and every tuning constant; the body, shadow and particle shaders
+share its GLSL, so a shadow, a bubble or a dust puff fades exactly like its body. Per fragment, on top of the
 user's opacity and the overlap fade:
 
 - **In front of live Mario, over him.** Playback projects his body box (feet at
@@ -778,7 +778,10 @@ is smooth, pixels outside 1.6x and a ghost behind Mario are byte-exact, and
 the camera term hides a ghost at 100 units, halves it at 300 and is exact at
 450. The shadow fades over Mario like its body, the renderer's y flip mirrors
 the ghost and its region together, and the clean game image and both depths
-stay exact. The [playback witness](../tests/test_ghost_playback.py)
+stay exact. The [particle witness](../tests/test_ghost_particles.py) draws a
+particle over Mario's region the same way: every pixel follows the rule (52
+fully faded, 124 faded in all), behind him it is byte-exact, at the camera it
+is hidden or halved, and the flip mirrors it with its region. The [playback witness](../tests/test_ghost_playback.py)
 checks that the projected box reaches each pose, that there is no region when
 Mario is behind the camera or has no pose, and that the switch empties it. The
 connected pipeline (2026-09-23, RTX 5090, 640x480, real model) faded 8444 ghost
@@ -786,9 +789,9 @@ pixels over a live Mario 300 units beyond the ghost. It changed 0 pixels
 outside the ghost and 0 with Mario 300 units nearer. It then timed the fade on
 over 180 samples: one ghost p50 0.62 ms, p95 1.11 ms, max 1.35 ms including
 swap; sixteen p50 3.05 ms, p95 4.16 ms, max 4.51 ms. Removing the fade from
-the body, the shadow or the camera term, reversing the front test, ignoring
-the region, taking the region after the y flip, or dropping the switch in
-playback, IPC or the channel each turns a witness red.
+the body, the shadow, the particles or the camera term, reversing the front
+test, ignoring the region, taking the region after the y flip, or dropping the
+switch in playback, IPC or the channel each turns a witness red.
 
 ### Sound events
 
