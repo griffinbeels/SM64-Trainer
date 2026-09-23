@@ -201,7 +201,7 @@ def test_unplayable_or_ambiguous_file_refused(rows, reason):
 
 
 BAD_HEADER_WORDS = [(8, 1), (12, 128), (16, 192), (20, 240001), (28, 2),
-                    (104, 25), (112, 3), (116, 102), (120, 2), (124, 1),
+                    (104, 25), (112, 3), (116, 102), (120, 2), (124, 2),
                     (128, 2), (136, 2), (144, 10), (152, 1), (156, 1)]
 
 
@@ -209,6 +209,16 @@ BAD_HEADER_WORDS = [(8, 1), (12, 128), (16, 192), (20, 240001), (28, 2),
 def test_corrupted_header_is_not_accepted(offset, value):
     data = bytearray(encoded((frame(),)))
     struct.pack_into("<I", data, offset, value)
+    with pytest.raises(ClipError):
+        decode_clip(data)
+
+
+def test_a_dance_tail_is_one_known_header_flag_on_either_clock():
+    for kind in (STAR_CLOCK, SEGMENT_CLOCK):  # the 100-coin star runs on its exit segment's clock
+        assert decode_clip(encode_clip((frame(),), producer(), clock_kind=kind, dance_tail=True)).dance_tail
+    assert not decode_clip(encoded((frame(),))).dance_tail
+    data = bytearray(encoded((frame(),)))
+    struct.pack_into("<I", data, 124, 3)
     with pytest.raises(ClipError):
         decode_clip(data)
 
