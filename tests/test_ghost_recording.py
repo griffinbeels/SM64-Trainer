@@ -24,7 +24,7 @@ class Source:
 
 def test_retired_owner_rejects_late_callbacks_and_preserves_unjoined_archive(tmp_path):
     owner = PoseRecording(tmp_path / "poses.sqlite", Source, producer_pid=123,
-                          retention_s=300, allowed=lambda: True)
+                          allowed=lambda: True)
     owner.start()
     owner.source.emit(producer(), (frame(1),))
     owner.source.joined = False

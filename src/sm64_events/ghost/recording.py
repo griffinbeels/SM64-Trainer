@@ -3,8 +3,9 @@ from sm64_events.ghost.archive import PoseArchive
 
 
 class PoseRecording:
-    def __init__(self, path, factory, *, producer_pid, retention_s, allowed):
-        self.archive = PoseArchive(path, retention_s=retention_s)
+    def __init__(self, path, factory, *, producer_pid, allowed):
+        # The archive keeps its own two-hour window whatever the video keeps.
+        self.archive = PoseArchive(path)
         self.source = None
         self._factory, self._pid = factory, producer_pid
         self._allowed, self._accepting = allowed, False

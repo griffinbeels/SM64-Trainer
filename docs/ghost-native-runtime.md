@@ -516,8 +516,14 @@ the set with `GIPC_BUDGET` (12), kept apart from a bad clip (`GIPC_CLIP`, 8)
 so the ghost card can say "These ghosts are too long to show together;
 untick one." (one ghost: "Making room for this ghost..."). One maximum-size clip
 (100000 records, about 55 minutes at 30 Hz) fits. The pose archive keeps its
-own window (288 MiB of rows, two hours at 30 Hz), independent of that clip
-cap, so a late save still reaches an early attempt. All resident slots count, so a replacement
+own window (two hours, whatever the video keeps; a ceiling of 288 MiB of raw
+records), independent of that clip cap, so a late save still reaches an early
+attempt. It writes in WAL with one commit per 30 rows or second rather than
+per batch, and stores rows zlib-compressed under integer keys (about 570 B a
+row, 118 MiB for the two hours); the measurements and the schema-version rule
+(an older file is recreated, never migrated) live in
+[archive.py](../src/sm64_events/ghost/archive.py). A ghost kept for a template
+mark and then saved with its video shares one file between both names. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
 If a reader holds the status page during revocation, the worker retries that
