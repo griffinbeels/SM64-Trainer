@@ -36,6 +36,14 @@ _SAMPLE = struct.Struct("<4I2QqI2H2h2I")
 _WARP = struct.Struct("<Hh")
 _CLOCK = struct.Struct("<4I6Q")
 _SOUND = struct.Struct("<4B8I")
+REFUSAL_AT = 16 + 60 + 77  # record offset of gc_pose.refusal
+# gc_refusal (ghost_capture.h), by value: the one check that refused the pose.
+# With a valid pose, "not_drawn" means the game culled Mario and the root was
+# carried from the last frame that proved it, or composed as his own TRS.
+REFUSALS = ("", "object", "area", "held", "billboard", "throw_matrix", "floor", "head",
+            "transform", "animation", "animation_range", "animation_stale", "body_state",
+            "camera", "camera_to_object", "shared_model", "graph", "body_graph", "material",
+            "not_drawn", "not_drawn_floor", "body_mismatch", "duplicate", "incomplete")
 PRODUCER_FIELDS = ("pid", "created", "generation", "rom_generation", "configuration",
                    "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor")
 
@@ -110,6 +118,16 @@ class Frame:
     clock: Clock
     sounds: tuple[int, ...] = ()  # Mario's play_sound bits this frame, in order
     sound_overflow: bool = False  # more than SOUND_EVENTS were issued
+    refusal: int = 0  # gc_refusal: why this frame's own lists did not prove the pose
+
+    @property
+    def refusal_name(self) -> str:
+        return REFUSALS[self.refusal]
+
+    @property
+    def carried(self) -> bool:
+        """Mario was culled: the root came from memory or TRS, not this frame's lists."""
+        return bool(self.valid_fields & POSE) and self.refusal != 0
 
     @property
     def has_shadow(self) -> bool:
@@ -145,7 +163,10 @@ def frame_from_bytes(data: bytes) -> Frame:
     count, flags, _producer, _consumer, *bits = _SOUND.unpack_from(raw, SOUND_AT)
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
                   *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)),
-                  tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW))
+                  tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW),
+                  raw[REFUSAL_AT])
+    if frame.refusal >= len(REFUSALS):
+        raise ClipError("native ghost pose refusal is unknown")
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
         raise ClipError("native ghost occurrence is invalid")
     if valid & CLOCK and not (4 <= frame.level <= 36 and 1 <= frame.area <= 8):
@@ -153,7 +174,8 @@ def frame_from_bytes(data: bytes) -> Frame:
     if bool(valid & ACTION) != bool(frame.live_action):
         raise ClipError("native ghost action validity disagrees with its value")
     for bit, lo, hi in ((POSE, 76, 220), (CAMERA, 220, 256)):
-        if not valid & bit and any(raw[lo:hi]):
+        component = raw[lo:hi] if bit != POSE else raw[lo:REFUSAL_AT] + raw[REFUSAL_AT + 1:hi]
+        if not valid & bit and any(component):
             raise ClipError("native ghost refusal retains invalid component bytes")
         if valid & bit:
             floats = struct.unpack_from("<6f", raw, lo)

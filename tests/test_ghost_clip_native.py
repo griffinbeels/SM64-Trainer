@@ -49,6 +49,15 @@ def corpus():
         changed = bytearray(encoded((frame(1), frame(2))))
         struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 160 + 652 + offset, value)
         values.append(bytes(changed))
+    # Pose refusal reasons: kept on refused rows and on carried roots; an
+    # unknown reason or any other pose byte on a refusal is refused.
+    for reason in (1, 3, 11, 19, 20, 23):
+        values.append(encoded((frame(1, valid=29, pose_refusal=reason), frame(2))))
+    values.append(encoded((frame(1, pose_refusal=19),)))
+    for offset, value in ((160 + 153, 24), (160 + 76, 1)):
+        changed = bytearray(encoded((frame(1, valid=29, pose_refusal=19), frame(2))))
+        changed[offset] = value
+        values.append(bytes(changed))
     # Recorded shadow and sound: accepted shapes, then each native refusal.
     evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,)),
                         frame(2, sounds=tuple(range(1, 9)), overflow=True)))

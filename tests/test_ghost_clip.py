@@ -225,6 +225,20 @@ def test_clock_schema_cannot_claim_or_retain_inconsistent_evidence(offset, value
         frame_from_bytes(raw)
 
 
+def test_refused_pose_keeps_only_its_named_reason():
+    refused = frame_from_bytes(frame(valid=29, pose_refusal=19))
+    assert not refused.playable and refused.refusal_name == "not_drawn" and not refused.carried
+    carried = frame_from_bytes(frame(pose_refusal=19))
+    assert carried.playable and carried.carried
+    assert frame_from_bytes(frame()).refusal == 0 and not frame_from_bytes(frame()).carried
+    with pytest.raises(ClipError, match="refusal is unknown"):
+        frame_from_bytes(frame(valid=29, pose_refusal=24))
+    raw = bytearray(frame(valid=29, pose_refusal=3))
+    raw[76] = 1
+    with pytest.raises(ClipError, match="retains"):
+        frame_from_bytes(bytes(raw))
+
+
 def test_truncation_trailing_data_nonfinite_and_invalid_components():
     data = encoded((frame(),))
     for broken in (data[:100], data[:-1], data + b"\0"):

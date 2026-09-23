@@ -1139,6 +1139,18 @@ and playback draws none.
 - **Lives** — `plugin/gfxwrap/ghost_root.cpp` captures it;
   `plugin/gfxwrap/ghost_pose.cpp` places it for drawing
 
+### Pose refusal
+
+The one named check that kept Mario's pose off a recorded [[frame]] (for
+example `not_drawn_floor`, `animation_stale`, `body_mismatch`), stored with the
+frame so every hole in a [[ghost]] explains itself in the extraction audit.
+`not_drawn` on a frame that still has a pose means the game culled Mario (a
+star-spawn or dialog camera looked away) and the pose's root came from the
+last frame that drew him or from his own position and angles.
+
+- **Lives** — `plugin/gfxwrap/ghost_capture.h` (`gc_refusal`); decoded as
+  `Frame.refusal_name` in `src/sm64_events/ghost/clip.py`
+
 ### Ghost sound events
 
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in

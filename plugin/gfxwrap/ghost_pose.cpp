@@ -137,7 +137,9 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         return Result::invalid_camera;
     sg_mesh mesh{scratch.position,scratch.normal,scratch.color,scratch.uv,scratch.material,
         SG_MODEL_MAX_VERTICES,0,0};
-    const int32_t status = sg_model_evaluate(model,&pose,&mesh);
+    // A hidden Mario draws nothing. The game never advanced his animation
+    // (act_disappeared leaves frame -1), so the model is not asked to.
+    const int32_t status = p.hidden ? SG_OK : sg_model_evaluate(model,&pose,&mesh);
     if (status == SG_CAPACITY) return Result::capacity;
     if (status != SG_OK || mesh.error_flags || mesh.vertex_count > SG_MODEL_MAX_VERTICES)
         return Result::model_failed;
