@@ -77,7 +77,11 @@ struct Run {
         demand.play_enabled=1;demand.model_id=1;demand.opacity=1;demand.stop_at_star=!segment;
         demand.star_action_count=1;demand.star_actions[0]=0x1302;
         demand.clip_count=1;demand.clips[0].clip_id[0]=segment?72:71;
-        demand.origin={uint32_t(segment?GO_SEGMENT:GO_STAR),fixture::configuration,fixture::epoch,1000,1000,1,9};
+        // Each Run is its own tracker session and arm: every Run restarts the
+        // same global timers, so a restore parked by an earlier Run's close
+        // must not be handed to this one.
+        static uint64_t sessions=0;
+        demand.origin={uint32_t(segment?GO_SEGMENT:GO_STAR),fixture::configuration,fixture::epoch,1000,1000,sessions+=100,9};
         check(ghost_assets::sha256(session->rom_bytes,session->cartridge_digest),"hash original ROM");
         session->cartridge_verified=true;
         check(ghost_assets::sha256(clip_bytes,demand.clips[0].clip_sha256),"hash clip file");
@@ -280,8 +284,57 @@ int main() {
             ghost_playback::set_sound_sink(nullptr);
         }
         check(blink_mismatched==0,"after every state load each passed record sounds once");
+        unsigned stress_loads=0,stress_frames=0,stress_ghostless=0,stress_wrong=0,restart_hidden=0;
+        for(bool segment:{false,true}) {
+            // The live break, 2026-09-23: mid-run the recorder's capture
+            // restarted (a GPU capture failure reconnects it: a new channel
+            // owner token, capture namespace and source clock in the same
+            // trainer process), and the ghost stayed hidden until the next
+            // attempt. Then hundreds of rapid state loads, Usamune style (the
+            // global timer runs on, IGT holds a few frames) and PJ64 style (the
+            // global timer rewinds), backward, forward and repeated.
+            Run run(segment);const int start=segment?20:0;
+            uint32_t first_timer[401]{};
+            for(int raw=start;raw<=start+380;++raw) {first_timer[raw-start]=run.timer;run.step(uint16_t(raw),raw-start);}
+            run.worker_after_render=true;run.ghostless=run.wrong=run.frames=0;
+            ++run.demand.token;++run.demand.revision;++fixture::epoch;gcc_reset(&run.source_clock);
+            run.demand.origin.configuration=fixture::configuration+1;run.demand.origin.epoch=fixture::epoch;
+            // Play on after the restart. The run's origin was captured before
+            // it, so only the parked checkpoints can place the ghost again: a
+            // star by its own IGT at once, a segment at its next witnessed load.
+            int raw=start+381;
+            if(!segment) {
+                unsigned hidden=0;bool back=false;
+                for(int i=0;i<10;++i,++raw) {
+                    const auto before=run.ghostless;run.step(uint16_t(raw),raw-start);
+                    if(run.ghostless!=before)++hidden;else back=i>=5;
+                }
+                check(back,"a star ghost returns after a capture restart without a new attempt");
+                restart_hidden=hidden;run.ghostless-=hidden;
+            } else {
+                for(int i=0;i<10;++i,++raw)run.step(uint16_t(raw),-1); // unwitnessed: hidden, not wrong
+                run.ghostless=0;
+            }
+            uint32_t seed=12345u+uint32_t(segment);
+            const auto next=[&](uint32_t bound){seed=seed*1103515245u+12345u;return (seed>>8)%bound;};
+            for(int load=0;load<300;++load) {
+                // A segment load to near-zero IGT reads as a level retry, which
+                // the tracker owns (it re-arms), so segment loads stay above it.
+                const int to=int(segment?11+next(349):next(360));const bool rewind_timer=next(4)==0;
+                if(rewind_timer)run.timer=first_timer[to];
+                ++stress_loads;
+                const int hold=int(next(5)),play=int(next(7));
+                run.step(uint16_t(start+to),to);
+                for(int i=0;i<hold;++i)run.step(uint16_t(start+to),to);          // IGT holds after a load
+                for(int i=1;i<=play;++i)run.step(uint16_t(start+to+i),to+i);    // then play on
+            }
+            stress_frames+=run.frames;stress_ghostless+=run.ghostless;stress_wrong+=run.wrong;
+        }
         std::printf("{\"ok\":true,\"checks\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
-            "\"blink\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u}}\n",
-            checks,allocations.load(),destructions.load(),blink_loads,blink_frames,blink_ghostless,blink_wrong);return 0;
+            "\"blink\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u},"
+            "\"stress\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u,"
+            "\"hidden_after_capture_restart\":%u}}\n",
+            checks,allocations.load(),destructions.load(),blink_loads,blink_frames,blink_ghostless,blink_wrong,
+            stress_loads,stress_frames,stress_ghostless,stress_wrong,restart_hidden);return 0;
     } catch(const std::exception& e) {std::fprintf(stderr,"%s\n",e.what());return 1;}
 }

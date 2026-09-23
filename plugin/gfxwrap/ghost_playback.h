@@ -60,8 +60,10 @@ typedef struct gp_request {
     /* Enabled: 1..GP_GHOSTS distinct nonzero ids, each already prepared. */
     uint32_t clip_count, reserved1;
     gp_clip clips[GP_GHOSTS];
-    /* Draw each visible ghost's recorded shadow (GC_VALID_SHADOW rows only). */
-    uint32_t shadow_enabled, reserved2;
+    /* Draw each visible ghost's recorded shadow (GC_VALID_SHADOW rows only).
+     * occlusion_fade fills each pose's player-first region (ghost_occlusion.h);
+     * formerly the checked-zero reserved2, so 0 draws as before. */
+    uint32_t shadow_enabled, occlusion_fade;
     /* Ghost sound loudness, 0..1; 0 is exact silence. */
     float volume;
     uint32_t reserved3;
@@ -159,8 +161,11 @@ bool particles(sg_particle_view *out, uint64_t *model_id);
  * A star generation change or live star grab ends the shared origin and every
  * ghost; tuning the same origin cannot revive it. With star_ends, FOLLOW also
  * hides each ghost at its own first recorded valid star action coordinate
- * after nudge (including duplicate/refused poses). This recorded cutoff moves
- * with nudge; FIXED ignores both end policies. A new continuity refuses until
+ * after nudge (including duplicate/refused poses). A FOLLOW clip that carries a
+ * dance tail (with or without star_ends) instead draws through any earlier
+ * star and its closing grab and dance, then holds the last pose and fades
+ * (body, shadow, sound) over GP_STAR_FADE_FRAMES.
+ * This recorded cutoff moves with nudge; FIXED ignores both end policies. A new continuity refuses until
  * a witnessed recovery offset binds: the renderer runs the worker's same
  * ghost_origin::Recovery over its live samples, so a state load it can resolve
  * draws on its own frame, and the worker's next command confirms or replaces
@@ -180,6 +185,15 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &,
  * gain of min(1, GP_SOUND_NEAR / d) -- inverse-square INTENSITY -- d its world distance from live
  * Mario (1 while live Mario's pose is unknown). */
 #define GP_SOUND_CATCHUP 90u
+/* Tuning: a ghost whose clip carries its star dance (GCLIP_DANCE_TAIL) fades
+ * out over this many frames after its last recorded dance frame (15 = 0.5 s),
+ * holding that pose; its sounds fade with it and are silent once it hides. */
+#define GP_STAR_FADE_FRAMES 15u
+/* A run of at most this many consecutive refused records, with a recorded
+ * pose on both sides in the same scene and no missing occurrence, holds the
+ * pose before it instead of blinking (2 = 67 ms, below a noticeable pause).
+ * The refused rows stay refused in the clip; this is display only. */
+#define GP_BRIDGE_FRAMES 2u
 #define GP_SOUND_NEAR 400.0f /* tuning: full gain within 2.5 Mario heights (160 units each) */
 struct SoundSink {
     void (__cdecl *cue)(uint32_t ghost, uint32_t sound_bits);

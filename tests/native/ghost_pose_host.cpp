@@ -65,6 +65,12 @@ int main() {
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
         assert(record.world.status==status && camera_x==42 && pose.count==3);
     }
+    // act_disappeared: the game never advanced the hidden Mario's animation
+    // (frame -1). The ghost draws nothing and the model is not consulted.
+    saved.pose.hidden=1;saved.pose.animation_frame=-1;applied={};
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(!pose.count && !applied.fields && pose.opacity==0.5f);
+    saved.pose.hidden=0;saved.pose.animation_frame=0;
     saved.valid_fields&=~GC_VALID_POSE;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::missing_pose);
     assert(!pose.vertices && !pose.count);

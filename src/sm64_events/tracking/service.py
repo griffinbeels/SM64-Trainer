@@ -39,7 +39,8 @@ from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.tracking.defaults import remember_deletion, resolve_steps
 from sm64_events.tracking.hundred_coin import classify
 from sm64_events.tracking.prune import PRUNE_EVENT, prunable_ids
-from sm64_events.tracking.projection import (Projector, journal_id, replay,
+from sm64_events.tracking.projection import (ATTEMPT_RULES, Projector,
+                                             journal_id, replay,
                                              wipe_matches)
 from sm64_events.tracking.segments import (SegmentDef, hundred_coin_entity,
                                            merge_definitions,
@@ -158,6 +159,8 @@ class TrackerService:
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
+        # Automatic PB saves in flight (`_spawn_auto_pb`); a test awaits them.
+        self.auto_pb_tasks: set[asyncio.Task] = set()
         self._tracking_lock = asyncio.Lock()
         self._tracking_dirty = False
         self._tracking_error = None
@@ -271,7 +274,8 @@ class TrackerService:
         self.session_id = self.db.insert_session(_iso(_now()))
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
-                                 payload={"session_id": self.session_id}))
+                                 payload={"session_id": self.session_id,
+                                          "attempt_rules": ATTEMPT_RULES}))
         # AFTER session_started, deliberately: that event is what closes an
         # attempt left in flight when the last session ended (the cross-session
         # abandon), and such a row belongs to the session that just ended, so
@@ -580,6 +584,9 @@ class TrackerService:
             # which for a cross-session abandon differs from the attempt's own
             # session_id — the payload's session_id is authoritative.
             await self.publish(self._attempt_completed_event(attempt, event))
+            mode = self._auto_pb_mode(attempt)
+            if mode is not None:
+                self._spawn_auto_pb(attempt.id, mode)
             if self._projector is not proj:
                 return jid
         self._update_replay_history()
@@ -646,6 +653,9 @@ class TrackerService:
                          "rollouts_dustless": a.rollouts_dustless,
                          "jumps_total": a.jumps_total,
                          "jumps_dustless": a.jumps_dustless,
+                         "valid": a.valid,
+                         "invalid_reason": a.invalid_reason,
+                         "state_loads": a.state_loads,
                      })
 
     def _segment_name(self, segment_id: int | None) -> str | None:
@@ -2142,7 +2152,59 @@ class TrackerService:
     def _refusal(blocked, fallback: str) -> str:
         return blocked["reason"] if blocked else fallback
 
-    async def save_pb(self, attempt_id: int, timer_mode: str) -> dict:
+    def _auto_pb_mode(self, attempt) -> str | None:
+        """The clock an AUTOMATIC PB saves this finished attempt on, or None
+        when it must stay a manual choice (task 0144, his decisions
+        2026-09-23).
+
+        Every condition is his: a VALID run (projection caveat 21 -- a full
+        reset at the course start and no save-state load; never an unjudged
+        pre-rules-2 row), on the clock the entity grades on (a star's IGT, a
+        segment's RTA; the other clock stays a manual Save), that BEATS its
+        strategy's current PB, and that the PB action resolver would offer
+        Save for -- which is where "only with an active strategy, and only a
+        run tagged with it" and every quantity gate (a grab-timed star) live,
+        so the automatic door and the button cannot disagree."""
+        if self.db is None or attempt.valid is not True:
+            return None
+        if attempt.outcome != "success" or attempt.cleared:
+            return None
+        mode = "rta" if attempt.segment_id is not None else "igt"
+        frames = attempt.igt_frames if mode == "igt" else attempt.rta_frames
+        if frames is None:
+            return None
+        action, _ = self.pb_action(attempt, mode)
+        if action != "save":
+            return None
+        current = self.db.current_pb(attempt.course_id, attempt.star_id, mode,
+                                     segment_id=attempt.segment_id,
+                                     strat_tag=attempt.strat_tag)
+        if current is not None and current["frames"] <= frames:
+            return None
+        return mode
+
+    def _spawn_auto_pb(self, attempt_id: int, mode: str) -> None:
+        """Save it OFF the tracking path. `save_pb` journals `pb_saved`
+        through `publish`, which takes the tracking lock this event still
+        holds, and then preserves the replay, which takes seconds -- awaited
+        here, either would stall the poll loop behind a video copy."""
+        task = asyncio.get_running_loop().create_task(
+            self._auto_save_pb(attempt_id, mode))
+        self.auto_pb_tasks.add(task)
+        task.add_done_callback(self.auto_pb_tasks.discard)
+
+    async def _auto_save_pb(self, attempt_id: int, mode: str) -> None:
+        try:
+            attempt = self._require_db().attempt(attempt_id)
+            # Asked again: a faster run may have saved while this waited.
+            if attempt is None or self._auto_pb_mode(attempt) != mode:
+                return
+            await self.save_pb(attempt_id, mode, auto=True)
+        except Exception:  # noqa: BLE001 - a missed auto-save leaves the manual Save
+            log.exception("automatic PB save failed for attempt %s", attempt_id)
+
+    async def save_pb(self, attempt_id: int, timer_mode: str,
+                      auto: bool = False) -> dict:
         db = self._require_db()
         attempt = self._pb_attempt(attempt_id, timer_mode)
         action, blocked = self.pb_action(attempt, timer_mode)
@@ -2169,6 +2231,8 @@ class TrackerService:
                    "segment_id": attempt.segment_id,
                    "strat_tag": attempt.strat_tag, "timer_mode": timer_mode,
                    "frames": frames, "attempt_id": attempt_id}
+        if auto:
+            payload["auto"] = True  # the practice log says who saved it
         await self.publish(Event(type="pb_saved", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         await self._pb_changed(attempt, saved=True)
@@ -2516,7 +2580,8 @@ class TrackerService:
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"session_id": self.session_id,
-                                          "label": label}))
+                                          "label": label,
+                                          "attempt_rules": ATTEMPT_RULES}))
         return self.session_id
 
     async def continue_session(self, session_id: int) -> int:
@@ -2534,7 +2599,8 @@ class TrackerService:
         await self.publish(Event(type="session_started", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"session_id": session_id,
-                                          "resumed": True}))
+                                          "resumed": True,
+                                          "attempt_rules": ATTEMPT_RULES}))
         return session_id
 
     async def delete_session(self, session_id: int) -> None:

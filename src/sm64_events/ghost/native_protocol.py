@@ -49,7 +49,7 @@ class Request(C.LittleEndianStructure):
         ("proximity_enabled", U32), ("proximity_distance", C.c_float),
         ("origin", Origin), ("clip_count", U32), ("reserved1", U32),
         ("clips", Clip * GHOSTS),
-        ("shadow_enabled", U32), ("reserved2", U32),
+        ("shadow_enabled", U32), ("occlusion_fade", U32),
         ("volume", C.c_float), ("reserved3", U32),
     ]
 

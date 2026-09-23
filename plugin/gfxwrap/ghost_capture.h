@@ -44,6 +44,35 @@ enum gc_status {
     GC_UNSUPPORTED_ROOT = 9, GC_UNSUPPORTED_HELD = 10,
     GC_STALE_SEQUENCE = 11, GC_RESET_REQUIRED = 12, GC_UNSUPPORTED_HEAD = 13
 };
+/* The one check that refused Mario's pose. Append only: Python and the
+ * extraction audit decode by value (clip.py REFUSALS). */
+enum gc_refusal {
+    GC_REFUSED_NONE = 0,
+    GC_REFUSED_OBJECT = 1,          /* MarioState/object/body pointer invalid */
+    GC_REFUSED_AREA = 2,            /* Mario belongs to another area */
+    GC_REFUSED_HELD = 3,            /* holding or riding (TRS path only) */
+    GC_REFUSED_BILLBOARD = 4,
+    GC_REFUSED_THROW_MATRIX = 5,    /* throwMatrix still set after rendering */
+    GC_REFUSED_FLOOR = 6,           /* floor-aligned action (TRS path only) */
+    GC_REFUSED_HEAD = 7,            /* C-up head override */
+    GC_REFUSED_TRANSFORM = 8,       /* nonfinite position or zero/huge scale */
+    GC_REFUSED_ANIMATION = 9,       /* no animation header */
+    GC_REFUSED_ANIMATION_RANGE = 10,/* id or frame outside the loaded animation */
+    GC_REFUSED_ANIMATION_STALE = 11,/* animTimer: the renderer did not process Mario */
+    GC_REFUSED_BODY_STATE = 12,     /* action or body byte out of range */
+    GC_REFUSED_CAMERA = 13,         /* no valid camera, so no root proof */
+    GC_REFUSED_CAMERA_TO_OBJECT = 14,
+    GC_REFUSED_SHARED_MODEL = 15,   /* another active object uses Mario's model */
+    GC_REFUSED_GRAPH = 16,          /* shadow/scale/ASM node shape differs */
+    GC_REFUSED_BODY_GRAPH = 17,     /* selected body branch not walkable */
+    GC_REFUSED_MATERIAL = 18,       /* translucent/metal alpha list */
+    GC_REFUSED_NOT_DRAWN = 19,      /* no Mario alpha list executed (culled) */
+    GC_REFUSED_NOT_DRAWN_FLOOR = 20,/* not drawn while floor-aligned and moved: tilt unknown */
+    GC_REFUSED_BODY_MISMATCH = 21,  /* alpha executed, body did not follow */
+    GC_REFUSED_DUPLICATE = 22,      /* Mario's lists matched twice */
+    GC_REFUSED_INCOMPLETE = 23,     /* interrupted list or foreign occurrence */
+    GC_REFUSED_LAST = 23
+};
 enum gc_root_kind {
     GC_ROOT_UNRESOLVED = 0, GC_ROOT_TRS = 1,
     /* Executed F3D pre-animation matrix: gfx scale and Mario's .25 geo
@@ -82,7 +111,14 @@ typedef struct gc_pose {
     int16_t torso_angles[3], head_angles[3];
     uint16_t model_state;
     uint8_t cap_state, eye_state, hand_state, wing_flutter;
-    uint8_t punch_state, grab_position, hidden, reserved;
+    uint8_t punch_state, grab_position, hidden;
+    /* gc_refusal: why THIS frame's executed lists did not prove the pose.
+     * Without GC_VALID_POSE it is the only nonzero byte of the pose block.
+     * With it, zero means proven this frame; GC_REFUSED_NOT_DRAWN means the
+     * game culled Mario and the root is either carried from the last proven
+     * frame (SCALED_MODELVIEW; sample.camera is then the camera it executed
+     * under) or his own TRS (see ghost_root.h). */
+    uint8_t refusal;
     float root_matrix[16]; /* zero for TRS; native Mat4 order, translation 12..14 */
 } gc_pose;
 

@@ -16,17 +16,20 @@ uniform mat4 viewProjection;
 uniform int flipY;
 out vec2 texCoord;
 out float vertexAlpha;
+out vec4 occlusionClip;
 void main() {
     gl_Position=viewProjection*vec4(position,1.0);
+    occlusionClip=gl_Position;
     if(flipY!=0)gl_Position.y=-gl_Position.y;
     texCoord=uv;vertexAlpha=alpha;
 })";
-constexpr const char* fragment_shader=R"(#version 430 core
+constexpr const char* fragment_shader=R"(
 layout(location=0) out vec4 outputColor;
 uniform sampler2D shadowTexture;
 uniform float opacity;
 in vec2 texCoord;
 in float vertexAlpha;
+in vec4 occlusionClip;
 void main() {
     // Pinned GLideN64 BILINEAR_3POINT. The texture sampler mirrors both axes;
     // the pose adapter has already applied the source scale and half texel.
@@ -36,7 +39,7 @@ void main() {
     float a1=texture(shadowTexture,texCoord-(off-vec2(sign(off.x),0.0))/16.0).a;
     float a2=texture(shadowTexture,texCoord-(off-vec2(0.0,sign(off.y)))/16.0).a;
     float alpha=a0+abs(off.x)*(a1-a0)+abs(off.y)*(a2-a0);
-    outputColor=vec4(0.0,0.0,0.0,clamp(alpha*vertexAlpha*opacity,0.0,1.0));
+    outputColor=vec4(0.0,0.0,0.0,clamp(alpha*vertexAlpha*opacity*playerFirst(occlusionClip),0.0,1.0));
 })";
 
 inline bool valid(const Shadow& s) {
@@ -55,6 +58,7 @@ inline bool valid(const Shadow& s) {
 struct Storage {
     uint32_t program=0,vao=0,vbo=0,texture=0;
     int32_t matrix=-1,flip=-1,opacity=-1,sampler=-1;
+    gl::OcclusionUniforms occlusion;
     bool prepare(const Dispatch& g,uint32_t compiled) {
         using namespace gl;
         if(!program) {
@@ -63,6 +67,7 @@ struct Storage {
             matrix=g.GetUniformLocation(program,"viewProjection");flip=g.GetUniformLocation(program,"flipY");
             opacity=g.GetUniformLocation(program,"opacity");sampler=g.GetUniformLocation(program,"shadowTexture");
             g.GenVertexArrays(1,&vao);g.GenBuffers(1,&vbo);g.GenTextures(1,&texture);
+            if(!occlusion.find(g,program))return false;
         }
         if(!vao || !vbo || !texture || matrix<0 || flip<0 || opacity<0 || sampler<0)return false;
         g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,texture);
@@ -96,7 +101,7 @@ struct Storage {
         g.TexSubImage2D(TEXTURE_2D,0,0,0,16,16,RGBA,UNSIGNED_BYTE,rgba);
         g.UseProgram(program);g.BindVertexArray(vao);
         g.UniformMatrix4fv(matrix,1,0,pose.shadow.view_projection);g.Uniform1i(flip,pose.flip_y);
-        g.Uniform1f(opacity,pose.opacity);g.Uniform1i(sampler,0);
+        g.Uniform1f(opacity,pose.opacity);g.Uniform1i(sampler,0);occlusion.set(g,pose.occlusion);
         g.DrawArrays(TRIANGLES,index*max_vertices,pose.shadow.count);
     }
     void destroy(const Dispatch& g) {

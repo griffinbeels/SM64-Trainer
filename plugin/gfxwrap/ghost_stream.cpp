@@ -26,6 +26,7 @@ gc_sample current{};
 gc_sample drawing_sample{};
 gc_root_probe root_probe{};
 gc_particle_probe particle_probe{};
+gc_root_memory root_memory{}; // last executed root, carried only by value identity
 ghost::Pass pass;
 
 void __cdecl disable() { configured.store(0, std::memory_order_release); }
@@ -70,7 +71,7 @@ void new_epoch() {
     const uint32_t old = epoch.load(std::memory_order_relaxed);
     if (old == std::numeric_limits<uint32_t>::max()) { disable(); rom_open = false; return; }
     epoch.store(old + 1, std::memory_order_release);
-    ghost_capture_reset(&reader);
+    ghost_capture_reset(&reader); root_memory = {};
     gcc_reset(&source_clock);
 }
 void publish(const gs_record &record) {
@@ -162,7 +163,7 @@ void end(bool completed) {
     if (!active) return;
     const bool valid = completed && configured.load(std::memory_order_acquire) == observed_config;
     pass.end(valid);
-    ghost_root_finish(root_probe,valid,current);
+    ghost_root_finish(root_probe,valid,current,&root_memory);
     ghost_particles_finish(particle_probe,valid,current);
     gs_record out{};
     out.bytes = sizeof(out); out.version = GS_VERSION; out.configuration = observed_config;

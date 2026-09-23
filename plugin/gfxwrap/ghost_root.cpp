@@ -211,6 +211,19 @@ void shadow_call(gc_root_probe &p, Ram &ram, uint32_t pc, uint32_t dl, uint32_t 
 }
 }
 
+bool ghost_floor_aligned(uint32_t action) {
+    // align_with_floor: crawling and common_slide_action, including their
+    // same-call bonk/stop destinations. Conservative both ways: a listed
+    // action may have tilted the root, so it never gets a composed TRS root,
+    // and it is not a discriminator for a persistent sFloorAlignMatrix.
+    switch (action & 0x1ffu) {
+    case 0x20: case 0x3e: case 0x3f: case 0x48:
+    case 0x52: case 0x53: case 0x54: case 0x55: case 0x56:
+    case 0x59: case 0x66: case 0x186: return true;
+    default: return false;
+    }
+}
+
 void ghost_root_prepare(gc_root_probe &p, const gc_frame &frame, uint32_t object,
                         uint32_t object_pool, gc_sample &sample) {
     p={};
@@ -221,10 +234,13 @@ void ghost_root_prepare(gc_root_probe &p, const gc_frame &frame, uint32_t object
         sample.pose={}; sample.valid_fields&=~GC_VALID_POSE;
         if (!sample.status) sample.status=GC_UNSUPPORTED_ROOT;
     }
+    // Each early return leaves the reason finish publishes if the root stays unproven.
+    p.reason=GC_REFUSED_CAMERA;
     if (!(sample.valid_fields&GC_VALID_CAMERA) || p.pose.hidden) return;
     p.ram=frame.rdram; p.ram_bytes=frame.rdram_bytes;
     p.epoch=frame.epoch; p.sequence=frame.sequence; p.serial=frame.dlist_serial;
     Ram ram{p.ram,p.ram_bytes};
+    p.reason=GC_REFUSED_CAMERA_TO_OBJECT;
     for (unsigned i=0;i<3;++i) {
         p.camera_to_object[i]=ram.number(object+0x54+4*i);
         if (!std::isfinite(p.camera_to_object[i]) || std::fabs(p.camera_to_object[i])>=32767) return;
@@ -232,10 +248,12 @@ void ghost_root_prepare(gc_root_probe &p, const gc_frame &frame, uint32_t object
     const auto shadow=ram.word(object+0x14), scale=ram.word(shadow+16);
     // Another active object sharing this model makes asset identity alone
     // insufficient. Refuse rather than borrow its matrix (even if coincident).
+    p.reason=GC_REFUSED_SHARED_MODEL;
     for(unsigned i=0;i<240;++i) {
         const auto other=object_pool+i*0x260;
         if(other!=object && (ram.half(other+2)&17)==1 && ram.word(other+0x14)==shadow) return;
     }
+    p.reason=GC_REFUSED_GRAPH;
     if (!ram.has(shadow,0x1c) || ram.half(shadow)!=0x28 || ram.word(shadow+12)
             || !ram.has(scale,0x1c) || ram.half(scale)!=0x1c
             || ram.word(scale+12)!=shadow || ram.word(scale+0x14) || ram.number(scale+0x18)!=0.25f) return;
@@ -249,7 +267,15 @@ void ghost_root_prepare(gc_root_probe &p, const gc_frame &frame, uint32_t object
     const auto distance=int16_t(-int16_t(std::floor(p.camera_to_object[2])));
     BodyWalk walk{ram,distance};
     p.body_dl=walk.chain(body,scale,0,true);
+    p.reason=GC_REFUSED_BODY_GRAPH;
     p.prepared=ram.ok && p.body_dl!=0;
+    // align_with_floor (and the object throw-matrix flags) are the only
+    // writers of Mario's throwMatrix; otherwise his root is plain TRS.
+    p.floor_aligned=ghost_floor_aligned(p.pose.action) || ghost_floor_aligned(p.pose.body_action)
+        || (ram.word(object+0x8c)&0xa00u) || !ram.ok;
+    // Translucent or metal Mario draws a different alpha list; unsupported,
+    // and never mistaken for a Mario the camera culled.
+    if (p.prepared) p.reason=uint8_t((p.pose.model_state&0x300u) ? GC_REFUSED_MATERIAL : GC_REFUSED_NONE);
 }
 
 void ghost_root_display_list(gc_root_probe &p, uint32_t pc, uint32_t dl,
@@ -273,6 +299,7 @@ void ghost_root_display_list(gc_root_probe &p, uint32_t pc, uint32_t dl,
             || !matrix_at(ram,pc,matrix)) return;
     for (unsigned i=0;i<3;++i)
         if (std::fabs(matrix[12+i]-p.camera_to_object[i])>1.0f/32768.0f) return;
+    p.alpha_seen=true;
     if (!p.matches) std::memcpy(p.matrix,matrix,sizeof(p.matrix));
     p.alpha_pc=pc; p.alpha_dl=physical_dl; p.depth=depth; p.armed=true;
 }
@@ -288,11 +315,65 @@ bool ghost_root_candidate(const gc_root_probe &p, gc_sample &sample) {
     }
     return false;
 }
-void ghost_root_finish(gc_root_probe &p, bool completed, gc_sample &sample) {
+namespace {
+bool same_scene(const gc_root_memory &m, const gc_sample &s) {
+    return m.valid && m.epoch==s.epoch && m.level==s.level && m.area==s.area;
+}
+bool same_root_inputs(const gc_root_memory &m, const gc_sample &s, const gc_pose &pose) {
+    return same_scene(m,s) && m.action==pose.action && m.body_action==pose.body_action
+        && !std::memcmp(m.position,pose.position,sizeof(m.position))
+        && !std::memcmp(m.scale,pose.scale,sizeof(m.scale))
+        && !std::memcmp(m.angles,pose.angles,sizeof(m.angles));
+}
+void remember(gc_root_memory &m, const gc_sample &s) {
+    const auto &pose=s.pose;
+    m.valid=true; m.epoch=s.epoch; m.level=s.level; m.area=s.area;
+    m.action=pose.action; m.body_action=pose.body_action;
+    std::memcpy(m.position,pose.position,sizeof(m.position));
+    std::memcpy(m.scale,pose.scale,sizeof(m.scale));
+    std::memcpy(m.angles,pose.angles,sizeof(m.angles));
+    m.animation_id=pose.animation_id; m.animation_frame=pose.animation_frame;
+    m.anim_y=pose.anim_y_translation;
+    std::memcpy(m.matrix,pose.root_matrix,sizeof(m.matrix));
+    m.camera=s.camera;
+    m.shadowed=(s.valid_fields&GC_VALID_SHADOW)!=0; m.shadow=s.shadow;
+}
+}
+void ghost_root_finish(gc_root_probe &p, bool completed, gc_sample &sample, gc_root_memory *memory) {
     // The shadow publishes only beside the root it was proven through, after
     // its master call and all three nested calls executed exactly once.
-    if (completed && ghost_root_candidate(p,sample) && p.shadow_calls==1 && p.shadow_step==4) {
-        sample.shadow=p.shadow; sample.valid_fields|=GC_VALID_SHADOW;
+    if (completed && ghost_root_candidate(p,sample)) {
+        if (p.shadow_calls==1 && p.shadow_step==4) {
+            sample.shadow=p.shadow; sample.valid_fields|=GC_VALID_SHADOW;
+        }
+        if (memory) remember(*memory,sample);
+        p={}; return;
     }
+    if (!p.required) { p={}; return; } // TRS, hidden, or refused before the probe
+    const bool current=completed && sample.epoch==p.epoch && sample.sequence==p.sequence
+        && sample.dlist_serial==p.serial;
+    uint8_t reason=p.reason;
+    if (!reason) reason=uint8_t(!current ? GC_REFUSED_INCOMPLETE : p.matches>1 ? GC_REFUSED_DUPLICATE
+        : p.alpha_seen ? GC_REFUSED_BODY_MISMATCH : GC_REFUSED_NOT_DRAWN);
+    if (reason==GC_REFUSED_NOT_DRAWN) {
+        if (memory && same_root_inputs(*memory,sample,p.pose)) {
+            sample.pose=p.pose; sample.valid_fields|=GC_VALID_POSE;
+            sample.pose.root_kind=GC_ROOT_SCALED_MODELVIEW;
+            std::memcpy(sample.pose.root_matrix,memory->matrix,sizeof(memory->matrix));
+            sample.camera=memory->camera;
+            if (memory->shadowed && memory->animation_id==p.pose.animation_id
+                    && memory->animation_frame==p.pose.animation_frame
+                    && memory->anim_y==p.pose.anim_y_translation) {
+                sample.shadow=memory->shadow; sample.valid_fields|=GC_VALID_SHADOW;
+            }
+        } else if (!p.floor_aligned) {
+            // Nothing set throwMatrix, so geo_process_object composed exactly
+            // TRS(gfx pos, angle, scale); the model reproduces that itself.
+            sample.pose=p.pose; sample.valid_fields|=GC_VALID_POSE;
+            sample.pose.root_kind=GC_ROOT_TRS;
+        } else reason=GC_REFUSED_NOT_DRAWN_FLOOR;
+        if ((sample.valid_fields&GC_VALID_POSE) && sample.status==GC_UNSUPPORTED_ROOT) sample.status=GC_OK;
+    }
+    sample.pose.refusal=reason;
     p={};
 }

@@ -58,6 +58,29 @@ const html = htm.bind(h);
 //     Suppressing the floor here would delete a true rank to explain a
 //     different fact, which is a second bug wearing the first one's fix.
 export const CAVEATS = {
+  // The run was not a VALID run (task 0144; tracking/caveats.py
+  // VALIDITY_CAVEATS). His rule: a valid run "began from a FULL RESET of the
+  // level", and "if you save stated at all during any part of the attempt,
+  // the run is fundamentally invalidated". Marked, never blocked: an invalid
+  // run keeps a manual Save as PB, and this sentence is the reason beside it.
+  save_state: {
+    glyph: "⟲",
+    short: "Save state",
+    sentence: "A save state was loaded during this run, so it is not a valid time",
+    suppressFloor: false,
+  },
+  subarea_reset: {
+    glyph: "↳",
+    short: "Subarea reset",
+    sentence: "Reset inside a subarea, not at the course start: valid for that subarea's segments, not for the whole star",
+    suppressFloor: false,
+  },
+  no_reset: {
+    glyph: "∅",
+    short: "No reset",
+    sentence: "This run did not start from a reset: it carried on from before",
+    suppressFloor: false,
+  },
   grab_timed: {
     glyph: "!",
     short: "Grab-timed",

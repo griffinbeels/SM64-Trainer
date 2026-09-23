@@ -167,6 +167,7 @@ struct Pipeline {
     bool swap_interval_disabled=false;std::vector<uint8_t> clean,display_clean,last_visible,coverage;
     std::string gpu_vendor,gpu_renderer,gl_version;
     std::vector<float> clean_depth;ghost::WorldPass world{};uint32_t configuration=0;gcc_output origin_clock{};
+    float live_shift=0; // moves live Mario along world z (the camera looks down -z) for the player-first proof
     explicit Pipeline(Fixture& f,const gs_record& first):g(dispatch()),scene(g,W,H),raster(g),fixture(f),
         configuration(first.configuration),origin_clock(first.sample.clock){
         require(SetWindowPos(window.window,nullptr,0,0,W,H,SWP_NOACTIVATE|SWP_NOZORDER)!=0,"resize hidden drawable");
@@ -279,7 +280,7 @@ struct Pipeline {
         const auto start=Clock::now();++frames;
         clock_word(fixture,fixture.config.global_timer,100+frames,4);
         const auto captured_source=capture_source(fixture,world.target,world.projection,1234+frames);
-        const auto& live=captured_source.sample;const auto* qualified=ghost_stream::candidate();
+        auto live=captured_source.sample;live.pose.position[2]+=live_shift;const auto* qualified=ghost_stream::candidate();
         require(qualified && qualified->list_serial==live.dlist_serial,"world and source share exact occurrence");world=*qualified;
         require(live.global_timer==100+frames && live.igt==10 && live.clock.elapsed_frames==origin_clock.elapsed_frames
             && live.clock.continuity_id==origin_clock.continuity_id,"paused IGT stays at origin while global timer advances");
@@ -426,7 +427,22 @@ int main(int argc,char** argv){
         require(water_tinted>300 && water_dry>300 && water_outside==0 && water_blend_errors==0,
             "ghost below the water plane takes the water's blend, above it is unchanged");
         pipeline->water(false);});
-    // Timing and the full set draw every ghost with its shadow.
+    // Player first: live Mario 300 units beyond the ghost, so the ghost stands
+    // between him and the camera and fades over his projected body only;
+    // 300 units nearer instead, the ghost is behind him and draws unchanged.
+    unsigned occlusion_faded=0,occlusion_outside=0,occlusion_behind_errors=0;
+    request.occlusion_fade=1;++request.revision;require(api->configure(&request)==GP_OK,"player-first fade on");
+    renderer.run([&]{pipeline->live_shift=-300;pipeline->frame(true,true);ppm(out/"occlusion-front.ppm",pipeline->last_visible);
+        for(size_t i=0;i<W*H;++i){const bool moved=std::memcmp(&pipeline->last_visible[4*i],&opaque[4*i],3)!=0;
+            if(moved && pipeline->body_coverage[i])++occlusion_faded;
+            if(moved && !pipeline->body_coverage[i])++occlusion_outside;}
+        pipeline->live_shift=300;pipeline->frame(true,true);ppm(out/"occlusion-behind.ppm",pipeline->last_visible);
+        occlusion_behind_errors=changed(pipeline->last_visible,opaque);
+        require(occlusion_faded>1000 && occlusion_outside==0 && occlusion_behind_errors==0,
+            "a ghost fades over live Mario only when it stands in front of him");
+        pipeline->live_shift=-300;});
+    // Timing and the full set draw every ghost with its shadow, the fade on
+    // with the ghost in front of live Mario (its costliest branch).
     request.shadow_enabled=1;++request.revision;require(api->configure(&request)==GP_OK,"shadows for timing");
     renderer.run([&]{
         for(unsigned i=0;i<20;++i){pipeline->frame(false);pipeline->frame(true);}
@@ -467,6 +483,8 @@ int main(int argc,char** argv){
     std::printf(",\"particles\":{\"recorded\":3,\"pixels\":%u}",particle_pixels);
     std::printf(",\"water\":{\"tinted\":%u,\"dry\":%u,\"outside_pixels_changed\":%u,\"blend_errors\":%u}",
         water_tinted,water_dry,water_outside,water_blend_errors);
+    std::printf(",\"occlusion\":{\"faded\":%u,\"outside_pixels_changed\":%u,\"behind_errors\":%u}",
+        occlusion_faded,occlusion_outside,occlusion_behind_errors);
     std::printf(",\"multi\":{\"ghosts\":%u,\"visible\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,",
         unsigned(GP_GHOSTS),multi_visible,multi_vertices,multi_silhouette,multi_outside);
     statistics("pipeline_gpu_completed",multi_times);std::printf(",");statistics("blocking_swap",multi_swap_times);

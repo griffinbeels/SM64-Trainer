@@ -11,6 +11,11 @@
 #define GCLIP_MAX_RECORDS 100000u
 #define GCLIP_WORLD_READY 3u
 enum gclip_clock_kind { GCLIP_STAR_CLOCK = 1u, GCLIP_SEGMENT_CLOCK = 2u };
+/* Header flag: the records after the attempt's closing frame are Mario's
+ * closing star grab and dance, kept for display (the dance tail). A star run
+ * sets it; the 100-coin star's clip does too although its clock is its exit
+ * segment's. */
+#define GCLIP_DANCE_TAIL 1u
 #pragma pack(push, 4)
 typedef struct gclip_header {
     char magic[8];

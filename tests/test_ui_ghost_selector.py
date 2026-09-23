@@ -107,10 +107,16 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 page.evaluate("""(() => { const range = document.querySelector('.ghost-volume-range');
                   range.value = '0.8'; range.dispatchEvent(new Event('input', {bubbles: true})); })()""")
                 assert settled(page, state, 5)[4] == {"volume": 0.8}
+                # So does the player-first fade's A/B switch, on by default.
+                fade = "document.querySelector('.ghost-front-fade .ghost-switch').getAttribute('aria-checked')"
+                assert page.evaluate(fade) == "true"
+                page.click(".ghost-front-fade .ghost-switch")
+                assert settled(page, state, 6)[5] == {"occlusion_fade": False}
+                assert page.evaluate(fade) == "false"
 
                 # Unticking his PB is remembered: the write says so explicitly.
                 tick(page, 0)
-                assert settled(page, state, 6)[5] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
+                assert settled(page, state, 7)[6] == {"ghosts": {"pb": False, "attempts": [1908, 1909]},
                                                       "target": target}
                 assert [item["checked"] for item in picks(page)["items"]] == [False, False, True, True]
                 assert page.problems() == []

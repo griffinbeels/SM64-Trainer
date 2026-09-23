@@ -29,7 +29,8 @@ void main() {
     if(flipY!=0)gl_Position.y=-gl_Position.y;
     texCoord=uv;cell=rect;vertexShade=shade;cut=cutout;
 })";
-constexpr const char* fragment_shader=R"(#version 430 core
+// Compiled after gl::fragment_version and the occlusion GLSL (compositor program()).
+constexpr const char* fragment_shader=R"(
 layout(location=0) out vec4 outputColor;
 uniform sampler2D atlas;
 uniform sampler2D terrain;

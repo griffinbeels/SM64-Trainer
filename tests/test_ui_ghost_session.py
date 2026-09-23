@@ -313,6 +313,18 @@ def test_the_control_claims_no_view_before_the_server_states_one():
     assert controls(session(view="mario"))["view"] == "mario"
 
 
+def test_the_on_off_settings_are_unknown_until_stated_never_off():
+    """The shadow and the fade-in-front switches: a bool the server stated,
+    otherwise null, so an unknown switch is drawn unknown rather than off."""
+    assert controls(None)["occlusionFade"] is None
+    assert controls(session())["occlusionFade"] is None  # a payload that never said
+    assert controls(session(occlusion_fade=True))["occlusionFade"] is True
+    assert controls(session(occlusion_fade=False))["occlusionFade"] is False
+    for garbage in ("yes", 1, None):
+        assert controls(session(occlusion_fade=garbage))["occlusionFade"] is None
+    assert controls(session(shadow=False))["shadow"] is False
+
+
 def test_a_view_this_build_cannot_draw_reads_as_unknown():
     """A payload from another build, or a typo on the wire. Drawing the
     control on a value nothing renders is how a select goes blank and looks

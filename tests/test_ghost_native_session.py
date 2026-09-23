@@ -77,6 +77,23 @@ def test_native_switch_uses_pose_without_video_window_and_preserves_controls(tmp
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("clock,stops", [("star", True), ("segment", False)])
+def test_a_star_timed_by_its_exit_segment_is_not_over_at_the_first_grab(tmp_path, clock, stops):
+    """The 100-coin star's live clock is its exit segment's: his 100-coin grab
+    (or the ghost's) must not end the run; the exit star's close does."""
+    session, source, _, _ = native_session(tmp_path)
+    session._native._origin_of = lambda *_: {"kind": clock, "session_id": 1, "arm_id": 9,
+                                             "frame": 100, "utc": "2026-09-21T08:00:00+00:00"}
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        session._native.note()
+        assert source.commands[-1]["enabled"] and source.commands[-1]["stop_at_star"] is stops
+        await session.stop()
+
+    asyncio.run(check())
+
+
 def test_missing_pose_never_opens_whole_picture_as_mario(tmp_path):
     session, source, windows, _ = native_session(tmp_path, asset=False)
 

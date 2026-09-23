@@ -19,7 +19,7 @@ static void begin(Fixture &f,gc_root_probe &probe,uint32_t expected=GC_UNSUPPORT
     for(size_t i=0;i<f.n64.size();++i) f.ram[i]=f.n64[i^3];
     ghost_capture_begin(&f.reader,&f.config,&f.frame,&f.sample,&probe);
     check(f.sample.status==expected && !(f.sample.valid_fields&GC_VALID_POSE),"root published before execution");
-    check(zero(f.sample.pose),"unqualified root retained pose bytes");
+    check(zero(f.sample.pose) || cleared(f.sample.pose,f.sample.pose.refusal),"unqualified root retained pose bytes");
     ++f.frame.sequence;++f.frame.dlist_serial;
 }
 static void pair(gc_root_probe &p) {
@@ -100,6 +100,146 @@ static void shadows(Fixture &f) {
     check(!(f.sample.valid_fields&(GC_VALID_POSE|GC_VALID_SHADOW)) && zero(f.sample.shadow),"shadow without a proven root");
     fresh();check(shadowed(f,p,normal),"shadow proof recovers on the next occurrence");
 }
+// A held object is drawn from Mario's hand node (geo_process_held_object),
+// so its lists follow Mario's alpha/body pair in the master list. Holding,
+// hands-free holding (heldObj set outside every hold action), Bowser's tail
+// and a ridden shell keep Mario's executed root; the ghost draws Mario alone.
+static void held(Fixture &f) {
+    gc_root_probe p;
+    constexpr uint32_t held_dl=0x23000, held_mtx=0x22200;
+    const float hand[16]={.25f,0,0,0, 0,.25f,0,0, 0,0,.25f,0, 150,80,-430,1};
+    fixed(f,held_mtx,hand);
+    // The held object's own opaque list is alpha-shaped, at the hand.
+    words(f,held_dl,{0xfb000000,0xffffffff,0xb8000000,0});
+    words(f,root_dl+32,{0x01020040,held_mtx,0x06000000,held_dl});
+    const auto state=f.config.mario_state;
+    const struct { uint32_t action, held, ridden; uint8_t grab; const char *name; } cases[]={
+        {0x08000207,0x80100000,0,1,"hold idle (bob-omb)"},
+        {0x00840452,0x80100000,0,1,"hands-free holding while butt sliding"},
+        {0x00000391,0x80100000,0,3,"holding Bowser's tail"},
+        {0x00000447,0x80100000,0,2,"heavy hold walking"},
+        {0x20810446,0,0x80100000,0,"riding a shell"}};
+    for(const auto &c:cases) {
+        scene(f);f.put32(state+0x0c,c.action);f.put32(Fixture::body,c.action);
+        f.put32(state+0x7c,c.held);f.put32(state+0x84,c.ridden);f.put8(Fixture::body+0x0a,c.grab);
+        begin(f,p);pair(p);
+        float exact[16];for(unsigned i=0;i<16;++i)exact[i]=float(int32_t(hand[i]*65536))/65536;
+        ghost_root_display_list(p,root_dl+40,held_dl,held_dl,1,exact);
+        ghost_root_finish(p,true,f.sample);
+        check((f.sample.valid_fields&GC_VALID_POSE) && f.sample.status==GC_OK && !f.sample.pose.refusal
+              && f.sample.pose.root_kind==GC_ROOT_SCALED_MODELVIEW && f.sample.pose.grab_position==c.grab
+              && f.sample.pose.action==c.action
+              && f.sample.pose.root_matrix[9]==float(int32_t(floor_matrix[9]*65536))/65536,c.name);
+    }
+    // Holding never relaxes ownership: the pair must still be Mario's.
+    scene(f);f.put32(state+0x7c,0x80100000);begin(f,p);
+    float exact[16];for(unsigned i=0;i<16;++i)exact[i]=float(int32_t(hand[i]*65536))/65536;
+    ghost_root_display_list(p,root_dl+40,held_dl,held_dl,1,exact);ghost_root_finish(p,true,f.sample);
+    check(!(f.sample.valid_fields&GC_VALID_POSE) && cleared(f.sample.pose,GC_REFUSED_NOT_DRAWN_FLOOR),
+          "held object's list stood in for Mario");
+    f.put32(state+0x7c,0);f.put8(Fixture::body+0x0a,2);words(f,root_dl+32,{0,0,0,0});
+}
+// A star spawn or dialog cutscene points the camera away: the game still
+// updates Mario's graph node (animation, cameraToObject) but culls every
+// list. Frozen, his root inputs are bit-identical to the last proven frame,
+// so the record carries that root under the camera it executed with.
+static void culled(Fixture &f) {
+    gc_root_probe p;gc_root_memory memory;
+    const auto obj=f.config.object_pool, state=f.config.mario_state;
+    const auto proven=[&]{
+        scene(f);realistic_shadow(f,shadow_matrix);f.put16(obj+0x42,0x8123);
+        begin(f,p);pair(p);execute_shadow(p,shadow_matrix);ghost_root_finish(p,true,f.sample,&memory);
+        check((f.sample.valid_fields&GC_VALID_SHADOW) && !f.sample.pose.refusal && memory.valid,
+              "proving frame not remembered");
+    };
+    const auto culled_frame=[&](uint8_t reason) {
+        begin(f,p);ghost_root_finish(p,true,f.sample,&memory);
+        return f.sample.pose.refusal==reason;
+    };
+    proven();
+    const gc_sample first=f.sample;
+    // The cutscene camera moves every frame; Mario does not.
+    f.putfloat(Fixture::camera+0x1c,-900);f.putfloat(obj+0x54,5000);
+    check(culled_frame(GC_REFUSED_NOT_DRAWN) && (f.sample.valid_fields&GC_VALID_POSE)
+          && f.sample.status==GC_OK && f.sample.pose.root_kind==GC_ROOT_SCALED_MODELVIEW,"frozen culled Mario refused");
+    check(!std::memcmp(f.sample.pose.root_matrix,first.pose.root_matrix,sizeof(first.pose.root_matrix))
+          && !std::memcmp(&f.sample.camera,&first.camera,sizeof(first.camera)),
+          "carried root lost the camera it executed under");
+    check((f.sample.valid_fields&GC_VALID_SHADOW) && !std::memcmp(&f.sample.shadow,&first.shadow,sizeof(first.shadow)),
+          "identical frozen Mario lost his shadow");
+    check(f.sample.pose.position[0]==first.pose.position[0] && f.sample.pose.animation_frame==first.pose.animation_frame,
+          "carried pose lost its own fresh fields");
+    check(culled_frame(GC_REFUSED_NOT_DRAWN) && (f.sample.valid_fields&GC_VALID_POSE),"long freeze stopped carrying");
+    // Head turns and animation do not move the root; the shadow can.
+    f.put16(Fixture::body+0x12,999);f.put16(obj+0x40,8);
+    check(culled_frame(GC_REFUSED_NOT_DRAWN) && (f.sample.valid_fields&GC_VALID_POSE)
+          && !(f.sample.valid_fields&GC_VALID_SHADOW) && zero(f.sample.shadow)
+          && f.sample.pose.head_angles[0]==999,"animation change carried a stale shadow");
+    f.put16(obj+0x40,7);
+    // A floor-aligned (sliding) Mario that moved while culled has an
+    // unknown tilt: refused, and the reason says so.
+    const auto moved=[&](uint32_t at,uint32_t value,const char *name) {
+        proven();f.put32(at,value);
+        check(culled_frame(GC_REFUSED_NOT_DRAWN_FLOOR) && !(f.sample.valid_fields&(GC_VALID_POSE|GC_VALID_SHADOW))
+              && cleared(f.sample.pose,GC_REFUSED_NOT_DRAWN_FLOOR) && zero(f.sample.shadow),name);
+    };
+    moved(obj+0x20,0x41a80001,"moved Mario carried a root");
+    moved(obj+0x1c,0x30390001,"turned Mario carried a root");
+    moved(obj+0x30,0x3fa00001,"rescaled Mario carried a root");
+    moved(state+0x0c,0x00840452,"new action carried a root");
+    moved(Fixture::body,0x00840452,"new body action carried a root");
+    // The frame the star spawn freezes Mario he has already moved once, off
+    // camera. Airborne (no align_with_floor), geo_process_object composes
+    // TRS(gfx pos, angle, scale): the record says so and keeps this frame's
+    // camera. Later frozen frames match it, not the remembered matrix.
+    const auto airborne=[&](uint32_t action) {
+        f.put32(state+0x0c,action);f.put32(Fixture::body,action);
+    };
+    proven();airborne(0x01000887);f.putfloat(obj+0x24,4046);f.putfloat(Fixture::camera+0x1c,-700);
+    for(unsigned frozen=0;frozen<3;++frozen) {
+        check(culled_frame(GC_REFUSED_NOT_DRAWN) && (f.sample.valid_fields&GC_VALID_POSE) && f.sample.status==GC_OK
+              && f.sample.pose.root_kind==GC_ROOT_TRS && !(f.sample.valid_fields&GC_VALID_SHADOW)
+              && f.sample.pose.position[1]==4046 && f.sample.camera.position[0]==-700,
+              "culled airborne Mario was not his own TRS root");
+        const float none[16]{};
+        check(!std::memcmp(f.sample.pose.root_matrix,none,sizeof(none)),"TRS root kept a matrix");
+    }
+    proven();airborne(0x01000887);f.putfloat(obj+0x24,4046);f.put32(obj+0x8c,0x800);
+    check(culled_frame(GC_REFUSED_NOT_DRAWN_FLOOR) && !(f.sample.valid_fields&GC_VALID_POSE),
+          "object throw-matrix flag composed a TRS root");
+    f.put32(obj+0x8c,0);
+    // A drawn-but-unproven Mario, a translucent one, an interrupted list, a
+    // shared model, another scene or epoch never borrow the memory.
+    proven();begin(f,p);
+    float exact[16];for(unsigned i=0;i<16;++i)exact[i]=float(int32_t(floor_matrix[i]*65536))/65536;
+    ghost_root_display_list(p,root_dl+8,alpha_dl,alpha_dl,1,exact);ghost_root_finish(p,true,f.sample,&memory);
+    check(cleared(f.sample.pose,GC_REFUSED_BODY_MISMATCH),"drawn Mario without his body carried a root");
+    begin(f,p);pair(p);pair(p);ghost_root_finish(p,true,f.sample,&memory);
+    check(cleared(f.sample.pose,GC_REFUSED_DUPLICATE),"duplicate proof carried a root");
+    begin(f,p);ghost_root_finish(p,false,f.sample,&memory);
+    check(cleared(f.sample.pose,GC_REFUSED_INCOMPLETE),"interrupted list carried a root");
+    f.put16(Fixture::body+8,0x180);
+    check(culled_frame(GC_REFUSED_MATERIAL) && !(f.sample.valid_fields&GC_VALID_POSE),"translucent Mario carried a root");
+    f.put16(Fixture::body+8,0);
+    const auto clone=obj+0x260;f.put16(clone+2,1);f.put32(clone+0x14,Fixture::base+0x18000);
+    check(culled_frame(GC_REFUSED_SHARED_MODEL) && !(f.sample.valid_fields&GC_VALID_POSE),"shared model carried a root");
+    f.put16(clone+2,0);
+    memory.area=2;check(culled_frame(GC_REFUSED_NOT_DRAWN_FLOOR) && !(f.sample.valid_fields&GC_VALID_POSE),
+                        "another area's root carried");
+    proven();++f.frame.epoch;f.frame.sequence=f.frame.dlist_serial=1;
+    check(culled_frame(GC_REFUSED_NOT_DRAWN_FLOOR) && !(f.sample.valid_fields&GC_VALID_POSE),"another epoch's root carried");
+    begin(f,p);ghost_root_finish(p,true,f.sample);
+    check(cleared(f.sample.pose,GC_REFUSED_NOT_DRAWN_FLOOR),"no memory, no carry");
+    // An invisible Mario (act_disappeared) is a valid hidden pose even though
+    // the renderer never advanced his animation from startFrame-1.
+    scene(f);f.put16(obj+2,0x20);f.put16(obj+0x40,0xffff);f.put16(obj+0x42,1);
+    for(size_t i=0;i<f.n64.size();++i) f.ram[i]=f.n64[i^3];
+    ghost_capture_begin(&f.reader,&f.config,&f.frame,&f.sample,&p);++f.frame.sequence;++f.frame.dlist_serial;
+    ghost_root_finish(p,true,f.sample,&memory);
+    check((f.sample.valid_fields&GC_VALID_POSE) && f.sample.pose.hidden && f.sample.pose.root_kind==GC_ROOT_TRS
+          && !f.sample.pose.refusal,"invisible Mario refused");
+    f.put16(obj+2,0x21);f.put16(obj+0x40,7);f.put16(obj+0x42,0x8123);
+}
 #endif
 int main(int argc,char **argv) {
     check(argc==2,"usage: ghost_root_host config"); Fixture f(argv[1]);scene(f);
@@ -118,7 +258,7 @@ int main(int argc,char **argv) {
     ghost_root_finish(p,false,f.sample);
     check(!(f.sample.valid_fields&GC_VALID_POSE),"preview bypassed completion guard");
     begin(f,p);pair(p);pair(p);ghost_root_finish(p,true,f.sample);
-    check(!(f.sample.valid_fields&GC_VALID_POSE) && zero(f.sample.pose),"duplicate owner accepted");
+    check(!(f.sample.valid_fields&GC_VALID_POSE) && cleared(f.sample.pose,GC_REFUSED_DUPLICATE),"duplicate owner accepted");
     begin(f,p);pair(p);ghost_root_finish(p,false,f.sample);
     check(!(f.sample.valid_fields&GC_VALID_POSE),"interrupted list published a root");
     begin(f,p);ghost_root_finish(p,true,f.sample);
@@ -165,6 +305,8 @@ int main(int argc,char **argv) {
     scene(f);f.put16(f.config.object_pool+0x42,0);begin(f,p,GC_BAD_VALUE); // source freshness still enforced
     check(!p.prepared,"stale animation admitted root candidate");
     shadows(f);
+    held(f);
+    culled(f);
     std::puts("executed root qualification passed");
 #endif
 }
