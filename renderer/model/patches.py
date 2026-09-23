@@ -30,6 +30,26 @@ def _patch_audio(source: Path) -> None:
          "           * sa_source_gain(sSoundBanks[bank][soundIndex].x);")
 
 
+def _patch_metal_wings(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # Metal Mario with the wing cap draws mario_metal_cap_wings(_transparent)
+    # from segment-4 0x0400A090/0x0400B090 (32x64 each); upstream libsm64
+    # leaves them out (-99), which refused that combination outright.
+    edit("load_tex_data.h", "    mario_texture_metal_wings_half_1 = -99,\n    mario_texture_metal_wings_half_2,\n"
+         "    mario_texture_eyes_closed_unused1,",
+         "    mario_texture_metal_wings_half_1,\n    mario_texture_metal_wings_half_2,\n"
+         "    mario_texture_eyes_closed_unused1 = -99,")
+    edit("load_tex_data.h", "#define NUM_USED_TEXTURES 11", "#define NUM_USED_TEXTURES SG_ATLAS_CELLS")
+    edit("load_tex_data.h", "32912, 37008 };", "32912, 37008, 41104, 45200 };")
+    edit("load_tex_data.h", "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };",
+         "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };")
+    edit("load_tex_data.h", "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64 };",
+         "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64, 64, 64 };")
+    edit("load_tex_data.h", "#include <stdint.h>", '#include <stdint.h>\n#include "model.h"')
+
+
 def patch(source: Path) -> None:
     def edit(name, old, new):
         replace(source / "src" / name, old, new)
@@ -64,8 +84,21 @@ def patch(source: Path) -> None:
     _patch_audio(source)
     path = source / "src/gfx_adapter.h"
     path.write_text(path.read_text(encoding="utf-8").replace("({})", "((void)0)"), encoding="utf-8", newline="\n")
-    edit("gfx_adapter_commands.h", "    GFXCMD_None = 0,", "    GFXCMD_None = 0,\n    GFXCMD_Material,")
+    edit("gfx_adapter_commands.h", "    GFXCMD_None = 0,", "    GFXCMD_None = 0,\n    GFXCMD_Material,\n    GFXCMD_GeometryMode,")
+    # Metal Mario's lists switch G_TEXTURE_GEN on and off; keep that bit.
+    # The words now reach the adapter, so the F3D (US) geometry-mode names
+    # need values here (gbi.h's non-F3DEX_GBI_2 branch).
+    edit("gfx_macros.h", "#define gsSPSetGeometryMode(word) (GFXCMD_None)",
+         "#ifndef G_TEXTURE_GEN\n#define G_ZBUFFER 0x00000001\n#define G_SHADE 0x00000004\n"
+         "#define G_TEXTURE_ENABLE 0x00000002\n#define G_SHADING_SMOOTH 0x00000200\n"
+         "#define G_CULL_FRONT 0x00001000\n#define G_CULL_BACK 0x00002000\n#define G_CULL_BOTH 0x00003000\n"
+         "#define G_FOG 0x00010000\n#define G_LIGHTING 0x00020000\n#define G_TEXTURE_GEN 0x00040000\n"
+         "#define G_TEXTURE_GEN_LINEAR 0x00080000\n#define G_LOD 0x00100000\n#endif\n"
+         "#define gsSPSetGeometryMode(word) GFXCMD_GeometryMode, 1, (word)")
+    edit("gfx_macros.h", "#define gsSPClearGeometryMode(word) (GFXCMD_None)",
+         "#define gsSPClearGeometryMode(word) GFXCMD_GeometryMode, 0, (word)")
     edit("gfx_macros.h", '#include "gfx_adapter_commands.h"', '#include "gfx_adapter_commands.h"\n#include "model.h"')
+    _patch_metal_wings(source)
     edit("gfx_macros.h", "#define gsDPSetCombineMode(a, b) (GFXCMD_None)", """
 /* Token pasting retains the actual named combiner before its RDP expansion.
  * Both cycles must map to the same supported behavior; unknown modes fail the
@@ -110,21 +143,27 @@ void sg_traversal_reset(void) {
     edit("gfx_adapter.c", "static struct SM64MarioGeometryBuffers *s_outBuffers;",
          "static struct SM64MarioGeometryBuffers *s_outBuffers;\n"
          "static struct SM64MarioGeometryBuffers s_model_output;\n"
-         "static uint32_t s_capacity, s_errors, s_material;\nstatic uint32_t *s_materialPtr;")
+         "static uint32_t s_capacity, s_errors, s_material, s_texgen;\nstatic uint32_t *s_materialPtr;")
     edit("gfx_adapter.c", "            case GFXCMD_VertexData:",
          "            case GFXCMD_Material: {\n"
          "                uint32_t first = (uint32_t)*ptr++, second = (uint32_t)*ptr++;\n"
          "                if (first != second || first > SG_MATERIAL_MODULATE_RGBA)\n"
          "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
          "                s_material = first; break;\n            }\n"
+         "            case GFXCMD_GeometryMode: {\n"
+         "                intptr_t set = *ptr++, word = *ptr++;\n"
+         "                if (word & G_TEXTURE_GEN) s_texgen = set ? 1u : 0u;\n"
+         "                break;\n            }\n"
          "            case GFXCMD_VertexData:")
     edit("gfx_adapter.c", "                UNUSED intptr_t flag0 = *ptr++;",
          "                UNUSED intptr_t flag0 = *ptr++;\n"
          "                if (s_outBuffers->numTrianglesUsed >= s_capacity / 3) {\n"
          "                    s_errors |= SG_MESH_TOO_SMALL; break;\n                }\n"
-         "                *s_materialPtr++ = s_textureOn ? s_material : SG_MATERIAL_SOLID;\n"
-         "                *s_materialPtr++ = s_textureOn ? s_material : SG_MATERIAL_SOLID;\n"
-         "                *s_materialPtr++ = s_textureOn ? s_material : SG_MATERIAL_SOLID;")
+         "                if (s_texgen && s_textureOn && (s_textureIndex != 0 || s_scaleS != 0x0F80 || s_scaleT != 0x07C0))\n"
+         "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
+         "                *s_materialPtr++ = s_textureOn ? s_material | (s_texgen ? SG_MATERIAL_TEXGEN : 0u) : SG_MATERIAL_SOLID;\n"
+         "                *s_materialPtr++ = s_textureOn ? s_material | (s_texgen ? SG_MATERIAL_TEXGEN : 0u) : SG_MATERIAL_SOLID;\n"
+         "                *s_materialPtr++ = s_textureOn ? s_material | (s_texgen ? SG_MATERIAL_TEXGEN : 0u) : SG_MATERIAL_SOLID;")
     edit("gfx_adapter.c", "                s_textureIndex = (int)i;",
          "                s_textureIndex = (int)i;\n"
          "                if (s_textureIndex < 0 || s_textureIndex >= NUM_USED_TEXTURES) {\n"
@@ -160,7 +199,7 @@ void sg_geometry_bind(sg_mesh *mesh) {
     s_model_output.position=mesh->position; s_model_output.normal=mesh->normal;
     s_model_output.color=mesh->color; s_model_output.uv=mesh->uv;
     s_capacity=mesh->vertex_capacity; s_errors=0;
-    s_materialPtr=mesh->material; s_material=SG_MATERIAL_SOLID;
+    s_materialPtr=mesh->material; s_material=SG_MATERIAL_SOLID; s_texgen=0;
     s_textureOn=0; s_textureIndex=0; s_scaleS=s_scaleT=0; s_uls=s_ult=0;
     s_texWidth=s_texHeight=64; s_curColor[0]=s_curColor[1]=s_curColor[2]=1;
     gfx_adapter_bind_output_buffers(&s_model_output);
@@ -169,7 +208,7 @@ uint32_t sg_geometry_errors(void) { return s_errors; }
 uint32_t sg_geometry_vertex_count(void) { return s_model_output.numTrianglesUsed * 3u; }
 void sg_geometry_reset(void) {
     s_outBuffers=NULL; s_trianglePtr=s_colorPtr=s_normalPtr=s_uvPtr=NULL;
-    s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID;
+    s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID; s_texgen=0;
     memset(&s_model_output,0,sizeof(s_model_output)); s_capacity=s_errors=0;
 }
 """

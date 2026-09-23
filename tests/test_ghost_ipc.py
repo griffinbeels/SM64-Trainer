@@ -91,11 +91,11 @@ int wmain(int argc,wchar_t** argv) {
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17",
         str(launcher), f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *compiler.LIBS], tmp_path)
     def header(clip_id):
-        return struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO4", 4, 160, 652, 1,
-                           1, 5, 1, 1, bytes([clip_id]) + bytes(15), 10_000_000, 0, 1.0,
+        return struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO5", 5, 160, 1232, 1,
+                           1, 6, 1, 1, bytes([clip_id]) + bytes(15), 10_000_000, 0, 1.0,
                            1, 1, 100, 100, 9, 1, 1, 100, 10, 0, 1, 0, 1, 0, 0)
-    frame = bytearray(652)
-    struct.pack_into("<8IQQqIHHhhII", frame, 0, 652, 4, 1, 3, 636, 5, 1, 3,
+    frame = bytearray(1232)
+    struct.pack_into("<8IQQqIHHhhII", frame, 0, 1232, 5, 1, 3, 1216, 6, 1, 3,
                      1, 1, 0, 100, 0, 10, 9, 1, 8, 0)
     struct.pack_into("<3f", frame, 88, 1.0, 1.0, 1.0)  # gc_pose.scale
     struct.pack_into("<h", frame, 106, 197)  # idle animation

@@ -5,6 +5,7 @@
 #include <windows.h>
 #include "ghost_playback.h"
 #include "ghost_pose.h"
+#include "ghost_particle_pose.h"
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -113,6 +114,14 @@ extern "C" int32_t sg_model_get_atlas(sg_model *p,sg_atlas_view *out) {
     *out={};if(p!=fake_model || !p)return SG_INVALID_MODEL;
     if(p->owner!=GetCurrentThreadId())return SG_WRONG_THREAD;
     static const uint8_t pixel[]={255,0,0,255};*out={pixel,1,1,209};return SG_OK;
+}
+// The fake model has no particle frames; placement has its own witness.
+extern "C" int32_t sg_model_get_particles(sg_model *p,sg_particle_view *out) {
+    *out={};return p==fake_model && p ? SG_OK : SG_INVALID_MODEL;
+}
+namespace ghost_particle_pose {
+Placed place(sg_model*,const sg_particle_view&,const gc_sample&,const gc_camera&,const float*,
+             ghost_compositor::ParticleVertex*,ghost_compositor::Particles& result) {result={};return {};}
 }
 namespace ghost_pose {
 Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
@@ -501,6 +510,54 @@ int main() {
             seek(1,false,GP_INVALID_FRAME,0,0);  // next pose is in another area
             seek(10,false,GP_INVALID_FRAME,0,0); // three refused frames: a real gap
             seek(13,false,GP_INVALID_FRAME,0,0); // nothing after it
+        }
+        {
+            // Elevator Tour, 2026-09-23: the ghost was recorded from the level
+            // entrance (area 1) and entered the volcano (area 2), where the
+            // game restarted its raw IGT at 1. A live attempt reset to the
+            // volcano entrance meets the ghost at its latest volcano entry,
+            // not after its walk; a live attempt from the entrance keeps the
+            // ghost's own origin (even past a later area-1 restart), and a
+            // scene the ghost never restarted in changes nothing.
+            Clip volcano=Clip::linear(24,24,17,5);
+            const auto scene=[&](uint32_t from,uint32_t to,int16_t area) {
+                for(uint32_t i=from;i<to;++i) {
+                    auto &s=volcano.frames[i].sample;s.area=area;s.igt=uint16_t(i-from+1);s.clock.raw_igt=s.igt;
+                }
+            };
+            // Entrance 0-5, a volcano visit 6-9, the volcano run 10-19 (its
+            // recorded touch at 17), back outside 20-23.
+            scene(6,10,2);scene(10,20,2);scene(20,24,1);
+            check(api->prepare_clip(&volcano.header,volcano.frames.data())==GP_OK,"prepare a clip with timer restarts");
+            revision=r.revision+1;r=request(volcano,revision);r.model_id=4;
+            const auto follow=[&](int area) {
+                ++r.revision;r.origin={GO_STAR,7,live.sequence+1,source_continuity,11000,source_generation,0,0};
+                elapsed_base=11000;live.level=9;live.live_action=1;live.area=int16_t(area);
+                check(api->configure(&r)==GP_OK,"follow a new live origin");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            };
+            follow(2);
+            draw(1,true,GP_READY,11,2);check(selected_x==2410,"volcano start meets the ghost's latest volcano start");
+            // A live scene change later does not re-align: unaligned, live 3
+            // outside would show row 3 outside.
+            draw(3,false,GP_WRONG_SCENE,0,1);
+            draw(5,true,GP_READY,15,2);check(selected_x==2414,"aligned ghost keeps pace");
+            draw(8,false,GP_STAR_ENDED,0,2); // the shifted coordinate reaches its recorded touch (row 17)
+            follow(1);
+            draw(1,true,GP_READY,2,1);check(selected_x==2401,"entrance start keeps the ghost's own origin");
+            follow(3);
+            draw(1,false,GP_WRONG_SCENE,0,3); // no restart in that scene: unchanged
+            ++r.revision;r.nudge_frames=-5;check(api->configure(&r)==GP_OK,"nudge an aligned ghost");
+            follow(2);r.nudge_frames=0;
+            draw(3,true,GP_READY,8,2);check(selected_x==2407,"nudge applies after alignment");
+            // A restore resolved into this attempt continues its live
+            // coordinate: it keeps the alignment even where live Mario now is
+            // (recomputed outside, live 4 would show row 4 outside).
+            ++r.revision;r.origin={GO_STAR,7,live.sequence+1,source_continuity,11000,source_generation,0,GO_RECOVERED};
+            check(api->configure(&r)==GP_OK,"restored origin");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            draw(4,false,GP_WRONG_SCENE,0,1);
+            draw(5,true,GP_READY,15,2);check(selected_x==2414,"restored origin keeps the alignment");
         }
         {
             // Three ghosts on one live origin. Each ends on its own recorded

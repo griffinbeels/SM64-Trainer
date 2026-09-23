@@ -7,11 +7,16 @@ end, so 1.03 synthetic seconds of freeze filled 256 PCM blocks and aborted the
 run (the round-46 witness). Native lifecycle and retry are not covered here.
 """
 
+from types import SimpleNamespace
+
+import pytest
+
 from sm64_events.replay.gpuaudio import GpuAudio, PcmHandoff
 from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpusettings import GpuSettings
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MediaRun
+from sm64_events.replay.pixels import SampledPicture
 
 
 class InertMux:
@@ -100,3 +105,65 @@ def test_real_pcm_ahead_of_a_frozen_frontier_waits_and_stays_bounded():
     media.video_end = 180000
     media.drain()
     assert mux.written_samples == 10 * 4800 and len(media.pcm.blocks) == 20
+
+
+def play_through_a_stall(stall_s, *, seconds=8.0, stall_at=3.0):
+    """Steady 30 fps pictures and 10 ms loopback callbacks (arrival-stamped, as
+    GpuCapture.submit_audio does), through a stop-the-world interpreter stall:
+    no callbacks and no ticks, then the device's buffered PCM arrives at once.
+    Returns (failure or None, pictures muxed, seconds of PCM muxed)."""
+    settings = GpuSettings()
+    run, mux, media, handoff, now, audio = make(settings)
+    pictures = []
+    mux.write_video = pictures.append
+    t, next_audio, next_picture, occurrence, backlog = 0.0, 0.01, 0.0, 0, 0
+    try:
+        while t < seconds:
+            now[0] = t
+            if stall_at <= t < stall_at + stall_s:
+                while next_audio <= t:
+                    backlog, next_audio = backlog + 1, next_audio + 0.01
+                t += settings.poll_s
+                continue
+            for _ in range(backlog):
+                handoff.submit(bytes(480 * 4), run.origin_ts + t, now=t)
+            backlog = 0
+            while next_audio <= t:
+                handoff.submit(bytes(480 * 4), run.origin_ts + t, now=t)
+                next_audio += 0.01
+            audio.drain()
+            # Pictures reach the media worker two frames after their capture.
+            while next_picture <= t - 0.066 and media.can_offer:
+                occurrence += 1
+                decision = media.offer(
+                    SampledPicture(16, 16, bytes([occurrence % 256, 1, 2, 255]) * 4, 8),
+                    SimpleNamespace(frame=occurrence, extras=lambda: {"exact": True}),
+                    occurrence=occurrence, capture_ts=run.origin_ts + next_picture, now=t)
+                if decision.kind == "selected":
+                    request = decision.request
+                    media.complete(request.ticket, b"packet", pts=request.pts,
+                                   duration=request.encoder_duration, keyframe=occurrence == 1)
+                media.frontier(run.origin_ts + next_picture)
+                next_picture += 1 / 30
+            media.drain()
+            media.check_age(t)
+            t += settings.poll_s
+    except Exception as error:  # noqa: BLE001 - the witness reports the run's own failure
+        return str(error), len(pictures), mux.written_samples / 48000
+    return None, len(pictures), mux.written_samples / 48000
+
+
+@pytest.mark.parametrize("stall_s", [0.05, 0.14, 0.3, 0.5])
+def test_an_interpreter_stall_does_not_deadlock_video_against_audio(stall_s):
+    """The live failure, 2026-09-19..23: every "pending age limit" came 1-3 s
+    after the recorder's forced gen-2 collection (54-139 ms stop-the-world).
+    Callbacks stamped after the stall leave a gap in the PCM timeline. Audio
+    could only be written up to the committed video end, and video only up to
+    the written audio end plus the 100 ms lead, so a gap of about the lead or
+    more blocked both until the head picture aged out and the run failed."""
+    failure, pictures, pcm_s = play_through_a_stall(stall_s)
+    assert failure is None
+    # Both streams carry on to the end: every picture after the stall is muxed
+    # and audio reaches within the interleave lead of the last one.
+    assert pictures >= int((8.0 - 0.2) * 30) - 2
+    assert pcm_s >= 8.0 - 0.3 - stall_s

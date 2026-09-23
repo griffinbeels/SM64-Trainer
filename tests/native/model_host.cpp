@@ -259,7 +259,37 @@ int main(int argc, char** argv) {
         check(sg_model_open(rom.data(),rom.size(),&model)==SG_BUSY && model,"single runtime");
         sg_atlas_view atlas{};
         check(sg_model_get_atlas(model,&atlas)==SG_OK && atlas.animation_count==209 && atlas.rgba,"atlas");
-        check(atlas.width==704 && atlas.height==64,"atlas dimensions");
+        check(atlas.width==SG_ATLAS_CELLS*64 && atlas.height==64,"atlas dimensions");
+        {
+            // Mario's particle models read from the same segment: every frame one
+            // textured quad, bubble first, splash frames 32x64.
+            sg_particle_view particles{};
+            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==58 &&
+                particles.vertex_count==348 && particles.atlas_rgba,"particle frames");
+            for(uint32_t i=0;i<particles.frame_count;++i)
+                check(particles.frames[i].vertex_count==6 && particles.frames[i].first_vertex==6*i,"one quad per particle frame");
+            check(particles.frames[0].display_list==0x0401DD60u && particles.frames[0].layer==SG_PARTICLE_CUTOUT,"bubble frame");
+            // The lava flame (common1) is shaded by its environment colour, not vertices.
+            const auto& flame=particles.vertices[particles.frames[45].first_vertex].rgba;
+            check(particles.frames[45].display_list==0x0301B3B0u && flame[0]==255 && flame[1]==50 && flame[2]==0 && flame[3]==200,
+                "flame frame");
+            // Mist fades by the object's opacity; sand, leaves and snow are cutouts.
+            check(particles.frames[53].display_list==0x03000880u && particles.frames[53].fade==1 && !particles.frames[45].fade
+                && particles.frames[57].display_list==0x0302C8A0u && particles.frames[57].layer==SG_PARTICLE_CUTOUT,
+                "mist, sand, leaves and snow frames");
+            unsigned opaque=0;
+            for(uint32_t i=0;i<particles.atlas_width*particles.atlas_height;++i)opaque+=particles.atlas_rgba[4*i+3]>0;
+            std::ofstream ppm("particles.ppm",std::ios::binary);
+            ppm<<"P6\n"<<particles.atlas_width<<' '<<particles.atlas_height<<"\n255\n";
+            for(uint32_t i=0;i<particles.atlas_width*particles.atlas_height;++i) {
+                // Composite over magenta so alpha holes are visible.
+                const uint8_t* p=particles.atlas_rgba+4*i;const unsigned a=p[3];
+                const unsigned char rgb[3]={uint8_t((p[0]*a+255*(255-a))/255),uint8_t((p[1]*a)/255),uint8_t((p[2]*a+255*(255-a))/255)};
+                ppm.write(reinterpret_cast<const char*>(rgb),3);
+            }
+            ppm.close();std::fprintf(stderr,"particle opaque texels %u\n",opaque);
+            check(opaque>15000,"particle textures decoded"); // 17063 on the US ROM
+        }
         sg_pose a=pose(); Mesh mesh;
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK,"base evaluation");
         check(mesh.out.vertex_count>1800 && mesh.out.vertex_count<=3072,"actual Mario geometry");
@@ -292,6 +322,37 @@ int main(int argc, char** argv) {
         for(unsigned i=0;i<mesh.out.vertex_count;i+=3)
             check(mesh.out.material[i]==mesh.out.material[i+1] && mesh.out.material[i]==mesh.out.material[i+2],
                 "triangle material agreement");
+        {
+            // Cap effects: geo_switch_mario_cap_effect picks the vanish,
+            // metal or metal-vanish body from modelState. Metal's lists turn
+            // on G_TEXTURE_GEN, which the model marks per triangle.
+            const auto texgen=[&]{
+                unsigned count=0;
+                for(unsigned i=0;i<mesh.out.vertex_count;++i)count+=(mesh.out.material[i]&SG_MATERIAL_TEXGEN)!=0;
+                return count;
+            };
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && texgen()==0,
+                "ordinary Mario has no generated texture coordinates");
+            b=a; b.model_state=0x180;
+            check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.out.vertex_count>1800 && texgen()==0,
+                "vanish-cap body");
+            b=a; b.model_state=0x200;
+            check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.out.vertex_count>1800,"metal body");
+            const unsigned metal=texgen();
+            check(metal==mesh.out.vertex_count,"every metal triangle is environment mapped");
+            for(unsigned i=0;i<mesh.out.vertex_count;++i)
+                check((mesh.out.material[i]&~uint32_t(SG_MATERIAL_TEXGEN))<=SG_MATERIAL_MODULATE_RGBA,"metal material code");
+            b=a; b.model_state=0x340;
+            check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && texgen()>1000,"metal vanish-cap body");
+            b=a; b.model_state=0x200; b.cap_state=2;
+            const int32_t winged=sg_model_evaluate(model,&b,&mesh.out);
+            // Metal wings sample the ROM's metal wing textures (atlas cells 11 and 12).
+            unsigned metal_wing=0;
+            for(unsigned i=0;i<mesh.out.vertex_count;++i)
+                metal_wing+=!(mesh.out.material[i]&SG_MATERIAL_TEXGEN) && mesh.out.uv[2*i]>=11.0f/SG_ATLAS_CELLS;
+            check(winged==SG_OK && metal_wing>=12,"metal wing cap draws its metal wings");
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"cap effect independence");
+        }
         b=a; b.head_rotation[1]=8192;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.snapshot()!=first_mesh,"effective head rotation");
         b=a; b.body_action=0x04000440; b.torso_angles[0]=4000; // ACT_WALKING.

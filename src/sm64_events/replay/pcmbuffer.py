@@ -69,6 +69,15 @@ class PcmBuffer:
         self.bytes += len(data)
         self._last_us, self._last_now = first_us, now
 
+    @property
+    def head_ticks(self):
+        """Media ticks where the oldest waiting block starts, or None. Blocks
+        are admitted in source-clock order, so no audio will ever precede it:
+        a gap before it is the source's own, not audio still to come."""
+        if not self.blocks:
+            return None
+        return (self.blocks[0].first_us - self.origin_us) * MEDIA_HZ // 1_000_000
+
     def _samples_before(self, block, end_ticks, final):
         # Compare rational clocks without adding epoch-sized floats. Samples
         # belong to the half-open interval when their START is before the end.

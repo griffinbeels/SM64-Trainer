@@ -1,6 +1,8 @@
 /* Actual playback's portable acceptance, with model calls forbidden. No ROM/GL. */
 #include "ghost_playback.h"
+#include "ghost_clip_upgrade.h"
 #include "ghost_pose.h"
+#include "ghost_particle_pose.h"
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -13,6 +15,11 @@ extern "C" int32_t sg_model_close(sg_model**) {std::abort();}
 extern "C" int32_t sg_model_detach(sg_model*) {std::abort();}
 extern "C" int32_t sg_model_adopt(sg_model*) {std::abort();}
 extern "C" int32_t sg_model_get_atlas(sg_model*,sg_atlas_view*) {std::abort();}
+extern "C" int32_t sg_model_get_particles(sg_model*,sg_particle_view*) {std::abort();}
+namespace ghost_particle_pose {
+Placed place(sg_model*,const sg_particle_view&,const gc_sample&,const gc_camera&,const float*,
+             ghost_compositor::ParticleVertex*,ghost_compositor::Particles&) {std::abort();}
+}
 namespace ghost_pose {
 Result evaluate(sg_model*,const gs_record&,const gc_sample&,const ghost::WorldPass&,
                 float,Scratch&,ghost_compositor::Pose&) {std::abort();}
@@ -27,13 +34,16 @@ static bool accepted(const std::string& path) {
     const auto length=file.tellg();
     if(length<std::streamoff(sizeof(gclip_header)) ||
        length>std::streamoff(sizeof(gclip_header)+uint64_t(GCLIP_MAX_RECORDS)*sizeof(gclip_frame)))return false;
-    file.seekg(0);gclip_header header{};file.read(reinterpret_cast<char*>(&header),sizeof(header));
+    file.seekg(0);std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    file.read(reinterpret_cast<char*>(bytes.data()),bytes.size());
+    if(!file)std::exit(2);
+    ghost_clip::upgrade_v4(bytes); // the worker's own GCLIP4 reading (ghost_assets::clip)
+    gclip_header header{};std::memcpy(&header,bytes.data(),sizeof(header));
     // File-length checks protect the pointer passed to the real native validator.
     if(!header.record_count || header.record_count>GCLIP_MAX_RECORDS ||
-       uint64_t(length)!=sizeof(header)+uint64_t(header.record_count)*sizeof(gclip_frame))return false;
+       uint64_t(bytes.size())!=sizeof(header)+uint64_t(header.record_count)*sizeof(gclip_frame))return false;
     std::vector<gclip_frame> frames(header.record_count);
-    file.read(reinterpret_cast<char*>(frames.data()),frames.size()*sizeof(gclip_frame));
-    if(!file)std::exit(2);
+    std::memcpy(frames.data(),bytes.data()+sizeof(header),frames.size()*sizeof(gclip_frame));
     const auto* api=ghost_playback::api();
     const bool okay=api->prepare_clip(&header,frames.data())==GP_OK;
     api->revoke(GP_DISABLED);

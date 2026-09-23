@@ -27,6 +27,15 @@ int main() {
     assert(p.candidate()->triangles==27 && p.candidate()->list_serial==42);
     assert(p.candidate()->projection[11]==-1 && p.candidate()->target.viewport[2]==1280);
     assert(!p.end(true));
+    // The renderer's lookat is taken with the world's first triangles; a
+    // later change in the same list does not rewrite that world.
+    {
+        Pass q; q.begin(2,3,43,true); q.projection(projection);
+        const Lookat first{{0,1,0},{1,0,0},1}, later{{1,0,0},{0,1,0},0};
+        q.lookat(first); q.triangles(target(),3,true); q.lookat(later); q.triangles(target(),3,true);
+        assert(q.geometry(true,false) && q.end(true));
+        assert(q.candidate()->lookat.enabled==1 && q.candidate()->lookat.x[1]==1 && q.candidate()->lookat.y[0]==1);
+    }
     // A second Z world invalidates the earlier provisional branch.
     world(p); assert(p.geometry(true,false)); p.geometry(false,true);
     assert(!p.end(true) && !p.candidate() && p.status()==PassStatus::MultipleWorlds);

@@ -9,10 +9,10 @@ import ctypes as C
 from dataclasses import dataclass
 from pathlib import Path
 
-MAGIC = b"SM64GIP6"
-VERSION = 6
-PREFIX = "Local\\sm64_trainer_ghost_v6_"
-SLOTS, RECORD_BYTES, RING_OFFSET = 512, 652, 20480
+MAGIC = b"SM64GIP7"
+VERSION = 7
+PREFIX = "Local\\sm64_trainer_ghost_v7_"
+SLOTS, RECORD_BYTES, RING_OFFSET = 512, 1232, 20480
 LAYOUT_BYTES = 184
 GHOSTS, PATH_CHARS = 16, 520
 PAGE_BYTES = RING_OFFSET + SLOTS * RECORD_BYTES
@@ -67,7 +67,7 @@ class Status(C.LittleEndianStructure):
         ("dropped", U64), ("ack_revision", U64), ("ack_token", U64),
         ("playback_state", U32), ("playback_reason", U32),
         ("displayed", U32), ("clips_requested", U32), ("clips_prepared", U32),
-        ("clips_visible", U32), ("reserved", C.c_ubyte * 104),
+        ("clips_visible", U32), ("particles_dropped", U32), ("reserved", C.c_ubyte * 100),
     ]
 
 

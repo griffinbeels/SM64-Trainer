@@ -65,11 +65,21 @@ enum sg_mesh_errors {
 enum sg_material {
     SG_MATERIAL_SOLID = 0, SG_MATERIAL_ALPHA_MIX = 1,
     SG_MATERIAL_DECAL_RGBA = 2, SG_MATERIAL_DECAL_RGB = 3,
-    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5
+    SG_MATERIAL_MODULATE_RGB = 4, SG_MATERIAL_MODULATE_RGBA = 5,
+    /* Flag on a material code: the triangle's texture coordinates are
+     * generated from its normal (G_TEXTURE_GEN, the metal cap's environment
+     * map), so the vertex uv is meaningless and the caller computes it under
+     * its own view. Only the 64x32 metal texture at scale 0x0F80/0x07C0 is
+     * admitted; anything else is SG_MESH_UNSUPPORTED_MATERIAL. */
+    SG_MATERIAL_TEXGEN = 0x100
 };
 
-enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = 704,
-       SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = 180224 };
+/* The atlas is one 64-pixel cell per Mario texture, left to right in
+ * libsm64's MarioTextures order: metal (cell 0) ... wing tip, then the metal
+ * wing and wing tip (cells 11, 12). */
+enum { SG_ATLAS_CELLS = 13 };
+enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
+       SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
 
 /* Arrays are caller-owned, nonoverlapping: 3 floats per vertex for position,
  * normal and color; 2 floats per vertex for UV; one material per vertex, with
@@ -84,6 +94,31 @@ typedef struct sg_mesh {
     uint32_t vertex_count;
     uint32_t error_flags;
 } sg_mesh;
+
+/* Mario's particle models (bubble, splashes, water rings, droplet, dust,
+ * sparkles, lava flame, mist, sand, leaves, snow), one frame per executed US
+ * display list. Vertices are
+ * model-local triangles; uv lies inside rect, the frame's clamped atlas cell;
+ * rgba is the combiner's shade factor (white for decal frames). CUTOUT draws
+ * texels with alpha, BLEND blends texture alpha times vertex alpha. */
+enum { SG_PARTICLE_FRAMES = 64, SG_PARTICLE_MAX_VERTICES = 384, SG_PARTICLE_CELLS = 64,
+       SG_PARTICLE_ATLAS_WIDTH = 512, SG_PARTICLE_ATLAS_HEIGHT = 256 };
+enum sg_particle_layer { SG_PARTICLE_CUTOUT = 1, SG_PARTICLE_BLEND = 2 };
+typedef struct sg_particle_vertex {
+    float position[3], uv[2], rect[4];
+    uint8_t rgba[4];
+} sg_particle_vertex;
+/* fade: the frame's alpha is the object's opacity (environment alpha set by
+ * the game's generated list), which the recording carries per particle. */
+typedef struct sg_particle_frame {
+    uint32_t display_list, layer, first_vertex, vertex_count, fade;
+} sg_particle_frame;
+typedef struct sg_particle_view {
+    const sg_particle_frame *frames;
+    const sg_particle_vertex *vertices;
+    const uint8_t *atlas_rgba;
+    uint32_t frame_count, vertex_count, atlas_width, atlas_height;
+} sg_particle_view;
 
 typedef struct sg_atlas_view {
     const uint8_t *rgba;
@@ -116,6 +151,9 @@ int32_t sg_model_validate_rom(const uint8_t *rom, size_t rom_bytes);
 int32_t sg_model_detach(sg_model *model);
 int32_t sg_model_adopt(sg_model *model);
 int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out);
+/* Zero frames when the ROM's particle lists were not the supported ones;
+ * Mario's own model still opens. Same owner/lifetime rules as the atlas. */
+int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out);
 int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out);
 /* Exact upstream SM64 look-at, including its sine table. Native Mat4 layout,
  * translation at 12..14; no N64 quantization or projection is applied. Rejects

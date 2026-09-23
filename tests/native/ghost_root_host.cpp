@@ -218,9 +218,6 @@ static void culled(Fixture &f) {
     check(cleared(f.sample.pose,GC_REFUSED_DUPLICATE),"duplicate proof carried a root");
     begin(f,p);ghost_root_finish(p,false,f.sample,&memory);
     check(cleared(f.sample.pose,GC_REFUSED_INCOMPLETE),"interrupted list carried a root");
-    f.put16(Fixture::body+8,0x180);
-    check(culled_frame(GC_REFUSED_MATERIAL) && !(f.sample.valid_fields&GC_VALID_POSE),"translucent Mario carried a root");
-    f.put16(Fixture::body+8,0);
     const auto clone=obj+0x260;f.put16(clone+2,1);f.put32(clone+0x14,Fixture::base+0x18000);
     check(culled_frame(GC_REFUSED_SHARED_MODEL) && !(f.sample.valid_fields&GC_VALID_POSE),"shared model carried a root");
     f.put16(clone+2,0);
@@ -239,6 +236,40 @@ static void culled(Fixture &f) {
     check((f.sample.valid_fields&GC_VALID_POSE) && f.sample.pose.hidden && f.sample.pose.root_kind==GC_ROOT_TRS
           && !f.sample.pose.refusal,"invisible Mario refused");
     f.put16(obj+2,0x21);f.put16(obj+0x40,7);f.put16(obj+0x42,0x8123);
+}
+// Vanish cap: make_gfx_mario_alpha's translucent list (dithered alpha
+// compare, then envcolor alpha 0x80 for MODEL_STATE_NOISE_ALPHA) is 24 bytes,
+// so it starts 8 bytes lower and Mario's shadow keeps its place past the
+// list's end. Metal keeps the opaque list; the cap-effect switch picked the
+// metal body the walk follows. The executed list must match the recorded
+// modelState, alpha included.
+static void materials(Fixture &f) {
+    gc_root_probe p;
+    float exact[16];for(unsigned i=0;i<16;++i)exact[i]=float(int32_t(floor_matrix[i]*65536))/65536;
+    const auto drawn=[&](uint16_t state,uint32_t alpha_at,uint32_t alpha_word) {
+        scene(f);realistic_shadow(f,shadow_matrix);f.put16(f.config.object_pool+0x42,0x8123);
+        f.put16(Fixture::body+8,state);
+        words(f,alpha_dl,{0xfb000000,0xffffffff,0xb8000000,0});
+        if(alpha_at!=alpha_dl)words(f,alpha_dl-8,{0xb9000002,3,0xfb000000,alpha_word,0xb8000000,0});
+        words(f,root_dl+12,{alpha_at});
+        begin(f,p);
+        ghost_root_display_list(p,root_dl+8,alpha_at,alpha_at,1,exact);
+        ghost_root_display_list(p,root_dl+24,body_dl,0x40080,1,exact);
+        execute_shadow(p,shadow_matrix);
+        ghost_root_finish(p,true,f.sample);
+        const bool posed=(f.sample.valid_fields&GC_VALID_POSE)!=0;
+        check(!posed || (f.sample.valid_fields&GC_VALID_SHADOW),"proven material Mario lost his shadow");
+        check(!posed || f.sample.pose.model_state==state,"material state not recorded");
+        f.put16(Fixture::body+8,0);words(f,root_dl+12,{alpha_dl});
+        return posed;
+    };
+    check(drawn(0x180,alpha_dl-8,0xffffff80),"vanish-cap Mario refused");
+    check(drawn(0x200,alpha_dl,0xffffff80),"metal Mario refused");
+    check(drawn(0x340,alpha_dl-8,0xffffff40),"metal vanish-cap Mario refused");
+    check(drawn(0x1ff,alpha_dl,0xffffff80),"fully faded-in warp Mario (alpha 255) refused");
+    check(!drawn(0x180,alpha_dl-8,0xffffff7f),"translucent list with another alpha accepted");
+    check(!drawn(0x180,alpha_dl,0xffffff80),"opaque list accepted for a vanish-cap Mario");
+    check(!drawn(0,alpha_dl-8,0xffffffff),"translucent list accepted for an opaque Mario");
 }
 #endif
 int main(int argc,char **argv) {
@@ -307,6 +338,7 @@ int main(int argc,char **argv) {
     shadows(f);
     held(f);
     culled(f);
+    materials(f);
     std::puts("executed root qualification passed");
 #endif
 }

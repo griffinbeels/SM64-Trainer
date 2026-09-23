@@ -10,6 +10,7 @@
 #include <ghost_compositor_host.cpp>
 #undef main
 #include "ghost_playback.h"
+#include "ghost_clip_upgrade.h"
 #include "ghost_pass.h"
 #include "ghost_presentation.h"
 #include "ghost_stream.h"
@@ -74,6 +75,20 @@ struct ViRaster {
 // Mario's shadow G_MTX: translate to his feet (world origin, floor y=0) under
 // the same look-at camera as his root: eye (0,100,600), focus (0,100,0).
 static const float feet[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,-100,-600,1};
+// Mario's particles, as the game leaves them: active objects whose parent
+// chain reaches Mario (a splash's droplet is two hops away), each drawn with a
+// billboard matrix at its cameraToObject. A foreign bubble has another parent.
+struct FixtureParticle { uint32_t slot, parent_slot, dl; float scale, view[3]; };
+static const FixtureParticle fixture_particles[]={
+    {3,0,0x0401DD60u,1.0f,{150,-20,-560}},    // bubble (Mario's child)
+    {4,5,0x04032A18u,1.5f,{-60,130,-560}},    // droplet (child of the splash)
+    {5,0,0x04032670u,1.0f,{-150,-100,-620}},  // water splash, third frame
+    {6,6,0x0401DD60u,1.0f,{0,60,-560}},       // another object's bubble: never recorded
+};
+static void particle_matrix(const FixtureParticle& p,float out[16]){
+    std::memset(out,0,16*sizeof(float));out[0]=out[5]=out[10]=p.scale;out[15]=1;
+    for(unsigned i=0;i<3;++i)out[12+i]=p.view[i];
+}
 static void configure_fixture(Fixture& f){
     const auto obj=f.config.object_pool;
     f.put32(f.config.global_timer,100);f.put16(f.config.igt_overall,10);f.put16(f.config.area_update_counter,1);
@@ -87,6 +102,11 @@ static void configure_fixture(Fixture& f){
     const float root[16]={.25f,0,0,0,0,.25f,0,0,0,0,.25f,0,0,-100,-600,1};
     configure_root_scene(f,root);
     realistic_shadow(f,feet);
+    for(const auto& p:fixture_particles){
+        const uint32_t object=obj+p.slot*0x260,parent=obj+p.parent_slot*0x260;
+        f.put16(object+0x02,1);f.put16(object+0x74,1);f.put32(object+0x68,parent);
+        for(unsigned i=0;i<3;++i)f.putfloat(object+0x54+4*i,p.view[i]);
+    }
     check(f.run()==GC_OK,"pipeline fixture capture");
 }
 static void clock_word(Fixture& f,uint32_t address,uint32_t value,unsigned width){
@@ -108,11 +128,20 @@ static gs_record capture_source(Fixture& f,const ghost::RasterTarget& target,con
     ghost_stream::display_list(physical2(seg_circle),seg_begin,physical2(seg_begin),3,feet);
     ghost_stream::display_list(shadow_list+16,seg_tris,physical2(seg_tris),2,feet);
     ghost_stream::display_list(shadow_list+24,seg_end,physical2(seg_end),2,feet);
+    // The transparent layer: each particle's geo display list under its matrix.
+    for(unsigned i=0;i<4;++i){float m[16];particle_matrix(fixture_particles[i],m);
+        ghost_stream::display_list(root_dl+48+8*i,fixture_particles[i].dl,fixture_particles[i].dl,1,m);}
     ghost_stream::projection(matrix);ghost_stream::triangles(target,2,true);
     require(ghost_stream::geometry(true,false),"source qualifies synthetic world end");
     ghost_stream::end(true);gs_record out{};
     require(ghost_stream::api()->read(&out,sizeof(out))==1 && out.world.status==GCLIP_WORLD_READY,"actual source queue occurrence");
     require(out.sample.valid_fields&GC_VALID_SHADOW,"source captures Mario's executed shadow");
+    const auto& recorded=out.sample.particles;
+    require((out.sample.valid_fields&GC_VALID_PARTICLES) && recorded.count==3 && !recorded.flags
+        // Nearest Mario (feet at view 0,-100,-600) first: splash 151, bubble 175, droplet 241 units.
+        && recorded.entries[0].display_list==0x04032670u && recorded.entries[1].display_list==0x0401DD60u
+        && recorded.entries[2].display_list==0x04032A18u && recorded.entries[2].basis[0]==6144
+        && recorded.entries[1].translation[0]==150,"source records Mario's particles, not another object's");
     require(out.sample.status==GC_OK && (out.sample.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
         ==(GCC_RAW_VALID|GCC_ELAPSED_VALID),"source derives usable elapsed clock");
     return out;
@@ -156,6 +185,10 @@ struct Pipeline {
         compositor=gc::create(g,1);require(compositor!=nullptr,"pipeline compositor");
         require(gc::prepare(compositor,W,H,GP_GHOSTS*SG_MODEL_MAX_VERTICES,atlas.rgba,atlas.width,atlas.height)==gc::Result::ok,
             "real atlas upload with one vertex range per ghost");
+        sg_particle_view particles{};uint64_t particle_model=0;
+        require(ghost_playback::particles(&particles,&particle_model) && particle_model==1 &&
+            gc::prepare_particles(compositor,particles.atlas_rgba,particles.atlas_width,particles.atlas_height)==gc::Result::ok,
+            "real ROM particle atlas upload");
         present::Dispatch d{};d.gl=g;d.CopyTexSubImage2D=glCopyTexSubImage2D;
         d.DrawBuffers=reinterpret_cast<decltype(d.DrawBuffers)>(load("glDrawBuffers"));
         presentation=present::create(d,1);require(presentation && present::prepare(presentation,1,W,H,W,H),"pipeline clean presentation");
@@ -215,15 +248,17 @@ struct Pipeline {
         clean=pixels(g,scene.fbo,W,H);clean_depth=depth(g,scene);
         for(unsigned y=0;y<H;++y)std::memcpy(&display_clean[y*W*4],&clean[(H-1-y)*W*4],W*4);
     }
-    std::vector<uint8_t> body_coverage,shadow_coverage;
-    // coverage = bodies and their shadows; the two parts are also kept apart.
+    std::vector<uint8_t> body_coverage,shadow_coverage,particle_coverage;
+    // coverage = bodies, their shadows and particles; the parts are also kept apart.
     void geometry_mask(const gc::Pose* poses,uint32_t count){
-        coverage.assign(W*H,0);body_coverage.assign(W*H,0);shadow_coverage.assign(W*H,0);
+        coverage.assign(W*H,0);body_coverage.assign(W*H,0);shadow_coverage.assign(W*H,0);particle_coverage.assign(W*H,0);
         for(uint32_t ghost=0;ghost<count;++ghost){const auto& p=poses[ghost];
             cover(body_coverage,&p.vertices[0].position[0],sizeof(gc::Vertex),p.count,p.view_projection,p.flip_y);
             if(p.shadow.count)cover(shadow_coverage,&p.shadow.vertices[0].position[0],sizeof(gc::ShadowVertex),
-                p.shadow.count,p.shadow.view_projection,p.flip_y);}
-        for(size_t i=0;i<coverage.size();++i)coverage[i]=body_coverage[i]|shadow_coverage[i];
+                p.shadow.count,p.shadow.view_projection,p.flip_y);
+            if(p.particles.count)cover(particle_coverage,&p.particles.vertices[0].position[0],sizeof(gc::ParticleVertex),
+                p.particles.count,p.particles.view_projection,p.flip_y);}
+        for(size_t i=0;i<coverage.size();++i)coverage[i]=body_coverage[i]|shadow_coverage[i]|particle_coverage[i];
     }
     static void cover(std::vector<uint8_t>& mask,const float* first,size_t stride,uint32_t count,const float* vp,uint32_t flip){
         const auto position=[&](unsigned index){return reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(first)+index*stride);};
@@ -283,7 +318,7 @@ static void statistics(const char* name,std::vector<double> values){
         name,values.size(),values[values.size()/2],values[size_t(std::ceil(values.size()*.95))-1],values.back(),exceeded);
 }
 int main(int argc,char** argv){
-    require(argc==4,"usage: ghost_pipeline_host layout ROM output");const auto foreground=GetForegroundWindow();
+    require(argc==5,"usage: ghost_pipeline_host layout ROM output saved-GCLIP4-clip");const auto foreground=GetForegroundWindow();
     Fixture fixture(argv[1]);configure_fixture(fixture);
     std::ifstream file(argv[2],std::ios::binary);std::vector<uint8_t> rom((std::istreambuf_iterator<char>(file)),{});
     require(rom.size()==(8u<<20),"read-only supplied ROM");const auto* api=ghost_playback::api();
@@ -319,10 +354,14 @@ int main(int argc,char** argv){
     const std::filesystem::path out(argv[3]);std::filesystem::create_directories(out);
     std::vector<uint8_t> baseline,opaque,half,wall;std::vector<double> baseline_times,ghost_times,swap_times,total_times;
     std::vector<double> multi_times,multi_swap_times,multi_total_times;
-    unsigned silhouette=0,outside=0,alpha_errors=0,occlusion_errors=0,multi_silhouette=0,multi_outside=0,multi_visible=0,multi_vertices=0;
+    unsigned particle_pixels=0,silhouette=0,outside=0,alpha_errors=0,occlusion_errors=0,multi_silhouette=0,multi_outside=0,multi_visible=0,multi_vertices=0;
     renderer.run([&]{pipeline->frame(false,true);baseline=pipeline->last_visible;ppm(out/"baseline.ppm",baseline);
         pipeline->frame(true,true);opaque=pipeline->last_visible;ppm(out/"opacity100.ppm",opaque);
         silhouette=changed(baseline,opaque);require(silhouette>1000,"real Mario silhouette");
+        // His recorded particles, from the ROM's own frames, and nothing of another object's.
+        for(size_t i=0;i<W*H;++i)if(pipeline->particle_coverage[i] && !pipeline->body_coverage[i]
+                && std::memcmp(&baseline[4*i],&opaque[4*i],3))++particle_pixels;
+        require(particle_pixels>200,"recorded particles drawn");
         for(size_t i=0;i<W*H;++i)if(!pipeline->coverage[i] && std::memcmp(&baseline[4*i],&opaque[4*i],3))++outside;
         require(outside==0,"outside independently projected triangles unchanged");});
     request.opacity=.5f;++request.revision;require(api->configure(&request)==GP_OK,"opacity50 request");
@@ -380,7 +419,8 @@ int main(int argc,char** argv){
         gc::break_layer(pipeline->compositor);pipeline->frame(true,true);const auto unlayered=pipeline->last_visible;
         ppm(out/"water-unlayered.ppm",unlayered);
         for(size_t i=0;i<W*H;++i){const auto* now=&submerged[4*i];const auto* dry=&unlayered[4*i];
-            if(!pipeline->body_coverage[i]){water_outside+=std::memcmp(now,&water_baseline[4*i],3)!=0;continue;}
+            if(!pipeline->coverage[i]){water_outside+=std::memcmp(now,&water_baseline[4*i],3)!=0;continue;}
+            if(!pipeline->body_coverage[i] || pipeline->particle_coverage[i])continue;
             if(!std::memcmp(now,dry,3)){++water_dry;continue;}
             ++water_tinted;
             for(unsigned c=0;c<3;++c)
@@ -428,6 +468,31 @@ int main(int argc,char** argv){
         require(pipeline->visible==GP_GHOSTS,"full set stays visible");});
     const auto vertex_count=pipeline->vertices;const auto swap_disabled=pipeline->swap_interval_disabled;
     const auto gpu_vendor=pipeline->gpu_vendor,gpu_renderer=pipeline->gpu_renderer,gl_version=pipeline->gl_version;
+    // A real saved GCLIP4 clip (recorded before particles, Whomp's Fortress like
+    // this fixture's live scene) loads through the worker's own GCLIP4 reading
+    // and draws Mario, at a fixed seek, under the camera he was recorded with.
+    unsigned saved_pixels=0,saved_visible=0,saved_records=0;
+    {
+        std::ifstream saved(argv[4],std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(saved)),{});
+        require(bytes.size()>8 && !std::memcmp(bytes.data(),"SM64GHO4",8) && ghost_clip::upgrade_v4(bytes),"real GCLIP4 clip read as GCLIP5");
+        gclip_header h{};std::memcpy(&h,bytes.data(),sizeof(h));saved_records=h.record_count;
+        const auto* rows=reinterpret_cast<const gclip_frame*>(bytes.data()+sizeof(h));
+        require(api->prepare_clip(&h,rows)==GP_OK,"real GCLIP4 clip prepared for playback");
+        const auto& shown=rows[h.record_count/2].sample;
+        require(!(shown.valid_fields&GC_VALID_PARTICLES) && (shown.valid_fields&GC_VALID_POSE) && shown.level==24,"a posed row, no particles");
+        request.clip_count=1;request.tint_enabled=0;for(auto& clip:request.clips)clip={};std::memcpy(request.clips[0].clip_id,h.clip_id,16);
+        request.mode=GP_FIXED;request.origin={};request.seek_igt=shown.igt;request.opacity=1;request.shadow_enabled=0;
+        ++request.revision;require(api->configure(&request)==GP_OK,"fixed seek into the saved clip");
+        renderer.run([&]{
+            auto camera_word=[&](uint32_t address,float value){uint32_t bits;std::memcpy(&bits,&value,4);clock_word(fixture,address,bits,4);};
+            for(unsigned i=0;i<3;++i){camera_word(Fixture::camera+0x1c+4*i,shown.camera.position[i]);
+                camera_word(Fixture::camera+0x28+4*i,shown.camera.focus[i]);}
+            pipeline->frame(false,true);const auto before=pipeline->last_visible;
+            pipeline->frame(true,true);saved_visible=pipeline->visible;saved_pixels=changed(before,pipeline->last_visible);
+            ppm(out/"saved-gclip4.ppm",pipeline->last_visible);
+            require(saved_visible==1 && saved_pixels>300,"the saved GCLIP4 ghost draws");});
+    }
     renderer.run([&]{pipeline.reset();});ghost_stream::api()->disable();api->revoke(GP_DISABLED);require(api->collect()==GP_OK,"worker collects real retired model");
     require(api->release_worker()==GP_OK,"worker releases real storage");require(GetForegroundWindow()==foreground,"foreground unchanged");
     std::printf("{\"ok\":true,\"synthetic\":true,\"live_gliden64\":false,\"width\":640,\"height\":480,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"setup_ms\":%.6f,\"swap_interval_disabled\":%s,",
@@ -442,6 +507,8 @@ int main(int argc,char** argv){
         "\"darkening_errors\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"would_occlude\":%u}",
         shadow_pixels,shadow_outside,shadow_switch_errors,shadow_darkening_errors,shadow_alpha_errors,
         shadow_occlusion_errors,shadow_would_occlude);
+    std::printf(",\"particles\":{\"recorded\":3,\"pixels\":%u}",particle_pixels);
+    std::printf(",\"saved_gclip4\":{\"records\":%u,\"visible\":%u,\"pixels\":%u}",saved_records,saved_visible,saved_pixels);
     std::printf(",\"water\":{\"tinted\":%u,\"dry\":%u,\"outside_pixels_changed\":%u,\"blend_errors\":%u}",
         water_tinted,water_dry,water_outside,water_blend_errors);
     std::printf(",\"occlusion\":{\"faded\":%u,\"outside_pixels_changed\":%u,\"behind_errors\":%u}",

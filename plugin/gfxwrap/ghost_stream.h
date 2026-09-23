@@ -6,7 +6,7 @@
 #include "ghost_capture.h"
 #include <stdint.h>
 
-#define GS_VERSION 4u
+#define GS_VERSION 5u
 #define GS_SLOTS 128u
 #define GS_CAP_POSE 1u
 #define GS_CAP_WORLD_PASS 2u
@@ -32,6 +32,7 @@ typedef struct gs_record {
 typedef struct gs_stats {
     uint32_t bytes, version, epoch, configuration;
     uint32_t offered, dropped, taken, busy, enabled;
+    uint32_t particles_dropped; /* Mario's particles drawn beyond the 16 kept */
 } gs_stats;
 #pragma pack(pop)
 
@@ -60,6 +61,7 @@ void rom(bool opened);
 // Called inside the serialized renderer DList command, before RSP processing.
 bool begin(const uint8_t *rdram, uint32_t bytes, uint32_t context_generation, int64_t qpc);
 void projection(const float matrix[16]);
+void lookat(const ghost::Lookat &);
 void triangles(const ghost::RasterTarget &, uint32_t count, bool zbuffer);
 bool geometry(bool was_zbuffer, bool is_zbuffer);
 void color_target_changed();

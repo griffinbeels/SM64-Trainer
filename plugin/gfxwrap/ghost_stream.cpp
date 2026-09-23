@@ -1,5 +1,6 @@
 #include "ghost_stream.h"
 #include "ghost_root.h"
+#include "ghost_particle_capture.h"
 #include <atomic>
 #include <cstring>
 #include <limits>
@@ -14,7 +15,7 @@ std::atomic_flag control_writer = ATOMIC_FLAG_INIT;
 std::atomic_flag consumer = ATOMIC_FLAG_INIT;
 std::atomic<uint32_t> config_sequence{0}, configured{0};
 std::atomic<uint32_t> config_words[sizeof(gc_layout) / sizeof(uint32_t)];
-std::atomic<uint32_t> epoch{0}, configuration{0}, offered{0}, dropped{0}, taken{0}, busy{0};
+std::atomic<uint32_t> epoch{0}, configuration{0}, offered{0}, dropped{0}, taken{0}, busy{0}, particles_dropped{0};
 bool rom_open = false, active = false;
 uint32_t observed_config = 0;
 uint64_t serial = 0;
@@ -24,6 +25,7 @@ gc_layout layout{};
 gc_sample current{};
 gc_sample drawing_sample{};
 gc_root_probe root_probe{};
+gc_particle_probe particle_probe{};
 gc_root_memory root_memory{}; // last executed root, carried only by value identity
 ghost::Pass pass;
 
@@ -101,7 +103,8 @@ int __cdecl read(gs_record *out, uint32_t bytes) {
 }
 gs_stats __cdecl stats() {
     return {sizeof(gs_stats), GS_VERSION, epoch.load(), configuration.load(),
-        offered.load(), dropped.load(), taken.load(), busy.load(), configured.load() ? 1u : 0u};
+        offered.load(), dropped.load(), taken.load(), busy.load(), configured.load() ? 1u : 0u,
+        particles_dropped.load()};
 }
 const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WORLD_PASS, 0,
     configure, disable, read, stats};
@@ -109,9 +112,9 @@ const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WOR
 namespace ghost_stream {
 const gs_api *api() { return &capture_api; }
 bool requested() { return rom_open && configured.load(std::memory_order_acquire) != 0; }
-void cancel() { active = false; current = {}; root_probe = {}; pass.reset(); }
+void cancel() { active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); }
 void rom(bool opened) {
-    active = false; current = {}; root_probe = {}; pass.reset(); rom_open = opened; new_epoch();
+    active = false; current = {}; root_probe = {}; particle_probe = {}; pass.reset(); rom_open = opened; new_epoch();
 }
 bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc) {
     active = false; current = {}; root_probe = {}; pass.reset();
@@ -125,6 +128,7 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc)
     ++serial;
     gc_frame frame{ram,bytes,epoch.load(std::memory_order_relaxed),serial,serial,qpc};
     ghost_capture_begin(&reader, &layout, &frame, &current, &root_probe);
+    ghost_particles_prepare(particle_probe, ram, bytes, layout.mario_object, layout.object_pool);
     gcc_input timing{};
     timing.fields = ((current.valid_fields & GC_VALID_CLOCK) ? GCC_CLOCK : 0)
         | ((current.valid_fields & GC_VALID_ACTION) ? GCC_ACTION : 0)
@@ -145,6 +149,7 @@ bool begin(const uint8_t *ram, uint32_t bytes, uint32_t generation, int64_t qpc)
     return true;
 }
 void projection(const float matrix[16]) { if (active) pass.projection(matrix); }
+void lookat(const ghost::Lookat &value) { if (active) pass.lookat(value); }
 void triangles(const ghost::RasterTarget &target, uint32_t count, bool zbuffer) {
     if (active) pass.triangles(target,count,zbuffer);
 }
@@ -154,12 +159,15 @@ bool geometry(bool was_zbuffer, bool is_zbuffer) {
 void color_target_changed() { if (active) pass.color_target_changed(); }
 void display_list(uint32_t pc, uint32_t dl, uint32_t physical_dl, uint32_t depth, const float *matrix) {
     if (active) ghost_root_display_list(root_probe,pc,dl,physical_dl,depth,matrix);
+    if (active) ghost_particles_display_list(particle_probe,dl,matrix);
 }
 void end(bool completed) {
     if (!active) return;
     const bool valid = completed && configured.load(std::memory_order_acquire) == observed_config;
     pass.end(valid);
     ghost_root_finish(root_probe,valid,current,&root_memory);
+    ghost_particles_finish(particle_probe,valid,current);
+    particles_dropped.fetch_add(particle_probe.dropped, std::memory_order_relaxed);
     gs_record out{};
     out.bytes = sizeof(out); out.version = GS_VERSION; out.configuration = observed_config;
     out.sample = current; out.world.status = static_cast<uint32_t>(pass.status());

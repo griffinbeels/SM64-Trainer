@@ -139,6 +139,25 @@ int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out)
     return leave(status);
 }
 
+int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out)
+{
+    int status;
+    if (!out) return SG_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    if (!enter()) return SG_BUSY;
+    status = valid_model(model);
+    if (status == SG_OK) {
+        out->frames = model->particles.frames;
+        out->vertices = model->particles.vertices;
+        out->atlas_rgba = model->particles.atlas;
+        out->frame_count = model->particles.frame_count;
+        out->vertex_count = model->particles.vertex_count;
+        out->atlas_width = SG_PARTICLE_ATLAS_WIDTH;
+        out->atlas_height = SG_PARTICLE_ATLAS_HEIGHT;
+    }
+    return leave(status);
+}
+
 static int valid_pose(const sg_pose *pose)
 {
     int i;
