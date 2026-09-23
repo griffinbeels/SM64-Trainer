@@ -11,12 +11,13 @@
 //
 // Moved verbatim, comments included -- the evidence in them is the point.
 // No behaviour change.
-import { h } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { createContext, h } from "preact";
+import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { AttemptDrawer } from "./attemptdrawer.js";
-import { displayName } from "../entitysection.js";
+import { displayName, sectionPbByStrat } from "../entitysection.js";
+import { celebrationsEnabled } from "../celebrations.js";
 import { StatMenu } from "./statmenu.js";
 import { RankIcon } from "./rankicon.js";
 import { StratPicker } from "./stratpicker.js";
@@ -64,6 +65,98 @@ export function delta(frames) {
   const cls = frames > 0 ? "delta-up" : "delta-down";
   const sign = frames > 0 ? "+" : "";
   return html` <span class=${cls}>${sign}${(frames / 30).toFixed(2)}s</span>`;
+}
+
+// THE PB ROW (task 0147, 2026-09-23). The row that is its strategy's current
+// personal best says GOLD!! where its 0.00s used to be, in holo-foil gold, on
+// a gold-washed row -- his ask: "it should say "GOLD!!" -- it should have a
+// gold font color, and should be holographic, like a cool pokemon card. not
+// super distracting, but it should be OBVIOUS". The look lives in index.html's
+// "The PB row" block and its numbers in logtuning.js's "Personal best" group;
+// this decides WHICH row and WHEN, and owns the row's PB actions.
+const PB_WORD = "GOLD!!";
+const PB_TITLE = "Your personal best on this strategy";
+
+// The attempt ids a live pb_saved just crowned (ui/pbcrown.js). PracticeLog
+// provides it once for every card, so no card or table between the page and
+// the row has to carry it.
+export const CrownedIds = createContext(null);
+
+// The delta and the word share one grid cell and swap SEQUENTIALLY (ui-core:
+// never a crossfade). The number that fades out is the one the row showed
+// BEFORE it became the PB -- the -0.43s it won by -- not the 0.00s it becomes,
+// so a live PB reads as "beat it by this much -> GOLD!!". Losing the crown (a
+// faster PB, an Undo) runs the same swap backwards.
+function PbDelta({ frames, isPb, arriving }) {
+  const before = useRef(frames);
+  if (!isPb) before.current = frames;
+  return html`<span class="pb-swap">
+    <span class="pb-swap-num" aria-hidden=${isPb ? "true" : undefined}>${
+      delta(isPb ? before.current : frames)}</span>
+    <span class="pb-gold" aria-hidden=${isPb ? undefined : "true"}>${PB_WORD}</span>
+    ${arriving ? html`<i class="pb-spark" aria-hidden="true">✦</i><i
+      class="pb-spark" aria-hidden="true">✦</i><i
+      class="pb-spark" aria-hidden="true">✦</i>` : ""}
+  </span>`;
+}
+
+// The holo follows the pointer across the PB row -- the flat-screen version of
+// tilting a holo card. Written straight to the row's style, not component
+// state: a render per pointer move would redraw the whole row for one number.
+function tiltFoil(event) {
+  const box = event.currentTarget.getBoundingClientRect();
+  const across = (event.clientX - box.left) / Math.max(1, box.width);
+  event.currentTarget.style.setProperty("--pb-tilt", `${Math.round((0.5 - across) * 80)}%`);
+}
+function settleFoil(event) { event.currentTarget.style.removeProperty("--pb-tilt"); }
+
+// Everything a row knows about its PB: whether it IS the active strategy's PB
+// (the record the card's PB tag names -- entitysection.js::sectionPbByStrat --
+// so the GOLD!! row and the tag can never be two different runs), the one-shot
+// arrival, and Undo.
+//
+// The arrival plays once per crowning while the row IS the PB. `crowned` comes
+// from the live pb_saved broadcast, which lands before the refetch that paints
+// this row as the PB -- hence waiting for both. The Celebrations preference
+// silences the arrival only; the standing gold is information.
+function usePbRow(a, sec, t) {
+  const crownedIds = useContext(CrownedIds);
+  const pb = sec ? sectionPbByStrat(sec, t.clock) : null;
+  const isPb = Boolean(pb) && pb.attempt_id === a.id && !a.cleared;
+  const crowned = Boolean(crownedIds) && crownedIds.has(a.id);
+  const [arriving, setArriving] = useState(false);
+  const crownPlayed = useRef(false);
+  useEffect(() => {
+    if (!crowned) { crownPlayed.current = false; return; }
+    if (!isPb || crownPlayed.current) return;
+    crownPlayed.current = true;
+    if (celebrationsEnabled()) setArriving(true);
+  }, [isPb, crowned]);
+  // Its own effect, for the reason AttemptRow's un-flash timer gives: a timer
+  // inside the effect above would be cancelled by the next crowned/isPb
+  // change. animationend normally ends it first; this is the backstop for
+  // reduced motion, where no animation runs to its end.
+  useEffect(() => {
+    if (!arriving) return undefined;
+    const timer = setTimeout(() => setArriving(false), 6000);
+    return () => clearTimeout(timer);
+  }, [arriving]);
+  const endArrival = (event) => {
+    if (event.target === event.currentTarget && event.animationName === "pbarrive") setArriving(false);
+  };
+  async function undo() {
+    await send("POST", "/api/pb/undo",
+      { attempt_id: a.id, timer_mode: a.segment_id != null ? "rta" : t.clock });
+    t.refresh();
+  }
+  return {
+    undo,
+    rowClass: `${isPb ? "is-pb" : ""} ${arriving ? "pb-arrive" : ""}`,
+    handlers: isPb
+      ? { onpointermove: tiltFoil, onpointerleave: settleFoil, onanimationend: endArrival } : {},
+    title: isPb ? PB_TITLE : undefined,
+    delta: html`<${PbDelta} frames=${a.pb_delta_frames} isPb=${isPb} arriving=${arriving} />`,
+  };
 }
 
 export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, sec }) {
@@ -121,11 +214,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // saves with "segments are RTA-only") — force rta whatever the view clock.
   const isSeg = a.segment_id != null;
   const pbReplay = usePbReplay(a.id, isSeg ? "rta" : t.clock, t.refresh);
-  async function undoPb() {
-    await send("POST", "/api/pb/undo",
-      { attempt_id: a.id, timer_mode: isSeg ? "rta" : t.clock });
-    t.refresh();
-  }
+  const pbRow = usePbRow(a, sec, t);
   const time = isSeg ? a.rta : (t.clock === "igt" ? a.igt : a.rta);
   const frames = isSeg ? a.rta_frames : (t.clock === "igt" ? a.igt_frames : a.rta_frames);
   const inTime = isSeg ? a.rta : a.igt; // failures: how-far-in on the section's clock
@@ -165,8 +254,8 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
   // snapping -- "the dimming should naturally animate to the correct
   // states" (2026-08-23). The server decides which rows are other
   // (`other_strat`, the same gate that withholds the button).
-  const row = html`<tr ref=${(el) => { rowRef.current = el; }}
-      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""}">
+  const row = html`<tr ref=${(el) => { rowRef.current = el; }} ...${pbRow.handlers}
+      class="${a.cleared ? "cleared" : ""} ${a.other_strat ? "other-strat" : ""} ${flash ? "row-flash" : ""} ${isNew ? "row-new" : ""} ${pbRow.rowClass}">
     <td class="meta attempt-index">#${idx + 1}</td>
     <td class="attempt-medal">${a.rank
       ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />` : ""}</td>
@@ -184,7 +273,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
       ${a.cleared && a.cleared_reason
         ? html` <span class="meta">(${a.cleared_reason})</span>` : ""}
     </td>
-    <td class="attempt-delta">${a.outcome === "success" ? delta(a.pb_delta_frames) : ""}</td>
+    <td class="attempt-delta" title=${pbRow.title}>${a.outcome === "success" ? pbRow.delta : ""}</td>
     <td class="meta attempt-strategy">
       ${sec
         ? html`<${StratPicker} entity=${entity} strategies=${sec.strategies}
@@ -208,7 +297,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
            with no entity, a row on another strategy, a card with no strategy
            picked -- draws nothing (the last two by his 2026-08-22 ruling:
            hide the button until the action is valid again). */""}
-      <${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay} undo=${undoPb} beat=${pbBeat} />
+      <${PbAction} attempt=${a} blocked=${blockedPb} state=${pbReplay} undo=${pbRow.undo} beat=${pbBeat} />
       ${a.cleared
         ? html` <button onclick=${restore}>undo</button>`
         : html` <button class="icon-button" onclick=${clear}

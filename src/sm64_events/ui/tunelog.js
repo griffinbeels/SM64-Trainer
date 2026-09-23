@@ -47,6 +47,7 @@ import { entityKey } from "/ui/entitysection.js";
 import { TUNABLES, CHOICES, DEFAULTS, GROUPS, setLogTuning, encodeTuning,
          decodeTuning, changedFromDefault, withDefaults } from "/ui/logtuning.js";
 import { ControlGroups } from "/ui/tunecontrols.js";
+import { fmtIgt } from "/ui/format.js";
 
 const html = htm.bind(h);
 const STORE_KEY = "sm64.logTuneDraft";
@@ -247,12 +248,63 @@ const UNASSIGNED_ATTEMPTS = [
   mkAttempt({ outcome: "hard_reset", igt: "0'00\"40" }),
 ];
 
-function fixtureView() {
+function fixtureView(demo = null) {
+  const stars = demo ? [crownedSection(SECTIONS[0], demo), ...SECTIONS.slice(1)] : SECTIONS;
   return {
-    stars: [...SECTIONS, ...MORE_SECTIONS],
+    stars: [...stars, ...MORE_SECTIONS],
     segments: SEGMENT_SECTIONS,
     unassigned: UNASSIGNED_ATTEMPTS,
   };
+}
+
+// ---- The PB row, both directions (task 0147) --------------------------------
+//
+// "New PB" plays what an automatic PB does live: a faster run lands at the top
+// of the open card still measured against the old PB, and a beat later the
+// save crowns it -- the order the server's background save produces, so the
+// "-0.47s -> GOLD!!" swap is what gets judged. The crowning goes through the
+// REAL door: a `pb_saved` event on the fixture store's feed, which the log's
+// own crown hook reads exactly as it reads the socket's. "Undo PB" takes the
+// newest crown back, so the drain and the quiet hand-back can be judged too.
+// The crown is a stack of attempt ids; the card is rebuilt from it, deltas and
+// all, the way the server measures every row against the strategy's PB.
+const PB_STEP_FRAMES = 14;
+const CROWN_DELAY_MS = 250;
+
+function crownedSection(section, demo) {
+  const pbId = demo.crowns[demo.crowns.length - 1];
+  const attempts = [...demo.extra, ...section.attempts];
+  const pbRow = attempts.find((attempt) => attempt.id === pbId);
+  const measured = attempts.map((attempt) => (
+    attempt.outcome !== "success" || attempt.other_strat ? attempt : {
+      ...attempt,
+      pb_delta_frames: attempt.igt_frames - pbRow.igt_frames,
+      pb_action: attempt.id === pbId ? "undo" : "save",
+    }));
+  const pb = { display: fmtIgt(pbRow.igt_frames), attempt_id: pbId, caveat: null };
+  return { ...section, attempts: measured,
+           pb: { ...section.pb, igt: pb }, pb_by_strat: { ...section.pb_by_strat, igt: pb } };
+}
+
+function usePbDemo() {
+  const [demo, setDemo] = useState(() => ({
+    extra: [], crowns: [OPEN_ATTEMPTS[0].id], feed: [] }));
+  function newPb() {
+    const all = [...demo.extra, ...OPEN_ATTEMPTS];
+    const best = all.find((attempt) => attempt.id === demo.crowns[demo.crowns.length - 1]);
+    const frames = best.igt_frames - PB_STEP_FRAMES;
+    const run = mkAttempt({ outcome: "success", igt: fmtIgt(frames), igt_frames: frames });
+    setDemo((prior) => ({ ...prior, extra: [run, ...prior.extra] }));
+    setTimeout(() => setDemo((prior) => ({
+      ...prior, crowns: [...prior.crowns, run.id],
+      feed: [{ type: "pb_saved", payload: { attempt_id: run.id } }, ...prior.feed] })),
+    CROWN_DELAY_MS);
+  }
+  function undoPb() {
+    setDemo((prior) => (prior.crowns.length > 1
+      ? { ...prior, crowns: prior.crowns.slice(0, -1) } : prior));
+  }
+  return { demo, newPb, undoPb, canUndo: demo.crowns.length > 1 };
 }
 
 // The first section (the OPEN-card / long-name demonstration above) doubles
@@ -360,8 +412,10 @@ function Inspector() {
   const ui = useMemo(() => ({
     sort, hideResets, setSort, setHideResets,
   }), [sort, hideResets]);
-  const view = useMemo(() => fixtureView(), []);
-  const t = useMemo(() => fixtureT(), []);
+  const pbDemo = usePbDemo();
+  const view = useMemo(() => fixtureView(pbDemo.demo),
+    [pbDemo.demo.extra, pbDemo.demo.crowns]);
+  const t = useMemo(() => ({ ...fixtureT(), feed: pbDemo.demo.feed }), [pbDemo.demo.feed]);
 
   async function saveToRepo() {
     setStatus({ kind: "busy", text: "Saving..." });
@@ -416,6 +470,14 @@ function Inspector() {
         recency order -- so the alignment items (1-3) can be judged across
         several closed cards at once; the first card stays open, with
         attempts, for item 4.</p>
+
+      <p class="tune-note">Personal best: <b>New PB</b>${" "}lands a faster
+        run on the first card and crowns it a beat later, the way an automatic
+        save does; <b>Undo PB</b>${" "}hands the crown back.</p>
+      <div class="tune-actions">
+        <button class="save" onclick=${pbDemo.newPb}>New PB</button>
+        <button disabled=${!pbDemo.canUndo} onclick=${pbDemo.undoPb}>Undo PB</button>
+      </div>
 
       <${ControlGroups} groups=${GROUPS} rows=${{ ...CHOICES, ...TUNABLES }}
         values=${values} defaults=${DEFAULTS} onChange=${set} />
