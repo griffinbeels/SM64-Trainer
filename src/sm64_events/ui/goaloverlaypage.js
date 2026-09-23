@@ -273,15 +273,17 @@ function LiveOverlay({ config }) {
 // example ("pb: 1:48.56 / goal: low 1:4x").
 const DEMO_BASE = {
   entity: "star:2:6", context: "Whomp's Fortress", name: "100 Coins",
+  // A typed time's label is the server's own wording of it
+  // (scorecard_resolve.py), which the goal line prints as-is.
   goal: { key: "star:2:6", clock: "igt", you_cs: 10856, goal_cs: 10500,
-          source: { kind: "time", label: "Custom" }, pinned: true,
+          source: { kind: "time", label: `sub 1'45"` }, pinned: true,
           achieved: false, count: 1, streak: false, progress: null },
 };
 const counted = (streak, done) => ({
   ...DEMO_BASE, entity: "star:1:0", context: "Bob-omb Battlefield",
   name: "Big Bob-omb on the Summit",
   goal: { key: "star:1:0", clock: "igt", you_cs: 1456, goal_cs: 1500,
-          source: { kind: "time", label: "Custom" }, pinned: true,
+          source: { kind: "time", label: `sub 15"` }, pinned: true,
           achieved: false, count: 10, streak,
           progress: { done, needed: 10, best: streak ? 4 : done, broken_by: null,
                       window_start: "2026-09-23T18:00:00Z" } },

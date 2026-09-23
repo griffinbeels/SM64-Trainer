@@ -6961,7 +6961,7 @@
     /* The head keeps the unassigned card's height (icon + padding), so the
        plate is exactly as tall as the course icon beside it. */
     height: var(--log-icon-size, 40px); box-sizing: border-box; line-height: 1;
-    min-width: var(--goal-plate-width, 196px);
+    min-width: var(--goal-plate-width, 214px);
     margin-left: var(--log-pb-offset, 0px);
     padding: 1px 10px; border-radius: 8px;
     background: rgba(5,14,24,.55); border: 1px solid var(--border-soft);
@@ -6987,8 +6987,14 @@
   .goal-plate-source {
     font-size: 11px; color: var(--muted, #8aa0b6); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; min-width: 0; margin-left: auto;
+    /* Zero width, then grow: the source fills what the plate has left and
+       never widens it, so the plate (and a stream crop of it) keeps one
+       width whatever the goal came from. */
+    width: 0; flex: 1 1 0; text-align: right;
   }
   .goal-plate-done { color: var(--good, #5bc97a); font-weight: 800; font-size: 12px; }
+  /* Reserved while unmet, so reaching a goal never shifts the plate. */
+  .goal-plate-done.is-pending { visibility: hidden; }
   .goal-plate.is-achieved { border-color: rgba(91,201,122,.45); }
   .goal-plate.is-achieved .goal-plate-time { color: #a3e0a3; }
   .goal-plate-count { gap: .5rem; }

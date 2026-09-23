@@ -299,6 +299,14 @@ export function parseLooseTime(text) {
   return cs > 0 ? cs : null;
 }
 
+// The words right of the goal time. A typed time's "Custom" says nothing the
+// time does not, so a repeat goal on one shows just "3x streak".
+function plateSourceText(goal) {
+  const repeat = repeatLabel(goal);
+  if (repeat && goal.source && goal.source.kind === "time") return repeat;
+  return [repeat, goalSourceLabel(goal)].filter(Boolean).join(" · ");
+}
+
 /** The plate: the card's PB line (the existing PbTag, still a link) over the
  *  GOAL line, which opens the picker. */
 export function GoalPlate({ goalKey, goal, pbTag, attempts, t, onChanged }) {
@@ -317,9 +325,8 @@ export function GoalPlate({ goalKey, goal, pbTag, attempts, t, onChanged }) {
           onclick=${() => setOpen(!open)}>
         <span class="goal-plate-word">GOAL</span>
         <span class="goal-plate-time">${goalTimeLabel(goal)}</span>
-        ${achieved ? html`<span class="goal-plate-done" aria-label="achieved">✓</span>` : null}
-        <span class="goal-plate-source">${[repeatLabel(goal), goalSourceLabel(goal)]
-          .filter(Boolean).join(" · ")}</span>
+        <span class="goal-plate-done ${achieved ? "" : "is-pending"}" aria-label=${achieved ? "achieved" : null}>✓</span>
+        <span class="goal-plate-source" title=${goalSourceLabel(goal)}>${plateSourceText(goal)}</span>
       </button>
       ${open ? html`<${GoalPicker} goalKey=${goalKey} t=${t} goal=${goal}
           onClose=${() => setOpen(false)} onSaved=${onChanged} />` : null}
