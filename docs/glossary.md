@@ -606,12 +606,22 @@ adapt alongside those choices, and selecting it only changes **[[Rank]] Goal**.
 [[Rank]] alone needs no legend. With players or custom sets selected, pills and
 colored dots identify the winning source; the [[rank]] pill has no remove button.
 
+Automatic is also floored per entry: an entry's goal is the harder of the
+[[scope]]'s Automatic goal and one subdivision above your own [[rank]] on that
+entry's [[ladder]] (capped at its top), so it never shows a goal you already hold.
+
+A **pinned** goal is one threshold set on a single [[star]] or [[segment]] from its
+Practice card: a [[division]], a [[runner]]'s time, or a typed time. It replaces
+that entry's fastest-offer choice everywhere, including its [[Scorecard]] tile,
+until cleared.
+
 Capless 4 through 1 have finite goal times; Capless 5 is the unbounded floor
 and is not a selectable goal.
 
 - **Lives** — `src/sm64_events/server/scorecard_standards.py` resolves the entry identity;
   `src/sm64_events/server/scorecard_goals.py` owns saved selection/set semantics;
-  `src/sm64_events/server/scorecard_api.py` builds targets; `src/sm64_events/ui/components/scorecard.js`
+  `src/sm64_events/server/scorecard_resolve.py` resolves every entry's goal (pins,
+  the Automatic floor); `src/sm64_events/server/scorecard_api.py` serves them; `src/sm64_events/ui/components/scorecard.js`
   presents the controls and inline editor.
 
 ### Scope

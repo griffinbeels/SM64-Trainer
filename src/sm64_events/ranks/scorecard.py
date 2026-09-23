@@ -40,7 +40,8 @@ __all__ = ["SECRET_ROW", "BOWSER_REDS", "SPECIAL_STAR_LABELS", "FIGHTS_LABEL",
            "SECRET_LABEL", "BOWSER_LABEL", "bowser_number",
            "hundred_coin_companion", "template_rows",
            "rows_for_course", "rows_for_route", "without_keys", "card_keys",
-           "automatic_goal", "division_goal_cs", "build_card"]
+           "automatic_goal", "entry_automatic_goal", "division_goal_cs",
+           "build_card"]
 
 _HUNDRED_COIN_SLOT = 6
 
@@ -467,6 +468,27 @@ def automatic_goal(tier: str | None, division: str | None) -> dict:
     return {"kind": "automatic", "tier": RANK_NAMES[-1 - tier_index],
             "division": DIVISION_NUMERALS[division_index]}
 
+
+def entry_automatic_goal(ladder_cs: dict[str, int], you_cs: int | None,
+                         scope_goal: dict) -> dict:
+    """One entry's Automatic goal: the HARDER of the scope's `automatic_goal`
+    and one subdivision above YOUR current rank on this entry's own ladder,
+    so an entry never shows an automatic goal you already hold.
+
+    Your rank is `progress_for_time` -- the grading every rank surface uses --
+    and its `next_*` step is ladder-aware (a ragged ladder never names a tier
+    it does not define); already at the ladder's top, the goal is the top
+    itself. `progression_key` orders the two candidates. With no time or no
+    ladder the scope's goal stands unchanged."""
+    if you_cs is None or not defined_tiers(ladder_cs):
+        return scope_goal
+    progress = progress_for_time(ladder_cs, you_cs)
+    tier = progress["next_tier"] or progress["tier"]
+    division = progress["next_division"] or progress["division"]
+    if (scope_goal.get("tier") is not None and progression_key(
+            scope_goal["tier"], scope_goal["division"]) >= progression_key(tier, division)):
+        return scope_goal
+    return {"kind": "automatic", "tier": tier, "division": division}
 
 def division_goal_cs(ladder_cs: dict[str, int], tier: str, division: str) -> int | None:
     """The slowest displayed centisecond that grades AT LEAST
