@@ -66,14 +66,16 @@ export function goalSourceLabel(goal) {
       : source.label;
     return source.kind === "automatic" ? `Auto · ${rank}` : rank;
   }
+  // A typed time's own words are already the goal line; the source is Custom.
+  if (source.kind === "time") return "Custom";
   return source.label || "";
 }
 
-// "sub 1'45" for a whole-second threshold; the exact time otherwise.
+// The server words a typed time ("sub 1'45" for a whole second); every other
+// goal prints as the plain time.
 export function goalTimeLabel(goal) {
   if (!goal || goal.goal_cs == null) return "—";
-  if (goal.source && goal.source.kind === "time" && goal.goal_cs % 100 === 0)
-    return `sub ${fmtSeconds(goal.goal_cs / 100).replace(/"00$/, "")}`;
+  if (goal.source && goal.source.kind === "time" && goal.source.label) return goal.source.label;
   return fmtCs(goal.goal_cs);
 }
 
@@ -248,7 +250,7 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
       value=${typed} oninput=${(e) => setTyped(e.target.value)} aria-label="Goal time" />
     <button type="submit" class="quiet-button" disabled=${!typedCs || busy}>Set</button>
   </form>`;
-  return html`<${SearchMenu} title="Goal for this star" groups=${groups}
+  return html`<${SearchMenu} title="Pick a goal" groups=${groups}
     onPick=${pick} onClose=${onClose} busy=${busy} error=${error}
     align="right" footer=${footer}
     emptyNote=${options ? "No ranks or players for this one — type a time below." : "Loading…"} />`;

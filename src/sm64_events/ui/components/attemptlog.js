@@ -340,10 +340,11 @@ export function PbTag({ pb, mode, rows, pick, t, strat = null,
   const mark = showCaveat ? caveatOf(pb.caveat) : null;
   // `bare`: the goal plate draws its own "PB" label in a column beside
   // "GOAL", and states the clock once for both lines, so the tag is the time.
+  const shortDisplay = String(pb.display).replace(/^0'/, "");
   if (bare) return html`<span class="pbtag">${pick
     ? html`<a class="pblink" onclick=${jump}
-        title="jump to this PB in the list below">${pb.display}</a>`
-    : pb.display}${mark ? cardBadge(mark) : null}</span>`;
+        title="jump to this PB in the list below">${shortDisplay}</a>`
+    : shortDisplay}${mark ? cardBadge(mark) : null}</span>`;
   return html`<span class="pbtag">PB ${pick
     ? html`<a class="pblink" onclick=${jump}
         title="jump to this PB in the list below">${pb.display}</a>`
