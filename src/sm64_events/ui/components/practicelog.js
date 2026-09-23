@@ -33,11 +33,12 @@ import { StratPicker } from "./stratpicker.js";
 import { StandardsPanel } from "./standards.js";
 import { AttemptTable, AttemptLogEmpty, HideToggle, SortControl,
          ResetFilterToggle, StatMenuTrigger, comparator, ranksAreAtFloor,
-         showsEntityBanner, rankIdentity, PbTag }
+         showsEntityBanner, rankIdentity, PbTag, CrownedIds }
   from "./attemptlog.js";
 import { logTuning, logTuningVars, logTuningClasses, rankPlacementFor,
          nextStepModeFor, NARROW_CONTAINER_PX } from "../logtuning.js";
 import { nestSubsections } from "../subsections.js";
+import { crownedSince, CROWN_MS } from "../pbcrown.js";
 import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
@@ -55,6 +56,30 @@ const html = htm.bind(h);
 // own initiative (see `isCardOpen` below). An uncapped lifetime-scope view
 // therefore renders every entity COLLAPSED but one, not expanded.
 const CARDS_PER_PAGE = 5;
+
+// Attempt ids a live `pb_saved` just made the PB (ui/pbcrown.js), for the
+// rows' one-shot arrival. Absorb-first, like practice.js's new-entry blink:
+// the feed this log mounts onto is history, so a PB saved before it was
+// showing is never celebrated on arrival.
+function useCrownedAttemptIds(t) {
+  const [crownedIds, setCrownedIds] = useState(() => new Set());
+  const seen = useRef(null);
+  useEffect(() => {
+    if (!seen.current) {
+      seen.current = new WeakSet(t.feed || []);
+      return;
+    }
+    const crowned = crownedSince(t.feed, seen.current);
+    if (crowned.length === 0) return;
+    setCrownedIds((prev) => new Set([...prev, ...crowned]));
+    setTimeout(() => setCrownedIds((prev) => {   // per-batch: an effect cleanup
+      const next = new Set(prev);                 // would cancel this batch's
+      crowned.forEach((id) => next.delete(id));   // expiry when the next event
+      return next;                                // lands inside the window
+    }), CROWN_MS);
+  }, [t.feed]);
+  return crownedIds;
+}
 
 // How many attempt rows one page of an OPEN card shows. Real pagination
 // (spec practice-log-entity-cards, amendment A8) -- "we should replace the
@@ -1075,6 +1100,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   };
   const listRef = useRef(null);
   useFeedMotion(listRef, [...page.map(entityKey), "unassigned"]);
+  const crownedIds = useCrownedAttemptIds(t);
   return html`<section class="practice-card log-list-card ${logClasses}"
       style=${logVars} ref=${pageRef}>
     <div class="card-heading attempts-heading">
@@ -1116,11 +1142,11 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
          a layout effect. The unassigned bucket carries a feed key too: it is
          not an entity, but it is a card in this list and it gets pushed down
          like any other physical object in the space. */""}
-    <div class="log-list" ref=${listRef}>
+    <${CrownedIds.Provider} value=${crownedIds}><div class="log-list" ref=${listRef}>
       ${page.map((sec) => cardFor(sec))}
       <${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
         openCompare=${openCompare} />
-    </div>
+    </div></${CrownedIds.Provider}>
     ${sections.length > shown && html`<div class="log-list-footer">
       <button class="quiet-button"
           onclick=${() => setShown(shown + CARDS_PER_PAGE)}>

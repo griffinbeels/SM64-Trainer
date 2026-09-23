@@ -6385,6 +6385,7 @@
     .attempt-table td { display: block; width: auto; border: 0; padding: .12rem .2rem; }
     .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .attempt-delta { text-align: right; }
+    .pb-swap { justify-items: end; }
     .attempt-strategy { min-width: 0; }
     .attempt-actions { display: flex; justify-content: flex-end; }
     .attempt-strategy select { max-width: 104px; }
@@ -7041,9 +7042,131 @@
      declaration on `.other-strat` would REPLACE this one while the class
      is on, and the fade would run in one direction only. A cleared row
      keeps its own stronger dim (`.cleared`, above) whatever its strategy. */
-  .attempt-table tr { transition: opacity var(--log-other-strat-fade, 240ms) ease; }
+  .attempt-table tr { transition: opacity var(--log-other-strat-fade, 240ms) ease,
+                                  --pb-lit var(--log-pb-fade, 700ms) ease,
+                                  --pb-tilt 260ms ease-out; }
   .attempt-table tr.other-strat:not(.cleared) { opacity: var(--log-other-strat-dim, 0.5); }
   @media (prefers-reduced-motion: reduce) { .attempt-table tr { transition: none; } }
+  /* ---- The PB row (task 0147, 2026-09-23) -------------------------------
+     The row that IS its strategy's current personal best: GOLD!! in holo
+     foil where 0.00s was, a gold wash fading left to right, a gold edge
+     ribbon. His ask: "not super distracting, but it should be OBVIOUS...
+     holographic, like a cool pokemon card". attemptlog.js::usePbRow decides
+     which row and when; every number here is a logtuning.js "Personal best"
+     row.
+
+     ONE registered number, --pb-lit (0 = an ordinary row, 1 = the PB),
+     drives the wash, the ribbon and the glow, so the crown arrives and
+     leaves as one transition: a faster PB or an Undo drains the old row
+     back to normal over the same --log-pb-fade it lit up with, riding the
+     row's one `transition` declaration above. The gradients sit on EVERY
+     row at zero strength rather than on `.is-pb`, because a gradient that
+     only exists while the class is on vanishes the instant it comes off --
+     a snap, not a drain. A PB row that MOUNTS lit does not fade in: a new
+     element has no before-state to transition from, which is exactly "do
+     not replay a celebration on arrival".
+
+     The arrival (`.pb-arrive`, one live pb_saved) sweeps one foil glint
+     across the row (--pb-sweep), overshoots the wash to --log-pb-flash and
+     settles, pops the word and twinkles three sparks. --pb-tilt is the
+     pointer's position across the PB row, so the holo moves like a tilted
+     card when he hovers it. */
+  @property --pb-lit { syntax: "<number>"; inherits: true; initial-value: 0; }
+  @property --pb-sweep { syntax: "<percentage>"; inherits: false; initial-value: -40%; }
+  @property --pb-tilt { syntax: "<percentage>"; inherits: true; initial-value: 0%; }
+  @property --pb-drift { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+  .attempt-table tr:not(.replay-row) {
+    background-image:
+      linear-gradient(100deg, transparent calc(var(--pb-sweep) - 9%),
+        rgb(255 205 80 / calc(var(--log-pb-glint, 0.45) * 0.45 * min(var(--pb-lit), 1))) calc(var(--pb-sweep) - 3%),
+        rgb(255 251 235 / calc(var(--log-pb-glint, 0.45) * min(var(--pb-lit), 1))) var(--pb-sweep),
+        rgb(255 205 80 / calc(var(--log-pb-glint, 0.45) * 0.45 * min(var(--pb-lit), 1))) calc(var(--pb-sweep) + 3%),
+        transparent calc(var(--pb-sweep) + 9%)),
+      linear-gradient(115deg, transparent 15%,
+        hsl(300 90% 78% / calc(var(--log-pb-row-holo, 0.06) * var(--pb-lit))) 38%,
+        hsl(190 90% 72% / calc(var(--log-pb-row-holo, 0.06) * var(--pb-lit))) 52%,
+        hsl(55 95% 70% / calc(var(--log-pb-row-holo, 0.06) * var(--pb-lit))) 64%,
+        transparent 85%),
+      linear-gradient(90deg,
+        rgb(255 215 95 / calc(var(--log-pb-tint, 0.14) * var(--pb-lit))),
+        rgb(255 215 95 / calc(var(--log-pb-tint, 0.14) * 0.35 * var(--pb-lit))) 55%,
+        rgb(255 215 95 / 0));
+    background-repeat: no-repeat;
+    background-size: 100% 100%, 250% 100%, 100% 100%;
+    background-position: 0 0, calc(50% + var(--pb-tilt) * 1.5) 0, 0 0;
+  }
+  .attempt-table tr:not(.replay-row) > td:first-child {
+    box-shadow: inset var(--log-pb-edge, 3px) 0 0 rgb(255 215 95 / calc(min(var(--pb-lit), 1)));
+  }
+  .attempt-table tr.is-pb { --pb-lit: 1; }
+  .attempt-table tr.pb-arrive {
+    animation: pbarrive var(--log-pb-arrive, 1400ms) cubic-bezier(.25, .1, .25, 1) both;
+  }
+  /* The arrival REPLACES the new-entry blink rather than stacking on it: an
+     automatic PB lands as a new row and is crowned a beat later, and three
+     gold pulses under a glint read as two things happening. */
+  .attempt-table tr.pb-arrive.row-new td { animation: none; }
+  @keyframes pbarrive {
+    0%   { --pb-lit: 0; --pb-sweep: -40%; }
+    35%  { --pb-lit: var(--log-pb-flash, 1.7); }
+    100% { --pb-lit: 1; --pb-sweep: 140%; }
+  }
+  /* The delta and GOLD!! share one grid cell and exchange SEQUENTIALLY
+     (ui-core: never a crossfade) -- the outgoing one reaches 0 before the
+     incoming one starts, in both directions, by swapping which side waits. */
+  .pb-swap { display: inline-grid; position: relative; vertical-align: middle; }
+  .pb-swap > .pb-swap-num, .pb-swap > .pb-gold { grid-area: 1 / 1; }
+  .pb-swap-num { transition: opacity var(--log-pb-swap, 220ms) ease var(--log-pb-swap, 220ms); }
+  .pb-gold {
+    display: inline-block; opacity: 0;
+    transition: opacity var(--log-pb-swap, 220ms) ease;
+    font-size: 1.12em; font-weight: 800; letter-spacing: .04em; color: var(--gold);
+    background-image:
+      linear-gradient(100deg, hsl(0 0% 100% / 0) 0%,
+        hsl(320 100% 80% / var(--log-pb-holo, 0.6)) 26%,
+        hsl(190 100% 74% / var(--log-pb-holo, 0.6)) 36%,
+        hsl(95 90% 72% / var(--log-pb-holo, 0.6)) 45%,
+        hsl(0 0% 100% / 0) 58%, hsl(0 0% 100% / 0) 100%),
+      linear-gradient(100deg, #b8801c 0%, #ffd75f 14%, #fff3c4 24%, #ffcf4a 34%,
+        #e8a52c 48%, #ffe594 60%, #fff8dc 67%, #ffd75f 80%, #b8801c 100%);
+    background-size: 200% 100%;
+    background-position: calc(var(--pb-drift) + var(--pb-tilt)) 50%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 calc(3px * var(--pb-lit)) rgb(255 196 64 / 0.5));
+    animation: pbdrift var(--log-pb-shimmer, 7000ms) linear infinite;
+  }
+  @keyframes pbdrift { from { --pb-drift: 0%; } to { --pb-drift: 200%; } }
+  tr.is-pb .pb-swap-num { opacity: 0; transition-delay: 0ms; }
+  tr.is-pb .pb-gold { opacity: 1; transition-delay: var(--log-pb-swap, 220ms); }
+  tr.pb-arrive .pb-gold {
+    animation: pbdrift var(--log-pb-shimmer, 7000ms) linear infinite,
+               pbpop var(--log-pb-pop-ms, 650ms) cubic-bezier(.3, .7, .4, 1) var(--log-pb-swap, 220ms) both;
+  }
+  @keyframes pbpop {
+    0%   { transform: scale(0.4); opacity: 0; }
+    55%  { transform: scale(var(--log-pb-pop, 1.3)); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .pb-spark {
+    position: absolute; font-style: normal; font-size: 12px; line-height: 1;
+    color: #fff8dc; pointer-events: none; opacity: 0;
+    text-shadow: 0 0 5px rgb(255 215 95 / .95);
+    animation: pbspark 900ms ease-out both;
+  }
+  .pb-spark:nth-of-type(1) { left: -11px; top: -9px; animation-delay: 380ms; }
+  .pb-spark:nth-of-type(2) { right: -12px; top: -6px; font-size: 9px; animation-delay: 520ms; }
+  .pb-spark:nth-of-type(3) { right: 10px; bottom: -10px; font-size: 10px; animation-delay: 660ms; }
+  @keyframes pbspark {
+    0%   { opacity: 0; transform: scale(0) rotate(0deg); }
+    40%  { opacity: var(--log-pb-sparkle, 1); transform: scale(1) rotate(60deg); }
+    100% { opacity: 0; transform: scale(.3) rotate(120deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pb-gold, .attempt-table tr.pb-arrive, tr.pb-arrive .pb-gold { animation: none; }
+    .pb-swap-num, .pb-gold { transition: none; }
+    .pb-spark { display: none; }
+  }
   /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the
      subsection should appear WITHIN the star's practice log entry as a
      sub-entry... indented a bit so it's clear that it's owned by the parent

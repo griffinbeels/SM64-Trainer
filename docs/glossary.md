@@ -353,7 +353,8 @@ so every [[strategy]] holds its own, and the [[practice log]] shows whichever
 [[strategy]] you have selected.
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
-  → the PB tag on the [[practice log]]
+  → the PB tag on the [[practice log]], and the gold GOLD!! row that marks
+  the [[attempt]] itself (`src/sm64_events/ui/components/attemptlog.js`)
 
 ### Automatic PB
 
