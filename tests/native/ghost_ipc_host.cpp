@@ -394,9 +394,11 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.revision=4;refused(page,r,GIPC_PROTOCOL);r.revision=3;refused(page,r,GIPC_PROTOCOL);
         r.revision=4;refused(page,r,GIPC_PROTOCOL);check(last_command().revision==five,"rejected requests cannot lower high-water");
         r.revision=6;ready(page,r);
-        r.revision=7;r.play_enabled=0;const auto withdrawn=withdrawals.load();page.send(r);
+        r.revision=7;r.play_enabled=0;const auto withdrawn=withdrawals.load(),kept=released_ids[1].load();page.send(r);
         page.wait([&](const gipc_status& s){return s.ack_revision==7 && s.state==GIPC_CAPTURING;},"playback stop keeps capture");
-        check(withdrawals.load()>withdrawn,"playback disable withdraws without discarding assets");
+        // Switched off, nothing is listed to draw: its clips' storage goes too.
+        page.wait([&](const gipc_status&){return released_ids[1].load()>kept;},"playback disable releases its clips");
+        check(withdrawals.load()>withdrawn,"playback disable withdraws");
         // Replacing a selected clip reuses this ROM generation's prepared copy.
         // Removing the fixture image now would make a fresh discovery fail.
         rom[0]=0;
@@ -438,7 +440,11 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         bad=r;bad.revision=20;bad.occlusion_fade=2;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=21;bad.volume=1.25f;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=22;bad.reserved3=1;refused(page,bad,GIPC_PROTOCOL);
+        // The protocol refusals retired the model, and the worker holds no
+        // cartridge once a model is built: rebuilding reads the cartridge again.
+        rom[0]=0x40;const auto before_rebuild=rom_validations.load();
         r.revision=23;ready(page,r);
+        check(rom_validations.load()>before_rebuild,"a retired model is rebuilt from a fresh cartridge read");
         r.revision=24;r.owner_created_lo^=1;refused(page,r,GIPC_OWNER_GONE);
         r.owner_created_lo^=1;r.token=124;r.revision=1;ready(page,r);
         // Reproduce the reader owning the page exactly when lease expiry must
@@ -482,6 +488,21 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         refused(page,r,GIPC_ROM);
         for(unsigned i=0;i<4;++i){Sleep(25);refused(page,r,GIPC_ROM);}
         rom[0]=0x40;r.revision=2;ready(page,r);
+        // The worker keeps neither the cartridge nor a clip's file once playback
+        // holds its copies: a lost renderer context rebuilds both from fresh
+        // reads. With the files moved away that read is refused; back, it shows.
+        {
+            const unsigned discoveries=rom_validations.load(),built=models.load();
+            const wchar_t* files[]={argv[1],argv[4],argv[6]};wchar_t away[3][MAX_PATH]{};
+            for(unsigned i=0;i<3;++i){std::swprintf(away[i],MAX_PATH,L"%ls.away",files[i]);
+                check(MoveFileW(files[i],away[i])!=FALSE,"clip file moved away");}
+            model_state=GP_MODEL_EMPTY; // the renderer lost its context
+            page.wait([](const gipc_status& s){return s.state==GIPC_REFUSED && s.reason==GIPC_FILE;},
+                "a lost copy is read from disk again");
+            for(unsigned i=0;i<3;++i)check(MoveFileW(away[i],files[i])!=FALSE,"clip file restored");
+            r.revision=3;ready(page,r);
+            check(rom_validations.load()>discoveries && models.load()>built,"the model is rebuilt from a fresh cartridge read");
+        }
         ghost_ipc::rom(false);page.stopped();
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
         check(audio_starts.load()>=1 && audio_stops.load()==audio_starts.load(),"every sound engine stopped with its ROM");

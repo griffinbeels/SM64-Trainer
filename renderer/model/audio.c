@@ -52,15 +52,18 @@ int32_t sa_open(const uint8_t *rom, size_t bytes) {
     if (!rom || bytes != SA_ROM_BYTES) return SA_ARGUMENT;
     if (!header(rom, SA_CTL_OFFSET, SA_TBL_OFFSET, 1) || !header(rom, SA_TBL_OFFSET, SA_SEQ_OFFSET, 2)
             || !header(rom, SA_SEQ_OFFSET, SA_BANKS_OFFSET, 3)) return SA_INVALID_ROM;
-    copy = malloc(bytes);
+    /* Only the sound data: the banks (CTL), samples (TBL), sequences and bank
+     * sets run from SA_CTL_OFFSET to the cartridge's end, 2.5 MB of its 8 MB,
+     * in PJ64's 2 GiB. Everything the engine reads is inside it. */
+    copy = malloc(SA_SOUND_BYTES);
     if (!copy) return SA_MEMORY;
-    memcpy(copy, rom, bytes);
-    gSoundDataADSR = ctl = parse_seqfile(copy + SA_CTL_OFFSET);
-    gSoundDataRaw = tbl = parse_seqfile(copy + SA_TBL_OFFSET);
-    gMusicData = seq = parse_seqfile(copy + SA_SEQ_OFFSET);
+    memcpy(copy, rom + SA_CTL_OFFSET, SA_SOUND_BYTES);
+    gSoundDataADSR = ctl = parse_seqfile(copy);
+    gSoundDataRaw = tbl = parse_seqfile(copy + (SA_TBL_OFFSET - SA_CTL_OFFSET));
+    gMusicData = seq = parse_seqfile(copy + (SA_SEQ_OFFSET - SA_CTL_OFFSET));
     if (!ctl || !tbl || !seq || !gCtlSeqs) { release(); return SA_MEMORY; }
     /* Upstream's bank-set fixup, inside the region it was checked against. */
-    gBankSetsData = copy + SA_BANKS_OFFSET;
+    gBankSetsData = copy + (SA_BANKS_OFFSET - SA_CTL_OFFSET);
     memmove(gBankSetsData + 0x45, gBankSetsData + 0x44, 0x5B);
     gBankSetsData[0x45] = 0x00;
     ptrs_to_offsets(ctl);

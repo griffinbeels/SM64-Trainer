@@ -126,10 +126,17 @@ struct Session {
     uint64_t applied = 0, attempted = 0, failed = 0;
     uint32_t last_dropped = 0;
     bool live = false, awaiting_configuration = false, rom_ready = false;
+    // The cartridge is held only until the model is built from it (and the
+    // sound engine has taken its own copy); the digest stays. A rebuild after
+    // a context loss reads it again. In PJ64's 2 GiB, 8 MB a session.
     std::vector<uint8_t> rom_bytes;
     uint32_t cached_rom_generation = 0;
+    uint64_t built_model = 0; // the model id playback built from rom_bytes
     // One validated file per listed clip, keyed by id+SHA. Its playback copy
-    // survives set changes; only a removed clip is released.
+    // survives set changes; only a removed clip is released. The file's bytes
+    // are dropped once playback holds its copy (the id, SHA and header stay):
+    // clips were held twice, up to 2 x GP_CLIP_BUDGET. A lost copy is read
+    // from disk again and checked against the same SHA.
     struct Asset {
         uint8_t id[16]{}, sha256[32]{};
         gclip_header header{};
@@ -162,7 +169,41 @@ struct Session {
                 return &asset;
         return nullptr;
     }
-    void forget_prepared() { for (auto &asset : assets) asset.prepared = false; }
+    void forget_prepared() {
+        bool reread = false;
+        for (auto &asset : assets) { asset.prepared = false; reread |= asset.bytes.empty(); }
+        if (reread) attempted = 0; // this revision loads again, from disk
+    }
+    void release_all() {
+        for (const auto &asset : assets) play->release_clip(asset.id);
+        assets.clear();
+    }
+    // Playback's model is gone (revoked, retired or its context lost). The
+    // worker no longer holds the cartridge it was built from, so the very next
+    // pass reads it again rather than first asking playback and finding out.
+    void model_retired() {
+        built_model = 0;
+        if (rom_bytes.empty() && rom_ready) { rom_ready = false; attempted = 0; }
+    }
+    void release_rom_bytes() {
+        if (!rom_bytes.empty()) SecureZeroMemory(rom_bytes.data(), rom_bytes.size());
+        std::vector<uint8_t>().swap(rom_bytes);
+    }
+    // The built model, without the cartridge in hand: playback still holds
+    // the one it built. Otherwise the cartridge is read again to rebuild it.
+    int model_ready(const gipc_request &r) {
+        if (!rom_bytes.empty()) {
+            const int result = play->prepare_model(r.model_id, rom_bytes.data(), static_cast<uint32_t>(rom_bytes.size()));
+            if (result == GP_OK) { built_model = r.model_id; release_rom_bytes(); }
+            return result;
+        }
+        gp_status status{};
+        if (built_model == r.model_id && play->status(&status, sizeof(status)) == GP_OK
+                && (status.model_state == GP_MODEL_READY || status.model_state == GP_MODEL_RENDER_OWNED))
+            return GP_OK;
+        built_model = 0; rom_ready = false; attempted = 0; // rebuild from a fresh read
+        return GP_BUSY;
+    }
     uint32_t prepared_count(const gipc_request &r) {
         uint32_t count = 0;
         for (uint32_t i = 0; i < r.clip_count; ++i) { auto *asset = find(r.clips[i]); count += asset && asset->prepared; }
@@ -170,7 +211,10 @@ struct Session {
     }
     bool needs_load(const gipc_request &r) {
         if (!rom_ready || !same_rom(r, loaded)) return true;
-        for (uint32_t i = 0; i < r.clip_count; ++i) if (!find(r.clips[i])) return true;
+        for (uint32_t i = 0; i < r.clip_count; ++i) {
+            const auto *asset = find(r.clips[i]);
+            if (!asset || (!asset->prepared && asset->bytes.empty())) return true;
+        }
         return false;
     }
     // A clip that left the set stops drawing at the next render boundary;
@@ -195,7 +239,7 @@ struct Session {
         // a later generation's discovery could mistake for the live image.
         if (!rom_bytes.empty()) SecureZeroMemory(rom_bytes.data(), rom_bytes.size());
         std::vector<uint8_t>().swap(rom_bytes);
-        cached_rom_generation = 0; rom_ready = false;
+        cached_rom_generation = 0; rom_ready = false; built_model = 0;
         cartridge_verified = false;
         std::memset(cartridge_digest,0,sizeof(cartridge_digest));
     }
@@ -236,7 +280,7 @@ struct Session {
         else if(previous.token) recovery_cache.clear();
         recovery.clear();
         capture->disable();
-        if (live || applied) play->revoke(why);
+        if (live || applied) { play->revoke(why); model_retired(); }
         live = false; applied = 0; configuration = 0; awaiting_configuration = false;
         forget_prepared();
         origins.clear();
@@ -294,7 +338,7 @@ struct Session {
             // path which retires this Session and starts a replacement worker.
             if(rom && rom!=current_rom)park_recovery(true);
             const bool same_cartridge=rom && rom==current_rom && rom_ready;
-            play->revoke(GP_WRONG_IDENTITY);
+            play->revoke(GP_WRONG_IDENTITY); model_retired();
             forget_prepared();
             origins.clear();
             have_origin = false;
@@ -333,23 +377,27 @@ struct Session {
         gp_status playback{};
         if (applied && play->status(&playback, sizeof(playback)) == GP_OK
                 && (playback.decision == GP_CONTEXT_LOST || playback.model_state == GP_MODEL_EMPTY)) {
-            applied = 0; forget_prepared();
+            applied = 0; forget_prepared(); model_retired();
         }
         if (!r.play_enabled) {
             if (applied) play->withdraw();
+            // Nothing listed to draw: its clips' storage is released, not kept
+            // for a later switch-on (which reads the files again).
+            release_all();
             recovery.clear();have_origin=false;
             applied = 0;
         } else if (!needs_load(r) && configuration) {
             // A suspended owner (the tracker's arm ended) keeps the command
             // applied, marked suspended: the renderer hides it, and a state
             // load it resolves brings it back on the load frame.
-            const int model = play->prepare_model(r.model_id, rom_bytes.data(), static_cast<uint32_t>(rom_bytes.size()));
+            const int model = model_ready(r);
             int clip = GP_OK;
             for (uint32_t i = 0; i < r.clip_count; ++i) {
                 auto *asset = find(r.clips[i]);
                 if (asset->prepared) continue;
                 const int result = play->prepare_clip(&asset->header, asset->frames());
                 asset->prepared = result == GP_OK;
+                if (asset->prepared) std::vector<uint8_t>().swap(asset->bytes); // playback holds its copy
                 if (result != GP_OK && (clip == GP_OK || result == GP_INVALID)) clip = result;
             }
             // The old command may keep drawing only while it means the same thing.
@@ -423,7 +471,8 @@ struct Session {
         for (const auto &asset : assets) total += asset.bytes.size();
         for (uint32_t i = 0; i < loaded.clip_count; ++i) {
             const auto &clip = loaded.clips[i];
-            if (find(clip)) continue;
+            Asset *known = find(clip);
+            if (known && (known->prepared || !known->bytes.empty())) continue;
             Asset asset;
             std::memcpy(asset.id, clip.clip_id, 16); std::memcpy(asset.sha256, clip.clip_sha256, 32);
             // Memory running out while reading or upgrading is room, not a bad file.
@@ -438,6 +487,8 @@ struct Session {
             if (total > GP_CLIP_BUDGET + uint64_t(GIPC_GHOSTS) * sizeof(gclip_header)) {
                 failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
             }
+            // A copy playback lost is read back into its own entry.
+            if (known) { known->header = asset.header; known->bytes.swap(asset.bytes); continue; }
             // Out of memory in PJ64's 2 GiB is a refusal of this set, never a
             // throw into the worker's last-resort handler (which revokes all).
             try { assets.push_back(std::move(asset)); }
