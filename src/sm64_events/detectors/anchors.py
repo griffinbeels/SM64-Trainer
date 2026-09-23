@@ -32,6 +32,9 @@ state_loaded — savestate / Usamune section-state load: gGlobalTimer jumps
   tools/score_state_loads.py):
     - "frame_counter_rewound": gGlobalTimer went backward (the full-RAM
       restore above, and the only shape journaled before this date);
+    - "frame_counter_skipped_ahead": gGlobalTimer went FORWARD further than
+      the wall clock allows -- a Project64 state from an earlier boot loaded
+      after a restart (FRAME_SPEEDUP_ALLOWANCE carries the measurement);
     - "igt_rewound": gGlobalTimer ran on while Usamune's counter went
       BACKWARD to a value no restart can reach -- above the reset band AND
       above the frames that passed since the last poll (a restart plus a
@@ -296,6 +299,17 @@ PAUSE_WARP_MIN_STREAK = 5  # walked load echoes pause 0-3 frames, menu warps 13+
 # ends (tools/verify_death_clock.py READ_SKEW_FRAMES is 1 per end). That is the
 # whole tolerance for "the counter moved further than the game did".
 LOAD_SKEW_FRAMES = 2
+# A Project64 state saved in an EARLIER boot of the game puts the frame counter
+# FORWARD when loaded after a restart (his 2026-06-11 BitDW practice: boot at
+# frame 96, F7 to a state at 1763 -- journal ids 17790 and 17834). The counter
+# can only outrun the wall clock that far by a load: a 30 fps game at up to
+# FRAME_SPEEDUP_ALLOWANCE times normal speed, plus FRAME_JUMP_SLACK frames of
+# poll jitter. Measured before shipping: the worst consecutive pair in every
+# picture ledger ran 2.65x (one frame in 11 ms), every journal's 99.9th
+# percentile under 2.8x, and the only pairs over this rule were those two loads.
+FRAME_SPEEDUP_ALLOWANCE = 4
+FRAME_JUMP_SLACK = 30
+GAME_FPS = 30
 # The pairing windows and the destination-area rule live in
 # `detectors/counter_epoch.py` since 2026-08-04 — igt_clock.py needs the SAME
 # answer to know whether the counter it is reading measures a whole star or one
@@ -319,6 +333,10 @@ def load_signature(prev: GameSnapshot, curr: GameSnapshot) -> str | None:
     frames = curr.global_timer - prev.global_timer
     if frames < 0:
         return None if curr.global_timer < BOOT_TIMER_MAX else "frame_counter_rewound"
+    elapsed = (curr.wall_time_utc - prev.wall_time_utc).total_seconds()
+    if frames > (max(elapsed, 0.0) * GAME_FPS * FRAME_SPEEDUP_ALLOWANCE
+                 + FRAME_JUMP_SLACK):
+        return "frame_counter_skipped_ahead"
     moved = curr.igt_overall - prev.igt_overall
     if (moved < 0 and prev.igt_overall < IGT_WRAP_CEILING
             and curr.igt_overall > max(NEAR_ZERO_IGT, frames + LOAD_SKEW_FRAMES)):
@@ -537,7 +555,7 @@ class AnchorDetector:
         if curr.global_timer < prev.global_timer and curr.global_timer < BOOT_TIMER_MAX:
             return []  # console reset — GameResetDetector owns this
         signature = load_signature(prev, curr)
-        if signature == "frame_counter_rewound":
+        if signature in ("frame_counter_rewound", "frame_counter_skipped_ahead"):
             return [self._state_loaded(prev, curr, signature, frames_since_door,
                                        frames_since_dialog, observed)]
         if (curr.igt_overall < prev.igt_overall

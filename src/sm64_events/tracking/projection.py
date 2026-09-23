@@ -251,6 +251,8 @@ Caveats (hard-won — keep these current):
         closes nothing, the open attempt counts it (`state_loads`,
         `first_load_frame`), and with nothing open it opens an attempt
         that can never be valid. Dust tricks before it stay with the run.
+        So does play before it: a reset that closes the attempt counts as
+        acted when he played anywhere in it, not only since the last load.
       * every attempt is JUDGED: `valid` True/False and `invalid_reason`
         (`save_state` | `subarea_reset` | `no_reset`, the keys
         tracking/caveats.py words). A STAR is valid only from a full reset
@@ -846,6 +848,7 @@ class Projector:
         self._open_judged = False        # the open attempt was opened under rules 2, so it can be judged
         self._open_verdict: str | None = None  # why the open attempt did not start at the course start, or None
         self._open_loads = 0             # save-state loads the open attempt ran through
+        self._open_acted_before_load = False  # he played before one of them
         self._open_first_load_frame: int | None = None
         self._open_prev_anchor_utc: str | None = None
         self._open_level: int | None = None
@@ -1678,9 +1681,10 @@ class Projector:
             # walked on from the last one's finish (`no_reset`).
             verdict = "no_reset" if involuntary else self._reset_verdict(ev)
             self._anchor_verdicts[ev.id] = verdict
-            closed = self._dispatch(ev)
-            if self._open is ev:
-                self._opened(ev, verdict, prev_anchor_utc)
+            row = self._acted_through_loads(ev)
+            closed = self._dispatch(row)
+            if self._open is row:
+                self._opened(row, verdict, prev_anchor_utc)
             return closed
         closed = self._dispatch(ev)
         if ev.type == "session_started":
@@ -1691,6 +1695,19 @@ class Projector:
         elif ev.type == "level_changed":
             self._entry_frame, self._entry_area = ev.frame, None
         return closed
+
+    def _acted_through_loads(self, ev):
+        """The reset closing a rules-2 attempt that ran through a load, seen
+        with the attempt's WHOLE activity. The detector's `mario_acted` means
+        "since the last anchor", and a load is an anchor to it (the segment
+        matcher needs exactly that), so "reset, play, load, reset without
+        moving" arrived unacted and the no-op discard threw away an attempt
+        he really played -- and its replay with it (review 2026-09-23)."""
+        if (self._rules >= 2 and ev.type == "practice_reset"
+                and self._open is not None and self._open_acted_before_load
+                and not ev.payload.get("mario_acted", True)):
+            return _CorrectedRow(ev, {**ev.payload, "mario_acted": True})
+        return ev
 
     def _run_through_load(self, ev, prev_anchor_utc) -> list[Attempt]:
         """A save-state load is not a retry (caveat 21, his ruling
@@ -1709,6 +1726,12 @@ class Projector:
         if not self._open_loads:
             self._open_first_load_frame = ev.frame
         self._open_loads += 1
+        # He played before this load, whatever happens after it. The load's
+        # own `mario_acted` covers the stretch since the last anchor, which
+        # is this attempt's only when the attempt was already running.
+        self._open_acted_before_load = (
+            self._open_acted_before_load or self._open_acted
+            or (self._open is not ev and bool(ev.payload.get("mario_acted"))))
         if ev.payload.get("load_signature") == "frame_counter_rewound":
             self._clock_origin = ev
         return []
@@ -2021,6 +2044,7 @@ class Projector:
         self._open_loads = 0
         self._open_first_load_frame = None
         self._open_prev_anchor_utc = prev_anchor_utc
+        self._open_acted_before_load = False
         self._open_level = self._level
         self._clock_origin = None
 
