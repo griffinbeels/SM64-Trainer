@@ -157,8 +157,10 @@ bool atlas(sg_atlas_view *out, uint64_t *model_id);
  * A star generation change or live star grab ends the shared origin and every
  * ghost; tuning the same origin cannot revive it. With star_ends, FOLLOW also
  * hides each ghost at its own first recorded valid star action coordinate
- * after nudge (including duplicate/refused poses). This recorded cutoff moves
- * with nudge; FIXED ignores both end policies. A new continuity refuses until
+ * after nudge (including duplicate/refused poses), unless its clip carries a
+ * dance tail: that ghost keeps drawing through its grab and dance, then holds
+ * the last pose and fades (body, shadow, sound) over GP_STAR_FADE_FRAMES.
+ * This recorded cutoff moves with nudge; FIXED ignores both end policies. A new continuity refuses until
  * a witnessed recovery offset binds: the renderer runs the worker's same
  * ghost_origin::Recovery over its live samples, so a state load it can resolve
  * draws on its own frame, and the worker's next command confirms or replaces
@@ -178,6 +180,10 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &,
  * gain of min(1, GP_SOUND_NEAR / d) -- inverse-square INTENSITY -- d its world distance from live
  * Mario (1 while live Mario's pose is unknown). */
 #define GP_SOUND_CATCHUP 90u
+/* Tuning: a ghost whose clip carries its star dance (GCLIP_DANCE_TAIL) fades
+ * out over this many frames after its last recorded dance frame (15 = 0.5 s),
+ * holding that pose; its sounds fade with it and are silent once it hides. */
+#define GP_STAR_FADE_FRAMES 15u
 #define GP_SOUND_NEAR 400.0f /* tuning: full gain within 2.5 Mario heights (160 units each) */
 struct SoundSink {
     void (__cdecl *cue)(uint32_t ghost, uint32_t sound_bits);

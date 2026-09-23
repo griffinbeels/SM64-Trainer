@@ -11,6 +11,9 @@
 #define GCLIP_MAX_RECORDS 200000u
 #define GCLIP_WORLD_READY 3u
 enum gclip_clock_kind { GCLIP_STAR_CLOCK = 1u, GCLIP_SEGMENT_CLOCK = 2u };
+/* Header flag, star clips only: the records after the attempt's closing frame
+ * are Mario's star grab and dance, kept for display (the dance tail). */
+#define GCLIP_DANCE_TAIL 1u
 #pragma pack(push, 4)
 typedef struct gclip_header {
     char magic[8];

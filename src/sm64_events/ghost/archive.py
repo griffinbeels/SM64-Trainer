@@ -2,6 +2,7 @@
 
 Every row retains its immutable renderer occurrence. UTC narrows the possible
 capture epoch; exact game-frame endpoints bind an attempt, never a nearest row.
+A star attempt's export also keeps its dance tail (`dance_tail`).
 """
 from __future__ import annotations
 
@@ -13,13 +14,53 @@ import math
 from pathlib import Path
 import sqlite3
 import threading
+import time
 from types import SimpleNamespace
 
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.clip import (
     ELAPSED_VALID, RAW_VALID, STAR_CLOCK, CLOCK_KINDS, MAX_RECORDS,
-    ClipError, attempt_origin, frame_from_bytes, producer_values, write_clip,
+    ClipError, Frame, attempt_origin, frame_from_bytes, producer_values, write_clip,
 )
+from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
+
+# His ask, 2026-09-23: the ghost stays on screen through its own star grab and
+# dance, then fades. A star attempt closes at x-cam (the dance's first frame),
+# so its clip keeps the frames after that through the dance's end: display
+# only, the attempt's origin and closing frame are unchanged. Measured dances
+# run about 100-125 frames past x-cam (the exit dance, and the longer no-exit
+# one); the cap keeps a stuck or unusual tail bounded.
+DANCE_TAIL_MAX_FRAMES = 180
+# Export can run the moment the attempt closes, before the dance is recorded;
+# it waits for the dance to end, for the recording to stall or close, or for
+# the cap's own duration plus a second, whichever comes first.
+DANCE_TAIL_WAIT_S = DANCE_TAIL_MAX_FRAMES / 30 + 1
+DANCE_TAIL_STALL_S = 1.0
+
+
+def dance_tail(close: Frame, candidates) -> tuple[list[bytes], bool]:
+    """Rows after the closing frame through the end of Mario's star dance,
+    and whether that end was seen. The dance ends at the first row that leaves
+    the grab/dance actions, stops the game clock (the exit warp freezes it),
+    breaks the clip's timing (reset, state load, new star), changes scene, or
+    passes DANCE_TAIL_MAX_FRAMES. A repeated occurrence of the same frame is
+    kept, as inside the attempt."""
+    tail, last = [], close
+    for raw in candidates:
+        frame = frame_from_bytes(raw)
+        repeat = (frame.global_timer, frame.clock.elapsed_frames) == (last.global_timer, last.clock.elapsed_frames)
+        if (frame.global_timer > close.global_timer + DANCE_TAIL_MAX_FRAMES
+                or frame.live_action not in STAR_GRAB_ACTIONS
+                or frame.clock.valid & (RAW_VALID | ELAPSED_VALID) != RAW_VALID | ELAPSED_VALID
+                or (frame.clock.continuity_id, frame.clock.origin_id, frame.level, frame.area)
+                != (close.clock.continuity_id, close.clock.origin_id, close.level, close.area)
+                or frame.qpc < last.qpc
+                or not (repeat or (frame.global_timer > last.global_timer
+                                   and frame.clock.elapsed_frames > last.clock.elapsed_frames))):
+            return tail, True
+        tail.append(raw)
+        last = frame
+    return tail, False
 
 
 def _utc(value: str) -> float:
@@ -34,7 +75,8 @@ def _utc(value: str) -> float:
 
 class PoseArchive:
     def __init__(self, path: Path, *, max_records: int = MAX_RECORDS,
-                 retention_s: float | None = 7200, boundary_slack_s: float = 1):
+                 retention_s: float | None = 7200, boundary_slack_s: float = 1,
+                 dance_wait_s: float = DANCE_TAIL_WAIT_S, dance_stall_s: float = DANCE_TAIL_STALL_S):
         if type(max_records) is not int or not 1 <= max_records <= MAX_RECORDS:
             raise ValueError("pose archive record bound is invalid")
         if ((retention_s is not None and (not math.isfinite(retention_s) or retention_s <= 0))
@@ -43,6 +85,7 @@ class PoseArchive:
         self.path = Path(path)
         self.max_records, self.retention_s = max_records, retention_s
         self.boundary_slack_s = boundary_slack_s
+        self.dance_wait_s, self.dance_stall_s = dance_wait_s, dance_stall_s
         self._lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(self.path, check_same_thread=False)
@@ -169,10 +212,33 @@ class PoseArchive:
         # The immutable copy survives pruning or recorder detach during publication.
         if kind == STAR_CLOCK and frame_from_bytes(rows[0][0]).igt > NEAR_ZERO_IGT:
             raise ClipError("star origin has no canonical near-zero native clock witness")
-        manifest = write_clip(destination, tuple(row[0] for row in rows), SimpleNamespace(**source), clock_kind=kind)
+        close = frame_from_bytes(rows[-1][0])
+        tail = (self._dance_tail(identity, last, close)
+                if kind == STAR_CLOCK and close.live_action in STAR_GRAB_ACTIONS else [])
+        manifest = write_clip(destination, tuple(row[0] for row in rows) + tuple(tail),
+                              SimpleNamespace(**source), clock_kind=kind, tail_records=len(tail))
         return {**manifest, "attempt_id": attempt.id, "session_id": attempt.session_id,
                 **origin,
                 "target": dict(target) if target else None}
+
+    def _dance_tail(self, identity: str, after: str, close: Frame) -> list[bytes]:
+        """Wait, bounded, for the recorder to capture the dance; outside the
+        lock between looks so capture keeps committing."""
+        deadline = time.monotonic() + self.dance_wait_s
+        seen, moved = -1, time.monotonic()
+        while True:
+            with self._reader() as db:
+                recording = self._db is not None
+                candidates = [row[0] for row in db.execute(
+                    "SELECT data FROM poses WHERE producer=? AND sequence>? ORDER BY sequence LIMIT ?",
+                    (identity, after, 4 * DANCE_TAIL_MAX_FRAMES))]
+            tail, ended = dance_tail(close, candidates)
+            now = time.monotonic()
+            if len(candidates) != seen:
+                seen, moved = len(candidates), now
+            if ended or not recording or now >= deadline or now - moved >= self.dance_stall_s:
+                return tail
+            time.sleep(0.1)
 
     def status(self) -> dict:
         with self._reader() as db:

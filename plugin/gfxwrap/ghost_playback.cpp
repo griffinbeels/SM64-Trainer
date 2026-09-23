@@ -285,7 +285,8 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
             || h.rom_layout!=GC_ROM_US || h.sample_version!=GC_VERSION || !h.configuration || !h.epoch
             || !nonzero_id(h.clip_id) || !h.qpc_frequency || h.qpc_anchor<0
             || !std::isfinite(h.utc_anchor) || h.utc_anchor<=0
-            || h.level<4 || h.level>36 || h.area<1 || h.area>8 || h.flags
+            || h.level<4 || h.level>36 || h.area<1 || h.area>8 || (h.flags&~GCLIP_DANCE_TAIL)
+            || (h.flags && h.clock_kind!=GCLIP_STAR_CLOCK)
             || h.reserved[0] || h.reserved[1] || !frames
             || (h.clock_kind!=GCLIP_STAR_CLOCK && h.clock_kind!=GCLIP_SEGMENT_CLOCK)
             || !h.origin_continuity || h.origin_raw>UINT16_MAX) return false;
@@ -598,16 +599,24 @@ float sound_gain(const gc_sample& live,const float ghost[3]) {
     return squared>reach*reach ? float(reach/std::sqrt(squared)) : 1.0f; // NaN compares false: full gain
 }
 // Where a visible ghost sounds from this frame; before its cues, so a new
-// sound starts at the ghost's current place.
-void place(uint32_t index,const gc_sample& live,const float ghost[3]) {
+// sound starts at the ghost's current place. fade follows its star-dance fade.
+void place(uint32_t index,const gc_sample& live,const float ghost[3],float fade) {
     const auto *sink=sound_sink.load(std::memory_order_acquire);
     if(!sink || !sink->place)return;
     float relative[3]{};
     if(!ghost_pose::camera_relative(model.value,live.camera,ghost,relative))relative[0]=relative[1]=relative[2]=0;
-    sink->place(index,relative,sound_gain(live,ghost));
+    sink->place(index,relative,sound_gain(live,ghost)*fade);
 }
+// A ghost whose dance has faded out: its sounds still playing fade with it.
+void silence(uint32_t index) {
+    const auto *sink=sound_sink.load(std::memory_order_acquire);
+    const float centre[3]{};
+    if(sink && sink->place)sink->place(index,centre,0.0f);
+}
+// fade: 1 normally; after a dance tail's last record it falls by
+// 1/GP_STAR_FADE_FRAMES a frame on the held last pose, and is 0 once hidden.
 uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
-                ghost_compositor::Pose& out,uint32_t& record) {
+                ghost_compositor::Pose& out,uint32_t& record,float& fade) {
     const Clip *clip=bound[index];
     if(!clip)return GP_PREPARING;
     const auto &h=clip->header;
@@ -617,15 +626,25 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     const uint64_t last=clip_coordinate(*clip,clip->index_count-1);
     // Before-start clamps to the first pose, including when that pose already
     // carries a touch. Unlike the live-end latch, this moves with the nudge.
-    if(have_touch[index] && (target>=touch[index] || first>=touch[index]))return GP_STAR_ENDED;
-    if(target>last)return GP_AFTER_END;
+    // A clip with a dance tail keeps its ghost through its own grab and dance
+    // instead, then fades it out over GP_STAR_FADE_FRAMES from its last record.
+    const bool dances=have_touch[index] && (h.flags&GCLIP_DANCE_TAIL);
+    if(have_touch[index] && (first>=touch[index] || (!dances && target>=touch[index])))return GP_STAR_ENDED;
+    uint64_t at=target;
+    if(target>last) {
+        if(!dances)return GP_AFTER_END;
+        const uint64_t past=target-last;
+        if(past>=GP_STAR_FADE_FRAMES) {fade=0;return GP_STAR_ENDED;}
+        fade=float(GP_STAR_FADE_FRAMES-past)/float(GP_STAR_FADE_FRAMES);
+        at=last; // the dance's final pose, held while it fades
+    }
     uint32_t lo=0,hi=clip->index_count;
     while(lo<hi) {
         const uint32_t middle=lo+(hi-lo)/2;
-        if(clip_coordinate(*clip,middle)<target)lo=middle+1;else hi=middle;
+        if(clip_coordinate(*clip,middle)<at)lo=middle+1;else hi=middle;
     }
     const auto &selected=clip->frames[lo];
-    if(!frame.below_zero && target>=first && clip_coordinate(*clip,lo)!=target) {gaps.fetch_add(1);return GP_GAP;}
+    if(!frame.below_zero && at>=first && clip_coordinate(*clip,lo)!=at) {gaps.fetch_add(1);return GP_GAP;}
     if(live.level!=selected.sample.level || live.area!=selected.sample.area)return GP_WRONG_SCENE;
     if(!sequence_reported) {
         report.selected_sequence_lo=uint32_t(selected.sample.sequence);
@@ -637,7 +656,7 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     recorded.configuration=selected.configuration;recorded.sample=selected.sample;
     recorded.world.status=selected.world_status;
     evaluations.fetch_add(1);
-    float opacity=active_request.opacity;
+    float opacity=active_request.opacity*fade;
     if(active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE))
         opacity*=ghost_proximity::factor(live.pose.position,live.pose.scale,
             selected.sample.pose.position,selected.sample.pose.scale,active_request.proximity_distance);
@@ -805,8 +824,8 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     uint32_t summary=GP_DISABLED;bool before_start=true;
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
-        ghost_compositor::Pose pose{};uint32_t record=0;
-        const auto result=select(i,frame,live,world,pose,record);
+        ghost_compositor::Pose pose{};uint32_t record=0;float fade=1;
+        const auto result=select(i,frame,live,world,pose,record,fade);
         if(!current(candidate)) {
             // A revocation during any evaluation discards the whole candidate.
             for(uint32_t j=0;j<GP_GHOSTS;++j)out[j]={};
@@ -814,8 +833,12 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         }
         report.clip_decisions[i]=uint8_t(result);
         if(!i)summary=result;
-        if(result!=GP_READY && result!=GP_BEFORE_START) {heard[i]=unheard;continue;} // hidden: silent
-        place(i,live,bound[i]->frames[record].sample.pose.position);
+        if(result!=GP_READY && result!=GP_BEFORE_START) { // hidden: silent
+            heard[i]=unheard;
+            if(fade==0)silence(i);
+            continue;
+        }
+        place(i,live,bound[i]->frames[record].sample.pose.position,fade);
         hear(i,*bound[i],record,result==GP_BEFORE_START);
         before_start=before_start && result==GP_BEFORE_START;
         if(pose.count)out[count++]=pose;

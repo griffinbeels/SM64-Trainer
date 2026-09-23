@@ -32,7 +32,7 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
 | Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP4: header 160, record 652, maximum 200000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Portable clip | GCLIP4: header 160, record 652, maximum 200000 records; header flag `GCLIP_DANCE_TAIL` (star clips only) | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
 Sizes are bytes. Native ghost versions are checked together; older native clips
@@ -199,6 +199,23 @@ Nudging back before the recorded touch can show an earlier pose unless the live
 origin has already ended. Fixed seek and segments without star-end behavior do
 not use this cutoff. Drawing neither scans the clip nor allocates an index.
 
+A clip flagged `GCLIP_DANCE_TAIL` (his ask, 2026-09-23, reversing the
+2026-09-19 end-at-touch ruling for the ghost's own star) keeps its ghost past
+its touch: it draws the recorded grab and dance, then holds the last recorded
+pose and fades it out over `GP_STAR_FADE_FRAMES` (a tuning constant, 15 frames
+= 0.5 s), one equal opacity step a frame (body and shadow), and hides exactly
+that many frames after the last record. Its sound fades with it (the
+placement gain carries the fade) and is set silent as it hides. Unflagged
+clips, every recording saved before the tail existed, still end at the touch.
+The live behaviour is unchanged: his own star grab (or a new star generation)
+ends every ghost on that frame, dancing or not, and the tracker's suspension
+that follows his completion keeps them hidden. The suspension comes only from
+his attempt, so a ghost that grabs first dances and fades on its own timeline
+while he is still playing; if he grabs first, the ghosts vanish on his grab
+before reaching their own. The playback witness drives both orders and the
+fade values (1, 14/15 ... 1/15, then hidden at 15 frames), and an older clip
+beside the dancer ending at its touch.
+
 The index chooses the first exact coordinate, including an unsupported pose,
 then checks that row's scene against live. It never searches a later duplicate
 or another scene for a usable pose. Before-start selection clamps to the first
@@ -254,6 +271,21 @@ as `anchor_frame + rta_frames`. Every retained clip row needs valid raw/elapsed
 evidence in one continuity, with monotonic occurrences and elapsed time;
 timing-invalid archive rows cannot form a playable clip. A final closing reset
 can remain as evidence, but a star index stops before the next generation.
+
+A star attempt closes at x-cam, the dance's first frame, so export appends the
+dance tail: the rows after the closing frame while Mario stays in a star
+grab/dance action (`STAR_GRAB_ACTIONS`), the game clock advances, and timing
+continuity, star generation and scene hold, at most `DANCE_TAIL_MAX_FRAMES`
+(180, 6 s) past the close. Measured on his 2026-09-22 archive, dances run
+about 100 to 125 frames past x-cam; the exit dance ends by freezing the clock
+for the exit warp, the no-exit dance by returning to idle. Export often runs
+the moment the attempt closes, so it waits for the dance to end, the recording
+to stall for a second or close, or the cap's duration plus a second. A reset
+or state load ends the tail at once. The manifest's `tail_records` counts the
+tail; `check_manifest` binds the attempt's closing frame to the row before it.
+The [archive tests](../tests/test_ghost_archive.py) cover each way a dance
+ends, the cap, waiting for a dance still being captured, and no tail for a
+segment or a close outside the dance.
 
 Recorded pose usability depends on the captured clock and pose components, not
 the recording's framebuffer qualification. The saved `world_status` remains

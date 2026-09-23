@@ -36,3 +36,10 @@ def test_native_playback_ownership_and_selection(tmp_path):
     # Several ghosts shared one origin; each clip was prepared exactly once per copy.
     assert report["multi"] == {"ghosts": 3, "max_visible": 3, "prepares": 5}
     assert report["render_allocations"] == report["render_frees"] == 0
+    # A dance-tail ghost fades from its last dance frame to hidden over the
+    # tuning constant, one equal step a frame.
+    print(json.dumps(report["dance"]))
+    fade = report["dance"]["fade"]
+    steps = report["dance"]["hidden_after"]
+    assert steps >= 1 and len(fade) == steps + 1 and fade[0] == 1 and fade[-1] == 0
+    assert all(abs(fade[k] - (steps - k) / steps) < 1e-6 for k in range(steps + 1))

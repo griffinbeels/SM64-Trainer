@@ -1139,6 +1139,18 @@ and playback draws none.
 - **Lives** — `plugin/gfxwrap/ghost_root.cpp` captures it;
   `plugin/gfxwrap/ghost_pose.cpp` places it for drawing
 
+### Dance tail
+
+The recorded [[frame]]s after a star [[attempt]] closes, through Mario's star
+grab and dance, kept on the end of its [[ghost]] recording so the [[ghost]]
+celebrates instead of vanishing at its touch; it then fades out over half a
+second. Display only: the [[attempt]]'s origin, closing [[frame]] and time are
+unchanged. Recordings saved before it have none and still end at the touch;
+segments never carry one.
+
+- **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
+  `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
+
 ### Ghost sound events
 
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in
