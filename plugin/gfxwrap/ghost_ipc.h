@@ -81,7 +81,7 @@ typedef struct gipc_page {
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
 static_assert(sizeof(gipc_clip) == 1096, "ghost clip entry bytes");
-static_assert(sizeof(gipc_request) == 18952, "ghost request bytes");
+static_assert(sizeof(gipc_request) == 18956, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {

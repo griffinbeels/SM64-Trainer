@@ -59,6 +59,7 @@ class GhostLayout:
     sound_producer: int
     sound_consumer: int
     sound_ring: int
+    behaviour_base: int = 0  # segment 0x13 in RAM; 0 leaves held objects uncaptured
 
     def __post_init__(self) -> None:
         if any(type(getattr(self, field.name)) is not int for field in fields(self)):
@@ -79,6 +80,9 @@ class GhostLayout:
             if (address % alignment or address < KSEG0_BASE
                     or address - KSEG0_BASE + size > self.rdram_bytes):
                 raise ValueError(f"Ghost capture {name} lies outside aligned RDRAM")
+        if self.behaviour_base and (self.behaviour_base % 4 or self.behaviour_base < KSEG0_BASE
+                                    or self.behaviour_base - KSEG0_BASE + 4 > self.rdram_bytes):
+            raise ValueError("Ghost capture behaviour_base lies outside aligned RDRAM")
 
     @classmethod
     def from_layout(cls, layout: Layout, *, rdram_bytes: int = 8 << 20) -> "GhostLayout":
@@ -90,14 +94,16 @@ class GhostLayout:
                  "object_pool", "pending_warp_op", "delayed_warp_timer",
                  "sound_code", "sound_producer", "sound_consumer", "sound_ring")
         layout.require(*names)
-        return cls(rdram_bytes, *(layout.value(name) for name in names))
+        return cls(rdram_bytes, *(layout.value(name) for name in names),
+                   behaviour_base=layout.value("behaviour_base") or 0)
 
     def to_bytes(self) -> bytes:
-        """Exactly 184 bytes; compared against the compiled C reader in tests."""
+        """Exactly 188 bytes; compared against the compiled C reader in tests."""
         roots = (self.global_timer, self.mario_state, self.mario_object,
                  self.current_area_pointer, self.area_update_counter,
                  self.current_level, self.current_area, self.igt_overall,
                  self.object_pool, self.pending_warp_op, self.delayed_warp_timer,
                  self.sound_code, self.sound_producer, self.sound_consumer, self.sound_ring)
-        return _CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size, VERSION, RAM_WORD_SWAPPED,
-                            self.rdram_bytes, ROM_US, *roots) + clock_config_bytes()
+        return (_CONFIG.pack(_CONFIG.size + _CLOCK_CONFIG.size + 4, VERSION, RAM_WORD_SWAPPED,
+                             self.rdram_bytes, ROM_US, *roots) + clock_config_bytes()
+                + self.behaviour_base.to_bytes(4, "little"))

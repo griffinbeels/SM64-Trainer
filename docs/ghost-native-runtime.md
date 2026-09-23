@@ -27,12 +27,12 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC6: layout 184, sample 1216; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved) and particles (580 at 636) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC6: layout 188 (`behaviour_base` at 184), sample 1252; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (36 at 1216) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS5, still exported as `SM64GhostSourceV3` (the version argument must be 5); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC7: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1232 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP5: header 160, record 1232, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP4 (record 652) still loads, read as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Ghost IPC | GIPC7: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1268 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP5: header 160, record 1268, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP4 (record 652) still loads, read as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
 Sizes are bytes. Native ghost versions are checked together. GCLIP4 (GC5,
@@ -94,6 +94,28 @@ float precision. Tests execute the pinned staged `gSPDisplayList` and x86 matrix
 loader, and cover floor tilt, nonuniform scale, camera motion and ownership
 refusals. A new live recording remains the acceptance check for the installed
 practice ROM's complete graph and emitted command sequence.
+
+### Held objects
+
+What Mario holds (a Bob-omb, a baby penguin, a heavy object, Bowser's tail,
+or the SSL hands-free-holding object) is drawn from his right hand
+(`geo_process_held_object`). The object's own graph node is off while held,
+so its animation advances only there, in the same callback that writes
+`marioBodyState->heldObjLastPosition` (the HOLP). Capture
+([ghost_capture.cpp](../plugin/gfxwrap/ghost_capture.cpp) `capture_held`)
+records `gc_held` only when all of these hold: Mario's pose is valid (a root
+refused or carried away later clears it), `heldObj` is an aligned pool slot
+that is active with its own node off, its `animTimer` equals this frame's
+`area_update_counter`, and its frame lies inside the loaded animation. The
+block holds the segmented behaviour (`behaviour - behaviour_base + 0x13000000`,
+the identity; `bhvBobomb` is 0x13003174), the animation id, frame and y
+translation, the HOLP (its world root) and its gfx scale. Its orientation
+needs no field: the hand copies Mario's own root matrix (his throwMatrix),
+so the held root is Mario's recorded world root rotation, rows scaled by
+`scale`, at the HOLP. A held object without an animation cannot prove it was
+drawn this frame and is not recorded. The legacy TRS reader still refuses a
+holding Mario and records none. Drawing held objects is a separate model
+stage; until it lands the ghost draws Mario alone.
 
 ### Cap effects (vanish and metal)
 
@@ -440,7 +462,7 @@ assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
 full set plus as many retiring copies) share a 128 MiB clip/index budget, and
 the worker's retained files obey the same bound. One maximum-size clip
-(100000 records, about 55 minutes at 30 Hz: 100000 x (1232 + 4) bytes) fits;
+(100000 records, about 55 minutes at 30 Hz: 100000 x (1268 + 4) bytes) fits;
 two maximum-size clips do not with GC6. The particle block halved the maximum
 from GC5's 200000 records rather than raising the budget. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing

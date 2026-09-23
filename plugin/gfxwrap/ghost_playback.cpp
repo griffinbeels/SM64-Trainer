@@ -283,6 +283,17 @@ bool valid_shadow(const gc_sample& s) {
     return m[3]==0 && m[7]==0 && m[11]==0 && m[15]==1;
 }
 // Particles: bounded count, overflow only when full, unused entries zero.
+// A held object rides only a pose, with a segment-0x13 behaviour.
+bool valid_held(const gc_sample& s) {
+    const gc_held zero{};
+    if(!(s.valid_fields&GC_VALID_HELD))return !std::memcmp(&s.held,&zero,sizeof(zero));
+    const auto& h=s.held;
+    if(!(s.valid_fields&GC_VALID_POSE) || (h.behavior>>16)!=0x1300u || h.flags
+            || h.animation_id<0 || h.animation_frame<0)return false;
+    for(unsigned axis=0;axis<3;++axis)
+        if(!std::isfinite(h.holp[axis]) || !std::isfinite(h.scale[axis]) || h.scale[axis]==0)return false;
+    return true;
+}
 bool valid_particles(const gc_sample& s) {
     const gc_particles zero{};
     if(!(s.valid_fields&GC_VALID_PARTICLES))return !std::memcmp(&s.particles,&zero,sizeof(zero));
@@ -334,7 +345,7 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
         if(!(s.valid_fields&GC_VALID_POSE) && std::memcmp(&s.pose,&zero_pose,sizeof(s.pose)))return false;
         if(!(s.valid_fields&GC_VALID_CAMERA) && std::memcmp(&s.camera,&zero_camera,sizeof(s.camera)))return false;
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;
-        if(!valid_shadow(s) || !valid_sound(s) || !valid_particles(s))return false;
+        if(!valid_shadow(s) || !valid_sound(s) || !valid_particles(s) || !valid_held(s))return false;
         if(s.valid_fields&GC_VALID_POSE)for(unsigned axis=0;axis<3;++axis)
             if(!std::isfinite(s.pose.position[axis]) || !std::isfinite(s.pose.scale[axis]))return false;
         if(s.valid_fields&GC_VALID_POSE) {

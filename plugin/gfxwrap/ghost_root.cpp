@@ -383,5 +383,6 @@ void ghost_root_finish(gc_root_probe &p, bool completed, gc_sample &sample, gc_r
         if ((sample.valid_fields&GC_VALID_POSE) && sample.status==GC_UNSUPPORTED_ROOT) sample.status=GC_OK;
     }
     sample.pose.refusal=reason;
+    if (!(sample.valid_fields&GC_VALID_POSE)) { sample.held={}; sample.valid_fields&=~GC_VALID_HELD; }
     p={};
 }

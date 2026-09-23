@@ -12,8 +12,8 @@ from pathlib import Path
 MAGIC = b"SM64GIP7"
 VERSION = 7
 PREFIX = "Local\\sm64_trainer_ghost_v7_"
-SLOTS, RECORD_BYTES, RING_OFFSET = 512, 1232, 20480
-LAYOUT_BYTES = 184
+SLOTS, RECORD_BYTES, RING_OFFSET = 512, 1268, 20480
+LAYOUT_BYTES = 188
 GHOSTS, PATH_CHARS = 16, 520
 PAGE_BYTES = RING_OFFSET + SLOTS * RECORD_BYTES
 U32, U64, I32 = C.c_uint32, C.c_uint64, C.c_int32
@@ -71,7 +71,7 @@ class Status(C.LittleEndianStructure):
     ]
 
 
-assert C.sizeof(Origin) == 40 and C.sizeof(Clip) == 1096 and C.sizeof(Request) == 18952
+assert C.sizeof(Origin) == 40 and C.sizeof(Clip) == 1096 and C.sizeof(Request) == 18956
 assert C.sizeof(Status) == 256 and 256 + C.sizeof(Request) <= RING_OFFSET
 assert Request.layout.offset == 80 and Status.consumed.offset == 96
 

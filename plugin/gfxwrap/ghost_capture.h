@@ -22,10 +22,11 @@ enum gc_valid {
     GC_VALID_CLOCK = 1u, GC_VALID_POSE = 2u, GC_VALID_CAMERA = 4u,
     GC_VALID_ACTION = 8u, GC_VALID_WARP = 16u,
     /* Optional evidence: never part of GC_OK. */
-    GC_VALID_SHADOW = 32u, GC_VALID_SOUND = 64u, GC_VALID_PARTICLES = 128u
+    GC_VALID_SHADOW = 32u, GC_VALID_SOUND = 64u, GC_VALID_PARTICLES = 128u,
+    GC_VALID_HELD = 256u
 };
 #define GC_VALID_REQUIRED 31u
-#define GC_VALID_ALL 255u
+#define GC_VALID_ALL 511u
 #define GC_SHADOW_VERTICES 9u
 #define GC_SHADOW_TEXTURE_BYTES 128u /* 16x16 IA8 alpha nibbles, two per byte */
 #define GC_SOUND_EVENTS 8u
@@ -97,6 +98,10 @@ typedef struct gc_layout {
      * nonzero set must be complete. The code must match the ring layout. */
     uint32_t sound_code, sound_producer, sound_consumer, sound_ring;
     gcc_config clock;
+    /* Segment 0x13's RAM base (layout.py behaviour_base): a held object's
+     * behaviour is stored segmented, never as a per-version pointer. Zero
+     * declares held-object capture unavailable. */
+    uint32_t behaviour_base;
 } gc_layout;
 
 typedef struct gc_pose {
@@ -160,6 +165,20 @@ typedef struct gc_particles {
     gc_particle entries[GC_PARTICLES];
 } gc_particles;
 
+/* The object Mario holds, as geo_process_held_object drew it from his right
+ * hand this frame. Its own graph node is off while held, so a current
+ * animTimer (== area_update_counter) can only come from that hand, the same
+ * callback that writes the HOLP: this frame's world root. The orientation is
+ * Mario's own root (the hand copies his throwMatrix), scaled by `scale`.
+ * Zero unless GC_VALID_HELD. */
+typedef struct gc_held {
+    uint32_t behavior; /* segmented behaviour script, e.g. 0x13003174 bhvBobomb */
+    int16_t animation_id, animation_frame, anim_y_translation;
+    uint16_t flags;    /* reserved, zero */
+    float holp[3];     /* marioBodyState->heldObjLastPosition */
+    float scale[3];    /* the held object's gfx scale */
+} gc_held;
+
 typedef struct gc_camera {
     float position[3], focus[3];
     int16_t roll, roll_screen;
@@ -200,6 +219,7 @@ typedef struct gc_sample {
     gc_shadow shadow;
     gc_sound sound;
     gc_particles particles;
+    gc_held held;
 } gc_sample;
 
 /* Zero-initialize or reset before use. One reader per serialized producer.
