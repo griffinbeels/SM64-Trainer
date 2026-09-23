@@ -144,6 +144,7 @@ struct OcclusionUniforms {
         g.Uniform2f(at[1],r.center[0],r.center[1]);g.Uniform2f(at[2],r.radius[0],r.radius[1]);
         g.Uniform1f(at[3],r.player_w);g.Uniform2f(at[4],REGION_INNER,REGION_OUTER);
         g.Uniform2f(at[5],FRONT_BAND,PLAYER_STRENGTH);g.Uniform2f(at[6],NEAR_HIDDEN,NEAR_FULL);
+        g.Uniform2f(at[7],r.overlap,GHOST_FLOOR);
     }
 };
 struct Guard {

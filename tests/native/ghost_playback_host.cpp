@@ -309,25 +309,27 @@ int main() {
         check(api->configure(&r)==GP_OK,"enable overlap fading");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=0;
-        // Overlap fades to the floor (15% of the configured opacity), never to nothing.
-        const float floor_opacity=.25f*.15f,half_opacity=.25f*(.15f+.85f*.5f);
+        // The overlap factor rides with the player-first region, never in the
+        // opacity: the shaders give both fades one floor (15%), never nothing.
+        const float half_overlap=.15f+.85f*.5f;
         auto near_to=[](float a,float b){return std::fabs(a-b)<1e-6f;};
-        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,floor_opacity),"coincident Mario keeps the ghost faint");
+        auto faded=[&](float overlap){return pose.opacity==0.25f && near_to(pose.occlusion.overlap,overlap);};
+        draw(10,true,GP_READY,5,2);check(faded(.15f),"coincident Mario: the floor, carried to the shaders");
         live.pose.position[0]=37;
-        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,half_opacity),"half body overlap multiplies configured opacity");
+        draw(10,true,GP_READY,5,2);check(faded(half_overlap),"half body overlap reaches the shaders");
         live.pose.position[0]=74;
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"touching bodies at zero extra distance restore opacity");
+        draw(10,true,GP_READY,5,2);check(faded(1),"touching bodies at zero extra distance restore opacity");
         ++r.revision;r.proximity_distance=74;
         check(api->configure(&r)==GP_OK,"extra fade distance");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
-        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,half_opacity),"distance changes actual generated ghost opacity");
+        draw(10,true,GP_READY,5,2);check(faded(half_overlap),"distance changes actual generated ghost fade");
         live.valid_fields&=~GC_VALID_POSE;
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"missing player pose does not invent fading");
+        draw(10,true,GP_READY,5,2);check(faded(1),"missing player pose does not invent fading");
         live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=0;
         ++r.revision;r.proximity_enabled=0;
         check(api->configure(&r)==GP_OK,"overlap A/B disable");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"disabled overlap preserves visibility even at coincidence");
+        draw(10,true,GP_READY,5,2);check(faded(1),"disabled overlap preserves visibility even at coincidence");
         check(!pose.occlusion.enabled && !pose.occlusion.has_player,"occlusion fade off leaves the region empty");
         // Player first: live Mario's body box under the pose's own live
         // view-projection reaches the drawn pose; opacity is untouched.
@@ -645,7 +647,8 @@ int main() {
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=2005;live.pose.position[1]=0;live.pose.position[2]=5;
             frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
-            check(poses[0].opacity==1 && poses[1].opacity==1 && std::fabs(poses[2].opacity-.15f)<1e-6f,
+            check(poses[0].occlusion.overlap==1 && poses[1].occlusion.overlap==1
+                  && std::fabs(poses[2].occlusion.overlap-.15f)<1e-6f && poses[2].opacity==1,
                   "only the coincident ghost fades, to the floor");
             live.valid_fields&=~GC_VALID_POSE;
             ++r.revision;r.proximity_enabled=0;check(api->configure(&r)==GP_OK,"fade off");

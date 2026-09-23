@@ -26,13 +26,14 @@ inline float smooth(float e0,float e1,float x) {
 }
 inline float fade(const ghost_occlusion::Region& r,uint32_t x,uint32_t y,float w,uint32_t width,uint32_t height) {
     using namespace ghost_occlusion;
-    if(!r.enabled)return 1;
-    float result=smooth(NEAR_HIDDEN,NEAR_FULL,w);
-    if(r.has_player) {
+    float camera=1,block=1;
+    if(r.enabled)camera=smooth(NEAR_HIDDEN,NEAR_FULL,w);
+    if(r.enabled && r.has_player) {
         const float nx=(2*(x+.5f)/width-1-r.center[0])/r.radius[0],ny=(2*(y+.5f)/height-1-r.center[1])/r.radius[1];
         const float cover=1-smooth(REGION_INNER,REGION_OUTER,std::sqrt(nx*nx+ny*ny));
-        result*=1-PLAYER_STRENGTH*cover*smooth(0,FRONT_BAND,r.player_w-w);
+        block=1-PLAYER_STRENGTH*cover*smooth(0,FRONT_BAND,r.player_w-w);
     }
-    return result;
+    // One floor for both fades: overlapping AND in front never goes below it.
+    return camera*(std::max)(GHOST_FLOOR,r.overlap*block);
 }
 }

@@ -92,7 +92,20 @@ int main() {
         // Half the front band: partial fade.
         const auto band=player(1000+ghost_occlusion::FRONT_BAND/2);
         compare(draw(g,compositor,scene,ghost(body,opacity,band),mode),clean,band,opacity,1000);
-        std::printf("mode %u: faded=%u full=%u exact=%u worst=%.2f\n",unsigned(mode),t1.faded,t1.full,t1.exact,t1.worst);
+        // ONE FLOOR. A ghost coincident with Mario on a pole (the overlap fade
+        // at its floor) AND in front of him: every pixel keeps exactly 15% of
+        // the opacity -- over his core too, never the two floors multiplied.
+        auto both=front;both.overlap=ghost_occlusion::GHOST_FLOOR;
+        const auto joint=draw(g,compositor,scene,ghost(body,opacity,both),mode);
+        compare(joint,clean,both,opacity,1000);
+        const int floor_red=int(std::lround(20*(1-opacity*.15f)+255*opacity*.15f));
+        for(uint32_t y=0;y<H;++y)for(uint32_t x=W/2;x<W;++x)
+            require(std::abs(int(joint[(y*W+x)*4])-floor_red)<=1,"overlapping and in front: exactly the 15% floor");
+        // The overlap fade alone, half way: the whole ghost, region or not.
+        auto partial=off;partial.overlap=.575f;
+        compare(draw(g,compositor,scene,ghost(body,opacity,partial),mode),clean,partial,opacity,1000);
+        std::printf("mode %u: faded=%u full=%u exact=%u worst=%.2f joint_red=%d\n",unsigned(mode),t1.faded,t1.full,t1.exact,t1.worst,
+            int(joint[(32*W+48)*4]));
     }
     // The renderer's y flip moves the ghost and the region together: the
     // region is in the ghost's unflipped clip space, so a flipped frame is the
@@ -115,6 +128,11 @@ int main() {
     require(th.faded==W*H/2 && std::abs(int(half[(32*W+48)*4])-int(std::lround(20*.5f+255*.5f)))<=1,"half way fades by half");
     require(draw(g,compositor,scene,ghost(whole,1,camera))==draw(g,compositor,scene,ghost(whole,1,off)),
         "from NEAR_FULL the camera fade is exact");
+    // The camera term may still go below the floor: an overlapping ghost at
+    // the camera is gone, and half way it keeps half the floor.
+    auto near_overlap=camera;near_overlap.overlap=ghost_occlusion::GHOST_FLOOR;
+    require(draw(g,compositor,scene,ghost(touching,1,near_overlap))==clean,"the camera still hides an overlapping ghost");
+    compare(draw(g,compositor,scene,ghost(middle,1,near_overlap)),clean,near_overlap,1,300);
     // The shadow follows the same rule: a black decal over Mario's region
     // fades like the body; the body itself sits off screen.
     const auto offscreen=plane(1000,3,4);
@@ -134,7 +152,7 @@ int main() {
     require(pixels(g,scene.fbo,W,H)==clean,"clean game RGB exact");
     require(depth(g,scene)==z && image_depth(g,scene)==n64z,"both game depth representations exact");
     gc::destroy(compositor);no_error("occlusion shutdown");require(GetForegroundWindow()==foreground,"occlusion focus unchanged");
-    std::printf("occlusion passed: hidden=yes front=faded_over_mario behind=exact away=exact camera=hidden,half,exact "
+    std::printf("occlusion passed: hidden=yes front=faded_over_mario behind=exact away=exact camera=hidden,half,exact joint_floor=15 "
                 "shadow=follows depth=ordinary,n64_image clean=exact\n");
     return 0;
 }
