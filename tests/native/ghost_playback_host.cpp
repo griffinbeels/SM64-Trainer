@@ -476,6 +476,33 @@ int main() {
         check(api->configure(&r)==GP_OK,"before-start clamp must not reveal an already touched first pose");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(0,false,GP_STAR_ENDED);
         {
+            // Short refusal runs (a one-frame BLJ land) between two poses in
+            // one scene hold the previous pose; a longer run, a scene change
+            // or the clip's end still hides the ghost.
+            Clip gap=Clip::linear(23,14,UINT32_MAX,5);
+            const auto refuse=[&](unsigned i) {
+                auto &s=gap.frames[i].sample;s.valid_fields&=~GC_VALID_POSE;
+                s.pose={};s.pose.refusal=GC_REFUSED_ANIMATION_RANGE;s.status=GC_BAD_VALUE;
+            };
+            refuse(1);gap.frames[2].sample.area=2;
+            refuse(4);refuse(6);refuse(7);refuse(9);refuse(10);refuse(11);refuse(13);
+            check(api->prepare_clip(&gap.header,gap.frames.data())==GP_OK,"prepare clip with short refusal runs");
+            revision=r.revision+1;r=request(gap,revision);r.model_id=4;r.mode=GP_FIXED;r.origin={};
+            const auto seek=[&](uint32_t at,bool shown,uint32_t why,uint64_t sequence,float x) {
+                ++r.revision;r.seek_igt=at;check(api->configure(&r)==GP_OK,"seek a bridge row");
+                live.level=9;renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+                draw(0,shown,why,sequence,1);
+                if(shown)check(selected_x==x,"bridge shows the previous pose");
+            };
+            seek(3,true,GP_READY,4,2303);
+            seek(4,true,GP_READY,4,2303);   // one refused frame holds row 3
+            seek(6,true,GP_READY,6,2305);   // two refused frames hold row 5
+            seek(7,true,GP_READY,6,2305);
+            seek(1,false,GP_INVALID_FRAME,0,0);  // next pose is in another area
+            seek(10,false,GP_INVALID_FRAME,0,0); // three refused frames: a real gap
+            seek(13,false,GP_INVALID_FRAME,0,0); // nothing after it
+        }
+        {
             // Three ghosts on one live origin. Each ends on its own recorded
             // touch or length; a live grab ends them all.
             Clip a=Clip::linear(20,30,20,5),b=Clip::linear(21,30,8,50),c=Clip::linear(22,10,UINT32_MAX,20);
