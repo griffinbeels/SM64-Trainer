@@ -389,6 +389,40 @@ behind the renderer: over 10 loads and 92 frames the previous path showed 8
 frames without a ghost and 1 at a wrong position (a forward load to an
 unwitnessed state); this path shows 0 and 0.
 
+A load names a point on the run by a witnessed checkpoint: the same raw IGT,
+level and area, action, animation, animation frame and angles, and a drawn
+root within `GO_RESTORE_PLACE` (32 units) per axis. Without one, raw IGT
+names it before any banked transition: a star's coordinate is its raw IGT,
+and a segment whose origin read Usamune's own zero (raw IGT at most the
+layout's near-zero, `GO_ZERO_CLOCK`) reads raw IGT less its origin's. That
+places a state saved in an earlier attempt too, also after a reset, which is
+how he practises (round 10). A segment that began elsewhere cannot know such
+a state's coordinate and stays hidden rather than wrong. A move-clock
+segment's origin is Mario's first movement, so a state from another attempt
+lands up to that attempt's own start delay (at most the near-zero second)
+away. The relation between raw IGT and the coordinate settles on the first
+checkpoint on the origin's timeline, which for the renderer can come after
+its bind.
+
+A load that re-arms a segment (the tracker ends the attempt there and times a
+new one from it) keeps the ghost on the run it continues: the new arm carries
+the run's marker (`SegmentEngine._continued_ghost`), and only a practice reset
+starts a new ghost clock. Before this, each load re-armed a new marker at the
+load frame; one he logged that the renderer never saw (IGT 297 to 296, seven
+frames after the previous restore) missed the worker's two-frame hand-off and
+restarted the ghost at 0. A 100-coin engine no longer re-arms on a load at
+all under attempt rules 2. The root is read back
+through the camera's fixed-point matrices, so a loaded state never draws
+exactly where its saved frame did. His WF 100 Coins loads (2026-09-23,
+session 23: one state saved at IGT 296, loaded seven times) drew Mario 0.06
+to 7.4 units away; the previous exact compare matched none of them, so each
+load hid the ghost until the tracker's new arm restarted it from the
+segment's beginning. Replaying his archived frames (1129 of the run), his
+PB clip and the markers this projector publishes over his own journal
+through the real worker and playback: before, 718 frames wrong and no load
+frame right; now 1128 right, 0 wrong, and the one hidden frame is the run's
+first, before the tracker's arm arrives.
+
 A star or segment completion removes the tracker's arm until the next attempt,
 so the session marks the owner suspended. The worker used to withdraw the
 command then, which dropped the restore checkpoints: a load after a star grab

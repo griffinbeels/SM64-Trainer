@@ -522,7 +522,7 @@ bool valid_request(const gp_request& r) {
         if(i<r.star_action_count ? !r.star_actions[i] : r.star_actions[i]!=0) return false;
     if(r.mode==GP_FIXED) {const gp_origin zero{};if(std::memcmp(&r.origin,&zero,sizeof(zero)))return false;}
     else if((r.origin.kind!=GO_STAR && r.origin.kind!=GO_SEGMENT) || !r.origin.epoch
-            || !r.origin.sequence || !r.origin.continuity || (r.origin.flags&~GO_RECOVERED)
+            || !r.origin.sequence || !r.origin.continuity || (r.origin.flags&~(GO_RECOVERED|GO_ZERO_CLOCK))
             || (!(r.origin.flags&GO_RECOVERED) && (r.origin.kind==GO_STAR
                 ? r.origin.offset>UINT16_MAX : r.origin.offset!=0)))return false;
     return true;

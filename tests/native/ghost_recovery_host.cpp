@@ -271,9 +271,10 @@ int main() {
                 run.demand.origin.utc=1000+double(run.last.qpc-1-1000)/1000;++run.demand.revision;
                 for(int raw=152;raw<=156;++raw)run.step(uint16_t(start+raw),raw);
             } else {
-                // A forward load to a state never witnessed stays hidden on
-                // the renderer too; a known state afterwards draws at once.
-                run.step(uint16_t(start+300),-1);run.step(uint16_t(start+301),-1);
+                // A forward load to a state never witnessed: this segment began
+                // at Usamune's zero, so its raw IGT names the coordinate on the
+                // load frame, as a star's does; a known state afterwards too.
+                run.step(uint16_t(start+300),300);run.step(uint16_t(start+301),301);
                 load(start+150,3);
                 // A completed segment suspends the owner: no native star end
                 // hides it, the suspension does, until a load revives it.
@@ -302,25 +303,24 @@ int main() {
             Run run(segment);const int start=segment?20:0;
             uint32_t first_timer[401]{};
             for(int raw=start;raw<=start+380;++raw) {first_timer[raw-start]=run.timer;run.step(uint16_t(raw),raw-start);}
+            // One load before the restart: the run it parks is a restored one,
+            // which must still read its coordinate from IGT afterwards.
+            for(int raw=start+300;raw<=start+380;++raw)run.step(uint16_t(raw),raw-start);
             run.worker_after_render=true;run.ghostless=run.wrong=run.frames=0;
             ++run.demand.token;++run.demand.revision;++fixture::epoch;gcc_reset(&run.source_clock);
             run.demand.origin.configuration=fixture::configuration+1;run.demand.origin.epoch=fixture::epoch;
             // Play on after the restart. The run's origin was captured before
             // it, so only the parked checkpoints can place the ghost again: a
-            // star by its own IGT at once, a segment at its next witnessed load.
+            // star by its own IGT at once, and so does this segment, whose
+            // clock began at Usamune's zero (raw 20).
             int raw=start+381;
-            if(!segment) {
-                unsigned hidden=0;bool back=false;
-                for(int i=0;i<10;++i,++raw) {
-                    const auto before=run.ghostless;run.step(uint16_t(raw),raw-start);
-                    if(run.ghostless!=before)++hidden;else back=i>=5;
-                }
-                check(back,"a star ghost returns after a capture restart without a new attempt");
-                restart_hidden=hidden;run.ghostless-=hidden;
-            } else {
-                for(int i=0;i<10;++i,++raw)run.step(uint16_t(raw),-1); // unwitnessed: hidden, not wrong
-                run.ghostless=0;
+            unsigned hidden=0;bool back=false;
+            for(int i=0;i<10;++i,++raw) {
+                const auto before=run.ghostless;run.step(uint16_t(raw),raw-start);
+                if(run.ghostless!=before)++hidden;else back=i>=5;
             }
+            check(back,"the ghost returns after a capture restart without a new attempt");
+            restart_hidden=std::max(restart_hidden,hidden);run.ghostless-=hidden;
             uint32_t seed=12345u+uint32_t(segment);
             const auto next=[&](uint32_t bound){seed=seed*1103515245u+12345u;return (seed>>8)%bound;};
             for(int load=0;load<300;++load) {
@@ -336,11 +336,55 @@ int main() {
             }
             stress_frames+=run.frames;stress_ghostless+=run.ghostless;stress_wrong+=run.wrong;
         }
+        unsigned wf_loads=0,wf_frames=0,wf_ghostless=0,wf_wrong=0;
+        {
+            // His WF 100 Coins loads (session 23, 2026-09-23): a segment run
+            // from a practice reset, a state saved at IGT 296 (Usamune holds
+            // the timer while it saves), then seven loads of that state. Each
+            // load drew Mario's root a little away from the saved frame (the
+            // offsets below are his, in units), and the tracker re-armed a new
+            // attempt on every load frame. The old exact compare never found
+            // the saved frame: every load hid the ghost, then the new arm
+            // restarted it from the segment's beginning.
+            Run run(true);const int start=20,saved=276; // raw IGT 296 is coordinate 276
+            for(int raw=start;raw<=start+saved;++raw)run.step(uint16_t(raw),raw-start);
+            for(int i=0;i<8;++i)run.step(uint16_t(start+saved),saved);
+            for(int raw=start+saved+1;raw<=start+366;++raw)run.step(uint16_t(raw),raw-start);
+            run.worker_after_render=true;run.ghostless=run.wrong=run.frames=0;
+            const float moved[]={0.06f,2.93f,7.36f,-0.35f,0.98f,6.97f,6.97f};
+            const int reached[]={305,351,394,333,402,312,340}; // his IGT before the next load, minus 20
+            for(unsigned i=0;i<7;++i) {
+                ++wf_loads;
+                const float at=float(start+saved)+moved[i];
+                for(int hold=0;hold<3;++hold)run.step(uint16_t(start+saved),saved,1,1,at);
+                // The tracker's new arm for the load frame, a poll later.
+                run.demand.origin.arm_id+=100;
+                run.demand.origin.global_timer=run.last.global_timer-2;
+                run.demand.origin.utc=1000+double(run.last.qpc-2-1000)/1000;++run.demand.revision;
+                for(int hold=0;hold<3;++hold)run.step(uint16_t(start+saved),saved,1,1,at);
+                for(int raw=start+saved+1;raw<=reached[i];++raw)run.step(uint16_t(raw),raw-start);
+            }
+            wf_frames=run.frames;wf_ghostless=run.ghostless;wf_wrong=run.wrong;
+        }
+        for(int start:{20,100}) {
+            // His practice loads a state saved earlier, also in an earlier
+            // attempt: a frame this run never witnessed (Mario elsewhere).
+            // A segment that began at Usamune's zero (raw 20) reads the
+            // coordinate from raw IGT, as a star does; one that began at raw
+            // 100 cannot know it and stays hidden rather than wrong.
+            Run run(true);
+            for(int raw=start;raw<=start+120;++raw)run.step(uint16_t(raw),raw-start);
+            const bool zero=start<=30;
+            run.step(uint16_t(start+60),zero?60:-1,1,1,5000.0f);
+            run.step(uint16_t(start+61),zero?61:-1,1,1,5001.0f);
+        }
         std::printf("{\"ok\":true,\"checks\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
             "\"blink\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u},"
             "\"stress\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u,"
-            "\"hidden_after_capture_restart\":%u}}\n",
+            "\"hidden_after_capture_restart\":%u},"
+            "\"wf_loads\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u}}\n",
             checks,allocations.load(),destructions.load(),blink_loads,blink_frames,blink_ghostless,blink_wrong,
-            stress_loads,stress_frames,stress_ghostless,stress_wrong,restart_hidden);return 0;
+            stress_loads,stress_frames,stress_ghostless,stress_wrong,restart_hidden,
+            wf_loads,wf_frames,wf_ghostless,wf_wrong);return 0;
     } catch(const std::exception& e) {std::fprintf(stderr,"%s\n",e.what());return 1;}
 }
