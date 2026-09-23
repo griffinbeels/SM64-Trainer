@@ -17,6 +17,15 @@ def save_pb(svc, db, attempt_id, mode):
         asyncio.run(svc.set_strat(attempt.course_id, attempt.star_id, tag))
     if not attempt.strat_tag:
         asyncio.run(svc.set_attempt_strat(attempt_id, tag))
+    attempt = next(a for a in db.attempts() if a.id == attempt_id)
+    if svc.pb_action(attempt, mode)[0] == "undo":
+        # A valid run under a picked strategy already saved ITSELF (task
+        # 0144's automatic PB); a test that only needs a saved PB gets it.
+        row = db.current_pb(attempt.course_id, attempt.star_id, mode,
+                            segment_id=attempt.segment_id,
+                            strat_tag=attempt.strat_tag)
+        return {"frames": row["frames"], "attempt_id": attempt_id,
+                "timer_mode": mode, "strat_tag": row["strat_tag"]}
     return asyncio.run(svc.save_pb(attempt_id, mode))   # the real command
 
 

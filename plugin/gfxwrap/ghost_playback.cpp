@@ -87,6 +87,9 @@ struct LiveRecovery {
     bool bound=false;
     LiveRecovery() {timing.reserve();} // capacity before any renderer use
     void clear() {timing.clear();owner={};restored=0;bound=false;}
+    // Revoked or withdrawn: nothing follows it now, but its checkpoints stay
+    // for a worker restore of the same run (adopt_recovery decides).
+    void detach() {timing.forget_stream();restored=0;bound=false;}
 } live_recovery;
 // Ghost sound: the last record each ghost displayed, so each record's
 // recorded sounds are handed over exactly once, as the ghost passes it.
@@ -285,7 +288,7 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
             || h.rom_layout!=GC_ROM_US || h.sample_version!=GC_VERSION || !h.configuration || !h.epoch
             || !nonzero_id(h.clip_id) || !h.qpc_frequency || h.qpc_anchor<0
             || !std::isfinite(h.utc_anchor) || h.utc_anchor<=0
-            || h.level<4 || h.level>36 || h.area<1 || h.area>8 || h.flags
+            || h.level<4 || h.level>36 || h.area<1 || h.area>8 || (h.flags&~GCLIP_DANCE_TAIL)
             || h.reserved[0] || h.reserved[1] || !frames
             || (h.clock_kind!=GCLIP_STAR_CLOCK && h.clock_kind!=GCLIP_SEGMENT_CLOCK)
             || !h.origin_continuity || h.origin_raw>UINT16_MAX) return false;
@@ -300,7 +303,9 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
                 || s.qpc<prior_qpc || (!s.status && (s.valid_fields&GC_VALID_REQUIRED)!=GC_VALID_REQUIRED)
                 || bool(s.valid_fields&GC_VALID_ACTION)!=bool(s.live_action)
                 || f.world_status>static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity)) return false;
-        const gc_pose zero_pose{};const gc_camera zero_camera{};
+        // A refused pose keeps only its refusal reason.
+        gc_pose zero_pose{};zero_pose.refusal=s.pose.refusal;const gc_camera zero_camera{};
+        if(s.pose.refusal>GC_REFUSED_LAST)return false;
         if(!(s.valid_fields&GC_VALID_POSE) && std::memcmp(&s.pose,&zero_pose,sizeof(s.pose)))return false;
         if(!(s.valid_fields&GC_VALID_CAMERA) && std::memcmp(&s.camera,&zero_camera,sizeof(s.camera)))return false;
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;
@@ -400,7 +405,7 @@ bool valid_request(const gp_request& r) {
             || r.enabled>1 || r.tint_enabled>1 || r.clip_count>GP_GHOSTS || r.reserved1
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
             || r.proximity_distance<0 || r.proximity_distance>400
-            || r.shadow_enabled>1 || r.reserved2 || r.reserved3
+            || r.shadow_enabled>1 || r.occlusion_fade>1 || r.reserved3
             || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
             || r.suspended>1 || r.reserved4) return false;
     const gp_clip unused{};
@@ -555,7 +560,16 @@ bool adopt_recovery(const gp_request& next) {
     if(same && !std::memcmp(&live.owner.origin,&next.origin,sizeof(next.origin))) {live.owner=next;return false;}
     go_origin local{};
     const bool confirmed=same && live.timing.current(local) && !std::memcmp(&local,&next.origin,sizeof(local));
-    if(!confirmed) {live.timing.bind(next.origin);live.restored=next.origin.sequence;}
+    if(!confirmed) {
+        // The worker's restore of the run the renderer was following keeps the
+        // renderer's checkpoints, also across a revoke (a capture restart), so
+        // its next load still draws on its own frame. Worker revisions never
+        // repeat or reset, so an unbroken chain proves the same run: a new run
+        // always arrives as an unrecovered origin in between.
+        const bool same_run=(next.origin.flags&GO_RECOVERED) && live.owner.revision
+            && next.revision==live.owner.revision+1;
+        live.timing.bind(next.origin,same_run);live.restored=next.origin.sequence;
+    }
     live.owner=next;live.bound=true;
     return !confirmed;
 }
@@ -598,16 +612,45 @@ float sound_gain(const gc_sample& live,const float ghost[3]) {
     return squared>reach*reach ? float(reach/std::sqrt(squared)) : 1.0f; // NaN compares false: full gain
 }
 // Where a visible ghost sounds from this frame; before its cues, so a new
-// sound starts at the ghost's current place.
-void place(uint32_t index,const gc_sample& live,const float ghost[3]) {
+// sound starts at the ghost's current place. fade follows its star-dance fade.
+void place(uint32_t index,const gc_sample& live,const float ghost[3],float fade) {
     const auto *sink=sound_sink.load(std::memory_order_acquire);
     if(!sink || !sink->place)return;
     float relative[3]{};
     if(!ghost_pose::camera_relative(model.value,live.camera,ghost,relative))relative[0]=relative[1]=relative[2]=0;
-    sink->place(index,relative,sound_gain(live,ghost));
+    sink->place(index,relative,sound_gain(live,ghost)*fade);
 }
+// A ghost whose dance has faded out: its sounds still playing fade with it.
+void silence(uint32_t index) {
+    const auto *sink=sound_sink.load(std::memory_order_acquire);
+    const float centre[3]{};
+    if(sink && sink->place)sink->place(index,centre,0.0f);
+}
+// The record whose pose a refused record displays: the previous pose when
+// the refusal run is at most GP_BRIDGE_FRAMES long, bounded by recorded poses
+// in the same scene with consecutive occurrences and coordinates. Null
+// otherwise (a longer run, a scene change, the clip's first or last rows).
+const gclip_frame *bridged(const Clip& clip,uint32_t at) {
+    const auto posed=[&](uint32_t i){return (clip.frames[i].sample.valid_fields&GC_VALID_POSE)!=0;};
+    uint32_t before=at,after=at;
+    while(before>0 && !posed(before-1) && at-before<GP_BRIDGE_FRAMES)--before;
+    if(before==0 || !posed(before-1))return nullptr;
+    --before;
+    while(after+1<clip.index_count && !posed(after+1) && after-before<GP_BRIDGE_FRAMES)++after;
+    if(after+1>=clip.index_count || !posed(after+1))return nullptr;
+    ++after;
+    if(after-before-1>GP_BRIDGE_FRAMES)return nullptr;
+    const auto &first=clip.frames[before].sample,&last=clip.frames[after].sample;
+    if(last.sequence-first.sequence!=after-before
+            || clip_coordinate(clip,after)-clip_coordinate(clip,before)!=after-before)return nullptr;
+    for(uint32_t i=before;i<=after;++i)
+        if(clip.frames[i].sample.level!=first.level || clip.frames[i].sample.area!=first.area)return nullptr;
+    return &clip.frames[before];
+}
+// fade: 1 normally; after a dance tail's last record it falls by
+// 1/GP_STAR_FADE_FRAMES a frame on the held last pose, and is 0 once hidden.
 uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
-                ghost_compositor::Pose& out,uint32_t& record) {
+                ghost_compositor::Pose& out,uint32_t& record,float& fade) {
     const Clip *clip=bound[index];
     if(!clip)return GP_PREPARING;
     const auto &h=clip->header;
@@ -617,36 +660,55 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     const uint64_t last=clip_coordinate(*clip,clip->index_count-1);
     // Before-start clamps to the first pose, including when that pose already
     // carries a touch. Unlike the live-end latch, this moves with the nudge.
-    if(have_touch[index] && (target>=touch[index] || first>=touch[index]))return GP_STAR_ENDED;
-    if(target>last)return GP_AFTER_END;
+    // A clip with a dance tail ends on its own closing grab instead: it plays
+    // on through any earlier star (the 100-coin star before its exit star) and
+    // its closing dance, then fades out over GP_STAR_FADE_FRAMES from its last
+    // record. FIXED seek ignores it, like both end policies.
+    const bool dances=(h.flags&GCLIP_DANCE_TAIL) && active_request.mode==GP_FOLLOW;
+    if(have_touch[index] && (first>=touch[index] || (!dances && target>=touch[index])))return GP_STAR_ENDED;
+    uint64_t at=target;
+    if(target>last) {
+        if(!dances)return GP_AFTER_END;
+        const uint64_t past=target-last;
+        if(past>=GP_STAR_FADE_FRAMES) {fade=0;return GP_STAR_ENDED;}
+        fade=float(GP_STAR_FADE_FRAMES-past)/float(GP_STAR_FADE_FRAMES);
+        at=last; // the dance's final pose, held while it fades
+    }
     uint32_t lo=0,hi=clip->index_count;
     while(lo<hi) {
         const uint32_t middle=lo+(hi-lo)/2;
-        if(clip_coordinate(*clip,middle)<target)lo=middle+1;else hi=middle;
+        if(clip_coordinate(*clip,middle)<at)lo=middle+1;else hi=middle;
     }
     const auto &selected=clip->frames[lo];
-    if(!frame.below_zero && target>=first && clip_coordinate(*clip,lo)!=target) {gaps.fetch_add(1);return GP_GAP;}
+    if(!frame.below_zero && at>=first && clip_coordinate(*clip,lo)!=at) {gaps.fetch_add(1);return GP_GAP;}
     if(live.level!=selected.sample.level || live.area!=selected.sample.area)return GP_WRONG_SCENE;
     if(!sequence_reported) {
         report.selected_sequence_lo=uint32_t(selected.sample.sequence);
         report.selected_sequence_hi=uint32_t(selected.sample.sequence>>32);
         sequence_reported=true;
     }
-    if(!(selected.sample.valid_fields&GC_VALID_POSE)) {refusals.fetch_add(1);return GP_INVALID_FRAME;}
+    const gclip_frame *shown=&selected;
+    if(!(selected.sample.valid_fields&GC_VALID_POSE) && !(shown=bridged(*clip,lo))) {
+        refusals.fetch_add(1);return GP_INVALID_FRAME;
+    }
     gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
-    recorded.configuration=selected.configuration;recorded.sample=selected.sample;
-    recorded.world.status=selected.world_status;
+    recorded.configuration=shown->configuration;recorded.sample=shown->sample;
+    recorded.world.status=shown->world_status;
     evaluations.fetch_add(1);
-    float opacity=active_request.opacity;
+    float opacity=active_request.opacity*fade;
     if(active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE))
         opacity*=ghost_proximity::factor(live.pose.position,live.pose.scale,
-            selected.sample.pose.position,selected.sample.pose.scale,active_request.proximity_distance);
+            shown->sample.pose.position,shown->sample.pose.scale,active_request.proximity_distance);
     if(ghost_pose::evaluate(model.value,recorded,live,world,opacity,scratch[index],out)!=ghost_pose::Result::ok) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
     out.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
-    if(active_request.shadow_enabled && (selected.sample.valid_fields&GC_VALID_SHADOW)
-            && !ghost_pose::shadow(model.value,selected.sample,out.view_projection,shadows[index].vertices,
+    // Player first: the same live Mario region for every ghost this frame,
+    // under the live view-projection its body and shadow are drawn with.
+    ghost_occlusion::region(out.view_projection,active_request.occlusion_fade!=0,
+        (live.valid_fields&GC_VALID_POSE)!=0,live.pose.position,live.pose.scale,out.occlusion);
+    if(active_request.shadow_enabled && (shown->sample.valid_fields&GC_VALID_SHADOW)
+            && !ghost_pose::shadow(model.value,shown->sample,out.view_projection,shadows[index].vertices,
                                    shadows[index].texture,out.shadow)) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
@@ -670,7 +732,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         && published.cancellation==current_cancel
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
-        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.clear();
+        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.detach();
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
@@ -679,7 +741,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
-    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.clear();}
+    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
         clear_timeline();have_timeline=true;timeline_request=next;
     }
@@ -805,8 +867,8 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     uint32_t summary=GP_DISABLED;bool before_start=true;
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
-        ghost_compositor::Pose pose{};uint32_t record=0;
-        const auto result=select(i,frame,live,world,pose,record);
+        ghost_compositor::Pose pose{};uint32_t record=0;float fade=1;
+        const auto result=select(i,frame,live,world,pose,record,fade);
         if(!current(candidate)) {
             // A revocation during any evaluation discards the whole candidate.
             for(uint32_t j=0;j<GP_GHOSTS;++j)out[j]={};
@@ -814,8 +876,12 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         }
         report.clip_decisions[i]=uint8_t(result);
         if(!i)summary=result;
-        if(result!=GP_READY && result!=GP_BEFORE_START) {heard[i]=unheard;continue;} // hidden: silent
-        place(i,live,bound[i]->frames[record].sample.pose.position);
+        if(result!=GP_READY && result!=GP_BEFORE_START) { // hidden: silent
+            heard[i]=unheard;
+            if(fade==0)silence(i);
+            continue;
+        }
+        place(i,live,bound[i]->frames[record].sample.pose.position,fade);
         hear(i,*bound[i],record,result==GP_BEFORE_START);
         before_start=before_start && result==GP_BEFORE_START;
         if(pose.count)out[count++]=pose;

@@ -44,7 +44,10 @@ def audit_clips(save_root: Path) -> int:
         missing = frames[-1].sequence - frames[0].sequence + 1 - len(frames)
         holes += bool(refused or missing)
         state = "OK" if not (refused or missing) else f"HOLES refused={len(refused)} missing={missing}"
-        print(f"  {state:<14} {path.name}: {len(frames)} frames" + (f", first refused {refused[:8]}" if refused else ""))
+        reasons = Counter(frames[index].refusal_name or "unrecorded" for index in refused)
+        print(f"  {state:<14} {path.name}: {len(frames)} frames"
+              + (f", first refused {refused[:8]} ({', '.join(f'{name} {count}' for name, count in reasons.most_common())})"
+                 if refused else ""))
     return holes
 
 
@@ -59,7 +62,7 @@ def audit_archive(path: Path) -> None:
         source.close()
         target.close()
         snapshot.unlink(missing_ok=True)
-    kinds, total = Counter(), 0
+    kinds, total, carried = Counter(), 0, 0
     for data in rows:
         try:
             frame = C.frame_from_bytes(data)
@@ -67,10 +70,14 @@ def audit_archive(path: Path) -> None:
             kinds["older or unreadable record"] += 1
             continue
         total += 1
+        if frame.carried:
+            carried += 1
         if not frame.playable:
             kinds[f"level {frame.level} area {frame.area} action {frame.live_action:#x} "
+                  f"refused {frame.refusal_name or 'unrecorded'} (status {frame.status}) "
                   f"world {frame.world_status} fields {frame.valid_fields}"] += 1
-    print(f"  {path.name}: {total} records, {sum(kinds.values())} without a playable pose")
+    print(f"  {path.name}: {total} records, {sum(kinds.values())} without a playable pose, "
+          f"{carried} with Mario culled (root carried or composed)")
     for kind, count in kinds.most_common(12):
         print(f"    {count:>6}  {kind}")
 

@@ -119,6 +119,13 @@ TINT_ENABLED_KEY = "ghost_tint_enabled"
 #: the game's own; a shipped preference, so no test pins the value.
 SHADOW_KEY = "ghost_shadow"
 DEFAULT_SHADOW = True
+#: THE GHOST NEVER BLOCKS THE PLAYER, on or off (the player-first fade). His
+#: words, 2026-09-23: *"if the ghost is blocking the player in any way, we
+#: prioritize rendering the player, not the ghost, which means we decrease
+#: opacity for the ghost."* On by default; the switch is his A/B comparison.
+#: A shipped preference, so no test pins the value.
+OCCLUSION_FADE_KEY = "ghost_occlusion_fade"
+DEFAULT_OCCLUSION_FADE = True
 #: HOW LOUD GHOST MARIO IS. His words, 2026-09-22: *"it would be nice if Ghost
 #: mario also played sound effects whenever he did his actions in game ... We
 #: should have a volume slider to adjust the ghost volume."* Half by default so
@@ -150,7 +157,7 @@ NO_RECORDINGS = {
 
 #: What a client may send to PUT /api/ghost.
 SETTABLE = ("enabled", "opacity", "nudge_frames", "tint", "view", "ghosts", "target", "proximity",
-            "shadow", "volume")
+            "shadow", "occlusion_fade", "volume")
 
 
 def template_store(inputs):
@@ -256,6 +263,17 @@ def _checked_view(value) -> str:
     return value
 
 
+def _checked_volume(volume) -> float:
+    if type(volume) not in (int, float) or not 0 <= volume <= 1:
+        raise ValueError("The ghost's volume is between silent and full.")
+    return float(volume)
+
+
+#: The Only Mario on/off settings, and what a value that is not a bool hears.
+SWITCHES = {"shadow": "The ghost's shadow is either on or off.",
+            "occlusion_fade": "Fading the ghost in front of Mario is either on or off."}
+
+
 def validate_changes(changes: dict) -> dict:
     """What a client asked for, or the one sentence saying why it cannot have
     it. Raises ValueError; nothing is applied until every value passes, so a
@@ -273,15 +291,13 @@ def validate_changes(changes: dict) -> dict:
         checked["nudge_frames"] = _checked_nudge(changes["nudge_frames"])
     if "tint" in changes:
         checked["tint"] = _checked_tint(changes["tint"])
-    if "shadow" in changes:
-        if type(changes["shadow"]) is not bool:
-            raise ValueError("The ghost's shadow is either on or off.")
-        checked["shadow"] = changes["shadow"]
+    for name, sentence in SWITCHES.items():
+        if name in changes:
+            if type(changes[name]) is not bool:
+                raise ValueError(sentence)
+            checked[name] = changes[name]
     if "volume" in changes:
-        volume = changes["volume"]
-        if type(volume) not in (int, float) or not 0 <= volume <= 1:
-            raise ValueError("The ghost's volume is between silent and full.")
-        checked["volume"] = float(volume)
+        checked["volume"] = _checked_volume(changes["volume"])
     if "proximity" in changes:
         checked["proximity"] = checked_proximity(changes["proximity"])
     if "view" in changes:
@@ -323,6 +339,7 @@ class GhostSession:
         self._opacity = DEFAULT_OPACITY
         self._tint = dict(DEFAULT_TINT)
         self._shadow = DEFAULT_SHADOW
+        self._occlusion_fade = DEFAULT_OCCLUSION_FADE
         self._volume = DEFAULT_VOLUME
         self._proximity = dict(DEFAULT_PROXIMITY)
         self._view = DEFAULT_VIEW
@@ -364,6 +381,7 @@ class GhostSession:
                 "opacity": self._opacity,
                 "tint": dict(self._tint),
                 "shadow": self._shadow,
+                "occlusion_fade": self._occlusion_fade,
                 "volume": self._volume,
                 "proximity": dict(self._proximity),
                 "view": self._view,
@@ -729,6 +747,7 @@ class GhostSession:
                                             DEFAULT_TINT["hue_degrees"])
             stored_view = database.get_state(VIEW_KEY, DEFAULT_VIEW)
             stored_shadow = database.get_state(SHADOW_KEY, DEFAULT_SHADOW)
+            stored_fade = database.get_state(OCCLUSION_FADE_KEY, DEFAULT_OCCLUSION_FADE)
             stored_volume = database.get_state(VOLUME_KEY, DEFAULT_VOLUME)
             stored_proximity = database.get_state(PROXIMITY_KEY, DEFAULT_PROXIMITY)
             self._selection.load(database)
@@ -750,6 +769,7 @@ class GhostSession:
         self._tint = {"enabled": bool(stored_tint_on), "hue_degrees": hue}
         self._proximity = saved_proximity(stored_proximity)
         self._shadow = stored_shadow if type(stored_shadow) is bool else DEFAULT_SHADOW
+        self._occlusion_fade = stored_fade if type(stored_fade) is bool else DEFAULT_OCCLUSION_FADE
         try:
             self._volume = min(1.0, max(0.0, float(stored_volume)))
         except (TypeError, ValueError):
@@ -778,6 +798,9 @@ class GhostSession:
         if "shadow" in changes:
             self._shadow = changes["shadow"]
             _remember(database, SHADOW_KEY, self._shadow)
+        if "occlusion_fade" in changes:
+            self._occlusion_fade = changes["occlusion_fade"]
+            _remember(database, OCCLUSION_FADE_KEY, self._occlusion_fade)
         if "volume" in changes:
             self._volume = changes["volume"]
             _remember(database, VOLUME_KEY, self._volume)
@@ -851,7 +874,8 @@ class GhostSession:
             self._native.reconcile(enabled=native_view and self._enabled and self._source.get("available", False),
                                    opacity=self._opacity, nudge=self._nudge,
                                    tint=self._tint, target=self._target, proximity=self._proximity,
-                                   shadow=self._shadow, volume=self._volume)
+                                   shadow=self._shadow, occlusion_fade=self._occlusion_fade,
+                                   volume=self._volume)
             if native_view:
                 self._end_window()
                 return

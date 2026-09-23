@@ -2,6 +2,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "ghost_occlusion.h"
 
 #ifdef _WIN32
 #define GC_GL_CALL __stdcall
@@ -59,6 +60,7 @@
  X(void, PolygonOffset, (float,float)) \
  X(void, StencilFuncSeparate, (uint32_t,uint32_t,int32_t,uint32_t)) X(void, StencilOpSeparate, (uint32_t,uint32_t,uint32_t,uint32_t)) \
  X(void, StencilMaskSeparate, (uint32_t,uint32_t)) X(void, ClearBufferfi, (uint32_t,int32_t,float,int32_t)) \
+ X(void, ClearBufferfv, (uint32_t,int32_t,const float*)) \
  X(void, DrawArrays, (uint32_t,int32_t,int32_t)) X(void, MemoryBarrier, (uint32_t))
 
 namespace ghost_compositor {
@@ -102,6 +104,8 @@ struct Pose {
     uint32_t flip_y; // GLideN64 world triangle path requires 1
     float hue_degrees; // 0 retains the original model colors
     Shadow shadow{}; // optional, at most 24 vertices; borrowed 16x16 IA8 texture
+    // Player-first fade for this body and its shadow; zero draws as before.
+    ghost_occlusion::Region occlusion{};
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;
@@ -125,6 +129,22 @@ Result begin_batch(Instance*, const Target&, const Pose*, uint32_t count);
  * SAME raster call, then end_hud. No emulation command or state update is replayed. */
 Result begin_hud(Instance*, uint64_t occurrence);
 void end_hud(Instance*);
+/* Translucent world layer: the game's water surfaces (and any other world
+ * geometry that blends over what is behind it without writing depth) seen
+ * over a ghost. The renderer mirrors each such world draw twice with its own
+ * program, textures and depth state: pass 0 accumulates its premultiplied
+ * color and remaining transmittance, pass 1 its nearest depth. begin_batch
+ * then gives every ghost fragment behind that depth the same blend the game
+ * gave the pixels behind the surface. Call clear_layer at each list start;
+ * a depth-writing world draw after the layer opened breaks it for the list.
+ * Only ordinary D24 depth is supported (N64 image depth never opens it). */
+enum class LayerPass : uint32_t { color = 0, depth = 1 };
+Result begin_layer(Instance*, const Target&, LayerPass);
+void end_layer(Instance*);
+void clear_layer(Instance*);
+void break_layer(Instance*);
+struct LayerStats { uint64_t opened, mirrored, skipped_blend, broken, applied; };
+LayerStats layer_stats(const Instance*);
 Result finalize(Instance*, uint64_t occurrence);
 Display display(const Instance*); // zero until finalized, never a stale candidate
 void abort(Instance*);

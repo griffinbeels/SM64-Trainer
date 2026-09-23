@@ -27,12 +27,12 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308) and sound events (36 at 600) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600) and the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP4: header 160, record 652, maximum 200000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP4: header 160, record 652, maximum 200000 records; header flag `GCLIP_DANCE_TAIL` | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
 Sizes are bytes. Native ghost versions are checked together; older native clips
@@ -87,6 +87,84 @@ float precision. Tests execute the pinned staged `gSPDisplayList` and x86 matrix
 loader, and cover floor tilt, nonuniform scale, camera motion and ownership
 refusals. A new live recording remains the acceptance check for the installed
 practice ROM's complete graph and emitted command sequence.
+
+### Pose refusals and the gaps they closed
+
+Every refused pose names its one failing check in `gc_pose.refusal` (the
+`gc_refusal` enum, append-only; Python `clip.REFUSALS`, `Frame.refusal_name`).
+A refused record keeps only that byte in its pose block; both loaders
+([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `valid_clip`,
+[clip.py](../src/sm64_events/ghost/clip.py)) accept it and refuse unknown
+values. `tools/ghost_extraction_audit.py` prints it per hole. Records written
+before 2026-09-23 have zero there (`unrecorded`).
+
+The first live archive with holes (2026-09-23, about 76k records) showed four
+causes, each fixed at its source:
+
+- **Holding or riding** (status 10: Bob-omb, Li'l Penguin, a heavy object,
+  Bowser's tail, the SSL hands-free-holding glitch that keeps `heldObj` set
+  through ordinary jumps and slides for 300+ frames, a shell). Capture refused
+  any nonzero `heldObj`/`riddenObj`. `geo_process_held_object` draws the held
+  object from Mario's hand node, after his alpha/body pair, so the executed
+  root proof is unaffected; the executed path now accepts these frames. The
+  ghost draws Mario alone (hand pose and `grab_position` included), not the
+  held object or shell. The legacy TRS reader keeps the refusal (`held`).
+- **Culled by the camera** (status 9: red-coin/8-coin star spawns freezing
+  Mario mid side flip or rollout, Bowser's final dialog). `geo_process_object`
+  still updates Mario's animation and `cameraToObject`, then `obj_is_in_view`
+  skips every list, so nothing proved the root. When a completed occurrence
+  shows no Mario alpha list at all (`not_drawn`), [ghost_root.cpp](../plugin/gfxwrap/ghost_root.cpp)
+  publishes the pose if either (1) his root inputs (gfx position, angles,
+  scale, action, body action) are bit-identical to the last executed root in
+  the same epoch and scene: the record carries that matrix and, as
+  `sample.camera`, the camera it executed under, plus its shadow when the
+  animation is identical too; or (2) neither action is floor-aligned and the
+  object's throw-matrix flags are clear: `align_with_floor` is the only writer
+  of Mario's `throwMatrix`, so the game composed TRS(gfx position, angle,
+  scale) and the record says `GC_ROOT_TRS`. A floor-aligned Mario that moved
+  while culled stays refused (`not_drawn_floor`: the tilt is unknown). A
+  Mario whose alpha list executed without his body (`body_mismatch`), a
+  duplicate, an interrupted list, a shared model or a translucent/metal
+  Mario is never carried. The star-spawn freeze starts after Mario's own
+  update that frame, so its first culled frame has already moved off the
+  last drawn one; route (2) covers it. Culled frames carry no shadow unless
+  route (1) applies.
+- **Invisible Mario** (status 4, `act_disappeared` and similar). The
+  renderer skips an inactive Mario, so his animation stays at
+  `set_mario_animation`'s startFrame-1 (-1) with a stale timer. A hidden pose
+  no longer checks animation fields; playback draws nothing for it without
+  evaluating the model ([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp)).
+- **Short gaps, bridged in playback**: 40 single frames of long-jump land
+  during the BitS-stairs BLJ (status 4). The frame after each is a fresh land
+  animation at frame 0, so the renderer did not process Mario on the refused
+  frame. A new recording's reason will say whether he was inactive (now a hidden
+  pose) or in another area index (`area`). Whatever the cause, playback now
+  holds the previous pose over any run of at most `GP_BRIDGE_FRAMES` (2)
+  refused records. The run must have a recorded pose on both sides, in the same
+  level and area, with no missing occurrence
+  ([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `bridged`). A
+  67 ms hold is below what reads as a pause; a blink is not. Longer runs, scene
+  changes and the clip's first or last rows still hide the ghost. The clip
+  and the audit keep the rows refused: this is display, not extraction.
+- **Painting exit, kept hidden**: the first 16 frames of `ACT_EXIT_AIRBORNE`
+  (status 3) come before the action's first `set_mario_animation`, so the new
+  level's Mario object has no animation (`animation`). The game draws him
+  unanimated at his spawn point, which is in the painting's plane. On
+  2026-09-23 he sat at (-2304, 0, -4520) for all 16 frames, then launched at
+  +32 units a frame out of it. By decomp reading (not yet footage), those
+  frames are also the arrival transition (`init_mario_after_warp`'s default
+  star iris, 0x10 frames). A ghost drawn there would sit inside the painting
+  under the same terrain depth, so it stays hidden. The model has no
+  unanimated pose to draw it with anyway. Footage of a painting exit would
+  confirm or overturn this.
+
+Poles and grabs have no capture rule of their own: their gfx angles carry
+the pole's pitch/roll into the executed (or TRS) root. In the 2026-09-23 Elevator
+Tour clip every pole frame (grab, hold, climb) has a pose. The ghost was missing
+on the poles because of alignment: that clip was recorded from the level entrance,
+the later attempts started inside the volcano, and the star coordinate follows
+elapsed time, so the ghost was still outside (another area, hidden) while he
+climbed.
 
 The native classifier follows the existing `EpochTracker`/`IgtClock` transition
 rules for levels, retries, area warps and teleports. Python encodes configuration
@@ -161,13 +239,39 @@ counts 0 ghostless frames over 11 loads; forwarding the old withdraw hides the
 load frame, ignoring `suspended` draws the paused frames, and not reviving on
 a restore hides the load frame (each red).
 
+A capture restart keeps the run (his report, 2026-09-23: spamming state loads
+in Blast Away the Wall, "eventually the ghost broke, and it never showed up
+again, until I reset"). His journal and pose archive show the cause: mid-run
+the recorder's GPU capture failed ("pending age limit") and reconnected, which
+opened a new capture channel (new owner token) in the same trainer process.
+The worker revoked, reconfigured capture (a new configuration and epoch) and
+cleared both its recovery and its origin ledger; the tracker's arm still named
+the attempt's first frame, captured before the restart, so it could never
+resolve again until the next attempt re-armed. The loads were incidental.
+Now any revoke except a protocol refusal parks the recovery (only a ROM close
+also demands an exact global timer afterwards), and the re-live on the same
+cartridge hands it back to the same process, tracker session and layout,
+still suspended as parked (restoring used to re-demand an exact global timer,
+which Usamune loads never meet because they keep the timer running). A star
+resumes by its own IGT at once; a segment at its next witnessed load. The renderer keeps its
+own checkpoints across the revoke too (`detach`), and a worker restore of the
+same run (a recovered origin with no command skipped in between, since worker
+revisions never repeat) keeps them on rebind, so later loads still draw on
+their own frame. The recovery witness restarts capture mid-run and then makes
+600 rapid loads (star and segment; backward, forward, repeated; Usamune style
+holding IGT a few frames and PJ64 style rewinding the timer): 2 hidden frames
+after the restart for the star, 1 for the segment's first load (the worker's
+first command arrives a list later), 0 wrong frames. Before, the star ghost
+never returned in that run.
+
 ### Several ghosts
 
 One command displays a set of up to 16 saved recordings (the PB plus others)
 against the same live origin and the same opacity, nudge, tint switch, overlap
 fade and star-end policy. Hue is per recording. Each ghost selects its own row
 from the shared coordinate: before-start clamps, and after-end, gaps, wrong
-scene, refused poses and its own recorded touch hide only that ghost. A live
+scene, refused poses (except a bridged short run) and its own recorded touch
+hide only that ghost. A live
 star grab or star generation change ends every ghost. Overlap fade compares
 live Mario with each ghost separately. The renderer evaluates all ghosts into
 one borrowed mesh each, sorts them farthest root first and draws them with one
@@ -199,10 +303,40 @@ Nudging back before the recorded touch can show an earlier pose unless the live
 origin has already ended. Fixed seek and segments without star-end behavior do
 not use this cutoff. Drawing neither scans the clip nor allocates an index.
 
+A FOLLOW clip flagged `GCLIP_DANCE_TAIL` (his ask, 2026-09-23, reversing the
+2026-09-19 end-at-touch ruling for the ghost's own star) ends on its own
+closing grab, not its first touch: it draws through any earlier star and the
+recorded closing grab and dance, then holds the last recorded pose and fades
+it out over `GP_STAR_FADE_FRAMES` (a tuning constant, 15 frames = 0.5 s), one
+equal opacity step a frame (body and shadow), and hides exactly that many
+frames after the last record, with or without `star_ends`. Its sound fades with it (the
+placement gain carries the fade) and is set silent as it hides. Unflagged
+clips, every recording saved before the tail existed, still end at the touch.
+The live behaviour is unchanged: his own star grab (or a new star generation)
+ends every ghost on that frame, dancing or not, and the tracker's suspension
+that follows his completion keeps them hidden. The suspension comes only from
+his attempt, so a ghost that grabs first dances and fades on its own timeline
+while he is still playing; if he grabs first, the ghosts vanish on his grab
+before reaching their own. The playback witness drives both orders and the
+fade values (1, 14/15 ... 1/15, then hidden at 15 frames), and an older clip
+beside the dancer ending at its touch.
+
+The 100-coin star (his report, 2026-09-23: the ghost vanished at the 100-coin
+star when the run goes on to an exit star) is timed by its exit segment: its
+live origin kind is `segment` and its attempt closes on the exit star's grab.
+[NativeGhost](../src/sm64_events/ghost/native_session.py) therefore sends
+`stop_at_star` only for a star origin, so neither his 100-coin grab nor the
+ghost's ends playback; his exit grab closes the attempt and the suspension
+hides the ghosts (a poll or so after his x-cam, not on the grab frame). Its
+export keeps the exit star's dance (any star run, whatever owns its clock), so
+a new 100-coin ghost plays through its 100-coin grab, the exit star and its
+dance, then fades; an older 100-coin clip plays to its end at the exit x-cam.
+
 The index chooses the first exact coordinate, including an unsupported pose,
 then checks that row's scene against live. It never searches a later duplicate
 or another scene for a usable pose. Before-start selection clamps to the first
-row; gaps, after-end, wrong scene, invalid timing and pose refusals hide playback.
+row; gaps, after-end, wrong scene, invalid timing and pose refusals hide playback,
+except that a refusal run of at most two records inside one scene holds the pose before it.
 Per-row scenes allow coherent cross-area clips.
 
 ## Recording, preservation and ownership
@@ -254,6 +388,22 @@ as `anchor_frame + rta_frames`. Every retained clip row needs valid raw/elapsed
 evidence in one continuity, with monotonic occurrences and elapsed time;
 timing-invalid archive rows cannot form a playable clip. A final closing reset
 can remain as evidence, but a star index stops before the next generation.
+
+A star run closes at x-cam, the dance's first frame of the grab that completes
+it (the exit star for the 100-coin star), so export appends the dance tail for
+any attempt that is not a segment: the rows after the closing frame while Mario stays in a star
+grab/dance action (`STAR_GRAB_ACTIONS`), the game clock advances, and timing
+continuity, star generation and scene hold, at most `DANCE_TAIL_MAX_FRAMES`
+(180, 6 s) past the close. Measured on his 2026-09-22 archive, dances run
+about 100 to 125 frames past x-cam; the exit dance ends by freezing the clock
+for the exit warp, the no-exit dance by returning to idle. Export often runs
+the moment the attempt closes, so it waits for the dance to end, the recording
+to stall for a second or close, or the cap's duration plus a second. A reset
+or state load ends the tail at once. The manifest's `tail_records` counts the
+tail; `check_manifest` binds the attempt's closing frame to the row before it.
+The [archive tests](../tests/test_ghost_archive.py) cover each way a dance
+ends, the cap, waiting for a dance still being captured, and no tail for a
+segment or a close outside the dance.
 
 Recorded pose usability depends on the captured clock and pose components, not
 the recording's framebuffer qualification. The saved `world_status` remains
@@ -354,6 +504,103 @@ world-space vertices under the body's live view-projection. Opacity and
 overlap fade apply through the pose; the shadow is black, so tint does not.
 `shadow_enabled` (GP5/GIPC5 onward, default on; `NativeChannel` key
 `shadow_enabled`, a bool) removes every ghost's shadow without rebuilding it.
+
+### Translucent world layer (water over the ghost)
+
+The ghost is drawn after the whole world pass against copied terrain depth.
+The game's water surfaces (SM64 movtex in the transparent layer, render mode
+`G_RM_AA_ZB_XLU_SURF`) test depth but never write it, so the ghost used to be
+drawn over them: a submerged ghost read through the water untinted. Live Mario
+is drawn before them and blended under them.
+
+The staged `ContextImpl::drawTriangles` seam
+([stage_ghost_renderer.py](../tools/stage_ghost_renderer.py)) repeats each
+world triangle draw ([ghost_link.cpp](../plugin/gfxwrap/ghost_link.cpp)
+`begin_layer`) whose N64 render mode compares but does not update depth, with
+the renderer's own program, textures, depth function and polygon offset, twice
+([ghost_compositor.cpp](../plugin/gfxwrap/ghost_compositor.cpp)
+`begin_layer`). The first layer draw opens the layer: it copies the game's depth
+and clears the layer to no color and full transmittance. Pass 0 keeps the
+game's RGB blend factors and replaces alpha with (ZERO, ONE_MINUS_SRC_ALPHA),
+so the layer holds the accumulated premultiplied color and the fraction let
+through. Pass 1 writes the nearest surface depth. Each pass restores the exact
+draw framebuffer, blend, color mask and depth mask. The ghost fragment shader
+then replaces a fragment behind that depth with `layer.rgb + ghost * layer.a`
+before its opacity blend. The result equals the game blending that surface
+over a ghost standing there, and a ghost in front of the surface is unchanged.
+It needs no captured colors and no format change. The camera below the
+surface works the same way, since SM64 draws water from both sides.
+
+The layer takes only a draw whose GL blend is dst `ONE_MINUS_SRC_ALPHA` with
+source `ONE` or `SRC_ALPHA`, depth test on and depth writes off. Other blends
+(additive, destination-reading) are counted (`skipped_blend`) and stay out. A
+depth-writing world draw after the layer opened, a failed depth pass or a GL
+error drops the layer for that list (`broken`); the ghost then draws as before.
+N64 image depth and multisampling never open it. The layer composes several
+surfaces in draw order but keeps one nearest depth, so a ghost between two
+translucent surfaces takes both. Level fog on the ghost's own body is not
+reproduced; that would need the frame's fog state, not this layer.
+
+The [water witness](../tests/test_ghost_water.py) (`SM64_TEST_GHOST_COMPOSITOR=1`)
+plays the renderer with two water bands, one in front of and one behind the
+ghost: pixels behind the near band equal the analytic water blend at 100% and
+50% opacity, pixels in front and outside the ghost are unchanged, the game frame
+is bit-identical with and without the repeated draws, state restores exactly,
+and a broken or refused layer draws as before. Removing the shader tint, the
+depth comparison, the alpha override, the depth pass or the depth-mask restore
+each turns it red. The connected pipeline witness draws real Mario behind a
+water plane at his waist: 5535 pixels take the water blend exactly, 4437 above
+it and every pixel outside him are unchanged (2026-09-23, RTX 5090). Live GLideN64
+has not run it; which SM64 draws qualify is known from the decomp render
+modes and the pinned blend code, not from a live frame.
+
+### Player-first fade
+
+A ghost never blocks live Mario or the camera. [ghost_occlusion.h](../plugin/gfxwrap/ghost_occlusion.h)
+owns the rule and every tuning constant; the body and shadow shaders share its
+GLSL, so a shadow fades exactly like its body. Per fragment, on top of the
+user's opacity and the overlap fade:
+
+- **In front of live Mario, over him.** Playback projects his body box (feet at
+  his position, 100 wide and 160 tall per unit gfx scale) with the ghosts' own
+  live view-projection: a screen ellipse plus his body centre's clip w. A ghost
+  fragment keeps `1 - 0.85 x cover x front` of its opacity. `cover` is 1 inside
+  the ellipse inscribed in his box and falls smoothly to 0 at 1.6 times that.
+  `front` rises from 0 at his centre's depth to 1 at 60 units nearer the
+  camera. Behind him, or away from him on screen, a ghost is byte-exact.
+- **At the camera.** `smoothstep(150, 450, w)`: invisible within 150 units of
+  the camera, whole from 450. Clip w is eye distance because SM64's
+  guPerspective uses scale 1, and GLideN64's screen scale only touches x and y.
+
+Without a live pose, only the camera term applies. `occlusion_fade` (the
+`NativeChannel` key, a bool, absent means on) removes both terms. It lives in
+the checked-zero word after `shadow_enabled` in both the IPC and the playback
+request, so no size or version moved: 0 draws exactly as before, and an older
+DLL refuses 1 with `GIPC_PROTOCOL`. Why per fragment rather than per ghost:
+a per-ghost fade (Trackmania's "ghosts close to you turn transparent") fades
+the whole body when only an arm crosses Mario, and it cannot tell "in front
+of" from "beside". Screen-space cutouts around the player (Unreal's depth and
+camera-distance fades) fade only the pixels that block. The box assumes a
+standing Mario, so during a dive the edges of his body get a softer fade.
+
+The [occlusion witness](../tests/test_ghost_occlusion.py) (hidden WGL, both
+depth routes) checks every pixel against the rule. Over the core, the ghost
+keeps 15% of its opacity (208 fully faded pixels, 524 faded in all), the rim
+is smooth, pixels outside 1.6x and a ghost behind Mario are byte-exact, and
+the camera term hides a ghost at 100 units, halves it at 300 and is exact at
+450. The shadow fades over Mario like its body, the renderer's y flip mirrors
+the ghost and its region together, and the clean game image and both depths
+stay exact. The [playback witness](../tests/test_ghost_playback.py)
+checks that the projected box reaches each pose, that there is no region when
+Mario is behind the camera or has no pose, and that the switch empties it. The
+connected pipeline (2026-09-23, RTX 5090, 640x480, real model) faded 8444 ghost
+pixels over a live Mario 300 units beyond the ghost. It changed 0 pixels
+outside the ghost and 0 with Mario 300 units nearer. It then timed the fade on
+over 180 samples: one ghost p50 0.62 ms, p95 1.11 ms, max 1.35 ms including
+swap; sixteen p50 3.05 ms, p95 4.16 ms, max 4.51 ms. Removing the fade from
+the body, the shadow or the camera term, reversing the front test, ignoring
+the region, taking the region after the y flip, or dropping the switch in
+playback, IPC or the channel each turns a witness red.
 
 ### Sound events
 
@@ -479,8 +726,10 @@ alone never reports that the ghost reached the game window.
 and never-captured frames (`clip.py::pose_gaps`); a nonzero count is logged when
 the clip is saved and shown on that ghost's picker row, because the ghost blinks
 there. `tools/ghost_extraction_audit.py` audits every committed clip and the live
-pose archives (exit 1 on any hole). 2026-09-22: every post-fix clip was complete;
-the only pose-less archive records were a star-exit level load, outside attempts.
+pose archives (exit 1 on any hole), naming each hole's pose refusal and
+counting frames whose Mario was culled but posed. 2026-09-22: every post-fix
+clip was complete; the only pose-less archive records were a star-exit level
+load, outside attempts. 2026-09-23: see [pose refusals](#pose-refusals-and-the-gaps-they-closed).
 
 Focused hosts exercise the actual capture reader, clock, origin ledger, playback
 loader, compositor and presentation modules. See

@@ -5,6 +5,13 @@ and its captured camera is evidence rather than the playback camera. Each
 record may also carry the shadow the game drew under Mario and the sound
 requests Mario issued since the previous frame (`Frame.sounds`), each with
 its own validity bit.
+
+A star run's clip may end with a DANCE TAIL (header flag `DANCE_TAIL`): the
+frames after the attempt closed, through Mario's closing star grab and dance,
+so the ghost celebrates before it fades. The 100-coin star's clip carries one
+too although its clock is its exit segment's (it closes on the exit star). The
+attempt still closes on its own frame; the manifest's `tail_records` counts
+the rows after it.
 """
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ SHADOW_BYTES, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW = 292, 36, 8, 1
 OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
 STAR_CLOCK, SEGMENT_CLOCK = 1, 2
+DANCE_TAIL = 1  # header flag: rows after the closing frame are the closing star's dance
 CLOCK_KINDS = {"star": STAR_CLOCK, "segment": SEGMENT_CLOCK}
 _HEADER = struct.Struct("<8s8I16sQqd2Q2I2i4I3Q2I")
 _PREFIX = struct.Struct("<4I")
@@ -36,6 +44,14 @@ _SAMPLE = struct.Struct("<4I2QqI2H2h2I")
 _WARP = struct.Struct("<Hh")
 _CLOCK = struct.Struct("<4I6Q")
 _SOUND = struct.Struct("<4B8I")
+REFUSAL_AT = 16 + 60 + 77  # record offset of gc_pose.refusal
+# gc_refusal (ghost_capture.h), by value: the one check that refused the pose.
+# With a valid pose, "not_drawn" means the game culled Mario and the root was
+# carried from the last frame that proved it, or composed as his own TRS.
+REFUSALS = ("", "object", "area", "held", "billboard", "throw_matrix", "floor", "head",
+            "transform", "animation", "animation_range", "animation_stale", "body_state",
+            "camera", "camera_to_object", "shared_model", "graph", "body_graph", "material",
+            "not_drawn", "not_drawn_floor", "body_mismatch", "duplicate", "incomplete")
 PRODUCER_FIELDS = ("pid", "created", "generation", "rom_generation", "configuration",
                    "epoch", "qpc_frequency", "qpc_anchor", "utc_anchor")
 
@@ -110,6 +126,16 @@ class Frame:
     clock: Clock
     sounds: tuple[int, ...] = ()  # Mario's play_sound bits this frame, in order
     sound_overflow: bool = False  # more than SOUND_EVENTS were issued
+    refusal: int = 0  # gc_refusal: why this frame's own lists did not prove the pose
+
+    @property
+    def refusal_name(self) -> str:
+        return REFUSALS[self.refusal]
+
+    @property
+    def carried(self) -> bool:
+        """Mario was culled: the root came from memory or TRS, not this frame's lists."""
+        return bool(self.valid_fields & POSE) and self.refusal != 0
 
     @property
     def has_shadow(self) -> bool:
@@ -145,7 +171,10 @@ def frame_from_bytes(data: bytes) -> Frame:
     count, flags, _producer, _consumer, *bits = _SOUND.unpack_from(raw, SOUND_AT)
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
                   *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)),
-                  tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW))
+                  tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW),
+                  raw[REFUSAL_AT])
+    if frame.refusal >= len(REFUSALS):
+        raise ClipError("native ghost pose refusal is unknown")
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
         raise ClipError("native ghost occurrence is invalid")
     if valid & CLOCK and not (4 <= frame.level <= 36 and 1 <= frame.area <= 8):
@@ -153,7 +182,8 @@ def frame_from_bytes(data: bytes) -> Frame:
     if bool(valid & ACTION) != bool(frame.live_action):
         raise ClipError("native ghost action validity disagrees with its value")
     for bit, lo, hi in ((POSE, 76, 220), (CAMERA, 220, 256)):
-        if not valid & bit and any(raw[lo:hi]):
+        component = raw[lo:hi] if bit != POSE else raw[lo:REFUSAL_AT] + raw[REFUSAL_AT + 1:hi]
+        if not valid & bit and any(component):
             raise ClipError("native ghost refusal retains invalid component bytes")
         if valid & bit:
             floats = struct.unpack_from("<6f", raw, lo)
@@ -269,6 +299,11 @@ class Clip:
     origin_elapsed: int
     origin_continuity: int
     frames: tuple[Frame, ...]
+    flags: int = 0
+
+    @property
+    def dance_tail(self) -> bool:
+        return bool(self.flags & DANCE_TAIL)
 
     def canonical_frames(self) -> dict[int, Frame]:
         """First exact owner-coordinate occurrence, including pose refusals."""
@@ -332,7 +367,8 @@ def decode_clip(data: bytes) -> Clip:
     if ((magic, version, size, record_size, rom, sample_version) !=
             (MAGIC, VERSION, HEADER_BYTES, RECORD_BYTES, 1, SAMPLE_VERSION)
             or not configuration or not epoch or not frequency or anchor < 0
-            or not math.isfinite(utc) or utc <= 0 or not any(clip_id) or flags or any(reserved)
+            or not math.isfinite(utc) or utc <= 0 or not any(clip_id) or any(reserved)
+            or flags & ~DANCE_TAIL
             or not 1 <= count <= MAX_RECORDS or len(data) != HEADER_BYTES + count * RECORD_BYTES):
         raise ClipError("native ghost file header is invalid")
     frames = tuple(frame_from_bytes(data[at:at + RECORD_BYTES])
@@ -347,10 +383,12 @@ def decode_clip(data: bytes) -> Clip:
             origin.clock.continuity_id):
         raise ClipError("native ghost header disagrees with its exact origin")
     return Clip(clip_id.hex(), configuration, epoch, frequency, anchor, utc, level, area,
-                kind, origin_timer, origin_raw, origin_sequence, origin_elapsed, origin_continuity, frames)
+                kind, origin_timer, origin_raw, origin_sequence, origin_elapsed, origin_continuity, frames,
+                flags)
 
 
-def encode_clip(frames, producer, *, clock_kind: int, clip_id: str | None = None) -> bytes:
+def encode_clip(frames, producer, *, clock_kind: int, clip_id: str | None = None,
+                dance_tail: bool = False) -> bytes:
     source = producer_values(producer)
     checked = []
     for frame in frames:
@@ -367,7 +405,7 @@ def encode_clip(frames, producer, *, clock_kind: int, clip_id: str | None = None
                           source["qpc_frequency"], source["qpc_anchor"], source["utc_anchor"],
                           records[0].sequence, records[-1].sequence,
                           records[0].global_timer, records[-1].global_timer, level, area,
-                          clock_kind, records[0].global_timer, records[0].igt, 0,
+                          clock_kind, records[0].global_timer, records[0].igt, DANCE_TAIL if dance_tail else 0,
                           records[0].sequence, records[0].clock.elapsed_frames,
                           records[0].clock.continuity_id, 0, 0)
     return header + b"".join(frame.raw for frame in records)
@@ -403,9 +441,12 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
     source = producer_values(SimpleNamespace(**manifest["source"]))
     clip = read_clip(path, digest)
     first, last = clip.frames[0], clip.frames[-1]
+    tail = manifest.get("tail_records", 0)  # absent before dance tails: none
+    if type(tail) is not int or not 0 <= tail < len(clip.frames) or bool(tail) != clip.dance_tail:
+        raise ClipError("native ghost manifest disagrees with its dance tail")
     expected_kind = CLOCK_KINDS[owner["native_clock_kind"]]
     if (clip.clock_kind != expected_kind or clip.origin_global_timer != owner["native_clock_frame"]
-            or last.global_timer != owner["closed_frame"]):
+            or clip.frames[-1 - tail].global_timer != owner["closed_frame"]):
         raise ClipError("native ghost manifest disagrees with the attempt's effective origin")
     expected = dict(version=VERSION, clip_id=clip.clip_id, bytes=path.stat().st_size,
                     records=len(clip.frames), record_bytes=RECORD_BYTES, sample_version=SAMPLE_VERSION,
@@ -430,9 +471,12 @@ def pose_gaps(manifest) -> int:
     return int(manifest.get("invalid_records") or 0) + int(manifest.get("missing_occurrences") or 0)
 
 
-def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | None = None) -> dict:
-    """Atomically write one clip; the replay publisher owns its durable commit."""
-    data = encode_clip(frames, producer, clock_kind=clock_kind, clip_id=clip_id)
+def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | None = None,
+               tail_records: int = 0) -> dict:
+    """Atomically write one clip; the replay publisher owns its durable commit.
+    The last `tail_records` frames are a star clip's dance tail."""
+    data = encode_clip(frames, producer, clock_kind=clock_kind, clip_id=clip_id,
+                       dance_tail=tail_records > 0)
     clip = decode_clip(data)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -457,5 +501,6 @@ def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | 
             "first_igt": first.igt, "last_igt": last.igt, "level": clip.level, "area": clip.area,
             "invalid_records": sum(not frame.playable for frame in clip.frames),
             "missing_occurrences": last.sequence - first.sequence + 1 - len(clip.frames),
+            "tail_records": tail_records,
             **_origin_metadata(clip),
             "source": producer_values(producer)}

@@ -60,7 +60,7 @@ void Recovery::clear() {
     pending_=ended_=absolute_timer_=direct_star_=false;
     first_level_=first_area_=0;
 }
-void Recovery::suspend() {if(bound())pending_=absolute_timer_=true;}
+void Recovery::suspend(bool absolute_timer) {if(bound()){pending_=true;absolute_timer_=absolute_timer;}}
 bool Recovery::coordinate(const Checkpoint &s,uint32_t &out) const {
     if(!bound() || s.epoch!=origin_.epoch || s.continuity!=origin_.continuity
             || s.sequence<origin_.sequence || s.elapsed<origin_.elapsed)return false;
@@ -83,8 +83,9 @@ void Recovery::remember(const Checkpoint &value) {
         history_.push_back(copy);next_=uint32_t(history_.size())%limit;
     } else {history_[next_]=copy;next_=(next_+1)%limit;}
 }
-void Recovery::bind(const go_origin &origin) {
-    history_.clear();next_=0;origin_=origin;restoration_={};
+void Recovery::bind(const go_origin &origin,bool same_run) {
+    if(!(same_run && bound())) {history_.clear();next_=0;}
+    origin_=origin;restoration_={};
     pending_=ended_=absolute_timer_=false;
     first_level_=latest_.level;first_area_=latest_.area;
     uint32_t value=0;

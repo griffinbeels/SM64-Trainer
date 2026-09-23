@@ -16,7 +16,7 @@ IDENTITY = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
 def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=4,
           epoch=5, qpc=None, level=24, area=1, elapsed=None, continuity=9,
           origin=1, clock_valid=None, refusal=None, transition=1, banked=0,
-          shadow=False, sounds=None, overflow=False):
+          shadow=False, sounds=None, overflow=False, action=None, pose_refusal=0):
     raw_igt = sequence if igt is None else igt
     valid |= (32 if shadow else 0) | (64 if sounds is not None else 0)
     raw = bytearray(652)
@@ -25,11 +25,12 @@ def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=
         sequence, sequence + 100, 1000 + sequence if qpc is None else qpc,
         100 + sequence if timer is None else timer, sequence & 0xffff,
         raw_igt, level, area, 0 if valid & 31 == 31 else 9,
-        0x0c400201 if valid & 8 else 0)
+        (0x0c400201 if action is None else action) if valid & 8 else 0)
     if valid & 2:
         struct.pack_into("<6f", raw, 76, 10, 20, 30, 1, 1, 1)
         struct.pack_into("<3h3h2H4I", raw, 100, 0, 1234, 0, 197, 7, 189, 1, 1,
                          0x0c400201, 0x0c400201, 0, 1)
+    raw[153] = pose_refusal  # gc_pose.refusal: the one pose byte a refusal keeps
     if valid & 4:
         struct.pack_into("<6f2hf2h", raw, 220, 0, 100, 500, 0, 0, 0, 0, 0, 45, 100, 20000)
     if clock_valid is None:

@@ -46,7 +46,7 @@ enum : uint32_t {
     STENCIL_BACK_REF=0x8CA3, STENCIL_BACK_VALUE_MASK=0x8CA4, STENCIL_BACK_WRITEMASK=0x8CA5,
     KEEP=0x1E00, INCR=0x1E02, EQUAL=0x202, LESS=0x201, LEQUAL=0x203, ALWAYS=0x207,
     POLYGON_OFFSET_FACTOR=0x8038, POLYGON_OFFSET_UNITS=0x2A00,
-    DEPTH_STENCIL=0x84F9, TRANSFORM_FEEDBACK_ACTIVE=0x8E24, MAJOR_VERSION=0x821B,
+    DEPTH_STENCIL=0x84F9, COLOR=0x1800,TRANSFORM_FEEDBACK_ACTIVE=0x8E24, MAJOR_VERSION=0x821B,
     MINOR_VERSION=0x821C, CONTEXT_PROFILE_MASK=0x9126, CONTEXT_CORE_PROFILE_BIT=1,
     SHADER_IMAGE_ACCESS_BARRIER_BIT=0x20, TEXTURE_FETCH_BARRIER_BIT=8
 };
@@ -62,12 +62,12 @@ constexpr uint32_t stencil_queries[2][7] = {
 constexpr uint32_t blend_queries[] = {BLEND_SRC_RGB,BLEND_DST_RGB,BLEND_SRC_ALPHA,BLEND_DST_ALPHA,BLEND_EQUATION_RGB,BLEND_EQUATION_ALPHA};
 constexpr uint32_t unpack_queries[] = {UNPACK_ALIGNMENT,UNPACK_ROW_LENGTH,UNPACK_SKIP_ROWS,UNPACK_SKIP_PIXELS};
 
-/* Only this module's VAO, texture units 0/1 and draw-buffer index 0 change.
+/* Only this module's VAO, texture units 0-3 and draw-buffer index 0 change.
  * In particular, no element-buffer binding on the renderer's VAO is changed. */
 struct State {
     int32_t program, vao, array_buffer, unpack_buffer, renderbuffer;
     int32_t read_fbo, draw_fbo, read_buffer, active_texture;
-    int32_t textures[2], samplers[2], scissor[4], polygon[2];
+    int32_t textures[4], samplers[4], scissor[4], polygon[2];
     float viewport[4];
     float polygon_offset[2];
     int32_t blend[6], stencil[2][7], depth_func, unpack[4];
@@ -81,7 +81,7 @@ struct State {
         g.GetIntegerv(RENDERBUFFER_BINDING,&renderbuffer); g.GetIntegerv(READ_FRAMEBUFFER_BINDING,&read_fbo);
         g.GetIntegerv(DRAW_FRAMEBUFFER_BINDING,&draw_fbo); g.GetIntegerv(READ_BUFFER,&read_buffer);
         g.GetIntegerv(ACTIVE_TEXTURE,&active_texture);
-        for (uint32_t i=0;i<2;++i) {
+        for (uint32_t i=0;i<4;++i) {
             g.ActiveTexture(TEXTURE0+i); g.GetIntegerv(TEXTURE_BINDING_2D,&textures[i]);
             g.GetIntegerv(SAMPLER_BINDING,&samplers[i]);
         }
@@ -106,7 +106,7 @@ struct State {
         g.BindBuffer(PIXEL_UNPACK_BUFFER,unpack_buffer); g.BindRenderbuffer(RENDERBUFFER,renderbuffer);
         g.BindFramebuffer(READ_FRAMEBUFFER,read_fbo); g.ReadBuffer(read_buffer);
         g.BindFramebuffer(DRAW_FRAMEBUFFER,draw_fbo);
-        for (uint32_t i=0;i<2;++i) {g.ActiveTexture(TEXTURE0+i);g.BindTexture(TEXTURE_2D,textures[i]);g.BindSampler(i,samplers[i]);}
+        for (uint32_t i=0;i<4;++i) {g.ActiveTexture(TEXTURE0+i);g.BindTexture(TEXTURE_2D,textures[i]);g.BindSampler(i,samplers[i]);}
         g.ActiveTexture(active_texture);
         g.ViewportIndexedf(0,viewport[0],viewport[1],viewport[2],viewport[3]);
         g.ScissorIndexed(0,scissor[0],scissor[1],scissor[2],scissor[3]);
@@ -124,6 +124,26 @@ struct State {
         }
         for (size_t i=0;i<std::size(enables);++i) (enabled[i] ? g.Enable : g.Disable)(enables[i]);
         for (size_t i=0;i<4;++i) g.PixelStorei(unpack_queries[i],unpack[i]);
+    }
+};
+/* Every ghost fragment shader is this version line, then the player-first
+ * fade (ghost_occlusion.h), then its own body; one rule for body and shadow. */
+constexpr const char* fragment_version="#version 430 core\n";
+struct OcclusionUniforms {
+    int32_t at[ghost_occlusion::uniform_count]{};
+    bool find(const Dispatch& g,uint32_t program) {
+        for (unsigned i=0;i<ghost_occlusion::uniform_count;++i) {
+            at[i]=g.GetUniformLocation(program,ghost_occlusion::uniform_names[i]);
+            if (at[i]<0) return false;
+        }
+        return true;
+    }
+    void set(const Dispatch& g,const ghost_occlusion::Region& r) const {
+        using namespace ghost_occlusion;
+        g.Uniform1i(at[0],!r.enabled ? 0 : r.has_player ? 2 : 1);
+        g.Uniform2f(at[1],r.center[0],r.center[1]);g.Uniform2f(at[2],r.radius[0],r.radius[1]);
+        g.Uniform1f(at[3],r.player_w);g.Uniform2f(at[4],REGION_INNER,REGION_OUTER);
+        g.Uniform2f(at[5],FRONT_BAND,PLAYER_STRENGTH);g.Uniform2f(at[6],NEAR_HIDDEN,NEAR_FULL);
     }
 };
 struct Guard {

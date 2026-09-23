@@ -77,6 +77,20 @@ marking a grab as a mistake (`attempt_cleared`) retroactively re-attributes
 every later failure to the previous valid practice target. Implemented in
 `tracking/projection.py`; semantics in its docstring.
 
+**How attempts are built is journaled per session (2026-09-23, task 0144).**
+Changing a projection rule re-derives every attempt ever recorded, and an
+attempt id is what a saved PB, a saved clip and a clear point at. So a rule
+that moves attempt BOUNDARIES is keyed to the events it was written for, not
+applied to history: `session_started` carries `attempt_rules`
+(`projection.ATTEMPT_RULES`), absent on every older session, and the projector
+switches per session. Rules 2 made save-state loads run through attempts and
+judged every attempt a valid attempt or not; replaying all seven journal
+snapshots on this machine with the old code and the new (5,343 attempts, 754
+PB rows) moved nothing — no attempt lost, gained or changed, every PB link and
+every finished run identical. The next rule that moves a boundary bumps the
+number the same way. A rule that only ADDS a fact (the replay lead-in floor)
+applies to history freely.
+
 ### Recovery boundaries
 
 `server/pollsupervisor.py` restarts an unexpectedly failed poll loop with fresh

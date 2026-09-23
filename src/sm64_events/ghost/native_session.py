@@ -137,7 +137,8 @@ class NativeGhost:
             del self._cached[next(iter(self._cached))]
         return result, asset
 
-    def reconcile(self, *, enabled, opacity, nudge, tint, target, proximity=None, shadow=True, volume=0.5):
+    def reconcile(self, *, enabled, opacity, nudge, tint, target, proximity=None, shadow=True,
+                  occlusion_fade=True, volume=0.5):
         proximity = {**DEFAULT_PROXIMITY, **checked_proximity(proximity or {})}
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         with self._control_lock:
@@ -155,7 +156,8 @@ class NativeGhost:
                               "proximity_enabled": proximity["enabled"],
                               "proximity_distance": proximity["extra_distance"],
                               "tint_enabled": tint["enabled"], "hue_degrees": tint["hue_degrees"],
-                              "shadow_enabled": bool(shadow), "volume": float(volume),
+                              "shadow_enabled": bool(shadow), "occlusion_fade": bool(occlusion_fade),
+                              "volume": float(volume),
                               "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
             self._send()
 
@@ -204,6 +206,11 @@ class NativeGhost:
                 return self._send(blocking=blocking)
             controls = dict(self._controls)
             hue = controls.pop("hue_degrees")
+            # A star whose live clock is a segment's (the 100-coin star, timed
+            # to its exit star) is not over at the first star grab: his
+            # 100-coin grab must not end the ghosts, nor theirs end them. His
+            # exit grab closes the attempt, and the suspension hides them.
+            controls["stop_at_star"] = controls["stop_at_star"] and origin["kind"] == "star"
             clips = [{"clip_id": bytes.fromhex(manifest["clip_id"]),
                       "clip_sha256": bytes.fromhex(manifest["sha256"]),
                       "clip_path": str(path), "hue_degrees": ghost_hue(hue, index)}

@@ -116,6 +116,20 @@ bool begin_hud() {
     return observing && ghost_stream::candidate() && ghost_draw::begin_hud();
 }
 void end_hud() { ghost_draw::end_hud(); }
+bool begin_layer(uint32_t pass) {
+    if (!observing || !ghost_stream::requested() || !(gSP.geometryMode & G_ZBUFFER) || RSP.LLE
+            || GBI.getMicrocodeType() != F3D || GBI.isNoN() || config.frameBufferEmulation.N64DepthCompare
+            || gDP.otherMode.cycleType > G_CYC_2CYCLE)
+        return false;
+    // A draw that writes depth after the layer opened moves the scene the
+    // layer was measured against; the list keeps no layer rather than a stale one.
+    if (gDP.otherMode.depthUpdate) { if (pass == 0) ghost_draw::break_layer(); return false; }
+    if (!gDP.otherMode.depthCompare) return false;
+    auto *buffer = raster_buffer();
+    return buffer && !buffer->m_isDepthBuffer && buffer->m_pDepthBuffer
+        && ghost_draw::begin_layer(pass, uint32_t(buffer->m_FBO));
+}
+void end_layer() { ghost_draw::end_layer(); }
 void triangles(uint32_t count) {
     if (!observing || !count || !(gSP.geometryMode & G_ZBUFFER)) return;
     auto *buffer = raster_buffer();

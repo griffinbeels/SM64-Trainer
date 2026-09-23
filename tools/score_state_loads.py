@@ -26,7 +26,10 @@ evidence and they answer different halves:
   * DENSE -- the picture ledger's `igt_overall`, one row per drawn picture,
     from the capture scratch (`replay/picturearchive.py`) and saved clip
     sidecars. Consecutive game frames, so the rule can be run exactly as it
-    would run on the poll loop. This plane measures FALSE ALARMS.
+    would run on the poll loop. Until 2026-09-23 no trace held a load, so
+    every hit here was a false alarm; that day's WF trace holds sixteen real
+    ones, so a hit is now a load to CHECK (its restored values repeat) rather
+    than an error. The rule shipped as `anchors.load_signature`.
   * SPARSE -- the journals. Events carry `igt_frames` but nothing in between,
     so a pair can only prove that the counter went backward at least once,
     never on which frame. This plane measures how many loads today's system
@@ -469,7 +472,7 @@ def main() -> int:
                        if kind != SAMPLE_GAP)
     print(f"  scored steps       {scored_steps}"
           f"  ({scored_steps / 30 / 60:.1f} minutes of game time)")
-    print(f"  FALSE ALARMS of the rule on real play: "
+    print(f"  rule hits on real play (check each: a real load restores the same value again and again): "
           f"{dense_totals[BACKWARD] + dense_totals[FORWARD]}")
     if dense_findings:
         causes = Counter(f.cause for f in dense_findings)

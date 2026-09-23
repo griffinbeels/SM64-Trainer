@@ -201,7 +201,7 @@ def test_unplayable_or_ambiguous_file_refused(rows, reason):
 
 
 BAD_HEADER_WORDS = [(8, 1), (12, 128), (16, 192), (20, 240001), (28, 2),
-                    (104, 25), (112, 3), (116, 102), (120, 2), (124, 1),
+                    (104, 25), (112, 3), (116, 102), (120, 2), (124, 2),
                     (128, 2), (136, 2), (144, 10), (152, 1), (156, 1)]
 
 
@@ -209,6 +209,16 @@ BAD_HEADER_WORDS = [(8, 1), (12, 128), (16, 192), (20, 240001), (28, 2),
 def test_corrupted_header_is_not_accepted(offset, value):
     data = bytearray(encoded((frame(),)))
     struct.pack_into("<I", data, offset, value)
+    with pytest.raises(ClipError):
+        decode_clip(data)
+
+
+def test_a_dance_tail_is_one_known_header_flag_on_either_clock():
+    for kind in (STAR_CLOCK, SEGMENT_CLOCK):  # the 100-coin star runs on its exit segment's clock
+        assert decode_clip(encode_clip((frame(),), producer(), clock_kind=kind, dance_tail=True)).dance_tail
+    assert not decode_clip(encoded((frame(),))).dance_tail
+    data = bytearray(encoded((frame(),)))
+    struct.pack_into("<I", data, 124, 3)
     with pytest.raises(ClipError):
         decode_clip(data)
 
@@ -223,6 +233,20 @@ def test_clock_schema_cannot_claim_or_retain_inconsistent_evidence(offset, value
     struct.pack_into("<I", raw, offset, value)
     with pytest.raises(ClipError):
         frame_from_bytes(raw)
+
+
+def test_refused_pose_keeps_only_its_named_reason():
+    refused = frame_from_bytes(frame(valid=29, pose_refusal=19))
+    assert not refused.playable and refused.refusal_name == "not_drawn" and not refused.carried
+    carried = frame_from_bytes(frame(pose_refusal=19))
+    assert carried.playable and carried.carried
+    assert frame_from_bytes(frame()).refusal == 0 and not frame_from_bytes(frame()).carried
+    with pytest.raises(ClipError, match="refusal is unknown"):
+        frame_from_bytes(frame(valid=29, pose_refusal=24))
+    raw = bytearray(frame(valid=29, pose_refusal=3))
+    raw[76] = 1
+    with pytest.raises(ClipError, match="retains"):
+        frame_from_bytes(bytes(raw))
 
 
 def test_truncation_trailing_data_nonfinite_and_invalid_components():

@@ -283,6 +283,9 @@
   .attempt-actions button.pb-blocked .caveat-chip {
     cursor: not-allowed; margin-left: .3rem;
   }
+  /* Save-as-PB on a run that was not valid (task 0144): still live, so
+     nothing is dimmed -- the chip is the whole difference. */
+  .attempt-actions button.pb-invalid .caveat-chip { margin-left: .3rem; }
   /* The mark beside a practice-log row's TIME keeps the glyph and drops the
      word at EVERY width, unlike the objective card's chip which only drops it
      under 793px. Two reasons, and the first is measured: at 1500px the two-
@@ -8626,7 +8629,7 @@
   .ghost-timing { flex-wrap: wrap; }
   /* Tighter than a default field: its first item is a small switch, not text,
      so the label sits closer to it without the two running together. */
-  .ghost-colour, .ghost-shadow { gap: .4rem; }
+  .ghost-colour, .ghost-shadow, .ghost-front-fade { gap: .4rem; }
   .ghost-volume-range { width: 90px; min-width: 0; accent-color: var(--gold); }
   /* WHAT THE GHOST DRAWS -- the whole picture, or only Mario.
      A native `<select>` of two options: this project's rule is that a SHORT

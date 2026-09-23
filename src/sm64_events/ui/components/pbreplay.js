@@ -4,7 +4,7 @@ import { useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { Icon } from "./icons.js";
-import { cardBadge } from "./marks.js";
+import { caveatOf, cardBadge } from "./marks.js";
 
 const html = htm.bind(h);
 
@@ -45,13 +45,32 @@ export function PbAction({ attempt, blocked, state, undo, beat }) {
   if (attempt.pb_action === "undo") return html`<button onclick=${undo} disabled=${state.busy}
     title="delete this save — the previous PB on this strategy becomes current again">Undo PB</button>`;
   if (attempt.pb_action !== "save" && !blocked) return null;
-  return html`<button class=${blocked ? "pb-blocked" : (beat ? "pb-glow" : "")}
+  const { cls, title, mark } = saveReason(attempt, blocked, beat);
+  return html`<button class=${cls}
     disabled=${Boolean(blocked) || state.busy} onclick=${state.save}
-    title=${blocked ? `Cannot be saved as a PB — ${blocked.sentence}` : "Save this time as a PB and keep its replay"}
-    aria-label=${blocked ? `Cannot be saved as a PB — ${blocked.sentence}` : undefined}>
+    title=${title} aria-label=${mark ? title : undefined}>
     <${Icon} name="bookmark" size=${14} />
     <span class="save-pb-wide">Save as PB</span><span class="save-pb-narrow">Save PB</span>
-    ${blocked ? cardBadge(blocked) : ""}</button>`;
+    ${mark ? cardBadge(mark) : ""}</button>`;
+}
+
+// What the Save button says about itself. A refused save wears its reason
+// disabled; a run that was not VALID (task 0144: a save state, a subarea
+// reset, no reset) never saves itself, and his ruling leaves it "a manual
+// choice for the user to decide" -- so Save stays live and wears that reason
+// the same way. The server already sends both keys.
+function saveReason(attempt, blocked, beat) {
+  if (blocked) {
+    return { cls: "pb-blocked", mark: blocked,
+             title: `Cannot be saved as a PB — ${blocked.sentence}` };
+  }
+  const invalid = attempt.valid === false ? caveatOf(attempt.invalid_reason) : null;
+  if (invalid) {
+    return { cls: "pb-invalid", mark: invalid,
+             title: `Not a valid run — ${invalid.sentence}. You can still save it as a PB.` };
+  }
+  return { cls: beat ? "pb-glow" : "", mark: null,
+           title: "Save this time as a PB and keep its replay" };
 }
 
 export function PbReplayNotice({ state }) {

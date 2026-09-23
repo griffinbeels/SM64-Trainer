@@ -1,8 +1,12 @@
+import threading
+import time
+
 import pytest
 
 from ghost_native_fixture import attempt, frame, producer
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
-from sm64_events.ghost.archive import PoseArchive
+from sm64_events.ghost.archive import DANCE_TAIL_MAX_FRAMES, PoseArchive
+from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT
 from sm64_events.ghost.clip import ClipError, attempt_origin, check_manifest, read_clip
 
 
@@ -186,3 +190,103 @@ def test_size_only_recording_retention_still_has_a_hard_pose_ceiling(tmp_path):
     archive.ingest(producer(), (frame(3, qpc=10000001),))
     assert archive.status()["records"] == 2  # record ceiling remains mandatory
     archive.close()
+
+# -- the dance tail: a star clip keeps Mario's grab and dance after x-cam ----
+
+DANCE, IDLE = ACT_STAR_DANCE_EXIT, 0x0C400201
+
+
+def danced(ends_with: dict | None = None, *, dance_rows: int = 5):
+    """Attempt rows 1..3 closing on the dance's first frame (timer 103), then
+    `dance_rows` more dance frames, then one row that ends the dance."""
+    rows = [frame(1), frame(2), frame(3, action=DANCE)]
+    rows += [frame(n, action=DANCE) for n in range(4, 4 + dance_rows)]
+    after = 4 + dance_rows
+    if ends_with is not None:
+        rows.append(frame(after, **{"action": DANCE, **ends_with}))
+    return rows
+
+
+@pytest.mark.parametrize("ends_with", [
+    {"action": IDLE},                  # a no-exit dance returns to idle
+    {"elapsed": 8},                    # the exit warp freezes the game clock
+    {"origin": 2},                     # a new star generation
+    {"level": 16},                     # a scene change
+    {"timer": 104, "elapsed": 9},      # a state load rewinds the global timer
+])
+def test_star_export_keeps_the_dance_until_it_ends_and_no_further(tmp_path, ends_with):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    rows = danced(ends_with)
+    archive.ingest(producer(), tuple(rows))
+    row, path, target = attempt(), tmp_path / "danced.ghost", {"kind": "star"}
+    manifest = archive.export_attempt(row, path, target=target)
+    clip = check_manifest(path, manifest, attempt=row, target=target)
+    assert manifest["tail_records"] == 5 and manifest["records"] == 8 and clip.dance_tail
+    assert tuple(f.raw for f in clip.frames) == tuple(rows[:8])
+    assert manifest["last_global_timer"] == 108  # the attempt itself still closes at 103
+    for tail, reason in ((0, "dance tail"), (4, "effective origin")):
+        with pytest.raises(ClipError, match=reason):
+            check_manifest(path, {**manifest, "tail_records": tail}, attempt=row, target=target)
+    archive.close()
+
+
+def test_the_dance_tail_is_bounded(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    archive.ingest(producer(), tuple(danced(dance_rows=DANCE_TAIL_MAX_FRAMES + 20)))
+    manifest = archive.export_attempt(attempt(), tmp_path / "long.ghost")
+    assert manifest["tail_records"] == DANCE_TAIL_MAX_FRAMES
+    assert manifest["last_global_timer"] == 103 + DANCE_TAIL_MAX_FRAMES
+    archive.close()
+
+
+@pytest.mark.parametrize("close_action,kind,segment_id", [(IDLE, "star", None), (DANCE, "segment", 5)])
+def test_no_tail_unless_a_star_run_closes_inside_the_dance(tmp_path, close_action, kind, segment_id):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    archive.ingest(producer(), (frame(1), frame(2), frame(3, action=close_action),
+                                *(frame(n, action=DANCE) for n in range(4, 9))))
+    row, path = attempt(kind=kind), tmp_path / "plain.ghost"
+    row.segment_id = segment_id
+    manifest = archive.export_attempt(row, path)
+    assert manifest["tail_records"] == 0 and manifest["records"] == 3
+    assert not check_manifest(path, manifest, attempt=row, target=None).dance_tail
+    archive.close()
+
+
+def test_the_hundred_coin_star_keeps_its_exit_star_dance(tmp_path):
+    """The 100-coin star is a star run timed by its exit segment: it grabs the
+    100-coin star mid-run and closes on the exit star, whose dance it keeps."""
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    rows = (frame(1), frame(2, action=ACT_STAR_DANCE_NO_EXIT), frame(3), frame(4, action=DANCE),
+            *(frame(n, action=DANCE) for n in range(5, 8)), frame(8, action=IDLE))
+    archive.ingest(producer(), rows)
+    row, path = attempt(end=104, kind="segment"), tmp_path / "hundred.ghost"
+    row.segment_id = None  # reattributed to the 100-coin star
+    manifest = archive.export_attempt(row, path)
+    clip = check_manifest(path, manifest, attempt=row, target=None)
+    assert manifest["tail_records"] == 3 and clip.dance_tail and len(clip.frames) == 7
+    archive.close()
+
+
+def test_export_waits_for_the_dance_the_recorder_is_still_capturing(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite", dance_stall_s=2.0)
+    rows = danced({"action": IDLE})
+    archive.ingest(producer(), tuple(rows[:4]))  # closed on x-cam; one dance frame so far
+    later = threading.Timer(0.3, lambda: archive.ingest(producer(), tuple(rows[4:])))
+    later.start()
+    begun = time.monotonic()
+    manifest = archive.export_attempt(attempt(), tmp_path / "live.ghost")
+    later.join()
+    assert manifest["tail_records"] == 5 and 0.25 < time.monotonic() - begun < 2.0
+    archive.close()
+
+
+def test_a_stalled_or_closed_recording_keeps_the_dance_it_has(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite", dance_stall_s=0.2)
+    archive.ingest(producer(), tuple(danced(dance_rows=2)))  # no end yet
+    begun = time.monotonic()
+    assert archive.export_attempt(attempt(), tmp_path / "stalled.ghost")["tail_records"] == 2
+    assert time.monotonic() - begun < 1.5
+    archive.close()
+    begun = time.monotonic()
+    assert archive.export_attempt(attempt(), tmp_path / "closed.ghost")["tail_records"] == 2
+    assert time.monotonic() - begun < 0.5
