@@ -96,6 +96,7 @@ int32_t sg_model_open(const uint8_t *rom, size_t bytes, sg_model **out)
     memory_init();
     model->building = 1;
     model->graph = process_geo_layout(alloc_only_pool_init(), mario_geo_ptr);
+    if (model->graph && sg_held_build(model) != SG_OK) model->held_available = 0;
     model->building = 0;
     if (!model->graph) {
         release_model(model);
@@ -162,7 +163,7 @@ static int valid_pose(const sg_pose *pose)
 {
     int i;
     if (!pose || (pose->fields & SG_POSE_REQUIRED) != SG_POSE_REQUIRED ||
-        (pose->fields & ~63u) || pose->animation_frame < 0 ||
+        (pose->fields & ~127u) || pose->animation_frame < 0 ||
         pose->cap_state > 3 || pose->eye_state > 8 ||
         (pose->eye_state >= 4 && pose->eye_state <= 7) ||
         pose->hand_state > 5 || pose->wing_flutter > 1 || pose->grab_position > 3 ||
@@ -172,6 +173,15 @@ static int valid_pose(const sg_pose *pose)
         if (!finite_bound(pose->position[i], 10000000.0f) ||
             !finite_bound(pose->scale[i], 100.0f) ||
             (pose->scale[i] > -0.000001f && pose->scale[i] < 0.000001f)) return 0;
+    if (pose->fields & SG_POSE_HELD) {
+        if (pose->held_kind == SG_HELD_NONE || pose->held_kind >= SG_HELD_KINDS ||
+            pose->held_animation_id < 0 || pose->held_animation_frame < 0) return 0;
+        for (i = 0; i < 3; ++i)
+            if (!finite_bound(pose->held_position[i], 10000000.0f) ||
+                !finite_bound(pose->held_scale[i], 100.0f) ||
+                (pose->held_scale[i] > -0.000001f && pose->held_scale[i] < 0.000001f)) return 0;
+        for (i = 0; i < 16; ++i) if (!finite_bound(pose->view[i], 10000000.0f)) return 0;
+    }
     if (pose->fields & SG_POSE_THROW_MATRIX) {
         double det;
         const float *m = pose->throw_matrix;
@@ -240,7 +250,7 @@ int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out)
 {
     int status;
     size_t i;
-    Mat4 transform;
+    Mat4 transform, mario_root;
     if (!out) return SG_INVALID_ARGUMENT;
     out->vertex_count = out->error_flags = 0;
     if (!enter()) return SG_BUSY;
@@ -265,13 +275,24 @@ int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out)
         out->error_flags = SG_MESH_SCRATCH_EXHAUSTED;
         return leave(model->abort_status);
     }
+    if ((pose->fields & SG_POSE_HELD) && !(model->held_available & (1u << pose->held_kind))) {
+        out->error_flags = SG_MESH_UNSUPPORTED_MATERIAL;
+        return leave(SG_INVALID_GEOMETRY);
+    }
+    /* Mario's root as sg_traverse_frozen composes it (with his scale): what
+     * his hand hands a held object. */
     if (pose->fields & SG_POSE_THROW_MATRIX) {
         memcpy(transform, pose->throw_matrix, sizeof(transform));
         model->object.header.gfx.throwMatrix = &transform;
+        memcpy(mario_root, transform, sizeof(mario_root));
+    } else {
+        mtxf_rotate_zxy_and_translate(mario_root, model->object.header.gfx.pos, model->object.header.gfx.angle);
     }
+    mtxf_scale_vec3f(mario_root, mario_root, model->object.header.gfx.scale);
     sg_geometry_bind(out);
     sg_traverse_frozen(model->graph);
     model->object.header.gfx.throwMatrix = NULL;
+    sg_held_evaluate(model, pose, (const float (*)[4])mario_root);
     out->error_flags = sg_geometry_errors();
     out->vertex_count = sg_geometry_vertex_count();
     sg_geometry_reset();

@@ -20,8 +20,11 @@ enum sg_status {
 enum sg_pose_fields {
     SG_POSE_TRANSFORM = 1u, SG_POSE_ANIMATION = 2u, SG_POSE_BODY = 4u,
     SG_POSE_HEAD_ROTATION = 8u, SG_POSE_REQUIRED = 15u,
-    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u
+    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u
 };
+
+/* Objects the model can draw in Mario's hand (SG_POSE_HELD). */
+enum sg_held_kind { SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_KINDS = 2 };
 
 /* A native C value, not a packed wire format. Angles are signed SM64 turns.
  * position/angles are the DRAWN gfx transform. body_action is separate from
@@ -49,6 +52,17 @@ typedef struct sg_pose {
     uint16_t model_state;
     uint8_t cap_state, eye_state, hand_state, wing_flutter;
     uint8_t punch_state, grab_position;
+    /* SG_POSE_HELD: the object in Mario's hand, appended to his mesh the way
+     * geo_process_held_object draws it: Mario's own root rows (his scale
+     * included) scaled by held_scale, at held_position (the HOLP). view is the
+     * look-at it is drawn under (sg_model_view), for its billboards; roll is
+     * that camera's roll. The mesh stays in world space. */
+    uint32_t held_kind;
+    int16_t held_animation_id, held_animation_frame, held_anim_y_translation;
+    uint16_t held_anim_state;
+    float held_position[3], held_scale[3];
+    float view[16];
+    int16_t roll;
 } sg_pose;
 
 enum sg_mesh_errors {
@@ -74,10 +88,15 @@ enum sg_material {
     SG_MATERIAL_TEXGEN = 0x100
 };
 
-/* The atlas is one 64-pixel cell per Mario texture, left to right in
- * libsm64's MarioTextures order: metal (cell 0) ... wing tip, then the metal
- * wing and wing tip (cells 11, 12). */
-enum { SG_ATLAS_CELLS = 13 };
+/* The atlas is one 64-pixel cell per texture, left to right: Mario's in
+ * libsm64's MarioTextures order, metal (cell 0) ... wing tip, then the metal
+ * wing and wing tip (cells 11, 12); then held objects' (from 13). */
+enum { SG_MARIO_ATLAS_CELLS = 13 };
+enum sg_atlas_cell {
+    SG_ATLAS_CELL_BOBOMB_LEFT = 13, SG_ATLAS_CELL_BOBOMB_RIGHT = 14,
+    SG_ATLAS_CELL_BOBOMB_EYES = 15, SG_ATLAS_CELL_BOBOMB_BLINK = 16,
+    SG_ATLAS_CELLS = 17
+};
 enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
        SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
 

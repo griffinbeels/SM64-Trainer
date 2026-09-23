@@ -5,7 +5,7 @@
 #include <cmath>
 static sg_pose applied{};
 static float camera_x=0;
-static float fake_normal[3]={0,1,0};static uint32_t fake_flags=0;
+static float fake_normal[3]={0,1,0};static uint32_t fake_flags=0;static bool refuse_held=false;
 extern "C" int32_t sg_model_view(sg_model *,const float *position,const float *,int16_t,float *out) {
     camera_x=position[0];
     const float identity[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
@@ -18,6 +18,7 @@ extern "C" int32_t sg_model_view(sg_model *,const float *position,const float *,
 }
 extern "C" int32_t sg_model_evaluate(sg_model *,const sg_pose *pose,sg_mesh *mesh) {
     applied=*pose; assert(mesh->vertex_capacity>=3);
+    if(refuse_held && (pose->fields&SG_POSE_HELD)) return SG_INVALID_ANIMATION;
     for(unsigned i=0;i<3;++i) {
         mesh->position[3*i]=float(i+1); mesh->position[3*i+1]=2; mesh->position[3*i+2]=3;
         mesh->normal[3*i]=fake_normal[0]; mesh->normal[3*i+1]=fake_normal[1]; mesh->normal[3*i+2]=fake_normal[2];
@@ -99,6 +100,24 @@ int main() {
     live.camera.position[0]=42;fake_flags=0;fake_normal[0]=0;fake_normal[1]=1;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(pose.vertices[0].uv[0]==0.25f); // untextured-generation vertices keep their uv
+    // A held Bob-omb (bhvBobomb) reaches the model with its animation, HOLP,
+    // scale and blink, and the live view and roll its billboard faces.
+    saved.valid_fields|=GC_VALID_HELD; saved.held.behavior=0x13003174u;
+    saved.held.animation_id=1; saved.held.animation_frame=5; saved.held.anim_state=1;
+    saved.held.holp[0]=40; saved.held.holp[1]=120; saved.held.holp[2]=60;
+    saved.held.scale[0]=saved.held.scale[1]=saved.held.scale[2]=1; live.camera.roll=77;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert((applied.fields&SG_POSE_HELD) && applied.held_kind==SG_HELD_BOBOMB && applied.held_animation_id==1
+        && applied.held_animation_frame==5 && applied.held_anim_state==1 && applied.held_position[1]==120
+        && applied.held_scale[2]==1 && applied.roll==77 && applied.view[0]==1 && applied.view[15]==1);
+    // A refused held object leaves Mario drawn; an unknown one never asks.
+    refuse_held=true;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.count==3 && !(applied.fields&SG_POSE_HELD));
+    refuse_held=false; saved.held.behavior=0x13000000u;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.count==3 && !(applied.fields&SG_POSE_HELD));
+    saved.valid_fields&=~GC_VALID_HELD; saved.held={}; live.camera.roll=0;
     saved.pose.model_state=0;
     saved.valid_fields&=~GC_VALID_POSE;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::missing_pose);

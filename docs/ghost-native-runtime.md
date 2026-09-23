@@ -114,8 +114,14 @@ needs no field: the hand copies Mario's own root matrix (his throwMatrix),
 so the held root is Mario's recorded world root rotation, rows scaled by
 `scale`, at the HOLP. A held object without an animation cannot prove it was
 drawn this frame and is not recorded. The legacy TRS reader still refuses a
-holding Mario and records none. Drawing held objects is a separate model
-stage; until it lands the ghost draws Mario alone.
+holding Mario and records none.
+
+The ghost draws the held objects the model knows (`held_models` in
+[ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp); the Bob-omb so far), as
+part of Mario's mesh: the recorded animation frame and `oAnimState`, at the
+HOLP, its billboards turned to the live camera. An object the model does not
+know, or refuses (no textures, an animation it lacks, no room in the mesh),
+is left out and Mario still draws.
 
 ### Cap effects (vanish and metal)
 

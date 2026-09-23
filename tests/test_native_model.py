@@ -61,7 +61,8 @@ def test_native_pose_runtime(tmp_path):
 def test_component_identity_covers_inputs_and_recipe(tmp_path, monkeypatch):
     builder = load_tool("build_model")
     inputs = json.loads((ROOT / "renderer/model/inputs.json").read_text(encoding="utf-8"))
-    assert set(inputs) == {"libsm64", "mario_geo", "mario_model"}
+    assert set(inputs) == {"libsm64", "mario_geo", "mario_model", "bobomb_geo", "bobomb_model",
+                           "bobomb_anim_walk", "bobomb_anim_held", "bobomb_anims"}
     assert all(len(item["sha256"]) == 64 for item in inputs.values())
     copied = tmp_path / "model"
     copied.mkdir()
@@ -73,7 +74,7 @@ def test_component_identity_covers_inputs_and_recipe(tmp_path, monkeypatch):
     monkeypatch.setattr(builder, "MODEL", copied)
     monkeypatch.setattr(builder, "__file__", str(recipe))
     original = builder.component_hash()
-    for changed in [recipe, copied / "model.h", copied / "model.c",
+    for changed in [recipe, copied / "model.h", copied / "model.c", copied / "held.c",
                     copied / "patches.py", copied / "inputs.json"]:
         before = changed.read_bytes()
         changed.write_bytes(before + b"\nchanged component input\n")

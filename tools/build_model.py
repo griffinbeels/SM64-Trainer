@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import urllib.request
 import zipfile
@@ -18,8 +19,50 @@ SOURCE_FILES = (
     "src/decomp/engine/geo_layout.c", "src/decomp/engine/guMtxF2L.c",
     "src/decomp/game/rendering_graph_node.c", "src/decomp/game/mario_misc.c",
     "src/decomp/game/object_stuff.c", "src/decomp/game/behavior_actions.c", "src/decomp/mario/geo.inc.c",
-    "src/decomp/mario/model.inc.c", "src/gfx_adapter.c",
+    "src/decomp/mario/model.inc.c", "src/decomp/held/bobomb.c", "src/decomp/held/bobomb_lists.c",
+    "src/gfx_adapter.c",
 )
+# Objects Mario can hold, built like his own model from pinned decomp sources
+# (inputs.json): geo, lists and animations compile through the same libsm64
+# macros; each texture array becomes the model atlas cell assets.c fills from
+# the ROM. As for Mario, the lists compile apart from the decomp headers
+# (libsm64's gfx_macros.h); geo and animations see them as extern Gfx.
+# {prefix: (geo layout, animation table, list input, geo/animation inputs, textures)}.
+HELD_MODELS = {
+    "bobomb": ("black_bobomb_geo", "bobomb_seg8_anims_0802396C", "bobomb_model",
+               ("bobomb_anim_walk", "bobomb_anim_held", "bobomb_anims", "bobomb_geo"),
+               {"bobomb_seg8_texture_0801DA60": "SG_ATLAS_CELL_BOBOMB_LEFT",
+                "bobomb_seg8_texture_0801EA60": "SG_ATLAS_CELL_BOBOMB_RIGHT",
+                # The buddy's sides: its geo compiles beside the black one, never drawn.
+                "bobomb_seg8_texture_0801FA60": "SG_ATLAS_CELL_BOBOMB_LEFT",
+                "bobomb_seg8_texture_08020A60": "SG_ATLAS_CELL_BOBOMB_RIGHT",
+                "bobomb_seg8_texture_08021A60": "SG_ATLAS_CELL_BOBOMB_EYES",
+                "bobomb_seg8_texture_08022260": "SG_ATLAS_CELL_BOBOMB_BLINK"}),
+}
+HELD_HEADER = """#include "../include/sm64.h"
+#include "../include/types.h"
+#include "../include/geo_commands.h"
+#include "../game/rendering_graph_node.h"
+#include "../shim.h"
+Gfx *geo_switch_anim_state(s32 callContext, struct GraphNode *node, void *context);
+"""
+# Each held graph is wrapped as libsm64 wraps Mario (mario_geo_libsm64): only a
+# z-buffered master list emits display lists, and libsm64's master-list hack
+# drops the first opaque entry, so an empty list takes that place.
+HELD_ROOT = """const GeoLayout sg_{name}_root[] = {{
+   GEO_NODE_START(),
+   GEO_OPEN_NODE(),
+      GEO_ZBUFFER(1),
+      GEO_OPEN_NODE(),
+         GEO_DISPLAY_LIST(LAYER_OPAQUE, sg_{name}_skipped),
+         GEO_BRANCH(1, {geo}),
+      GEO_CLOSE_NODE(),
+   GEO_CLOSE_NODE(),
+   GEO_END(),
+}};
+void *sg_{name}_geo = (void *)sg_{name}_root;
+const struct Animation *const *sg_{name}_animations = {table};
+"""
 # Ghost sound effects: SM64's own audio engine, driven by renderer/model/audio.c.
 AUDIO_FILES = (
     *(f"src/decomp/audio/{name}.c" for name in (
@@ -108,6 +151,7 @@ def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
     }
     for name, text in generated.items():
         (destination / name).write_text(text, encoding="utf-8", newline="\n")
+    _stage_held(files, source)
     _module("model_patches", MODEL / "patches.py").patch(source)
     # convUtils needs two helpers from utils.c, whose remainder is filesystem code.
     utilities = (source / "src/decomp/tools/utils.c").read_text(encoding="utf-8")
@@ -116,6 +160,36 @@ def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
         text += _function(utilities, name)
     (source / "src/conversion.c").write_text(text, encoding="utf-8", newline="\n")
     return source
+
+
+def _stage_held(files: dict, source: Path) -> None:
+    """Two translation units per held model: its lists (texture arrays
+    commented out, their names now atlas cells) and its geo and animations."""
+    destination = source / "src/decomp/held"
+    destination.mkdir(exist_ok=True)
+    for name, (geo, table, lists, inputs, textures) in HELD_MODELS.items():
+        lines, skip, externs = files[lists].read_text(encoding="utf-8").splitlines(), 0, ""
+        for i, line in enumerate(lines):
+            if skip:
+                skip -= 1
+                lines[i] = "//" + line
+            elif line.startswith("ALIGNED8 static const u8 ") and "_texture_" in line:
+                skip = 2
+                lines[i] = "//" + line
+            elif line.startswith("const "):
+                externs += "extern " + line.replace(" = {", ";") + "\n"
+        (destination / f"{name}_lists.c").write_text(
+            '#include "../../load_tex_data.h"\n#include "../../gfx_macros.h"\n'
+            + "".join(f"#define {symbol} {cell}\n" for symbol, cell in textures.items())
+            + "\n".join(lines) + f"\nconst Gfx sg_{name}_skipped[] = {{ gsSPEndDisplayList() }};\n",
+            encoding="utf-8", newline="\n")
+        text = HELD_HEADER + externs + f"extern const Gfx sg_{name}_skipped[];\n"
+        text += "".join(files[key].read_text(encoding="utf-8") + "\n" for key in inputs)
+        # libsm64's shadow node draws nothing and skips its children, so a
+        # held graph's shadow becomes a plain start node.
+        text = re.sub(r"GEO_SHADOW\([^)]*\)", "GEO_NODE_START()", text)
+        text += HELD_ROOT.format(name=name, geo=geo, table=table)
+        (destination / f"{name}.c").write_text(text, encoding="utf-8", newline="\n")
 
 
 def _function(source: str, name: str) -> str:
@@ -146,7 +220,7 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
     output = staging / "objects"
     output.mkdir(exist_ok=True)
     sources = [source / name for name in (*SOURCE_FILES, *AUDIO_FILES)]
-    sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c")]
+    sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c", "held.c")]
     flags = ["/nologo", "/O2", "/W3", "/TC", "/std:c17", "/MT", "/Gy", "/Gw",
              "/D_CRT_SECURE_NO_WARNINGS", "/DSM64_LIB_STATIC", "/DGBI_FLOATS", "/DVERSION_US", "/DNO_SEGMENTED_MEMORY"]
     if testing:

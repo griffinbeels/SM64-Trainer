@@ -349,6 +349,55 @@ int main(int argc, char** argv) {
             check(winged==SG_OK && metal_wing>=12,"metal wing cap draws its metal wings");
             check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"cap effect independence");
         }
+        {
+            // A held Bob-omb joins Mario's mesh at the HOLP, from the ROM's own
+            // textures (atlas cells 13..16), its billboard facing the view.
+            unsigned opaque=0;
+            for(unsigned y=0;y<32;++y)for(unsigned x=0;x<32;++x)
+                opaque+=atlas.rgba[4*(y*atlas.width+SG_ATLAS_CELL_BOBOMB_LEFT*64+x)+3]>0;
+            check(opaque>200,"Bob-omb texture cell loaded from the ROM");
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK,"no held object");
+            const unsigned alone=mesh.out.vertex_count;
+            float camera[3]={0,160,600},focus[3]={0,80,0};
+            sg_pose h=a; h.fields|=SG_POSE_HELD; h.held_kind=SG_HELD_BOBOMB;
+            h.held_animation_id=1; h.held_animation_frame=0;
+            h.held_position[0]=40; h.held_position[1]=120; h.held_position[2]=60;
+            h.held_scale[0]=h.held_scale[1]=h.held_scale[2]=1;
+            check(sg_model_view(model,camera,focus,0,h.view)==SG_OK,"held view");
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_OK && mesh.out.vertex_count>alone+24,"held Bob-omb drawn");
+            double centre[3]={0,0,0};const unsigned added=mesh.out.vertex_count-alone;
+            // Its whole graph: body 4, feet 2x28, key 16 and eyes 4 triangles.
+            // (libsm64's master list drops its first opaque entry: one foot.)
+            check(added==240,"held Bob-omb draws every part");
+            for(unsigned i=alone;i<mesh.out.vertex_count;++i)for(unsigned k=0;k<3;++k)centre[k]+=mesh.out.position[3*i+k]/added;
+            check(std::fabs(centre[0]-40)<80 && std::fabs(centre[1]-120)<80 && std::fabs(centre[2]-60)<80,
+                "held Bob-omb sits at the HOLP");
+            bool textured=false;
+            for(unsigned i=alone;i<mesh.out.vertex_count;++i)
+                textured|=mesh.out.uv[2*i]>=float(SG_ATLAS_CELL_BOBOMB_LEFT)/SG_ATLAS_CELLS;
+            check(textured,"held Bob-omb samples its own cells");
+            // oAnimState picks the eyes: 0 open, 1 blinking.
+            auto samples=[&](unsigned cell){
+                for(unsigned i=alone;i<mesh.out.vertex_count;++i)
+                    if(unsigned(mesh.out.uv[2*i]*SG_ATLAS_CELLS)==cell)return true;
+                return false;
+            };
+            check(samples(SG_ATLAS_CELL_BOBOMB_EYES) && !samples(SG_ATLAS_CELL_BOBOMB_BLINK),"open eyes");
+            h.held_anim_state=1;
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_OK && samples(SG_ATLAS_CELL_BOBOMB_BLINK) &&
+                !samples(SG_ATLAS_CELL_BOBOMB_EYES),"blinking eyes");
+            h.held_anim_state=0;
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_OK,"open eyes again");
+            const auto front=mesh.snapshot();
+            float side[3]={600,160,0};
+            check(sg_model_view(model,side,focus,0,h.view)==SG_OK && sg_model_evaluate(model,&h,&mesh.out)==SG_OK,"side view");
+            check(mesh.snapshot()!=front,"held billboard turns with the view");
+            h.held_animation_id=2;
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_INVALID_ANIMATION,"unknown held animation refused");
+            h.held_animation_id=1;h.held_kind=SG_HELD_KINDS;
+            check(sg_model_evaluate(model,&h,&mesh.out)!=SG_OK,"unknown held kind refused");
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"held object leaves no state");
+        }
         b=a; b.head_rotation[1]=8192;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.snapshot()!=first_mesh,"effective head rotation");
         b=a; b.body_action=0x04000440; b.torso_angles[0]=4000; // ACT_WALKING.

@@ -10,6 +10,14 @@
  * Located by its decoded flame lists in the US and Usamune US ROMs. */
 #define COMMON1_BASE 0x201410u
 #define COMMON1_SPAN (256u * 1024u)
+/* common0 (segment 8): the Bob-omb. Located by its decoded lists in the US
+ * ROM (bobomb_seg8_dl_08022D08 at 0x22D08). */
+#define COMMON0_BASE 0x1F2200u
+#define COMMON0_SPAN (256u * 1024u)
+static const struct { unsigned cell; uint32_t offset; } held_textures[] = {
+    {SG_ATLAS_CELL_BOBOMB_LEFT, 0x1DA60u}, {SG_ATLAS_CELL_BOBOMB_RIGHT, 0x1EA60u},
+    {SG_ATLAS_CELL_BOBOMB_EYES, 0x21A60u}, {SG_ATLAS_CELL_BOBOMB_BLINK, 0x22260u},
+};
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static uint32_t be32(const uint8_t *p)
@@ -64,6 +72,39 @@ bad:
     return SG_INVALID_ROM;
 }
 
+/* One RGBA16 texture into its 64-pixel atlas cell; its size is the cell's. */
+static int blit(struct sg_model *model, unsigned tile, const uint8_t *decoded, uint32_t size, size_t offset)
+{
+    unsigned x, y, width = mario_tex_widths[tile], height = mario_tex_heights[tile];
+    if (width > 64 || height > 64 || !range(offset, width * height * 2u, size)) return SG_INVALID_ROM;
+    for (y = 0; y < height; ++y) for (x = 0; x < width; ++x) {
+        unsigned color = be16(decoded + offset + (y * width + x) * 2u);
+        uint8_t *dest = model->atlas + ((y * SG_MODEL_ATLAS_WIDTH) + tile * 64u + x) * 4u;
+        dest[0] = (uint8_t)(((color >> 11) & 31u) * 255u / 31u);
+        dest[1] = (uint8_t)(((color >> 6) & 31u) * 255u / 31u);
+        dest[2] = (uint8_t)(((color >> 1) & 31u) * 255u / 31u);
+        dest[3] = (color & 1u) ? 255 : 0;
+    }
+    return SG_OK;
+}
+
+/* Held objects' textures; failure leaves their cells empty and marks them
+ * unavailable rather than refusing Mario. */
+static void held_cells(struct sg_model *model, const uint8_t *rom)
+{
+    uint8_t *decoded;
+    uint32_t size;
+    unsigned i;
+    model->held_available = 0;
+    if (mio0(rom, COMMON0_BASE, COMMON0_SPAN, &decoded, &size) != SG_OK) return;
+    for (i = 0; i < sizeof(held_textures) / sizeof(held_textures[0]); ++i)
+        if (blit(model, held_textures[i].cell, decoded, size, held_textures[i].offset) != SG_OK) {
+            free(decoded); return;
+        }
+    free(decoded);
+    model->held_available = 1u << SG_HELD_BOBOMB;
+}
+
 static int textures(struct sg_model *model, const uint8_t *rom)
 {
     uint32_t size, common1_size;
@@ -71,19 +112,9 @@ static int textures(struct sg_model *model, const uint8_t *rom)
     uint8_t *decoded, *common1;
     int status = mio0(rom, TEXTURE_BASE, TEXTURE_SPAN, &decoded, &size);
     if (status != SG_OK) return status;
-    for (tile = 0; tile < NUM_USED_TEXTURES; ++tile) {
-        unsigned x, y, width = mario_tex_widths[tile], height = mario_tex_heights[tile];
-        size_t offset = (size_t)mario_tex_offsets[tile];
-        if (width > 64 || height > 64 || !range(offset, width * height * 2u, size)) goto bad;
-        for (y = 0; y < height; ++y) for (x = 0; x < width; ++x) {
-            unsigned color = be16(decoded + offset + (y * width + x) * 2u);
-            uint8_t *dest = model->atlas + ((y * SG_MODEL_ATLAS_WIDTH) + tile * 64u + x) * 4u;
-            dest[0] = (uint8_t)(((color >> 11) & 31u) * 255u / 31u);
-            dest[1] = (uint8_t)(((color >> 6) & 31u) * 255u / 31u);
-            dest[2] = (uint8_t)(((color >> 1) & 31u) * 255u / 31u);
-            dest[3] = (color & 1u) ? 255 : 0;
-        }
-    }
+    for (tile = 0; tile < SG_MARIO_ATLAS_CELLS; ++tile)
+        if (blit(model, tile, decoded, size, (size_t)mario_tex_offsets[tile]) != SG_OK) goto bad;
+    held_cells(model, rom);
     /* Same segment: Mario's particle models. Unsupported lists leave none;
      * the flame (common1) is added only when its own lists read too. */
     if (sg_particles_load(&model->particles, decoded, size) == SG_OK &&

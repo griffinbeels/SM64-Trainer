@@ -17,5 +17,35 @@
     "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mario/model.inc.c",
     "filename": "upstream-mario-model.c",
     "sha256": "3c28959f915121cd94daab7941e144078098b3cac668fdc70817f4127c549e8f"
+  },
+  "bobomb_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/bobomb/geo.inc.c",
+    "filename": "upstream-bobomb-geo.c",
+    "sha256": "ca61380f70d3a0d41318b571283f1295d9fb583cb167930270b596fd9b3739c5"
+  },
+  "bobomb_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/bobomb/model.inc.c",
+    "filename": "upstream-bobomb-model.c",
+    "sha256": "ae0d0c89c8d35785bc3d01d349558531c5ccd0ea18054e5c480b16934443807e"
+  },
+  "bobomb_anim_walk": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/bobomb/anims/anim_080237FC.inc.c",
+    "filename": "upstream-bobomb-anim-080237FC.c",
+    "sha256": "649d451809066f8f6515fe427f53a299098e0fa734e6721aa18daaee9f215dc7"
+  },
+  "bobomb_anim_held": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/bobomb/anims/anim_08023954.inc.c",
+    "filename": "upstream-bobomb-anim-08023954.c",
+    "sha256": "88157ff30a36a8a35beabedab9d166112da1fa254915b4604ef632588cdde660"
+  },
+  "bobomb_anims": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/bobomb/anims/table.inc.c",
+    "filename": "upstream-bobomb-anims.c",
+    "sha256": "f8e96a738892cb95500540d7f9f8c41bcb8a431db8d7e9059632063c00cf6762"
   }
 }

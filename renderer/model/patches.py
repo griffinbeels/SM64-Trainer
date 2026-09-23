@@ -42,11 +42,13 @@ def _patch_metal_wings(source: Path) -> None:
          "    mario_texture_metal_wings_half_1,\n    mario_texture_metal_wings_half_2,\n"
          "    mario_texture_eyes_closed_unused1 = -99,")
     edit("load_tex_data.h", "#define NUM_USED_TEXTURES 11", "#define NUM_USED_TEXTURES SG_ATLAS_CELLS")
-    edit("load_tex_data.h", "32912, 37008 };", "32912, 37008, 41104, 45200 };")
+    # Held-object cells (13..16, the Bob-omb) follow; assets.c loads them from
+    # their own ROM segment, so their offsets here are unused zeros.
+    edit("load_tex_data.h", "32912, 37008 };", "32912, 37008, 41104, 45200, 0, 0, 0, 0 };")
     edit("load_tex_data.h", "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };",
-         "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };")
+         "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };")
     edit("load_tex_data.h", "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64 };",
-         "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64, 64, 64 };")
+         "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64, 64, 64, 64, 64, 32, 32 };")
     edit("load_tex_data.h", "#include <stdint.h>", '#include <stdint.h>\n#include "model.h"')
 
 
@@ -206,6 +208,8 @@ void sg_geometry_bind(sg_mesh *mesh) {
 }
 uint32_t sg_geometry_errors(void) { return s_errors; }
 uint32_t sg_geometry_vertex_count(void) { return s_model_output.numTrianglesUsed * 3u; }
+float *sg_geometry_position(uint32_t vertex) { return s_model_output.position + 3u * vertex; }
+float *sg_geometry_normal(uint32_t vertex) { return s_model_output.normal + 3u * vertex; }
 void sg_geometry_reset(void) {
     s_outBuffers=NULL; s_trianglePtr=s_colorPtr=s_normalPtr=s_uvPtr=NULL;
     s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID; s_texgen=0;
