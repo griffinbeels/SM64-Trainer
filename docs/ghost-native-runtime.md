@@ -438,12 +438,18 @@ ROM failure nor renderer readiness changes saved-recording eligibility.
 Disabling or losing the active origin withdraws drawing while retaining prepared
 assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
-full set plus as many retiring copies) share a 256 MiB clip/index budget, and
+full set plus as many retiring copies) share a 192 MiB clip/index budget, and
 the worker's retained files obey the same bound. It is sized so sixteen
-3.5-minute ghosts can be replaced by sixteen more in flight (32 x 6300 x
-(1232 + 4) bytes; his longest raced segment is 1m51): GC6 records are about
-twice GC5's, and the earlier 128 MiB would have cut that to under two minutes a
-ghost. The budget is a ceiling, not a reservation. One maximum-size clip
+2m40 ghosts can be replaced by sixteen more in flight (32 x 4800 x
+(sizeof(gclip_frame) + 4) bytes; his longest raced segment is 1m51): GC6
+records are about twice GC5's, and the earlier 128 MiB would have cut that to
+under two minutes a ghost. It stays well under the 2 GiB his Project64 has:
+wermi's build v7 is 32-bit and not large-address-aware (checked 2026-09-23),
+and the emulator, GLideN64, its texture caches and the worker's retained files
+share that space. The budget is a ceiling, not a reservation. Every clip
+allocation fails soft: the worker's file read, GCLIP4 upgrade and asset list,
+and playback's copy (`new(std::nothrow)`), refuse the set with `GIPC_CLIP`
+(budget or memory) instead of throwing inside Project64. One maximum-size clip
 (100000 records, about 55 minutes at 30 Hz) fits. The pose archive keeps its
 own window (288 MiB of rows, two hours at 30 Hz), independent of that clip
 cap, so a late save still reaches an early attempt. All resident slots count, so a replacement

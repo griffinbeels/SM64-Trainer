@@ -16,10 +16,15 @@
  * action index (static_assert in ghost_playback.cpp). GC6 records are about
  * twice GC5's (particles, and the held object), so 128 MiB would have cut a
  * swappable set to under two minutes a ghost; his longest raced segment,
- * WDW 100 coins at 1m51, is 3,321 records with its dance. The budget is a
- * ceiling, never a reservation: storage follows the clips actually loaded. */
-#define GP_CLIP_BUDGET (256u * 1024u * 1024u)
-#define GP_LONG_GHOST_FRAMES 6300u /* 3.5 minutes at 30 Hz */
+ * WDW 100 coins at 1m51, is 3,321 records with its dance. The ceiling is
+ * held down by the host: his Project64 1.6 (wermi's build v7) is 32-bit and
+ * NOT large-address-aware (checked 2026-09-23), so the emulator, GLideN64,
+ * its texture caches, the worker's retained files and these copies share
+ * 2 GiB. 192 MiB keeps 2m40 a ghost swappable, and about 5m20 unswapped.
+ * A ceiling, never a reservation: storage follows the clips actually loaded,
+ * and a refusal withholds the set with GIPC_CLIP rather than failing. */
+#define GP_CLIP_BUDGET (192u * 1024u * 1024u)
+#define GP_LONG_GHOST_FRAMES 4800u /* 2m40 at 30 Hz */
 #define GP_STAR_ACTIONS 8u
 #ifndef __cdecl
 #if !defined(_MSC_VER)
