@@ -208,9 +208,14 @@ function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
   // mark that can wrap onto a line of its own leaves a blank line under
   // the text and drops the icon below it. Titled, so the colour is never
   // the only way to read it.
-  const sourceColor = sourceTitle ? sourceColour(tile.goal_source) : null;
+  // A goal PINNED from the Practice log (task 0106) replaces this line's
+  // Scorecard pick outright, so it wears its own mark whatever the legend
+  // says -- gold, like the practice card's GOAL word.
+  const pinnedTitle = tile.goal_pinned ? "Custom goal, set from the Practice log" : null;
+  const sourceColor = pinnedTitle ? "var(--gold)"
+    : sourceTitle ? sourceColour(tile.goal_source) : null;
   const dot = sourceColor
-    ? html`<span class="score-line-source" title=${sourceTitle || ""}
+    ? html`<span class="score-line-source" title=${pinnedTitle || sourceTitle || ""}
         style=${`--source-colour:${sourceColor}`} aria-hidden="true"></span>`
     : "";
   const glyph = html`<span class="score-line-lib" aria-hidden="true">
