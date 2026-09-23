@@ -182,6 +182,18 @@ int32_t sg_model_get_held_lights(sg_model *model, uint32_t kind, sg_body_lights 
     return leave(status);
 }
 
+int32_t sg_model_get_animation_frames(sg_model *model, int32_t animation_id, int32_t *frames)
+{
+    int status;
+    if (!frames) return SG_INVALID_ARGUMENT;
+    *frames = 0;
+    if (animation_id < 0 || animation_id >= SG_ANIMATION_COUNT) return SG_INVALID_ANIMATION;
+    if (!enter()) return SG_BUSY;
+    status = valid_model(model);
+    if (status == SG_OK) *frames = model->animations[animation_id].loopEnd;
+    return leave(status);
+}
+
 static int valid_pose(const sg_pose *pose)
 {
     int i;

@@ -182,11 +182,13 @@ int main() {
             run.timer=1150;++fixture::epoch;gcc_reset(&run.source_clock);
             run.demand.origin.epoch=fixture::epoch;++run.demand.revision;
             run.step(150,150);run.step(151,151); // Capture epoch changed on full clock rewind.
-            run.step(152,-1,1,0x1302);run.step(153,-1);
-            ++run.demand.revision;run.demand.opacity=.5f;run.step(154,-1);
-            run.demand.owner_suspended=1;++run.demand.revision;run.step(155,-1);
+            // His grab beats the ghost: it falls where it stood (row 151) and
+            // keeps falling through tuning and the tracker's suspension.
+            run.step(152,151,1,0x1302);run.step(153,151);
+            ++run.demand.revision;run.demand.opacity=.5f;run.step(154,151);
+            run.demand.owner_suspended=1;++run.demand.revision;run.step(155,151);
             check(run.session->recovery.bound(),"tracker completion hides without deleting restore history");
-            run.step(156,-1); // Suspended between arms: hidden.
+            run.step(156,151); // Suspended between arms: its fall plays on.
             run.step(150,150); // A restore while the tracker is between arms draws at once.
             run.demand.owner_suspended=0;++run.demand.revision;
             run.step(150,150); // Restoration, unlike tuning, revives the completed run.
@@ -253,12 +255,13 @@ int main() {
             load(start+180,3);  // forward to a state seen before the rewinds
             load(start+150,30); // the same state again, then play on
             if(!segment) {
-                // A star grab ends the run; loading back revives it at once.
-                run.step(uint16_t(start+181),-1,1,0x1302);run.step(uint16_t(start+182),-1);
+                // His star grab beats the ghost: it falls where it stood (row
+                // 180); loading back revives it at once.
+                run.step(uint16_t(start+181),180,1,0x1302);run.step(uint16_t(start+182),180);
                 // The live grab closes the attempt: the owner suspends (as
                 // NativeGhost.note does) before he loads the state again.
                 run.demand.owner_suspended=1;++run.demand.revision;
-                run.step(uint16_t(start+183),-1);run.step(uint16_t(start+184),-1);
+                run.step(uint16_t(start+183),180);run.step(uint16_t(start+184),180);
                 ++blink_loads;run.step(uint16_t(start+150),150); // drawn on the load frame, still suspended
                 run.step(uint16_t(start+151),151);
                 // The owner re-arms from the state_loaded anchor of the load
