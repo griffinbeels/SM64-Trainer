@@ -129,6 +129,58 @@
   .starcell.active-star .starimg {
     filter: drop-shadow(0 0 6px rgba(255,215,95,.85)) drop-shadow(0 0 2px rgba(255,215,95,.9)); }
   .starimg.dim { opacity: .72; filter: saturate(.85); }
+  /* The Daily Star's foil (task 0111): "animated and glistening, like a
+     holographic rare pokemon card". Two layers inside the element's own box,
+     so nothing bleeds: ::before is the rainbow film, drifting and cycling its
+     hue, painted BEHIND the content (z-index -1 inside `isolation`) so the
+     star art stays crisp, the way a holo card's foil is its frame and not a
+     wash over the picture; ::after is the white glint that sweeps across
+     everything every few seconds. Shared by the selector cell and the
+     announcement's art. Reduced motion keeps the film, still, and drops the
+     glint. */
+  .daily-star-foil { position: relative; isolation: isolate;
+    box-shadow: 0 0 0 1px rgba(196,168,255,.55), 0 0 14px rgba(150,120,255,.28); }
+  .daily-star-foil::before, .daily-star-foil::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    pointer-events: none; }
+  .daily-star-foil::before {
+    z-index: -1;
+    background: linear-gradient(115deg,
+      rgba(255,110,196,.12) 6%, rgba(255,110,196,.42) 20%, rgba(255,214,120,.38) 33%,
+      rgba(140,255,170,.34) 46%, rgba(110,210,255,.42) 59%, rgba(186,140,255,.42) 72%,
+      rgba(255,110,196,.12) 90%);
+    background-size: 260% 260%;
+    animation: daily-foil-drift 5.5s ease-in-out infinite alternate,
+               daily-foil-hue 9s linear infinite; }
+  .daily-star-foil::after {
+    background: linear-gradient(105deg, transparent 38%, rgba(255,255,255,.34) 48%,
+      rgba(255,255,255,.08) 54%, transparent 62%);
+    z-index: 1; background-size: 300% 100%; background-position: 130% 0; mix-blend-mode: overlay;
+    animation: daily-foil-glint 3.6s ease-in-out infinite; }
+  @keyframes daily-foil-drift { from { background-position: 0% 30%; } to { background-position: 100% 70%; } }
+  @keyframes daily-foil-hue { to { filter: hue-rotate(360deg); } }
+  @keyframes daily-foil-glint { 0%, 55% { background-position: 130% 0; } 100% { background-position: -30% 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .daily-star-foil::before { animation: none; background-position: 50% 50%; }
+    .daily-star-foil::after { animation: none; opacity: 0; } }
+  .starcell.daily-star-foil:not(.active-star) { border-color: rgba(196,168,255,.4); }
+  .modal.modal-daily { width: min(100%, 440px); }
+  .daily-card { display: grid; justify-items: center; gap: .35rem; text-align: center; }
+  .daily-art { width: 124px; height: 124px; padding: 7px; border-radius: 20px; overflow: hidden;
+    background: #10243a; display: grid; place-items: center; margin-bottom: .45rem; }
+  .daily-art img { width: 100%; height: 100%; object-fit: cover; border-radius: 14px; }
+  .daily-where { color: var(--muted); font-size: .72rem; letter-spacing: .06em;
+    text-transform: uppercase; }
+  .daily-name { color: var(--text); font-size: 1.25rem; font-weight: 750; line-height: 1.2; }
+  .daily-blurb { margin: .2rem 0 .5rem; color: var(--muted); font-size: .8rem; line-height: 1.4;
+    max-width: 34ch; }
+  .daily-times { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; width: 100%; margin: 0; }
+  .daily-times > div { display: grid; gap: .1rem; padding: .55rem .6rem; border-radius: 9px;
+    border: 1px solid var(--border-soft); background: rgba(7,18,31,.6); }
+  .daily-times dt { color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; }
+  .daily-times dd { margin: 0; color: var(--gold-soft); font-size: 1.2rem; font-weight: 750;
+    font-variant-numeric: tabular-nums; }
+  .daily-times small { color: var(--muted); font-size: .68rem; }
   /* min-height must cover the CLAMP plus the font's descenders, or the box is
      shorter than the two lines it promises to show and `overflow: hidden`
      shaves the bottom off the second one -- live report 2026-08-02 ("'Floating

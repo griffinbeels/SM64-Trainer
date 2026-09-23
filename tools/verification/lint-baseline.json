@@ -405,7 +405,7 @@
     "a4ee0f9dc1f9a5090100905f2dc40a49bbec633ede366d0a0719f71da5fc5cc9",
     "5ea56cfd1edc45e943d21ec85c54704d461a4006b7b4bae36ed0f800b1483ab8",
     "007b8b9299a0f3098ac167064608ab7fb3d73842490cd28422012909270cc839",
-    "8ee883b217fa8ce8865d9b3ee776c22a9c7f1451b725ea373cb7658ab3875925",
+    "bd35722cd000901d45742634ac856830492bb6db18cbda860608fd77250718ec",
     "9b3c7ce6f2f13f928abfd4e0327b0aa2dd2d14ff7b3bde297baeb395547e515f",
     "53d8401e8fc6f0c2ccd83a752ec7619539d3cdbfee23c7e11bec928415803537",
     "8c559afe45e453988a501daf3fa39469059a51b028edbc5dcecee3359d500709",
@@ -2874,9 +2874,9 @@
     },
     {
       "path": "src/sm64_events/ui/components/practicecell.js",
-      "line": 76,
+      "line": 91,
       "rule": "complexity",
-      "message": "Function 'PracticeCell' has a complexity of 22. Maximum allowed is 15."
+      "message": "Function 'PracticeCell' has a complexity of 20. Maximum allowed is 15."
     },
     {
       "path": "src/sm64_events/ui/components/practicelog.js",
@@ -3447,6 +3447,22 @@
       "source_commit": "6387622a08ef11430aca450fbe32a2cf99646b70",
       "source_state": "Reviewed working-tree delta from source_commit",
       "reviewer": "r42_startup_workload independent read-only review"
+    },
+    {
+      "findings": [
+        {
+          "message": "Function 'PracticeCell' has a complexity of 20. Maximum allowed is 15.",
+          "allowance": "bd35722cd000901d45742634ac856830492bb6db18cbda860608fd77250718ec",
+          "rule": "complexity",
+          "replaces_allowance": "8ee883b217fa8ce8865d9b3ee776c22a9c7f1451b725ea373cb7658ab3875925",
+          "path": "src/sm64_events/ui/components/practicecell.js",
+          "line": 91
+        }
+      ],
+      "reason": "Task 0111 (Daily Star) adds a `daily` prop to PracticeCell; its class and hover text moved into the new `cellFace` helper, which also took the existing active-class and title fallbacks. Diagnostic decreases from 22 to 20. Previous allowance removed, so no increase to 22 is permitted. No other findings adopted.",
+      "source_commit": "c343489fe5008941aaffa3092fc95e3e197cc29b",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "daily-star session self-review"
     }
   ]
 }
