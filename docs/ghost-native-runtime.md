@@ -122,8 +122,9 @@ records none.
 
 The ghost draws the held objects the model knows (`held_models` in
 [ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp): the Bob-omb, the small
-penguin, King Bob-omb, Chuckya, and the cork and crazy boxes), as part of
-Mario's mesh: the recorded
+penguin, King Bob-omb, Chuckya, the cork and crazy boxes, and Mips), as part
+of Mario's mesh, their textures clamped and wrapped per render tile
+([model README](../renderer/model/README.md)): the recorded
 animation frame, `oAnimState` and `gGlobalTimer` (the penguin's blink), at the
 HOLP, its billboards turned to the live camera. Holding Bowser's tail holds
 his tail anchor, which has no model and no animation, so nothing is

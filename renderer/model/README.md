@@ -98,10 +98,19 @@ caller's view so billboards face that camera, then returns to world space.
 A unit scale under the wrapper publishes the root's fixed-point matrix, which
 a graph whose lists hang off its root (the box) draws under. A kind without
 animations (the box) takes animation id -1. A kind whose textures failed to
-load is refused, never drawn untextured. Texture coordinates are mapped into
-the texture's cell without the tile's clamp or wrap: most of Mips' run past
-its 32x32 fur under G_TX_CLAMP (a few of King Bob-omb's, the penguin's and
-Chuckya's too), so the ghost does not show Mips yet. Vanish/ghost opacity is a
+load is refused, never drawn untextured.
+
+Each textured triangle's material word carries its render tile above the
+combiner code (`sg_tile`, from bit `SG_MATERIAL_TILE_SHIFT`): the texture's
+atlas cell, and per axis whether it clamps, its wrap mask and its size, as
+`gsDPSetTile` and `gsDPSetTileSize` set them. The ghost compositor clamps and
+wraps each texel inside the cell as the RDP does. Most of Mips' coordinates run
+past its 32x32 fur under G_TX_CLAMP, King Bob-omb's 16-texel tile wraps across,
+and 58 of Mario's 150 textured vertices (his button, logo, sideburns, mustache
+and eyes) sit just past their clamped 32x32 textures; without the tile they
+sampled the neighbouring atlas cells. Mirroring, shifts and non-power-of-two
+tiles are refused (`SG_MESH_UNSUPPORTED_MATERIAL`). The metal environment map
+(texgen) carries no tile: its coordinates are generated in range. Vanish/ghost opacity is a
 renderer concern. Replaying geometry alone does not reproduce the entire
 game's material pipeline.
 

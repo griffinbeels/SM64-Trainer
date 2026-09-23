@@ -68,6 +68,76 @@ def _patch_held(source: Path) -> None:
     edit("decomp/game/rendering_graph_node.c", "geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 1);",
          "if (gMarioObject->header.gfx.animInfo.curAnim != NULL)\n"
          "        geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 0);")
+    _patch_tiles(source)
+
+
+def _patch_tiles(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # The render tile's clamp, mask and size ride each textured triangle's
+    # material word (sg_tile in model.h), so the ghost samples inside the
+    # texture as the RDP does: most of Mips' coordinates run past its 32x32
+    # fur under G_TX_CLAMP, King Bob-omb's wrap on a 16-texel mask.
+    edit("gfx_adapter_commands.h", "    GFXCMD_EndDisplayList,", "    GFXCMD_EndDisplayList,\n    GFXCMD_SetTile,")
+    edit("gfx_macros.h",
+         "#define gsDPSetTile(fmt, siz, line, tmem, tile, palette, cmt, maskt, shiftt, cms, masks, shifts) (GFXCMD_None)",
+         "#define gsDPSetTile(fmt, siz, line, tmem, tile, palette, cmt, maskt, shiftt, cms, masks, shifts) \\\n"
+         "    GFXCMD_SetTile, tile, cmt, maskt, shiftt, cms, masks, shifts\n"
+         "#ifndef G_TX_CLAMP /* gbi.h values; the list units see only these macros */\n"
+         "#define G_TX_RENDERTILE 0\n#define G_TX_LOADTILE 7\n#define G_TX_NOMIRROR 0\n#define G_TX_WRAP 0\n"
+         "#define G_TX_MIRROR 1\n#define G_TX_CLAMP 2\n#define G_TX_NOMASK 0\n#define G_TX_NOLOD 0\n#endif")
+    edit("gfx_adapter.c", "                s_uls = (uint16_t)uls;",
+         "                s_uls = (uint16_t)uls; s_lrs = (uint16_t)ptr[-2]; s_lrt = (uint16_t)ptr[-1];")
+    edit("gfx_adapter.c", "            case GFXCMD_EndDisplayList:",
+         "            case GFXCMD_SetTile:\n            {\n"
+         "                const intptr_t tile = ptr[0];\n"
+         "                if (tile == 0) { /* G_TX_RENDERTILE */\n"
+         "                    s_cmt = ptr[1]; s_maskt = ptr[2]; s_shiftt = ptr[3];\n"
+         "                    s_cms = ptr[4]; s_masks = ptr[5]; s_shifts = ptr[6];\n"
+         "                }\n"
+         "                ptr += 7;\n                break;\n            }\n\n"
+         "            case GFXCMD_EndDisplayList:")
+    edit("gfx_adapter.c", "static void process_display_list( void *dl )", TILE_WORD + "static void process_display_list( void *dl )")
+
+
+# sg_tile (model.h) for the current render tile: its atlas cell, and per axis
+# clamp, mask and size (log2) from gsDPSetTile and gsDPSetTileSize. Mirroring,
+# shifts, a mask or size past 64 texels, or a size that is not a power of two
+# are unsupported rather than approximated.
+TILE_WORD = """static intptr_t s_cms, s_cmt, s_masks, s_maskt, s_shifts, s_shiftt;
+static uint16_t s_lrs, s_lrt;
+static unsigned sg_log2(unsigned value)
+{
+    unsigned bits = 0;
+    while (bits < 7u && (1u << bits) < value) ++bits;
+    return (1u << bits) == value ? bits : 7u;
+}
+static uint32_t sg_tile_word(void)
+{
+    const unsigned width = s_lrs >= s_uls ? ((unsigned)(s_lrs - s_uls) >> 2) + 1u : 0u;
+    const unsigned height = s_lrt >= s_ult ? ((unsigned)(s_lrt - s_ult) >> 2) + 1u : 0u;
+    const unsigned ws = sg_log2(width), hs = sg_log2(height);
+    if (ws > 6u || hs > 6u || s_masks < 0 || s_masks > 6 || s_maskt < 0 || s_maskt > 6 || s_shifts || s_shiftt
+            || (s_cms & 1) || (s_cmt & 1) || s_textureIndex < 0 || s_textureIndex > (int)SG_TILE_CELL) {
+        s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;
+        return 0u;
+    }
+    /* G_TX_CLAMP is 2, G_TX_MIRROR 1. */
+    return SG_TILE_PRESENT | (uint32_t)s_textureIndex
+        | ((s_cms & 2) ? SG_TILE_S_CLAMP : 0u) | ((uint32_t)s_masks << SG_TILE_S_MASK_SHIFT) | (ws << SG_TILE_S_SIZE_SHIFT)
+        | ((s_cmt & 2) ? SG_TILE_T_CLAMP : 0u) | ((uint32_t)s_maskt << SG_TILE_T_MASK_SHIFT) | (hs << SG_TILE_T_SIZE_SHIFT);
+}
+/* A textured triangle's material carries its tile; the metal environment map
+ * (texgen) keeps none: the caller generates its coordinates in range. */
+static uint32_t sg_material_word(void)
+{
+    if (!s_textureOn) return SG_MATERIAL_SOLID;
+    if (s_texgen) return s_material | SG_MATERIAL_TEXGEN;
+    return s_material | (sg_tile_word() << SG_MATERIAL_TILE_SHIFT);
+}
+
+"""
 
 
 def patch(source: Path) -> None:
@@ -180,9 +250,8 @@ void sg_traversal_reset(void) {
          "                    s_errors |= SG_MESH_TOO_SMALL; break;\n                }\n"
          "                if (s_texgen && s_textureOn && (s_textureIndex != 0 || s_scaleS != 0x0F80 || s_scaleT != 0x07C0))\n"
          "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
-         "                *s_materialPtr++ = s_textureOn ? s_material | (s_texgen ? SG_MATERIAL_TEXGEN : 0u) : SG_MATERIAL_SOLID;\n"
-         "                *s_materialPtr++ = s_textureOn ? s_material | (s_texgen ? SG_MATERIAL_TEXGEN : 0u) : SG_MATERIAL_SOLID;\n"
-         "                *s_materialPtr++ = s_textureOn ? s_material | (s_texgen ? SG_MATERIAL_TEXGEN : 0u) : SG_MATERIAL_SOLID;")
+         "                s_materialPtr[0] = s_materialPtr[1] = s_materialPtr[2] = sg_material_word();\n"
+         "                s_materialPtr += 3;")
     edit("gfx_adapter.c", "                s_textureIndex = (int)i;",
          "                s_textureIndex = (int)i;\n"
          "                if (s_textureIndex < 0 || s_textureIndex >= NUM_USED_TEXTURES) {\n"

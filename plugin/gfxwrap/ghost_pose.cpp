@@ -8,6 +8,12 @@ static_assert(static_cast<uint32_t>(ghost_compositor::Material::decal_rgba) == S
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::decal_rgb) == SG_MATERIAL_DECAL_RGB);
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::modulate_rgb) == SG_MATERIAL_MODULATE_RGB);
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::modulate_rgba) == SG_MATERIAL_MODULATE_RGBA);
+// The compositor's tile fields are the model's sg_tile, moved above its mode.
+static_assert(ghost_compositor::tile::cell == SG_TILE_CELL && ghost_compositor::tile::s_clamp == SG_TILE_S_CLAMP
+    && ghost_compositor::tile::s_mask == SG_TILE_S_MASK_SHIFT && ghost_compositor::tile::s_size == SG_TILE_S_SIZE_SHIFT
+    && ghost_compositor::tile::t_clamp == SG_TILE_T_CLAMP && ghost_compositor::tile::t_mask == SG_TILE_T_MASK_SHIFT
+    && ghost_compositor::tile::t_size == SG_TILE_T_SIZE_SHIFT && ghost_compositor::tile::field == SG_TILE_FIELD
+    && ghost_compositor::tile::present == SG_TILE_PRESENT);
 namespace {
 bool sample_valid(const gc_sample &s, uint32_t required) {
     return s.bytes == sizeof(s) && s.version == GC_VERSION && s.epoch && s.sequence
@@ -24,8 +30,7 @@ constexpr HeldModel held_models[] = {
     {0x13000528u, SG_HELD_CHUCKYA},     // bhvChuckya
     {0x13004218u, SG_HELD_BREAKABLE_BOX}, // bhvBreakableBoxSmall (the cork box)
     {0x13001650u, SG_HELD_BREAKABLE_BOX}, // bhvJumpingBox (the crazy box, same model)
-    // bhvMips (0x130044FC) waits: most of Mips' texture coordinates run past
-    // its 32x32 fur under G_TX_CLAMP, which the atlas cannot yet reproduce.
+    {0x130044FCu, SG_HELD_MIPS},        // bhvMips: its fur clamps (sg_tile)
 };
 uint32_t held_kind(uint32_t behavior) {
     for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;
@@ -214,8 +219,9 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         return Result::model_failed;
     ghost_compositor::Pose built{};
     for (uint32_t i = 0; i < mesh.vertex_count; ++i) {
-        const uint32_t material = scratch.material[i] & ~uint32_t(SG_MATERIAL_TEXGEN);
-        if (material > SG_MATERIAL_MODULATE_RGBA) return Result::model_failed;
+        const uint32_t material = scratch.material[i] & SG_MATERIAL_CODE;
+        const uint32_t tile = scratch.material[i] >> SG_MATERIAL_TILE_SHIFT;
+        if (material > SG_MATERIAL_MODULATE_RGBA || tile >= (SG_TILE_PRESENT << 1)) return Result::model_failed;
         auto &v = scratch.vertices[i];
         std::memcpy(v.position,scratch.position+3*i,sizeof(v.position));
         std::memcpy(v.normal,scratch.normal+3*i,sizeof(v.normal));
@@ -225,7 +231,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         // would from this camera.
         if ((scratch.material[i] & SG_MATERIAL_TEXGEN) && !environment_uv(view,world.lookat,v.normal,v.uv))
             return Result::model_failed;
-        v.material = static_cast<ghost_compositor::Material>(material);
+        v.material = ghost_compositor::with_tile(static_cast<ghost_compositor::Material>(material), tile);
     }
     multiply(world.projection,view,built.view_projection);
     for (unsigned c = 0; c < 4; ++c) {
