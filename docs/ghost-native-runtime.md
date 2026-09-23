@@ -447,9 +447,12 @@ under two minutes a ghost. It stays well under the 2 GiB his Project64 has:
 wermi's build v7 is 32-bit and not large-address-aware (checked 2026-09-23),
 and the emulator, GLideN64, its texture caches and the worker's retained files
 share that space. The budget is a ceiling, not a reservation. Every clip
-allocation fails soft: the worker's file read, GCLIP4 upgrade and asset list,
-and playback's copy (`new(std::nothrow)`), refuse the set with `GIPC_CLIP`
-(budget or memory) instead of throwing inside Project64. One maximum-size clip
+allocation fails soft instead of throwing inside Project64. The worker's file
+read and GCLIP4 upgrade refuse with `GIPC_FILE` (6). The retained-file total,
+the asset list and playback's copy (`new(std::nothrow)`, `GP_BUDGET`) refuse
+the set with `GIPC_BUDGET` (12), kept apart from a bad clip (`GIPC_CLIP`, 8)
+so the ghost card can say "These ghosts are too long to show together;
+untick one." (one ghost: "Making room for this ghost..."). One maximum-size clip
 (100000 records, about 55 minutes at 30 Hz) fits. The pose archive keeps its
 own window (288 MiB of rows, two hours at 30 Hz), independent of that clip
 cap, so a late save still reaches an early attempt. All resident slots count, so a replacement
