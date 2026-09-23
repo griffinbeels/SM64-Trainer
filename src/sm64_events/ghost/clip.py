@@ -6,10 +6,12 @@ record may also carry the shadow the game drew under Mario and the sound
 requests Mario issued since the previous frame (`Frame.sounds`), each with
 its own validity bit.
 
-A star clip may end with a DANCE TAIL (header flag `DANCE_TAIL`): the frames
-after the attempt closed, through Mario's star grab and dance, so the ghost
-celebrates before it fades. The attempt still closes on its own frame; the
-manifest's `tail_records` counts the rows after it.
+A star run's clip may end with a DANCE TAIL (header flag `DANCE_TAIL`): the
+frames after the attempt closed, through Mario's closing star grab and dance,
+so the ghost celebrates before it fades. The 100-coin star's clip carries one
+too although its clock is its exit segment's (it closes on the exit star). The
+attempt still closes on its own frame; the manifest's `tail_records` counts
+the rows after it.
 """
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ SHADOW_BYTES, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW = 292, 36, 8, 1
 OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
 STAR_CLOCK, SEGMENT_CLOCK = 1, 2
-DANCE_TAIL = 1  # header flag: rows after the closing frame are the star dance
+DANCE_TAIL = 1  # header flag: rows after the closing frame are the closing star's dance
 CLOCK_KINDS = {"star": STAR_CLOCK, "segment": SEGMENT_CLOCK}
 _HEADER = struct.Struct("<8s8I16sQqd2Q2I2i4I3Q2I")
 _PREFIX = struct.Struct("<4I")
@@ -344,7 +346,7 @@ def decode_clip(data: bytes) -> Clip:
             (MAGIC, VERSION, HEADER_BYTES, RECORD_BYTES, 1, SAMPLE_VERSION)
             or not configuration or not epoch or not frequency or anchor < 0
             or not math.isfinite(utc) or utc <= 0 or not any(clip_id) or any(reserved)
-            or flags & ~DANCE_TAIL or (flags and kind != STAR_CLOCK)
+            or flags & ~DANCE_TAIL
             or not 1 <= count <= MAX_RECORDS or len(data) != HEADER_BYTES + count * RECORD_BYTES):
         raise ClipError("native ghost file header is invalid")
     frames = tuple(frame_from_bytes(data[at:at + RECORD_BYTES])
@@ -373,8 +375,6 @@ def encode_clip(frames, producer, *, clock_kind: int, clip_id: str | None = None
         checked.append(frame_from_bytes(frame.raw if isinstance(frame, Frame) else frame))
     records = tuple(checked)
     level, area = _checked_frames(records, source["configuration"], source["epoch"], clock_kind)
-    if dance_tail and clock_kind != STAR_CLOCK:
-        raise ClipError("only a star clip carries a dance tail")
     identity = UUID(clip_id).bytes if clip_id else uuid4().bytes
     if not any(identity):
         raise ClipError("native ghost clip identity is empty")

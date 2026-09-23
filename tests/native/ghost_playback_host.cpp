@@ -645,8 +645,9 @@ int main() {
                 }
             Clip segment_tail=Clip::linear(42,30,20,5);segment_tail.header.flags=GCLIP_DANCE_TAIL;
             segment_tail.header.clock_kind=GCLIP_SEGMENT_CLOCK;
-            check(api->prepare_clip(&segment_tail.header,segment_tail.frames.data())==GP_INVALID,
-                  "only a star clip carries a dance tail");
+            check(api->prepare_clip(&segment_tail.header,segment_tail.frames.data())==GP_OK,
+                  "a segment-clock clip (the 100-coin star's) may carry a dance tail");
+            check(api->release_clip(segment_tail.header.clip_id)==GP_OK,"release the unlisted clip");
             Clip unknown=Clip::linear(43,30,20,5);unknown.header.flags=2;
             check(api->prepare_clip(&unknown.header,unknown.frames.data())==GP_INVALID,"unknown clip flag refused");
             check(api->prepare_clip(&dancer.header,dancer.frames.data())==GP_OK
@@ -717,6 +718,31 @@ int main() {
             ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"the tracker suspends after his completion");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             live.live_action=1;check(!step(27,GP_DISABLED,{},{}),"suspended: hidden");
+            // The 100-coin star: its clock is its exit segment's (no star_ends),
+            // and its run grabs the 100-coin star (rows 10..14, a no-exit dance)
+            // before closing on the exit star (row 20) and dancing to row 29.
+            // With its dance tail the ghost plays through both grabs and fades
+            // after the exit dance; an older clip plays to its end.
+            Clip hundred=Clip::linear(44,30,20,5),hundred_older=Clip::linear(45,30,20,9);
+            hundred.header.flags=GCLIP_DANCE_TAIL;
+            for(auto *clip:{&hundred,&hundred_older}) {
+                clip->header.clock_kind=GCLIP_SEGMENT_CLOCK;
+                for(uint32_t i=10;i<15;++i)clip->frames[i].sample.live_action=0x1307;
+                for(uint32_t i=21;i<30;++i)clip->frames[i].sample.live_action=0x1302;
+                check(api->prepare_clip(&clip->header,clip->frames.data())==GP_OK,"prepare a 100-coin run");
+            }
+            revision=r.revision+1;r=request(hundred,revision);r.model_id=4;r.star_ends=0;r.volume=1;
+            r.clip_count=2;std::memcpy(r.clips[1].clip_id,hundred_older.header.clip_id,16);
+            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,14000,source_generation,0,0};
+            elapsed_base=14000;timer_base+=1000;live.live_action=1;
+            check(api->configure(&r)==GP_OK,"a 100-coin run on its exit segment's clock");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(12,GP_READY,{GP_READY,GP_READY},{}) && count==2,"both play through the 100-coin grab");
+            check(step(29,GP_READY,{GP_READY,GP_READY},{}) && count==2,"and through the exit star's dance");
+            check(step(30,GP_READY,{GP_READY,GP_AFTER_END},{}) && count==1
+                  && poses[0].opacity==float(GP_STAR_FADE_FRAMES-1)/float(GP_STAR_FADE_FRAMES),
+                  "the dance-tail clip fades after the exit dance; the older one has ended");
+            check(!step(29+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_AFTER_END},{}),"then it hides");
             ghost_playback::set_sound_sink(nullptr);
         }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");

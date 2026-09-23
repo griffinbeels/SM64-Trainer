@@ -25,9 +25,10 @@ from sm64_events.ghost.clip import (
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 
 # His ask, 2026-09-23: the ghost stays on screen through its own star grab and
-# dance, then fades. A star attempt closes at x-cam (the dance's first frame),
-# so its clip keeps the frames after that through the dance's end: display
-# only, the attempt's origin and closing frame are unchanged. Measured dances
+# dance, then fades. A star attempt closes at x-cam (the dance's first frame)
+# of the grab that completes it -- for the 100-coin star, the EXIT star after
+# it -- so its clip keeps the frames after that through the dance's end:
+# display only, the attempt's origin and closing frame are unchanged. Measured dances
 # run about 100-125 frames past x-cam (the exit dance, and the longer no-exit
 # one); the cap keeps a stuck or unusual tail bounded.
 DANCE_TAIL_MAX_FRAMES = 180
@@ -213,8 +214,12 @@ class PoseArchive:
         if kind == STAR_CLOCK and frame_from_bytes(rows[0][0]).igt > NEAR_ZERO_IGT:
             raise ClipError("star origin has no canonical near-zero native clock witness")
         close = frame_from_bytes(rows[-1][0])
+        # A star run, whatever owns its clock: the 100-coin star is timed by
+        # its exit segment and closes on the exit star's grab. Segments keep
+        # ending where they close.
+        star_run = getattr(attempt, "segment_id", None) is None
         tail = (self._dance_tail(identity, last, close)
-                if kind == STAR_CLOCK and close.live_action in STAR_GRAB_ACTIONS else [])
+                if star_run and close.live_action in STAR_GRAB_ACTIONS else [])
         manifest = write_clip(destination, tuple(row[0] for row in rows) + tuple(tail),
                               SimpleNamespace(**source), clock_kind=kind, tail_records=len(tail))
         return {**manifest, "attempt_id": attempt.id, "session_id": attempt.session_id,

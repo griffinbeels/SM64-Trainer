@@ -204,6 +204,11 @@ class NativeGhost:
                 return self._send(blocking=blocking)
             controls = dict(self._controls)
             hue = controls.pop("hue_degrees")
+            # A star whose live clock is a segment's (the 100-coin star, timed
+            # to its exit star) is not over at the first star grab: his
+            # 100-coin grab must not end the ghosts, nor theirs end them. His
+            # exit grab closes the attempt, and the suspension hides them.
+            controls["stop_at_star"] = controls["stop_at_star"] and origin["kind"] == "star"
             clips = [{"clip_id": bytes.fromhex(manifest["clip_id"]),
                       "clip_sha256": bytes.fromhex(manifest["sha256"]),
                       "clip_path": str(path), "hue_degrees": ghost_hue(hue, index)}

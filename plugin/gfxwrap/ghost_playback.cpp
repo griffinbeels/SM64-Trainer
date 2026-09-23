@@ -286,7 +286,6 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
             || !nonzero_id(h.clip_id) || !h.qpc_frequency || h.qpc_anchor<0
             || !std::isfinite(h.utc_anchor) || h.utc_anchor<=0
             || h.level<4 || h.level>36 || h.area<1 || h.area>8 || (h.flags&~GCLIP_DANCE_TAIL)
-            || (h.flags && h.clock_kind!=GCLIP_STAR_CLOCK)
             || h.reserved[0] || h.reserved[1] || !frames
             || (h.clock_kind!=GCLIP_STAR_CLOCK && h.clock_kind!=GCLIP_SEGMENT_CLOCK)
             || !h.origin_continuity || h.origin_raw>UINT16_MAX) return false;
@@ -626,9 +625,11 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     const uint64_t last=clip_coordinate(*clip,clip->index_count-1);
     // Before-start clamps to the first pose, including when that pose already
     // carries a touch. Unlike the live-end latch, this moves with the nudge.
-    // A clip with a dance tail keeps its ghost through its own grab and dance
-    // instead, then fades it out over GP_STAR_FADE_FRAMES from its last record.
-    const bool dances=have_touch[index] && (h.flags&GCLIP_DANCE_TAIL);
+    // A clip with a dance tail ends on its own closing grab instead: it plays
+    // on through any earlier star (the 100-coin star before its exit star) and
+    // its closing dance, then fades out over GP_STAR_FADE_FRAMES from its last
+    // record. FIXED seek ignores it, like both end policies.
+    const bool dances=(h.flags&GCLIP_DANCE_TAIL) && active_request.mode==GP_FOLLOW;
     if(have_touch[index] && (first>=touch[index] || (!dances && target>=touch[index])))return GP_STAR_ENDED;
     uint64_t at=target;
     if(target>last) {

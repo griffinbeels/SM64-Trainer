@@ -213,13 +213,12 @@ def test_corrupted_header_is_not_accepted(offset, value):
         decode_clip(data)
 
 
-def test_only_a_star_clip_may_carry_a_dance_tail():
-    star = decode_clip(encode_clip((frame(),), producer(), clock_kind=STAR_CLOCK, dance_tail=True))
-    assert star.dance_tail and not decode_clip(encoded((frame(),))).dance_tail
-    with pytest.raises(ClipError, match="dance tail"):
-        encode_clip((frame(),), producer(), clock_kind=SEGMENT_CLOCK, dance_tail=True)
-    data = bytearray(encoded((frame(),), SEGMENT_CLOCK))
-    struct.pack_into("<I", data, 124, 1)
+def test_a_dance_tail_is_one_known_header_flag_on_either_clock():
+    for kind in (STAR_CLOCK, SEGMENT_CLOCK):  # the 100-coin star runs on its exit segment's clock
+        assert decode_clip(encode_clip((frame(),), producer(), clock_kind=kind, dance_tail=True)).dance_tail
+    assert not decode_clip(encoded((frame(),))).dance_tail
+    data = bytearray(encoded((frame(),)))
+    struct.pack_into("<I", data, 124, 3)
     with pytest.raises(ClipError):
         decode_clip(data)
 

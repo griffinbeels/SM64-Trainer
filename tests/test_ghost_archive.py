@@ -6,7 +6,7 @@ import pytest
 from ghost_native_fixture import attempt, frame, producer
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.archive import DANCE_TAIL_MAX_FRAMES, PoseArchive
-from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT
+from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT
 from sm64_events.ghost.clip import ClipError, attempt_origin, check_manifest, read_clip
 
 
@@ -239,15 +239,31 @@ def test_the_dance_tail_is_bounded(tmp_path):
     archive.close()
 
 
-@pytest.mark.parametrize("close_action,kind", [(IDLE, "star"), (DANCE, "segment")])
-def test_no_tail_unless_a_star_attempt_closes_inside_the_dance(tmp_path, close_action, kind):
+@pytest.mark.parametrize("close_action,kind,segment_id", [(IDLE, "star", None), (DANCE, "segment", 5)])
+def test_no_tail_unless_a_star_run_closes_inside_the_dance(tmp_path, close_action, kind, segment_id):
     archive = PoseArchive(tmp_path / "poses.sqlite")
     archive.ingest(producer(), (frame(1), frame(2), frame(3, action=close_action),
                                 *(frame(n, action=DANCE) for n in range(4, 9))))
     row, path = attempt(kind=kind), tmp_path / "plain.ghost"
+    row.segment_id = segment_id
     manifest = archive.export_attempt(row, path)
     assert manifest["tail_records"] == 0 and manifest["records"] == 3
     assert not check_manifest(path, manifest, attempt=row, target=None).dance_tail
+    archive.close()
+
+
+def test_the_hundred_coin_star_keeps_its_exit_star_dance(tmp_path):
+    """The 100-coin star is a star run timed by its exit segment: it grabs the
+    100-coin star mid-run and closes on the exit star, whose dance it keeps."""
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    rows = (frame(1), frame(2, action=ACT_STAR_DANCE_NO_EXIT), frame(3), frame(4, action=DANCE),
+            *(frame(n, action=DANCE) for n in range(5, 8)), frame(8, action=IDLE))
+    archive.ingest(producer(), rows)
+    row, path = attempt(end=104, kind="segment"), tmp_path / "hundred.ghost"
+    row.segment_id = None  # reattributed to the 100-coin star
+    manifest = archive.export_attempt(row, path)
+    clip = check_manifest(path, manifest, attempt=row, target=None)
+    assert manifest["tail_records"] == 3 and clip.dance_tail and len(clip.frames) == 7
     archive.close()
 
 

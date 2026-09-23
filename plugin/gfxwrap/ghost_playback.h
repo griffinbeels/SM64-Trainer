@@ -157,9 +157,10 @@ bool atlas(sg_atlas_view *out, uint64_t *model_id);
  * A star generation change or live star grab ends the shared origin and every
  * ghost; tuning the same origin cannot revive it. With star_ends, FOLLOW also
  * hides each ghost at its own first recorded valid star action coordinate
- * after nudge (including duplicate/refused poses), unless its clip carries a
- * dance tail: that ghost keeps drawing through its grab and dance, then holds
- * the last pose and fades (body, shadow, sound) over GP_STAR_FADE_FRAMES.
+ * after nudge (including duplicate/refused poses). A FOLLOW clip that carries a
+ * dance tail (with or without star_ends) instead draws through any earlier
+ * star and its closing grab and dance, then holds the last pose and fades
+ * (body, shadow, sound) over GP_STAR_FADE_FRAMES.
  * This recorded cutoff moves with nudge; FIXED ignores both end policies. A new continuity refuses until
  * a witnessed recovery offset binds: the renderer runs the worker's same
  * ghost_origin::Recovery over its live samples, so a state load it can resolve

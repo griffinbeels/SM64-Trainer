@@ -1141,12 +1141,14 @@ and playback draws none.
 
 ### Dance tail
 
-The recorded [[frame]]s after a star [[attempt]] closes, through Mario's star
-grab and dance, kept on the end of its [[ghost]] recording so the [[ghost]]
-celebrates instead of vanishing at its touch; it then fades out over half a
-second. Display only: the [[attempt]]'s origin, closing [[frame]] and time are
-unchanged. Recordings saved before it have none and still end at the touch;
-segments never carry one.
+The recorded [[frame]]s after a star [[attempt]] closes, through the grab and
+dance of the star that completed it, kept on the end of its [[ghost]]
+recording so the [[ghost]] celebrates instead of vanishing at its touch; it
+then fades out over half a second. For the 100-coin star that is the exit
+star after it, so the [[ghost]] plays on through its 100-coin grab. Display
+only: the [[attempt]]'s origin, closing [[frame]] and time are unchanged.
+Recordings saved before it have none and still end at the touch; segments
+never carry one.
 
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
   `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
