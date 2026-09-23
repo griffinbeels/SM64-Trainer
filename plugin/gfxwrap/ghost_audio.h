@@ -11,6 +11,10 @@ constexpr uint32_t queue_slots = 256;
 constexpr uint32_t low_water_frames = 1088; // synthesize the next tick at or below this (34 ms)
 constexpr uint32_t tick_capacity = 1088;   // SA_TICK_MAX_FRAMES
 constexpr uint32_t sources = 16;           // SA_SOURCES: one per ghost
+/* After this much silent output (3 s at 32 kHz) the audio thread closes the
+ * device and stops ticking until a request can be heard; it reopens on that
+ * request, which sounds in the first tick written. */
+constexpr uint32_t idle_close_frames = 96000;
 
 /* Render thread only: bounded single-producer queue; never waits/allocates.
  * A full queue, or a ghost index >= sources, drops the request and counts it. */
@@ -43,7 +47,7 @@ const ghost_playback::SoundSink *sink();
 
 enum class Start { ok, busy, invalid_rom, engine, device, thread };
 /* Worker thread. Checks the ROM's audio regions against known SM64 US audio
- * data, copies them, and starts the audio thread (engine + device). */
+ * data, copies only that span, and starts the audio thread (engine + device). */
 Start start(const uint8_t *rom, size_t bytes, const Output &output);
 bool known_audio(const uint8_t *rom, size_t bytes);
 /* Worker thread: stops and joins the audio thread; closes engine and device. */
@@ -54,6 +58,8 @@ struct Stats {
     double last_latency_ms, max_latency_ms; // request to its first audible sample
     uint32_t running;
     uint64_t underruns; // ticks written after the device had already run dry
+    uint32_t device_open;
+    uint64_t idle_closes, reopens, failed_reopens;
 };
 Stats stats();
 }
