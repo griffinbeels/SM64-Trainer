@@ -426,7 +426,7 @@ at the camera to about 0.11 at 10000 units and never below 0.1 (0.9 x
 intensity squared + 0.1); this copy uses one reach (level 0, 20000) where the
 game uses each level's own. On its own the engine therefore never silences a
 distant ghost, which is what the renderer's gain adds. On top of that the renderer multiplies each ghost's gain by
-`min(1, (GP_SOUND_NEAR / d)^2)`, d being the world distance between that
+`min(1, GP_SOUND_NEAR / d)` -- the inverse-square law for intensity, so -6 dB per doubling -- d being the world distance between that
 ghost's root and live Mario (gain 1 while live Mario's pose is unknown).
 `GP_SOUND_NEAR` is a tuning constant, 400 units (2.5 Mario heights). The gain
 scales amplitude, so it halves the level (-6 dB) for every 1.41x distance

@@ -584,8 +584,10 @@ void hear(uint32_t index,const Clip& clip,uint32_t record,bool before_start) {
     if(int64_t(record)>high)high=int64_t(record);
     last=int64_t(record);
 }
-// Inverse-square falloff from live Mario, on top of the engine's own camera
-// falloff; full gain within GP_SOUND_NEAR, and while live Mario is unknown.
+// The inverse-square law from live Mario, on top of the engine's own camera
+// falloff: sound INTENSITY falls as 1/d^2, so the amplitude this gain scales
+// falls as 1/d (-6 dB per doubling of distance). Full gain within
+// GP_SOUND_NEAR, and while live Mario is unknown.
 float sound_gain(const gc_sample& live,const float ghost[3]) {
     if(!(live.valid_fields&GC_VALID_POSE))return 1.0f;
     double squared=0;
@@ -593,7 +595,7 @@ float sound_gain(const gc_sample& live,const float ghost[3]) {
         const double apart=double(ghost[axis])-double(live.pose.position[axis]);squared+=apart*apart;
     }
     const double reach=GP_SOUND_NEAR;
-    return squared>reach*reach ? float(reach*reach/squared) : 1.0f; // NaN compares false: full gain
+    return squared>reach*reach ? float(reach/std::sqrt(squared)) : 1.0f; // NaN compares false: full gain
 }
 // Where a visible ghost sounds from this frame; before its cues, so a new
 // sound starts at the ghost's current place.

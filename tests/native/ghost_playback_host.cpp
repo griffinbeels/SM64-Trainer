@@ -581,9 +581,9 @@ int main() {
                   && placed[1].position[0]==108 && placed[1].position[2]==109,"placed at its root from the live camera");
             check(placed[0].gain==1 && placed[1].gain==1,"within GP_SOUND_NEAR of live Mario: full gain");
             live.pose.position[0]=3008+2*GP_SOUND_NEAR;step(8,{});
-            check(std::fabs(placed[0].gain-.25f)<1e-6f,"twice GP_SOUND_NEAR away: a quarter");
+            check(std::fabs(placed[0].gain-.5f)<1e-6f,"twice GP_SOUND_NEAR away: half the amplitude, a quarter the intensity");
             const double distant=double(3808-3108)*(3808-3108)+16.0;
-            check(std::fabs(placed[1].gain-float(GP_SOUND_NEAR*GP_SOUND_NEAR/distant))<1e-6f,"each ghost its own distance");
+            check(std::fabs(placed[1].gain-float(GP_SOUND_NEAR/std::sqrt(distant)))<1e-6f,"each ghost its own distance");
             live.valid_fields&=~GC_VALID_POSE;step(8,{});
             check(placed[0].gain==1 && placed[1].gain==1,"unknown live Mario: full gain");
             std::memset(live.camera.position,0,sizeof(live.camera.position));

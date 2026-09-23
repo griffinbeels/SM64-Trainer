@@ -175,7 +175,7 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &,
  * or a restored/rebound timeline passes nothing. Null discards.
  * Each drawn frame also places every visible ghost: its displayed root
  * relative to the live camera (SM64 pans and distances that itself) and a
- * gain of min(1, (GP_SOUND_NEAR / d)^2), d its world distance from live
+ * gain of min(1, GP_SOUND_NEAR / d) -- inverse-square INTENSITY -- d its world distance from live
  * Mario (1 while live Mario's pose is unknown). */
 #define GP_SOUND_CATCHUP 90u
 #define GP_SOUND_NEAR 400.0f /* tuning: full gain within 2.5 Mario heights (160 units each) */
