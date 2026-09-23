@@ -70,6 +70,9 @@ class TemplateStore:
     def __init__(self, conn, lock):
         self._conn = conn
         self._lock = lock
+        #: Moves on every write, so a reader holding an answer derived from
+        #: the templates (the ghost session's resolve) knows to ask again.
+        self.generation = 0
 
     def save(self, *, kind: str, entity_key: str, strat_tag: str | None,
              name: str, origin: str, document: str,
@@ -103,6 +106,7 @@ class TemplateStore:
                  1 if active else 0, now))
             new_id = cursor.lastrowid
             result = self._get(new_id)
+        self.generation += 1
         return result
 
     def get(self, template_id: int) -> Template:
@@ -165,6 +169,7 @@ class TemplateStore:
             self._conn.execute("UPDATE input_templates SET active=1 WHERE id=?",
                                (template_id,))
             result = self._get(template_id)
+        self.generation += 1
         return result
 
     def delete(self, template_id: int) -> None:
@@ -175,6 +180,7 @@ class TemplateStore:
             self._conn.execute("DELETE FROM input_templates WHERE id=?",
                                (template_id,))
             self._conn.commit()
+        self.generation += 1
 
 
 __all__ = ["DocumentError", "Template", "TemplateStore"]

@@ -8688,6 +8688,11 @@
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .ghost-pick-why { color: var(--muted); }
+  /* Runs that can never play as Only Mario, folded into one line: quiet,
+     because there is nothing on this card to do about them. */
+  .ghost-picks-folded {
+    align-self: center; color: var(--muted); font-size: .72rem; cursor: help;
+  }
   .ghost-pick-why::before { content: "— "; }
   /* The reason takes its OWN ROW, beside the control groups rather than
      inside one: a whole sentence is not part of a control's box, and while it

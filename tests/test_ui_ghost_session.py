@@ -475,3 +475,28 @@ def test_a_run_with_missing_positions_says_where_the_ghost_will_blink():
     assert [item["reason"] for item in mario["items"]] == [
         "blinks on 1 frame with no recorded position", "blinks on 12 frames with no recorded position"]
     assert recording_options(selection, "whole")["items"][1]["reason"] is None
+
+
+OLDER = "This Mario recording uses an older pose format. Record a new attempt to use it."
+
+
+def older_candidate(attempt_id, reason="older_pose_format", text=OLDER):
+    return {**saved_candidate(attempt_id, native=False),
+            "native_reason": reason, "native_reason_text": text}
+
+
+def test_runs_that_can_never_play_as_mario_fold_into_one_quiet_line():
+    """His picker, 2026-09-23: a column of disabled boxes each saying "older
+    pose format" is noise in Only Mario. They fold into one line; a ticked
+    one stays a box so it can be unticked; Whole picture folds nothing."""
+    selection = {"ghosts": ghosts(True, 3), "pb": PB, "candidates": [
+        saved_candidate(1), older_candidate(2), older_candidate(3),
+        older_candidate(4, "no_native_poses", "Mario poses were not recorded."),
+        saved_candidate(5, native=False)]}
+    mario = recording_options(selection, "mario")
+    assert [item["key"] for item in mario["items"]] == ["pb", 1, 3, 5]
+    assert mario["folded"]["count"] == 2
+    assert mario["folded"]["label"] == "2 older runs can't play as Only Mario"
+    assert OLDER in mario["folded"]["reason"] and "not recorded" in mario["folded"]["reason"]
+    whole = recording_options(selection, "whole")
+    assert whole["folded"] is None and len(whole["items"]) == 6

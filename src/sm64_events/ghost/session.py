@@ -43,6 +43,7 @@ import logging
 import threading
 from contextlib import suppress
 from datetime import datetime, timezone
+from time import monotonic
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -102,10 +103,20 @@ NUDGE_LIMIT_FRAMES = 600
 #: catches is human-paced, and the live clock the overlay actually follows
 #: arrives on its own socket.
 WATCH_PERIOD_S = 0.5
-#: Re-resolving asks the template store and looks for the clip on disk, so it
-#: runs every Nth tick rather than every tick -- a target change re-resolves
-#: immediately whatever this says.
-RESOLVE_EVERY = 8
+#: RESOLVING -- which ghosts exist for the target and whether each can play --
+#: reads the template store, the saved-clip index and every candidate's
+#: sidecar, 86 ms of CPU on his PB (2026-09-23). It used to run every 4 s
+#: whatever happened, switch off included. It now runs when something that
+#: decides the answer moves: the target, the templates (`TemplateStore.
+#: generation`), the saved clips (`ReplayService.saved_generation`), the
+#: database, a PB save or undo, a saved-ghost change, and a PUT that changes
+#: which ghosts or which view. This interval is the backstop for anything
+#: that moves some other way, and it runs only while the switch is on: with
+#: it off nothing is drawn, and turning it on resolves at once.
+SAFETY_RESOLVE_S = 45.0
+#: The PUT fields that change what the resolve answers. Opacity, tint, nudge,
+#: shadow and volume ride the clock feed and never need one.
+RESOLVING_CHANGES = frozenset({"enabled", "view", "ghosts"})
 #: A child that will not stay up is not retried forever; a crash loop spawning
 #: a process twice a second is worse than no overlay.
 MAX_START_ATTEMPTS = 3
@@ -330,6 +341,13 @@ class GhostSession:
         self._period_s = period_s
         self._native = native
         self._native_answer = {}
+        # When the last resolve ran, and what the world it read looked like
+        # (`_world`): a change there is itself the event that re-resolves.
+        self._resolved_at: float | None = None
+        self._world = None
+        # PBs whose video save has been asked for and not finished: the only
+        # time "still being saved" is true (`video_pending`, wired in main.py).
+        self._videos_pending: set[int] = set()
         self._selection = GhostSelection()
         self._candidates = []
         self._pb = None
@@ -448,16 +466,32 @@ class GhostSession:
                 self._native.stop()
 
     async def _watch(self) -> None:
-        tick = 0
         while True:
             await asyncio.sleep(self._period_s)
-            tick += 1
             try:
-                await self.refresh(resolve=tick % RESOLVE_EVERY == 0)
+                await self.refresh(resolve=self._safety_resolve_due())
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - one bad cycle must not end the watch
                 log.exception("ghost session cycle failed")
+
+    def _safety_resolve_due(self) -> bool:
+        """The backstop resolve (`SAFETY_RESOLVE_S`), only while drawing."""
+        return (self._enabled and self._resolved_at is not None
+                and monotonic() - self._resolved_at >= SAFETY_RESOLVE_S)
+
+    def _world_now(self):
+        """Everything a resolve reads that can change without an event
+        reaching this session: which database, which templates, which saved
+        clips. Each is a counter, so asking costs nothing."""
+        database = self._db()
+        try:
+            store = template_store(self._inputs)
+            templates = (id(store), getattr(store, "generation", None))
+        except Exception:  # noqa: BLE001 - no input service yet is a world too
+            templates = None
+        return (id(database) if database is not None else None, templates,
+                getattr(self._replay, "saved_generation", None))
 
     # -- the cycle ------------------------------------------------------------
 
@@ -493,9 +527,11 @@ class GhostSession:
             resolve = True
         self._load_persisted()
         if self._pending:
-            resolve = resolve or "view" in self._pending
+            resolve = resolve or bool(RESOLVING_CHANGES & set(self._pending))
             self._apply(self._pending)
             self._pending = {}
+        world = self._world_now()
+        resolve = resolve or world != self._world or self._resolved_at is None
         # Every cycle, not only the ones that changed it: a feed attached late,
         # or a session whose watch reset the nudge on a target change, converges
         # here rather than waiting for the next press.
@@ -503,6 +539,7 @@ class GhostSession:
         if resolve:
             self._source = self._resolve_source(target)
             self._refresh_candidates(target)
+            self._world, self._resolved_at = world, monotonic()
         try:
             self._reconcile()
         except Exception:  # noqa: BLE001 - a window that will not open is not a reason to stop practising
@@ -616,38 +653,75 @@ class GhostSession:
         except RuntimeError:  # no captured-input service yet
             return None
 
-    def _refresh_pb(self, target):
+    def video_pending(self, attempt_id: int, pending: bool) -> None:
+        """A PB's video save was asked for (True) or has finished (False)."""
+        if pending:
+            self._videos_pending.add(attempt_id)
+        else:
+            self._videos_pending.discard(attempt_id)
+
+    def _row_video(self):
+        """How the picker's rows learn whether the WHOLE PICTURE can play.
+
+        Only Mario draws poses, so there a row's whole-picture answer decides
+        one thing -- whether switching to Whole picture is offered at all --
+        and one playable recording settles that. Each answer reads a clip's
+        sidecar and checks its picture map, so after the first yes (the
+        current source's own counts) the rest are left unasked (`None`);
+        switching views resolves again and asks them properly."""
+        if self._view != "mario":
+            return self._resolve_video_source
+        found = [bool(self._source.get("whole_available"))]
+
+        def video_of(target, ghost):
+            if found[0]:
+                return {"available": None, "reason_text": None}
+            answer = self._resolve_video_source(target, ghost)
+            found[0] = bool(answer["available"])
+            return answer
+        return video_of
+
+    def _refresh_pb(self, target, video_of):
         """What the picker's default option plays: the PB ghost and whether
         each Show mode can draw it. Never a saved choice."""
         library = self.library()
         pb = library.pb_for(target["kind"], target["entity_key"], target["strat"]) if target else None
         if pb is None:
             return None
-        video = self._resolve_video_source(target, pb)
+        video = video_of(target, pb)
         native = self._native.probe(target, pb) if self._native is not None else {
             "available": False, "reason_text": "Mario playback is not available in this window."}
-        return {"attempt_id": pb.attempt_id, "frames": pb.frames, "pose_gaps": native.get("pose_gaps", 0),
-                "native_available": bool(native["available"]),
-                "native_reason_text": native["reason_text"],
-                "whole_available": bool(video["available"]) and video.get("attempt_id") == pb.attempt_id,
-                "whole_reason_text": (video["reason_text"] if video.get("attempt_id") == pb.attempt_id
-                                      else "This PB's video is still being saved.")}
+        row = {"attempt_id": pb.attempt_id, "frames": pb.frames, "pose_gaps": native.get("pose_gaps", 0),
+               "native_available": bool(native["available"]),
+               "native_reason_text": native["reason_text"]}
+        if video["available"] is None:
+            return {**row, "whole_available": None, "whole_reason_text": None}
+        mine = video.get("attempt_id") == pb.attempt_id
+        # "Still being saved" only while a save really is running; a PB whose
+        # footage was never kept says so instead of promising it.
+        waiting = ("This PB's video is still being saved." if pb.attempt_id in self._videos_pending
+                   else "There is no saved video for this PB.")
+        return {**row, "whole_available": bool(video["available"]) and mine,
+                "whole_reason_text": video["reason_text"] if mine else waiting}
 
     def _refresh_candidates(self, target):
+        video_of = self._row_video()
         try:
-            self._pb = self._refresh_pb(target)
+            self._pb = self._refresh_pb(target, video_of)
         except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
             log.debug("PB ghost unavailable", exc_info=True)
             self._pb = None
         try:
             self._candidates = self._selection.candidates(
-                target, self.library(), self._resolve_video_source, self._native)
+                target, self.library(), video_of, self._native,
+                variant=(self._view, self._world_now()))
             # The chosen ghosts were resolved just now. Do not let the list's
             # short cache hide a deletion or a newly saved file on them.
             fresh = {ghost["attempt_id"]: ghost for ghost in self._native_answer.get("ghosts", [])}
             for row in self._candidates:
                 if row["attempt_id"] in fresh:
                     row["native_available"] = fresh[row["attempt_id"]]["available"]
+                    row["native_reason"] = fresh[row["attempt_id"]].get("reason")
                     row["native_reason_text"] = fresh[row["attempt_id"]]["reason_text"]
         except Exception:  # noqa: BLE001 - the picker must not stop the current ghost
             log.debug("ghost choices unavailable", exc_info=True)
@@ -829,7 +903,10 @@ class GhostSession:
         async with self._lock:
             target = self._read_target()
             await asyncio.to_thread(self._queue_update, checked, target)
-            await asyncio.to_thread(self._cycle, target, True)
+            # A slider dragged through fifteen values is fifteen PUTs; only a
+            # change to which ghosts, which view or the switch itself asks the
+            # resolve anything new (`RESOLVING_CHANGES`).
+            await asyncio.to_thread(self._cycle, target, False)
             body = self.payload()
             changed = body != self._published
             self._published = body

@@ -138,16 +138,17 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
 
     @router.get("/ghost")
     async def ghost_state():
-        """Everything the switch needs in one read, re-resolved on the spot:
-        a stale `available` is what would leave the control enabled over a
-        template he has just deleted.
+        """Everything the switch needs in one read. Not a forced re-resolve
+        (86 ms, and every page load asks): the session re-resolves whenever
+        anything its answer reads has moved -- a deleted template bumps the
+        store's generation -- so the answer here is already current.
 
         With no session the READ still answers, in the same shape: every page
         that mounts the practice card asks, and an error status lands in the
         page's own problem list (it turned 40 unrelated browser tests red)."""
         if session is None:
             return no_session_state()
-        return await session.refresh()
+        return await session.refresh(resolve=False)
 
     _mount_saved_ghosts(router, session, _session)
 

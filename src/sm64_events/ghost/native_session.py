@@ -102,7 +102,8 @@ class NativeGhost:
         return {**first, "ghosts": [
             {"template_id": answer["template_id"], "attempt_id": answer["attempt_id"],
              "pb": bool(getattr(template, "pb", False)),
-             "available": answer["available"], "reason_text": answer["reason_text"]}
+             "available": answer["available"], "reason": answer.get("reason"),
+             "reason_text": answer["reason_text"]}
             for template, answer in zip(ghosts, answers, strict=True)]}
 
     def probe(self, target, template):
