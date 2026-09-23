@@ -37,10 +37,9 @@ import { getJSON, send } from "../api.js";
 import { holdRepeat } from "../holdrepeat.js";
 import { GhostProximity } from "./ghostproximity.js";
 import { clampNudge, clampOpacity, ghostControls, ghostRecordingOptions,
-         ghostViewChoices, hueText, newestGhostSession,
+         ghostViewChoices, hueText, newestGhostSession, nudgeLimit, SWITCH_LABELS,
          nudgeSeconds, nudgeText, opacityText, shownTint, shownView,
-         GHOST_VIEWS, HUE_MAX, HUE_MIN, NUDGE_STEP,
-         OPACITY_MAX, OPACITY_MIN, VIEW_LABELS } from "../ghostsession.js";
+         GHOST_VIEWS, NUDGE_STEP, VIEW_LABELS } from "../ghostsession.js";
 
 const html = htm.bind(h);
 
@@ -197,49 +196,48 @@ function GhostSwitchButton({ on, canToggle, onToggle, labelId, reasonId,
  * One Only-Mario on/off setting: a small switch after its name. Unknown (null
  * until the server says) is drawn unknown and cannot be pressed, never off.
  */
-function GhostOnOff({ name, className, group, label, waiting, setting, value, draft, write }) {
+function GhostOnOff({ setting, value, draft, write }) {
+  const words = SWITCH_LABELS[setting];
   const on = draft == null ? value : Boolean(draft);
   const known = on != null;
-  return html`<div class="ghost-field ${className}" role="group" aria-label=${group}>
-    <span class="ghost-field-name">${name}</span>
+  return html`<div class="ghost-field ghost-onoff ${words.className}" role="group" aria-label=${words.group}>
+    <span class="ghost-field-name">${words.name}</span>
     <${GhostSwitchButton} on=${known && on} canToggle=${known} small=${true}
-      label=${known ? label : waiting}
+      label=${known ? words.label : words.waiting}
       onToggle=${() => write({ [setting]: !(known && on) })} />
   </div>`;
 }
 
 /**
- * THE GHOST'S SHADOW, on or off -- his A/B switch for the game's own shadow
- * under Ghost Mario (2026-09-22). Only Mario draws it; the whole picture
- * already contains the recorded one.
+ * UNKNOWN IS NOT A POSITION ON THE SLIDER. Until the server has said how
+ * solid the ghost is drawn (and what the slider offers), the control carries
+ * no author value, cannot be dragged, and says why -- so the only opacity
+ * that ever reaches the server is one HE chose. A thumb parked at some
+ * default looks exactly like a value he picked, and one small drag from
+ * there writes it back for good.
  */
-function GhostShadow({ shadow, draft, write }) {
-  return html`<${GhostOnOff} name="Shadow" className="ghost-shadow" group="Ghost shadow"
-    label="Draw Mario's own shadow under the ghost" waiting="Waiting for the ghost's shadow setting"
-    setting="shadow" value=${shadow} draft=${draft} write=${write} />`;
-}
-
-/**
- * THE GHOST NEVER BLOCKS THE PLAYER -- his A/B switch for the player-first
- * fade (2026-09-23): where Ghost Mario stands between the camera and you, it
- * goes faint over your Mario, and it fades out right at the camera.
- */
-function GhostFrontFade({ fade, draft, write }) {
-  return html`<${GhostOnOff} name="Fade in front of Mario" className="ghost-front-fade"
-    group="Fade the ghost in front of Mario"
-    label="Fade the ghost where it covers your Mario or the camera"
-    waiting="Waiting for the fade-in-front setting"
-    setting="occlusion_fade" value=${fade} draft=${draft} write=${write} />`;
+function GhostVisibility({ opacity, range, queue }) {
+  const known = opacity != null && range != null;
+  return html`<label class="ghost-field">
+    <span class="ghost-field-name">Visibility</span>
+    <input class="ghost-opacity" type="range" min=${range?.min}
+      max=${range?.max} step=${range?.step} value=${known ? opacity : null}
+      disabled=${!known}
+      title=${known ? "How solid the ghost is drawn over the game"
+                    : "Waiting for how solid the ghost is drawn"}
+      oninput=${(event) => queue({ opacity: Number(event.target.value) })} />
+    <span class="ghost-field-value">${opacityText(opacity)}</span>
+  </label>`;
 }
 
 /** HOW LOUD GHOST MARIO IS: his own action sounds, mixed under the game.
  * Unknown is drawn unknown, like the opacity: no thumb parked at a default. */
-function GhostVolume({ volume, draft, queue }) {
+function GhostVolume({ volume, draft, range, queue }) {
   const value = draft == null ? volume : draft;
-  const known = value != null;
+  const known = value != null && range != null;
   return html`<label class="ghost-field ghost-volume">
     <span class="ghost-field-name">Volume</span>
-    <input class="ghost-volume-range" type="range" min="0" max="1" step="0.05"
+    <input class="ghost-volume-range" type="range" min=${range?.min} max=${range?.max} step=${range?.step}
       value=${known ? value : null} disabled=${!known}
       title=${known ? "How loud Ghost Mario's sounds play under the game" : "Waiting for the ghost's volume"}
       oninput=${(event) => queue({ volume: Number(event.target.value) })} />
@@ -247,7 +245,7 @@ function GhostVolume({ volume, draft, queue }) {
   </label>`;
 }
 
-function GhostColour({ tint, write, queue }) {
+function GhostColour({ tint, range, write, queue }) {
   const known = tint != null;
   return html`<div class="ghost-field ghost-colour" role="group"
       aria-label="Ghost colour">
@@ -257,9 +255,9 @@ function GhostColour({ tint, write, queue }) {
       label=${known ? "Colour the ghost so it stands out from the live game"
                     : "Waiting for how the ghost is coloured"}
       onToggle=${() => write({ tint: { enabled: !(known && tint.enabled) } })} />
-    ${known && tint.enabled && html`
-      <input class="ghost-hue" type="range" min=${HUE_MIN} max=${HUE_MAX}
-        step="1" value=${tint.hue}
+    ${known && tint.enabled && range && html`
+      <input class="ghost-hue" type="range" min=${range.min} max=${range.max}
+        step=${range.step} value=${tint.hue}
         title="How far the ghost's colours are shifted around the colour wheel"
         oninput=${(event) =>
           queue({ tint: { hue_degrees: Number(event.target.value) } })} />
@@ -337,6 +335,8 @@ function GhostRecording({ recording, entityKey, target, write }) {
         <span class="ghost-pick-name">${item.label}</span>
         ${item.reason && html`<span class="ghost-pick-why">${item.reason}</span>`}
       </label>`)}
+      ${recording.folded && html`<span class="ghost-picks-folded"
+        title=${recording.folded.reason || undefined}>${recording.folded.label}</span>`}
     </fieldset>
     ${recording.reasonText && html`<span class="ghost-why" id=${reasonId}>
       ${recording.reasonText}
@@ -352,34 +352,21 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, shadow, fade, volume, view, boxes, nudge, write, queue, showView = true }) {
+function GhostTuning({ opacity, tint, switches, volume, view, boxes, nudge, limits, write, queue,
+                      showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
     nudge_frames: clampNudge(
-      (pending.nudge_frames == null ? nudge : pending.nudge_frames) + delta),
+      (pending.nudge_frames == null ? nudge : pending.nudge_frames) + delta, nudgeLimit(limits)),
   }));
-  // UNKNOWN IS NOT A POSITION ON THE SLIDER. Until the server has said how
-  // solid the ghost is drawn, the control carries no author value, cannot be
-  // dragged, and says why -- so the only opacity that ever reaches the server
-  // is one HE chose. A thumb parked at some default looks exactly like a
-  // value he picked, and one small drag from there writes it back for good.
-  const known = opacity != null;
   return html`<div class="ghost-tune">
-    <label class="ghost-field">
-      <span class="ghost-field-name">Visibility</span>
-      <input class="ghost-opacity" type="range" min=${OPACITY_MIN}
-        max=${OPACITY_MAX} step="0.05" value=${known ? opacity : null}
-        disabled=${!known}
-        title=${known ? "How solid the ghost is drawn over the game"
-                      : "Waiting for how solid the ghost is drawn"}
-        oninput=${(event) => queue({ opacity: Number(event.target.value) })} />
-      <span class="ghost-field-value">${opacityText(opacity)}</span>
-    </label>
-    <${GhostColour} tint=${tint} write=${write} queue=${queue} />
-    ${view === "mario" && html`<${GhostShadow} shadow=${shadow.value} draft=${shadow.draft} write=${write} />
-      <${GhostFrontFade} fade=${fade.value} draft=${fade.draft} write=${write} />
-      <${GhostVolume} volume=${volume.value} draft=${volume.draft} queue=${queue} />`}
+    <${GhostVisibility} opacity=${opacity} range=${limits.opacity} queue=${queue} />
+    <${GhostColour} tint=${tint} range=${limits.tint} write=${write} queue=${queue} />
+    ${view === "mario" && html`${switches.map((row) => html`<${GhostOnOff} key=${row.setting}
+        setting=${row.setting} value=${row.value} draft=${row.draft} write=${write} />`)}
+      <${GhostVolume} volume=${volume.value} draft=${volume.draft} range=${limits.volume}
+        queue=${queue} />`}
     ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
       <span class="ghost-field-name">Timing</span>
@@ -400,6 +387,26 @@ function GhostTuning({ opacity, tint, shadow, fade, volume, view, boxes, nudge, 
     ${showView && view != null && !boxes.available && boxes.reasonText
       && html`<span class="ghost-why ghost-view-why">${boxes.reasonText}</span>`}
   </div>`;
+}
+
+/**
+ * What the tuning row shows: the server's values with his in-flight changes
+ * laid over them. The opacity may be null, and that is a state rather than a
+ * gap: nobody has said how solid the ghost is drawn, so the row draws it as
+ * unknown and no write can carry it (see GhostVisibility). The tint's two
+ * halves arrive by different gestures, so its merge is its own rule.
+ */
+function heldValues(controls, held) {
+  const { limits } = controls;
+  return {
+    opacity: held.opacity == null ? controls.opacity : clampOpacity(held.opacity, limits.opacity),
+    nudge: held.nudge_frames == null ? controls.nudge : clampNudge(held.nudge_frames, nudgeLimit(limits)),
+    // Every on/off setting the server lists that this card has words for.
+    switches: Object.entries(controls.switches)
+      .filter(([setting]) => SWITCH_LABELS[setting])
+      .map(([setting, value]) => ({ setting, value, draft: held[setting] })),
+    tint: shownTint(controls.tint, held.tint, limits.tint),
+  };
 }
 
 /** The strategy being practised; the picker names a run's strategy only when it differs. */
@@ -427,16 +434,8 @@ export function GhostSwitch({ t, entityKey, active = true }) {
   const held = draft || {};
   const on = held.enabled == null
     ? controls.enabled : Boolean(held.enabled) && controls.available;
-  // May be null, and that is a state rather than a gap: nobody has said how
-  // solid the ghost is drawn, so the tuning row draws it as unknown and no
-  // write can carry it (see GhostTuning).
-  const opacity = held.opacity == null
-    ? controls.opacity : clampOpacity(held.opacity);
-  const nudge = held.nudge_frames == null
-    ? controls.nudge : clampNudge(held.nudge_frames);
-  // Null until the server says, same state the opacity has, and the two halves
-  // arrive by different gestures -- so the merge is its own rule.
-  const tint = shownTint(controls.tint, held.tint);
+  const { limits } = controls;
+  const { opacity, nudge, switches, tint } = heldValues(controls, held);
   const view = shownView(controls.view, held.view);
   const recording = ghostRecordingOptions(controls.selection, view, held, practisedStrat(session));
   const nativeViews = ghostViewChoices(controls.nativeViews, recording);
@@ -458,12 +457,11 @@ export function GhostSwitch({ t, entityKey, active = true }) {
     <${GhostRecording} recording=${recording} entityKey=${entityKey}
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
-      shadow=${{ value: controls.shadow, draft: held.shadow }}
-      fade=${{ value: controls.occlusionFade, draft: held.occlusion_fade }}
+      switches=${switches} limits=${limits}
       volume=${{ value: controls.volume, draft: held.volume }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}
-    <${GhostProximity} active=${on} view=${view} value=${controls.proximity}
+    <${GhostProximity} active=${on} view=${view} value=${controls.proximity} range=${limits.proximity}
       draft=${held.proximity} write=${write} queue=${queue} />
   </div>`;
 }

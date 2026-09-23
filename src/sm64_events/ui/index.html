@@ -8629,7 +8629,7 @@
   .ghost-timing { flex-wrap: wrap; }
   /* Tighter than a default field: its first item is a small switch, not text,
      so the label sits closer to it without the two running together. */
-  .ghost-colour, .ghost-shadow, .ghost-front-fade { gap: .4rem; }
+  .ghost-colour, .ghost-onoff { gap: .4rem; }
   .ghost-volume-range { width: 90px; min-width: 0; accent-color: var(--gold); }
   /* WHAT THE GHOST DRAWS -- the whole picture, or only Mario.
      A native `<select>` of two options: this project's rule is that a SHORT
@@ -8688,6 +8688,11 @@
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .ghost-pick-why { color: var(--muted); }
+  /* Runs that can never play as Only Mario, folded into one line: quiet,
+     because there is nothing on this card to do about them. */
+  .ghost-picks-folded {
+    align-self: center; color: var(--muted); font-size: .72rem; cursor: help;
+  }
   .ghost-pick-why::before { content: "— "; }
   /* The reason takes its OWN ROW, beside the control groups rather than
      inside one: a whole sentence is not part of a control's box, and while it

@@ -60,20 +60,21 @@ def ghost_session(*, enabled: bool = False, opacity: float = 0.6,
                   mario_boxes: bool = False) -> dict:
     """One I5 payload, in the frozen shape.
 
-    The colour treatment defaults to ON here because that is what the shipped
-    session defaults to, and a fixture sitting at the easy end of a range
-    measures a card nobody has: the tuning line is at its WIDEST with the hue
-    slider out, so that is the one worth rendering.
+    Every setting is the registry's own default and the ranges are the ones
+    the server publishes (`ghost/settings.py`), so a new setting reaches the
+    fixture without an edit here. The colour treatment's shipped default is
+    ON, which is also the widest tuning line (the hue slider out), so that is
+    the one worth rendering.
     """
+    from sm64_events.ghost import settings
+
+    values = settings.defaults()
+    values.update(enabled=enabled, opacity=opacity, nudge_frames=nudge_frames, view=view)
+    if tint is not None:
+        values["tint"] = tint
     return {
-        "enabled": enabled,
-        "opacity": opacity,
-        "tint": {"enabled": True, "hue_degrees": 120} if tint is None else tint,
-        "shadow": True,
-        "occlusion_fade": True,
-        "volume": 0.5,
-        "view": view,
-        "nudge_frames": nudge_frames,
+        **values,
+        "limits": settings.limits(),
         "target": FIXTURE_TARGET if target is None else target,
         "source": {"available": available,
                    "reason": reason,
@@ -132,21 +133,19 @@ def _select_ghosts(session: dict, body: dict, input_source: dict) -> None:
             session["source"][key] = first[key]
 
 
-def _set_shadow(session: dict, body: dict) -> None:
+def _set_settings(session: dict, body: dict) -> None:
+    """Every registry setting in the body, checked and applied (merged for the
+    partial ones) exactly as the real session does it."""
     from fastapi import HTTPException
 
-    if "shadow" in body:
-        if type(body["shadow"]) is not bool:
-            raise HTTPException(422, "The ghost's shadow is either on or off.")
-        session["shadow"] = body["shadow"]
-    if "occlusion_fade" in body:
-        if type(body["occlusion_fade"]) is not bool:
-            raise HTTPException(422, "Fading the ghost in front of Mario is either on or off.")
-        session["occlusion_fade"] = body["occlusion_fade"]
-    if "volume" in body:
-        if type(body["volume"]) not in (int, float) or not 0 <= body["volume"] <= 1:
-            raise HTTPException(422, "The ghost's volume is between silent and full.")
-        session["volume"] = float(body["volume"])
+    from sm64_events.ghost import settings
+
+    try:
+        checked = settings.validated(body)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    for name, value in checked.items():
+        session[name] = settings.applied(session.get(name) or {}, settings.BY_NAME[name], value)
 
 
 def attach_ghost_routes(app, state: dict) -> None:
@@ -166,8 +165,6 @@ def attach_ghost_routes(app, state: dict) -> None:
     28 rendered switch checks errored on a control that was never drawn
     (measured 2026-09-18, on the merge of tracks E and F).
     """
-    from fastapi import HTTPException
-
     app.router.routes = [route for route in app.router.routes
                          if getattr(route, "path", None) != "/api/ghost"]
     input_source = dict(state["session"]["source"])
@@ -179,39 +176,11 @@ def attach_ghost_routes(app, state: dict) -> None:
     @app.put("/api/ghost")
     def _ghost_put(body: dict):
         session = dict(state["session"])
-        if "enabled" in body:
-            session["enabled"] = bool(body["enabled"])
-        if "opacity" in body:
-            opacity = float(body["opacity"])
-            if not 0 <= opacity <= 1:
-                raise HTTPException(422, "The ghost's visibility is a "
-                                         "fraction between 0 and 1.")
-            session["opacity"] = opacity
-        if "nudge_frames" in body:
-            frames = int(body["nudge_frames"])
-            if abs(frames) > 300:
-                raise HTTPException(422, "The ghost can only be nudged ten "
-                                         "seconds either way.")
-            session["nudge_frames"] = frames
-        if "tint" in body:
-            # MERGED, as the real session merges it: the control sends only the
-            # half he touched, and a fixture that replaced the whole object
-            # would let a control that drops the other half look correct.
-            asked = dict(body["tint"])
-            if "hue_degrees" in asked and not 0 <= int(asked["hue_degrees"]) <= 359:
-                raise HTTPException(422, "The ghost's colour goes from 0 to "
-                                         "359 degrees around the colour wheel.")
-            session["tint"] = {**(session.get("tint") or {}), **asked}
-        _set_shadow(session, body)
-        if "view" in body:
-            if body["view"] not in ("whole", "mario"):
-                raise HTTPException(422, "The ghost shows either the whole "
-                                         "picture or only Mario.")
-            session["view"] = body["view"]
-        if "proximity" in body:
-            from sm64_events.ghost.proximity import checked_proximity
-            session["proximity"] = {**session.get("proximity", {}),
-                                    **checked_proximity(body["proximity"])}
+        # MERGED where the real session merges (the tint, the overlap fade):
+        # the control sends only the half he touched, and a fixture that
+        # replaced the whole object would let a control that drops the other
+        # half look correct.
+        _set_settings(session, body)
         if "ghosts" in body:
             _select_ghosts(session, body, input_source)
         if "native_available" in session["source"]:

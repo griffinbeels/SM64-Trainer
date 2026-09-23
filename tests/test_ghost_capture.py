@@ -13,6 +13,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.detectors import counter_epoch
 from sm64_events.detectors.anchors import IGT_WRAP_CEILING, NEAR_ZERO_IGT
 from sm64_events.memory import addresses as A
+from sm64_events.ghost import native_layout as L
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.memory.layout import JP, US, LayoutIncomplete
 from sm64_events.sync.address_gates import (
@@ -79,7 +80,7 @@ def test_compiled_capture(capture_host, scenario):
         capture_output=True, text=True, timeout=15, check=False, **quiet_spawn_kwargs(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"ghost capture passed: {scenario}; config=188 sample=1252" in result.stdout
+    assert f"ghost capture passed: {scenario}; config={L.LAYOUT_BYTES} sample={L.SAMPLE_BYTES}" in result.stdout
 
 
 def test_semantic_config_resolves_selected_layout():
@@ -89,8 +90,8 @@ def test_semantic_config_resolves_selected_layout():
     assert config.area_update_counter == US.area_update_counter
     assert config.pending_warp_op == US.pending_warp_op
     assert config.delayed_warp_timer == US.delayed_warp_timer
-    assert len(config.to_bytes()) == 188
-    assert struct.unpack_from("<II", config.to_bytes()) == (188, 6)
+    assert len(config.to_bytes()) == L.LAYOUT_BYTES
+    assert struct.unpack_from("<II", config.to_bytes()) == (L.LAYOUT_BYTES, L.SAMPLE_VERSION)
     assert struct.unpack_from("<II", config.to_bytes(), 56) == (US.pending_warp_op, US.delayed_warp_timer)
     with pytest.raises(LayoutIncomplete, match="US layout"):
         GhostLayout.from_layout(JP)
@@ -253,3 +254,12 @@ def test_visual_counter_gate_requires_repeated_matching_advances():
     context = GateContext()
     context.timer_matches = False
     assert _check_area_update_counter(context).status == "failed"
+
+
+def test_one_capture_sample_version_macro():
+    """GC_VERSION names the ghost capture sample and nothing else: the GPU
+    channel's wire version is GC_CHANNEL_VERSION, so a unit that includes
+    both headers cannot read the wrong one."""
+    defined = [path.name for path in sorted(NATIVE.glob("*.h"))
+               if "#define GC_VERSION " in path.read_text(encoding="utf-8")]
+    assert defined == ["ghost_capture.h"]

@@ -16,6 +16,7 @@ std::atomic_flag consumer = ATOMIC_FLAG_INIT;
 std::atomic<uint32_t> config_sequence{0}, configured{0};
 std::atomic<uint32_t> config_words[sizeof(gc_layout) / sizeof(uint32_t)];
 std::atomic<uint32_t> epoch{0}, configuration{0}, offered{0}, dropped{0}, taken{0}, busy{0}, particles_dropped{0};
+std::atomic<uint32_t> hook_queries{0}, hook_micros{0};
 bool rom_open = false, active = false;
 uint32_t observed_config = 0;
 uint64_t serial = 0;
@@ -104,7 +105,8 @@ int __cdecl read(gs_record *out, uint32_t bytes) {
 gs_stats __cdecl stats() {
     return {sizeof(gs_stats), GS_VERSION, epoch.load(), configuration.load(),
         offered.load(), dropped.load(), taken.load(), busy.load(), configured.load() ? 1u : 0u,
-        particles_dropped.load()};
+        particles_dropped.load(), hook_queries.load(std::memory_order_relaxed),
+        hook_micros.load(std::memory_order_relaxed)};
 }
 const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WORLD_PASS, 0,
     configure, disable, read, stats};
@@ -157,6 +159,10 @@ bool geometry(bool was_zbuffer, bool is_zbuffer) {
     return active && pass.geometry(was_zbuffer,is_zbuffer);
 }
 void color_target_changed() { if (active) pass.color_target_changed(); }
+void hooks(uint32_t gl_queries, uint32_t micros) {
+    hook_queries.store(gl_queries, std::memory_order_relaxed);
+    hook_micros.store(micros, std::memory_order_relaxed);
+}
 void display_list(uint32_t pc, uint32_t dl, uint32_t physical_dl, uint32_t depth, const float *matrix) {
     if (active) ghost_root_display_list(root_probe,pc,dl,physical_dl,depth,matrix);
     if (active) ghost_particles_display_list(particle_probe,dl,matrix);

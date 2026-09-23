@@ -175,10 +175,10 @@ class FakeSession:
                       "tint": {"enabled": True, "hue_degrees": 120},
                       "target": None, "source": {"available": False},
                       "window": {"running": False, "visible": False}}
-        self.refreshes = 0
+        self.refreshes = []
 
-    async def refresh(self):
-        self.refreshes += 1
+    async def refresh(self, *, resolve=True):
+        self.refreshes.append(resolve)
         return dict(self.state)
 
     async def update(self, changes):
@@ -193,14 +193,16 @@ def session_client(session) -> TestClient:
     return TestClient(app)
 
 
-def test_reading_the_ghost_answers_the_whole_shape_freshly_resolved():
-    """A cached `available` is what would leave the switch enabled over a
-    template he has just deleted, so the read re-resolves."""
+def test_reading_the_ghost_answers_the_whole_shape_without_forcing_a_resolve():
+    """Every page load reads this, and a forced resolve cost 86 ms of CPU a
+    read (2026-09-23). The session re-resolves on its own whenever what the
+    answer reads has moved (tests/test_ghost_session.py), so the read only
+    reconciles."""
     session = FakeSession()
     body = session_client(session).get("/api/ghost").json()
     assert set(body) == {"enabled", "opacity", "tint", "nudge_frames",
                          "target", "source", "window"}
-    assert session.refreshes == 1
+    assert session.refreshes == [False]
 
 
 def test_setting_the_ghost_answers_the_same_shape():

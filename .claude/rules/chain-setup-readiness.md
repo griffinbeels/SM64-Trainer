@@ -3,6 +3,7 @@ paths:
   - "src/sm64_events/core/capturelayer.py"
   - "src/sm64_events/core/capturelayer_win.py"
   - "src/sm64_events/core/plugin_installation.py"
+  - "src/sm64_events/core/plugin_ownership.py"
   - "tools/graphics_diagnostics.py"
   - "src/sm64_events/core/paths.py"
   - "src/sm64_events/core/setup_runtime.py"
@@ -55,6 +56,18 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-09-23, hop 1: every plugin rebuild needed a manual Install with PJ64
+  closed, and the frozen app then copied its OLDER bundle over it within two
+  seconds of PJ64 closing: all trainers share one overlay, and each read "the
+  installed DLL is mine" from the same hash. Installs now record their
+  installer (frozen app, or a checkout's folder) and build (link time, build
+  id); a trainer refreshes only an installer-like-it's install and never to
+  an older link time, and only frozen installs write the legacy
+  `installed_sha256` older apps trust (`core/plugin_ownership.py`). This
+  supersedes the source-checkouts-never-refresh rule below.
+  `test_only_an_installer_like_this_one_refreshes_its_install` and
+  `test_a_refresh_never_replaces_a_newer_build` cover the pairings.
 
 - 2026-09-17, hop 5: "Looks like it stalls on the 'setup checked' screen. It
   should automatically continue once we've successfully confirmed the setup."

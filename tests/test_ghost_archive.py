@@ -1,3 +1,5 @@
+from contextlib import closing
+import sqlite3
 import threading
 import time
 
@@ -6,8 +8,10 @@ import pytest
 from ghost_native_fixture import attempt, frame, producer
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.archive import (
-    ARCHIVE_MAX_BYTES, ARCHIVE_MAX_RECORDS, ARCHIVE_RETENTION_S, DANCE_TAIL_MAX_FRAMES, PoseArchive,
+    ARCHIVE_MAX_BYTES, ARCHIVE_MAX_RECORDS, ARCHIVE_RETENTION_S, COMMIT_ROWS, COMMIT_S,
+    DANCE_TAIL_MAX_FRAMES, SCHEMA_VERSION, PoseArchive, stored_record,
 )
+from sm64_events.ghost.recording import PoseRecording
 from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT
 from sm64_events.ghost.clip import (
     MAX_RECORDS, RECORD_BYTES, ClipError, attempt_origin, check_manifest, read_clip,
@@ -64,6 +68,20 @@ def test_stale_or_mixed_batch_commits_nothing(tmp_path):
         archive.ingest(producer(), (frame(2), frame(3, epoch=8)))
     assert archive.status()["records"] == 1
     archive.close()
+
+
+def test_a_stale_occurrence_is_refused_across_batches_and_reopens(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    archive.ingest(producer(), (frame(2),))
+    for stale in (frame(1, qpc=1003), frame(3, qpc=1001)):  # an older occurrence, or time running back
+        with pytest.raises(ClipError, match="stale"):
+            archive.ingest(producer(), (stale,))
+    archive.close()
+    reopened = PoseArchive(tmp_path / "poses.sqlite")  # the last row comes from the file
+    with pytest.raises(ClipError, match="stale"):
+        reopened.ingest(producer(), (frame(1, qpc=1003),))
+    assert reopened.ingest(producer(), (frame(3),)) and reopened.status()["records"] == 2
+    reopened.close()
 
 
 def test_archive_window_is_its_own_not_the_clip_cap(tmp_path):
@@ -199,12 +217,92 @@ def test_attempt_origin_never_falls_back_to_anchor_or_duration(field, value):
         attempt_origin(row)
 
 
-def test_size_only_recording_retention_still_has_a_hard_pose_ceiling(tmp_path):
-    archive = PoseArchive(tmp_path / "poses.sqlite", retention_s=None, max_records=2)
-    archive.ingest(producer(), (frame(1, qpc=1000), frame(2, qpc=10000000)))
-    assert archive.status()["records"] == 2  # more than two hours is retained
-    archive.ingest(producer(), (frame(3, qpc=10000001),))
-    assert archive.status()["records"] == 2  # record ceiling remains mandatory
+def test_the_two_hour_window_applies_whatever_the_video_keeps(tmp_path):
+    """The recorder's video retention may be "whole session" (None); that once
+    reached the archive, so only the ~499 MiB record ceiling bounded it."""
+    with pytest.raises(ValueError, match="time bound"):
+        PoseArchive(tmp_path / "unbounded.sqlite", retention_s=None)
+    owner = PoseRecording(tmp_path / "owned.sqlite", None, producer_pid=1, allowed=lambda: True)
+    assert owner.archive.retention_s == ARCHIVE_RETENTION_S
+    hour = 30 * 3600  # qpc ticks at the fixture's 30 Hz
+    owner.archive.ingest(producer(), (frame(1, qpc=1000), frame(2, qpc=1000 + hour),
+                                      frame(3, qpc=1000 + 2 * hour + 30)))
+    assert owner.archive.status()["records"] == 2  # the first is over two hours old
+    owner.archive.close()
+
+
+def test_rows_commit_in_batches_and_the_owner_reads_what_is_not_yet_committed(tmp_path):
+    now = [0.0]
+    archive = PoseArchive(tmp_path / "poses.sqlite", clock=lambda: now[0])
+
+    def committed():
+        with closing(sqlite3.connect(tmp_path / "poses.sqlite")) as reader:
+            return reader.execute("SELECT COUNT(*) FROM poses").fetchone()[0]
+
+    rows = [frame(n) for n in range(1, COMMIT_ROWS + 5)]
+    for raw in rows[:3]:
+        archive.ingest(producer(), (raw,))
+    assert committed() == 0  # one ingest is no longer one fsync'd commit
+    manifest = archive.export_attempt(attempt(), tmp_path / "pending.ghost")
+    assert manifest["records"] == 3 and archive.status()["records"] == 3
+    assert tuple(f.raw for f in read_clip(tmp_path / "pending.ghost").frames) == tuple(rows[:3])
+    for raw in rows[3:COMMIT_ROWS]:
+        archive.ingest(producer(), (raw,))
+    assert committed() == COMMIT_ROWS  # the row count commits
+    archive.ingest(producer(), (rows[COMMIT_ROWS],))
+    now[0] += COMMIT_S
+    archive.ingest(producer(), (rows[COMMIT_ROWS + 1],))
+    assert committed() == COMMIT_ROWS + 2  # so does a second's age
+    archive.ingest(producer(), (rows[COMMIT_ROWS + 2],))
+    archive.close()
+    assert committed() == COMMIT_ROWS + 3  # and close
+    assert archive.export_attempt(attempt(), tmp_path / "closed.ghost")["records"] == 3
+
+
+def test_a_failed_batch_leaves_the_earlier_uncommitted_ones(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    archive.ingest(producer(), (frame(1), frame(2)))
+    archive._db.execute("CREATE TEMP TRIGGER refuse BEFORE INSERT ON poses "
+                        "WHEN NEW.timer = 103 BEGIN SELECT RAISE(ABORT, 'disk'); END")
+    with pytest.raises(sqlite3.Error):
+        archive.ingest(producer(), (frame(3),))
+    archive._db.execute("DROP TRIGGER refuse")
+    assert archive.status()["records"] == 2
+    assert archive.ingest(producer(), (frame(3),))  # its sequence was never taken
+    assert archive.export_attempt(attempt(), tmp_path / "a.ghost")["records"] == 3
+    archive.close()
+
+
+def test_rows_are_compressed_under_integer_keys_in_unsigned_order(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    below = 2**63 - 1  # the signed boundary sits inside this run
+    rows = tuple(frame(below + n, timer=101 + n, igt=1 + n, elapsed=1 + n, qpc=1001 + n) for n in (0, 1, 2))
+    archive.ingest(producer(), rows)
+    archive.export_attempt(attempt(), tmp_path / "a.ghost")
+    assert tuple(f.raw for f in read_clip(tmp_path / "a.ghost").frames) == rows
+    stored = archive._db.execute(
+        "SELECT typeof(producer), typeof(sequence), length(data), data FROM poses ORDER BY sequence").fetchall()
+    assert [row[:2] for row in stored] == [("integer", "integer")] * 3
+    assert all(size < RECORD_BYTES // 2 and stored_record(data) == raw
+               for (_, _, size, data), raw in zip(stored, rows, strict=True))
+    archive.close()
+
+
+def test_an_archive_from_another_schema_version_is_recreated(tmp_path):
+    path = tmp_path / "poses.sqlite"
+    with sqlite3.connect(path) as older:  # v1: hex text keys, raw records
+        older.executescript("""
+            CREATE TABLE producers (identity TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE poses (id INTEGER PRIMARY KEY, producer TEXT NOT NULL, sequence TEXT NOT NULL,
+                captured REAL NOT NULL, timer INTEGER NOT NULL, valid INTEGER NOT NULL,
+                data BLOB NOT NULL, UNIQUE(producer, sequence));""")
+        older.execute("INSERT INTO poses VALUES (1,'x','0000000000000001',1.0,101,31,x'00')")
+    older.close()
+    archive = PoseArchive(path)
+    assert archive.status()["records"] == 0
+    assert archive._db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert archive.ingest(producer(), (frame(1), frame(2), frame(3)))
+    assert archive.export_attempt(attempt(), tmp_path / "a.ghost")["records"] == 3
     archive.close()
 
 # -- the dance tail: a star clip keeps Mario's grab and dance after x-cam ----
@@ -297,12 +395,18 @@ def test_export_waits_for_the_dance_the_recorder_is_still_capturing(tmp_path):
 
 
 def test_a_stalled_or_closed_recording_keeps_the_dance_it_has(tmp_path):
-    archive = PoseArchive(tmp_path / "poses.sqlite", dance_stall_s=0.2)
+    # A fake clock: wall-time bounds flaked under a loaded merge check (0.52 s vs 0.5 s).
+    now, naps = [0.0], []
+
+    def nap(seconds):
+        naps.append(seconds)
+        now[0] += seconds
+
+    archive = PoseArchive(tmp_path / "poses.sqlite", dance_stall_s=0.2, clock=lambda: now[0], sleep=nap)
     archive.ingest(producer(), tuple(danced(dance_rows=2)))  # no end yet
-    begun = time.monotonic()
     assert archive.export_attempt(attempt(), tmp_path / "stalled.ghost")["tail_records"] == 2
-    assert time.monotonic() - begun < 1.5
+    assert 0.2 <= sum(naps) <= 0.3 + 1e-9  # the stall ends the wait, not the whole cap
     archive.close()
-    begun = time.monotonic()
+    naps.clear()
     assert archive.export_attempt(attempt(), tmp_path / "closed.ghost")["tail_records"] == 2
-    assert time.monotonic() - begun < 0.5
+    assert naps == []  # a closed recording has nothing more coming

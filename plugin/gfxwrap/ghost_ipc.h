@@ -3,6 +3,7 @@
 #pragma once
 #include "ghost_clip.h"
 #include "ghost_origin.h"
+#include "ghost_tuning.h"
 #include <stddef.h>
 #define GIPC_VERSION 7u
 #define GIPC_MAGIC "SM64GIP7"
@@ -10,7 +11,7 @@
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
 #define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v7_"
-#define GIPC_GHOSTS 16u
+#define GIPC_GHOSTS GP_GHOSTS
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
@@ -72,7 +73,10 @@ typedef struct gipc_status {
     uint32_t clips_requested, clips_prepared, clips_visible;
     /* Mario's particles captured this lease but not kept (beyond 16 a frame). */
     uint32_t particles_dropped;
-    uint8_t reserved[100];
+    /* The last list's render hooks: driver state queries and microseconds on
+     * the emulation thread (gs_stats). Measured live, never asked of him. */
+    uint32_t hook_gl_queries, hook_micros;
+    uint8_t reserved[92];
 } gipc_status;
 typedef struct gipc_page {
     gipc_status status;

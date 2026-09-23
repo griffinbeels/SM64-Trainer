@@ -120,6 +120,30 @@ def test_native_pose_sidecar_commits_with_video_and_recovers_without_scratch(tmp
     assert recovered.clip_id == identity["clip_id"]
 
 
+@pytest.mark.parametrize("linkable", [True, False])
+def test_a_kept_ghost_is_stored_once_and_each_name_keeps_its_lifetime(tmp_path, monkeypatch, linkable):
+    """A ghost kept for a template mark, then saved with its video, used to be
+    two copies. Now both names share one file when the volume allows it."""
+    from ghost_native_fixture import frame, producer
+    from sm64_events.ghost.clip import STAR_CLOCK, write_clip
+    source, root, destination = inputs(tmp_path)
+    ghost, identity, _row, _target = native_inputs(tmp_path, destination)
+    kept = root / "native" / "attempt_42.ghost"
+    kept.parent.mkdir(parents=True)
+    ghost.replace(kept)
+    original = kept.read_bytes()
+    if not linkable:
+        monkeypatch.setattr(publication.os, "link", lambda *_: (_ for _ in ()).throw(OSError("cross-volume")))
+    publication.publish(root, 42, source, destination, {"native_ghost": identity}, {}, ghost=kept)
+    saved = destination.with_suffix(".ghost")
+    assert saved.read_bytes() == original
+    assert kept.stat().st_nlink == (2 if linkable else 1)
+    write_clip(kept, (frame(), frame(2)), producer(), clock_kind=STAR_CLOCK)  # a rewrite replaces
+    assert saved.read_bytes() == original
+    kept.unlink()
+    assert saved.read_bytes() == original
+
+
 def test_native_pose_tampering_or_missing_bytes_never_publishes_video(tmp_path):
     from sm64_events.ghost.clip import check_manifest
     source, root, destination = inputs(tmp_path)

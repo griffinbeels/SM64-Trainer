@@ -33,7 +33,10 @@ NVENC helper. Why they are built this way, and what failed on the way:
   setup screen with Project64 closed. Packaged builds refresh automatically.
 - **Python decodes layouts and codes by position.** The control page,
   `gd_status` and reason enums (`replay/gpudiagnostics.py`), `rb_stats` and
-  `rb_surface` keep their offsets and values: append, never renumber.
+  `rb_surface` keep their offsets and values: append, never renumber. Ghost
+  formats and limits are stated once in `ghost/native_layout.py`, checked by
+  `tests/test_ghost_layout.py`; the recipe for a new captured field is in
+  the runtime contracts doc.
 - **The configured gate skips the GPU witnesses.** After a native contract
   change, run them on the NVIDIA machine: `SM64_TEST_GPU_BRIDGE=1`
   (`test_gpu_bridge`, `test_gpu_cadence`, `test_gpu_fidelity`),

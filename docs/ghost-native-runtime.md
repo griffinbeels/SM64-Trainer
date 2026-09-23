@@ -54,6 +54,35 @@ capture interface. Rendering uses the separate playback/draw path and requires
 negotiated clean presentation. A capability bit or prepared model is not proof
 of a displayed ghost.
 
+### Adding a captured field
+
+The C headers own every size, offset, version and limit. Python states each one
+once in [native_layout.py](../src/sm64_events/ghost/native_layout.py), and
+`clip.py`, `native_protocol.py` and the byte fixtures import it.
+`tests/test_ghost_layout.py` compiles `tests/native/ghost_layout_host.cpp`,
+which prints each of those names from `sizeof`/`offsetof` and the macros. It
+fails on a wrong value, on a Python name the host does not print, and on a
+decoder `struct` format that no longer spans the bytes between two named
+offsets. Tuning numbers and ghost limits live in
+[ghost_tuning.h](../plugin/gfxwrap/ghost_tuning.h) (the player-first fade keeps
+its own in `ghost_occlusion.h`). A new block of evidence touches:
+
+1. `ghost_capture.h`: the block at the END of `gc_sample`, its `GC_VALID_` bit
+   (and `GC_VALID_ALL`), a `GC_VERSION` bump; filled in the capture source,
+   with the static_asserts in `ghost_capture.cpp` moved on.
+2. `ghost_clip.h`: the `GCLIP_VERSION`/magic bump and record-size assert. Only
+   when older saved ghosts must keep playing, an upgrade step like
+   `ghost_clip_upgrade.h` and `clip.py::upgrade_record`.
+3. `native_layout.py` and `ghost_layout_host.cpp`: the new names, in both.
+4. `clip.py`: decode and validate the block; a refused row keeps it zero.
+5. The consumer (playback, pose or compositor) that uses it.
+6. `tests/ghost_native_fixture.py` and the block's own tests.
+7. The table above.
+
+Earlier offsets do not move, so tests that name them keep passing. Any edit
+under `plugin/gfxwrap` changes the wrapper and renderer build ids, so the DLLs
+are rebuilt once when the work is integrated (see the native plugin rule).
+
 ## Source occurrences and clocks
 
 [ghost_link.cpp](../plugin/gfxwrap/ghost_link.cpp) captures inside the serialized
@@ -497,11 +526,18 @@ No ROM scan or file read runs on the render thread. A ROM acquisition refusal
 uses `GIPC_ROM` (11); `GIPC_FILE` (6) describes clip acquisition. Neither a shared
 ROM failure nor renderer readiness changes saved-recording eligibility.
 
-Disabling or losing the active origin withdraws drawing while retaining prepared
-assets for later use. Lease/ROM shutdown revokes playback and retires assets;
+Losing the active origin withdraws drawing while retaining prepared assets.
+Switching playback off (nothing listed to draw) also releases its clips; a
+later switch-on reads the files again. The worker holds no second copy of
+anything playback holds: a clip file's bytes are dropped once playback has
+prepared its copy (id, SHA-256 and header stay), and the cartridge's once the
+model is built from it (its digest stays). A retired model or a lost renderer
+context rebuilds both from fresh reads, the clips checked against the same
+SHA-256. The sound engine keeps only the sound data, the last 2.5 MB of the
+8 MB cartridge (`SA_SOUND_BYTES`). Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
 full set plus as many retiring copies) share a 192 MiB clip/index budget, and
-the worker's retained files obey the same bound. It is sized so sixteen
+the files the worker is still reading obey the same bound. It is sized so sixteen
 2m40 ghosts can be replaced by sixteen more in flight (32 x 4800 x
 (sizeof(gclip_frame) + 4) bytes; his longest raced segment is 1m51): GC6
 records are about twice GC5's, and the earlier 128 MiB would have cut that to
@@ -516,10 +552,27 @@ the set with `GIPC_BUDGET` (12), kept apart from a bad clip (`GIPC_CLIP`, 8)
 so the ghost card can say "These ghosts are too long to show together;
 untick one." (one ghost: "Making room for this ghost..."). One maximum-size clip
 (100000 records, about 55 minutes at 30 Hz) fits. The pose archive keeps its
-own window (288 MiB of rows, two hours at 30 Hz), independent of that clip
-cap, so a late save still reaches an early attempt. All resident slots count, so a replacement
+own window (two hours, whatever the video keeps; a ceiling of 288 MiB of raw
+records), independent of that clip cap, so a late save still reaches an early
+attempt. It writes in WAL with one commit per 30 rows or second rather than
+per batch, and stores rows zlib-compressed under integer keys (about 570 B a
+row, 118 MiB for the two hours); the measurements and the schema-version rule
+(an older file is recreated, never migrated) live in
+[archive.py](../src/sm64_events/ghost/archive.py). A ghost kept for a template
+mark and then saved with its video shares one file between both names. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
+The render hooks run on the emulation thread for every z-buffered draw while
+capture is configured, ghost or not, so they make no driver state queries:
+the draw framebuffer, viewport and depth range come from the renderer's own
+dispatched calls (`replay_gl::Raster`; `glViewport` is aliased at the call,
+like `glReadBuffer`). A query is only the fallback before the dispatch has
+seen a value, and each is counted. The translucent layer's hook leaves before
+any framebuffer lookup when no ghost will draw the list. The last list's
+hook cost, driver queries and microseconds inside the hooks, rides
+`gs_stats` to the status page (`hook_gl_queries`, `hook_micros`); the
+trainer logs its mean and max once a minute (`ghost/capture.py::HookCost`).
+
 If a reader holds the status page during revocation, the worker retries that
 publication before sleeping indefinitely. An expired owner cannot leave the
 mapped page reporting ready merely because the final nonblocking lock was busy.

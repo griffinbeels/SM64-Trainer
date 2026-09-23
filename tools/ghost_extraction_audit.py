@@ -20,6 +20,7 @@ import argparse
 import sqlite3
 import sys
 import tempfile
+import zlib
 from collections import Counter
 from pathlib import Path
 
@@ -27,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from sm64_events.ghost import clip as C  # noqa: E402
+from sm64_events.ghost.archive import stored_record  # noqa: E402
 
 
 def audit_clips(save_root: Path) -> int:
@@ -65,8 +67,8 @@ def audit_archive(path: Path) -> None:
     kinds, total, carried = Counter(), 0, 0
     for data in rows:
         try:
-            frame = C.frame_from_bytes(data)
-        except C.ClipError:
+            frame = C.frame_from_bytes(stored_record(data))
+        except (C.ClipError, zlib.error):  # an archive from before schema v2
             kinds["older or unreadable record"] += 1
             continue
         total += 1

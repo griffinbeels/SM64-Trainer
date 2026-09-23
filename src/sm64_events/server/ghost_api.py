@@ -14,6 +14,7 @@ saying so.
 """
 from fastapi import APIRouter, HTTPException, Query
 
+from sm64_events.ghost import settings
 from sm64_events.ghost.session import template_store
 from sm64_events.ghost.source import missing_ghost, resolve_ghost
 
@@ -47,7 +48,7 @@ def no_session_state() -> dict:
     colour treatment are None on purpose: nobody chose them here, and the card
     shows unknown as unknown."""
     return {"enabled": False, "opacity": None, "tint": None, "view": None,
-            "nudge_frames": 0, "target": None,
+            "nudge_frames": 0, "limits": settings.limits(), "target": None,
             "selection": {"ghosts": {"pb": True, "templates": []}, "missing": [],
                           "pb": None, "candidates": []},
             "source": {"available": False, "reason": "no_session",
@@ -138,16 +139,17 @@ def create_ghost_router(inputs, replay, session=None) -> APIRouter:
 
     @router.get("/ghost")
     async def ghost_state():
-        """Everything the switch needs in one read, re-resolved on the spot:
-        a stale `available` is what would leave the control enabled over a
-        template he has just deleted.
+        """Everything the switch needs in one read. Not a forced re-resolve
+        (86 ms, and every page load asks): the session re-resolves whenever
+        anything its answer reads has moved -- a deleted template bumps the
+        store's generation -- so the answer here is already current.
 
         With no session the READ still answers, in the same shape: every page
         that mounts the practice card asks, and an error status lands in the
         page's own problem list (it turned 40 unrelated browser tests red)."""
         if session is None:
             return no_session_state()
-        return await session.refresh()
+        return await session.refresh(resolve=False)
 
     _mount_saved_ghosts(router, session, _session)
 

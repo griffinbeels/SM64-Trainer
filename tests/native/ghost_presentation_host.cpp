@@ -40,11 +40,27 @@ struct Window {
     }
     ~Window(){wglMakeCurrent(nullptr,nullptr);wglDeleteContext(context);ReleaseDC(window,dc);DestroyWindow(window);}
 };
+// Every state query the presentation makes, counted through its own table.
+static unsigned queries=0;
+#define GP_QUERIES(X) X(GetIntegerv,(uint32_t a,int32_t* b),(a,b)) X(GetBooleanv,(uint32_t a,uint8_t* b),(a,b)) \
+    X(GetFloatv,(uint32_t a,float* b),(a,b)) X(GetDoublev,(uint32_t a,double* b),(a,b)) \
+    X(GetIntegeri_v,(uint32_t a,uint32_t b,int32_t* c),(a,b,c)) X(GetBooleani_v,(uint32_t a,uint32_t b,uint8_t* c),(a,b,c)) \
+    X(GetFloati_v,(uint32_t a,uint32_t b,float* c),(a,b,c)) X(GetDoublei_v,(uint32_t a,uint32_t b,double* c),(a,b,c))
+#define GP_COUNT(name,params,args) static decltype(gc::Dispatch::name) real_##name=nullptr; \
+    static void GC_GL_CALL count_##name params {++queries;real_##name args;}
+GP_QUERIES(GP_COUNT)
+#undef GP_COUNT
+static decltype(gc::Dispatch::IsEnabled) real_IsEnabled=nullptr;
+static uint8_t GC_GL_CALL count_IsEnabled(uint32_t a){++queries;return real_IsEnabled(a);}
 static gp::Dispatch dispatch() {
     gp::Dispatch d{};
 #define GP_LOAD(result,name,args) d.gl.name=reinterpret_cast<decltype(d.gl.name)>(load("gl" #name));require(d.gl.name!=nullptr,#name);
     GC_GL_FUNCTIONS(GP_LOAD)
 #undef GP_LOAD
+#define GP_WRAP(name,params,args) real_##name=d.gl.name;d.gl.name=count_##name;
+    GP_QUERIES(GP_WRAP)
+#undef GP_WRAP
+    real_IsEnabled=d.gl.IsEnabled;d.gl.IsEnabled=count_IsEnabled;
     d.CopyTexSubImage2D=glCopyTexSubImage2D;
     d.DrawBuffers=reinterpret_cast<decltype(d.DrawBuffers)>(load("glDrawBuffers"));return d;
 }
@@ -168,7 +184,12 @@ static void run(uint32_t generation) {
     // Saving BACK restores both the original read FBO and the default read
     // selector, even when those are different state objects.
     background(g);gp::begin_update(p,204);g.ReadBuffer(gl::FRONT);g.BindFramebuffer(gl::READ_FRAMEBUFFER,old.framebuffer);g.ReadBuffer(GL_NONE);
-    gl::State before{};before.capture(g);require(gp::before_swap(p,0x3000,raster.api()),"foreign read FBO clean save");
+    gl::State before{};before.capture(g);queries=0;
+    require(gp::before_swap(p,0x3000,raster.api()),"foreign read FBO clean save");
+    // Saving the clean picture reads four values (read FBO, active unit, its
+    // texture, the default read selector), not the full state guard.
+    std::printf("clean save state queries: %u\n",queries);
+    require(queries<=4,"the clean save queries only what it changes");
     gl::State after{};after.capture(g);require(std::memcmp(&before,&after,sizeof before)==0,"save restores touched GL state");
     g.BindFramebuffer(gl::READ_FRAMEBUFFER,0);g.GetIntegerv(gl::READ_BUFFER,&selector);require(selector==gl::FRONT,"default read selector restored");
     completed(p,window);const auto resource=gp::surface(p).resource_generation;

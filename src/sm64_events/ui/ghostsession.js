@@ -29,19 +29,11 @@ import { fmtIgtShort } from "./format.js";
 
 export const GAME_FPS = 30;
 
-// A ghost you cannot see through is not a ghost, and one at zero is a
-// control that looks broken -- so the slider's own floor is well above
-// invisible. The server clamps too; this is what the control offers.
-export const OPACITY_MIN = 0.15;
-export const OPACITY_MAX = 1;
-
-// THE COLOUR WHEEL, one full turn. The ghost's whole picture is shifted this
-// far around it, which is what makes it unmistakable against the live game.
-// 0 and 360 are the same colour, so the control offers the half-open range --
-// and 0 is a real choice (no shift) rather than a hole in the range, because
-// the switch beside it is what turns the treatment off.
-export const HUE_MIN = 0;
-export const HUE_MAX = 359;
+// EVERY RANGE COMES FROM THE SERVER. `GET /api/ghost` publishes `limits`
+// (ghost/settings.py): what each control offers -- the visibility floor, the
+// colour wheel, the volume, the overlap distance, the nudge limit -- and which
+// settings are on/off switches. Nothing here restates one of those numbers; a
+// JS copy of the nudge limit once said ten seconds while the server said twenty.
 
 // WHAT THE GHOST SHOWS. His report is why there is a choice: *"it's still
 // extremely hard to understand the ghost, because all the camera movement /
@@ -53,11 +45,31 @@ export const HUE_MAX = 359;
 export const GHOST_VIEWS = ["whole", "mario"];
 export const VIEW_LABELS = { whole: "Whole picture", mario: "Only Mario" };
 
+/**
+ * THE WORDS FOR EACH ON/OFF SETTING, one row per `switch(...)` row in
+ * ghost/settings.py (the server lists them in `limits.switches`). Only Mario
+ * draws each of them. A switch the server lists without a row here is not
+ * drawn, and tests/test_ghost_settings.py fails on it.
+ *
+ * - shadow: his A/B switch for the game's own shadow under Ghost Mario
+ *   (2026-09-22); the whole picture already contains the recorded one.
+ * - occlusion_fade: the player-first fade (2026-09-23): where Ghost Mario
+ *   stands between the camera and you it goes faint over your Mario, and it
+ *   fades out right at the camera.
+ */
+export const SWITCH_LABELS = {
+  shadow: { name: "Shadow", className: "ghost-shadow", group: "Ghost shadow",
+    label: "Draw Mario's own shadow under the ghost",
+    waiting: "Waiting for the ghost's shadow setting" },
+  occlusion_fade: { name: "Fade in front of Mario", className: "ghost-front-fade",
+    group: "Fade the ghost in front of Mario",
+    label: "Fade the ghost where it covers your Mario or the camera",
+    waiting: "Waiting for the fade-in-front setting" },
+};
+
 // One press is one game frame: the unit the ghost actually moves in, and the
 // unit a frame map can express. Press and hold to run through them.
 export const NUDGE_STEP = 1;
-// Ten seconds either way. Past that a "nudge" is a different run.
-export const NUDGE_LIMIT = 300;
 
 // A MISSING opacity is UNKNOWN, and unknown is `null` -- never a number.
 //
@@ -71,23 +83,29 @@ export const NUDGE_LIMIT = 300;
 // has always been 0.5, and this is the shape that could put it there.
 //
 // So: unknown stays unknown, the control says so, and nothing sends it.
-export function clampOpacity(value) {
+// `range` is a published `{min, max}` (limits.opacity); without one the
+// value passes through, since only the server knows the control's floor.
+export function clampOpacity(value, range = null) {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
-  return Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, number));
+  return range ? Math.min(range.max, Math.max(range.min, number)) : number;
 }
 
-export function clampNudge(frames) {
+// `limit` is limits.nudge_frames.limit, whole game frames either way.
+export function clampNudge(frames, limit = Infinity) {
   const number = Math.round(Number(frames));
   if (!Number.isFinite(number)) return 0;
-  return Math.min(NUDGE_LIMIT, Math.max(-NUDGE_LIMIT, number));
+  return Math.min(limit, Math.max(-limit, number));
 }
 
-export function clampHue(degrees) {
+// `range` is limits.tint: one turn of the colour wheel, half-open, because 0
+// and 360 are the same colour and the switch beside it turns the shift off.
+export function clampHue(degrees, range = null) {
   const number = Math.round(Number(degrees));
-  if (!Number.isFinite(number)) return HUE_MIN;
-  return Math.min(HUE_MAX, Math.max(HUE_MIN, number));
+  const low = range ? range.min : 0;
+  if (degrees === null || degrees === undefined || !Number.isFinite(number)) return low;
+  return range ? Math.min(range.max, Math.max(low, number)) : number;
 }
 
 /**
@@ -100,9 +118,9 @@ export function clampHue(degrees) {
  * ON, so guessing wrong here would show him a plain ghost and tell him the
  * colour was something he had already turned off.
  */
-export function ghostTint(tint) {
+export function ghostTint(tint, range = null) {
   if (!tint || typeof tint !== "object") return null;
-  return { enabled: Boolean(tint.enabled), hue: clampHue(tint.hue_degrees) };
+  return { enabled: Boolean(tint.enabled), hue: clampHue(tint.hue_degrees, range) };
 }
 
 /** "+120°" -- the shift, for the readout beside the control. */
@@ -120,14 +138,47 @@ export function hueText(degrees) {
  * two halves are written by different gestures and either can be in flight
  * alone, so `"enabled" in draft` is the question, never its truthiness.
  */
-export function shownTint(current, draft) {
+export function shownTint(current, draft, range = null) {
   if (!current && !draft) return null;
-  const base = current || { enabled: false, hue: HUE_MIN };
+  const base = current || { enabled: false, hue: clampHue(null, range) };
   return {
     enabled: draft && "enabled" in draft
       ? Boolean(draft.enabled) : base.enabled,
     hue: draft && "hue_degrees" in draft
-      ? clampHue(draft.hue_degrees) : base.hue,
+      ? clampHue(draft.hue_degrees, range) : base.hue,
+  };
+}
+
+/**
+ * THE ON/OFF SETTINGS, by name: every switch the server lists in
+ * `limits.switches` (ghost/settings.py `switch(...)` rows), each the bool it
+ * stated or null. Null until the server says, like the tint: an unknown switch
+ * is drawn unknown, never as off.
+ */
+export function ghostSwitches(session, limits) {
+  const names = Array.isArray(limits?.switches) ? limits.switches : [];
+  return Object.fromEntries(names.map(
+    (name) => [name, typeof session?.[name] === "boolean" ? session[name] : null]));
+}
+
+/** The published ranges, or none from a server that has not said. */
+export function ghostLimits(session) {
+  const limits = session?.limits;
+  return limits && typeof limits === "object" ? limits : {};
+}
+
+/** How far the nudge may go, whole game frames either way. */
+export function nudgeLimit(limits) {
+  return limits?.nudge_frames?.limit ?? Infinity;
+}
+
+// The values whose shape the published limits decide.
+function limitedValues(session, limits) {
+  return {
+    opacity: clampOpacity(session.opacity, limits.opacity),
+    tint: ghostTint(session.tint, limits.tint),
+    switches: ghostSwitches(session, limits),
+    nudge: clampNudge(session.nudge_frames, nudgeLimit(limits)),
   };
 }
 
@@ -205,8 +256,8 @@ export function ghostControls(session, entityKey) {
     reasonText: "Checking whether this has a run to play alongside you...",
     // Nobody has said how solid the ghost is drawn, so the control does not
     // pretend to know -- see clampOpacity.
-    showsTuning: false, opacity: null, tint: null, view: null, proximity: null, shadow: null,
-    occlusionFade: null, volume: null,
+    showsTuning: false, opacity: null, tint: null, view: null, proximity: null, switches: {},
+    volume: null, limits: {},
     marioBoxes: { available: false, reasonText: null }, nudge: 0,
     selection: null,
   };
@@ -216,6 +267,7 @@ export function ghostControls(session, entityKey) {
   const source = session.source || {};
   const available = Boolean(source.available);
   const enabled = Boolean(session.enabled) && available;
+  const limits = ghostLimits(session);
   return {
     known: true,
     available,
@@ -223,17 +275,12 @@ export function ghostControls(session, entityKey) {
     canToggle: available,
     reasonText: ghostReason(session, source),
     showsTuning: enabled,
-    opacity: clampOpacity(session.opacity),
-    tint: ghostTint(session.tint),
-    // Null until the server says, like the tint: an unknown switch is drawn
-    // unknown, never as off.
-    shadow: typeof session.shadow === "boolean" ? session.shadow : null,
-    occlusionFade: typeof session.occlusion_fade === "boolean" ? session.occlusion_fade : null,
+    ...limitedValues(session, limits),
     volume: typeof session.volume === "number" ? session.volume : null,
+    limits,
     proximity: session.proximity || null,
     view: GHOST_VIEWS.includes(session.view) ? session.view : null,
     ...viewAvailability(source),
-    nudge: clampNudge(session.nudge_frames),
     selection: session.selection || null,
   };
 }
@@ -251,8 +298,14 @@ export function ghostRecordingOptions(selection, view, draft = {}, strat = null)
   const candidates = selection.candidates || [];
   const hues = new Map((selection.playing || []).map((row) => [row.key, row.hue_degrees]));
   const items = [pbItem(selection.pb, choice.pb, field, hues)];
+  const unplayable = [];
   for (const candidate of candidates) {
-    items.push(candidateItem(candidate, choice.attempts.includes(candidate.attempt_id), field, view, hues, strat));
+    const checked = choice.attempts.includes(candidate.attempt_id);
+    if (view === "mario" && !checked && neverPlaysAsMario(candidate)) {
+      unplayable.push(candidate);
+      continue;
+    }
+    items.push(candidateItem(candidate, checked, field, view, hues, strat));
   }
   const missing = choice.attempts.filter(
     (id) => !candidates.some((candidate) => candidate.attempt_id === id));
@@ -263,11 +316,33 @@ export function ghostRecordingOptions(selection, view, draft = {}, strat = null)
   const rows = selection.pb ? [selection.pb, ...candidates] : candidates;
   return {
     items, choice, reasonText: choiceReason(choice, missing, view),
+    folded: foldedLine(unplayable),
     toggle: (key) => toggled(choice, key),
     views: {
       mario: rows.some((row) => row.native_available),
       whole: rows.some((row) => row.whole_available),
     },
+  };
+}
+
+/** The server's reasons a run can NEVER play as Only Mario: its poses are in
+ * an older format, or were never recorded or kept. Nothing he does on this
+ * card changes that, so in Only Mario those runs fold into one quiet line
+ * instead of a column of disabled boxes each saying the same thing (his
+ * picker, 2026-09-23). A ticked one stays a box so it can be unticked. */
+const NEVER_PLAYS_AS_MARIO = new Set(["older_pose_format", "no_native_poses", "native_preservation_failed"]);
+
+function neverPlaysAsMario(candidate) {
+  return !candidate.native_available && NEVER_PLAYS_AS_MARIO.has(candidate.native_reason);
+}
+
+function foldedLine(rows) {
+  if (!rows.length) return null;
+  const reasons = [...new Set(rows.map((row) => row.native_reason_text).filter(Boolean))];
+  return {
+    count: rows.length,
+    label: `${rows.length} older run${rows.length === 1 ? "" : "s"} can't play as Only Mario`,
+    reason: reasons.join(" "),
   };
 }
 

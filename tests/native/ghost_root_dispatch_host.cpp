@@ -27,6 +27,9 @@ void display_list(uint32_t pc,uint32_t dl,uint32_t physical,uint32_t depth,const
 }
 }
 namespace ghost_link {
+// ghost_link.cpp's file-scope hook timer, like observing above: the root
+// witness runs the extracted hook, not its cost accounting.
+struct HookTime { HookTime() {} }; // user-provided: a used scope object, not an unused local
 #include "actual_root_link.inc"
 }
 unsigned RSP_SegmentToPhysical(unsigned value){return value==body_dl ? 0x40080 : value;}
