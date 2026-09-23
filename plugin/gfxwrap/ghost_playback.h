@@ -150,6 +150,8 @@ const gp_api *api();
 void safe_boundary(uint32_t rom_generation, uint32_t configuration);
 /* Borrowed until the next safe_boundary/retire call. Obtain only on renderer. */
 bool atlas(sg_atlas_view *out, uint64_t *model_id);
+/* The prepared model's ROM particle frames and atlas; false when it has none. */
+bool particles(sg_particle_view *out, uint64_t *model_id);
 /* FOLLOW uses exact elapsed-origin differences plus the resolved origin.offset and
  * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Each clip
  * then selects its first exact coordinate INCLUDING refused poses and compares

@@ -1151,6 +1151,18 @@ takes the water's color. The game's own picture stays untouched.
 - **Lives** — `plugin/gfxwrap/ghost_compositor.cpp`; the [[renderer]]'s
   repeat is staged by `tools/stage_ghost_renderer.py`
 
+### Recorded particles
+
+The bubbles, splashes, water rings, droplets, dust and sparkles the game drew
+for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
+one showed and where. A Mario-only [[ghost]] draws them with the ROM's own
+pictures, after its body. Another object's bubble, or a particle whose picture
+the ROM reader does not know, is never drawn.
+
+- **Lives** — `plugin/gfxwrap/ghost_particle_capture.cpp` records them;
+  `renderer/model/particles.c` reads the pictures; `plugin/gfxwrap/ghost_particle_pose.cpp`
+  places them
+
 ### Ghost sound events
 
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in

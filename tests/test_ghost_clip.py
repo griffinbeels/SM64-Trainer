@@ -107,7 +107,7 @@ def test_invalid_sound_events_refuse(mutate):
         frame_from_bytes(bytes(raw))
 
 
-@pytest.mark.parametrize("at, name", [(324 + 4, "shadow"), (620, "sound")])
+@pytest.mark.parametrize("at, name", [(324 + 4, "shadow"), (620, "sound"), (656, "particle")])
 def test_refused_optional_evidence_keeps_no_bytes(at, name):
     raw = bytearray(frame())
     raw[at] = 1
@@ -121,8 +121,8 @@ def test_portable_offsets_and_lossless_refusal_rows(tmp_path):
     manifest = write_clip(path, rows, producer(), clock_kind=STAR_CLOCK,
                           clip_id="112233445566778899aabbccddeeff00")
     raw = path.read_bytes()
-    assert raw[:8] == b"SM64GHO4"
-    assert struct.unpack_from("<8I", raw, 8) == (4, 160, 652, 3, 1, 5, 4, 5)
+    assert raw[:8] == b"SM64GHO5"
+    assert struct.unpack_from("<8I", raw, 8) == (5, 160, 1232, 3, 1, 6, 4, 5)
     assert raw[40:56].hex() == manifest["clip_id"]
     assert struct.unpack_from("<Qqd", raw, 56) == (30, 1000, 1800000000.0)
     assert struct.unpack_from("<2Q2I2i", raw, 80) == (1, 4, 101, 104, 24, 1)

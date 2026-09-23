@@ -20,6 +20,7 @@ void multiply(const float *a, const float *b, float *out) {
             out[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1]
                 + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
 }
+}
 // SM64 look-at is rigid: the recorded camera inverts by transpose.
 bool recorded_camera_inverse(sg_model *model, const gc_camera &camera, float inverse[16]) {
     float view[16]{};
@@ -31,6 +32,7 @@ bool recorded_camera_inverse(sg_model *model, const gc_camera &camera, float inv
         inverse[12+r]=-(inverse[r]*view[12]+inverse[4+r]*view[13]+inverse[8+r]*view[14]);
     return true;
 }
+namespace {
 bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
     const auto &p=sample.pose;
     if (p.root_kind==GC_ROOT_TRS) {

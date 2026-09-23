@@ -2,9 +2,10 @@
 
 Capture refusals remain records. A clip never fills a gap from a nearby pose,
 and its captured camera is evidence rather than the playback camera. Each
-record may also carry the shadow the game drew under Mario and the sound
-requests Mario issued since the previous frame (`Frame.sounds`), each with
-its own validity bit.
+record may also carry the shadow the game drew under Mario, the sound
+requests Mario issued since the previous frame (`Frame.sounds`) and the
+particles the game drew for him (bubbles, splashes, water rings, dust), each
+with its own validity bit.
 """
 from __future__ import annotations
 
@@ -19,14 +20,15 @@ import tempfile
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO4", 4, 5
-HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 652, 636
-MAX_RECORDS, WORLD_READY = 200000, 3
-CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND = 1, 2, 4, 8, 16, 32, 64
-REQUIRED, ALL_VALID = 31, 127
-SHADOW_AT, SOUND_AT = 16 + 308, 16 + 600  # record offsets of gc_shadow / gc_sound
+MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO5", 5, 6
+HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1232, 1216
+MAX_RECORDS, WORLD_READY = 100000, 3
+CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND, PARTICLES = 1, 2, 4, 8, 16, 32, 64, 128
+REQUIRED, ALL_VALID = 31, 255
+SHADOW_AT, SOUND_AT, PARTICLES_AT = 16 + 308, 16 + 600, 16 + 636  # record offsets of the optional blocks
 SHADOW_BYTES, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW = 292, 36, 8, 1
-OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
+PARTICLE_BYTES, PARTICLE_EVENTS, PARTICLE_OVERFLOW = 580, 16, 1
+OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3", b"SM64GHO4")
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
 STAR_CLOCK, SEGMENT_CLOCK = 1, 2
 CLOCK_KINDS = {"star": STAR_CLOCK, "segment": SEGMENT_CLOCK}
@@ -110,6 +112,7 @@ class Frame:
     clock: Clock
     sounds: tuple[int, ...] = ()  # Mario's play_sound bits this frame, in order
     sound_overflow: bool = False  # more than SOUND_EVENTS were issued
+    particles: int = 0  # Mario's particles the game drew this frame
 
     @property
     def has_shadow(self) -> bool:
@@ -130,7 +133,9 @@ def frame_from_bytes(data: bytes) -> Frame:
     if ((len(data) == 260 and struct.unpack_from("<2I", data) == (260, 2)
             and struct.unpack_from("<2I", data, 16) == (244, 3))
             or (len(data) == 324 and struct.unpack_from("<2I", data) == (324, 3)
-                and struct.unpack_from("<2I", data, 16) == (308, 4))):
+                and struct.unpack_from("<2I", data, 16) == (308, 4))
+            or (len(data) == 652 and struct.unpack_from("<2I", data) == (652, 4)
+                and struct.unpack_from("<2I", data, 16) == (636, 5))):
         raise OlderPoseFormat()
     if len(data) != RECORD_BYTES:
         raise ClipError("native ghost record has the wrong size")
@@ -145,7 +150,8 @@ def frame_from_bytes(data: bytes) -> Frame:
     count, flags, _producer, _consumer, *bits = _SOUND.unpack_from(raw, SOUND_AT)
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
                   *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)),
-                  tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW))
+                  tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW),
+                  raw[PARTICLES_AT] if valid & PARTICLES else 0)
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
         raise ClipError("native ghost occurrence is invalid")
     if valid & CLOCK and not (4 <= frame.level <= 36 and 1 <= frame.area <= 8):
@@ -168,6 +174,7 @@ def frame_from_bytes(data: bytes) -> Frame:
         raise ClipError("native ghost success is missing a component")
     _validate_shadow(raw, valid)
     _validate_sound(count, flags, bits, raw, valid)
+    _validate_particles(raw, valid)
     _validate_clock(frame)
     return frame
 
@@ -210,6 +217,22 @@ def _validate_sound(count: int, flags: int, bits: list[int], raw: bytes, valid: 
     if (count > SOUND_EVENTS or flags & ~SOUND_OVERFLOW or any(bits[count:])
             or (flags & SOUND_OVERFLOW and count != SOUND_EVENTS)):
         raise ClipError("native ghost sound events are inconsistent")
+
+
+def _validate_particles(raw: bytes, valid: int) -> None:
+    block = raw[PARTICLES_AT:PARTICLES_AT + PARTICLE_BYTES]
+    if not valid & PARTICLES:
+        if any(block):
+            raise ClipError("native ghost particle refusal retains bytes")
+        return
+    count, flags = block[0], block[1]
+    if (count > PARTICLE_EVENTS or flags & ~PARTICLE_OVERFLOW or any(block[2:4])
+            or (flags & PARTICLE_OVERFLOW and count != PARTICLE_EVENTS) or any(block[4 + 36 * count:])):
+        raise ClipError("native ghost particles are inconsistent")
+    for at in range(4, 4 + 36 * count, 36):
+        if any(block[at + 22:at + 24]) or not all(
+                math.isfinite(value) for value in struct.unpack_from("<3f", block, at + 24)):
+            raise ClipError("native ghost particle entry is invalid")
 
 
 def _validate_clock(frame: Frame) -> None:
@@ -395,7 +418,7 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
             or manifest.get("target") != target
             or manifest.get("file") != path.name):
         raise ClipError("native ghost manifest belongs to another attempt")
-    if type(manifest.get("version")) is int and manifest["version"] in (1, 2, 3):
+    if type(manifest.get("version")) is int and manifest["version"] in (1, 2, 3, 4):
         raise OlderPoseFormat()
     digest = manifest.get("sha256")
     if not isinstance(digest, str) or len(digest) != 64:

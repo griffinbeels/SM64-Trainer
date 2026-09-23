@@ -5,6 +5,7 @@
 #include <windows.h>
 #include "ghost_playback.h"
 #include "ghost_pose.h"
+#include "ghost_particle_pose.h"
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -111,6 +112,14 @@ extern "C" int32_t sg_model_get_atlas(sg_model *p,sg_atlas_view *out) {
     *out={};if(p!=fake_model || !p)return SG_INVALID_MODEL;
     if(p->owner!=GetCurrentThreadId())return SG_WRONG_THREAD;
     static const uint8_t pixel[]={255,0,0,255};*out={pixel,1,1,209};return SG_OK;
+}
+// The fake model has no particle frames; placement has its own witness.
+extern "C" int32_t sg_model_get_particles(sg_model *p,sg_particle_view *out) {
+    *out={};return p==fake_model && p ? SG_OK : SG_INVALID_MODEL;
+}
+namespace ghost_particle_pose {
+Placed place(sg_model*,const sg_particle_view&,const gc_sample&,const gc_camera&,const float*,
+             ghost_compositor::ParticleVertex*,ghost_compositor::Particles& result) {result={};return {};}
 }
 namespace ghost_pose {
 Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,

@@ -44,6 +44,8 @@ OVERLAY_SOURCES = (
     "renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp", "source_descriptor3.h",
     "ghost_capture.h", "ghost_capture.cpp", "ghost_root.h", "ghost_root.cpp", "ghost_pass.h", "ghost_pass.cpp",
     "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
+    "ghost_particle_capture.h", "ghost_particle_capture.cpp", "ghost_particle_gl.h",
+    "ghost_particle_pose.h", "ghost_particle_pose.cpp",
     "ghost_clock.h", "ghost_clock.cpp", "ghost_origin.h", "ghost_origin.cpp",
     "ghost_pose.h", "ghost_pose.cpp", "ghost_compositor.h", "ghost_compositor.cpp", "ghost_compositor_gl.h",
     "ghost_clip.h", "ghost_assets.h", "ghost_assets.cpp", "ghost_rom.h", "ghost_rom.cpp", "ghost_ipc.h", "ghost_ipc.cpp",
@@ -53,7 +55,7 @@ OVERLAY_SOURCES = (
 )
 OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp",
                    "ghost_capture.cpp", "ghost_root.cpp", "ghost_clock.cpp", "ghost_origin.cpp",
-                   "ghost_pass.cpp", "ghost_stream.cpp", "ghost_link.cpp",
+                   "ghost_pass.cpp", "ghost_stream.cpp", "ghost_link.cpp", "ghost_particle_capture.cpp", "ghost_particle_pose.cpp",
                    "ghost_pose.cpp", "ghost_compositor.cpp", "ghost_assets.cpp", "ghost_rom.cpp", "ghost_ipc.cpp",
                    "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp",
                    "ghost_audio.cpp")

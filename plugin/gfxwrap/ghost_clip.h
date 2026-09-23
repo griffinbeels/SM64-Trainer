@@ -4,11 +4,11 @@
 #include "ghost_capture.h"
 #include <stddef.h>
 #include <stdint.h>
-#define GCLIP_VERSION 4u
-#define GCLIP_MAGIC "SM64GHO4"
-/* 200000 records (111 minutes at 30 Hz) plus their 4-byte index fit the
- * 128 MiB playback budget: 200000 * (652 + 4) bytes. */
-#define GCLIP_MAX_RECORDS 200000u
+#define GCLIP_VERSION 5u
+#define GCLIP_MAGIC "SM64GHO5"
+/* 100000 records (55 minutes at 30 Hz) plus their 4-byte index fit the
+ * 128 MiB playback budget: 100000 * (1232 + 4) bytes. */
+#define GCLIP_MAX_RECORDS 100000u
 #define GCLIP_WORLD_READY 3u
 enum gclip_clock_kind { GCLIP_STAR_CLOCK = 1u, GCLIP_SEGMENT_CLOCK = 2u };
 #pragma pack(push, 4)
@@ -37,5 +37,5 @@ static_assert(sizeof(gclip_header) == 160, "portable ghost header");
 static_assert(offsetof(gclip_header, clock_kind) == 112, "portable clock kind");
 static_assert(offsetof(gclip_header, origin_sequence) == 128, "portable origin sequence");
 static_assert(offsetof(gclip_header, origin_continuity) == 144, "portable continuity");
-static_assert(sizeof(gclip_frame) == 652, "portable ghost record");
+static_assert(sizeof(gclip_frame) == 1232, "portable ghost record");
 #endif

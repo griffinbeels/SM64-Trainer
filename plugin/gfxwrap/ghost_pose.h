@@ -24,6 +24,9 @@ Result evaluate(sg_model *, const gs_record &recorded, const gc_sample &live,
 /* A world point relative to the LIVE camera, in the space SM64 hands its own
  * sound engine (Mario's cameraToObject: +x right, +y up, -z ahead). */
 bool camera_relative(sg_model *, const gc_camera &live, const float world[3], float out[3]);
+/* The inverse of a recorded camera's look-at (rigid: transpose), native
+ * column-major; removes that camera from an executed modelview. */
+bool recorded_camera_inverse(sg_model *, const gc_camera &recorded, float inverse[16]);
 /* The recorded shadow in world space under the same live view_projection as
  * its body: removes the RECORDED camera from the executed shadow matrix,
  * expands the game's triangle order and unpacks the IA8 texture into the

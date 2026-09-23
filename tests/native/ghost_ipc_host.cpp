@@ -275,7 +275,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         uint16_t clip_path[GIPC_PATH_CHARS]{},rom_path[GIPC_PATH_CHARS]{};
         path(clip_path,argv[1]);path(rom_path,argv[3]);
         std::vector<uint8_t> bytes;gclip_header header{};
-        check(ghost_assets::read(clip_path,GIPC_PATH_CHARS,1024,bytes),"bounded local clip read");
+        check(ghost_assets::read(clip_path,GIPC_PATH_CHARS,2048,bytes),"bounded local clip read");
         const uint8_t id[16]={1};
         check(ghost_assets::clip(bytes,digest,id,header),"independent Python digest accepted");
         auto corrupt=bytes;corrupt.back()^=1;

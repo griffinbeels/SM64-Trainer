@@ -6,7 +6,7 @@
 #include "ghost_capture.h"
 #include <stdint.h>
 
-#define GS_VERSION 4u
+#define GS_VERSION 5u
 #define GS_SLOTS 128u
 #define GS_CAP_POSE 1u
 #define GS_CAP_WORLD_PASS 2u

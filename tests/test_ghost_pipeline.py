@@ -65,8 +65,9 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     library = builder.build_model(tmp_path / "model", seed=seed, vcvars32=vcvars)
     native = COMPONENTS / "plugin/gfxwrap"
     sources = [native / f"{name}.cpp" for name in
-               ("ghost_capture", "ghost_root", "ghost_clock", "ghost_origin", "ghost_stream", "ghost_pass", "ghost_playback",
-                "ghost_pose", "ghost_compositor", "ghost_presentation")]
+               ("ghost_capture", "ghost_root", "ghost_particle_capture", "ghost_clock", "ghost_origin", "ghost_stream",
+                "ghost_pass", "ghost_playback", "ghost_pose", "ghost_particle_pose", "ghost_compositor",
+                "ghost_presentation")]
     host = ROOT / "tests/native/ghost_pipeline_host.cpp"
     source_inputs = [*sources, host, Path(__file__), COMPONENTS / "tests/native/ghost_capture_host.cpp",
                      COMPONENTS / "tests/native/ghost_root_fixture.h",
@@ -106,9 +107,9 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
                       *tmp_path.glob("*.png")])
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
-    assert report["capture_version"] == 5 and report["clip_version"] == 4 and report["playback_version"] == 7
+    assert report["capture_version"] == 6 and report["clip_version"] == 5 and report["playback_version"] == 7
     assert_recorded_shadow(report["shadow"])
-    assert_submerged(report["water"])
+    assert_submerged(report["water"], report["particles"])
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
@@ -128,10 +129,12 @@ def assert_recorded_shadow(shadow):
     assert shadow["alpha_errors"] == shadow["occlusion_errors"] == 0
 
 
-def assert_submerged(water):
-    """Below the water plane the ghost takes the water's own blend; above it, nothing changes."""
+def assert_submerged(water, particles):
+    """Below the water plane the ghost takes the water's own blend; above it, nothing changes.
+    Its recorded particles (Mario's only) are drawn from the ROM's own frames."""
     assert water["tinted"] > 300 and water["dry"] > 300
     assert water["outside_pixels_changed"] == water["blend_errors"] == 0
+    assert particles["recorded"] == 3 and particles["pixels"] > 200
 
 
 def assert_full_ghost_set(report):

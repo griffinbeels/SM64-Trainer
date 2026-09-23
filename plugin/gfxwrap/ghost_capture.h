@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define GC_VERSION 5u
+#define GC_VERSION 6u
 #define GC_RAM_WORD_SWAPPED 1u
 #define GC_ROM_US 1u
 #define GC_GRAPH_NODE_LIMIT 256u
@@ -22,14 +22,17 @@ enum gc_valid {
     GC_VALID_CLOCK = 1u, GC_VALID_POSE = 2u, GC_VALID_CAMERA = 4u,
     GC_VALID_ACTION = 8u, GC_VALID_WARP = 16u,
     /* Optional evidence: never part of GC_OK. */
-    GC_VALID_SHADOW = 32u, GC_VALID_SOUND = 64u
+    GC_VALID_SHADOW = 32u, GC_VALID_SOUND = 64u, GC_VALID_PARTICLES = 128u
 };
 #define GC_VALID_REQUIRED 31u
-#define GC_VALID_ALL 127u
+#define GC_VALID_ALL 255u
 #define GC_SHADOW_VERTICES 9u
 #define GC_SHADOW_TEXTURE_BYTES 128u /* 16x16 IA8 alpha nibbles, two per byte */
 #define GC_SOUND_EVENTS 8u
 enum gc_sound_flags { GC_SOUND_OVERFLOW = 1u };
+#define GC_PARTICLES 16u
+#define GC_PARTICLE_BASIS_ONE 4096 /* basis entries are 4.12 fixed point */
+enum gc_particle_flags { GC_PARTICLES_OVERFLOW = 1u };
 /* dl_shadow_9_verts: the game's eight triangles over the nine vertices.
  * Capture refuses any other executed list; playback draws this order. */
 static const uint8_t gc_shadow_triangles[24] = {
@@ -105,6 +108,22 @@ typedef struct gc_sound {
     uint32_t bits[GC_SOUND_EVENTS];
 } gc_sound;
 
+/* Mario's particles as executed this frame (ghost_particle_capture.h): each
+ * object's first pushed display list (segmented, e.g. 0x0401DD60 bubble) and
+ * its executed modelview: basis columns in 4.12 fixed point, translation in
+ * view space. Count may be zero; OVERFLOW when more were drawn. Zero unless
+ * GC_VALID_PARTICLES. */
+typedef struct gc_particle {
+    uint32_t display_list;
+    int16_t basis[9]; /* column-major 3x3 */
+    int16_t reserved;
+    float translation[3];
+} gc_particle;
+typedef struct gc_particles {
+    uint8_t count, flags, reserved[2];
+    gc_particle entries[GC_PARTICLES];
+} gc_particles;
+
 typedef struct gc_camera {
     float position[3], focus[3];
     int16_t roll, roll_screen;
@@ -144,6 +163,7 @@ typedef struct gc_sample {
     gcc_output clock;
     gc_shadow shadow;
     gc_sound sound;
+    gc_particles particles;
 } gc_sample;
 
 /* Zero-initialize or reset before use. One reader per serialized producer.

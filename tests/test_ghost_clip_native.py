@@ -47,17 +47,20 @@ def corpus():
         values.append(bytes(changed))
     for offset, value in [(32, 1), (40, 101), (48, 999), (56, 99), (308, 0), (316, 10)]:
         changed = bytearray(encoded((frame(1), frame(2))))
-        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 160 + 652 + offset, value)
+        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 160 + 1232 + offset, value)
         values.append(bytes(changed))
     # Recorded shadow and sound: accepted shapes, then each native refusal.
-    evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,)),
-                        frame(2, sounds=tuple(range(1, 9)), overflow=True)))
+    evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,), particles=((0x0401DD60, (1, 2, -300)),)),
+                        frame(2, sounds=tuple(range(1, 9)), overflow=True, particles=())))
     values.append(evidence)
     for offset, pack, value in [(160 + 128, "<I", 1), (160 + 324 + 60, "<f", 0.5),
                                 (160 + 324, "<I", 0x7fc00000), (160 + 324 + 163, "<B", 1),
-                                (160 + 616, "<B", 9), (160 + 652 + 617, "<B", 2),
+                                (160 + 616, "<B", 9), (160 + 1232 + 617, "<B", 2),
                                 (160 + 616 + 1, "<B", 1), (160 + 620 + 4, "<I", 5),
-                                (160 + 652 + 324 + 8, "<I", 1), (160 + 652 + 620, "<I", 0)]:
+                                (160 + 1232 + 324 + 8, "<I", 1), (160 + 1232 + 620, "<I", 0),
+                                (160 + 652, "<B", 17), (160 + 653, "<B", 2), (160 + 654, "<B", 1),
+                                (160 + 656 + 22, "<h", 1), (160 + 656 + 24, "<I", 0x7fc00000),
+                                (160 + 656 + 36, "<I", 0x0401DD60), (160 + 1232 + 652, "<B", 1)]:
         changed = bytearray(evidence)
         struct.pack_into(pack, changed, offset, value)
         values.append(bytes(changed))

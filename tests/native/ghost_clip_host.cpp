@@ -1,6 +1,7 @@
 /* Actual playback's portable acceptance, with model calls forbidden. No ROM/GL. */
 #include "ghost_playback.h"
 #include "ghost_pose.h"
+#include "ghost_particle_pose.h"
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -13,6 +14,11 @@ extern "C" int32_t sg_model_close(sg_model**) {std::abort();}
 extern "C" int32_t sg_model_detach(sg_model*) {std::abort();}
 extern "C" int32_t sg_model_adopt(sg_model*) {std::abort();}
 extern "C" int32_t sg_model_get_atlas(sg_model*,sg_atlas_view*) {std::abort();}
+extern "C" int32_t sg_model_get_particles(sg_model*,sg_particle_view*) {std::abort();}
+namespace ghost_particle_pose {
+Placed place(sg_model*,const sg_particle_view&,const gc_sample&,const gc_camera&,const float*,
+             ghost_compositor::ParticleVertex*,ghost_compositor::Particles&) {std::abort();}
+}
 namespace ghost_pose {
 Result evaluate(sg_model*,const gs_record&,const gc_sample&,const ghost::WorldPass&,
                 float,Scratch&,ghost_compositor::Pose&) {std::abort();}

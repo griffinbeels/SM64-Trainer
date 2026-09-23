@@ -23,7 +23,7 @@ ghost_compositor::Dispatch dispatch{};
 renderer::Identity owner{}, presentation_owner{};
 uint32_t width = 0, height = 0, prepared_width = 0, prepared_height = 0;
 uint32_t configuration = 0, clean_fbo = 0, clean_texture = 0;
-uint64_t model_id = 0, occurrence = 0;
+uint64_t model_id = 0, particle_model = 0, occurrence = 0;
 gp_draw_token draw_token{};
 bool provisional = false, hud = false, ready = false, layer = false;
 using GetUniform = void (APIENTRY *)(GLuint, GLint, GLint*);
@@ -94,7 +94,7 @@ void context_lost() {
         else ghost_compositor::abandon(compositor);
     }
     compositor = nullptr; owner = {}; presentation_owner = {}; dispatch = {};
-    model_id = 0; prepared_width = prepared_height = width = height = 0;
+    model_id = particle_model = 0; prepared_width = prepared_height = width = height = 0;
     get_uniform = nullptr;
 }
 void begin(uint32_t rom, uint32_t config_id) {
@@ -116,7 +116,7 @@ void begin(uint32_t rom, uint32_t config_id) {
             if (identity.context == owner.context) ghost_compositor::destroy(compositor);
             else ghost_compositor::abandon(compositor);
         }
-        compositor = nullptr; prepared_width = prepared_height = 0; model_id = 0;
+        compositor = nullptr; prepared_width = prepared_height = 0; model_id = particle_model = 0;
         if (!ghost_dispatch::load(dispatch)) return;
         owner = identity;
         get_uniform = reinterpret_cast<GetUniform>(wglGetProcAddress("glGetUniformiv"));
@@ -133,8 +133,17 @@ void begin(uint32_t rom, uint32_t config_id) {
                                                      atlas.rgba, atlas.width, atlas.height);
         const bool clean = replay_gl::EndCapture();
         if (result == ghost_compositor::Result::ok && clean) {
-            prepared_width = width; prepared_height = height; model_id = wanted_model;
+            prepared_width = width; prepared_height = height; model_id = wanted_model; particle_model = 0;
         }
+    }
+    // The ROM particle atlas rides on the prepared model; none leaves particles undrawn.
+    sg_particle_view particles{}; uint64_t particle_id = 0;
+    if (compositor && model_id && particle_model != model_id && ghost_playback::particles(&particles, &particle_id)
+            && particle_id == model_id) {
+        if (!replay_gl::BeginCapture()) return;
+        const auto result = ghost_compositor::prepare_particles(compositor, particles.atlas_rgba,
+                                                              particles.atlas_width, particles.atlas_height);
+        if (replay_gl::EndCapture() && result == ghost_compositor::Result::ok) particle_model = model_id;
     }
 }
 void observe(const ghost::RasterTarget &target) {

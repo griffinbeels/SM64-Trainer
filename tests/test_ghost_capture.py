@@ -79,7 +79,7 @@ def test_compiled_capture(capture_host, scenario):
         capture_output=True, text=True, timeout=15, check=False, **quiet_spawn_kwargs(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"ghost capture passed: {scenario}; config=184 sample=636" in result.stdout
+    assert f"ghost capture passed: {scenario}; config=184 sample=1216" in result.stdout
 
 
 def test_semantic_config_resolves_selected_layout():
@@ -90,7 +90,7 @@ def test_semantic_config_resolves_selected_layout():
     assert config.pending_warp_op == US.pending_warp_op
     assert config.delayed_warp_timer == US.delayed_warp_timer
     assert len(config.to_bytes()) == 184
-    assert struct.unpack_from("<II", config.to_bytes()) == (184, 5)
+    assert struct.unpack_from("<II", config.to_bytes()) == (184, 6)
     assert struct.unpack_from("<II", config.to_bytes(), 56) == (US.pending_warp_op, US.delayed_warp_timer)
     with pytest.raises(LayoutIncomplete, match="US layout"):
         GhostLayout.from_layout(JP)
