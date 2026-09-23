@@ -29,6 +29,17 @@ for line in sys.stdin:
         k.VirtualFree(image, 0, 0x8000)
         image = None
         print("ok", flush=True)
+    elif command == "decoy":
+        # Game memory that happens to hold the swapped magic: a pointer to
+        # 0x80371240 stored word-swapped, followed by ordinary binary data.
+        decoy = None
+        for want in (int(a, 16) for a in args[0].split(",")):
+            decoy = k.VirtualAlloc(want, size, 0x3000, 0x04)
+            if decoy:
+                data = bytes.fromhex(args[1])
+                ctypes.memmove(decoy + 0x1000, data, len(data))
+                break
+        print(hex(decoy or 0), flush=True)
     elif command == "open":
         if image is not None:
             k.VirtualFree(image, 0, 0x8000)
@@ -145,5 +156,22 @@ def test_a_process_that_never_showed_a_cartridge_is_not_walked_at_every_ask(emul
         assert memory.rom_header() is None
         assert memory.rom_header() is None
         assert walks[0] == 1
+    finally:
+        memory._close()
+
+
+def test_game_memory_holding_the_magic_is_not_mistaken_for_the_cartridge(emulator, walks):
+    """Live 2026-09-22: Usamune was reported unsupported because the scan took
+    the first 4-byte magic it met -- a pointer to 0x80371240 in a LOWER region
+    -- as the header, and remembered it. Garbage after the magic must be
+    skipped and the real image found."""
+    garbage = (bytes.fromhex("40123780") + bytes(range(0x90, 0xd0)))
+    decoy = int(emulator.send(f"decoy {','.join(LOW_ADDRESSES[:6])} {garbage.hex()}"), 16)
+    assert decoy
+    real = emulator.open(b"SM64 USAMUNE v1.93u", [a for a in LOW_ADDRESSES[6:]])
+    assert real > decoy, "the decoy must come first in address order to be meaningful"
+    memory = attached_to(emulator)
+    try:
+        assert memory.rom_header() == cartridge(b"SM64 USAMUNE v1.93u")
     finally:
         memory._close()

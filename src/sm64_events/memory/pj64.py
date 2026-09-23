@@ -124,14 +124,14 @@ class Pj64Memory(RdramReader):
         """
         if self._pm is None:
             return None
-        from sm64_events.memory.version_probe import HEADER_SIZE, normalise_header
+        from sm64_events.memory.version_probe import HEADER_SIZE, plausible_header
         pid = self._pm.process_id
         if self._rom_at is not None and self._rom_at[0] == pid:
             try:
                 head = self._pm.read_bytes(self._rom_at[1], HEADER_SIZE)
             except pymem.exception.PymemError:
                 head = None
-            if head is not None and normalise_header(head) is not None:
+            if head is not None and plausible_header(head) is not None:
                 return head
             self._rom_at = None
         if (self._rom_seen_pid != pid and self._rom_missed is not None
@@ -151,7 +151,7 @@ class Pj64Memory(RdramReader):
         from sm64_events.memory.version_probe import (HEADER_SIZE,
                                                       ROM_MAGIC_BE,
                                                       ROM_MAGIC_WORD_SWAPPED,
-                                                      normalise_header)
+                                                      plausible_header)
         chunk = 4 * 1024 * 1024
         try:
             for base, size in iter_committed_regions(self._pm.process_handle):
@@ -164,7 +164,7 @@ class Pj64Memory(RdramReader):
                         at = block.find(magic)
                         while at != -1:
                             head = block[at:at + HEADER_SIZE]
-                            if len(head) == HEADER_SIZE and normalise_header(head) is not None:
+                            if len(head) == HEADER_SIZE and plausible_header(head) is not None:
                                 return base + offset + at, head
                             at = block.find(magic, at + 1)
         except pymem.exception.PymemError:
