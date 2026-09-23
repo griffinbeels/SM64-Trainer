@@ -253,3 +253,12 @@ def test_visual_counter_gate_requires_repeated_matching_advances():
     context = GateContext()
     context.timer_matches = False
     assert _check_area_update_counter(context).status == "failed"
+
+
+def test_one_capture_sample_version_macro():
+    """GC_VERSION names the ghost capture sample and nothing else: the GPU
+    channel's wire version is GC_CHANNEL_VERSION, so a unit that includes
+    both headers cannot read the wrong one."""
+    defined = [path.name for path in sorted(NATIVE.glob("*.h"))
+               if "#define GC_VERSION " in path.read_text(encoding="utf-8")]
+    assert defined == ["ghost_capture.h"]

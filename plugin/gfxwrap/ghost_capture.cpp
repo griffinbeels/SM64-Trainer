@@ -1,11 +1,12 @@
 #include "ghost_capture.h"
 #include "ghost_root.h"
+#include "ghost_ram.h"
 #include <cstddef>
 #include <cmath>
 #include <cstring>
 
 namespace {
-constexpr uint32_t kseg0 = 0x80000000u;
+using ghost::kseg0;
 constexpr uint32_t object_size = 0x260, object_count = 240;
 constexpr uint16_t active = 1, invisible = 16, billboard = 4;
 constexpr uint16_t root_type = 1, perspective_type = 0x103, camera_type = 0x114;
@@ -16,37 +17,9 @@ constexpr uint32_t area_root = 4, area_camera = 0x24;
 constexpr uint32_t mario_body = 0x98, mario_area = 0x90, mario_object = 0x88;
 
 bool span(uint32_t address, uint32_t count, uint32_t size, uint32_t alignment = 4) {
-    return address >= kseg0 && !(address & (alignment - 1))
-        && uint64_t(address - kseg0) + count <= size;
+    return ghost::ram_span(address, count, size, alignment);
 }
-
-struct Ram {
-    const uint8_t *data;
-    uint32_t size;
-    bool ok = true;
-    bool has(uint32_t address, uint32_t count, uint32_t alignment = 4) {
-        if (!span(address, count, size, alignment)) ok = false;
-        return ok;
-    }
-    uint8_t u8(uint32_t address) {
-        if (!has(address, 1, 1)) return 0;
-        return data[(address - kseg0) ^ 3u];
-    }
-    uint16_t u16(uint32_t address) {
-        if (!has(address, 2, 2)) return 0;
-        return uint16_t(uint16_t(u8(address)) << 8 | u8(address + 1));
-    }
-    uint32_t u32(uint32_t address) {
-        if (!has(address, 4)) return 0;
-        const uint8_t *p = data + (address - kseg0);
-        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-    }
-    int16_t s16(uint32_t address) { return int16_t(u16(address)); }
-    float f32(uint32_t address) {
-        const uint32_t bits = u32(address);
-        float value; std::memcpy(&value, &bits, sizeof(value)); return value;
-    }
-};
+using Ram = ghost::Ram;
 
 bool finite(float value, float limit = 10000000.0f) {
     return std::isfinite(value) && value >= -limit && value <= limit;
