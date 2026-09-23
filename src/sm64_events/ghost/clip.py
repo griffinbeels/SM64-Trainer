@@ -289,9 +289,9 @@ def _validate_held(raw: bytes, valid: int) -> None:
         if any(block):
             raise ClipError("native ghost held-object refusal retains bytes")
         return
-    behaviour, animation_id, frame, _y, flags = struct.unpack_from("<I3hH", block)
+    behaviour, animation_id, frame, _y, anim_state = struct.unpack_from("<I3hH", block)
     values = struct.unpack_from("<6f", block, 12)
-    if (not valid & POSE or behaviour >> 16 != 0x1300 or flags or animation_id < 0 or frame < 0
+    if (not valid & POSE or behaviour >> 16 != 0x1300 or anim_state > 255 or animation_id < 0 or frame < 0
             or not all(math.isfinite(value) for value in values) or 0 in values[3:]):
         raise ClipError("native ghost held object is inconsistent")
 

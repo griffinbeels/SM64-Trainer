@@ -109,7 +109,7 @@ that is active with its own node off, its `animTimer` equals this frame's
 `area_update_counter`, and its frame lies inside the loaded animation. The
 block holds the segmented behaviour (`behaviour - behaviour_base + 0x13000000`,
 the identity; `bhvBobomb` is 0x13003174), the animation id, frame and y
-translation, the HOLP (its world root) and its gfx scale. Its orientation
+translation, its `oAnimState` (switch frames such as the Bob-omb's blink), the HOLP (its world root) and its gfx scale. Its orientation
 needs no field: the hand copies Mario's own root matrix (his throwMatrix),
 so the held root is Mario's recorded world root rotation, rows scaled by
 `scale`, at the HOLP. A held object without an animation cannot prove it was

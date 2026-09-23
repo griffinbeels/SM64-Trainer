@@ -282,7 +282,7 @@ static void held_block(Fixture &f) {
         f.put32(f.config.mario_state+0x7c,bomb);
         f.put16(bomb+0x74,1);f.put16(bomb+2,0x20);f.put32(bomb+0x14,0);
         f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);
-        f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);
+        f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0x14c,1);
         f.put32(bomb+0x3c,anim);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
         for(unsigned i=0;i<3;++i) {
             f.putfloat(bomb+0x2c+4*i,1.0f);f.putfloat(Fixture::body+0x18+4*i,100.0f+float(i));
@@ -298,7 +298,7 @@ static void held_block(Fixture &f) {
     check(frame(true),"held Bob-omb not captured");
     const auto &h=f.sample.held;
     check(h.behavior==0x13003174 && h.animation_id==1 && h.animation_frame==12 && h.anim_y_translation==7
-          && h.holp[0]==100 && h.holp[2]==102 && h.scale[1]==1 && !h.flags,"held Bob-omb fields");
+          && h.holp[0]==100 && h.holp[2]==102 && h.scale[1]==1 && h.anim_state==1,"held Bob-omb fields");
     holding();check(!frame(false),"held object kept without a proven pose");
     const auto none=[&](uint32_t at,uint32_t word,const char *why){holding();f.put32(at,word);check(!frame(true),why);};
     none(bomb+0,0x00180021,"held object drawn by its own node accepted");

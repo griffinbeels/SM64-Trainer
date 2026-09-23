@@ -174,7 +174,7 @@ typedef struct gc_particles {
 typedef struct gc_held {
     uint32_t behavior; /* segmented behaviour script, e.g. 0x13003174 bhvBobomb */
     int16_t animation_id, animation_frame, anim_y_translation;
-    uint16_t flags;    /* reserved, zero */
+    uint16_t anim_state; /* oAnimState: texture/switch frame (the Bob-omb's blink) */
     float holp[3];     /* marioBodyState->heldObjLastPosition */
     float scale[3];    /* the held object's gfx scale */
 } gc_held;

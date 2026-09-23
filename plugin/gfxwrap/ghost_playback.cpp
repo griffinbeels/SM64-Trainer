@@ -288,7 +288,7 @@ bool valid_held(const gc_sample& s) {
     const gc_held zero{};
     if(!(s.valid_fields&GC_VALID_HELD))return !std::memcmp(&s.held,&zero,sizeof(zero));
     const auto& h=s.held;
-    if(!(s.valid_fields&GC_VALID_POSE) || (h.behavior>>16)!=0x1300u || h.flags
+    if(!(s.valid_fields&GC_VALID_POSE) || (h.behavior>>16)!=0x1300u || h.anim_state>255
             || h.animation_id<0 || h.animation_frame<0)return false;
     for(unsigned axis=0;axis<3;++axis)
         if(!std::isfinite(h.holp[axis]) || !std::isfinite(h.scale[axis]) || h.scale[axis]==0)return false;
