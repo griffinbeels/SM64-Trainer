@@ -101,20 +101,40 @@ def _spread(order: list[str], previous_course: int | None) -> list[str]:
 
 
 @lru_cache(maxsize=64)
-def cycle_order(cycle: int) -> tuple[str, ...]:
-    """The deck as cycle `cycle` deals it. A string seed hashes the same on
-    every Python build, which is what keeps installs in agreement."""
+def _own_order(cycle: int) -> tuple[str, ...]:
+    """Cycle `cycle` from its own seed alone. A string seed hashes the same
+    on every Python build, which is what keeps installs in agreement."""
     order = list(DECK)
     random.Random(f"sm64-daily-star/{cycle}").shuffle(order)
-    previous_course = None
     if cycle == 0:
         order.remove(FIRST_KEY)
         order.insert(0, FIRST_KEY)
-        head, rest = order[:1], _spread(order[1:], course_of(FIRST_KEY))
-        return tuple(head + rest)
-    if cycle > 0:
-        previous_course = course_of(cycle_order(cycle - 1)[-1])
-    return tuple(_spread(order, previous_course))
+        return tuple([FIRST_KEY] + _spread(order[1:], course_of(FIRST_KEY)))
+    return tuple(_spread(order, None))
+
+
+def cycle_order(cycle: int) -> tuple[str, ...]:
+    """The deck as cycle `cycle` deals it, forever: any cycle number works.
+
+    Only the FIRST card may move to meet the previous cycle, and it never
+    touches the last card, so a cycle's last card is its own order's last
+    card. That keeps every cycle one lookup away from its neighbour rather
+    than a chain back to Day 1 -- the prototype recursed through every
+    earlier cycle and a date far enough ahead would overflow the stack
+    (round 1, his ask: "continues to cycle FOREVER, for the rest of time")."""
+    order = list(_own_order(cycle))
+    if cycle == 0:
+        return tuple(order)
+    avoid = course_of(_own_order(cycle - 1)[-1])
+    if course_of(order[0]) != avoid:
+        return tuple(order)
+    for index in range(1, len(order) - 1):
+        course = course_of(order[index])
+        if course in (avoid, course_of(order[0])) \
+                or course_of(order[index - 1]) == course_of(order[index + 1]):
+            continue
+        return tuple([order[index]] + order[:index] + order[index + 1:])
+    return tuple(order)
 
 
 @dataclass(frozen=True)

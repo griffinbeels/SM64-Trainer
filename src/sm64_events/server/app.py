@@ -595,7 +595,8 @@ def _mount_service_routes(app, service, mode_path) -> None:
             service, library=library, adoptions=adoptions,
             overrides=library_overrides))
         from sm64_events.server.dailystar_api import create_dailystar_router
-        app.include_router(create_dailystar_router(service))
+        app.include_router(create_dailystar_router(
+            service, library=library, adoptions=adoptions))
 
 
 def _mount_optional_routes(app, replay, inputs, capture_layer, compare,

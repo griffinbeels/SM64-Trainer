@@ -1477,8 +1477,10 @@ every install on the same local date: the date alone picks it, so no server
 decides it. The rotation deals the Overall card's 103 default entries once
 per 103-day cycle in a shuffled order where two days in a row never share a
 course; Day 1 is 2026-09-23, Whomp's Fortress "Shoot into the Wild Blue". The
-app announces it once per day in a modal, and its [[selector]] cell wears a
-holographic foil. Its **today's best** is the fastest finished, uncleared
+app announces it once per day in a modal showing your [[personal best]], the
+time that reaches the next [[division]] above it, and the time left in the
+day, which turns to the next day's [[star]] at midnight; its [[selector]] cell wears a
+holographic foil. The rotation never ends: each cycle reshuffles. Its **today's best** is the fastest finished, uncleared
 [[attempt]] on it that ended inside today, on the entry's [[Scorecard]] clock,
 whatever the [[strategy]]; unlike a [[personal best]] it needs no save.
 

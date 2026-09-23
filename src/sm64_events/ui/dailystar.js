@@ -21,6 +21,13 @@ export function msUntilNextLocalMidnight(now = new Date()) {
   return next - now;
 }
 
+// Time left in the local day `dateKey` ("YYYY-MM-DD") at `now` (ms); zero or
+// less once that day is over.
+export function msUntilEndOfDate(dateKey, now = Date.now()) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(year, month - 1, day + 1) - now;
+}
+
 function useLocalDate() {
   const [date, setDate] = useState(localDateKey);
   useEffect(() => {
@@ -59,10 +66,11 @@ export function useDailyStar(rev) {
       .catch(() => {});
     return () => { live = false; };
   });
-  const markSeen = () => {
-    if (!daily) return;
-    setDaily({ ...daily, seen: true });
-    send("POST", "/api/daily-star/seen", { date: daily.date }).catch(() => {});
+  // `date` is the day whose announcement was dismissed -- the one on screen,
+  // which after a midnight inside the open dialog is no longer the store's.
+  const markSeen = (date) => {
+    if (daily && daily.date === date) setDaily({ ...daily, seen: true });
+    send("POST", "/api/daily-star/seen", { date }).catch(() => {});
   };
   return { daily, markSeen };
 }

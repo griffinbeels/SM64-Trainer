@@ -181,6 +181,33 @@
   .daily-times dd { margin: 0; color: var(--gold-soft); font-size: 1.2rem; font-weight: 750;
     font-variant-numeric: tabular-nums; }
   .daily-times small { color: var(--muted); font-size: .68rem; }
+  .daily-goal-rank { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; }
+  /* TIME LEFT sits centered in the footer's free space, left of Got it. */
+  .daily-timer { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline;
+    justify-content: center; gap: .45rem; color: var(--muted); font-size: .7rem;
+    letter-spacing: .06em; }
+  .daily-timer b { color: var(--text); font-size: 1rem; letter-spacing: .02em;
+    font-variant-numeric: tabular-nums; }
+  .daily-timer.times-up b { color: var(--gold-soft); font-size: 1.05rem; letter-spacing: .08em;
+    animation: daily-times-up .42s cubic-bezier(.34,1.56,.64,1) both; }
+  @keyframes daily-times-up { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  /* The page turn (round 1: "animate as if we went to the next page of the
+     modal"): the finished day slides off to the left and tilts away while the
+     next day's page comes in from the right, a full page-width apart so the
+     two never overlap, both on one eased curve that starts and ends slowly.
+     The two pages share one grid cell so the modal keeps its height; the
+     frame clips the travel. 560ms = TURN_MS. */
+  .daily-pages { display: grid; overflow: hidden; perspective: 900px; }
+  .daily-page { grid-area: 1 / 1; min-width: 0; }
+  .daily-page.turn-out { animation: daily-turn-out .56s cubic-bezier(.65,0,.35,1) both; pointer-events: none; }
+  .daily-page.turn-in { animation: daily-turn-in .56s cubic-bezier(.65,0,.35,1) both; }
+  @keyframes daily-turn-out { from { transform: none; opacity: 1; }
+    to { transform: translateX(-100%) rotateY(28deg); opacity: .25; } }
+  @keyframes daily-turn-in { from { transform: translateX(100%) rotateY(-28deg); opacity: .25; }
+    to { transform: none; opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .daily-page.turn-out, .daily-page.turn-in, .daily-timer.times-up b { animation: none; }
+    .daily-page.turn-out { visibility: hidden; } }
   /* min-height must cover the CLAMP plus the font's descenders, or the box is
      shorter than the two lines it promises to show and `overflow: hidden`
      shaves the bottom off the second one -- live report 2026-08-02 ("'Floating

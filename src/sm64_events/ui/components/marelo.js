@@ -219,7 +219,7 @@ export function RouteRankCard({ marelo, routes = [], activeRouteId = null,
     </span>
     ${interactive && onPickRoute ? html`<${CardSearchSelect}
       label=${cardLabel} menuTitle="Pick your route"
-      title="Which route you are practising — this is also what the rank rates"
+      title="Which route you are practicing — this is also what the rank rates"
       groups=${[{ label: null,
                   options: options.map(([optionValue, optionLabel]) =>
                     ({ value: optionValue, label: optionLabel })) }]}
