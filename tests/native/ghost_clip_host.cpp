@@ -1,4 +1,5 @@
-/* Actual playback's portable acceptance, with model calls forbidden. No ROM/GL. */
+/* Actual playback's portable acceptance and the refused rows it would hide,
+ * with model calls forbidden. No ROM/GL. */
 #include "ghost_playback.h"
 #include "ghost_clip_upgrade.h"
 #include "ghost_pose.h"
@@ -29,6 +30,7 @@ bool shadow(sg_model*,const gc_sample&,const float*,ghost_compositor::ShadowVert
 bool camera_relative(sg_model*,const gc_camera&,const float*,float*) {std::abort();}
 }
 
+static uint32_t hidden=0; // the refused rows playback hides; 0 for a refused clip
 static bool accepted(const std::string& path) {
     std::ifstream file(path,std::ios::binary|std::ios::ate);
     if(!file)std::exit(2);
@@ -47,11 +49,16 @@ static bool accepted(const std::string& path) {
     std::memcpy(frames.data(),bytes.data()+sizeof(header),frames.size()*sizeof(gclip_frame));
     const auto* api=ghost_playback::api();
     const bool okay=api->prepare_clip(&header,frames.data())==GP_OK;
+    hidden=okay?ghost_playback::hidden_refusals(header,frames.data()):0;
     api->revoke(GP_DISABLED);
     if(api->collect()!=GP_OK || api->release_worker()!=GP_OK)std::exit(3);
     return okay;
 }
 int main() {
-    std::string path;while(std::getline(std::cin,path))std::cout<<(accepted(path)?1:0)<<'\n';
+    std::string path;
+    while(std::getline(std::cin,path)) {
+        hidden=0;const bool okay=accepted(path);
+        std::cout<<(okay?1:0)<<' '<<hidden<<'\n';
+    }
     return 0;
 }

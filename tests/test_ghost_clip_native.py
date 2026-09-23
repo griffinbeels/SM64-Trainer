@@ -12,7 +12,7 @@ import pytest
 
 from ghost_native_fixture import frame, producer
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip
+from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip, hidden_refusals
 from sm64_events.ghost.native_layout import (
     CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT, PARTICLE_TRANSLATION_AT,
     PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT, ROOT_KIND_AT, SHADOW_AT,
@@ -101,6 +101,7 @@ def corpus():
     segment_tail = bytearray(encoded((frame(),), SEGMENT_CLOCK))
     struct.pack_into("<I", segment_tail, 124, 1)
     values.append(bytes(segment_tail))
+    values.extend(refusal_runs())
     # A real GCLIP4 recording saved before particles plays; a broken one does not.
     saved = REAL_GCLIP4.read_bytes()
     values.append(saved)
@@ -109,6 +110,21 @@ def corpus():
         struct.pack_into("<I", broken, offset, value)
         values.append(bytes(broken))
     return values
+
+
+def refusal_runs():
+    """Refused runs playback bridges or hides: the picker's blink count."""
+    def clip(refused, kind=STAR_CLOCK, rows=range(1, 7), changed=None):
+        changed = changed or {}
+        return encode_clip(tuple(frame(i, **({"valid": 29, "pose_refusal": 10} if i in refused else {}),
+                                       **changed.get(i, {})) for i in rows), producer(), clock_kind=kind)
+    later = {"origin": 2}
+    return [clip({3}), clip({3, 4}), clip({3, 4, 5}), clip({3, 4}, SEGMENT_CLOCK), clip({3, 4, 5}, SEGMENT_CLOCK),
+            clip({1}), clip({6}), clip({2, 5}),
+            clip({3}, changed={4: {"area": 2}}), clip({3}, changed={3: {"area": 2}}),  # another scene
+            clip({3}, changed={i: {"elapsed": i + 1} for i in (4, 5, 6)}),  # the clock skipped a frame
+            clip({2}, rows=(1, 2, 4)),  # an occurrence never arrived
+            clip({3}, changed={5: later, 6: later}), clip({5, 6}, changed={5: later, 6: later})]  # past the index
 
 
 def test_python_and_native_acceptance_agree(tmp_path):
@@ -140,22 +156,25 @@ def test_python_and_native_acceptance_agree(tmp_path):
         path.write_bytes(data)
         paths.append(str(path))
         try:
-            decode_clip(data)
+            clip = decode_clip(data)
         except ClipError:
-            expected.append(0)
+            expected.append((0, 0))
         else:
-            expected.append(1)
+            expected.append((1, hidden_refusals(clip)))
     result = subprocess.run([str(target)], input="\n".join(paths) + "\n", cwd=tmp_path,
         capture_output=True, text=True, timeout=30, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
     assert hashes == {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}, \
         "codec or native playback source changed during the witness"
-    actual = [int(value) for value in result.stdout.splitlines()]
-    receipt = {"cases": len(expected), "accepted": sum(expected), "native": actual,
+    actual = [tuple(int(value) for value in line.split()) for line in result.stdout.splitlines()]
+    receipt = {"cases": len(expected), "accepted": sum(accepted for accepted, _ in expected), "native": actual,
                "python": expected, "source_sha256": hashes,
                "executable_sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
     (tmp_path / "codec-parity.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
-    assert set(expected) == {0, 1}
-    assert expected[-5:] == actual[-5:] == [1, 0, 0, 0, 0], "a saved GCLIP4 clip plays; broken ones do not"
+    assert {accepted for accepted, _ in expected} == {0, 1}
+    assert [accepted for accepted, _ in expected[-5:]] == [1, 0, 0, 0, 0], "a saved GCLIP4 plays; broken ones do not"
+    runs = len(refusal_runs())
+    assert [hidden for _, hidden in expected[-5 - runs:-5]] == [0, 0, 3, 0, 3, 1, 1, 0, 1, 1, 1, 1, 0, 0], \
+        "a short refused run between poses in one scene is held; anything else blinks"
     assert actual == expected, [(index, want, got) for index, (want, got)
                                 in enumerate(zip(expected, actual, strict=False)) if want != got]

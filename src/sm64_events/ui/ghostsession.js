@@ -370,7 +370,7 @@ function pbItem(pb, checked, field, hues) {
 /** Frames where Mario's position was not recorded: the ghost blinks there.
  * Only Mario reads positions, so only that view says so. */
 function gapReason(run, field) {
-  const gaps = field === "native" ? run.pose_gaps || 0 : 0;
+  const gaps = field === "native" ? run.blinks || 0 : 0;
   return gaps ? `blinks on ${gaps} frame${gaps === 1 ? "" : "s"} with no recorded position` : null;
 }
 
