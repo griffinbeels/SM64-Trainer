@@ -401,7 +401,10 @@ star grab or star generation change ends every ghost. Overlap fade compares
 live Mario with each ghost separately
 ([ghost_proximity.h](../plugin/gfxwrap/ghost_proximity.h)): touching bodies
 fade the ghost smoothly down to the shared floor, 15% of its opacity
-(`GHOST_FLOOR` in ghost_occlusion.h), never to nothing. On a pole, a ledge or
+(`GHOST_FLOOR` in ghost_occlusion.h), never to nothing. Playback hands the
+factor to the shaders with the player-first region rather than folding it into
+the pose's opacity, so the two fades share that one floor (see the
+player-first section). On a pole, a ledge or
 Blast Away the Wall's plank both Marios snap to one point, 1 to 4 units
 apart; before the floor the ghost vanished for the whole hold (his report,
 2026-09-23). The [proximity witness](../tests/test_ghost_proximity_native.py)
@@ -819,14 +822,20 @@ it red (2026-09-23).
 
 A ghost never blocks live Mario or the camera. [ghost_occlusion.h](../plugin/gfxwrap/ghost_occlusion.h)
 owns the rule and every tuning constant; the body, shadow and particle shaders
-share its GLSL, so a shadow, a bubble or a dust puff fades exactly like its body. Per fragment, on top of the
-user's opacity and the overlap fade:
+share its GLSL, so a shadow, a bubble or a dust puff fades exactly like its body. Per fragment,
+on top of the user's opacity, a fragment keeps
+`near x max(0.15, overlap x block)`: `overlap` is the overlap fade, `block` the
+in-front term below and `near` the camera term. ONE floor for both: applied
+one after the other, each with its own 15% floor, a ghost holding a pole with
+Mario (overlapping him, and in front of him from the camera) fell to about 5%
+and still read as vanished (second review, 2026-09-23). Only the camera term
+and the star-dance fade in the opacity may take a ghost below the floor.
 
 - **In front of live Mario, over him.** Playback projects his body box (feet at
   his position, 100 wide and 160 tall per unit gfx scale) with the ghosts' own
   live view-projection: a screen ellipse plus his body centre's clip w. A ghost
-  fragment keeps `1 - 0.85 x cover x front` of its opacity, so over his core
-  it keeps the same 15% floor as the overlap fade. `cover` is 1 inside
+  fragment's `block` is `1 - 0.85 x cover x front`, so over his core it is
+  the same 15% floor as the overlap fade. `cover` is 1 inside
   the ellipse inscribed in his box and falls smoothly to 0 at 1.6 times that.
   `front` rises from 0 at his centre's depth to 1 at 60 units nearer the
   camera. Behind him, or away from him on screen, a ghost is byte-exact.
@@ -852,7 +861,10 @@ is smooth, pixels outside 1.6x and a ghost behind Mario are byte-exact, and
 the camera term hides a ghost at 100 units, halves it at 300 and is exact at
 450. The shadow fades over Mario like its body, the renderer's y flip mirrors
 the ghost and its region together, and the clean game image and both depths
-stay exact. The [particle witness](../tests/test_ghost_particles.py) draws a
+stay exact. A ghost overlapping Mario at the floor and in front of him keeps
+exactly 15% on every pixel, over his core too; the overlap fade alone at half
+applies to the whole ghost; and the camera term still hides an overlapping
+ghost at 100 units and halves the floor at 300. The [particle witness](../tests/test_ghost_particles.py) draws a
 particle over Mario's region the same way: every pixel follows the rule (52
 fully faded, 124 faded in all), behind him it is byte-exact, at the camera it
 is hidden or halved, and the flip mirrors it with its region. The [playback witness](../tests/test_ghost_playback.py)
