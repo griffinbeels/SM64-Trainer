@@ -146,7 +146,7 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
     output = staging / "objects"
     output.mkdir(exist_ok=True)
     sources = [source / name for name in (*SOURCE_FILES, *AUDIO_FILES)]
-    sources += [MODEL / name for name in ("model.c", "assets.c", "memory.c", "audio.c")]
+    sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c")]
     flags = ["/nologo", "/O2", "/W3", "/TC", "/std:c17", "/MT", "/Gy", "/Gw",
              "/D_CRT_SECURE_NO_WARNINGS", "/DSM64_LIB_STATIC", "/DGBI_FLOATS", "/DVERSION_US", "/DNO_SEGMENTED_MEMORY"]
     if testing:

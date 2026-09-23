@@ -64,6 +64,8 @@ static int textures(struct sg_model *model, const uint8_t *rom)
             dest[3] = (color & 1u) ? 255 : 0;
         }
     }
+    /* Same segment: Mario's particle models. Unsupported lists leave none. */
+    sg_particles_load(&model->particles, decoded, size);
     free(decoded);
     return SG_OK;
 bad:
