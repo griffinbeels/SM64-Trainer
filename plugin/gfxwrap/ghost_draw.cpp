@@ -25,7 +25,7 @@ uint32_t width = 0, height = 0, prepared_width = 0, prepared_height = 0;
 uint32_t configuration = 0, clean_fbo = 0, clean_texture = 0;
 uint64_t model_id = 0, occurrence = 0;
 gp_draw_token draw_token{};
-bool provisional = false, hud = false, ready = false;
+bool provisional = false, hud = false, ready = false, layer = false;
 using GetUniform = void (APIENTRY *)(GLuint, GLint, GLint*);
 GetUniform get_uniform = nullptr;
 
@@ -99,6 +99,7 @@ void context_lost() {
 }
 void begin(uint32_t rom, uint32_t config_id) {
     cancel();
+    ghost_compositor::clear_layer(compositor);
     ghost_playback::safe_boundary(rom, config_id);
     configuration = config_id;
     if (!ghost_presentation::clean_consumer()) return;
@@ -175,6 +176,28 @@ void finish(const ghost::WorldPass *world) {
     ready = ghost_compositor::finalize(compositor, occurrence) == ghost_compositor::Result::ok;
     if (!ready) cancel();
 }
+bool begin_layer(uint32_t pass, uint32_t framebuffer) {
+    if (layer || !compositor || !model_id || pass > 1 || !ghost_presentation::clean_consumer()
+            || width != prepared_width || height != prepared_height) return false;
+    ghost_compositor::Target target{};
+    target.generation = owner.context_generation; target.framebuffer = framebuffer;
+    target.width = width; target.height = height; target.samples = 1;
+    target.unsupported = config.video.multisampling > 0;
+    target.depth = ghost_compositor::Depth::ordinary;
+    if (!replay_gl::BeginCapture()) return false;
+    layer = ghost_compositor::begin_layer(compositor, target, ghost_compositor::LayerPass(pass))
+        == ghost_compositor::Result::ok;
+    // A surface whose color entered the layer without its depth would tint
+    // nothing behind it consistently: drop the layer for this list instead.
+    if (!layer && (!replay_gl::EndCapture() || pass == 1)) ghost_compositor::break_layer(compositor);
+    return layer;
+}
+void end_layer() {
+    if (!layer) return;
+    ghost_compositor::end_layer(compositor); layer = false;
+    if (!replay_gl::EndCapture()) ghost_compositor::break_layer(compositor);
+}
+void break_layer() { ghost_compositor::break_layer(compositor); }
 bool begin_hud() {
     if (!provisional || hud) return false;
     auto *buffer = ghost_link::raster_buffer();

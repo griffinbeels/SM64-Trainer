@@ -10,5 +10,8 @@ void finish(const ghost::WorldPass*);
 void cancel();
 bool begin_hud();
 void end_hud();
+bool begin_layer(uint32_t pass, uint32_t framebuffer);
+void end_layer();
+void break_layer();
 void context_lost();
 }

@@ -161,7 +161,8 @@ struct Pipeline {
         world.context_generation=1;world.target={scene.color,scene.depth,W,H,1,0,{0,0,int32_t(W),int32_t(H)},{.5f,.5f},{1,1}};
         projection(world.projection);background(false);glFinish();
     }
-    ~Pipeline(){present::destroy(presentation);gc::destroy(compositor);ghost_playback::retire_on_context_loss();ghost_stream::rom(false);}
+    ~Pipeline(){if(water_program){g.DeleteProgram(water_program);g.DeleteVertexArrays(1,&water_vao);}
+        present::destroy(presentation);gc::destroy(compositor);ghost_playback::retire_on_context_loss();ghost_stream::rom(false);}
     void background(bool wall){
         ordinary_state(g,scene);std::vector<uint8_t> color(W*H*4);std::vector<float> z(W*H,1.f);
         for(unsigned y=0;y<H;++y)for(unsigned x=0;x<W;++x){const auto i=y*W+x;
@@ -172,6 +173,45 @@ struct Pipeline {
         g.BindTexture(GL_TEXTURE_2D,scene.depth);g.TexImage2D(GL_TEXTURE_2D,0,cgl::DEPTH_COMPONENT24,W,H,0,GL_DEPTH_COMPONENT,GL_FLOAT,z.data());
         clean=pixels(g,scene.fbo,W,H);clean_depth=depth(g,scene);
         display_clean.resize(clean.size());
+        for(unsigned y=0;y<H;++y)std::memcpy(&display_clean[y*W*4],&clean[(H-1-y)*W*4],W*4);
+    }
+    // A translucent water plane across the view at Mario's waist (view-space
+    // y=-20 under the same projection), drawn the way the pinned renderer
+    // draws the game's water (premultiplied, ONE/ONE_MINUS_SRC_ALPHA, depth
+    // tested, never written) and mirrored into the ghost's layer as the
+    // renderer seam does. Off restores the plain terrain and drops the layer.
+    uint32_t water_program=0,water_vao=0;
+    static constexpr float water_rgb[3]={40.f/255,110.f/255,200.f/255},water_alpha=.6f;
+    void water(bool on){
+        if(!on){gc::clear_layer(compositor);background(false);return;}
+        if(!water_program){
+            const char* vs="#version 430 core\nuniform mat4 projection;"
+                "const vec2 p[6]=vec2[6](vec2(-4000,-100),vec2(4000,-100),vec2(-4000,-6000),vec2(-4000,-6000),vec2(4000,-100),vec2(4000,-6000));"
+                "void main(){vec2 q=p[gl_VertexID];gl_Position=projection*vec4(q.x,-20.0,q.y,1.0);gl_Position.y=-gl_Position.y;}";
+            const char* fs="#version 430 core\nuniform vec3 shade;uniform float alpha;layout(location=0) out vec4 c;"
+                "void main(){c=vec4(shade*alpha,alpha);}";
+            auto vsh=g.CreateShader(cgl::VERTEX_SHADER),fsh=g.CreateShader(cgl::FRAGMENT_SHADER);
+            g.ShaderSource(vsh,1,&vs,nullptr);g.ShaderSource(fsh,1,&fs,nullptr);g.CompileShader(vsh);g.CompileShader(fsh);
+            water_program=g.CreateProgram();g.AttachShader(water_program,vsh);g.AttachShader(water_program,fsh);g.LinkProgram(water_program);
+            g.DeleteShader(vsh);g.DeleteShader(fsh);int32_t linked=0;g.GetProgramiv(water_program,cgl::LINK_STATUS,&linked);
+            require(linked!=0,"water program");g.GenVertexArrays(1,&water_vao);
+        }
+        background(false);gc::clear_layer(compositor);
+        auto destination=target(scene,gc::Depth::ordinary);
+        const auto draw=[&]{
+            g.UseProgram(water_program);g.BindVertexArray(water_vao);
+            g.UniformMatrix4fv(g.GetUniformLocation(water_program,"projection"),1,0,world.projection);
+            g.Uniform3fv(g.GetUniformLocation(water_program,"shade"),1,water_rgb);
+            g.Uniform1f(g.GetUniformLocation(water_program,"alpha"),water_alpha);g.DrawArrays(cgl::TRIANGLES,0,6);
+        };
+        ordinary_state(g,scene);g.Enable(cgl::DEPTH_TEST);g.DepthFunc(cgl::LESS);g.DepthMask(0);
+        g.Enablei(cgl::BLEND,0);g.BlendFuncSeparatei(0,cgl::ONE,cgl::ONE_MINUS_SRC_ALPHA,cgl::ONE,cgl::ONE_MINUS_SRC_ALPHA);
+        draw();
+        for(uint32_t pass=0;pass<2;++pass){
+            require(gc::begin_layer(compositor,destination,gc::LayerPass(pass))==gc::Result::ok,"water mirrored into the layer");
+            draw();gc::end_layer(compositor);}
+        g.Disablei(cgl::BLEND,0);g.DepthMask(1);g.Disable(cgl::DEPTH_TEST);g.UseProgram(0);g.BindVertexArray(0);
+        clean=pixels(g,scene.fbo,W,H);clean_depth=depth(g,scene);
         for(unsigned y=0;y<H;++y)std::memcpy(&display_clean[y*W*4],&clean[(H-1-y)*W*4],W*4);
     }
     std::vector<uint8_t> body_coverage,shadow_coverage;
@@ -329,6 +369,25 @@ int main(int argc,char** argv){
             else if(std::memcmp(&wall[i],&opaque[i],3))++occlusion_errors;}
         require(would_occlude>100 && occlusion_errors==0,"independent foreground depth occludes only covered Mario");
         pipeline->background(false);});
+    // Submerged: the water plane at Mario's waist, camera above it. Behind it
+    // the ghost takes the water's own blend; above it the ghost is unchanged;
+    // outside the ghost the frame is exactly the game's water frame.
+    unsigned water_tinted=0,water_dry=0,water_outside=0,water_blend_errors=0;
+    renderer.run([&]{pipeline->water(true);pipeline->frame(false,true);const auto water_baseline=pipeline->last_visible;
+        ppm(out/"water-baseline.ppm",water_baseline);
+        pipeline->frame(true,true);const auto submerged=pipeline->last_visible;ppm(out/"water-opacity100.ppm",submerged);
+        gc::break_layer(pipeline->compositor);pipeline->frame(true,true);const auto unlayered=pipeline->last_visible;
+        ppm(out/"water-unlayered.ppm",unlayered);
+        for(size_t i=0;i<W*H;++i){const auto* now=&submerged[4*i];const auto* dry=&unlayered[4*i];
+            if(!pipeline->body_coverage[i]){water_outside+=std::memcmp(now,&water_baseline[4*i],3)!=0;continue;}
+            if(!std::memcmp(now,dry,3)){++water_dry;continue;}
+            ++water_tinted;
+            for(unsigned c=0;c<3;++c)
+                if(std::abs(float(now[c])-(Pipeline::water_rgb[c]*255*Pipeline::water_alpha+dry[c]*(1-Pipeline::water_alpha)))>2.5f)
+                    ++water_blend_errors;}
+        require(water_tinted>300 && water_dry>300 && water_outside==0 && water_blend_errors==0,
+            "ghost below the water plane takes the water's blend, above it is unchanged");
+        pipeline->water(false);});
     // Timing and the full set draw every ghost with its shadow.
     request.shadow_enabled=1;++request.revision;require(api->configure(&request)==GP_OK,"shadows for timing");
     renderer.run([&]{
@@ -367,6 +426,8 @@ int main(int argc,char** argv){
         "\"darkening_errors\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"would_occlude\":%u}",
         shadow_pixels,shadow_outside,shadow_switch_errors,shadow_darkening_errors,shadow_alpha_errors,
         shadow_occlusion_errors,shadow_would_occlude);
+    std::printf(",\"water\":{\"tinted\":%u,\"dry\":%u,\"outside_pixels_changed\":%u,\"blend_errors\":%u}",
+        water_tinted,water_dry,water_outside,water_blend_errors);
     std::printf(",\"multi\":{\"ghosts\":%u,\"visible\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,",
         unsigned(GP_GHOSTS),multi_visible,multi_vertices,multi_silhouette,multi_outside);
     statistics("pipeline_gpu_completed",multi_times);std::printf(",");statistics("blocking_swap",multi_swap_times);

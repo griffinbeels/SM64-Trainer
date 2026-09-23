@@ -96,6 +96,7 @@ bool load(ghost_compositor::Dispatch& out) {
     d.StencilOpSeparate=reinterpret_cast<decltype(d.StencilOpSeparate)>(extension("glStencilOpSeparate"));
     d.StencilMaskSeparate=reinterpret_cast<decltype(d.StencilMaskSeparate)>(extension("glStencilMaskSeparate"));
     d.ClearBufferfi=reinterpret_cast<decltype(d.ClearBufferfi)>(extension("glClearBufferfi"));
+    d.ClearBufferfv=reinterpret_cast<decltype(d.ClearBufferfv)>(extension("glClearBufferfv"));
     d.DrawArrays=reinterpret_cast<decltype(d.DrawArrays)>(::glDrawArrays);
     d.MemoryBarrier=reinterpret_cast<decltype(d.MemoryBarrier)>(g_glMemoryBarrier);
 #define GD_REQUIRE(result,name,args) if(!d.name)return false;
