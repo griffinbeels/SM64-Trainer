@@ -83,7 +83,8 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
         *compiler.LIBS], tmp_path)
     layout = tmp_path / "layout.bin"
     layout.write_bytes(layout_module().GhostLayout.from_layout(US).to_bytes())
-    result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path)], cwd=tmp_path,
+    saved = ROOT / "tests/fixtures/attempt_2549_whomps-fortress_shoot-into-the-wild-blue_0m10s66.ghost"
+    result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path), str(saved)], cwd=tmp_path,
         capture_output=True, text=True, timeout=60, check=False, **quiet_spawn_kwargs())
     (tmp_path / "pipeline-output.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
     retain_artifacts([tmp_path / "pipeline-output.txt"])
@@ -109,6 +110,9 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
     assert report["capture_version"] == 6 and report["clip_version"] == 5 and report["playback_version"] == 7
     assert_scene_effects(report)  # the timing below runs with the player-first fade on
+    # His saved ghosts from before particles (GCLIP4) still play natively.
+    assert report["saved_gclip4"] == {"records": 320, "visible": 1, "pixels": report["saved_gclip4"]["pixels"]}
+    assert report["saved_gclip4"]["pixels"] > 300
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
