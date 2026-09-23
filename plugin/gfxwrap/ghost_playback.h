@@ -159,6 +159,10 @@ namespace ghost { struct WorldPass; }
 namespace ghost_compositor { struct Pose; }
 namespace ghost_playback {
 const gp_api *api();
+/* Refused rows of a valid clip that playback hides rather than bridging:
+ * where the ghost blinks. UINT32_MAX for a clip prepare_clip refuses. Any
+ * thread; reads only its arguments. ghost/clip.py blink_frames states it too. */
+uint32_t hidden_refusals(const gclip_header &, const gclip_frame *);
 /* Actual serialized renderer thread, between completed uses of borrowed pose
  * arrays. Claims preloaded state or retires old ownership without allocation,
  * destruction or waiting. Zero identity revokes this ROM session. */

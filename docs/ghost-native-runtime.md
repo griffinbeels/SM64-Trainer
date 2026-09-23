@@ -257,13 +257,23 @@ causes, each fixed at its source:
   `set_mario_animation`'s startFrame-1 (-1) with a stale timer. A hidden pose
   no longer checks animation fields; playback draws nothing for it without
   evaluating the model ([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp)).
-- **Short gaps, bridged in playback**: 40 single frames of long-jump land
-  during the BitS-stairs BLJ (status 4). The frame after each is a fresh land
-  animation at frame 0, so the renderer did not process Mario on the refused
-  frame. A new recording's reason will say whether he was inactive (now a hidden
-  pose) or in another area index (`area`). Whatever the cause, playback now
-  holds the previous pose over any run of at most `GP_BRIDGE_FRAMES` (2)
-  refused records. The run must have a recorded pose on both sides, in the same
+- **A jump that lands in the frame it starts** (`animation_range`, status 4,
+  closed 2026-09-23): every BLJ press on the endless stairs (castle area 2,
+  `ACT_LONG_JUMP_LAND`; 20 in his 24"20 BitS Entry PB) and every jump off a
+  slide slope in the pyramid (`ACT_JUMP_LAND` between butt slides; 8 in his
+  21"00 pyramid PB). `set_mario_action_airborne` writes animID -1 for
+  `ACT_JUMP`, `ACT_LONG_JUMP`, `ACT_BACKFLIP` and `ACT_STEEP_JUMP` so the
+  jump's animation restarts. `common_air_action_step` sets no animation on a
+  landing step, so a jump that lands at once leaves -1 while the renderer
+  still draws `curAnim`, Mario's DMA buffer, at an advanced frame. The next
+  frame's `set_mario_animation` sees -1 and restarts the land animation at
+  frame 0: that restart was the evidence. Capture now names the loaded
+  animation from `gMarioState->animList` (`currentAddr` matched against the
+  DMA table, only when `bufTarget` is `curAnim` and one entry matches).
+  Earlier clips keep the refused rows; each is a single frame that playback
+  bridges, so the ghost never blinked there.
+- **Short gaps, bridged in playback**: playback holds the previous pose over
+  any run of at most `GP_BRIDGE_FRAMES` (2) refused records. The run must have a recorded pose on both sides, in the same
   level and area, with no missing occurrence
   ([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `bridged`). A
   67 ms hold is below what reads as a pause; a blink is not. Longer runs, scene
@@ -1071,8 +1081,10 @@ alone never reports that the ghost reached the game window.
 
 **Every frame must carry Mario's position.** A committed clip counts refused
 and never-captured frames (`clip.py::pose_gaps`); a nonzero count is logged when
-the clip is saved and shown on that ghost's picker row, because the ghost blinks
-there. `tools/ghost_extraction_audit.py` audits every committed clip and the live
+the clip is saved. The picker row names only the frames where the ghost really
+blinks (`clip.py::blink_frames`): a refused run playback bridges is not one.
+`hidden_refusals` states the bridge rule in Python and natively, compared by
+`tests/test_ghost_clip_native.py`. `tools/ghost_extraction_audit.py` audits every committed clip and the live
 pose archives (exit 1 on any hole), naming each hole's pose refusal and
 counting frames whose Mario was culled but posed. 2026-09-22: every post-fix
 clip was complete; the only pose-less archive records were a star-exit level

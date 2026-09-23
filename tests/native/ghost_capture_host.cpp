@@ -217,6 +217,33 @@ int main(int argc, char **argv) {
               && f.sample.pose.root_kind == GC_ROOT_TRS && !f.sample.pose.refusal, "disappeared Mario refused");
         f.put16(f.config.object_pool+2, 0x21); f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
         f.put16(f.config.object_pool+0x40, 7); f.put16(f.config.object_pool+0x42, 0x8123);
+        {
+            // A BLJ press: ACT_LONG_JUMP wrote animID -1 and the air step
+            // landed that frame, so curAnim (Mario's DMA buffer) still holds
+            // the land animation it last loaded. The DMA list names it.
+            const uint32_t list = Fixture::base + 0x15000, table = Fixture::base + 0x15100, source = 0x004ec000;
+            const auto state = f.config.mario_state;
+            f.put16(f.config.object_pool+0x38, 0xffff);
+            f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);  // no list: unprovable
+            f.put32(table, 209); f.put32(table+4, source);
+            for (uint32_t i = 0; i < 209; ++i) {f.put32(table+8+8*i, 0x100*i); f.put32(table+12+8*i, 0x100);}
+            f.put32(list, table); f.put32(list+4, source + 0x100*18); f.put32(list+8, Fixture::animation);
+            f.put32(state+0xa0, list);
+            check(f.run() == GC_OK && f.sample.pose.animation_id == 18 && f.sample.pose.animation_frame == 7
+                  && !f.sample.pose.refusal, "landed jump's loaded animation not recovered");
+            f.put32(list+8, Fixture::animation + 0x100);  // curAnim is not Mario's buffer
+            f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
+            f.put32(list+8, Fixture::animation); f.put32(table+8+8*19, 0x100*18);  // two entries match
+            f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
+            f.put32(table+8+8*19, 0x100*19); f.put32(table, 210);  // more than Mario's animations
+            f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
+            f.put32(table, 209); f.put32(list, Fixture::base + f.config.rdram_bytes - 4);  // table off RAM
+            f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
+            f.put32(list, table); f.put16(f.config.object_pool+0x38, 0xfffe);  // only -1 is recovered
+            f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
+            f.put16(f.config.object_pool+0x38, 197);
+            check(f.run() == GC_OK && f.sample.pose.animation_id == 197, "a set animation id was replaced");
+        }
         f.put32(f.config.object_pool+0x3c, 0); f.pose_refusal(GC_BAD_POINTER, GC_REFUSED_ANIMATION);
     } else if (mode == "unsupported") {
         f.put32(f.config.mario_state+0x0c, 0x04008448); f.pose_refusal(GC_UNSUPPORTED_ROOT, GC_REFUSED_FLOOR);

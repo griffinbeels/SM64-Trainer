@@ -56,3 +56,4 @@ V4_MAGIC, V4_VERSION, V4_SAMPLE_VERSION, V4_RECORD_BYTES, V4_SAMPLE_BYTES = b"SM
 IPC_SLOTS, IPC_RING_AT, IPC_PATH_CHARS = 512, 20480, 520
 GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sources, request slots
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
+BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over

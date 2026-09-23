@@ -274,10 +274,12 @@ def test_the_saved_ghost_doors(tmp_path):
         archive.close()
 
 
-def test_a_recording_with_missing_positions_is_counted_and_said_out_loud(tmp_path, caplog):
+def test_a_missing_position_is_logged_but_a_held_one_is_not_called_a_blink(tmp_path, caplog):
     from ghost_native_fixture import frame
     from test_ghost_recording import native_service
 
+    # Playback holds the pose before a lone refused frame, so the picker
+    # does not promise a blink; extraction still counts and logs it.
     replay, row, archive = native_service(tmp_path, rows=(frame(1), frame(2, valid=29), frame(3)))
     try:
         with caplog.at_level("WARNING", logger="sm64.replay"):
@@ -287,6 +289,6 @@ def test_a_recording_with_missing_positions_is_counted_and_said_out_loud(tmp_pat
         target = {"kind": "star", "entity_key": f"{row.course_id}-{row.star_id}", "strat": row.strat_tag}
         from sm64_events.ghost.pb import AttemptGhost
         answer = NativeGhost(replay).probe(target, AttemptGhost(row.id, "star", target["entity_key"], None))
-        assert answer["available"] and answer["pose_gaps"] == 1
+        assert answer["available"] and answer["blinks"] == 0
     finally:
         archive.close()

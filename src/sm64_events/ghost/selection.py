@@ -209,7 +209,7 @@ class GhostSelection:
                                "native_available": bool(pose["available"]),
                                "native_reason": pose.get("reason"),
                                "native_reason_text": pose["reason_text"],
-                               "pose_gaps": pose.get("pose_gaps", 0),
+                               "blinks": pose.get("blinks", 0),
                                "whole_available": (None if video["available"] is None
                                                    else bool(video["available"])),
                                "whole_reason_text": video["reason_text"]})

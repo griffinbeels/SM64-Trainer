@@ -28,7 +28,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from sm64_events.ghost.native_layout import (  # every size and offset: native_layout.py
-    CAMERA_AT, CAMERA_FOV_AT, CLIP_MAGIC as MAGIC, CLIP_VERSION as VERSION, CLOCK_AT, DANCE_TAIL,
+    BRIDGE_FRAMES, CAMERA_AT, CAMERA_FOV_AT, CLIP_MAGIC as MAGIC, CLIP_VERSION as VERSION, CLOCK_AT, DANCE_TAIL,
     HEADER_BYTES, HELD_AT, HELD_BYTES, HELD_HOLP_AT, MAX_RECORDS, PARTICLE_BYTES as PARTICLE_ENTRY_BYTES,
     PARTICLE_EVENTS, PARTICLE_OPACITY, PARTICLE_OPACITY_AT, PARTICLE_OVERFLOW, PARTICLE_TRANSLATION_AT,
     PARTICLES_AT, PARTICLES_BYTES as PARTICLE_BYTES, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES,
@@ -554,6 +554,47 @@ def pose_gaps(manifest) -> int:
     return int(manifest.get("invalid_records") or 0) + int(manifest.get("missing_occurrences") or 0)
 
 
+def blink_frames(clip: Clip) -> int:
+    """Frames where playback draws no ghost, which the picker says out loud:
+    refused rows it does not bridge, and occurrences that never arrived."""
+    frames = clip.frames
+    return hidden_refusals(clip) + frames[-1].sequence - frames[0].sequence + 1 - len(frames)
+
+
+def hidden_refusals(clip: Clip) -> int:
+    """Refused rows playback hides. It bridges (`bridged` in
+    ghost_playback.cpp) a run of at most BRIDGE_FRAMES refused rows with a
+    recorded pose on each side, in one level and area, whose occurrences and
+    clock both advance one frame per row. The native `hidden_refusals` is
+    the same rule; tests/test_ghost_clip_native.py compares the two."""
+    frames = clip.frames
+    indexed = len(frames)
+    if clip.clock_kind == STAR_CLOCK:
+        origin = frames[0].clock.origin_id
+        indexed = next((i for i, frame in enumerate(frames) if frame.clock.origin_id != origin), indexed)
+
+    def posed(i):
+        return bool(frames[i].valid_fields & POSE)
+
+    hidden, i = 0, 0
+    while i < indexed:
+        if posed(i):
+            i += 1
+            continue
+        end = i
+        while end < indexed and not posed(end):
+            end += 1
+        before, after = i - 1, end
+        bridged = (end - i <= BRIDGE_FRAMES and before >= 0 and after < indexed
+                   and frames[after].sequence - frames[before].sequence == after - before
+                   and frames[after].clock.elapsed_frames - frames[before].clock.elapsed_frames == after - before
+                   and all((frame.level, frame.area) == (frames[before].level, frames[before].area)
+                           for frame in frames[before:after + 1]))
+        hidden += 0 if bridged else end - i
+        i = end
+    return hidden
+
+
 def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | None = None,
                tail_records: int = 0) -> dict:
     """Atomically write one clip; the replay publisher owns its durable commit.
@@ -583,6 +624,7 @@ def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | 
             "first_global_timer": first.global_timer, "last_global_timer": last.global_timer,
             "first_igt": first.igt, "last_igt": last.igt, "level": clip.level, "area": clip.area,
             "invalid_records": sum(not frame.playable for frame in clip.frames),
+            "blink_frames": blink_frames(clip),
             "missing_occurrences": last.sequence - first.sequence + 1 - len(clip.frames),
             "tail_records": tail_records,
             **_origin_metadata(clip),

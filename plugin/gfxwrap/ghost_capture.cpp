@@ -14,7 +14,8 @@ constexpr uint16_t object_type = 0x18, object_parent_type = 0x29, held_type = 0x
 // Original N64 types.h / graph_node.h offsets, NOT host libsm64 offsetof.
 constexpr uint32_t graph_next = 8, graph_parent = 12, graph_children = 16;
 constexpr uint32_t area_root = 4, area_camera = 0x24;
-constexpr uint32_t mario_body = 0x98, mario_area = 0x90, mario_object = 0x88;
+constexpr uint32_t mario_body = 0x98, mario_area = 0x90, mario_object = 0x88, mario_animations = 0xa0;
+constexpr uint32_t mario_animation_count = 209;
 
 bool span(uint32_t address, uint32_t count, uint32_t size, uint32_t alignment = 4) {
     return ghost::ram_span(address, count, size, alignment);
@@ -147,13 +148,34 @@ void capture_sound(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_samp
 
 
 // Each refusal names its one check in gc_pose.refusal (reason).
+// The animation Mario's DMA buffer holds: gMarioState->animList
+// {dmaTable, currentAddr, bufTarget} names the loaded entry by its source
+// address, dmaTable {count, srcAddr, {offset, size}[count]} names each entry.
+// -1 unless `drawn` is that buffer and exactly one entry matches. Asks with
+// fits(), so a bad list leaves the pose's own refusal (animation_range).
+int16_t loaded_animation(Ram &ram, uint32_t state, uint32_t drawn) {
+    const uint32_t list = ram.u32(state + mario_animations);
+    if (!ram.fits(list, 12)) return -1;
+    const uint32_t table = ram.u32(list), loaded = ram.u32(list + 4);
+    if (ram.u32(list + 8) != drawn || !ram.fits(table, 8)) return -1;
+    const uint32_t count = ram.u32(table), source = ram.u32(table + 4);
+    if (!count || count > mario_animation_count || !ram.fits(table + 8, count * 8)) return -1;
+    int16_t found = -1;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (source + ram.u32(table + 8 + 8*i) != loaded) continue;
+        if (found >= 0) return -1;
+        found = int16_t(i);
+    }
+    return found;
+}
+
 uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
                       int16_t area_index, uint16_t visual_frame, gc_pose &out, bool deferred,
                       uint8_t &reason) {
     const uint32_t state = layout.mario_state;
     const uint32_t object = ram.u32(layout.mario_object);
     reason = GC_REFUSED_OBJECT;
-    if (!ram.has(state, 0xa0) || !ram.has(object, object_size)
+    if (!ram.has(state, mario_animations + 4) || !ram.has(object, object_size)
             || object < layout.object_pool || (object - layout.object_pool) % object_size
             || (object - layout.object_pool) / object_size >= object_count) return GC_BAD_POINTER;
     const uint32_t body = ram.u32(state + mario_body);
@@ -197,6 +219,11 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
     reason = GC_REFUSED_ANIMATION;
     if (!ram.has(animation, 0x18)) return GC_BAD_POINTER;
     const int16_t end = ram.s16(animation + 8);
+    // A jump, long jump, backflip or steep jump writes animID -1 so its own
+    // animation restarts. When the air step lands that same frame (every BLJ
+    // press, a jump off a slide slope) nothing sets it again, and the renderer
+    // draws curAnim, Mario's DMA buffer, still holding what it last loaded.
+    if (out.animation_id == -1) out.animation_id = loaded_animation(ram, state, animation);
     out.model_state = ram.u16(body + 8);
     out.cap_state = ram.u8(body + 4); out.eye_state = ram.u8(body + 5);
     out.hand_state = ram.u8(body + 6); out.wing_flutter = ram.u8(body + 7);
@@ -285,7 +312,7 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     const uint32_t halves[] = {layout->area_update_counter, layout->current_level,
                               layout->current_area, layout->igt_overall};
     for (auto address : halves) if (!span(address, 2, layout->rdram_bytes, 2)) return GC_BAD_CONFIG;
-    if (!span(layout->mario_state, 0xa0, layout->rdram_bytes)
+    if (!span(layout->mario_state, mario_animations + 4, layout->rdram_bytes)
             || !span(layout->object_pool, object_count*object_size, layout->rdram_bytes)) return GC_BAD_CONFIG;
     const uint32_t warps[] = {layout->pending_warp_op, layout->delayed_warp_timer};
     for (auto address : warps)

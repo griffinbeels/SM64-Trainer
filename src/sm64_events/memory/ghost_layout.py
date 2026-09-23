@@ -67,7 +67,7 @@ class GhostLayout:
         if self.rdram_bytes not in (4 << 20, 8 << 20):
             raise ValueError("Ghost capture requires 4 or 8 MiB of RDRAM")
         for name, size, alignment in (
-            ("global_timer", 4, 4), ("mario_state", 0xA0, 4),
+            ("global_timer", 4, 4), ("mario_state", 0xA4, 4),
             ("mario_object", 4, 4), ("current_area_pointer", 4, 4),
             ("area_update_counter", 2, 2), ("current_level", 2, 2),
             ("current_area", 2, 2), ("igt_overall", 2, 2),

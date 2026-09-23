@@ -65,7 +65,7 @@ int main() {
 
     number("IPC_SLOTS", GIPC_SLOTS); number("IPC_RING_AT", offsetof(gipc_page, records));
     number("IPC_PATH_CHARS", GIPC_PATH_CHARS);
-    number("GHOSTS", GP_GHOSTS); number("PROXIMITY_MAX", GP_PROXIMITY_MAX);
+    number("GHOSTS", GP_GHOSTS); number("PROXIMITY_MAX", GP_PROXIMITY_MAX); number("BRIDGE_FRAMES", GP_BRIDGE_FRAMES);
     std::printf("}\n");
     return 0;
 }

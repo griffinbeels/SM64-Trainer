@@ -804,6 +804,15 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
 }
 
 namespace ghost_playback {
+uint32_t hidden_refusals(const gclip_header& header,const gclip_frame *frames) {
+    uint32_t indexed=0;
+    if(!valid_clip(header,frames,indexed))return UINT32_MAX;
+    Clip clip;clip.header=header;clip.frames=const_cast<gclip_frame*>(frames);clip.index_count=indexed;
+    uint32_t hidden=0;
+    for(uint32_t i=0;i<indexed;++i)
+        if(!(frames[i].sample.valid_fields&GC_VALID_POSE) && !bridged(clip,i))++hidden;
+    return hidden;
+}
 const gp_api *api() {return &api_v2;}
 void set_sound_sink(const SoundSink *sink) {sound_sink.store(sink,std::memory_order_release);}
 void safe_boundary(uint32_t rom,uint32_t configuration) {
