@@ -1,5 +1,5 @@
 # tests/test_anchors.py
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -13,11 +13,17 @@ ACT_WALKING = 0x04000440  # not in PASSIVE_ACTIONS -> counts as "acted"
 ACT_QUICKSAND_DEATH = 0x00021312  # in DEATH_ACTIONS -> involuntary
 
 
+BOOT = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
+
 def snap(timer: int, igt: int = 0, action: int = ACT_IDLE,
          level: int = 0, area: int = 0, warp_op: int = 0,
-         warp_timer: int = 0) -> GameSnapshot:
+         warp_timer: int = 0, wall: datetime | None = None) -> GameSnapshot:
+    # The wall clock runs with the game unless a test says otherwise: a frame
+    # counter that outruns it is a load (load_signature), so a fixed stamp
+    # would make every multi-frame step read as one.
     return GameSnapshot(
-        wall_time_utc=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        wall_time_utc=wall or BOOT + timedelta(seconds=timer / 30),
         global_timer=timer, mario_action=action, mario_action_timer=0,
         num_stars=5, last_completed_course=1, last_completed_star=3,
         igt_overall=igt, curr_level=level, curr_area=area,
@@ -1089,3 +1095,35 @@ def test_his_real_resets_stay_resets():
     practice_reset and none is a load."""
     events = _run_trace(_trace("resets_only"))
     assert events and {e.type for e in events} == {"practice_reset"}
+
+
+def test_a_state_from_an_earlier_boot_is_a_load_too():
+    """His 2026-06-11 BitDW practice (journal ids 17831-17834): the console
+    reset, the game booted to frame 96, and a Project64 state saved in an
+    earlier boot put the counter at 1763 eight seconds later -- FORWARD, so
+    neither the rewind nor the Usamune readings could see it."""
+    events = AnchorDetector().process(
+        snap(96, igt=0, wall=BOOT),
+        snap(1763, igt=1386, wall=BOOT + timedelta(seconds=7.77)))
+    assert [(e.type, e.payload["load_signature"]) for e in events] == [
+        ("state_loaded", "frame_counter_skipped_ahead")]
+
+
+def test_the_frame_counter_keeping_pace_with_the_wall_is_not_a_load():
+    """A poll gap: ten minutes pass and the game ran through them. And a game
+    at double speed for a second is still inside the allowance."""
+    assert AnchorDetector().process(
+        snap(1000, igt=500, wall=BOOT),
+        snap(19000, igt=18500, wall=BOOT + timedelta(minutes=10))) == []
+    assert AnchorDetector().process(
+        snap(1000, igt=500, wall=BOOT),
+        snap(1060, igt=560, wall=BOOT + timedelta(seconds=1))) == []
+
+
+def test_a_forward_load_to_a_fresh_state_is_not_read_as_a_reset():
+    """A state saved in the first second of a course restores a counter
+    inside the reset band; the jump itself is what says it was a load."""
+    events = AnchorDetector().process(
+        snap(96, igt=400, wall=BOOT),
+        snap(1763, igt=5, wall=BOOT + timedelta(seconds=7.77)))
+    assert [e.type for e in events] == ["state_loaded"]

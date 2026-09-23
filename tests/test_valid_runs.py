@@ -316,3 +316,37 @@ def test_a_load_the_matcher_runs_through_still_invalidates_the_segment():
     assert (run.anchor_type, run.state_loads, run.first_load_frame) == (
         "moment_reached", 1, 1500)
     assert (run.valid, run.invalid_reason) == (False, "save_state")
+
+
+def test_a_reset_after_a_load_keeps_an_attempt_he_played():
+    """Review 2026-09-23: reset, play, load, reset without moving. The reset
+    says "nothing since the last anchor" -- true of the stretch after the
+    load, not of the attempt -- and the no-op discard used to drop the whole
+    played attempt, replay and all."""
+    attempts = project([
+        session(1), *enter(2, 1000, WF),
+        jev(10, "mario_acted", 1100),
+        load(11, 1400, mario_acted=True),
+        reset(12, 1500, mario_acted=False)])
+    played, = [a for a in attempts if a.id == 4]
+    assert (played.outcome, played.state_loads, played.invalid_reason) == (
+        "reset", 1, "save_state")
+
+
+def test_a_run_nobody_played_is_still_discarded_through_a_load():
+    """The discard still does its job: reset, load, reset, never moving."""
+    attempts = project([
+        session(1), *enter(2, 1000, WF),
+        load(11, 1400, mario_acted=False),
+        reset(12, 1500, mario_acted=False)])
+    assert [a.id for a in attempts] == []
+
+
+def test_a_load_that_opens_an_attempt_does_not_lend_it_the_last_ones_play():
+    """Grab, load (the play before it belongs to the finished run), reset
+    without moving: nothing was played in the attempt the load opened."""
+    attempts = project([
+        session(1), *enter(2, 1000, WF), grab(10, 1300),
+        load(11, 1400, mario_acted=True),
+        reset(12, 1500, mario_acted=False)])
+    assert [a.id for a in attempts] == [4]

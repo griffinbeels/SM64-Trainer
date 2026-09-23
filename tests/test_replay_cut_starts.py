@@ -8,6 +8,10 @@ audio packet began between that picture and the requested start, the audio
 track had nothing covering the replay's first instant and the save failed.
 This sweeps every picture boundary and every point between them.
 """
+from fractions import Fraction
+
+import pytest
+
 from test_replay_fragment_archive import recording as recording  # noqa: F401 - fixture
 from test_replay_fragment_archive import units_of
 from test_replay_picture_identity import encoder as encoder  # noqa: F401 - fixture
@@ -75,3 +79,77 @@ def test_audio_starting_after_the_held_picture_takes_the_previous_fragment():
             firsts.setdefault(sample.track_id, sample.dts)
     for identity, dts in firsts.items():
         assert dts * 90000 <= held * tracks[identity].timescale, (identity, dts)
+
+
+def _encoded_pictures(count=90, gop=15):
+    """Real H.264 pictures, 30 fps, a keyframe every `gop` (no reordering)."""
+    import av
+    import numpy as np
+
+    from sm64_events.replay.packetmux import EncodedPicture
+
+    codec = av.CodecContext.create("libx264", "w")
+    codec.width, codec.height, codec.pix_fmt = 160, 120, "yuv420p"
+    codec.time_base = Fraction(1, 30)
+    codec.options = {"g": str(gop), "bf": "0", "preset": "ultrafast", "tune": "zerolatency"}
+    packets = []
+    for index in range(count):
+        frame = av.VideoFrame.from_ndarray(
+            np.full((120, 160, 3), index * 2 % 256, dtype=np.uint8), format="rgb24").reformat(format="yuv420p")
+        frame.pts = index
+        packets += codec.encode(frame)
+    packets += codec.encode(None)
+    return [EncodedPicture(index + 1, index * 3000, 3000, packet.is_keyframe, bytes(packet))
+            for index, packet in enumerate(packets)]
+
+
+@pytest.mark.parametrize("hole_s", [0.14, 0.5])
+def test_a_cut_starting_inside_an_audio_hole_still_builds(tmp_path, hole_s):
+    """A stall of the audio callback leaves a hole in the PCM (the forced gen-2
+    collection, 2026-09-23). Every cut start around and inside that hole must
+    still build a replay with both tracks, never "MP4 selection lacks initial
+    track dependency"."""
+    from test_packetmux import RATE, Output, pcm
+
+    from sm64_events.replay.packetmux import NativeFormat, PacketFragmentMux
+
+    run = MediaRun("audio-hole", 1000.0)
+    out = Output(tmp_path, run)
+    mux = PacketFragmentMux(out, NativeFormat("h264", 160, 120, 30), run, audio_rate=RATE,
+                            audio_bitrate=160000, packet_limit=8 * 1024 * 1024, pcm_limit=384000)
+    pictures = _encoded_pictures()
+    end_tick = pictures[-1].pts + pictures[-1].duration
+    hole = (round(1.5 * RATE), round((1.5 + hole_s) * RATE))  # inside the second GOP
+    events = [(picture.pts / 90000, "video", picture) for picture in pictures]
+    events += [(first / RATE, "audio", first) for first in range(0, round(end_tick / 90000 * RATE), 960)
+               if not hole[0] <= first < hole[1]]
+    for _, kind, item in sorted(events, key=lambda event: (event[0], event[1] == "video")):
+        if kind == "video":
+            mux.write_video(item)
+        else:
+            mux.write_pcm(pcm(item), round(run.origin_ts * 1e6 + item / RATE * 1e6))
+    mux.close()
+    out.finish()
+    # Why every start can build: the encoded audio track covers the hole
+    # contiguously, as silence at its true time, so there is no gap for a cut
+    # to start inside. (Measured, not assumed: this also holds with the
+    # muxer's aresample async compensation removed.)
+    from test_packetmux import decode_audio
+
+    first, audio = decode_audio(out.path)  # asserts the decoded frames are contiguous
+    assert first <= 0 and audio.shape[1] >= hole[1]
+    inside = audio[:, hole[0] - first + 2048:hole[1] - first - 2048]  # clear of codec ringing
+    before = audio[:, hole[0] - first - 9600:hole[0] - first - 2048]
+    assert abs(inside).max() < 0.002 < 0.1 < abs(before).max()  # decoded float PCM: silence, then tone
+    archive = out.archive
+    assert archive.error is None and {t.kind for t in archive.tracks.values()} == {"video", "audio"}
+    failures, built = [], 0
+    for start in range(0, end_tick - 30000, 750):  # every 1/120 s, the hole included
+        with archive.selection(start, start + 30000) as (init, tracks, selected, visible):
+            try:
+                VirtualMp4(init, tracks, selected, visible[0].pts, start + 30000)
+                built += 1
+            except ValueError as error:
+                failures.append((start, visible[0].pts, str(error)))
+    assert built > 300
+    assert failures == [], failures[:5]

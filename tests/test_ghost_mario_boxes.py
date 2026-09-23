@@ -9,6 +9,7 @@ the picture. Every refusal is NAMED, because a ghost that silently has no
 Mario view is indistinguishable from one whose boxes were quietly dropped.
 """
 import json
+import os
 
 import pytest
 
@@ -280,9 +281,13 @@ def test_a_rewritten_list_is_read_again_rather_than_remembered(tmp_path):
     first, _ = read_box_list(clip, pictures=2)
     assert first.boxes == ((1, 2, 3, 4), None)
 
-    # A different file at the same path: same size is the hard case, so the
-    # boxes change without the length changing.
+    # A different file at the same path: same size AND same timestamp is the
+    # hard case -- two writes inside one filesystem tick -- so nothing but the
+    # bytes changes.
+    first_stamp = box_list_path(clip).stat()
     a_box_list(clip, pictures=2, boxes=[[9, 8, 7, 6], None])
+    os.utime(box_list_path(clip), ns=(first_stamp.st_atime_ns, first_stamp.st_mtime_ns))
+    assert box_list_path(clip).stat().st_size == first_stamp.st_size
     again, reason = read_box_list(clip, pictures=2)
     assert reason is None
     assert again.boxes == ((9, 8, 7, 6), None), (

@@ -43,6 +43,20 @@ static const struct { uint32_t dl; uint32_t layer; } common1_frames[] = {
     {0x0301B3E0u, SG_PARTICLE_BLEND}, {0x0301B3F8u, SG_PARTICLE_BLEND},
     {0x0301B410u, SG_PARTICLE_BLEND}, {0x0301B428u, SG_PARTICLE_BLEND},
     {0x0301B440u, SG_PARTICLE_BLEND}, {0x0301B458u, SG_PARTICLE_BLEND},
+    {0x03000880u, SG_PARTICLE_BLEND}, {0x03000920u, SG_PARTICLE_BLEND},  /* mist, white puff (ground pound, dust) */
+    {0x0302BCD0u, SG_PARTICLE_CUTOUT},                               /* sand (bhvGroundSand) */
+    {0x0301CDE0u, SG_PARTICLE_CUTOUT},                               /* leaves (bhvSnowLeafParticleSpawn) */
+    {0x0302C8A0u, SG_PARTICLE_CUTOUT},                               /* snow (bhvGroundSnow, white particle) */
+    /* Meshes: ground-pound/wall-bonk stars (MODEL_CARTOON_STAR; the game draws
+     * oAnimState 4, the unlit yellow 0x0302C318), punch dirt
+     * (MODEL_DIRT_ANIMATION), the wind-knocked cap (MODEL_MARIOS_CAP). */
+    {0x0302C298u, SG_PARTICLE_OPAQUE}, {0x0302C2B8u, SG_PARTICLE_OPAQUE},
+    {0x0302C2D8u, SG_PARTICLE_OPAQUE}, {0x0302C2F8u, SG_PARTICLE_OPAQUE},
+    {0x0302C318u, SG_PARTICLE_OPAQUE},
+    {0x0302C378u, SG_PARTICLE_OPAQUE}, {0x0302C3B0u, SG_PARTICLE_OPAQUE},
+    {0x0302C3E8u, SG_PARTICLE_OPAQUE}, {0x0302C028u, SG_PARTICLE_CUTOUT},
+    {0x0302C420u, SG_PARTICLE_OPAQUE}, {0x0302C458u, SG_PARTICLE_OPAQUE},
+    {0x03022F48u, SG_PARTICLE_OPAQUE}, /* translucent only while fading */
 };
 
 static uint32_t be32(const uint8_t *p)
@@ -63,8 +77,18 @@ struct reader {
     uint32_t tile_format, tile_size, tile_width, tile_height, texture_on;
     float scale_s, scale_t;
     uint8_t environment[4];
-    int combiner; /* 0 none, 1 decal, 2 modulate by shade, 3 modulate by environment */
+    uint32_t environment_set; /* this list set the environment (else: the object's opacity) */
+    uint32_t fades; /* a triangle took its alpha from the object's opacity */
+    uint32_t geometry; /* G_LIGHTING, G_TEXTURE_GEN, ... */
+    uint8_t light_diffuse[3], light_ambient[3];
+    int8_t light_dir[3];
+    uint32_t lights; /* 1: diffuse light loaded, 2: ambient loaded */
+    int combiner; /* enum combiner */
 };
+enum combiner { PCC_NONE, PCC_DECAL, PCC_MODULATE, PCC_FADEA, PCC_MODULATEIFADEA, PCC_SHADE, PCC_SHADEFADEA,
+                PCC_BLENDRGBFADEA };
+#define G_LIGHTING_BIT 0x00020000u
+#define G_TEXTURE_GEN_BIT 0x00040000u
 
 static int offset(const struct reader *r, uint32_t address, uint32_t bytes, uint32_t *out)
 {
@@ -75,16 +99,23 @@ static int offset(const struct reader *r, uint32_t address, uint32_t bytes, uint
     return 1;
 }
 
-/* One cycle of G_SETCOMBINE: DECALRGBA, MODULATEIA/RGBA or FADEA (texture
- * times environment), else refused. */
+/* One cycle of G_SETCOMBINE: DECALRGBA, MODULATEIA/RGBA, FADEA (texture
+ * times environment), MODULATEIFADEA (shade colour, environment alpha: the
+ * object's opacity, which playback applies), SHADE, SHADEFADEA or
+ * BLENDRGBFADEA (shade mixed toward the texture by its alpha); else refused. */
 static int combiner(uint32_t w0, uint32_t w1)
 {
     const uint32_t a = (w0 >> 20) & 15u, c = (w0 >> 15) & 31u, aa = (w0 >> 12) & 7u, ac = (w0 >> 9) & 7u;
     const uint32_t b = (w1 >> 28) & 15u, d = (w1 >> 15) & 7u, ab = (w1 >> 12) & 7u, ad = (w1 >> 9) & 7u;
-    if (c == 31u && d == 1u && ac == 7u && ad == 1u) return 1;
-    if (a == 1u && b == 15u && c == 4u && d == 7u && aa == 1u && ab == 7u && ac == 4u && ad == 7u) return 2;
-    if (a == 1u && b == 15u && c == 5u && d == 7u && aa == 1u && ab == 7u && ac == 5u && ad == 7u) return 3;
-    return 0;
+    const int zero_rgb = a == 15u && b == 15u && c == 31u, zero_alpha = aa == 7u && ab == 7u && ac == 7u;
+    if (c == 31u && d == 1u && ac == 7u && ad == 1u) return PCC_DECAL;
+    if (a == 1u && b == 15u && c == 4u && d == 7u && aa == 1u && ab == 7u && ac == 4u && ad == 7u) return PCC_MODULATE;
+    if (a == 1u && b == 15u && c == 5u && d == 7u && aa == 1u && ab == 7u && ac == 5u && ad == 7u) return PCC_FADEA;
+    if (a == 1u && b == 15u && c == 4u && d == 7u && aa == 1u && ab == 7u && ac == 5u && ad == 7u) return PCC_MODULATEIFADEA;
+    if (zero_rgb && d == 4u && zero_alpha && ad == 4u) return PCC_SHADE;
+    if (zero_rgb && d == 4u && zero_alpha && ad == 5u) return PCC_SHADEFADEA;
+    if (a == 1u && b == 4u && c == 8u && d == 4u && zero_alpha && ad == 5u) return PCC_BLENDRGBFADEA;
+    return PCC_NONE;
 }
 
 static int texel(const struct reader *r, uint32_t x, uint32_t y, uint8_t rgba[4])
@@ -114,14 +145,15 @@ static int texel(const struct reader *r, uint32_t x, uint32_t y, uint8_t rgba[4]
 static int cell(struct reader *r)
 {
     struct sg_particles *p = r->out;
+    const uint32_t image = (r->segment_id << 24) | r->loaded; /* segments decode separately */
     uint32_t i, x, y;
     for (i = 0; i < p->cell_count; ++i)
-        if (p->cells[i].image == r->loaded && p->cells[i].format == r->tile_format &&
+        if (p->cells[i].image == image && p->cells[i].format == r->tile_format &&
             p->cells[i].width == r->tile_width && p->cells[i].height == r->tile_height) return (int)i;
     if (p->cell_count >= SG_PARTICLE_CELLS || r->tile_width > 32u || r->tile_height > 64u ||
         !r->tile_width || !r->tile_height || r->tile_width * r->tile_height > r->loaded_texels) return -1;
     i = p->cell_count++;
-    p->cells[i].image = r->loaded; p->cells[i].format = r->tile_format;
+    p->cells[i].image = image; p->cells[i].format = r->tile_format;
     p->cells[i].width = r->tile_width; p->cells[i].height = r->tile_height;
     p->cells[i].x = (i % (SG_PARTICLE_ATLAS_WIDTH / 32u)) * 32u;
     p->cells[i].y = (i / (SG_PARTICLE_ATLAS_WIDTH / 32u)) * 64u;
@@ -132,14 +164,38 @@ static int cell(struct reader *r)
     return (int)i;
 }
 
+/* Untextured combiners sample one opaque white cell. */
+static int white_cell(struct reader *r)
+{
+    struct sg_particles *p = r->out;
+    uint32_t i, y;
+    for (i = 0; i < p->cell_count; ++i) if (p->cells[i].image == 0xFFFFFFFFu) return (int)i;
+    if (p->cell_count >= SG_PARTICLE_CELLS) return -1;
+    i = p->cell_count++;
+    p->cells[i].image = 0xFFFFFFFFu; p->cells[i].width = p->cells[i].height = 4;
+    p->cells[i].x = (i % (SG_PARTICLE_ATLAS_WIDTH / 32u)) * 32u;
+    p->cells[i].y = (i / (SG_PARTICLE_ATLAS_WIDTH / 32u)) * 64u;
+    for (y = 0; y < 4u; ++y)
+        memset(p->atlas + ((p->cells[i].y + y) * SG_PARTICLE_ATLAS_WIDTH + p->cells[i].x) * 4u, 255, 16u);
+    return (int)i;
+}
+
 static int triangle(struct reader *r, const uint32_t index[3])
 {
     struct sg_particles *p = r->out;
+    const int textured = r->combiner != PCC_SHADE && r->combiner != PCC_SHADEFADEA;
+    const int shade_rgb = r->combiner == PCC_MODULATE || r->combiner == PCC_MODULATEIFADEA || r->combiner == PCC_SHADE
+        || r->combiner == PCC_SHADEFADEA || r->combiner == PCC_BLENDRGBFADEA;
+    const int opacity_alpha = !r->environment_set && (r->combiner == PCC_MODULATEIFADEA || r->combiner == PCC_SHADEFADEA
+        || r->combiner == PCC_BLENDRGBFADEA || r->combiner == PCC_FADEA);
+    const int lit = shade_rgb && (r->geometry & G_LIGHTING_BIT);
     int c;
     uint32_t k;
-    if (!r->texture_on || !r->combiner || p->vertex_count + 3u > SG_PARTICLE_MAX_VERTICES) return 0;
-    c = cell(r);
+    if (!r->combiner || p->vertex_count + 3u > SG_PARTICLE_MAX_VERTICES || (textured && !r->texture_on)
+            || (r->geometry & G_TEXTURE_GEN_BIT) || (lit && r->lights != 3u)) return 0;
+    c = textured ? cell(r) : white_cell(r);
     if (c < 0) return 0;
+    if (opacity_alpha) r->fades = 1;
     for (k = 0; k < 3u; ++k) {
         const uint32_t s = index[k];
         sg_particle_vertex *v = &p->vertices[p->vertex_count++];
@@ -155,9 +211,25 @@ static int triangle(struct reader *r, const uint32_t index[3])
         v->rect[1] = (at->y + .5f) / SG_PARTICLE_ATLAS_HEIGHT;
         v->rect[2] = (at->x + at->width - .5f) / SG_PARTICLE_ATLAS_WIDTH;
         v->rect[3] = (at->y + at->height - .5f) / SG_PARTICLE_ATLAS_HEIGHT;
-        if (r->combiner == 1) memset(v->rgba, 255, 4); /* decal: texture only */
-        else if (r->combiner == 3) memcpy(v->rgba, r->environment, 4);
-        else memcpy(v->rgba, r->slot_color[s], 4);
+        if (!textured) { /* the white cell's centre */
+            v->uv[0] = (at->x + 2.0f) / SG_PARTICLE_ATLAS_WIDTH; v->uv[1] = (at->y + 2.0f) / SG_PARTICLE_ATLAS_HEIGHT;
+        }
+        /* rgb: the environment (FADEA), the vertex colour, or white (decal);
+         * lit vertices get theirs at placement. alpha: the environment's when
+         * the list set it, 255 when it is the object's opacity, else the vertex. */
+        if (r->combiner == PCC_DECAL) memset(v->rgba, 255, 3);
+        else if (r->combiner == PCC_FADEA) memcpy(v->rgba, r->environment, 3);
+        else memcpy(v->rgba, r->slot_color[s], 3);
+        if (r->combiner == PCC_DECAL) v->rgba[3] = 255;
+        else if (r->combiner == PCC_MODULATE || r->combiner == PCC_SHADE) v->rgba[3] = r->slot_color[s][3];
+        else v->rgba[3] = r->environment_set ? r->environment[3] : 255;
+        v->mode = (uint8_t)((lit ? SG_PARTICLE_LIT : 0) | (r->combiner == PCC_BLENDRGBFADEA ? SG_PARTICLE_MIX : 0));
+        if (lit) {
+            const int8_t *n = (const int8_t *)r->slot_color[s];
+            v->normal[0] = n[0] / 127.0f; v->normal[1] = n[1] / 127.0f; v->normal[2] = n[2] / 127.0f;
+            memcpy(v->light_ambient, r->light_ambient, 3); memcpy(v->light_diffuse, r->light_diffuse, 3);
+            memcpy(v->light_dir, r->light_dir, 3);
+        }
     }
     return 1;
 }
@@ -172,9 +244,21 @@ static int run(struct reader *r, uint32_t start)
         w0 = be32(r->segment + pc); w1 = be32(r->segment + pc + 4u); pc += 8u;
         switch (w0 >> 24) {
         case 0xE6: case 0xE7: case 0xE8: break;                   /* syncs */
-        case 0xB6: case 0xB7: break;                             /* geometry mode: lighting only matters via combiner */
+        case 0xB6: r->geometry &= ~w1; break;                     /* G_CLEARGEOMETRYMODE */
+        case 0xB7: r->geometry |= w1; break;                      /* G_SETGEOMETRYMODE */
+        case 0xB9: case 0xBA: break;                              /* other modes: blender/alpha compare by layer */
+        case 0x03: {                                              /* G_MOVEMEM: one light */
+            const uint32_t which = (w0 >> 16) & 0xffu;
+            if ((w0 & 0xffffu) != 16u || (which != 0x86u && which != 0x88u) || !offset(r, w1, 16u, &at)) return 0;
+            if (which == 0x86u) {
+                memcpy(r->light_diffuse, r->segment + at, 3);
+                memcpy(r->light_dir, r->segment + at + 8, 3);
+                r->lights |= 1u;
+            } else { memcpy(r->light_ambient, r->segment + at, 3); r->lights |= 2u; }
+            break;
+        }
         case 0xFC: r->combiner = combiner(w0, w1); break;
-        case 0xFB:                                               /* G_SETENVCOLOR */
+        case 0xFB: r->environment_set = 1;                       /* G_SETENVCOLOR */
             r->environment[0] = (uint8_t)(w1 >> 24); r->environment[1] = (uint8_t)(w1 >> 16);
             r->environment[2] = (uint8_t)(w1 >> 8); r->environment[3] = (uint8_t)w1;
             break;
@@ -246,10 +330,14 @@ static int append(struct sg_particles *out, const uint8_t *segment, uint32_t siz
     f = &out->frames[out->frame_count];
     memset(&r, 0, sizeof(r));
     r.segment = segment; r.size = size; r.segment_id = segment_id; r.out = out;
+    /* SM64's state between object lists: every list ends restoring these. */
+    r.geometry = G_LIGHTING_BIT; r.combiner = PCC_SHADE;
+    memset(r.environment, 255, 4);
     f->display_list = dl; f->layer = layer;
     f->first_vertex = out->vertex_count;
     if (!run(&r, dl) || out->vertex_count == f->first_vertex) return 0;
     f->vertex_count = out->vertex_count - f->first_vertex;
+    f->fade = r.fades;
     ++out->frame_count;
     return 1;
 }

@@ -1227,8 +1227,9 @@ takes the water's color. The game's own picture stays untouched.
 
 ### Recorded particles
 
-The bubbles, splashes, water rings, droplets, dust, sparkles and lava flame the
-game drew for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
+The bubbles, splashes, water rings, droplets, dust, sparkles, lava flame,
+ground-pound mist, sand, leaves, snow, ground-pound and wall-bonk bursts, punch
+dirt and his knocked-off cap the game drew for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
 one showed and where. A Mario-only [[ghost]] draws them with the ROM's own
 pictures, after its body. Another object's bubble, or a particle whose picture
 the ROM reader does not know, is never drawn.
@@ -1243,7 +1244,8 @@ A Mario-only [[ghost]] fades wherever it would block the player. The parts of
 it that stand between the camera and live Mario, over his body on screen, keep
 only 15% of their opacity. Near the camera the whole body fades out, so it
 can never fill the screen. The fade leaves a [[ghost]] behind Mario, or away
-from him, untouched. Its [[recorded shadow]] follows the same rule. It
+from him, untouched. Its [[recorded shadow]] and [[recorded particles]]
+follow the same rule. It
 multiplies with opacity and the overlap fade; the card's **Fade in front of
 Mario** switch turns it off for comparison.
 

@@ -186,6 +186,20 @@ int main(int argc, char **argv) {
             replay_gl::ContextLost(); glEnable(0xFFFFFFFF);
             CHECK(!replay_gl::BeginCapture() && !replay_gl::EndCapture());
             CHECK(raw_error()==GL_INVALID_ENUM); // no inactive driver error read
+        } else if (std::strcmp(argv[1],"layer")==0) {
+            // Two errors inside the translucent layer drop the layer only: the
+            // flags are drained, and the replay source and ghost stay nominal.
+            CHECK(replay_gl::BeginLayer() && !replay_gl::BeginCapture());
+            glEnable(0xFFFFFFFF); glScissor(0,0,-1,1);
+            CHECK(!replay_gl::EndLayer() && !replay_gl::EndLayer());
+            CHECK(raw_error()==GL_NO_ERROR);
+            CHECK(replay_gl::CandidateBindings(&identity,&witness));
+            CHECK(replay_gl::BeginCapture() && replay_gl::EndCapture());
+            CHECK(replay_gl::BeginLayer() && replay_gl::EndLayer());
+            // An error the renderer left before the layer is not the layer's.
+            glEnable(0xFFFFFFFF);
+            CHECK(!replay_gl::BeginLayer() && !replay_gl::CandidateBindings(&identity,&witness));
+            CHECK(glGetError()==GL_INVALID_ENUM);
         } else if (std::strcmp(argv[1],"clean")==0) {
             CHECK(replay_gl::BeginCapture() && replay_gl::EndCapture());
             CHECK(replay_gl::CandidateBindings(&identity,&witness));

@@ -14,6 +14,20 @@ from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 HUE_STEP_DEGREES = 137
 
 
+#: The renderer's GIPC_BUDGET: the chosen set does not fit the clip budget (or
+#: memory) together. The files are fine; fewer or shorter ghosts would show.
+NATIVE_BUDGET_REASON = 12
+
+
+def budget_reason(ghosts: int) -> str:
+    """What the ghost card says when the set does not fit. One ghost alone
+    always fits (a maximum clip is under the budget), so a single refusal
+    only waits for the previous set's storage to clear; the renderer retries."""
+    if ghosts > 1:
+        return "These ghosts are too long to show together; untick one."
+    return "Making room for this ghost..."
+
+
 def ghost_hue(base: int, index: int) -> int:
     """The first ghost (his PB) keeps his chosen colour; the rest step away."""
     return (base + index * HUE_STEP_DEGREES) % 360
@@ -252,6 +266,7 @@ class NativeGhost:
                           6: "The saved Mario poses could not be loaded.",
                           7: "Mario's model could not be loaded from this ROM.",
                           8: "The saved Mario poses could not be played.",
+                          NATIVE_BUDGET_REASON: budget_reason(len(self._selected_asset or ())),
                           11: "The game ROM could not be read for Mario. Reopen the game with the Trainer graphics plugin."}.get(
                               status.get("reason"), "Mario playback is unavailable; try switching it off and on.")
             else:

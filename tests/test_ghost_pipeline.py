@@ -14,6 +14,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.memory.layout import US
 
 ROOT = Path(__file__).resolve().parents[1]
+SAVED_GCLIP4 = ROOT / "tests/fixtures/attempt_2549_whomps-fortress_shoot-into-the-wild-blue_0m10s66.ghost"
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PIPELINE_ROOT", ROOT)).resolve()
 pytestmark = pytest.mark.skipif(os.environ.get("SM64_TEST_GHOST_PIPELINE") != "1",
     reason="explicit hidden connected native GPU witness: set SM64_TEST_GHOST_PIPELINE=1")
@@ -83,7 +84,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
         *compiler.LIBS], tmp_path)
     layout = tmp_path / "layout.bin"
     layout.write_bytes(layout_module().GhostLayout.from_layout(US).to_bytes())
-    result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path)], cwd=tmp_path,
+    result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path), str(SAVED_GCLIP4)], cwd=tmp_path,
         capture_output=True, text=True, timeout=60, check=False, **quiet_spawn_kwargs())
     (tmp_path / "pipeline-output.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
     retain_artifacts([tmp_path / "pipeline-output.txt"])
@@ -109,6 +110,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
     assert report["capture_version"] == 6 and report["clip_version"] == 5 and report["playback_version"] == 7
     assert_scene_effects(report)  # the timing below runs with the player-first fade on
+    assert_saved_ghost_plays(report["saved_gclip4"])
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
@@ -128,6 +130,11 @@ def assert_scene_effects(report):
     assert_player_first(report["occlusion"])
 
 
+def assert_saved_ghost_plays(saved):
+    """His saved ghosts from before particles (GCLIP4) still load and draw natively."""
+    assert saved["records"] == 320 and saved["visible"] == 1 and saved["pixels"] > 300
+
+
 def assert_recorded_shadow(shadow):
     """The captured shadow darkens only its decal, scales with opacity and hides behind terrain."""
     assert shadow["captured"] and shadow["pixels"] > 300 and shadow["would_occlude"] > 50
@@ -140,7 +147,10 @@ def assert_submerged(water, particles):
     Its recorded particles (Mario's only) are drawn from the ROM's own frames."""
     assert water["tinted"] > 300 and water["dry"] > 300
     assert water["outside_pixels_changed"] == water["blend_errors"] == 0
-    assert particles["recorded"] == 3 and particles["pixels"] > 200
+    assert particles["recorded"] == 5 and particles["pixels"] > 200
+    # His footage (attempt 2794, a ground pound) shows the stars flat yellow, 255,253,0.
+    assert particles["star_pixels"] > 30 and particles["star_rgb"][2] <= 10
+    assert min(particles["star_rgb"][:2]) >= 243
 
 
 def assert_player_first(occlusion):

@@ -61,6 +61,8 @@ DWORD worker_thread=0; // protected by worker_gate
 std::atomic<uint32_t> cancellation{1}, context_serial{1};
 std::atomic<bool> exhausted{false};
 std::atomic<uint64_t> desired_model{0}, enabled_revision{0}, resident_bytes{0};
+static_assert(uint64_t(GP_CLIP_SLOTS)*GP_LONG_GHOST_FRAMES*(sizeof(gclip_frame)+sizeof(uint32_t))
+              <=GP_CLIP_BUDGET,"a full set of long ghosts and its replacement fit the clip budget");
 std::atomic<uint32_t> evaluations{0}, rendered{0}, gaps{0}, refusals{0}, adoption_busy{0};
 std::atomic<int32_t> model_error{SG_OK};
 struct PublishedRequest {gp_request value{};uint32_t cancellation=0,reserved=0;};
@@ -304,7 +306,7 @@ bool valid_particles(const gc_sample& s) {
     for(uint32_t i=0;i<GC_PARTICLES;++i) {
         const auto& e=d.entries[i];
         if(i>=d.count) {if(std::memcmp(&e,&empty,sizeof(e)))return false;continue;}
-        if(e.reserved)return false;
+        if(e.opacity && (e.opacity&~0x1ffu || !(e.opacity&GC_PARTICLE_OPACITY)))return false;
         for(float value:e.translation)if(!std::isfinite(value))return false;
     }
     return true;
@@ -882,12 +884,15 @@ bool particles(sg_particle_view *out,uint64_t *id) {
     if(sg_model_get_particles(model.value,out)!=SG_OK || !out->frame_count)return false;
     *id=model.id;return true;
 }
-bool current(const gp_draw_token& token) {
+bool drawing() {
     return renderer_owner() && have_request && have_model && active_count() && !exhausted.load()
-        && token.revision && enabled_revision.load()==token.revision && active_request.revision==token.revision
-        && cancellation.load()==token.cancellation && acquired_cancel==token.cancellation
-        && context_serial.load()==token.context_serial && model.id==desired_model.load()
+        && active_request.revision && enabled_revision.load()==active_request.revision
+        && cancellation.load()==acquired_cancel && model.id==desired_model.load()
         && active_request.rom_generation==live_rom && active_request.configuration==live_configuration;
+}
+bool current(const gp_draw_token& token) {
+    return drawing() && token.revision==active_request.revision && token.cancellation==acquired_cancel
+        && context_serial.load()==token.context_serial;
 }
 bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
               ghost_compositor::Pose *out,uint32_t& count,gp_draw_token& token) {

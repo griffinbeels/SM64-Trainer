@@ -470,11 +470,24 @@ ROM failure nor renderer readiness changes saved-recording eligibility.
 Disabling or losing the active origin withdraws drawing while retaining prepared
 assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
-full set plus as many retiring copies) share a 128 MiB clip/index budget, and
-the worker's retained files obey the same bound. One maximum-size clip
-(100000 records, about 55 minutes at 30 Hz: 100000 x (1268 + 4) bytes) fits;
-two maximum-size clips do not with GC6. The particle block halved the maximum
-from GC5's 200000 records rather than raising the budget. All resident slots count, so a replacement
+full set plus as many retiring copies) share a 192 MiB clip/index budget, and
+the worker's retained files obey the same bound. It is sized so sixteen
+2m40 ghosts can be replaced by sixteen more in flight (32 x 4800 x
+(sizeof(gclip_frame) + 4) bytes; his longest raced segment is 1m51): GC6
+records are about twice GC5's, and the earlier 128 MiB would have cut that to
+under two minutes a ghost. It stays well under the 2 GiB his Project64 has:
+wermi's build v7 is 32-bit and not large-address-aware (checked 2026-09-23),
+and the emulator, GLideN64, its texture caches and the worker's retained files
+share that space. The budget is a ceiling, not a reservation. Every clip
+allocation fails soft instead of throwing inside Project64. The worker's file
+read and GCLIP4 upgrade refuse with `GIPC_FILE` (6). The retained-file total,
+the asset list and playback's copy (`new(std::nothrow)`, `GP_BUDGET`) refuse
+the set with `GIPC_BUDGET` (12), kept apart from a bad clip (`GIPC_CLIP`, 8)
+so the ghost card can say "These ghosts are too long to show together;
+untick one." (one ghost: "Making room for this ghost..."). One maximum-size clip
+(100000 records, about 55 minutes at 30 Hz) fits. The pose archive keeps its
+own window (288 MiB of rows, two hours at 30 Hz), independent of that clip
+cap, so a late save still reaches an early attempt. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
 If a reader holds the status page during revocation, the worker retries that
@@ -645,6 +658,11 @@ source `ONE` or `SRC_ALPHA`, depth test on and depth writes off. Other blends
 (additive, destination-reading) are counted (`skipped_blend`) and stay out. A
 depth-writing world draw after the layer opened, a failed depth pass or a GL
 error drops the layer for that list (`broken`); the ghost then draws as before.
+The layer has its own GL error scope (`replay_gl::BeginLayer`/`EndLayer`): its
+ordinary errors are drained and never leave the nominal state that replay
+capture and the ghost depend on; out of memory or a lost context still does.
+The layer runs only while playback is drawing (`ghost_playback::drawing`), so
+a retired, withdrawn or disabled playback repeats no draw and blits no depth.
 N64 image depth and multisampling never open it. The layer composes several
 surfaces in draw order but keeps one nearest depth, so a ghost between two
 translucent surfaces takes both. Level fog on the ghost's own body is not
@@ -705,15 +723,50 @@ game's texture-edge layer) keep texels at alpha 0.5 or more, blend frames
 multiply texture and vertex alpha, and both take the ghost's opacity.
 Particles never refuse their ghost and have no switch.
 
-Recorded but not drawn: the ground-pound mist and the snow, leaf and sand
-spawners, whose models are in other segments. Environment bubbles (`envfx`)
-are not objects and not Mario's.
+common1 also supplies the ground-pound mist and white puffs (`MODEL_MIST`,
+0x03000880/0x03000920), sand (0x0302BCD0), leaves (0x0301CDE0) and snow
+(`white_particle_dl`, 0x0302C8A0). Mist fades with its object's `oOpacity`,
+which reaches the game's combiner (`G_CC_MODULATEIFADEA`) through a list the
+game generates each frame (`geo_update_layer_transparency`): a segment-0
+list pushed at the object's position just before its model list. Capture
+never records that list; it reads its `G_SETENVCOLOR 255,255,255,alpha` and
+stores the alpha with the particle (`gc_particle.opacity`, flag
+`GC_PARTICLE_OPACITY`), and playback multiplies it into frames the model
+marks `fade`.
+
+Three kinds are 3D meshes, also from common1: the stars a ground pound or a
+wall bonk throws (`MODEL_CARTOON_STAR`, 0x0302C298..0x0302C318, four light
+colours and an unlit one; a successful wall kick throws none). Those stars
+set `oAnimState` 4, so the game draws the unlit list 0x0302C318, flat yellow
+255,255,0 at every angle; his footage agrees (attempt 2794's ground pound
+decodes to 255,253,0), and the pipeline witness pins its render to that
+colour. The other kinds are the punch dirt (`MODEL_DIRT_ANIMATION`,
+0x0302C378..0x0302C458) and the wind- or snowman-knocked cap
+(`MODEL_MARIOS_CAP`, 0x03022F48, 156 vertices; a cap Klepto drops is Klepto's
+and is not recorded). The reader follows their `gsSPLight` loads (G_MOVEMEM
+0x86 diffuse and direction, 0x88 ambient), per-vertex normals and the
+`SHADE`, `SHADEFADEA` and `BLENDRGBFADEA` combiners (the cap's logo mixes
+toward the texture by its alpha; untextured triangles sample one white cell).
+Placement lights each vertex with F3D's own formula, as GLideN64's
+`gSPLightVertex` does: ambient plus diffuse times N.L, negatives dropped,
+clamped, with the list's light in the recorded view space and the normal
+turned by the executed matrix. That is the lighting the game drew at record
+time, including the lit cartoon-star lists' back-facing normals (0,0,-127),
+which leave those at their ambient colour. The game's layer decides depth: opaque and
+texture-edge frames (alpha ignored, or tested at .5) are drawn first with a
+nearest-surface prepass and one colour per pixel, so an opaque mesh never
+blends with itself; translucent frames follow without writing depth. A cap
+that is fading (opacity below 255) is translucent, as the game switches it to
+its transparent layer. Environment bubbles (`envfx`) are not objects and not
+Mario's.
 
 The [particle witness](../tests/test_ghost_particles.py)
 (`SM64_TEST_GHOST_COMPOSITOR=1`) checks cutout and blend frames, hiding
 behind the body and behind terrain, the clean frame and GL state; removing the
 draw, the body depth test, the terrain test or the cutout each turns it red.
-The model witness checks all 53 frames decode to one quad each (17063 visible
+The model witness checks the 58 textured frames decode to one quad each, the
+12 lit meshes carry their lights and normals (642 vertices in all, the cap
+mixing and fading) (17063 visible
 segment-4 texels, the flame's environment colour) on both the US and the
 Usamune US ROM. The [probe witness](../tests/test_ghost_particle_capture.py) keeps the 16
 nearest of 21 drawn (5 counted), skips nested calls, another object's bubble and
@@ -727,8 +780,8 @@ it red (2026-09-23).
 ### Player-first fade
 
 A ghost never blocks live Mario or the camera. [ghost_occlusion.h](../plugin/gfxwrap/ghost_occlusion.h)
-owns the rule and every tuning constant; the body and shadow shaders share its
-GLSL, so a shadow fades exactly like its body. Per fragment, on top of the
+owns the rule and every tuning constant; the body, shadow and particle shaders
+share its GLSL, so a shadow, a bubble or a dust puff fades exactly like its body. Per fragment, on top of the
 user's opacity and the overlap fade:
 
 - **In front of live Mario, over him.** Playback projects his body box (feet at
@@ -760,7 +813,10 @@ is smooth, pixels outside 1.6x and a ghost behind Mario are byte-exact, and
 the camera term hides a ghost at 100 units, halves it at 300 and is exact at
 450. The shadow fades over Mario like its body, the renderer's y flip mirrors
 the ghost and its region together, and the clean game image and both depths
-stay exact. The [playback witness](../tests/test_ghost_playback.py)
+stay exact. The [particle witness](../tests/test_ghost_particles.py) draws a
+particle over Mario's region the same way: every pixel follows the rule (52
+fully faded, 124 faded in all), behind him it is byte-exact, at the camera it
+is hidden or halved, and the flip mirrors it with its region. The [playback witness](../tests/test_ghost_playback.py)
 checks that the projected box reaches each pose, that there is no region when
 Mario is behind the camera or has no pose, and that the switch empties it. The
 connected pipeline (2026-09-23, RTX 5090, 640x480, real model) faded 8444 ghost
@@ -768,9 +824,9 @@ pixels over a live Mario 300 units beyond the ghost. It changed 0 pixels
 outside the ghost and 0 with Mario 300 units nearer. It then timed the fade on
 over 180 samples: one ghost p50 0.62 ms, p95 1.11 ms, max 1.35 ms including
 swap; sixteen p50 3.05 ms, p95 4.16 ms, max 4.51 ms. Removing the fade from
-the body, the shadow or the camera term, reversing the front test, ignoring
-the region, taking the region after the y flip, or dropping the switch in
-playback, IPC or the channel each turns a witness red.
+the body, the shadow, the particles or the camera term, reversing the front
+test, ignoring the region, taking the region after the y flip, or dropping the
+switch in playback, IPC or the channel each turns a witness red.
 
 ### Sound events
 

@@ -52,7 +52,7 @@ const ghost_ipc::AudioHooks fake_audio{fake_audio_start,fake_audio_stop};
 std::atomic<uint32_t> configuration{0},model_state{GP_MODEL_EMPTY};
 std::atomic<uint32_t> pending_record{0},sample_sequence{0};
 std::atomic<uint32_t> burst_records{0};
-std::atomic<bool> capture_enabled{false},retirement_allowed{true},fail_model{false};
+std::atomic<bool> capture_enabled{false},retirement_allowed{true},fail_model{false},fail_budget{false};
 std::atomic<bool> intercept_expiry{false},intercept_wait{false},barrier_failed{false};
 // The worker pins this DLL until retirement, including a failed witness. Keep
 // barriers alive for that whole lifetime rather than closing a pending wait.
@@ -105,6 +105,7 @@ int32_t __cdecl prepare_model(uint64_t id,const uint8_t* bytes,uint32_t size) {
 }
 int32_t __cdecl prepare_clip(const gclip_header* h,const gclip_frame* frame) {
     if(!enter_worker())return GP_WRONG_THREAD;
+    if(fail_budget.load())return GP_BUDGET; // the set does not fit; nothing prepared
     if(h)++prepared_ids[h->clip_id[0]];
     return h && frame && h->record_count==1 && frame->bytes==sizeof(*frame)?GP_OK:GP_INVALID;
 }
@@ -392,7 +393,9 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(withdrawals==shown,"applied ghosts keep drawing while a new clip loads");
         auto readiness=page.status();
         check(readiness.clips_requested==2 && readiness.clips_prepared==2,"set readiness published");
-        r.revision=11;r.clip_count=3;set_clip(r.clips[2],3,argv[6],argv[7],300);ready(page,r);
+        // A set that does not fit says so apart from a bad clip, and shows once it fits.
+        fail_budget=true;r.revision=11;r.clip_count=3;set_clip(r.clips[2],3,argv[6],argv[7],300);
+        refused(page,r,GIPC_BUDGET);fail_budget=false;ready(page,r);
         check(prepared_ids[1]==prepared_one && prepared_ids[2]==1 && prepared_ids[3]==1,"third clip alone prepared");
         r.revision=12;r.clips[0]=r.clips[1];r.clips[1]=r.clips[2];r.clips[2]={};r.clip_count=2;ready(page,r);
         set=last_command();

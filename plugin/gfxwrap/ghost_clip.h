@@ -7,7 +7,7 @@
 #define GCLIP_VERSION 5u
 #define GCLIP_MAGIC "SM64GHO5"
 /* 100000 records (55 minutes at 30 Hz) plus their 4-byte index fit the
- * 128 MiB playback budget: 100000 * (1268 + 4) bytes. */
+ * playback budget (GP_CLIP_BUDGET): 100000 * (1268 + 4) bytes. */
 #define GCLIP_MAX_RECORDS 100000u
 #define GCLIP_WORLD_READY 3u
 enum gclip_clock_kind { GCLIP_STAR_CLOCK = 1u, GCLIP_SEGMENT_CLOCK = 2u };

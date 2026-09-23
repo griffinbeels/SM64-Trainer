@@ -157,9 +157,12 @@ typedef struct gc_sound {
 typedef struct gc_particle {
     uint32_t display_list;
     int16_t basis[9]; /* column-major 3x3 */
-    int16_t reserved;
+    /* GC_PARTICLE_OPACITY | alpha when the game's generated list set this
+     * object's opacity (G_SETENVCOLOR 255,255,255,alpha) before it; else 0. */
+    uint16_t opacity;
     float translation[3];
 } gc_particle;
+#define GC_PARTICLE_OPACITY 0x100u
 typedef struct gc_particles {
     uint8_t count, flags, reserved[2];
     gc_particle entries[GC_PARTICLES];

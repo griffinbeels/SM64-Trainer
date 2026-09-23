@@ -95,15 +95,18 @@ struct Shadow {
     const uint8_t* texture_ia8;
     float view_projection[16];
 };
-/* Recorded particles in world space: the ROM frame's quad already placed.
- * rect is the frame's atlas cell (uv is clamped to it); rgba the shade
- * factor; cutout 1 keeps texels with alpha >= .5, 0 blends. */
-constexpr uint32_t particle_vertices=96; // 16 particles, one quad each
-struct ParticleVertex { float position[3], uv[2], rect[4], rgba[4], cutout; };
+/* Recorded particles in world space: the ROM frame's triangles already
+ * placed and lit. rect is the frame's atlas cell (uv is clamped to it); rgba
+ * the shade; cutout 1 keeps texels with alpha >= .5, 2 is opaque (alpha
+ * ignored), 0 blends; mix 1 mixes
+ * rgba toward the texel by its alpha (the cap's logo) instead of modulating. */
+constexpr uint32_t particle_vertices=768; // 16 particles: a knocked-off cap (156) and 15 stars (24)
+struct ParticleVertex { float position[3], uv[2], rect[4], rgba[4], cutout, mix; };
 struct Particles {
     const ParticleVertex* vertices;
     uint32_t count;
     float view_projection[16];
+    uint32_t opaque_count; // the first ones are cutout/opaque (depth-writing); the rest blend
 };
 struct Pose {
     const Vertex* vertices;
@@ -115,7 +118,7 @@ struct Pose {
     float hue_degrees; // 0 retains the original model colors
     Shadow shadow{}; // optional, at most 24 vertices; borrowed 16x16 IA8 texture
     Particles particles{}; // optional, at most particle_vertices; needs prepare_particles
-    // Player-first fade for this body and its shadow; zero draws as before.
+    // Player-first fade for this body, its shadow and its particles; zero draws as before.
     ghost_occlusion::Region occlusion{};
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
