@@ -218,28 +218,48 @@ class FragmentArchive:
             index = max(0, bisect_right(self._extents, start, key=lambda extent: extent.start) - 1)
             while index < len(self._extents) and self._extents[index].units[-1].end <= start:
                 index += 1
-            if index == len(self._extents):
-                raise LookupError("replay footage is no longer retained")
-            first = self._extents[index]
-            start = max(start, first.start)
-            if index == 0 or self._extents[index-1].units[-1].end < first.start:
-                start = max(start, self._playable_start(first))
-            last = first
-            for following_index in range(index+1, len(self._extents)):
-                following = self._extents[following_index]
-                if last.units[-1].end >= end or following.start > last.units[-1].end:
-                    break
-                last = following
-            bounds = {}
-            for unit in reversed(last.units):
-                for sample in reversed(unit.samples):
-                    bounds.setdefault(sample.track_id, sample.dts + sample.duration)
-                if len(bounds) == len(self.tracks):
-                    break
-            end = min(end, *(tick * 90000 // self.tracks[key].timescale for key, tick in bounds.items()))
-            if end <= start:
-                raise ValueError("no complete replay interval is published")
-            return start, end
+            while True:
+                if index == len(self._extents):
+                    raise LookupError("replay footage is no longer retained")
+                window, following = self._window_from(index, start, end)
+                if window is not None:
+                    return window
+                # The query began after the last instant every track covers
+                # before a hole: one track (usually AAC) ended a little before
+                # the other. Nothing complete is left on this side, so the
+                # selection starts in the next retained run. Seen when a
+                # loaded machine shifted audio against video at an idle hole:
+                # the previous window ended where audio did, and a query from
+                # the next tick landed in that video-only tail (2026-09-23).
+                if following is None:
+                    raise ValueError("no complete replay interval is published")
+                index = following
+
+    def _window_from(self, index, start, end):
+        """((start, end), None) for the window beginning in extent `index`, or
+        (None, the first extent after its run's hole) when that run has no
+        instant at or after `start` that every track covers."""
+        first = self._extents[index]
+        start = max(start, first.start)
+        if index == 0 or self._extents[index-1].units[-1].end < first.start:
+            start = max(start, self._playable_start(first))
+        last, after = first, None
+        for following_index in range(index+1, len(self._extents)):
+            following = self._extents[following_index]
+            if last.units[-1].end >= end:
+                break
+            if following.start > last.units[-1].end:
+                after = following_index
+                break
+            last = following
+        bounds = {}
+        for unit in reversed(last.units):
+            for sample in reversed(unit.samples):
+                bounds.setdefault(sample.track_id, sample.dts + sample.duration)
+            if len(bounds) == len(self.tracks):
+                break
+        end = min(end, *(tick * 90000 // self.tracks[key].timescale for key, tick in bounds.items()))
+        return ((start, end), None) if end > start else (None, after)
 
     def discard(self):
         """Retire a closed run under the session-wide metadata budget."""
