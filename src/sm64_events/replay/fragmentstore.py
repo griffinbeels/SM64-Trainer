@@ -332,6 +332,18 @@ class FragmentArchive:
     def _select(self, start, end):
         if not self._init or start < 0 or end <= start:
             raise LookupError("invalid fragment interval")
+        selected, visible = self._select_from(start, end)
+        # The replay begins at the picture HELD at `start`, which can begin
+        # earlier. Every track must cover that instant, not only `start`:
+        # otherwise an audio packet starting between the two leaves the audio
+        # track with nothing at the replay's first instant, and the save fails
+        # "MP4 selection lacks initial track dependency" (live 2026-09-22).
+        held = visible[0].pts
+        if held < start:
+            return self._select_from(held, end)
+        return selected, visible
+
+    def _select_from(self, start, end):
         index = bisect_right(self._extents, start, key=lambda extent: extent.start) - 1
         if index < 0:
             raise LookupError("replay dependency GOP was evicted")
