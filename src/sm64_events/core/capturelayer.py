@@ -18,11 +18,14 @@ folder). Installing the layer is four writes and nothing else:
    it replaced (``previous_graphics_dll`` in the overlay) for undo.
 
 Undo is step 4 in reverse; the files stay (harmless, and a reinstall is
-instant). An app update never re-onboards: a packaged build refreshes the
-installed pair by itself (``refresh_if_stale`` at boot and every two
-seconds) as soon as Project64 is closed, under the consent already given,
-and the setup screen stays shut while that is pending (his rule,
-2026-09-16: "No additional onboarding past the original onboarding").
+instant). An app update never re-onboards: a trainer refreshes the installed
+pair by itself (``refresh_if_stale`` at boot and every two seconds) as soon
+as Project64 is closed, under the consent already given, and the setup
+screen stays shut while that is pending (his rule, 2026-09-16: "No
+additional onboarding past the original onboarding"). It refreshes only what
+an installer like it put there -- the frozen app a frozen app's install, a
+source checkout only its own -- and never with an older build
+(``core/plugin_ownership.py``).
 Both refuse while Project64 runs: PJ64 1.6 rewrites its registry
 values on exit, so a change made under it can be undone by its own
 shutdown, and a running emulator has the old DLL loaded anyway.
@@ -49,6 +52,7 @@ from typing import Callable, Protocol
 
 from sm64_events.core.setup_gpu import GpuSetupEvidence
 from sm64_events.core.plugin_installation import sha256 as _sha256, verified_copy
+from sm64_events.core.plugin_ownership import FROZEN, build_stamp, not_older, owns
 
 log = logging.getLogger("sm64.capturelayer")
 
@@ -81,6 +85,13 @@ _OVERLAY_DEFAULTS = {
     "installed_renderer_sha256": None,
     "renderer_receipt": None,
     "previous_graphics_dll": None,
+    # Who installed the pair and what build it was (core/plugin_ownership.py),
+    # and the installed wrapper's hash that proves nobody replaced it since.
+    # `installed_sha256` above is what OLDER trainers' refresh trusts: it is
+    # written only for a frozen installer.
+    "installed_by": None,
+    "installed_build": None,
+    "owned_sha256": None,
 }
 
 
@@ -250,7 +261,7 @@ class CaptureLayer:
                  *,
                  renderer_source: Path | None | Callable[[], Path | None] = None,
                  gpu_observation: Callable[[], GpuSetupEvidence | None] | None = None,
-                 auto_refresh: bool = False):
+                 auto_refresh: bool = False, installer: dict | None = None):
         self._registry = registry
         self._processes = processes
         self._settings_path = settings_path
@@ -258,8 +269,10 @@ class CaptureLayer:
         self._renderer_source = renderer_source
         self._gpu_observation = gpu_observation or (lambda: None)
         # A worktree's bundled bytes may be older than a manually installed
-        # candidate. Hash inequality proves difference, never update ordering.
+        # candidate. Hash inequality proves difference, never update ordering:
+        # refresh needs this installer's own install and a newer link time.
         self.auto_refresh = auto_refresh
+        self._installer = installer
         # Install, the packaged refresh tick and Remove all copy the same
         # files and rewrite the same overlay; one at a time, or one side's
         # rollback snapshot can undo the other's finished copy.
@@ -516,8 +529,9 @@ class CaptureLayer:
             overlay["renderer_receipt"] = renderer_receipt
             with verified_copy(source, dll_path, reason="explicit_install",
                                rollback=(ini_path, self._settings_path)) as receipt:
-                overlay["installed_sha256"] = receipt["after"]["sha256"]
                 overlay["installation_receipt"] = receipt
+                overlay["installed_by"] = self._installer
+                self._record_wrapper(overlay, receipt["after"]["sha256"], dll_path, renderer_path)
                 self._write_wrapped_name(ini_path, RENDERER_DLL)
                 self._save_overlay(overlay)
                 # Last write: if copying or persistence fails, Project64 keeps
@@ -560,29 +574,49 @@ class CaptureLayer:
             return ([close, start] if running else [start])
         return []
 
+    def _record_wrapper(self, overlay: dict, sha: str, dll_path: Path, renderer_path: Path) -> None:
+        """The installed wrapper's hash and the installed build. Older
+        trainers refresh whatever `installed_sha256` names, so only a frozen
+        installer writes it; they then leave a checkout's install alone."""
+        frozen = isinstance(self._installer, dict) and self._installer.get("kind") == FROZEN
+        overlay["owned_sha256"] = sha
+        overlay["installed_sha256"] = sha if frozen else None
+        overlay["installed_build"] = build_stamp(dll_path, renderer_path, _build_identity)
+
     def _automatic_refresh(self, pj64_dir: Path | None) -> bool:
-        """External/manual replacements do not transfer update ownership."""
+        """This trainer may update the installed pair by itself: consent, an
+        install by an installer like this one (the frozen app's by a frozen
+        app, a checkout's only by that checkout), the wrapper unchanged since
+        (a manual or external replacement transfers nothing), and a bundle no
+        older than what is installed (never a downgrade)."""
         if not self.auto_refresh or pj64_dir is None:
             return False
         overlay = self._load_overlay()
-        expected = overlay.get("installed_sha256")
+        expected = overlay.get("owned_sha256")
         if not expected or not overlay.get("consented_at"):
             return False
+        if not owns(overlay.get("installed_by"), self._installer):
+            return False
+        plugin_dir = self._plugin_dir(pj64_dir)
+        source, renderer = self._source_dll(), self._renderer_dll()
+        if source is None or renderer is None:
+            return False
         try:
-            return _sha256(self._plugin_dir(pj64_dir) / WRAPPER_DLL) == expected
+            if _sha256(plugin_dir / WRAPPER_DLL) != expected:
+                return False
         except OSError:
             return False
+        return not_older(source, plugin_dir / WRAPPER_DLL) and not_older(renderer, plugin_dir / RENDERER_DLL)
 
     def refresh_if_stale(self) -> bool:
         with self._install_lock:
             return self._refresh_if_stale()
 
     def _refresh_if_stale(self) -> bool:
-        """Copy this build's DLL over a differing one when explicitly enabled.
-
-        Source checkouts leave a shared, manually installed candidate alone.
-        Packaged composition opts in to the existing release update behavior.
-        Project64 must be closed. True when a copy happened; False when nothing was
+        """Copy this build's DLLs over differing ones when `_automatic_refresh`
+        allows it: this installer's own earlier install, never a downgrade, a
+        manual or another checkout's candidate left alone. Project64 must be
+        closed. True when a copy happened; False when nothing was
         installed, the file is current, or PJ64 holds it open. Runs at boot
         under the consent already given -- the one update path for a plugin
         fix, so a user never re-consents to what they already chose."""
@@ -630,8 +664,8 @@ class CaptureLayer:
             if wrapper_stale:
                 receipt = copies.enter_context(verified_copy(
                     source, dll_path, reason="automatic_refresh", rollback=(ini_path, self._settings_path)))
-                overlay["installed_sha256"] = receipt["after"]["sha256"]
                 overlay["installation_receipt"] = receipt
+            self._record_wrapper(overlay, _sha256(dll_path), dll_path, renderer_path)
             self._write_wrapped_name(ini_path, RENDERER_DLL)
             self._save_overlay(overlay)
         return True

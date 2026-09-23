@@ -104,10 +104,14 @@ Updates: when the user clicks Update in the app, the new build restarts and
 `CaptureLayer.refresh_if_stale` (at boot and every two seconds) copies the
 new renderer and wrapper over the installed ones as soon as Project64 is
 closed, keeps the ini pointing at the renderer, and records the new hashes.
-It refreshes only an install the trainer made itself (the installed wrapper
-hash matches its receipt); a wrapper someone else copied in is left alone
-and the setup screen asks. The status field `automatic_update` tells the UI
-which case it is, and onboarding never reopens for an automatic update.
+A source checkout's server does the same for its own rebuilds. Each
+trainer refreshes only an install made by an installer like it -- the
+installed app's by the installed app, a checkout's only by that same
+checkout -- whose wrapper still matches its receipt, and never with an
+older build (by the DLLs' link times; `core/plugin_ownership.py`). A wrapper
+someone else copied in, another checkout's install or a newer build is left
+alone and the setup screen asks. The status field `automatic_update` tells
+the UI which case it is, and onboarding never reopens for an automatic update.
 
 ## Owners and data flow
 

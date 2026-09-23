@@ -33,6 +33,15 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def installer_identity() -> dict:
+    """Who installs the capture layer from this process (core/plugin_ownership.py):
+    the frozen app, or this source checkout by its folder."""
+    if is_frozen():
+        from sm64_events.core.version import __version__
+        return {"kind": "frozen", "version": __version__}
+    return {"kind": "checkout", "path": str(Path(__file__).resolve().parents[3])}
+
+
 def server_port() -> int:
     """TCP port the API/UI server binds. The packaged exe (frozen) uses the
     canonical 8064 (the port external consumers/overlays expect); running from

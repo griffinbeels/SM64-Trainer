@@ -4,6 +4,7 @@ list on the real machine is ever touched. `FakeRegistry` and `FakeProcesses`
 stand in for the injected `Registry`/`Processes` protocols; the plugin
 folder and the DLL source are real files under `tmp_path`."""
 import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,23 @@ from sm64_events.core.capturelayer import (
     CaptureLayer,
     LayerRefused,
 )
+
+#: the installed app; a source checkout is {"kind": "checkout", "path": ...}
+FROZEN_APP = {"kind": "frozen", "version": "test"}
+_clock = [1_700_000_000]
+
+
+def build(payload: bytes, linked: int | None = None) -> bytes:
+    """A minimal PE image whose header carries a link time: what orders two
+    builds (core/plugin_ownership.py). Each call without `linked` is newer."""
+    if linked is None:
+        _clock[0] += 1
+        linked = _clock[0]
+    head = bytearray(0x40)
+    head[:2] = b"MZ"
+    struct.pack_into("<I", head, 0x3C, 0x40)
+    return bytes(head) + b"PE\0\0" + struct.pack("<HHI", 0x14C, 1, linked) + payload
+
 
 ORIGINAL_GRAPHICS_DLL = "GLideN64_LINK_4.2.dll"
 OTHER_GRAPHICS_DLL = "Jabo_Direct3D8.dll"
@@ -79,8 +97,8 @@ def pj64_dir(tmp_path):
 def dll_source(tmp_path):
     """The bundled wrapper; the bundled renderer sits beside it (renderer_for)."""
     source = tmp_path / "shipped_sm64_trainer_gfx.dll"
-    source.write_bytes(b"the real capture layer bytes")
-    renderer_for(source).write_bytes(b"the real renderer bytes")
+    source.write_bytes(build(b"the real capture layer bytes"))
+    renderer_for(source).write_bytes(build(b"the real renderer bytes"))
     return source
 
 
@@ -105,7 +123,7 @@ def write_overlay(settings_path, **fields):
 
 
 def make_layer(pj64_dir, dll_source, settings_path, *, registry=None,
-               image_path=None, gpu=None):
+               image_path=None, gpu=None, installer=FROZEN_APP):
     """A CaptureLayer over fakes, with the overlay pre-seeded to already
     know `pj64_dir` -- the situation after locate() has once seen the
     process running, which is what every install/uninstall test assumes so
@@ -121,7 +139,7 @@ def make_layer(pj64_dir, dll_source, settings_path, *, registry=None,
     else:
         renderer = lambda: renderer_for(dll_source()) if dll_source() else None  # noqa: E731
     layer = CaptureLayer(registry, processes, settings_path, dll_source, renderer_source=renderer,
-                          gpu_observation=gpu, auto_refresh=True)
+                          gpu_observation=gpu, auto_refresh=True, installer=installer)
     return layer, registry, processes
 
 
@@ -154,7 +172,7 @@ def test_packaged_refresh_preserves_a_manual_candidate(pj64_dir, dll_source, set
     layer.install(True)
     installed = pj64_dir / "Plugin" / WRAPPER_DLL
     installed.write_bytes(b"manually installed candidate")
-    dll_source.write_bytes(b"different packaged build")
+    dll_source.write_bytes(build(b"different packaged build"))
     assert layer.refresh_if_stale() is False
     assert installed.read_bytes() == b"manually installed candidate"
     assert any(step["action"] == "install" for step in layer.status().steps)
@@ -173,7 +191,7 @@ def test_corrupt_copy_is_rejected_and_original_install_restored(
     layer.install(True)
     installed = pj64_dir / "Plugin" / WRAPPER_DLL
     before = installed.read_bytes(), settings_path.read_bytes()
-    dll_source.write_bytes(b"new candidate")
+    dll_source.write_bytes(build(b"new candidate"))
     monkeypatch.setattr(shutil, "copyfile", lambda source, dest: Path(dest).write_bytes(b"wrong bytes"))
     with pytest.raises(OSError, match="verification"):
         layer.refresh_if_stale() if automatic else layer.install(True)
@@ -190,7 +208,7 @@ def test_install_receipts_identify_each_successful_copy(pj64_dir, dll_source, se
     assert first["before"]["sha256"] is None
     assert first["source"]["sha256"] == first["after"]["sha256"]
     previous = first["after"]["sha256"]
-    for content in (b"candidate two", b"candidate three"):
+    for content in (build(b"candidate two"), build(b"candidate three")):
         dll_source.write_bytes(content)
         assert layer.refresh_if_stale()
         overlay = json.loads(settings_path.read_text())
@@ -218,9 +236,10 @@ def test_unknown_installation_history_requires_explicit_install(pj64_dir, dll_so
     layer.install(True)
     overlay = json.loads(settings_path.read_text())
     overlay.pop("installed_sha256")
+    overlay.pop("owned_sha256")
     overlay.pop("installation_receipt")
     settings_path.write_text(json.dumps(overlay))
-    dll_source.write_bytes(b"other bundle")
+    dll_source.write_bytes(build(b"other bundle"))
     assert not layer.refresh_if_stale()
     assert any(step["action"] == "install" for step in layer.status().steps)
 
@@ -230,7 +249,7 @@ def test_uninstall_revokes_automatic_update_guidance(pj64_dir, dll_source, setti
     layer.install(True)
     layer.uninstall()
     registry.set(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE, WRAPPER_DLL)
-    dll_source.write_bytes(b"another bundle")
+    dll_source.write_bytes(build(b"another bundle"))
     assert not layer.refresh_if_stale()
     assert any(step["action"] == "install" for step in layer.status().steps)
 
@@ -275,7 +294,7 @@ def test_automatic_refresh_also_leaves_an_unsupported_emulator_alone(pj64_dir, d
     layer, _, processes = make_layer(pj64_dir, dll_source, settings_path)
     layer.install(True)
     previous = (pj64_dir / "Plugin" / WRAPPER_DLL).read_bytes()
-    dll_source.write_bytes(b"a newer wrapper")
+    dll_source.write_bytes(build(b"a newer wrapper"))
     processes.check_folder = lambda path: {"state": "unsupported", "message": "Use Project64 v1.6"}
     assert not layer.refresh_if_stale()
     assert (pj64_dir / "Plugin" / WRAPPER_DLL).read_bytes() == previous
@@ -403,7 +422,8 @@ def test_a_newer_build_refreshes_the_installed_dll_only_while_project64_is_close
         pj64_dir, dll_source, settings_path):
     header = FakeGpu()
     layer, _registry, processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)
-    dll_source.write_bytes(b"a newer capture layer")
+    original = dll_source.read_bytes()
+    dll_source.write_bytes(newer := build(b"a newer capture layer"))
     installed = pj64_dir / "Plugin" / WRAPPER_DLL
 
     processes.image_path = str(pj64_dir / "Project64.exe")
@@ -416,11 +436,11 @@ def test_a_newer_build_refreshes_the_installed_dll_only_while_project64_is_close
     # stays shut (his rule, 2026-09-16).
     assert status.automatic_update is True
     assert layer.refresh_if_stale() is False           # PJ64 holds the file
-    assert installed.read_bytes() == b"the real capture layer bytes"
+    assert installed.read_bytes() == original
 
     processes.image_path = None
     assert layer.refresh_if_stale() is True
-    assert installed.read_bytes() == b"a newer capture layer"
+    assert installed.read_bytes() == newer
     assert layer.refresh_if_stale() is False           # current now
     header.alive += 1
     assert layer.status().wrapper_current is True
@@ -430,7 +450,8 @@ def test_the_refresh_loop_keeps_trying_until_stopped(pj64_dir, dll_source, setti
     import threading
     header = FakeGpu()
     layer, _registry, processes = _installed_and_alive(pj64_dir, dll_source, settings_path, header)
-    dll_source.write_bytes(b"a newer capture layer")
+    original = dll_source.read_bytes()
+    dll_source.write_bytes(newer := build(b"a newer capture layer"))
     processes.image_path = str(pj64_dir / "Project64.exe")
     stop = threading.Event()
     thread = threading.Thread(target=layer.refresh_loop, args=(stop, 0.02), daemon=True)
@@ -438,12 +459,12 @@ def test_the_refresh_loop_keeps_trying_until_stopped(pj64_dir, dll_source, setti
     import time
     time.sleep(0.1)
     installed = pj64_dir / "Plugin" / WRAPPER_DLL
-    assert installed.read_bytes() == b"the real capture layer bytes"   # PJ64 open: waits
+    assert installed.read_bytes() == original                           # PJ64 open: waits
     processes.image_path = None                                          # ...closed
     deadline = time.monotonic() + 2.0
-    while installed.read_bytes() != b"a newer capture layer" and time.monotonic() < deadline:
+    while installed.read_bytes() != newer and time.monotonic() < deadline:
         time.sleep(0.02)
-    assert installed.read_bytes() == b"a newer capture layer"
+    assert installed.read_bytes() == newer
     stop.set()
     thread.join(timeout=2.0)
     assert not thread.is_alive()
@@ -464,12 +485,12 @@ def test_the_steps_are_the_exact_path_from_each_state_to_a_live_layer(pj64_dir, 
     layer.install(consent=True)
     assert ids(layer.status()) == [("start", False, None)]          # needs_restart, PJ64 closed
     processes.image_path = str(pj64_dir / "Project64.exe")
-    dll_source.write_bytes(b"a newer capture layer")
+    dll_source.write_bytes(build(b"a newer capture layer"))
     header = FakeGpu()
     processes2 = FakeProcesses(str(pj64_dir / "Project64.exe"))
     layer2 = CaptureLayer(_registry, processes2, settings_path, dll_source,
                           renderer_source=renderer_for(dll_source),
-                          gpu_observation=header, auto_refresh=True)
+                          gpu_observation=header, auto_refresh=True, installer=FROZEN_APP)
     layer2.status()
     header.alive += 1
     stale = layer2.status()
@@ -654,12 +675,12 @@ def test_a_packaged_refresh_adds_the_renderer_to_an_older_install(pj64_dir, dll_
 def test_a_stale_renderer_alone_makes_the_layer_stale(pj64_dir, dll_source, settings_path):
     layer, _, _ = make_layer(pj64_dir, dll_source, settings_path)
     layer.install(True)
-    renderer_for(dll_source).write_bytes(b"a newer renderer")
+    renderer_for(dll_source).write_bytes(newer := build(b"a newer renderer"))
     status = layer.status()
     assert status.wrapper_current and not status.renderer_current
     assert any("differs from this build" in problem for problem in status.problems)
     assert layer.refresh_if_stale() is True
-    assert (pj64_dir / "Plugin" / RENDERER_DLL).read_bytes() == b"a newer renderer"
+    assert (pj64_dir / "Plugin" / RENDERER_DLL).read_bytes() == newer
     assert layer.status().installation_verified
 
 
@@ -690,3 +711,97 @@ def test_build_identity_is_read_once_per_file_version(tmp_path, monkeypatch):
     dll.write_bytes(b"MZ " + b"b" * 64 + b"-renderer" + b" longer")
     assert _build_identity(dll) == b"b" * 64 + b"-renderer"
     assert reads == [dll]
+
+
+# -- who may refresh by itself (core/plugin_ownership.py) -----------------------
+# One Plugin folder, one shared overlay, several trainers: the installed app
+# (frozen) and each source checkout. Before 2026-09-23 every one of them read
+# "the installed DLL is the one I installed", so the frozen app copied its
+# older bundle over a worktree's fresh install as soon as Project64 closed.
+
+CHECKOUT_A = {"kind": "checkout", "path": "C:/code/sm64_tracker"}
+CHECKOUT_B = {"kind": "checkout", "path": "C:/code/sm64_tracker/.claude/worktrees/other"}
+
+
+def _as(installer, registry, processes, settings_path, dll_source):
+    """Another trainer on the same machine, sharing the overlay and Plugin folder."""
+    return CaptureLayer(registry, processes, settings_path, dll_source,
+                        renderer_source=renderer_for(dll_source), auto_refresh=True, installer=installer)
+
+
+@pytest.mark.parametrize("installed_by, refreshing, owned", [
+    (FROZEN_APP, FROZEN_APP, True),                                  # the packaged update path
+    ({"kind": "frozen", "version": "0.9"}, FROZEN_APP, True),        # a release updates an earlier one's install
+    (CHECKOUT_A, CHECKOUT_A, True),                                  # a checkout updates its own: no Install click
+    (CHECKOUT_A, FROZEN_APP, False),                                 # the frozen app leaves a dev install alone
+    (FROZEN_APP, CHECKOUT_A, False),                                 # a checkout leaves the app's install alone
+    (CHECKOUT_A, CHECKOUT_B, False),                                 # ...and another checkout's
+    (None, FROZEN_APP, False),                                       # an unknown installer owns nothing
+])
+def test_only_an_installer_like_this_one_refreshes_its_install(
+        pj64_dir, dll_source, settings_path, installed_by, refreshing, owned):
+    installer, registry, processes = make_layer(pj64_dir, dll_source, settings_path, installer=installed_by)
+    installer.install(True)
+    installed = pj64_dir / "Plugin" / WRAPPER_DLL
+    before = installed.read_bytes()
+    dll_source.write_bytes(newer := build(b"a newer capture layer"))
+    renderer_for(dll_source).write_bytes(build(b"a newer renderer"))
+    other = _as(refreshing, registry, processes, settings_path, dll_source)
+    status = other.status()
+    assert status.automatic_update is owned
+    assert any(step["action"] == "install" for step in status.steps) is not owned
+    assert other.refresh_if_stale() is owned
+    assert installed.read_bytes() == (newer if owned else before)
+    if owned:  # the refresh keeps the install's owner and records the new build
+        overlay = json.loads(settings_path.read_text())
+        assert overlay["installed_by"] == installed_by
+        assert overlay["installed_build"]["wrapper"]["linked"] == struct.unpack_from("<I", newer, 0x48)[0]
+
+
+@pytest.mark.parametrize("installer", [FROZEN_APP, CHECKOUT_A])
+@pytest.mark.parametrize("older", ["wrapper", "renderer"])
+def test_a_refresh_never_replaces_a_newer_build(pj64_dir, dll_source, settings_path, installer, older):
+    # The same installer, now running an older build (an older release, or a
+    # checkout switched to an older branch): the installed layer stays.
+    layer, _, _ = make_layer(pj64_dir, dll_source, settings_path, installer=installer)
+    layer.install(True)
+    plugin = pj64_dir / "Plugin"
+    before = (plugin / WRAPPER_DLL).read_bytes(), (plugin / RENDERER_DLL).read_bytes()
+    stale = dll_source if older == "wrapper" else renderer_for(dll_source)
+    stale.write_bytes(build(b"an older " + older.encode(), linked=1_000))
+    status = layer.status()
+    assert status.automatic_update is False
+    assert any(step["action"] == "install" for step in status.steps)
+    assert layer.refresh_if_stale() is False
+    assert ((plugin / WRAPPER_DLL).read_bytes(), (plugin / RENDERER_DLL).read_bytes()) == before
+    layer.install(True)                      # he may still choose it explicitly
+    assert (plugin / (WRAPPER_DLL if older == "wrapper" else RENDERER_DLL)).read_bytes() == stale.read_bytes()
+
+
+def test_a_build_without_a_link_time_is_never_replaced_or_installed_by_itself(
+        pj64_dir, dll_source, settings_path):
+    layer, _, _ = make_layer(pj64_dir, dll_source, settings_path)
+    layer.install(True)
+    dll_source.write_bytes(b"not a PE image: its age is unknown")
+    assert layer.refresh_if_stale() is False
+    assert layer.status().automatic_update is False
+
+
+def test_a_checkout_install_is_invisible_to_older_trainers_refresh(pj64_dir, dll_source, settings_path):
+    # Older trainers (the installed app until it updates) refresh whatever
+    # `installed_sha256` names while the disk still holds it. A checkout's
+    # install leaves it empty; the frozen app's keeps writing it.
+    import hashlib
+    layer, _, _ = make_layer(pj64_dir, dll_source, settings_path, installer=CHECKOUT_A)
+    layer.install(True)
+    overlay = json.loads(settings_path.read_text())
+    wrapper_sha = hashlib.sha256(dll_source.read_bytes()).hexdigest()
+    assert overlay["installed_by"] == CHECKOUT_A and overlay["owned_sha256"] == wrapper_sha
+    assert overlay["installed_sha256"] is None
+    stamp = overlay["installed_build"]
+    assert stamp["wrapper"]["linked"] == struct.unpack_from("<I", dll_source.read_bytes(), 0x48)[0]
+    assert stamp["renderer"]["linked"] is not None
+    frozen, _, _ = make_layer(pj64_dir, dll_source, settings_path, installer=FROZEN_APP)
+    frozen.install(True)
+    overlay = json.loads(settings_path.read_text())
+    assert overlay["installed_by"] == FROZEN_APP and overlay["installed_sha256"] == wrapper_sha

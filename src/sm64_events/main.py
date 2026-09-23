@@ -369,7 +369,7 @@ def _build_capture_layer(poller, replay):
     from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
     from sm64_events.core.setup_gpu import GpuSetupProbe
     from sm64_events.core.paths import (bundled_plugin_dll, bundled_renderer_dll, capture_layer_settings_path,
-                                        is_frozen, migrate_capture_layer_settings)
+                                        installer_identity, migrate_capture_layer_settings)
     migrate_capture_layer_settings()
     capture_layer = CaptureLayer(
         registry=WinRegistry(), processes=WinProcesses(),
@@ -377,19 +377,19 @@ def _build_capture_layer(poller, replay):
         dll_source=bundled_plugin_dll,
         renderer_source=bundled_renderer_dll,
         gpu_observation=GpuSetupProbe(lambda: replay.recorder.status() if replay else {}),
-        auto_refresh=is_frozen())
+        auto_refresh=True, installer=installer_identity())
     from sm64_events.core.setup_runtime import SetupRuntime
     setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
-    # Source checkouts can carry older DLLs than the user's active candidate.
-    # Only an explicit Install may replace that shared file from a worktree.
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:
-        # A packaged build carrying a different layer refreshes the installed DLL
-        # while Project64 is closed -- the packaged-release update path,
-        # under the consent already given; a running PJ64 holds its DLL and
-        # the setup screen says so instead. Check at boot and at the refresh
-        # loop's configured interval, independent of which app opens first.
+        # A build carrying a newer layer refreshes the installed DLL while
+        # Project64 is closed, under the consent already given -- but only an
+        # install by an installer like this one (the frozen app's, or this
+        # checkout's own) and never with an older build (plugin_ownership).
+        # A running PJ64 holds its DLL and the setup screen says so instead.
+        # Check at boot and at the refresh loop's interval, independent of
+        # which app opens first.
         if capture_layer.refresh_if_stale():
             logging.getLogger("sm64.replay").info(
                 "capture layer refreshed to this build's DLL (Project64 was closed)")
