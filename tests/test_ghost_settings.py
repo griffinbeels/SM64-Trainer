@@ -120,3 +120,77 @@ def test_the_card_reads_every_published_limit_and_switch():
     for name in limits["switches"]:
         assert name in shown["labels"], f"ui/ghostsession.js SWITCH_LABELS has no words for {name!r}"
         assert controls["switches"][name] is (not settings.BY_NAME[name].default)
+
+
+# -- one definition of each default ------------------------------------------
+
+#: Settings whose default has been restated beside the registry before (the
+#: native channel and session each carried their own 0.5 for both).
+GUARDED = ("opacity", "volume")
+#: The shipped modules a ghost setting passes through.
+GHOST_MODULES = sorted([*(REPO / "src/sm64_events/ghost").glob("*.py"),
+                        REPO / "src/sm64_events/server/ghost_api.py",
+                        REPO / "src/sm64_events/server/ghost_clock.py"])
+
+
+def restated_defaults(source: str, names=GUARDED) -> list[str]:
+    """Every place a module gives a guarded setting its own literal value:
+    `DEFAULT_<NAME> = ...`, `x.get("<name>", <literal>)`, a parameter named
+    after it with a literal default, or `<obj>.<name> = <literal>`."""
+    import ast
+    found = []
+    literal = lambda node: isinstance(node, ast.Constant) and node.value is not None  # noqa: E731
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Assign):
+            targets = [element for target in node.targets
+                       for element in (target.elts if isinstance(target, ast.Tuple) else [target])]
+            values = node.value.elts if isinstance(node.value, ast.Tuple) else [node.value] * len(targets)
+            for target, value in zip(targets, values):
+                name = getattr(target, "id", None) or getattr(target, "attr", None)
+                if name in {f"DEFAULT_{guarded.upper()}" for guarded in names}:
+                    found.append(f"line {node.lineno}: {name} defined")
+                elif name in names and literal(value):
+                    found.append(f"line {node.lineno}: {name} = {value.value!r}")
+        elif (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "get"
+              and len(node.args) == 2 and isinstance(node.args[0], ast.Constant)
+              and node.args[0].value in names and literal(node.args[1])):
+            found.append(f"line {node.lineno}: .get({node.args[0].value!r}, {node.args[1].value!r})")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            arguments = node.args
+            pairs = [*zip(arguments.args[len(arguments.args) - len(arguments.defaults):], arguments.defaults),
+                     *zip(arguments.kwonlyargs, arguments.kw_defaults)]
+            found += [f"line {node.lineno}: {node.name}({arg.arg}={default.value!r})"
+                      for arg, default in pairs if default is not None and arg.arg in names and literal(default)]
+    return found
+
+
+def test_only_the_registry_gives_a_setting_its_default():
+    """The default visibility and volume are the registry rows' own; the
+    native channel, the native session and the session read them there
+    (`settings.DEFAULT_OPACITY`, `settings.DEFAULT_VOLUME`) or are handed the
+    value, so moving a default is one edit."""
+    offenders = {}
+    for path in GHOST_MODULES:
+        if path.name == "settings.py":
+            continue
+        found = restated_defaults(path.read_text(encoding="utf-8"))
+        if found:
+            offenders[path.relative_to(REPO).as_posix()] = found
+    assert not offenders, f"these modules restate a registry default: {offenders}"
+    assert restated_defaults((REPO / "src/sm64_events/ghost/settings.py").read_text(encoding="utf-8")), \
+        "the owner itself must define them, or the scan could never match anything"
+
+
+@pytest.mark.parametrize("planted", [
+    'OPACITY = value.get("opacity", 0.5)\n',
+    "DEFAULT_VOLUME = 0.5\n",
+    "def reconcile(*, volume=0.5):\n    pass\n",
+    "request.opacity, request.volume = 0.5, DEFAULT_VOLUME\n",
+])
+def test_the_default_guard_can_still_fail(planted):
+    assert restated_defaults(planted)
+
+
+def test_the_default_guard_ignores_what_is_not_a_default():
+    assert not restated_defaults('request.opacity = DEFAULT_OPACITY\nwait = value.get("opacity")\n'
+                                 'WATCH_PERIOD_S = 0.5\ndef reconcile(*, volume=None):\n    pass\n')
