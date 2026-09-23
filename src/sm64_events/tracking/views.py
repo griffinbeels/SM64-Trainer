@@ -318,6 +318,13 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             # but every one of them still carries a time that measures the
             # wrong moment.
             "caveat": attempt_caveat(a),
+            # A VALID run (projection caveat 21): True/False once judged,
+            # null for every row journaled before the rules that judge it.
+            # `invalid_reason` is a caveats.py VALIDITY_CAVEATS key; the log
+            # draws it through `caveat` above and still offers Save.
+            "valid": a.valid,
+            "invalid_reason": a.invalid_reason,
+            "state_loads": a.state_loads,
             # A time he brought rather than played: a real row with every
             # row affordance, and provably no replay -- the one control the
             # log hides for it, rather than drawing a player for a run the
