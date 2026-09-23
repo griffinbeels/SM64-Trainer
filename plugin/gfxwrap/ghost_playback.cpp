@@ -614,6 +614,27 @@ void silence(uint32_t index) {
     const float centre[3]{};
     if(sink && sink->place)sink->place(index,centre,0.0f);
 }
+// The record whose pose a refused record displays: the previous pose when
+// the refusal run is at most GP_BRIDGE_FRAMES long, bounded by recorded poses
+// in the same scene with consecutive occurrences and coordinates. Null
+// otherwise (a longer run, a scene change, the clip's first or last rows).
+const gclip_frame *bridged(const Clip& clip,uint32_t at) {
+    const auto posed=[&](uint32_t i){return (clip.frames[i].sample.valid_fields&GC_VALID_POSE)!=0;};
+    uint32_t before=at,after=at;
+    while(before>0 && !posed(before-1) && at-before<GP_BRIDGE_FRAMES)--before;
+    if(before==0 || !posed(before-1))return nullptr;
+    --before;
+    while(after+1<clip.index_count && !posed(after+1) && after-before<GP_BRIDGE_FRAMES)++after;
+    if(after+1>=clip.index_count || !posed(after+1))return nullptr;
+    ++after;
+    if(after-before-1>GP_BRIDGE_FRAMES)return nullptr;
+    const auto &first=clip.frames[before].sample,&last=clip.frames[after].sample;
+    if(last.sequence-first.sequence!=after-before
+            || clip_coordinate(clip,after)-clip_coordinate(clip,before)!=after-before)return nullptr;
+    for(uint32_t i=before;i<=after;++i)
+        if(clip.frames[i].sample.level!=first.level || clip.frames[i].sample.area!=first.area)return nullptr;
+    return &clip.frames[before];
+}
 // fade: 1 normally; after a dance tail's last record it falls by
 // 1/GP_STAR_FADE_FRAMES a frame on the held last pose, and is 0 once hidden.
 uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
@@ -654,15 +675,18 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
         report.selected_sequence_hi=uint32_t(selected.sample.sequence>>32);
         sequence_reported=true;
     }
-    if(!(selected.sample.valid_fields&GC_VALID_POSE)) {refusals.fetch_add(1);return GP_INVALID_FRAME;}
+    const gclip_frame *shown=&selected;
+    if(!(selected.sample.valid_fields&GC_VALID_POSE) && !(shown=bridged(*clip,lo))) {
+        refusals.fetch_add(1);return GP_INVALID_FRAME;
+    }
     gs_record recorded{};recorded.bytes=sizeof(recorded);recorded.version=GS_VERSION;
-    recorded.configuration=selected.configuration;recorded.sample=selected.sample;
-    recorded.world.status=selected.world_status;
+    recorded.configuration=shown->configuration;recorded.sample=shown->sample;
+    recorded.world.status=shown->world_status;
     evaluations.fetch_add(1);
     float opacity=active_request.opacity*fade;
     if(active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE))
         opacity*=ghost_proximity::factor(live.pose.position,live.pose.scale,
-            selected.sample.pose.position,selected.sample.pose.scale,active_request.proximity_distance);
+            shown->sample.pose.position,shown->sample.pose.scale,active_request.proximity_distance);
     if(ghost_pose::evaluate(model.value,recorded,live,world,opacity,scratch[index],out)!=ghost_pose::Result::ok) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
@@ -671,8 +695,8 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     // under the live view-projection its body and shadow are drawn with.
     ghost_occlusion::region(out.view_projection,active_request.occlusion_fade!=0,
         (live.valid_fields&GC_VALID_POSE)!=0,live.pose.position,live.pose.scale,out.occlusion);
-    if(active_request.shadow_enabled && (selected.sample.valid_fields&GC_VALID_SHADOW)
-            && !ghost_pose::shadow(model.value,selected.sample,out.view_projection,shadows[index].vertices,
+    if(active_request.shadow_enabled && (shown->sample.valid_fields&GC_VALID_SHADOW)
+            && !ghost_pose::shadow(model.value,shown->sample,out.view_projection,shadows[index].vertices,
                                    shadows[index].texture,out.shadow)) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }

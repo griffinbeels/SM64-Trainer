@@ -134,18 +134,37 @@ causes, each fixed at its source:
   `set_mario_animation`'s startFrame-1 (-1) with a stale timer. A hidden pose
   no longer checks animation fields; playback draws nothing for it without
   evaluating the model ([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp)).
-- **Still open**: 40 single frames of long-jump land during the BitS-stairs
-  BLJ (status 4). The frame after each is a fresh land animation at frame 0,
-  so the renderer did not process Mario on the refused frame; whether he was
-  inactive (now a hidden pose) or in another area index (`area`) needs a new
-  recording's reason. 16 frames of `ACT_EXIT_AIRBORNE` after a painting exit
-  (status 3) are most likely a NULL animation before the first
-  `set_mario_animation` (`animation`); the model cannot reproduce an
-  unanimated Mario, so they stay hidden until confirmed.
+- **Short gaps, bridged in playback**: 40 single frames of long-jump land
+  during the BitS-stairs BLJ (status 4). The frame after each is a fresh land
+  animation at frame 0, so the renderer did not process Mario on the refused
+  frame. A new recording's reason will say whether he was inactive (now a hidden
+  pose) or in another area index (`area`). Whatever the cause, playback now
+  holds the previous pose over any run of at most `GP_BRIDGE_FRAMES` (2)
+  refused records. The run must have a recorded pose on both sides, in the same
+  level and area, with no missing occurrence
+  ([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `bridged`). A
+  67 ms hold is below what reads as a pause; a blink is not. Longer runs, scene
+  changes and the clip's first or last rows still hide the ghost. The clip
+  and the audit keep the rows refused: this is display, not extraction.
+- **Painting exit, kept hidden**: the first 16 frames of `ACT_EXIT_AIRBORNE`
+  (status 3) come before the action's first `set_mario_animation`, so the new
+  level's Mario object has no animation (`animation`). The game draws him
+  unanimated at his spawn point, which is in the painting's plane. On
+  2026-09-23 he sat at (-2304, 0, -4520) for all 16 frames, then launched at
+  +32 units a frame out of it. By decomp reading (not yet footage), those
+  frames are also the arrival transition (`init_mario_after_warp`'s default
+  star iris, 0x10 frames). A ghost drawn there would sit inside the painting
+  under the same terrain depth, so it stays hidden. The model has no
+  unanimated pose to draw it with anyway. Footage of a painting exit would
+  confirm or overturn this.
 
 Poles and grabs have no capture rule of their own: their gfx angles carry
-the pole's pitch/roll into the executed (or TRS) root. A future pole gap will
-name its reason.
+the pole's pitch/roll into the executed (or TRS) root. In the 2026-09-23 Elevator
+Tour clip every pole frame (grab, hold, climb) has a pose. The ghost was missing
+on the poles because of alignment: that clip was recorded from the level entrance,
+the later attempts started inside the volcano, and the star coordinate follows
+elapsed time, so the ghost was still outside (another area, hidden) while he
+climbed.
 
 The native classifier follows the existing `EpochTracker`/`IgtClock` transition
 rules for levels, retries, area warps and teleports. Python encodes configuration
@@ -226,7 +245,8 @@ One command displays a set of up to 16 saved recordings (the PB plus others)
 against the same live origin and the same opacity, nudge, tint switch, overlap
 fade and star-end policy. Hue is per recording. Each ghost selects its own row
 from the shared coordinate: before-start clamps, and after-end, gaps, wrong
-scene, refused poses and its own recorded touch hide only that ghost. A live
+scene, refused poses (except a bridged short run) and its own recorded touch
+hide only that ghost. A live
 star grab or star generation change ends every ghost. Overlap fade compares
 live Mario with each ghost separately. The renderer evaluates all ghosts into
 one borrowed mesh each, sorts them farthest root first and draws them with one
@@ -290,7 +310,8 @@ dance, then fades; an older 100-coin clip plays to its end at the exit x-cam.
 The index chooses the first exact coordinate, including an unsupported pose,
 then checks that row's scene against live. It never searches a later duplicate
 or another scene for a usable pose. Before-start selection clamps to the first
-row; gaps, after-end, wrong scene, invalid timing and pose refusals hide playback.
+row; gaps, after-end, wrong scene, invalid timing and pose refusals hide playback,
+except that a refusal run of at most two records inside one scene holds the pose before it.
 Per-row scenes allow coherent cross-area clips.
 
 ## Recording, preservation and ownership
