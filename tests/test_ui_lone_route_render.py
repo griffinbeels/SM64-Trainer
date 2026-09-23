@@ -42,6 +42,20 @@ SETTLE = "new Promise(r => setTimeout(r, 2500))"
 COUNT_CELLS = ("document.querySelectorAll('.stagebanner .starcell').length")
 
 
+def _drawn(page, ready) -> int:
+    """Wait (up to the run's bound) until the star row's cell count satisfies
+    `ready`, then return it (the last count if it never does, for the
+    caller's assertion). A fixed settle before counting read 0 cells while a
+    loaded machine was still drawing the page (merge check 2026-09-23)."""
+    import time
+    deadline = time.monotonic() + driver.default_wait_ms() / 1000
+    while True:
+        cells = page.evaluate(COUNT_CELLS)
+        if ready(cells) or time.monotonic() >= deadline:
+            return cells
+        page.wait_ms(100)
+
+
 def _post(base: str, path: str, payload: dict) -> dict:
     request = urllib.request.Request(
         f"{base}{path}", data=json.dumps(payload).encode(),
@@ -75,8 +89,7 @@ def test_a_route_that_leaves_one_star_renders_exactly_one_cell(tmp_path):
         _post(base, "/api/route/select", {"route_id": route_id})
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
-            page.evaluate(SETTLE)
-            cells = page.evaluate(COUNT_CELLS)
+            cells = _drawn(page, lambda cells: cells == 1)
     assert before["course_id"] == FIXTURE_COURSE
     assert cells == 1, (
         f"the route names one star of this course; the selector drew {cells} "
@@ -94,6 +107,9 @@ def test_a_lone_route_option_does_not_steal_a_target_he_already_holds(tmp_path):
         _post(base, "/api/route/select", {"route_id": route_id})
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
+            # The row is drawn before the settle that gives any auto-pick
+            # its chance to act.
+            assert _drawn(page, lambda cells: cells > 0) > 0
             page.evaluate(SETTLE)
             errors = page.evaluate(
                 "JSON.stringify(window.__uilabErrors || [])")
@@ -112,8 +128,8 @@ def test_the_page_still_renders_with_no_route_at_all(tmp_path):
     with serve_ui(tmp_path / "lone-noroute.db") as base:
         with driver.get_driver().launch(headless=True) as page:
             page.goto(base)
+            cells = _drawn(page, lambda cells: cells > 1)
             page.evaluate(SETTLE)
-            cells = page.evaluate(COUNT_CELLS)
         after = _get(base, "/api/session")["target"]
     assert cells > 1, "no route active: the full star row must still render"
     assert after["star_id"] == FIXTURE_STAR
