@@ -169,9 +169,11 @@ typedef struct gc_particles {
 } gc_particles;
 
 /* The object Mario holds, as geo_process_held_object drew it from his right
- * hand this frame. Its own graph node is off while held, so a current
- * animTimer (== area_update_counter) can only come from that hand, the same
- * callback that writes the HOLP: this frame's world root. An object without
+ * hand this frame. Its own graph node never draws while held: it is off, or
+ * (the Bob-omb, Mips) on but invisible, culled after geo_process_object
+ * advanced its animation. A current animTimer (== area_update_counter) proves
+ * this frame's animation either way, and the hand's callback writes the HOLP:
+ * this frame's world root. An object without
  * an animation (a box: animation_id -1, frame 0) has no timer; the hand draws
  * it whenever Mario's body draws, so it is kept only beside a root his
  * executed lists proved this frame. The orientation is Mario's own root (the
