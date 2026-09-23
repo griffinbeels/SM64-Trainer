@@ -162,6 +162,15 @@ def main() -> int:
                   "encoder. Install ffmpeg for a proper release.")
         else:
             print(f"bundling ffmpeg: {ffmpeg}")
+        # The three natives are build outputs, not tracked files: package
+        # only ones built from THESE sources, or refuse (tools/build_natives.py).
+        sys.path.insert(0, str(REPO / "tools"))
+        import build_natives
+        try:
+            build_natives.ensure(strict=True)
+        except RuntimeError as failure:
+            print(f"cannot package the natives: {failure}", file=sys.stderr)
+            return 2
         pyi.run(app_args(ffmpeg))
         print("\nBuilt:", REPO / "dist" / "SM64Trainer")
     if args.mode in ("bootstrap", "all"):
