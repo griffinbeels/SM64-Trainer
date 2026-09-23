@@ -1,5 +1,6 @@
 #include "ghost_compositor_gl.h"
 #include "ghost_shadow_gl.h"
+#include "ghost_particle_gl.h"
 #include <algorithm>
 #include <cmath>
 #include <new>
@@ -143,6 +144,7 @@ struct Instance {
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
     int32_t uniforms[12]={};
     shadow::Storage shadow;
+    particle::Storage particles;
     struct Layer {
         bool open=false,broken=false,active=false;
         LayerPass pass=LayerPass::color;
@@ -233,6 +235,14 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     p->width=width;p->height=height;p->capacity=capacity;p->ready=true;return Result::ok;
 }
 
+Result prepare_particles(Instance* p,const uint8_t* rgba,uint32_t width,uint32_t height) {
+    if(!p || !p->ready)return Result::invalid;
+    abort(p);
+    const auto& g=p->g;Guard guard(g);
+    return p->particles.prepare(g,p->particles.program?p->particles.program:
+        program(g,particle::vertex_shader,particle::fragment_shader),rgba,width,height) ? Result::ok : Result::resources;
+}
+
 Result begin(Instance* p,const Target& t,const Pose& pose) {
     return begin_batch(p,t,&pose,1);
 }
@@ -253,7 +263,8 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
        !finite(pose.view_projection,16) || !finite(pose.light_direction,3) ||
        !std::isfinite(pose.ambient) || !std::isfinite(pose.diffuse) || !std::isfinite(pose.opacity) ||
        pose.opacity<0 || pose.opacity>1 || pose.flip_y>1 || !std::isfinite(pose.hue_degrees) ||
-       pose.hue_degrees<0 || pose.hue_degrees>359 || !shadow::valid(pose.shadow))return Result::invalid;
+       pose.hue_degrees<0 || pose.hue_degrees>359 || !shadow::valid(pose.shadow) ||
+       !particle::valid(pose.particles))return Result::invalid;
     }
     if(t.samples!=1 || t.unsupported || (t.depth!=Depth::ordinary && t.depth!=Depth::n64_image))return Result::unsupported;
     if(t.depth==Depth::n64_image && (!t.n64_depth_texture || t.n64_depth_texture==p->textures[0] ||
@@ -330,6 +341,8 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.BufferSubData(ARRAY_BUFFER,ptrdiff_t(first)*sizeof(Vertex),ptrdiff_t(pose.count)*sizeof(Vertex),pose.vertices);
         first+=pose.count;
     }
+    p->particles.upload(g,poses,count);
+    g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
     first=0;
     for(uint32_t index=0;index<count;++index) {
       const auto& pose=poses[index];
@@ -359,6 +372,9 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.StencilOpSeparate(FRONT_AND_BACK,KEEP,KEEP,INCR);
         g.Enablei(BLEND,0);g.BlendFuncSeparatei(0,SRC_ALPHA,ONE_MINUS_SRC_ALPHA,ZERO,ONE);
         g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);g.DrawArrays(TRIANGLES,first,pose.count);
+        // This ghost's particles, against its body depth still in self-depth.
+        p->particles.draw(g,pose,index,t,layered);
+        g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
     }
       first+=pose.count;
     }
@@ -460,7 +476,7 @@ Display display(const Instance* p) {
 }
 void destroy(Instance* p) {
     if(!p)return;abort(p);const auto& g=p->g;
-    p->shadow.destroy(g);
+    p->shadow.destroy(g);p->particles.destroy(g);
     end_layer(p);
     g.DeleteTextures(5,p->textures);g.DeleteFramebuffers(4,p->fbos);g.DeleteRenderbuffers(1,&p->self_depth);
     g.DeleteVertexArrays(1,&p->vao);g.DeleteBuffers(1,&p->vbo);if(p->shader_program)g.DeleteProgram(p->shader_program);delete p;
