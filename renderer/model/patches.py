@@ -30,6 +30,26 @@ def _patch_audio(source: Path) -> None:
          "           * sa_source_gain(sSoundBanks[bank][soundIndex].x);")
 
 
+def _patch_metal_wings(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # Metal Mario with the wing cap draws mario_metal_cap_wings(_transparent)
+    # from segment-4 0x0400A090/0x0400B090 (32x64 each); upstream libsm64
+    # leaves them out (-99), which refused that combination outright.
+    edit("load_tex_data.h", "    mario_texture_metal_wings_half_1 = -99,\n    mario_texture_metal_wings_half_2,\n"
+         "    mario_texture_eyes_closed_unused1,",
+         "    mario_texture_metal_wings_half_1,\n    mario_texture_metal_wings_half_2,\n"
+         "    mario_texture_eyes_closed_unused1 = -99,")
+    edit("load_tex_data.h", "#define NUM_USED_TEXTURES 11", "#define NUM_USED_TEXTURES SG_ATLAS_CELLS")
+    edit("load_tex_data.h", "32912, 37008 };", "32912, 37008, 41104, 45200 };")
+    edit("load_tex_data.h", "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };",
+         "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };")
+    edit("load_tex_data.h", "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64 };",
+         "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64, 64, 64 };")
+    edit("load_tex_data.h", "#include <stdint.h>", '#include <stdint.h>\n#include "model.h"')
+
+
 def patch(source: Path) -> None:
     def edit(name, old, new):
         replace(source / "src" / name, old, new)
@@ -78,20 +98,7 @@ def patch(source: Path) -> None:
     edit("gfx_macros.h", "#define gsSPClearGeometryMode(word) (GFXCMD_None)",
          "#define gsSPClearGeometryMode(word) GFXCMD_GeometryMode, 0, (word)")
     edit("gfx_macros.h", '#include "gfx_adapter_commands.h"', '#include "gfx_adapter_commands.h"\n#include "model.h"')
-    # Metal Mario with the wing cap draws mario_metal_cap_wings(_transparent)
-    # from segment-4 0x0400A090/0x0400B090 (32x64 each); upstream libsm64
-    # leaves them out (-99), which refused that combination outright.
-    edit("load_tex_data.h", "    mario_texture_metal_wings_half_1 = -99,\n    mario_texture_metal_wings_half_2,\n"
-         "    mario_texture_eyes_closed_unused1,",
-         "    mario_texture_metal_wings_half_1,\n    mario_texture_metal_wings_half_2,\n"
-         "    mario_texture_eyes_closed_unused1 = -99,")
-    edit("load_tex_data.h", "#define NUM_USED_TEXTURES 11", "#define NUM_USED_TEXTURES SG_ATLAS_CELLS")
-    edit("load_tex_data.h", "32912, 37008 };", "32912, 37008, 41104, 45200 };")
-    edit("load_tex_data.h", "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };",
-         "{ 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 };")
-    edit("load_tex_data.h", "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64 };",
-         "{ 32, 32, 32, 32, 32, 32, 32, 32, 32, 64, 64, 64, 64 };")
-    edit("load_tex_data.h", "#include <stdint.h>", '#include <stdint.h>\n#include "model.h"')
+    _patch_metal_wings(source)
     edit("gfx_macros.h", "#define gsDPSetCombineMode(a, b) (GFXCMD_None)", """
 /* Token pasting retains the actual named combiner before its RDP expansion.
  * Both cycles must map to the same supported behavior; unknown modes fail the
