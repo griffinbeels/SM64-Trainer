@@ -5,7 +5,9 @@
 
 Refuses unless the tree is clean, you're on main, `gh` is authed, the local
 merge check passes, and the commit's full run on GitHub passed (it waits
-for one still running). Builds the onedir app + bootstrap installer via
+for one still running). The verification lane and tools/build_exe.py build
+the three natives from this commit and refuse a stale one
+(tools/build_natives.py). Builds the onedir app + bootstrap installer via
 tools/build_exe.py (ffmpeg must be on PATH so it gets bundled), zips the
 onedir tree, emits the per-file update manifest, and publishes SIX assets
 the incremental updater + bootstrap consume:

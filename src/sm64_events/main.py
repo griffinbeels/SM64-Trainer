@@ -14,6 +14,7 @@ from sm64_events.core.paths import (
     compilations_dir,
     db_path,
     instance_lock_path,
+    is_frozen,
     migrate_legacy_data_dir,
     server_port,
 )
@@ -548,6 +549,29 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def _build_stale_natives() -> None:
+    """From a checkout, bring the bundled natives up to these sources before
+    serving (tools/build_natives.py: a cache copy when another checkout built
+    them, else a compile). A frozen app ships its own; a failure only warns,
+    and the setup screen then reports the capture layer unavailable."""
+    import os
+    from pathlib import Path
+    tool = Path(__file__).resolve().parents[2] / "tools" / "build_natives.py"
+    if is_frozen() or os.environ.get("SM64_BUILD_NATIVES") == "0" or not tool.is_file():
+        return
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_natives", tool)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    print("Checking the capture layer and renderer against this checkout's sources...")
+    try:
+        states = module.ensure()
+    except Exception as failure:  # noqa: BLE001 - never stop the server over the bundle
+        print(f"  WARNING: the native bundle was not checked: {failure}")
+        return
+    print("  " + ", ".join(f"{name} {state}" for name, state in states.items()))
+
+
 def run() -> None:
     """THE canonical launch (`uv run python -m sm64_events.main`).
 
@@ -569,6 +593,7 @@ def run() -> None:
     30 s = drain wedged; neither = a new layer, instrument before fixing.
     """
     import os
+    _build_stale_natives()
     if os.environ.pop("SM64_RESTART", None):
         # A restart relaunch: the old process is exiting — wait for the
         # port, THEN the db instance lock. Both waits are needed: uvicorn
