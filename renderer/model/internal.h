@@ -46,6 +46,7 @@ struct sg_model {
      * textures loaded, and the object node their animation runs on. */
     struct GraphNode *held_graph[SG_HELD_KINDS];
     const struct Animation *const *held_animations[SG_HELD_KINDS];
+    int held_animation_count[SG_HELD_KINDS];
     unsigned held_available;
     struct Object held_object;
 };

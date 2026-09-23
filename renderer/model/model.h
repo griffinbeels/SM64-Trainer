@@ -24,7 +24,10 @@ enum sg_pose_fields {
 };
 
 /* Objects the model can draw in Mario's hand (SG_POSE_HELD). */
-enum sg_held_kind { SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_KINDS = 2 };
+enum sg_held_kind {
+    SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_PENGUIN = 2, SG_HELD_KING_BOBOMB = 3,
+    SG_HELD_CHUCKYA = 4, SG_HELD_KINDS = 5
+};
 
 /* A native C value, not a packed wire format. Angles are signed SM64 turns.
  * position/angles are the DRAWN gfx transform. body_action is separate from
@@ -63,6 +66,8 @@ typedef struct sg_pose {
     float held_position[3], held_scale[3];
     float view[16];
     int16_t roll;
+    /* The recorded frame's gGlobalTimer: the penguin's blink reads it. */
+    uint32_t held_global_timer;
 } sg_pose;
 
 enum sg_mesh_errors {
@@ -90,12 +95,14 @@ enum sg_material {
 
 /* The atlas is one 64-pixel cell per texture, left to right: Mario's in
  * libsm64's MarioTextures order, metal (cell 0) ... wing tip, then the metal
- * wing and wing tip (cells 11, 12); then held objects' (from 13). */
+ * wing and wing tip (cells 11, 12); then held objects' (from 13, in the
+ * sg_held_kind order; the first cell of each is named here). */
 enum { SG_MARIO_ATLAS_CELLS = 13 };
 enum sg_atlas_cell {
     SG_ATLAS_CELL_BOBOMB_LEFT = 13, SG_ATLAS_CELL_BOBOMB_RIGHT = 14,
     SG_ATLAS_CELL_BOBOMB_EYES = 15, SG_ATLAS_CELL_BOBOMB_BLINK = 16,
-    SG_ATLAS_CELLS = 17
+    SG_ATLAS_CELL_PENGUIN = 17, SG_ATLAS_CELL_KING_BOBOMB = 23, SG_ATLAS_CELL_CHUCKYA = 29,
+    SG_ATLAS_CELLS = 33
 };
 enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
        SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };

@@ -3,6 +3,7 @@
  * the object's scale, at the HOLP. The graph runs in the given view's camera
  * space so its billboards face that camera (mtxf_billboard), then every
  * vertex returns to world space by the rigid inverse of that view.
+ * The models are HELD_MODELS in tools/build_model.py (held_cells.h).
  */
 #include "internal.h"
 #include "decomp/shim.h"
@@ -10,10 +11,14 @@
 #include "decomp/engine/math_util.h"
 #include "decomp/game/rendering_graph_node.h"
 #include "decomp/include/object_fields.h"
+#include "decomp/held/held_cells.h"
 #include <string.h>
 
-extern void *sg_bobomb_geo;
-extern const struct Animation *const *sg_bobomb_animations;
+#define DECLARE_HELD(name, kind) \
+    extern void *sg_##name##_geo; \
+    extern const struct Animation *const *sg_##name##_animations; \
+    extern const int sg_##name##_animation_count;
+SG_HELD_MODELS(DECLARE_HELD)
 
 /* object_helpers.c: a switch on the object's oAnimState (the Bob-omb's blink). */
 Gfx *geo_switch_anim_state(s32 callContext, struct GraphNode *node, void *context)
@@ -28,32 +33,55 @@ Gfx *geo_switch_anim_state(s32 callContext, struct GraphNode *node, void *contex
     return NULL;
 }
 
+/* behaviors/tuxie.c: the penguins' blink, on gGlobalTimer. Tuxie's mother's
+ * angry eyes (case 3) are hers alone; she is never held. */
+Gfx *geo_switch_tuxie_mother_eyes(s32 callContext, struct GraphNode *node, void *context)
+{
+    struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *)node;
+    s32 timer;
+    (void)context;
+    if (callContext == GEO_CONTEXT_RENDER) {
+        timer = gGlobalTimer % 50;
+        if (timer < 43) switchCase->selectedCase = 0;
+        else if (timer < 45) switchCase->selectedCase = 1;
+        else if (timer < 47) switchCase->selectedCase = 2;
+        else switchCase->selectedCase = 1;
+    }
+    return NULL;
+}
+
+/* King Bob-omb's and Chuckya's hands place a Mario THEY hold; held by
+ * Mario, they hold nothing, and the node draws nothing either way. */
+Gfx *geo_update_held_mario_pos(s32 callContext, struct GraphNode *node, void *context)
+{
+    (void)callContext; (void)node; (void)context;
+    return NULL;
+}
+
 int sg_held_build(struct sg_model *model)
 {
     Vec3f zero = {0, 0, 0}, unit = {1, 1, 1};
     Vec3s angles = {0, 0, 0};
+    int status = SG_OK;
     init_graph_node_object(NULL, &model->held_object.header.gfx, NULL, zero, angles, unit);
-    model->held_graph[SG_HELD_BOBOMB] = process_geo_layout(alloc_only_pool_init(), sg_bobomb_geo);
-    model->held_animations[SG_HELD_BOBOMB] = sg_bobomb_animations;
-    return model->held_graph[SG_HELD_BOBOMB] ? SG_OK : SG_INVALID_GEOMETRY;
-}
-
-/* Animation count of a NULL-terminated table (at most 64). */
-static int animation_count(const struct Animation *const *table)
-{
-    int count = 0;
-    while (table && count < 64 && table[count]) ++count;
-    return count;
+#define BUILD_HELD(name, kind) \
+    model->held_graph[kind] = process_geo_layout(alloc_only_pool_init(), sg_##name##_geo); \
+    model->held_animations[kind] = sg_##name##_animations; \
+    model->held_animation_count[kind] = sg_##name##_animation_count; \
+    if (!model->held_graph[kind]) status = SG_INVALID_GEOMETRY;
+    SG_HELD_MODELS(BUILD_HELD)
+#undef BUILD_HELD
+    return status;
 }
 
 void sg_held_evaluate(struct sg_model *model, const sg_pose *pose, const float mario_root[4][4])
 {
     struct Object *held = &model->held_object;
     struct AnimInfo *info = &held->header.gfx.animInfo;
-    const struct Animation *const *table;
     const struct Animation *animation;
     struct GraphNodeCamera camera;
     struct Object *mario = gMarioObject;
+    u32 global_timer = gGlobalTimer;
     Mat4 root, view, local;
     uint32_t first = sg_geometry_vertex_count(), last, i;
     int row, column;
@@ -62,9 +90,9 @@ void sg_held_evaluate(struct sg_model *model, const sg_pose *pose, const float m
             || !(model->held_available & (1u << pose->held_kind)) || !model->held_graph[pose->held_kind]) {
         sg_abort(SG_INVALID_ARGUMENT);
     }
-    table = model->held_animations[pose->held_kind];
-    if (pose->held_animation_id < 0 || pose->held_animation_id >= animation_count(table)) sg_abort(SG_INVALID_ANIMATION);
-    animation = table[pose->held_animation_id];
+    if (pose->held_animation_id < 0 || pose->held_animation_id >= model->held_animation_count[pose->held_kind])
+        sg_abort(SG_INVALID_ANIMATION);
+    animation = model->held_animations[pose->held_kind][pose->held_animation_id];
     if (pose->held_animation_frame < 0 || pose->held_animation_frame >= animation->loopEnd) sg_abort(SG_INVALID_ANIMATION);
     /* Mario's rows, translation at the HOLP; the traversal scales rows by the
      * object's own scale, as geo_process_held_object's mtxf_scale_vec3f. */
@@ -86,7 +114,9 @@ void sg_held_evaluate(struct sg_model *model, const sg_pose *pose, const float m
     gMarioObject = held;
     gCurGraphNodeObject = &held->header.gfx;
     gCurGraphNodeCamera = &camera;
+    gGlobalTimer = pose->held_global_timer;
     sg_traverse_frozen(model->held_graph[pose->held_kind]);
+    gGlobalTimer = global_timer;
     gCurGraphNodeCamera = NULL;
     gCurGraphNodeObject = NULL;
     gMarioObject = mario;

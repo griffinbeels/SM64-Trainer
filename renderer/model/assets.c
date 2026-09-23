@@ -10,14 +10,15 @@
  * Located by its decoded flame lists in the US and Usamune US ROMs. */
 #define COMMON1_BASE 0x201410u
 #define COMMON1_SPAN (256u * 1024u)
-/* common0 (segment 8): the Bob-omb. Located by its decoded lists in the US
- * ROM (bobomb_seg8_dl_08022D08 at 0x22D08). */
-#define COMMON0_BASE 0x1F2200u
-#define COMMON0_SPAN (256u * 1024u)
-static const struct { unsigned cell; uint32_t offset; } held_textures[] = {
-    {SG_ATLAS_CELL_BOBOMB_LEFT, 0x1DA60u}, {SG_ATLAS_CELL_BOBOMB_RIGHT, 0x1EA60u},
-    {SG_ATLAS_CELL_BOBOMB_EYES, 0x21A60u}, {SG_ATLAS_CELL_BOBOMB_BLINK, 0x22260u},
+/* Held objects' textures, each from its model's own MIO0 segment
+ * (HELD_MODELS in tools/build_model.py generates the table). */
+#define HELD_SEGMENT_SPAN (256u * 1024u)
+static const struct { unsigned kind, cell; uint32_t segment, offset; } held_textures[] = {
+    SG_HELD_TEXTURES
 };
+typedef char sg_held_cells_fill_atlas[(SG_MARIO_ATLAS_CELLS + SG_HELD_CELL_COUNT == SG_ATLAS_CELLS) ? 1 : -1];
+typedef char sg_held_kinds_match[(SG_HELD_KIND_COUNT == SG_HELD_KINDS) ? 1 : -1];
+SG_HELD_KIND_CHECKS
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static uint32_t be32(const uint8_t *p)
@@ -88,21 +89,26 @@ static int blit(struct sg_model *model, unsigned tile, const uint8_t *decoded, u
     return SG_OK;
 }
 
-/* Held objects' textures; failure leaves their cells empty and marks them
- * unavailable rather than refusing Mario. */
+/* Held objects' textures; a kind whose segment or texture fails leaves its
+ * cells empty and is marked unavailable rather than refusing Mario. */
 static void held_cells(struct sg_model *model, const uint8_t *rom)
 {
-    uint8_t *decoded;
-    uint32_t size;
-    unsigned i;
-    model->held_available = 0;
-    if (mio0(rom, COMMON0_BASE, COMMON0_SPAN, &decoded, &size) != SG_OK) return;
-    for (i = 0; i < sizeof(held_textures) / sizeof(held_textures[0]); ++i)
-        if (blit(model, held_textures[i].cell, decoded, size, held_textures[i].offset) != SG_OK) {
-            free(decoded); return;
+    uint8_t *decoded = NULL;
+    uint32_t size = 0, segment = 0;
+    unsigned i, present = 0, failed = 0;
+    for (i = 0; i < sizeof(held_textures) / sizeof(held_textures[0]); ++i) {
+        present |= 1u << held_textures[i].kind;
+        if (!decoded || segment != held_textures[i].segment) {
+            free(decoded);
+            decoded = NULL;
+            segment = held_textures[i].segment;
+            if (mio0(rom, segment, HELD_SEGMENT_SPAN, &decoded, &size) != SG_OK) decoded = NULL;
         }
+        if (!decoded || blit(model, held_textures[i].cell, decoded, size, held_textures[i].offset) != SG_OK)
+            failed |= 1u << held_textures[i].kind;
+    }
     free(decoded);
-    model->held_available = 1u << SG_HELD_BOBOMB;
+    model->held_available = present & ~failed;
 }
 
 static int textures(struct sg_model *model, const uint8_t *rom)

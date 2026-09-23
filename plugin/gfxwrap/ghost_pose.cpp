@@ -13,9 +13,15 @@ bool sample_valid(const gc_sample &s, uint32_t required) {
     return s.bytes == sizeof(s) && s.version == GC_VERSION && s.epoch && s.sequence
         && s.dlist_serial && (s.valid_fields & required) == required;
 }
-// The held objects the model draws, by segmented behaviour (US).
+// The held objects the model draws, by segmented behaviour (US; each found
+// by the LOAD_ANIMATIONS of its model's table in the ROM's behaviour segment).
 struct HeldModel { uint32_t behavior; uint32_t kind; };
-constexpr HeldModel held_models[] = {{0x13003174u, SG_HELD_BOBOMB}};
+constexpr HeldModel held_models[] = {
+    {0x13003174u, SG_HELD_BOBOMB},      // bhvBobomb
+    {0x130020E8u, SG_HELD_PENGUIN},     // bhvSmallPenguin
+    {0x130001F4u, SG_HELD_KING_BOBOMB}, // bhvKingBobomb
+    {0x13000528u, SG_HELD_CHUCKYA},     // bhvChuckya
+};
 uint32_t held_kind(uint32_t behavior) {
     for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;
     return SG_HELD_NONE;
@@ -182,6 +188,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         std::memcpy(pose.held_scale,held.scale,sizeof(pose.held_scale));
         std::memcpy(pose.view,view,sizeof(pose.view));
         pose.roll = live.camera.roll;
+        pose.held_global_timer = recorded.global_timer;
     }
     sg_mesh mesh{scratch.position,scratch.normal,scratch.color,scratch.uv,scratch.material,
         SG_MODEL_MAX_VERTICES,0,0};

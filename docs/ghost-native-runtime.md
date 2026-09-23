@@ -117,9 +117,13 @@ drawn this frame and is not recorded. The legacy TRS reader still refuses a
 holding Mario and records none.
 
 The ghost draws the held objects the model knows (`held_models` in
-[ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp); the Bob-omb so far), as
-part of Mario's mesh: the recorded animation frame and `oAnimState`, at the
-HOLP, its billboards turned to the live camera. An object the model does not
+[ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp): the Bob-omb, the small
+penguin, King Bob-omb and Chuckya), as part of Mario's mesh: the recorded
+animation frame, `oAnimState` and `gGlobalTimer` (the penguin's blink), at the
+HOLP, its billboards turned to the live camera. Holding Bowser's tail holds
+his tail anchor, which has no model and no animation, so nothing is
+recorded or drawn in the hand; Bowser himself is a world object, and the
+ghost shows Mario swinging with empty hands. An object the model does not
 know, or refuses (no textures, an animation it lacks, no room in the mesh),
 is left out and Mario still draws.
 

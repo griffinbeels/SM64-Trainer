@@ -47,5 +47,191 @@
     "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/bobomb/anims/table.inc.c",
     "filename": "upstream-bobomb-anims.c",
     "sha256": "f8e96a738892cb95500540d7f9f8c41bcb8a431db8d7e9059632063c00cf6762"
+  },
+  "penguin_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/penguin/model.inc.c",
+    "filename": "upstream-penguin-model.c",
+    "sha256": "743704e970a6666108872b2ad4586d3ff6afdfcd586171c71760da31545625b0"
+  },
+  "penguin_anim_050079E4": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/penguin/anims/anim_050079E4.inc.c",
+    "filename": "upstream-penguin-anim-050079E4.c",
+    "sha256": "fffd4e500ba24fe04fb3308b0fbe9b4b17b3c9f080a74920fd441539e252cc18"
+  },
+  "penguin_anim_05007DCC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/penguin/anims/anim_05007DCC.inc.c",
+    "filename": "upstream-penguin-anim-05007DCC.c",
+    "sha256": "1529c0c1e6a5cc75328ad89c21de014aa69e1f03364273203ab5db05369675fe"
+  },
+  "penguin_anim_050087C0": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/penguin/anims/anim_050087C0.inc.c",
+    "filename": "upstream-penguin-anim-050087C0.c",
+    "sha256": "2ea3d765245509aaf1b5b3c0e7905a78d252a3e989c64d555c0c91a9506c6c6e"
+  },
+  "penguin_anim_05008B5C": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/penguin/anims/anim_05008B5C.inc.c",
+    "filename": "upstream-penguin-anim-05008B5C.c",
+    "sha256": "83300e6d21b70abd17857c88e5281fda653921c4f017a4d265de8c57d074d2ce"
+  },
+  "penguin_anims": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/penguin/anims/table.inc.c",
+    "filename": "upstream-penguin-anims.c",
+    "sha256": "2e0d2433dbedec60b5a17ae7e2674aeda38e6cefe8a95aac68e7bd9b8fe9c371"
+  },
+  "penguin_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/penguin/geo.inc.c",
+    "filename": "upstream-penguin-geo.c",
+    "sha256": "789263da6b724e200f3615186cfae4487346af9ae09913108ea7dec0bdc2da9a"
+  },
+  "king_bobomb_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/model.inc.c",
+    "filename": "upstream-king-bobomb-model.c",
+    "sha256": "e7cd66ab157fe6f3b78bc8a5475de5088aab1238367d470a57eb7807e737cb40"
+  },
+  "king_bobomb_anim_0500BDFC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500BDFC.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500BDFC.c",
+    "sha256": "ff6b71a1da78f34fe077de90627a127b25df985383b576ab1efa3a19d1df2d9f"
+  },
+  "king_bobomb_anim_0500C2AC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500C2AC.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500C2AC.c",
+    "sha256": "55e409bc5b12142c183f11b57af6ff26d389251311590de95d30bc521cb8c30a"
+  },
+  "king_bobomb_anim_0500C520": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500C520.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500C520.c",
+    "sha256": "6200105aa62f0d9f5130deee32f8311d42c3f5325ab824c88954cab3ac3bead5"
+  },
+  "king_bobomb_anim_0500C774": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500C774.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500C774.c",
+    "sha256": "b989a123dcdd7a3df17c3dfac4d215953bc39d420bc4f3ca0a2dd962e8365ddb"
+  },
+  "king_bobomb_anim_0500CFCC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500CFCC.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500CFCC.c",
+    "sha256": "4f3c61f5490b004d8075d1dd26af86831dfd364cfc1f38c19948b37756fe68e7"
+  },
+  "king_bobomb_anim_0500D5B0": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500D5B0.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500D5B0.c",
+    "sha256": "6832a03897005d126311242a67edf291056a2703777c618096c81c8e931f4415"
+  },
+  "king_bobomb_anim_0500D978": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500D978.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500D978.c",
+    "sha256": "6ddfe96a88dc4e671f63c5f7173064e271b404de4ebbc1f6446760a152028cf4"
+  },
+  "king_bobomb_anim_0500DDD8": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500DDD8.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500DDD8.c",
+    "sha256": "38f33d14233f3ab38693b423899fc7755e4f922e2d8638a03f2cf47260c7c4a2"
+  },
+  "king_bobomb_anim_0500E10C": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500E10C.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500E10C.c",
+    "sha256": "ec60a765185d0951e6f02a30e4a9566d87e7cc9f1297465e77726918b584580b"
+  },
+  "king_bobomb_anim_0500F078": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500F078.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500F078.c",
+    "sha256": "02d839d61989322c174cdb8e281965bba476217256178a89fb16a39546cbcb95"
+  },
+  "king_bobomb_anim_0500F6C8": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500F6C8.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500F6C8.c",
+    "sha256": "7838189d0fa09ad5455acc317c98de03244c266e211bdf79d2cfb1ae6cd8f4a0"
+  },
+  "king_bobomb_anim_0500FE18": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/anim_0500FE18.inc.c",
+    "filename": "upstream-king-bobomb-anim-0500FE18.c",
+    "sha256": "622c514d347f9b9786abde1b3494a8d8c4709ebab0ef05c5012bd69b8e0f5589"
+  },
+  "king_bobomb_anims": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/anims/table.inc.c",
+    "filename": "upstream-king-bobomb-anims.c",
+    "sha256": "0602e04c4b619df845395f45ab4645e27ac582364d64caede6181e9846a4532e"
+  },
+  "king_bobomb_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/king_bobomb/geo.inc.c",
+    "filename": "upstream-king-bobomb-geo.c",
+    "sha256": "cba7f22fd76344a4d9cbc07a8be12f718809c5636047b3174027b7a47dd18267"
+  },
+  "chuckya_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/model.inc.c",
+    "filename": "upstream-chuckya-model.c",
+    "sha256": "3f9c3933fcb173c2b1cba4a817d1ae1d958af222806b7202007779544d2925d8"
+  },
+  "chuckya_anim_0800AF68": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/anims/anim_0800AF68.inc.c",
+    "filename": "upstream-chuckya-anim-0800AF68.c",
+    "sha256": "483717512351be9a63f1893a449c77de21778405939513d9e656cc6c2c8c37b2"
+  },
+  "chuckya_anim_0800B1A8": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/anims/anim_0800B1A8.inc.c",
+    "filename": "upstream-chuckya-anim-0800B1A8.c",
+    "sha256": "784806996f6936468879e944ea88714b1525ebfc242214d9599f9e506cff894b"
+  },
+  "chuckya_anim_0800B4A8": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/anims/anim_0800B4A8.inc.c",
+    "filename": "upstream-chuckya-anim-0800B4A8.c",
+    "sha256": "ee4f1a8ab2fc4814cf7742ae213f960547bed7c1654b25f19ad65d2359db450f"
+  },
+  "chuckya_anim_0800B9F8": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/anims/anim_0800B9F8.inc.c",
+    "filename": "upstream-chuckya-anim-0800B9F8.c",
+    "sha256": "becb5cf967350552f8fbf40932e2304158d65041c2aff90ea5896c5df27ad097"
+  },
+  "chuckya_anim_0800BBEC": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/anims/anim_0800BBEC.inc.c",
+    "filename": "upstream-chuckya-anim-0800BBEC.c",
+    "sha256": "c823653071754f8a5653adda2e19cc87db3a4571adc35c130889669242fdabdf"
+  },
+  "chuckya_anim_0800C058": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/anims/anim_0800C058.inc.c",
+    "filename": "upstream-chuckya-anim-0800C058.c",
+    "sha256": "4adc74fd207b79915cc25864aad1736b7de4301c387c8df66c500822aaac317e"
+  },
+  "chuckya_anims": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/anims/table.inc.c",
+    "filename": "upstream-chuckya-anims.c",
+    "sha256": "9ab07be473bd34b43fc93631a16f5cbbf7106a2cf7498e295610af6ecce229c0"
+  },
+  "chuckya_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/geo.inc.c",
+    "filename": "upstream-chuckya-geo.c",
+    "sha256": "a21e2b3dea8b6b19a66088a9734979029d53cf5599d6eb2c1e9629facfbb5bba"
   }
 }

@@ -392,6 +392,33 @@ int main(int argc, char** argv) {
             float side[3]={600,160,0};
             check(sg_model_view(model,side,focus,0,h.view)==SG_OK && sg_model_evaluate(model,&h,&mesh.out)==SG_OK,"side view");
             check(mesh.snapshot()!=front,"held billboard turns with the view");
+            // The penguin, King Bob-omb and Chuckya: every part of each (the
+            // triangles their geo reaches, first switch case, counted from the
+            // upstream lists), from its own cells; its table's end is refused.
+            const struct { uint32_t kind; unsigned first, cells; int16_t animations; unsigned vertices; const char* name; } kinds[]={
+                {SG_HELD_PENGUIN,SG_ATLAS_CELL_PENGUIN,6,5,402,"penguin"},
+                {SG_HELD_KING_BOBOMB,SG_ATLAS_CELL_KING_BOBOMB,6,12,348,"King Bob-omb"},
+                {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"}};
+            for(const auto &k:kinds) {
+                sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=0; o.held_animation_frame=0;
+                check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
+                bool own=false;
+                for(unsigned i=alone;i<mesh.out.vertex_count;++i) {
+                    const unsigned cell=unsigned(mesh.out.uv[2*i]*SG_ATLAS_CELLS);
+                    own|=mesh.out.uv[2*i]<1 && cell>=k.first && cell<k.first+k.cells;
+                }
+                check(own,"held object samples its own cells");
+                if(k.kind==SG_HELD_PENGUIN) {
+                    // Its blink runs on the recorded gGlobalTimer (50-frame cycle).
+                    const auto open=mesh.snapshot();
+                    o.held_global_timer=44;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=open,"penguin blinks");
+                    o.held_global_timer=50;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()==open,"penguin blink cycle");
+                }
+                o.held_animation_id=k.animations;
+                check(sg_model_evaluate(model,&o,&mesh.out)==SG_INVALID_ANIMATION,"held animation table end");
+            }
             h.held_animation_id=2;
             check(sg_model_evaluate(model,&h,&mesh.out)==SG_INVALID_ANIMATION,"unknown held animation refused");
             h.held_animation_id=1;h.held_kind=SG_HELD_KINDS;

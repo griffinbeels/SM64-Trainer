@@ -271,6 +271,9 @@ int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out)
     if (pose->fields & SG_POSE_HIDDEN) return leave(SG_OK);
     if (setjmp(model->abort)) {
         model->object.header.gfx.throwMatrix = NULL;
+        /* An abort inside the held object's traversal leaves it as Mario. */
+        model->held_object.header.gfx.throwMatrix = NULL;
+        model->state.mgMarioObject = &model->object;
         sg_traversal_reset(); sg_geometry_reset(); sg_memory_reset();
         out->error_flags = SG_MESH_SCRATCH_EXHAUSTED;
         return leave(model->abort_status);

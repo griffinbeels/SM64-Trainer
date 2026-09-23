@@ -81,9 +81,15 @@ metal wing and wing tip (cells 11, 12), then held objects' textures (13 on);
 it lacks directional-eye variants, and unsupported states fail closed instead
 of indexing outside the atlas.
 
-Held objects (`SG_POSE_HELD`, `held.c`) are compiled from their upstream geo,
-lists and animations like Mario (`HELD_MODELS` in `tools/build_model.py`), with
-textures from their own ROM segment (the Bob-omb: common0). Each graph runs
+Held objects (`SG_POSE_HELD`, `held.c`: the Bob-omb, the small penguin, King
+Bob-omb and Chuckya) are compiled from their upstream geo, lists and
+animations like Mario (`HELD_MODELS` in `tools/build_model.py`). The build
+walks each geo's display lists for the RGBA16 textures it reaches and
+generates `held_cells.h`: the kinds, each texture's atlas cell and size, and
+its ROM segment (the model's MIO0 block, the same in the US and Usamune US
+ROMs), which assets.c decodes. Adding a kind is a HELD_MODELS row, its pinned
+inputs, its sg_held_kind and its first atlas cell in model.h, and its
+behaviour in ghost_pose.cpp. Each graph runs
 under a wrapper like `mario_geo_libsm64`: libsm64 emits display lists only
 from a z-buffered master list, draws nothing under a shadow node (so a held
 graph's `GEO_SHADOW` becomes a start node), and drops the first opaque
