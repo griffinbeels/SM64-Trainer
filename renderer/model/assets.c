@@ -6,6 +6,10 @@
 #define ANIM_BASE 0x4ec000u
 #define TEXTURE_BASE 1132368u
 #define TEXTURE_SPAN (128u * 1024u)
+/* common1 (segment 3): Mario's lava flame among the global particle models.
+ * Located by its decoded flame lists in the US and Usamune US ROMs. */
+#define COMMON1_BASE 0x201410u
+#define COMMON1_SPAN (256u * 1024u)
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static uint32_t be32(const uint8_t *p)
@@ -18,24 +22,26 @@ static int range(size_t at, size_t count, size_t bytes)
 
 /* The model needs only bounded MIO0 decoding and RGBA16 conversion. No image
  * encoder, filesystem utility, directory enumerator or audio loader is linked.
+ * The caller has checked that span bytes from base lie inside the ROM.
  */
-static int textures(struct sg_model *model, const uint8_t *rom)
+static int mio0(const uint8_t *rom, uint32_t base, uint32_t span, uint8_t **out, uint32_t *out_size)
 {
-    const uint8_t *src = rom + TEXTURE_BASE;
+    const uint8_t *src = rom + base;
     uint32_t size, compressed, raw, flags = 16, written = 0;
-    unsigned bit = 0, tile;
+    unsigned bit = 0;
     uint8_t *decoded;
+    *out = NULL; *out_size = 0;
     if (memcmp(src, "MIO0", 4)) return SG_INVALID_ROM;
     size = be32(src + 4); compressed = be32(src + 8); raw = be32(src + 12);
     if (!size || size > 1024u * 1024u || compressed < 16 ||
-        raw < compressed || raw > TEXTURE_SPAN)
+        raw < compressed || raw > span)
         return SG_INVALID_ROM;
     decoded = malloc(size);
     if (!decoded) return SG_OUT_OF_MEMORY;
     while (written < size) {
         if (flags >= be32(src + 8)) goto bad;
         if (src[flags] & (0x80u >> bit)) {
-            if (raw >= TEXTURE_SPAN) goto bad;
+            if (raw >= span) goto bad;
             decoded[written++] = src[raw++];
         } else {
             uint32_t length, distance, j;
@@ -51,6 +57,20 @@ static int textures(struct sg_model *model, const uint8_t *rom)
         }
         if (++bit == 8) { bit = 0; ++flags; }
     }
+    *out = decoded; *out_size = size;
+    return SG_OK;
+bad:
+    free(decoded);
+    return SG_INVALID_ROM;
+}
+
+static int textures(struct sg_model *model, const uint8_t *rom)
+{
+    uint32_t size, common1_size;
+    unsigned tile;
+    uint8_t *decoded, *common1;
+    int status = mio0(rom, TEXTURE_BASE, TEXTURE_SPAN, &decoded, &size);
+    if (status != SG_OK) return status;
     for (tile = 0; tile < NUM_USED_TEXTURES; ++tile) {
         unsigned x, y, width = mario_tex_widths[tile], height = mario_tex_heights[tile];
         size_t offset = (size_t)mario_tex_offsets[tile];
@@ -64,8 +84,13 @@ static int textures(struct sg_model *model, const uint8_t *rom)
             dest[3] = (color & 1u) ? 255 : 0;
         }
     }
-    /* Same segment: Mario's particle models. Unsupported lists leave none. */
-    sg_particles_load(&model->particles, decoded, size);
+    /* Same segment: Mario's particle models. Unsupported lists leave none;
+     * the flame (common1) is added only when its own lists read too. */
+    if (sg_particles_load(&model->particles, decoded, size) == SG_OK &&
+        mio0(rom, COMMON1_BASE, COMMON1_SPAN, &common1, &common1_size) == SG_OK) {
+        sg_particles_add_common1(&model->particles, common1, common1_size);
+        free(common1);
+    }
     free(decoded);
     return SG_OK;
 bad:
@@ -124,7 +149,8 @@ int sg_assets_load(struct sg_model *model, const uint8_t *rom, size_t bytes)
     int status;
     if (!rom || bytes != 8u * 1024u * 1024u || be32(rom) != 0x80371240u ||
         !range(ANIM_BASE, 8 + SG_ANIMATION_COUNT * 8, bytes) ||
-        !range(TEXTURE_BASE, TEXTURE_SPAN, bytes)) return SG_INVALID_ROM;
+        !range(TEXTURE_BASE, TEXTURE_SPAN, bytes) ||
+        !range(COMMON1_BASE, COMMON1_SPAN, bytes)) return SG_INVALID_ROM;
     status = textures(model, rom);
     if (status != SG_OK) return status;
     return animations(model, rom, bytes);

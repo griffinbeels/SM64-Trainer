@@ -48,6 +48,8 @@ extern struct sg_model *sg_active;
 int sg_assets_load(struct sg_model *, const uint8_t *, size_t);
 void sg_assets_free(struct sg_model *);
 int sg_particles_load(struct sg_particles *, const uint8_t *segment, uint32_t size);
+/* Appends the common1 (segment 3) flame frames; a refusal leaves the loaded set. */
+int sg_particles_add_common1(struct sg_particles *, const uint8_t *segment, uint32_t size);
 void sg_abort(int status);
 void sg_memory_reset(void);
 const int16_t *sg_effective_head_rotation(void);

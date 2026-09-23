@@ -1,11 +1,12 @@
 /* Mario's particle models (bubble, water splash, water rings, droplet, dust,
  * sparkles), built once from the same decoded ROM segment 4 that holds his own
- * textures. A bounded Fast3D reader follows each particle frame's actual
+ * textures, plus his lava flame from common1 (segment 3). A bounded Fast3D reader follows each particle frame's actual
  * display list: its vertices, texture load, render tile and combiner. Any
  * command, address or format outside that small set refuses the whole set;
  * Mario's own model is unaffected. Addresses and layers: n64decomp actors/
  * (bubble, walk_smoke, burn_smoke, stomp_smoke, water_wave, sparkle,
- * water_splash, white_particle_small, sparkle_animation) and levels/scripts.c.
+ * water_splash, white_particle_small, sparkle_animation, flame) and
+ * levels/scripts.c.
  */
 #include "internal.h"
 #include <string.h>
@@ -37,6 +38,12 @@ static const struct { uint32_t dl; uint32_t layer; } frames[] = {
     {0x04035330u, SG_PARTICLE_BLEND}, {0x04035348u, SG_PARTICLE_BLEND},
     {0x04035360u, SG_PARTICLE_BLEND},
 };
+static const struct { uint32_t dl; uint32_t layer; } common1_frames[] = {
+    {0x0301B3B0u, SG_PARTICLE_BLEND}, {0x0301B3C8u, SG_PARTICLE_BLEND},  /* red flame (bhvFlameMario) */
+    {0x0301B3E0u, SG_PARTICLE_BLEND}, {0x0301B3F8u, SG_PARTICLE_BLEND},
+    {0x0301B410u, SG_PARTICLE_BLEND}, {0x0301B428u, SG_PARTICLE_BLEND},
+    {0x0301B440u, SG_PARTICLE_BLEND}, {0x0301B458u, SG_PARTICLE_BLEND},
+};
 
 static uint32_t be32(const uint8_t *p)
 {
@@ -46,7 +53,7 @@ static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); 
 
 struct reader {
     const uint8_t *segment;
-    uint32_t size;
+    uint32_t size, segment_id;
     struct sg_particles *out;
     /* RSP/RDP state this subset needs. */
     int16_t slot_position[16][3], slot_st[16][2];
@@ -55,25 +62,28 @@ struct reader {
     uint32_t image, image_format, image_size, loaded, loaded_texels;
     uint32_t tile_format, tile_size, tile_width, tile_height, texture_on;
     float scale_s, scale_t;
-    int combiner; /* 0 none, 1 decal, 2 modulate */
+    uint8_t environment[4];
+    int combiner; /* 0 none, 1 decal, 2 modulate by shade, 3 modulate by environment */
 };
 
 static int offset(const struct reader *r, uint32_t address, uint32_t bytes, uint32_t *out)
 {
-    if ((address >> 24) != 4u) return 0;
+    if ((address >> 24) != r->segment_id) return 0;
     address &= 0x00ffffffu;
     if (address > r->size || bytes > r->size - address) return 0;
     *out = address;
     return 1;
 }
 
-/* One cycle of G_SETCOMBINE: DECALRGBA or MODULATEIA/RGBA, else refused. */
+/* One cycle of G_SETCOMBINE: DECALRGBA, MODULATEIA/RGBA or FADEA (texture
+ * times environment), else refused. */
 static int combiner(uint32_t w0, uint32_t w1)
 {
     const uint32_t a = (w0 >> 20) & 15u, c = (w0 >> 15) & 31u, aa = (w0 >> 12) & 7u, ac = (w0 >> 9) & 7u;
     const uint32_t b = (w1 >> 28) & 15u, d = (w1 >> 15) & 7u, ab = (w1 >> 12) & 7u, ad = (w1 >> 9) & 7u;
     if (c == 31u && d == 1u && ac == 7u && ad == 1u) return 1;
     if (a == 1u && b == 15u && c == 4u && d == 7u && aa == 1u && ab == 7u && ac == 4u && ad == 7u) return 2;
+    if (a == 1u && b == 15u && c == 5u && d == 7u && aa == 1u && ab == 7u && ac == 5u && ad == 7u) return 3;
     return 0;
 }
 
@@ -146,6 +156,7 @@ static int triangle(struct reader *r, const uint32_t index[3])
         v->rect[2] = (at->x + at->width - .5f) / SG_PARTICLE_ATLAS_WIDTH;
         v->rect[3] = (at->y + at->height - .5f) / SG_PARTICLE_ATLAS_HEIGHT;
         if (r->combiner == 1) memset(v->rgba, 255, 4); /* decal: texture only */
+        else if (r->combiner == 3) memcpy(v->rgba, r->environment, 4);
         else memcpy(v->rgba, r->slot_color[s], 4);
     }
     return 1;
@@ -163,6 +174,10 @@ static int run(struct reader *r, uint32_t start)
         case 0xE6: case 0xE7: case 0xE8: break;                   /* syncs */
         case 0xB6: case 0xB7: break;                             /* geometry mode: lighting only matters via combiner */
         case 0xFC: r->combiner = combiner(w0, w1); break;
+        case 0xFB:                                               /* G_SETENVCOLOR */
+            r->environment[0] = (uint8_t)(w1 >> 24); r->environment[1] = (uint8_t)(w1 >> 16);
+            r->environment[2] = (uint8_t)(w1 >> 8); r->environment[3] = (uint8_t)w1;
+            break;
         case 0xBB:                                               /* G_TEXTURE */
             r->texture_on = w0 & 0xffu;
             r->scale_s = (float)(w1 >> 16) / 65536.0f; r->scale_t = (float)(w1 & 0xffffu) / 65536.0f;
@@ -222,23 +237,55 @@ static int run(struct reader *r, uint32_t start)
     }
 }
 
+static int append(struct sg_particles *out, const uint8_t *segment, uint32_t size, uint32_t segment_id,
+                  uint32_t dl, uint32_t layer)
+{
+    struct reader r;
+    sg_particle_frame *f;
+    if (out->frame_count >= SG_PARTICLE_FRAMES) return 0;
+    f = &out->frames[out->frame_count];
+    memset(&r, 0, sizeof(r));
+    r.segment = segment; r.size = size; r.segment_id = segment_id; r.out = out;
+    f->display_list = dl; f->layer = layer;
+    f->first_vertex = out->vertex_count;
+    if (!run(&r, dl) || out->vertex_count == f->first_vertex) return 0;
+    f->vertex_count = out->vertex_count - f->first_vertex;
+    ++out->frame_count;
+    return 1;
+}
+
 int sg_particles_load(struct sg_particles *out, const uint8_t *segment, uint32_t size)
 {
     uint32_t i;
     memset(out, 0, sizeof(*out));
-    for (i = 0; i < sizeof(frames) / sizeof(frames[0]); ++i) {
-        struct reader r;
-        sg_particle_frame *f = &out->frames[i];
-        memset(&r, 0, sizeof(r));
-        r.segment = segment; r.size = size; r.out = out;
-        f->display_list = frames[i].dl; f->layer = frames[i].layer;
-        f->first_vertex = out->vertex_count;
-        if (!run(&r, frames[i].dl) || out->vertex_count == f->first_vertex) {
+    for (i = 0; i < sizeof(frames) / sizeof(frames[0]); ++i)
+        if (!append(out, segment, size, 4u, frames[i].dl, frames[i].layer)) {
             memset(out, 0, sizeof(*out));
             return SG_INVALID_ROM;
         }
-        f->vertex_count = out->vertex_count - f->first_vertex;
-    }
-    out->frame_count = i;
+    return SG_OK;
+}
+
+int sg_particles_add_common1(struct sg_particles *out, const uint8_t *segment, uint32_t size)
+{
+    const uint32_t frames_before = out->frame_count, vertices_before = out->vertex_count;
+    const uint32_t cells_before = out->cell_count;
+    uint32_t i;
+    for (i = 0; i < sizeof(common1_frames) / sizeof(common1_frames[0]); ++i)
+        if (!append(out, segment, size, 3u, common1_frames[i].dl, common1_frames[i].layer)) {
+            /* Roll back: the segment-4 set stays exactly as it was. */
+            for (; out->cell_count > cells_before; --out->cell_count) {
+                const struct sg_particle_cell *c = &out->cells[out->cell_count - 1];
+                uint32_t y;
+                for (y = 0; y < 64u; ++y)
+                    memset(out->atlas + ((c->y + y) * SG_PARTICLE_ATLAS_WIDTH + c->x) * 4u, 0, 32u * 4u);
+                memset(&out->cells[out->cell_count - 1], 0, sizeof(out->cells[0]));
+            }
+            memset(&out->frames[frames_before], 0, (SG_PARTICLE_FRAMES - frames_before) * sizeof(out->frames[0]));
+            memset(&out->vertices[vertices_before], 0,
+                   (SG_PARTICLE_MAX_VERTICES - vertices_before) * sizeof(out->vertices[0]));
+            out->frame_count = frames_before; out->vertex_count = vertices_before;
+            return SG_INVALID_ROM;
+        }
     return SG_OK;
 }

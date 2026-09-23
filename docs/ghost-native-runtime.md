@@ -430,7 +430,10 @@ decoded ROM segment 4 as Mario's textures
 dust, burn smoke, small splash, water rings, sparkles, water splash, droplet,
 sparkle animation), each followed through a bounded Fast3D subset into one
 textured quad and a 512x256 atlas. Any other command or format leaves the
-model with no particles; Mario still opens. Playback
+model with no particles; Mario still opens. The 8 lava-flame frames
+(`bhvFlameMario`, `MODEL_RED_FLAME`, shaded by their environment colour) come
+from common1 (segment 3, MIO0 at ROM 0x201410 in both the US and Usamune US
+ROMs); if those lists do not read, only the flame is missing. Playback
 ([ghost_particle_pose.cpp](../plugin/gfxwrap/ghost_particle_pose.cpp)) removes
 the recorded camera from each matrix. A view-aligned (billboard) matrix is
 re-aligned to the live camera, as the game billboards every frame; a water
@@ -442,18 +445,17 @@ game's texture-edge layer) keep texels at alpha 0.5 or more, blend frames
 multiply texture and vertex alpha, and both take the ghost's opacity.
 Particles never refuse their ghost and have no switch.
 
-Not recorded: particles that are not objects (Mario's lava fire is
-`bhvFlameMario`, an object with `MODEL_RED_FLAME` outside segment 4, so it is
-recorded but not drawn), the ground-pound mist and snow/leaf/sand spawners
-(objects whose models are outside segment 4, also skipped) and environment
-bubbles (`envfx`, not objects, and not Mario's).
+Recorded but not drawn: the ground-pound mist and the snow, leaf and sand
+spawners, whose models are in other segments. Environment bubbles (`envfx`)
+are not objects and not Mario's.
 
 The [particle witness](../tests/test_ghost_particles.py)
 (`SM64_TEST_GHOST_COMPOSITOR=1`) checks cutout and blend frames, hiding
 behind the body and behind terrain, the clean frame and GL state; removing the
 draw, the body depth test, the terrain test or the cutout each turns it red.
-The model witness checks all 45 frames decode to one quad with 17063 visible
-texels. The connected pipeline records a bubble, a droplet (two hops) and a
+The model witness checks all 53 frames decode to one quad each (17063 visible
+segment-4 texels, the flame's environment colour) on both the US and the
+Usamune US ROM. The connected pipeline records a bubble, a droplet (two hops) and a
 splash frame while ignoring another object's bubble, and draws them from the
 real ROM atlas (19740 pixels, 0 outside); ignoring the parent chain or the
 position match, dropping the stream hook or the playback placement each turns

@@ -264,11 +264,15 @@ int main(int argc, char** argv) {
             // Mario's particle models read from the same segment: every frame one
             // textured quad, bubble first, splash frames 32x64.
             sg_particle_view particles{};
-            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==45 &&
-                particles.vertex_count==270 && particles.atlas_rgba,"particle frames");
+            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==53 &&
+                particles.vertex_count==318 && particles.atlas_rgba,"particle frames");
             for(uint32_t i=0;i<particles.frame_count;++i)
                 check(particles.frames[i].vertex_count==6 && particles.frames[i].first_vertex==6*i,"one quad per particle frame");
             check(particles.frames[0].display_list==0x0401DD60u && particles.frames[0].layer==SG_PARTICLE_CUTOUT,"bubble frame");
+            // The lava flame (common1) is shaded by its environment colour, not vertices.
+            const auto& flame=particles.vertices[particles.frames[45].first_vertex].rgba;
+            check(particles.frames[45].display_list==0x0301B3B0u && flame[0]==255 && flame[1]==50 && flame[2]==0 && flame[3]==200,
+                "flame frame");
             unsigned opaque=0;
             for(uint32_t i=0;i<particles.atlas_width*particles.atlas_height;++i)opaque+=particles.atlas_rgba[4*i+3]>0;
             std::ofstream ppm("particles.ppm",std::ios::binary);
