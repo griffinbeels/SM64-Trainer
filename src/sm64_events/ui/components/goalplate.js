@@ -134,7 +134,7 @@ function attemptCs(attempt, clock) {
 /** Fires when a FRESH finished attempt meets the goal the plate was holding.
  *  Never on mount or on a page load catching up on history (the glossary's
  *  Celebration rule): the first render only records which attempts exist. */
-function useGoalCelebration(attempts, goal) {
+export function useGoalCelebration(attempts, goal) {
   const seen = useRef(null);
   // The goal an attempt is judged against is the one on screen BEFORE it
   // landed. The goal fetch and the session fetch race; an automatic goal can

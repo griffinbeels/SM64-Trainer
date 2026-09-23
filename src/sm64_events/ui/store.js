@@ -12,7 +12,7 @@ import { getRankIconStyle, setRankIconStyle } from "./components/rankicon.js";
 // are deliberately not in this set. Without it the step track sits on a step
 // the player passed until some unrelated event happens to force a fetch: 77
 // seconds, on the live report that produced this (2026-08-02, WF -> SSL).
-const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
+export const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
   "rank_mode_changed", "game_version_changed", "icons_changed", "marelo_changed",
