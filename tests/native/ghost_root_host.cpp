@@ -271,6 +271,47 @@ static void materials(Fixture &f) {
     check(!drawn(0x180,alpha_dl,0xffffff80),"opaque list accepted for a vanish-cap Mario");
     check(!drawn(0,alpha_dl-8,0xffffffff),"translucent list accepted for an opaque Mario");
 }
+// The object Mario holds rides his proven pose: its own graph node off, its
+// animation advanced by his hand this frame, the HOLP its world root. Every
+// failed proof, or a refused root, leaves the block cleared.
+static void held_block(Fixture &f) {
+    gc_root_probe p;gc_root_memory memory;
+    const uint32_t bomb=f.config.object_pool+0x260, anim=Fixture::base+0x14100;
+    const auto holding=[&]{
+        scene(f);f.put16(f.config.object_pool+0x42,0x8123);
+        f.put32(f.config.mario_state+0x7c,bomb);
+        f.put16(bomb+0x74,1);f.put16(bomb+2,0x20);f.put32(bomb+0x14,0);
+        f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);
+        f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0xf0,1);
+        f.put32(bomb+0x3c,anim);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
+        for(unsigned i=0;i<3;++i) {
+            f.putfloat(bomb+0x2c+4*i,1.0f);f.putfloat(Fixture::body+0x18+4*i,100.0f+float(i));
+        }
+    };
+    const auto frame=[&](bool proven) {
+        begin(f,p);if(proven)pair(p);ghost_root_finish(p,true,f.sample,proven?&memory:nullptr);
+        const bool held=(f.sample.valid_fields&GC_VALID_HELD)!=0;
+        check(held || zero(f.sample.held),"held block bytes follow validity");
+        return held;
+    };
+    holding();
+    check(frame(true),"held Bob-omb not captured");
+    const auto &h=f.sample.held;
+    check(h.behavior==0x13003174 && h.animation_id==1 && h.animation_frame==12 && h.anim_y_translation==7
+          && h.holp[0]==100 && h.holp[2]==102 && h.scale[1]==1 && h.anim_state==1,"held Bob-omb fields");
+    holding();check(!frame(false),"held object kept without a proven pose");
+    const auto none=[&](uint32_t at,uint32_t word,const char *why){holding();f.put32(at,word);check(!frame(true),why);};
+    none(bomb+0,0x00180021,"held object drawn by its own node accepted");
+    none(bomb+0x40,0x000c8122,"stale held animation accepted"); // frame 12, animTimer one behind
+    none(bomb+0x74,0,"inactive held object accepted");
+    none(bomb+0x20c,0x80001000,"behaviour outside segment 0x13 accepted");
+    none(bomb+0x40,0x00188123,"frame past the held animation accepted");
+    none(Fixture::body+0x18,0x7fc00000,"nonfinite HOLP accepted");
+    none(f.config.mario_state+0x7c,bomb+4,"unaligned held pointer accepted");
+    holding();f.config.behaviour_base=0;check(!frame(true),"capture without a behaviour base");
+    f.config.behaviour_base=0x800EB180;
+    f.put32(f.config.mario_state+0x7c,0);f.put16(bomb+0x74,0);
+}
 #endif
 int main(int argc,char **argv) {
     check(argc==2,"usage: ghost_root_host config"); Fixture f(argv[1]);scene(f);
@@ -339,6 +380,7 @@ int main(int argc,char **argv) {
     held(f);
     culled(f);
     materials(f);
+    held_block(f);
     std::puts("executed root qualification passed");
 #endif
 }

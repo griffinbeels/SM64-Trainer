@@ -261,13 +261,37 @@ int main(int argc, char** argv) {
         check(sg_model_get_atlas(model,&atlas)==SG_OK && atlas.animation_count==209 && atlas.rgba,"atlas");
         check(atlas.width==SG_ATLAS_CELLS*64 && atlas.height==64,"atlas dimensions");
         {
-            // Mario's particle models read from the same segment: every frame one
-            // textured quad, bubble first, splash frames 32x64.
+            // Mario's particle models: 58 textured quads (bubble first, splash
+            // frames 32x64), then 12 lit meshes (stars, punch dirt, the cap).
             sg_particle_view particles{};
-            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==58 &&
-                particles.vertex_count==348 && particles.atlas_rgba,"particle frames");
-            for(uint32_t i=0;i<particles.frame_count;++i)
+            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==70 &&
+                particles.atlas_rgba,"particle frames");
+            for(uint32_t i=0;i<58;++i)
                 check(particles.frames[i].vertex_count==6 && particles.frames[i].first_vertex==6*i,"one quad per particle frame");
+            std::fprintf(stderr,"particle vertices %u; lit frames:",particles.vertex_count);
+            for(uint32_t i=58;i<particles.frame_count;++i)std::fprintf(stderr," %08x=%u",particles.frames[i].display_list,particles.frames[i].vertex_count);
+            std::fprintf(stderr,"\n");
+            {
+                // A lit cartoon star: 8 triangles lit by its list's own light.
+                const auto& star=particles.frames[58];
+                const auto& v=particles.vertices[star.first_vertex];
+                check(star.display_list==0x0302C298u && star.vertex_count==24 && (v.mode&SG_PARTICLE_LIT)
+                    && v.light_dir[0]==0x28 && v.normal[0]*v.normal[0]+v.normal[1]*v.normal[1]+v.normal[2]*v.normal[2]>0.5f,
+                    "lit star mesh");
+                // The star the game draws (oAnimState 4): unlit, every vertex flat yellow,
+                // as his ground-pound footage shows (255,253,0 decoded).
+                const auto& drawn=particles.frames[62];
+                bool yellow=drawn.display_list==0x0302C318u && drawn.vertex_count==24;
+                for(uint32_t i=0;yellow && i<drawn.vertex_count;++i){const auto& d=particles.vertices[drawn.first_vertex+i];
+                    yellow=!(d.mode&SG_PARTICLE_LIT) && d.rgba[0]==255 && d.rgba[1]==255 && d.rgba[2]==0 && d.rgba[3]==255;}
+                check(yellow,"drawn star is unlit yellow");
+                // The cap: shade mixed toward its logo, alpha by the object's opacity.
+                const auto& cap=particles.frames[69];
+                bool mixes=false;
+                for(uint32_t i=0;i<cap.vertex_count;++i)mixes|=(particles.vertices[cap.first_vertex+i].mode&SG_PARTICLE_MIX)!=0;
+                check(cap.display_list==0x03022F48u && cap.fade==1 && cap.vertex_count>60 && mixes,"knocked-off cap mesh");
+                check(particles.vertex_count<=SG_PARTICLE_MAX_VERTICES,"vertex budget");
+            }
             check(particles.frames[0].display_list==0x0401DD60u && particles.frames[0].layer==SG_PARTICLE_CUTOUT,"bubble frame");
             // The lava flame (common1) is shaded by its environment colour, not vertices.
             const auto& flame=particles.vertices[particles.frames[45].first_vertex].rgba;
@@ -352,6 +376,82 @@ int main(int argc, char** argv) {
                 metal_wing+=!(mesh.out.material[i]&SG_MATERIAL_TEXGEN) && mesh.out.uv[2*i]>=11.0f/SG_ATLAS_CELLS;
             check(winged==SG_OK && metal_wing>=12,"metal wing cap draws its metal wings");
             check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"cap effect independence");
+        }
+        {
+            // A held Bob-omb joins Mario's mesh at the HOLP, from the ROM's own
+            // textures (atlas cells 13..16), its billboard facing the view.
+            unsigned opaque=0;
+            for(unsigned y=0;y<32;++y)for(unsigned x=0;x<32;++x)
+                opaque+=atlas.rgba[4*(y*atlas.width+SG_ATLAS_CELL_BOBOMB_LEFT*64+x)+3]>0;
+            check(opaque>200,"Bob-omb texture cell loaded from the ROM");
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK,"no held object");
+            const unsigned alone=mesh.out.vertex_count;
+            float camera[3]={0,160,600},focus[3]={0,80,0};
+            sg_pose h=a; h.fields|=SG_POSE_HELD; h.held_kind=SG_HELD_BOBOMB;
+            h.held_animation_id=1; h.held_animation_frame=0;
+            h.held_position[0]=40; h.held_position[1]=120; h.held_position[2]=60;
+            h.held_scale[0]=h.held_scale[1]=h.held_scale[2]=1;
+            check(sg_model_view(model,camera,focus,0,h.view)==SG_OK,"held view");
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_OK && mesh.out.vertex_count>alone+24,"held Bob-omb drawn");
+            double centre[3]={0,0,0};const unsigned added=mesh.out.vertex_count-alone;
+            // Its whole graph: body 4, feet 2x28, key 16 and eyes 4 triangles.
+            // (libsm64's master list drops its first opaque entry: one foot.)
+            check(added==240,"held Bob-omb draws every part");
+            for(unsigned i=alone;i<mesh.out.vertex_count;++i)for(unsigned k=0;k<3;++k)centre[k]+=mesh.out.position[3*i+k]/added;
+            check(std::fabs(centre[0]-40)<80 && std::fabs(centre[1]-120)<80 && std::fabs(centre[2]-60)<80,
+                "held Bob-omb sits at the HOLP");
+            bool textured=false;
+            for(unsigned i=alone;i<mesh.out.vertex_count;++i)
+                textured|=mesh.out.uv[2*i]>=float(SG_ATLAS_CELL_BOBOMB_LEFT)/SG_ATLAS_CELLS;
+            check(textured,"held Bob-omb samples its own cells");
+            // oAnimState picks the eyes: 0 open, 1 blinking.
+            auto samples=[&](unsigned cell){
+                for(unsigned i=alone;i<mesh.out.vertex_count;++i)
+                    if(unsigned(mesh.out.uv[2*i]*SG_ATLAS_CELLS)==cell)return true;
+                return false;
+            };
+            check(samples(SG_ATLAS_CELL_BOBOMB_EYES) && !samples(SG_ATLAS_CELL_BOBOMB_BLINK),"open eyes");
+            h.held_anim_state=1;
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_OK && samples(SG_ATLAS_CELL_BOBOMB_BLINK) &&
+                !samples(SG_ATLAS_CELL_BOBOMB_EYES),"blinking eyes");
+            h.held_anim_state=0;
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_OK,"open eyes again");
+            const auto front=mesh.snapshot();
+            float side[3]={600,160,0};
+            check(sg_model_view(model,side,focus,0,h.view)==SG_OK && sg_model_evaluate(model,&h,&mesh.out)==SG_OK,"side view");
+            check(mesh.snapshot()!=front,"held billboard turns with the view");
+            // The penguin, King Bob-omb and Chuckya: every part of each (the
+            // triangles their geo reaches, first switch case, counted from the
+            // upstream lists), from its own cells; its table's end is refused.
+            const struct { uint32_t kind; unsigned first, cells; int16_t animations; unsigned vertices; const char* name; } kinds[]={
+                {SG_HELD_PENGUIN,SG_ATLAS_CELL_PENGUIN,6,5,402,"penguin"},
+                {SG_HELD_KING_BOBOMB,SG_ATLAS_CELL_KING_BOBOMB,6,12,348,"King Bob-omb"},
+                {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"}};
+            for(const auto &k:kinds) {
+                sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=0; o.held_animation_frame=0;
+                check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
+                bool own=false;
+                for(unsigned i=alone;i<mesh.out.vertex_count;++i) {
+                    const unsigned cell=unsigned(mesh.out.uv[2*i]*SG_ATLAS_CELLS);
+                    own|=mesh.out.uv[2*i]<1 && cell>=k.first && cell<k.first+k.cells;
+                }
+                check(own,"held object samples its own cells");
+                if(k.kind==SG_HELD_PENGUIN) {
+                    // Its blink runs on the recorded gGlobalTimer (50-frame cycle).
+                    const auto open=mesh.snapshot();
+                    o.held_global_timer=44;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=open,"penguin blinks");
+                    o.held_global_timer=50;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()==open,"penguin blink cycle");
+                }
+                o.held_animation_id=k.animations;
+                check(sg_model_evaluate(model,&o,&mesh.out)==SG_INVALID_ANIMATION,"held animation table end");
+            }
+            h.held_animation_id=2;
+            check(sg_model_evaluate(model,&h,&mesh.out)==SG_INVALID_ANIMATION,"unknown held animation refused");
+            h.held_animation_id=1;h.held_kind=SG_HELD_KINDS;
+            check(sg_model_evaluate(model,&h,&mesh.out)!=SG_OK,"unknown held kind refused");
+            check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"held object leaves no state");
         }
         b=a; b.head_rotation[1]=8192;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.snapshot()!=first_mesh,"effective head rotation");

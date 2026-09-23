@@ -4,6 +4,7 @@
 #define main compositor_fixture_program
 #include "ghost_compositor_host.cpp"
 #undef main
+#include "ghost_occlusion_expect.h"
 
 // A 2x1 atlas: a mostly opaque green texel (cutout keeps it, fully) and a
 // mostly transparent white one (cutout drops it).
@@ -42,6 +43,10 @@ int main() {
     quad(particles,-.25f,0,-.25f,.25f,-.5f,true,1,true);     // B: cutout of the thin white texel: nothing
     quad(particles,0,1,.25f,.75f,.5f,false,.5f,false);       // C: blended, BEHIND the body: x16..31 y20..27
     quad(particles,-1,-.5f,-.25f,.25f,0,false,1,true);       // D: behind the near wall: hidden
+    quad(particles,.5f,1,-1,-.25f,-.5f,false,1,true);        // E: the cap's mix: red toward the texel by its alpha
+    for(size_t i=particles.size()-6;i<particles.size();++i){particles[i].mix=1;particles[i].rgba[1]=particles[i].rgba[2]=0;}
+    quad(particles,.75f,1,-.25f,.25f,-.5f,false,0,true);     // F: opaque layer, shade alpha 0: alpha ignored
+    for(size_t i=particles.size()-6;i<particles.size();++i)particles[i].cutout=2;
     for(float opacity:{1.f,.5f}) {
         auto p=pose(body,opacity);
         p.particles.vertices=particles.data();p.particles.count=uint32_t(particles.size());
@@ -61,6 +66,9 @@ int main() {
             // C samples the green texel too, at vertex alpha .5, only off the body.
             const float a=200.f/255*.5f*opacity;
             if(x>=16 && y>=20 && y<28 && !on_body)for(int k=0;k<3;++k)rgb[k]=green[k]*a+rgb[k]*(1-a);
+            const float mixed[3]={255*(1-200.f/255),200,0}; // mix(red, green, 200/255), shade alpha 1
+            if(x>=24 && y<12)for(int k=0;k<3;++k)rgb[k]=mixed[k]*opacity+rgb[k]*(1-opacity);
+            if(x>=28 && y>=12 && y<20)for(int k=0;k<3;++k)rgb[k]=green[k]*opacity+rgb[k]*(1-opacity);
             for(int k=0;k<3;++k) {
                 const float got=image[(y*32+x)*4+k];
                 if(std::abs(got-rgb[k])>1.6f)
@@ -69,11 +77,64 @@ int main() {
             }
         }
     }
+    // PLAYER FIRST: a ghost's particles fade by its body's rule. A cutout green
+    // particle over the right half at eye depth d under a real perspective;
+    // the body sits off screen. Every pixel against the rule's statement.
+    unsigned faded=0,full=0;
+    {
+        std::vector<gc::Vertex> away;
+        for(const auto& v:body){auto moved=v;moved.position[0]+=3000;moved.position[2]=-1000;away.push_back(moved);}
+        auto at=[&](float d){std::vector<gc::ParticleVertex> out;quad(out,0,d,-d,d,-d,false,1,true);return out;};
+        auto shot=[&](const std::vector<gc::ParticleVertex>& v,const ghost_occlusion::Region& region,float opacity) {
+            auto p=pose(away,opacity);occlusion_expect::perspective(p.view_projection);
+            p.particles.vertices=v.data();p.particles.count=uint32_t(v.size());
+            occlusion_expect::perspective(p.particles.view_projection);p.occlusion=region;
+            require(gc::begin_batch(c,target(scene,gc::Depth::ordinary),&p,1)==gc::Result::ok,"player-first batch");
+            require(gc::finalize(c,77)==gc::Result::ok,"player-first finalize");ordinary_state(g,scene);
+            return pixels(g,gc::display(c).framebuffer,32,32);
+        };
+        auto check=[&](const std::vector<uint8_t>& image,const ghost_occlusion::Region& region,float opacity,float d) {
+            for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x)for(int k=0;k<3;++k) {
+                const size_t i=(y*32+x)*4+k;
+                if(x<16){require(image[i]==clean[i],"player-first: the wall half stays clean");continue;}
+                const float f=occlusion_expect::fade(region,x,y,d,32,32),a=opacity*f;
+                const float want=(k==1?255.f:0.f)*a+clean[i]*(1-a);
+                if(std::abs(image[i]-want)>1.01f)std::fprintf(stderr,"x=%u y=%u c=%d got=%u want=%.2f fade=%.3f\n",x,y,k,image[i],want,f);
+                require(std::abs(image[i]-want)<=1.01f,"particles follow the player-first rule");
+                if(k==0){faded+=f<1;full+=std::abs(f-(1-ghost_occlusion::PLAYER_STRENGTH))<1e-6f;}
+            }
+        };
+        const auto plane=at(1000);const ghost_occlusion::Region off{};
+        const auto before=shot(plane,off,.5f);check(before,off,.5f,1000);
+        const auto front=occlusion_expect::player(2000);
+        faded=full=0;check(shot(plane,front,.5f),front,.5f,1000);
+        require(faded>0 && full>=30,"particles in front of Mario fade over him");
+        require(shot(plane,occlusion_expect::player(500),.5f)==before,"particles behind Mario are byte-exact");
+        // The y flip mirrors a particle and the region together.
+        auto high=front;high.center[1]=.25f;
+        const auto upright=shot(plane,high,.5f);
+        std::vector<uint8_t> flipped;
+        {
+            auto p=pose(away,.5f);occlusion_expect::perspective(p.view_projection);p.flip_y=1;
+            p.particles.vertices=plane.data();p.particles.count=uint32_t(plane.size());
+            occlusion_expect::perspective(p.particles.view_projection);p.occlusion=high;
+            require(gc::begin_batch(c,target(scene,gc::Depth::ordinary),&p,1)==gc::Result::ok &&
+                gc::finalize(c,77)==gc::Result::ok,"flipped particle batch");
+            ordinary_state(g,scene);flipped=pixels(g,gc::display(c).framebuffer,32,32);
+        }
+        for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x)for(int k=0;k<4;++k)
+            require(flipped[(y*32+x)*4+k]==upright[((31-y)*32+x)*4+k],"flip mirrors particles and their region together");
+        ghost_occlusion::Region camera{};camera.enabled=1;
+        require(shot(at(100),camera,1)==clean,"particles at the camera are invisible");
+        const unsigned front_faded=faded,front_full=full;
+        check(shot(at(300),camera,1),camera,1,300);faded=front_faded;full=front_full;
+    }
     auto bad=pose(body,1);std::vector<gc::ParticleVertex> partial(particles.begin(),particles.begin()+4);
     bad.particles.vertices=partial.data();bad.particles.count=4;
     require(gc::begin_batch(c,target(scene,gc::Depth::ordinary),&bad,1)==gc::Result::invalid,"partial particle triangle refused");
     gc::destroy(c);
     require(GetForegroundWindow()==foreground,"foreground preserved");
-    std::puts("particles passed: cutout=texels blend=alpha behind_body=hidden behind_terrain=hidden clean=unchanged state=restored");
+    std::printf("player-first: faded=%u full=%u\n",faded,full);
+    std::puts("particles passed: cutout=texels blend=alpha mix=texel_alpha opaque=alpha_ignored behind_body=hidden behind_terrain=hidden clean=unchanged state=restored player_first=follows_body");
     return 0;
 }

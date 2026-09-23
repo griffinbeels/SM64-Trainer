@@ -249,6 +249,44 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
     reason = GC_REFUSED_NONE;
     return GC_OK;
 }
+
+// Segment 0x13 holds every behaviour script (the US map's last is below 0x6000).
+constexpr uint32_t behaviour_segment = 0x13000000u, behaviour_span = 0x10000u;
+constexpr uint32_t object_behaviour = 0x20c, object_active_flags = 0x74, object_anim_state = 0xf0, body_holp = 0x18;
+
+// gMarioState->heldObj as geo_process_held_object drew it from Mario's hand
+// this frame (gc_held). Anything unprovable leaves the block cleared.
+void capture_held(Ram &ram, const gc_layout &layout, gc_sample &out) {
+    // Rides a pose only; ghost_root_finish clears it with a refused root.
+    if (!layout.behaviour_base || !(out.valid_fields & GC_VALID_POSE)) return;
+    const uint32_t state = layout.mario_state, held = ram.u32(state + 0x7c), body = ram.u32(state + mario_body);
+    if (!held || held < layout.object_pool || (held - layout.object_pool) % object_size
+            || (held - layout.object_pool) / object_size >= object_count || !ram.has(body, 0x24)) return;
+    // Alive, and drawn only through the hand: its own graph node is off.
+    if (!(ram.u16(held + object_active_flags) & 1u) || (ram.u16(held + 2) & active)) return;
+    // Fresh this frame: only geo_process_held_object set its animation globals.
+    const uint32_t animation = ram.u32(held + 0x3c);
+    if (!ram.has(animation, 0x18) || ram.u16(held + 0x42) != out.area_update_counter) return;
+    const uint32_t behaviour = ram.u32(held + object_behaviour);
+    if (behaviour < layout.behaviour_base || behaviour - layout.behaviour_base >= behaviour_span) return;
+    gc_held h{};
+    h.behavior = behaviour_segment + (behaviour - layout.behaviour_base);
+    h.animation_id = ram.s16(held + 0x38);
+    h.anim_y_translation = ram.s16(held + 0x3a);
+    h.animation_frame = ram.s16(held + 0x40);
+    const uint32_t anim_state = ram.u32(held + object_anim_state);
+    if (anim_state > 255) return;
+    h.anim_state = uint16_t(anim_state);
+    const int16_t end = ram.s16(animation + 8);
+    if (h.animation_id < 0 || end <= 0 || h.animation_frame < 0 || h.animation_frame >= end) return;
+    for (unsigned i = 0; i < 3; ++i) {
+        h.holp[i] = ram.f32(body + body_holp + 4*i);
+        h.scale[i] = ram.f32(held + 0x2c + 4*i);
+        if (!finite(h.holp[i]) || !finite(h.scale[i], 100.0f) || std::fabs(h.scale[i]) < 0.000001f) return;
+    }
+    if (!ram.ok) return;
+    out.held = h; out.valid_fields |= GC_VALID_HELD;
+}
 } // namespace
 
 extern "C" void ghost_capture_reset(gc_reader *reader) {
@@ -275,6 +313,7 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
                 || !span(layout->sound_consumer, 1, layout->rdram_bytes, 1)
                 || !span(layout->sound_ring, 256 * 8, layout->rdram_bytes, 8)) return GC_BAD_CONFIG;
     }
+    if (layout->behaviour_base && !span(layout->behaviour_base, 4, layout->rdram_bytes)) return GC_BAD_CONFIG;
     gcc_clock validation{};
     if (!gcc_init(&validation, &layout->clock)) return GC_BAD_CONFIG;
     return GC_OK;
@@ -345,6 +384,9 @@ static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
         out->pose.refusal = reason;
         if (!out->status) out->status = pose_status;
     }
+    ram.ok = true;
+    capture_held(ram, *layout, *out);
+    ram.ok = true;
     if (probe) ghost_root_prepare(*probe, *frame, ram.u32(layout->mario_object), layout->object_pool, *out);
     return out->status;
 }
@@ -358,7 +400,7 @@ extern "C" uint32_t ghost_capture_begin(gc_reader *reader, const gc_layout *layo
     return capture_read(reader,layout,frame,out,probe);
 }
 
-static_assert(sizeof(gc_layout) == 184, "Ghost layout ABI changed");
+static_assert(sizeof(gc_layout) == 188 && offsetof(gc_layout, behaviour_base) == 184, "Ghost layout ABI changed");
 static_assert(offsetof(gc_layout, sound_code) == 64, "Ghost sound layout ABI changed");
 static_assert(offsetof(gc_layout, pending_warp_op) == 56, "Ghost warp layout ABI changed");
 static_assert(offsetof(gc_layout, delayed_warp_timer) == 60, "Ghost countdown layout ABI changed");
@@ -366,7 +408,8 @@ static_assert(offsetof(gc_layout, clock) == 80, "Ghost clock layout ABI changed"
 static_assert(sizeof(gc_particle) == 36 && sizeof(gc_particles) == 580 && offsetof(gc_particle, opacity) == 22,
               "Ghost particle ABI changed");
 static_assert(offsetof(gc_sample, particles) == 636, "Ghost particle block follows sound");
-static_assert(sizeof(gc_sample) == 1216, "Ghost sample ABI changed");
+static_assert(sizeof(gc_sample) == 1252 && offsetof(gc_sample, held) == 1216 && sizeof(gc_held) == 36,
+              "Ghost sample ABI changed");
 static_assert(sizeof(gc_shadow) == 292 && sizeof(gc_sound) == 36, "Ghost optional evidence ABI changed");
 static_assert(offsetof(gc_sample, shadow) == 308 && offsetof(gc_sample, sound) == 600, "Ghost optional evidence offsets");
 static_assert(offsetof(gc_shadow, position) == 64 && offsetof(gc_shadow, uv) == 118

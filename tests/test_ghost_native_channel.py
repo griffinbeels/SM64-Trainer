@@ -410,6 +410,61 @@ def test_an_unencodable_command_is_a_typed_rejection_that_changes_nothing(kernel
         connection.close()
 
 
+def test_a_refused_batch_is_said_once_dropped_and_keeps_the_channel(monkeypatch, caplog):
+    """2026-09-23 review: a ClipError from the archive restarted the channel
+    silently, so a recurring refusal would blink the ghost and drop the queued
+    poses every 0.5 s with nothing in the log. The channel is not at fault; a
+    reconnect cannot fix refused data."""
+    from sm64_events.ghost.clip import ClipError
+    batches, closed, constructions = [], [], []
+
+    class Source:
+        def __init__(self, *_): constructions.append(1)
+
+        def poll(self, control=None):
+            return status(), (frame(2, 7),)
+
+        def close(self): closed.append(1)
+
+    def ingest(*args):
+        batches.append(args)
+        if len(batches) % 2:  # every other batch is refused, forever
+            raise ClipError("native ghost archive received a stale occurrence")
+
+    monkeypatch.setattr(capture, "NativeChannel", Source)
+    source = capture.NativeCapture(US, ingest, producer_pid=123)
+    with caplog.at_level("WARNING", logger="sm64.ghost.capture"):
+        source.start()
+        try:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and len(batches) < 20:
+                time.sleep(0.01)
+            snapshot = source.snapshot_status()
+        finally:
+            assert source.stop(3)
+    assert len(batches) >= 20 and constructions == [1]  # never reconnected
+    assert snapshot["available"] and snapshot["refused_batches"] >= 9
+    assert snapshot["refused_reason"] == "native ghost archive received a stale occurrence"
+    warnings = [r.getMessage() for r in caplog.records if "refused" in r.getMessage()]
+    assert warnings == ["Mario poses refused by the archive; batch dropped: "
+                        "native ghost archive received a stale occurrence"]  # once, not per batch
+
+
+def test_a_recurring_warning_is_repeated_once_a_minute_with_its_count(caplog):
+    now = [0.0]
+    warn = capture.RateLimitedWarning(capture.log, clock=lambda: now[0])
+    with caplog.at_level("WARNING", logger="sm64.ghost.capture"):
+        assert warn("channel unavailable", "OSError: no producer")
+        for step in range(1, 121):  # a minute at the pump's 0.5 s retry
+            now[0] = step * 0.5
+            warn("channel unavailable", "OSError: no producer")
+        assert warn("channel unavailable", "ValueError: other")  # a new reason says so at once
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages == ["channel unavailable: OSError: no producer",
+                        "channel unavailable: OSError: no producer (x120 in the last 60 s)",
+                        "channel unavailable: ValueError: other"]
+
+
 def test_a_rejected_command_never_stops_pose_recording(monkeypatch):
     batches, polls, closed = [], [], []
 

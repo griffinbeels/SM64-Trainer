@@ -30,11 +30,20 @@ Placed place(sg_model *model, const sg_particle_view &view, const gc_sample &rec
     if (!ghost_pose::recorded_camera_inverse(model, recorded.camera, inverse)
             || sg_model_view(model, live.position, live.focus, live.roll, live_view) != SG_OK) return placed;
     uint32_t written = 0;
+    // Opaque frames first (the game's opaque and texture-edge layers write
+    // depth: the nearest surface wins), then the translucent ones.
+    for (int opaque_pass = 1; opaque_pass >= 0; --opaque_pass) {
+    if (!opaque_pass) result.opaque_count = written;
     for (uint32_t i = 0; i < set.count && i < GC_PARTICLES; ++i) {
         const auto &entry = set.entries[i];
         const auto *f = frame(view, entry.display_list);
-        if (!f) { ++placed.unknown; continue; }
-        if (written + f->vertex_count > ghost_compositor::particle_vertices) break;
+        if (!f) { if (opaque_pass) ++placed.unknown; continue; }
+        // A fading object (the cap blinking out) is drawn translucent, as the
+        // game switches it to its transparent layer.
+        const bool faded = f->fade && (entry.opacity & GC_PARTICLE_OPACITY) && (entry.opacity & 0xffu) < 255u;
+        const bool opaque = (f->layer == SG_PARTICLE_CUTOUT || f->layer == SG_PARTICLE_OPAQUE) && !faded;
+        if (opaque != bool(opaque_pass)) continue;
+        if (written + f->vertex_count > ghost_compositor::particle_vertices) { ++placed.invalid; continue; }
         float basis[9], t[3];
         bool finite = true;
         for (unsigned k = 0; k < 9; ++k) basis[k] = float(entry.basis[k]) / GC_PARTICLE_BASIS_ONE;
@@ -62,11 +71,27 @@ Placed place(sg_model *model, const sg_particle_view &view, const gc_sample &rec
             std::memcpy(target.uv, source.uv, sizeof(target.uv));
             std::memcpy(target.rect, source.rect, sizeof(target.rect));
             for (unsigned k = 0; k < 4; ++k) target.rgba[k] = source.rgba[k] / 255.0f;
+            if (source.mode & SG_PARTICLE_LIT) {
+                // F3D lighting as the game drew it: the list's light is in
+                // the recorded view space, the normal goes there by the
+                // executed matrix; ambient plus diffuse times N.L, clamped.
+                float n[3], l[3] = {float(source.light_dir[0]), float(source.light_dir[1]), float(source.light_dir[2])};
+                for (unsigned row = 0; row < 3; ++row)
+                    n[row] = basis[row]*source.normal[0] + basis[3+row]*source.normal[1] + basis[6+row]*source.normal[2];
+                const float nl = std::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]), ll = std::sqrt(l[0]*l[0] + l[1]*l[1] + l[2]*l[2]);
+                const float facing = nl > 0 && ll > 0 ? (n[0]*l[0] + n[1]*l[1] + n[2]*l[2]) / (nl * ll) : 0.0f;
+                for (unsigned k = 0; k < 3; ++k) {
+                    const float lit = (source.light_ambient[k] + source.light_diffuse[k] * (facing > 0 ? facing : 0.0f)) / 255.0f;
+                    target.rgba[k] = lit > 1.0f ? 1.0f : lit;
+                }
+            }
+            target.mix = (source.mode & SG_PARTICLE_MIX) ? 1.0f : 0.0f;
             if (f->fade && (entry.opacity & GC_PARTICLE_OPACITY)) target.rgba[3] *= float(entry.opacity & 0xffu) / 255.0f;
-            target.cutout = f->layer == SG_PARTICLE_CUTOUT ? 1.0f : 0.0f;
+            target.cutout = !opaque ? 0.0f : f->layer == SG_PARTICLE_OPAQUE ? 2.0f : 1.0f;
         }
         written += f->vertex_count;
         ++placed.drawn;
+    }
     }
     if (written) {
         result.vertices = out; result.count = written;

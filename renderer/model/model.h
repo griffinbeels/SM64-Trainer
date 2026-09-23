@@ -20,7 +20,13 @@ enum sg_status {
 enum sg_pose_fields {
     SG_POSE_TRANSFORM = 1u, SG_POSE_ANIMATION = 2u, SG_POSE_BODY = 4u,
     SG_POSE_HEAD_ROTATION = 8u, SG_POSE_REQUIRED = 15u,
-    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u
+    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u
+};
+
+/* Objects the model can draw in Mario's hand (SG_POSE_HELD). */
+enum sg_held_kind {
+    SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_PENGUIN = 2, SG_HELD_KING_BOBOMB = 3,
+    SG_HELD_CHUCKYA = 4, SG_HELD_KINDS = 5
 };
 
 /* A native C value, not a packed wire format. Angles are signed SM64 turns.
@@ -49,6 +55,19 @@ typedef struct sg_pose {
     uint16_t model_state;
     uint8_t cap_state, eye_state, hand_state, wing_flutter;
     uint8_t punch_state, grab_position;
+    /* SG_POSE_HELD: the object in Mario's hand, appended to his mesh the way
+     * geo_process_held_object draws it: Mario's own root rows (his scale
+     * included) scaled by held_scale, at held_position (the HOLP). view is the
+     * look-at it is drawn under (sg_model_view), for its billboards; roll is
+     * that camera's roll. The mesh stays in world space. */
+    uint32_t held_kind;
+    int16_t held_animation_id, held_animation_frame, held_anim_y_translation;
+    uint16_t held_anim_state;
+    float held_position[3], held_scale[3];
+    float view[16];
+    int16_t roll;
+    /* The recorded frame's gGlobalTimer: the penguin's blink reads it. */
+    uint32_t held_global_timer;
 } sg_pose;
 
 enum sg_mesh_errors {
@@ -74,10 +93,17 @@ enum sg_material {
     SG_MATERIAL_TEXGEN = 0x100
 };
 
-/* The atlas is one 64-pixel cell per Mario texture, left to right in
- * libsm64's MarioTextures order: metal (cell 0) ... wing tip, then the metal
- * wing and wing tip (cells 11, 12). */
-enum { SG_ATLAS_CELLS = 13 };
+/* The atlas is one 64-pixel cell per texture, left to right: Mario's in
+ * libsm64's MarioTextures order, metal (cell 0) ... wing tip, then the metal
+ * wing and wing tip (cells 11, 12); then held objects' (from 13, in the
+ * sg_held_kind order; the first cell of each is named here). */
+enum { SG_MARIO_ATLAS_CELLS = 13 };
+enum sg_atlas_cell {
+    SG_ATLAS_CELL_BOBOMB_LEFT = 13, SG_ATLAS_CELL_BOBOMB_RIGHT = 14,
+    SG_ATLAS_CELL_BOBOMB_EYES = 15, SG_ATLAS_CELL_BOBOMB_BLINK = 16,
+    SG_ATLAS_CELL_PENGUIN = 17, SG_ATLAS_CELL_KING_BOBOMB = 23, SG_ATLAS_CELL_CHUCKYA = 29,
+    SG_ATLAS_CELLS = 33
+};
 enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
        SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
 
@@ -101,12 +127,21 @@ typedef struct sg_mesh {
  * model-local triangles; uv lies inside rect, the frame's clamped atlas cell;
  * rgba is the combiner's shade factor (white for decal frames). CUTOUT draws
  * texels with alpha, BLEND blends texture alpha times vertex alpha. */
-enum { SG_PARTICLE_FRAMES = 64, SG_PARTICLE_MAX_VERTICES = 384, SG_PARTICLE_CELLS = 64,
+enum { SG_PARTICLE_FRAMES = 80, SG_PARTICLE_MAX_VERTICES = 1024, SG_PARTICLE_CELLS = 64,
        SG_PARTICLE_ATLAS_WIDTH = 512, SG_PARTICLE_ATLAS_HEIGHT = 256 };
-enum sg_particle_layer { SG_PARTICLE_CUTOUT = 1, SG_PARTICLE_BLEND = 2 };
+/* The game's layer: CUTOUT texture edge (alpha test at .5), BLEND
+ * translucent, OPAQUE opaque (alpha ignored). CUTOUT and OPAQUE write depth. */
+enum sg_particle_layer { SG_PARTICLE_CUTOUT = 1, SG_PARTICLE_BLEND = 2, SG_PARTICLE_OPAQUE = 3 };
+/* LIT: rgb is the game's lighting of normal (model space) by the list's own
+ * directional light (dir in view space, as F3D takes it) plus its ambient,
+ * computed at placement. MIX: rgb = mix(rgba, texture, texture alpha) (the
+ * cap's BLENDRGBFADEA) instead of texture times rgba. */
+enum sg_particle_vertex_mode { SG_PARTICLE_LIT = 1, SG_PARTICLE_MIX = 2 };
 typedef struct sg_particle_vertex {
-    float position[3], uv[2], rect[4];
+    float position[3], uv[2], rect[4], normal[3];
     uint8_t rgba[4];
+    uint8_t mode, light_ambient[3], light_diffuse[3];
+    int8_t light_dir[3];
 } sg_particle_vertex;
 /* fade: the frame's alpha is the object's opacity (environment alpha set by
  * the game's generated list), which the recording carries per particle. */

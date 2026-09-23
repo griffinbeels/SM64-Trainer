@@ -4,9 +4,11 @@ from __future__ import annotations
 import logging
 import struct
 import threading
+import time
 from dataclasses import replace
 from typing import Callable
 
+from sm64_events.ghost.clip import ClipError
 from sm64_events.ghost.native_channel import NativeChannel, RejectedControl
 from sm64_events.ghost.native_protocol import RECORD_BYTES, Producer
 from sm64_events.memory.ghost_layout import GhostLayout
@@ -14,6 +16,29 @@ from sm64_events.replay.capturecontrol import CaptureControl
 from sm64_events.replay.ownedclose import CleanupPending, retain
 
 log = logging.getLogger("sm64.ghost.capture")
+
+WARN_EVERY_S = 60.0  # one warning per distinct reason per minute, with the count since
+
+
+class RateLimitedWarning:
+    """Say every distinct failure once at once, then at most once a minute
+    with how many times it happened since: a recurring fault stays visible
+    without filling the log at the pump's 0.5 s retry rate."""
+
+    def __init__(self, logger, clock=time.monotonic, every_s=WARN_EVERY_S):
+        self._log, self._clock, self._every = logger, clock, every_s
+        self._last = {}  # reason -> (logged at, repeats since)
+
+    def __call__(self, message, reason):
+        now = self._clock()
+        logged, repeats = self._last.get(reason, (None, 0))
+        if logged is not None and now - logged < self._every:
+            self._last[reason] = (logged, repeats + 1)
+            return False
+        suffix = f" (x{repeats + 1} in the last {now - logged:.0f} s)" if logged is not None else ""
+        self._log.warning("%s: %s%s", message, reason, suffix)
+        self._last[reason] = (now, 0)
+        return True
 
 
 def grouped(producer: Producer, frames: tuple[bytes, ...]):
@@ -53,6 +78,8 @@ class NativeCapture:
         self._status = {"available": False, "reason": "not_started"}
         self._channel = None
         self._pending_cleanup = None
+        self._warn = RateLimitedWarning(log)
+        self._refused, self._refused_reason = 0, None
 
     def start(self):
         if self._thread is not None:
@@ -139,12 +166,24 @@ class NativeCapture:
                 for identity, batch in grouped(producer, frames):
                     if self._stop.is_set():
                         break
-                    self._on_batch(identity, batch)
+                    try:
+                        self._on_batch(identity, batch)
+                    except ClipError as error:
+                        # The archive refused this batch's data; the channel
+                        # is fine. Reconnecting (the old path, silently) cannot
+                        # fix data, only drop the queued poses with it and
+                        # revoke the ghost's display: a blink every 0.5 s for
+                        # a recurring refusal. Drop this batch, keep the
+                        # channel, and say why.
+                        self._refused += 1
+                        self._refused_reason = str(error)
+                        self._warn("Mario poses refused by the archive; batch dropped", str(error))
                 self._report(available=True, reason=status.reason, state=status.state,
                              dropped=status.dropped, producer=producer,
                              playback_state=status.playback_state,
                              playback_reason=status.playback_reason,
-                             displayed=bool(status.displayed))
+                             displayed=bool(status.displayed),
+                             refused_batches=self._refused, refused_reason=self._refused_reason)
                 self._stop.wait(0.016)
             except BlockingIOError:
                 self._stop.wait(0.016)
@@ -164,6 +203,9 @@ class NativeCapture:
             except Exception as error:  # noqa: BLE001 - this thread also records every attempt's poses
                 if not isinstance(error, (OSError, RuntimeError, ValueError)):
                     log.exception("native ghost channel failed; reconnecting")
+                else:  # expected shapes (no Project64, a closed channel), but never silent
+                    self._warn("native ghost channel unavailable; reconnecting",
+                               f"{type(error).__name__}: {error}")
                 self._report(available=False, reason=str(error))
                 if not self._close_channel():
                     # A close failure may retain handles. Never acquire a new

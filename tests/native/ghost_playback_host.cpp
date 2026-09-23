@@ -309,15 +309,18 @@ int main() {
         check(api->configure(&r)==GP_OK,"enable overlap fading");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=0;
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0,"coincident Mario fully transparent");
+        // Overlap fades to the floor (15% of the configured opacity), never to nothing.
+        const float floor_opacity=.25f*.15f,half_opacity=.25f*(.15f+.85f*.5f);
+        auto near_to=[](float a,float b){return std::fabs(a-b)<1e-6f;};
+        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,floor_opacity),"coincident Mario keeps the ghost faint");
         live.pose.position[0]=37;
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0.125f,"half body overlap multiplies configured opacity");
+        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,half_opacity),"half body overlap multiplies configured opacity");
         live.pose.position[0]=74;
         draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"touching bodies at zero extra distance restore opacity");
         ++r.revision;r.proximity_distance=74;
         check(api->configure(&r)==GP_OK,"extra fade distance");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0.125f,"distance changes actual generated ghost opacity");
+        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,half_opacity),"distance changes actual generated ghost opacity");
         live.valid_fields&=~GC_VALID_POSE;
         draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"missing player pose does not invent fading");
         live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=0;
@@ -349,8 +352,11 @@ int main() {
         check(!pose.occlusion.enabled && !pose.occlusion.has_player,"switched-off fade reaches no pose");
         perspective=false;live.pose.position[0]=live.pose.position[2]=0;
         live.valid_fields&=~GC_VALID_POSE;
+        // The translucent world layer runs only while playback is drawing.
+        renderer.run([&]{check(ghost_playback::drawing(),"a displayed request is drawing");});
         const auto displayed=token;api->withdraw();
         renderer.run([&]{check(!ghost_playback::current(displayed),"withdraw cancels candidate immediately");
+            check(!ghost_playback::drawing(),"withdrawn playback draws nothing: no layer");
             ghost_playback::safe_boundary(7,4);});
         gp_status suspended{};check(api->status(&suspended,sizeof(suspended))==GP_OK
             && suspended.model_state==GP_MODEL_RENDER_OWNED && suspended.clips_owned==1
@@ -385,7 +391,8 @@ int main() {
         draw(0,true,GP_READY,6,2);
         api->withdraw();
         check(api->prepare_model(2,rom.data(),uint32_t(rom.size()))==GP_DEFERRED,"withdrawn model replacement waits for retirement");
-        renderer.run([&]{check(!ghost_playback::current(token),"replacement cancels displayed candidate");ghost_playback::safe_boundary(7,4);});
+        renderer.run([&]{check(!ghost_playback::current(token),"replacement cancels displayed candidate");
+            ghost_playback::safe_boundary(7,4);check(!ghost_playback::drawing(),"retired playback draws nothing: no layer");});
         refuse_adoption=true;check(api->collect()==GP_DEFERRED,"busy background adoption deferred");refuse_adoption=false;
         refuse_close=true;check(api->collect()==GP_DEFERRED,"busy close retains worker custody");refuse_close=false;
         check(api->collect()==GP_OK && closes==1 && last_close==worker,"worker retries actual close");
@@ -504,7 +511,13 @@ int main() {
                 if(shown)check(selected_x==x,"bridge shows the previous pose");
             };
             seek(3,true,GP_READY,4,2303);
+            // A bridged refusal sounds from the pose it shows (row 3), not
+            // from its own empty pose at the world origin.
+            ghost_playback::set_sound_sink(&test_sink);for(auto &p:placed)p={};
             seek(4,true,GP_READY,4,2303);   // one refused frame holds row 3
+            check(placed[0].count==1 && placed[0].position[0]+live.camera.position[0]==2303,
+                  "bridged frame sounds at its held pose");
+            ghost_playback::set_sound_sink(nullptr);
             seek(6,true,GP_READY,6,2305);   // two refused frames hold row 5
             seek(7,true,GP_READY,6,2305);
             seek(1,false,GP_INVALID_FRAME,0,0);  // next pose is in another area
@@ -519,16 +532,18 @@ int main() {
             // not after its walk; a live attempt from the entrance keeps the
             // ghost's own origin (even past a later area-1 restart), and a
             // scene the ghost never restarted in changes nothing.
-            Clip volcano=Clip::linear(24,24,17,5);
-            const auto scene=[&](uint32_t from,uint32_t to,int16_t area) {
-                for(uint32_t i=from;i<to;++i) {
-                    auto &s=volcano.frames[i].sample;s.area=area;s.igt=uint16_t(i-from+1);s.clock.raw_igt=s.igt;
-                }
-            };
+            Clip volcano=Clip::linear(24,24,17,5),other=Clip::linear(25,24,17,5);
             // Entrance 0-5, a volcano visit 6-9, the volcano run 10-19 (its
             // recorded touch at 17), back outside 20-23.
-            scene(6,10,2);scene(10,20,2);scene(20,24,1);
-            check(api->prepare_clip(&volcano.header,volcano.frames.data())==GP_OK,"prepare a clip with timer restarts");
+            for(auto *clip:{&volcano,&other}) {
+                const auto scene=[&](uint32_t from,uint32_t to,int16_t area) {
+                    for(uint32_t i=from;i<to;++i) {
+                        auto &s=clip->frames[i].sample;s.area=area;s.igt=uint16_t(i-from+1);s.clock.raw_igt=s.igt;
+                    }
+                };
+                scene(6,10,2);scene(10,20,2);scene(20,24,1);
+                check(api->prepare_clip(&clip->header,clip->frames.data())==GP_OK,"prepare a clip with timer restarts");
+            }
             revision=r.revision+1;r=request(volcano,revision);r.model_id=4;
             const auto follow=[&](int area) {
                 ++r.revision;r.origin={GO_STAR,7,live.sequence+1,source_continuity,11000,source_generation,0,0};
@@ -558,6 +573,23 @@ int main() {
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             draw(4,false,GP_WRONG_SCENE,0,1);
             draw(5,true,GP_READY,15,2);check(selected_x==2414,"restored origin keeps the alignment");
+            // Load practice, 2026-09-23: changing the selection under that
+            // restored origin (another ghost, a toggle, a capture restart that
+            // re-adopts clips into other slots) aligns the newly shown clip to
+            // the attempt's own scene, the volcano. Unaligned it would show
+            // its row 4 outside; aligned from live Mario's area 1 it would too.
+            const auto select_clip=[&](const Clip& shown) {
+                ++r.revision;std::memcpy(r.clips[0].clip_id,shown.header.clip_id,16);
+                check(api->configure(&r)==GP_OK,"change the selection under a restored origin");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            };
+            select_clip(other);
+            draw(4,false,GP_WRONG_SCENE,0,1);
+            draw(5,true,GP_READY,15,2);check(selected_x==2514,"a newly selected ghost aligns to the attempt");
+            // The worker prepares a re-selected recording again.
+            check(api->prepare_clip(&volcano.header,volcano.frames.data())==GP_OK,"prepare the first ghost again");
+            select_clip(volcano);
+            draw(5,true,GP_READY,15,2);check(selected_x==2414,"toggling back keeps its alignment");
         }
         {
             // Three ghosts on one live origin. Each ends on its own recorded
@@ -613,7 +645,8 @@ int main() {
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=2005;live.pose.position[1]=0;live.pose.position[2]=5;
             frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
-            check(poses[0].opacity==1 && poses[1].opacity==1 && poses[2].opacity==0,"only the coincident ghost fades");
+            check(poses[0].opacity==1 && poses[1].opacity==1 && std::fabs(poses[2].opacity-.15f)<1e-6f,
+                  "only the coincident ghost fades, to the floor");
             live.valid_fields&=~GC_VALID_POSE;
             ++r.revision;r.proximity_enabled=0;check(api->configure(&r)==GP_OK,"fade off");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});

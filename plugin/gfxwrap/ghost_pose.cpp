@@ -13,6 +13,19 @@ bool sample_valid(const gc_sample &s, uint32_t required) {
     return s.bytes == sizeof(s) && s.version == GC_VERSION && s.epoch && s.sequence
         && s.dlist_serial && (s.valid_fields & required) == required;
 }
+// The held objects the model draws, by segmented behaviour (US; each found
+// by the LOAD_ANIMATIONS of its model's table in the ROM's behaviour segment).
+struct HeldModel { uint32_t behavior; uint32_t kind; };
+constexpr HeldModel held_models[] = {
+    {0x13003174u, SG_HELD_BOBOMB},      // bhvBobomb
+    {0x130020E8u, SG_HELD_PENGUIN},     // bhvSmallPenguin
+    {0x130001F4u, SG_HELD_KING_BOBOMB}, // bhvKingBobomb
+    {0x13000528u, SG_HELD_CHUCKYA},     // bhvChuckya
+};
+uint32_t held_kind(uint32_t behavior) {
+    for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;
+    return SG_HELD_NONE;
+}
 void multiply(const float *a, const float *b, float *out) {
     // Same column-major operation as GLideN64 MultMatrix, with separate output.
     for (unsigned c = 0; c < 4; ++c)
@@ -163,11 +176,34 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     float view[16]{};
     if (sg_model_view(model,live.camera.position,live.camera.focus,live.camera.roll,view) != SG_OK)
         return Result::invalid_camera;
+    // The object in his hand, when the model knows its geo; its billboards
+    // face the live camera the ghost is drawn under.
+    const gc_held &held = recorded.held;
+    if ((recorded.valid_fields & GC_VALID_HELD) && held_kind(held.behavior) != SG_HELD_NONE) {
+        pose.fields |= SG_POSE_HELD;
+        pose.held_kind = held_kind(held.behavior);
+        pose.held_animation_id = held.animation_id; pose.held_animation_frame = held.animation_frame;
+        pose.held_anim_y_translation = held.anim_y_translation; pose.held_anim_state = held.anim_state;
+        std::memcpy(pose.held_position,held.holp,sizeof(pose.held_position));
+        std::memcpy(pose.held_scale,held.scale,sizeof(pose.held_scale));
+        std::memcpy(pose.view,view,sizeof(pose.view));
+        pose.roll = live.camera.roll;
+        pose.held_global_timer = recorded.global_timer;
+    }
     sg_mesh mesh{scratch.position,scratch.normal,scratch.color,scratch.uv,scratch.material,
         SG_MODEL_MAX_VERTICES,0,0};
     // A hidden Mario draws nothing. The game never advanced his animation
     // (act_disappeared leaves frame -1), so the model is not asked to.
-    const int32_t status = p.hidden ? SG_OK : sg_model_evaluate(model,&pose,&mesh);
+    int32_t status = p.hidden ? SG_OK : sg_model_evaluate(model,&pose,&mesh);
+    // A held object the model refuses (its textures missing, an animation it
+    // does not have, no room left in the mesh) is left out rather than
+    // losing Mario.
+    if ((status != SG_OK || mesh.error_flags) && (pose.fields & SG_POSE_HELD)) {
+        pose.fields &= ~uint32_t(SG_POSE_HELD);
+        mesh = {scratch.position,scratch.normal,scratch.color,scratch.uv,scratch.material,
+            SG_MODEL_MAX_VERTICES,0,0};
+        status = sg_model_evaluate(model,&pose,&mesh);
+    }
     if (status == SG_CAPACITY) return Result::capacity;
     if (status != SG_OK || mesh.error_flags || mesh.vertex_count > SG_MODEL_MAX_VERTICES)
         return Result::model_failed;

@@ -42,6 +42,13 @@ struct sg_model {
     jmp_buf abort;
     int abort_status;
     int16_t effective_head[3];
+    /* Held objects: one graph per sg_held_kind, a bit per kind whose
+     * textures loaded, and the object node their animation runs on. */
+    struct GraphNode *held_graph[SG_HELD_KINDS];
+    const struct Animation *const *held_animations[SG_HELD_KINDS];
+    int held_animation_count[SG_HELD_KINDS];
+    unsigned held_available;
+    struct Object held_object;
 };
 
 extern struct sg_model *sg_active;
@@ -59,6 +66,11 @@ uint32_t sg_geometry_errors(void);
 uint32_t sg_geometry_vertex_count(void);
 void sg_geometry_reset(void);
 void sg_traverse_frozen(struct GraphNode *node);
+/* Appends the held object to the bound mesh (held.c). */
+int sg_held_build(struct sg_model *);
+void sg_held_evaluate(struct sg_model *, const sg_pose *, const float mario_root[4][4]);
+float *sg_geometry_position(uint32_t vertex);
+float *sg_geometry_normal(uint32_t vertex);
 void sg_traversal_reset(void);
 
 #endif

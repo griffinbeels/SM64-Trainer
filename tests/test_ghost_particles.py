@@ -35,4 +35,5 @@ def test_particles_with_their_ghost(tmp_path):
         timeout=40, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
     print(result.stdout.strip())
-    assert "particles passed: cutout=texels blend=alpha behind_body=hidden behind_terrain=hidden" in result.stdout
+    assert "particles passed: cutout=texels blend=alpha mix=texel_alpha opaque=alpha_ignored behind_body=hidden behind_terrain=hidden" in result.stdout
+    assert "player_first=follows_body" in result.stdout

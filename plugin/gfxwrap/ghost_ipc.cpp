@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cwchar>
 #include <limits>
+#include <new>
 #include <string>
 #include <vector>
 #include <utility>
@@ -100,6 +101,9 @@ struct RecoveryCache {
 bool read_live_rom(uint32_t generation, std::vector<uint8_t> &out) {
     const uintptr_t address = rom_header.load(std::memory_order_acquire);
     if (!address || !generation || opened.load(std::memory_order_acquire) != generation) return false;
+    // The 8 MiB image and its scratch come from PJ64's 2 GiB too: out of
+    // memory is "no ROM yet" (GIPC_ROM), never a throw into the worker.
+    try {
     return ghost_rom::read(reinterpret_cast<const uint8_t*>(address), [=] {
         return opened.load(std::memory_order_acquire) == generation
             && rom_header.load(std::memory_order_acquire) == address;
@@ -109,6 +113,7 @@ bool read_live_rom(uint32_t generation, std::vector<uint8_t> &out) {
             : result == SG_INVALID_ROM ? ghost_rom::Validation::invalid
             : ghost_rom::Validation::unavailable;
     }) == ghost_rom::Result::ready;
+    } catch (const std::bad_alloc &) { out.clear(); return false; }
 }
 
 struct Session {
@@ -401,7 +406,9 @@ struct Session {
             } else {
                 state = GIPC_PREPARING;
                 if (model < 0 && model != GP_BUSY) { state = GIPC_REFUSED; reason = GIPC_MODEL; }
-                if (clip < 0 && clip != GP_BUSY) { state = GIPC_REFUSED; reason = GIPC_CLIP; }
+                if (clip < 0 && clip != GP_BUSY) {
+                    state = GIPC_REFUSED; reason = clip == GP_BUDGET ? GIPC_BUDGET : GIPC_CLIP;
+                }
                 if (model == GP_MODEL_ERROR || model == GP_INVALID || clip == GP_INVALID)
                     failed = r.revision;
             }
@@ -427,9 +434,14 @@ struct Session {
             // Retained files are bounded like their resident playback copies.
             total += asset.bytes.size();
             if (total > GP_CLIP_BUDGET + uint64_t(GIPC_GHOSTS) * sizeof(gclip_header)) {
-                failed = loaded.revision; reason = GIPC_CLIP; state = GIPC_REFUSED; return;
+                failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
             }
-            assets.push_back(std::move(asset));
+            // Out of memory in PJ64's 2 GiB is a refusal of this set, never a
+            // throw into the worker's last-resort handler (which revokes all).
+            try { assets.push_back(std::move(asset)); }
+            catch (const std::bad_alloc &) {
+                failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
+            }
         }
         restore_cache(loaded);
     }

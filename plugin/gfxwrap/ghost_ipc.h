@@ -14,7 +14,10 @@
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
-    GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY, GIPC_ORIGIN, GIPC_ROM };
+    GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY, GIPC_ORIGIN, GIPC_ROM,
+    /* The set does not fit: GP_CLIP_BUDGET, or memory in PJ64's 2 GiB. The
+     * clips are fine; fewer or shorter ones would show. */
+    GIPC_BUDGET };
 #pragma pack(push, 4)
 /* One saved recording in the displayed set. Hue is per ghost; tint_enabled
  * stays global. id+SHA is the identity the worker reuses across set changes. */
@@ -81,7 +84,7 @@ typedef struct gipc_page {
 #ifdef __cplusplus
 static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
 static_assert(sizeof(gipc_clip) == 1096, "ghost clip entry bytes");
-static_assert(sizeof(gipc_request) == 18952, "ghost request bytes");
+static_assert(sizeof(gipc_request) == 18956, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
 static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {

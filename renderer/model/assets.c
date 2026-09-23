@@ -10,6 +10,15 @@
  * Located by its decoded flame lists in the US and Usamune US ROMs. */
 #define COMMON1_BASE 0x201410u
 #define COMMON1_SPAN (256u * 1024u)
+/* Held objects' textures, each from its model's own MIO0 segment
+ * (HELD_MODELS in tools/build_model.py generates the table). */
+#define HELD_SEGMENT_SPAN (256u * 1024u)
+static const struct { unsigned kind, cell; uint32_t segment, offset; } held_textures[] = {
+    SG_HELD_TEXTURES
+};
+typedef char sg_held_cells_fill_atlas[(SG_MARIO_ATLAS_CELLS + SG_HELD_CELL_COUNT == SG_ATLAS_CELLS) ? 1 : -1];
+typedef char sg_held_kinds_match[(SG_HELD_KIND_COUNT == SG_HELD_KINDS) ? 1 : -1];
+SG_HELD_KIND_CHECKS
 
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static uint32_t be32(const uint8_t *p)
@@ -64,6 +73,44 @@ bad:
     return SG_INVALID_ROM;
 }
 
+/* One RGBA16 texture into its 64-pixel atlas cell; its size is the cell's. */
+static int blit(struct sg_model *model, unsigned tile, const uint8_t *decoded, uint32_t size, size_t offset)
+{
+    unsigned x, y, width = mario_tex_widths[tile], height = mario_tex_heights[tile];
+    if (width > 64 || height > 64 || !range(offset, width * height * 2u, size)) return SG_INVALID_ROM;
+    for (y = 0; y < height; ++y) for (x = 0; x < width; ++x) {
+        unsigned color = be16(decoded + offset + (y * width + x) * 2u);
+        uint8_t *dest = model->atlas + ((y * SG_MODEL_ATLAS_WIDTH) + tile * 64u + x) * 4u;
+        dest[0] = (uint8_t)(((color >> 11) & 31u) * 255u / 31u);
+        dest[1] = (uint8_t)(((color >> 6) & 31u) * 255u / 31u);
+        dest[2] = (uint8_t)(((color >> 1) & 31u) * 255u / 31u);
+        dest[3] = (color & 1u) ? 255 : 0;
+    }
+    return SG_OK;
+}
+
+/* Held objects' textures; a kind whose segment or texture fails leaves its
+ * cells empty and is marked unavailable rather than refusing Mario. */
+static void held_cells(struct sg_model *model, const uint8_t *rom)
+{
+    uint8_t *decoded = NULL;
+    uint32_t size = 0, segment = 0;
+    unsigned i, present = 0, failed = 0;
+    for (i = 0; i < sizeof(held_textures) / sizeof(held_textures[0]); ++i) {
+        present |= 1u << held_textures[i].kind;
+        if (!decoded || segment != held_textures[i].segment) {
+            free(decoded);
+            decoded = NULL;
+            segment = held_textures[i].segment;
+            if (mio0(rom, segment, HELD_SEGMENT_SPAN, &decoded, &size) != SG_OK) decoded = NULL;
+        }
+        if (!decoded || blit(model, held_textures[i].cell, decoded, size, held_textures[i].offset) != SG_OK)
+            failed |= 1u << held_textures[i].kind;
+    }
+    free(decoded);
+    model->held_available = present & ~failed;
+}
+
 static int textures(struct sg_model *model, const uint8_t *rom)
 {
     uint32_t size, common1_size;
@@ -71,19 +118,9 @@ static int textures(struct sg_model *model, const uint8_t *rom)
     uint8_t *decoded, *common1;
     int status = mio0(rom, TEXTURE_BASE, TEXTURE_SPAN, &decoded, &size);
     if (status != SG_OK) return status;
-    for (tile = 0; tile < NUM_USED_TEXTURES; ++tile) {
-        unsigned x, y, width = mario_tex_widths[tile], height = mario_tex_heights[tile];
-        size_t offset = (size_t)mario_tex_offsets[tile];
-        if (width > 64 || height > 64 || !range(offset, width * height * 2u, size)) goto bad;
-        for (y = 0; y < height; ++y) for (x = 0; x < width; ++x) {
-            unsigned color = be16(decoded + offset + (y * width + x) * 2u);
-            uint8_t *dest = model->atlas + ((y * SG_MODEL_ATLAS_WIDTH) + tile * 64u + x) * 4u;
-            dest[0] = (uint8_t)(((color >> 11) & 31u) * 255u / 31u);
-            dest[1] = (uint8_t)(((color >> 6) & 31u) * 255u / 31u);
-            dest[2] = (uint8_t)(((color >> 1) & 31u) * 255u / 31u);
-            dest[3] = (color & 1u) ? 255 : 0;
-        }
-    }
+    for (tile = 0; tile < SG_MARIO_ATLAS_CELLS; ++tile)
+        if (blit(model, tile, decoded, size, (size_t)mario_tex_offsets[tile]) != SG_OK) goto bad;
+    held_cells(model, rom);
     /* Same segment: Mario's particle models. Unsupported lists leave none;
      * the flame (common1) is added only when its own lists read too. */
     if (sg_particles_load(&model->particles, decoded, size) == SG_OK &&

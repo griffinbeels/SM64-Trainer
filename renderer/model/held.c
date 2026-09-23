@@ -1,0 +1,134 @@
+/* The object Mario holds, drawn into his mesh the way geo_process_held_object
+ * draws it from his hand: his own root rows (with his scale), each scaled by
+ * the object's scale, at the HOLP. The graph runs in the given view's camera
+ * space so its billboards face that camera (mtxf_billboard), then every
+ * vertex returns to world space by the rigid inverse of that view.
+ * The models are HELD_MODELS in tools/build_model.py (held_cells.h).
+ */
+#include "internal.h"
+#include "decomp/shim.h"
+#include "decomp/engine/geo_layout.h"
+#include "decomp/engine/math_util.h"
+#include "decomp/game/rendering_graph_node.h"
+#include "decomp/include/object_fields.h"
+#include "decomp/held/held_cells.h"
+#include <string.h>
+
+#define DECLARE_HELD(name, kind) \
+    extern void *sg_##name##_geo; \
+    extern const struct Animation *const *sg_##name##_animations; \
+    extern const int sg_##name##_animation_count;
+SG_HELD_MODELS(DECLARE_HELD)
+
+/* object_helpers.c: a switch on the object's oAnimState (the Bob-omb's blink). */
+Gfx *geo_switch_anim_state(s32 callContext, struct GraphNode *node, void *context)
+{
+    struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *)node;
+    struct Object *obj = (struct Object *)gCurGraphNodeObject;
+    (void)context;
+    if (callContext == GEO_CONTEXT_RENDER && obj) {
+        if (obj->oAnimState >= switchCase->numCases) obj->oAnimState = 0;
+        switchCase->selectedCase = (s16)obj->oAnimState;
+    }
+    return NULL;
+}
+
+/* behaviors/tuxie.c: the penguins' blink, on gGlobalTimer. Tuxie's mother's
+ * angry eyes (case 3) are hers alone; she is never held. */
+Gfx *geo_switch_tuxie_mother_eyes(s32 callContext, struct GraphNode *node, void *context)
+{
+    struct GraphNodeSwitchCase *switchCase = (struct GraphNodeSwitchCase *)node;
+    s32 timer;
+    (void)context;
+    if (callContext == GEO_CONTEXT_RENDER) {
+        timer = gGlobalTimer % 50;
+        if (timer < 43) switchCase->selectedCase = 0;
+        else if (timer < 45) switchCase->selectedCase = 1;
+        else if (timer < 47) switchCase->selectedCase = 2;
+        else switchCase->selectedCase = 1;
+    }
+    return NULL;
+}
+
+/* King Bob-omb's and Chuckya's hands place a Mario THEY hold; held by
+ * Mario, they hold nothing, and the node draws nothing either way. */
+Gfx *geo_update_held_mario_pos(s32 callContext, struct GraphNode *node, void *context)
+{
+    (void)callContext; (void)node; (void)context;
+    return NULL;
+}
+
+int sg_held_build(struct sg_model *model)
+{
+    Vec3f zero = {0, 0, 0}, unit = {1, 1, 1};
+    Vec3s angles = {0, 0, 0};
+    int status = SG_OK;
+    init_graph_node_object(NULL, &model->held_object.header.gfx, NULL, zero, angles, unit);
+#define BUILD_HELD(name, kind) \
+    model->held_graph[kind] = process_geo_layout(alloc_only_pool_init(), sg_##name##_geo); \
+    model->held_animations[kind] = sg_##name##_animations; \
+    model->held_animation_count[kind] = sg_##name##_animation_count; \
+    if (!model->held_graph[kind]) status = SG_INVALID_GEOMETRY;
+    SG_HELD_MODELS(BUILD_HELD)
+#undef BUILD_HELD
+    return status;
+}
+
+void sg_held_evaluate(struct sg_model *model, const sg_pose *pose, const float mario_root[4][4])
+{
+    struct Object *held = &model->held_object;
+    struct AnimInfo *info = &held->header.gfx.animInfo;
+    const struct Animation *animation;
+    struct GraphNodeCamera camera;
+    struct Object *mario = gMarioObject;
+    u32 global_timer = gGlobalTimer;
+    Mat4 root, view, local;
+    uint32_t first = sg_geometry_vertex_count(), last, i;
+    int row, column;
+    if (!(pose->fields & SG_POSE_HELD)) return;
+    if (pose->held_kind == SG_HELD_NONE || pose->held_kind >= SG_HELD_KINDS
+            || !(model->held_available & (1u << pose->held_kind)) || !model->held_graph[pose->held_kind]) {
+        sg_abort(SG_INVALID_ARGUMENT);
+    }
+    if (pose->held_animation_id < 0 || pose->held_animation_id >= model->held_animation_count[pose->held_kind])
+        sg_abort(SG_INVALID_ANIMATION);
+    animation = model->held_animations[pose->held_kind][pose->held_animation_id];
+    if (pose->held_animation_frame < 0 || pose->held_animation_frame >= animation->loopEnd) sg_abort(SG_INVALID_ANIMATION);
+    /* Mario's rows, translation at the HOLP; the traversal scales rows by the
+     * object's own scale, as geo_process_held_object's mtxf_scale_vec3f. */
+    memcpy(local, mario_root, sizeof(local));
+    for (column = 0; column < 3; ++column) local[3][column] = pose->held_position[column];
+    memcpy(view, pose->view, sizeof(view));
+    mtxf_mul(root, local, view);
+    info->animID = pose->held_animation_id;
+    info->curAnim = (struct Animation *)animation;
+    info->animFrame = pose->held_animation_frame;
+    info->animYTrans = pose->held_anim_y_translation;
+    info->animAccel = 0; info->animFrameAccelAssist = (s32)pose->held_animation_frame * 65536;
+    info->animTimer = g_state->mgAreaUpdateCounter;
+    for (column = 0; column < 3; ++column) held->header.gfx.scale[column] = pose->held_scale[column];
+    held->oAnimState = pose->held_anim_state;
+    held->header.gfx.throwMatrix = &root;
+    memset(&camera, 0, sizeof(camera));
+    camera.roll = pose->roll;
+    gMarioObject = held;
+    gCurGraphNodeObject = &held->header.gfx;
+    gCurGraphNodeCamera = &camera;
+    gGlobalTimer = pose->held_global_timer;
+    sg_traverse_frozen(model->held_graph[pose->held_kind]);
+    gGlobalTimer = global_timer;
+    gCurGraphNodeCamera = NULL;
+    gCurGraphNodeObject = NULL;
+    gMarioObject = mario;
+    held->header.gfx.throwMatrix = NULL;
+    /* Camera space back to world: p = (p' - t) R^T for the rigid look-at. */
+    last = sg_geometry_vertex_count();
+    for (i = first; i < last; ++i) {
+        float *p = sg_geometry_position(i), *n = sg_geometry_normal(i), q[3], m[3];
+        for (row = 0; row < 3; ++row) { q[row] = p[row] - view[3][row]; m[row] = n[row]; }
+        for (row = 0; row < 3; ++row) {
+            p[row] = q[0] * view[row][0] + q[1] * view[row][1] + q[2] * view[row][2];
+            n[row] = m[0] * view[row][0] + m[1] * view[row][1] + m[2] * view[row][2];
+        }
+    }
+}

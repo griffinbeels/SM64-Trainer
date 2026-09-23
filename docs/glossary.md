@@ -1228,7 +1228,8 @@ takes the water's color. The game's own picture stays untouched.
 ### Recorded particles
 
 The bubbles, splashes, water rings, droplets, dust, sparkles, lava flame,
-ground-pound mist, sand, leaves and snow the game drew for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
+ground-pound mist, sand, leaves, snow, ground-pound and wall-bonk bursts, punch
+dirt and his knocked-off cap the game drew for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
 one showed and where. A Mario-only [[ghost]] draws them with the ROM's own
 pictures, after its body. Another object's bubble, or a particle whose picture
 the ROM reader does not know, is never drawn.
@@ -1243,14 +1244,40 @@ A Mario-only [[ghost]] fades wherever it would block the player. The parts of
 it that stand between the camera and live Mario, over his body on screen, keep
 only 15% of their opacity. Near the camera the whole body fades out, so it
 can never fill the screen. The fade leaves a [[ghost]] behind Mario, or away
-from him, untouched. Its [[recorded shadow]] follows the same rule. It
-multiplies with opacity and the overlap fade; the card's **Fade in front of
-Mario** switch turns it off for comparison.
+from him, untouched. Its [[recorded shadow]] and [[recorded particles]]
+follow the same rule. It
+multiplies with opacity and the [[overlap fade]], which shares its 15% floor;
+the card's **Fade in front of Mario** switch turns it off for comparison.
 
 - **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
   playback fills live Mario's region each frame
-- **Not** — the overlap fade, which fades a whole [[ghost]] when its body touches
-  live Mario's, wherever the camera is.
+- **Not** — the [[overlap fade]], which fades a whole [[ghost]] when its body
+  touches live Mario's, wherever the camera is.
+
+### Overlap fade
+
+A [[ghost]] whose body touches live Mario's fades as a whole, smoothly down to
+15% of its opacity when the two stand on the same spot, so it never vanishes
+on a pole, a ledge or a plank both Marios hold. It is back to full opacity
+once the bodies stop touching, plus any extra distance set on the practice
+card.
+
+- **Lives** — `plugin/gfxwrap/ghost_proximity.h`; the floor is shared with the
+  [[player-first fade]] in `plugin/gfxwrap/ghost_occlusion.h`
+- **Not** — the [[player-first fade]], which fades only the pixels in front of
+  live Mario and depends on the camera.
+
+### Held object (ghost)
+
+The object Mario holds on a recorded [[frame]] (a Bob-omb, a baby penguin,
+Bowser's tail), recorded as what it is (its behaviour), its animation state,
+and where his hand drew it in that [[frame]]. Captured only when the game
+provably drew it from his hand in that [[frame]]. A [[ghost]] draws the kinds
+its model knows (the Bob-omb, the small penguin, King Bob-omb, Chuckya) in
+his hand and leaves the others out.
+
+- **Lives** — `plugin/gfxwrap/ghost_capture.cpp` (capture); decoded in
+  `src/sm64_events/ghost/clip.py`; drawn by `renderer/model/held.c`
 
 ### Ghost sound events
 

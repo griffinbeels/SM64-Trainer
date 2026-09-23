@@ -22,7 +22,7 @@ export function GhostProximity({ active, view, value, draft, write, queue }) {
           oninput=${(event) => queue({ proximity: { extra_distance: Number(event.target.value) } })} />
         <span class="ghost-field-value">${shown.extra_distance} units</span>
       </label>`}
-      <p class="ghost-proximity-help">At the same position, the ghost disappears. At zero extra
+      <p class="ghost-proximity-help">At the same position, the ghost keeps 15% of your Visibility. At zero extra
         distance, it reaches your Visibility setting just beyond Mario’s body.
         More distance makes the fade gentler. One Mario width is about 74 units.</p>
     </div>

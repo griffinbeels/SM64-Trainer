@@ -185,6 +185,7 @@ if _MISSING:
 from ghost_fixture import (NO_FRAME_MAP_TEXT, ghost_session,  # noqa: E402
                            serve_ui_with_ghost)
 from ui_fixture import FIXTURE_SEGMENT  # noqa: E402
+from sm64_events.ghost.native_session import budget_reason  # noqa: E402
 from uilab.driver import get_driver  # noqa: E402
 
 
@@ -209,7 +210,14 @@ STATES = {
     # every older recording once he has ever picked the Mario view.
     "asked": ghost_session(enabled=True, opacity=0.6, nudge_frames=3,
                            view="mario"),
+    # Several ghosts the renderer cannot hold together: the card says so in
+    # the server's own sentence (the native budget refusal, not a bad file).
+    "no_room": {**ghost_session(enabled=True, opacity=0.6, nudge_frames=3, view="mario"),
+                "window": {"running": False, "visible": False, "backend": "native",
+                           "reason": budget_reason(2)}},
 }
+STATES["no_room"]["source"] = {**STATES["no_room"]["source"], "native_available": True,
+                               "native_reason_text": None, "whole_available": True}
 
 MEASURE = """
 (() => {
@@ -482,6 +490,15 @@ def test_the_geometry_guard_can_fail(rendered):
     row = rendered[("disabled", min(WIDTHS))][0]
     assert row["rowClient"] > 0, "the probe measured a zero-width row"
     assert row["rowScroll"] + 40 > row["rowClient"] + 1
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_ghosts_that_do_not_fit_together_say_so_on_the_card(rendered, width):
+    """His ghosts are fine; there are too many long ones at once. The card
+    says what to do, on screen, and the switch stays usable."""
+    row = rendered[("no_room", width)][0]
+    assert row["whyText"] == "These ghosts are too long to show together; untick one."
+    assert row["whySeen"] and row["checked"] == "true" and not row["disabled"]
 
 
 @pytest.mark.parametrize("width", WIDTHS)
