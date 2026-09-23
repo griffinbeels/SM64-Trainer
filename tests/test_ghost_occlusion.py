@@ -28,6 +28,6 @@ def test_ghost_never_blocks_the_player(tmp_path):
     result = subprocess.run([str(executable)], capture_output=True, text=True, cwd=tmp_path,
         timeout=30, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
-    assert ("front=faded_over_mario behind=exact away=exact camera=hidden,half,exact "
+    assert ("front=faded_over_mario behind=exact away=exact camera=hidden,half,exact joint_floor=15 "
             "shadow=follows depth=ordinary,n64_image clean=exact") in result.stdout
     print(result.stdout.strip())

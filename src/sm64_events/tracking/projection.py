@@ -267,6 +267,7 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
 
 from sm64_events.core.modes import platform_from_payload
+from sm64_events.detectors.anchors import FULL_RAM_LOADS
 from sm64_events.detectors.counter_epoch import (COURSE_START_AREA,
                                                  LEVEL_LOAD_TAIL_FRAMES)
 from sm64_events.memory.addresses import (CASTLE_LEVELS, LEVEL_CASTLE_INSIDE,
@@ -1732,7 +1733,11 @@ class Projector:
         self._open_acted_before_load = (
             self._open_acted_before_load or self._open_acted
             or (self._open is not ev and bool(ev.payload.get("mario_acted"))))
-        if ev.payload.get("load_signature") == "frame_counter_rewound":
+        # A full-RAM restore puts the game's own clock at the saved state, so
+        # the native ghost restarts there -- backward or, onto a state from an
+        # earlier boot, forward (review 2026-09-23: after F7 forward the star
+        # ghost stayed on the pre-load reset until the next one).
+        if ev.payload.get("load_signature") in FULL_RAM_LOADS:
             self._clock_origin = ev
         return []
 

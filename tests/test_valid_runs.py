@@ -350,3 +350,27 @@ def test_a_load_that_opens_an_attempt_does_not_lend_it_the_last_ones_play():
         load(11, 1400, mario_acted=True),
         reset(12, 1500, mario_acted=False)])
     assert [a.id for a in attempts] == [4]
+
+
+import pytest  # noqa: E402
+
+from sm64_events.tracking.projection import Projector  # noqa: E402
+
+
+@pytest.mark.parametrize("signature, frame, origin", [
+    ("frame_counter_rewound", 900, (10, 900)),          # Project64 F7, backward
+    ("frame_counter_skipped_ahead", 5000, (10, 5000)),  # F7 onto an earlier boot's state
+    ("igt_rewound", 1400, (5, 1047)),                   # Usamune's own load: the reset stays
+])
+def test_a_full_ram_load_restarts_the_star_ghosts_clock(signature, frame, origin):
+    """A Project64 load restores the game's own frame counter, so the star
+    ghost times from the load, whichever way the counter moved (review
+    2026-09-23: forward, the ghost stayed on the pre-load reset). A load
+    Usamune does itself leaves the counter alone and the origin with it."""
+    projector = Projector()
+    for ev in [session(1), jev(2, "target_set", 990, {"course_id": WF_COURSE, "star_id": 1}),
+               *[jev(e.id + 1, e.type, e.frame, e.payload) for e in enter(2, 1000, WF)],
+               load(10, frame, signature=signature)]:
+        projector.feed(ev)
+    live = projector.native_ghost_origin("star", f"{WF_COURSE}-1")
+    assert (live["arm_id"], live["frame"]) == origin

@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <winioctl.h>
 #include "ghost_ipc.h"
 #include "ghost_assets.h"
 #include "ghost_stream.h"
@@ -306,6 +307,25 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(!ghost_assets::read(clip_path,GIPC_PATH_CHARS,1,corrupt) && corrupt.empty(),"oversized file clears output");
         const uint16_t relative[]={'x',0};
         check(!ghost_assets::read(relative,2,1024,corrupt),"relative file refused");
+        // A file too big for this 32-bit process's address space is refused as
+        // memory (GIPC_BUDGET), never as a bad file. Sparse: no disk is used.
+        {
+            wchar_t folder[MAX_PATH]{},name[MAX_PATH]{};
+            check(GetTempPathW(MAX_PATH,folder) && GetTempFileNameW(folder,L"gho",0,name),"temporary file");
+            HANDLE big=CreateFileW(name,GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_TEMPORARY,nullptr);
+            DWORD returned=0;LARGE_INTEGER end{};end.QuadPart=0x7F000000;
+            check(big!=INVALID_HANDLE_VALUE && DeviceIoControl(big,FSCTL_SET_SPARSE,nullptr,0,nullptr,0,&returned,nullptr)
+                && SetFilePointerEx(big,end,nullptr,FILE_BEGIN) && SetEndOfFile(big),"sparse 2 GB file");
+            CloseHandle(big);
+            uint16_t big_path[GIPC_PATH_CHARS]{};path(big_path,name);
+            bool memory=false;
+            check(!ghost_assets::read(big_path,GIPC_PATH_CHARS,0xF0000000u,corrupt,&memory) && memory && corrupt.empty(),
+                "out of memory is reported as memory");
+            memory=false;
+            check(!ghost_assets::read(big_path,GIPC_PATH_CHARS,1024,corrupt,&memory) && !memory,
+                "an oversized file is not memory");
+            check(DeleteFileW(name),"temporary file removed");
+        }
         std::vector<uint8_t> rom;
         check(ghost_assets::read(rom_path,GIPC_PATH_CHARS,8u<<20,rom) && rom.size()==(8u<<20),"ROM fixture read");
         // The in-process cartridge fixture starts word-swapped, like Project64.

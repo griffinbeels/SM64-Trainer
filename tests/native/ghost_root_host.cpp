@@ -271,9 +271,9 @@ static void materials(Fixture &f) {
     check(!drawn(0x180,alpha_dl,0xffffff80),"opaque list accepted for a vanish-cap Mario");
     check(!drawn(0,alpha_dl-8,0xffffffff),"translucent list accepted for an opaque Mario");
 }
-// The object Mario holds rides his proven pose: its own graph node off, its
-// animation advanced by his hand this frame, the HOLP its world root. Every
-// failed proof, or a refused root, leaves the block cleared.
+// The object Mario holds rides his proven pose: its own graph node off or
+// invisible, its animation advanced this frame, the HOLP its world root.
+// Every failed proof, or a refused root, leaves the block cleared.
 static void held_block(Fixture &f) {
     gc_root_probe p;gc_root_memory memory;
     const uint32_t bomb=f.config.object_pool+0x260, anim=Fixture::base+0x14100;
@@ -310,6 +310,23 @@ static void held_block(Fixture &f) {
     none(Fixture::body+0x18,0x7fc00000,"nonfinite HOLP accepted");
     none(f.config.mario_state+0x7c,bomb+4,"unaligned held pointer accepted");
     none(bomb+0x14,0,"held object without a model accepted"); // Bowser's tail anchor
+    // Each kind with the node flags its held behaviour really leaves:
+    // bobomb_held_loop and bhv_mips_held set only GRAPH_RENDER_INVISIBLE
+    // (0x10), ACTIVE (0x01) staying set; the others clear ACTIVE; the cork box
+    // through cur_obj_disable_rendering. HAS_ANIMATION is 0x20.
+    const struct { uint32_t behaviour; uint16_t flags; bool animated; const char *name; } kinds[]={
+        {0x3174,0x31,true,"held Bob-omb (active, invisible) not captured"},
+        {0x44FC,0x31,true,"held Mips (active, invisible) not captured"},
+        {0x01F4,0x20,true,"held King Bob-omb not captured"},
+        {0x0528,0x20,true,"held Chuckya not captured"},
+        {0x20E8,0x20,true,"held penguin not captured"},
+        {0x1650,0x00,false,"held crazy box not captured"},
+        {0x4218,0x00,false,"held cork box not captured"}};
+    for(const auto &k:kinds) {
+        holding();f.put32(bomb+0x20c,f.config.behaviour_base+k.behaviour);f.put16(bomb+2,k.flags);
+        if(!k.animated)f.put32(bomb+0x3c,0);
+        check(frame(true) && f.sample.held.behavior==0x13000000u+k.behaviour,k.name);
+    }
     // A box has no animation (id -1, frame 0): the hand drew it only if
     // Mario's body was drawn, so it rides a root proven by this frame's lists
     // and never a carried one. An animated object's own timer proves itself.

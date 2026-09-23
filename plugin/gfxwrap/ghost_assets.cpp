@@ -3,10 +3,11 @@
 #include <windows.h>
 #include <bcrypt.h>
 #include <cstring>
+#include <new>
 #pragma comment(lib, "bcrypt.lib")
 namespace ghost_assets {
 bool read(const uint16_t *path, uint32_t capacity, uint32_t maximum,
-          std::vector<uint8_t> &out) {
+          std::vector<uint8_t> &out, bool *out_of_memory) {
     out.clear();
     uint32_t length = 0;
     if (!path || !capacity || !maximum) return false;
@@ -22,6 +23,7 @@ bool read(const uint16_t *path, uint32_t capacity, uint32_t maximum,
         && size.QuadPart > 0 && size.QuadPart <= maximum;
     if (ok) {
         try { out.resize(static_cast<size_t>(size.QuadPart)); }
+        catch (const std::bad_alloc &) { if (out_of_memory) *out_of_memory = true; CloseHandle(file); return false; }
         catch (...) { CloseHandle(file); return false; }
         DWORD got = 0;
         ok = ReadFile(file, out.data(), static_cast<DWORD>(out.size()), &got, nullptr)
@@ -50,13 +52,15 @@ bool sha256(const std::vector<uint8_t> &data,uint8_t digest[32]) {
     return ok;
 }
 bool clip(std::vector<uint8_t> &data, const uint8_t expected[32],
-          const uint8_t id[16], gclip_header &out) {
+          const uint8_t id[16], gclip_header &out, bool *out_of_memory) {
     out = {};
     if (data.size() < sizeof(out)) return false;
     // The digest names the file as saved; a GCLIP4 file is then read as GCLIP5.
     uint8_t digest[32]{};
     if (!sha256(data,digest) || std::memcmp(digest, expected, sizeof(digest))) return false;
-    ghost_clip::upgrade_v4(data);
+    bool upgrade_memory = false;
+    ghost_clip::upgrade_v4(data, &upgrade_memory);
+    if (upgrade_memory) { if (out_of_memory) *out_of_memory = true; return false; }
     gclip_header header{}; std::memcpy(&header, data.data(), sizeof(header));
     if (std::memcmp(header.magic, GCLIP_MAGIC, 8) || header.version != GCLIP_VERSION
             || header.bytes != sizeof(header) || header.record_bytes != sizeof(gclip_frame)

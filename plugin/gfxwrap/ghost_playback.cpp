@@ -61,6 +61,7 @@ DWORD worker_thread=0; // protected by worker_gate
 std::atomic<uint32_t> cancellation{1}, context_serial{1};
 std::atomic<bool> exhausted{false};
 std::atomic<uint64_t> desired_model{0}, enabled_revision{0}, resident_bytes{0};
+static_assert(GP_GHOSTS==ghost_compositor::max_poses,"one batch draws every displayed ghost");
 static_assert(uint64_t(GP_CLIP_SLOTS)*GP_LONG_GHOST_FRAMES*(sizeof(gclip_frame)+sizeof(uint32_t))
               <=GP_CLIP_BUDGET,"a full set of long ghosts and its replacement fit the clip budget");
 std::atomic<uint32_t> evaluations{0}, rendered{0}, gaps{0}, refusals{0}, adoption_busy{0};
@@ -771,10 +772,13 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     recorded.configuration=shown->configuration;recorded.sample=shown->sample;
     recorded.world.status=shown->world_status;
     evaluations.fetch_add(1);
-    float opacity=active_request.opacity*fade;
-    if(active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE))
-        opacity*=ghost_proximity::factor(live.pose.position,live.pose.scale,
-            shown->sample.pose.position,shown->sample.pose.scale,active_request.proximity_distance);
+    const float opacity=active_request.opacity*fade;
+    // The overlap fade rides with the player-first region, not the opacity:
+    // the shaders give the two ONE floor (ghost_occlusion.h).
+    const float overlap=active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE)
+        ? ghost_proximity::factor(live.pose.position,live.pose.scale,
+              shown->sample.pose.position,shown->sample.pose.scale,active_request.proximity_distance)
+        : 1.0f;
     if(ghost_pose::evaluate(model.value,recorded,live,world,opacity,scratch[index],out)!=ghost_pose::Result::ok) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
@@ -783,6 +787,7 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     // under the live view-projection its body and shadow are drawn with.
     ghost_occlusion::region(out.view_projection,active_request.occlusion_fade!=0,
         (live.valid_fields&GC_VALID_POSE)!=0,live.pose.position,live.pose.scale,out.occlusion);
+    out.occlusion.overlap=overlap;
     if(active_request.shadow_enabled && (shown->sample.valid_fields&GC_VALID_SHADOW)
             && !ghost_pose::shadow(model.value,shown->sample,out.view_projection,shadows[index].vertices,
                                    shadows[index].texture,out.shadow)) {
