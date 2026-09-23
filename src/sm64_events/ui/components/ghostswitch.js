@@ -337,6 +337,8 @@ function GhostRecording({ recording, entityKey, target, write }) {
         <span class="ghost-pick-name">${item.label}</span>
         ${item.reason && html`<span class="ghost-pick-why">${item.reason}</span>`}
       </label>`)}
+      ${recording.folded && html`<span class="ghost-picks-folded"
+        title=${recording.folded.reason || undefined}>${recording.folded.label}</span>`}
     </fieldset>
     ${recording.reasonText && html`<span class="ghost-why" id=${reasonId}>
       ${recording.reasonText}

@@ -251,8 +251,14 @@ export function ghostRecordingOptions(selection, view, draft = {}, strat = null)
   const candidates = selection.candidates || [];
   const hues = new Map((selection.playing || []).map((row) => [row.key, row.hue_degrees]));
   const items = [pbItem(selection.pb, choice.pb, field, hues)];
+  const unplayable = [];
   for (const candidate of candidates) {
-    items.push(candidateItem(candidate, choice.attempts.includes(candidate.attempt_id), field, view, hues, strat));
+    const checked = choice.attempts.includes(candidate.attempt_id);
+    if (view === "mario" && !checked && neverPlaysAsMario(candidate)) {
+      unplayable.push(candidate);
+      continue;
+    }
+    items.push(candidateItem(candidate, checked, field, view, hues, strat));
   }
   const missing = choice.attempts.filter(
     (id) => !candidates.some((candidate) => candidate.attempt_id === id));
@@ -263,11 +269,33 @@ export function ghostRecordingOptions(selection, view, draft = {}, strat = null)
   const rows = selection.pb ? [selection.pb, ...candidates] : candidates;
   return {
     items, choice, reasonText: choiceReason(choice, missing, view),
+    folded: foldedLine(unplayable),
     toggle: (key) => toggled(choice, key),
     views: {
       mario: rows.some((row) => row.native_available),
       whole: rows.some((row) => row.whole_available),
     },
+  };
+}
+
+/** The server's reasons a run can NEVER play as Only Mario: its poses are in
+ * an older format, or were never recorded or kept. Nothing he does on this
+ * card changes that, so in Only Mario those runs fold into one quiet line
+ * instead of a column of disabled boxes each saying the same thing (his
+ * picker, 2026-09-23). A ticked one stays a box so it can be unticked. */
+const NEVER_PLAYS_AS_MARIO = new Set(["older_pose_format", "no_native_poses", "native_preservation_failed"]);
+
+function neverPlaysAsMario(candidate) {
+  return !candidate.native_available && NEVER_PLAYS_AS_MARIO.has(candidate.native_reason);
+}
+
+function foldedLine(rows) {
+  if (!rows.length) return null;
+  const reasons = [...new Set(rows.map((row) => row.native_reason_text).filter(Boolean))];
+  return {
+    count: rows.length,
+    label: `${rows.length} older run${rows.length === 1 ? "" : "s"} can't play as Only Mario`,
+    reason: reasons.join(" "),
   };
 }
 
