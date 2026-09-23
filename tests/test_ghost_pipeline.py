@@ -107,9 +107,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
                       *tmp_path.glob("*.png")])
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
     assert report["capture_version"] == 5 and report["clip_version"] == 4 and report["playback_version"] == 7
-    assert_recorded_shadow(report["shadow"])
-    assert_submerged(report["water"])
-    assert_player_first(report["occlusion"])  # the timing below runs with this fade on
+    assert_scene_effects(report)  # the timing below runs with the player-first fade on
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
@@ -120,6 +118,13 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     # A functional pass cannot disguise exceeding the requested whole-frame budget.
     assert report["including_swap"]["over_budget"] == 0, report["including_swap"]
     assert_full_ghost_set(report)
+
+
+def assert_scene_effects(report):
+    """The recorded shadow, the water over a submerged ghost and the player-first fade."""
+    assert_recorded_shadow(report["shadow"])
+    assert_submerged(report["water"])
+    assert_player_first(report["occlusion"])
 
 
 def assert_recorded_shadow(shadow):
