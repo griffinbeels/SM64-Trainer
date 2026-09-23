@@ -5,12 +5,12 @@
 #include "ghost_origin.h"
 #include "ghost_tuning.h"
 #include <stddef.h>
-#define GIPC_VERSION 7u
-#define GIPC_MAGIC "SM64GIP7"
+#define GIPC_VERSION 8u
+#define GIPC_MAGIC "SM64GIP8"
 #define GIPC_SLOTS 512u
 #define GIPC_PATH_CHARS 520u
 #define GIPC_LEASE_MS 3000u
-#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v7_"
+#define GIPC_PREFIX L"Local\\sm64_trainer_ghost_v8_"
 #define GIPC_GHOSTS GP_GHOSTS
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };

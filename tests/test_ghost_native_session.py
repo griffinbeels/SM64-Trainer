@@ -37,7 +37,7 @@ class Capture:
 def native_session(tmp_path, *, asset=True):
     session, windows, tracker, store = a_session(tmp_path)
     source = Capture()
-    manifest = {"clip_id": "ab" * 16, "sha256": "cd" * 32}
+    manifest = {"clip_id": "ab" * 16, "sha256": "cd" * 32, "blink_frames": 0}
     replay = SimpleNamespace(recorder=SimpleNamespace(ghost_capture=source),
                              native_identity=lambda _: {"native_clock_frame": 100},
                              find_native=lambda _: (tmp_path / "run.ghost", manifest) if asset else None)

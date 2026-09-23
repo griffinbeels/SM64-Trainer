@@ -14,17 +14,17 @@ block are named <BLOCK>_<FIELD>_AT and are relative to that block.
 """
 
 # Versions and names
-CLIP_MAGIC, CLIP_VERSION = b"SM64GHO5", 5
-SAMPLE_VERSION = 6  # GC_VERSION: gc_sample, and the gc_layout it is read with
-IPC_MAGIC, IPC_VERSION = b"SM64GIP7", 7
-IPC_PREFIX = "Local\\sm64_trainer_ghost_v7_"
+CLIP_MAGIC, CLIP_VERSION = b"SM64GHO6", 6
+SAMPLE_VERSION = 7  # GC_VERSION: gc_sample, and the gc_layout it is read with
+IPC_MAGIC, IPC_VERSION = b"SM64GIP8", 8
+IPC_PREFIX = "Local\\sm64_trainer_ghost_v8_"
 
 # Sizes
-HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1268, 1252
+HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1276, 1260
 RECORD_PREFIX_BYTES = 16  # bytes, version, configuration, world_status
 LAYOUT_BYTES = 188
 CLOCK_BYTES = 64
-SHADOW_BYTES, SOUND_BYTES, PARTICLES_BYTES, PARTICLE_BYTES, HELD_BYTES = 292, 36, 580, 36, 36
+SHADOW_BYTES, SOUND_BYTES, PARTICLES_BYTES, PARTICLE_BYTES, HELD_BYTES = 292, 36, 580, 36, 44
 
 # Record offsets
 POSE_AT, ROOT_KIND_AT, REFUSAL_AT, ROOT_MATRIX_AT = 76, 128, 153, 156
@@ -36,7 +36,7 @@ SHADOW_AT, SOUND_AT, PARTICLES_AT, HELD_AT = 324, 616, 652, 1232
 SHADOW_POSITION_AT, SHADOW_ALPHA_AT, SHADOW_RESERVED_AT, SHADOW_TEXTURE_AT = 64, 154, 163, 164
 SOUND_BITS_AT = 4
 PARTICLES_ENTRIES_AT, PARTICLE_OPACITY_AT, PARTICLE_TRANSLATION_AT = 4, 22, 24
-HELD_HOLP_AT = 12
+HELD_HOLP_AT, HELD_ANGLES_AT, HELD_RELEASED_AT = 12, 36, 42
 
 # Counts and flags
 SHADOW_VERTICES, SHADOW_TEXTURE_BYTES = 9, 128
@@ -51,8 +51,12 @@ ROOT_TRS, ROOT_SCALED_MODELVIEW = 1, 2  # gc_root_kind
 
 # GCLIP4 (GC5, before particles): still read, upgraded to the current record
 V4_MAGIC, V4_VERSION, V4_SAMPLE_VERSION, V4_RECORD_BYTES, V4_SAMPLE_BYTES = b"SM64GHO4", 4, 5, 652, 636
+# GCLIP5 (GC6, before a released object's angle): still read, its held tail zero
+V5_MAGIC, V5_VERSION, V5_SAMPLE_VERSION, V5_RECORD_BYTES, V5_SAMPLE_BYTES = b"SM64GHO5", 5, 6, 1268, 1252
 
 # The IPC page and ghost limits
 IPC_SLOTS, IPC_RING_AT, IPC_PATH_CHARS = 512, 20480, 520
 GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sources, request slots
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
+BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over
+RELEASED_FRAMES = 300  # the longest a released held object is followed (10 s)

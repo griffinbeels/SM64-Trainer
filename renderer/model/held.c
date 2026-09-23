@@ -134,10 +134,19 @@ void sg_held_evaluate(struct sg_model *model, const sg_pose *pose, const float m
         if (pose->held_animation_frame < 0 || pose->held_animation_frame >= animation->loopEnd)
             sg_abort(SG_INVALID_ANIMATION);
     }
-    /* Mario's rows, translation at the HOLP; the traversal scales rows by the
-     * object's own scale, as geo_process_held_object's mtxf_scale_vec3f. */
-    memcpy(local, mario_root, sizeof(local));
-    for (column = 0; column < 3; ++column) local[3][column] = pose->held_position[column];
+    /* In his hand: Mario's rows, translation at the HOLP. Released: its own
+     * node's rotate-and-translate, as geo_process_object. Either way the
+     * traversal scales rows by the object's own scale (mtxf_scale_vec3f). */
+    if (pose->fields & SG_POSE_HELD_RELEASED) {
+        Vec3f position; Vec3s angles;
+        for (column = 0; column < 3; ++column) {
+            position[column] = pose->held_position[column]; angles[column] = pose->held_angles[column];
+        }
+        mtxf_rotate_zxy_and_translate(local, position, angles);
+    } else {
+        memcpy(local, mario_root, sizeof(local));
+        for (column = 0; column < 3; ++column) local[3][column] = pose->held_position[column];
+    }
     memcpy(view, pose->view, sizeof(view));
     mtxf_mul(root, local, view);
     info->animID = pose->held_animation_id;

@@ -471,6 +471,21 @@ class MatchContext:
     # name. None = no catalogue in hand (bare test contexts) = key equality
     # only, byte-for-byte the pre-collapse behaviour.
     landmark_names: dict | None = None
+    # The attempt rules the event's session was journaled under
+    # (projection.py caveat 21). Under 2 a save-state load runs THROUGH a
+    # star's attempt -- a 100-coin engine times a star -- and a segment
+    # attempt it does end is said to have ended on a load, not a reset.
+    attempt_rules: int = 1
+
+
+def _anchor_outcome(ev, ctx) -> str:
+    """What an attempt closed by this anchor is called: `loaded` when a
+    save state ended it under attempt rules 2 -- his words, 2026-09-23: "it
+    shouldn't be a *real* reset, it should be a 'LOADED SAVE STATE'" -- and
+    `reset` for everything else, history included."""
+    if ev.type == "state_loaded" and ctx is not None and ctx.attempt_rules >= 2:
+        return "loaded"
+    return "reset"
 
 
 @dataclass(frozen=True)
@@ -2856,6 +2871,10 @@ class _Arm:
     # A 100-coin proof arm may establish attribution after its true beginning
     # was missed. Keep that scoring behavior, but do not claim a ghost origin.
     native_origin_known: bool = True
+    # The ghost's clock owner when this arm continues a run through a save-state
+    # load: (arm_id, start_frame, started_utc, frame, utc) of the arm the run
+    # began on. None = this arm is its own owner. See `_continued_ghost`.
+    ghost_origin: tuple | None = None
 
     def clock_origin(self, mode: str) -> tuple[int, str | None]:
         if mode == "move" and self.clock_frame is not None:
@@ -3047,7 +3066,14 @@ class SegmentEngine:
     def native_ghost_origin(self, sid: int) -> dict | None:
         """The currently armed clock's ownership, with no matching inference."""
         arm, definition = self._armed.get(sid), self._def_by_id.get(sid)
-        if arm is None or definition is None or not arm.native_origin_known:
+        if arm is None or definition is None:
+            return None
+        if arm.ghost_origin is not None:
+            arm_id, start_frame, started_utc, frame, utc = arm.ghost_origin
+            return {"kind": "segment", "session_id": arm.session_id, "arm_id": arm_id,
+                    "start_frame": start_frame, "started_utc": started_utc,
+                    "frame": frame, "utc": utc}
+        if not arm.native_origin_known:
             return None
         frame, utc = arm.clock_origin(definition.clock_start)
         if utc is None:
@@ -3056,6 +3082,32 @@ class SegmentEngine:
                 "arm_id": arm.jid + SEGMENT_ATTEMPT_OFFSET * sid,
                 "start_frame": arm.start_frame, "started_utc": arm.started_utc,
                 "frame": frame, "utc": utc}
+
+    @staticmethod
+    def _continued_ghost(arm, d, ev) -> tuple | None:
+        """The ghost's clock owner for an arm a `state_loaded` re-arms.
+
+        A load at the arm position ends the attempt and re-arms the segment
+        at the load frame (a subsegment may start from a save state), but the
+        run the ghost follows goes on: his report, round 10 (2026-09-23), "The
+        ghost should start from the loaded save state position, but right now,
+        it incorrectly resets at the very absolute beginning". A new arm used to
+        hand the renderer a new origin at the load frame, a fresh clock at 0.
+        The load keeps the run's owner instead, and the renderer places the
+        loaded state on that run's timeline itself. A practice reset (any other
+        anchor) is a real restart and owns its own clock. Attempt rows are
+        untouched; only the ghost's marker carries over.
+        """
+        if arm is None or ev.type != "state_loaded":
+            return None
+        if arm.ghost_origin is not None:
+            return arm.ghost_origin
+        if not arm.native_origin_known:
+            return None
+        frame, utc = arm.clock_origin(d.clock_start)
+        if utc is None:
+            return None
+        return (arm.jid + SEGMENT_ATTEMPT_OFFSET * d.id, arm.start_frame, arm.started_utc, frame, utc)
 
     def definitions(self) -> list[SegmentDef]:
         """Every loaded definition. The cross-definition rules
@@ -3346,6 +3398,16 @@ class SegmentEngine:
 
     def _feed_definition(self, Attempt, d, ev, ctx, notices, anchor_is_echo):
         closed = []
+        if (ev.type == "state_loaded" and ctx is not None and ctx.attempt_rules >= 2
+                and hundred_coin_entity(d.start_triggers, d.waypoints) is not None):
+            # A 100-coin engine times a STAR, and under attempt rules 2 a
+            # load runs through a star's attempt instead of ending it
+            # (projection.py caveat 21). Round 10, his WF 100 Coins: every
+            # load read as a reset and re-armed the engine at the load, ten
+            # "reset" rows for one run he never reset. To this engine the
+            # load is now what an echo is -- invisible; the projector still
+            # counts it and marks the run invalid (`_segment_validity`).
+            anchor_is_echo = True
         arm = self._armed.get(d.id)
         start_clause = self._first_match(d.start_triggers, ev, ctx)
         starts = start_clause is not None
@@ -3489,12 +3551,14 @@ class SegmentEngine:
                 self._disarm(d, ev, notices)  # visible: no row for
                 # the discarded partial, same as every other no-row
                 # disarm on this branch
+            kept = None if fresh or loose_plain_refire else self._armed.get(d.id)
             self._armed[d.id] = _Arm(jid=ev.id, start_frame=ev.frame,
                                      started_utc=ev.wall_time_utc,
                                      anchor_type=ev.type,
                                      session_id=ev.session_id,
                                      level=ctx.level, area=ctx.area,
-                                     deadline_frame=self._deadline_for(d, ev))
+                                     deadline_frame=self._deadline_for(d, ev),
+                                     ghost_origin=self._continued_ghost(kept, d, ev))
             if fresh or loose_plain_refire:
                 notices.append({"event": "segment_armed",
                                 "segment_id": d.id, "name": d.name,
@@ -3781,7 +3845,7 @@ class SegmentEngine:
             unacted = ev.payload.get("acted_tracking", False) \
                 and not ev.payload.get("mario_acted", False)
             if not afk and not unacted:
-                a = self._close(Attempt, d, arm, ev, "reset", None)
+                a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)
             # Re-arm in place at the anchor frame instead of disarming.
@@ -3803,6 +3867,7 @@ class SegmentEngine:
                 session_id=ev.session_id,
                 level=ctx.level if ctx.level is not None else arm.level,
                 area=ctx.area if ctx.area is not None else arm.area,
+                ghost_origin=self._continued_ghost(arm, d, ev),
             )
         elif ev.type == "death":
             a = self._close(Attempt, d, arm, ev, "death",
@@ -3931,7 +3996,10 @@ class SegmentEngine:
             # (mirrors the star-side discard in projection.py's
             # _close_by_reset) -- a true no-op anchor refire still records
             # nothing.
-            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+            # `anchor_is_echo` is this event's echo verdict for THIS def (a
+            # 100-coin engine also treats a rules-2 load as one); the event-
+            # level reading stays beside it, as before.
+            if (ev.frame == arm.start_frame or anchor_is_echo or self._anchor_echo(ev)
                     or self._arrived_by_a_real_move(ev)):
                 return closed
             afk = ev.payload.get("paused_frames_before", 0) \
@@ -3939,7 +4007,7 @@ class SegmentEngine:
             unacted = ev.payload.get("acted_tracking", False) \
                 and not ev.payload.get("mario_acted", False)
             if not afk and not unacted:
-                a = self._close(Attempt, d, arm, ev, "reset", None)
+                a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)
             self._armed[d.id] = replace(
@@ -3947,7 +4015,8 @@ class SegmentEngine:
                 started_utc=ev.wall_time_utc, jid=ev.id,
                 anchor_type=ev.type, session_id=ev.session_id,
                 level=ctx.level if ctx.level is not None else arm.level,
-                area=ctx.area if ctx.area is not None else arm.area)
+                area=ctx.area if ctx.area is not None else arm.area,
+                ghost_origin=self._continued_ghost(arm, d, ev))
             return closed
         if not complete and self._matches(d.waypoints[arm.progress], ev, ctx):
             self._armed[d.id] = replace(arm, progress=arm.progress + 1)
@@ -4047,7 +4116,10 @@ class SegmentEngine:
             self._disarm(d, ev, notices)
             return closed
         if ev.type in _ANCHOR_TYPES:
-            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+            # `anchor_is_echo` is this event's echo verdict for THIS def (a
+            # 100-coin engine also treats a rules-2 load as one); the event-
+            # level reading stays beside it, as before.
+            if (ev.frame == arm.start_frame or anchor_is_echo or self._anchor_echo(ev)
                     or self._arrived_by_a_real_move(ev)):
                 return closed          # echo: invisible
             if not _at_arm_position(arm, ctx):
@@ -4062,7 +4134,7 @@ class SegmentEngine:
                 # untouched — position, start_frame, deadline — exactly like
                 # every other mid-route event this matcher already lets pass.
                 return closed
-            a = self._close(Attempt, d, arm, ev, "reset", None)
+            a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
             if a:
                 closed.append(a)
             self._armed[d.id] = replace(
@@ -4071,7 +4143,8 @@ class SegmentEngine:
                 anchor_type=ev.type, session_id=ev.session_id,
                 deadline_frame=self._deadline_for(d, ev),
                 level=ctx.level if ctx.level is not None else arm.level,
-                area=ctx.area if ctx.area is not None else arm.area)
+                area=ctx.area if ctx.area is not None else arm.area,
+                ghost_origin=self._continued_ghost(arm, d, ev))
             return closed
         if not complete and self._matches(d.waypoints[arm.progress], ev, ctx):
             self._armed[d.id] = replace(arm, progress=arm.progress + 1)

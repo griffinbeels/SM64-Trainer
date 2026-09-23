@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define GC_VERSION 6u
+#define GC_VERSION 7u
 #define GC_RAM_WORD_SWAPPED 1u
 #define GC_ROM_US 1u
 #define GC_GRAPH_NODE_LIMIT 256u
@@ -32,6 +32,9 @@ enum gc_valid {
 #define GC_SOUND_EVENTS 8u
 enum gc_sound_flags { GC_SOUND_OVERFLOW = 1u };
 #define GC_PARTICLES 16u
+/* A released held object is followed at most this many game frames (10 s):
+ * longer than a thrown Bob-omb's flight to its explosion. */
+#define GC_RELEASED_FRAMES 300u
 #define GC_PARTICLE_BASIS_ONE 4096 /* basis entries are 4.12 fixed point */
 enum gc_particle_flags { GC_PARTICLES_OVERFLOW = 1u };
 /* dl_shadow_9_verts: the game's eight triangles over the nine vertices.
@@ -177,13 +180,23 @@ typedef struct gc_particles {
  * an animation (a box: animation_id -1, frame 0) has no timer; the hand draws
  * it whenever Mario's body draws, so it is kept only beside a root his
  * executed lists proved this frame. The orientation is Mario's own root (the
- * hand copies his throwMatrix), scaled by `scale`. Zero unless GC_VALID_HELD. */
+ * hand copies his throwMatrix), scaled by `scale`.
+ *
+ * RELEASED (`released` 1): the same object after it left his hand, thrown or
+ * dropped, drawn by its own node: TRS(`holp` = its gfx position, `angles`,
+ * `scale`), as geo_process_object composes it without a throwMatrix. The
+ * reader follows the slot while its behaviour is unchanged and it stays
+ * active, one game frame at a time, for at most GC_RELEASED_FRAMES. A frame
+ * its node is off or invisible (culled, or not yet shown) carries nothing.
+ * Zero unless GC_VALID_HELD. */
 typedef struct gc_held {
     uint32_t behavior; /* segmented behaviour script, e.g. 0x13003174 bhvBobomb */
     int16_t animation_id, animation_frame, anim_y_translation;
     uint16_t anim_state; /* oAnimState: texture/switch frame (the Bob-omb's blink) */
     float holp[3];     /* marioBodyState->heldObjLastPosition */
     float scale[3];    /* the held object's gfx scale */
+    int16_t angles[3]; /* released: its gfx angle; zero in his hand */
+    uint16_t released;
 } gc_held;
 
 typedef struct gc_camera {
@@ -238,6 +251,11 @@ typedef struct gc_reader {
     uint64_t last_sequence, last_dlist_serial;
     /* Sound baseline: the producer seen at global timer sound_timer. */
     uint32_t sound_baseline, sound_timer, sound_producer, reserved;
+    /* The object in his hand at held_timer, then the one released from it:
+     * RAM address, behaviour pointer, the last game frame followed and how
+     * many were followed. Zero address: none. */
+    uint32_t held_object, held_behaviour, held_timer;
+    uint32_t released_object, released_behaviour, released_timer, released_frames, reserved2;
 } gc_reader;
 #pragma pack(pop)
 

@@ -13,7 +13,7 @@ leave None). The finale is the fastest available successful run, in full, last.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-FAILURE_OUTCOMES = frozenset({"reset", "hard_reset", "abandoned", "death"})
+FAILURE_OUTCOMES = frozenset({"reset", "loaded", "hard_reset", "abandoned", "death"})
 
 
 def _parse_utc(s: str) -> datetime:

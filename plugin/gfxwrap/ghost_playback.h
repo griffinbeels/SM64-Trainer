@@ -159,6 +159,10 @@ namespace ghost { struct WorldPass; }
 namespace ghost_compositor { struct Pose; }
 namespace ghost_playback {
 const gp_api *api();
+/* Refused rows of a valid clip that playback hides rather than bridging:
+ * where the ghost blinks. UINT32_MAX for a clip prepare_clip refuses. Any
+ * thread; reads only its arguments. ghost/clip.py blink_frames states it too. */
+uint32_t hidden_refusals(const gclip_header &, const gclip_frame *);
 /* Actual serialized renderer thread, between completed uses of borrowed pose
  * arrays. Claims preloaded state or retires old ownership without allocation,
  * destruction or waiting. Zero identity revokes this ROM session. */
@@ -171,8 +175,12 @@ bool particles(sg_particle_view *out, uint64_t *model_id);
  * nudge; FIXED uses an explicit uint32 coordinate without a live arm. Each clip
  * then selects its first exact coordinate INCLUDING refused poses and compares
  * live scene: before-start clamps; after-end/gaps/refusals hide only that ghost.
- * A star generation change or live star grab ends the shared origin and every
- * ghost; tuning the same origin cannot revive it. With star_ends, FOLLOW also
+ * A star generation change or live star grab ends the shared origin;
+ * tuning the same origin cannot revive it. On his grab (or, with no star
+ * latch, the suspension his completing grab brings) each ghost drawn the
+ * frame before and still short of its own completing grab is defeated: it
+ * plays Mario's standing death where it stood and fades (GP_DEFEAT_*); one
+ * already past it plays on its dance and fade. With star_ends, FOLLOW also
  * hides each ghost at its own first recorded valid star action coordinate
  * after nudge (including duplicate/refused poses). A FOLLOW clip that carries a
  * dance tail (with or without star_ends) instead draws through any earlier

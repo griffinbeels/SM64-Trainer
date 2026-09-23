@@ -65,10 +65,13 @@ Component contracts live beside this page:
 | `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | the capture wrapper Project64 selects; loads the renderer named by `sm64_trainer_gfx.ini` | `tools/build_plugin.py` | `-gpu-runtime` |
 | `SM64GpuEncoderV1.dll` | the 64-bit NVENC helper the server's isolated encoder process loads | `tools/build_plugin.py` | `-gpu-encoder` |
 
-All three live in `src/sm64_events/data/plugin/` and are packaged by
-`tools/build_exe.py`. Each carries an embedded build id naming the exact
-sources it came from; `tests/test_bundled_natives.py` fails when a bundled
-file and the tree disagree, and the setup screen compares an installed file
+All three are build outputs in `src/sm64_events/data/plugin/`, which git
+ignores, and are packaged by `tools/build_exe.py`. Each carries an embedded
+build id naming the exact sources it came from. `tools/build_natives.py`
+rebuilds whichever disagrees with the tree, from a shared cache keyed by that
+id when another checkout already built it; the server launched from a checkout
+(so `run-test-server.bat`), the full verification lane and release run it, and
+`tests/test_bundled_natives.py` fails when a built file and the tree disagree, and the setup screen compares an installed file
 with the bundled one by that id (`core/capturelayer.py::_files_match`), so a
 rebuild of unchanged sources never reads as "differs from this build". The
 setup screen installs the renderer and the wrapper together, writes the ini

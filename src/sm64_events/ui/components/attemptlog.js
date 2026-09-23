@@ -28,7 +28,9 @@ import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
 
 const html = htm.bind(h);
 
+// `loaded`: a save state ended it (attempt rules 2) -- not a reset he chose.
 const OUTCOME_LABEL = { success: "✔", reset: "✘ reset",
+  loaded: "⟲ loaded save state",
   hard_reset: "✘ hard reset", abandoned: "– abandoned", death: "✘ death" };
 
 export const SORT_OPTIONS = [

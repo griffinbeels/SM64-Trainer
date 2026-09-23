@@ -70,6 +70,10 @@ static bool refuse_adoption=false,refuse_close=false,revoke_evaluation=false;
 static uint64_t selected_sequence=0;
 static uint32_t selected_world=0;
 static float selected_x=0;
+// What the defeat hands the model: its animation, frame, eyes and angles.
+static int16_t selected_animation=-1,selected_frame=-1,selected_torso=0;
+static uint8_t selected_eyes=0;static uint32_t selected_fields=0;
+static int32_t defeat_frames=60; // the fake ROM's fall is shorter than the game's 80-frame hold
 static bool refuse_shadow=false;
 static bool perspective=false; // a real look-down-minus-z projection for the occlusion region
 static unsigned shadow_calls=0;
@@ -116,6 +120,10 @@ extern "C" int32_t sg_model_get_atlas(sg_model *p,sg_atlas_view *out) {
     static const uint8_t pixel[]={255,0,0,255};*out={pixel,1,1,209};return SG_OK;
 }
 // The fake model has no particle frames; placement has its own witness.
+extern "C" int32_t sg_model_get_animation_frames(sg_model *p,int32_t id,int32_t *frames) {
+    *frames=0;if(!p || p!=fake_model)return SG_INVALID_MODEL;
+    *frames=id==GP_DEFEAT_ANIMATION?defeat_frames:1;return SG_OK;
+}
 extern "C" int32_t sg_model_get_particles(sg_model *p,sg_particle_view *out) {
     *out={};return p==fake_model && p ? SG_OK : SG_INVALID_MODEL;
 }
@@ -134,6 +142,9 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     selected_world=recorded.world.status;
     selected_sequence=recorded.sample.sequence;
     selected_x=recorded.sample.pose.position[0];
+    selected_animation=recorded.sample.pose.animation_id;selected_frame=recorded.sample.pose.animation_frame;
+    selected_eyes=recorded.sample.pose.eye_state;selected_torso=recorded.sample.pose.torso_angles[1];
+    selected_fields=recorded.sample.valid_fields;
     if(revoke_evaluation)ghost_playback::api()->revoke(GP_DISABLED);
     static const ghost_compositor::Vertex triangle[3]{};
     out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.opacity=opacity;
@@ -675,8 +686,10 @@ int main() {
             frame(6,{2006},GP_READY,{GP_READY,GP_WRONG_IDENTITY});
             check(api->collect()==GP_OK && api->status(&after,sizeof(after))==GP_OK && after.clips_owned==2
                 && !after.clips_ready,"renderer holds exactly the listed set");
-            live.live_action=0x1302;frame(7,{},GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED});
-            live.live_action=1;frame(8,{},GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED});
+            // His grab: a, still short of its touch, falls where it stood (row 6);
+            // the other ghost was not drawn, so it stays hidden.
+            live.live_action=0x1302;frame(7,{2006},GP_READY,{GP_READY,GP_STAR_ENDED});
+            live.live_action=1;frame(8,{2006},GP_READY,{GP_READY,GP_STAR_ENDED});
         }
         {
             // Ghost sound: each record's recorded requests reach the sink once,
@@ -852,22 +865,49 @@ int main() {
             check(!step(40+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}) && placed[0].gain==0,
                   "and stays silent");
             dance_hidden_after=GP_STAR_FADE_FRAMES;
-            // He grabs first: the live grab ends every ghost on that frame,
-            // before the dancer reaches its touch.
+            // He grabs first (his Round 10 ask): every ghost still short of its
+            // own completing grab plays Mario's standing death where it stood,
+            // crying once, holds the fall's last frame, then fades out.
             run(12000);
             check(step(10,GP_READY,{GP_READY,GP_READY},{4010,5010}),"both ghosts running");
             live.live_action=0x1302;
-            check(!step(11,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"a live grab ends every ghost at once");
-            live.live_action=1;check(!step(12,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"latched");
-            // Ghost first, then he grabs while it dances: the live grab still
-            // ends it, and the tracker's suspension that follows keeps it hidden.
+            check(step(11,GP_READY,{GP_READY,GP_READY},{GP_DEFEAT_SOUND,GP_DEFEAT_SOUND}) && count==2,
+                  "his grab: both slower ghosts fall, each crying once");
+            check(selected_animation==GP_DEFEAT_ANIMATION && selected_frame==0 && selected_eyes==GP_DEFEAT_EYES
+                  && selected_torso==0 && selected_x==4110 && poses[0].opacity==1 && poses[1].opacity==1
+                  && !(selected_fields&(GC_VALID_PARTICLES|GC_VALID_HELD)),
+                  "the fall starts where each stood, dead-eyed, without what it held");
+            check(placed[0].count==1 && placed[1].count==1 && unplaced_cues==0,"each cry starts where its ghost falls");
+            live.live_action=1;
+            check(step(12,GP_READY,{GP_READY,GP_READY},{}) && selected_frame==1,"latched: the fall runs a frame a frame");
+            check(step(11+uint32_t(defeat_frames)-1,GP_READY,{GP_READY,GP_READY},{})
+                  && selected_frame==int16_t(defeat_frames-1),"to the fall's last frame");
+            check(step(11+GP_DEFEAT_FRAMES-1,GP_READY,{GP_READY,GP_READY},{})
+                  && selected_frame==int16_t(defeat_frames-1) && poses[0].opacity==1,"held there at full opacity");
+            check(step(11+GP_DEFEAT_FRAMES+1,GP_READY,{GP_READY,GP_READY},{})
+                  && poses[0].opacity==float(GP_DEFEAT_FADE_FRAMES-1)/float(GP_DEFEAT_FADE_FRAMES)
+                  && placed[0].gain==poses[0].opacity,"then fades, its sound with it");
+            check(!step(11+GP_DEFEAT_FRAMES+GP_DEFEAT_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{})
+                  && placed[0].gain==0 && placed[1].gain==0,"and hides, silenced");
+            check(!step(11+GP_DEFEAT_FRAMES+GP_DEFEAT_FADE_FRAMES+1,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),
+                  "once only: the latch keeps them hidden");
+            // Ghost first, then he grabs while it dances: it already won its own
+            // race, so its dance and fade go on; the older clip, ended at its
+            // touch, stays hidden. The tracker's suspension that follows keeps
+            // the dance going.
             run(13000);
             check(step(25,GP_READY,{GP_READY,GP_STAR_ENDED},{4025}),"dancing while he still plays");
             live.live_action=0x1302;
-            check(!step(26,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"his grab ends the dance");
+            check(step(26,GP_READY,{GP_READY,GP_STAR_ENDED},{4026}) && count==1 && selected_x==4026
+                  && selected_animation!=GP_DEFEAT_ANIMATION,"his grab: the ghost that already won dances on");
             ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"the tracker suspends after his completion");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
-            live.live_action=1;check(!step(27,GP_DISABLED,{},{}),"suspended: hidden");
+            live.live_action=1;
+            check(step(27,GP_READY,{GP_READY,GP_STAR_ENDED},{4027}) && selected_x==4027,"suspended: its dance goes on");
+            check(step(29,GP_READY,{GP_READY,GP_STAR_ENDED},{4028,4029}) && poses[0].opacity==1,"to its last record");
+            check(step(30,GP_READY,{GP_READY,GP_STAR_ENDED},{})
+                  && poses[0].opacity==float(GP_STAR_FADE_FRAMES-1)/float(GP_STAR_FADE_FRAMES),"and fades after it");
+            check(!step(29+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"then hides");
             // The 100-coin star: its clock is its exit segment's (no star_ends),
             // and its run grabs the 100-coin star (rows 10..14, a no-exit dance)
             // before closing on the exit star (row 20) and dancing to row 29.
@@ -893,6 +933,30 @@ int main() {
                   && poses[0].opacity==float(GP_STAR_FADE_FRAMES-1)/float(GP_STAR_FADE_FRAMES),
                   "the dance-tail clip fades after the exit dance; the older one has ended");
             check(!step(29+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_AFTER_END},{}),"then it hides");
+            // He completes on his exit star first: no star latch applies on this
+            // clock, so his grab arrives as the tracker's suspension. Both ghosts,
+            // past the 100-coin grab (row 12) but short of the exit star, fall.
+            ++r.revision;r.suspended=0;
+            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,15000,source_generation,0,0};
+            elapsed_base=15000;timer_base+=1000;live.live_action=1;
+            check(api->configure(&r)==GP_OK,"a new 100-coin run");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(16,GP_READY,{GP_READY,GP_READY},{}) && count==2,"both past the 100-coin grab");
+            ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"his exit star suspends the run");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            live.live_action=0x1302;
+            check(step(17,GP_READY,{GP_READY,GP_READY},{GP_DEFEAT_SOUND,GP_DEFEAT_SOUND}) && count==2
+                  && selected_animation==GP_DEFEAT_ANIMATION && selected_x==4516,"both fall where they stood");
+            // A suspension with no grab (a reset) only hides, as before.
+            ++r.revision;r.suspended=0;
+            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,16000,source_generation,0,0};
+            elapsed_base=16000;timer_base+=1000;live.live_action=1;
+            check(api->configure(&r)==GP_OK,"another run");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(16,GP_READY,{GP_READY,GP_READY},{}),"running");
+            ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"a reset suspends the run");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(!step(17,GP_DISABLED,{},{}),"no grab: no defeat, hidden");
             ghost_playback::set_sound_sink(nullptr);
         }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");

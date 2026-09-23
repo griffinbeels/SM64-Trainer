@@ -344,6 +344,87 @@ static void held_block(Fixture &f) {
     f.config.behaviour_base=0x800EB180;
     f.put32(f.config.mario_state+0x7c,0);f.put16(bomb+0x74,0);
 }
+// Thrown or dropped, the same object is followed where its own node draws it:
+// one game frame at a time, same slot and behaviour, while it stays active,
+// for at most GC_RELEASED_FRAMES. Its transform is TRS(gfx pos, angle, scale).
+static void released_block(Fixture &f) {
+    gc_root_probe p;gc_root_memory memory;
+    const uint32_t bomb=f.config.object_pool+0x260, anim=Fixture::base+0x14100;
+    uint32_t timer=0x12345678;
+    // Game frames after every earlier case: the clock never runs backward.
+    const auto at=[&](uint32_t t){timer=0x12400000u+t;f.put32(f.config.global_timer,timer);};
+    const auto hold=[&]{
+        scene(f);f.put16(f.config.object_pool+0x42,0x8123);
+        f.put32(f.config.mario_state+0x7c,bomb);
+        f.put16(bomb+0x74,1);f.put16(bomb+2,0x31);f.put32(bomb+0x14,Fixture::base+0x14200);
+        f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);f.put32(bomb+0x50,0);f.put8(bomb+0x18,1);
+        f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0xf0,1);
+        f.put32(bomb+0x3c,anim);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
+        for(unsigned i=0;i<3;++i) {
+            f.putfloat(bomb+0x2c+4*i,1.0f);f.putfloat(Fixture::body+0x18+4*i,100.0f+float(i));
+            f.putfloat(bomb+0x20+4*i,300.0f-float(i)*150);
+        }
+        f.put16(bomb+0x1a,0);f.put16(bomb+0x1c,0x1234);f.put16(bomb+0x1e,0);
+    };
+    // Thrown this frame: out of his hand, its own node on and visible.
+    const auto thrown=[&]{f.put32(f.config.mario_state+0x7c,0);f.put16(bomb+2,0x21);};
+    const auto frame=[&](bool proven) {
+        begin(f,p);if(proven)pair(p);ghost_root_finish(p,true,f.sample,proven?&memory:nullptr);
+        const bool held=(f.sample.valid_fields&GC_VALID_HELD)!=0;
+        check(held || zero(f.sample.held),"released block bytes follow validity");
+        return held && f.sample.held.released;
+    };
+    const auto &h=f.sample.held;
+    hold();at(1000);
+    check(!frame(true) && (f.sample.valid_fields&GC_VALID_HELD) && !h.angles[1],"in his hand before the throw");
+    thrown();at(1001);
+    check(frame(true),"thrown Bob-omb not followed");
+    check(h.behavior==0x13003174 && h.released==1 && h.holp[0]==300 && h.holp[1]==150 && h.holp[2]==0
+          && h.angles[1]==0x1234 && h.animation_id==1 && h.animation_frame==12 && h.scale[0]==1,
+          "released block is its own node's transform");
+    at(1002);check(frame(true),"followed on the next frame");
+    check(frame(true),"a repeated game frame keeps following");
+    f.put16(bomb+2,0x31);at(1003);check(!frame(true),"invisible node drawn");
+    f.put16(bomb+2,0x21);at(1004);check(frame(true),"an invisible frame ended the follow");
+    f.put32(bomb+0x50,Fixture::base+0x14300);at(1005);check(!frame(true),"thrown object with a throw matrix drawn");
+    f.put32(bomb+0x50,0);f.put16(bomb+0x42,0x8122);at(1006);check(!frame(true),"stale released animation drawn");
+    f.put16(bomb+0x42,0x8123);f.put8(bomb+0x18,2);at(1007);check(!frame(true),"released object in another area drawn");
+    f.put8(bomb+0x18,1);at(1008);check(frame(true),"a skipped draw ended the follow");
+    // A carried root still carries it, animated or not: its own node drew it.
+    at(1009);begin(f,p);ghost_root_finish(p,true,f.sample,&memory);
+    check((f.sample.valid_fields&GC_VALID_POSE) && (f.sample.valid_fields&GC_VALID_HELD) && h.released,
+          "released object dropped beside a carried root");
+    // Anything that breaks the chain ends it for good.
+    uint32_t next=2000;
+    const auto ends=[&](const std::function<void()> &breaks,const std::function<void()> &mends,const char *why) {
+        next+=10;hold();at(next);frame(true);thrown();at(next+1);check(frame(true),"thrown Bob-omb not followed");
+        breaks();at(next+2);check(!frame(true),why);
+        mends();at(next+3);check(!frame(true),why);
+    };
+    ends([&]{f.put16(bomb+0x74,0);},[&]{f.put16(bomb+0x74,1);},"exploded Bob-omb followed");
+    ends([&]{f.put32(bomb+0x20c,f.config.behaviour_base+0x4218);},
+         [&]{f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);},"a slot's new object followed");
+    hold();at(2500);frame(true);thrown();at(2501);frame(true);
+    at(2503);check(!frame(true),"followed across a skipped game frame");
+    at(2504);check(!frame(true),"followed again after a skipped game frame");
+    // Released only from the frame after he held it.
+    hold();at(3000);frame(true);thrown();at(3002);check(!frame(true),"release across a skipped frame followed");
+    // Grabbed again: back in his hand.
+    hold();at(4000);frame(true);thrown();at(4001);frame(true);hold();at(4002);
+    check(frame(true)==false && (f.sample.valid_fields&GC_VALID_HELD) && !h.released,"re-grab not in his hand");
+    // At most GC_RELEASED_FRAMES game frames after the throw.
+    // (Each fixture frame copies all of RDRAM, so the count is advanced here.)
+    hold();at(5000);frame(true);thrown();at(5001);frame(true);
+    check(f.reader.released_frames==1,"one followed frame counted");
+    f.reader.released_frames=GC_RELEASED_FRAMES-1;
+    at(5002);check(frame(true),"released object lost before its limit");
+    at(5003);check(!frame(true),"released object followed past its limit");
+    // A box without an animation is followed too.
+    hold();f.put32(bomb+0x20c,f.config.behaviour_base+0x4218);f.put32(bomb+0x3c,0);f.put16(bomb+2,0x00);
+    at(6000);frame(true);thrown();f.put16(bomb+2,0x01);at(6001);
+    check(frame(true) && h.behavior==0x13004218 && h.animation_id==-1 && h.animation_frame==0,"thrown box not followed");
+    f.put32(f.config.mario_state+0x7c,0);f.put16(bomb+0x74,0);
+}
 #endif
 int main(int argc,char **argv) {
     check(argc==2,"usage: ghost_root_host config"); Fixture f(argv[1]);scene(f);
@@ -413,6 +494,7 @@ int main(int argc,char **argv) {
     culled(f);
     materials(f);
     held_block(f);
+    released_block(f);
     std::puts("executed root qualification passed");
 #endif
 }

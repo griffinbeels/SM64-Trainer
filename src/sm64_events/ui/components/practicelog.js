@@ -446,7 +446,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const hidden = sec.attempts.filter((a) => a.cleared || a.outcome === "abandoned");
   const rows = base
     .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+      && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
     .slice()
     .sort(comparator(ui.sort, clock));
   // A pick (this card's own PbTag jump, or a trend-graph dot in
@@ -837,7 +837,7 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
   const hidden = unassigned.filter((a) => a.cleared || a.outcome === "abandoned");
   const rows = visibleAttempts
     .filter((a) => !(ui.hideResets
-      && (a.outcome === "reset" || a.outcome === "hard_reset")))
+      && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
     .slice()
     .sort(comparator(ui.sort, t.clock));
   const shown = rows.slice(0, visible);

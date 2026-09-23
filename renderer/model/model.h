@@ -20,7 +20,10 @@ enum sg_status {
 enum sg_pose_fields {
     SG_POSE_TRANSFORM = 1u, SG_POSE_ANIMATION = 2u, SG_POSE_BODY = 4u,
     SG_POSE_HEAD_ROTATION = 8u, SG_POSE_REQUIRED = 15u,
-    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u
+    SG_POSE_THROW_MATRIX = 16u, SG_POSE_HIDDEN = 32u, SG_POSE_HELD = 64u,
+    /* With SG_POSE_HELD: the object has left his hand (thrown or dropped)
+     * and is drawn by its own node, TRS(held_position, held_angles). */
+    SG_POSE_HELD_RELEASED = 128u
 };
 
 /* Objects the model can draw in Mario's hand (SG_POSE_HELD). */
@@ -68,6 +71,8 @@ typedef struct sg_pose {
     int16_t roll;
     /* The recorded frame's gGlobalTimer: the penguin's blink reads it. */
     uint32_t held_global_timer;
+    /* SG_POSE_HELD_RELEASED: the object's own gfx angle. */
+    int16_t held_angles[3];
 } sg_pose;
 
 enum sg_mesh_errors {
@@ -228,6 +233,10 @@ int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out);
 /* Zero lights when the ROM's lists did not read as the supported ones (two
  * lights with one diffuse colour, or none at all). Same owner rules. */
 int32_t sg_model_get_body_lights(sg_model *model, sg_body_lights *out);
+/* How many frames one of Mario's own animations has (its loopEnd): evaluate
+ * accepts animation_frame below it. For an animation the recording never
+ * played (a ghost's defeat), chosen by id. Same owner rules. */
+int32_t sg_model_get_animation_frames(sg_model *model, int32_t animation_id, int32_t *frames);
 /* The lights a held object's own lists load (its gdSPDefLights1 table), in
  * the same form; none when two share both colours but not a direction. A
  * vertex names its light by its diffuse (color) and ambient colours. */

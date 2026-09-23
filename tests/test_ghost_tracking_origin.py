@@ -77,6 +77,45 @@ def test_latest_move_zero_changes_origin_without_changing_the_arm():
     assert projector.native_ghost_origin("segment", "1")["frame"] == 1052
 
 
+LOADED = {"igt_frames_restored": 60, "igt_frames_before": 90, "load_signature": "igt_rewound",
+          "mario_acted": True, "acted_tracking": True}
+
+
+def anchor_started_segment():
+    """Armed by the reset itself: a load at its start refires the start trigger
+    too, which replaces the arm a second time in the same event."""
+    definition = replace(ccm_piece("trigger"),
+                         start_triggers=[{"type": "attempt_anchor", "level": 6, "area": 1}])
+    projector = Projector(segments=[definition])
+    projector.feed(row(1, "level_changed", 990, {"from": 16, "to": 6}))
+    projector.feed(row(2, "target_set", 991, {"kind": "segment", "segment_id": 1}))
+    projector.feed(row(3, "area_changed", 992, {"level": 6, "from": 2, "to": 1}))
+    projector.feed(row(10, "practice_reset", 1000, {"mario_acted": True, "acted_tracking": True}))
+    return projector
+
+
+@pytest.mark.parametrize("start", ["move", "trigger", "anchor"])
+def test_a_load_keeps_the_ghost_on_the_run_a_reset_restarts_it(start):
+    """His report, round 10: a save-state load put the ghost back at the very
+    beginning. The load still ends the attempt and re-arms the segment (a
+    subsegment may start from a save state), but the ghost keeps following
+    the run the load continues; the renderer places the loaded state on it."""
+    projector = anchor_started_segment() if start == "anchor" else selected_segment(start)
+    run = projector.native_ghost_origin("segment", "1")
+    assert run["arm_id"] == 10 + SEGMENT_ATTEMPT_OFFSET
+    previous = 10
+    for jid, frame in ((20, 1300), (21, 1350), (22, 1360)):  # repeated loads, even 10 frames apart
+        closed = projector.feed(row(jid, "state_loaded", frame, dict(LOADED), utc=LATER))
+        assert [a.id for a in closed] == [previous + SEGMENT_ATTEMPT_OFFSET]  # the attempts still split
+        assert projector.native_ghost_origin("segment", "1") == run
+        previous = jid
+    attempts = projector.feed(row(23, "practice_reset", 1500, {"mario_acted": True, "acted_tracking": True},
+                                  utc=LAST))
+    restarted = projector.native_ghost_origin("segment", "1")
+    assert attempts and restarted["arm_id"] == 23 + SEGMENT_ATTEMPT_OFFSET
+    assert (restarted["frame"], restarted["utc"]) == (1500, LAST)
+
+
 def test_disarmed_but_still_selected_segment_has_no_live_origin():
     projector = selected_segment()
     assert projector.native_ghost_origin("segment", "2") is None

@@ -44,7 +44,8 @@ int main() {
     number("PARTICLES_ENTRIES_AT", offsetof(gc_particles, entries));
     number("PARTICLE_OPACITY_AT", offsetof(gc_particle, opacity));
     number("PARTICLE_TRANSLATION_AT", offsetof(gc_particle, translation));
-    number("HELD_HOLP_AT", offsetof(gc_held, holp));
+    number("HELD_HOLP_AT", offsetof(gc_held, holp)); number("HELD_ANGLES_AT", offsetof(gc_held, angles));
+    number("HELD_RELEASED_AT", offsetof(gc_held, released));
 
     number("SHADOW_VERTICES", GC_SHADOW_VERTICES); number("SHADOW_TEXTURE_BYTES", GC_SHADOW_TEXTURE_BYTES);
     number("SOUND_EVENTS", GC_SOUND_EVENTS); number("SOUND_OVERFLOW", GC_SOUND_OVERFLOW);
@@ -62,10 +63,14 @@ int main() {
     text("V4_MAGIC", ghost_clip::v4_magic); number("V4_VERSION", ghost_clip::v4_version);
     number("V4_SAMPLE_VERSION", ghost_clip::v4_sample_version);
     number("V4_RECORD_BYTES", ghost_clip::v4_record_bytes); number("V4_SAMPLE_BYTES", ghost_clip::v4_sample_bytes);
+    text("V5_MAGIC", ghost_clip::v5_magic); number("V5_VERSION", ghost_clip::v5_version);
+    number("V5_SAMPLE_VERSION", ghost_clip::v5_sample_version);
+    number("V5_RECORD_BYTES", ghost_clip::v5_record_bytes); number("V5_SAMPLE_BYTES", ghost_clip::v5_sample_bytes);
+    number("RELEASED_FRAMES", GC_RELEASED_FRAMES);
 
     number("IPC_SLOTS", GIPC_SLOTS); number("IPC_RING_AT", offsetof(gipc_page, records));
     number("IPC_PATH_CHARS", GIPC_PATH_CHARS);
-    number("GHOSTS", GP_GHOSTS); number("PROXIMITY_MAX", GP_PROXIMITY_MAX);
+    number("GHOSTS", GP_GHOSTS); number("PROXIMITY_MAX", GP_PROXIMITY_MAX); number("BRIDGE_FRAMES", GP_BRIDGE_FRAMES);
     std::printf("}\n");
     return 0;
 }

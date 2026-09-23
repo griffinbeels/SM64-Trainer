@@ -63,6 +63,36 @@ int main(int argc, char **argv) {
                     && pose.vertices[i].color[c] <= 1;
         check(shaded, "held colours are F3D shades");
     }
+    // Thrown: the same Bob-omb drawn where it flies, by its own node's
+    // TRS(position, angle, scale), whatever Mario's own root is.
+    const auto released = [&](uint32_t behavior, int16_t animation, uint32_t vertices, int16_t yaw,
+                              float &cx, float &cz, float &width_x, float &width_z) {
+        saved.valid_fields = GC_VALID_CLOCK | GC_VALID_POSE | GC_VALID_HELD;
+        saved.held = {}; saved.held.behavior = behavior; saved.held.animation_id = animation; saved.held.released = 1;
+        saved.held.holp[0] = 600; saved.held.holp[1] = 20; saved.held.holp[2] = -400; saved.held.angles[1] = yaw;
+        saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
+        const auto result = ghost_pose::evaluate(model, record, live, world, 1.0f, scratch, pose);
+        check(result == ghost_pose::Result::ok && pose.count == alone + vertices, "released object drawn beside Mario");
+        float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
+        for (uint32_t i = alone; i < pose.count; ++i)
+            for (int c = 0; c < 3; ++c) {
+                lo[c] = std::fmin(lo[c], pose.vertices[i].position[c]);
+                hi[c] = std::fmax(hi[c], pose.vertices[i].position[c]);
+            }
+        cx = (lo[0] + hi[0]) / 2; cz = (lo[2] + hi[2]) / 2; width_x = hi[0] - lo[0]; width_z = hi[2] - lo[2];
+    };
+    float cx, cz, wx, wz, turned_cx, turned_cz, turned_wx, turned_wz;
+    released(0x13003174u, 1, 240, 0, cx, cz, wx, wz);
+    std::fprintf(stderr, "released Bob-omb: centre %.1f %.1f\n", cx, cz);
+    check(std::fabs(cx - 600) < 60 && std::fabs(cz + 400) < 60, "released at its own position, not his hand");
+    // The cork box is a cube with no billboard: an eighth turn of its own yaw
+    // widens its footprint by the square root of two.
+    released(0x13004218u, -1, 36, 0, cx, cz, wx, wz);
+    released(0x13004218u, -1, 36, 0x2000, turned_cx, turned_cz, turned_wx, turned_wz);
+    std::fprintf(stderr, "released box: %.1f x %.1f, turned %.1f x %.1f\n", wx, wz, turned_wx, turned_wz);
+    check(std::fabs(turned_cx - 600) < 1 && std::fabs(turned_cz + 400) < 1, "turned about its own position");
+    check(std::fabs(turned_wx / wx - 1.41421f) < 0.02f && std::fabs(turned_wz / wz - 1.41421f) < 0.02f,
+          "its own yaw turns it");
     sg_model_close(&model);
     return failures ? 1 : 0;
 }

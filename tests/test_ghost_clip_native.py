@@ -12,13 +12,13 @@ import pytest
 
 from ghost_native_fixture import frame, producer
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip
+from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip, hidden_refusals
 from sm64_events.ghost.native_layout import (
-    CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT, PARTICLE_TRANSLATION_AT,
-    PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT, ROOT_KIND_AT, SHADOW_AT,
-    SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
+    CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, HELD_RELEASED_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT,
+    PARTICLE_TRANSLATION_AT, PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT,
+    ROOT_KIND_AT, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
 )
-from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded, matrix_frame
+from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, REAL_GCLIP5, as_gclip5, encoded, matrix_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
@@ -65,22 +65,7 @@ def corpus():
         changed = bytearray(encoded((frame(1, valid=29, pose_refusal=19), frame(2))))
         changed[offset] = value
         values.append(bytes(changed))
-    # A held object: accepted on a pose; refused without one, outside
-    # segment 0x13, or as stray bytes on a record without the bit.
-    values.append(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
-    # A box: no animation, id -1 at frame 0 only.
-    values.append(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
-    for offset, value in ((H + HELD_AT + 6, 3), (H + HELD_AT + 4, 0xfe)):  # frame 3; id -2
-        changed = bytearray(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
-        changed[offset] = value
-        values.append(bytes(changed))
-    for offset, value in ((H + HELD_AT + 3, 0x80), (H + HELD_AT + 30, 0)):
-        changed = bytearray(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
-        changed[offset] = value
-        values.append(bytes(changed))
-    stray = bytearray(encoded((frame(1), frame(2))))
-    stray[H + HELD_AT] = 1
-    values.append(bytes(stray))
+    values.extend(held_cases())
     # Recorded shadow and sound: accepted shapes, then each native refusal.
     evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,), particles=((0x0401DD60, (1, 2, -300)),)),
                         frame(2, sounds=tuple(range(1, 9)), overflow=True, particles=())))
@@ -101,6 +86,7 @@ def corpus():
     segment_tail = bytearray(encoded((frame(),), SEGMENT_CLOCK))
     struct.pack_into("<I", segment_tail, 124, 1)
     values.append(bytes(segment_tail))
+    values.extend(refusal_runs())
     # A real GCLIP4 recording saved before particles plays; a broken one does not.
     saved = REAL_GCLIP4.read_bytes()
     values.append(saved)
@@ -109,6 +95,55 @@ def corpus():
         struct.pack_into("<I", broken, offset, value)
         values.append(bytes(broken))
     return values
+
+
+def held_cases():
+    """The held block, in his hand and released, and a GCLIP5 file from before release."""
+    cases = []
+    # A held object: accepted on a pose; refused without one, outside
+    # segment 0x13, or as stray bytes on a record without the bit.
+    cases.append(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+    # A box: no animation, id -1 at frame 0 only.
+    cases.append(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
+    for offset, value in ((H + HELD_AT + 6, 3), (H + HELD_AT + 4, 0xfe)):  # frame 3; id -2
+        changed = bytearray(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
+        changed[offset] = value
+        cases.append(bytes(changed))
+    for offset, value in ((H + HELD_AT + 3, 0x80), (H + HELD_AT + 30, 0)):
+        changed = bytearray(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+        changed[offset] = value
+        cases.append(bytes(changed))
+    stray = bytearray(encoded((frame(1), frame(2))))
+    stray[H + HELD_AT] = 1
+    cases.append(bytes(stray))
+    # Released: its own angle; in his hand none, and released is 0 or 1.
+    thrown = encoded((frame(1, held=(0x13003174, 1, 12, 0x1234)), frame(2)))
+    cases.append(thrown)
+    for offset, value in ((H + HELD_AT + HELD_RELEASED_AT, 0), (H + HELD_AT + HELD_RELEASED_AT, 2)):
+        changed = bytearray(thrown)
+        changed[offset] = value
+        cases.append(bytes(changed))
+    # A GCLIP5 file (GC6 records, before released objects) plays; a torn one does not.
+    older = as_gclip5(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+    cases.extend((older, older[:-1], older[:8] + b"\x04" + older[9:]))
+    # His real one: Behind Chain Chomp's Gate, a Bob-omb in his hand for 85 frames.
+    cases.append(REAL_GCLIP5.read_bytes())
+    return cases
+
+
+def refusal_runs():
+    """Refused runs playback bridges or hides: the picker's blink count."""
+    def clip(refused, kind=STAR_CLOCK, rows=range(1, 7), changed=None):
+        changed = changed or {}
+        return encode_clip(tuple(frame(i, **({"valid": 29, "pose_refusal": 10} if i in refused else {}),
+                                       **changed.get(i, {})) for i in rows), producer(), clock_kind=kind)
+    later = {"origin": 2}
+    return [clip({3}), clip({3, 4}), clip({3, 4, 5}), clip({3, 4}, SEGMENT_CLOCK), clip({3, 4, 5}, SEGMENT_CLOCK),
+            clip({1}), clip({6}), clip({2, 5}),
+            clip({3}, changed={4: {"area": 2}}), clip({3}, changed={3: {"area": 2}}),  # another scene
+            clip({3}, changed={i: {"elapsed": i + 1} for i in (4, 5, 6)}),  # the clock skipped a frame
+            clip({2}, rows=(1, 2, 4)),  # an occurrence never arrived
+            clip({3}, changed={5: later, 6: later}), clip({5, 6}, changed={5: later, 6: later})]  # past the index
 
 
 def test_python_and_native_acceptance_agree(tmp_path):
@@ -140,22 +175,25 @@ def test_python_and_native_acceptance_agree(tmp_path):
         path.write_bytes(data)
         paths.append(str(path))
         try:
-            decode_clip(data)
+            clip = decode_clip(data)
         except ClipError:
-            expected.append(0)
+            expected.append((0, 0))
         else:
-            expected.append(1)
+            expected.append((1, hidden_refusals(clip)))
     result = subprocess.run([str(target)], input="\n".join(paths) + "\n", cwd=tmp_path,
         capture_output=True, text=True, timeout=30, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
     assert hashes == {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}, \
         "codec or native playback source changed during the witness"
-    actual = [int(value) for value in result.stdout.splitlines()]
-    receipt = {"cases": len(expected), "accepted": sum(expected), "native": actual,
+    actual = [tuple(int(value) for value in line.split()) for line in result.stdout.splitlines()]
+    receipt = {"cases": len(expected), "accepted": sum(accepted for accepted, _ in expected), "native": actual,
                "python": expected, "source_sha256": hashes,
                "executable_sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
     (tmp_path / "codec-parity.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
-    assert set(expected) == {0, 1}
-    assert expected[-5:] == actual[-5:] == [1, 0, 0, 0, 0], "a saved GCLIP4 clip plays; broken ones do not"
+    assert {accepted for accepted, _ in expected} == {0, 1}
+    assert [accepted for accepted, _ in expected[-5:]] == [1, 0, 0, 0, 0], "a saved GCLIP4 plays; broken ones do not"
+    runs = len(refusal_runs())
+    assert [hidden for _, hidden in expected[-5 - runs:-5]] == [0, 0, 3, 0, 3, 1, 1, 0, 1, 1, 1, 1, 0, 0], \
+        "a short refused run between poses in one scene is held; anything else blinks"
     assert actual == expected, [(index, want, got) for index, (want, got)
                                 in enumerate(zip(expected, actual, strict=False)) if want != got]

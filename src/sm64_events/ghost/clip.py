@@ -28,14 +28,15 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from sm64_events.ghost.native_layout import (  # every size and offset: native_layout.py
-    CAMERA_AT, CAMERA_FOV_AT, CLIP_MAGIC as MAGIC, CLIP_VERSION as VERSION, CLOCK_AT, DANCE_TAIL,
-    HEADER_BYTES, HELD_AT, HELD_BYTES, HELD_HOLP_AT, MAX_RECORDS, PARTICLE_BYTES as PARTICLE_ENTRY_BYTES,
+    BRIDGE_FRAMES, CAMERA_AT, CAMERA_FOV_AT, CLIP_MAGIC as MAGIC, CLIP_VERSION as VERSION, CLOCK_AT, DANCE_TAIL,
+    HEADER_BYTES, HELD_ANGLES_AT, HELD_AT, HELD_BYTES, HELD_HOLP_AT, HELD_RELEASED_AT, MAX_RECORDS, PARTICLE_BYTES as PARTICLE_ENTRY_BYTES,
     PARTICLE_EVENTS, PARTICLE_OPACITY, PARTICLE_OPACITY_AT, PARTICLE_OVERFLOW, PARTICLE_TRANSLATION_AT,
     PARTICLES_AT, PARTICLES_BYTES as PARTICLE_BYTES, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES,
     REFUSAL_AT, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW, ROOT_TRS, SAMPLE_BYTES,
     SAMPLE_VERSION, SEGMENT_CLOCK,
     SHADOW_AT, SHADOW_BYTES, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW,
     STAR_CLOCK, V4_MAGIC, V4_RECORD_BYTES, V4_SAMPLE_BYTES, V4_SAMPLE_VERSION, V4_VERSION,
+    V5_MAGIC, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION, V5_VERSION,
     VALID_ACTION as ACTION, VALID_ALL as ALL_VALID, VALID_CAMERA as CAMERA, VALID_CLOCK as CLOCK,
     VALID_HELD as HELD, VALID_PARTICLES as PARTICLES, VALID_POSE as POSE, VALID_REQUIRED as REQUIRED,
     VALID_SHADOW as SHADOW, VALID_SOUND as SOUND, VALID_WARP as WARP, WARP_AT,
@@ -161,15 +162,24 @@ class Frame:
         return self.valid_fields & (CLOCK | POSE) == CLOCK | POSE
 
 
+# Older formats still read, newest last: (magic, version, record bytes, sample
+# bytes, sample version). GCLIP4 had no particles, GCLIP5 no released angle.
+OLDER_FORMATS = ((V4_MAGIC, V4_VERSION, V4_RECORD_BYTES, V4_SAMPLE_BYTES, V4_SAMPLE_VERSION),
+                 (V5_MAGIC, V5_VERSION, V5_RECORD_BYTES, V5_SAMPLE_BYTES, V5_SAMPLE_VERSION))
+
+
 def upgrade_record(data: bytes) -> bytes:
-    """A GCLIP4/GC5 record read as GCLIP5/GC6: the same bytes, its sizes and
-    versions moved on and an empty particle block (native ghost_clip_upgrade.h).
-    Anything else is returned unchanged for the ordinary checks."""
-    if (len(data) != V4_RECORD_BYTES or struct.unpack_from("<2I", data) != (V4_RECORD_BYTES, V4_VERSION)
-            or struct.unpack_from("<2I", data, _PREFIX.size) != (V4_SAMPLE_BYTES, V4_SAMPLE_VERSION)):
+    """An older record read as the current one: the same bytes, its sizes and
+    versions moved on and the blocks it never had zero (native
+    ghost_clip_upgrade.h). Anything else is returned unchanged for the
+    ordinary checks."""
+    older = next((f for f in OLDER_FORMATS if len(data) == f[2]
+                  and struct.unpack_from("<2I", data) == (f[2], f[1])
+                  and struct.unpack_from("<2I", data, _PREFIX.size) == (f[3], f[4])), None)
+    if older is None:
         return data
     raw = bytearray(RECORD_BYTES)
-    raw[:V4_RECORD_BYTES] = data
+    raw[:older[2]] = data
     struct.pack_into("<2I", raw, 0, RECORD_BYTES, VERSION)
     struct.pack_into("<2I", raw, _PREFIX.size, SAMPLE_BYTES, SAMPLE_VERSION)
     return bytes(raw)
@@ -295,10 +305,13 @@ def _validate_held(raw: bytes, valid: int) -> None:
         return
     behaviour, animation_id, frame, _y, anim_state = struct.unpack_from("<I3hH", block)
     values = struct.unpack_from("<6f", block, HELD_HOLP_AT)
+    angles = struct.unpack_from("<3h", block, HELD_ANGLES_AT)
+    released = struct.unpack_from("<H", block, HELD_RELEASED_AT)[0]
     # animation_id -1: an object without an animation (a box), at frame 0.
+    # In his hand it has no angle of its own (Mario's root orients it).
     if (not valid & POSE or behaviour >> 16 != 0x1300 or anim_state > 255 or animation_id < -1 or frame < 0
             or (animation_id == -1 and frame) or not all(math.isfinite(value) for value in values)
-            or 0 in values[3:]):
+            or 0 in values[3:] or released > 1 or (not released and any(angles))):
         raise ClipError("native ghost held object is inconsistent")
 
 
@@ -415,27 +428,35 @@ def _checked_frames(frames: tuple[Frame, ...], configuration: int, epoch: int,
     return first.level, first.area
 
 
+def _older_format(data: bytes):
+    return next((f for f in OLDER_FORMATS if data[:8] == f[0]), None)
+
+
 def _upgrade_clip(data: bytes) -> bytes:
-    """A structurally sized GCLIP4 file as GCLIP5 (ghost_clip_upgrade.h);
-    anything else unchanged, for the ordinary header checks to judge."""
-    if len(data) < HEADER_BYTES or data[:8] != V4_MAGIC:
+    """A structurally sized older file as the current version
+    (ghost_clip_upgrade.h); anything else unchanged, for the ordinary header
+    checks to judge."""
+    older = _older_format(data) if len(data) >= HEADER_BYTES else None
+    if older is None:
         return data
+    _magic, older_version, older_record, _older_sample, older_sample_version = older
     version, size, record_size, count, _rom, sample_version = struct.unpack_from("<6I", data, 8)
-    if ((version, size, record_size, sample_version) != (V4_VERSION, HEADER_BYTES, V4_RECORD_BYTES, V4_SAMPLE_VERSION)
-            or not 1 <= count <= MAX_RECORDS or len(data) != HEADER_BYTES + count * V4_RECORD_BYTES):
+    if ((version, size, record_size, sample_version) != (older_version, HEADER_BYTES, older_record, older_sample_version)
+            or not 1 <= count <= MAX_RECORDS or len(data) != HEADER_BYTES + count * older_record):
         return data
     header = bytearray(data[:HEADER_BYTES])
     header[:8] = MAGIC
     struct.pack_into("<3I", header, 8, VERSION, HEADER_BYTES, RECORD_BYTES)
     struct.pack_into("<I", header, 28, SAMPLE_VERSION)
-    return bytes(header) + b"".join(upgrade_record(data[at:at + V4_RECORD_BYTES])
-                                    for at in range(HEADER_BYTES, len(data), V4_RECORD_BYTES))
+    return bytes(header) + b"".join(upgrade_record(data[at:at + older_record])
+                                    for at in range(HEADER_BYTES, len(data), older_record))
 
 
 def decode_clip(data: bytes) -> Clip:
     if data[:8] in OLDER_MAGICS:
         raise OlderPoseFormat()
-    file_version = V4_VERSION if data[:8] == V4_MAGIC else VERSION
+    older = _older_format(data)
+    file_version = older[1] if older else VERSION
     data = _upgrade_clip(data)
     if not HEADER_BYTES <= len(data) <= HEADER_BYTES + MAX_RECORDS * RECORD_BYTES:
         raise ClipError("native ghost file size is outside its bound")
@@ -528,11 +549,11 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
     if (clip.clock_kind != expected_kind or clip.origin_global_timer != owner["native_clock_frame"]
             or clip.frames[-1 - tail].global_timer != owner["closed_frame"]):
         raise ClipError("native ghost manifest disagrees with the attempt's effective origin")
-    saved_before_particles = clip.file_version == V4_VERSION
+    saved = next((f for f in OLDER_FORMATS if f[1] == clip.file_version), None)
     expected = dict(version=clip.file_version, clip_id=clip.clip_id, bytes=path.stat().st_size,
                     records=len(clip.frames),
-                    record_bytes=V4_RECORD_BYTES if saved_before_particles else RECORD_BYTES,
-                    sample_version=V4_SAMPLE_VERSION if saved_before_particles else SAMPLE_VERSION,
+                    record_bytes=saved[2] if saved else RECORD_BYTES,
+                    sample_version=saved[4] if saved else SAMPLE_VERSION,
                     configuration=clip.configuration, epoch=clip.epoch, level=clip.level, area=clip.area,
                     first_sequence=first.sequence, last_sequence=last.sequence,
                     first_global_timer=first.global_timer, last_global_timer=last.global_timer,
@@ -552,6 +573,47 @@ def pose_gaps(manifest) -> int:
     if not isinstance(manifest, dict):
         return 0
     return int(manifest.get("invalid_records") or 0) + int(manifest.get("missing_occurrences") or 0)
+
+
+def blink_frames(clip: Clip) -> int:
+    """Frames where playback draws no ghost, which the picker says out loud:
+    refused rows it does not bridge, and occurrences that never arrived."""
+    frames = clip.frames
+    return hidden_refusals(clip) + frames[-1].sequence - frames[0].sequence + 1 - len(frames)
+
+
+def hidden_refusals(clip: Clip) -> int:
+    """Refused rows playback hides. It bridges (`bridged` in
+    ghost_playback.cpp) a run of at most BRIDGE_FRAMES refused rows with a
+    recorded pose on each side, in one level and area, whose occurrences and
+    clock both advance one frame per row. The native `hidden_refusals` is
+    the same rule; tests/test_ghost_clip_native.py compares the two."""
+    frames = clip.frames
+    indexed = len(frames)
+    if clip.clock_kind == STAR_CLOCK:
+        origin = frames[0].clock.origin_id
+        indexed = next((i for i, frame in enumerate(frames) if frame.clock.origin_id != origin), indexed)
+
+    def posed(i):
+        return bool(frames[i].valid_fields & POSE)
+
+    hidden, i = 0, 0
+    while i < indexed:
+        if posed(i):
+            i += 1
+            continue
+        end = i
+        while end < indexed and not posed(end):
+            end += 1
+        before, after = i - 1, end
+        bridged = (end - i <= BRIDGE_FRAMES and before >= 0 and after < indexed
+                   and frames[after].sequence - frames[before].sequence == after - before
+                   and frames[after].clock.elapsed_frames - frames[before].clock.elapsed_frames == after - before
+                   and all((frame.level, frame.area) == (frames[before].level, frames[before].area)
+                           for frame in frames[before:after + 1]))
+        hidden += 0 if bridged else end - i
+        i = end
+    return hidden
 
 
 def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | None = None,
@@ -583,6 +645,7 @@ def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | 
             "first_global_timer": first.global_timer, "last_global_timer": last.global_timer,
             "first_igt": first.igt, "last_igt": last.igt, "level": clip.level, "area": clip.area,
             "invalid_records": sum(not frame.playable for frame in clip.frames),
+            "blink_frames": blink_frames(clip),
             "missing_occurrences": last.sequence - first.sequence + 1 - len(clip.frames),
             "tail_records": tail_records,
             **_origin_metadata(clip),

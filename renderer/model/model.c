@@ -182,11 +182,23 @@ int32_t sg_model_get_held_lights(sg_model *model, uint32_t kind, sg_body_lights 
     return leave(status);
 }
 
+int32_t sg_model_get_animation_frames(sg_model *model, int32_t animation_id, int32_t *frames)
+{
+    int status;
+    if (!frames) return SG_INVALID_ARGUMENT;
+    *frames = 0;
+    if (animation_id < 0 || animation_id >= SG_ANIMATION_COUNT) return SG_INVALID_ANIMATION;
+    if (!enter()) return SG_BUSY;
+    status = valid_model(model);
+    if (status == SG_OK) *frames = model->animations[animation_id].loopEnd;
+    return leave(status);
+}
+
 static int valid_pose(const sg_pose *pose)
 {
     int i;
     if (!pose || (pose->fields & SG_POSE_REQUIRED) != SG_POSE_REQUIRED ||
-        (pose->fields & ~127u) || pose->animation_frame < 0 ||
+        (pose->fields & ~255u) || pose->animation_frame < 0 ||
         pose->cap_state > 3 || pose->eye_state > 8 ||
         (pose->eye_state >= 4 && pose->eye_state <= 7) ||
         pose->hand_state > 5 || pose->wing_flutter > 1 || pose->grab_position > 3 ||
@@ -196,6 +208,7 @@ static int valid_pose(const sg_pose *pose)
         if (!finite_bound(pose->position[i], 10000000.0f) ||
             !finite_bound(pose->scale[i], 100.0f) ||
             (pose->scale[i] > -0.000001f && pose->scale[i] < 0.000001f)) return 0;
+    if ((pose->fields & SG_POSE_HELD_RELEASED) && !(pose->fields & SG_POSE_HELD)) return 0;
     if (pose->fields & SG_POSE_HELD) {
         if (pose->held_kind == SG_HELD_NONE || pose->held_kind >= SG_HELD_KINDS ||
             pose->held_animation_id < -1 || pose->held_animation_frame < 0) return 0;

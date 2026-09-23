@@ -14,7 +14,8 @@ constexpr uint16_t object_type = 0x18, object_parent_type = 0x29, held_type = 0x
 // Original N64 types.h / graph_node.h offsets, NOT host libsm64 offsetof.
 constexpr uint32_t graph_next = 8, graph_parent = 12, graph_children = 16;
 constexpr uint32_t area_root = 4, area_camera = 0x24;
-constexpr uint32_t mario_body = 0x98, mario_area = 0x90, mario_object = 0x88;
+constexpr uint32_t mario_body = 0x98, mario_area = 0x90, mario_object = 0x88, mario_animations = 0xa0;
+constexpr uint32_t mario_animation_count = 209;
 
 bool span(uint32_t address, uint32_t count, uint32_t size, uint32_t alignment = 4) {
     return ghost::ram_span(address, count, size, alignment);
@@ -147,13 +148,34 @@ void capture_sound(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_samp
 
 
 // Each refusal names its one check in gc_pose.refusal (reason).
+// The animation Mario's DMA buffer holds: gMarioState->animList
+// {dmaTable, currentAddr, bufTarget} names the loaded entry by its source
+// address, dmaTable {count, srcAddr, {offset, size}[count]} names each entry.
+// -1 unless `drawn` is that buffer and exactly one entry matches. Asks with
+// fits(), so a bad list leaves the pose's own refusal (animation_range).
+int16_t loaded_animation(Ram &ram, uint32_t state, uint32_t drawn) {
+    const uint32_t list = ram.u32(state + mario_animations);
+    if (!ram.fits(list, 12)) return -1;
+    const uint32_t table = ram.u32(list), loaded = ram.u32(list + 4);
+    if (ram.u32(list + 8) != drawn || !ram.fits(table, 8)) return -1;
+    const uint32_t count = ram.u32(table), source = ram.u32(table + 4);
+    if (!count || count > mario_animation_count || !ram.fits(table + 8, count * 8)) return -1;
+    int16_t found = -1;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (source + ram.u32(table + 8 + 8*i) != loaded) continue;
+        if (found >= 0) return -1;
+        found = int16_t(i);
+    }
+    return found;
+}
+
 uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
                       int16_t area_index, uint16_t visual_frame, gc_pose &out, bool deferred,
                       uint8_t &reason) {
     const uint32_t state = layout.mario_state;
     const uint32_t object = ram.u32(layout.mario_object);
     reason = GC_REFUSED_OBJECT;
-    if (!ram.has(state, 0xa0) || !ram.has(object, object_size)
+    if (!ram.has(state, mario_animations + 4) || !ram.has(object, object_size)
             || object < layout.object_pool || (object - layout.object_pool) % object_size
             || (object - layout.object_pool) / object_size >= object_count) return GC_BAD_POINTER;
     const uint32_t body = ram.u32(state + mario_body);
@@ -197,6 +219,11 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
     reason = GC_REFUSED_ANIMATION;
     if (!ram.has(animation, 0x18)) return GC_BAD_POINTER;
     const int16_t end = ram.s16(animation + 8);
+    // A jump, long jump, backflip or steep jump writes animID -1 so its own
+    // animation restarts. When the air step lands that same frame (every BLJ
+    // press, a jump off a slide slope) nothing sets it again, and the renderer
+    // draws curAnim, Mario's DMA buffer, still holding what it last loaded.
+    if (out.animation_id == -1) out.animation_id = loaded_animation(ram, state, animation);
     out.model_state = ram.u16(body + 8);
     out.cap_state = ram.u8(body + 4); out.eye_state = ram.u8(body + 5);
     out.hand_state = ram.u8(body + 6); out.wing_flutter = ram.u8(body + 7);
@@ -227,14 +254,88 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
 constexpr uint32_t behaviour_segment = 0x13000000u, behaviour_span = 0x10000u;
 constexpr uint32_t object_behaviour = 0x20c, object_active_flags = 0x74, object_anim_state = 0xf0, body_holp = 0x18;
 
+bool pool_object(const gc_layout &layout, uint32_t object) {
+    return object >= layout.object_pool && !((object - layout.object_pool) % object_size)
+        && (object - layout.object_pool) / object_size < object_count;
+}
+
+// What the in-hand and released blocks share: behaviour, this frame's
+// animation, blink frame and scale. False when any is unprovable.
+bool object_state(Ram &ram, const gc_layout &layout, uint32_t object, uint16_t area_update_counter, gc_held &h) {
+    // Fresh this frame: its animation globals were set this frame, by the hand
+    // or by its own node (culled or not). Without an animation, the in-hand
+    // block is kept only beside a root Mario's executed lists proved.
+    const uint32_t animation = ram.u32(object + 0x3c);
+    if (animation && (!ram.has(animation, 0x18) || ram.u16(object + 0x42) != area_update_counter)) return false;
+    const uint32_t behaviour = ram.u32(object + object_behaviour);
+    if (behaviour < layout.behaviour_base || behaviour - layout.behaviour_base >= behaviour_span) return false;
+    h.behavior = behaviour_segment + (behaviour - layout.behaviour_base);
+    h.animation_id = animation ? ram.s16(object + 0x38) : int16_t(-1);
+    h.anim_y_translation = animation ? ram.s16(object + 0x3a) : int16_t(0);
+    h.animation_frame = animation ? ram.s16(object + 0x40) : int16_t(0);
+    const uint32_t anim_state = ram.u32(object + object_anim_state);
+    if (anim_state > 255) return false;
+    h.anim_state = uint16_t(anim_state);
+    const int16_t end = animation ? ram.s16(animation + 8) : int16_t(1);
+    if ((animation && h.animation_id < 0) || end <= 0 || h.animation_frame < 0 || h.animation_frame >= end) return false;
+    for (unsigned i = 0; i < 3; ++i) {
+        h.scale[i] = ram.f32(object + 0x2c + 4*i);
+        if (!finite(h.scale[i], 100.0f) || std::fabs(h.scale[i]) < 0.000001f) return false;
+    }
+    return ram.ok;
+}
+
+// The object released from his hand, followed one game frame at a time: the
+// same slot, still active, still running the behaviour it had in his hand.
+// Anything else ends the follow for good. A frame its own node does not draw
+// (off, invisible, another area) carries nothing but keeps following.
+void capture_released(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_sample &out) {
+    const uint32_t object = reader.released_object;
+    if (!object) return;
+    const bool repeat = out.global_timer == reader.released_timer;
+    if ((!repeat && (out.global_timer != reader.released_timer + 1 || reader.released_frames >= GC_RELEASED_FRAMES))
+            || !(ram.u16(object + object_active_flags) & 1u)
+            || ram.u32(object + object_behaviour) != reader.released_behaviour) {
+        reader.released_object = 0; return;
+    }
+    if (!repeat) { reader.released_timer = out.global_timer; ++reader.released_frames; }
+    // Rides a pose, like the in-hand block. geo_process_object composed
+    // TRS(gfx pos, angle, scale): no throwMatrix, no billboard.
+    const uint16_t node_flags = ram.u16(object + 2);
+    if (!(out.valid_fields & GC_VALID_POSE) || !(node_flags & active) || (node_flags & (invisible | billboard))
+            || ram.u32(object + 0x50) || ram.u8(object + 0x18) != out.area || !ram.u32(object + 0x14)) return;
+    gc_held h{};
+    if (!object_state(ram, layout, object, out.area_update_counter, h)) return;
+    for (unsigned i = 0; i < 3; ++i) {
+        h.holp[i] = ram.f32(object + 0x20 + 4*i);
+        h.angles[i] = ram.s16(object + 0x1a + 2*i);
+        if (!finite(h.holp[i])) return;
+    }
+    if (!ram.ok) return;
+    h.released = 1;
+    out.held = h; out.valid_fields |= GC_VALID_HELD;
+}
+
 // gMarioState->heldObj as geo_process_held_object drew it from Mario's hand
-// this frame (gc_held). Anything unprovable leaves the block cleared.
-void capture_held(Ram &ram, const gc_layout &layout, gc_sample &out) {
-    // Rides a pose only; ghost_root_finish clears it with a refused root.
-    if (!layout.behaviour_base || !(out.valid_fields & GC_VALID_POSE)) return;
+// this frame (gc_held); once he lets go, the same object where it flies.
+// Anything unprovable leaves the block cleared.
+void capture_held(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_sample &out) {
+    if (!layout.behaviour_base) return;
     const uint32_t state = layout.mario_state, held = ram.u32(state + 0x7c), body = ram.u32(state + mario_body);
-    if (!held || held < layout.object_pool || (held - layout.object_pool) % object_size
-            || (held - layout.object_pool) / object_size >= object_count || !ram.has(body, 0x24)) return;
+    if (held) {
+        reader.held_object = pool_object(layout, held) ? held : 0;
+        reader.held_behaviour = reader.held_object ? ram.u32(held + object_behaviour) : 0;
+        reader.held_timer = out.global_timer;
+    } else if (reader.held_object) {
+        // Let go since he last held it: follow it from that frame (a gap
+        // ends the follow on its first frame, like any other).
+        reader.released_object = reader.held_object; reader.released_behaviour = reader.held_behaviour;
+        reader.released_timer = reader.held_timer; reader.released_frames = 0;
+        reader.held_object = 0;
+    }
+    if (!held) return capture_released(ram, layout, reader, out);
+    // Rides a pose only; ghost_root_finish clears it with a refused root.
+    if (!(out.valid_fields & GC_VALID_POSE) || !pool_object(layout, held) || !ram.has(body, 0x24)) return;
     // Alive, drawn only through the hand, with a model the hand can draw
     // (Bowser's tail anchor has none). Its own node never draws while held:
     // either it is off (cur_obj_disable_rendering, most holdables) or it stays
@@ -244,28 +345,11 @@ void capture_held(Ram &ram, const gc_layout &layout, gc_sample &out) {
     const uint16_t node_flags = ram.u16(held + 2);
     if (!(ram.u16(held + object_active_flags) & 1u) || ((node_flags & active) && !(node_flags & invisible))
             || !ram.u32(held + 0x14)) return;
-    // Fresh this frame: its animation globals were set this frame, by the hand
-    // or (invisible, still active) by its own culled node.
-    // Without an animation, ghost_root_finish keeps it only beside a root
-    // Mario's executed lists proved.
-    const uint32_t animation = ram.u32(held + 0x3c);
-    if (animation && (!ram.has(animation, 0x18) || ram.u16(held + 0x42) != out.area_update_counter)) return;
-    const uint32_t behaviour = ram.u32(held + object_behaviour);
-    if (behaviour < layout.behaviour_base || behaviour - layout.behaviour_base >= behaviour_span) return;
     gc_held h{};
-    h.behavior = behaviour_segment + (behaviour - layout.behaviour_base);
-    h.animation_id = animation ? ram.s16(held + 0x38) : int16_t(-1);
-    h.anim_y_translation = animation ? ram.s16(held + 0x3a) : int16_t(0);
-    h.animation_frame = animation ? ram.s16(held + 0x40) : int16_t(0);
-    const uint32_t anim_state = ram.u32(held + object_anim_state);
-    if (anim_state > 255) return;
-    h.anim_state = uint16_t(anim_state);
-    const int16_t end = animation ? ram.s16(animation + 8) : int16_t(1);
-    if ((animation && h.animation_id < 0) || end <= 0 || h.animation_frame < 0 || h.animation_frame >= end) return;
+    if (!object_state(ram, layout, held, out.area_update_counter, h)) return;
     for (unsigned i = 0; i < 3; ++i) {
         h.holp[i] = ram.f32(body + body_holp + 4*i);
-        h.scale[i] = ram.f32(held + 0x2c + 4*i);
-        if (!finite(h.holp[i]) || !finite(h.scale[i], 100.0f) || std::fabs(h.scale[i]) < 0.000001f) return;
+        if (!finite(h.holp[i])) return;
     }
     if (!ram.ok) return;
     out.held = h; out.valid_fields |= GC_VALID_HELD;
@@ -285,7 +369,7 @@ extern "C" uint32_t ghost_capture_validate_layout(const gc_layout *layout) {
     const uint32_t halves[] = {layout->area_update_counter, layout->current_level,
                               layout->current_area, layout->igt_overall};
     for (auto address : halves) if (!span(address, 2, layout->rdram_bytes, 2)) return GC_BAD_CONFIG;
-    if (!span(layout->mario_state, 0xa0, layout->rdram_bytes)
+    if (!span(layout->mario_state, mario_animations + 4, layout->rdram_bytes)
             || !span(layout->object_pool, object_count*object_size, layout->rdram_bytes)) return GC_BAD_CONFIG;
     const uint32_t warps[] = {layout->pending_warp_op, layout->delayed_warp_timer};
     for (auto address : warps)
@@ -368,7 +452,7 @@ static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
         if (!out->status) out->status = pose_status;
     }
     ram.ok = true;
-    capture_held(ram, *layout, *out);
+    capture_held(ram, *layout, *reader, *out);
     ram.ok = true;
     if (probe) ghost_root_prepare(*probe, *frame, ram.u32(layout->mario_object), layout->object_pool, *out);
     return out->status;
@@ -391,7 +475,7 @@ static_assert(offsetof(gc_layout, clock) == 80, "Ghost clock layout ABI changed"
 static_assert(sizeof(gc_particle) == 36 && sizeof(gc_particles) == 580 && offsetof(gc_particle, opacity) == 22,
               "Ghost particle ABI changed");
 static_assert(offsetof(gc_sample, particles) == 636, "Ghost particle block follows sound");
-static_assert(sizeof(gc_sample) == 1252 && offsetof(gc_sample, held) == 1216 && sizeof(gc_held) == 36,
+static_assert(sizeof(gc_sample) == 1260 && offsetof(gc_sample, held) == 1216 && sizeof(gc_held) == 44,
               "Ghost sample ABI changed");
 static_assert(sizeof(gc_shadow) == 292 && sizeof(gc_sound) == 36, "Ghost optional evidence ABI changed");
 static_assert(offsetof(gc_sample, shadow) == 308 && offsetof(gc_sample, sound) == 600, "Ghost optional evidence offsets");

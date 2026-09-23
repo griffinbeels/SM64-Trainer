@@ -24,6 +24,25 @@
  * this many frames after its last recorded dance frame (15 = 0.5 s), holding
  * that pose; its sounds fade with it and are silent once it hides. */
 #define GP_STAR_FADE_FRAMES 15u
+/* Defeat (his ask, 2026-09-23: "because you won, you get to trigger the
+ * death animation for all of the remaining ghosts that were slower than
+ * you"). When live Mario's grab completes the attempt, each ghost still
+ * short of its own completing grab plays Mario's standing death where it
+ * stood: act_standing_death's MARIO_ANIM_DYING_FALL_OVER (0x32; he clutches
+ * himself and falls on his face), dead eyes (MARIO_EYES_DEAD) and
+ * SOUND_MARIO_DYING = SOUND_ARG_LOAD(2, 4, 0x15, 0xFF, 8). The game warps
+ * away at frame 80 of that fall; the ghost holds its last frame from there
+ * and fades over GP_DEFEAT_FADE_FRAMES. A ghost already past its own grab
+ * keeps its dance and fade. Source: n64decomp/sm64
+ * src/game/mario_actions_cutscene.c (act_standing_death, common_death_handler). */
+#define GP_DEFEAT_ANIMATION 0x32
+#define GP_DEFEAT_EYES 8u
+#define GP_DEFEAT_SOUND 0x2415FF81u
+#define GP_DEFEAT_FRAMES 80u
+#define GP_DEFEAT_FADE_FRAMES 15u
+/* The furthest back from a clip's end its completing grab is looked for:
+ * the dance tail (archive DANCE_TAIL_MAX_FRAMES, 180) and its grab. */
+#define GP_DEFEAT_SCAN 512u
 /* A run of at most this many consecutive refused records, with a recorded
  * pose on both sides in the same scene and no missing occurrence, holds the
  * pose before it instead of blinking (2 = 67 ms, below a noticeable pause).

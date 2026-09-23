@@ -287,7 +287,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         check(!ghost_assets::clip(bytes,digest,wrong_id,header),"wrong clip identity refused");
         {
             // The same clip saved as GCLIP4 (before particles): its own digest,
-            // read as GCLIP5 with every sample byte kept and no particles.
+            // read as the current version with every sample byte kept and no particles.
             std::vector<uint8_t> v4(bytes.begin(),bytes.begin()+sizeof(gclip_header));
             std::memcpy(v4.data(),"SM64GHO4",8);
             const uint32_t v4_header[]={4,sizeof(gclip_header),652};std::memcpy(v4.data()+8,v4_header,sizeof(v4_header));
@@ -303,7 +303,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
             uint8_t v4_digest[32]{};check(ghost_assets::sha256(v4,v4_digest),"GCLIP4 digest");
             gclip_header upgraded{};
             check(ghost_assets::clip(v4,v4_digest,id,upgraded) && upgraded.version==GCLIP_VERSION
-                && upgraded.record_bytes==sizeof(gclip_frame) && v4==bytes,"GCLIP4 clip read as GCLIP5");
+                && upgraded.record_bytes==sizeof(gclip_frame) && v4==bytes,"GCLIP4 clip read as the current version");
         }
         check(!ghost_assets::read(clip_path,GIPC_PATH_CHARS,1,corrupt) && corrupt.empty(),"oversized file clears output");
         const uint16_t relative[]={'x',0};
