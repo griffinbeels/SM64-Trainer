@@ -108,6 +108,7 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
     assert report["capture_version"] == 5 and report["clip_version"] == 4 and report["playback_version"] == 7
     assert_recorded_shadow(report["shadow"])
+    assert_player_first(report["occlusion"])  # the timing below runs with this fade on
     assert report["follow_segment_origin"] and report["paused_igt_ignores_global_timer"]
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
@@ -125,6 +126,11 @@ def assert_recorded_shadow(shadow):
     assert shadow["captured"] and shadow["pixels"] > 300 and shadow["would_occlude"] > 50
     assert shadow["outside_pixels_changed"] == shadow["switch_errors"] == shadow["darkening_errors"] == 0
     assert shadow["alpha_errors"] == shadow["occlusion_errors"] == 0
+
+
+def assert_player_first(occlusion):
+    """A ghost in front of live Mario fades over him only; behind him it is unchanged."""
+    assert occlusion["faded"] > 1000 and occlusion["outside_pixels_changed"] == occlusion["behind_errors"] == 0
 
 
 def assert_full_ghost_set(report):

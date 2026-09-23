@@ -19,9 +19,11 @@ uniform vec2 lighting;
 out vec3 vertexColor;
 out vec2 texCoord;
 out float illumination;
+out vec4 occlusionClip;
 flat out float mode;
 void main() {
     gl_Position=viewProjection*vec4(position,1.0);
+    occlusionClip=gl_Position;
     if (flipY!=0) gl_Position.y=-gl_Position.y;
     float n=length(normal);
     float lit=lighting.x+lighting.y*max(n>0.0 ? dot(normal/n,lightDirection) : 0.0,0.0);
@@ -30,7 +32,7 @@ void main() {
     texCoord=uv;
     mode=materialMode;
 })";
-constexpr const char* fragment_shader=R"(#version 430 core
+constexpr const char* fragment_shader=R"(
 layout(location=0) out vec4 outputColor;
 uniform sampler2D atlas;
 uniform sampler2D terrain;
@@ -40,6 +42,7 @@ uniform float hueDegrees;
 in vec3 vertexColor;
 in vec2 texCoord;
 in float illumination;
+in vec4 occlusionClip;
 flat in float mode;
 void main() {
     float depth=clamp((gl_FragCoord.z*2.0-1.0)*depthMapping.x+depthMapping.y,0.0,1.0);
@@ -68,17 +71,18 @@ void main() {
                  dot(rgb,vec3(.213-.213*c+.143*s,.715+.285*c+.140*s,.072-.072*c-.283*s)),
                  dot(rgb,vec3(.213-.213*c-.787*s,.715-.715*c+.715*s,.072+.928*c+.072*s)));
     }
-    outputColor=vec4(clamp(rgb,0.0,1.0),opacity*material.a);
+    outputColor=vec4(clamp(rgb,0.0,1.0),opacity*material.a*playerFirst(occlusionClip));
 })";
 
-uint32_t shader(const Dispatch& g,uint32_t type,const char* source) {
+uint32_t shader(const Dispatch& g,uint32_t type,const char* const* sources,int32_t count) {
     const auto id=g.CreateShader(type); if (!id) return 0;
-    g.ShaderSource(id,1,&source,nullptr);g.CompileShader(id);
+    g.ShaderSource(id,count,sources,nullptr);g.CompileShader(id);
     int32_t compiled=0;g.GetShaderiv(id,COMPILE_STATUS,&compiled);
     if (!compiled) {g.DeleteShader(id);return 0;} return id;
 }
 uint32_t program(const Dispatch& g,const char* vertex=vertex_shader,const char* fragment=fragment_shader) {
-    const auto vs=shader(g,VERTEX_SHADER,vertex), fs=shader(g,FRAGMENT_SHADER,fragment);
+    const char* const fragment_sources[]={fragment_version,ghost_occlusion::glsl,fragment};
+    const auto vs=shader(g,VERTEX_SHADER,&vertex,1), fs=shader(g,FRAGMENT_SHADER,fragment_sources,3);
     if (!vs || !fs) {if(vs)g.DeleteShader(vs);if(fs)g.DeleteShader(fs);return 0;}
     const auto id=g.CreateProgram();
     if(id) {g.AttachShader(id,vs);g.AttachShader(id,fs);g.LinkProgram(id);}
@@ -131,6 +135,7 @@ struct Instance {
     uint32_t fbos[2]={}; // display/self depth; copied terrain depth
     uint32_t self_depth=0,vao=0,vbo=0,shader_program=0;
     int32_t uniforms[9]={};
+    OcclusionUniforms occlusion;
     shadow::Storage shadow;
     Target target{};
     bool ready=false,begun=false,finalized=false,hud=false;
@@ -166,6 +171,7 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
         p->shader_program=program(g);if(!p->shader_program)return Result::resources;
         constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain","hueDegrees"};
         for(size_t i=0;i<9;++i) {p->uniforms[i]=g.GetUniformLocation(p->shader_program,names[i]);if(p->uniforms[i]<0)return Result::resources;}
+        if(!p->occlusion.find(g,p->shader_program))return Result::resources;
         g.GenTextures(3,p->textures);g.GenFramebuffers(2,p->fbos);
         g.GenRenderbuffers(1,&p->self_depth);g.GenVertexArrays(1,&p->vao);g.GenBuffers(1,&p->vbo);
     }
@@ -306,7 +312,7 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.Uniform3fv(p->uniforms[2],1,pose.light_direction);g.Uniform2f(p->uniforms[3],pose.ambient,pose.diffuse);
         g.Uniform2f(p->uniforms[4],t.depth_scale,t.depth_translate);g.Uniform1f(p->uniforms[5],pose.opacity);
         g.Uniform1i(p->uniforms[6],0);g.Uniform1i(p->uniforms[7],1);
-        g.Uniform1f(p->uniforms[8],pose.hue_degrees);
+        g.Uniform1f(p->uniforms[8],pose.hue_degrees);p->occlusion.set(g,pose.occlusion);
         g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,p->textures[2]);g.BindSampler(0,0);
         g.ActiveTexture(TEXTURE0+1);g.BindTexture(TEXTURE_2D,t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture);g.BindSampler(1,0);
         // Private nearest-surface prepass, then exactly one color contribution

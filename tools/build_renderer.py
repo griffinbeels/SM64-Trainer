@@ -90,6 +90,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def overlay_sources() -> tuple[str, ...]:
+    """OVERLAY_SOURCES plus every ghost source the staging tool copies by glob.
+    A header missing from the hand list (the shadow shader, the proximity and
+    occlusion rules) used to change the DLL without changing its id."""
+    extra = sorted(path.name for path in (REPO / "plugin" / "gfxwrap").glob("ghost_*")
+                   if path.suffix in (".h", ".cpp") and path.name not in OVERLAY_SOURCES)
+    return (*OVERLAY_SOURCES, *extra)
+
+
 def renderer_build_id() -> str:
     """Names everything the DLL is made of: the pinned upstream tree, the
     overlay sources, the staging tool, the label and this recipe. The static
@@ -103,7 +112,7 @@ def renderer_build_id() -> str:
     digest.update((REPO / "tools" / "stage_ghost_presentation.py").read_bytes() + b"\0")
     model = _load("renderer_model_build", REPO / "tools/build_model.py")
     digest.update(model.component_hash().encode() + b"\0")
-    for name in OVERLAY_SOURCES:
+    for name in overlay_sources():
         digest.update(name.encode() + b"\0" + (REPO / "plugin" / "gfxwrap" / name).read_bytes() + b"\0")
     return digest.hexdigest() + "-renderer"
 

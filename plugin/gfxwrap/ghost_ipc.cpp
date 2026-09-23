@@ -72,7 +72,7 @@ bool same_controls(gipc_request a, gipc_request b) {
 }
 bool valid_set(const gipc_request &r) {
     if (r.clip_count > GIPC_GHOSTS || r.reserved1 || (r.play_enabled && !r.clip_count)
-            || r.shadow_enabled > 1 || r.reserved2 || r.reserved3
+            || r.shadow_enabled > 1 || r.occlusion_fade > 1 || r.reserved3
             || !(r.volume >= 0 && r.volume <= 1)) return false;
     for (uint32_t i = 0; i < r.clip_count; ++i) {
         const auto &clip = r.clips[i];
@@ -378,6 +378,7 @@ struct Session {
                     command.proximity_enabled = r.proximity_enabled;
                     command.proximity_distance = r.proximity_distance;
                     command.shadow_enabled = r.shadow_enabled; command.volume = r.volume;
+                    command.occlusion_fade = r.occlusion_fade;
                     command.suspended = r.owner_suspended;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;

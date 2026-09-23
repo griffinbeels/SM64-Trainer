@@ -1139,6 +1139,21 @@ and playback draws none.
 - **Lives** — `plugin/gfxwrap/ghost_root.cpp` captures it;
   `plugin/gfxwrap/ghost_pose.cpp` places it for drawing
 
+### Player-first fade
+
+A Mario-only [[ghost]] fades wherever it would block the player. The parts of
+it that stand between the camera and live Mario, over his body on screen, keep
+only 15% of their opacity. Near the camera the whole body fades out, so it
+can never fill the screen. The fade leaves a [[ghost]] behind Mario, or away
+from him, untouched. Its [[recorded shadow]] follows the same rule. It
+multiplies with opacity and the overlap fade, and one switch turns it off for
+comparison.
+
+- **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
+  playback fills live Mario's region each frame
+- **Not** — the overlap fade, which fades a whole [[ghost]] when its body touches
+  live Mario's, wherever the camera is.
+
 ### Ghost sound events
 
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in

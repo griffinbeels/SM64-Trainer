@@ -69,6 +69,7 @@ static uint64_t selected_sequence=0;
 static uint32_t selected_world=0;
 static float selected_x=0;
 static bool refuse_shadow=false;
+static bool perspective=false; // a real look-down-minus-z projection for the occlusion region
 static unsigned shadow_calls=0;
 static uint64_t shadow_sequence=0;
 // Sound sink: fixed storage, since the renderer must never allocate.
@@ -128,7 +129,13 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.opacity=opacity;
     // Identify the recorded row and its depth in the otherwise opaque matrix.
     out.view_projection[0]=recorded.sample.pose.position[0];
-    out.view_projection[15]=recorded.sample.pose.position[2];return Result::ok;
+    out.view_projection[15]=recorded.sample.pose.position[2];
+    if(perspective) {
+        // clip = (x, y, z, -z): the camera at the origin looking down -z.
+        std::memset(out.view_projection,0,sizeof(out.view_projection));
+        out.view_projection[0]=out.view_projection[5]=out.view_projection[10]=1;out.view_projection[11]=-1;
+    }
+    return Result::ok;
 }
 // The pose witness proves the look-at product; this one proves which point
 // is placed: the camera here is a pure translation.
@@ -308,6 +315,29 @@ int main() {
         check(api->configure(&r)==GP_OK,"overlap A/B disable");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"disabled overlap preserves visibility even at coincidence");
+        check(!pose.occlusion.enabled && !pose.occlusion.has_player,"occlusion fade off leaves the region empty");
+        // Player first: live Mario's body box under the pose's own live
+        // view-projection reaches the drawn pose; opacity is untouched.
+        ++r.revision;r.occlusion_fade=1;check(api->configure(&r)==GP_OK,"occlusion fade on");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+        perspective=true;live.pose.position[0]=0;live.pose.position[1]=0;live.pose.position[2]=-1000;
+        for(auto& axis:live.pose.scale)axis=1;
+        draw(10,true,GP_READY,5,2);
+        {
+            const auto& o=pose.occlusion;auto same=[](float a,float b){return std::fabs(a-b)<1e-5f;};
+            check(o.enabled && o.has_player && pose.opacity==0.25f,"live Mario region reaches the pose");
+            check(same(o.center[0],0) && same(o.radius[0],50.0f/950) && same(o.center[1],80.0f/950)
+                  && same(o.radius[1],80.0f/950) && same(o.player_w,1000),"region is his projected body box");
+        }
+        live.pose.position[2]=500;draw(10,true,GP_READY,5,2);
+        check(pose.occlusion.enabled && !pose.occlusion.has_player,"Mario behind the camera has no region");
+        live.pose.position[2]=-1000;live.valid_fields&=~GC_VALID_POSE;draw(10,true,GP_READY,5,2);
+        check(pose.occlusion.enabled && !pose.occlusion.has_player,"missing player pose keeps only the camera fade");
+        live.valid_fields|=GC_VALID_POSE;
+        ++r.revision;r.occlusion_fade=0;check(api->configure(&r)==GP_OK,"occlusion A/B off");
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});draw(10,true,GP_READY,5,2);
+        check(!pose.occlusion.enabled && !pose.occlusion.has_player,"switched-off fade reaches no pose");
+        perspective=false;live.pose.position[0]=live.pose.position[2]=0;
         live.valid_fields&=~GC_VALID_POSE;
         const auto displayed=token;api->withdraw();
         renderer.run([&]{check(!ghost_playback::current(displayed),"withdraw cancels candidate immediately");
@@ -671,8 +701,8 @@ int main() {
         r.proximity_distance=401;check(api->configure(&r)==GP_INVALID,"proximity distance bounded");
         r.proximity_distance=0;
         r.shadow_enabled=2;check(api->configure(&r)==GP_INVALID,"shadow flag bounded");
-        r.shadow_enabled=1;r.reserved2=1;check(api->configure(&r)==GP_INVALID,"shadow reserved word checked");
-        r.reserved2=0;r.volume=1.5f;check(api->configure(&r)==GP_INVALID,"volume bounded");
+        r.shadow_enabled=1;r.occlusion_fade=2;check(api->configure(&r)==GP_INVALID,"occlusion flag bounded");
+        r.occlusion_fade=0;r.volume=1.5f;check(api->configure(&r)==GP_INVALID,"volume bounded");
         r.volume=std::numeric_limits<float>::quiet_NaN();check(api->configure(&r)==GP_INVALID,"volume NaN refused");
         r.volume=.5f;r.reserved3=1;check(api->configure(&r)==GP_INVALID,"sound reserved word checked");
         r.reserved3=0;
