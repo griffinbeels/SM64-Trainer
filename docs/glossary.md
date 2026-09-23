@@ -49,10 +49,11 @@ The line of detections waiting behind the held [[target]] — first hooked,
 first held. Performing a [[segment]]'s own start deliberately (a course
 exit, a door [[moment]]) takes an empty hand and becomes a
 [[hooked target]]; a detection that fires while the hand already holds
-something waits its turn; when the front completes or dies, the oldest
-detection still alive takes over, and an empty queue leaves the hand
-neutral. A queued detection also takes a [[leftover target]], which is the
-one hand nobody chose. A [[segment]] that
+something waits its turn. When the front completes it stays in the hand as
+a [[leftover target]], so its ghost and its retries keep a target; when it
+dies (forfeited or expired), the oldest detection still alive takes over,
+and an empty queue leaves the hand neutral. A queued detection also takes
+a [[leftover target]], which is the one hand nobody chose. A [[segment]] that
 arms by mere presence — a pipe family on a course
 entry — never enters the queue, and neither does a [[subsection]] a
 [[star]] or another [[segment]] owns, whatever its clause shape: only your
@@ -82,8 +83,9 @@ through that grab, because explicit choices take priority.
 
 ### Leftover target
 
-The [[segment]] the trainer followed onto after you finished one somewhere
-else, still in the hand and no longer armed where you stand — neither a
+A finished [[segment]] still in the hand — one the trainer followed onto
+after you finished it somewhere else, or one you just completed while
+it was the [[hooked target]] — and no longer armed where you stand: neither a
 [[picked target]] nor a [[hooked target]], so nothing bounds it. A detection
 in the [[target queue]] displaces it: performing a [[segment]]'s own start
 here beats a guess about a place you have walked out of.
