@@ -426,7 +426,8 @@ fade and star-end policy. Hue is per recording. Each ghost selects its own row
 from the shared coordinate: before-start clamps, and after-end, gaps, wrong
 scene, refused poses (except a bridged short run) and its own recorded touch
 hide only that ghost. A live
-star grab or star generation change ends every ghost. Overlap fade compares
+star grab or star generation change ends the run: every ghost still racing
+is defeated (below) and the rest stay hidden. Overlap fade compares
 live Mario with each ghost separately
 ([ghost_proximity.h](../plugin/gfxwrap/ghost_proximity.h)): touching bodies
 fade the ghost smoothly down to the shared floor, 15% of its opacity
@@ -477,14 +478,42 @@ equal opacity step a frame (body and shadow), and hides exactly that many
 frames after the last record, with or without `star_ends`. Its sound fades with it (the
 placement gain carries the fade) and is set silent as it hides. Unflagged
 clips, every recording saved before the tail existed, still end at the touch.
-The live behaviour is unchanged: his own star grab (or a new star generation)
-ends every ghost on that frame, dancing or not, and the tracker's suspension
-that follows his completion keeps them hidden. The suspension comes only from
-his attempt, so a ghost that grabs first dances and fades on its own timeline
-while he is still playing; if he grabs first, the ghosts vanish on his grab
-before reaching their own. The playback witness drives both orders and the
-fade values (1, 14/15 ... 1/15, then hidden at 15 frames), and an older clip
-beside the dancer ending at its touch.
+A ghost that grabs first dances and fades on its own timeline while he is
+still playing, and his own grab later does not cut that short.
+
+**Defeat** (his ask, 2026-09-23: "because you won, you get to trigger the
+death animation for all of the remaining ghosts that were slower than you").
+When his grab completes the attempt, on the star latch (his grab action, or a
+new star generation while he is in one) or, where no latch applies (the
+100-coin star's exit star), on the tracker's suspension arriving while he is
+in a grab action, playback decides from what each ghost drew the frame before:
+
+- a ghost already past its own completing grab (a dance tail's closing grab,
+  found by walking the clip's final run of grab actions back from its end;
+  else its first recorded touch) keeps its dance and fade, moving on from
+  the frame after the one it last drew;
+- a ghost still short of it falls where it stood: Mario's standing death
+  (`act_standing_death`: `MARIO_ANIM_DYING_FALL_OVER`, 0x32, 96 frames in
+  the ROM), dead eyes, torso and head straight, without what it held or its
+  particles, crying `SOUND_MARIO_DYING` once from where it falls. The model
+  plays the animation by id (`sg_model_get_animation_frames` bounds the
+  frame); the root, facing, scale and shadow are its recorded row's. It
+  holds the fall's last frame from `GP_DEFEAT_FRAMES` (80, where the game
+  warps) and fades over `GP_DEFEAT_FADE_FRAMES`, sound included;
+- a ghost not drawn then stays hidden.
+
+The defeat runs on the live `gGlobalTimer` (the game clock stops at his
+grab), through tuning and the suspension, and happens once per run: a state
+load that restores the run ends it and draws the ghosts at the loaded state,
+and a scene change or the counter running back ends it. A suspension with no
+grab (a reset) only hides, as before. Tuning lives in `ghost_tuning.h`. The
+playback witness drives him first (both fall, cry once, frame by frame,
+held, faded, hidden), the ghost first (it dances on through his grab and the
+suspension), the 100-coin exit star through the suspension, and a reset's
+suspension; breaking the winner rule, the animation, the eyes, the cry or the
+trigger each turns it red. The fade values for a dance stay (1, 14/15 ...
+1/15, then hidden at 15 frames), with an older clip beside the dancer ending
+at its touch.
 
 The 100-coin star (his report, 2026-09-23: the ghost vanished at the 100-coin
 star when the run goes on to an exit star) is timed by its exit segment: its

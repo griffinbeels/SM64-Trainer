@@ -1218,6 +1218,19 @@ touch; [[segment]]s never carry one.
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
   `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
 
+### Ghost defeat
+
+What a [[ghost]] still racing does when live Mario's grab completes the
+[[attempt]] first: it plays Mario's own dying fall where it stood, with
+dead eyes and his dying cry, then fades out. A [[ghost]] that already made
+its own completing grab keeps its [[dance tail]] instead. Once per [[attempt]]; a
+state load back into the [[attempt]] brings the [[ghost]]s back.
+
+- **Lives** — `plugin/gfxwrap/ghost_playback.cpp` decides and draws it;
+  `plugin/gfxwrap/ghost_tuning.h` holds its animation, timing and sound
+- **Not** — the [[dance tail]]'s fade, which ends a [[ghost]] that won its
+  own race
+
 ### Translucent world layer
 
 The game's water surfaces, and any other see-through world geometry, as they

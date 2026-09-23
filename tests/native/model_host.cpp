@@ -269,6 +269,14 @@ int main(int argc, char** argv) {
             // (0x7f of 0xff) and one eye-space direction (40,40,40).
             sg_body_lights lights{};
             check(sg_model_get_body_lights(model,&lights)==SG_OK && lights.count==6,"Mario's body lights");
+            // A ghost's defeat plays an animation its recording never did, by id:
+            // the standing death's fall (0x32) runs past the game's 80-frame warp.
+            {
+                int32_t fall=0;
+                check(sg_model_get_animation_frames(model,0x32,&fall)==SG_OK && fall>=80,"the fall's length");
+                check(sg_model_get_animation_frames(model,-1,&fall)==SG_INVALID_ANIMATION && !fall
+                    && sg_model_get_animation_frames(nullptr,0x32,&fall)!=SG_OK,"an unknown fall is refused");
+            }
             bool halves=true,red=false;
             for(uint32_t i=0;i<lights.count;++i){const auto& l=lights.lights[i];
                 for(unsigned c=0;c<3;++c)halves&=l.ambient[c]*2u<=l.diffuse[c]+1u && l.ambient[c]*2u+1u>=l.diffuse[c]
