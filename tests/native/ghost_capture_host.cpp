@@ -371,6 +371,13 @@ int main(int argc, char **argv) {
         check(f.run() == GC_BAD_CONFIG, "misaligned ring accepted");
         f.config = layout; f.config.sound_code = 0;
         check(f.run() == GC_BAD_CONFIG, "partial sound configuration accepted");
+    } else if (mode == "held") {
+        // The legacy TRS reader still refuses a holding Mario, so it never
+        // records a held object; the executed-root reader does (root host).
+        check(f.config.behaviour_base == 0x800EB180, "Python layout lost the behaviour base");
+        f.put32(f.config.mario_state + 0x7c, f.config.object_pool + 0x260);
+        check(f.run() == GC_UNSUPPORTED_HELD && !(f.sample.valid_fields & (GC_VALID_POSE | GC_VALID_HELD))
+              && zero(f.sample.held), "TRS reader recorded a held object");
     } else if (mode == "arguments") {
         f.config.version = GC_VERSION - 1;
         check(f.run() == GC_BAD_CONFIG && f.sample.valid_fields == 0 && f.sample.live_action == 0,

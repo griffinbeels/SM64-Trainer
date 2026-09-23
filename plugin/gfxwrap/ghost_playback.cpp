@@ -77,10 +77,16 @@ bool have_model=false, have_request=false, have_timeline=false, star_ended=false
 bool sequence_reported=false;
 bool held[GP_CLIP_SLOTS]{};          // this renderer owns the slot (Owned or Unwanted)
 Clip *bound[GP_GHOSTS]{};            // request order; null until adopted
-// Per ghost: the coordinate shift aligning its clip to the live origin's
-// restart, fixed for one (clip, live origin) pair.
-uint64_t align[GP_GHOSTS]{}, aligned_origin[GP_GHOSTS]{};
-const Clip *aligned_clip[GP_GHOSTS]{};
+// Per ghost: the coordinate shift aligning its clip to the live attempt's
+// restart, fixed for one (clip id, attempt) pair. An attempt begins at an
+// unrecovered origin, in the scene live Mario is in when it first applies; a
+// restore continues it. Keyed on the recording, not its slot, so a selection
+// change, a toggle or a capture restart re-adopting clips elsewhere aligns
+// each clip to the attempt's scene.
+struct Attempt {uint64_t sequence;int16_t level,area;bool known;} attempt{};
+uint64_t align[GP_GHOSTS]{}, aligned_attempt[GP_GHOSTS]{};
+uint8_t aligned_id[GP_GHOSTS][16]{};
+bool aligned[GP_GHOSTS]{};
 gp_request active_request{};
 gp_request timeline_request{};
 gp_status report{};
@@ -285,6 +291,17 @@ bool valid_shadow(const gc_sample& s) {
     return m[3]==0 && m[7]==0 && m[11]==0 && m[15]==1;
 }
 // Particles: bounded count, overflow only when full, unused entries zero.
+// A held object rides only a pose, with a segment-0x13 behaviour.
+bool valid_held(const gc_sample& s) {
+    const gc_held zero{};
+    if(!(s.valid_fields&GC_VALID_HELD))return !std::memcmp(&s.held,&zero,sizeof(zero));
+    const auto& h=s.held;
+    if(!(s.valid_fields&GC_VALID_POSE) || (h.behavior>>16)!=0x1300u || h.anim_state>255
+            || h.animation_id<0 || h.animation_frame<0)return false;
+    for(unsigned axis=0;axis<3;++axis)
+        if(!std::isfinite(h.holp[axis]) || !std::isfinite(h.scale[axis]) || h.scale[axis]==0)return false;
+    return true;
+}
 bool valid_particles(const gc_sample& s) {
     const gc_particles zero{};
     if(!(s.valid_fields&GC_VALID_PARTICLES))return !std::memcmp(&s.particles,&zero,sizeof(zero));
@@ -336,7 +353,7 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
         if(!(s.valid_fields&GC_VALID_POSE) && std::memcmp(&s.pose,&zero_pose,sizeof(s.pose)))return false;
         if(!(s.valid_fields&GC_VALID_CAMERA) && std::memcmp(&s.camera,&zero_camera,sizeof(s.camera)))return false;
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;
-        if(!valid_shadow(s) || !valid_sound(s) || !valid_particles(s))return false;
+        if(!valid_shadow(s) || !valid_sound(s) || !valid_particles(s) || !valid_held(s))return false;
         if(s.valid_fields&GC_VALID_POSE)for(unsigned axis=0;axis<3;++axis)
             if(!std::isfinite(s.pose.position[axis]) || !std::isfinite(s.pose.scale[axis]))return false;
         if(s.valid_fields&GC_VALID_POSE) {
@@ -705,8 +722,10 @@ const gclip_frame *bridged(const Clip& clip,uint32_t at) {
 }
 // fade: 1 normally; after a dance tail's last record it falls by
 // 1/GP_STAR_FADE_FRAMES a frame on the held last pose, and is 0 once hidden.
+// record is the selected row (its sounds play); posed the row whose pose is
+// shown, earlier than record across a bridged refusal.
 uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
-                ghost_compositor::Pose& out,uint32_t& record,float& fade) {
+                ghost_compositor::Pose& out,uint32_t& record,uint32_t& posed,float& fade) {
     const Clip *clip=bound[index];
     if(!clip)return GP_PREPARING;
     const auto &h=clip->header;
@@ -773,7 +792,7 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
     if((selected.sample.valid_fields&GC_VALID_PARTICLES) && sg_model_get_particles(model.value,&particles)==SG_OK)
         ghost_particle_pose::place(model.value,particles,selected.sample,live.camera,out.view_projection,
                                    particle_vertices[index],out.particles);
-    rendered.fetch_add(1);record=lo;
+    rendered.fetch_add(1);record=lo;posed=uint32_t(shown-clip->frames);
     return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
 }
 }
@@ -924,26 +943,29 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         if(active_request.star_ends)for(uint32_t i=0;i<active_request.star_action_count;++i)
             if(live.live_action==active_request.star_actions[i])star_ended=true;
         if(star_ended) {decide_all(GP_STAR_ENDED);return false;}
-        // Fixed per attempt origin, from the scene live Mario is in when it
-        // first applies. A restored origin continues that attempt's live
-        // coordinate, so it keeps the alignment it already had.
+        // Fixed per attempt, from its scene. A restored origin continues that
+        // attempt's live coordinate, so the same clip keeps its alignment and
+        // a newly shown clip aligns to the same scene.
+        if(!attempt.known || (!(origin.flags&GO_RECOVERED) && attempt.sequence!=origin.sequence))
+            attempt={origin.sequence,live.level,live.area,true};
         for(uint32_t i=0;i<GP_GHOSTS;++i) {
-            if(!bound[i]) {aligned_clip[i]=nullptr;align[i]=0;continue;}
-            const bool recovered=(origin.flags&GO_RECOVERED)!=0;
-            if(aligned_clip[i]==bound[i] && (aligned_origin[i]==origin.sequence || recovered))continue;
-            aligned_clip[i]=bound[i];aligned_origin[i]=origin.sequence;
-            align[i]=origin.kind==GO_STAR && !recovered?restart_shift(*bound[i],live.level,live.area):0;
+            if(!bound[i]) {aligned[i]=false;align[i]=0;continue;}
+            if(aligned[i] && aligned_attempt[i]==attempt.sequence && id_equal(aligned_id[i],bound[i]->header.clip_id))
+                continue;
+            aligned[i]=true;aligned_attempt[i]=attempt.sequence;
+            std::memcpy(aligned_id[i],bound[i]->header.clip_id,16);
+            align[i]=origin.kind==GO_STAR?restart_shift(*bound[i],attempt.level,attempt.area):0;
         }
     }
     report.visible=0;
     uint32_t summary=GP_DISABLED;bool before_start=true;
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
-        ghost_compositor::Pose pose{};uint32_t record=0;float fade=1;
+        ghost_compositor::Pose pose{};uint32_t record=0,posed=0;float fade=1;
         // Restart alignment, then the timing nudge, on this ghost's coordinate.
         Coordinate mine=frame;
         if(active_request.mode==GP_FOLLOW) {
-            const uint64_t shift=bound[i] && aligned_clip[i]==bound[i]?align[i]:0;
+            const uint64_t shift=bound[i] && aligned[i]?align[i]:0;
             if(mine.target>UINT64_MAX-shift-600) {decide_all(GP_NO_CLOCK);return false;}
             mine.target+=shift;
             if(active_request.nudge_frames<0) {
@@ -951,7 +973,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
                 if(mine.target<amount){mine.below_zero=true;mine.target=0;}else mine.target-=amount;
             } else mine.target+=uint32_t(active_request.nudge_frames);
         }
-        const auto result=select(i,mine,live,world,pose,record,fade);
+        const auto result=select(i,mine,live,world,pose,record,posed,fade);
         if(!current(candidate)) {
             // A revocation during any evaluation discards the whole candidate.
             for(uint32_t j=0;j<GP_GHOSTS;++j)out[j]={};
@@ -964,7 +986,8 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
             if(fade==0)silence(i);
             continue;
         }
-        place(i,live,bound[i]->frames[record].sample.pose.position,fade);
+        // A bridged refusal sounds its own cues from the pose it shows.
+        place(i,live,bound[i]->frames[posed].sample.pose.position,fade);
         hear(i,*bound[i],record,result==GP_BEFORE_START);
         before_start=before_start && result==GP_BEFORE_START;
         if(pose.count)out[count++]=pose;

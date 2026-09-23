@@ -27,12 +27,12 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC6: layout 184, sample 1216; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved) and particles (580 at 636) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC6: layout 188 (`behaviour_base` at 184), sample 1252; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (36 at 1216) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS5, still exported as `SM64GhostSourceV3` (the version argument must be 5); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC7: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1232 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP5: header 160, record 1232, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP4 (record 652) still loads, read as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Ghost IPC | GIPC7: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1268 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP5: header 160, record 1268, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP4 (record 652) still loads, read as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
 Sizes are bytes. Native ghost versions are checked together. GCLIP4 (GC5,
@@ -94,6 +94,38 @@ float precision. Tests execute the pinned staged `gSPDisplayList` and x86 matrix
 loader, and cover floor tilt, nonuniform scale, camera motion and ownership
 refusals. A new live recording remains the acceptance check for the installed
 practice ROM's complete graph and emitted command sequence.
+
+### Held objects
+
+What Mario holds (a Bob-omb, a baby penguin, a heavy object, Bowser's tail,
+or the SSL hands-free-holding object) is drawn from his right hand
+(`geo_process_held_object`). The object's own graph node is off while held,
+so its animation advances only there, in the same callback that writes
+`marioBodyState->heldObjLastPosition` (the HOLP). Capture
+([ghost_capture.cpp](../plugin/gfxwrap/ghost_capture.cpp) `capture_held`)
+records `gc_held` only when all of these hold: Mario's pose is valid (a root
+refused or carried away later clears it), `heldObj` is an aligned pool slot
+that is active with its own node off, its `animTimer` equals this frame's
+`area_update_counter`, and its frame lies inside the loaded animation. The
+block holds the segmented behaviour (`behaviour - behaviour_base + 0x13000000`,
+the identity; `bhvBobomb` is 0x13003174), the animation id, frame and y
+translation, its `oAnimState` (switch frames such as the Bob-omb's blink), the HOLP (its world root) and its gfx scale. Its orientation
+needs no field: the hand copies Mario's own root matrix (his throwMatrix),
+so the held root is Mario's recorded world root rotation, rows scaled by
+`scale`, at the HOLP. A held object without an animation cannot prove it was
+drawn this frame and is not recorded. The legacy TRS reader still refuses a
+holding Mario and records none.
+
+The ghost draws the held objects the model knows (`held_models` in
+[ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp): the Bob-omb, the small
+penguin, King Bob-omb and Chuckya), as part of Mario's mesh: the recorded
+animation frame, `oAnimState` and `gGlobalTimer` (the penguin's blink), at the
+HOLP, its billboards turned to the live camera. Holding Bowser's tail holds
+his tail anchor, which has no model and no animation, so nothing is
+recorded or drawn in the hand; Bowser himself is a world object, and the
+ghost shows Mario swinging with empty hands. An object the model does not
+know, or refuses (no textures, an animation it lacks, no room in the mesh),
+is left out and Mario still draws.
 
 ### Cap effects (vanish and metal)
 
@@ -193,7 +225,9 @@ causes, each fixed at its source:
   ([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `bridged`). A
   67 ms hold is below what reads as a pause; a blink is not. Longer runs, scene
   changes and the clip's first or last rows still hide the ghost. The clip
-  and the audit keep the rows refused: this is display, not extraction.
+  and the audit keep the rows refused: this is display, not extraction. A
+  bridged row's own sounds still play, placed at the pose it shows (its own
+  pose is empty, the world origin).
 - **Painting exit, kept hidden**: the first 16 frames of `ACT_EXIT_AIRBORNE`
   (status 3) come before the action's first `set_mario_animation`, so the new
   level's Mario object has no animation (`animation`). The game draws him
@@ -268,9 +302,12 @@ compares live Mario's scene with the clip's first row. If they differ and
 the clip restarted in live Mario's level and area, it shifts that ghost's
 coordinate so the latest such restart's raw IGT meets the live raw IGT.
 Otherwise, including segments and fixed seek, nothing changes. The shift is
-fixed per ghost and attempt origin. A restore resolved into that attempt
-(`GO_RECOVERED`) keeps it, because its coordinate continues the attempt's
-timeline. A later live scene change never re-aligns. Touch, dance tail and
+fixed per recording (clip id, not its slot) and attempt. An attempt begins at
+an unrecovered origin, in the scene live Mario is in when it first applies. A
+restore resolved into it (`GO_RECOVERED`) continues its timeline, so the same
+recording keeps its shift, and a recording newly shown during it (a selection
+change, a toggle, a capture restart re-adopting clips into other slots) aligns
+to the attempt's scene. A later live scene change never re-aligns. Touch, dance tail and
 after-end checks use the shifted coordinate.
 
 Real replay (2026-09-23, the actual playback selection over the saved 2814

@@ -508,7 +508,13 @@ int main() {
                 if(shown)check(selected_x==x,"bridge shows the previous pose");
             };
             seek(3,true,GP_READY,4,2303);
+            // A bridged refusal sounds from the pose it shows (row 3), not
+            // from its own empty pose at the world origin.
+            ghost_playback::set_sound_sink(&test_sink);for(auto &p:placed)p={};
             seek(4,true,GP_READY,4,2303);   // one refused frame holds row 3
+            check(placed[0].count==1 && placed[0].position[0]+live.camera.position[0]==2303,
+                  "bridged frame sounds at its held pose");
+            ghost_playback::set_sound_sink(nullptr);
             seek(6,true,GP_READY,6,2305);   // two refused frames hold row 5
             seek(7,true,GP_READY,6,2305);
             seek(1,false,GP_INVALID_FRAME,0,0);  // next pose is in another area
@@ -523,16 +529,18 @@ int main() {
             // not after its walk; a live attempt from the entrance keeps the
             // ghost's own origin (even past a later area-1 restart), and a
             // scene the ghost never restarted in changes nothing.
-            Clip volcano=Clip::linear(24,24,17,5);
-            const auto scene=[&](uint32_t from,uint32_t to,int16_t area) {
-                for(uint32_t i=from;i<to;++i) {
-                    auto &s=volcano.frames[i].sample;s.area=area;s.igt=uint16_t(i-from+1);s.clock.raw_igt=s.igt;
-                }
-            };
+            Clip volcano=Clip::linear(24,24,17,5),other=Clip::linear(25,24,17,5);
             // Entrance 0-5, a volcano visit 6-9, the volcano run 10-19 (its
             // recorded touch at 17), back outside 20-23.
-            scene(6,10,2);scene(10,20,2);scene(20,24,1);
-            check(api->prepare_clip(&volcano.header,volcano.frames.data())==GP_OK,"prepare a clip with timer restarts");
+            for(auto *clip:{&volcano,&other}) {
+                const auto scene=[&](uint32_t from,uint32_t to,int16_t area) {
+                    for(uint32_t i=from;i<to;++i) {
+                        auto &s=clip->frames[i].sample;s.area=area;s.igt=uint16_t(i-from+1);s.clock.raw_igt=s.igt;
+                    }
+                };
+                scene(6,10,2);scene(10,20,2);scene(20,24,1);
+                check(api->prepare_clip(&clip->header,clip->frames.data())==GP_OK,"prepare a clip with timer restarts");
+            }
             revision=r.revision+1;r=request(volcano,revision);r.model_id=4;
             const auto follow=[&](int area) {
                 ++r.revision;r.origin={GO_STAR,7,live.sequence+1,source_continuity,11000,source_generation,0,0};
@@ -562,6 +570,23 @@ int main() {
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             draw(4,false,GP_WRONG_SCENE,0,1);
             draw(5,true,GP_READY,15,2);check(selected_x==2414,"restored origin keeps the alignment");
+            // Load practice, 2026-09-23: changing the selection under that
+            // restored origin (another ghost, a toggle, a capture restart that
+            // re-adopts clips into other slots) aligns the newly shown clip to
+            // the attempt's own scene, the volcano. Unaligned it would show
+            // its row 4 outside; aligned from live Mario's area 1 it would too.
+            const auto select_clip=[&](const Clip& shown) {
+                ++r.revision;std::memcpy(r.clips[0].clip_id,shown.header.clip_id,16);
+                check(api->configure(&r)==GP_OK,"change the selection under a restored origin");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            };
+            select_clip(other);
+            draw(4,false,GP_WRONG_SCENE,0,1);
+            draw(5,true,GP_READY,15,2);check(selected_x==2514,"a newly selected ghost aligns to the attempt");
+            // The worker prepares a re-selected recording again.
+            check(api->prepare_clip(&volcano.header,volcano.frames.data())==GP_OK,"prepare the first ghost again");
+            select_clip(volcano);
+            draw(5,true,GP_READY,15,2);check(selected_x==2414,"toggling back keeps its alignment");
         }
         {
             // Three ghosts on one live origin. Each ends on its own recorded

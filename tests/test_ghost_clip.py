@@ -125,7 +125,7 @@ def test_portable_offsets_and_lossless_refusal_rows(tmp_path):
                           clip_id="112233445566778899aabbccddeeff00")
     raw = path.read_bytes()
     assert raw[:8] == b"SM64GHO5"
-    assert struct.unpack_from("<8I", raw, 8) == (5, 160, 1232, 3, 1, 6, 4, 5)
+    assert struct.unpack_from("<8I", raw, 8) == (5, 160, 1268, 3, 1, 6, 4, 5)
     assert raw[40:56].hex() == manifest["clip_id"]
     assert struct.unpack_from("<Qqd", raw, 56) == (30, 1000, 1800000000.0)
     assert struct.unpack_from("<2Q2I2i", raw, 80) == (1, 4, 101, 104, 24, 1)
@@ -249,6 +249,19 @@ def test_refused_pose_keeps_only_its_named_reason():
     raw = bytearray(frame(valid=29, pose_refusal=3))
     raw[76] = 1
     with pytest.raises(ClipError, match="retains"):
+        frame_from_bytes(bytes(raw))
+
+
+def test_held_object_rides_a_pose_with_a_segment_0x13_behaviour():
+    held = frame_from_bytes(frame(held=(0x13003174, 1, 12)))
+    assert held.held_behaviour == 0x13003174 and frame_from_bytes(frame()).held_behaviour == 0
+    for broken in (frame(valid=29, held=(0x13003174, 1, 12)), frame(held=(0x80003174, 1, 12)),
+                   frame(held=(0x13003174, -1, 12))):
+        with pytest.raises(ClipError, match="held object"):
+            frame_from_bytes(broken)
+    raw = bytearray(frame())
+    raw[16 + 1216] = 1
+    with pytest.raises(ClipError, match="held-object refusal"):
         frame_from_bytes(bytes(raw))
 
 

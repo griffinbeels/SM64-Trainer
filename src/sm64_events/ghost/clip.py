@@ -28,11 +28,12 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO5", 5, 6
-HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1232, 1216
+HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1268, 1252
 MAX_RECORDS, WORLD_READY = 100000, 3
-CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND, PARTICLES = 1, 2, 4, 8, 16, 32, 64, 128
-REQUIRED, ALL_VALID = 31, 255
-SHADOW_AT, SOUND_AT, PARTICLES_AT = 16 + 308, 16 + 600, 16 + 636  # record offsets of the optional blocks
+CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND, PARTICLES, HELD = 1, 2, 4, 8, 16, 32, 64, 128, 256
+REQUIRED, ALL_VALID = 31, 511
+SHADOW_AT, SOUND_AT, PARTICLES_AT, HELD_AT = 16 + 308, 16 + 600, 16 + 636, 16 + 1216  # optional blocks
+HELD_BYTES = 36  # gc_held: segmented behaviour, animation, HOLP, scale
 SHADOW_BYTES, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW = 292, 36, 8, 1
 PARTICLE_BYTES, PARTICLE_EVENTS, PARTICLE_OVERFLOW = 580, 16, 1
 OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
@@ -132,6 +133,7 @@ class Frame:
     sound_overflow: bool = False  # more than SOUND_EVENTS were issued
     refusal: int = 0  # gc_refusal: why this frame's own lists did not prove the pose
     particles: int = 0  # Mario's particles the game drew this frame
+    held_behaviour: int = 0  # segmented behaviour of the object in Mario's hand, 0 if none
 
     @property
     def refusal_name(self) -> str:
@@ -192,7 +194,8 @@ def frame_from_bytes(data: bytes) -> Frame:
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
                   *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)),
                   tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW),
-                  raw[REFUSAL_AT], raw[PARTICLES_AT] if valid & PARTICLES else 0)
+                  raw[REFUSAL_AT], raw[PARTICLES_AT] if valid & PARTICLES else 0,
+                  struct.unpack_from("<I", raw, HELD_AT)[0] if valid & HELD else 0)
     if frame.refusal >= len(REFUSALS):
         raise ClipError("native ghost pose refusal is unknown")
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
@@ -219,6 +222,7 @@ def frame_from_bytes(data: bytes) -> Frame:
     _validate_shadow(raw, valid)
     _validate_sound(count, flags, bits, raw, valid)
     _validate_particles(raw, valid)
+    _validate_held(raw, valid)
     _validate_clock(frame)
     return frame
 
@@ -278,6 +282,19 @@ def _validate_particles(raw: bytes, valid: int) -> None:
         if (opacity and not 0x100 <= opacity <= 0x1FF) or not all(
                 math.isfinite(value) for value in struct.unpack_from("<3f", block, at + 24)):
             raise ClipError("native ghost particle entry is invalid")
+
+
+def _validate_held(raw: bytes, valid: int) -> None:
+    block = raw[HELD_AT:HELD_AT + HELD_BYTES]
+    if not valid & HELD:
+        if any(block):
+            raise ClipError("native ghost held-object refusal retains bytes")
+        return
+    behaviour, animation_id, frame, _y, anim_state = struct.unpack_from("<I3hH", block)
+    values = struct.unpack_from("<6f", block, 12)
+    if (not valid & POSE or behaviour >> 16 != 0x1300 or anim_state > 255 or animation_id < 0 or frame < 0
+            or not all(math.isfinite(value) for value in values) or 0 in values[3:]):
+        raise ClipError("native ghost held object is inconsistent")
 
 
 def _validate_clock(frame: Frame) -> None:

@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import urllib.request
 import zipfile
@@ -20,6 +21,59 @@ SOURCE_FILES = (
     "src/decomp/game/object_stuff.c", "src/decomp/game/behavior_actions.c", "src/decomp/mario/geo.inc.c",
     "src/decomp/mario/model.inc.c", "src/gfx_adapter.c",
 )
+# Objects Mario can hold, built like his own model from pinned decomp sources
+# (inputs.json): geo, lists and animations compile through the same libsm64
+# macros. As for Mario, the lists compile apart from the decomp headers
+# (libsm64's gfx_macros.h); geo and animations see them as extern Gfx. Each
+# texture the geo reaches becomes an atlas cell that assets.c fills from the
+# model's ROM segment: its MIO0 block in the US ROM (the same in the Usamune
+# ROM), located by matching the upstream vertices at their segment offsets.
+# Order is the sg_held_kind order in model.h (checked at compile time).
+# {name: (geo layout, animation table, segment ROM offset, list input, geo/animation inputs)}
+def _anims(actor: str, *addresses: str) -> tuple[str, ...]:
+    return (*(f"{actor}_anim_{address}" for address in addresses), f"{actor}_anims", f"{actor}_geo")
+
+
+HELD_MODELS = {
+    "bobomb": ("black_bobomb_geo", "bobomb_seg8_anims_0802396C", 0x1F2200, "bobomb_model",
+               ("bobomb_anim_walk", "bobomb_anim_held", "bobomb_anims", "bobomb_geo")),
+    "penguin": ("penguin_geo", "penguin_seg5_anims_05008B74", 0x160670, "penguin_model",
+                _anims("penguin", "050079E4", "05007DCC", "050087C0", "05008B5C")),
+    "king_bobomb": ("king_bobomb_geo", "king_bobomb_seg5_anims_0500FE30", 0x134D20, "king_bobomb_model",
+                    _anims("king_bobomb", "0500BDFC", "0500C2AC", "0500C520", "0500C774", "0500CFCC",
+                           "0500D5B0", "0500D978", "0500DDD8", "0500E10C", "0500F078", "0500F6C8",
+                           "0500FE18")),
+    "chuckya": ("chuckya_geo", "chuckya_seg8_anims_0800C070", 0x1F2200, "chuckya_model",
+                _anims("chuckya", "0800AF68", "0800B1A8", "0800B4A8", "0800B9F8", "0800BBEC", "0800C058")),
+}
+MARIO_ATLAS_CELLS = 13
+HELD_HEADER = """#include "../include/sm64.h"
+#include "../include/types.h"
+#include "../include/geo_commands.h"
+#include "../game/rendering_graph_node.h"
+#include "../shim.h"
+Gfx *geo_switch_anim_state(s32 callContext, struct GraphNode *node, void *context);
+Gfx *geo_switch_tuxie_mother_eyes(s32 callContext, struct GraphNode *node, void *context);
+Gfx *geo_update_held_mario_pos(s32 callContext, struct GraphNode *node, void *context);
+"""
+# Each held graph is wrapped as libsm64 wraps Mario (mario_geo_libsm64): only a
+# z-buffered master list emits display lists, and libsm64's master-list hack
+# drops the first opaque entry, so an empty list takes that place.
+HELD_ROOT = """const GeoLayout sg_{name}_root[] = {{
+   GEO_NODE_START(),
+   GEO_OPEN_NODE(),
+      GEO_ZBUFFER(1),
+      GEO_OPEN_NODE(),
+         GEO_DISPLAY_LIST(LAYER_OPAQUE, sg_{name}_skipped),
+         GEO_BRANCH(1, {geo}),
+      GEO_CLOSE_NODE(),
+   GEO_CLOSE_NODE(),
+   GEO_END(),
+}};
+void *sg_{name}_geo = (void *)sg_{name}_root;
+const struct Animation *const *sg_{name}_animations = {table};
+const int sg_{name}_animation_count = {count};
+"""
 # Ghost sound effects: SM64's own audio engine, driven by renderer/model/audio.c.
 AUDIO_FILES = (
     *(f"src/decomp/audio/{name}.c" for name in (
@@ -108,6 +162,7 @@ def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
     }
     for name, text in generated.items():
         (destination / name).write_text(text, encoding="utf-8", newline="\n")
+    _stage_held(files, source)
     _module("model_patches", MODEL / "patches.py").patch(source)
     # convUtils needs two helpers from utils.c, whose remainder is filesystem code.
     utilities = (source / "src/decomp/tools/utils.c").read_text(encoding="utf-8")
@@ -116,6 +171,97 @@ def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
         text += _function(utilities, name)
     (source / "src/conversion.c").write_text(text, encoding="utf-8", newline="\n")
     return source
+
+
+def _stage_held(files: dict, source: Path) -> None:
+    """Two translation units per held model, its lists (texture arrays
+    commented out, their names now atlas cells) and its geo and animations,
+    plus held_cells.h: the kinds, and the cells assets.c fills."""
+    destination = source / "src/decomp/held"
+    destination.mkdir(exist_ok=True)
+    cell, widths, heights, textures, models = MARIO_ATLAS_CELLS, [], [], [], []
+    for name, (geo, table, segment, lists, inputs) in HELD_MODELS.items():
+        kind = f"SG_HELD_{name.upper()}"
+        list_text = files[lists].read_text(encoding="utf-8")
+        text = "".join(files[key].read_text(encoding="utf-8") + "\n" for key in inputs)
+        cells = {}
+        for symbol, width, height in _reached_textures(text, geo, list_text):
+            cells[symbol] = cell
+            widths.append(width)
+            heights.append(height)
+            textures.append(f"{{{kind}, {cell}u, {segment:#x}u, {int(symbol[-6:], 16):#x}u}}")
+            cell += 1
+        if not cells:
+            raise ValueError(f"held model {name} reaches no texture")
+        lines, skip, externs, first = list_text.splitlines(), 0, "", min(cells.values())
+        defines = ""
+        for i, line in enumerate(lines):
+            if skip:
+                skip -= 1
+                lines[i] = "//" + line
+            elif line.startswith("ALIGNED8 static const u8 ") and "_texture_" in line:
+                skip = 2
+                lines[i] = "//" + line
+                symbol = line.split()[4].removesuffix("[]")
+                # A texture its geo never reaches still names a cell; never drawn.
+                defines += f"#define {symbol} {cells.get(symbol, first)}\n"
+            elif line.startswith("const "):
+                externs += "extern " + line.replace(" = {", ";") + "\n"
+        (destination / f"{name}_lists.c").write_text(
+            '#include "../../load_tex_data.h"\n#include "../../gfx_macros.h"\n' + defines
+            + "\n".join(lines) + f"\nconst Gfx sg_{name}_skipped[] = {{ gsSPEndDisplayList() }};\n",
+            encoding="utf-8", newline="\n")
+        # libsm64's shadow node draws nothing and skips its children, so a
+        # held graph's shadow becomes a plain start node.
+        text = re.sub(r"GEO_SHADOW\([^)]*\)", "GEO_NODE_START()", text)
+        count = len(re.findall(r"^\s*&", _array(text, table), re.M))
+        text = HELD_HEADER + externs + f"extern const Gfx sg_{name}_skipped[];\n" + text
+        text += HELD_ROOT.format(name=name, geo=geo, table=table, count=count)
+        (destination / f"{name}.c").write_text(text, encoding="utf-8", newline="\n")
+        models.append((name, kind))
+    header = ("/* Generated by tools/build_model.py (HELD_MODELS): the held models, their\n"
+              " * sg_held_kind, and the atlas cells their textures fill. */\n#pragma once\n"
+              "#define SG_HELD_MODELS(X) " + " ".join(f"X({name}, {kind})" for name, kind in models) + "\n"
+              "#define SG_HELD_KIND_CHECKS " + " ".join(
+                  f"typedef char sg_held_kind_{name}[({kind} == {i}) ? 1 : -1];"
+                  for i, (name, kind) in enumerate(models, 1)) + "\n"
+              f"#define SG_HELD_KIND_COUNT {len(models) + 1}\n"
+              f"#define SG_HELD_CELL_COUNT {cell - MARIO_ATLAS_CELLS}\n"
+              f"#define SG_HELD_CELL_WIDTHS {', '.join(map(str, widths))}\n"
+              f"#define SG_HELD_CELL_HEIGHTS {', '.join(map(str, heights))}\n"
+              "/* {kind, cell, segment ROM offset, texture offset in the segment} */\n"
+              f"#define SG_HELD_TEXTURES {', '.join(textures)}\n")
+    (destination / "held_cells.h").write_text(header, encoding="utf-8", newline="\n")
+
+
+def _array(text: str, name: str) -> str:
+    """The initializer of one C array definition."""
+    start = text.index(f" {name}[] = {{")
+    return text[start:text.index("};", start)]
+
+
+def _reached_textures(text: str, geo: str, lists: str) -> list[tuple[str, int, int]]:
+    """The RGBA16 textures the geo's display lists load, in declaration order,
+    with the size each gsDPLoadBlock gives."""
+    bodies = dict(re.findall(r"const Gfx (\w+)\[\] = \{(.*?)\};", lists, re.S))
+    pending, seen, reached = re.findall(r"\b(\w+_dl_[0-9A-Fa-f]+)\b", _array(text, geo)), set(), set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        pending += re.findall(r"gsSPDisplayList\((\w+)\)", bodies[name])
+        reached.update(re.findall(r"gsDPSetTextureImage\(G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, (\w+)\)", bodies[name]))
+    found = []
+    for symbol in re.findall(r"^ALIGNED8 static const u8 (\w+_texture_\w+)\[\]", lists, re.M):
+        if symbol not in reached:
+            continue
+        size = re.search(rf"{symbol}\),\s*gsDPLoadSync\(\),\s*gsDPLoadBlock\(G_TX_LOADTILE, 0, 0, "
+                         rf"(\d+) \* (\d+) - 1, CALC_DXT\((\d+), G_IM_SIZ_16b_BYTES\)\)", lists)
+        if not size or size[1] != size[3] or int(size[1]) > 64 or int(size[2]) > 64:
+            raise ValueError(f"held texture {symbol} has no RGBA16 load up to 64x64")
+        found.append((symbol, int(size[1]), int(size[2])))
+    return found
 
 
 def _function(source: str, name: str) -> str:
@@ -146,7 +292,8 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
     output = staging / "objects"
     output.mkdir(exist_ok=True)
     sources = [source / name for name in (*SOURCE_FILES, *AUDIO_FILES)]
-    sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c")]
+    sources += [source / f"src/decomp/held/{name}{suffix}.c" for name in HELD_MODELS for suffix in ("", "_lists")]
+    sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c", "held.c")]
     flags = ["/nologo", "/O2", "/W3", "/TC", "/std:c17", "/MT", "/Gy", "/Gw",
              "/D_CRT_SECURE_NO_WARNINGS", "/DSM64_LIB_STATIC", "/DGBI_FLOATS", "/DVERSION_US", "/DNO_SEGMENTED_MEMORY"]
     if testing:
