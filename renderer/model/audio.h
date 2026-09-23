@@ -24,11 +24,18 @@ enum { SA_OK = 0, SA_ARGUMENT = -1, SA_INVALID_ROM = -2, SA_BUSY = -3,
 #define SA_TBL_OFFSET 0x593560u
 #define SA_SEQ_OFFSET 0x7B0860u
 #define SA_BANKS_OFFSET 0x7CC621u
-#define SA_SOUND_BYTES (SA_ROM_BYTES - SA_CTL_OFFSET) /* what sa_open keeps */
 #define SA_BANKS_BYTES 0xA0u
+/* Upstream's audio_init DMA-copies 0x100 bytes from the bank-set table, 0x60
+ * past the 0xA0 it uses (upstream read them from its whole-ROM copy). */
+#define SA_BANKS_READ_BYTES 0x100u
+/* Those regions are one contiguous span, and the engine reads nothing else:
+ * about 2.3 MB of the 8 MB ROM (TBL's samples are most of it). */
+#define SA_AUDIO_OFFSET SA_CTL_OFFSET
+#define SA_AUDIO_BYTES (SA_BANKS_OFFSET + SA_BANKS_READ_BYTES - SA_AUDIO_OFFSET)
 
-/* Copies the big-endian ROM; owns that copy and every parse until close. */
-int32_t sa_open(const uint8_t *rom, size_t bytes);
+/* Copies the big-endian ROM's audio span (SA_AUDIO_BYTES starting at
+ * SA_AUDIO_OFFSET); owns that copy and every parse until close. */
+int32_t sa_open(const uint8_t *audio, size_t bytes);
 #define SA_SOURCES 16u /* one per displayed ghost (GP_GHOSTS) */
 /* Where a source sounds from, relative to the camera as SM64 places its own
  * sounds (+x right, +y up, -z ahead), and its gain 0..1 on top of the engine's

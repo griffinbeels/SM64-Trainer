@@ -5,6 +5,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <mmsystem.h>
+#define PSAPI_VERSION 2
+#include <psapi.h>
 #include "ghost_audio.h"
 #include "audio.h"
 #include "decomp/include/PR/ultratypes.h"
@@ -30,11 +32,13 @@ struct Capture {
     std::mutex mutex; std::condition_variable changed;
     std::vector<int16_t> pcm;
     uint64_t written = 0, played = 0;
-    bool waiting = false, fail_open = false, opened = false, closed = false;
+    bool waiting = false, fail_open = false, opened = false, closed = false, open_now = false;
+    unsigned opens = 0;
     static Capture &of(void *owner) { return *static_cast<Capture *>(owner); }
     static bool open(void *owner, uint32_t rate) {
         auto &self = of(owner); std::lock_guard<std::mutex> lock(self.mutex);
-        self.opened = !self.fail_open && rate == SA_RATE; return self.opened;
+        self.opened = self.open_now = !self.fail_open && rate == SA_RATE;
+        self.opens += self.opened; self.changed.notify_all(); return self.opened;
     }
     static uint32_t queued(void *owner) {
         auto &self = of(owner); std::lock_guard<std::mutex> lock(self.mutex);
@@ -51,11 +55,13 @@ struct Capture {
         self.changed.wait_for(lock, std::chrono::milliseconds(milliseconds), [&] { return self.played != before; });
         self.waiting = false;
     }
-    static void close(void *owner) {
-        auto &self = of(owner); std::lock_guard<std::mutex> lock(self.mutex); self.closed = true;
+    static void close(void *owner) { // like waveOutReset: what was queued is dropped
+        auto &self = of(owner); std::lock_guard<std::mutex> lock(self.mutex);
+        self.closed = true; self.open_now = false; self.played = self.written; self.changed.notify_all();
     }
     ghost_audio::Output output() { return {this, open, queued, write, wait, close}; }
-    bool refilled() { return waiting && written - played > ghost_audio::low_water_frames; }
+    // Refilled, or closed while idle (nothing more is written until a request).
+    bool refilled() { return !open_now || (waiting && written - played > ghost_audio::low_water_frames); }
     // One game frame of audio leaves the device; wait until the thread refills.
     void frame(uint32_t frames = 1067) {
         std::unique_lock<std::mutex> lock(mutex);
@@ -67,6 +73,14 @@ struct Capture {
         check(changed.wait_for(lock, std::chrono::seconds(5), [&] { return refilled(); }), "audio thread starts");
     }
     uint64_t position() { std::lock_guard<std::mutex> lock(mutex); return written; }
+    bool is_open() { std::lock_guard<std::mutex> lock(mutex); return open_now; }
+    // A request reopened the device and the thread has refilled it.
+    void reopened(unsigned opens_before) {
+        std::unique_lock<std::mutex> lock(mutex);
+        check(changed.wait_for(lock, std::chrono::seconds(5), [&] {
+            return opens > opens_before && open_now && waiting && written - played > ghost_audio::low_water_frames;
+        }), "a request reopens the device");
+    }
 };
 
 struct Result {
@@ -100,8 +114,16 @@ static Result run(const std::vector<uint8_t> &rom, float volume, bool stop_midwa
         if (stop_midway && frame == 90) ghost_audio::control(true, volume);
         capture.frame();
     }
+    // A request to a closed device is handled on the audio thread's own wake,
+    // not on the next played frame: wait until every request is accounted for.
+    for (int waited = 0; waited < 1000; ++waited) {
+        const auto now = ghost_audio::stats();
+        if (now.played + now.discarded - before.played - before.discarded >= out.cue_at.size()) break;
+        Sleep(1);
+    }
     out.stats = ghost_audio::stats();
-    out.stats.played -= before.played;
+    out.stats.played -= before.played; out.stats.discarded -= before.discarded;
+    out.stats.idle_closes -= before.idle_closes;
     ghost_audio::stop();
     check(capture.closed && !ghost_audio::stats().running, "stop closes the device and joins");
     out.pcm = capture.pcm;
@@ -132,9 +154,20 @@ int main(int argc, char **argv) {
             check(ghost_audio::start(changed.data(), changed.size(), unused.output()) == ghost_audio::Start::invalid_rom
                   && !unused.opened, "engine never parses unknown audio data");
         }
-        check(sa_open(rom.data(), rom.size() - 4) == SA_ARGUMENT, "short ROM refused");
+        check(sa_open(rom.data() + SA_AUDIO_OFFSET, SA_AUDIO_BYTES - 4) == SA_ARGUMENT, "short audio span refused");
         {   auto broken = rom; broken[SA_TBL_OFFSET + 3] = 0xff; // 255 banks: headers leave the region
-            check(sa_open(broken.data(), broken.size()) == SA_INVALID_ROM, "bank headers bounded"); }
+            check(sa_open(broken.data() + SA_AUDIO_OFFSET, SA_AUDIO_BYTES) == SA_INVALID_ROM, "bank headers bounded"); }
+        // The engine keeps the ROM's audio span (~2.3 MB), not the whole 8 MB ROM.
+        size_t engine_bytes = 0;
+        {   Capture held; PROCESS_MEMORY_COUNTERS_EX before{}, after{};
+            GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&before), sizeof(before));
+            ghost_audio::control(true, 1.0f);
+            check(ghost_audio::start(rom.data(), rom.size(), held.output()) == ghost_audio::Start::ok, "engine starts");
+            held.settle();
+            GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&after), sizeof(after));
+            ghost_audio::stop();
+            engine_bytes = after.PrivateUsage > before.PrivateUsage ? after.PrivateUsage - before.PrivateUsage : 0;
+            check(engine_bytes < 4u << 20, "the running engine holds its audio span, not the ROM"); }
         {   Capture refusing; refusing.fail_open = true;
             check(ghost_audio::start(rom.data(), rom.size(), refusing.output()) == ghost_audio::Start::device,
                   "no device: sound stays off");
@@ -160,8 +193,56 @@ int main(int argc, char **argv) {
         }
         check(nonzero > 10000 && mismatched == 0, "0.5 is exactly half of every sample");
         const auto mute = run(rom, 0.0f);
-        check(mute.stats.played == 4 && std::all_of(mute.pcm.begin(), mute.pcm.end(), [](int16_t v) { return v == 0; }),
+        check(mute.stats.played + mute.stats.discarded == 4
+              && std::all_of(mute.pcm.begin(), mute.pcm.end(), [](int16_t v) { return v == 0; }),
               "volume 0 is exact silence");
+        // At volume 0 nothing is heard, so the device closes after the idle
+        // time, and a request that still cannot be heard does not reopen it.
+        check(mute.stats.idle_closes == 1 && mute.stats.discarded >= 1, "volume 0 closes the device when idle");
+
+        // Idle close and reopen: after idle_close_frames of silence the thread
+        // closes the device and stops ticking; the next request reopens it and
+        // sounds in the first tick written, with its whole attack.
+        double reopen_latency = -1;
+        size_t reopen_onset_frames = SIZE_MAX, reopen_frames_to_close = 0;
+        {   Capture capture; const auto before = ghost_audio::stats();
+            ghost_audio::control(true, 1.0f);
+            check(ghost_audio::start(rom.data(), rom.size(), capture.output()) == ghost_audio::Start::ok, "engine starts");
+            capture.settle();
+            for (int frame = 0; frame < 5; ++frame) capture.frame();
+            const uint64_t first_at = capture.position();
+            ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING);
+            size_t frames = 0;
+            while (capture.is_open() && frames < 400) { capture.frame(); ++frames; }
+            reopen_frames_to_close = frames;
+            const auto closed = ghost_audio::stats();
+            check(!capture.is_open() && closed.idle_closes - before.idle_closes == 1 && !closed.device_open,
+                  "silence closes the device");
+            // The idle time is counted from the last sound, not from the request.
+            check(frames * 1067 > ghost_audio::idle_close_frames && frames * 1067 < ghost_audio::idle_close_frames + 40 * 1067,
+                  "closes after the idle time");
+            Sleep(100);
+            check(ghost_audio::stats().ticks == closed.ticks, "no ticks while closed");
+            const unsigned opens = capture.opens;
+            const uint64_t reopen_at = capture.position();
+            ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING);
+            capture.reopened(opens);
+            for (int frame = 0; frame < 40; ++frame) capture.frame();
+            const auto after = ghost_audio::stats();
+            ghost_audio::stop();
+            check(after.reopens - before.reopens == 1 && after.underruns == before.underruns,
+                  "one reopen, and the fresh device never counts as run dry");
+            reopen_latency = after.last_latency_ms;
+            check(reopen_latency < 80, "a reopened request is not late");
+            const size_t first = first_sound(capture.pcm, first_at), again = first_sound(capture.pcm, reopen_at);
+            check(first != SIZE_MAX && again != SIZE_MAX, "both requests sound");
+            reopen_onset_frames = again - size_t(reopen_at);
+            check(reopen_onset_frames < ghost_audio::tick_capacity, "it sounds in the first tick written");
+            const size_t span = 2 * 20 * 1067; // the landing's first 20 frames, sample for sample
+            check(2 * again + span <= capture.pcm.size()
+                  && std::equal(capture.pcm.begin() + 2 * first, capture.pcm.begin() + 2 * first + span,
+                                capture.pcm.begin() + 2 * again), "the reopened sound is whole, not clipped");
+        }
         const auto stopped = run(rom, 1.0f, true);
         // From the first tick written after the switch-off until the resume.
         const uint64_t quiet_from = stopped.stop_at + 2 * ghost_audio::tick_capacity, quiet_to = stopped.resume_at;
@@ -202,32 +283,49 @@ int main(int argc, char **argv) {
             check(ghost_audio::stats().dropped - before.dropped == 1, "a ghost index past the sources drops"); }
 
         // Optional device smoke: silence only, skipped (stated) without a device.
+        // A volume too small to reach one int16 step is silent output that still
+        // counts as audible, so its requests reopen the real device.
         const bool device = waveOutGetNumDevs() > 0;
-        double smoke_latency = -1, fed_rate = 0;
+        double smoke_latency = -1, fed_rate = 0, device_reopen_latency = -1, device_close_after_s = -1;
         uint64_t smoke_underruns = 0;
         if (device) {
             const auto before = ghost_audio::stats();
-            ghost_audio::control(true, 0.0f);
-            LARGE_INTEGER frequency{}, begin{}, end{};
+            ghost_audio::control(true, 1e-6f);
+            LARGE_INTEGER frequency{}, begin{}, end{}, closed_at{};
             QueryPerformanceFrequency(&frequency);
+            const auto seconds = [&](const LARGE_INTEGER &a, const LARGE_INTEGER &b) {
+                return double(b.QuadPart - a.QuadPart) / double(frequency.QuadPart); };
             check(ghost_audio::start(rom.data(), rom.size(), ghost_audio::wave_out()) == ghost_audio::Start::ok, "waveOut opens");
             const auto opened = ghost_audio::stats();
             QueryPerformanceCounter(&begin);
-            for (int i = 0; i < 90; ++i) { Sleep(33); ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING); }
+            for (int i = 0; i < 45; ++i) { Sleep(33); ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING); }
             QueryPerformanceCounter(&end);
             const auto at_end = ghost_audio::stats();
+            // Nothing audible was ever written, so the stream closes 3 s after it opened.
+            while (ghost_audio::stats().device_open && seconds(begin, closed_at) < 6) { Sleep(10); QueryPerformanceCounter(&closed_at); }
+            device_close_after_s = seconds(begin, closed_at);
+            const auto closed = ghost_audio::stats();
+            check(!closed.device_open && closed.idle_closes - before.idle_closes == 1, "the idle device closes");
+            Sleep(300);
+            check(ghost_audio::stats().ticks == closed.ticks, "the closed device is not ticked");
+            ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING);
+            while (ghost_audio::stats().played == closed.played) Sleep(1);
+            device_reopen_latency = ghost_audio::stats().last_latency_ms;
+            for (int i = 0; i < 30; ++i) { Sleep(33); ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING); }
             Sleep(100); // the last request reaches its tick
-            auto stats = ghost_audio::stats();
-            stats.ticks = at_end.ticks;
+            const auto stats = ghost_audio::stats();
             ghost_audio::stop();
-            check(stats.played - before.played >= 90 && stats.silent_ticks - before.silent_ticks > 60,
+            check(stats.played - before.played >= 76 && stats.ticks - before.ticks > 60,
                   "device fed real ticks of silence");
-            // The device never runs dry, and is fed at its own rate (~32000 frames/s).
+            check(stats.reopens - before.reopens == 1 && stats.failed_reopens == before.failed_reopens,
+                  "one request reopened the device");
+            // The device never runs dry, before or after the reopen, and is fed
+            // at its own rate (~32000 frames/s).
             smoke_underruns = stats.underruns - before.underruns;
-            fed_rate = double(stats.ticks - opened.ticks) * 1076.0
-                / (double(end.QuadPart - begin.QuadPart) / double(frequency.QuadPart));
+            fed_rate = double(at_end.ticks - opened.ticks) * 1076.0 / seconds(begin, end);
             check(smoke_underruns == 0, "device never runs dry between ticks");
             check(fed_rate > 30000 && fed_rate < 34500, "device fed in real time");
+            check(device_reopen_latency < 80, "a request that reopens the device is not late");
             smoke_latency = stats.max_latency_ms;
         }
         // The queue is bounded and never blocks its producer (no audio thread now).
@@ -238,11 +336,15 @@ int main(int argc, char **argv) {
             "\"half_energy_ratio\":%.6f,\"capture_max_latency_ms\":%.3f,\"device\":%s,\"device_max_latency_ms\":%.3f,"
             "\"stale_samples_when_left_on\":%zu,\"device_underruns\":%llu,\"device_fed_frames_per_second\":%.0f,"
             "\"right_placed_right_left_energy\":%.4f,\"left_placed_right_left_energy\":%.4f,"
-            "\"gain_quarter_energy_ratio\":%.6f,\"camera_5000_energy_ratio\":%.6f,\"second_ghost_routed_identical\":%s}\n",
+            "\"gain_quarter_energy_ratio\":%.6f,\"camera_5000_energy_ratio\":%.6f,\"second_ghost_routed_identical\":%s,"
+            "\"engine_private_bytes\":%zu,\"capture_reopen_latency_ms\":%.3f,\"capture_reopen_onset_frames\":%zu,"
+            "\"capture_frames_to_close\":%zu,\"device_close_after_s\":%.3f,\"device_reopen_latency_ms\":%.3f}\n",
             checks, full.cue_at.size(), nonzero, half_energy / full_energy, full.stats.max_latency_ms,
             device ? "true" : "false", smoke_latency, stale_full,
             static_cast<unsigned long long>(smoke_underruns), fed_rate,
-            right_lr, left_lr, quarter_ratio, far_ratio, routed_identical ? "true" : "false");
+            right_lr, left_lr, quarter_ratio, far_ratio, routed_identical ? "true" : "false",
+            engine_bytes, reopen_latency, reopen_onset_frames, reopen_frames_to_close,
+            device_close_after_s, device_reopen_latency);
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "audio witness: %s (check %u)\n", error.what(), checks);
