@@ -67,7 +67,8 @@ class Status(C.LittleEndianStructure):
         ("dropped", U64), ("ack_revision", U64), ("ack_token", U64),
         ("playback_state", U32), ("playback_reason", U32),
         ("displayed", U32), ("clips_requested", U32), ("clips_prepared", U32),
-        ("clips_visible", U32), ("particles_dropped", U32), ("reserved", C.c_ubyte * 100),
+        ("clips_visible", U32), ("particles_dropped", U32),
+        ("hook_gl_queries", U32), ("hook_micros", U32), ("reserved", C.c_ubyte * 92),
     ]
 
 

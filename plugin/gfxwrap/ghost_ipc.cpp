@@ -483,6 +483,7 @@ struct Session {
         s.rom_generation = opened.load(std::memory_order_acquire); s.rom_open = s.rom_generation != 0;
         s.configuration = configuration; s.epoch = stats.epoch;
         s.particles_dropped = stats.particles_dropped;
+        s.hook_gl_queries = stats.hook_gl_queries; s.hook_micros = stats.hook_micros;
         s.state = state; s.reason = reason; s.ack_token = r.token; s.ack_revision = r.revision;
         gp_status playback{};
         s.displayed = 0;

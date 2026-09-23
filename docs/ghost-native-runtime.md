@@ -520,6 +520,17 @@ own window (288 MiB of rows, two hours at 30 Hz), independent of that clip
 cap, so a late save still reaches an early attempt. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
+The render hooks run on the emulation thread for every z-buffered draw while
+capture is configured, ghost or not, so they make no driver state queries:
+the draw framebuffer, viewport and depth range come from the renderer's own
+dispatched calls (`replay_gl::Raster`; `glViewport` is aliased at the call,
+like `glReadBuffer`). A query is only the fallback before the dispatch has
+seen a value, and each is counted. The translucent layer's hook leaves before
+any framebuffer lookup when no ghost will draw the list. The last list's
+hook cost, driver queries and microseconds inside the hooks, rides
+`gs_stats` to the status page (`hook_gl_queries`, `hook_micros`); the
+trainer logs its mean and max once a minute (`ghost/capture.py::HookCost`).
+
 If a reader holds the status page during revocation, the worker retries that
 publication before sleeping indefinitely. An expired owner cannot leave the
 mapped page reporting ready merely because the final nonblocking lock was busy.

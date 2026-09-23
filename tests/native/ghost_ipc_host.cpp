@@ -95,7 +95,8 @@ int __cdecl capture_read(gs_record* out,uint32_t bytes) {
 }
 gs_stats __cdecl capture_stats() {
     gs_stats out{};out.bytes=sizeof(out);out.version=GS_VERSION;out.epoch=1;
-    out.configuration=configuration.load();out.enabled=capture_enabled.load();return out;
+    out.configuration=configuration.load();out.enabled=capture_enabled.load();
+    out.hook_gl_queries=2;out.hook_micros=345;return out;
 }
 int32_t __cdecl prepare_model(uint64_t id,const uint8_t* bytes,uint32_t size) {
     if(!enter_worker())return GP_WRONG_THREAD;
@@ -224,7 +225,7 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(configuration) X(epoch) X(record_bytes) X(capabilities) X(qpc_frequency) X(qpc_anchor) \
     X(utc_anchor) X(produced) X(consumed) X(dropped) X(ack_revision) X(ack_token) \
     X(playback_state) X(playback_reason) X(displayed) X(clips_requested) X(clips_prepared) \
-    X(clips_visible) X(particles_dropped) X(reserved)
+    X(clips_visible) X(particles_dropped) X(hook_gl_queries) X(hook_micros) X(reserved)
 void field(const char* name,size_t offset) {std::printf("\"%s\":%u,",name,unsigned(offset));}
 void print_layout() {
     std::printf("\"layout\":{\"page\":%u,\"ring\":%u,\"request\":{",unsigned(sizeof(gipc_page)),
@@ -351,6 +352,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
         r.layout.clock.near_zero=30;
         ready(page,r);auto first=last_command();
+        {const auto hooked=page.status();check(hooked.hook_gl_queries==2 && hooked.hook_micros==345,"render hook cost reaches the status page");}
         check(audio_starts.load()==1 && !audio_stops.load(),"sound engine starts once from the verified ROM");
         page.consume_record();
         check(first.rom_generation==r.rom_generation && first.owner_token==r.token && first.opacity==0.75f

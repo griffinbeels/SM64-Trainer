@@ -23,6 +23,12 @@ renderer::Identity identity{};
 PFNGLBINDFRAMEBUFFERPROC raw_bind_framebuffer = nullptr;
 PFNGLDELETEFRAMEBUFFERSPROC raw_delete_framebuffers = nullptr;
 PFNGLACTIVETEXTUREPROC raw_active_texture = nullptr;
+PFNGLDEPTHRANGEFPROC raw_depth_range = nullptr;
+// Raster state the ghost hooks read per draw instead of querying the driver.
+GLuint draw_framebuffer = 0;
+GLint viewport[4]{};
+GLfloat depth_range[2]{0, 1};
+bool draw_known = false, viewport_known = false, depth_known = false;
 uint32_t generation = 0, dispatch_generation = 0;
 unsigned unit_limit = 0;
 unsigned drawable_width = 0, drawable_height = 0;
@@ -59,7 +65,7 @@ void observe_source_format() {
     if (encoding==GL_LINEAR) source_format=RB_SOURCE_RGB8_LINEAR;
     else if (encoding==GL_SRGB) source_format=RB_SOURCE_RGB8_SRGB;
 }
-void invalidate() { nominal = false; state.unknown(); }
+void invalidate() { nominal = false; state.unknown(); draw_known = viewport_known = depth_known = false; }
 void APIENTRY BindFramebuffer(GLenum target, GLuint name) {
     raw_bind_framebuffer(target, name);
     if (!nominal) return;
@@ -68,6 +74,7 @@ void APIENTRY BindFramebuffer(GLenum target, GLuint name) {
     }
     state.bind_framebuffer(target, name);
     if (target != GL_DRAW_FRAMEBUFFER) read_framebuffer = name;
+    if (target != GL_READ_FRAMEBUFFER) draw_framebuffer = name;
 }
 void APIENTRY DeleteFramebuffers(GLsizei count, const GLuint *names) {
     raw_delete_framebuffers(count, names);
@@ -76,7 +83,18 @@ void APIENTRY DeleteFramebuffers(GLsizei count, const GLuint *names) {
         invalidate(); return;
     }
     state.delete_framebuffers(count, names);
-    for (GLsizei n = 0; n < count; ++n) if (names[n] == read_framebuffer) read_framebuffer = 0;
+    for (GLsizei n = 0; n < count; ++n) {
+        if (names[n] == read_framebuffer) read_framebuffer = 0;
+        if (names[n] && names[n] == draw_framebuffer) draw_framebuffer = 0; // deleting the bound FBO binds 0
+    }
+}
+void APIENTRY DepthRangef(GLfloat nearest, GLfloat farthest) {
+    raw_depth_range(nearest, farthest);
+    if (!nominal) return;
+    // GL clamps both to 0..1.
+    depth_range[0] = nearest < 0 ? 0 : nearest > 1 ? 1 : nearest;
+    depth_range[1] = farthest < 0 ? 0 : farthest > 1 ? 1 : farthest;
+    depth_known = true;
 }
 void APIENTRY ActiveTexture(GLenum unit) {
     raw_active_texture(unit);
@@ -97,6 +115,7 @@ void ContextLost() {
     anchor_attempted = anchor_published = false;
 #endif
     nominal = false; practice = false; identity = {}; dispatch_generation = 0; state.lost();
+    draw_known = viewport_known = depth_known = false;
     drawable_width = drawable_height = 0;
     capture_open = false; saved_error = GL_NO_ERROR;
     source_format = RB_SOURCE_UNKNOWN;
@@ -140,6 +159,10 @@ void ContextCreated(HGLRC context, HDC drawable, bool buffered) {
     identity = {reinterpret_cast<uintptr_t>(context), reinterpret_cast<uintptr_t>(drawable),
                 generation, generation, GetCurrentThreadId()};
     double_buffer = buffered; read_framebuffer = 0;
+    // A fresh context draws to its default framebuffer over depth 0..1; its
+    // viewport is the window's until the renderer sets one, so it is unknown.
+    draw_framebuffer = 0; draw_known = true; depth_range[0] = 0; depth_range[1] = 1; depth_known = true;
+    viewport_known = false;
     state.created(identity, buffered); nominal = true;
     observe_source_format();
     // No anchor here. R31 published the shared context at every ROM open,
@@ -165,19 +188,27 @@ void InstallDispatch() {
     // Upstream must have resolved fresh raw addresses. Reject accidental repeated
     // installation rather than capturing ourselves and recursively dispatching.
     if (g_glBindFramebuffer == &BindFramebuffer || g_glDeleteFramebuffers == &DeleteFramebuffers
-            || g_glActiveTexture == &ActiveTexture) { invalidate(); return; }
+            || g_glActiveTexture == &ActiveTexture || g_glDepthRangef == &DepthRangef) { invalidate(); return; }
     raw_bind_framebuffer = g_glBindFramebuffer;
     raw_delete_framebuffers = g_glDeleteFramebuffers;
     raw_active_texture = g_glActiveTexture;
+    raw_depth_range = g_glDepthRangef;
     if (raw_bind_framebuffer) g_glBindFramebuffer = &BindFramebuffer;
     if (raw_delete_framebuffers) g_glDeleteFramebuffers = &DeleteFramebuffers;
     if (raw_active_texture) g_glActiveTexture = &ActiveTexture;
+    if (raw_depth_range) g_glDepthRangef = &DepthRangef;
     if (!raw_bind_framebuffer || !raw_delete_framebuffers || !raw_active_texture
             || !nominal || reinterpret_cast<HGLRC>(identity.context) != wglGetCurrentContext()
             || reinterpret_cast<HDC>(identity.read_drawable) != wglGetCurrentDC()) {
         invalidate(); return;
     }
     dispatch_generation = identity.context_generation;
+}
+void APIENTRY Viewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+    ::glViewport(x, y, width, height);
+    if (!nominal) return;
+    viewport[0] = x; viewport[1] = y; viewport[2] = width; viewport[3] = height;
+    viewport_known = width >= 0 && height >= 0;
 }
 void APIENTRY ReadBuffer(GLenum mode) {
     ::glReadBuffer(mode);
@@ -202,6 +233,17 @@ void APIENTRY DeleteTextures(GLsizei count, const GLuint *names) {
         invalidate(); return;
     }
     state.delete_textures(count, names);
+}
+bool Raster(RasterState *out) {
+    if (!out) return false;
+    *out = {};
+    if (!nominal || !dispatch_generation || dispatch_generation != identity.context_generation
+            || GetCurrentThreadId() != identity.owner_thread) return false;
+    out->draw_framebuffer = draw_framebuffer; out->draw_known = draw_known;
+    for (unsigned i = 0; i < 4; ++i) out->viewport[i] = viewport[i];
+    out->viewport_known = viewport_known;
+    out->depth_range[0] = depth_range[0]; out->depth_range[1] = depth_range[1]; out->depth_known = depth_known;
+    return true;
 }
 bool CandidateBindings(renderer::Identity *out, snapshot::RestoreBindings *bindings) {
     if (!out || !nominal || !dispatch_generation || dispatch_generation != identity.context_generation

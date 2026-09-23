@@ -41,6 +41,44 @@ class RateLimitedWarning:
         return True
 
 
+class HookCost:
+    """What the renderer's ghost hooks cost the emulation thread, logged once
+    a minute while capture runs: the plugin publishes the last list's time
+    inside its hooks and the driver state queries they made (zero once the
+    dispatch has seen the raster state), and each poll samples one list. A
+    live session measures it without anyone asking him."""
+
+    def __init__(self, logger, clock=time.monotonic, every_s=WARN_EVERY_S):
+        self._log, self._clock, self._every = logger, clock, every_s
+        self._since = None
+        self._reset()
+
+    def _reset(self):
+        self.samples = self.micros = self.queries = self.max_micros = self.max_queries = 0
+
+    def observe(self, queries: int, micros: int) -> dict | None:
+        """Add one sampled list; returns the window's summary when it logs one."""
+        now = self._clock()
+        if self._since is None:
+            self._since = now
+        self.samples += 1
+        self.micros += micros
+        self.queries += queries
+        self.max_micros = max(self.max_micros, micros)
+        self.max_queries = max(self.max_queries, queries)
+        if now - self._since < self._every:
+            return None
+        summary = {"lists": self.samples, "mean_us": self.micros / self.samples,
+                   "max_us": self.max_micros, "mean_queries": self.queries / self.samples,
+                   "max_queries": self.max_queries}
+        self._log.info("native render hooks, last %.0f s (%d lists sampled): %.1f us mean, %d us max; "
+                       "%.2f driver queries mean, %d max", now - self._since, summary["lists"],
+                       summary["mean_us"], summary["max_us"], summary["mean_queries"], summary["max_queries"])
+        self._since = now
+        self._reset()
+        return summary
+
+
 def grouped(producer: Producer, frames: tuple[bytes, ...]):
     """Queue batches can straddle rewind; attach each record's own identity."""
     group, identity = [], None
@@ -80,6 +118,7 @@ class NativeCapture:
         self._pending_cleanup = None
         self._warn = RateLimitedWarning(log)
         self._refused, self._refused_reason = 0, None
+        self._hooks, self._hook_summary = HookCost(log), None
 
     def start(self):
         if self._thread is not None:
@@ -178,12 +217,16 @@ class NativeCapture:
                         self._refused += 1
                         self._refused_reason = str(error)
                         self._warn("Mario poses refused by the archive; batch dropped", str(error))
+                self._hook_summary = (self._hooks.observe(status.hook_gl_queries, status.hook_micros)
+                                      or self._hook_summary)
                 self._report(available=True, reason=status.reason, state=status.state,
                              dropped=status.dropped, producer=producer,
                              playback_state=status.playback_state,
                              playback_reason=status.playback_reason,
                              displayed=bool(status.displayed),
-                             refused_batches=self._refused, refused_reason=self._refused_reason)
+                             refused_batches=self._refused, refused_reason=self._refused_reason,
+                             hook_gl_queries=status.hook_gl_queries, hook_micros=status.hook_micros,
+                             hook_cost=self._hook_summary)
                 self._stop.wait(0.016)
             except BlockingIOError:
                 self._stop.wait(0.016)
