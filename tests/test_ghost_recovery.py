@@ -40,4 +40,14 @@ def test_native_savestate_recovery(tmp_path):
     # with the worker a list behind the renderer as it is live.
     blink = report["blink"]
     assert blink["loads"] == 11 and blink["frames"] > 90
+    # A capture restart mid-run, then 600 rapid loads (star and segment): the
+    # ghost returns without a new attempt and is never misplaced. The one frame
+    # allowed is a segment's first load after the restart, drawn a list later
+    # once the worker's first command arrives; every later load draws on its
+    # own frame.
+    stress = report["stress"]
+    print(json.dumps(stress))
+    assert stress["loads"] == 600 and stress["frames"] > 3000
+    assert stress["ghostless_frames"] <= 1 and stress["wrong_frames"] == 0
+    assert stress["hidden_after_capture_restart"] <= 2
     assert blink["ghostless_frames"] == blink["wrong_frames"] == 0, blink

@@ -4,6 +4,7 @@
 #include "ghost_playback.h"
 #include "ghost_proximity.h"
 #include "ghost_pose.h"
+#include "ghost_particle_pose.h"
 #include "ghost_compositor.h"
 #include <algorithm>
 #include <atomic>
@@ -94,6 +95,9 @@ struct LiveRecovery {
     bool bound=false;
     LiveRecovery() {timing.reserve();} // capacity before any renderer use
     void clear() {timing.clear();owner={};restored=0;bound=false;}
+    // Revoked or withdrawn: nothing follows it now, but its checkpoints stay
+    // for a worker restore of the same run (adopt_recovery decides).
+    void detach() {timing.forget_stream();restored=0;bound=false;}
 } live_recovery;
 // Ghost sound: the last record each ghost displayed, so each record's
 // recorded sounds are handed over exactly once, as the ghost passes it.
@@ -123,6 +127,7 @@ struct ShadowScratch {
     ghost_compositor::ShadowVertex vertices[24];
     uint8_t texture[256];
 } shadows[GP_GHOSTS]; // borrowed shadow per displayed ghost
+ghost_compositor::ParticleVertex particle_vertices[GP_GHOSTS][ghost_compositor::particle_vertices];
 
 int worker_enter() {
     if(worker_gate.test_and_set(std::memory_order_acquire)) return GP_BUSY;
@@ -277,6 +282,22 @@ bool valid_shadow(const gc_sample& s) {
     for(float value:m)if(!std::isfinite(value))return false;
     return m[3]==0 && m[7]==0 && m[11]==0 && m[15]==1;
 }
+// Particles: bounded count, overflow only when full, unused entries zero.
+bool valid_particles(const gc_sample& s) {
+    const gc_particles zero{};
+    if(!(s.valid_fields&GC_VALID_PARTICLES))return !std::memcmp(&s.particles,&zero,sizeof(zero));
+    const auto& d=s.particles;
+    if(d.count>GC_PARTICLES || (d.flags&~uint8_t(GC_PARTICLES_OVERFLOW)) || d.reserved[0] || d.reserved[1]
+            || ((d.flags&GC_PARTICLES_OVERFLOW) && d.count!=GC_PARTICLES))return false;
+    const gc_particle empty{};
+    for(uint32_t i=0;i<GC_PARTICLES;++i) {
+        const auto& e=d.entries[i];
+        if(i>=d.count) {if(std::memcmp(&e,&empty,sizeof(e)))return false;continue;}
+        if(e.reserved)return false;
+        for(float value:e.translation)if(!std::isfinite(value))return false;
+    }
+    return true;
+}
 bool valid_sound(const gc_sample& s) {
     const gc_sound zero{};
     if(!(s.valid_fields&GC_VALID_SOUND))return !std::memcmp(&s.sound,&zero,sizeof(zero));
@@ -313,7 +334,7 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
         if(!(s.valid_fields&GC_VALID_POSE) && std::memcmp(&s.pose,&zero_pose,sizeof(s.pose)))return false;
         if(!(s.valid_fields&GC_VALID_CAMERA) && std::memcmp(&s.camera,&zero_camera,sizeof(s.camera)))return false;
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;
-        if(!valid_shadow(s) || !valid_sound(s))return false;
+        if(!valid_shadow(s) || !valid_sound(s) || !valid_particles(s))return false;
         if(s.valid_fields&GC_VALID_POSE)for(unsigned axis=0;axis<3;++axis)
             if(!std::isfinite(s.pose.position[axis]) || !std::isfinite(s.pose.scale[axis]))return false;
         if(s.valid_fields&GC_VALID_POSE) {
@@ -574,7 +595,16 @@ bool adopt_recovery(const gp_request& next) {
     if(same && !std::memcmp(&live.owner.origin,&next.origin,sizeof(next.origin))) {live.owner=next;return false;}
     go_origin local{};
     const bool confirmed=same && live.timing.current(local) && !std::memcmp(&local,&next.origin,sizeof(local));
-    if(!confirmed) {live.timing.bind(next.origin);live.restored=next.origin.sequence;}
+    if(!confirmed) {
+        // The worker's restore of the run the renderer was following keeps the
+        // renderer's checkpoints, also across a revoke (a capture restart), so
+        // its next load still draws on its own frame. Worker revisions never
+        // repeat or reset, so an unbroken chain proves the same run: a new run
+        // always arrives as an unrecovered origin in between.
+        const bool same_run=(next.origin.flags&GO_RECOVERED) && live.owner.revision
+            && next.revision==live.owner.revision+1;
+        live.timing.bind(next.origin,same_run);live.restored=next.origin.sequence;
+    }
     live.owner=next;live.bound=true;
     return !confirmed;
 }
@@ -736,6 +766,11 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
                                    shadows[index].texture,out.shadow)) {
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
+    // Recorded particles never refuse their ghost; unknown frames are skipped.
+    sg_particle_view particles{};
+    if((selected.sample.valid_fields&GC_VALID_PARTICLES) && sg_model_get_particles(model.value,&particles)==SG_OK)
+        ghost_particle_pose::place(model.value,particles,selected.sample,live.camera,out.view_projection,
+                                   particle_vertices[index],out.particles);
     rendered.fetch_add(1);record=lo;
     return frame.below_zero || target<first?GP_BEFORE_START:GP_READY;
 }
@@ -756,7 +791,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         && published.cancellation==current_cancel
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
-        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.clear();
+        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.detach();
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
@@ -765,7 +800,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
-    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.clear();}
+    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
         clear_timeline();have_timeline=true;timeline_request=next;
     }
@@ -828,6 +863,12 @@ bool atlas(sg_atlas_view *out,uint64_t *id) {
     if(out)*out={};if(id)*id=0;
     if(!out || !id || !renderer_owner() || !have_model || exhausted.load())return false;
     if(sg_model_get_atlas(model.value,out)!=SG_OK)return false;
+    *id=model.id;return true;
+}
+bool particles(sg_particle_view *out,uint64_t *id) {
+    if(out)*out={};if(id)*id=0;
+    if(!out || !id || !renderer_owner() || !have_model || exhausted.load())return false;
+    if(sg_model_get_particles(model.value,out)!=SG_OK || !out->frame_count)return false;
     *id=model.id;return true;
 }
 bool current(const gp_draw_token& token) {

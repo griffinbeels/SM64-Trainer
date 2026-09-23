@@ -95,6 +95,16 @@ struct Shadow {
     const uint8_t* texture_ia8;
     float view_projection[16];
 };
+/* Recorded particles in world space: the ROM frame's quad already placed.
+ * rect is the frame's atlas cell (uv is clamped to it); rgba the shade
+ * factor; cutout 1 keeps texels with alpha >= .5, 0 blends. */
+constexpr uint32_t particle_vertices=96; // 16 particles, one quad each
+struct ParticleVertex { float position[3], uv[2], rect[4], rgba[4], cutout; };
+struct Particles {
+    const ParticleVertex* vertices;
+    uint32_t count;
+    float view_projection[16];
+};
 struct Pose {
     const Vertex* vertices;
     uint32_t count; // unindexed triangle list, bounded at prepare()
@@ -104,6 +114,7 @@ struct Pose {
     uint32_t flip_y; // GLideN64 world triangle path requires 1
     float hue_degrees; // 0 retains the original model colors
     Shadow shadow{}; // optional, at most 24 vertices; borrowed 16x16 IA8 texture
+    Particles particles{}; // optional, at most particle_vertices; needs prepare_particles
     // Player-first fade for this body and its shadow; zero draws as before.
     ghost_occlusion::Region occlusion{};
 };
@@ -117,6 +128,9 @@ struct Instance;
 Instance* create(const Dispatch&, uint64_t generation);
 Result prepare(Instance*, uint32_t width, uint32_t height, uint32_t max_vertices,
                const uint8_t* atlas_rgba, uint32_t atlas_width, uint32_t atlas_height);
+/* The ROM particle atlas (model sg_particle_view). Without it particles are
+ * skipped; setup-time only, like prepare. */
+Result prepare_particles(Instance*, const uint8_t* atlas_rgba, uint32_t width, uint32_t height);
 Result begin(Instance*, const Target&, const Pose&); // copies clean color, draws once
 /* Bounded multi-ghost experiment: copy the clean surface once and draw each
  * body with its own self-depth/stencil pass. Caller supplies back-to-front

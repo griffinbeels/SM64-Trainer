@@ -15,6 +15,14 @@
 #define SG_SCRATCH_BYTES (256u * 1024u)
 
 struct AllocOnlyPool { unsigned active, permanent; };
+struct sg_particle_cell { uint32_t image, format, width, height, x, y; };
+struct sg_particles {
+    sg_particle_frame frames[SG_PARTICLE_FRAMES];
+    sg_particle_vertex vertices[SG_PARTICLE_MAX_VERTICES];
+    struct sg_particle_cell cells[SG_PARTICLE_CELLS];
+    uint32_t frame_count, vertex_count, cell_count;
+    uint8_t atlas[SG_PARTICLE_ATLAS_WIDTH * SG_PARTICLE_ATLAS_HEIGHT * 4];
+};
 struct sg_model {
     DWORD owner;
     struct GlobalState state;
@@ -24,6 +32,7 @@ struct sg_model {
     struct GraphNode *graph;
     struct Animation animations[SG_ANIMATION_COUNT];
     uint8_t atlas[SG_MODEL_ATLAS_BYTES];
+    struct sg_particles particles;
     uint8_t *permanent, *scratch;
     size_t permanent_used, scratch_used;
     size_t scratch_limit;
@@ -38,6 +47,9 @@ struct sg_model {
 extern struct sg_model *sg_active;
 int sg_assets_load(struct sg_model *, const uint8_t *, size_t);
 void sg_assets_free(struct sg_model *);
+int sg_particles_load(struct sg_particles *, const uint8_t *segment, uint32_t size);
+/* Appends the common1 (segment 3) flame frames; a refusal leaves the loaded set. */
+int sg_particles_add_common1(struct sg_particles *, const uint8_t *segment, uint32_t size);
 void sg_abort(int status);
 void sg_memory_reset(void);
 const int16_t *sg_effective_head_rotation(void);

@@ -222,7 +222,7 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(configuration) X(epoch) X(record_bytes) X(capabilities) X(qpc_frequency) X(qpc_anchor) \
     X(utc_anchor) X(produced) X(consumed) X(dropped) X(ack_revision) X(ack_token) \
     X(playback_state) X(playback_reason) X(displayed) X(clips_requested) X(clips_prepared) \
-    X(clips_visible) X(reserved)
+    X(clips_visible) X(particles_dropped) X(reserved)
 void field(const char* name,size_t offset) {std::printf("\"%s\":%u,",name,unsigned(offset));}
 void print_layout() {
     std::printf("\"layout\":{\"page\":%u,\"ring\":%u,\"request\":{",unsigned(sizeof(gipc_page)),
@@ -275,13 +275,33 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         uint16_t clip_path[GIPC_PATH_CHARS]{},rom_path[GIPC_PATH_CHARS]{};
         path(clip_path,argv[1]);path(rom_path,argv[3]);
         std::vector<uint8_t> bytes;gclip_header header{};
-        check(ghost_assets::read(clip_path,GIPC_PATH_CHARS,1024,bytes),"bounded local clip read");
+        check(ghost_assets::read(clip_path,GIPC_PATH_CHARS,2048,bytes),"bounded local clip read");
         const uint8_t id[16]={1};
         check(ghost_assets::clip(bytes,digest,id,header),"independent Python digest accepted");
         auto corrupt=bytes;corrupt.back()^=1;
         check(!ghost_assets::clip(corrupt,digest,id,header),"changed payload hash refused");
         const uint8_t wrong_id[16]={2};
         check(!ghost_assets::clip(bytes,digest,wrong_id,header),"wrong clip identity refused");
+        {
+            // The same clip saved as GCLIP4 (before particles): its own digest,
+            // read as GCLIP5 with every sample byte kept and no particles.
+            std::vector<uint8_t> v4(bytes.begin(),bytes.begin()+sizeof(gclip_header));
+            std::memcpy(v4.data(),"SM64GHO4",8);
+            const uint32_t v4_header[]={4,sizeof(gclip_header),652};std::memcpy(v4.data()+8,v4_header,sizeof(v4_header));
+            const uint32_t v4_sample_version=5;std::memcpy(v4.data()+8+4*5,&v4_sample_version,4);
+            uint32_t count=0;std::memcpy(&count,bytes.data()+20,4); // header.record_count
+            for(uint32_t i=0;i<count;++i) {
+                const uint8_t* record=bytes.data()+sizeof(gclip_header)+size_t(i)*sizeof(gclip_frame);
+                std::vector<uint8_t> old(record,record+652);
+                const uint32_t prefix[]={652,4};std::memcpy(old.data(),prefix,8);
+                const uint32_t sample[]={636,5};std::memcpy(old.data()+16,sample,8);
+                v4.insert(v4.end(),old.begin(),old.end());
+            }
+            uint8_t v4_digest[32]{};check(ghost_assets::sha256(v4,v4_digest),"GCLIP4 digest");
+            gclip_header upgraded{};
+            check(ghost_assets::clip(v4,v4_digest,id,upgraded) && upgraded.version==GCLIP_VERSION
+                && upgraded.record_bytes==sizeof(gclip_frame) && v4==bytes,"GCLIP4 clip read as GCLIP5");
+        }
         check(!ghost_assets::read(clip_path,GIPC_PATH_CHARS,1,corrupt) && corrupt.empty(),"oversized file clears output");
         const uint16_t relative[]={'x',0};
         check(!ghost_assets::read(relative,2,1024,corrupt),"relative file refused");

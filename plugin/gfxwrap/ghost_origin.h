@@ -52,11 +52,19 @@ private:
 class Recovery {
 public:
     void clear();
-    void bind(const go_origin &);
-    void suspend();
+    /* same_run keeps the witnessed checkpoints: the origin is a restore of
+     * the run they were recorded in, so their coordinates still hold. */
+    void bind(const go_origin &, bool same_run=false);
+    /* Pending until a restore resolves. absolute_timer: the game itself
+     * restarted (a ROM reopen), so only an exact global timer can name a
+     * witnessed state; a capture restart keeps the running game's timer. */
+    void suspend(bool absolute_timer=true);
     /* Capacity for the whole checkpoint history, off the render thread;
      * afterwards clear/bind/observe keep it and never allocate. */
     void reserve() { history_.reserve(limit); }
+    /* Keep the witnessed checkpoints but forget the sample stream they came
+     * from; the next bind(origin, true) can resume the same run from them. */
+    void forget_stream() { latest_={}; restoration_={}; }
     bool bound() const { return origin_.sequence != 0; }
     bool current(go_origin &) const;
     bool restored_near(const go_marker &, uint64_t frequency, int64_t anchor, double utc) const;

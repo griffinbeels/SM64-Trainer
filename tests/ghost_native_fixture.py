@@ -1,5 +1,5 @@
-"""Independent byte fixture for portable v4/capture v5, including source timing,
-Mario's recorded shadow and his sound requests."""
+"""Independent byte fixture for portable v5/capture v6, including source timing,
+Mario's recorded shadow, his sound requests and his particles."""
 from datetime import datetime, timezone
 import struct
 from types import SimpleNamespace
@@ -16,12 +16,12 @@ IDENTITY = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
 def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=4,
           epoch=5, qpc=None, level=24, area=1, elapsed=None, continuity=9,
           origin=1, clock_valid=None, refusal=None, transition=1, banked=0,
-          shadow=False, sounds=None, overflow=False, action=None, pose_refusal=0):
+          shadow=False, sounds=None, overflow=False, action=None, pose_refusal=0, particles=None):
     raw_igt = sequence if igt is None else igt
-    valid |= (32 if shadow else 0) | (64 if sounds is not None else 0)
-    raw = bytearray(652)
-    struct.pack_into("<4I", raw, 0, 652, 4, configuration, world)
-    struct.pack_into("<4I2QqI2H2h2I", raw, 16, 636, 5, epoch, valid,
+    valid |= (32 if shadow else 0) | (64 if sounds is not None else 0) | (128 if particles is not None else 0)
+    raw = bytearray(1232)
+    struct.pack_into("<4I", raw, 0, 1232, 5, configuration, world)
+    struct.pack_into("<4I2QqI2H2h2I", raw, 16, 1216, 6, epoch, valid,
         sequence, sequence + 100, 1000 + sequence if qpc is None else qpc,
         100 + sequence if timer is None else timer, sequence & 0xffff,
         raw_igt, level, area, 0 if valid & 31 == 31 else 9,
@@ -54,6 +54,11 @@ def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=
         struct.pack_into("<4B", raw, 616, len(sounds), 1 if overflow else 0, 7, 5)
         if sounds:
             struct.pack_into(f"<{len(sounds)}I", raw, 620, *sounds)
+    if particles is not None:  # (display list, view-space translation) per particle
+        raw[652] = len(particles)
+        for index, (dl, translation) in enumerate(particles):
+            at = 656 + 36 * index
+            struct.pack_into("<I9hh3f", raw, at, dl, 4096, 0, 0, 0, 4096, 0, 0, 0, 4096, 0, *translation)
     return bytes(raw)
 
 

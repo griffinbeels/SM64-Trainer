@@ -20,6 +20,7 @@ void multiply(const float *a, const float *b, float *out) {
             out[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1]
                 + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
 }
+}
 // SM64 look-at is rigid: the recorded camera inverts by transpose.
 bool recorded_camera_inverse(sg_model *model, const gc_camera &camera, float inverse[16]) {
     float view[16]{};
@@ -31,6 +32,7 @@ bool recorded_camera_inverse(sg_model *model, const gc_camera &camera, float inv
         inverse[12+r]=-(inverse[r]*view[12]+inverse[4+r]*view[13]+inverse[8+r]*view[14]);
     return true;
 }
+namespace {
 // G_TEXTURE_GEN as the live renderer computes it for SM64's F3D lists (no
 // gSPLookAt, so GLideN64 takes the normal through the modelview): the unit
 // eye-space normal's x/y, (n+1)*512 scaled by gSPTexture(0x0F80, 0x07C0),
