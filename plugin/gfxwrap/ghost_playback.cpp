@@ -37,9 +37,12 @@ template<class T> struct Mailbox {
 };
 // Unwanted: renderer-held storage the worker released; it retires at the next boundary.
 enum ClipState : uint32_t { Empty, Building, Ready, Owned, Retired, Reclaiming, Unwanted };
+// A row where the recorded raw IGT restarted (fell below the row before).
+struct Restart {int16_t level=0,area=0;uint32_t index=0;};
 struct Clip {
     std::atomic<uint32_t> state{Empty};
-    uint32_t cancellation=0, index_count=0, action_count=0;
+    uint32_t cancellation=0, index_count=0, action_count=0, restart_count=0;
+    Restart restarts[GP_RESTARTS]{}; // oldest first; the latest GP_RESTARTS kept
     uint64_t allocation=0;
     gclip_header header{};
     gclip_frame *frames=nullptr;
@@ -71,6 +74,10 @@ bool have_model=false, have_request=false, have_timeline=false, star_ended=false
 bool sequence_reported=false;
 bool held[GP_CLIP_SLOTS]{};          // this renderer owns the slot (Owned or Unwanted)
 Clip *bound[GP_GHOSTS]{};            // request order; null until adopted
+// Per ghost: the coordinate shift aligning its clip to the live origin's
+// restart, fixed for one (clip, live origin) pair.
+uint64_t align[GP_GHOSTS]{}, aligned_origin[GP_GHOSTS]{};
+const Clip *aligned_clip[GP_GHOSTS]{};
 gp_request active_request{};
 gp_request timeline_request{};
 gp_status report{};
@@ -140,7 +147,7 @@ void free_clip(Clip& clip) {
     delete[] clip.frames; delete[] clip.actions;
     resident_bytes.store(resident_bytes.load()-clip.allocation);
     clip.frames=nullptr; clip.actions=nullptr; clip.header={};
-    clip.allocation=0; clip.index_count=clip.action_count=0;
+    clip.allocation=0; clip.index_count=clip.action_count=clip.restart_count=0;
     clip.state.store(Empty,std::memory_order_release);
 }
 int reclaim_model() {
@@ -391,6 +398,16 @@ int32_t __cdecl prepare_clip(const gclip_header *header,const gclip_frame *frame
     for(uint32_t i=0;i<action_count;++i)
         if(!unique || copy[actions[i]].sample.live_action!=copy[actions[unique-1]].sample.live_action)
             actions[unique++]=actions[i];
+    uint32_t restarts=0;
+    for(uint32_t i=1;i<indexed && header->clock_kind==GCLIP_STAR_CLOCK;++i) {
+        const auto &s=copy[i].sample;
+        if(s.clock.raw_igt>=copy[i-1].sample.clock.raw_igt)continue;
+        if(restarts==GP_RESTARTS) {
+            std::memmove(chosen->restarts,chosen->restarts+1,(GP_RESTARTS-1)*sizeof(Restart));--restarts;
+        }
+        chosen->restarts[restarts++]={s.level,s.area,i};
+    }
+    chosen->restart_count=restarts;
     chosen->frames=copy; chosen->actions=actions; chosen->index_count=indexed;chosen->action_count=unique;
     chosen->header=*header; chosen->allocation=allocation; chosen->cancellation=before;
     resident_bytes.store(resident_bytes.load()+allocation);
@@ -563,6 +580,25 @@ bool adopt_recovery(const gp_request& next) {
 }
 uint32_t active_count() {uint32_t count=0;for(auto *clip:bound)count+=clip!=nullptr;return count;}
 struct Coordinate {uint64_t target;bool below_zero;};
+// A star ghost recorded from the level entrance, raced from a later restart
+// of the game's timer (a reset to the LLL volcano entrance, where Usamune
+// restarts IGT): the live origin is in a scene the ghost reaches only after
+// its own restart there. Align that restart's raw IGT with the live raw IGT,
+// using the latest such restart in the live origin's level and area. The
+// clip's own origin scene, a segment clock or no matching restart keeps the
+// ghost's own origin (shift 0).
+uint64_t restart_shift(const Clip& clip,int16_t level,int16_t area) {
+    const auto &first=clip.frames[0].sample;
+    if(clip.header.clock_kind!=GCLIP_STAR_CLOCK || (first.level==level && first.area==area))return 0;
+    for(uint32_t k=clip.restart_count;k--;) {
+        const auto &restart=clip.restarts[k];
+        if(restart.level!=level || restart.area!=area)continue;
+        const uint64_t coordinate=clip_coordinate(clip,restart.index);
+        const uint64_t raw=clip.frames[restart.index].sample.clock.raw_igt;
+        return coordinate>raw?coordinate-raw:0;
+    }
+    return 0;
+}
 // One ghost against the shared live coordinate. Hides only this ghost.
 // Visible ghost: hand over every record passed since its last drawn one.
 // Backward moves and long jumps only re-establish where it is.
@@ -842,13 +878,15 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         if(active_request.star_ends)for(uint32_t i=0;i<active_request.star_action_count;++i)
             if(live.live_action==active_request.star_actions[i])star_ended=true;
         if(star_ended) {decide_all(GP_STAR_ENDED);return false;}
-        if(active_request.nudge_frames<0) {
-            const auto amount=uint32_t(-active_request.nudge_frames);
-            if(frame.target<amount){frame.below_zero=true;frame.target=0;}else frame.target-=amount;
-        } else {
-            const auto amount=uint32_t(active_request.nudge_frames);
-            if(frame.target>UINT64_MAX-amount){decide_all(GP_NO_CLOCK);return false;}
-            frame.target+=amount;
+        // Fixed per attempt origin, from the scene live Mario is in when it
+        // first applies. A restored origin continues that attempt's live
+        // coordinate, so it keeps the alignment it already had.
+        for(uint32_t i=0;i<GP_GHOSTS;++i) {
+            if(!bound[i]) {aligned_clip[i]=nullptr;align[i]=0;continue;}
+            const bool recovered=(origin.flags&GO_RECOVERED)!=0;
+            if(aligned_clip[i]==bound[i] && (aligned_origin[i]==origin.sequence || recovered))continue;
+            aligned_clip[i]=bound[i];aligned_origin[i]=origin.sequence;
+            align[i]=origin.kind==GO_STAR && !recovered?restart_shift(*bound[i],live.level,live.area):0;
         }
     }
     report.visible=0;
@@ -856,7 +894,18 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         if(i>=active_request.clip_count) {report.clip_decisions[i]=uint8_t(GP_DISABLED);continue;}
         ghost_compositor::Pose pose{};uint32_t record=0;float fade=1;
-        const auto result=select(i,frame,live,world,pose,record,fade);
+        // Restart alignment, then the timing nudge, on this ghost's coordinate.
+        Coordinate mine=frame;
+        if(active_request.mode==GP_FOLLOW) {
+            const uint64_t shift=bound[i] && aligned_clip[i]==bound[i]?align[i]:0;
+            if(mine.target>UINT64_MAX-shift-600) {decide_all(GP_NO_CLOCK);return false;}
+            mine.target+=shift;
+            if(active_request.nudge_frames<0) {
+                const auto amount=uint32_t(-active_request.nudge_frames);
+                if(mine.target<amount){mine.below_zero=true;mine.target=0;}else mine.target-=amount;
+            } else mine.target+=uint32_t(active_request.nudge_frames);
+        }
+        const auto result=select(i,mine,live,world,pose,record,fade);
         if(!current(candidate)) {
             // A revocation during any evaluation discards the whole candidate.
             for(uint32_t j=0;j<GP_GHOSTS;++j)out[j]={};
