@@ -59,14 +59,31 @@ def click_text(page, text):
     page.evaluate(f"{found}.click()")
 
 
+def wait_until(page, expression, what):
+    """Poll a page predicate up to the run's wait bound: a fixed pause before
+    an assertion is a coin-flip on a loaded machine (merge checks 2026-09-23)."""
+    import time
+    deadline = time.monotonic() + default_wait_ms() / 1000
+    while not page.evaluate(expression):
+        assert time.monotonic() < deadline, f"timed out waiting until {what}"
+        page.wait_ms(50)
+
+
+def closed(page):
+    wait_until(page, "!document.querySelector('.setup-modal')", "the setup modal closes")
+
+
 def connect(layer, observed):
     layer.update(pj64_dir="C:/Games/Project64 1.6", pj64_running=True)
     observed["target"] = dict(state="ready", pid=123, message="Project64 v1.6 found.")
 
 
-def installed(layer):
-    layer.update(consented_at="today", wrapper_present=True, wrapper_current=True,
+INSTALLED = dict(consented_at="today", wrapper_present=True, wrapper_current=True,
                  wrapper_selected=True, state="needs_restart")
+
+
+def installed(layer):
+    layer.update(INSTALLED)
 
 
 def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
@@ -97,7 +114,7 @@ def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
         page.click('.setup-arrow[aria-label="Forward"]')
         wait_page(page, "install")
         page.click(".setup-not-now")
-        assert page.count(".setup-modal") == 0
+        closed(page)
         page.goto(url + "/ui/index.html")
         page.wait_ms(1500)
         assert page.count(".setup-modal") == 0
@@ -107,7 +124,8 @@ def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
 def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
     layer, observed = scenario()
     connect(layer, observed)
-    with serve_ui(capture_layer_status=layer, setup_observer=lambda _: observed) as url, get_driver().launch() as page:
+    with serve_ui(capture_layer_status=layer, capture_layer_install=INSTALLED,
+                  setup_observer=lambda _: observed) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
         wait_page(page, "platform")
         page.click(".setup-platform-choice:first-child")
@@ -120,7 +138,6 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
         page.wait_ms(400)
         (tmp_path / "install-details.png").write_bytes(page.screenshot())
         click_text(page, "What does this install change?")
-        installed(layer)
         click_text(page, "Install Practice Replay")
         wait_step(page, "reopen")
         layer["pj64_running"] = True
@@ -148,8 +165,7 @@ def test_install_reopen_verify_finish_and_practice_navigation(tmp_path):
         page.wait_ms(1000)
         assert page.evaluate("Array.from(document.querySelectorAll('.setup-confetti i')).every(el => Number(getComputedStyle(el).opacity) === 0)")
         click_text(page, "Ready to practice!")
-        page.wait_ms(400)
-        assert page.count(".setup-modal") == 0
+        closed(page)
         result = page.evaluate("fetch('/api/setup').then(r=>r.json())")
         assert result["onboarding"]["completed_at"]
         assert result["platform"] == "emu"
@@ -170,7 +186,8 @@ def test_confirmed_setup_continues_while_visible_and_waits_while_hidden(tmp_path
     the completion is never spent where nobody can see it."""
     layer, observed = scenario()
     connect(layer, observed)
-    with serve_ui(capture_layer_status=layer, setup_observer=lambda _: observed) as url, get_driver().launch() as page:
+    with serve_ui(capture_layer_status=layer, capture_layer_install=INSTALLED,
+                  setup_observer=lambda _: observed) as url, get_driver().launch() as page:
         page.goto(url + "/ui/index.html")
         wait_page(page, "platform")
         page.click(".setup-platform-choice:first-child")
@@ -178,7 +195,6 @@ def test_confirmed_setup_continues_while_visible_and_waits_while_hidden(tmp_path
         wait_step(page, "close")
         layer["pj64_running"] = False
         wait_step(page, "install")
-        installed(layer)
         click_text(page, "Install Practice Replay")
         wait_step(page, "reopen")
         layer["pj64_running"] = True  # he goes back to Project64: the trainer loses focus
@@ -211,7 +227,8 @@ def test_jp_finishes_available_setup_and_keeps_warning(tmp_path):
         assert "JP tracking isn't supported yet" in body(page)
         (tmp_path / "complete-jp.png").write_bytes(page.screenshot())
         click_text(page, "Ready to practice!")
-        page.wait_ms(400)
+        closed(page)
+        page.wait_for(".setup-capability-note")
         assert "JP tracking" in page.evaluate("document.querySelector('.setup-capability-note').textContent")
         assert page.problems() == []
 
@@ -234,8 +251,7 @@ def test_console_branch_can_switch_to_emulator_or_finish():
         page.wait_for(f'{CURRENT} .setup-console')
         observed["rom"] = dict(state="jp", region="jp", name="SM64 USAMUNE JP", warning=JP_WARNING)
         click_text(page, "Explore the app")
-        page.wait_ms(500)
-        assert page.count(".setup-modal") == 0
+        closed(page)
         assert page.evaluate("fetch('/api/setup').then(r=>r.json())")["platform"] == "n64"
         assert page.count(".setup-capability-note") == 0
         assert page.problems() == []
@@ -249,9 +265,10 @@ def test_manual_entry_keeps_management_available_and_motion_has_real_intermediat
         page.evaluate(_SETUP_SETUP)
         wait_page(page, "install")
         click_text(page, "Manage Practice Replay")
-        page.wait_ms(400)
-        assert page.evaluate("Array.from(document.querySelectorAll('.setup-modal button'))"
-                             ".find(b=>b.textContent.trim()==='Remove Practice Replay').disabled")
+        remove = ("Array.from(document.querySelectorAll('.setup-modal button'))"
+                  ".find(b=>b.textContent.trim()==='Remove Practice Replay')")
+        wait_until(page, f"!!{remove}", "Manage shows Remove Practice Replay")
+        assert page.evaluate(f"{remove}.disabled")
         page.click('.setup-arrow[aria-label="Back"]')
         wait_page(page, "connect")
         # Sample a real click's transition over animation frames, not CSS declarations.
