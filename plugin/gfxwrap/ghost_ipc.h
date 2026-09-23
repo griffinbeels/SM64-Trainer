@@ -45,8 +45,10 @@ typedef struct gipc_request {
     /* play_enabled requires 1..GIPC_GHOSTS nonzero, distinct clip ids. */
     uint32_t clip_count, reserved1;
     gipc_clip clips[GIPC_GHOSTS];
-    /* 0 draws no recorded shadow for any ghost (the A/B switch). */
-    uint32_t shadow_enabled, reserved2;
+    /* 0 draws no recorded shadow for any ghost (the A/B switch). 1 in
+     * occlusion_fade fades ghost pixels that block live Mario or the camera
+     * (ghost_occlusion.h); formerly the checked-zero reserved2, so 0 is off. */
+    uint32_t shadow_enabled, occlusion_fade;
     /* Ghost sound loudness 0..1; 0 is exact silence. */
     float volume;
     uint32_t reserved3;

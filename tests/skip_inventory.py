@@ -37,7 +37,7 @@ ALLOWED = (
      "admission and include GPU timing. Run them enabled after native ghost "
      "changes, separately from the ordinary full suite; see docs/testing.md.",
      "tests/test_ghost_compositor.py, test_ghost_presentation.py, "
-     "test_ghost_compositor_tint.py, test_ghost_pipeline.py"),
+     "test_ghost_compositor_tint.py, test_ghost_occlusion.py, test_ghost_pipeline.py"),
     ("set SM64_MODEL_ROM",
      "The native model witness requires locally supplied copyrighted US ROM "
      "bytes, which a fresh clone cannot include. Lifts with SM64_MODEL_ROM "

@@ -1201,14 +1201,14 @@ last frame that drew him or from his own position and angles.
 
 ### Dance tail
 
-The recorded [[frame]]s after a star [[attempt]] closes, through the grab and
-dance of the star that completed it, kept on the end of its [[ghost]]
+The recorded [[frame]]s after a [[star]] [[attempt]] closes, through the grab
+and dance of the [[star]] that completed it, kept on the end of its [[ghost]]
 recording so the [[ghost]] celebrates instead of vanishing at its touch; it
-then fades out over half a second. For the 100-coin star that is the exit
-star after it, so the [[ghost]] plays on through its 100-coin grab. Display
-only: the [[attempt]]'s origin, closing [[frame]] and time are unchanged.
-Recordings saved before it have none and still end at the touch; segments
-never carry one.
+then fades out over half a second. For the [[100-coin star]] that is the
+[[exit star]] after it, so the [[ghost]] plays on through its 100-coin grab.
+Display only: export keeps the [[attempt]]'s origin, closing [[frame]] and
+time as they were. Recordings saved before it have none and still end at the
+touch; [[segment]]s never carry one.
 
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
   `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
@@ -1224,6 +1224,21 @@ takes the water's color. The game's own picture stays untouched.
 
 - **Lives** — `plugin/gfxwrap/ghost_compositor.cpp`; the [[renderer]]'s
   repeat is staged by `tools/stage_ghost_renderer.py`
+
+### Player-first fade
+
+A Mario-only [[ghost]] fades wherever it would block the player. The parts of
+it that stand between the camera and live Mario, over his body on screen, keep
+only 15% of their opacity. Near the camera the whole body fades out, so it
+can never fill the screen. The fade leaves a [[ghost]] behind Mario, or away
+from him, untouched. Its [[recorded shadow]] follows the same rule. It
+multiplies with opacity and the overlap fade; the card's **Fade in front of
+Mario** switch turns it off for comparison.
+
+- **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
+  playback fills live Mario's region each frame
+- **Not** — the overlap fade, which fades a whole [[ghost]] when its body touches
+  live Mario's, wherever the camera is.
 
 ### Ghost sound events
 

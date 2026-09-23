@@ -126,6 +126,26 @@ struct State {
         for (size_t i=0;i<4;++i) g.PixelStorei(unpack_queries[i],unpack[i]);
     }
 };
+/* Every ghost fragment shader is this version line, then the player-first
+ * fade (ghost_occlusion.h), then its own body; one rule for body and shadow. */
+constexpr const char* fragment_version="#version 430 core\n";
+struct OcclusionUniforms {
+    int32_t at[ghost_occlusion::uniform_count]{};
+    bool find(const Dispatch& g,uint32_t program) {
+        for (unsigned i=0;i<ghost_occlusion::uniform_count;++i) {
+            at[i]=g.GetUniformLocation(program,ghost_occlusion::uniform_names[i]);
+            if (at[i]<0) return false;
+        }
+        return true;
+    }
+    void set(const Dispatch& g,const ghost_occlusion::Region& r) const {
+        using namespace ghost_occlusion;
+        g.Uniform1i(at[0],!r.enabled ? 0 : r.has_player ? 2 : 1);
+        g.Uniform2f(at[1],r.center[0],r.center[1]);g.Uniform2f(at[2],r.radius[0],r.radius[1]);
+        g.Uniform1f(at[3],r.player_w);g.Uniform2f(at[4],REGION_INNER,REGION_OUTER);
+        g.Uniform2f(at[5],FRONT_BAND,PLAYER_STRENGTH);g.Uniform2f(at[6],NEAR_HIDDEN,NEAR_FULL);
+    }
+};
 struct Guard {
     const Dispatch& g; State state{};
     explicit Guard(const Dispatch& dispatch):g(dispatch) {state.capture(g);}

@@ -62,6 +62,7 @@ class NativeChannel:
                 request.revision = request.heartbeat = request.capture_enabled = 1
                 request.rom_generation = status.rom_generation
                 request.opacity, request.shadow_enabled, request.volume = 0.5, 1, DEFAULT_VOLUME
+                request.occlusion_fade = 1
                 request.layout[:] = layout
                 actions = sorted(STAR_GRAB_ACTIONS)
                 if len(actions) > 8:
@@ -164,6 +165,7 @@ class NativeChannel:
         request.proximity_distance = proximity["extra_distance"]
         request.tint_enabled = bool(value.get("tint_enabled", False))
         request.shadow_enabled, request.volume = _shadow_and_volume(value)
+        request.occlusion_fade = _switch(value, "occlusion_fade")
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")
@@ -213,12 +215,18 @@ class NativeChannel:
 CLIP_KEYS = {"clip_id", "clip_sha256", "clip_path", "hue_degrees"}
 
 
+def _switch(value: dict, key: str) -> bool:
+    """A native A/B switch; absent means on."""
+    setting = value.get(key, True)
+    if type(setting) is not bool:
+        raise ValueError(f"native ghost {key} must be a bool")
+    return setting
+
+
 def _shadow_and_volume(value: dict) -> tuple[bool, float]:
     """The recorded-shadow A/B switch (absent: on) and ghost sound loudness
     (absent: half; 0 is exact silence natively)."""
-    shadow = value.get("shadow_enabled", True)
-    if type(shadow) is not bool:
-        raise ValueError("native ghost shadow_enabled must be a bool")
+    shadow = _switch(value, "shadow_enabled")
     volume = value.get("volume", DEFAULT_VOLUME)
     if type(volume) not in (int, float) or not math.isfinite(volume) or not 0 <= volume <= 1:
         raise ValueError("native ghost volume must be a number in 0..1")
