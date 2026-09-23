@@ -110,7 +110,12 @@ and 58 of Mario's 150 textured vertices (his button, logo, sideburns, mustache
 and eyes) sit just past their clamped 32x32 textures; without the tile they
 sampled the neighbouring atlas cells. Mirroring, shifts and non-power-of-two
 tiles are refused (`SG_MESH_UNSUPPORTED_MATERIAL`). The metal environment map
-(texgen) carries no tile: its coordinates are generated in range. Vanish/ghost opacity is a
+(texgen) carries no tile: its coordinates are generated in range.
+
+The mesh's `held_first_vertex` marks where a held object's vertices begin, and
+the optional `ambient` buffer keeps each vertex's ambient light colour beside
+its diffuse (`color`). Each held kind's `gdSPDefLights1` table is generated into
+`held_cells.h` and served by `sg_model_get_held_lights`. Vanish/ghost opacity is a
 renderer concern. Replaying geometry alone does not reproduce the entire
 game's material pipeline.
 

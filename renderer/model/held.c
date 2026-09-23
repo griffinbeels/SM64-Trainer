@@ -58,6 +58,28 @@ Gfx *geo_update_held_mario_pos(s32 callContext, struct GraphNode *node, void *co
     return NULL;
 }
 
+/* One held kind's gdSPDefLights1 table (held_cells.h), as a vertex's diffuse
+ * and ambient colours name them. Two lights sharing both colours with
+ * different directions leave none: the colours would not say which lit it. */
+static void add_held_light(struct sg_model *model, unsigned kind, int ar, int ag, int ab,
+                           int r, int g, int b, int x, int y, int z)
+{
+    sg_body_lights *lights = &model->held_lights[kind];
+    sg_body_light entry;
+    uint32_t i;
+    if (lights->count == UINT32_MAX) return;
+    entry.ambient[0] = (uint8_t)ar; entry.ambient[1] = (uint8_t)ag; entry.ambient[2] = (uint8_t)ab;
+    entry.diffuse[0] = (uint8_t)r; entry.diffuse[1] = (uint8_t)g; entry.diffuse[2] = (uint8_t)b;
+    entry.direction[0] = (int8_t)x; entry.direction[1] = (int8_t)y; entry.direction[2] = (int8_t)z;
+    for (i = 0; i < lights->count; ++i)
+        if (!memcmp(lights->lights[i].diffuse, entry.diffuse, 3) && !memcmp(lights->lights[i].ambient, entry.ambient, 3)) {
+            if (memcmp(&lights->lights[i], &entry, sizeof(entry))) lights->count = UINT32_MAX;
+            return;
+        }
+    if (lights->count < SG_BODY_LIGHTS) lights->lights[lights->count++] = entry;
+    else lights->count = UINT32_MAX;
+}
+
 int sg_held_build(struct sg_model *model)
 {
     Vec3f zero = {0, 0, 0}, unit = {1, 1, 1};
@@ -73,6 +95,15 @@ int sg_held_build(struct sg_model *model)
     if (!model->held_graph[kind]) status = SG_INVALID_GEOMETRY;
     SG_HELD_MODELS(BUILD_HELD)
 #undef BUILD_HELD
+    {
+        unsigned kind;
+        memset(model->held_lights, 0, sizeof(model->held_lights));
+#define HELD_LIGHT(kind, ar, ag, ab, r, g, b, x, y, z) add_held_light(model, kind, ar, ag, ab, r, g, b, x, y, z);
+        SG_HELD_LIGHTS(HELD_LIGHT)
+#undef HELD_LIGHT
+        for (kind = 0; kind < SG_HELD_KINDS; ++kind)
+            if (model->held_lights[kind].count == UINT32_MAX) memset(&model->held_lights[kind], 0, sizeof(sg_body_lights));
+    }
     return status;
 }
 

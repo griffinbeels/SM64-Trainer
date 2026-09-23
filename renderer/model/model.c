@@ -159,6 +159,29 @@ int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out)
     return leave(status);
 }
 
+int32_t sg_model_get_body_lights(sg_model *model, sg_body_lights *out)
+{
+    int status;
+    if (!out) return SG_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    if (!enter()) return SG_BUSY;
+    status = valid_model(model);
+    if (status == SG_OK) *out = model->body_lights;
+    return leave(status);
+}
+
+int32_t sg_model_get_held_lights(sg_model *model, uint32_t kind, sg_body_lights *out)
+{
+    int status;
+    if (!out) return SG_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    if (!enter()) return SG_BUSY;
+    status = valid_model(model);
+    if (status == SG_OK && (kind == SG_HELD_NONE || kind >= SG_HELD_KINDS)) status = SG_INVALID_ARGUMENT;
+    if (status == SG_OK) *out = model->held_lights[kind];
+    return leave(status);
+}
+
 static int valid_pose(const sg_pose *pose)
 {
     int i;
@@ -252,7 +275,7 @@ int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out)
     size_t i;
     Mat4 transform, mario_root;
     if (!out) return SG_INVALID_ARGUMENT;
-    out->vertex_count = out->error_flags = 0;
+    out->vertex_count = out->error_flags = out->held_first_vertex = 0;
     if (!enter()) return SG_BUSY;
     status = valid_model(model);
     if (status != SG_OK) return leave(status);
@@ -295,9 +318,11 @@ int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out)
     sg_geometry_bind(out);
     sg_traverse_frozen(model->graph);
     model->object.header.gfx.throwMatrix = NULL;
+    out->held_first_vertex = sg_geometry_vertex_count();
     sg_held_evaluate(model, pose, (const float (*)[4])mario_root);
     out->error_flags = sg_geometry_errors();
     out->vertex_count = sg_geometry_vertex_count();
+    if (!(pose->fields & SG_POSE_HELD)) out->held_first_vertex = out->vertex_count;
     sg_geometry_reset();
     restore_pose(model, pose);
     if (out->error_flags) {
