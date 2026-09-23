@@ -906,7 +906,9 @@ def _arm_segment(base: str, service, segment_id: int = FIXTURE_SEGMENT) -> None:
             if sec.get("segment_id") == segment_id
             for a in sec.get("attempts", [])
             if a.get("outcome") == "success" and a.get("rta_frames") == 85]
-    if rows:
+    # A valid run under a picked strategy already saved itself (task 0144's
+    # automatic PB); only a row still offering Save needs the click.
+    if rows and rows[0].get("pb_action") == "save":
         post("/api/pb", {"attempt_id": rows[0]["id"], "timer_mode": "rta"})
     _run_coro(rearm())
 

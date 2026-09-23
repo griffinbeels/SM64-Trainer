@@ -45,20 +45,32 @@ export function PbAction({ attempt, blocked, state, undo, beat }) {
   if (attempt.pb_action === "undo") return html`<button onclick=${undo} disabled=${state.busy}
     title="delete this save — the previous PB on this strategy becomes current again">Undo PB</button>`;
   if (attempt.pb_action !== "save" && !blocked) return null;
-  // A run that was not VALID (task 0144: a save state, a subarea reset, no
-  // reset) never saves itself, and his ruling leaves it "a manual choice for
-  // the user to decide" -- so Save stays live and wears the reason, the way a
-  // refused save wears its own. The server already sends the key.
-  const invalid = !blocked && attempt.valid === false ? caveatOf(attempt.invalid_reason) : null;
-  const title = blocked ? `Cannot be saved as a PB — ${blocked.sentence}`
-    : invalid ? `Not a valid run — ${invalid.sentence}. You can still save it as a PB.`
-    : "Save this time as a PB and keep its replay";
-  return html`<button class=${blocked ? "pb-blocked" : (invalid ? "pb-invalid" : (beat ? "pb-glow" : ""))}
+  const { cls, title, mark } = saveReason(attempt, blocked, beat);
+  return html`<button class=${cls}
     disabled=${Boolean(blocked) || state.busy} onclick=${state.save}
-    title=${title} aria-label=${blocked || invalid ? title : undefined}>
+    title=${title} aria-label=${mark ? title : undefined}>
     <${Icon} name="bookmark" size=${14} />
     <span class="save-pb-wide">Save as PB</span><span class="save-pb-narrow">Save PB</span>
-    ${blocked ? cardBadge(blocked) : invalid ? cardBadge(invalid) : ""}</button>`;
+    ${mark ? cardBadge(mark) : ""}</button>`;
+}
+
+// What the Save button says about itself. A refused save wears its reason
+// disabled; a run that was not VALID (task 0144: a save state, a subarea
+// reset, no reset) never saves itself, and his ruling leaves it "a manual
+// choice for the user to decide" -- so Save stays live and wears that reason
+// the same way. The server already sends both keys.
+function saveReason(attempt, blocked, beat) {
+  if (blocked) {
+    return { cls: "pb-blocked", mark: blocked,
+             title: `Cannot be saved as a PB — ${blocked.sentence}` };
+  }
+  const invalid = attempt.valid === false ? caveatOf(attempt.invalid_reason) : null;
+  if (invalid) {
+    return { cls: "pb-invalid", mark: invalid,
+             title: `Not a valid run — ${invalid.sentence}. You can still save it as a PB.` };
+  }
+  return { cls: beat ? "pb-glow" : "", mark: null,
+           title: "Save this time as a PB and keep its replay" };
 }
 
 export function PbReplayNotice({ state }) {
