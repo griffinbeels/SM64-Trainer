@@ -43,6 +43,10 @@ static const struct { uint32_t dl; uint32_t layer; } common1_frames[] = {
     {0x0301B3E0u, SG_PARTICLE_BLEND}, {0x0301B3F8u, SG_PARTICLE_BLEND},
     {0x0301B410u, SG_PARTICLE_BLEND}, {0x0301B428u, SG_PARTICLE_BLEND},
     {0x0301B440u, SG_PARTICLE_BLEND}, {0x0301B458u, SG_PARTICLE_BLEND},
+    {0x03000880u, SG_PARTICLE_BLEND}, {0x03000920u, SG_PARTICLE_BLEND},  /* mist, white puff (ground pound, dust) */
+    {0x0302BCD0u, SG_PARTICLE_CUTOUT},                               /* sand (bhvGroundSand) */
+    {0x0301CDE0u, SG_PARTICLE_CUTOUT},                               /* leaves (bhvSnowLeafParticleSpawn) */
+    {0x0302C8A0u, SG_PARTICLE_CUTOUT},                               /* snow (bhvGroundSnow, white particle) */
 };
 
 static uint32_t be32(const uint8_t *p)
@@ -63,7 +67,9 @@ struct reader {
     uint32_t tile_format, tile_size, tile_width, tile_height, texture_on;
     float scale_s, scale_t;
     uint8_t environment[4];
-    int combiner; /* 0 none, 1 decal, 2 modulate by shade, 3 modulate by environment */
+    uint32_t fades; /* a triangle took its alpha from the environment */
+    int combiner; /* 0 none, 1 decal, 2 modulate by shade, 3 modulate by environment,
+                   * 4 colour by shade, alpha by environment (MODULATEIFADEA) */
 };
 
 static int offset(const struct reader *r, uint32_t address, uint32_t bytes, uint32_t *out)
@@ -75,8 +81,9 @@ static int offset(const struct reader *r, uint32_t address, uint32_t bytes, uint
     return 1;
 }
 
-/* One cycle of G_SETCOMBINE: DECALRGBA, MODULATEIA/RGBA or FADEA (texture
- * times environment), else refused. */
+/* One cycle of G_SETCOMBINE: DECALRGBA, MODULATEIA/RGBA, FADEA (texture
+ * times environment) or MODULATEIFADEA (shade colour, environment alpha: the
+ * object's opacity, which playback applies), else refused. */
 static int combiner(uint32_t w0, uint32_t w1)
 {
     const uint32_t a = (w0 >> 20) & 15u, c = (w0 >> 15) & 31u, aa = (w0 >> 12) & 7u, ac = (w0 >> 9) & 7u;
@@ -84,6 +91,7 @@ static int combiner(uint32_t w0, uint32_t w1)
     if (c == 31u && d == 1u && ac == 7u && ad == 1u) return 1;
     if (a == 1u && b == 15u && c == 4u && d == 7u && aa == 1u && ab == 7u && ac == 4u && ad == 7u) return 2;
     if (a == 1u && b == 15u && c == 5u && d == 7u && aa == 1u && ab == 7u && ac == 5u && ad == 7u) return 3;
+    if (a == 1u && b == 15u && c == 4u && d == 7u && aa == 1u && ab == 7u && ac == 5u && ad == 7u) return 4;
     return 0;
 }
 
@@ -157,6 +165,7 @@ static int triangle(struct reader *r, const uint32_t index[3])
         v->rect[3] = (at->y + at->height - .5f) / SG_PARTICLE_ATLAS_HEIGHT;
         if (r->combiner == 1) memset(v->rgba, 255, 4); /* decal: texture only */
         else if (r->combiner == 3) memcpy(v->rgba, r->environment, 4);
+        else if (r->combiner == 4) { memcpy(v->rgba, r->slot_color[s], 3); v->rgba[3] = 255; r->fades = 1; }
         else memcpy(v->rgba, r->slot_color[s], 4);
     }
     return 1;
@@ -250,6 +259,7 @@ static int append(struct sg_particles *out, const uint8_t *segment, uint32_t siz
     f->first_vertex = out->vertex_count;
     if (!run(&r, dl) || out->vertex_count == f->first_vertex) return 0;
     f->vertex_count = out->vertex_count - f->first_vertex;
+    f->fade = r.fades;
     ++out->frame_count;
     return 1;
 }

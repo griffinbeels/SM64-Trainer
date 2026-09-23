@@ -62,6 +62,7 @@ Placed place(sg_model *model, const sg_particle_view &view, const gc_sample &rec
             std::memcpy(target.uv, source.uv, sizeof(target.uv));
             std::memcpy(target.rect, source.rect, sizeof(target.rect));
             for (unsigned k = 0; k < 4; ++k) target.rgba[k] = source.rgba[k] / 255.0f;
+            if (f->fade && (entry.opacity & GC_PARTICLE_OPACITY)) target.rgba[3] *= float(entry.opacity & 0xffu) / 255.0f;
             target.cutout = f->layer == SG_PARTICLE_CUTOUT ? 1.0f : 0.0f;
         }
         written += f->vertex_count;

@@ -274,7 +274,8 @@ def _validate_particles(raw: bytes, valid: int) -> None:
             or (flags & PARTICLE_OVERFLOW and count != PARTICLE_EVENTS) or any(block[4 + 36 * count:])):
         raise ClipError("native ghost particles are inconsistent")
     for at in range(4, 4 + 36 * count, 36):
-        if any(block[at + 22:at + 24]) or not all(
+        opacity = struct.unpack_from("<H", block, at + 22)[0]
+        if (opacity and not 0x100 <= opacity <= 0x1FF) or not all(
                 math.isfinite(value) for value in struct.unpack_from("<3f", block, at + 24)):
             raise ClipError("native ghost particle entry is invalid")
 

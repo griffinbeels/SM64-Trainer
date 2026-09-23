@@ -286,7 +286,7 @@ bool valid_particles(const gc_sample& s) {
     for(uint32_t i=0;i<GC_PARTICLES;++i) {
         const auto& e=d.entries[i];
         if(i>=d.count) {if(std::memcmp(&e,&empty,sizeof(e)))return false;continue;}
-        if(e.reserved)return false;
+        if(e.opacity && (e.opacity&~0x1ffu || !(e.opacity&GC_PARTICLE_OPACITY)))return false;
         for(float value:e.translation)if(!std::isfinite(value))return false;
     }
     return true;

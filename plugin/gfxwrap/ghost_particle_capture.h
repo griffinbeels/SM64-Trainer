@@ -17,6 +17,7 @@ struct gc_particle_probe {
     uint32_t objects[64]{};
     float camera_to_object[64][3]{}, mario[3]{};
     bool recorded[64]{};
+    uint16_t opacity[64]{}; // from a generated list pushed at the object's position
     bool prepared = false, overflow = false;
     uint32_t drawn = 0; // matched candidates this occurrence
     gc_particle candidates[64]{};
@@ -29,6 +30,9 @@ struct gc_particle_probe {
  * unprepared, and an unprepared probe publishes nothing. */
 void ghost_particles_prepare(gc_particle_probe &, const uint8_t *ram, uint32_t ram_bytes,
                              uint32_t mario_object, uint32_t object_pool);
+/* dl is the pushed operand. A segment-0 (physical) list at an object's
+ * position is the game's generated opacity list (geo_update_layer_transparency):
+ * its G_SETENVCOLOR alpha rides on that object's next, recorded, list. */
 void ghost_particles_display_list(gc_particle_probe &, uint32_t dl, const float matrix[16]);
 /* Publishes GC_VALID_PARTICLES (count may be 0) only for a completed occurrence. */
 void ghost_particles_finish(gc_particle_probe &, bool completed, gc_sample &);

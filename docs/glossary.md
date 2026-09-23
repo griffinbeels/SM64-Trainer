@@ -1227,8 +1227,8 @@ takes the water's color. The game's own picture stays untouched.
 
 ### Recorded particles
 
-The bubbles, splashes, water rings, droplets, dust, sparkles and lava flame the
-game drew for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
+The bubbles, splashes, water rings, droplets, dust, sparkles, lava flame,
+ground-pound mist, sand, leaves and snow the game drew for Mario on a recorded [[frame]]: which of the ROM's particle pictures each
 one showed and where. A Mario-only [[ghost]] draws them with the ROM's own
 pictures, after its body. Another object's bubble, or a particle whose picture
 the ROM reader does not know, is never drawn.
