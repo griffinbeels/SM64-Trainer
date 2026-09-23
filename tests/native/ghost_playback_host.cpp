@@ -32,6 +32,7 @@ void operator delete[](void *p) noexcept {::operator delete(p);}
 void operator delete(void *p,size_t) noexcept {::operator delete(p);}
 void operator delete[](void *p,size_t) noexcept {::operator delete(p);}
 static unsigned checks=0,multi_ghosts=0,multi_visible=0,multi_prepares=0;
+static float dance_fade[GP_STAR_FADE_FRAMES]{};static unsigned dance_hidden_after=0;
 static void check(bool ok,const char *message) {++checks;if(!ok)throw std::runtime_error(message);}
 struct RenderScope {RenderScope(){rendering=true;}~RenderScope(){rendering=false;}};
 class Renderer {
@@ -629,6 +630,121 @@ int main() {
             check(unplaced_cues==0,"every sound was placed before it was cued");
             ghost_playback::set_sound_sink(nullptr);
         }
+        {
+            // Star dance: a clip carrying its dance tail keeps its ghost through
+            // its own touch and dance, then holds the last pose and fades it out
+            // over GP_STAR_FADE_FRAMES, sound included. A clip without the tail
+            // still ends at its touch; a live grab still ends every ghost.
+            Clip dancer=Clip::linear(40,30,20,5),older=Clip::linear(41,30,20,9);
+            dancer.header.flags=GCLIP_DANCE_TAIL;
+            for(auto *clip:{&dancer,&older})
+                for(uint32_t i=0;i<30;++i) {
+                    auto &s=clip->frames[i].sample;
+                    if(i>20)s.live_action=0x1302; // still dancing after the touch
+                    s.valid_fields|=GC_VALID_SOUND;s.sound.count=1;s.sound.bits[0]=(clip==&dancer?4000u:5000u)+i;
+                }
+            Clip segment_tail=Clip::linear(42,30,20,5);segment_tail.header.flags=GCLIP_DANCE_TAIL;
+            segment_tail.header.clock_kind=GCLIP_SEGMENT_CLOCK;
+            check(api->prepare_clip(&segment_tail.header,segment_tail.frames.data())==GP_OK,
+                  "a segment-clock clip (the 100-coin star's) may carry a dance tail");
+            check(api->release_clip(segment_tail.header.clip_id)==GP_OK,"release the unlisted clip");
+            Clip unknown=Clip::linear(43,30,20,5);unknown.header.flags=2;
+            check(api->prepare_clip(&unknown.header,unknown.frames.data())==GP_INVALID,"unknown clip flag refused");
+            check(api->prepare_clip(&dancer.header,dancer.frames.data())==GP_OK
+                  && api->prepare_clip(&older.header,older.frames.data())==GP_OK,"prepare dancer and older clip");
+            ghost_playback::set_sound_sink(&test_sink);
+            revision=r.revision+1;r=request(dancer,revision);r.model_id=4;r.clip_count=2;r.volume=1;
+            std::memcpy(r.clips[1].clip_id,older.header.clip_id,16);
+            uint32_t timer_base=30000;
+            auto run=[&](uint64_t elapsed) {
+                ++r.revision;r.suspended=0;
+                r.origin={GO_STAR,7,live.sequence+1,source_continuity,elapsed,source_generation,0,0};
+                elapsed_base=elapsed;timer_base+=1000;
+                live.level=9;live.area=1;live.live_action=1;live.valid_fields&=~GC_VALID_POSE;
+                check(api->configure(&r)==GP_OK,"a new run against the dancer and the older clip");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            };
+            auto step=[&](uint64_t time,uint32_t why,std::initializer_list<uint32_t> each,
+                          std::initializer_list<uint32_t> expected_sounds) {
+                live.igt=uint16_t(time);++live.sequence;++live.dlist_serial;world.list_serial=live.dlist_serial;
+                live.global_timer=uint32_t(timer_base+time);
+                live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
+                    0,0,source_generation,1,elapsed_base+time,source_continuity};
+                sound_count=0;for(auto &p:placed)p={};
+                bool drawn=false;
+                renderer.run([&]{drawn=ghost_playback::evaluate(live,world,poses,count,token);});
+                gp_status status{};
+                check(api->status(&status,sizeof(status))==GP_OK && status.decision==why,"dance decision");
+                unsigned k=0;for(auto value:each)check(status.clip_decisions[k++]==value,"per-ghost dance decision");
+                const std::vector<uint32_t> want(expected_sounds),heard(sound_log,sound_log+sound_count);
+                check(heard==want,"dance sounds exactly as its records pass");
+                return drawn;
+            };
+            // Ghost grabs first: it dances on, then fades over the constant.
+            run(11000);
+            check(step(19,GP_READY,{GP_READY,GP_READY},{4019,5019}),"both ghosts before their touch");
+            check(step(20,GP_READY,{GP_READY,GP_STAR_ENDED},{4020}) && count==1,"the older clip ends at its touch");
+            check(step(29,GP_READY,{GP_READY,GP_STAR_ENDED},{4021,4022,4023,4024,4025,4026,4027,4028,4029})
+                  && poses[0].opacity==1 && selected_x==4029,"the dancer draws its whole dance at full opacity");
+            float previous=1;
+            for(uint32_t k=1;k<GP_STAR_FADE_FRAMES;++k) {
+                check(step(29+k,GP_READY,{GP_READY,GP_STAR_ENDED},{}) && count==1,"the dancer fades on its last pose");
+                const float expected=float(GP_STAR_FADE_FRAMES-k)/float(GP_STAR_FADE_FRAMES);
+                dance_fade[k]=poses[0].opacity;
+                check(poses[0].opacity==expected && poses[0].opacity<previous && selected_x==4029,
+                      "fade falls by one step a frame from the held last pose");
+                check(placed[0].count==1 && placed[0].gain==expected,"its sound fades with it");
+                previous=poses[0].opacity;
+            }
+            check(!step(29+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),
+                  "hidden exactly GP_STAR_FADE_FRAMES after the dance's last record");
+            check(placed[0].count==1 && placed[0].gain==0,"its sound is silenced as it hides");
+            check(!step(40+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}) && placed[0].gain==0,
+                  "and stays silent");
+            dance_hidden_after=GP_STAR_FADE_FRAMES;
+            // He grabs first: the live grab ends every ghost on that frame,
+            // before the dancer reaches its touch.
+            run(12000);
+            check(step(10,GP_READY,{GP_READY,GP_READY},{4010,5010}),"both ghosts running");
+            live.live_action=0x1302;
+            check(!step(11,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"a live grab ends every ghost at once");
+            live.live_action=1;check(!step(12,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"latched");
+            // Ghost first, then he grabs while it dances: the live grab still
+            // ends it, and the tracker's suspension that follows keeps it hidden.
+            run(13000);
+            check(step(25,GP_READY,{GP_READY,GP_STAR_ENDED},{4025}),"dancing while he still plays");
+            live.live_action=0x1302;
+            check(!step(26,GP_STAR_ENDED,{GP_STAR_ENDED,GP_STAR_ENDED},{}),"his grab ends the dance");
+            ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"the tracker suspends after his completion");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            live.live_action=1;check(!step(27,GP_DISABLED,{},{}),"suspended: hidden");
+            // The 100-coin star: its clock is its exit segment's (no star_ends),
+            // and its run grabs the 100-coin star (rows 10..14, a no-exit dance)
+            // before closing on the exit star (row 20) and dancing to row 29.
+            // With its dance tail the ghost plays through both grabs and fades
+            // after the exit dance; an older clip plays to its end.
+            Clip hundred=Clip::linear(44,30,20,5),hundred_older=Clip::linear(45,30,20,9);
+            hundred.header.flags=GCLIP_DANCE_TAIL;
+            for(auto *clip:{&hundred,&hundred_older}) {
+                clip->header.clock_kind=GCLIP_SEGMENT_CLOCK;
+                for(uint32_t i=10;i<15;++i)clip->frames[i].sample.live_action=0x1307;
+                for(uint32_t i=21;i<30;++i)clip->frames[i].sample.live_action=0x1302;
+                check(api->prepare_clip(&clip->header,clip->frames.data())==GP_OK,"prepare a 100-coin run");
+            }
+            revision=r.revision+1;r=request(hundred,revision);r.model_id=4;r.star_ends=0;r.volume=1;
+            r.clip_count=2;std::memcpy(r.clips[1].clip_id,hundred_older.header.clip_id,16);
+            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,14000,source_generation,0,0};
+            elapsed_base=14000;timer_base+=1000;live.live_action=1;
+            check(api->configure(&r)==GP_OK,"a 100-coin run on its exit segment's clock");
+            renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+            check(step(12,GP_READY,{GP_READY,GP_READY},{}) && count==2,"both play through the 100-coin grab");
+            check(step(29,GP_READY,{GP_READY,GP_READY},{}) && count==2,"and through the exit star's dance");
+            check(step(30,GP_READY,{GP_READY,GP_AFTER_END},{}) && count==1
+                  && poses[0].opacity==float(GP_STAR_FADE_FRAMES-1)/float(GP_STAR_FADE_FRAMES),
+                  "the dance-tail clip fades after the exit dance; the older one has ended");
+            check(!step(29+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED,GP_AFTER_END},{}),"then it hides");
+            ghost_playback::set_sound_sink(nullptr);
+        }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
         {
             Clip maximum(12,GCLIP_MAX_RECORDS);
@@ -688,8 +804,10 @@ int main() {
         check(allocations.load()==0 && destructions.load()==0,"render path never allocates or destroys storage");
         check(opens==closes && !fake_model,"all model lifetimes reclaimed");
         std::printf("{\"ok\":true,\"checks\":%u,\"models\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
-            "\"multi\":{\"ghosts\":%u,\"max_visible\":%u,\"prepares\":%u}}\n",
-            checks,opens,allocations.load(),destructions.load(),multi_ghosts,multi_visible,multi_prepares);return 0;
+            "\"multi\":{\"ghosts\":%u,\"max_visible\":%u,\"prepares\":%u},\"dance\":{\"hidden_after\":%u,\"fade\":[1",
+            checks,opens,allocations.load(),destructions.load(),multi_ghosts,multi_visible,multi_prepares,dance_hidden_after);
+        for(uint32_t k=1;k<GP_STAR_FADE_FRAMES;++k)std::printf(",%.6f",dance_fade[k]);
+        std::printf(",0]}}\n");return 0;
     } catch(const std::exception& error) {
         std::fprintf(stderr,"playback witness: %s (check %u)\n",error.what(),checks);return 1;
     }

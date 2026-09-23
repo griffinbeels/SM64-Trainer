@@ -391,7 +391,9 @@ def test_idle_gating_discards_segments_keeps_straddlers(tmp_path):
     rec = make_recorder(tmp_path, FakeVideoSource(), FakeAudioSource(),
                         video_sink_factory=lambda *args: FakeAvSink())
     rec._begin_capture(WIN)
-    assert rec.idle_after_s == 5.0          # default pads 3+2
+    # the padding window, whatever the shipped pads are (floored)
+    pads = rec._cfg.pre_pad_s + rec._cfg.post_pad_s
+    assert rec.idle_after_s == max(3.0, pads)
     overhead = rec.ring.total_bytes        # ownership marker is accounted too
     rec.set_idle_after(1.0)
     assert rec.idle_after_s == 3.0          # floor prevents thrash

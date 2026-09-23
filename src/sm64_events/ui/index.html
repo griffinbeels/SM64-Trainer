@@ -283,6 +283,9 @@
   .attempt-actions button.pb-blocked .caveat-chip {
     cursor: not-allowed; margin-left: .3rem;
   }
+  /* Save-as-PB on a run that was not valid (task 0144): still live, so
+     nothing is dimmed -- the chip is the whole difference. */
+  .attempt-actions button.pb-invalid .caveat-chip { margin-left: .3rem; }
   /* The mark beside a practice-log row's TIME keeps the glyph and drops the
      word at EVERY width, unlike the objective card's chip which only drops it
      under 793px. Two reasons, and the first is measured: at 1500px the two-

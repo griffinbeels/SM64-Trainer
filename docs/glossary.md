@@ -291,13 +291,50 @@ leaving the area.
 
 ### Anchor
 
-What opens an [[attempt]] — a practice [[reset]] or a state load. The
+What opens an [[attempt]] — a practice [[reset]] or a [[save-state load]]. The
 [[projector]] discards an anchor you never moved after, so an idle [[reset]]
 never counts against your [[failure rate]]. The move the anchor INTERRUPTED
 belongs to the [[attempt]] it ended, so the anchor holds that action back until
-you leave it.
+you leave it. Since 2026-09-23 a [[save-state load]] opens an [[attempt]] only
+when none is open; otherwise the open one carries on through it.
 
 - **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
+
+### Save-state load
+
+Loading a saved state, caught by whichever clock gives it away: the game's own
+[[frame]] counter going backward (Project64's savestate), or Usamune's timer
+jumping to a value no play can reach (the state Usamune loads itself). The
+[[practice log]] counts every load inside the [[attempt]] it happened in rather
+than starting a new one, so one row covers one [[reset]] and every load after
+it, and an [[attempt]] with a load in it is not a [[valid attempt]].
+
+- **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
+  → the [[projector]] (`src/sm64_events/tracking/projection.py`)
+- **Not** — a [[reset]]. A [[reset]] starts the [[attempt]] over; a load puts
+  you back part-way through it.
+
+### Valid attempt
+
+An [[attempt]] whose time could stand as a real result. A [[star]] [[attempt]] is
+valid when a full [[reset]] at the course's own start opened it and no
+[[save-state load]] came before the finish; a [[segment]] [[attempt]] is valid when
+no load came between its own start and its finish. The [[practice log]] marks
+an [[attempt]] that is not valid with a [[caveat mark]] saying why, keeps its
+Save as PB button, and never saves it as an [[automatic PB]]. An [[attempt]]
+journaled before 2026-09-23 is not judged.
+
+- **Lives** — the [[projector]] (`src/sm64_events/tracking/projection.py`)
+  → the [[caveat mark]] and the Save as PB button in the [[practice log]]
+
+### Subarea reset
+
+A [[reset]] that lands inside a level's subarea — the volcano, the slide, the
+pyramid — rather than at the course's start. A [[star]] [[attempt]] it opens
+is not a [[valid attempt]]; a [[segment]] that starts in that subarea is,
+because the [[reset]] landed where it starts.
+
+- **Lives** — the [[projector]] (`src/sm64_events/tracking/projection.py`)
 
 ### Failure rate
 
@@ -317,6 +354,17 @@ so every [[strategy]] holds its own, and the [[practice log]] shows whichever
 
 - **Lives** — the store (`src/sm64_events/storage/db.py`)
   → the PB tag on the [[practice log]]
+
+### Automatic PB
+
+A [[personal best]] the trainer saves by itself, as soon as a
+[[valid attempt]] on the [[active strategy]] beats that [[strategy]]'s best on
+the clock its [[ladder]] grades — [[in-game time]] for a [[star]],
+[[real time]] for a [[segment]]. It goes through the same door as the Save as PB button, so the
+[[PB ghost]] and the replay follow it and Undo works as usual. With no
+[[strategy]] selected nothing saves by itself.
+
+- **Lives** — the tracker service (`src/sm64_events/tracking/service.py`)
 
 ### Imported time
 
@@ -1151,6 +1199,32 @@ last frame that drew him or from his own position and angles.
 - **Lives** — `plugin/gfxwrap/ghost_capture.h` (`gc_refusal`); decoded as
   `Frame.refusal_name` in `src/sm64_events/ghost/clip.py`
 
+### Dance tail
+
+The recorded [[frame]]s after a star [[attempt]] closes, through the grab and
+dance of the star that completed it, kept on the end of its [[ghost]]
+recording so the [[ghost]] celebrates instead of vanishing at its touch; it
+then fades out over half a second. For the 100-coin star that is the exit
+star after it, so the [[ghost]] plays on through its 100-coin grab. Display
+only: the [[attempt]]'s origin, closing [[frame]] and time are unchanged.
+Recordings saved before it have none and still end at the touch; segments
+never carry one.
+
+- **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
+  `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
+
+### Translucent world layer
+
+The game's water surfaces, and any other see-through world geometry, as they
+would fall over a [[ghost]] standing behind them. The [[renderer]] repeats each
+such game draw into the layer, keeping its color, how much it lets through and
+its nearest depth; the compositor then gives every [[ghost]] pixel behind that
+depth the same blend the game gave the scene there, so a submerged [[ghost]]
+takes the water's color. The game's own picture stays untouched.
+
+- **Lives** — `plugin/gfxwrap/ghost_compositor.cpp`; the [[renderer]]'s
+  repeat is staged by `tools/stage_ghost_renderer.py`
+
 ### Ghost sound events
 
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in
@@ -1408,8 +1482,10 @@ Mario dying, which closes the open [[attempt]] with a losing [[outcome]].
 
 ### Reset
 
-Usamune restarting the game or loading a save state. A reset closes whatever
-[[attempt]] was open and may open the next one as an [[anchor]].
+Usamune restarting the level — the L button, or entering a course. A reset
+closes whatever [[attempt]] was open and may open the next one as an
+[[anchor]]. Since 2026-09-23 loading a save state is a [[save-state load]]
+instead, which closes nothing.
 
 - **Lives** — the anchor detector (`src/sm64_events/detectors/anchors.py`)
 

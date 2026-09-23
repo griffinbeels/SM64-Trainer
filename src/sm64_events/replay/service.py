@@ -424,7 +424,18 @@ class ReplayService:
         raise LookupError(f"no attempt {attempt_id}")
 
     def _span(self, a) -> tuple[datetime, datetime]:
-        start = _parse_utc(a.started_utc) - timedelta(seconds=self.pre_pad_s)
+        """The attempt's footage: `pre_pad_s` of lead-in, never reaching back
+        past the anchor before the one that opened it (task 0144, his ruling
+        2026-09-23: "about 0.5 s before the opening reset, never reaching back
+        past the previous reset"). Reset fifteen times and run on the
+        sixteenth, and the clip opens on the sixteenth, not on a stack of the
+        fifteen before it. `prev_anchor_utc` is None for a run nothing came
+        before; the pad alone applies."""
+        started = _parse_utc(a.started_utc)
+        start = started - timedelta(seconds=self.pre_pad_s)
+        floor = getattr(a, "prev_anchor_utc", None)
+        if floor is not None:
+            start = max(start, min(_parse_utc(floor), started))
         end = _parse_utc(a.ended_utc) + timedelta(seconds=self.post_pad_s)
         return start, end
 
@@ -979,7 +990,7 @@ class ReplayService:
         """
         start = meta.get("start_utc")
         if start is None:
-            wall = float(self.pre_pad_s)
+            wall = (_parse_utc(a.started_utc) - self._span(a)[0]).total_seconds()
         else:
             wall = max(0.0, (_parse_utc(a.started_utc)
                              - _parse_utc(start)).total_seconds())

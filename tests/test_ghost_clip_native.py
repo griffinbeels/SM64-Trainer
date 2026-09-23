@@ -10,9 +10,9 @@ import sys
 
 import pytest
 
-from ghost_native_fixture import frame
+from ghost_native_fixture import frame, producer
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, decode_clip
+from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip
 from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded, matrix_frame
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +70,11 @@ def corpus():
         changed = bytearray(evidence)
         struct.pack_into(pack, changed, offset, value)
         values.append(bytes(changed))
+    # A star clip may carry its dance tail; a segment clip may not.
+    values.append(encode_clip((frame(1), frame(2)), producer(), clock_kind=STAR_CLOCK, dance_tail=True))
+    segment_tail = bytearray(encoded((frame(),), SEGMENT_CLOCK))
+    struct.pack_into("<I", segment_tail, 124, 1)
+    values.append(bytes(segment_tail))
     return values
 
 
