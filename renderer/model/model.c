@@ -158,6 +158,17 @@ int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out)
     return leave(status);
 }
 
+int32_t sg_model_get_body_lights(sg_model *model, sg_body_lights *out)
+{
+    int status;
+    if (!out) return SG_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    if (!enter()) return SG_BUSY;
+    status = valid_model(model);
+    if (status == SG_OK) *out = model->body_lights;
+    return leave(status);
+}
+
 static int valid_pose(const sg_pose *pose)
 {
     int i;

@@ -129,6 +129,20 @@ typedef struct sg_particle_view {
     uint32_t frame_count, vertex_count, atlas_width, atlas_height;
 } sg_particle_view;
 
+/* The lights Mario's own lists load (gsSPSetLights1: one directional light,
+ * direction in EYE space as F3D takes it, plus its ambient), read from the
+ * ROM. The mesh's vertex colour is the diffuse colour of the light its
+ * triangle was drawn under; each diffuse colour names exactly one light. */
+#define SG_BODY_LIGHTS 16
+typedef struct sg_body_light {
+    uint8_t diffuse[3], ambient[3];
+    int8_t direction[3];
+} sg_body_light;
+typedef struct sg_body_lights {
+    sg_body_light lights[SG_BODY_LIGHTS];
+    uint32_t count;
+} sg_body_lights;
+
 typedef struct sg_atlas_view {
     const uint8_t *rgba;
     uint32_t width, height, animation_count;
@@ -163,6 +177,9 @@ int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out);
 /* Zero frames when the ROM's particle lists were not the supported ones;
  * Mario's own model still opens. Same owner/lifetime rules as the atlas. */
 int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out);
+/* Zero lights when the ROM's lists did not read as the supported ones (two
+ * lights with one diffuse colour, or none at all). Same owner rules. */
+int32_t sg_model_get_body_lights(sg_model *model, sg_body_lights *out);
 int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out);
 /* Exact upstream SM64 look-at, including its sine table. Native Mat4 layout,
  * translation at 12..14; no N64 quantization or projection is applied. Rejects

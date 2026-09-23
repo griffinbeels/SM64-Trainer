@@ -263,6 +263,17 @@ int main(int argc, char** argv) {
         {
             // Mario's particle models: 58 textured quads (bubble first, splash
             // frames 32x64), then 12 lit meshes (stars, punch dirt, the cap).
+            // Mario's own lights, read from his lists: six materials (overalls,
+            // white, cap red, two browns, skin), each ambient half its diffuse
+            // (0x7f of 0xff) and one eye-space direction (40,40,40).
+            sg_body_lights lights{};
+            check(sg_model_get_body_lights(model,&lights)==SG_OK && lights.count==6,"Mario's body lights");
+            bool halves=true,red=false;
+            for(uint32_t i=0;i<lights.count;++i){const auto& l=lights.lights[i];
+                for(unsigned c=0;c<3;++c)halves&=l.ambient[c]*2u<=l.diffuse[c]+1u && l.ambient[c]*2u+1u>=l.diffuse[c]
+                    && l.direction[c]==40;
+                red|=l.diffuse[0]==255 && !l.diffuse[1] && !l.diffuse[2] && l.ambient[0]==127;}
+            check(halves && red,"each light's ambient is half its diffuse, all from (40,40,40)");
             sg_particle_view particles{};
             check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==70 &&
                 particles.atlas_rgba,"particle frames");

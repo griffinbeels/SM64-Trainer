@@ -33,6 +33,7 @@ struct sg_model {
     struct Animation animations[SG_ANIMATION_COUNT];
     uint8_t atlas[SG_MODEL_ATLAS_BYTES];
     struct sg_particles particles;
+    sg_body_lights body_lights;
     uint8_t *permanent, *scratch;
     size_t permanent_used, scratch_used;
     size_t scratch_limit;

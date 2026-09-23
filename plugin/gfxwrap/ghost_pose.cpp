@@ -1,4 +1,5 @@
 #include "ghost_pose.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 namespace ghost_pose {
@@ -56,6 +57,34 @@ bool environment_uv(const float view[16], const ghost::Lookat &lookat, const flo
     const float t = (y + 1.0f) * 512.0f * (0x07C0 / 65536.0f);
     uv[0] = s / 64.0f / float(SG_ATLAS_CELLS);
     uv[1] = t / 64.0f;
+    return true;
+}
+// F3D's vertex light as GLideN64's gSPLightVertex computes it, with the
+// light Mario's own list loaded for this vertex's colour: ambient + diffuse
+// * max(0, N.L), the light in EYE space (gSPLight's direction, turned back by
+// the modelview), clamped per vertex before interpolation. The live view
+// is the eye: the game lights Mario from the camera it draws him with.
+bool shade(const float view[16], const sg_body_lights &lights, float color[3], const float normal[3]) {
+    const sg_body_light *light = nullptr;
+    for (uint32_t i = 0; i < lights.count && !light; ++i) {
+        bool same = true;
+        for (unsigned c = 0; c < 3; ++c)
+            same &= std::fabs(color[c] * 255.0f - float(lights.lights[i].diffuse[c])) < 0.5f;
+        if (same) light = &lights.lights[i];
+    }
+    if (!light) return false; // a colour no light of his names: never guessed
+    float eye[3], direction[3];
+    for (unsigned r = 0; r < 3; ++r) {
+        eye[r] = view[r]*normal[0] + view[4+r]*normal[1] + view[8+r]*normal[2];
+        direction[r] = float(light->direction[r]);
+    }
+    const float n = std::sqrt(eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2]);
+    const float d = std::sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
+    float lit = 0;
+    if (n > 0 && d > 0 && std::isfinite(n))
+        lit = std::max(0.0f, (eye[0]*direction[0] + eye[1]*direction[1] + eye[2]*direction[2]) / (n * d));
+    for (unsigned c = 0; c < 3; ++c)
+        color[c] = std::min(1.0f, (float(light->ambient[c]) + float(light->diffuse[c]) * lit) / 255.0f);
     return true;
 }
 bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
@@ -171,6 +200,9 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     if (status == SG_CAPACITY) return Result::capacity;
     if (status != SG_OK || mesh.error_flags || mesh.vertex_count > SG_MODEL_MAX_VERTICES)
         return Result::model_failed;
+    sg_body_lights lights{};
+    if (mesh.vertex_count && (sg_model_get_body_lights(model,&lights) != SG_OK || !lights.count))
+        return Result::model_failed;
     ghost_compositor::Pose built{};
     for (uint32_t i = 0; i < mesh.vertex_count; ++i) {
         const uint32_t material = scratch.material[i] & ~uint32_t(SG_MATERIAL_TEXGEN);
@@ -184,6 +216,10 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         // would from this camera.
         if ((scratch.material[i] & SG_MATERIAL_TEXGEN) && !environment_uv(view,world.lookat,v.normal,v.uv))
             return Result::model_failed;
+        // A decal draws its texture's own colour; everything else is shaded.
+        if (material != SG_MATERIAL_DECAL_RGBA && material != SG_MATERIAL_DECAL_RGB
+                && !shade(view,lights,v.color,v.normal))
+            return Result::model_failed;
         v.material = static_cast<ghost_compositor::Material>(material);
     }
     multiply(world.projection,view,built.view_projection);
@@ -192,11 +228,10 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         built.view_projection[4*c+1] *= world.target.screen_scale[1];
     }
     built.vertices = scratch.vertices; built.count = mesh.vertex_count;
-    // Mario's conventional model light. Environment/material matching is a
-    // separate renderer contract; this does not pretend to capture scene lights.
-    const float inverse_sqrt3 = 0.57735026919f;
-    built.light_direction[0] = built.light_direction[1] = built.light_direction[2] = inverse_sqrt3;
-    built.ambient = 0.5f; built.diffuse = 0.5f; built.opacity = opacity; built.flip_y = 1;
+    // Every vertex already carries its F3D shade (shade above): the
+    // compositor's own light is switched to a flat 1.
+    built.light_direction[2] = 1;
+    built.ambient = 1; built.diffuse = 0; built.opacity = opacity; built.flip_y = 1;
     out = built;
     return Result::ok;
 }

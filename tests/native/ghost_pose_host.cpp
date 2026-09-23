@@ -16,6 +16,14 @@ extern "C" int32_t sg_model_view(sg_model *,const float *position,const float *,
     }
     return SG_OK;
 }
+// Mario's cap light as his ROM list loads it: diffuse 255,0,0, ambient
+// 127,0,0, direction (40,40,40) in eye space.
+static uint32_t fake_lights=1;
+extern "C" int32_t sg_model_get_body_lights(sg_model *,sg_body_lights *out) {
+    *out={};out->count=fake_lights;
+    out->lights[0]={{255,0,0},{127,0,0},{40,40,40}};
+    return SG_OK;
+}
 extern "C" int32_t sg_model_evaluate(sg_model *,const sg_pose *pose,sg_mesh *mesh) {
     applied=*pose; assert(mesh->vertex_capacity>=3);
     for(unsigned i=0;i<3;++i) {
@@ -169,6 +177,30 @@ int main() {
         saved.shadow.matrix[0]=0;saved.valid_fields&=~GC_VALID_SHADOW;
         assert(!ghost_pose::shadow(model,saved,projection,vertices,texture,shadow));
         assert(!ghost_pose::shadow(nullptr,saved,projection,vertices,texture,shadow));
+    }
+    // Mario lit as F3D lights him: ambient + diffuse * max(0, N.L) with his
+    // own light in EYE space, so the lit side follows the live camera. A
+    // normal facing away keeps exactly the ambient; turned toward the light
+    // by the other camera it clamps to full red. A world-space light would
+    // shade both cameras the same.
+    {
+        saved.pose.root_kind=GC_ROOT_TRS;saved.valid_fields&=~GC_VALID_SHADOW;
+        std::memset(saved.pose.root_matrix,0,sizeof(saved.pose.root_matrix));
+        for(float& axis:saved.pose.scale)axis=1;
+        live.epoch=3;live.dlist_serial=20;live.sequence=20;live.level=saved.level;live.area=saved.area;
+        world.epoch=3;world.list_serial=20;world.context_generation=2;
+        fake_normal[0]=-1;fake_normal[1]=0;fake_normal[2]=0;fake_flags=0;
+        live.camera.position[0]=42; // identity view: eye normal (-1,0,0), unlit
+        assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::ok);
+        assert(std::fabs(pose.vertices[0].color[0]-127.0f/255.0f)<1e-6f && pose.vertices[0].color[1]==0);
+        assert(pose.ambient==1 && pose.diffuse==0); // the compositor adds no second light
+        live.camera.position[0]=-5; // turned view: eye normal (0,0,1), N.L = 1/sqrt3
+        assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::ok);
+        assert(pose.vertices[0].color[0]==1 && pose.vertices[0].color[2]==0);
+        // A colour none of his lights names is refused, never guessed.
+        fake_lights=0;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::model_failed);
+        fake_lights=1;fake_normal[0]=0;fake_normal[1]=1;
     }
     // Sound placement: a world point under the same live look-at product as drawing.
     {

@@ -531,8 +531,19 @@ describes the vanish and metal material routes.
 The camera comes from bounded lookup of the active graph camera matching the
 area camera, including persistent position/focus/roll. It is not the final
 display-list modelview matrix. Projection and viewport corrections come from
-actual world submissions. Scene lighting is not captured; Mario uses the
-conventional directional light. The floating-point model/view path does not
+actual world submissions. Mario is lit by his own lights, as the game lights
+him: the model reads each light his lists load (`gsSPLight` L0 diffuse and
+direction, L1 ambient; six in the US ROM, each ambient half its diffuse, all
+from (40,40,40)), and the pose shades every vertex with F3D's formula,
+ambient + diffuse * max(0, N.L) clamped per vertex, with the light in EYE
+space, so the lit side follows the live camera exactly as live Mario's does
+(GLideN64 `gSPLightVertex`). A vertex colour none of his lights names refuses
+the pose rather than guessing. Measured against his replay of attempt 2549
+(four registered frames): the lit side of cap, overalls and gloves now
+reaches 255 like the game's (it stopped at 204 to 245); the red and skin
+medians sit within 5 of the game's in all four (they were off by up to 57 and
+48) and blue within 18 (was 72).
+The floating-point model/view path does not
 reproduce every accumulated N64 16.16 matrix quantization, so live registration
 and depth alignment remain acceptance checks.
 

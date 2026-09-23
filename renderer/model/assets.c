@@ -64,6 +64,47 @@ bad:
     return SG_INVALID_ROM;
 }
 
+/* Mario's lights, as his lists load them: gsSPLight(&l, 1) then
+ * gsSPLight(&a, 2), i.e. G_MOVEMEM L0 (03860010, the directional light)
+ * followed by L1 (03880010, its ambient), both in this segment (87 pairs in
+ * the US ROM). The adjacent pair, and each Light's colour repeated in its copy, keep
+ * texture bytes from reading as a light. A diffuse colour loaded with two
+ * different ambients or directions leaves no lights: the mesh's colour
+ * would not say which one lit it. */
+static void body_lights(struct sg_model *model, const uint8_t *segment, uint32_t size)
+{
+    sg_body_lights found;
+    uint32_t at, i;
+    memset(&found, 0, sizeof(found));
+    for (at = 0; at + 16u <= size; at += 8u) {
+        uint32_t light, ambient;
+        const uint8_t *l, *a;
+        sg_body_light entry;
+        if (be32(segment + at) != 0x03860010u || be32(segment + at + 8) != 0x03880010u) continue;
+        light = be32(segment + at + 4); ambient = be32(segment + at + 12);
+        if ((light >> 24) != 0x04u || (ambient >> 24) != 0x04u) goto refuse;
+        light &= 0xFFFFFFu; ambient &= 0xFFFFFFu;
+        if (!range(light, 16u, size) || !range(ambient, 8u, size)) goto refuse;
+        l = segment + light; a = segment + ambient;
+        if (memcmp(l, l + 4, 3) || memcmp(a, a + 4, 3)) goto refuse;
+        memcpy(entry.diffuse, l, 3); memcpy(entry.ambient, a, 3);
+        memcpy(entry.direction, l + 8, 3);
+        if (!entry.direction[0] && !entry.direction[1] && !entry.direction[2]) goto refuse;
+        for (i = 0; i < found.count; ++i)
+            if (!memcmp(found.lights[i].diffuse, entry.diffuse, 3)) break;
+        if (i < found.count) {
+            if (memcmp(&found.lights[i], &entry, sizeof(entry))) goto refuse;
+            continue;
+        }
+        if (found.count == SG_BODY_LIGHTS) goto refuse;
+        found.lights[found.count++] = entry;
+    }
+    model->body_lights = found;
+    return;
+refuse:
+    memset(&model->body_lights, 0, sizeof(model->body_lights));
+}
+
 static int textures(struct sg_model *model, const uint8_t *rom)
 {
     uint32_t size, common1_size;
@@ -84,6 +125,7 @@ static int textures(struct sg_model *model, const uint8_t *rom)
             dest[3] = (color & 1u) ? 255 : 0;
         }
     }
+    body_lights(model, decoded, size);
     /* Same segment: Mario's particle models. Unsupported lists leave none;
      * the flame (common1) is added only when its own lists read too. */
     if (sg_particles_load(&model->particles, decoded, size) == SG_OK &&
