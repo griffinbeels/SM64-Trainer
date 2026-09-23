@@ -145,7 +145,7 @@ def restated_defaults(source: str, names=GUARDED) -> list[str]:
             targets = [element for target in node.targets
                        for element in (target.elts if isinstance(target, ast.Tuple) else [target])]
             values = node.value.elts if isinstance(node.value, ast.Tuple) else [node.value] * len(targets)
-            for target, value in zip(targets, values):
+            for target, value in zip(targets, values, strict=False):
                 name = getattr(target, "id", None) or getattr(target, "attr", None)
                 if name in {f"DEFAULT_{guarded.upper()}" for guarded in names}:
                     found.append(f"line {node.lineno}: {name} defined")
@@ -157,8 +157,9 @@ def restated_defaults(source: str, names=GUARDED) -> list[str]:
             found.append(f"line {node.lineno}: .get({node.args[0].value!r}, {node.args[1].value!r})")
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             arguments = node.args
-            pairs = [*zip(arguments.args[len(arguments.args) - len(arguments.defaults):], arguments.defaults),
-                     *zip(arguments.kwonlyargs, arguments.kw_defaults)]
+            positional = arguments.args[len(arguments.args) - len(arguments.defaults):]
+            pairs = [*zip(positional, arguments.defaults, strict=True),
+                     *zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True)]
             found += [f"line {node.lineno}: {node.name}({arg.arg}={default.value!r})"
                       for arg, default in pairs if default is not None and arg.arg in names and literal(default)]
     return found
