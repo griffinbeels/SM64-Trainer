@@ -309,15 +309,18 @@ int main() {
         check(api->configure(&r)==GP_OK,"enable overlap fading");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
         live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=0;
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0,"coincident Mario fully transparent");
+        // Overlap fades to the floor (15% of the configured opacity), never to nothing.
+        const float floor_opacity=.25f*.15f,half_opacity=.25f*(.15f+.85f*.5f);
+        auto near_to=[](float a,float b){return std::fabs(a-b)<1e-6f;};
+        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,floor_opacity),"coincident Mario keeps the ghost faint");
         live.pose.position[0]=37;
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0.125f,"half body overlap multiplies configured opacity");
+        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,half_opacity),"half body overlap multiplies configured opacity");
         live.pose.position[0]=74;
         draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"touching bodies at zero extra distance restore opacity");
         ++r.revision;r.proximity_distance=74;
         check(api->configure(&r)==GP_OK,"extra fade distance");
         renderer.run([&]{ghost_playback::safe_boundary(7,4);});
-        draw(10,true,GP_READY,5,2);check(pose.opacity==0.125f,"distance changes actual generated ghost opacity");
+        draw(10,true,GP_READY,5,2);check(near_to(pose.opacity,half_opacity),"distance changes actual generated ghost opacity");
         live.valid_fields&=~GC_VALID_POSE;
         draw(10,true,GP_READY,5,2);check(pose.opacity==0.25f,"missing player pose does not invent fading");
         live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=0;
@@ -642,7 +645,8 @@ int main() {
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=2005;live.pose.position[1]=0;live.pose.position[2]=5;
             frame(5,{2105,2205,2005},GP_READY,{GP_READY,GP_READY,GP_READY});
-            check(poses[0].opacity==1 && poses[1].opacity==1 && poses[2].opacity==0,"only the coincident ghost fades");
+            check(poses[0].opacity==1 && poses[1].opacity==1 && std::fabs(poses[2].opacity-.15f)<1e-6f,
+                  "only the coincident ghost fades, to the floor");
             live.valid_fields&=~GC_VALID_POSE;
             ++r.revision;r.proximity_enabled=0;check(api->configure(&r)==GP_OK,"fade off");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
