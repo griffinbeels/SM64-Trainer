@@ -1165,6 +1165,23 @@ class Database:
                               "cleared": bool(r["cleared"])}) for r in rows]
         return sorted(out, key=lambda a: journal_id(a.id))
 
+    def session_attempts(self, session_id: int) -> list[Attempt]:
+        """One session's attempts, in `attempts()`'s chronological order --
+        filtered in SQL, so a caller that runs after every attempt (the
+        Scorecard's repeat-goal progress) never loads the whole history."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM attempts WHERE session_id = ?",
+                                      (session_id,)).fetchall()
+            out = [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
+                              "cleared": bool(r["cleared"])}) for r in rows]
+        return sorted(out, key=lambda a: journal_id(a.id))
+
+    def session_started_utc(self, session_id: int) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT started_utc FROM sessions WHERE id = ?",
+                                     (session_id,)).fetchone()
+        return row["started_utc"] if row is not None else None
+
     # -- segment definitions -------------------------------------------------
     def segment_defs(self) -> list[dict]:
         with self._lock:

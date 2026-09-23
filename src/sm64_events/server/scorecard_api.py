@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool, StrictInt
 
 from sm64_events.library.examples import sheet_best
 from sm64_events.library.export_column import column_cells, sheet_time
@@ -42,11 +42,9 @@ from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
 from sm64_events.core.events import Event
 from sm64_events.core.modes import platform_of
-from sm64_events.memory.addresses import star_name
 from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.scorecard import (
-    SPECIAL_STAR_LABELS, build_card, rows_for_course, rows_for_route,
-    template_rows, without_keys)
+    build_card, rows_for_course, rows_for_route, template_rows, without_keys)
 from sm64_events.tracking.views import (latest_pbs_by_strategy,
                                         segment_courses)
 from sm64_events.server.import_api import sheet_row_placer
@@ -54,11 +52,10 @@ from sm64_events.server.jobs import JobBoard
 from sm64_events.server.scorecard_goals import prepare_goal
 from sm64_events.server.scorecard_resolve import (
     CUSTOM_KEY, GOAL_KEY, REGIONS_KEY, VALID_REGIONS, GoalResolver, entry_goal,
-    pin_of)
+    pin_of, require_entry_key)
 from sm64_events.server.ranks_api import absorb_after_regrade
 
 _log = logging.getLogger("sm64.scorecard")
-_ENTRY_KEY = re.compile(r"^(star:\d+:\d+|segment:\d+)$")
 # Round 29 item 2: how the pasted column is COLOURED. A time set on the
 # emulator and one set on a console wear different fills in the sheet
 # (Raisn's convention, and his ask: "The user should be able to select a color
@@ -101,6 +98,13 @@ class GoalBody(BaseModel):
 class EntryGoalBody(BaseModel):
     key: str
     goal: dict | None = None
+    scope: str = "overall"
+
+
+class ForgiveBody(BaseModel):
+    key: str
+    attempt_id: StrictInt
+    undo: StrictBool = False
     scope: str = "overall"
 
 
@@ -468,39 +472,27 @@ def create_scorecard_router(service, library=None, adoptions=None,
         return card, resolved["goal_value"]
 
     def entry_rows(scope_id: str, keys: list[str]) -> list[dict]:
-        """A one-row spec holding exactly `keys`. An entry on the scope's
-        card keeps the card's own label and clock, so it resolves to the
-        tile's strategy; any other key -- a user segment, a 100c companion
-        merged into the combined cell, an excluded entry -- resolves alone."""
         for key in keys:
-            if not _ENTRY_KEY.match(key):
-                raise HTTPException(422, f"not an entry key: {key!r}")
+            require_entry_key(key)
         _require_db()
-        on_card = {key: (label, clock) for row in
-                   without_keys(scope_rows(scope_id), service.rank_excluded())
-                   for key, label, clock in row["entries"]}
-        segment_names = None
-        entries = []
-        for key in keys:
-            if key in on_card:
-                entries.append((key, *on_card[key]))
-                continue
-            parts = key.split(":")
-            if parts[0] == "star":
-                label = SPECIAL_STAR_LABELS.get(key, star_name(int(parts[1]), int(parts[2])))
-                entries.append((key, label, "igt"))
-            else:
-                if segment_names is None:
-                    segment_names = {row["id"]: row["name"]
-                                     for row in service.db.segment_defs()}
-                entries.append((key, segment_names.get(int(parts[1]), ""), "rta"))
-        return [{"course_id": None, "label": "", "entries": entries}]
+        return goals.entry_spec(keys, without_keys(scope_rows(scope_id),
+                                                   service.rank_excluded()))
 
     def entry_goals(scope_id: str, keys: list[str]) -> dict:
         rows_spec = entry_rows(scope_id, keys)
         resolved = goals.resolve_entries(rows_spec, scope_id)
-        return {key: entry_goal(key, clock, resolved)
-                for key, _label, clock in rows_spec[0]["entries"]}
+        clocks = {key: clock for key, _label, clock in rows_spec[0]["entries"]}
+        resolved["progress"] = goals.entry_progress(resolved, clocks)
+        return {key: entry_goal(key, clock, resolved) for key, clock in clocks.items()}
+
+    async def goal_changed(key: str, scope_id: str) -> dict:
+        """The key's EntryGoal after a write, and the `goal_changed` broadcast
+        every open Practice card and Scorecard refetches on."""
+        answer = await run_in_threadpool(entry_goals, scope_id, [key])
+        await service.broadcaster.publish(Event(
+            type="goal_changed", frame=0, timestamp_utc=datetime.now(timezone.utc),
+            payload={"key": key}))
+        return answer[key]
 
     @router.get("")
     def get_scorecard(scope: str = "overall"):
@@ -561,16 +553,21 @@ def create_scorecard_router(service, library=None, adoptions=None,
         """Pin one entry's goal, or unpin it with `goal: null`, then broadcast
         `goal_changed` so every open Practice card and Scorecard refetches."""
         _require_db()
-        if not _ENTRY_KEY.match(body.key):
-            raise HTTPException(422, f"not an entry key: {body.key!r}")
+        require_entry_key(body.key)
         pin = pin_of(body.goal)
         scope_rows(body.scope)            # an unknown scope 404s before the write
         goals.set_pin(body.key, pin)
-        answer = await run_in_threadpool(entry_goals, body.scope, [body.key])
-        await service.broadcaster.publish(Event(
-            type="goal_changed", frame=0, timestamp_utc=datetime.now(timezone.utc),
-            payload={"key": body.key}))
-        return answer[body.key]
+        return await goal_changed(body.key, body.scope)
+
+    @router.post("/entry_goal/forgive")
+    async def forgive_attempt(body: ForgiveBody):
+        """Forgive one attempt on a repeat goal (it neither counts nor breaks
+        the streak), or with `undo: true` take the forgiveness back."""
+        _require_db()
+        require_entry_key(body.key)
+        scope_rows(body.scope)
+        goals.forgive(body.key, body.attempt_id, undo=body.undo)
+        return await goal_changed(body.key, body.scope)
 
     @router.put("/regions")
     async def set_regions(body: RegionsBody):

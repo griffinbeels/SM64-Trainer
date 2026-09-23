@@ -8,18 +8,24 @@ so a Practice card and its Scorecard tile cannot disagree. Lifted out of
 `scorecard_api.create_scorecard_router` when per-entry goals landed -- the
 seam `docs/architecture.md` named for the four goal resolvers.
 """
+import re
+from datetime import datetime, timezone
+
 from fastapi import HTTPException
 
 from sm64_events.core.timefmt import attainable_cs, format_igt, frame_at_or_after
 from sm64_events.library.ratings import runner_times
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
+from sm64_events.memory.addresses import star_name
 from sm64_events.ranks.scorecard import (
-    automatic_goal, card_keys, division_goal_cs, entry_automatic_goal)
+    SPECIAL_STAR_LABELS, automatic_goal, card_keys, division_goal_cs,
+    entry_automatic_goal)
 from sm64_events.ranks.scoring import DIVISION_NUMERALS
 from sm64_events.server.ranks_api import _score_scope
 from sm64_events.server.scorecard_goals import combined, sources_of, valid_division
 from sm64_events.server.scorecard_standards import tile_strategies
 from sm64_events.tracking.activestrat import ActiveStrats
+from sm64_events.tracking.goal_progress import entry_key_of, goal_progress, parse_utc
 from sm64_events.tracking.views import fastest_current_pbs
 
 GOAL_KEY = "scorecard_goal"
@@ -32,8 +38,25 @@ CUSTOM_KEY = "scorecard_custom_goals"
 # the fastest-offer merge for that one entry (never joins it); clearing it
 # returns the entry to the normal resolution. Per entity, so every scope reads
 # the same pin. One threshold each: a division on the entry's ladder, a
-# runner's time on it, or a typed time (`{"kind": "time", "cs"}`).
+# runner's time on it, or a typed time (`{"kind": "time", "cs"}`). A pin may
+# also ask for a REPEAT: `count` finishes under it (1..999), consecutive when
+# `streak`; `set_at` (UTC) is when its threshold or repeat last changed, which
+# is where its progress window opens (`tracking/goal_progress.py`).
 ENTRY_GOALS_KEY = "scorecard_entry_goals"
+# {entity_key: [attempt ids]} the player forgave: an attempt the tracker
+# judged (truthfully) as a streak-breaker that he considers fair game. His
+# words: "Maybe we have a button to undo / restore the streak, just in case we
+# automatically detected their reset (truthfully), but the player wants to
+# keep the streak because they consider it fair game".
+FORGIVEN_KEY = "scorecard_goal_forgiven"
+MAX_REPEAT = 999
+ENTRY_KEY = re.compile(r"^(star:\d+:\d+|segment:\d+)$")
+
+
+def require_entry_key(key: str) -> None:
+    """422 unless `key` is a star or segment entity key."""
+    if not ENTRY_KEY.match(key):
+        raise HTTPException(422, f"not an entry key: {key!r}")
 # Which ROM regions a RUNNER goal is allowed to offer a time from -- round 24,
 # his mechanism verbatim: "we should define their scorecard based on their
 # detected region (e.g., US in my case). BUT it should be a deliberate choice
@@ -51,9 +74,20 @@ VALID_REGIONS = ("us", "jp")
 
 
 def pin_of(goal) -> dict | None:
-    """A validated, normalized pin, or a 422. `None` clears."""
+    """A validated, normalized pin (without `set_at`), or a 422. `None`
+    clears. Every pin kind is a fixed threshold, so any may repeat."""
     if goal is None:
         return None
+    count, streak = goal.get("count", 1), goal.get("streak", False)
+    if (not isinstance(count, int) or isinstance(count, bool)
+            or not 1 <= count <= MAX_REPEAT):
+        raise HTTPException(422, f"count is a whole number from 1 to {MAX_REPEAT}")
+    if not isinstance(streak, bool):
+        raise HTTPException(422, "streak is true or false")
+    return {**_threshold_of(goal), "count": count, "streak": streak}
+
+
+def _threshold_of(goal) -> dict:
     kind = goal.get("kind")
     if kind == "division":
         if not valid_division(goal.get("tier"), goal.get("division")):
@@ -100,13 +134,25 @@ def entry_source(key: str, resolved: dict) -> dict:
     return {"kind": kind, "tier": tier, "division": division,
             "label": f"{tier} {division}" if tier is not None else ""}
 
+
+
 def entry_goal(key: str, clock: str, resolved: dict) -> dict:
+    """One entry's EntryGoal. A repeat pin (count > 1) carries `progress`
+    (`resolved["progress"]`, filled by `GoalResolver.entry_progress`) and is
+    achieved once its best run reaches the count; otherwise achieved means
+    your PB is at or under the goal."""
     you_cs = resolved["you"].get(key)
     goal_cs = resolved["goal"].get(key)
+    pin = resolved["pins"].get(key) or {}
+    count, streak = pin.get("count", 1), pin.get("streak", False)
+    progress = resolved.get("progress", {}).get(key) if count > 1 else None
+    achieved = (progress["best"] >= progress["needed"] if progress is not None
+                else you_cs is not None and goal_cs is not None and you_cs <= goal_cs)
     return {"key": key, "clock": clock, "you_cs": you_cs, "goal_cs": goal_cs,
             "source": entry_source(key, resolved),
             "pinned": key in resolved["pins"],
-            "achieved": you_cs is not None and goal_cs is not None and you_cs <= goal_cs}
+            "count": count, "streak": streak, "progress": progress,
+            "achieved": achieved}
 
 
 class GoalResolver:
@@ -392,6 +438,30 @@ class GoalResolver:
                 "goal": {**goal_map, **pinned}, "owner": goal_owner,
                 "players": player_goals, "pins": pins}
 
+    def entry_spec(self, keys: list[str], card_rows: list[dict]) -> list[dict]:
+        """A one-row spec holding exactly `keys`. An entry on the scope's
+        card keeps the card's own label and clock, so it resolves to the
+        tile's strategy; any other key -- a user segment, a 100c companion
+        merged into the combined cell, an excluded entry -- resolves alone."""
+        on_card = {key: (label, clock) for row in card_rows
+                   for key, label, clock in row["entries"]}
+        segment_names = None
+        entries = []
+        for key in keys:
+            if key in on_card:
+                entries.append((key, *on_card[key]))
+                continue
+            parts = key.split(":")
+            if parts[0] == "star":
+                label = SPECIAL_STAR_LABELS.get(key, star_name(int(parts[1]), int(parts[2])))
+                entries.append((key, label, "igt"))
+            else:
+                if segment_names is None:
+                    segment_names = {row["id"]: row["name"]
+                                     for row in self.service.db.segment_defs()}
+                entries.append((key, segment_names.get(int(parts[1]), ""), "rta"))
+        return [{"course_id": None, "label": "", "entries": entries}]
+
     def entry_options(self, key: str, strategy) -> dict:
         """What a Practice card can pin on one entry, each fastest first:
         every finite division on its strategy ladder (never Capless V) and
@@ -416,9 +486,55 @@ class GoalResolver:
                             in sorted(best.items(), key=lambda item: (item[1], item[0]))]}
 
     def set_pin(self, key: str, pin: dict | None) -> None:
+        """Store (or clear) one pin. `set_at` moves only when the threshold
+        or the repeat changed, so re-saving the same goal keeps its window."""
         pins = dict(self.entry_pins())
         if pin is None:
             pins.pop(key, None)
         else:
-            pins[key] = pin
+            old = pins.get(key) if isinstance(pins.get(key), dict) else {}
+            unchanged = {k: v for k, v in old.items() if k != "set_at"} == pin
+            set_at = old.get("set_at") if unchanged and old.get("set_at") else (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            pins[key] = {**pin, "set_at": set_at}
         self.service.db.set_state(ENTRY_GOALS_KEY, pins)
+
+    def forgiven(self) -> dict[str, list[int]]:
+        store = self.service.db.get_state(FORGIVEN_KEY, {})
+        return store if isinstance(store, dict) else {}
+
+    def forgive(self, key: str, attempt_id: int, undo: bool = False) -> None:
+        store = dict(self.forgiven())
+        ids = [i for i in store.get(key, []) if i != attempt_id]
+        if not undo:
+            ids.append(attempt_id)
+        if ids:
+            store[key] = ids
+        else:
+            store.pop(key, None)
+        self.service.db.set_state(FORGIVEN_KEY, store)
+
+    def entry_progress(self, resolved: dict, clocks: dict[str, str]) -> dict:
+        """{key: progress} for every repeat pin among `clocks`' keys -- ONE
+        read of the current session's attempts, however many keys ask."""
+        repeat = {key: pin for key, pin in resolved["pins"].items()
+                  if key in clocks and pin.get("count", 1) > 1}
+        if not repeat:
+            return {}
+        db, session_id = self.service.db, self.service.session_id
+        attempts = db.session_attempts(session_id) if session_id is not None else []
+        started = db.session_started_utc(session_id) if session_id is not None else None
+        by_key: dict[str, list] = {}
+        for attempt in attempts:
+            by_key.setdefault(entry_key_of(attempt), []).append(attempt)
+        forgiven = self.forgiven()
+        progress = {}
+        for key, pin in repeat.items():
+            since = parse_utc(pin.get("set_at") or "1970-01-01T00:00:00Z")
+            if started is not None:
+                since = max(since, parse_utc(started))
+            progress[key] = goal_progress(
+                by_key.get(key, []), clock=clocks[key], goal_cs=resolved["goal"].get(key),
+                count=pin["count"], streak=bool(pin.get("streak")), since=since,
+                forgiven=frozenset(forgiven.get(key, ())))
+        return progress

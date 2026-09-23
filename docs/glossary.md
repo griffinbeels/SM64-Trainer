@@ -613,7 +613,11 @@ entry's [[ladder]] (capped at its top), so it never shows a goal you already hol
 A **pinned** goal is one threshold set on a single [[star]] or [[segment]] from its
 Practice card: a [[division]], a [[runner]]'s time, or a typed time. It replaces
 that entry's fastest-offer choice everywhere, including its [[Scorecard]] tile,
-until cleared.
+until cleared. A pin may repeat: `10x` asks for ten finishes under it, `10x
+streak` for ten in a row, counted from the current [[session]]'s [[attempt]]s
+since you set the pin, so each sitting starts again. A [[reset]] in the first
+3 s neither counts nor breaks a streak, and you can forgive an [[attempt]]
+that broke one.
 
 Capless 4 through 1 have finite goal times; Capless 5 is the unbounded floor
 and is not a selectable goal.
