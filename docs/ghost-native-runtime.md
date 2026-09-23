@@ -533,8 +533,8 @@ anything playback holds: a clip file's bytes are dropped once playback has
 prepared its copy (id, SHA-256 and header stay), and the cartridge's once the
 model is built from it (its digest stays). A retired model or a lost renderer
 context rebuilds both from fresh reads, the clips checked against the same
-SHA-256. The sound engine keeps only the sound data, the last 2.5 MB of the
-8 MB cartridge (`SA_SOUND_BYTES`). Lease/ROM shutdown revokes playback and retires assets;
+SHA-256. The sound engine keeps only its audio span, 2.25 MB of the 8 MB
+cartridge ([`SA_AUDIO_BYTES`](#ghost-sound-playback)). Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
 full set plus as many retiring copies) share a 192 MiB clip/index budget, and
 the files the worker is still reading obey the same bound. It is sized so sixteen
@@ -986,7 +986,15 @@ device had already run dry, wrote every tick into silence and chopped the
 audio about every 50 ms (the crackle heard live 2026-09-22; a tap on the live
 path measured 139 of 140 writes into an empty device, 0 of 206 after). The
 audio thread runs at `THREAD_PRIORITY_HIGHEST` and counts any tick written
-after the device ran dry as an underrun.
+after the device ran dry as an underrun. After 3 s of silent output
+(`idle_close_frames`, counted after `volume`, so volume 0 is silent) it closes
+the device and stops ticking: the open stream otherwise woke it about 200
+times a second and held an audio session for as long as the ROM ran (native
+audit, 2026-09-23). It then sleeps on an event that `cue` sets only while it
+is idle. A request that can be heard reopens the device and sounds in the
+first tick written, whole; one that cannot (switched off, volume 0) is
+discarded without reopening. A fresh device starts empty, so the first tick
+after a reopen is not counted as an underrun.
 `volume` (GP7/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
 scales the engine output exactly; 0 writes zeros. Disabled or withdrawn
 playback, including the owner-suspended pause, stops every ghost sound and
@@ -1019,17 +1027,26 @@ The IPC worker starts the engine from its verified ROM bytes and stops it
 (joining the thread) when the ROM closes. Before the engine parses anything,
 the CTL, TBL and SEQ regions must match the SHA-256 of SM64 US audio data (the
 same in stock and Usamune US) and the bank-set table one of the two known
-versions; `sa_open` also bounds every seq header, owns its ROM copy and frees
-every parse on close. Any other ROM, or no audio device, leaves ghosts drawing
+versions; `sa_open` also bounds every seq header, owns a copy of only the
+ROM's audio span (`SA_AUDIO_BYTES`, about 2.3 MB: CTL through the bank-set
+table's 0x100 bytes that upstream's init reads) rather than upstream's whole
+8 MB ROM, and frees every parse on close. Any other ROM, or no audio device, leaves ghosts drawing
 silently.
 
 The [audio witness](../tests/test_ghost_audio.py) drives the real queue,
 thread and engine into a captured buffer: each cue sounds within the next
 tick and nothing before it, 0.5 is exactly half of every sample (energy ratio
 0.250001), 0 is all zeros, switching off silences within one tick, altered
-audio data never reaches the parser, and a full queue drops. Its waveOut
-smoke plays silence only when a device exists; for three seconds it must feed
-the device in real time (31599 frames/s measured) with 0 underruns. Placed
+audio data never reaches the parser, and a full queue drops. The running
+engine adds 2.5 MB of private memory (under a 4 MB bound). After a sound
+and the idle time the device closes and no tick runs; the next request
+reopens it and sounds within the first tick (49 frames in) with the same
+samples as the first time, and volume 0 closes the device without reopening
+it. Its waveOut smoke plays silence only when a device exists (a volume below
+one sample step, which still counts as audible): for two seconds it must feed
+the device in real time (31501 frames/s measured), close it 3 s after opening
+(2.994 s) and reopen it on a request (7.7 ms from request to first tick,
+waveOutOpen included), with 0 underruns across both. Placed
 (same schedule): 2000 units right of the camera the right channel carries
 21x the left's energy (mirrored on the left); gain 0.25 leaves 0.060 of the
 energy; 5000 units ahead, the engine's own falloff leaves 0.133; and ghost 1

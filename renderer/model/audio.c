@@ -28,12 +28,16 @@ static uint32_t be32(const uint8_t *p) {
 }
 static uint32_t be16(const uint8_t *p) { return (uint32_t)p[0] << 8 | p[1]; }
 
+/* Where a ROM offset lies inside the audio span. */
+#define AT(offset) ((offset) - SA_AUDIO_OFFSET)
+
 /* A seq file header whose every bank lies inside its own region. */
-static int header(const uint8_t *rom, uint32_t at, uint32_t end, uint32_t type) {
-    const uint32_t span = end - at, count = be16(rom + at + 2);
-    if (be16(rom + at) != type || !count || count > 64 || 4 + 8 * count > span) return 0;
+static int header(const uint8_t *audio, uint32_t at, uint32_t end, uint32_t type) {
+    const uint8_t *seq = audio + AT(at);
+    const uint32_t span = end - at, count = be16(seq + 2);
+    if (be16(seq) != type || !count || count > 64 || 4 + 8 * count > span) return 0;
     for (uint32_t i = 0; i < count; ++i) {
-        const uint32_t offset = be32(rom + at + 4 + 8 * i), length = be32(rom + at + 8 + 8 * i);
+        const uint32_t offset = be32(seq + 4 + 8 * i), length = be32(seq + 8 + 8 * i);
         if (offset > span || length > span - offset) return 0;
     }
     return 1;
@@ -47,23 +51,22 @@ static void release(void) {
     gSoundDataADSR = gSoundDataRaw = gMusicData = NULL; gBankSetsData = NULL;
 }
 
-int32_t sa_open(const uint8_t *rom, size_t bytes) {
+int32_t sa_open(const uint8_t *audio, size_t bytes) {
     if (copy) return SA_BUSY;
-    if (!rom || bytes != SA_ROM_BYTES) return SA_ARGUMENT;
-    if (!header(rom, SA_CTL_OFFSET, SA_TBL_OFFSET, 1) || !header(rom, SA_TBL_OFFSET, SA_SEQ_OFFSET, 2)
-            || !header(rom, SA_SEQ_OFFSET, SA_BANKS_OFFSET, 3)) return SA_INVALID_ROM;
-    /* Only the sound data: the banks (CTL), samples (TBL), sequences and bank
-     * sets run from SA_CTL_OFFSET to the cartridge's end, 2.5 MB of its 8 MB,
-     * in PJ64's 2 GiB. Everything the engine reads is inside it. */
-    copy = malloc(SA_SOUND_BYTES);
+    if (!audio || bytes != SA_AUDIO_BYTES) return SA_ARGUMENT;
+    if (!header(audio, SA_CTL_OFFSET, SA_TBL_OFFSET, 1) || !header(audio, SA_TBL_OFFSET, SA_SEQ_OFFSET, 2)
+            || !header(audio, SA_SEQ_OFFSET, SA_BANKS_OFFSET, 3)) return SA_INVALID_ROM;
+    /* Upstream copied the whole 8 MB ROM; every parse is relative to its own
+     * region, so the span alone is enough. */
+    copy = malloc(bytes);
     if (!copy) return SA_MEMORY;
-    memcpy(copy, rom + SA_CTL_OFFSET, SA_SOUND_BYTES);
-    gSoundDataADSR = ctl = parse_seqfile(copy);
-    gSoundDataRaw = tbl = parse_seqfile(copy + (SA_TBL_OFFSET - SA_CTL_OFFSET));
-    gMusicData = seq = parse_seqfile(copy + (SA_SEQ_OFFSET - SA_CTL_OFFSET));
+    memcpy(copy, audio, bytes);
+    gSoundDataADSR = ctl = parse_seqfile(copy + AT(SA_CTL_OFFSET));
+    gSoundDataRaw = tbl = parse_seqfile(copy + AT(SA_TBL_OFFSET));
+    gMusicData = seq = parse_seqfile(copy + AT(SA_SEQ_OFFSET));
     if (!ctl || !tbl || !seq || !gCtlSeqs) { release(); return SA_MEMORY; }
     /* Upstream's bank-set fixup, inside the region it was checked against. */
-    gBankSetsData = copy + (SA_BANKS_OFFSET - SA_CTL_OFFSET);
+    gBankSetsData = copy + AT(SA_BANKS_OFFSET);
     memmove(gBankSetsData + 0x45, gBankSetsData + 0x44, 0x5B);
     gBankSetsData[0x45] = 0x00;
     ptrs_to_offsets(ctl);
