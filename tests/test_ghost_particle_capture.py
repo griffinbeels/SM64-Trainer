@@ -48,4 +48,4 @@ def test_particle_placement(tmp_path):
     result = subprocess.run([str(target)], cwd=tmp_path, capture_output=True, text=True,
                             timeout=15, check=False, **quiet_spawn_kwargs())
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "particle pose passed: known=3 unknown=1 fade=recorded" in result.stdout
+    assert "particle pose passed: known=3 unknown=1 fade=recorded lit=f3d" in result.stdout

@@ -613,16 +613,37 @@ list pushed at the object's position just before its model list. Capture
 never records that list; it reads its `G_SETENVCOLOR 255,255,255,alpha` and
 stores the alpha with the particle (`gc_particle.opacity`, flag
 `GC_PARTICLE_OPACITY`), and playback multiplies it into frames the model
-marks `fade`. Recorded but not drawn: the wall-kick and ground-pound stars
-(`MODEL_CARTOON_STAR`) and punch triangles (`MODEL_DIRT_ANIMATION`), which are
-lit 3D models, not textured quads. Environment bubbles (`envfx`) are not
-objects and not Mario's.
+marks `fade`.
+
+Three kinds are lit 3D meshes, also from common1: the wall-kick and
+ground-pound stars (`MODEL_CARTOON_STAR`, 0x0302C298..0x0302C318, four light
+colours and an unlit one), the punch dirt (`MODEL_DIRT_ANIMATION`,
+0x0302C378..0x0302C458) and the wind- or snowman-knocked cap
+(`MODEL_MARIOS_CAP`, 0x03022F48, 156 vertices; a cap Klepto drops is Klepto's
+and is not recorded). The reader follows their `gsSPLight` loads (G_MOVEMEM
+0x86 diffuse and direction, 0x88 ambient), per-vertex normals and the
+`SHADE`, `SHADEFADEA` and `BLENDRGBFADEA` combiners (the cap's logo mixes
+toward the texture by its alpha; untextured triangles sample one white cell).
+Placement lights each vertex with F3D's own formula, as GLideN64's
+`gSPLightVertex` does: ambient plus diffuse times N.L, negatives dropped,
+clamped, with the list's light in the recorded view space and the normal
+turned by the executed matrix. That is the lighting the game drew at record
+time, including the cartoon stars' back-facing normals (0,0,-127), which leave
+them at their ambient colour. The game's layer decides depth: opaque and
+texture-edge frames (alpha ignored, or tested at .5) are drawn first with a
+nearest-surface prepass and one colour per pixel, so an opaque mesh never
+blends with itself; translucent frames follow without writing depth. A cap
+that is fading (opacity below 255) is translucent, as the game switches it to
+its transparent layer. Environment bubbles (`envfx`) are not objects and not
+Mario's.
 
 The [particle witness](../tests/test_ghost_particles.py)
 (`SM64_TEST_GHOST_COMPOSITOR=1`) checks cutout and blend frames, hiding
 behind the body and behind terrain, the clean frame and GL state; removing the
 draw, the body depth test, the terrain test or the cutout each turns it red.
-The model witness checks all 58 frames decode to one quad each (17063 visible
+The model witness checks the 58 textured frames decode to one quad each, the
+12 lit meshes carry their lights and normals (642 vertices in all, the cap
+mixing and fading) (17063 visible
 segment-4 texels, the flame's environment colour) on both the US and the
 Usamune US ROM. The [probe witness](../tests/test_ghost_particle_capture.py) keeps the 16
 nearest of 21 drawn (5 counted), skips nested calls, another object's bubble and

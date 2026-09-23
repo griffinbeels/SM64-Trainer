@@ -46,11 +46,43 @@ int main() {
     const auto placed = ghost_particle_pose::place(reinterpret_cast<sg_model *>(1), view, recorded, gc_camera{},
                                                    identity, out, result);
     require(placed.drawn == 3 && placed.unknown == 1 && result.count == 18, "three known frames drawn, one unknown skipped");
-    require(std::fabs(out[0].rgba[3] - 128.0f / 255.0f) < 1e-6f, "mist takes its recorded opacity");
-    require(out[6].rgba[3] == 1.0f, "mist without a generated list stays whole");
-    require(out[12].rgba[3] == 1.0f && out[12].cutout == 1.0f, "a bubble never fades by opacity");
-    require(out[1].position[0] == 20 && out[1].position[2] == -500 && out[13].position[0] == 220,
+    // Opaque (depth-writing) frames come first: the bubble, then both mists.
+    require(result.opaque_count == 6 && out[0].cutout == 1.0f && out[6].cutout == 0.0f, "opaque particles first");
+    require(out[0].rgba[3] == 1.0f, "a bubble never fades by opacity");
+    require(std::fabs(out[6].rgba[3] - 128.0f / 255.0f) < 1e-6f, "mist takes its recorded opacity");
+    require(out[12].rgba[3] == 1.0f, "mist without a generated list stays whole");
+    require(out[7].position[0] == 20 && out[7].position[2] == -500 && out[1].position[0] == 220,
             "billboard scale and origin");
-    std::printf("particle pose passed: known=3 unknown=1 fade=recorded checks=%u\n", checks);
+    // A lit star: F3D lighting in the recorded view space by the list's own
+    // light (dir 0x28,0x28,0x28, ambient 0x3f, diffuse 0x7f in red).
+    {
+        sg_particle_vertex lit[3]{};
+        for (auto &v : lit) {
+            v.mode = SG_PARTICLE_LIT | SG_PARTICLE_MIX; v.rgba[3] = 255;
+            v.light_ambient[0] = 0x3f; v.light_diffuse[0] = 0x7f;
+            v.light_dir[0] = v.light_dir[1] = v.light_dir[2] = 0x28;
+        }
+        lit[0].normal[0] = lit[0].normal[1] = lit[0].normal[2] = 0.57735f; // facing the light
+        lit[1].normal[0] = lit[1].normal[1] = lit[1].normal[2] = -0.57735f; // facing away
+        lit[2].normal[2] = 1;                                                // 54.7 degrees off
+        sg_particle_frame star{0x0302C298u, SG_PARTICLE_CUTOUT, 0, 3, 0};
+        sg_particle_view stars{&star, lit, nullptr, 1, 3, 0, 0};
+        gc_sample one{};
+        one.valid_fields = GC_VALID_PARTICLES | GC_VALID_CAMERA; one.particles.count = 1;
+        auto &e = one.particles.entries[0]; e.display_list = 0x0302C298u;
+        e.basis[0] = e.basis[4] = e.basis[8] = int16_t(GC_PARTICLE_BASIS_ONE);
+        ghost_compositor::ParticleVertex shaded[ghost_compositor::particle_vertices]{};
+        ghost_compositor::Particles drawn{};
+        ghost_particle_pose::place(reinterpret_cast<sg_model *>(1), stars, one, gc_camera{}, identity, shaded, drawn);
+        require(drawn.count == 3 && std::fabs(shaded[0].rgba[0] - (0x3f + 0x7f) / 255.0f) < 1e-4f
+            && std::fabs(shaded[1].rgba[0] - 0x3f / 255.0f) < 1e-4f
+            && std::fabs(shaded[2].rgba[0] - (0x3f + 0x7f * 0.57735f) / 255.0f) < 1e-3f
+            && shaded[0].rgba[1] == 0 && shaded[0].mix == 1, "lit by the list's own light, mixed where the list mixes");
+        // The executed matrix turns the normal: a 180-degree turn faces it away.
+        e.basis[0] = e.basis[4] = e.basis[8] = int16_t(-GC_PARTICLE_BASIS_ONE);
+        ghost_particle_pose::place(reinterpret_cast<sg_model *>(1), stars, one, gc_camera{}, identity, shaded, drawn);
+        require(std::fabs(shaded[0].rgba[0] - 0x3f / 255.0f) < 1e-4f, "normals follow the executed matrix");
+    }
+    std::printf("particle pose passed: known=3 unknown=1 fade=recorded lit=f3d checks=%u\n", checks);
     return 0;
 }

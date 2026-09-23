@@ -42,6 +42,10 @@ int main() {
     quad(particles,-.25f,0,-.25f,.25f,-.5f,true,1,true);     // B: cutout of the thin white texel: nothing
     quad(particles,0,1,.25f,.75f,.5f,false,.5f,false);       // C: blended, BEHIND the body: x16..31 y20..27
     quad(particles,-1,-.5f,-.25f,.25f,0,false,1,true);       // D: behind the near wall: hidden
+    quad(particles,.5f,1,-1,-.25f,-.5f,false,1,true);        // E: the cap's mix: red toward the texel by its alpha
+    for(size_t i=particles.size()-6;i<particles.size();++i){particles[i].mix=1;particles[i].rgba[1]=particles[i].rgba[2]=0;}
+    quad(particles,.75f,1,-.25f,.25f,-.5f,false,0,true);     // F: opaque layer, shade alpha 0: alpha ignored
+    for(size_t i=particles.size()-6;i<particles.size();++i)particles[i].cutout=2;
     for(float opacity:{1.f,.5f}) {
         auto p=pose(body,opacity);
         p.particles.vertices=particles.data();p.particles.count=uint32_t(particles.size());
@@ -61,6 +65,9 @@ int main() {
             // C samples the green texel too, at vertex alpha .5, only off the body.
             const float a=200.f/255*.5f*opacity;
             if(x>=16 && y>=20 && y<28 && !on_body)for(int k=0;k<3;++k)rgb[k]=green[k]*a+rgb[k]*(1-a);
+            const float mixed[3]={255*(1-200.f/255),200,0}; // mix(red, green, 200/255), shade alpha 1
+            if(x>=24 && y<12)for(int k=0;k<3;++k)rgb[k]=mixed[k]*opacity+rgb[k]*(1-opacity);
+            if(x>=28 && y>=12 && y<20)for(int k=0;k<3;++k)rgb[k]=green[k]*opacity+rgb[k]*(1-opacity);
             for(int k=0;k<3;++k) {
                 const float got=image[(y*32+x)*4+k];
                 if(std::abs(got-rgb[k])>1.6f)
@@ -74,6 +81,6 @@ int main() {
     require(gc::begin_batch(c,target(scene,gc::Depth::ordinary),&bad,1)==gc::Result::invalid,"partial particle triangle refused");
     gc::destroy(c);
     require(GetForegroundWindow()==foreground,"foreground preserved");
-    std::puts("particles passed: cutout=texels blend=alpha behind_body=hidden behind_terrain=hidden clean=unchanged state=restored");
+    std::puts("particles passed: cutout=texels blend=alpha mix=texel_alpha opaque=alpha_ignored behind_body=hidden behind_terrain=hidden clean=unchanged state=restored");
     return 0;
 }

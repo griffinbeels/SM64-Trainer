@@ -147,7 +147,7 @@ def assert_submerged(water, particles):
     Its recorded particles (Mario's only) are drawn from the ROM's own frames."""
     assert water["tinted"] > 300 and water["dry"] > 300
     assert water["outside_pixels_changed"] == water["blend_errors"] == 0
-    assert particles["recorded"] == 3 and particles["pixels"] > 200
+    assert particles["recorded"] == 5 and particles["pixels"] > 200
 
 
 def assert_player_first(occlusion):
