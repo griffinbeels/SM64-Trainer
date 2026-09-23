@@ -239,6 +239,31 @@ counts 0 ghostless frames over 11 loads; forwarding the old withdraw hides the
 load frame, ignoring `suspended` draws the paused frames, and not reviving on
 a restore hides the load frame (each red).
 
+A capture restart keeps the run (his report, 2026-09-23: spamming state loads
+in Blast Away the Wall, "eventually the ghost broke, and it never showed up
+again, until I reset"). His journal and pose archive show the cause: mid-run
+the recorder's GPU capture failed ("pending age limit") and reconnected, which
+opened a new capture channel (new owner token) in the same trainer process.
+The worker revoked, reconfigured capture (a new configuration and epoch) and
+cleared both its recovery and its origin ledger; the tracker's arm still named
+the attempt's first frame, captured before the restart, so it could never
+resolve again until the next attempt re-armed. The loads were incidental.
+Now any revoke except a protocol refusal parks the recovery (only a ROM close
+also demands an exact global timer afterwards), and the re-live on the same
+cartridge hands it back to the same process, tracker session and layout,
+still suspended as parked (restoring used to re-demand an exact global timer,
+which Usamune loads never meet because they keep the timer running). A star
+resumes by its own IGT at once; a segment at its next witnessed load. The renderer keeps its
+own checkpoints across the revoke too (`detach`), and a worker restore of the
+same run (a recovered origin with no command skipped in between, since worker
+revisions never repeat) keeps them on rebind, so later loads still draw on
+their own frame. The recovery witness restarts capture mid-run and then makes
+600 rapid loads (star and segment; backward, forward, repeated; Usamune style
+holding IGT a few frames and PJ64 style rewinding the timer): 2 hidden frames
+after the restart for the star, 1 for the segment's first load (the worker's
+first command arrives a list later), 0 wrong frames. Before, the star ghost
+never returned in that run.
+
 ### Several ghosts
 
 One command displays a set of up to 16 saved recordings (the PB plus others)
