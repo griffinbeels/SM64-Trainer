@@ -272,12 +272,19 @@ int main(int argc, char** argv) {
             for(uint32_t i=58;i<particles.frame_count;++i)std::fprintf(stderr," %08x=%u",particles.frames[i].display_list,particles.frames[i].vertex_count);
             std::fprintf(stderr,"\n");
             {
-                // A wall-kick star: 8 lit triangles lit by its list's own light.
+                // A lit cartoon star: 8 triangles lit by its list's own light.
                 const auto& star=particles.frames[58];
                 const auto& v=particles.vertices[star.first_vertex];
                 check(star.display_list==0x0302C298u && star.vertex_count==24 && (v.mode&SG_PARTICLE_LIT)
                     && v.light_dir[0]==0x28 && v.normal[0]*v.normal[0]+v.normal[1]*v.normal[1]+v.normal[2]*v.normal[2]>0.5f,
                     "lit star mesh");
+                // The star the game draws (oAnimState 4): unlit, every vertex flat yellow,
+                // as his ground-pound footage shows (255,253,0 decoded).
+                const auto& drawn=particles.frames[62];
+                bool yellow=drawn.display_list==0x0302C318u && drawn.vertex_count==24;
+                for(uint32_t i=0;yellow && i<drawn.vertex_count;++i){const auto& d=particles.vertices[drawn.first_vertex+i];
+                    yellow=!(d.mode&SG_PARTICLE_LIT) && d.rgba[0]==255 && d.rgba[1]==255 && d.rgba[2]==0 && d.rgba[3]==255;}
+                check(yellow,"drawn star is unlit yellow");
                 // The cap: shade mixed toward its logo, alpha by the object's opacity.
                 const auto& cap=particles.frames[69];
                 bool mixes=false;

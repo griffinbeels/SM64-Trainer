@@ -47,8 +47,9 @@ static const struct { uint32_t dl; uint32_t layer; } common1_frames[] = {
     {0x0302BCD0u, SG_PARTICLE_CUTOUT},                               /* sand (bhvGroundSand) */
     {0x0301CDE0u, SG_PARTICLE_CUTOUT},                               /* leaves (bhvSnowLeafParticleSpawn) */
     {0x0302C8A0u, SG_PARTICLE_CUTOUT},                               /* snow (bhvGroundSnow, white particle) */
-    /* Lit meshes: wall-kick/ground-pound stars (MODEL_CARTOON_STAR), punch
-     * dirt (MODEL_DIRT_ANIMATION), the wind-knocked cap (MODEL_MARIOS_CAP). */
+    /* Meshes: ground-pound/wall-bonk stars (MODEL_CARTOON_STAR; the game draws
+     * oAnimState 4, the unlit yellow 0x0302C318), punch dirt
+     * (MODEL_DIRT_ANIMATION), the wind-knocked cap (MODEL_MARIOS_CAP). */
     {0x0302C298u, SG_PARTICLE_OPAQUE}, {0x0302C2B8u, SG_PARTICLE_OPAQUE},
     {0x0302C2D8u, SG_PARTICLE_OPAQUE}, {0x0302C2F8u, SG_PARTICLE_OPAQUE},
     {0x0302C318u, SG_PARTICLE_OPAQUE},

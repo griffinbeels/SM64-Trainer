@@ -148,6 +148,9 @@ def assert_submerged(water, particles):
     assert water["tinted"] > 300 and water["dry"] > 300
     assert water["outside_pixels_changed"] == water["blend_errors"] == 0
     assert particles["recorded"] == 5 and particles["pixels"] > 200
+    # His footage (attempt 2794, a ground pound) shows the stars flat yellow, 255,253,0.
+    assert particles["star_pixels"] > 30 and particles["star_rgb"][2] <= 10
+    assert min(particles["star_rgb"][:2]) >= 243
 
 
 def assert_player_first(occlusion):

@@ -615,9 +615,13 @@ stores the alpha with the particle (`gc_particle.opacity`, flag
 `GC_PARTICLE_OPACITY`), and playback multiplies it into frames the model
 marks `fade`.
 
-Three kinds are lit 3D meshes, also from common1: the wall-kick and
-ground-pound stars (`MODEL_CARTOON_STAR`, 0x0302C298..0x0302C318, four light
-colours and an unlit one), the punch dirt (`MODEL_DIRT_ANIMATION`,
+Three kinds are 3D meshes, also from common1: the stars a ground pound or a
+wall bonk throws (`MODEL_CARTOON_STAR`, 0x0302C298..0x0302C318, four light
+colours and an unlit one; a successful wall kick throws none). Those stars
+set `oAnimState` 4, so the game draws the unlit list 0x0302C318, flat yellow
+255,255,0 at every angle; his footage agrees (attempt 2794's ground pound
+decodes to 255,253,0), and the pipeline witness pins its render to that
+colour. The other kinds are the punch dirt (`MODEL_DIRT_ANIMATION`,
 0x0302C378..0x0302C458) and the wind- or snowman-knocked cap
 (`MODEL_MARIOS_CAP`, 0x03022F48, 156 vertices; a cap Klepto drops is Klepto's
 and is not recorded). The reader follows their `gsSPLight` loads (G_MOVEMEM
@@ -628,8 +632,8 @@ Placement lights each vertex with F3D's own formula, as GLideN64's
 `gSPLightVertex` does: ambient plus diffuse times N.L, negatives dropped,
 clamped, with the list's light in the recorded view space and the normal
 turned by the executed matrix. That is the lighting the game drew at record
-time, including the cartoon stars' back-facing normals (0,0,-127), which leave
-them at their ambient colour. The game's layer decides depth: opaque and
+time, including the lit cartoon-star lists' back-facing normals (0,0,-127),
+which leave those at their ambient colour. The game's layer decides depth: opaque and
 texture-edge frames (alpha ignored, or tested at .5) are drawn first with a
 nearest-surface prepass and one colour per pixel, so an opaque mesh never
 blends with itself; translucent frames follow without writing depth. A cap
