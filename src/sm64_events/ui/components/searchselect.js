@@ -33,10 +33,13 @@ const FILTER_FLOOR = 8;
  * its own face — "we should see its name *in its font*"). The caller owns
  * open/close state so it can keep the panel up through a failed action (the
  * link door shows the server's 409 where the click landed).
+ * `footer` is an optional extra row under the options for an entry the list
+ * cannot hold (the goal picker's typed time).
  */
 export function SearchMenu({ title, groups, onPick, onClose, busy = false,
                              error = null, emptyNote = "Nothing to pick.",
-                             align = "left", selected = null }) {
+                             align = "left", selected = null,
+                             footer = null }) {
   const [filter, setFilter] = useState("");
   const inputRef = useRef(null);
   const menuRef = useRef(null);
@@ -107,6 +110,7 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
             })}
           </div>`)}
     </div>
+    ${footer ? html`<div class="search-menu-footer">${footer}</div>` : ""}
     ${error ? html`<p class="search-menu-error">${error}</p>` : ""}
   </div>`;
 }

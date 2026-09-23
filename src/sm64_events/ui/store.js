@@ -16,6 +16,7 @@ const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   "pb_saved", "pb_undone", "session_started", "target_changed",
   "star_collected", "strat_set", "rank_standards_changed",
   "rank_mode_changed", "game_version_changed", "icons_changed", "marelo_changed",
+  "goal_changed",
   "route_selected",
   "segment_progress",
   // `spawned` LEFT this set on 2026-09-03 (task 0122). It joined in round 26

@@ -42,6 +42,7 @@ import { effectiveRankDisplayMode, readRankDisplayMode,
          writeRankDisplayMode } from "../rankdisplaymode.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
+import { GoalPlate, useEntryGoals } from "./goalplate.js";
 
 const html = htm.bind(h);
 
@@ -339,7 +340,7 @@ export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
-                          active = false, pieces = null,
+                          active = false, pieces = null, goal = null,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
   const [showHidden, setShowHidden] = useState(false);
@@ -629,8 +630,14 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            (above) and the page-turn effect (above) already exist for a
            trend-graph dot; a PB link needs no second implementation of
            "open + turn to the right page + scroll + flash". */""}
-      <${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock} rows=${rows}
-        pick=${pbPick} t=${t} showCaveat=${false} />
+      ${/* PB over GOAL (task 0106): the PB tag keeps its link and sits on
+           top; the goal line under it is the Scorecard's per-entry goal for
+           the ladder this card grades on (`standards.entity`), and picking
+           one pins it there. One fixed-size plate so a stream can crop it. */""}
+      <${GoalPlate} goalKey=${standards.entity} goal=${goal} t=${t}
+        attempts=${sec.attempts} onChanged=${t.refresh}
+        pbTag=${html`<${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock}
+          rows=${rows} pick=${pbPick} t=${t} showCaveat=${false} />`} />
       ${/* The book mark -- a doorway OUT to the community sheet for whatever
            this card is showing: it opens the Library at this card's target
            and strategy. It is the ONLY such doorway on the card now; the one
@@ -1039,6 +1046,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // top-level, not nested, and must not borrow the nested case's leniency.
   const nestedKeys = [...childrenOf.values()].flat().map(entityKey);
   const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys);
+  const goals = useEntryGoals(t, openCandidates.map((sec) => standardsIdentity(sec).entity));
   // ONE renderer, used for a top-level card and for a nested [[subsection]]
   // alike (round 22) -- his "These cards should work exactly the same way as
   // normal" is structural here rather than a promise: a child goes through
@@ -1068,6 +1076,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
       onSetOpen=${(next) => setCardOpen(ek, next)}
       active=${activeKey != null && ek === activeKey}
       pieces=${kids}
+      goal=${goals[standardsIdentity(sec).entity] || null}
       nameOverflow=${nameOverflow} rankIconSize=${rankIconSize}
       rankPlacement=${rankPlacementFor(tuning, { isNarrow, twoLadder })}
       nextStepMode=${nextStepModeFor(tuning, { isNarrow, twoLadder })} />`;
