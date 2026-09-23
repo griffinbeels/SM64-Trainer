@@ -1787,6 +1787,17 @@ class Database:
                                (strat_tag, attempt_id))
             self._conn.commit()
 
+    def retag_attempts(self, attempt_ids: list[int],
+                       strat_tag: str | None) -> None:
+        """`retag_attempt` and `retag_pbs_for_attempt` for many rows in one
+        transaction: a strategy pick adopting every untagged row of its
+        entity (service._adopt_untagged)."""
+        rows = [(strat_tag, attempt_id) for attempt_id in attempt_ids]
+        with self._lock, self._conn:
+            self._conn.executemany("UPDATE pbs SET strat_tag=? WHERE attempt_id=?", rows)
+            self._conn.executemany("UPDATE attempts SET strat_tag=? WHERE id=?", rows)
+            self._conn.commit()
+
     def retag_pbs_for_attempt(self, attempt_id: int,
                               strat_tag: str | None) -> None:
         """Follow an attempt's reclassification into the PBs it saved.
