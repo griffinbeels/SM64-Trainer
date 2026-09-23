@@ -113,7 +113,7 @@ class PoseArchive:
     def __init__(self, path: Path, *, max_records: int = ARCHIVE_MAX_RECORDS,
                  retention_s: float = ARCHIVE_RETENTION_S, boundary_slack_s: float = 1,
                  dance_wait_s: float = DANCE_TAIL_WAIT_S, dance_stall_s: float = DANCE_TAIL_STALL_S,
-                 clock=time.monotonic):
+                 clock=time.monotonic, sleep=time.sleep):
         if type(max_records) is not int or not 1 <= max_records <= ARCHIVE_MAX_RECORDS:
             raise ValueError("pose archive record bound is invalid")
         if (retention_s is None or not math.isfinite(retention_s) or retention_s <= 0
@@ -123,7 +123,7 @@ class PoseArchive:
         self.max_records, self.retention_s = max_records, retention_s
         self.boundary_slack_s = boundary_slack_s
         self.dance_wait_s, self.dance_stall_s = dance_wait_s, dance_stall_s
-        self._clock = clock
+        self._clock, self._sleep = clock, sleep  # injectable: tests run on a fake clock
         self._lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(self.path, check_same_thread=False)
@@ -309,8 +309,8 @@ class PoseArchive:
     def _dance_tail(self, identity: int, after: int, close: Frame) -> list[bytes]:
         """Wait, bounded, for the recorder to capture the dance; outside the
         lock between looks so capture keeps committing."""
-        deadline = time.monotonic() + self.dance_wait_s
-        seen, moved = -1, time.monotonic()
+        deadline = self._clock() + self.dance_wait_s
+        seen, moved = -1, self._clock()
         while True:
             with self._reader() as db:
                 recording = self._db is not None
@@ -318,12 +318,12 @@ class PoseArchive:
                     "SELECT data FROM poses WHERE producer=? AND sequence>? ORDER BY sequence LIMIT ?",
                     (identity, after, 4 * DANCE_TAIL_MAX_FRAMES))]
             tail, ended = dance_tail(close, candidates)
-            now = time.monotonic()
+            now = self._clock()
             if len(candidates) != seen:
                 seen, moved = len(candidates), now
             if ended or not recording or now >= deadline or now - moved >= self.dance_stall_s:
                 return tail
-            time.sleep(0.1)
+            self._sleep(0.1)
 
     def status(self) -> dict:
         with self._reader() as db:

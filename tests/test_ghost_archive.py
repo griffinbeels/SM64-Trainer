@@ -395,12 +395,18 @@ def test_export_waits_for_the_dance_the_recorder_is_still_capturing(tmp_path):
 
 
 def test_a_stalled_or_closed_recording_keeps_the_dance_it_has(tmp_path):
-    archive = PoseArchive(tmp_path / "poses.sqlite", dance_stall_s=0.2)
+    # A fake clock: wall-time bounds flaked under a loaded merge check (0.52 s vs 0.5 s).
+    now, naps = [0.0], []
+
+    def nap(seconds):
+        naps.append(seconds)
+        now[0] += seconds
+
+    archive = PoseArchive(tmp_path / "poses.sqlite", dance_stall_s=0.2, clock=lambda: now[0], sleep=nap)
     archive.ingest(producer(), tuple(danced(dance_rows=2)))  # no end yet
-    begun = time.monotonic()
     assert archive.export_attempt(attempt(), tmp_path / "stalled.ghost")["tail_records"] == 2
-    assert time.monotonic() - begun < 1.5
+    assert 0.2 <= sum(naps) <= 0.3 + 1e-9  # the stall ends the wait, not the whole cap
     archive.close()
-    begun = time.monotonic()
+    naps.clear()
     assert archive.export_attempt(attempt(), tmp_path / "closed.ghost")["tail_records"] == 2
-    assert time.monotonic() - begun < 0.5
+    assert naps == []  # a closed recording has nothing more coming
