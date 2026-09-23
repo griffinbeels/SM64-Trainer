@@ -426,10 +426,12 @@ int main(int argc, char** argv) {
             const struct { uint32_t kind; unsigned first, cells; int16_t animations; unsigned vertices; const char* name; } kinds[]={
                 {SG_HELD_PENGUIN,SG_ATLAS_CELL_PENGUIN,6,5,402,"penguin"},
                 {SG_HELD_KING_BOBOMB,SG_ATLAS_CELL_KING_BOBOMB,6,12,348,"King Bob-omb"},
-                {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"}};
+                {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"},
+                {SG_HELD_BREAKABLE_BOX,SG_ATLAS_CELL_BREAKABLE_BOX,2,0,36,"cork box"},
+                {SG_HELD_MIPS,SG_ATLAS_CELL_MIPS,1,5,588,"Mips"}};
             for(const auto &k:kinds) {
-                sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=0; o.held_animation_frame=0;
-                check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
+                // A box has no animation: id -1, and its parts' own transforms.
+                sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=k.animations?0:-1; o.held_animation_frame=0;                check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
                 bool own=false;
                 for(unsigned i=alone;i<mesh.out.vertex_count;++i) {
                     const unsigned cell=unsigned(mesh.out.uv[2*i]*SG_ATLAS_CELLS);
@@ -443,6 +445,13 @@ int main(int argc, char** argv) {
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=open,"penguin blinks");
                     o.held_global_timer=50;
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()==open,"penguin blink cycle");
+                }
+                if(!k.animations) {
+                    // oAnimState picks its texture (the switch's second list).
+                    const auto first=mesh.snapshot();
+                    o.held_anim_state=1;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=first,"box variant");
+                    o.held_anim_state=0;
                 }
                 o.held_animation_id=k.animations;
                 check(sg_model_evaluate(model,&o,&mesh.out)==SG_INVALID_ANIMATION,"held animation table end");

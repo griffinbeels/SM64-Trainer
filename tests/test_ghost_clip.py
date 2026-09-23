@@ -255,8 +255,10 @@ def test_refused_pose_keeps_only_its_named_reason():
 def test_held_object_rides_a_pose_with_a_segment_0x13_behaviour():
     held = frame_from_bytes(frame(held=(0x13003174, 1, 12)))
     assert held.held_behaviour == 0x13003174 and frame_from_bytes(frame()).held_behaviour == 0
+    # A box has no animation: id -1 at frame 0 only.
+    assert frame_from_bytes(frame(held=(0x13004218, -1, 0))).held_behaviour == 0x13004218
     for broken in (frame(valid=29, held=(0x13003174, 1, 12)), frame(held=(0x80003174, 1, 12)),
-                   frame(held=(0x13003174, -1, 12))):
+                   frame(held=(0x13003174, -1, 12)), frame(held=(0x13004218, -2, 0))):
         with pytest.raises(ClipError, match="held object"):
             frame_from_bytes(broken)
     raw = bytearray(frame())

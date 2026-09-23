@@ -280,7 +280,8 @@ static void held_block(Fixture &f) {
     const auto holding=[&]{
         scene(f);f.put16(f.config.object_pool+0x42,0x8123);
         f.put32(f.config.mario_state+0x7c,bomb);
-        f.put16(bomb+0x74,1);f.put16(bomb+2,0x20);f.put32(bomb+0x14,0);
+        // Its own model (sharedChild), not Mario's: the hand draws it.
+        f.put16(bomb+0x74,1);f.put16(bomb+2,0x20);f.put32(bomb+0x14,Fixture::base+0x14200);
         f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);
         f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0xf0,1);
         f.put32(bomb+0x3c,anim);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
@@ -308,6 +309,20 @@ static void held_block(Fixture &f) {
     none(bomb+0x40,0x00188123,"frame past the held animation accepted");
     none(Fixture::body+0x18,0x7fc00000,"nonfinite HOLP accepted");
     none(f.config.mario_state+0x7c,bomb+4,"unaligned held pointer accepted");
+    none(bomb+0x14,0,"held object without a model accepted"); // Bowser's tail anchor
+    // A box has no animation (id -1, frame 0): the hand drew it only if
+    // Mario's body was drawn, so it rides a root proven by this frame's lists
+    // and never a carried one. An animated object's own timer proves itself.
+    const auto box=[&]{holding();f.put32(bomb+0x20c,f.config.behaviour_base+0x4218);f.put32(bomb+0x3c,0);};
+    box();check(frame(true),"held box not captured");
+    check(h.behavior==0x13004218 && h.animation_id==-1 && h.animation_frame==0 && h.anim_y_translation==0
+          && h.anim_state==1,"held box fields");
+    box();begin(f,p);ghost_root_finish(p,true,f.sample,&memory);
+    check((f.sample.valid_fields&GC_VALID_POSE) && !(f.sample.valid_fields&GC_VALID_HELD) && zero(f.sample.held),
+          "held box kept beside a carried root");
+    holding();begin(f,p);ghost_root_finish(p,true,f.sample,&memory);
+    check((f.sample.valid_fields&GC_VALID_POSE) && (f.sample.valid_fields&GC_VALID_HELD),
+          "animated held object beside a carried root");
     holding();f.config.behaviour_base=0;check(!frame(true),"capture without a behaviour base");
     f.config.behaviour_base=0x800EB180;
     f.put32(f.config.mario_state+0x7c,0);f.put16(bomb+0x74,0);

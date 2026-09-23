@@ -13,14 +13,19 @@ bool sample_valid(const gc_sample &s, uint32_t required) {
     return s.bytes == sizeof(s) && s.version == GC_VERSION && s.epoch && s.sequence
         && s.dlist_serial && (s.valid_fields & required) == required;
 }
-// The held objects the model draws, by segmented behaviour (US; each found
-// by the LOAD_ANIMATIONS of its model's table in the ROM's behaviour segment).
+// The held objects the model draws, by segmented behaviour (US; each agrees
+// with STROOP's map in data/behaviours_us.tsv, and the animated ones with the
+// LOAD_ANIMATIONS of their model's table in the ROM's behaviour segment).
 struct HeldModel { uint32_t behavior; uint32_t kind; };
 constexpr HeldModel held_models[] = {
     {0x13003174u, SG_HELD_BOBOMB},      // bhvBobomb
     {0x130020E8u, SG_HELD_PENGUIN},     // bhvSmallPenguin
     {0x130001F4u, SG_HELD_KING_BOBOMB}, // bhvKingBobomb
     {0x13000528u, SG_HELD_CHUCKYA},     // bhvChuckya
+    {0x13004218u, SG_HELD_BREAKABLE_BOX}, // bhvBreakableBoxSmall (the cork box)
+    {0x13001650u, SG_HELD_BREAKABLE_BOX}, // bhvJumpingBox (the crazy box, same model)
+    // bhvMips (0x130044FC) waits: most of Mips' texture coordinates run past
+    // its 32x32 fur under G_TX_CLAMP, which the atlas cannot yet reproduce.
 };
 uint32_t held_kind(uint32_t behavior) {
     for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;

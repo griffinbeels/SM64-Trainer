@@ -111,14 +111,19 @@ int main() {
         && applied.held_animation_frame==5 && applied.held_anim_state==1 && applied.held_position[1]==120
         && applied.held_scale[2]==1 && applied.roll==77 && applied.view[0]==1 && applied.view[15]==1
         && applied.held_global_timer==777);
-    // The penguin, King Bob-omb and Chuckya by their behaviours.
+    // The penguin, King Bob-omb, Chuckya and both boxes by their behaviours; not
+    // yet Mips (its clamped texture coordinates).
     const struct { uint32_t behavior, kind; } kinds[]={{0x130020E8u,SG_HELD_PENGUIN},
-        {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA}};
+        {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA},{0x13004218u,SG_HELD_BREAKABLE_BOX},
+        {0x13001650u,SG_HELD_BREAKABLE_BOX}};
     for(const auto &k:kinds) {
         saved.held.behavior=k.behavior;
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
         assert((applied.fields&SG_POSE_HELD) && applied.held_kind==k.kind);
     }
+    saved.held.behavior=0x130044FCu;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(!(applied.fields&SG_POSE_HELD));
     saved.held.behavior=0x13003174u;
     // A refused held object leaves Mario drawn; an unknown one never asks.
     refuse_held=true;

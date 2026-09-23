@@ -175,7 +175,7 @@ static int valid_pose(const sg_pose *pose)
             (pose->scale[i] > -0.000001f && pose->scale[i] < 0.000001f)) return 0;
     if (pose->fields & SG_POSE_HELD) {
         if (pose->held_kind == SG_HELD_NONE || pose->held_kind >= SG_HELD_KINDS ||
-            pose->held_animation_id < 0 || pose->held_animation_frame < 0) return 0;
+            pose->held_animation_id < -1 || pose->held_animation_frame < 0) return 0;
         for (i = 0; i < 3; ++i)
             if (!finite_bound(pose->held_position[i], 10000000.0f) ||
                 !finite_bound(pose->held_scale[i], 100.0f) ||

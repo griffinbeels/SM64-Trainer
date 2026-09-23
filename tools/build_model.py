@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+from typing import NamedTuple
 import subprocess
 import urllib.request
 import zipfile
@@ -29,22 +30,37 @@ SOURCE_FILES = (
 # model's ROM segment: its MIO0 block in the US ROM (the same in the Usamune
 # ROM), located by matching the upstream vertices at their segment offsets.
 # Order is the sg_held_kind order in model.h (checked at compile time).
-# {name: (geo layout, animation table, segment ROM offset, list input, geo/animation inputs)}
+# shift: where the model's data sits in its US segment minus the decomp
+# comment's address (Mips' group sits 0xF0 later in the US ROM).
+class HeldModel(NamedTuple):
+    geo: str
+    table: str | None  # None: the object has no animation
+    segment: int       # ROM offset of the MIO0 block
+    lists: str         # list input
+    inputs: tuple[str, ...]  # geo and animation inputs
+    shift: int = 0
+
+
 def _anims(actor: str, *addresses: str) -> tuple[str, ...]:
     return (*(f"{actor}_anim_{address}" for address in addresses), f"{actor}_anims", f"{actor}_geo")
 
 
 HELD_MODELS = {
-    "bobomb": ("black_bobomb_geo", "bobomb_seg8_anims_0802396C", 0x1F2200, "bobomb_model",
-               ("bobomb_anim_walk", "bobomb_anim_held", "bobomb_anims", "bobomb_geo")),
-    "penguin": ("penguin_geo", "penguin_seg5_anims_05008B74", 0x160670, "penguin_model",
-                _anims("penguin", "050079E4", "05007DCC", "050087C0", "05008B5C")),
-    "king_bobomb": ("king_bobomb_geo", "king_bobomb_seg5_anims_0500FE30", 0x134D20, "king_bobomb_model",
-                    _anims("king_bobomb", "0500BDFC", "0500C2AC", "0500C520", "0500C774", "0500CFCC",
-                           "0500D5B0", "0500D978", "0500DDD8", "0500E10C", "0500F078", "0500F6C8",
-                           "0500FE18")),
-    "chuckya": ("chuckya_geo", "chuckya_seg8_anims_0800C070", 0x1F2200, "chuckya_model",
-                _anims("chuckya", "0800AF68", "0800B1A8", "0800B4A8", "0800B9F8", "0800BBEC", "0800C058")),
+    "bobomb": HeldModel("black_bobomb_geo", "bobomb_seg8_anims_0802396C", 0x1F2200, "bobomb_model",
+                        ("bobomb_anim_walk", "bobomb_anim_held", "bobomb_anims", "bobomb_geo")),
+    "penguin": HeldModel("penguin_geo", "penguin_seg5_anims_05008B74", 0x160670, "penguin_model",
+                         _anims("penguin", "050079E4", "05007DCC", "050087C0", "05008B5C")),
+    "king_bobomb": HeldModel("king_bobomb_geo", "king_bobomb_seg5_anims_0500FE30", 0x134D20, "king_bobomb_model",
+                             _anims("king_bobomb", "0500BDFC", "0500C2AC", "0500C520", "0500C774", "0500CFCC",
+                                    "0500D5B0", "0500D978", "0500DDD8", "0500E10C", "0500F078", "0500F6C8",
+                                    "0500FE18")),
+    "chuckya": HeldModel("chuckya_geo", "chuckya_seg8_anims_0800C070", 0x1F2200, "chuckya_model",
+                         _anims("chuckya", "0800AF68", "0800B1A8", "0800B4A8", "0800B9F8", "0800BBEC",
+                                "0800C058")),
+    "breakable_box": HeldModel("breakable_box_small_geo", None, 0x1F2200, "breakable_box_model",
+                               ("breakable_box_geo",)),
+    "mips": HeldModel("mips_geo", "mips_seg6_anims_06015634", 0x1D8310, "mips_model",
+                      _anims("mips", "06013248", "0601369C", "060139F8", "06014B94", "0601561C"), shift=0xF0),
 }
 MARIO_ATLAS_CELLS = 13
 HELD_HEADER = """#include "../include/sm64.h"
@@ -58,14 +74,20 @@ Gfx *geo_update_held_mario_pos(s32 callContext, struct GraphNode *node, void *co
 """
 # Each held graph is wrapped as libsm64 wraps Mario (mario_geo_libsm64): only a
 # z-buffered master list emits display lists, and libsm64's master-list hack
-# drops the first opaque entry, so an empty list takes that place.
+# drops the first opaque entry, so an empty list takes that place. The unit
+# scale publishes the root's fixed-point matrix (sg_traverse_frozen computes
+# only the float one), as geo_process_held_object's mtxf_to_mtx does: a graph
+# whose lists hang straight off its root (the box) draws under it.
 HELD_ROOT = """const GeoLayout sg_{name}_root[] = {{
    GEO_NODE_START(),
    GEO_OPEN_NODE(),
       GEO_ZBUFFER(1),
       GEO_OPEN_NODE(),
          GEO_DISPLAY_LIST(LAYER_OPAQUE, sg_{name}_skipped),
-         GEO_BRANCH(1, {geo}),
+         GEO_SCALE(0x00, 65536),
+         GEO_OPEN_NODE(),
+            GEO_BRANCH(1, {geo}),
+         GEO_CLOSE_NODE(),
       GEO_CLOSE_NODE(),
    GEO_CLOSE_NODE(),
    GEO_END(),
@@ -180,7 +202,7 @@ def _stage_held(files: dict, source: Path) -> None:
     destination = source / "src/decomp/held"
     destination.mkdir(exist_ok=True)
     cell, widths, heights, textures, models = MARIO_ATLAS_CELLS, [], [], [], []
-    for name, (geo, table, segment, lists, inputs) in HELD_MODELS.items():
+    for name, (geo, table, segment, lists, inputs, shift) in HELD_MODELS.items():
         kind = f"SG_HELD_{name.upper()}"
         list_text = files[lists].read_text(encoding="utf-8")
         text = "".join(files[key].read_text(encoding="utf-8") + "\n" for key in inputs)
@@ -189,7 +211,7 @@ def _stage_held(files: dict, source: Path) -> None:
             cells[symbol] = cell
             widths.append(width)
             heights.append(height)
-            textures.append(f"{{{kind}, {cell}u, {segment:#x}u, {int(symbol[-6:], 16):#x}u}}")
+            textures.append(f"{{{kind}, {cell}u, {segment:#x}u, {int(symbol[-6:], 16) + shift:#x}u}}")
             cell += 1
         if not cells:
             raise ValueError(f"held model {name} reaches no texture")
@@ -214,9 +236,9 @@ def _stage_held(files: dict, source: Path) -> None:
         # libsm64's shadow node draws nothing and skips its children, so a
         # held graph's shadow becomes a plain start node.
         text = re.sub(r"GEO_SHADOW\([^)]*\)", "GEO_NODE_START()", text)
-        count = len(re.findall(r"^\s*&", _array(text, table), re.M))
+        count = len(re.findall(r"^\s*&", _array(text, table), re.M)) if table else 0
         text = HELD_HEADER + externs + f"extern const Gfx sg_{name}_skipped[];\n" + text
-        text += HELD_ROOT.format(name=name, geo=geo, table=table, count=count)
+        text += HELD_ROOT.format(name=name, geo=geo, table=table or "NULL", count=count)
         (destination / f"{name}.c").write_text(text, encoding="utf-8", newline="\n")
         models.append((name, kind))
     header = ("/* Generated by tools/build_model.py (HELD_MODELS): the held models, their\n"
@@ -250,7 +272,7 @@ def _reached_textures(text: str, geo: str, lists: str) -> list[tuple[str, int, i
         if name in seen:
             continue
         seen.add(name)
-        pending += re.findall(r"gsSPDisplayList\((\w+)\)", bodies[name])
+        pending += re.findall(r"gsSP(?:DisplayList|BranchList)\((\w+)\)", bodies[name])
         reached.update(re.findall(r"gsDPSetTextureImage\(G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, (\w+)\)", bodies[name]))
     found = []
     for symbol in re.findall(r"^ALIGNED8 static const u8 (\w+_texture_\w+)\[\]", lists, re.M):

@@ -54,6 +54,22 @@ def _patch_metal_wings(source: Path) -> None:
          '#include <stdint.h>\n#include "model.h"\n#include "decomp/held/held_cells.h"')
 
 
+def _patch_held(source: Path) -> None:
+    def edit(name, old, new):
+        replace(source / "src" / name, old, new)
+
+    # Held objects' lists end in a branch (the box's shared faces): the call
+    # and the end it implies.
+    edit("gfx_macros.h", "#define gsSPDisplayList(dl) \\",
+         "#define gsSPBranchList(dl) \\\n    GFXCMD_SubDisplayList, \\\n    (intptr_t)dl, \\\n"
+         "    GFXCMD_EndDisplayList\n\n#define gsSPDisplayList(dl) \\")
+    # A held object without an animation (a box) keeps its parts' own
+    # transforms, as geo_process_held_object skips the globals for it.
+    edit("decomp/game/rendering_graph_node.c", "geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 1);",
+         "if (gMarioObject->header.gfx.animInfo.curAnim != NULL)\n"
+         "        geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 0);")
+
+
 def patch(source: Path) -> None:
     def edit(name, old, new):
         replace(source / "src" / name, old, new)
@@ -103,6 +119,7 @@ def patch(source: Path) -> None:
          "#define gsSPClearGeometryMode(word) GFXCMD_GeometryMode, 0, (word)")
     edit("gfx_macros.h", '#include "gfx_adapter_commands.h"', '#include "gfx_adapter_commands.h"\n#include "model.h"')
     _patch_metal_wings(source)
+    _patch_held(source)
     edit("gfx_macros.h", "#define gsDPSetCombineMode(a, b) (GFXCMD_None)", """
 /* Token pasting retains the actual named combiner before its RDP expansion.
  * Both cycles must map to the same supported behavior; unknown modes fail the
@@ -129,8 +146,6 @@ def patch(source: Path) -> None:
          "            rotNode->rotation[2] = head[2];")
     edit("decomp/game/rendering_graph_node.c", "void geo_process_root_hack_single_node(struct GraphNode *node)",
          "void sg_traverse_frozen(struct GraphNode *node)")
-    edit("decomp/game/rendering_graph_node.c", "geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 1);",
-         "geo_set_animation_globals(&gMarioObject->header.gfx.animInfo, 0);")
     path = source / "src/decomp/game/rendering_graph_node.c"
     text = path.read_text(encoding="utf-8").replace("gDisplayListHead++", "NULL")
     text += """

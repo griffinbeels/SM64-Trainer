@@ -82,7 +82,7 @@ it lacks directional-eye variants, and unsupported states fail closed instead
 of indexing outside the atlas.
 
 Held objects (`SG_POSE_HELD`, `held.c`: the Bob-omb, the small penguin, King
-Bob-omb and Chuckya) are compiled from their upstream geo, lists and
+Bob-omb, Chuckya, the small breakable box and Mips) are compiled from their upstream geo, lists and
 animations like Mario (`HELD_MODELS` in `tools/build_model.py`). The build
 walks each geo's display lists for the RGBA16 textures it reaches and
 generates `held_cells.h`: the kinds, each texture's atlas cell and size, and
@@ -95,7 +95,13 @@ from a z-buffered master list, draws nothing under a shadow node (so a held
 graph's `GEO_SHADOW` becomes a start node), and drops the first opaque
 master-list entry (an empty list takes it). The graph evaluates in the
 caller's view so billboards face that camera, then returns to world space.
-A kind whose textures failed to load is refused, never drawn untextured. Vanish/ghost opacity is a
+A unit scale under the wrapper publishes the root's fixed-point matrix, which
+a graph whose lists hang off its root (the box) draws under. A kind without
+animations (the box) takes animation id -1. A kind whose textures failed to
+load is refused, never drawn untextured. Texture coordinates are mapped into
+the texture's cell without the tile's clamp or wrap: most of Mips' run past
+its 32x32 fur under G_TX_CLAMP (a few of King Bob-omb's, the penguin's and
+Chuckya's too), so the ghost does not show Mips yet. Vanish/ghost opacity is a
 renderer concern. Replaying geometry alone does not reproduce the entire
 game's material pipeline.
 

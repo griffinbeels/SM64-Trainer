@@ -62,7 +62,7 @@ def test_component_identity_covers_inputs_and_recipe(tmp_path, monkeypatch):
     builder = load_tool("build_model")
     inputs = json.loads((ROOT / "renderer/model/inputs.json").read_text(encoding="utf-8"))
     # Every pinned input is staged, and every held model's input is pinned.
-    held = {key for _, _, _, lists, keys in builder.HELD_MODELS.values() for key in (lists, *keys)}
+    held = {key for model in builder.HELD_MODELS.values() for key in (model.lists, *model.inputs)}
     assert set(inputs) == {"libsm64", "mario_geo", "mario_model"} | held
     assert all(len(item["sha256"]) == 64 for item in inputs.values())
     copied = tmp_path / "model"
