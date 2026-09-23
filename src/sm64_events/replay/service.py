@@ -510,11 +510,15 @@ class ReplayService:
             if not reason and previous is not None and previous[0] != identity:
                 return  # An older successful lookup cannot clear a newer projection's refusal.
             self._native_preservation_failures.pop(identity[0], None)
+            # Said once per refusal, not per lookup: the ghost picker re-reads
+            # every candidate every few seconds, and one old-format template
+            # filled the log with the same line every 4 s (2026-09-22).
+            repeated = previous is not None and previous == (identity, (reason or "")[:1024])
             if reason:
                 self._native_preservation_failures[identity[0]] = identity, reason[:1024]
                 while len(self._native_preservation_failures) > 128:
                     self._native_preservation_failures.popitem(last=False)
-        if reason:
+        if reason and not repeated:
             log.warning("Native Mario preservation refused for attempt %s (session %s): %s",
                         identity[0], identity[1], reason)
 

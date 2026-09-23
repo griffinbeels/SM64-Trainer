@@ -524,3 +524,20 @@ def test_playable_saved_copy_wins_over_an_older_permanent_file(tmp_path):
     path, _ = service.find_native(row.id)
     assert path == Path(saved["path"]).with_suffix(".ghost")
     assert service.native_preservation_reason(row.id) is None
+
+
+def test_an_older_file_is_logged_once_not_on_every_lookup(tmp_path, caplog):
+    import json
+    from test_ghost_recording import native_service
+
+    service, row, archive = native_service(tmp_path)
+    try:
+        service.preserve_native(row.id)
+        path, manifest = service.find_native(row.id)
+        path.with_suffix(".json").write_text(json.dumps({**manifest, "version": 2}), encoding="utf-8")
+        with caplog.at_level("WARNING", logger="sm64.replay"):
+            for _ in range(5):
+                assert service.find_native(row.id) is None
+        assert caplog.text.count("preservation refused") == 1
+    finally:
+        archive.close()
