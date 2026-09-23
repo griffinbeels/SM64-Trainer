@@ -42,7 +42,7 @@ OVERLAY_SOURCES = (
     "link_dispatch.h", "link_dispatch.cpp", "renderer_gl_state.h", "gl_snapshot.h",
     "source_format.h", "practice_rom.h", "context_lifetime.h", "context_lifetime.cpp",
     "renderer_boundary.h", "renderer_boundary.cpp", "link_source_api.h", "link_source_api.cpp", "source_descriptor3.h",
-    "ghost_capture.h", "ghost_capture.cpp", "ghost_root.h", "ghost_root.cpp", "ghost_pass.h", "ghost_pass.cpp",
+    "ghost_ram.h", "ghost_capture.h", "ghost_capture.cpp", "ghost_root.h", "ghost_root.cpp", "ghost_pass.h", "ghost_pass.cpp",
     "ghost_stream.h", "ghost_stream.cpp", "ghost_link.h", "ghost_link.cpp",
     "ghost_particle_capture.h", "ghost_particle_capture.cpp", "ghost_particle_gl.h",
     "ghost_particle_pose.h", "ghost_particle_pose.cpp",

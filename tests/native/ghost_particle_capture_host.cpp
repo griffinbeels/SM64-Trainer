@@ -2,6 +2,7 @@
  * count as Mario's, which executed display lists match them, and which 16 are
  * kept when more were drawn. No renderer, GL or model. */
 #include "ghost_particle_capture.h"
+#include "ghost_ram.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +37,25 @@ static void billboard(const float view[3], float scale, float out[16]) {
 }
 
 int main() {
+    // The one RDRAM reader (capture, root and particles): in range it reads the
+    // word-swapped bytes; past RDRAM it reads 0 and refuses, never the bytes
+    // beyond; a refusal sticks; fits() only asks.
+    {
+        uint8_t bytes[16]; std::memset(bytes, 0xAA, sizeof(bytes));
+        const uint32_t word = 0x11223344u; std::memcpy(bytes, &word, 4);
+        ghost::Ram r{bytes, 8};
+        require(r.u32(ghost::kseg0) == 0x11223344u && r.u16(ghost::kseg0) == 0x1122u
+            && r.u8(ghost::kseg0 + 3) == 0x44u && r.ok, "in-range reads");
+        require(!r.fits(ghost::kseg0 + 8, 4) && r.ok, "fits only asks");
+        require(r.u32(ghost::kseg0 + 8) == 0 && !r.ok, "a word past RDRAM reads 0 and refuses");
+        require(r.u32(ghost::kseg0) == 0, "a refused reader stays refused");
+        ghost::Ram low{bytes, 8};
+        require(low.u32(0x7ffffffcu) == 0 && !low.ok, "below KSEG0 refused");
+        ghost::Ram odd{bytes, 8};
+        require(odd.u32(ghost::kseg0 + 2) == 0 && !odd.ok, "an unaligned word refused");
+        ghost::Ram none{nullptr, 8};
+        require(!none.fits(ghost::kseg0, 4) && none.u32(ghost::kseg0) == 0, "no RAM reads nothing");
+    }
     Ram ram;
     const float mario[3] = {0, -100, -600};
     ram.u32(Ram::mario_pointer, Ram::slot(0)); ram.object(0, 0, mario);

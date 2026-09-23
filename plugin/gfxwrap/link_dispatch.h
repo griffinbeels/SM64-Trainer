@@ -15,6 +15,13 @@ void ContextLost();
 void DrawableChanged(); // same context and drawable, before a resize/fullscreen change
 bool DrawableCommitted(HWND, bool resized); // observes extent; returns original resize result
 bool DrawableExtent(unsigned *width, unsigned *height); // source-owned values; no query
+// The renderer's own draw framebuffer, viewport and depth range, as its
+// dispatched calls last set them: no driver query. Each is known only while
+// nominal, on the owner thread, and once observed (the viewport after the
+// renderer's first glViewport; a fresh context's draw FBO 0 and range 0..1).
+struct RasterState { uint32_t draw_framebuffer; int32_t viewport[4]; float depth_range[2];
+                     bool draw_known, viewport_known, depth_known; };
+bool Raster(RasterState *);
 // Nominal state only: copy validity/device-loss/source qualification are separate
 // prerequisites. Never promote this alone to a verified replay picture.
 bool CandidateBindings(renderer::Identity *, snapshot::RestoreBindings *);
@@ -41,11 +48,13 @@ bool __cdecl EndLayer();
 // This preserves visibility, not an identical driver error-flag history.
 GLenum APIENTRY GetError();
 void APIENTRY ReadBuffer(GLenum);
+void APIENTRY Viewport(GLint, GLint, GLsizei, GLsizei); // a Windows GL 1.1 export: aliased at the call
 void APIENTRY BindTexture(GLenum, GLuint);
 void APIENTRY DeleteTextures(GLsizei, const GLuint *);
 }
 #ifndef REPLAY_GL_DISPATCH_IMPLEMENTATION
 #define glReadBuffer replay_gl::ReadBuffer
+#define glViewport replay_gl::Viewport
 #define glBindTexture replay_gl::BindTexture
 #define glDeleteTextures replay_gl::DeleteTextures
 #define glGetError replay_gl::GetError

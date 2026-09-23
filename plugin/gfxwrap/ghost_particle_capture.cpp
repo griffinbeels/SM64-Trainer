@@ -1,36 +1,24 @@
 #include "ghost_particle_capture.h"
+#include "ghost_ram.h"
 #include <cmath>
 #include <cstring>
 
 namespace {
-constexpr uint32_t kseg0 = 0x80000000u, object_size = 0x260, object_count = 240;
+constexpr uint32_t object_size = 0x260, object_count = 240;
 // n64decomp object_fields.h / graph_node.h: gfx.node.flags, gfx.cameraToObject,
 // parentObj, activeFlags. GRAPH_RENDER_ACTIVE and ACTIVE_FLAG_ACTIVE are bit 0.
 constexpr uint32_t node_flags = 0x02, camera_to_object = 0x54, parent = 0x68, active_flags = 0x74;
 constexpr uint32_t chain_limit = 4; // splash -> droplet is the deepest Mario chain
 constexpr float match_tolerance = 0.05f; // 16.16 executed matrix vs float source
 
-struct Ram {
-    const uint8_t *data; uint32_t size;
-    bool has(uint32_t address, uint32_t count) const {
-        return address >= kseg0 && !(address & 3u) && uint64_t(address - kseg0) + count <= size;
-    }
-    uint32_t u32(uint32_t address) const {
-        const uint8_t *p = data + (address - kseg0);
-        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-    }
-    uint16_t u16(uint32_t address) const { // word-swapped RDRAM
-        const uint32_t word = u32(address & ~3u);
-        return uint16_t((address & 2u) ? word : word >> 16);
-    }
-    float f32(uint32_t address) const { const uint32_t bits = u32(address); float v; std::memcpy(&v, &bits, 4); return v; }
-};
+using Ram = ghost::Ram;
+using ghost::kseg0;
 }
 
 void ghost_particles_prepare(gc_particle_probe &p, const uint8_t *ram, uint32_t bytes,
                              uint32_t mario_object, uint32_t pool) {
     p = {};
-    const Ram r{ram, bytes};
+    Ram r{ram, bytes};
     if (!ram || !r.has(mario_object, 4)) return;
     const uint32_t mario = r.u32(mario_object);
     if (!r.has(mario, object_size) || !r.has(pool, object_size * object_count)) return;
@@ -44,7 +32,8 @@ void ghost_particles_prepare(gc_particle_probe &p, const uint8_t *ram, uint32_t 
         for (uint32_t hop = 0; hop < chain_limit && !mario_descended; ++hop) {
             const uint32_t up = r.u32(at + parent);
             if (up == mario) mario_descended = true;
-            else if (up == at || !r.has(up, object_size)) break;
+            // fits() only asks: a bogus parent ends this object's walk, not the pool's.
+            else if (up == at || !r.fits(up, object_size)) break;
             at = up;
         }
         if (!mario_descended) continue;
@@ -65,9 +54,9 @@ void ghost_particles_display_list(gc_particle_probe &p, uint32_t dl, const float
         if (std::fabs(matrix[12] - c[0]) > match_tolerance || std::fabs(matrix[13] - c[1]) > match_tolerance
                 || std::fabs(matrix[14] - c[2]) > match_tolerance) continue;
         if (!(dl >> 24)) { // generated in the frame's pool: read, never recorded
-            const Ram r{p.ram, p.ram_bytes};
+            Ram r{p.ram, p.ram_bytes};
             const uint32_t at = kseg0 | (dl & 0x00ffffffu);
-            for (uint32_t k = 0; k < 3 && r.has(at + 8 * k, 8); ++k) {
+            for (uint32_t k = 0; k < 3 && r.fits(at + 8 * k, 8); ++k) {
                 const uint32_t w0 = r.u32(at + 8 * k), w1 = r.u32(at + 8 * k + 4);
                 if ((w0 >> 24) == 0xB8u) break;
                 if ((w0 >> 24) == 0xFBu && (w1 >> 8) == 0xffffffu) p.opacity[i] = uint16_t(GC_PARTICLE_OPACITY | (w1 & 0xffu));

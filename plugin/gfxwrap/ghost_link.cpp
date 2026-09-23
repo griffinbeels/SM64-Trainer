@@ -33,6 +33,23 @@ const struct AudioWiring {
 } audio_wiring;
 uint32_t context_generation = 0;
 bool context_current = false, observing = false;
+// The hooks' own cost, per list: driver state queries (only when the
+// dispatch has not observed the value yet) and time inside the hooks. The
+// per-draw hooks used to query the draw FBO, viewport and depth range on
+// every z-buffered draw, ghost or not: a pipeline sync each when the driver
+// threads its GL. Published per list for the status page.
+uint32_t hook_queries = 0;
+int64_t hook_ticks = 0, qpc_frequency = 0;
+struct HookTime {
+    LARGE_INTEGER start{};
+    HookTime() { QueryPerformanceCounter(&start); }
+    ~HookTime() { LARGE_INTEGER end{}; QueryPerformanceCounter(&end); hook_ticks += end.QuadPart - start.QuadPart; }
+};
+replay_gl::RasterState tracked() {
+    replay_gl::RasterState state{};
+    replay_gl::Raster(&state);
+    return state;
+}
 bool supported_rom() {
     unsigned char bytes[PRACTICE_ROM_HEADER_BYTES]{};
     SIZE_T got = 0;
@@ -45,8 +62,14 @@ FrameBuffer* raster_buffer() {
     auto& buffers = frameBufferList();
     auto* buffer = config.frameBufferEmulation.enable ? buffers.getCurrent() : buffers.getScreenSizeBuffer();
     if (!buffer || !buffer->m_pTexture || !uint32_t(buffer->m_FBO)) return nullptr;
-    GLint draw = 0; glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
-    return uint32_t(draw) == uint32_t(buffer->m_FBO) ? buffer : nullptr;
+    // The renderer's own last draw binding, as its dispatch saw it bound.
+    const auto state = tracked();
+    uint32_t draw = state.draw_framebuffer;
+    if (!state.draw_known) {
+        GLint value = 0; glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &value); ++hook_queries;
+        draw = uint32_t(value);
+    }
+    return draw == uint32_t(buffer->m_FBO) ? buffer : nullptr;
 }
 void rom(bool opened) {
     const bool practice = opened && supported_rom();
@@ -62,6 +85,8 @@ void context_lost() {
     context_current = false; observing = false;
 }
 bool begin_list() {
+    hook_queries = 0; hook_ticks = 0;
+    HookTime timed;
     if (!context_current || !ghost_stream::requested()) {
         ghost_draw::begin(ghost_ipc::rom_generation(), 0);
         ghost_stream::cancel(); observing = false; return false;
@@ -79,21 +104,30 @@ bool begin_list() {
     return observing;
 }
 void end_list(bool completed) {
-    if (observing) ghost_stream::end(completed && context_current);
-    ghost_draw::finish(completed && context_current ? ghost_stream::candidate() : nullptr);
-    observing = false;
+    {
+        HookTime timed;
+        if (observing) ghost_stream::end(completed && context_current);
+        ghost_draw::finish(completed && context_current ? ghost_stream::candidate() : nullptr);
+        observing = false;
+    }
+    if (!qpc_frequency) { LARGE_INTEGER f{}; QueryPerformanceFrequency(&f); qpc_frequency = f.QuadPart; }
+    const int64_t micros = qpc_frequency > 0 ? hook_ticks * 1000000 / qpc_frequency : 0;
+    ghost_stream::hooks(hook_queries, micros < 0 ? 0u : micros > UINT32_MAX ? UINT32_MAX : uint32_t(micros));
 }
 void projection() {
     if (observing) ghost_stream::projection(&gSP.matrix.projection[0][0]);
 }
 void display_list(uint32_t dl, uint32_t physical_dl) {
-    if (observing && !RSP.LLE && GBI.getMicrocodeType()==F3D && !GBI.isNoN()
+    if (!observing) return;
+    HookTime timed;
+    if (!RSP.LLE && GBI.getMicrocodeType()==F3D && !GBI.isNoN()
             && RSP.PC[RSP.PCi]>=8)
         ghost_stream::display_list(RSP.PC[RSP.PCi]-8,dl,physical_dl,RSP.PCi,
                                   &gSP.matrix.modelView[gSP.matrix.modelViewi][0][0]);
 }
 void geometry(uint32_t before, uint32_t after) {
     if (!observing) return;
+    HookTime timed;
     if ((before & G_ZBUFFER) && !(after & G_ZBUFFER)) {
         // PipeSync is a no-op upstream. Flush BOTH triangles and deferred rects
         // while the world state is still current, before sealing its branch.
@@ -117,7 +151,11 @@ bool begin_hud() {
 }
 void end_hud() { ghost_draw::end_hud(); }
 bool begin_layer(uint32_t pass) {
-    if (!observing || !ghost_stream::requested() || !(gSP.geometryMode & G_ZBUFFER) || RSP.LLE
+    // No ghost will draw this list: every XLU draw leaves at once, before any
+    // framebuffer lookup.
+    if (!observing || !ghost_draw::drawing()) return false;
+    HookTime timed;
+    if (!ghost_stream::requested() || !(gSP.geometryMode & G_ZBUFFER) || RSP.LLE
             || GBI.getMicrocodeType() != F3D || GBI.isNoN() || config.frameBufferEmulation.N64DepthCompare
             || gDP.otherMode.cycleType > G_CYC_2CYCLE)
         return false;
@@ -129,9 +167,10 @@ bool begin_layer(uint32_t pass) {
     return buffer && !buffer->m_isDepthBuffer && buffer->m_pDepthBuffer
         && ghost_draw::begin_layer(pass, uint32_t(buffer->m_FBO));
 }
-void end_layer() { ghost_draw::end_layer(); }
+void end_layer() { HookTime timed; ghost_draw::end_layer(); }
 void triangles(uint32_t count) {
     if (!observing || !count || !(gSP.geometryMode & G_ZBUFFER)) return;
+    HookTime timed;
     auto *buffer = raster_buffer();
     ghost::RasterTarget target{};
     // Supported command-generation contract is deliberately specific. Missing
@@ -154,8 +193,13 @@ void triangles(uint32_t count) {
                 target.depth = static_cast<uint32_t>(depth->m_pDepthImageZTexture->name);
             }
         }
-        glGetIntegerv(GL_VIEWPORT,target.viewport);
-        GLdouble range[2]{}; glGetDoublev(GL_DEPTH_RANGE,range);
+        // The renderer's own viewport and depth range, as its dispatch set
+        // them; a driver query only before the dispatch has seen one.
+        const auto state = tracked();
+        GLdouble range[2]{state.depth_range[0], state.depth_range[1]};
+        if (state.viewport_known) for (unsigned i = 0; i < 4; ++i) target.viewport[i] = state.viewport[i];
+        else { glGetIntegerv(GL_VIEWPORT,target.viewport); ++hook_queries; }
+        if (!state.depth_known) { glGetDoublev(GL_DEPTH_RANGE,range); ++hook_queries; }
         // Mirror the shader's actual depth path. With fragment-depth writes
         // disabled, fixed GL interpolation never applies the N64 viewport Z.
         if (!config.generalEmulation.enableFragmentDepthWrite && !target.depth_mode) {

@@ -24,6 +24,7 @@ enum { SA_OK = 0, SA_ARGUMENT = -1, SA_INVALID_ROM = -2, SA_BUSY = -3,
 #define SA_TBL_OFFSET 0x593560u
 #define SA_SEQ_OFFSET 0x7B0860u
 #define SA_BANKS_OFFSET 0x7CC621u
+#define SA_SOUND_BYTES (SA_ROM_BYTES - SA_CTL_OFFSET) /* what sa_open keeps */
 #define SA_BANKS_BYTES 0xA0u
 
 /* Copies the big-endian ROM; owns that copy and every parse until close. */

@@ -497,11 +497,18 @@ No ROM scan or file read runs on the render thread. A ROM acquisition refusal
 uses `GIPC_ROM` (11); `GIPC_FILE` (6) describes clip acquisition. Neither a shared
 ROM failure nor renderer readiness changes saved-recording eligibility.
 
-Disabling or losing the active origin withdraws drawing while retaining prepared
-assets for later use. Lease/ROM shutdown revokes playback and retires assets;
+Losing the active origin withdraws drawing while retaining prepared assets.
+Switching playback off (nothing listed to draw) also releases its clips; a
+later switch-on reads the files again. The worker holds no second copy of
+anything playback holds: a clip file's bytes are dropped once playback has
+prepared its copy (id, SHA-256 and header stay), and the cartridge's once the
+model is built from it (its digest stays). A retired model or a lost renderer
+context rebuilds both from fresh reads, the clips checked against the same
+SHA-256. The sound engine keeps only the sound data, the last 2.5 MB of the
+8 MB cartridge (`SA_SOUND_BYTES`). Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
 full set plus as many retiring copies) share a 192 MiB clip/index budget, and
-the worker's retained files obey the same bound. It is sized so sixteen
+the files the worker is still reading obey the same bound. It is sized so sixteen
 2m40 ghosts can be replaced by sixteen more in flight (32 x 4800 x
 (sizeof(gclip_frame) + 4) bytes; his longest raced segment is 1m51): GC6
 records are about twice GC5's, and the earlier 128 MiB would have cut that to
@@ -526,6 +533,17 @@ row, 118 MiB for the two hours); the measurements and the schema-version rule
 mark and then saved with its video shares one file between both names. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
+The render hooks run on the emulation thread for every z-buffered draw while
+capture is configured, ghost or not, so they make no driver state queries:
+the draw framebuffer, viewport and depth range come from the renderer's own
+dispatched calls (`replay_gl::Raster`; `glViewport` is aliased at the call,
+like `glReadBuffer`). A query is only the fallback before the dispatch has
+seen a value, and each is counted. The translucent layer's hook leaves before
+any framebuffer lookup when no ghost will draw the list. The last list's
+hook cost, driver queries and microseconds inside the hooks, rides
+`gs_stats` to the status page (`hook_gl_queries`, `hook_micros`); the
+trainer logs its mean and max once a minute (`ghost/capture.py::HookCost`).
+
 If a reader holds the status page during revocation, the worker retries that
 publication before sleeping indefinitely. An expired owner cannot leave the
 mapped page reporting ready merely because the final nonblocking lock was busy.
