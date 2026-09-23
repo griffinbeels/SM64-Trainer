@@ -52,9 +52,14 @@ def test_igt_running_normally_is_silent():
     assert AnchorDetector().process(snap(1000, igt=500), snap(1001, igt=500)) == []
 
 
-def test_igt_drop_to_large_value_is_not_a_practice_reset():
-    # e.g. a Usamune timer-mode change; not a retry anchor
-    assert AnchorDetector().process(snap(1000, igt=500), snap(1001, igt=300)) == []
+def test_igt_drop_to_large_value_is_a_load_not_a_practice_reset():
+    """A counter that lands ABOVE the reset band, one frame after reading
+    500, was restored rather than restarted: no retry reaches 300 in a frame
+    (task 0144; this test said "silent" until then, and the TTC loop of
+    2026-08-28 was eleven of those silences)."""
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1001, igt=300))
+    found = [(e.type, e.payload["load_signature"]) for e in events]
+    assert found == [("state_loaded", "igt_rewound")]
 
 
 def test_backward_global_timer_emits_state_loaded():
@@ -88,8 +93,19 @@ def test_igt_drop_to_threshold_exactly_fires():
     assert len(events) == 1 and events[0].type == "practice_reset"
 
 
-def test_igt_drop_just_above_threshold_is_silent():
-    assert AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=31)) == []
+def test_igt_drop_just_above_threshold_is_a_load():
+    # two frames cannot climb a restarted counter to 31
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=31))
+    assert [e.type for e in events] == ["state_loaded"]
+
+
+def test_a_reset_hidden_in_a_poll_gap_is_not_a_load():
+    """Sixty frames between polls: a reset at the start of the gap and a climb
+    back to 40 look exactly like a backward jump from either end, so the rule
+    only claims a load the gap cannot explain."""
+    assert AnchorDetector().process(snap(1000, igt=500), snap(1060, igt=40)) == []
+    events = AnchorDetector().process(snap(1000, igt=500), snap(1060, igt=63))
+    assert [e.type for e in events] == ["state_loaded"]
 
 
 def test_backward_jump_to_exactly_boot_max_is_state_loaded():
@@ -980,3 +996,96 @@ def test_a_ride_the_reset_cancelled_is_a_real_reset():
         snap(1008, igt=0, level=5, area=1)])
     [anchor] = [e for e in events if e.type == "practice_reset"]
     assert anchor.payload["area_load"] is False
+
+
+# ---------------------------------------------------------------------------
+# Save-state loads the frame counter never sees (task 0144)
+# ---------------------------------------------------------------------------
+
+ACT_FORWARD_ROLLOUT = 0x010008A6
+ACT_STAR_DANCE_EXIT = 0x00001302
+
+
+def test_his_wf_load_is_journaled_as_a_state_load():
+    """Real pair, his 2026-09-23 WF session (picture ledger frames 19153 ->
+    19154): the star dance, then the frame counter ticks ONE while Usamune's
+    counter falls from 353 to the 181 he saved at, Mario in the saved rollout."""
+    events = AnchorDetector().process(
+        snap(19153, igt=353, action=ACT_STAR_DANCE_EXIT, level=24, area=1),
+        snap(19154, igt=181, action=ACT_FORWARD_ROLLOUT, level=24, area=1))
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.type == "state_loaded" and ev.frame == 19154
+    assert ev.payload | {"load_signature": "igt_rewound",
+                         "igt_frames_restored": 181, "igt_frames_before": 353,
+                         "loads_journaled": True, "area": 1,
+                         "area_load": False, "teleport": False} == ev.payload
+
+
+def test_the_ttc_loop_shape_is_a_load():
+    # 2026-08-28: 3645 at one grab, 3319 at the next, the frame counter
+    # monotonic the whole time -- the docstring's eleven unrecorded loads.
+    events = AnchorDetector().process(snap(165500, igt=3645),
+                                      snap(165501, igt=3319))
+    assert [e.payload["load_signature"] for e in events] == ["igt_rewound"]
+
+
+def test_a_counter_that_outruns_the_game_is_a_load():
+    events = AnchorDetector().process(snap(1000, igt=100), snap(1001, igt=400))
+    assert [e.payload["load_signature"] for e in events] == ["igt_skipped_ahead"]
+
+
+def test_read_skew_is_not_a_load():
+    # one sample's two reads straddling a frame, at each end
+    assert AnchorDetector().process(snap(1000, igt=100), snap(1001, igt=103)) == []
+
+
+def test_a_frame_counter_rewind_names_its_signature():
+    events = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
+    assert events[0].payload["load_signature"] == "frame_counter_rewound"
+
+
+def test_a_wrap_from_the_u16_ceiling_is_not_a_load():
+    assert AnchorDetector().process(snap(1000, igt=65100), snap(1001, igt=40)) == []
+
+
+def test_every_anchor_says_loads_are_journaled():
+    reset = AnchorDetector().process(snap(1000, igt=500), snap(1002, igt=0))
+    load = AnchorDetector().process(snap(5000, igt=900), snap(3000, igt=120))
+    assert reset[0].payload["loads_journaled"] is True
+    assert load[0].payload["loads_journaled"] is True
+
+
+def _trace(name):
+    import gzip
+    import json
+    from pathlib import Path
+    raw = (Path(__file__).parent / "fixtures" / "state_load_traces.json.gz").read_bytes()
+    return json.loads(gzip.decompress(raw))[name]
+
+
+def _run_trace(rows):
+    d, prev, out = AnchorDetector(), None, []
+    for frame, igt, action in rows:
+        curr = snap(frame, igt=igt, action=action, level=24, area=1)
+        if prev is not None:
+            out += [e for e in d.process(prev, curr) if e.type != "mario_acted"]
+        prev = curr
+    return out
+
+
+def test_his_real_wf_session_journals_exactly_its_sixteen_loads():
+    """Every drawn frame of the session the rule was measured on: the counter
+    was restored to 181 eight times and 177 eight times, and nothing else in
+    the trace is a load."""
+    loads = [e for e in _run_trace(_trace("wf_loads")) if e.type == "state_loaded"]
+    restored = sorted(e.payload["igt_frames_restored"] for e in loads)
+    assert restored == [177] * 8 + [181] * 8
+    assert {e.payload["load_signature"] for e in loads} == {"igt_rewound"}
+
+
+def test_his_real_resets_stay_resets():
+    """A window of ordinary play full of L-resets: every anchor is a
+    practice_reset and none is a load."""
+    events = _run_trace(_trace("resets_only"))
+    assert events and {e.type for e in events} == {"practice_reset"}
