@@ -14,11 +14,15 @@
 
 namespace ghost_audio {
 namespace {
-struct Request { uint32_t bits; int64_t qpc; };
+struct Request { uint32_t ghost, bits; int64_t qpc; };
 Request slots[queue_slots];
+// Latest placement per ghost. Fields are separate atomics: a tick may read
+// x from one frame and z from the next, a difference nobody can hear.
+struct Placement { std::atomic<float> position[3]; std::atomic<float> gain; };
+Placement placements[sources];
 std::atomic<uint32_t> head{0}, tail{0};            // render writes head, audio reads tail
 std::atomic<uint32_t> playing{0}, volume_bits{0}, stop_generation{0};
-std::atomic<uint64_t> cues{0}, dropped{0}, played{0}, discarded{0}, ticks{0}, silent_ticks{0};
+std::atomic<uint64_t> cues{0}, dropped{0}, played{0}, discarded{0}, ticks{0}, silent_ticks{0}, underruns{0};
 std::atomic<uint64_t> last_latency{0}, max_latency{0}; // double bits
 std::atomic<uint32_t> running{0};
 
@@ -40,9 +44,10 @@ float volume() {
     return std::isfinite(value) && value>0 ? (value>1 ? 1.0f : value) : 0.0f;
 }
 
-void __cdecl sink_cue(uint32_t bits) { cue(bits); }
+void __cdecl sink_cue(uint32_t ghost, uint32_t bits) { cue(ghost,bits); }
 void __cdecl sink_control(uint32_t on, float level) { control(on!=0,level); }
-const ghost_playback::SoundSink playback_sink{sink_cue, sink_control};
+void __cdecl sink_place(uint32_t ghost, const float *position, float gain) { place(ghost,position,gain); }
+const ghost_playback::SoundSink playback_sink{sink_cue, sink_control, sink_place};
 
 DWORD WINAPI audio_main(void *) {
     const int32_t opened=sa_open(rom_copy.data(),rom_copy.size());
@@ -50,12 +55,16 @@ DWORD WINAPI audio_main(void *) {
     if(opened!=SA_OK) return 1;
     if(!device.open(device.owner,SA_RATE)) { sa_close(); return 2; }
     running.store(1);
+    // Audio refills must not queue behind emulation; the thread mostly sleeps.
+    SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_HIGHEST);
     const double per_second=frequency();
     int16_t buffer[2*tick_capacity];
     uint32_t seen_stop=stop_generation.load(std::memory_order_acquire);
+    bool wrote=false;
     while(!quit.load(std::memory_order_acquire)) {
         const uint32_t queued=device.queued(device.owner);
-        if(queued>low_water_frames) { device.wait(device.owner,20); continue; }
+        if(queued>low_water_frames) { device.wait(device.owner,5); continue; }
+        if(!queued && wrote) underruns.fetch_add(1,std::memory_order_relaxed); // it ran dry before this tick
         const bool on=playing.load(std::memory_order_acquire)!=0;
         const uint32_t generation=stop_generation.load(std::memory_order_acquire);
         if(generation!=seen_stop) { seen_stop=generation; sa_stop_all(); }
@@ -65,10 +74,18 @@ DWORD WINAPI audio_main(void *) {
             const Request request=slots[at%queue_slots];
             tail.store(at+1,std::memory_order_release);
             if(!on) { discarded.fetch_add(1,std::memory_order_relaxed); continue; }
-            sa_play(request.bits); played.fetch_add(1,std::memory_order_relaxed);
+            sa_play(request.ghost,request.bits); played.fetch_add(1,std::memory_order_relaxed);
             const double latency=double(tick_time-request.qpc)*1000.0/per_second+queued*1000.0/SA_RATE;
             store_double(last_latency,latency);
             if(latency>load_double(max_latency)) store_double(max_latency,latency);
+        }
+        // The engine reads each source's position and gain when it mixes, so
+        // the latest placement also steers sounds already playing.
+        for(uint32_t ghost=0;ghost<sources;++ghost) {
+            const auto &from=placements[ghost];
+            const float position[3]={from.position[0].load(std::memory_order_relaxed),
+                from.position[1].load(std::memory_order_relaxed),from.position[2].load(std::memory_order_relaxed)};
+            sa_place(ghost,position,from.gain.load(std::memory_order_relaxed));
         }
         uint32_t frames=0;
         if(sa_tick(queued,buffer,tick_capacity,&frames)!=SA_OK || !frames) break;
@@ -78,6 +95,7 @@ DWORD WINAPI audio_main(void *) {
             for(uint32_t i=0;i<2*frames;++i) buffer[i]=int16_t(std::lrintf(float(buffer[i])*level));
         ticks.fetch_add(1,std::memory_order_relaxed);
         if(!device.write(device.owner,buffer,frames)) break;
+        wrote=true;
     }
     running.store(0);
     device.close(device.owner);
@@ -85,10 +103,16 @@ DWORD WINAPI audio_main(void *) {
     return 0;
 }
 
-// waveOut: blocks of up to one tick, completion signalled by an event.
+// waveOut: one header per tick, completion signalled by an event. What the
+// device still holds is measured from its play position, not from which
+// headers are done: a header counts in full until it finishes, so a header
+// count reads "empty" only once the device has already run dry, and every
+// tick used to be written into a silent device (the 2026-09-22 crackle).
+constexpr unsigned wave_headers=8;
 struct Wave {
     HWAVEOUT handle=nullptr; HANDLE event=nullptr;
-    WAVEHDR headers[6]{}; int16_t data[6][2*tick_capacity]{};
+    uint64_t written=0; uint32_t last_position=0; uint64_t position_base=0;
+    WAVEHDR headers[wave_headers]{}; int16_t data[wave_headers][2*tick_capacity]{};
 } wave;
 bool __cdecl wave_open(void *, uint32_t rate) {
     wave.event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
@@ -100,23 +124,33 @@ bool __cdecl wave_open(void *, uint32_t rate) {
             CALLBACK_EVENT)!=MMSYSERR_NOERROR) {
         CloseHandle(wave.event); wave.event=nullptr; wave.handle=nullptr; return false;
     }
-    for(unsigned i=0;i<6;++i) { wave.headers[i]={}; wave.headers[i].dwFlags=WHDR_DONE; }
+    for(unsigned i=0;i<wave_headers;++i) { wave.headers[i]={}; wave.headers[i].dwFlags=WHDR_DONE; }
+    wave.written=0; wave.last_position=0; wave.position_base=0;
     return true;
 }
 uint32_t __cdecl wave_queued(void *) {
-    uint32_t frames=0;
-    for(auto &header:wave.headers) if(!(header.dwFlags&WHDR_DONE)) frames+=header.dwBufferLength/4;
-    return frames;
+    MMTIME time{}; time.wType=TIME_SAMPLES;
+    if(waveOutGetPosition(wave.handle,&time,sizeof(time))!=MMSYSERR_NOERROR || time.wType!=TIME_SAMPLES) {
+        uint32_t frames=0; // no position: fall back to whole unfinished headers
+        for(auto &header:wave.headers) if(!(header.dwFlags&WHDR_DONE)) frames+=header.dwBufferLength/4;
+        return frames;
+    }
+    if(time.u.sample<wave.last_position) wave.position_base+=uint64_t(1)<<32; // 32-bit sample counter wrapped
+    wave.last_position=time.u.sample;
+    const uint64_t consumed=wave.position_base+time.u.sample;
+    return consumed>=wave.written ? 0u : uint32_t(wave.written-consumed);
 }
 bool __cdecl wave_write(void *, const int16_t *stereo, uint32_t frames) {
-    for(unsigned i=0;i<6;++i) {
+    for(unsigned i=0;i<wave_headers;++i) {
         auto &header=wave.headers[i];
         if(!(header.dwFlags&WHDR_DONE)) continue;
         if(header.dwFlags&WHDR_PREPARED) waveOutUnprepareHeader(wave.handle,&header,sizeof(header));
         std::memcpy(wave.data[i],stereo,frames*4);
         header={}; header.lpData=reinterpret_cast<LPSTR>(wave.data[i]); header.dwBufferLength=frames*4;
-        return waveOutPrepareHeader(wave.handle,&header,sizeof(header))==MMSYSERR_NOERROR
+        const bool queued=waveOutPrepareHeader(wave.handle,&header,sizeof(header))==MMSYSERR_NOERROR
             && waveOutWrite(wave.handle,&header,sizeof(header))==MMSYSERR_NOERROR;
+        if(queued) wave.written+=frames;
+        return queued;
     }
     return false;
 }
@@ -151,12 +185,22 @@ bool matches(const uint8_t digest[32], const char *hex) {
 }
 }
 
-void cue(uint32_t bits) {
+void cue(uint32_t ghost, uint32_t bits) {
     const uint32_t at=head.load(std::memory_order_relaxed);
     cues.fetch_add(1,std::memory_order_relaxed);
-    if(at-tail.load(std::memory_order_acquire)>=queue_slots) { dropped.fetch_add(1,std::memory_order_relaxed); return; }
-    slots[at%queue_slots]={bits,now()};
+    if(ghost>=sources || at-tail.load(std::memory_order_acquire)>=queue_slots) {
+        dropped.fetch_add(1,std::memory_order_relaxed); return;
+    }
+    slots[at%queue_slots]={ghost,bits,now()};
     head.store(at+1,std::memory_order_release);
+}
+void place(uint32_t ghost, const float camera_relative[3], float gain) {
+    if(ghost>=sources || !camera_relative) return;
+    for(unsigned axis=0;axis<3;++axis)
+        if(!std::isfinite(camera_relative[axis])) return; // keep the last good placement
+    auto &to=placements[ghost];
+    for(unsigned axis=0;axis<3;++axis) to.position[axis].store(camera_relative[axis],std::memory_order_relaxed);
+    to.gain.store(std::isfinite(gain) && gain>0 ? (gain>1 ? 1.0f : gain) : 0.0f,std::memory_order_relaxed);
 }
 void control(bool on, float level) {
     uint32_t bits; std::memcpy(&bits,&level,4);
@@ -182,6 +226,10 @@ Start start(const uint8_t *rom, size_t bytes, const Output &output) {
     if(!known_audio(rom,bytes)) return Start::invalid_rom;
     if(!output.open || !output.queued || !output.write || !output.wait || !output.close) return Start::device;
     rom_copy.assign(rom,rom+bytes); device=output; quit.store(false);
+    for(auto &placement:placements) { // a new engine starts every ghost centred, at full gain
+        for(auto &axis:placement.position) axis.store(0.0f);
+        placement.gain.store(1.0f);
+    }
     thread=CreateThread(nullptr,0,audio_main,nullptr,0,nullptr);
     if(!thread) { SecureZeroMemory(rom_copy.data(),rom_copy.size()); std::vector<uint8_t>().swap(rom_copy); return Start::thread; }
     // Report an engine/device failure to the caller instead of a silent thread.
@@ -200,6 +248,6 @@ void stop() {
 }
 Stats stats() {
     return {cues.load(),dropped.load(),played.load(),discarded.load(),ticks.load(),silent_ticks.load(),
-        load_double(last_latency),load_double(max_latency),running.load()};
+        load_double(last_latency),load_double(max_latency),running.load(),underruns.load()};
 }
 }

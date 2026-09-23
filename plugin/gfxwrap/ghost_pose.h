@@ -21,6 +21,9 @@ struct Scratch {
 Result evaluate(sg_model *, const gs_record &recorded, const gc_sample &live,
                 const ghost::WorldPass &, float opacity, Scratch &,
                 ghost_compositor::Pose &out);
+/* A world point relative to the LIVE camera, in the space SM64 hands its own
+ * sound engine (Mario's cameraToObject: +x right, +y up, -z ahead). */
+bool camera_relative(sg_model *, const gc_camera &live, const float world[3], float out[3]);
 /* The recorded shadow in world space under the same live view_projection as
  * its body: removes the RECORDED camera from the executed shadow matrix,
  * expands the game's triangle order and unpacks the IA8 texture into the

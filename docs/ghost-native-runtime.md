@@ -30,7 +30,7 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308) and sound events (36 at 600) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP6: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch and sound `volume` | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
 | Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP4: header 160, record 652, maximum 200000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
@@ -146,6 +146,20 @@ later restore is not delayed a frame. The
 behind the renderer: over 10 loads and 92 frames the previous path showed 8
 frames without a ghost and 1 at a wrong position (a forward load to an
 unwitnessed state); this path shows 0 and 0.
+
+A star or segment completion removes the tracker's arm until the next attempt,
+so the session marks the owner suspended. The worker used to withdraw the
+command then, which dropped the restore checkpoints: a load after a star grab
+hid the ghost until the tracker re-armed (the blink seen live 2026-09-22 on
+every such load, never on a load before the grab). The worker now keeps the
+command and forwards `suspended` (GP7). Playback hides every ghost and its
+sound while suspended, until the renderer's own recovery resolves a restore
+it had not resolved when the pause began; that load draws on its load frame
+and the tracker's next arm confirms it. The recovery witness loads once after
+a star grab and once after a segment completion, each while suspended, and
+counts 0 ghostless frames over 11 loads; forwarding the old withdraw hides the
+load frame, ignoring `suspended` draws the paused frames, and not reviving on
+a restore hides the load frame (each red).
 
 ### Several ghosts
 
@@ -371,25 +385,58 @@ the sound sink, ghosts in request order, each record's requests in issue
 order. A frame the renderer did not draw still sounds on the next one, up to
 `GP_SOUND_CATCHUP` (90) records; a longer jump only re-establishes position.
 A per-ghost high-water record keeps a nudge or seek backwards from replaying
-anything: re-passed records stay silent. A new run (a new, non-restored origin)
-starts fresh and sounds its first record; a state load re-bases at the restored
-record and sounds what the ghost passes from there. Hidden ghosts (star end,
+anything: re-passed records stay silent. Every new timeline re-bases it: a new
+run (a new, non-restored origin) sounds its first record; a state load, or the
+worker re-binding the same ghost to a restored origin (how a reset re-arms
+it), re-bases at the restored record and sounds what the ghost passes from
+there. A command that only confirms the renderer's own restore re-bases
+nothing. Until 2026-09-22 the worker's re-bind kept the first attempt's
+high-water, so every later attempt of the same ghost stayed silent. Hidden ghosts (star end,
 wrong scene, after end, refusals) sound nothing and replay nothing on return;
 before its start a ghost is silent and sounds its first record when it begins.
 
 [ghost_audio.cpp](../plugin/gfxwrap/ghost_audio.cpp) owns the rest. The render
 thread only writes a bounded 256-entry single-producer queue (full drops and
-counts) and two atomics, so it never waits or allocates (the playback witness
+counts) and plain atomics, so it never waits or allocates (the playback witness
 counts zero render allocations). One audio thread owns the engine and a
 shared-mode waveOut device (event driven, no window or focus). It synthesizes
 one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever the device
-holds 544 frames or fewer, so requests start after at most three blocks.
-`volume` (GP6/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
+holds 1088 frames (34 ms) or fewer. What the device holds is measured from its
+play position (`waveOutGetPosition`), not from finished headers: a header
+counts in full until it finishes, and the first version's 544-frame threshold
+sat below its one-tick (1088-frame) headers, so it saw "empty" only after the
+device had already run dry, wrote every tick into silence and chopped the
+audio about every 50 ms (the crackle heard live 2026-09-22; a tap on the live
+path measured 139 of 140 writes into an empty device, 0 of 206 after). The
+audio thread runs at `THREAD_PRIORITY_HIGHEST` and counts any tick written
+after the device ran dry as an underrun.
+`volume` (GP7/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
 scales the engine output exactly; 0 writes zeros. Disabled or withdrawn
 playback, including the owner-suspended pause, stops every ghost sound and
-discards queued requests at the next tick. All ghosts share one engine, one
-centred, undistanced source and SM64's own per-bank channel limits: two ghosts
-making the same sound at once can cut each other off, as in the game.
+discards queued requests at the next tick.
+
+Each ghost is its own source to the engine (`sa_place`/`sa_play`, 16
+sources). Every drawn frame the renderer places each visible ghost, before
+its cues: its displayed root (`pose.position`) under the live camera's
+look-at, the same camera space the game hands the engine for Mario's own
+sounds (`cameraToObject`: +x right, -z ahead). The engine then does what it
+does for Mario: pans by that position and fades with camera distance. In the
+pinned US engine (`get_sound_volume`), Mario's banks fall in amplitude from 1
+at the camera to about 0.11 at 10000 units and never below 0.1 (0.9 x
+intensity squared + 0.1); this copy uses one reach (level 0, 20000) where the
+game uses each level's own. On its own the engine therefore never silences a
+distant ghost, which is what the renderer's gain adds. On top of that the renderer multiplies each ghost's gain by
+`min(1, (GP_SOUND_NEAR / d)^2)`, d being the world distance between that
+ghost's root and live Mario (gain 1 while live Mario's pose is unknown).
+`GP_SOUND_NEAR` is a tuning constant, 400 units (2.5 Mario heights). The gain
+scales amplitude, so it halves the level (-6 dB) for every 1.41x distance
+past 400 units. Final loudness is `volume` x engine camera falloff x that
+gain. Placement also steers sounds already playing, since the engine
+rereads the position and volume every tick. SM64 gives each sound bank one
+channel (`sMaxChannelsForSoundBank`, all 1). Mario's sounds carry
+`SOUND_NO_PRIORITY_LOSS`, so distance does not rank them, and a newer sound of
+equal priority in the same bank takes the channel: two ghosts, or a far ghost
+and a near one, can still cut each other off, as Mario's own sounds do.
 
 The IPC worker starts the engine from its verified ROM bytes and stops it
 (joining the thread) when the ROM closes. Before the engine parses anything,
@@ -404,10 +451,18 @@ thread and engine into a captured buffer: each cue sounds within the next
 tick and nothing before it, 0.5 is exactly half of every sample (energy ratio
 0.250001), 0 is all zeros, switching off silences within one tick, altered
 audio data never reaches the parser, and a full queue drops. Its waveOut
-smoke plays silence only when a device exists: on this machine (2026-09-22)
-request-to-device latency measured at most 49.9 ms (host-driven capture
-13.1 ms). That excludes Windows' own mixer and output delay, and nobody has
-yet listened to it.
+smoke plays silence only when a device exists; for three seconds it must feed
+the device in real time (31599 frames/s measured) with 0 underruns. Placed
+(same schedule): 2000 units right of the camera the right channel carries
+21x the left's energy (mirrored on the left); gain 0.25 leaves 0.060 of the
+energy; 5000 units ahead, the engine's own falloff leaves 0.133; and ghost 1
+on the right, with ghost 0 placed left and silent, is sample-identical to
+ghost 0 on the right. The playback witness checks each visible ghost is
+placed once a frame, before its cues, at its root from the live camera, with
+gain 1 within 400 units, 0.25 at 800 and 1 with no live pose. With the
+deeper fill (2026-09-22, this machine) request-to-device latency measured at
+most 64.8 ms (host-driven capture 32.3 ms), up from 49.9 ms. That excludes
+Windows' own mixer and output delay.
 
 [ghost_presentation.cpp](../plugin/gfxwrap/ghost_presentation.cpp) preserves the
 clean drawable, applies the renderer's VI mapping/gamma to the display branch,

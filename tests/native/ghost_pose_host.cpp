@@ -135,5 +135,11 @@ int main() {
         assert(!ghost_pose::shadow(model,saved,projection,vertices,texture,shadow));
         assert(!ghost_pose::shadow(nullptr,saved,projection,vertices,texture,shadow));
     }
+    // Sound placement: a world point under the same live look-at product as drawing.
+    {
+        gc_camera camera{};camera.position[0]=-5;const float point[3]={1,2,3};float out[3]{};
+        assert(ghost_pose::camera_relative(nullptr,camera,point,out));
+        assert(out[0]==13 && out[1]==22 && out[2]==29);
+    }
     std::puts("recorded pose to live camera mapping passed");
 }

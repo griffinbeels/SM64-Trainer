@@ -7,6 +7,7 @@
 #include "decomp/audio/load_dat.h"
 #include "load_audio_data.h"
 #include "play_sound.h"
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,7 +16,12 @@ extern u8 sNumProcessedSoundRequests;
 
 static uint8_t *copy;
 static struct seqFile *ctl, *tbl, *seq;
-static f32 source[3]; /* at the listener: centred, undistanced */
+/* One source per ghost, camera-relative like SM64's own cameraToObject, so
+ * the engine pans, distances and prioritises each ghost as the game would
+ * Mario at that spot. gains[] multiplies get_sound_volume (patches.py). */
+static f32 sources[SA_SOURCES][3];
+static f32 gains[SA_SOURCES];
+#define SA_PLACE_BOUND 100000.0f /* silent beyond 22000; keeps distance a valid u32 */
 
 static uint32_t be32(const uint8_t *p) {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
@@ -62,20 +68,39 @@ int32_t sa_open(const uint8_t *rom, size_t bytes) {
     sound_init();
     sound_reset(0);
     gAudioVolume = 1.0f; /* loudness is the caller's exact output scale */
+    memset(sources, 0, sizeof(sources));
+    for (uint32_t i = 0; i < SA_SOURCES; ++i) gains[i] = 1.0f;
     g_is_audio_initialized = true;
     return SA_OK;
 }
 
-int32_t sa_play(uint32_t sound_bits) {
+int32_t sa_place(uint32_t source, const float position[3], float gain) {
     if (!copy) return SA_CLOSED;
-    play_sound(sound_bits, source);
+    if (source >= SA_SOURCES || !position || !(gain >= 0.0f && gain <= 1.0f)) return SA_ARGUMENT;
+    for (uint32_t i = 0; i < 3; ++i) if (!isfinite(position[i])) return SA_ARGUMENT;
+    for (uint32_t i = 0; i < 3; ++i)
+        sources[source][i] = position[i] > SA_PLACE_BOUND ? SA_PLACE_BOUND
+                           : position[i] < -SA_PLACE_BOUND ? -SA_PLACE_BOUND : position[i];
+    gains[source] = gain;
     return SA_OK;
+}
+
+int32_t sa_play(uint32_t source, uint32_t sound_bits) {
+    if (!copy) return SA_CLOSED;
+    if (source >= SA_SOURCES) return SA_ARGUMENT;
+    play_sound(sound_bits, sources[source]);
+    return SA_OK;
+}
+
+float sa_source_gain(const float *x) {
+    for (uint32_t i = 0; i < SA_SOURCES; ++i) if (x == sources[i]) return gains[i];
+    return 1.0f;
 }
 
 int32_t sa_stop_all(void) {
     if (!copy) return SA_CLOSED;
     sNumProcessedSoundRequests = sSoundRequestCount;
-    stop_sounds_from_source(source);
+    for (uint32_t i = 0; i < SA_SOURCES; ++i) stop_sounds_from_source(sources[i]);
     return SA_OK;
 }
 

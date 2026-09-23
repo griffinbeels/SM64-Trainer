@@ -346,6 +346,11 @@ int main(int argc, char** argv) {
         float camera[3]={0,0,100}, focus[3]={0,0,0}, matrix[16];
         check(sg_model_view(model,camera,focus,0,matrix)==SG_OK,"look-at");
         check(matrix[0]==1 && matrix[5]==1 && matrix[10]==1 && matrix[14]==-100 && matrix[15]==1,"native look-at layout");
+        // Ghost sound placement hands this space to SM64's engine, which pans
+        // +x right and treats -z as ahead: facing +x, a point on +z is right.
+        float east[3]={-100,0,0};
+        check(sg_model_view(model,east,focus,0,matrix)==SG_OK && std::fabs(matrix[8]-1)<1e-5f
+              && std::fabs(matrix[12])<1e-3f && std::fabs(matrix[14]+100)<1e-3f,"camera space: right is +x, ahead is -z");
         check(sg_model_view(model,camera,camera,0,matrix)==SG_INVALID_ARGUMENT,"coincident camera");
         check(std::all_of(matrix,matrix+16,[](float f){return f==0;}),"camera failure clears output");
         camera[2]=0;camera[1]=100;
