@@ -371,9 +371,13 @@ the sound sink, ghosts in request order, each record's requests in issue
 order. A frame the renderer did not draw still sounds on the next one, up to
 `GP_SOUND_CATCHUP` (90) records; a longer jump only re-establishes position.
 A per-ghost high-water record keeps a nudge or seek backwards from replaying
-anything: re-passed records stay silent. A new run (a new, non-restored origin)
-starts fresh and sounds its first record; a state load re-bases at the restored
-record and sounds what the ghost passes from there. Hidden ghosts (star end,
+anything: re-passed records stay silent. Every new timeline re-bases it: a new
+run (a new, non-restored origin) sounds its first record; a state load, or the
+worker re-binding the same ghost to a restored origin (how a reset re-arms
+it), re-bases at the restored record and sounds what the ghost passes from
+there. A command that only confirms the renderer's own restore re-bases
+nothing. Until 2026-09-22 the worker's re-bind kept the first attempt's
+high-water, so every later attempt of the same ghost stayed silent. Hidden ghosts (star end,
 wrong scene, after end, refusals) sound nothing and replay nothing on return;
 before its start a ghost is silent and sounds its first record when it begins.
 
@@ -383,7 +387,15 @@ counts) and two atomics, so it never waits or allocates (the playback witness
 counts zero render allocations). One audio thread owns the engine and a
 shared-mode waveOut device (event driven, no window or focus). It synthesizes
 one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever the device
-holds 544 frames or fewer, so requests start after at most three blocks.
+holds 1088 frames (34 ms) or fewer. What the device holds is measured from its
+play position (`waveOutGetPosition`), not from finished headers: a header
+counts in full until it finishes, and the first version's 544-frame threshold
+sat below its one-tick (1088-frame) headers, so it saw "empty" only after the
+device had already run dry, wrote every tick into silence and chopped the
+audio about every 50 ms (the crackle heard live 2026-09-22; a tap on the live
+path measured 139 of 140 writes into an empty device, 0 of 206 after). The
+audio thread runs at `THREAD_PRIORITY_HIGHEST` and counts any tick written
+after the device ran dry as an underrun.
 `volume` (GP6/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
 scales the engine output exactly; 0 writes zeros. Disabled or withdrawn
 playback, including the owner-suspended pause, stops every ghost sound and
@@ -404,10 +416,11 @@ thread and engine into a captured buffer: each cue sounds within the next
 tick and nothing before it, 0.5 is exactly half of every sample (energy ratio
 0.250001), 0 is all zeros, switching off silences within one tick, altered
 audio data never reaches the parser, and a full queue drops. Its waveOut
-smoke plays silence only when a device exists: on this machine (2026-09-22)
-request-to-device latency measured at most 49.9 ms (host-driven capture
-13.1 ms). That excludes Windows' own mixer and output delay, and nobody has
-yet listened to it.
+smoke plays silence only when a device exists; for three seconds it must feed
+the device in real time (31599 frames/s measured) with 0 underruns. With the
+deeper fill (2026-09-22, this machine) request-to-device latency measured at
+most 64.8 ms (host-driven capture 32.3 ms), up from 49.9 ms. That excludes
+Windows' own mixer and output delay.
 
 [ghost_presentation.cpp](../plugin/gfxwrap/ghost_presentation.cpp) preserves the
 clean drawable, applies the renderer's VI mapping/gamma to the display branch,

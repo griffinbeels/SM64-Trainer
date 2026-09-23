@@ -544,16 +544,18 @@ bool same_owner(const gp_request& a,const gp_request& b) {
 }
 // A command's origin rebinds the live timing unless the renderer already
 // reached that same origin itself (the worker confirming a local restore).
-void adopt_recovery(const gp_request& next) {
+// Returns true when the command moved the ghost to a timeline the renderer
+// was not already drawing (a new run, or the worker's own restore/re-bind).
+bool adopt_recovery(const gp_request& next) {
     auto& live=live_recovery;
-    if(next.mode!=GP_FOLLOW) {live.clear();return;}
+    if(next.mode!=GP_FOLLOW) {live.clear();return false;}
     const bool same=live.bound && same_owner(live.owner,next);
-    if(same && !std::memcmp(&live.owner.origin,&next.origin,sizeof(next.origin))) {live.owner=next;return;}
+    if(same && !std::memcmp(&live.owner.origin,&next.origin,sizeof(next.origin))) {live.owner=next;return false;}
     go_origin local{};
-    if(!(same && live.timing.current(local) && !std::memcmp(&local,&next.origin,sizeof(local)))) {
-        live.timing.bind(next.origin);live.restored=next.origin.sequence;
-    }
+    const bool confirmed=same && live.timing.current(local) && !std::memcmp(&local,&next.origin,sizeof(local));
+    if(!confirmed) {live.timing.bind(next.origin);live.restored=next.origin.sequence;}
     live.owner=next;live.bound=true;
+    return !confirmed;
 }
 uint32_t active_count() {uint32_t count=0;for(auto *clip:bound)count+=clip!=nullptr;return count;}
 struct Coordinate {uint64_t target;bool below_zero;};
@@ -660,15 +662,19 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     if(have_model && (model.id!=next.model_id || model.cancellation!=current_cancel || model.id!=desired_model.load()))
         if(!retire_model()) {decide_all(GP_PREPARING);return;}
     const bool changed=touch_revision!=next.revision;
-    // A new run starts fresh; a nudge or seek only moves where the ghost is.
-    // A restored origin (the worker confirming a load) keeps what was heard.
-    if(!have_request || (next.mode==GP_FOLLOW && !(next.origin.flags&GO_RECOVERED)
-            && std::memcmp(&next.origin,&active_request.origin,sizeof(next.origin))))forget_heard(Forget::run);
-    else if(next.nudge_frames!=active_request.nudge_frames || next.mode!=active_request.mode
-            || next.seek_igt!=active_request.seek_igt)forget_heard(Forget::move);
+    const bool first=!have_request;
+    const gp_request previous=active_request;
     active_request=next;have_request=true;acquired_cancel=current_cancel;
     sound_control(true,next.volume);
-    adopt_recovery(next);
+    // Every new timeline re-bases what each ghost has heard: a new run sounds
+    // its first record; a restore or the worker's re-bind (a reset re-arms
+    // the same ghost that way) sounds what it passes from where it stands.
+    // Only a nudge or seek on the same timeline keeps the high-water record,
+    // and a command that confirms the renderer's own restore changes nothing.
+    if(adopt_recovery(next) || first)
+        forget_heard(first || !(next.origin.flags&GO_RECOVERED) ? Forget::run : Forget::restore);
+    else if(next.nudge_frames!=previous.nudge_frames || next.mode!=previous.mode
+            || next.seek_igt!=previous.seek_igt)forget_heard(Forget::move);
     report={};report.revision=next.revision;report.owner_token=next.owner_token;report.model_id=next.model_id;
     report.clip_count=next.clip_count;report.rom_generation=rom;report.configuration=configuration;
     if(!have_model) {

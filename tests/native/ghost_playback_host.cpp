@@ -576,6 +576,21 @@ int main() {
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(last_playing==1 && last_volume==.5f,"resumed playback restores sound");
             step(0,{});step(1,{});step(2,{1000});step(3,{1001});
+            step(40,{1002,1003,1004,1005,1905,1006,1007,1008,1009,1010,1011,1012,1013,1014,1015,1016,1017,1018,
+                     1019,1020,1021,1022,1023,1024,1025,1026,1027,1028,1029,1030,1031,1032,1033,1034,1035,
+                     1036,1037,1038});
+            // The live reset sequence: the tracker's arm ends (owner suspended:
+            // the worker withdraws), then its next command binds the SAME ghost
+            // to the restored start again. Attempts 2 and 3 must sound too.
+            for(uint32_t attempt=2;attempt<=3;++attempt) {
+                api->withdraw();renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+                check(last_playing==0,"a reset between attempts silences");
+                ++r.revision;r.nudge_frames=0;elapsed_base=9000+attempt*1000;
+                r.origin={GO_STAR,7,live.sequence+1,source_continuity,elapsed_base,source_generation,0,GO_RECOVERED};
+                check(api->configure(&r)==GP_OK,"worker re-binds the restored start");
+                renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+                step(0,{});step(1,{1001});step(3,{1002,1003}); // the restored first record is where it stands
+            }
             ghost_playback::set_sound_sink(nullptr);
         }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");
