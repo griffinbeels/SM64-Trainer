@@ -256,6 +256,18 @@ int main() {
     require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),overflow,4)==gc::Result::invalid &&
         !gc::display(compositor).texture,"batch aggregate capacity refuses stale display");
     require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),batch,0)==gc::Result::invalid,"empty batch refused");
+    // One batch holds GP_GHOSTS: the per-ghost GPU ranges are sized for no more.
+    {
+        // One triangle each: 17 x 3 vertices fit the prepared 60, so only the
+        // ghost count can refuse it.
+        std::vector<gc::Pose> crowd(gc::max_poses+1,batch[0]);
+        for(auto& ghost:crowd)ghost.count=3;
+        require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),crowd.data(),gc::max_poses)
+            ==gc::Result::ok,"a full batch of GP_GHOSTS ghosts draws");
+        gc::abort(compositor);
+        require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),crowd.data(),gc::max_poses+1)
+            ==gc::Result::invalid,"a batch past GP_GHOSTS refused");
+    }
     // Authentic shadow decal: drawn over this frame's clean copy under every
     // Mario, tested against copied terrain depth, never written to the game.
     {

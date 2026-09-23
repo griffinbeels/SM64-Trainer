@@ -61,6 +61,7 @@ DWORD worker_thread=0; // protected by worker_gate
 std::atomic<uint32_t> cancellation{1}, context_serial{1};
 std::atomic<bool> exhausted{false};
 std::atomic<uint64_t> desired_model{0}, enabled_revision{0}, resident_bytes{0};
+static_assert(GP_GHOSTS==ghost_compositor::max_poses,"one batch draws every displayed ghost");
 static_assert(uint64_t(GP_CLIP_SLOTS)*GP_LONG_GHOST_FRAMES*(sizeof(gclip_frame)+sizeof(uint32_t))
               <=GP_CLIP_BUDGET,"a full set of long ghosts and its replacement fit the clip budget");
 std::atomic<uint32_t> evaluations{0}, rendered{0}, gaps{0}, refusals{0}, adoption_busy{0};
