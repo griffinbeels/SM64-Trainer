@@ -428,6 +428,13 @@ class Attempt:
 
 ANCHOR_EVENT_TYPES = ("practice_reset", "state_loaded")
 
+# Every way an attempt can end (caveat 4). `loaded` is a save state ending a
+# segment's attempt under attempt rules 2 (segments.py `_anchor_outcome`) --
+# his words, "it shouldn't be a *real* reset, it should be a 'LOADED SAVE
+# STATE'". The practice log draws each (`attemptlog.js` OUTCOME_LABEL; tests/
+# test_cross_language_parity.py keeps the two in step).
+OUTCOMES = ("success", "reset", "loaded", "hard_reset", "abandoned", "death")
+
 # The attempt rules a session's events are journaled under (caveat 21).
 # `session_started` carries it as `attempt_rules`; absent means 1.
 #   1 -- every anchor is a boundary; no attempt is judged valid or not.
@@ -994,7 +1001,16 @@ class Projector:
             return
         sid = self.target[1]
         if head_success:
-            self._drop_head()
+            # Completed: the hand is no longer HELD, but it is not emptied
+            # either -- the finished segment stays in it exactly as an
+            # empty-hand success follows onto its segment, and like that one
+            # it is a leftover the next detection in the queue displaces
+            # (`_settle_segment_target`). Round 10, his Bowser 3: dropping
+            # it left the hand empty after his first PB, so the ghost had no
+            # target ("Checking whether this has a run...") and every reset
+            # of the fight after it went unrecorded as untargeted, until his
+            # second PB -- won with the hand empty -- followed onto it.
+            self._target_hooked = False
             return
         arm = self._segments.armed_items().get(sid)
         if arm is not None:
@@ -1253,6 +1269,7 @@ class Projector:
                            last_star_attempted=self._last_star_attempted,
                            route_segments=self._route_segments,
                            target_segment=target_seg,
+                           attempt_rules=self._rules,
                            landmark_names=(self._landmark_names()
                                            if self._landmark_names else None))
 
@@ -1475,7 +1492,11 @@ class Projector:
         if loads:
             reason = "save_state"
         elif hc is not None:
-            reason = self._anchor_verdicts.get(arm_id)
+            # A star: its run starts at a level entry or a judged reset.
+            # Armed by anything else -- the 100-coin grab itself, which is
+            # how the engine picks up a run mid-course -- nothing reset it.
+            reason = (None if a.anchor_type == "level_changed"
+                      else self._anchor_verdicts.get(arm_id, "no_reset"))
         elif a.anchor_type == "state_loaded":
             d = self._segments.definition(a.segment_id)
             starts_on_anchor = d is not None and any(
@@ -1526,8 +1547,9 @@ class Projector:
                 if raw_segment_id == held_pick:
                     if head_was_hooked:
                         head_popped = True
-                    elif entered_stage:
+                    if entered_stage:
                         self.target = None
+                        self._target_hooked = False
             else:
                 # An empty hand — or a star target, which the auto-follow
                 # has always moved — fills exactly as before the queue.

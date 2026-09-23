@@ -49,10 +49,11 @@ The line of detections waiting behind the held [[target]] — first hooked,
 first held. Performing a [[segment]]'s own start deliberately (a course
 exit, a door [[moment]]) takes an empty hand and becomes a
 [[hooked target]]; a detection that fires while the hand already holds
-something waits its turn; when the front completes or dies, the oldest
-detection still alive takes over, and an empty queue leaves the hand
-neutral. A queued detection also takes a [[leftover target]], which is the
-one hand nobody chose. A [[segment]] that
+something waits its turn. When the front completes it stays in the hand as
+a [[leftover target]], so its [[ghost]] and its retries keep a [[target]]; when it
+dies (forfeited or expired), the oldest detection still alive takes over,
+and an empty queue leaves the hand neutral. A queued detection also takes
+a [[leftover target]], which is the one hand nobody chose. A [[segment]] that
 arms by mere presence — a pipe family on a course
 entry — never enters the queue, and neither does a [[subsection]] a
 [[star]] or another [[segment]] owns, whatever its clause shape: only your
@@ -82,8 +83,9 @@ through that grab, because explicit choices take priority.
 
 ### Leftover target
 
-The [[segment]] the trainer followed onto after you finished one somewhere
-else, still in the hand and no longer armed where you stand — neither a
+A finished [[segment]] still in the hand — one the trainer followed onto
+after you finished it somewhere else, or one you just completed while
+it was the [[hooked target]] — and no longer armed where you stand: neither a
 [[picked target]] nor a [[hooked target]], so nothing bounds it. A detection
 in the [[target queue]] displaces it: performing a [[segment]]'s own start
 here beats a guess about a place you have walked out of.
@@ -283,8 +285,9 @@ own [[outcome]].
 
 ### Outcome
 
-How an [[attempt]] ended: you finished it, you died, or you abandoned it by
-leaving the area.
+How an [[attempt]] ended: you finished it, you [[reset]], you loaded a save
+state (a [[segment]]'s [[attempt]] only; a [[star]]'s [[attempt]] continues
+through the load), you died, or you abandoned it by leaving the area.
 
 - **Lives** — the outcome registry (`src/sm64_events/tracking/views.py`)
   → the marker shapes on the [[progress graph]]
@@ -1058,7 +1061,8 @@ itself once you close Project64, under the consent already given; onboarding
 never reopens for it (his rule, 2026-09-16).
 
 - **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the wrapper), built by
-  `tools/build_plugin.py` into `src/sm64_events/data/plugin/` beside the
+  `tools/build_plugin.py` (through `tools/build_natives.py`, never committed)
+  into the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`) beside the
   [[renderer]] and the [[encoder helper]]; `src/sm64_events/core/capturelayer.py`
   installs and undoes it; `src/sm64_events/replay/sourcefactory.py` selects
   the [[recorder]]'s camera; `src/sm64_events/replay/gpucapture.py` owns the
@@ -1082,7 +1086,8 @@ user's existing GLideN64 settings carry over.
 - **Lives** -- `tools/build_renderer.py` builds it from the pin in
   `renderer/build-inputs.json` and the overlay in `plugin/gfxwrap/`
   (`renderer/README.md` has the provenance and credits) into
-  `src/sm64_events/data/plugin/`
+  the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`), a
+  build output that tool refreshes at launch
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
 
@@ -1212,6 +1217,19 @@ touch; [[segment]]s never carry one.
 
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
   `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
+
+### Ghost defeat
+
+What a [[ghost]] still racing does when live Mario's grab completes the
+[[attempt]] first: it plays Mario's own dying fall where it stood, with
+dead eyes and his dying cry, then fades out. A [[ghost]] that already made
+its own completing grab keeps its [[dance tail]] instead. Once per [[attempt]]; a
+state load back into the [[attempt]] brings the [[ghost]]s back.
+
+- **Lives** — `plugin/gfxwrap/ghost_playback.cpp` decides and draws it;
+  `plugin/gfxwrap/ghost_tuning.h` holds its animation, timing and sound
+- **Not** — the [[dance tail]]'s fade, which ends a [[ghost]] that won its
+  own race
 
 ### Translucent world layer
 

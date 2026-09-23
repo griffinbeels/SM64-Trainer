@@ -22,7 +22,7 @@ def test_the_copy_is_identical_reused_and_replaced_per_build(tmp_path):
     assert not first.exists(), "an unused older copy is removed"
 
 
-@pytest.mark.skipif(sys.platform != "win32" or bundled_encoder_dll() is None, reason="Windows + a built helper")
+@pytest.mark.skipif(sys.platform != "win32" or bundled_encoder_dll() is None, reason="Windows + a native not built in this checkout (tools/build_natives.py)")
 def test_the_shipped_file_can_be_replaced_while_the_copy_is_loaded(tmp_path):
     shipped = tmp_path / "plugin" / ENCODER_DLL_NAME
     shipped.parent.mkdir()

@@ -17,6 +17,7 @@ extern "C" int32_t sg_model_detach(sg_model*) {std::abort();}
 extern "C" int32_t sg_model_adopt(sg_model*) {std::abort();}
 extern "C" int32_t sg_model_get_atlas(sg_model*,sg_atlas_view*) {std::abort();}
 extern "C" int32_t sg_model_get_particles(sg_model*,sg_particle_view*) {std::abort();}
+extern "C" int32_t sg_model_get_animation_frames(sg_model*,int32_t,int32_t*) {std::abort();}
 namespace ghost_particle_pose {
 Placed place(sg_model*,const sg_particle_view&,const gc_sample&,const gc_camera&,const float*,
              ghost_compositor::ParticleVertex*,ghost_compositor::Particles&) {std::abort();}

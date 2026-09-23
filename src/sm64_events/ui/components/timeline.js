@@ -12,6 +12,7 @@ const html = htm.bind(h);
 const MARKERS = {
   success: { color: "#a3e0a3" },
   reset: { color: "#e0a3a3" },
+  loaded: { color: "#d9c48a" },
   death: { color: "#d96a6a" },
 };
 const ANNOT = "#8ab4f8"; // strategy annotation flags (spec §3)

@@ -3,6 +3,7 @@ paths:
   - "plugin/gfxwrap/**"
   - "tools/build_plugin.py"
   - "tools/build_renderer.py"
+  - "tools/build_natives.py"
   - "tools/stage_link_witness.py"
   - "renderer/**"
 ---
@@ -26,11 +27,13 @@ NVENC helper. Why they are built this way, and what failed on the way:
 
 - **Build ids hash the sources.** Any edit here changes the wrapper and
   encoder ids (`tools/build_plugin.py`); an overlay edit also changes the
-  renderer id (`tools/build_renderer.py`). Rebuild and commit the DLLs in
-  `src/sm64_events/data/plugin/`; `tests/test_bundled_natives.py` fails until
-  you do. Keep LF line endings, since the hash is over bytes. A source server
-  (`run-test-server.bat`) never refreshes an installed layer: install from the
-  setup screen with Project64 closed. Packaged builds refresh automatically.
+  renderer id (`tools/build_renderer.py`). The three DLLs are build outputs,
+  never committed: `tools/build_natives.py` rebuilds whichever is out of date
+  (the launcher, wrap and release run it; a shared cache makes repeats
+  instant). Keep LF line endings, since the hash is over bytes. A source
+  server (`run-test-server.bat`) refreshes the bundle, never an installed
+  layer: install from the setup screen with Project64 closed. Packaged
+  builds refresh automatically.
 - **Python decodes layouts and codes by position.** The control page,
   `gd_status` and reason enums (`replay/gpudiagnostics.py`), `rb_stats` and
   `rb_surface` keep their offsets and values: append, never renumber. Ghost

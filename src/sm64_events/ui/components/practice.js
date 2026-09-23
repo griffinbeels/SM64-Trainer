@@ -364,7 +364,7 @@ export function Practice({ t, openCompare, openLibrary }) {
     ? focusedSec.attempts
         .filter((a) => !a.cleared && a.outcome !== "abandoned")
         .filter((a) => !(ui.hideResets
-          && (a.outcome === "reset" || a.outcome === "hard_reset")))
+          && (a.outcome === "reset" || a.outcome === "hard_reset" || a.outcome === "loaded")))
         .slice()
         .sort(comparator(ui.sort, sectionClock(focusedSec, t.clock)))
     : [];

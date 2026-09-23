@@ -118,6 +118,12 @@ RUNNER_ONLY = (
     ("nvenc not available",
      "An NVENC witness; a runner has no NVIDIA encoder.",
      "tests/test_replay_encoder.py"),
+    ("native not built in this checkout",
+     "The three natives are build outputs (tools/build_natives.py), and a "
+     "runner cannot build the renderer: its prebuilt libraries live only in "
+     "Griffin's build cache. Here the full lane builds them before the merge "
+     "check, so they are always present.",
+     "tests/test_bundled_natives.py, tests/test_encoder_stage.py"),
     ("no live journal reachable",
      "Reads this machine's own practice journal; a runner has none.",
      "tests/test_rekey.py"),
