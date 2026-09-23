@@ -6,8 +6,8 @@ import struct
 from types import SimpleNamespace
 
 from sm64_events.ghost.native_layout import (
-    CAMERA_AT, CLIP_VERSION, CLOCK_AT, HELD_AT, PARTICLE_BYTES, PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT,
-    RECORD_BYTES, RECORD_PREFIX_BYTES, REFUSAL_AT, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW,
+    CAMERA_AT, CLIP_VERSION, CLOCK_AT, HELD_ANGLES_AT, HELD_AT, PARTICLE_BYTES, PARTICLES_AT,
+    PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES, RECORD_PREFIX_BYTES, REFUSAL_AT, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW,
     SAMPLE_BYTES, SAMPLE_VERSION, SHADOW_ALPHA_AT, SHADOW_AT, SHADOW_BYTES, SHADOW_POSITION_AT,
     SHADOW_TEXTURE_AT, SOUND_AT, SOUND_BITS_AT,
 )
@@ -63,9 +63,12 @@ def frame(sequence=1, *, timer=None, igt=None, valid=31, world=3, configuration=
         struct.pack_into("<4B", raw, SOUND_AT, len(sounds), 1 if overflow else 0, 7, 5)
         if sounds:
             struct.pack_into(f"<{len(sounds)}I", raw, SOUND_AT + SOUND_BITS_AT, *sounds)
-    if held:  # (segmented behaviour, animation id, frame): a held object at a fixed HOLP
+    if held:  # (segmented behaviour, animation id, frame[, yaw]): at a fixed HOLP;
+        # with a yaw it is released, at that position by its own node
         struct.pack_into("<I3hH6f", raw, HELD_AT, held[0], held[1], held[2], 0, 0,
                          100, 20, 30, 1, 1, 1)
+        if len(held) > 3:
+            struct.pack_into("<3hH", raw, HELD_AT + HELD_ANGLES_AT, 0, held[3], 0, 1)
     if particles is not None:  # (display list, view-space translation) per particle
         raw[PARTICLES_AT] = len(particles)
         for index, (dl, translation) in enumerate(particles):

@@ -27,22 +27,24 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC6: layout 188 (`behaviour_base` at 184), sample 1252; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (36 at 1216) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC7: layout 188 (`behaviour_base` at 184), sample 1260; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (44 at 1216, its released angle at 36) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
-| Renderer capture | GS5, still exported as `SM64GhostSourceV3` (the version argument must be 5); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
+| Renderer capture | GS6, still exported as `SM64GhostSourceV3` (the version argument must be 6); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC7: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1268 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP5: header 160, record 1268, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP4 (record 652) still loads, read as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP6: header 160, record 1276, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP5 (record 1268) still loads, read as having nothing released; GCLIP4 (record 652) also as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
-Sizes are bytes. Native ghost versions are checked together. GCLIP4 (GC5,
-652-byte records, the saved and PB ghosts recorded before particles) is the one
-format read by a compatibility step: the worker, after checking the saved
-file's SHA-256, and `clip.py` both rewrite it as GCLIP5 with every sample byte
-kept and no particle block ([ghost_clip_upgrade.h](../plugin/gfxwrap/ghost_clip_upgrade.h),
-`upgrade_record`), so it binds to its attempt and plays exactly as before
-(tested on a real saved clip, `tests/fixtures/attempt_2549_*`); a GCLIP4 clip
-longer than 100000 records is refused. Older native clips have no
+Sizes are bytes. Native ghost versions are checked together. GCLIP5 (GC6,
+1268-byte records, before released objects) and GCLIP4 (GC5, 652-byte records,
+before particles) are read by a compatibility step: the worker, after checking
+the saved file's SHA-256, and `clip.py` both rewrite them as GCLIP6 with every
+sample byte kept and the blocks they never had zero
+([ghost_clip_upgrade.h](../plugin/gfxwrap/ghost_clip_upgrade.h),
+`upgrade_record`), so they bind to their attempt and play exactly as before
+(GCLIP4 tested on a real saved clip, `tests/fixtures/attempt_2549_*`); an
+older clip longer than 100000 records is refused. The pose archive's GC6 and
+GC5 rows read the same way. Older native clips have no
 compatibility reader. Their files remain on disk; `OlderPoseFormat` provides a
 typed reason (`older_pose_format`) to record a new attempt. An older committed
 file keeps pruning protection and is never overwritten by a later export; a
@@ -169,6 +171,26 @@ recorded or drawn in the hand; Bowser himself is a world object, and the
 ghost shows Mario swinging with empty hands. An object the model does not
 know, or refuses (no textures, an animation it lacks, no room in the mesh),
 is left out and Mario still draws.
+
+**Released (thrown or dropped).** Once `heldObj` clears, the reader
+(`gc_reader`) follows the slot Mario last held, one game frame at a time,
+while the object stays active and keeps the behaviour it had in his hand, for
+at most `GC_RELEASED_FRAMES` (300, 10 s). A skipped game frame, a changed
+behaviour (the slot reused) or an inactive object (the Bob-omb explodes) ends
+the follow for good; grabbing it again returns it to his hand. On each
+followed frame whose own node draws it (active, visible, in Mario's area, no
+throwMatrix or billboard) the held block carries `released` 1, its gfx
+position in `holp`, its gfx angle in `angles`, and the same behaviour,
+animation and scale; `geo_process_object` composed TRS(position, angle,
+scale), and `held.c` does the same (`SG_POSE_HELD_RELEASED`). A frame its
+node does not draw (culled, not yet shown) carries nothing, so the ghost's
+object disappears exactly where the game's did. It rides Mario's pose like
+the in-hand block. An object without an animation (a box) is kept beside a
+carried root too, since its own node, not his hand, drew it. Witnessed by
+`tests/native/ghost_root_host.cpp` `released_block` (every rule mutation-proved)
+and `tests/native/held_pose_host.cpp` (a released Bob-omb at its own position;
+the box turned by its own yaw). Live, in his Behind Chain Chomp's Gate runs, is
+unwitnessed.
 
 ### Cap effects (vanish and metal)
 
@@ -619,7 +641,7 @@ wermi's build v7 is 32-bit and not large-address-aware (checked 2026-09-23),
 and the emulator, GLideN64, its texture caches and the worker's retained files
 share that space. The budget is a ceiling, not a reservation. Every clip
 allocation fails soft instead of throwing inside Project64. The worker's file
-read and GCLIP4 upgrade refuse with `GIPC_FILE` (6). The retained-file total,
+read and older-clip upgrade refuse with `GIPC_FILE` (6). The retained-file total,
 the asset list and playback's copy (`new(std::nothrow)`, `GP_BUDGET`) refuse
 the set with `GIPC_BUDGET` (12), kept apart from a bad clip (`GIPC_CLIP`, 8)
 so the ghost card can say "These ghosts are too long to show together;

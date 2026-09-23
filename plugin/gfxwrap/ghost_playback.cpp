@@ -340,6 +340,8 @@ bool valid_held(const gc_sample& s) {
     // animation_id -1: an object without an animation, at frame 0.
     if(!(s.valid_fields&GC_VALID_POSE) || (h.behavior>>16)!=0x1300u || h.anim_state>255
             || h.animation_id<-1 || h.animation_frame<0 || (h.animation_id==-1 && h.animation_frame))return false;
+    // In his hand the orientation is Mario's root: no angle of its own.
+    if(h.released>1 || (!h.released && (h.angles[0] || h.angles[1] || h.angles[2])))return false;
     for(unsigned axis=0;axis<3;++axis)
         if(!std::isfinite(h.holp[axis]) || !std::isfinite(h.scale[axis]) || h.scale[axis]==0)return false;
     return true;
