@@ -1,0 +1,74 @@
+"""The one Python statement of the native ghost layout matches the compiled headers.
+
+ghost/native_layout.py restates sizes, offsets, versions and limits once;
+tests/native/ghost_layout_host.cpp prints the same names from sizeof, offsetof
+and the C macros. A wrong or missing value fails here, not as a misread clip.
+"""
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+
+from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost import clip, native_layout as L, native_protocol as P
+from sm64_events.memory import ghost_layout
+from sm64_events.memory.layout import US
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="module")
+def native(tmp_path_factory):
+    if sys.platform != "win32":
+        pytest.skip("native MSVC layout witness")
+    work = tmp_path_factory.mktemp("ghost_layout")
+    spec = importlib.util.spec_from_file_location("build_plugin", ROOT / "tools/build_plugin.py")
+    compiler = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compiler)
+    vcvars = compiler.find_vcvars32()
+    assert vcvars, "x86 MSVC toolchain is required for this native witness"
+    target = work / "ghost_layout_host.exe"
+    compiler._cl(vcvars, ["/nologo", "/W4", "/MT", "/EHsc", "/std:c++17", f"/I{ROOT / 'plugin/gfxwrap'}",
+        f"/I{ROOT / 'renderer/model'}", str(ROOT / "tests/native/ghost_layout_host.cpp"),
+        f"/Fe:{target}", f"/Fo{work}\\"], work)
+    result = subprocess.run([str(target)], cwd=work, capture_output=True, text=True, timeout=10,
+                            check=False, **quiet_spawn_kwargs())
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout)
+
+
+def python_names():
+    return {name: value for name, value in vars(L).items() if name.isupper()}
+
+
+def test_every_python_value_is_the_compiled_one(native):
+    python = python_names()
+    wrong = {name: (python[name], native[name]) for name in native
+             if name in python and (python[name].decode() if isinstance(python[name], bytes) else python[name])
+             != native[name]}
+    assert not wrong, f"native_layout.py differs from the headers (python, native): {wrong}"
+
+
+def test_every_python_value_is_checked(native):
+    """A constant the host does not print would be a restatement nobody compares."""
+    assert set(python_names()) == set(native), (set(python_names()) ^ set(native))
+
+
+def test_python_decoders_fill_the_spans_they_read():
+    """Each struct format ends where the next named offset begins."""
+    assert clip._HEADER.size == L.HEADER_BYTES
+    assert clip._PREFIX.size == L.RECORD_PREFIX_BYTES
+    # gc_sample's scalar head (bytes .. live_action) runs up to the pose block.
+    assert L.RECORD_PREFIX_BYTES + clip._SAMPLE.size == L.POSE_AT
+    assert L.WARP_AT + clip._WARP.size == L.CLOCK_AT
+    assert clip._CLOCK.size == L.CLOCK_BYTES and L.CLOCK_AT + L.CLOCK_BYTES == L.SHADOW_AT
+    assert clip._SOUND.size == L.SOUND_BYTES
+    assert L.SOUND_BITS_AT + 4 * L.SOUND_EVENTS == L.SOUND_BYTES
+    assert L.PARTICLES_ENTRIES_AT + L.PARTICLE_EVENTS * L.PARTICLE_BYTES == L.PARTICLES_BYTES
+    assert L.HELD_AT + L.HELD_BYTES == L.RECORD_BYTES
+    assert len(ghost_layout.GhostLayout.from_layout(US).to_bytes()) == L.LAYOUT_BYTES
+    assert ghost_layout.VERSION == L.SAMPLE_VERSION
+    assert P.PAGE_BYTES == L.IPC_RING_AT + L.IPC_SLOTS * L.RECORD_BYTES

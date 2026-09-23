@@ -27,29 +27,31 @@ import tempfile
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO5", 5, 6
-HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1268, 1252
-MAX_RECORDS, WORLD_READY = 100000, 3
-CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND, PARTICLES, HELD = 1, 2, 4, 8, 16, 32, 64, 128, 256
-REQUIRED, ALL_VALID = 31, 511
-SHADOW_AT, SOUND_AT, PARTICLES_AT, HELD_AT = 16 + 308, 16 + 600, 16 + 636, 16 + 1216  # optional blocks
-HELD_BYTES = 36  # gc_held: segmented behaviour, animation, HOLP, scale
-SHADOW_BYTES, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW = 292, 36, 8, 1
-PARTICLE_BYTES, PARTICLE_EVENTS, PARTICLE_OVERFLOW = 580, 16, 1
+from sm64_events.ghost.native_layout import (  # every size and offset: native_layout.py
+    CAMERA_AT, CAMERA_FOV_AT, CLIP_MAGIC as MAGIC, CLIP_VERSION as VERSION, CLOCK_AT, DANCE_TAIL,
+    HEADER_BYTES, HELD_AT, HELD_BYTES, HELD_HOLP_AT, MAX_RECORDS, PARTICLE_BYTES as PARTICLE_ENTRY_BYTES,
+    PARTICLE_EVENTS, PARTICLE_OPACITY, PARTICLE_OPACITY_AT, PARTICLE_OVERFLOW, PARTICLE_TRANSLATION_AT,
+    PARTICLES_AT, PARTICLES_BYTES as PARTICLE_BYTES, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES,
+    REFUSAL_AT, ROOT_KIND_AT, ROOT_MATRIX_AT, ROOT_SCALED_MODELVIEW, ROOT_TRS, SAMPLE_BYTES,
+    SAMPLE_VERSION, SEGMENT_CLOCK,
+    SHADOW_AT, SHADOW_BYTES, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW,
+    STAR_CLOCK, V4_MAGIC, V4_RECORD_BYTES, V4_SAMPLE_BYTES, V4_SAMPLE_VERSION, V4_VERSION,
+    VALID_ACTION as ACTION, VALID_ALL as ALL_VALID, VALID_CAMERA as CAMERA, VALID_CLOCK as CLOCK,
+    VALID_HELD as HELD, VALID_PARTICLES as PARTICLES, VALID_POSE as POSE, VALID_REQUIRED as REQUIRED,
+    VALID_SHADOW as SHADOW, VALID_SOUND as SOUND, VALID_WARP as WARP, WARP_AT,
+)
+
 OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
-# GCLIP4/GC5, before particles: still read, as the same clip without them.
-V4_MAGIC, V4_VERSION, V4_SAMPLE_VERSION, V4_RECORD_BYTES, V4_SAMPLE_BYTES = b"SM64GHO4", 4, 5, 652, 636
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
-STAR_CLOCK, SEGMENT_CLOCK = 1, 2
-DANCE_TAIL = 1  # header flag: rows after the closing frame are the closing star's dance
 CLOCK_KINDS = {"star": STAR_CLOCK, "segment": SEGMENT_CLOCK}
+# The scalar runs each decoder reads; tests/test_ghost_layout.py checks that
+# each ends where the next named offset begins.
 _HEADER = struct.Struct("<8s8I16sQqd2Q2I2i4I3Q2I")
 _PREFIX = struct.Struct("<4I")
 _SAMPLE = struct.Struct("<4I2QqI2H2h2I")
 _WARP = struct.Struct("<Hh")
 _CLOCK = struct.Struct("<4I6Q")
 _SOUND = struct.Struct("<4B8I")
-REFUSAL_AT = 16 + 60 + 77  # record offset of gc_pose.refusal
 # gc_refusal (ghost_capture.h), by value: the one check that refused the pose.
 # With a valid pose, "not_drawn" means the game culled Mario and the root was
 # carried from the last frame that proved it, or composed as his own TRS.
@@ -164,12 +166,12 @@ def upgrade_record(data: bytes) -> bytes:
     versions moved on and an empty particle block (native ghost_clip_upgrade.h).
     Anything else is returned unchanged for the ordinary checks."""
     if (len(data) != V4_RECORD_BYTES or struct.unpack_from("<2I", data) != (V4_RECORD_BYTES, V4_VERSION)
-            or struct.unpack_from("<2I", data, 16) != (V4_SAMPLE_BYTES, V4_SAMPLE_VERSION)):
+            or struct.unpack_from("<2I", data, _PREFIX.size) != (V4_SAMPLE_BYTES, V4_SAMPLE_VERSION)):
         return data
     raw = bytearray(RECORD_BYTES)
     raw[:V4_RECORD_BYTES] = data
     struct.pack_into("<2I", raw, 0, RECORD_BYTES, VERSION)
-    struct.pack_into("<2I", raw, 16, SAMPLE_BYTES, SAMPLE_VERSION)
+    struct.pack_into("<2I", raw, _PREFIX.size, SAMPLE_BYTES, SAMPLE_VERSION)
     return bytes(raw)
 
 
@@ -192,7 +194,7 @@ def frame_from_bytes(data: bytes) -> Frame:
         raise ClipError("native ghost record schema is unsupported")
     count, flags, _producer, _consumer, *bits = _SOUND.unpack_from(raw, SOUND_AT)
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
-                  *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)),
+                  *_WARP.unpack_from(raw, WARP_AT), Clock(*_CLOCK.unpack_from(raw, CLOCK_AT)),
                   tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW),
                   raw[REFUSAL_AT], raw[PARTICLES_AT] if valid & PARTICLES else 0,
                   struct.unpack_from("<I", raw, HELD_AT)[0] if valid & HELD else 0)
@@ -204,7 +206,7 @@ def frame_from_bytes(data: bytes) -> Frame:
         raise ClipError("native ghost place is invalid")
     if bool(valid & ACTION) != bool(frame.live_action):
         raise ClipError("native ghost action validity disagrees with its value")
-    for bit, lo, hi in ((POSE, 76, 220), (CAMERA, 220, 256)):
+    for bit, lo, hi in ((POSE, POSE_AT, CAMERA_AT), (CAMERA, CAMERA_AT, WARP_AT)):
         component = raw[lo:hi] if bit != POSE else raw[lo:REFUSAL_AT] + raw[REFUSAL_AT + 1:hi]
         if not valid & bit and any(component):
             raise ClipError("native ghost refusal retains invalid component bytes")
@@ -212,7 +214,7 @@ def frame_from_bytes(data: bytes) -> Frame:
             floats = struct.unpack_from("<6f", raw, lo)
             if not all(math.isfinite(value) for value in floats):
                 raise ClipError("native ghost component contains a nonfinite value")
-    if valid & CAMERA and not math.isfinite(struct.unpack_from("<f", raw, 248)[0]):
+    if valid & CAMERA and not math.isfinite(struct.unpack_from("<f", raw, CAMERA_FOV_AT)[0]):
         raise ClipError("native ghost camera contains a nonfinite value")
     _validate_root(raw, valid)
     if not valid & WARP and (frame.pending_warp_op or frame.delayed_warp_timer):
@@ -230,12 +232,12 @@ def frame_from_bytes(data: bytes) -> Frame:
 def _validate_root(raw: bytes, valid: int) -> None:
     if not valid & POSE:
         return
-    root_kind = struct.unpack_from("<I", raw, 128)[0]
-    matrix = struct.unpack_from("<16f", raw, 156)
-    if root_kind == 1:
-        if any(raw[156:220]):
+    root_kind = struct.unpack_from("<I", raw, ROOT_KIND_AT)[0]
+    matrix = struct.unpack_from("<16f", raw, ROOT_MATRIX_AT)
+    if root_kind == ROOT_TRS:
+        if any(raw[ROOT_MATRIX_AT:ROOT_MATRIX_AT + 64]):
             raise ClipError("native ghost TRS root retains matrix bytes")
-    elif root_kind == 2:
+    elif root_kind == ROOT_SCALED_MODELVIEW:
         if not valid & CAMERA or not all(math.isfinite(value) for value in matrix):
             raise ClipError("native ghost matrix root has no valid recorded camera")
         if (matrix[3], matrix[7], matrix[11], matrix[15]) != (0, 0, 0, 1):
@@ -251,8 +253,8 @@ def _validate_shadow(raw: bytes, valid: int) -> None:
             raise ClipError("native ghost shadow refusal retains bytes")
         return
     matrix = struct.unpack_from("<16f", block)
-    if (not valid & POSE or struct.unpack_from("<I", raw, 128)[0] != 2 or block[163]
-            or not all(math.isfinite(value) for value in matrix)
+    if (not valid & POSE or struct.unpack_from("<I", raw, ROOT_KIND_AT)[0] != ROOT_SCALED_MODELVIEW
+            or block[SHADOW_RESERVED_AT] or not all(math.isfinite(value) for value in matrix)
             or (matrix[3], matrix[7], matrix[11], matrix[15]) != (0, 0, 0, 1)):
         raise ClipError("native ghost shadow has no executed root or an invalid matrix")
 
@@ -275,12 +277,13 @@ def _validate_particles(raw: bytes, valid: int) -> None:
         return
     count, flags = block[0], block[1]
     if (count > PARTICLE_EVENTS or flags & ~PARTICLE_OVERFLOW or any(block[2:4])
-            or (flags & PARTICLE_OVERFLOW and count != PARTICLE_EVENTS) or any(block[4 + 36 * count:])):
+            or (flags & PARTICLE_OVERFLOW and count != PARTICLE_EVENTS)
+            or any(block[PARTICLES_ENTRIES_AT + PARTICLE_ENTRY_BYTES * count:])):
         raise ClipError("native ghost particles are inconsistent")
-    for at in range(4, 4 + 36 * count, 36):
-        opacity = struct.unpack_from("<H", block, at + 22)[0]
-        if (opacity and not 0x100 <= opacity <= 0x1FF) or not all(
-                math.isfinite(value) for value in struct.unpack_from("<3f", block, at + 24)):
+    for at in range(PARTICLES_ENTRIES_AT, PARTICLES_ENTRIES_AT + PARTICLE_ENTRY_BYTES * count, PARTICLE_ENTRY_BYTES):
+        opacity = struct.unpack_from("<H", block, at + PARTICLE_OPACITY_AT)[0]
+        if (opacity and not PARTICLE_OPACITY <= opacity <= PARTICLE_OPACITY | 0xFF) or not all(
+                math.isfinite(value) for value in struct.unpack_from("<3f", block, at + PARTICLE_TRANSLATION_AT)):
             raise ClipError("native ghost particle entry is invalid")
 
 
@@ -291,7 +294,7 @@ def _validate_held(raw: bytes, valid: int) -> None:
             raise ClipError("native ghost held-object refusal retains bytes")
         return
     behaviour, animation_id, frame, _y, anim_state = struct.unpack_from("<I3hH", block)
-    values = struct.unpack_from("<6f", block, 12)
+    values = struct.unpack_from("<6f", block, HELD_HOLP_AT)
     # animation_id -1: an object without an animation (a box), at frame 0.
     if (not valid & POSE or behaviour >> 16 != 0x1300 or anim_state > 255 or animation_id < -1 or frame < 0
             or (animation_id == -1 and frame) or not all(math.isfinite(value) for value in values)

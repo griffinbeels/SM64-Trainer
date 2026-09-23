@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace ghost_clip {
+constexpr char v4_magic[] = "SM64GHO4";
 constexpr uint32_t v4_version = 4, v4_record_bytes = 652, v4_sample_bytes = 636, v4_sample_version = 5;
 static_assert(offsetof(gc_sample, particles) == v4_sample_bytes, "GC5 is GC6 without its particle block");
 
@@ -16,7 +17,7 @@ static_assert(offsetof(gc_sample, particles) == v4_sample_bytes, "GC5 is GC6 wit
  * in place as GCLIP5; false leaves data untouched (not GCLIP4, or malformed:
  * the ordinary GCLIP5 validation then refuses it). */
 inline bool upgrade_v4(std::vector<uint8_t> &data, bool *out_of_memory = nullptr) {
-    if (data.size() < sizeof(gclip_header) || std::memcmp(data.data(), "SM64GHO4", 8)) return false;
+    if (data.size() < sizeof(gclip_header) || std::memcmp(data.data(), v4_magic, 8)) return false;
     gclip_header header{}; std::memcpy(&header, data.data(), sizeof(header));
     if (header.version != v4_version || header.bytes != sizeof(header) || header.record_bytes != v4_record_bytes
             || header.sample_version != v4_sample_version || !header.record_count

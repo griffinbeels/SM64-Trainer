@@ -13,6 +13,11 @@ import pytest
 from ghost_native_fixture import frame, producer
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.ghost.clip import ClipError, SEGMENT_CLOCK, STAR_CLOCK, decode_clip, encode_clip
+from sm64_events.ghost.native_layout import (
+    CAMERA_FOV_AT, HEADER_BYTES as H, HELD_AT, PARTICLE_BYTES, PARTICLE_OPACITY_AT, PARTICLE_TRANSLATION_AT,
+    PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT, ROOT_KIND_AT, SHADOW_AT,
+    SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
+)
 from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded, matrix_frame
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,30 +38,30 @@ def corpus():
               base[:100], base[:-1], base + b"\0"]
     for offset, value in ((128, 3), (168, 1), (216, 0), (156, 0x7fc00000)):
         changed = bytearray(encoded((matrix_frame(),)))
-        struct.pack_into("<I", changed, 160 + offset, value)
+        struct.pack_into("<I", changed, H + offset, value)
         values.append(bytes(changed))
     for status in range(12):
         values.append(encoded((frame(world=status),)))
         # Timing and origin are unchanged; absent pose remains a refusal even
         # when the historical renderer was ready or its target was unsupported.
-        values.append(base[:160] + frame(world=status, valid=29))
-    for offset, value in [*BAD_HEADER_WORDS, *((160 + at, value) for at, value in BAD_CLOCK_WORDS),
-                           (160, 192), (164, 1), (180, 2), (188, 63),
-                           (172, 12),
-                           (160 + 72, 0), (160 + 76, 0x7fc00000), (160 + 248, 0x7f800000)]:
+        values.append(base[:H] + frame(world=status, valid=29))
+    for offset, value in [*BAD_HEADER_WORDS, *((H + at, value) for at, value in BAD_CLOCK_WORDS),
+                           (H, 192), (H + 4, 1), (H + 20, 2), (H + 28, 63),
+                           (H + 12, 12),
+                           (H + 72, 0), (H + POSE_AT, 0x7fc00000), (H + CAMERA_FOV_AT, 0x7f800000)]:
         changed = bytearray(base)
         struct.pack_into("<I", changed, offset, value)
         values.append(bytes(changed))
     for offset, value in [(32, 1), (40, 101), (48, 999), (56, 99), (308, 0), (316, 10)]:
         changed = bytearray(encoded((frame(1), frame(2))))
-        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 160 + 1268 + offset, value)
+        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, H + R + offset, value)
         values.append(bytes(changed))
     # Pose refusal reasons: kept on refused rows and on carried roots; an
     # unknown reason or any other pose byte on a refusal is refused.
     for reason in (1, 3, 11, 19, 20, 23):
         values.append(encoded((frame(1, valid=29, pose_refusal=reason), frame(2))))
     values.append(encoded((frame(1, pose_refusal=19),)))
-    for offset, value in ((160 + 153, 24), (160 + 76, 1)):
+    for offset, value in ((H + REFUSAL_AT, 24), (H + POSE_AT, 1)):
         changed = bytearray(encoded((frame(1, valid=29, pose_refusal=19), frame(2))))
         changed[offset] = value
         values.append(bytes(changed))
@@ -65,29 +70,29 @@ def corpus():
     values.append(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
     # A box: no animation, id -1 at frame 0 only.
     values.append(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
-    for offset, value in ((160 + 16 + 1216 + 6, 3), (160 + 16 + 1216 + 4, 0xfe)):  # frame 3; id -2
+    for offset, value in ((H + HELD_AT + 6, 3), (H + HELD_AT + 4, 0xfe)):  # frame 3; id -2
         changed = bytearray(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
         changed[offset] = value
         values.append(bytes(changed))
-    for offset, value in ((160 + 16 + 1216 + 3, 0x80), (160 + 16 + 1216 + 30, 0)):
+    for offset, value in ((H + HELD_AT + 3, 0x80), (H + HELD_AT + 30, 0)):
         changed = bytearray(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
         changed[offset] = value
         values.append(bytes(changed))
     stray = bytearray(encoded((frame(1), frame(2))))
-    stray[160 + 16 + 1216] = 1
+    stray[H + HELD_AT] = 1
     values.append(bytes(stray))
     # Recorded shadow and sound: accepted shapes, then each native refusal.
     evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,), particles=((0x0401DD60, (1, 2, -300)),)),
                         frame(2, sounds=tuple(range(1, 9)), overflow=True, particles=())))
     values.append(evidence)
-    for offset, pack, value in [(160 + 128, "<I", 1), (160 + 324 + 60, "<f", 0.5),
-                                (160 + 324, "<I", 0x7fc00000), (160 + 324 + 163, "<B", 1),
-                                (160 + 616, "<B", 9), (160 + 1268 + 617, "<B", 2),
-                                (160 + 616 + 1, "<B", 1), (160 + 620 + 4, "<I", 5),
-                                (160 + 1268 + 324 + 8, "<I", 1), (160 + 1268 + 620, "<I", 0),
-                                (160 + 652, "<B", 17), (160 + 653, "<B", 2), (160 + 654, "<B", 1),
-                                (160 + 656 + 22, "<h", 1), (160 + 656 + 24, "<I", 0x7fc00000),
-                                (160 + 656 + 36, "<I", 0x0401DD60), (160 + 1268 + 652, "<B", 1)]:
+    for offset, pack, value in [(H + ROOT_KIND_AT, "<I", 1), (H + SHADOW_AT + 60, "<f", 0.5),
+                                (H + SHADOW_AT, "<I", 0x7fc00000), (H + SHADOW_AT + SHADOW_RESERVED_AT, "<B", 1),
+                                (H + SOUND_AT, "<B", 9), (H + R + SOUND_AT + 1, "<B", 2),
+                                (H + SOUND_AT + 1, "<B", 1), (H + SOUND_AT + SOUND_BITS_AT + 4, "<I", 5),
+                                (H + R + SHADOW_AT + 8, "<I", 1), (H + R + SOUND_AT + SOUND_BITS_AT, "<I", 0),
+                                (H + PARTICLES_AT, "<B", 17), (H + PARTICLES_AT + 1, "<B", 2), (H + PARTICLES_AT + 2, "<B", 1),
+                                (H + PARTICLES_AT + PARTICLES_ENTRIES_AT + PARTICLE_OPACITY_AT, "<h", 1), (H + PARTICLES_AT + PARTICLES_ENTRIES_AT + PARTICLE_TRANSLATION_AT, "<I", 0x7fc00000),
+                                (H + PARTICLES_AT + PARTICLES_ENTRIES_AT + PARTICLE_BYTES, "<I", 0x0401DD60), (H + R + PARTICLES_AT, "<B", 1)]:
         changed = bytearray(evidence)
         struct.pack_into(pack, changed, offset, value)
         values.append(bytes(changed))
@@ -99,7 +104,7 @@ def corpus():
     # A real GCLIP4 recording saved before particles plays; a broken one does not.
     saved = REAL_GCLIP4.read_bytes()
     values.append(saved)
-    for offset, value in ((20, 321), (160, 653), (160 + 20, 637), (160 + 28, 128)):
+    for offset, value in ((20, 321), (H, 653), (H + 20, 637), (H + 28, 128)):
         broken = bytearray(saved)
         struct.pack_into("<I", broken, offset, value)
         values.append(bytes(broken))

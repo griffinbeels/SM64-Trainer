@@ -13,11 +13,13 @@ import json
 import logging
 from time import monotonic
 
+from sm64_events.ghost.native_layout import GHOSTS
+
 SELECTION_KEY = "ghost_templates"
 CANDIDATE_CACHE_S = 4.0
 MISSING_REASON = "The selected ghost was removed. Choose another saved ghost."
-#: Ghosts drawn at once; the native channel's `GIPC_GHOSTS`.
-MAX_GHOSTS = 16
+#: Ghosts drawn at once (the renderer's GP_GHOSTS).
+MAX_GHOSTS = GHOSTS
 DEFAULT_CHOICE = {"pb": True, "attempts": []}
 log = logging.getLogger("sm64.ghost")
 

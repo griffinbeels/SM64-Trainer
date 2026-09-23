@@ -7,6 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from ghost_native_fixture import frame, producer
+from sm64_events.ghost.native_layout import (
+    CLIP_MAGIC, CLIP_VERSION, HEADER_BYTES, HELD_AT, PARTICLES_AT, PARTICLES_ENTRIES_AT, ROOT_KIND_AT,
+    SAMPLE_VERSION, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
+)
 from sm64_events.ghost.clip import (
     PARTICLES, RECORD_BYTES, STAR_CLOCK, SEGMENT_CLOCK, ClipError, OlderPoseFormat, check_manifest,
     decode_clip, encode_clip, frame_from_bytes, read_clip, write_clip,
@@ -85,10 +89,10 @@ def test_shadow_and_sound_round_trip_with_their_own_validity():
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda raw: struct.pack_into("<I", raw, 128, 1),               # shadow without executed root
-    lambda raw: struct.pack_into("<f", raw, 324 + 60, 0.5),        # non-affine shadow matrix
-    lambda raw: struct.pack_into("<f", raw, 324, float("nan")),    # nonfinite shadow matrix
-    lambda raw: raw.__setitem__(324 + 163, 1),                     # reserved shadow byte
+    lambda raw: struct.pack_into("<I", raw, ROOT_KIND_AT, 1),      # shadow without executed root
+    lambda raw: struct.pack_into("<f", raw, SHADOW_AT + 60, 0.5),  # non-affine shadow matrix
+    lambda raw: struct.pack_into("<f", raw, SHADOW_AT, float("nan")),  # nonfinite shadow matrix
+    lambda raw: raw.__setitem__(SHADOW_AT + SHADOW_RESERVED_AT, 1),  # reserved shadow byte
 ])
 def test_invalid_recorded_shadow_refuses(mutate):
     raw = bytearray(frame(shadow=True))
@@ -98,10 +102,10 @@ def test_invalid_recorded_shadow_refuses(mutate):
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda raw: raw.__setitem__(616, 9),                           # more than eight events
-    lambda raw: raw.__setitem__(617, 1),                           # overflow before eight
-    lambda raw: raw.__setitem__(617, 2),                           # unknown flag
-    lambda raw: struct.pack_into("<I", raw, 620 + 4 * 3, 5),       # bits past the count
+    lambda raw: raw.__setitem__(SOUND_AT, 9),                      # more than eight events
+    lambda raw: raw.__setitem__(SOUND_AT + 1, 1),                  # overflow before eight
+    lambda raw: raw.__setitem__(SOUND_AT + 1, 2),                  # unknown flag
+    lambda raw: struct.pack_into("<I", raw, SOUND_AT + SOUND_BITS_AT + 4 * 3, 5),  # bits past the count
 ])
 def test_invalid_sound_events_refuse(mutate):
     raw = bytearray(frame(sounds=(1, 2)))
@@ -110,7 +114,8 @@ def test_invalid_sound_events_refuse(mutate):
         frame_from_bytes(bytes(raw))
 
 
-@pytest.mark.parametrize("at, name", [(324 + 4, "shadow"), (620, "sound"), (656, "particle")])
+@pytest.mark.parametrize("at, name", [(SHADOW_AT + 4, "shadow"), (SOUND_AT + SOUND_BITS_AT, "sound"),
+                                       (PARTICLES_AT + PARTICLES_ENTRIES_AT, "particle")])
 def test_refused_optional_evidence_keeps_no_bytes(at, name):
     raw = bytearray(frame())
     raw[at] = 1
@@ -124,13 +129,13 @@ def test_portable_offsets_and_lossless_refusal_rows(tmp_path):
     manifest = write_clip(path, rows, producer(), clock_kind=STAR_CLOCK,
                           clip_id="112233445566778899aabbccddeeff00")
     raw = path.read_bytes()
-    assert raw[:8] == b"SM64GHO5"
-    assert struct.unpack_from("<8I", raw, 8) == (5, 160, 1268, 3, 1, 6, 4, 5)
+    assert raw[:8] == CLIP_MAGIC
+    assert struct.unpack_from("<8I", raw, 8) == (CLIP_VERSION, HEADER_BYTES, RECORD_BYTES, 3, 1, SAMPLE_VERSION, 4, 5)
     assert raw[40:56].hex() == manifest["clip_id"]
     assert struct.unpack_from("<Qqd", raw, 56) == (30, 1000, 1800000000.0)
     assert struct.unpack_from("<2Q2I2i", raw, 80) == (1, 4, 101, 104, 24, 1)
     assert struct.unpack_from("<4I3Q2I", raw, 112) == (1, 101, 1, 0, 1, 1, 9, 0, 0)
-    assert raw[160:] == b"".join(rows)
+    assert raw[HEADER_BYTES:] == b"".join(rows)
     assert manifest["invalid_records"] == 1 and manifest["missing_occurrences"] == 1
     assert manifest["origin_elapsed"] == 1 and manifest["origin_generation"] == 1
     assert manifest["sha256"] == hashlib.sha256(raw).hexdigest()
@@ -262,7 +267,7 @@ def test_held_object_rides_a_pose_with_a_segment_0x13_behaviour():
         with pytest.raises(ClipError, match="held object"):
             frame_from_bytes(broken)
     raw = bytearray(frame())
-    raw[16 + 1216] = 1
+    raw[HELD_AT] = 1
     with pytest.raises(ClipError, match="held-object refusal"):
         frame_from_bytes(bytes(raw))
 

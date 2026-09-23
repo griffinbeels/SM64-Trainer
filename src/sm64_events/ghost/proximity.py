@@ -1,9 +1,11 @@
 """Native ghost readability preferences, independent of the footage overlay."""
 import math
 
+from sm64_events.ghost.native_layout import PROXIMITY_MAX
+
 DEFAULT_PROXIMITY = {"enabled": True, "extra_distance": 0.0}
 PROXIMITY_KEY = "ghost_proximity"
-MAX_EXTRA_DISTANCE = 400.0
+MAX_EXTRA_DISTANCE = PROXIMITY_MAX  # the renderer refuses a larger one
 
 
 def checked_proximity(value):

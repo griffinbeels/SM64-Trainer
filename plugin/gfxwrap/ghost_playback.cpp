@@ -460,7 +460,7 @@ bool valid_request(const gp_request& r) {
     if(r.bytes!=sizeof(r) || r.version!=GP_VERSION || !r.revision
             || r.enabled>1 || r.tint_enabled>1 || r.clip_count>GP_GHOSTS || r.reserved1
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
-            || r.proximity_distance<0 || r.proximity_distance>400
+            || r.proximity_distance<0 || r.proximity_distance>GP_PROXIMITY_MAX
             || r.shadow_enabled>1 || r.occlusion_fade>1 || r.reserved3
             || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
             || r.suspended>1 || r.reserved4) return false;

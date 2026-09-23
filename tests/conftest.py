@@ -20,6 +20,12 @@ _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.append(_REPO_ROOT)
 
+# Every native host compile goes through tools/build_plugin.py::_cl, which then
+# reuses an identical earlier compile from this shared folder (all worktrees)
+# instead of paying vcvars and cl again. SM64_NATIVE_BUILD_CACHE=0 opts out.
+os.environ.setdefault("SM64_NATIVE_BUILD_CACHE", str(
+    Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "SM64Trainer/build-cache/test-hosts"))
+
 from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database

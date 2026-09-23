@@ -11,7 +11,7 @@ import sys
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.ghost import native_protocol as P
+from sm64_events.ghost import native_layout as L, native_protocol as P
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,11 +91,12 @@ int wmain(int argc,wchar_t** argv) {
     compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17",
         str(launcher), f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *compiler.LIBS], tmp_path)
     def header(clip_id):
-        return struct.pack("<8s8I16sQqdQQIIii4I3Q2I", b"SM64GHO5", 5, 160, 1268, 1,
-                           1, 6, 1, 1, bytes([clip_id]) + bytes(15), 10_000_000, 0, 1.0,
+        return struct.pack("<8s8I16sQqdQQIIii4I3Q2I", L.CLIP_MAGIC, L.CLIP_VERSION, L.HEADER_BYTES,
+                           L.RECORD_BYTES, 1, 1, L.SAMPLE_VERSION, 1, 1, bytes([clip_id]) + bytes(15), 10_000_000, 0, 1.0,
                            1, 1, 100, 100, 9, 1, 1, 100, 10, 0, 1, 0, 1, 0, 0)
-    frame = bytearray(1268)
-    struct.pack_into("<8IQQqIHHhhII", frame, 0, 1268, 5, 1, 3, 1252, 6, 1, 3,
+    frame = bytearray(L.RECORD_BYTES)
+    struct.pack_into("<8IQQqIHHhhII", frame, 0, L.RECORD_BYTES, L.CLIP_VERSION, 1, 3,
+                     L.SAMPLE_BYTES, L.SAMPLE_VERSION, 1, 3,
                      1, 1, 0, 100, 0, 10, 9, 1, 8, 0)
     struct.pack_into("<3f", frame, 88, 1.0, 1.0, 1.0)  # gc_pose.scale
     struct.pack_into("<h", frame, 106, 197)  # idle animation

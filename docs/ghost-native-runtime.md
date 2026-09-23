@@ -54,6 +54,35 @@ capture interface. Rendering uses the separate playback/draw path and requires
 negotiated clean presentation. A capability bit or prepared model is not proof
 of a displayed ghost.
 
+### Adding a captured field
+
+The C headers own every size, offset, version and limit. Python states each one
+once in [native_layout.py](../src/sm64_events/ghost/native_layout.py), and
+`clip.py`, `native_protocol.py` and the byte fixtures import it.
+`tests/test_ghost_layout.py` compiles `tests/native/ghost_layout_host.cpp`,
+which prints each of those names from `sizeof`/`offsetof` and the macros. It
+fails on a wrong value, on a Python name the host does not print, and on a
+decoder `struct` format that no longer spans the bytes between two named
+offsets. Tuning numbers and ghost limits live in
+[ghost_tuning.h](../plugin/gfxwrap/ghost_tuning.h) (the player-first fade keeps
+its own in `ghost_occlusion.h`). A new block of evidence touches:
+
+1. `ghost_capture.h`: the block at the END of `gc_sample`, its `GC_VALID_` bit
+   (and `GC_VALID_ALL`), a `GC_VERSION` bump; filled in the capture source,
+   with the static_asserts in `ghost_capture.cpp` moved on.
+2. `ghost_clip.h`: the `GCLIP_VERSION`/magic bump and record-size assert. Only
+   when older saved ghosts must keep playing, an upgrade step like
+   `ghost_clip_upgrade.h` and `clip.py::upgrade_record`.
+3. `native_layout.py` and `ghost_layout_host.cpp`: the new names, in both.
+4. `clip.py`: decode and validate the block; a refused row keeps it zero.
+5. The consumer (playback, pose or compositor) that uses it.
+6. `tests/ghost_native_fixture.py` and the block's own tests.
+7. The table above.
+
+Earlier offsets do not move, so tests that name them keep passing. Any edit
+under `plugin/gfxwrap` changes the wrapper and renderer build ids, so the DLLs
+are rebuilt once when the work is integrated (see the native plugin rule).
+
 ## Source occurrences and clocks
 
 [ghost_link.cpp](../plugin/gfxwrap/ghost_link.cpp) captures inside the serialized
