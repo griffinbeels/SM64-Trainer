@@ -7,7 +7,6 @@ import threading
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT, pose_gaps
 from sm64_events.ghost.source import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
-from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 
 #: Hue step between simultaneous ghosts: the golden angle, so any number of
 #: them stay as far apart on the colour wheel as the count allows.
@@ -151,9 +150,9 @@ class NativeGhost:
             del self._cached[next(iter(self._cached))]
         return result, asset
 
-    def reconcile(self, *, enabled, opacity, nudge, tint, target, proximity=None, shadow=True,
-                  occlusion_fade=True, volume=0.5):
-        proximity = {**DEFAULT_PROXIMITY, **checked_proximity(proximity or {})}
+    def reconcile(self, *, enabled, target, controls: dict):
+        """`controls` are the settings' native command fields
+        (`ghost/settings.py::native_controls`); the target adds the rest."""
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         with self._control_lock:
             if source is not self._source:
@@ -166,12 +165,7 @@ class NativeGhost:
             self._target = identity
             self._selected_asset = self._asset
             self._requested = bool(enabled)
-            self._controls = {"opacity": opacity, "nudge": nudge,
-                              "proximity_enabled": proximity["enabled"],
-                              "proximity_distance": proximity["extra_distance"],
-                              "tint_enabled": tint["enabled"], "hue_degrees": tint["hue_degrees"],
-                              "shadow_enabled": bool(shadow), "occlusion_fade": bool(occlusion_fade),
-                              "volume": float(volume),
+            self._controls = {**controls,
                               "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
             self._send()
 

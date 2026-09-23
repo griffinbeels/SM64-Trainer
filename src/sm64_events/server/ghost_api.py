@@ -14,6 +14,7 @@ saying so.
 """
 from fastapi import APIRouter, HTTPException, Query
 
+from sm64_events.ghost import settings
 from sm64_events.ghost.session import template_store
 from sm64_events.ghost.source import missing_ghost, resolve_ghost
 
@@ -47,7 +48,7 @@ def no_session_state() -> dict:
     colour treatment are None on purpose: nobody chose them here, and the card
     shows unknown as unknown."""
     return {"enabled": False, "opacity": None, "tint": None, "view": None,
-            "nudge_frames": 0, "target": None,
+            "nudge_frames": 0, "limits": settings.limits(), "target": None,
             "selection": {"ghosts": {"pb": True, "templates": []}, "missing": [],
                           "pb": None, "candidates": []},
             "source": {"available": False, "reason": "no_session",
