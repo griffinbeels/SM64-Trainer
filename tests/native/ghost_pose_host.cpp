@@ -97,7 +97,13 @@ int main() {
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(std::fabs(pose.vertices[0].uv[0]-31.0f/64.0f/SG_ATLAS_CELLS)<1e-6f && std::fabs(pose.vertices[0].uv[1]-31.0f/64.0f)<1e-6f);
     world.lookat={};
-    live.camera.position[0]=42;fake_flags=0;fake_normal[0]=0;fake_normal[1]=1;
+    // A textured triangle's render tile rides above the compositor's mode.
+    live.camera.position[0]=42;fake_normal[0]=0;fake_normal[1]=1;
+    const uint32_t tile=SG_TILE_PRESENT|35u|SG_TILE_S_CLAMP|(5u<<SG_TILE_S_MASK_SHIFT)|(5u<<SG_TILE_S_SIZE_SHIFT);
+    fake_flags=tile<<SG_MATERIAL_TILE_SHIFT;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.vertices[0].material==ghost_compositor::with_tile(ghost_compositor::Material::alpha_mix,tile));
+    fake_flags=0;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(pose.vertices[0].uv[0]==0.25f); // untextured-generation vertices keep their uv
     // A held Bob-omb (bhvBobomb) reaches the model with its animation, HOLP,
@@ -111,9 +117,10 @@ int main() {
         && applied.held_animation_frame==5 && applied.held_anim_state==1 && applied.held_position[1]==120
         && applied.held_scale[2]==1 && applied.roll==77 && applied.view[0]==1 && applied.view[15]==1
         && applied.held_global_timer==777);
-    // The penguin, King Bob-omb and Chuckya by their behaviours.
+    // The penguin, King Bob-omb, Chuckya, both boxes and Mips by their behaviours.
     const struct { uint32_t behavior, kind; } kinds[]={{0x130020E8u,SG_HELD_PENGUIN},
-        {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA}};
+        {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA},{0x13004218u,SG_HELD_BREAKABLE_BOX},
+        {0x13001650u,SG_HELD_BREAKABLE_BOX},{0x130044FCu,SG_HELD_MIPS}};
     for(const auto &k:kinds) {
         saved.held.behavior=k.behavior;
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);

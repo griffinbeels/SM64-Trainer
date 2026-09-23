@@ -82,7 +82,7 @@ it lacks directional-eye variants, and unsupported states fail closed instead
 of indexing outside the atlas.
 
 Held objects (`SG_POSE_HELD`, `held.c`: the Bob-omb, the small penguin, King
-Bob-omb and Chuckya) are compiled from their upstream geo, lists and
+Bob-omb, Chuckya, the small breakable box and Mips) are compiled from their upstream geo, lists and
 animations like Mario (`HELD_MODELS` in `tools/build_model.py`). The build
 walks each geo's display lists for the RGBA16 textures it reaches and
 generates `held_cells.h`: the kinds, each texture's atlas cell and size, and
@@ -95,7 +95,22 @@ from a z-buffered master list, draws nothing under a shadow node (so a held
 graph's `GEO_SHADOW` becomes a start node), and drops the first opaque
 master-list entry (an empty list takes it). The graph evaluates in the
 caller's view so billboards face that camera, then returns to world space.
-A kind whose textures failed to load is refused, never drawn untextured. Vanish/ghost opacity is a
+A unit scale under the wrapper publishes the root's fixed-point matrix, which
+a graph whose lists hang off its root (the box) draws under. A kind without
+animations (the box) takes animation id -1. A kind whose textures failed to
+load is refused, never drawn untextured.
+
+Each textured triangle's material word carries its render tile above the
+combiner code (`sg_tile`, from bit `SG_MATERIAL_TILE_SHIFT`): the texture's
+atlas cell, and per axis whether it clamps, its wrap mask and its size, as
+`gsDPSetTile` and `gsDPSetTileSize` set them. The ghost compositor clamps and
+wraps each texel inside the cell as the RDP does. Most of Mips' coordinates run
+past its 32x32 fur under G_TX_CLAMP, King Bob-omb's 16-texel tile wraps across,
+and 58 of Mario's 150 textured vertices (his button, logo, sideburns, mustache
+and eyes) sit just past their clamped 32x32 textures; without the tile they
+sampled the neighbouring atlas cells. Mirroring, shifts and non-power-of-two
+tiles are refused (`SG_MESH_UNSUPPORTED_MATERIAL`). The metal environment map
+(texgen) carries no tile: its coordinates are generated in range. Vanish/ghost opacity is a
 renderer concern. Replaying geometry alone does not reproduce the entire
 game's material pipeline.
 

@@ -74,6 +74,19 @@ struct Dispatch {
 enum class Material : uint32_t {
     solid=0, alpha_mix=1, decal_rgba=2, decal_rgb=3, modulate_rgb=4, modulate_rgba=5
 };
+/* A vertex's material word is the mode in its low 3 bits and, for a textured
+ * triangle, the model's render tile above them (sg_tile: atlas cell, per axis
+ * clamp, mask and size). The fragment shader then clamps and wraps the texel
+ * inside the cell as the RDP does; a word without a tile samples its uv as
+ * given. The word stays below 2^24, exact through the float attribute. */
+namespace tile {
+constexpr uint32_t shift=3, cell=0x3fu, s_clamp=1u<<6, s_mask=7, s_size=10,
+    t_clamp=1u<<13, t_mask=14, t_size=17, field=7u, present=1u<<20;
+}
+inline Material mode(Material word) {return static_cast<Material>(uint32_t(word)&7u);}
+inline Material with_tile(Material mode,uint32_t tile_word) {
+    return static_cast<Material>(uint32_t(mode)|(tile_word<<tile::shift));
+}
 struct Vertex { float position[3], normal[3], color[3], uv[2]; Material material; };
 static_assert(sizeof(Vertex)==48 && offsetof(Vertex,material)==44,"GPU vertex layout");
 enum class Depth : uint32_t { ordinary = 1, n64_image = 2 };

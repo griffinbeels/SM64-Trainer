@@ -63,9 +63,11 @@ int sg_held_build(struct sg_model *model)
     Vec3f zero = {0, 0, 0}, unit = {1, 1, 1};
     Vec3s angles = {0, 0, 0};
     int status = SG_OK;
+    /* One permanent pool for every held graph: the model has eight pools. */
+    struct AllocOnlyPool *pool = alloc_only_pool_init();
     init_graph_node_object(NULL, &model->held_object.header.gfx, NULL, zero, angles, unit);
 #define BUILD_HELD(name, kind) \
-    model->held_graph[kind] = process_geo_layout(alloc_only_pool_init(), sg_##name##_geo); \
+    model->held_graph[kind] = process_geo_layout(pool, sg_##name##_geo); \
     model->held_animations[kind] = sg_##name##_animations; \
     model->held_animation_count[kind] = sg_##name##_animation_count; \
     if (!model->held_graph[kind]) status = SG_INVALID_GEOMETRY;
@@ -90,10 +92,17 @@ void sg_held_evaluate(struct sg_model *model, const sg_pose *pose, const float m
             || !(model->held_available & (1u << pose->held_kind)) || !model->held_graph[pose->held_kind]) {
         sg_abort(SG_INVALID_ARGUMENT);
     }
-    if (pose->held_animation_id < 0 || pose->held_animation_id >= model->held_animation_count[pose->held_kind])
-        sg_abort(SG_INVALID_ANIMATION);
-    animation = model->held_animations[pose->held_kind][pose->held_animation_id];
-    if (pose->held_animation_frame < 0 || pose->held_animation_frame >= animation->loopEnd) sg_abort(SG_INVALID_ANIMATION);
+    /* An object without animations (a box) is held with id -1, frame 0. */
+    if (!model->held_animation_count[pose->held_kind]) {
+        if (pose->held_animation_id != -1 || pose->held_animation_frame) sg_abort(SG_INVALID_ANIMATION);
+        animation = NULL;
+    } else {
+        if (pose->held_animation_id < 0 || pose->held_animation_id >= model->held_animation_count[pose->held_kind])
+            sg_abort(SG_INVALID_ANIMATION);
+        animation = model->held_animations[pose->held_kind][pose->held_animation_id];
+        if (pose->held_animation_frame < 0 || pose->held_animation_frame >= animation->loopEnd)
+            sg_abort(SG_INVALID_ANIMATION);
+    }
     /* Mario's rows, translation at the HOLP; the traversal scales rows by the
      * object's own scale, as geo_process_held_object's mtxf_scale_vec3f. */
     memcpy(local, mario_root, sizeof(local));

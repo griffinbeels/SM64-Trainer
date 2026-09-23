@@ -112,13 +112,19 @@ the identity; `bhvBobomb` is 0x13003174), the animation id, frame and y
 translation, its `oAnimState` (switch frames such as the Bob-omb's blink), the HOLP (its world root) and its gfx scale. Its orientation
 needs no field: the hand copies Mario's own root matrix (his throwMatrix),
 so the held root is Mario's recorded world root rotation, rows scaled by
-`scale`, at the HOLP. A held object without an animation cannot prove it was
-drawn this frame and is not recorded. The legacy TRS reader still refuses a
-holding Mario and records none.
+`scale`, at the HOLP. A held object without an animation (the cork and crazy
+boxes) has no timer to prove it: it is recorded with animation id -1 at frame
+0, and `ghost_root_finish` keeps it only beside a root Mario's own executed
+lists proved this frame, since the hand draws it whenever his body draws. A
+carried or TRS root (his body not drawn) drops it. Every held object needs a
+model (`sharedChild`). The legacy TRS reader still refuses a holding Mario and
+records none.
 
 The ghost draws the held objects the model knows (`held_models` in
 [ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp): the Bob-omb, the small
-penguin, King Bob-omb and Chuckya), as part of Mario's mesh: the recorded
+penguin, King Bob-omb, Chuckya, the cork and crazy boxes, and Mips), as part
+of Mario's mesh, their textures clamped and wrapped per render tile
+([model README](../renderer/model/README.md)): the recorded
 animation frame, `oAnimState` and `gGlobalTimer` (the penguin's blink), at the
 HOLP, its billboards turned to the live camera. Holding Bowser's tail holds
 his tail anchor, which has no model and no animation, so nothing is

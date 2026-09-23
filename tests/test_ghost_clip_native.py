@@ -63,6 +63,12 @@ def corpus():
     # A held object: accepted on a pose; refused without one, outside
     # segment 0x13, or as stray bytes on a record without the bit.
     values.append(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
+    # A box: no animation, id -1 at frame 0 only.
+    values.append(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
+    for offset, value in ((160 + 16 + 1216 + 6, 3), (160 + 16 + 1216 + 4, 0xfe)):  # frame 3; id -2
+        changed = bytearray(encoded((frame(1, held=(0x13004218, -1, 0)), frame(2))))
+        changed[offset] = value
+        values.append(bytes(changed))
     for offset, value in ((160 + 16 + 1216 + 3, 0x80), (160 + 16 + 1216 + 30, 0)):
         changed = bytearray(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
         changed[offset] = value

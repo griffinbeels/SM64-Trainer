@@ -317,10 +317,32 @@ int main(int argc, char** argv) {
         sg_pose a=pose(); Mesh mesh;
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK,"base evaluation");
         check(mesh.out.vertex_count>1800 && mesh.out.vertex_count<=3072,"actual Mario geometry");
-        check(std::find(mesh.out.material,mesh.out.material+mesh.out.vertex_count,SG_MATERIAL_ALPHA_MIX)!=
-            mesh.out.material+mesh.out.vertex_count,"face alpha-mix combiner");
-        check(std::find(mesh.out.material,mesh.out.material+mesh.out.vertex_count,SG_MATERIAL_SOLID)!=
-            mesh.out.material+mesh.out.vertex_count,"solid body combiner");
+        // The code is the material's low byte; a textured triangle carries its tile above it.
+        const auto has_code=[&](uint32_t code) {
+            for(unsigned i=0;i<mesh.out.vertex_count;++i)if((mesh.out.material[i]&SG_MATERIAL_CODE)==code)return true;
+            return false;
+        };
+        check(has_code(SG_MATERIAL_ALPHA_MIX),"face alpha-mix combiner");
+        check(has_code(SG_MATERIAL_SOLID),"solid body combiner");
+        {
+            // Mario's own tiles: CLAMP with 32-texel masks (the wings 64 tall),
+            // as his lists set them; solid triangles carry none.
+            unsigned tiled=0,outside=0;
+            for(unsigned i=0;i<mesh.out.vertex_count;++i) {
+                const uint32_t m=mesh.out.material[i],tile=m>>SG_MATERIAL_TILE_SHIFT;
+                if((m&SG_MATERIAL_CODE)==SG_MATERIAL_SOLID) {check(!tile,"solid triangle without a tile");continue;}
+                check(tile&SG_TILE_PRESENT,"textured triangle carries its tile");
+                check((tile&SG_TILE_S_CLAMP) && (tile&SG_TILE_T_CLAMP),"Mario's tiles clamp");
+                ++tiled;
+                const unsigned cell=tile&SG_TILE_CELL;
+                const float s=mesh.out.uv[2*i]*atlas.width-float(cell*64),t=mesh.out.uv[2*i+1]*atlas.height;
+                const float w=float(1u<<((tile>>SG_TILE_S_SIZE_SHIFT)&SG_TILE_FIELD)),h=float(1u<<((tile>>SG_TILE_T_SIZE_SHIFT)&SG_TILE_FIELD));
+                const bool out=s<-0.01f || t<-0.01f || s>w+0.01f || t>h+0.01f;
+                outside+=out;
+            }
+            std::fprintf(stderr,"Mario tiled vertices %u, outside their tile %u\n",tiled,outside);
+            check(tiled>=150,"Mario's textured triangles");
+        }
         const unsigned vertices=mesh.out.vertex_count;
         const auto first_mesh=mesh.snapshot();
         independent_asset_validation(model,rom,a,first_mesh);
@@ -341,8 +363,7 @@ int main(int argc, char** argv) {
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"A/B/A independence");
         b=a; b.cap_state=2;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK,"wing geometry");
-        check(std::find(mesh.out.material,mesh.out.material+mesh.out.vertex_count,SG_MATERIAL_DECAL_RGBA)!=
-            mesh.out.material+mesh.out.vertex_count,"wing decal-alpha combiner");
+        check(has_code(SG_MATERIAL_DECAL_RGBA),"wing decal-alpha combiner");
         for(unsigned i=0;i<mesh.out.vertex_count;i+=3)
             check(mesh.out.material[i]==mesh.out.material[i+1] && mesh.out.material[i]==mesh.out.material[i+2],
                 "triangle material agreement");
@@ -426,16 +447,37 @@ int main(int argc, char** argv) {
             const struct { uint32_t kind; unsigned first, cells; int16_t animations; unsigned vertices; const char* name; } kinds[]={
                 {SG_HELD_PENGUIN,SG_ATLAS_CELL_PENGUIN,6,5,402,"penguin"},
                 {SG_HELD_KING_BOBOMB,SG_ATLAS_CELL_KING_BOBOMB,6,12,348,"King Bob-omb"},
-                {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"}};
+                {SG_HELD_CHUCKYA,SG_ATLAS_CELL_CHUCKYA,4,6,132,"Chuckya"},
+                {SG_HELD_BREAKABLE_BOX,SG_ATLAS_CELL_BREAKABLE_BOX,2,0,36,"cork box"},
+                {SG_HELD_MIPS,SG_ATLAS_CELL_MIPS,1,5,588,"Mips"}};
             for(const auto &k:kinds) {
-                sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=0; o.held_animation_frame=0;
+                // A box has no animation: id -1, and its parts' own transforms.
+                sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=k.animations?0:-1; o.held_animation_frame=0;
                 check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
+                // Its textured triangles name its own cells in their tiles.
                 bool own=false;
                 for(unsigned i=alone;i<mesh.out.vertex_count;++i) {
-                    const unsigned cell=unsigned(mesh.out.uv[2*i]*SG_ATLAS_CELLS);
-                    own|=mesh.out.uv[2*i]<1 && cell>=k.first && cell<k.first+k.cells;
+                    const uint32_t tile=mesh.out.material[i]>>SG_MATERIAL_TILE_SHIFT;
+                    const unsigned cell=tile&SG_TILE_CELL;
+                    check(!tile || (cell>=k.first && cell<k.first+k.cells),"held tile names another object's cell");
+                    own|=tile!=0;
                 }
                 check(own,"held object samples its own cells");
+                const auto tiles=[&](uint32_t want) {
+                    unsigned count=0;
+                    for(unsigned i=alone;i<mesh.out.vertex_count;++i)count+=(mesh.out.material[i]>>SG_MATERIAL_TILE_SHIFT)==want;
+                    return count;
+                };
+                const auto tile=[](unsigned cell,bool s_clamp,unsigned s_mask,unsigned s_size,bool t_clamp,unsigned t_mask,unsigned t_size) {
+                    return SG_TILE_PRESENT|cell|(s_clamp?SG_TILE_S_CLAMP:0u)|(s_mask<<SG_TILE_S_MASK_SHIFT)|(s_size<<SG_TILE_S_SIZE_SHIFT)
+                        |(t_clamp?SG_TILE_T_CLAMP:0u)|(t_mask<<SG_TILE_T_MASK_SHIFT)|(t_size<<SG_TILE_T_SIZE_SHIFT);
+                };
+                // Mips' fur: gsDPSetTile(..., G_TX_CLAMP, 5, ..., G_TX_CLAMP, 5, ...),
+                // 32x32. King Bob-omb's 16x32 tile: T clamps at 32, S wraps every 16.
+                if(k.kind==SG_HELD_MIPS)
+                    check(tiles(tile(SG_ATLAS_CELL_MIPS,true,5,5,true,5,5))>300,"Mips' fur clamps at 32 texels");
+                if(k.kind==SG_HELD_KING_BOBOMB)
+                    check(tiles(tile(SG_ATLAS_CELL_KING_BOBOMB+3,false,4,4,true,5,5))>0,"King Bob-omb's tile wraps S by 16");
                 if(k.kind==SG_HELD_PENGUIN) {
                     // Its blink runs on the recorded gGlobalTimer (50-frame cycle).
                     const auto open=mesh.snapshot();
@@ -443,6 +485,13 @@ int main(int argc, char** argv) {
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=open,"penguin blinks");
                     o.held_global_timer=50;
                     check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()==open,"penguin blink cycle");
+                }
+                if(!k.animations) {
+                    // oAnimState picks its texture (the switch's second list).
+                    const auto first=mesh.snapshot();
+                    o.held_anim_state=1;
+                    check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.snapshot()!=first,"box variant");
+                    o.held_anim_state=0;
                 }
                 o.held_animation_id=k.animations;
                 check(sg_model_evaluate(model,&o,&mesh.out)==SG_INVALID_ANIMATION,"held animation table end");

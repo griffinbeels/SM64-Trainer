@@ -233,5 +233,65 @@
     "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/chuckya/geo.inc.c",
     "filename": "upstream-chuckya-geo.c",
     "sha256": "a21e2b3dea8b6b19a66088a9734979029d53cf5599d6eb2c1e9629facfbb5bba"
+  },
+  "breakable_box_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/breakable_box/model.inc.c",
+    "filename": "upstream-breakable-box-model.c",
+    "sha256": "005e506053ee3215ac2ae85f0395afd4d9855e9a9dba5a79f7bb11b2e7efb415"
+  },
+  "breakable_box_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/breakable_box/geo.inc.c",
+    "filename": "upstream-breakable-box-geo.c",
+    "sha256": "c5d6a29749ea1697cd3642c3f4b3100bad3d2100b264dca7d8504717ad9263d3"
+  },
+  "mips_model": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/model.inc.c",
+    "filename": "upstream-mips-model.c",
+    "sha256": "6b1582c21678390a28a0b90b08d7346ede53b4e7d82dad4570a478dc5493f5c1"
+  },
+  "mips_anim_06013248": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/anims/anim_06013248.inc.c",
+    "filename": "upstream-mips-anim-06013248.c",
+    "sha256": "52595abdb40d631f50c6462744965026f7c39f8c4f66ce84b7898e1d21b6a95b"
+  },
+  "mips_anim_0601369C": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/anims/anim_0601369C.inc.c",
+    "filename": "upstream-mips-anim-0601369C.c",
+    "sha256": "62aa070df1148f01e8ab552ad0f8216d843fe2d05e037409730c78515c9e1ec5"
+  },
+  "mips_anim_060139F8": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/anims/anim_060139F8.inc.c",
+    "filename": "upstream-mips-anim-060139F8.c",
+    "sha256": "aee178274d1051b91a31827381907888c376caf145ca7e2739dd685164d643de"
+  },
+  "mips_anim_06014B94": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/anims/anim_06014B94.inc.c",
+    "filename": "upstream-mips-anim-06014B94.c",
+    "sha256": "5ac745bf710c55562b0cfe63a70a53c1b0b680712d81f53d88d221f3551a8069"
+  },
+  "mips_anim_0601561C": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/anims/anim_0601561C.inc.c",
+    "filename": "upstream-mips-anim-0601561C.c",
+    "sha256": "1bc779b971c3576fb22f770aa6d5d03c9de618471b1c7585cc7eea78bf7adb73"
+  },
+  "mips_anims": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/anims/table.inc.c",
+    "filename": "upstream-mips-anims.c",
+    "sha256": "867bcfff56dbc519a596cb616335ba2ec0552eed70018804fbbecc6a6d8156b3"
+  },
+  "mips_geo": {
+    "revision": "06ec56df7f951f88da05f468cdcacecba496145a",
+    "url": "https://raw.githubusercontent.com/n64decomp/sm64/06ec56df7f951f88da05f468cdcacecba496145a/actors/mips/geo.inc.c",
+    "filename": "upstream-mips-geo.c",
+    "sha256": "a59c167e2b8c7c7c127e8e7f2cd0c5a605f5defb2e452fb9d3432b9b6d0d9d12"
   }
 }

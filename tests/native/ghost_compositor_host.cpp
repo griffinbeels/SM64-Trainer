@@ -391,6 +391,58 @@ int main() {
         }
     }
     {
+        // A tiled material samples as the RDP does: clamp to the tile's size,
+        // then wrap by its mask, inside its atlas cell. Cell 1 holds a 32x32
+        // texture whose texel (s,t) is (8s,8t,255); the rest of the atlas is
+        // magenta, so any sample outside the texture shows. A full-target quad
+        // runs s and t from -15.5 to 48.5 texels: pixel x samples s=2x-14.5.
+        std::vector<uint8_t> tiles(128*64*4);
+        for(uint32_t y=0;y<64;++y)for(uint32_t x=0;x<128;++x) {
+            uint8_t *t=&tiles[(y*128+x)*4];
+            const bool texel=x>=64 && x<96 && y<32;
+            t[0]=texel?uint8_t((x-64)*8):255;t[1]=texel?uint8_t(y*8):0;t[2]=texel?255:128;t[3]=255;
+        }
+        require(gc::prepare(compositor,32,32,60,tiles.data(),128,64)==gc::Result::ok,"tile atlas prepare");
+        const auto quad=[](gc::Material material) {
+            std::vector<gc::Vertex> q(6);
+            const float corners[6][2]={{-1,-1},{1,-1},{1,1},{-1,-1},{1,1},{-1,1}};
+            for(int i=0;i<6;++i) {
+                // In front of the scene's nearer (left) half too.
+                auto &v=q[i];v.position[0]=corners[i][0];v.position[1]=corners[i][1];v.position[2]=-.9f;v.normal[2]=1;
+                const float s=(corners[i][0]+1)*32-15.5f,t=(corners[i][1]+1)*32-15.5f;
+                v.uv[0]=(64+s)/128;v.uv[1]=t/64;v.color[0]=v.color[1]=v.color[2]=1;v.material=material;
+            }
+            return q;
+        };
+        const auto word=[](bool s_clamp,uint32_t s_mask,bool t_clamp,uint32_t t_mask) {
+            return 1u/*cell*/|gc::tile::present|(s_clamp?gc::tile::s_clamp:0u)|(s_mask<<gc::tile::s_mask)|(5u<<gc::tile::s_size)
+                |(t_clamp?gc::tile::t_clamp:0u)|(t_mask<<gc::tile::t_mask)|(5u<<gc::tile::t_size);
+        };
+        // Mips' fur: both axes clamp at 32 (mask 5). King Bob-omb's kind of
+        // tile: S wraps by a 16-texel mask without clamping, T clamps.
+        const struct { bool s_clamp; uint32_t s_mask; bool t_clamp; uint32_t t_mask; const char *name; } rules[]={
+            {true,5,true,5,"clamped tile"},{false,4,true,5,"S-wrapping tile"}};
+        for(const auto &rule:rules) {
+            const auto q=quad(gc::with_tile(gc::Material::decal_rgb,word(rule.s_clamp,rule.s_mask,rule.t_clamp,rule.t_mask)));
+            require(gc::begin(compositor,target(scene,gc::Depth::ordinary),pose(q,1))==gc::Result::ok,rule.name);
+            require(gc::finalize(compositor,77)==gc::Result::ok,"tile finalize");
+            const auto tiled=pixels(g,gc::display(compositor).framebuffer,32,32);
+            const auto axis=[](int texel,bool clamped,uint32_t mask) {
+                if(clamped)texel=texel<0?0:texel>31?31:texel;
+                if(mask)texel&=(1<<mask)-1;
+                return texel;
+            };
+            for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+                const size_t i=(y*32+x)*4;
+                const int s=axis(int(2*x)-15,rule.s_clamp,rule.s_mask),t=axis(int(2*y)-15,rule.t_clamp,rule.t_mask);
+                require(tiled[i]==s*8 && tiled[i+1]==t*8 && tiled[i+2]==255,"the texel the tile rules predict");
+            }
+        }
+        // An unknown mask or size, or a word without its present bit, refuses.
+        const auto bad=quad(static_cast<gc::Material>(uint32_t(gc::Material::decal_rgb)|((7u<<gc::tile::s_mask)<<gc::tile::shift)));
+        require(gc::begin(compositor,target(scene,gc::Depth::ordinary),pose(bad,1))==gc::Result::unsupported,"malformed tile refuses");
+    }
+    {
         Scene resized(g,64,32);require(gc::prepare(compositor,64,32,60,atlas,1,1)==gc::Result::ok,"resize prepare");
         require(!gc::display(compositor).texture,"resize retires old handle");
         require(gc::begin(compositor,target(resized,gc::Depth::ordinary),pose(vertices,.5f))==gc::Result::ok,"resize begin");

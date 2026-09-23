@@ -262,23 +262,26 @@ void capture_held(Ram &ram, const gc_layout &layout, gc_sample &out) {
     const uint32_t state = layout.mario_state, held = ram.u32(state + 0x7c), body = ram.u32(state + mario_body);
     if (!held || held < layout.object_pool || (held - layout.object_pool) % object_size
             || (held - layout.object_pool) / object_size >= object_count || !ram.has(body, 0x24)) return;
-    // Alive, and drawn only through the hand: its own graph node is off.
-    if (!(ram.u16(held + object_active_flags) & 1u) || (ram.u16(held + 2) & active)) return;
+    // Alive, drawn only through the hand (its own graph node is off), with a
+    // model the hand can draw (Bowser's tail anchor has none).
+    if (!(ram.u16(held + object_active_flags) & 1u) || (ram.u16(held + 2) & active) || !ram.u32(held + 0x14)) return;
     // Fresh this frame: only geo_process_held_object set its animation globals.
+    // Without an animation, ghost_root_finish keeps it only beside a root
+    // Mario's executed lists proved.
     const uint32_t animation = ram.u32(held + 0x3c);
-    if (!ram.has(animation, 0x18) || ram.u16(held + 0x42) != out.area_update_counter) return;
+    if (animation && (!ram.has(animation, 0x18) || ram.u16(held + 0x42) != out.area_update_counter)) return;
     const uint32_t behaviour = ram.u32(held + object_behaviour);
     if (behaviour < layout.behaviour_base || behaviour - layout.behaviour_base >= behaviour_span) return;
     gc_held h{};
     h.behavior = behaviour_segment + (behaviour - layout.behaviour_base);
-    h.animation_id = ram.s16(held + 0x38);
-    h.anim_y_translation = ram.s16(held + 0x3a);
-    h.animation_frame = ram.s16(held + 0x40);
+    h.animation_id = animation ? ram.s16(held + 0x38) : int16_t(-1);
+    h.anim_y_translation = animation ? ram.s16(held + 0x3a) : int16_t(0);
+    h.animation_frame = animation ? ram.s16(held + 0x40) : int16_t(0);
     const uint32_t anim_state = ram.u32(held + object_anim_state);
     if (anim_state > 255) return;
     h.anim_state = uint16_t(anim_state);
-    const int16_t end = ram.s16(animation + 8);
-    if (h.animation_id < 0 || end <= 0 || h.animation_frame < 0 || h.animation_frame >= end) return;
+    const int16_t end = animation ? ram.s16(animation + 8) : int16_t(1);
+    if ((animation && h.animation_id < 0) || end <= 0 || h.animation_frame < 0 || h.animation_frame >= end) return;
     for (unsigned i = 0; i < 3; ++i) {
         h.holp[i] = ram.f32(body + body_holp + 4*i);
         h.scale[i] = ram.f32(held + 0x2c + 4*i);
