@@ -4,11 +4,11 @@
 #pragma once
 #include "ghost_clip.h"
 #include "ghost_origin.h"
+#include "ghost_tuning.h"
 #include "model.h"
 #include <stdint.h>
 
 #define GP_VERSION 7u
-#define GP_GHOSTS 16u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
 /* Sized so a full set of long ghosts can be replaced by another full set in
@@ -196,21 +196,11 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &,
  * Each drawn frame also places every visible ghost: its displayed root
  * relative to the live camera (SM64 pans and distances that itself) and a
  * gain of min(1, GP_SOUND_NEAR / d) -- inverse-square INTENSITY -- d its world distance from live
- * Mario (1 while live Mario's pose is unknown). */
-#define GP_SOUND_CATCHUP 90u
-/* Tuning: a ghost whose clip carries its star dance (GCLIP_DANCE_TAIL) fades
- * out over this many frames after its last recorded dance frame (15 = 0.5 s),
- * holding that pose; its sounds fade with it and are silent once it hides. */
-#define GP_STAR_FADE_FRAMES 15u
-/* A run of at most this many consecutive refused records, with a recorded
- * pose on both sides in the same scene and no missing occurrence, holds the
- * pose before it instead of blinking (2 = 67 ms, below a noticeable pause).
- * The refused rows stay refused in the clip; this is display only. */
-#define GP_BRIDGE_FRAMES 2u
+ * Mario (1 while live Mario's pose is unknown). The tuning (GP_SOUND_NEAR,
+ * GP_SOUND_CATCHUP, GP_STAR_FADE_FRAMES, GP_BRIDGE_FRAMES) is ghost_tuning.h. */
 /* Raw-IGT restarts a star clip remembers (the latest win; Usamune restarts the
  * timer at some area entrances, e.g. LLL's volcano). */
 #define GP_RESTARTS 8u
-#define GP_SOUND_NEAR 400.0f /* tuning: full gain within 2.5 Mario heights (160 units each) */
 struct SoundSink {
     void (__cdecl *cue)(uint32_t ghost, uint32_t sound_bits);
     void (__cdecl *control)(uint32_t playing, float volume);

@@ -85,6 +85,13 @@ def toolchain_available() -> bool:
 
 def _cl(vcvars: Path, args: list, cwd: Path) -> None:
     """Run one cl.exe invocation inside vcvars32's environment, in `cwd`."""
+    # The test suite reuses identical earlier compiles (tools/native_build_cache.py).
+    if os.environ.get("SM64_NATIVE_BUILD_CACHE", "0") != "0":
+        if str(REPO / "tools") not in sys.path:  # one shared module: its toolchain memo too
+            sys.path.insert(0, str(REPO / "tools"))
+        import native_build_cache
+        native_build_cache.cl(vcvars, args, cwd, native_build_cache.enabled())
+        return
     # A batch file rather than a `cmd /c "..."` string: subprocess re-quotes
     # an argument holding quotes, and cmd then sees `\"` literally.
     quoted = " ".join(f'"{arg}"' if " " in str(arg) else str(arg) for arg in args)

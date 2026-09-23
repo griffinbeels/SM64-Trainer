@@ -309,7 +309,7 @@ struct Session {
                 || !(r.opacity >= 0 && r.opacity <= 1) || r.stop_at_star > 1
                 || r.star_action_count > 8 || r.tint_enabled > 1 || !valid_set(r)
                 || r.proximity_enabled > 1 || !std::isfinite(r.proximity_distance)
-                || r.proximity_distance < 0 || r.proximity_distance > 400
+                || r.proximity_distance < 0 || r.proximity_distance > GP_PROXIMITY_MAX
                 || (r.play_enabled && !r.model_id))) {
             revoke(GIPC_PROTOCOL); previous = r; return false;
         }

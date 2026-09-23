@@ -53,7 +53,7 @@ from sm64_events.ghost.native_session import ghost_hue
 from sm64_events.ghost.pb import GhostLibrary
 from sm64_events.ghost.source import resolve_ghost
 from sm64_events.ghost.selection import (
-    MISSING_REASON, SELECTION_KEY, GhostSelection, checked_choice, chosen_ghosts,
+    MAX_GHOSTS, MISSING_REASON, SELECTION_KEY, GhostSelection, checked_choice, chosen_ghosts,
 )
 from sm64_events.ghost import settings
 from sm64_events.ghost.settings import (
@@ -581,7 +581,7 @@ class GhostSession:
                 saved.save(database, attempt_id, kind, key)
                 self._selection.load(database)
                 choice = self._selection.chosen(target, self.library())
-                if attempt_id not in choice["attempts"] and len(choice["attempts"]) + choice["pb"] < 16:
+                if attempt_id not in choice["attempts"] and len(choice["attempts"]) + choice["pb"] < MAX_GHOSTS:
                     choice["attempts"].append(attempt_id)
                     _remember(database, SELECTION_KEY, self._selection.choose(target, choice))
         await asyncio.to_thread(remember)

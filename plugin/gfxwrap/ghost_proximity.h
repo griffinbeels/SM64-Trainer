@@ -1,12 +1,12 @@
 /* Display-only readability curve. No allocation, timing or model mutation.
- * Uses an ellipsoid proxy sized from bhvMario's radius=37, height=160:
- * https://github.com/n64decomp/sm64/blob/master/data/behavior_data.c
+ * Uses an ellipsoid proxy sized from bhvMario (ghost_tuning.h).
  * This is deliberately not a pixel-overlap test or a Trackmania formula.
  * Overlapping bodies fade the ghost down to ghost_occlusion::GHOST_FLOOR,
  * never to nothing: on a pole or a ledge both Marios snap to one point.
  */
 #pragma once
 #include "ghost_occlusion.h"
+#include "ghost_tuning.h"
 #include <cmath>
 
 namespace ghost_proximity {
@@ -19,7 +19,7 @@ inline float factor(const float live_position[3], const float live_scale[3],
         if (!std::isfinite(live_position[i]) || !std::isfinite(ghost_position[i]) ||
             !std::isfinite(live_scale[i]) || !std::isfinite(ghost_scale[i]) ||
             live_scale[i] <= 0.0f || ghost_scale[i] <= 0.0f) return 1.0f;
-        const double radius = i == 1 ? 80.0 : 37.0;
+        const double radius = i == 1 ? GP_OVERLAP_HALF_HEIGHT : GP_OVERLAP_RADIUS;
         extent[i] = radius * (double(live_scale[i]) + ghost_scale[i]);
         delta[i] = double(ghost_position[i]) - live_position[i];
         if (i == 1) delta[i] += radius * (double(ghost_scale[i]) - live_scale[i]);

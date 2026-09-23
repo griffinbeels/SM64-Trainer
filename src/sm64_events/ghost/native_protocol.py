@@ -9,12 +9,12 @@ import ctypes as C
 from dataclasses import dataclass
 from pathlib import Path
 
-MAGIC = b"SM64GIP7"
-VERSION = 7
-PREFIX = "Local\\sm64_trainer_ghost_v7_"
-SLOTS, RECORD_BYTES, RING_OFFSET = 512, 1268, 20480
-LAYOUT_BYTES = 188
-GHOSTS, PATH_CHARS = 16, 520
+from sm64_events.ghost.native_layout import (  # sizes and limits: native_layout.py
+    GHOSTS, IPC_MAGIC as MAGIC, IPC_PATH_CHARS as PATH_CHARS, IPC_PREFIX, IPC_RING_AT as RING_OFFSET,
+    IPC_SLOTS as SLOTS, IPC_VERSION as VERSION, LAYOUT_BYTES, RECORD_BYTES,
+)
+
+PREFIX = IPC_PREFIX  # the named mapping, mutex and event, plus the producer pid
 PAGE_BYTES = RING_OFFSET + SLOTS * RECORD_BYTES
 U32, U64, I32 = C.c_uint32, C.c_uint64, C.c_int32
 
