@@ -283,8 +283,9 @@ own [[outcome]].
 
 ### Outcome
 
-How an [[attempt]] ended: you finished it, you died, or you abandoned it by
-leaving the area.
+How an [[attempt]] ended: you finished it, you reset, you loaded a save state
+(a segment's attempt only; a star's runs through the load), you died, or you
+abandoned it by leaving the area.
 
 - **Lives** — the outcome registry (`src/sm64_events/tracking/views.py`)
   → the marker shapes on the [[progress graph]]
