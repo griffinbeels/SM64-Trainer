@@ -310,6 +310,11 @@ LOAD_SKEW_FRAMES = 2
 FRAME_SPEEDUP_ALLOWANCE = 4
 FRAME_JUMP_SLACK = 30
 GAME_FPS = 30
+# The load signatures that are Project64 restoring ALL of RAM -- the game's
+# own frame counter included, backward or forward. The detector checks them
+# before the reset band, and the projector re-clocks the native ghost at them
+# exactly as it always has for a rewind (tracking/projection.py).
+FULL_RAM_LOADS = frozenset({"frame_counter_rewound", "frame_counter_skipped_ahead"})
 # The pairing windows and the destination-area rule live in
 # `detectors/counter_epoch.py` since 2026-08-04 — igt_clock.py needs the SAME
 # answer to know whether the counter it is reading measures a whole star or one
@@ -555,7 +560,7 @@ class AnchorDetector:
         if curr.global_timer < prev.global_timer and curr.global_timer < BOOT_TIMER_MAX:
             return []  # console reset — GameResetDetector owns this
         signature = load_signature(prev, curr)
-        if signature in ("frame_counter_rewound", "frame_counter_skipped_ahead"):
+        if signature in FULL_RAM_LOADS:
             return [self._state_loaded(prev, curr, signature, frames_since_door,
                                        frames_since_dialog, observed)]
         if (curr.igt_overall < prev.igt_overall
