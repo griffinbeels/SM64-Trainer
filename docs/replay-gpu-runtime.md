@@ -176,6 +176,23 @@ eight synthetic frozen seconds with no failure. With continuous real
 callbacks (proctap zeros) the PCM capacity (about 5.5 s) still ends the run
 explicitly; a typed paused-frontier seal remains the next step.
 
+A stall of the whole interpreter must not deadlock the two streams. PCM is
+written only up to the committed video end, and a video packet muxes only up to
+the audio end plus the 100 ms lead (`lead_ticks`). Callbacks are stamped at
+arrival, so a stop-the-world pause of the audio callback leaves a gap in the
+PCM timeline. When that gap was at least the lead, the next PCM block straddled
+the video end and the next picture sat past the audio end, and neither could
+move. The head picture then hit the 2 s "pending age limit" and recording
+stopped. That was every such failure in the live log from 2026-09-19 to
+2026-09-23 (14 of 14 came 1 to 3 s after the recorder's forced gen-2
+collection, `_gcwatch.py`, which pauses for 54 to 139 ms), and the picture
+ledger shows 30 fps feeds up to 2.0 s before each failure. PCM arrives in
+source order, so a waiting block proves the gap before it is final: the video
+gate now counts audio as covered up to that block's start
+(`PcmBuffer.head_ticks`). `test_an_interpreter_stall_does_not_deadlock_video_against_audio`
+drives 30 fps pictures and 10 ms callbacks through stalls of 50 to 500 ms;
+before the fix the 140, 300 and 500 ms cases failed with the live error.
+
 ## Startup, idle and failure
 
 The paired GPU sink is bound before audio startup, but GPU demand starts only
