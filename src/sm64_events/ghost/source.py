@@ -102,8 +102,8 @@ KINDS = ("star", "segment")
 REASONS: dict[str, str] = {
     "selected_template_missing": MISSING_REASON,
     "no_template":
-        "You have not set a template for this yet, so there is no run to "
-        "play alongside you.",
+        "You have no PB with this strategy and no saved ghost here yet, so "
+        "there is no run to play alongside you.",
     "template_has_no_attempt":
         "This template came from a file rather than from a run you played "
         "here, so there is no footage behind it.",

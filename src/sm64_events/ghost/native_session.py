@@ -97,7 +97,7 @@ class NativeGhost:
 
     def _resolve_template(self, target, template):
         answer = {"available": False, "reason": "no_native_poses",
-                  "reason_text": "Record a new attempt and mark it as the template to show Mario in the game.",
+                  "reason_text": "Save a PB with this strategy, or save a run as a ghost, to race Mario here.",
                   "template_id": None, "attempt_id": None, "exactness": None}
         if not self._supported:
             return {**answer, "reason": "unsupported_rom",
@@ -107,7 +107,7 @@ class NativeGhost:
                     "reason_text": "Pick a star or a segment to practise."}, None
         if template is None:
             return {**answer, "reason": "no_template",
-                    "reason_text": "Mark an attempt as the template for this target."}, None
+                    "reason_text": "Save a PB with this strategy, or save a run as a ghost, to race Mario here."}, None
         answer["template_id"] = template.id
         attempt_id = attempt_id_of(template.origin)
         answer["attempt_id"] = attempt_id
