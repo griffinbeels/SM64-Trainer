@@ -64,7 +64,15 @@ def _stage_ghost(pending, ghost, metadata, reserve_bytes):
         raise OSError("Not enough free storage to save native ghost poses; free space and retry Save replay.")
     copying = pending / "ghost.copying"
     try:
-        shutil.copyfile(ghost, copying)
+        # One set of bytes, two names: a ghost kept for a template mark
+        # (native/) and the same ghost beside its saved video each keep their
+        # own lifetime (delete either, the other stays), but the disk holds it
+        # once. Safe because every .ghost writer replaces by rename, never in
+        # place; a copy remains the fallback across volumes.
+        try:
+            os.link(ghost, copying)
+        except OSError:
+            shutil.copyfile(ghost, copying)
         _checked_ghost(copying, identity)
         with copying.open("r+b") as stream:
             os.fsync(stream.fileno())

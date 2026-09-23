@@ -16,6 +16,7 @@ import sqlite3
 import threading
 import time
 from types import SimpleNamespace
+import zlib
 
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.clip import (
@@ -45,7 +46,32 @@ DANCE_TAIL_STALL_S = 1.0
 # decides what goes, and this only stops a runaway producer.
 ARCHIVE_MAX_BYTES = 288 * 1024 * 1024
 ARCHIVE_MAX_RECORDS = ARCHIVE_MAX_BYTES // RECORD_BYTES
+# Always applied: the recorder's video retention may be "whole session", and
+# before 2026-09-23 that None reached here too, so only the record ceiling
+# (~499 MiB of rows) ever bounded a long session.
 ARCHIVE_RETENTION_S = 7200
+
+# WRITE POLICY (optimization pass, 2026-09-23; measured on his archive, 3000
+# real rows): one fsync'd rollback-journal commit per ~1-row batch cost 14 ms
+# wall per ingest (the pose pump blocked ~430 ms of every second) and ~48 KB
+# written per row. Rows now go into one open WAL transaction (synchronous=
+# NORMAL) that commits every COMMIT_ROWS rows or COMMIT_S seconds, and on
+# close. Readers share the owning connection, so export, the dance-tail wait
+# and status see uncommitted rows without a flush; a crash loses at most
+# COMMIT_S of session scratch.
+COMMIT_ROWS = 30
+COMMIT_S = 1.0
+# Rows are session scratch in a per-recorder file: a file from another schema
+# version is dropped and recreated, never migrated. v2: integer producer and
+# sequence keys and zlib level-1 records (2204 -> ~614 B/row on disk).
+SCHEMA_VERSION = 2
+_SEQUENCE_BIAS = 1 << 63  # u64 occurrence -> signed INTEGER, order preserved
+_ZLIB_LEVEL = 1
+
+
+def stored_record(blob: bytes) -> bytes:
+    """The native record a poses row holds (rows are zlib-compressed)."""
+    return zlib.decompress(blob)
 
 
 def dance_tail(close: Frame, candidates) -> tuple[list[bytes], bool]:
@@ -85,33 +111,47 @@ def _utc(value: str) -> float:
 
 class PoseArchive:
     def __init__(self, path: Path, *, max_records: int = ARCHIVE_MAX_RECORDS,
-                 retention_s: float | None = ARCHIVE_RETENTION_S, boundary_slack_s: float = 1,
-                 dance_wait_s: float = DANCE_TAIL_WAIT_S, dance_stall_s: float = DANCE_TAIL_STALL_S):
+                 retention_s: float = ARCHIVE_RETENTION_S, boundary_slack_s: float = 1,
+                 dance_wait_s: float = DANCE_TAIL_WAIT_S, dance_stall_s: float = DANCE_TAIL_STALL_S,
+                 clock=time.monotonic):
         if type(max_records) is not int or not 1 <= max_records <= ARCHIVE_MAX_RECORDS:
             raise ValueError("pose archive record bound is invalid")
-        if ((retention_s is not None and (not math.isfinite(retention_s) or retention_s <= 0))
+        if (retention_s is None or not math.isfinite(retention_s) or retention_s <= 0
                 or not math.isfinite(boundary_slack_s) or boundary_slack_s < 0):
             raise ValueError("pose archive time bound is invalid")
         self.path = Path(path)
         self.max_records, self.retention_s = max_records, retention_s
         self.boundary_slack_s = boundary_slack_s
         self.dance_wait_s, self.dance_stall_s = dance_wait_s, dance_stall_s
+        self._clock = clock
         self._lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(self.path, check_same_thread=False)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=NORMAL")
+        if self._db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            self._db.executescript(f"""
+                DROP TABLE IF EXISTS poses; DROP TABLE IF EXISTS producers;
+                PRAGMA user_version={SCHEMA_VERSION};""")
         self._db.executescript("""
-            CREATE TABLE IF NOT EXISTS producers (identity TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS producers (
+                id INTEGER PRIMARY KEY, identity TEXT NOT NULL UNIQUE, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS poses (
-                id INTEGER PRIMARY KEY, producer TEXT NOT NULL, sequence TEXT NOT NULL,
-                captured REAL NOT NULL, timer INTEGER NOT NULL, valid INTEGER NOT NULL,
-                data BLOB NOT NULL, UNIQUE(producer, sequence));
+                id INTEGER PRIMARY KEY, producer INTEGER NOT NULL, sequence INTEGER NOT NULL,
+                captured REAL NOT NULL, timer INTEGER NOT NULL, data BLOB NOT NULL,
+                UNIQUE(producer, sequence));
             CREATE INDEX IF NOT EXISTS poses_time ON poses(captured);
             CREATE INDEX IF NOT EXISTS poses_timer ON poses(timer, captured);
         """)
-        self._count = self._db.execute("SELECT COUNT(*) FROM poses").fetchone()[0]
+        self._count, newest = self._db.execute("SELECT COUNT(*), MAX(captured) FROM poses").fetchone()
+        self._newest = newest if newest is not None else -math.inf
+        self._producers: dict[str, int] = {}  # identity -> producer id
+        self._last: dict[int, Frame] = {}     # producer id -> its newest archived frame
+        self._uncommitted, self._since = 0, None
+        self._new_producer = False
 
     def ingest(self, producer, frames: tuple[bytes, ...]) -> bool:
-        """Commit one bounded batch, or nothing. Closed owners reject late input."""
+        """Archive one bounded batch, or nothing. Closed owners reject late input."""
         if not 0 < len(frames) <= 512:
             if not frames:
                 return False
@@ -126,40 +166,70 @@ class PoseArchive:
         with self._lock:
             if self._db is None:
                 return False
-            previous = self._db.execute(
-                "SELECT data FROM poses WHERE producer=? ORDER BY sequence DESC LIMIT 1",
-                (identity,)).fetchone()
-            last = frame_from_bytes(previous[0]) if previous else None
+            known = self._producers.get(identity)
+            last = self._last.get(known) if known is not None else self._stored_last(identity)
             for frame in records:
                 if last and (frame.sequence <= last.sequence or frame.dlist_serial <= last.dlist_serial
                              or frame.qpc < last.qpc):
                     raise ClipError("native ghost archive received a stale occurrence")
                 last = frame
-            rows = [(identity, f"{frame.sequence:016x}",
-                     source["utc_anchor"] + (frame.qpc - source["qpc_anchor"]) / source["qpc_frequency"],
-                     frame.global_timer, frame.valid_fields, frame.raw) for frame in records]
-            with self._db:
-                inserted_source = self._db.execute(
-                    "INSERT OR IGNORE INTO producers VALUES (?,?)", (identity, document)).rowcount
+            captured = [source["utc_anchor"] + (frame.qpc - source["qpc_anchor"]) / source["qpc_frequency"]
+                        for frame in records]
+            if not self._db.in_transaction:
+                self._db.execute("BEGIN")
+            self._db.execute("SAVEPOINT batch")  # this batch, or nothing; earlier batches stay
+            try:
+                key = known if known is not None else self._producer_id(identity, document)
                 self._db.executemany(
-                    "INSERT INTO poses(producer,sequence,captured,timer,valid,data) VALUES (?,?,?,?,?,?)", rows)
-                newest = self._db.execute("SELECT MAX(captured) FROM poses").fetchone()[0]
-                # None follows the recorder's size-only retention mode; the
-                # hard record ceiling still bounds native history independently.
-                removed = (self._db.execute("DELETE FROM poses WHERE captured < ?",
-                                            (newest - self.retention_s,)).rowcount
-                           if self.retention_s is not None else 0)
-                count = self._count + len(rows) - removed
+                    "INSERT INTO poses(producer,sequence,captured,timer,data) VALUES (?,?,?,?,?)",
+                    [(key, frame.sequence - _SEQUENCE_BIAS, at, frame.global_timer,
+                      zlib.compress(frame.raw, _ZLIB_LEVEL)) for frame, at in zip(records, captured, strict=True)])
+                newest = max(self._newest, *captured)
+                removed = self._db.execute("DELETE FROM poses WHERE captured < ?",
+                                           (newest - self.retention_s,)).rowcount
+                count = self._count + len(records) - removed
                 if count > self.max_records:
                     count -= self._db.execute("""DELETE FROM poses WHERE id IN
                         (SELECT id FROM poses ORDER BY id LIMIT ?)""", (count - self.max_records,)).rowcount
-                if inserted_source:
-                    self._db.execute("DELETE FROM producers WHERE identity NOT IN (SELECT producer FROM poses)")
-            self._count = count
+                self._db.execute("RELEASE batch")
+            except BaseException:
+                self._db.execute("ROLLBACK TO batch")
+                self._db.execute("RELEASE batch")
+                raise
+            self._producers[identity], self._last[key] = key, last
+            self._count, self._newest = count, newest
+            self._uncommitted += len(records)
+            self._since = self._clock() if self._since is None else self._since
+            if self._uncommitted >= COMMIT_ROWS or self._clock() - self._since >= COMMIT_S:
+                self._commit()
             return True
+
+    def _stored_last(self, identity: str) -> Frame | None:
+        """A producer this owner has not written yet may already have rows."""
+        row = self._db.execute("""SELECT data FROM poses WHERE producer=
+            (SELECT id FROM producers WHERE identity=?) ORDER BY sequence DESC LIMIT 1""",
+            (identity,)).fetchone()
+        return frame_from_bytes(stored_record(row[0])) if row else None
+
+    def _producer_id(self, identity: str, document: str) -> int:
+        self._new_producer |= bool(self._db.execute(
+            "INSERT OR IGNORE INTO producers(identity,data) VALUES (?,?)", (identity, document)).rowcount)
+        return self._db.execute("SELECT id FROM producers WHERE identity=?", (identity,)).fetchone()[0]
+
+    def _commit(self) -> None:
+        if self._new_producer:
+            # A producer whose rows all aged out is forgotten with them.
+            for (gone,) in self._db.execute("""DELETE FROM producers
+                    WHERE id NOT IN (SELECT DISTINCT producer FROM poses) RETURNING id""").fetchall():
+                self._last.pop(gone, None)
+                self._producers = {name: key for name, key in self._producers.items() if key != gone}
+            self._new_producer = False
+        self._db.commit()
+        self._uncommitted, self._since = 0, None
 
     @contextmanager
     def _reader(self):
+        # The owning connection reads its own uncommitted rows: no flush.
         with self._lock:
             owned = self._db
             connection = owned or sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -172,7 +242,8 @@ class PoseArchive:
     def close(self) -> None:
         with self._lock:
             if self._db is not None:
-                self._db.close()
+                self._commit()
+                self._db.close()  # the last close checkpoints the WAL into the file
                 self._db = None
 
     def export_attempt(self, attempt, destination: Path, *, target: dict | None = None) -> dict:
@@ -184,7 +255,7 @@ class PoseArchive:
             raise ClipError("attempt UTC interval is reversed")
 
         def endpoint(rows):
-            frames = [frame_from_bytes(row[1]) for row in rows]
+            frames = [frame_from_bytes(stored_record(row[1])) for row in rows]
             if any(frame.clock.valid & (RAW_VALID | ELAPSED_VALID) != RAW_VALID | ELAPSED_VALID
                    for frame in frames):
                 raise ClipError("attempt endpoint has no exact native elapsed clock")
@@ -216,9 +287,9 @@ class PoseArchive:
                 raise ClipError("attempt has ambiguous native epochs" if matches else
                                 "attempt is missing exact native frame endpoints")
             identity, first, last = matches[0]
-            source = json.loads(db.execute("SELECT data FROM producers WHERE identity=?", (identity,)).fetchone()[0])
-            rows = db.execute("""SELECT data FROM poses WHERE producer=?
-                AND sequence BETWEEN ? AND ? ORDER BY sequence""", (identity, first, last)).fetchall()
+            source = json.loads(db.execute("SELECT data FROM producers WHERE id=?", (identity,)).fetchone()[0])
+            rows = [(stored_record(data),) for (data,) in db.execute("""SELECT data FROM poses
+                WHERE producer=? AND sequence BETWEEN ? AND ? ORDER BY sequence""", (identity, first, last))]
         # The immutable copy survives pruning or recorder detach during publication.
         if kind == STAR_CLOCK and frame_from_bytes(rows[0][0]).igt > NEAR_ZERO_IGT:
             raise ClipError("star origin has no canonical near-zero native clock witness")
@@ -235,7 +306,7 @@ class PoseArchive:
                 **origin,
                 "target": dict(target) if target else None}
 
-    def _dance_tail(self, identity: str, after: str, close: Frame) -> list[bytes]:
+    def _dance_tail(self, identity: int, after: int, close: Frame) -> list[bytes]:
         """Wait, bounded, for the recorder to capture the dance; outside the
         lock between looks so capture keeps committing."""
         deadline = time.monotonic() + self.dance_wait_s
@@ -243,7 +314,7 @@ class PoseArchive:
         while True:
             with self._reader() as db:
                 recording = self._db is not None
-                candidates = [row[0] for row in db.execute(
+                candidates = [stored_record(row[0]) for row in db.execute(
                     "SELECT data FROM poses WHERE producer=? AND sequence>? ORDER BY sequence LIMIT ?",
                     (identity, after, 4 * DANCE_TAIL_MAX_FRAMES))]
             tail, ended = dance_tail(close, candidates)
