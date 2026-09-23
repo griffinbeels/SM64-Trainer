@@ -90,6 +90,12 @@ int main() {
     live.camera.position[0]=-5; // the fake turns this view: +x now faces -z
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(std::fabs(pose.vertices[0].uv[0]-31.0f/64.0f/SG_ATLAS_CELLS)<1e-6f && std::fabs(pose.vertices[0].uv[1]-15.5f/64.0f)<1e-6f);
+    // With the renderer's lookat enabled (its ROM-open default x=(0,1,0),
+    // y=(1,0,0)), x/y come from the lookat, as GLideN64 does: swapped here.
+    live.camera.position[0]=42;world.lookat={{0,1,0},{1,0,0},1};
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(std::fabs(pose.vertices[0].uv[0]-31.0f/64.0f/SG_ATLAS_CELLS)<1e-6f && std::fabs(pose.vertices[0].uv[1]-31.0f/64.0f)<1e-6f);
+    world.lookat={};
     live.camera.position[0]=42;fake_flags=0;fake_normal[0]=0;fake_normal[1]=1;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(pose.vertices[0].uv[0]==0.25f); // untextured-generation vertices keep their uv

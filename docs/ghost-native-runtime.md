@@ -115,18 +115,27 @@ The game's dithered transparency becomes an even blend. The model draws the
 metal body from the ROM's own metal lists. Those lists switch on
 `G_TEXTURE_GEN`, which the model now reports per triangle
 (`SG_MATERIAL_TEXGEN`; [patches.py](../renderer/model/patches.py)). Playback
-replaces those vertices' coordinates the way the live renderer computes them
-for SM64's F3D lists. SM64 sends no `gSPLookAt`, so GLideN64 takes the unit
-eye-space normal's x and y, `(n + 1) * 512`, scaled by
-`gSPTexture(0x0F80, 0x07C0)`. That gives 0..62 x 0..31 texels of the ROM's
-64x32 metal texture, under the live view. The metal body is fully
-environment mapped (2256 of 2256 vertices on the US ROM). Metal with the wing
-cap draws `mario_metal_cap_wings` from the ROM's metal wing textures
-(segment 4 0x0400A090 and 0x0400B090). Upstream libsm64 leaves them out, so the
-model adds them as atlas cells 11 and 12 (`SG_ATLAS_CELLS` 13).
-Remaining approximations: the dither pattern, and the lookat assumption. If
-a title-screen `gSPLookAt` left GLideN64's lookat enabled, the live mapping
-would rotate; only a live comparison settles that.
+replaces those vertices' coordinates exactly as the live renderer computes
+them (GLideN64 `gSPProcessVertex`). With its lookat enabled, x and y are the
+unit eye-space normal dotted with the lookat vectors; otherwise they are the
+normal's own x and y. Then `(x + 1) * 512` and `(y + 1) * 512`, scaled by
+`gSPTexture(0x0F80, 0x07C0)`, give 0..62 x 0..31 texels of the ROM's 64x32
+metal texture, under the live view. The metal body is fully environment
+mapped (2256 of 2256 vertices on the US ROM). Metal with the wing cap draws
+`mario_metal_cap_wings` from the ROM's metal wing textures (segment 4
+0x0400A090 and 0x0400B090). Upstream libsm64 leaves them out, so the model
+adds them as atlas cells 11 and 12 (`SG_ATLAS_CELLS` 13).
+
+The lookat is live state, not an assumption. In the pinned LINK d0d10105,
+`RSP_SetDefaultState` runs only from `RSP_Init` (ROM open): lookat enabled,
+x=(0,1,0), y=(1,0,0). Only an F3D `G_MOVEMEM` `G_MV_LOOKATX/Y` (`gSPLookAt`)
+changes it afterwards, and nothing resets it per frame, per task or on a
+ucode load. So whatever last sent a lookat (the Goddard title head can) stays
+in force, and a savestate does not restore it. [ghost_link.cpp](../plugin/gfxwrap/ghost_link.cpp)
+reads `gSP.lookat` and `lookatEnable` with each world triangle submission.
+The world pass keeps the value from the world's first triangles
+(`WorldPass::lookat`), and ghost_pose maps the ghost's metal with it. The one
+remaining approximation is the dither pattern.
 
 ### Pose refusals and the gaps they closed
 

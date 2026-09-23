@@ -33,20 +33,27 @@ bool recorded_camera_inverse(sg_model *model, const gc_camera &camera, float inv
     return true;
 }
 namespace {
-// G_TEXTURE_GEN as the live renderer computes it for SM64's F3D lists (no
-// gSPLookAt, so GLideN64 takes the normal through the modelview): the unit
-// eye-space normal's x/y, (n+1)*512 scaled by gSPTexture(0x0F80, 0x07C0),
-// is 0..62 x 0..31 texels of the 64x32 metal texture, atlas cell 0 of the
-// model's SG_ATLAS_CELLS. The live view stands in for
-// the camera the game would have drawn the ghost with.
-bool environment_uv(const float view[16], const float normal[3], float uv[2]) {
+// G_TEXTURE_GEN exactly as the live renderer computes it (GLideN64 gSP.cpp):
+// with its lookat enabled, x/y are the unit eye-space normal dotted with the
+// lookat vectors, otherwise its own x/y. (x+1)*512 and (y+1)*512 scaled by
+// gSPTexture(0x0F80, 0x07C0) are 0..62 x 0..31 texels of the 64x32 metal
+// texture, atlas cell 0 of the model's SG_ATLAS_CELLS. The live view and
+// the live lookat stand in for how the game would draw the ghost now.
+bool environment_uv(const float view[16], const ghost::Lookat &lookat, const float normal[3], float uv[2]) {
     float eye[3];
     for (unsigned r = 0; r < 3; ++r)
         eye[r] = view[r]*normal[0] + view[4+r]*normal[1] + view[8+r]*normal[2];
     const float length = std::sqrt(eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2]);
     if (!std::isfinite(length) || length <= 0) return false;
-    const float s = (eye[0]/length + 1.0f) * 512.0f * (0x0F80 / 65536.0f);
-    const float t = (eye[1]/length + 1.0f) * 512.0f * (0x07C0 / 65536.0f);
+    for (float &axis : eye) axis /= length;
+    float x = eye[0], y = eye[1];
+    if (lookat.enabled) {
+        x = lookat.x[0]*eye[0] + lookat.x[1]*eye[1] + lookat.x[2]*eye[2];
+        y = lookat.y[0]*eye[0] + lookat.y[1]*eye[1] + lookat.y[2]*eye[2];
+    }
+    if (!std::isfinite(x) || !std::isfinite(y)) return false;
+    const float s = (x + 1.0f) * 512.0f * (0x0F80 / 65536.0f);
+    const float t = (y + 1.0f) * 512.0f * (0x07C0 / 65536.0f);
     uv[0] = s / 64.0f / float(SG_ATLAS_CELLS);
     uv[1] = t / 64.0f;
     return true;
@@ -175,7 +182,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         std::memcpy(v.uv,scratch.uv+2*i,sizeof(v.uv));
         // Metal Mario's environment map follows the live view, as the game's
         // would from this camera.
-        if ((scratch.material[i] & SG_MATERIAL_TEXGEN) && !environment_uv(view,v.normal,v.uv))
+        if ((scratch.material[i] & SG_MATERIAL_TEXGEN) && !environment_uv(view,world.lookat,v.normal,v.uv))
             return Result::model_failed;
         v.material = static_cast<ghost_compositor::Material>(material);
     }
