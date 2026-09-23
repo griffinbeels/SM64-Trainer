@@ -252,7 +252,7 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
 
 // Segment 0x13 holds every behaviour script (the US map's last is below 0x6000).
 constexpr uint32_t behaviour_segment = 0x13000000u, behaviour_span = 0x10000u;
-constexpr uint32_t object_behaviour = 0x20c, object_active_flags = 0x74, object_anim_state = 0x14c, body_holp = 0x18;
+constexpr uint32_t object_behaviour = 0x20c, object_active_flags = 0x74, object_anim_state = 0xf0, body_holp = 0x18;
 
 // gMarioState->heldObj as geo_process_held_object drew it from Mario's hand
 // this frame (gc_held). Anything unprovable leaves the block cleared.

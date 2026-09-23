@@ -282,7 +282,7 @@ static void held_block(Fixture &f) {
         f.put32(f.config.mario_state+0x7c,bomb);
         f.put16(bomb+0x74,1);f.put16(bomb+2,0x20);f.put32(bomb+0x14,0);
         f.put32(bomb+0x20c,f.config.behaviour_base+0x3174);
-        f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0x14c,1);
+        f.put16(bomb+0x38,1);f.put16(bomb+0x3a,7);f.put16(bomb+0x40,12);f.put32(bomb+0xf0,1);
         f.put32(bomb+0x3c,anim);f.put16(anim+8,24);f.put16(bomb+0x42,0x8123);
         for(unsigned i=0;i<3;++i) {
             f.putfloat(bomb+0x2c+4*i,1.0f);f.putfloat(Fixture::body+0x18+4*i,100.0f+float(i));
