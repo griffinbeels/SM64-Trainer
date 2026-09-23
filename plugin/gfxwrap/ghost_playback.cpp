@@ -579,10 +579,30 @@ void hear(uint32_t index,const Clip& clip,uint32_t record,bool before_start) {
         for(int64_t at=std::max(last,high)+1;at<=int64_t(record);++at) {
             const auto &sample=clip.frames[at].sample;
             if(!(sample.valid_fields&GC_VALID_SOUND))continue;
-            for(uint32_t k=0;k<sample.sound.count && k<GC_SOUND_EVENTS;++k)sink->cue(sample.sound.bits[k]);
+            for(uint32_t k=0;k<sample.sound.count && k<GC_SOUND_EVENTS;++k)sink->cue(index,sample.sound.bits[k]);
         }
     if(int64_t(record)>high)high=int64_t(record);
     last=int64_t(record);
+}
+// Inverse-square falloff from live Mario, on top of the engine's own camera
+// falloff; full gain within GP_SOUND_NEAR, and while live Mario is unknown.
+float sound_gain(const gc_sample& live,const float ghost[3]) {
+    if(!(live.valid_fields&GC_VALID_POSE))return 1.0f;
+    double squared=0;
+    for(unsigned axis=0;axis<3;++axis) {
+        const double apart=double(ghost[axis])-double(live.pose.position[axis]);squared+=apart*apart;
+    }
+    const double reach=GP_SOUND_NEAR;
+    return squared>reach*reach ? float(reach*reach/squared) : 1.0f; // NaN compares false: full gain
+}
+// Where a visible ghost sounds from this frame; before its cues, so a new
+// sound starts at the ghost's current place.
+void place(uint32_t index,const gc_sample& live,const float ghost[3]) {
+    const auto *sink=sound_sink.load(std::memory_order_acquire);
+    if(!sink || !sink->place)return;
+    float relative[3]{};
+    if(!ghost_pose::camera_relative(model.value,live.camera,ghost,relative))relative[0]=relative[1]=relative[2]=0;
+    sink->place(index,relative,sound_gain(live,ghost));
 }
 uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,const ghost::WorldPass& world,
                 ghost_compositor::Pose& out,uint32_t& record) {
@@ -793,6 +813,7 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
         report.clip_decisions[i]=uint8_t(result);
         if(!i)summary=result;
         if(result!=GP_READY && result!=GP_BEFORE_START) {heard[i]=unheard;continue;} // hidden: silent
+        place(i,live,bound[i]->frames[record].sample.pose.position);
         hear(i,*bound[i],record,result==GP_BEFORE_START);
         before_start=before_start && result==GP_BEFORE_START;
         if(pose.count)out[count++]=pose;

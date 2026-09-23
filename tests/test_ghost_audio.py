@@ -55,5 +55,9 @@ def test_ghost_sound_engine_queue_and_volume(tmp_path):
     # Request to first audible sample, with the device a tick deep.
     assert report["stale_samples_when_left_on"] > 1000  # the resume check is not vacuous
     assert report["capture_max_latency_ms"] < 80
+    # Placement: the engine pans and distances each ghost; gain scales amplitude.
+    assert report["right_placed_right_left_energy"] > 4 and report["left_placed_right_left_energy"] < 0.25
+    assert 0.055 < report["gain_quarter_energy_ratio"] < 0.07
+    assert report["camera_5000_energy_ratio"] < 0.5 and report["second_ghost_routed_identical"]
     if report["device"]:
         assert report["device_underruns"] == 0 and report["device_max_latency_ms"] < 80, report

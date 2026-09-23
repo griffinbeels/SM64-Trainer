@@ -6,6 +6,7 @@
 #include "ghost_playback.h"
 #include "ghost_pose.h"
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -71,11 +72,20 @@ static bool refuse_shadow=false;
 static unsigned shadow_calls=0;
 static uint64_t shadow_sequence=0;
 // Sound sink: fixed storage, since the renderer must never allocate.
-static uint32_t sound_log[256];static unsigned sound_count=0;
+static uint32_t sound_log[256],sound_ghost[256];static unsigned sound_count=0;
 static uint32_t last_playing=2;static float last_volume=-1;
-static void __cdecl test_cue(uint32_t bits) {if(sound_count<256)sound_log[sound_count++]=bits;}
+struct Placed {unsigned count;float position[3];float gain;};
+static Placed placed[GP_GHOSTS];static unsigned unplaced_cues=0;
+static void __cdecl test_cue(uint32_t ghost,uint32_t bits) {
+    if(ghost>=GP_GHOSTS || !placed[ghost].count)++unplaced_cues; // a sound starts where its ghost is
+    if(sound_count<256){sound_ghost[sound_count]=ghost;sound_log[sound_count++]=bits;}
+}
 static void __cdecl test_control(uint32_t playing,float volume) {last_playing=playing;last_volume=volume;}
-static const ghost_playback::SoundSink test_sink{test_cue,test_control};
+static void __cdecl test_place(uint32_t ghost,const float *position,float gain) {
+    if(ghost>=GP_GHOSTS){++unplaced_cues;return;}
+    auto &p=placed[ghost];++p.count;std::memcpy(p.position,position,sizeof(p.position));p.gain=gain;
+}
+static const ghost_playback::SoundSink test_sink{test_cue,test_control,test_place};
 extern "C" int32_t sg_model_open(const uint8_t*,size_t,sg_model **out) {
     if(fake_model)return SG_BUSY;
     *out=fake_model=new sg_model{GetCurrentThreadId()};++opens;return SG_OK;
@@ -119,6 +129,13 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     // Identify the recorded row and its depth in the otherwise opaque matrix.
     out.view_projection[0]=recorded.sample.pose.position[0];
     out.view_projection[15]=recorded.sample.pose.position[2];return Result::ok;
+}
+// The pose witness proves the look-at product; this one proves which point
+// is placed: the camera here is a pure translation.
+bool camera_relative(sg_model *p,const gc_camera& live,const float world[3],float out[3]) {
+    if(!p || p!=fake_model || p->owner!=GetCurrentThreadId())return false;
+    for(unsigned axis=0;axis<3;++axis)out[axis]=world[axis]-live.position[axis];
+    return true;
 }
 // Conversion math has the pose witness; this proves which row's shadow is used.
 bool shadow(sg_model *p,const gc_sample& recorded,const float view_projection[16],
@@ -536,9 +553,11 @@ int main() {
                 live.global_timer=uint32_t(12000+time);
                 live.clock={GCC_RAW_VALID|GCC_ELAPSED_VALID,GCC_UNKNOWN_ORIGIN,GCC_STEADY,live.igt,
                     0,0,source_generation,1,elapsed_base+time,source_continuity};
-                sound_count=0;
+                sound_count=0;for(auto &p:placed)p={};
                 renderer.run([&]{check(ghost_playback::evaluate(live,world,poses,count,token)==shown,"sound frame drawn");});
                 const std::vector<uint32_t> want(expected),heard(sound_log,sound_log+sound_count);
+                for(unsigned k=0;k<sound_count;++k)
+                    check(sound_ghost[k]==(sound_log[k]/1000==2?1u:0u),"each sound comes from its own ghost");
                 if(heard!=want) {
                     std::fprintf(stderr,"time %llu heard",static_cast<unsigned long long>(time));
                     for(auto bits:heard)std::fprintf(stderr," %u",bits);
@@ -552,6 +571,22 @@ int main() {
             step(4,{});                                // a paused ghost repeats nothing
             step(5,{1005,1905,2005});                  // several requests of one record keep their order
             step(8,{1006,1007,1008,2006,2008});        // a record without sound adds none
+            // Each visible ghost sounds from its displayed root relative to the
+            // live camera, at min(1,(GP_SOUND_NEAR/d)^2) of d from live Mario.
+            live.camera.position[0]=3000;live.camera.position[1]=50;live.camera.position[2]=-100;
+            live.valid_fields|=GC_VALID_POSE;live.pose.position[0]=3008;live.pose.position[1]=0;live.pose.position[2]=5;
+            step(8,{});
+            check(placed[0].count==1 && placed[1].count==1 && !placed[2].count,"every visible ghost is placed once a frame");
+            check(placed[0].position[0]==8 && placed[0].position[1]==-50 && placed[0].position[2]==105
+                  && placed[1].position[0]==108 && placed[1].position[2]==109,"placed at its root from the live camera");
+            check(placed[0].gain==1 && placed[1].gain==1,"within GP_SOUND_NEAR of live Mario: full gain");
+            live.pose.position[0]=3008+2*GP_SOUND_NEAR;step(8,{});
+            check(std::fabs(placed[0].gain-.25f)<1e-6f,"twice GP_SOUND_NEAR away: a quarter");
+            const double distant=double(3808-3108)*(3808-3108)+16.0;
+            check(std::fabs(placed[1].gain-float(GP_SOUND_NEAR*GP_SOUND_NEAR/distant))<1e-6f,"each ghost its own distance");
+            live.valid_fields&=~GC_VALID_POSE;step(8,{});
+            check(placed[0].gain==1 && placed[1].gain==1,"unknown live Mario: full gain");
+            std::memset(live.camera.position,0,sizeof(live.camera.position));
             ++r.revision;r.nudge_frames=-3;check(api->configure(&r)==GP_OK,"nudge back");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             step(9,{});step(11,{});step(12,{1009,2009}); // re-passed records stay silent
@@ -591,6 +626,7 @@ int main() {
                 renderer.run([&]{ghost_playback::safe_boundary(7,4);});
                 step(0,{});step(1,{1001});step(3,{1002,1003}); // the restored first record is where it stands
             }
+            check(unplaced_cues==0,"every sound was placed before it was cued");
             ghost_playback::set_sound_sink(nullptr);
         }
         check(api->prepare_model(4,rom.data(),uint32_t(rom.size()))==GP_OK,"budget test model");

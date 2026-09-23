@@ -10,10 +10,15 @@ namespace ghost_audio {
 constexpr uint32_t queue_slots = 256;
 constexpr uint32_t low_water_frames = 1088; // synthesize the next tick at or below this (34 ms)
 constexpr uint32_t tick_capacity = 1088;   // SA_TICK_MAX_FRAMES
+constexpr uint32_t sources = 16;           // SA_SOURCES: one per ghost
 
 /* Render thread only: bounded single-producer queue; never waits/allocates.
- * A full queue drops the request and counts it. */
-void cue(uint32_t sound_bits);
+ * A full queue, or a ghost index >= sources, drops the request and counts it. */
+void cue(uint32_t ghost, uint32_t sound_bits);
+/* Render thread only: where that ghost sounds from, relative to the live
+ * camera (+x right, -z ahead, as SM64 places its own sounds), and its gain
+ * 0..1. The audio thread applies the latest placement at each tick. */
+void place(uint32_t ghost, const float camera_relative[3], float gain);
 /* Render thread only. playing=false (disabled, suspended, switched off) stops
  * every sound at the next audio tick and discards queued requests. Volume
  * is an exact output scale: 0 writes true silence. */

@@ -397,7 +397,7 @@ before its start a ghost is silent and sounds its first record when it begins.
 
 [ghost_audio.cpp](../plugin/gfxwrap/ghost_audio.cpp) owns the rest. The render
 thread only writes a bounded 256-entry single-producer queue (full drops and
-counts) and two atomics, so it never waits or allocates (the playback witness
+counts) and plain atomics, so it never waits or allocates (the playback witness
 counts zero render allocations). One audio thread owns the engine and a
 shared-mode waveOut device (event driven, no window or focus). It synthesizes
 one tick (two blocks of 528/544 stereo frames at 32 kHz) whenever the device
@@ -413,9 +413,30 @@ after the device ran dry as an underrun.
 `volume` (GP7/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
 scales the engine output exactly; 0 writes zeros. Disabled or withdrawn
 playback, including the owner-suspended pause, stops every ghost sound and
-discards queued requests at the next tick. All ghosts share one engine, one
-centred, undistanced source and SM64's own per-bank channel limits: two ghosts
-making the same sound at once can cut each other off, as in the game.
+discards queued requests at the next tick.
+
+Each ghost is its own source to the engine (`sa_place`/`sa_play`, 16
+sources). Every drawn frame the renderer places each visible ghost, before
+its cues: its displayed root (`pose.position`) under the live camera's
+look-at, the same camera space the game hands the engine for Mario's own
+sounds (`cameraToObject`: +x right, -z ahead). The engine then does what it
+does for Mario: pans by that position and fades with camera distance. In the
+pinned US engine (`get_sound_volume`), Mario's banks fall in amplitude from 1
+at the camera to about 0.11 at 10000 units and never below 0.1 (0.9 x
+intensity squared + 0.1); this copy uses one reach (level 0, 20000) where the
+game uses each level's own. On its own the engine therefore never silences a
+distant ghost, which is what the renderer's gain adds. On top of that the renderer multiplies each ghost's gain by
+`min(1, (GP_SOUND_NEAR / d)^2)`, d being the world distance between that
+ghost's root and live Mario (gain 1 while live Mario's pose is unknown).
+`GP_SOUND_NEAR` is a tuning constant, 400 units (2.5 Mario heights). The gain
+scales amplitude, so it halves the level (-6 dB) for every 1.41x distance
+past 400 units. Final loudness is `volume` x engine camera falloff x that
+gain. Placement also steers sounds already playing, since the engine
+rereads the position and volume every tick. SM64 gives each sound bank one
+channel (`sMaxChannelsForSoundBank`, all 1). Mario's sounds carry
+`SOUND_NO_PRIORITY_LOSS`, so distance does not rank them, and a newer sound of
+equal priority in the same bank takes the channel: two ghosts, or a far ghost
+and a near one, can still cut each other off, as Mario's own sounds do.
 
 The IPC worker starts the engine from its verified ROM bytes and stops it
 (joining the thread) when the ROM closes. Before the engine parses anything,
@@ -431,7 +452,14 @@ tick and nothing before it, 0.5 is exactly half of every sample (energy ratio
 0.250001), 0 is all zeros, switching off silences within one tick, altered
 audio data never reaches the parser, and a full queue drops. Its waveOut
 smoke plays silence only when a device exists; for three seconds it must feed
-the device in real time (31599 frames/s measured) with 0 underruns. With the
+the device in real time (31599 frames/s measured) with 0 underruns. Placed
+(same schedule): 2000 units right of the camera the right channel carries
+21x the left's energy (mirrored on the left); gain 0.25 leaves 0.060 of the
+energy; 5000 units ahead, the engine's own falloff leaves 0.133; and ghost 1
+on the right, with ghost 0 placed left and silent, is sample-identical to
+ghost 0 on the right. The playback witness checks each visible ghost is
+placed once a frame, before its cues, at its root from the live camera, with
+gain 1 within 400 units, 0.25 at 800 and 1 with no live pose. With the
 deeper fill (2026-09-22, this machine) request-to-device latency measured at
 most 64.8 ms (host-driven capture 32.3 ms), up from 49.9 ms. That excludes
 Windows' own mixer and output delay.

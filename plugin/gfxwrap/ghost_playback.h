@@ -172,11 +172,17 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &,
  * requests to the sink once, as its displayed record passes them (every
  * record since the last drawn frame, at most GP_SOUND_CATCHUP), and the
  * playback switch/volume at each boundary. A hidden ghost, a nudge or seek,
- * or a restored/rebound timeline passes nothing. Null discards. */
+ * or a restored/rebound timeline passes nothing. Null discards.
+ * Each drawn frame also places every visible ghost: its displayed root
+ * relative to the live camera (SM64 pans and distances that itself) and a
+ * gain of min(1, (GP_SOUND_NEAR / d)^2), d its world distance from live
+ * Mario (1 while live Mario's pose is unknown). */
 #define GP_SOUND_CATCHUP 90u
+#define GP_SOUND_NEAR 400.0f /* tuning: full gain within 2.5 Mario heights (160 units each) */
 struct SoundSink {
-    void (__cdecl *cue)(uint32_t sound_bits);
+    void (__cdecl *cue)(uint32_t ghost, uint32_t sound_bits);
     void (__cdecl *control)(uint32_t playing, float volume);
+    void (__cdecl *place)(uint32_t ghost, const float camera_relative[3], float gain);
 };
 void set_sound_sink(const SoundSink *);
 /* Recheck immediately before final presentation; cancellation/configuration
