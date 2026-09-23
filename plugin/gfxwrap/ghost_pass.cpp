@@ -57,6 +57,9 @@ void Pass::projection(const float m[16]) {
     }
     if (projection_known_) std::memcpy(current_projection_, m, sizeof(current_projection_));
 }
+void Pass::lookat(const Lookat &value) {
+    if (!sealed_ && status_ != PassStatus::Disabled) current_lookat_ = value;
+}
 void Pass::triangles(const RasterTarget &t, uint32_t count, bool zbuffer) {
     if (sealed_ || status_ == PassStatus::Disabled || !count || !zbuffer) return;
     if (status_ == PassStatus::Candidate) { refuse(PassStatus::MultipleWorlds); return; }
@@ -66,6 +69,7 @@ void Pass::triangles(const RasterTarget &t, uint32_t count, bool zbuffer) {
     if (!world_open_) {
         value_.target = t;
         std::memcpy(value_.projection, current_projection_, sizeof(value_.projection));
+        value_.lookat = current_lookat_;
         world_open_ = true;
     } else if (t.color != value_.target.color || t.depth != value_.target.depth
             || t.width != value_.target.width || t.height != value_.target.height

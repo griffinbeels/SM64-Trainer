@@ -61,6 +61,7 @@ void rom(bool opened);
 // Called inside the serialized renderer DList command, before RSP processing.
 bool begin(const uint8_t *rdram, uint32_t bytes, uint32_t context_generation, int64_t qpc);
 void projection(const float matrix[16]);
+void lookat(const ghost::Lookat &);
 void triangles(const ghost::RasterTarget &, uint32_t count, bool zbuffer);
 bool geometry(bool was_zbuffer, bool is_zbuffer);
 void color_target_changed();

@@ -178,6 +178,13 @@ void triangles(uint32_t count) {
         }
         if (gSP.viewport.vscale[0] < 0) target.screen_scale[0] *= -1;
         if (gSP.viewport.vscale[1] < 0) target.screen_scale[1] *= -1;
+        // Metal Mario's texture generation reads this; the ghost must too.
+        ghost::Lookat lookat{};
+        for (unsigned i = 0; i < 3; ++i) {
+            lookat.x[i] = gSP.lookat.xyz[0][i]; lookat.y[i] = gSP.lookat.xyz[1][i];
+        }
+        lookat.enabled = gSP.lookatEnable ? 1u : 0u;
+        ghost_stream::lookat(lookat);
     }
     ghost_stream::triangles(target,count,true);
     ghost_draw::observe(target);
