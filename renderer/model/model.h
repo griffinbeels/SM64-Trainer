@@ -86,19 +86,22 @@ typedef struct sg_mesh {
 } sg_mesh;
 
 /* Mario's particle models (bubble, splashes, water rings, droplet, dust,
- * sparkles, lava flame), one frame per executed US display list. Vertices are
+ * sparkles, lava flame, mist, sand, leaves, snow), one frame per executed US
+ * display list. Vertices are
  * model-local triangles; uv lies inside rect, the frame's clamped atlas cell;
  * rgba is the combiner's shade factor (white for decal frames). CUTOUT draws
  * texels with alpha, BLEND blends texture alpha times vertex alpha. */
-enum { SG_PARTICLE_FRAMES = 56, SG_PARTICLE_MAX_VERTICES = 336, SG_PARTICLE_CELLS = 64,
+enum { SG_PARTICLE_FRAMES = 64, SG_PARTICLE_MAX_VERTICES = 384, SG_PARTICLE_CELLS = 64,
        SG_PARTICLE_ATLAS_WIDTH = 512, SG_PARTICLE_ATLAS_HEIGHT = 256 };
 enum sg_particle_layer { SG_PARTICLE_CUTOUT = 1, SG_PARTICLE_BLEND = 2 };
 typedef struct sg_particle_vertex {
     float position[3], uv[2], rect[4];
     uint8_t rgba[4];
 } sg_particle_vertex;
+/* fade: the frame's alpha is the object's opacity (environment alpha set by
+ * the game's generated list), which the recording carries per particle. */
 typedef struct sg_particle_frame {
-    uint32_t display_list, layer, first_vertex, vertex_count;
+    uint32_t display_list, layer, first_vertex, vertex_count, fade;
 } sg_particle_frame;
 typedef struct sg_particle_view {
     const sg_particle_frame *frames;

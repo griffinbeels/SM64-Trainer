@@ -630,15 +630,25 @@ game's texture-edge layer) keep texels at alpha 0.5 or more, blend frames
 multiply texture and vertex alpha, and both take the ghost's opacity.
 Particles never refuse their ghost and have no switch.
 
-Recorded but not drawn: the ground-pound mist and the snow, leaf and sand
-spawners, whose models are in other segments. Environment bubbles (`envfx`)
-are not objects and not Mario's.
+common1 also supplies the ground-pound mist and white puffs (`MODEL_MIST`,
+0x03000880/0x03000920), sand (0x0302BCD0), leaves (0x0301CDE0) and snow
+(`white_particle_dl`, 0x0302C8A0). Mist fades with its object's `oOpacity`,
+which reaches the game's combiner (`G_CC_MODULATEIFADEA`) through a list the
+game generates each frame (`geo_update_layer_transparency`): a segment-0
+list pushed at the object's position just before its model list. Capture
+never records that list; it reads its `G_SETENVCOLOR 255,255,255,alpha` and
+stores the alpha with the particle (`gc_particle.opacity`, flag
+`GC_PARTICLE_OPACITY`), and playback multiplies it into frames the model
+marks `fade`. Recorded but not drawn: the wall-kick and ground-pound stars
+(`MODEL_CARTOON_STAR`) and punch triangles (`MODEL_DIRT_ANIMATION`), which are
+lit 3D models, not textured quads. Environment bubbles (`envfx`) are not
+objects and not Mario's.
 
 The [particle witness](../tests/test_ghost_particles.py)
 (`SM64_TEST_GHOST_COMPOSITOR=1`) checks cutout and blend frames, hiding
 behind the body and behind terrain, the clean frame and GL state; removing the
 draw, the body depth test, the terrain test or the cutout each turns it red.
-The model witness checks all 53 frames decode to one quad each (17063 visible
+The model witness checks all 58 frames decode to one quad each (17063 visible
 segment-4 texels, the flame's environment colour) on both the US and the
 Usamune US ROM. The [probe witness](../tests/test_ghost_particle_capture.py) keeps the 16
 nearest of 21 drawn (5 counted), skips nested calls, another object's bubble and

@@ -72,6 +72,24 @@ int main() {
         require(kept.entries[i].display_list != 0x04000123u, "nested calls never recorded");
         require(kept.entries[i].translation[0] <= 150, "farther bubbles are the ones dropped");
     }
+    // A ground-pound mist puff: the game's generated list (physical, in the
+    // frame pool) sets its opacity just before its model list.
+    {
+        Ram mist_ram = ram;
+        const float puff[3] = {0, -60, -600};
+        mist_ram.object(25, 0, puff);
+        const uint32_t generated = 0x00300000u;
+        mist_ram.u32(Ram::base + generated, 0xFB000000u); mist_ram.u32(Ram::base + generated + 4, 0xFFFFFF60u);
+        mist_ram.u32(Ram::base + generated + 8, 0xB8000000u); mist_ram.u32(Ram::base + generated + 12, 0);
+        gc_particle_probe misty;
+        ghost_particles_prepare(misty, mist_ram.bytes.data(), uint32_t(mist_ram.bytes.size()), Ram::mario_pointer, Ram::pool);
+        billboard(puff, 1, m); ghost_particles_display_list(misty, generated, m);
+        billboard(puff, 1, m); ghost_particles_display_list(misty, 0x03000880u, m);
+        gc_sample faded{};
+        ghost_particles_finish(misty, true, faded);
+        require(faded.particles.count == 1 && faded.particles.entries[0].display_list == 0x03000880u
+            && faded.particles.entries[0].opacity == (GC_PARTICLE_OPACITY | 0x60), "mist keeps its opacity, not the generated list");
+    }
     // Under the cap: no overflow, nothing dropped; an incomplete list publishes nothing.
     gc_particle_probe few;
     ghost_particles_prepare(few, ram.bytes.data(), uint32_t(ram.bytes.size()), Ram::mario_pointer, Ram::pool);
@@ -87,6 +105,6 @@ int main() {
     gc_sample none{};
     ghost_particles_finish(bad, true, none);
     require(!bad.prepared && !(none.valid_fields & GC_VALID_PARTICLES), "bad Mario pointer: unprepared, nothing published");
-    std::printf("particle capture passed: mario=22 kept=16 nearest dropped=5 foreign=no nested=no checks=%u\n", checks);
+    std::printf("particle capture passed: mario=22 kept=16 nearest dropped=5 foreign=no nested=no mist=opacity checks=%u\n", checks);
     return 0;
 }

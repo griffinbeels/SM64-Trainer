@@ -64,11 +64,21 @@ void ghost_particles_display_list(gc_particle_probe &p, uint32_t dl, const float
         const float *c = p.camera_to_object[i];
         if (std::fabs(matrix[12] - c[0]) > match_tolerance || std::fabs(matrix[13] - c[1]) > match_tolerance
                 || std::fabs(matrix[14] - c[2]) > match_tolerance) continue;
-        // First push at this object's position is its geo display list; the
-        // frame lists' own nested calls reuse the same matrix and are skipped.
+        if (!(dl >> 24)) { // generated in the frame's pool: read, never recorded
+            const Ram r{p.ram, p.ram_bytes};
+            const uint32_t at = kseg0 | (dl & 0x00ffffffu);
+            for (uint32_t k = 0; k < 3 && r.has(at + 8 * k, 8); ++k) {
+                const uint32_t w0 = r.u32(at + 8 * k), w1 = r.u32(at + 8 * k + 4);
+                if ((w0 >> 24) == 0xB8u) break;
+                if ((w0 >> 24) == 0xFBu && (w1 >> 8) == 0xffffffu) p.opacity[i] = uint16_t(GC_PARTICLE_OPACITY | (w1 & 0xffu));
+            }
+            return;
+        }
+        // First model push at this object's position is its geo display list;
+        // the frame lists' own nested calls reuse the same matrix and are skipped.
         p.recorded[i] = true;
         gc_particle entry{};
-        entry.display_list = dl;
+        entry.display_list = dl; entry.opacity = p.opacity[i];
         for (uint32_t column = 0; column < 3; ++column)
             for (uint32_t row = 0; row < 3; ++row) {
                 const float value = matrix[column * 4 + row] * GC_PARTICLE_BASIS_ONE;

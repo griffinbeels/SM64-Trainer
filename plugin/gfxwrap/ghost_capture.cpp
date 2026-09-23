@@ -363,7 +363,8 @@ static_assert(offsetof(gc_layout, sound_code) == 64, "Ghost sound layout ABI cha
 static_assert(offsetof(gc_layout, pending_warp_op) == 56, "Ghost warp layout ABI changed");
 static_assert(offsetof(gc_layout, delayed_warp_timer) == 60, "Ghost countdown layout ABI changed");
 static_assert(offsetof(gc_layout, clock) == 80, "Ghost clock layout ABI changed");
-static_assert(sizeof(gc_particle) == 36 && sizeof(gc_particles) == 580, "Ghost particle ABI changed");
+static_assert(sizeof(gc_particle) == 36 && sizeof(gc_particles) == 580 && offsetof(gc_particle, opacity) == 22,
+              "Ghost particle ABI changed");
 static_assert(offsetof(gc_sample, particles) == 636, "Ghost particle block follows sound");
 static_assert(sizeof(gc_sample) == 1216, "Ghost sample ABI changed");
 static_assert(sizeof(gc_shadow) == 292 && sizeof(gc_sound) == 36, "Ghost optional evidence ABI changed");
