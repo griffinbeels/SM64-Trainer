@@ -333,11 +333,43 @@ int main() {
             }
             stress_frames+=run.frames;stress_ghostless+=run.ghostless;stress_wrong+=run.wrong;
         }
+        unsigned wf_loads=0,wf_frames=0,wf_ghostless=0,wf_wrong=0;
+        {
+            // His WF 100 Coins loads (session 23, 2026-09-23): a segment run
+            // from a practice reset, a state saved at IGT 296 (Usamune holds
+            // the timer while it saves), then seven loads of that state. Each
+            // load drew Mario's root a little away from the saved frame (the
+            // offsets below are his, in units), and the tracker re-armed a new
+            // attempt on every load frame. The old exact compare never found
+            // the saved frame: every load hid the ghost, then the new arm
+            // restarted it from the segment's beginning.
+            Run run(true);const int start=20,saved=276; // raw IGT 296 is coordinate 276
+            for(int raw=start;raw<=start+saved;++raw)run.step(uint16_t(raw),raw-start);
+            for(int i=0;i<8;++i)run.step(uint16_t(start+saved),saved);
+            for(int raw=start+saved+1;raw<=start+366;++raw)run.step(uint16_t(raw),raw-start);
+            run.worker_after_render=true;run.ghostless=run.wrong=run.frames=0;
+            const float moved[]={0.06f,2.93f,7.36f,-0.35f,0.98f,6.97f,6.97f};
+            const int reached[]={305,351,394,333,402,312,340}; // his IGT before the next load, minus 20
+            for(unsigned i=0;i<7;++i) {
+                ++wf_loads;
+                const float at=float(start+saved)+moved[i];
+                for(int hold=0;hold<3;++hold)run.step(uint16_t(start+saved),saved,1,1,at);
+                // The tracker's new arm for the load frame, a poll later.
+                run.demand.origin.arm_id+=100;
+                run.demand.origin.global_timer=run.last.global_timer-2;
+                run.demand.origin.utc=1000+double(run.last.qpc-2-1000)/1000;++run.demand.revision;
+                for(int hold=0;hold<3;++hold)run.step(uint16_t(start+saved),saved,1,1,at);
+                for(int raw=start+saved+1;raw<=reached[i];++raw)run.step(uint16_t(raw),raw-start);
+            }
+            wf_frames=run.frames;wf_ghostless=run.ghostless;wf_wrong=run.wrong;
+        }
         std::printf("{\"ok\":true,\"checks\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
             "\"blink\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u},"
             "\"stress\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u,"
-            "\"hidden_after_capture_restart\":%u}}\n",
+            "\"hidden_after_capture_restart\":%u},"
+            "\"wf_loads\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u}}\n",
             checks,allocations.load(),destructions.load(),blink_loads,blink_frames,blink_ghostless,blink_wrong,
-            stress_loads,stress_frames,stress_ghostless,stress_wrong,restart_hidden);return 0;
+            stress_loads,stress_frames,stress_ghostless,stress_wrong,restart_hidden,
+            wf_loads,wf_frames,wf_ghostless,wf_wrong);return 0;
     } catch(const std::exception& e) {std::fprintf(stderr,"%s\n",e.what());return 1;}
 }

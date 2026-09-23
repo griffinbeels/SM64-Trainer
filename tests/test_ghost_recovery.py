@@ -51,3 +51,10 @@ def test_native_savestate_recovery(tmp_path):
     assert stress["ghostless_frames"] <= 1 and stress["wrong_frames"] == 0
     assert stress["hidden_after_capture_restart"] <= 2
     assert blink["ghostless_frames"] == blink["wrong_frames"] == 0, blink
+    # His WF 100 Coins loads (2026-09-23): a loaded state draws Mario a few
+    # units from the frame it was saved on, and the tracker re-arms on each
+    # load frame. Every load shows the ghost at the loaded point, never the
+    # start and never hidden.
+    loads = report["wf_loads"]
+    assert loads["loads"] == 7 and loads["frames"] > 400
+    assert loads["ghostless_frames"] == loads["wrong_frames"] == 0, loads

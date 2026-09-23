@@ -8,6 +8,9 @@ enum go_result { GO_READY, GO_MISSING, GO_AMBIGUOUS, GO_INVALID };
 enum go_flags { GO_RECOVERED = 1u };
 #define GO_HISTORY 4096u
 #define GO_UTC_WINDOW 1.0
+/* How far (units, per axis) a loaded state's drawn root may sit from the
+ * witnessed frame it restores; see same_place in ghost_origin.cpp. */
+#define GO_RESTORE_PLACE 32.0f
 #pragma pack(push, 4)
 typedef struct go_marker {
     uint32_t kind, configuration, epoch, global_timer;

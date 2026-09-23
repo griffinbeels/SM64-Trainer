@@ -4,6 +4,20 @@
 #include <cstring>
 
 namespace ghost_origin {
+namespace {
+// A loaded state's recorded root is not bit-identical to the frame it was
+// saved on: the root is read back through the camera's fixed-point matrices,
+// and the camera after a load is not the one that drew the save. His WF 100
+// Coins loads (2026-09-23, 7 loads of one IGT-296 state) drew Mario up to 7.4
+// units from the witnessed save frame, which an exact compare never matched,
+// so every load hid the ghost. The action, animation and angles still match
+// exactly; the root must agree within GO_RESTORE_PLACE units per axis.
+bool same_place(const float (&a)[3],const float (&b)[3]) {
+    for(unsigned axis=0;axis<3;++axis)
+        if(!(std::fabs(a[axis]-b[axis])<=GO_RESTORE_PLACE))return false;
+    return true;
+}
+}
 void Ledger::clear() {
     configuration_ = epoch_ = count_ = next_ = 0;
     sequence_ = 0;
@@ -142,8 +156,7 @@ go_result Recovery::observe(const gc_sample &sample,const uint32_t *actions,uint
             const bool pose=(entry.fields&now.fields&GC_VALID_POSE)!=0;
             if(pose) {
                 if(entry.action!=now.action || entry.animation!=now.animation
-                        || entry.animation_frame!=now.animation_frame
-                        || std::memcmp(entry.position,now.position,sizeof(now.position))
+                        || entry.animation_frame!=now.animation_frame || !same_place(entry.position,now.position)
                         || std::memcmp(entry.angles,now.angles,sizeof(now.angles)))continue;
             } else if(!absolute_timer_ || entry.timer!=now.timer)continue;
             if(absolute_timer_ && entry.timer!=now.timer)continue;

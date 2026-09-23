@@ -379,6 +379,19 @@ behind the renderer: over 10 loads and 92 frames the previous path showed 8
 frames without a ghost and 1 at a wrong position (a forward load to an
 unwitnessed state); this path shows 0 and 0.
 
+A load names a point on the run by a witnessed checkpoint: the same raw IGT,
+level and area, action, animation, animation frame and angles, and a drawn
+root within `GO_RESTORE_PLACE` (32 units) per axis. A star can also be named
+by its raw IGT alone before any banked transition. The root is read back
+through the camera's fixed-point matrices, so a loaded state never draws
+exactly where its saved frame did. His WF 100 Coins loads (2026-09-23,
+session 23: one state saved at IGT 296, loaded seven times) drew Mario 0.06
+to 7.4 units away; the previous exact compare matched none of them, so each
+load hid the ghost until the tracker's new arm restarted it from the
+segment's beginning. Replaying his archived frames, his PB clip and his
+tracker arms through the real worker and playback now shows the ghost at
+the loaded point on every load frame.
+
 A star or segment completion removes the tracker's arm until the next attempt,
 so the session marks the owner suspended. The worker used to withdraw the
 command then, which dropped the restore checkpoints: a load after a star grab
