@@ -340,7 +340,7 @@ export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
-                          active = false, pieces = null, goal = null,
+                          active = false, pieces = null, goal,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
   const [showHidden, setShowHidden] = useState(false);
@@ -630,14 +630,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            (above) and the page-turn effect (above) already exist for a
            trend-graph dot; a PB link needs no second implementation of
            "open + turn to the right page + scroll + flash". */""}
-      ${/* PB over GOAL (task 0106): the PB tag keeps its link and sits on
-           top; the goal line under it is the Scorecard's per-entry goal for
-           the ladder this card grades on (`standards.entity`), and picking
-           one pins it there. One fixed-size plate so a stream can crop it. */""}
-      <${GoalPlate} goalKey=${standards.entity} goal=${goal} t=${t}
-        attempts=${sec.attempts} onChanged=${t.refresh}
-        pbTag=${html`<${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock}
-          rows=${rows} pick=${pbPick} t=${t} showCaveat=${false} bare=${true} />`} />
+      <${GoalPlate} goalKey=${standards.entity} goal=${goal} t=${t} attempts=${sec.attempts} onChanged=${t.refresh}
+        pbTag=${html`<${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock} rows=${rows} pick=${pbPick} t=${t} showCaveat=${false} bare=${true} />`} />
       ${/* The book mark -- a doorway OUT to the community sheet for whatever
            this card is showing: it opens the Library at this card's target
            and strategy. It is the ONLY such doorway on the card now; the one

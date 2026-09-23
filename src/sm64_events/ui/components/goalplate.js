@@ -107,7 +107,7 @@ function GoalProgress({ goal, goalKey, onChanged }) {
       await send("POST", "/api/scorecard/entry_goal/forgive",
         { key: goalKey, attempt_id: progress.broken_by });
       onChanged();
-    } catch (_) { /* the next refresh shows the unchanged count */ }
+    } catch { /* the next refresh shows the unchanged count */ }
   }
   return html`<div class="goal-plate-row goal-plate-count"
       title=${goal.streak ? `Best streak this session: ${progress.best}` : ""}>
@@ -182,19 +182,77 @@ export function useGoalCelebration(attempts, goal) {
   return party;
 }
 
-function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
-  const [options, setOptions] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
+// The picker's list: Automatic, then every rank and every player with a time
+// on this entry, each wearing the time it would set.
+function pickerGroups(options, goal) {
+  const groups = [{ label: null, options: [
+    { value: "auto", label: goal && goal.pinned
+        ? "Automatic (follow the Scorecard)" : "Automatic ✓" }] }];
+  if (!options) return groups;
+  groups.push({ label: "Rank", options: (options.divisions || []).map((d) => ({
+    value: `division:${d.tier}:${d.division}`,
+    label: `${capName(d.tier)} ${divisionDigit(d.division)} · ${fmtCs(d.cs)}` })) });
+  groups.push({ label: "Players", options: (options.runners || []).map((r) => ({
+    value: `runner:${r.runner}`, label: `${r.runner} · ${fmtCs(r.cs)}` })) });
+  return groups;
+}
+
+// A picked option -> the PUT body's goal (null = back to Automatic).
+function goalOfOption(value) {
+  if (value === "auto") return null;
+  const [kind, ...rest] = value.split(":");
+  if (kind === "division") return { kind, tier: rest[0], division: rest[1] };
+  return { kind: "runner", runner: rest.join(":") };
+}
+
+// "Repeat N× in total / in a row". Held locally until a pick lands, so
+// closing the picker changes nothing. `onApply` re-saves the pinned
+// threshold with new repeat settings without finding it in the list again.
+function RepeatControls({ count, setCount, streak, setStreak, onApply, busy }) {
+  const mode = (on, label, value) => html`<button type="button"
+      class="quiet-button ${on ? "is-selected" : ""}" disabled=${count < 2}
+      aria-pressed=${on ? "true" : "false"} onclick=${() => setStreak(value)}>${label}</button>`;
+  return html`<div class="goal-picker-repeat">
+    <label>Repeat <input type="number" min="1" max="999" value=${count}
+      oninput=${(e) => setCount(Math.max(1, Math.min(999, Number(e.target.value) || 1)))}
+      aria-label="How many times" />×</label>
+    <span class="goal-picker-mode" role="group" aria-label="Count how">
+      ${mode(!streak, "in total", false)}${mode(streak, "in a row", true)}
+    </span>
+    ${onApply && html`<button type="button" class="quiet-button"
+      disabled=${busy} onclick=${onApply}>Apply</button>`}
+  </div>`;
+}
+
+function TypedTime({ busy, onSet }) {
   const [typed, setTyped] = useState("");
-  const [count, setCount] = useState(goal && goal.count > 1 ? goal.count : 1);
-  const [streak, setStreak] = useState(!!(goal && goal.streak));
-  const scope = goalScopeOf(t);
+  const typedCs = parseGapTime(typed) ?? parseLooseTime(typed);
+  return html`<form class="goal-picker-time"
+      onsubmit=${(e) => { e.preventDefault(); if (typedCs) onSet({ kind: "time", cs: typedCs }); }}>
+    <input type="text" inputmode="decimal" placeholder="Your own time, e.g. 1'45"
+      value=${typed} oninput=${(e) => setTyped(e.target.value)} aria-label="Goal time" />
+    <button type="submit" class="quiet-button" disabled=${!typedCs || busy}>Set</button>
+  </form>`;
+}
+
+function useGoalOptions(goalKey, scope) {
+  const [options, setOptions] = useState(null);
   useEffect(() => {
     getJSON(`/api/scorecard/entry_goal_options?key=${encodeURIComponent(goalKey)}`
         + `&scope=${encodeURIComponent(scope)}`)
       .then(setOptions).catch(() => setOptions({ divisions: [], runners: [] }));
   }, [goalKey, scope]);
+  return options;
+}
+
+function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
+  const scope = goalScopeOf(t);
+  const options = useGoalOptions(goalKey, scope);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const held = goal || {};
+  const [count, setCount] = useState(held.count > 1 ? held.count : 1);
+  const [streak, setStreak] = useState(!!held.streak);
   async function save(value) {
     setBusy(true); setError(null);
     try {
@@ -207,52 +265,16 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
       setError((err && err.message) || "Could not save that goal.");
     } finally { setBusy(false); }
   }
-  const groups = [{ label: null, options: [
-    { value: "auto", label: goal && goal.pinned
-        ? "Automatic (follow the Scorecard)" : "Automatic ✓" }] }];
-  if (options) {
-    groups.push({ label: "Rank", options: (options.divisions || []).map((d) => ({
-      value: `division:${d.tier}:${d.division}`,
-      label: `${capName(d.tier)} ${divisionDigit(d.division)} · ${fmtCs(d.cs)}` })) });
-    groups.push({ label: "Players", options: (options.runners || []).map((r) => ({
-      value: `runner:${r.runner}`, label: `${r.runner} · ${fmtCs(r.cs)}` })) });
-  }
-  function pick(value) {
-    if (value === "auto") return save(null);
-    const [kind, ...rest] = value.split(":");
-    if (kind === "division") return save({ kind, tier: rest[0], division: rest[1] });
-    return save({ kind: "runner", runner: rest.join(":") });
-  }
-  const typedCs = parseGapTime(typed) ?? parseLooseTime(typed);
-  // Re-save the pinned threshold with new repeat settings, without making
-  // the player find the same rank/player/time in the list again.
-  const current = goal && goal.pinned && goal.source ? pinValueOf(goal) : null;
-  const repeatChanged = current && (count !== (goal.count || 1)
-    || (count > 1 && streak !== !!goal.streak));
-  const footer = html`<div class="goal-picker-repeat">
-    <label>Repeat <input type="number" min="1" max="999" value=${count}
-      oninput=${(e) => setCount(Math.max(1, Math.min(999, Number(e.target.value) || 1)))}
-      aria-label="How many times" />×</label>
-    <span class="goal-picker-mode" role="group" aria-label="Count how">
-      <button type="button" class="quiet-button ${!streak ? "is-selected" : ""}"
-        disabled=${count < 2} aria-pressed=${!streak ? "true" : "false"}
-        onclick=${() => setStreak(false)}>in total</button>
-      <button type="button" class="quiet-button ${streak ? "is-selected" : ""}"
-        disabled=${count < 2} aria-pressed=${streak ? "true" : "false"}
-        onclick=${() => setStreak(true)}>in a row</button>
-    </span>
-    ${repeatChanged && html`<button type="button" class="quiet-button"
-      disabled=${busy} onclick=${() => save(current)}>Apply</button>`}
-  </div>
-  <form class="goal-picker-time"
-      onsubmit=${(e) => { e.preventDefault(); if (typedCs) save({ kind: "time", cs: typedCs }); }}>
-    <input type="text" inputmode="decimal" placeholder="Your own time, e.g. 1'45"
-      value=${typed} oninput=${(e) => setTyped(e.target.value)} aria-label="Goal time" />
-    <button type="submit" class="quiet-button" disabled=${!typedCs || busy}>Set</button>
-  </form>`;
-  return html`<${SearchMenu} title="Pick a goal" groups=${groups}
-    onPick=${pick} onClose=${onClose} busy=${busy} error=${error}
-    align="right" footer=${footer}
+  const current = held.pinned && held.source ? pinValueOf(held) : null;
+  const repeatChanged = current && (count !== (held.count || 1)
+    || (count > 1 && streak !== !!held.streak));
+  const footer = html`<${RepeatControls} count=${count} setCount=${setCount}
+      streak=${streak} setStreak=${setStreak} busy=${busy}
+      onApply=${repeatChanged ? () => save(current) : null} />
+    <${TypedTime} busy=${busy} onSet=${save} />`;
+  return html`<${SearchMenu} title="Pick a goal" groups=${pickerGroups(options, goal)}
+    onPick=${(value) => save(goalOfOption(value))} onClose=${onClose}
+    busy=${busy} error=${error} align="right" footer=${footer}
     emptyNote=${options ? "No ranks or players for this one — type a time below." : "Loading…"} />`;
 }
 
