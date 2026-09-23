@@ -18,7 +18,7 @@ from sm64_events.ghost.native_layout import (
     PARTICLE_TRANSLATION_AT, PARTICLES_AT, PARTICLES_ENTRIES_AT, POSE_AT, RECORD_BYTES as R, REFUSAL_AT,
     ROOT_KIND_AT, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
 )
-from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, as_gclip5, encoded, matrix_frame
+from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, REAL_GCLIP5, as_gclip5, encoded, matrix_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
@@ -126,6 +126,8 @@ def held_cases():
     # A GCLIP5 file (GC6 records, before released objects) plays; a torn one does not.
     older = as_gclip5(encoded((frame(1, held=(0x13003174, 1, 12)), frame(2))))
     cases.extend((older, older[:-1], older[:8] + b"\x04" + older[9:]))
+    # His real one: Behind Chain Chomp's Gate, a Bob-omb in his hand for 85 frames.
+    cases.append(REAL_GCLIP5.read_bytes())
     return cases
 
 
