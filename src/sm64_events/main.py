@@ -219,12 +219,21 @@ def _ghost_follows_pb(service, ghost):
         return
     save_media = service.on_pb_saved
 
+    async def pb_changed(attempt, saved):
+        # The video save follows this call; until it finishes the picker may
+        # truly say the PB's video "is still being saved".
+        if saved and attempt is not None:
+            ghost.video_pending(attempt.id, True)
+        await ghost.pb_changed(attempt, saved)
+
     async def save_pb_media(attempt_id):
         # Whole picture follows the PB once its video exists, not a watch later.
         try:
             return await save_media(attempt_id)
         finally:
+            ghost.video_pending(attempt_id, False)
             await ghost.refresh(resolve=True)
+    service.on_pb_changed = pb_changed
     service.on_pb_saved = save_pb_media
 
 
