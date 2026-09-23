@@ -58,19 +58,52 @@ Gfx *geo_update_held_mario_pos(s32 callContext, struct GraphNode *node, void *co
     return NULL;
 }
 
+/* One held kind's gdSPDefLights1 table (held_cells.h), as a vertex's diffuse
+ * and ambient colours name them. Two lights sharing both colours with
+ * different directions leave none: the colours would not say which lit it. */
+static void add_held_light(struct sg_model *model, unsigned kind, int ar, int ag, int ab,
+                           int r, int g, int b, int x, int y, int z)
+{
+    sg_body_lights *lights = &model->held_lights[kind];
+    sg_body_light entry;
+    uint32_t i;
+    if (lights->count == UINT32_MAX) return;
+    entry.ambient[0] = (uint8_t)ar; entry.ambient[1] = (uint8_t)ag; entry.ambient[2] = (uint8_t)ab;
+    entry.diffuse[0] = (uint8_t)r; entry.diffuse[1] = (uint8_t)g; entry.diffuse[2] = (uint8_t)b;
+    entry.direction[0] = (int8_t)x; entry.direction[1] = (int8_t)y; entry.direction[2] = (int8_t)z;
+    for (i = 0; i < lights->count; ++i)
+        if (!memcmp(lights->lights[i].diffuse, entry.diffuse, 3) && !memcmp(lights->lights[i].ambient, entry.ambient, 3)) {
+            if (memcmp(&lights->lights[i], &entry, sizeof(entry))) lights->count = UINT32_MAX;
+            return;
+        }
+    if (lights->count < SG_BODY_LIGHTS) lights->lights[lights->count++] = entry;
+    else lights->count = UINT32_MAX;
+}
+
 int sg_held_build(struct sg_model *model)
 {
     Vec3f zero = {0, 0, 0}, unit = {1, 1, 1};
     Vec3s angles = {0, 0, 0};
     int status = SG_OK;
+    /* One permanent pool for every held graph: the model has eight pools. */
+    struct AllocOnlyPool *pool = alloc_only_pool_init();
     init_graph_node_object(NULL, &model->held_object.header.gfx, NULL, zero, angles, unit);
 #define BUILD_HELD(name, kind) \
-    model->held_graph[kind] = process_geo_layout(alloc_only_pool_init(), sg_##name##_geo); \
+    model->held_graph[kind] = process_geo_layout(pool, sg_##name##_geo); \
     model->held_animations[kind] = sg_##name##_animations; \
     model->held_animation_count[kind] = sg_##name##_animation_count; \
     if (!model->held_graph[kind]) status = SG_INVALID_GEOMETRY;
     SG_HELD_MODELS(BUILD_HELD)
 #undef BUILD_HELD
+    {
+        unsigned kind;
+        memset(model->held_lights, 0, sizeof(model->held_lights));
+#define HELD_LIGHT(kind, ar, ag, ab, r, g, b, x, y, z) add_held_light(model, kind, ar, ag, ab, r, g, b, x, y, z);
+        SG_HELD_LIGHTS(HELD_LIGHT)
+#undef HELD_LIGHT
+        for (kind = 0; kind < SG_HELD_KINDS; ++kind)
+            if (model->held_lights[kind].count == UINT32_MAX) memset(&model->held_lights[kind], 0, sizeof(sg_body_lights));
+    }
     return status;
 }
 
@@ -90,10 +123,17 @@ void sg_held_evaluate(struct sg_model *model, const sg_pose *pose, const float m
             || !(model->held_available & (1u << pose->held_kind)) || !model->held_graph[pose->held_kind]) {
         sg_abort(SG_INVALID_ARGUMENT);
     }
-    if (pose->held_animation_id < 0 || pose->held_animation_id >= model->held_animation_count[pose->held_kind])
-        sg_abort(SG_INVALID_ANIMATION);
-    animation = model->held_animations[pose->held_kind][pose->held_animation_id];
-    if (pose->held_animation_frame < 0 || pose->held_animation_frame >= animation->loopEnd) sg_abort(SG_INVALID_ANIMATION);
+    /* An object without animations (a box) is held with id -1, frame 0. */
+    if (!model->held_animation_count[pose->held_kind]) {
+        if (pose->held_animation_id != -1 || pose->held_animation_frame) sg_abort(SG_INVALID_ANIMATION);
+        animation = NULL;
+    } else {
+        if (pose->held_animation_id < 0 || pose->held_animation_id >= model->held_animation_count[pose->held_kind])
+            sg_abort(SG_INVALID_ANIMATION);
+        animation = model->held_animations[pose->held_kind][pose->held_animation_id];
+        if (pose->held_animation_frame < 0 || pose->held_animation_frame >= animation->loopEnd)
+            sg_abort(SG_INVALID_ANIMATION);
+    }
     /* Mario's rows, translation at the HOLP; the traversal scales rows by the
      * object's own scale, as geo_process_held_object's mtxf_scale_vec3f. */
     memcpy(local, mario_root, sizeof(local));

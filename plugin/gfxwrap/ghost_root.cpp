@@ -350,7 +350,13 @@ void remember(gc_root_memory &m, const gc_sample &s) {
 void ghost_root_finish(gc_root_probe &p, bool completed, gc_sample &sample, gc_root_memory *memory) {
     // The shadow publishes only beside the root it was proven through, after
     // its master call and all three nested calls executed exactly once.
-    if (completed && ghost_root_candidate(p,sample)) {
+    const bool proven=completed && ghost_root_candidate(p,sample);
+    // A held object without an animation was drawn only if Mario's body was:
+    // it rides a root proven by this frame's lists, never a carried or TRS one.
+    if (!proven && (sample.valid_fields&GC_VALID_HELD) && sample.held.animation_id==-1) {
+        sample.held={}; sample.valid_fields&=~GC_VALID_HELD;
+    }
+    if (proven) {
         if (p.shadow_calls==1 && p.shadow_step==4) {
             sample.shadow=p.shadow; sample.valid_fields|=GC_VALID_SHADOW;
         }

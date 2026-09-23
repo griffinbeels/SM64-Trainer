@@ -56,13 +56,24 @@ def test_native_pose_runtime(tmp_path):
                          "sha256": hashlib.sha256(Path(supplied).read_bytes()).hexdigest(),
                          "result": report})
     (tmp_path / "asset-witness.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+    # The real model through the real ghost_pose: Mario holding each kind the
+    # ghost draws, under the F3D lighting, on every supplied ROM.
+    held = tmp_path / "held_pose_host.exe"
+    compiler._cl(vcvars, ["/nologo", "/O2", "/MT", "/EHsc", "/std:c++17",
+        f"/I{ROOT / 'renderer/model'}", f"/I{ROOT / 'plugin/gfxwrap'}", str(ROOT / "tests/native/held_pose_host.cpp"),
+        str(ROOT / "plugin/gfxwrap/ghost_pose.cpp"), str(library), f"/Fe:{held}", f"/Fo{tmp_path}\\",
+        "/link", *compiler.LIBS], tmp_path)
+    for label, supplied in fixtures:
+        result = subprocess.run([str(held), supplied], cwd=tmp_path, capture_output=True,
+                                text=True, timeout=30, **quiet_spawn_kwargs(), check=False)
+        assert result.returncode == 0, f"{label} held poses: {result.stdout}{result.stderr}"
 
 
 def test_component_identity_covers_inputs_and_recipe(tmp_path, monkeypatch):
     builder = load_tool("build_model")
     inputs = json.loads((ROOT / "renderer/model/inputs.json").read_text(encoding="utf-8"))
     # Every pinned input is staged, and every held model's input is pinned.
-    held = {key for _, _, _, lists, keys in builder.HELD_MODELS.values() for key in (lists, *keys)}
+    held = {key for model in builder.HELD_MODELS.values() for key in (model.lists, *model.inputs)}
     assert set(inputs) == {"libsm64", "mario_geo", "mario_model"} | held
     assert all(len(item["sha256"]) == 64 for item in inputs.values())
     copied = tmp_path / "model"

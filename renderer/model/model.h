@@ -26,7 +26,7 @@ enum sg_pose_fields {
 /* Objects the model can draw in Mario's hand (SG_POSE_HELD). */
 enum sg_held_kind {
     SG_HELD_NONE = 0, SG_HELD_BOBOMB = 1, SG_HELD_PENGUIN = 2, SG_HELD_KING_BOBOMB = 3,
-    SG_HELD_CHUCKYA = 4, SG_HELD_KINDS = 5
+    SG_HELD_CHUCKYA = 4, SG_HELD_BREAKABLE_BOX = 5, SG_HELD_MIPS = 6, SG_HELD_KINDS = 7
 };
 
 /* A native C value, not a packed wire format. Angles are signed SM64 turns.
@@ -90,7 +90,21 @@ enum sg_material {
      * map), so the vertex uv is meaningless and the caller computes it under
      * its own view. Only the 64x32 metal texture at scale 0x0F80/0x07C0 is
      * admitted; anything else is SG_MESH_UNSUPPORTED_MATERIAL. */
-    SG_MATERIAL_TEXGEN = 0x100
+    SG_MATERIAL_TEXGEN = 0x100,
+    /* The code is the low byte. A textured, non-texgen triangle also carries
+     * its render tile (sg_tile) from bit SG_MATERIAL_TILE_SHIFT. */
+    SG_MATERIAL_CODE = 0xffu, SG_MATERIAL_TILE_SHIFT = 9
+};
+
+/* A render tile as gsDPSetTile and gsDPSetTileSize set it: the texture's atlas
+ * cell, and per axis (S across, T down) whether it clamps, its wrap mask and
+ * its size, both log2 texels (mask 0: no wrap). The RDP clamps a texel to the
+ * tile's size first, then wraps it by the mask. */
+enum sg_tile {
+    SG_TILE_CELL = 0x3fu,
+    SG_TILE_S_CLAMP = 1u << 6, SG_TILE_S_MASK_SHIFT = 7, SG_TILE_S_SIZE_SHIFT = 10,
+    SG_TILE_T_CLAMP = 1u << 13, SG_TILE_T_MASK_SHIFT = 14, SG_TILE_T_SIZE_SHIFT = 17,
+    SG_TILE_FIELD = 7u, SG_TILE_PRESENT = 1u << 20
 };
 
 /* The atlas is one 64-pixel cell per texture, left to right: Mario's in
@@ -102,7 +116,8 @@ enum sg_atlas_cell {
     SG_ATLAS_CELL_BOBOMB_LEFT = 13, SG_ATLAS_CELL_BOBOMB_RIGHT = 14,
     SG_ATLAS_CELL_BOBOMB_EYES = 15, SG_ATLAS_CELL_BOBOMB_BLINK = 16,
     SG_ATLAS_CELL_PENGUIN = 17, SG_ATLAS_CELL_KING_BOBOMB = 23, SG_ATLAS_CELL_CHUCKYA = 29,
-    SG_ATLAS_CELLS = 33
+    SG_ATLAS_CELL_BREAKABLE_BOX = 33, SG_ATLAS_CELL_MIPS = 35,
+    SG_ATLAS_CELLS = 36
 };
 enum { SG_MODEL_MAX_VERTICES = 3072, SG_MODEL_ATLAS_WIDTH = SG_ATLAS_CELLS * 64,
        SG_MODEL_ATLAS_HEIGHT = 64, SG_MODEL_ATLAS_BYTES = SG_ATLAS_CELLS * 64 * 64 * 4 };
@@ -119,6 +134,13 @@ typedef struct sg_mesh {
     uint32_t vertex_capacity;
     uint32_t vertex_count;
     uint32_t error_flags;
+    /* With SG_POSE_HELD, the held object's vertices run from here to
+     * vertex_count (Mario's come first); otherwise vertex_count. */
+    uint32_t held_first_vertex;
+    /* Optional (NULL: not written), 3 per vertex: the ambient colour of the
+     * light the vertex's list loaded, beside its diffuse in color. A held
+     * object's lights can share a diffuse colour with different ambients. */
+    float *ambient;
 } sg_mesh;
 
 /* Mario's particle models (bubble, splashes, water rings, droplet, dust,
@@ -155,6 +177,20 @@ typedef struct sg_particle_view {
     uint32_t frame_count, vertex_count, atlas_width, atlas_height;
 } sg_particle_view;
 
+/* The lights Mario's own lists load (gsSPSetLights1: one directional light,
+ * direction in EYE space as F3D takes it, plus its ambient), read from the
+ * ROM. The mesh's vertex colour is the diffuse colour of the light its
+ * triangle was drawn under; each diffuse colour names exactly one light. */
+#define SG_BODY_LIGHTS 16
+typedef struct sg_body_light {
+    uint8_t diffuse[3], ambient[3];
+    int8_t direction[3];
+} sg_body_light;
+typedef struct sg_body_lights {
+    sg_body_light lights[SG_BODY_LIGHTS];
+    uint32_t count;
+} sg_body_lights;
+
 typedef struct sg_atlas_view {
     const uint8_t *rgba;
     uint32_t width, height, animation_count;
@@ -189,6 +225,13 @@ int32_t sg_model_get_atlas(sg_model *model, sg_atlas_view *out);
 /* Zero frames when the ROM's particle lists were not the supported ones;
  * Mario's own model still opens. Same owner/lifetime rules as the atlas. */
 int32_t sg_model_get_particles(sg_model *model, sg_particle_view *out);
+/* Zero lights when the ROM's lists did not read as the supported ones (two
+ * lights with one diffuse colour, or none at all). Same owner rules. */
+int32_t sg_model_get_body_lights(sg_model *model, sg_body_lights *out);
+/* The lights a held object's own lists load (its gdSPDefLights1 table), in
+ * the same form; none when two share both colours but not a direction. A
+ * vertex names its light by its diffuse (color) and ambient colours. */
+int32_t sg_model_get_held_lights(sg_model *model, uint32_t kind, sg_body_lights *out);
 int32_t sg_model_evaluate(sg_model *model, const sg_pose *pose, sg_mesh *out);
 /* Exact upstream SM64 look-at, including its sine table. Native Mat4 layout,
  * translation at 12..14; no N64 quantization or projection is applied. Rejects

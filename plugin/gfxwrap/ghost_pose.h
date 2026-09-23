@@ -14,6 +14,7 @@ struct Scratch {
     float position[SG_MODEL_MAX_VERTICES * 3];
     float normal[SG_MODEL_MAX_VERTICES * 3];
     float color[SG_MODEL_MAX_VERTICES * 3];
+    float ambient[SG_MODEL_MAX_VERTICES * 3];
     float uv[SG_MODEL_MAX_VERTICES * 2];
     uint32_t material[SG_MODEL_MAX_VERTICES];
     ghost_compositor::Vertex vertices[SG_MODEL_MAX_VERTICES];

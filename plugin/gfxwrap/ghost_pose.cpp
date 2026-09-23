@@ -1,4 +1,5 @@
 #include "ghost_pose.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 namespace ghost_pose {
@@ -8,19 +9,29 @@ static_assert(static_cast<uint32_t>(ghost_compositor::Material::decal_rgba) == S
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::decal_rgb) == SG_MATERIAL_DECAL_RGB);
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::modulate_rgb) == SG_MATERIAL_MODULATE_RGB);
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::modulate_rgba) == SG_MATERIAL_MODULATE_RGBA);
+// The compositor's tile fields are the model's sg_tile, moved above its mode.
+static_assert(ghost_compositor::tile::cell == SG_TILE_CELL && ghost_compositor::tile::s_clamp == SG_TILE_S_CLAMP
+    && ghost_compositor::tile::s_mask == SG_TILE_S_MASK_SHIFT && ghost_compositor::tile::s_size == SG_TILE_S_SIZE_SHIFT
+    && ghost_compositor::tile::t_clamp == SG_TILE_T_CLAMP && ghost_compositor::tile::t_mask == SG_TILE_T_MASK_SHIFT
+    && ghost_compositor::tile::t_size == SG_TILE_T_SIZE_SHIFT && ghost_compositor::tile::field == SG_TILE_FIELD
+    && ghost_compositor::tile::present == SG_TILE_PRESENT);
 namespace {
 bool sample_valid(const gc_sample &s, uint32_t required) {
     return s.bytes == sizeof(s) && s.version == GC_VERSION && s.epoch && s.sequence
         && s.dlist_serial && (s.valid_fields & required) == required;
 }
-// The held objects the model draws, by segmented behaviour (US; each found
-// by the LOAD_ANIMATIONS of its model's table in the ROM's behaviour segment).
+// The held objects the model draws, by segmented behaviour (US; each agrees
+// with STROOP's map in data/behaviours_us.tsv, and the animated ones with the
+// LOAD_ANIMATIONS of their model's table in the ROM's behaviour segment).
 struct HeldModel { uint32_t behavior; uint32_t kind; };
 constexpr HeldModel held_models[] = {
     {0x13003174u, SG_HELD_BOBOMB},      // bhvBobomb
     {0x130020E8u, SG_HELD_PENGUIN},     // bhvSmallPenguin
     {0x130001F4u, SG_HELD_KING_BOBOMB}, // bhvKingBobomb
     {0x13000528u, SG_HELD_CHUCKYA},     // bhvChuckya
+    {0x13004218u, SG_HELD_BREAKABLE_BOX}, // bhvBreakableBoxSmall (the cork box)
+    {0x13001650u, SG_HELD_BREAKABLE_BOX}, // bhvJumpingBox (the crazy box, same model)
+    {0x130044FCu, SG_HELD_MIPS},        // bhvMips: its fur clamps (sg_tile)
 };
 uint32_t held_kind(uint32_t behavior) {
     for (const auto &held : held_models) if (held.behavior == behavior) return held.kind;
@@ -69,6 +80,53 @@ bool environment_uv(const float view[16], const ghost::Lookat &lookat, const flo
     const float t = (y + 1.0f) * 512.0f * (0x07C0 / 65536.0f);
     uv[0] = s / 64.0f / float(SG_ATLAS_CELLS);
     uv[1] = t / 64.0f;
+    return true;
+}
+// F3D's vertex light as GLideN64's gSPLightVertex computes it, with the
+// light Mario's own list loaded for this vertex's colour: ambient + diffuse
+// * max(0, N.L), the light in EYE space (gSPLight's direction, turned back by
+// the modelview), clamped per vertex before interpolation. The live view
+// is the eye: the game lights Mario from the camera it draws him with.
+// The light whose diffuse colour the adapter wrote into this vertex.
+const sg_body_light *named(const sg_body_lights &lights, const float color[3]) {
+    for (uint32_t i = 0; i < lights.count; ++i) {
+        bool same = true;
+        for (unsigned c = 0; c < 3; ++c)
+            same &= std::fabs(color[c] * 255.0f - float(lights.lights[i].diffuse[c])) < 0.5f;
+        if (same) return &lights.lights[i];
+    }
+    return nullptr;
+}
+// A held object's light: its diffuse and ambient colours both, since its
+// lists may load one diffuse with different ambients (King Bob-omb's white).
+const sg_body_light *named_held(const sg_body_lights &lights, const float color[3], const float ambient[3]) {
+    for (uint32_t i = 0; i < lights.count; ++i) {
+        bool same = true;
+        for (unsigned c = 0; c < 3; ++c)
+            same &= std::fabs(color[c] * 255.0f - float(lights.lights[i].diffuse[c])) < 0.5f
+                && std::fabs(ambient[c] * 255.0f - float(lights.lights[i].ambient[c])) < 0.5f;
+        if (same) return &lights.lights[i];
+    }
+    return nullptr;
+}
+bool shade(const float view[16], const sg_body_light *light, float color[3], const float normal[3]);
+bool shade(const float view[16], const sg_body_lights &lights, float color[3], const float normal[3]) {
+    return shade(view, named(lights, color), color, normal);
+}
+bool shade(const float view[16], const sg_body_light *light, float color[3], const float normal[3]) {
+    if (!light) return false; // a colour no light of his names: never guessed
+    float eye[3], direction[3];
+    for (unsigned r = 0; r < 3; ++r) {
+        eye[r] = view[r]*normal[0] + view[4+r]*normal[1] + view[8+r]*normal[2];
+        direction[r] = float(light->direction[r]);
+    }
+    const float n = std::sqrt(eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2]);
+    const float d = std::sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
+    float lit = 0;
+    if (n > 0 && d > 0 && std::isfinite(n))
+        lit = std::max(0.0f, (eye[0]*direction[0] + eye[1]*direction[1] + eye[2]*direction[2]) / (n * d));
+    for (unsigned c = 0; c < 3; ++c)
+        color[c] = std::min(1.0f, (float(light->ambient[c]) + float(light->diffuse[c]) * lit) / 255.0f);
     return true;
 }
 bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
@@ -191,7 +249,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         pose.held_global_timer = recorded.global_timer;
     }
     sg_mesh mesh{scratch.position,scratch.normal,scratch.color,scratch.uv,scratch.material,
-        SG_MODEL_MAX_VERTICES,0,0};
+        SG_MODEL_MAX_VERTICES,0,0,0,scratch.ambient};
     // A hidden Mario draws nothing. The game never advanced his animation
     // (act_disappeared leaves frame -1), so the model is not asked to.
     int32_t status = p.hidden ? SG_OK : sg_model_evaluate(model,&pose,&mesh);
@@ -201,16 +259,35 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     if ((status != SG_OK || mesh.error_flags) && (pose.fields & SG_POSE_HELD)) {
         pose.fields &= ~uint32_t(SG_POSE_HELD);
         mesh = {scratch.position,scratch.normal,scratch.color,scratch.uv,scratch.material,
-            SG_MODEL_MAX_VERTICES,0,0};
+            SG_MODEL_MAX_VERTICES,0,0,0,scratch.ambient};
         status = sg_model_evaluate(model,&pose,&mesh);
     }
     if (status == SG_CAPACITY) return Result::capacity;
     if (status != SG_OK || mesh.error_flags || mesh.vertex_count > SG_MODEL_MAX_VERTICES)
         return Result::model_failed;
+    sg_body_lights lights{};
+    if (mesh.vertex_count && (sg_model_get_body_lights(model,&lights) != SG_OK || !lights.count))
+        return Result::model_failed;
+    // The held object follows Mario's own vertices and is lit by the lights
+    // its own lists load. A colour none of them names leaves the object out,
+    // never Mario.
+    sg_body_lights held_lights{};
+    uint32_t held_first = mesh.vertex_count;
+    if (pose.fields & SG_POSE_HELD) {
+        held_first = std::min(mesh.held_first_vertex, mesh.vertex_count);
+        bool lit = sg_model_get_held_lights(model,pose.held_kind,&held_lights) == SG_OK && held_lights.count;
+        for (uint32_t i = held_first; lit && i < mesh.vertex_count; ++i) {
+            const uint32_t code = scratch.material[i] & SG_MATERIAL_CODE;
+            lit = code == SG_MATERIAL_DECAL_RGBA || code == SG_MATERIAL_DECAL_RGB
+                || named_held(held_lights,scratch.color+3*i,scratch.ambient+3*i) != nullptr;
+        }
+        if (!lit) mesh.vertex_count = held_first;
+    }
     ghost_compositor::Pose built{};
     for (uint32_t i = 0; i < mesh.vertex_count; ++i) {
-        const uint32_t material = scratch.material[i] & ~uint32_t(SG_MATERIAL_TEXGEN);
-        if (material > SG_MATERIAL_MODULATE_RGBA) return Result::model_failed;
+        const uint32_t material = scratch.material[i] & SG_MATERIAL_CODE;
+        const uint32_t tile = scratch.material[i] >> SG_MATERIAL_TILE_SHIFT;
+        if (material > SG_MATERIAL_MODULATE_RGBA || tile >= (SG_TILE_PRESENT << 1)) return Result::model_failed;
         auto &v = scratch.vertices[i];
         std::memcpy(v.position,scratch.position+3*i,sizeof(v.position));
         std::memcpy(v.normal,scratch.normal+3*i,sizeof(v.normal));
@@ -220,7 +297,13 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         // would from this camera.
         if ((scratch.material[i] & SG_MATERIAL_TEXGEN) && !environment_uv(view,world.lookat,v.normal,v.uv))
             return Result::model_failed;
-        v.material = static_cast<ghost_compositor::Material>(material);
+        // A decal draws its texture's own colour; everything else is shaded,
+        // Mario's vertices by his lights, a held object's by its own.
+        if (material != SG_MATERIAL_DECAL_RGBA && material != SG_MATERIAL_DECAL_RGB
+                && !(i < held_first ? shade(view,lights,v.color,v.normal)
+                     : shade(view,named_held(held_lights,v.color,scratch.ambient+3*i),v.color,v.normal)))
+            return Result::model_failed;
+        v.material = ghost_compositor::with_tile(static_cast<ghost_compositor::Material>(material), tile);
     }
     multiply(world.projection,view,built.view_projection);
     for (unsigned c = 0; c < 4; ++c) {
@@ -228,11 +311,10 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         built.view_projection[4*c+1] *= world.target.screen_scale[1];
     }
     built.vertices = scratch.vertices; built.count = mesh.vertex_count;
-    // Mario's conventional model light. Environment/material matching is a
-    // separate renderer contract; this does not pretend to capture scene lights.
-    const float inverse_sqrt3 = 0.57735026919f;
-    built.light_direction[0] = built.light_direction[1] = built.light_direction[2] = inverse_sqrt3;
-    built.ambient = 0.5f; built.diffuse = 0.5f; built.opacity = opacity; built.flip_y = 1;
+    // Every vertex already carries its F3D shade (shade above): the
+    // compositor's own light is switched to a flat 1.
+    built.light_direction[2] = 1;
+    built.ambient = 1; built.diffuse = 0; built.opacity = opacity; built.flip_y = 1;
     out = built;
     return Result::ok;
 }

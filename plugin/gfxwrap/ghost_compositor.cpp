@@ -49,21 +49,37 @@ in vec2 texCoord;
 in float illumination;
 in vec4 occlusionClip;
 flat in float mode;
+// The RDP's tile rule on one axis: clamp to the tile's size, then wrap by its
+// mask (a power-of-two AND, which also wraps negative texels), inside the cell.
+int tileAxis(float coordinate,uint clamped,uint mask,uint size) {
+    int texel=int(floor(coordinate));
+    if (clamped!=0u) texel=clamp(texel,0,(1<<size)-1);
+    if (mask!=0u) texel&=(1<<mask)-1;
+    return clamp(texel,0,63);
+}
+vec4 tiledTexel(uint tile) {
+    ivec2 atlasSize=textureSize(atlas,0);
+    int cell=int(tile&63u);
+    int s=tileAxis(texCoord.x*float(atlasSize.x)-float(cell*64),(tile>>6)&1u,(tile>>7)&7u,(tile>>10)&7u);
+    int t=tileAxis(texCoord.y*float(atlasSize.y),(tile>>13)&1u,(tile>>14)&7u,(tile>>17)&7u);
+    return texelFetch(atlas,ivec2(cell*64+s,t),0);
+}
 void main() {
     float depth=clamp((gl_FragCoord.z*2.0-1.0)*depthMapping.x+depthMapping.y,0.0,1.0);
     float scene=texelFetch(terrain,ivec2(gl_FragCoord.xy),0).r;
     if (depth>=scene && scene<1.0) discard;
     gl_FragDepth=depth;
     vec4 material=vec4(clamp(vertexColor*illumination,0.0,1.0),1.0);
-    if (mode!=0.0) {
-        vec4 textureColor=texture(atlas,texCoord);
-        if (mode==1.0) material.rgb=mix(material.rgb,textureColor.rgb,textureColor.a);
-        else if (mode==2.0) {
+    uint word=uint(mode+0.5),kind=word&7u,tile=word>>3;
+    if (kind!=0u) {
+        vec4 textureColor=tile!=0u ? tiledTexel(tile) : texture(atlas,texCoord);
+        if (kind==1u) material.rgb=mix(material.rgb,textureColor.rgb,textureColor.a);
+        else if (kind==2u) {
             if (textureColor.a==0.0) discard;
             material=textureColor;
         }
-        else if (mode==3.0) material.rgb=textureColor.rgb;
-        else if (mode==4.0) material.rgb*=textureColor.rgb;
+        else if (kind==3u) material.rgb=textureColor.rgb;
+        else if (kind==4u) material.rgb*=textureColor.rgb;
         else {
             if (textureColor.a==0.0) discard;
             material*=textureColor;
@@ -279,7 +295,11 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
       const auto& pose=poses[index];
       for(uint32_t i=0;i<pose.count;i+=3) {
         const auto material=pose.vertices[i].material;
-        if(uint32_t(material)>uint32_t(Material::modulate_rgba))return Result::unsupported;
+        const uint32_t tile_word=uint32_t(material)>>tile::shift;
+        if(uint32_t(mode(material))>uint32_t(Material::modulate_rgba) || tile_word>=(tile::present<<1)
+                || (tile_word && (!(tile_word&tile::present) || ((tile_word>>tile::s_mask)&tile::field)>6
+                    || ((tile_word>>tile::s_size)&tile::field)>6 || ((tile_word>>tile::t_mask)&tile::field)>6
+                    || ((tile_word>>tile::t_size)&tile::field)>6)))return Result::unsupported;
         for(uint32_t j=0;j<3;++j) {
             const auto& v=pose.vertices[i+j];
             if(!finite(v.position,3)||!finite(v.normal,3)||!finite(v.color,3)||!finite(v.uv,2))return Result::invalid;

@@ -16,6 +16,22 @@ extern "C" int32_t sg_model_view(sg_model *,const float *position,const float *,
     }
     return SG_OK;
 }
+// Mario's cap light as his ROM list loads it: diffuse 255,0,0, ambient
+// 127,0,0, direction (40,40,40) in eye space.
+static uint32_t fake_lights=1;
+extern "C" int32_t sg_model_get_body_lights(sg_model *,sg_body_lights *out) {
+    *out={};out->count=fake_lights;
+    out->lights[0]={{255,0,0},{127,0,0},{40,40,40}};
+    return SG_OK;
+}
+// A held object's own light (diffuse 0,0,255, ambient 0,0,100); its
+// vertices follow Mario's three, coloured by that diffuse.
+static bool fake_held_lights=true;static float held_blue=1;
+extern "C" int32_t sg_model_get_held_lights(sg_model *,uint32_t,sg_body_lights *out) {
+    *out={};out->count=fake_held_lights?1:0;
+    out->lights[0]={{0,0,255},{0,0,100},{40,40,40}};
+    return SG_OK;
+}
 extern "C" int32_t sg_model_evaluate(sg_model *,const sg_pose *pose,sg_mesh *mesh) {
     applied=*pose; assert(mesh->vertex_capacity>=3);
     if(refuse_held && (pose->fields&SG_POSE_HELD)) return SG_INVALID_ANIMATION;
@@ -26,7 +42,17 @@ extern "C" int32_t sg_model_evaluate(sg_model *,const sg_pose *pose,sg_mesh *mes
         mesh->uv[2*i]=0.25f; mesh->uv[2*i+1]=0.5f;
         mesh->material[i]=SG_MATERIAL_ALPHA_MIX|fake_flags;
     }
-    mesh->vertex_count=3; mesh->error_flags=0; return SG_OK;
+    mesh->vertex_count=3; mesh->error_flags=0; mesh->held_first_vertex=3;
+    if(pose->fields&SG_POSE_HELD) {
+        for(unsigned i=3;i<6;++i) {
+            for(unsigned k=0;k<3;++k){mesh->position[3*i+k]=mesh->position[3*(i-3)+k];mesh->normal[3*i+k]=mesh->normal[3*(i-3)+k];}
+            mesh->color[3*i]=0; mesh->color[3*i+1]=0; mesh->color[3*i+2]=held_blue;
+            if(mesh->ambient){mesh->ambient[3*i]=0;mesh->ambient[3*i+1]=0;mesh->ambient[3*i+2]=100.0f/255.0f;}
+            mesh->uv[2*i]=0.25f; mesh->uv[2*i+1]=0.5f; mesh->material[i]=SG_MATERIAL_ALPHA_MIX;
+        }
+        mesh->vertex_count=6;
+    }
+    return SG_OK;
 }
 int main() {
     gs_record record{}; record.bytes=sizeof(record); record.version=GS_VERSION; record.configuration=2;
@@ -97,7 +123,13 @@ int main() {
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(std::fabs(pose.vertices[0].uv[0]-31.0f/64.0f/SG_ATLAS_CELLS)<1e-6f && std::fabs(pose.vertices[0].uv[1]-31.0f/64.0f)<1e-6f);
     world.lookat={};
-    live.camera.position[0]=42;fake_flags=0;fake_normal[0]=0;fake_normal[1]=1;
+    // A textured triangle's render tile rides above the compositor's mode.
+    live.camera.position[0]=42;fake_normal[0]=0;fake_normal[1]=1;
+    const uint32_t tile=SG_TILE_PRESENT|35u|SG_TILE_S_CLAMP|(5u<<SG_TILE_S_MASK_SHIFT)|(5u<<SG_TILE_S_SIZE_SHIFT);
+    fake_flags=tile<<SG_MATERIAL_TILE_SHIFT;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.vertices[0].material==ghost_compositor::with_tile(ghost_compositor::Material::alpha_mix,tile));
+    fake_flags=0;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(pose.vertices[0].uv[0]==0.25f); // untextured-generation vertices keep their uv
     // A held Bob-omb (bhvBobomb) reaches the model with its animation, HOLP,
@@ -111,15 +143,25 @@ int main() {
         && applied.held_animation_frame==5 && applied.held_anim_state==1 && applied.held_position[1]==120
         && applied.held_scale[2]==1 && applied.roll==77 && applied.view[0]==1 && applied.view[15]==1
         && applied.held_global_timer==777);
-    // The penguin, King Bob-omb and Chuckya by their behaviours.
+    // The penguin, King Bob-omb, Chuckya, both boxes and Mips by their behaviours.
     const struct { uint32_t behavior, kind; } kinds[]={{0x130020E8u,SG_HELD_PENGUIN},
-        {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA}};
+        {0x130001F4u,SG_HELD_KING_BOBOMB},{0x13000528u,SG_HELD_CHUCKYA},{0x13004218u,SG_HELD_BREAKABLE_BOX},
+        {0x13001650u,SG_HELD_BREAKABLE_BOX},{0x130044FCu,SG_HELD_MIPS}};
     for(const auto &k:kinds) {
         saved.held.behavior=k.behavior;
         assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
         assert((applied.fields&SG_POSE_HELD) && applied.held_kind==k.kind);
     }
     saved.held.behavior=0x13003174u;
+    // The held object is lit by its own lights, not Mario's: its blue vertex
+    // shades to its ambient plus diffuse (the fake normal faces the light).
+    assert(pose.count==6 && pose.vertices[3].color[0]==0 && pose.vertices[3].color[2]>100.0f/255.0f);
+    // Its lights missing, or a colour none of them names: Mario alone draws.
+    fake_held_lights=false;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok && pose.count==3);
+    fake_held_lights=true;held_blue=0.5f;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok && pose.count==3);
+    held_blue=1;
     // A refused held object leaves Mario drawn; an unknown one never asks.
     refuse_held=true;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
@@ -198,6 +240,30 @@ int main() {
         saved.shadow.matrix[0]=0;saved.valid_fields&=~GC_VALID_SHADOW;
         assert(!ghost_pose::shadow(model,saved,projection,vertices,texture,shadow));
         assert(!ghost_pose::shadow(nullptr,saved,projection,vertices,texture,shadow));
+    }
+    // Mario lit as F3D lights him: ambient + diffuse * max(0, N.L) with his
+    // own light in EYE space, so the lit side follows the live camera. A
+    // normal facing away keeps exactly the ambient; turned toward the light
+    // by the other camera it clamps to full red. A world-space light would
+    // shade both cameras the same.
+    {
+        saved.pose.root_kind=GC_ROOT_TRS;saved.valid_fields&=~GC_VALID_SHADOW;
+        std::memset(saved.pose.root_matrix,0,sizeof(saved.pose.root_matrix));
+        for(float& axis:saved.pose.scale)axis=1;
+        live.epoch=3;live.dlist_serial=20;live.sequence=20;live.level=saved.level;live.area=saved.area;
+        world.epoch=3;world.list_serial=20;world.context_generation=2;
+        fake_normal[0]=-1;fake_normal[1]=0;fake_normal[2]=0;fake_flags=0;
+        live.camera.position[0]=42; // identity view: eye normal (-1,0,0), unlit
+        assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::ok);
+        assert(std::fabs(pose.vertices[0].color[0]-127.0f/255.0f)<1e-6f && pose.vertices[0].color[1]==0);
+        assert(pose.ambient==1 && pose.diffuse==0); // the compositor adds no second light
+        live.camera.position[0]=-5; // turned view: eye normal (0,0,1), N.L = 1/sqrt3
+        assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::ok);
+        assert(pose.vertices[0].color[0]==1 && pose.vertices[0].color[2]==0);
+        // A colour none of his lights names is refused, never guessed.
+        fake_lights=0;
+        assert(ghost_pose::evaluate(nullptr,record,live,world,.5f,scratch,pose)==Result::model_failed);
+        fake_lights=1;fake_normal[0]=0;fake_normal[1]=1;
     }
     // Sound placement: a world point under the same live look-at product as drawing.
     {
