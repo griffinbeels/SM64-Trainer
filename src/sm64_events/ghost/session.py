@@ -82,9 +82,10 @@ WATCH_PERIOD_S = 0.5
 #: that moves some other way, and it runs only while the switch is on: with
 #: it off nothing is drawn, and turning it on resolves at once.
 SAFETY_RESOLVE_S = 45.0
-#: The PUT fields that change what the resolve answers. Opacity, tint, nudge,
-#: shadow and volume ride the clock feed and never need one.
-RESOLVING_CHANGES = frozenset({"enabled", "view", "ghosts"})
+#: The PUT fields that change what the resolve answers: the settings rows
+#: marked `resolves` (the switch, the view) and the ticked ghost set. Every
+#: other setting rides the clock feed or the native command and never needs one.
+RESOLVING_CHANGES = frozenset({*settings.resolving(), "ghosts"})
 #: A child that will not stay up is not retried forever; a crash loop spawning
 #: a process twice a second is worse than no overlay.
 MAX_START_ATTEMPTS = 3
@@ -693,7 +694,13 @@ class GhostSession:
                        self.library().ghosts_for(target["kind"], target["entity_key"])}
             if any(number not in offered for number in checked["ghosts"]["attempts"]):
                 raise ValueError("That ghost is not saved for this star or segment. Choose another ghost.")
-        self._pending.update(checked)
+        # Queued changes FOLD the way applied ones merge: two halves of the
+        # colour (or of the overlap fade) queued before one cycle both land.
+        for name, value in checked.items():
+            row = settings.BY_NAME.get(name)
+            if row is not None and row.merge and name in self._pending:
+                value = {**self._pending[name], **value}
+            self._pending[name] = value
 
     def _tell_clock(self) -> None:
         """Publish the nudge, the colour and the view to whoever is following
