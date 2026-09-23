@@ -637,7 +637,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       <${GoalPlate} goalKey=${standards.entity} goal=${goal} t=${t}
         attempts=${sec.attempts} onChanged=${t.refresh}
         pbTag=${html`<${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock}
-          rows=${rows} pick=${pbPick} t=${t} showCaveat=${false} />`} />
+          rows=${rows} pick=${pbPick} t=${t} showCaveat=${false} bare=${true} />`} />
       ${/* The book mark -- a doorway OUT to the community sheet for whatever
            this card is showing: it opens the Library at this card's target
            and strategy. It is the ONLY such doorway on the card now; the one

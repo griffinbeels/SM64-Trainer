@@ -23,6 +23,7 @@ import { capName, divisionDigit } from "./caps.js";
 import { SearchMenu } from "./searchselect.js";
 import { parseGapTime } from "../scorecardgoal.js";
 import { celebrationsEnabled } from "../celebrations.js";
+import { useIdentityFetch } from "../refetch.js";
 
 const html = htm.bind(h);
 
@@ -43,15 +44,17 @@ export function useEntryGoals(t, keys) {
   const [goals, setGoals] = useState({});
   const scope = goalScopeOf(t);
   const keyList = [...new Set(keys)].sort().join(",");
-  useEffect(() => {
-    if (!keyList) { setGoals({}); return; }
+  // A card joining the list changes the identity too; keeping the goals
+  // already on screen (rather than clearing) stops every plate blinking.
+  useIdentityFetch(`${scope}|${keyList}`, t.mareloRev, () => {
+    if (!keyList) { setGoals({}); return undefined; }
     let live = true;
     getJSON(`/api/scorecard/entry_goals?scope=${encodeURIComponent(scope)}`
         + `&keys=${encodeURIComponent(keyList)}`)
       .then((body) => { if (live) setGoals((body && body.goals) || {}); })
       .catch(() => {});
     return () => { live = false; };
-  }, [keyList, scope, t.mareloRev]);
+  });
   return goals;
 }
 
@@ -72,6 +75,51 @@ export function goalTimeLabel(goal) {
   if (goal.source && goal.source.kind === "time" && goal.goal_cs % 100 === 0)
     return `sub ${fmtSeconds(goal.goal_cs / 100).replace(/"00$/, "")}`;
   return fmtCs(goal.goal_cs);
+}
+
+// "10x streak" / "10x" / "" -- the repeat half of a goal, in the words
+// streamers already use for it.
+export function repeatLabel(goal) {
+  if (!goal || !(goal.count > 1)) return "";
+  return `${goal.count}x${goal.streak ? " streak" : ""}`;
+}
+
+/** The count row: one pip per required success (up to PIP_LIMIT; past it a
+ *  plain N/M), the newest one popping as it fills. A streak that broke offers
+ *  to forgive the break -- his call: a detected reset the player considers
+ *  "fair game" should not cost the run. */
+const PIP_LIMIT = 12;
+function GoalProgress({ goal, goalKey, onChanged }) {
+  const progress = goal && goal.progress;
+  const lastDone = useRef(progress ? progress.done : 0);
+  const [popAt, setPopAt] = useState(-1);
+  const done = progress ? Math.min(progress.done, progress.needed) : 0;
+  useEffect(() => {
+    if (progress && progress.done > lastDone.current) setPopAt(done - 1);
+    lastDone.current = progress ? progress.done : 0;
+  }, [progress && progress.done]);
+  if (!progress) return html`<div class="goal-plate-row goal-plate-count" aria-hidden="true"></div>`;
+  const pips = progress.needed <= PIP_LIMIT;
+  async function forgive() {
+    try {
+      await send("POST", "/api/scorecard/entry_goal/forgive",
+        { key: goalKey, attempt_id: progress.broken_by });
+      onChanged();
+    } catch (_) { /* the next refresh shows the unchanged count */ }
+  }
+  return html`<div class="goal-plate-row goal-plate-count"
+      title=${goal.streak ? `Best streak this session: ${progress.best}` : ""}>
+    ${pips
+      ? html`<span class="goal-pips" aria-label=${`${done} of ${progress.needed}`}>
+          ${Array.from({ length: progress.needed }, (_, index) => html`<i
+            key=${index} class="goal-pip ${index < done ? "is-on" : ""}
+            ${index === popAt ? "is-new" : ""}"></i>`)}
+        </span>`
+      : html`<span class="goal-count-text">${done}<small>/${progress.needed}</small></span>`}
+    ${goal.streak && progress.broken_by != null && html`<button type="button"
+        class="goal-plate-forgive" onclick=${forgive}
+        title="That miss should not count: restore the streak">Undo break</button>`}
+  </div>`;
 }
 
 // The attempt's time on the GOAL's clock, as displayed centiseconds -- the
@@ -96,11 +144,16 @@ function useGoalCelebration(attempts, goal) {
   if (goalCs !== held.current.current) {
     held.current = { current: goalCs, previous: held.current.current };
   }
+  const wasAchieved = useRef(goal ? goal.achieved : false);
   useEffect(() => {
     const ids = new Set((attempts || []).map((a) => a.id));
     if (seen.current === null) { seen.current = ids; return; }
     const fresh = (attempts || []).filter((a) => !seen.current.has(a.id));
     seen.current = ids;
+    // A repeat goal ("sub 1'55 10x") falls on the attempt that completes the
+    // COUNT, not on any single qualifying time -- that is the server's
+    // `achieved`, which the goals fetch may deliver a beat after the row.
+    if (goal && goal.count > 1) return;
     const targets = [held.current.current, held.current.previous].filter((cs) => cs != null);
     if (!fresh.length || !targets.length || !goal) return;
     const chased = Math.max(...targets);
@@ -109,6 +162,16 @@ function useGoalCelebration(attempts, goal) {
     if (!hit || !celebrationsEnabled()) return;
     setParty({ id: hit.id, beatenCs: chased, timeCs: attemptCs(hit, goal.clock) });
   }, [attempts]);
+  const achievedNow = !!(goal && goal.count > 1 && goal.achieved);
+  useEffect(() => {
+    const was = wasAchieved.current;
+    wasAchieved.current = achievedNow;
+    if (!achievedNow || was || seen.current === null || !celebrationsEnabled()) return;
+    const progress = goal.progress || {};
+    setParty({ id: `count-${progress.window_start}-${progress.best}`,
+               beatenCs: goal.goal_cs, timeCs: null,
+               count: progress.needed, streak: goal.streak });
+  }, [achievedNow]);
   useEffect(() => {
     if (!party) return undefined;
     const timer = setTimeout(() => setParty(null), GOAL_CELEBRATION_MS);
@@ -122,6 +185,8 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [typed, setTyped] = useState("");
+  const [count, setCount] = useState(goal && goal.count > 1 ? goal.count : 1);
+  const [streak, setStreak] = useState(!!(goal && goal.streak));
   const scope = goalScopeOf(t);
   useEffect(() => {
     getJSON(`/api/scorecard/entry_goal_options?key=${encodeURIComponent(goalKey)}`
@@ -131,7 +196,9 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
   async function save(value) {
     setBusy(true); setError(null);
     try {
-      await send("PUT", "/api/scorecard/entry_goal", { key: goalKey, scope, goal: value });
+      const repeat = value && count > 1 ? { count, streak } : {};
+      await send("PUT", "/api/scorecard/entry_goal",
+        { key: goalKey, scope, goal: value && { ...value, ...repeat } });
       onSaved();
       onClose();
     } catch (err) {
@@ -155,7 +222,27 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
     return save({ kind: "runner", runner: rest.join(":") });
   }
   const typedCs = parseGapTime(typed) ?? parseLooseTime(typed);
-  const footer = html`<form class="goal-picker-time"
+  // Re-save the pinned threshold with new repeat settings, without making
+  // the player find the same rank/player/time in the list again.
+  const current = goal && goal.pinned && goal.source ? pinValueOf(goal) : null;
+  const repeatChanged = current && (count !== (goal.count || 1)
+    || (count > 1 && streak !== !!goal.streak));
+  const footer = html`<div class="goal-picker-repeat">
+    <label>Repeat <input type="number" min="1" max="999" value=${count}
+      oninput=${(e) => setCount(Math.max(1, Math.min(999, Number(e.target.value) || 1)))}
+      aria-label="How many times" />×</label>
+    <span class="goal-picker-mode" role="group" aria-label="Count how">
+      <button type="button" class="quiet-button ${!streak ? "is-selected" : ""}"
+        disabled=${count < 2} aria-pressed=${!streak ? "true" : "false"}
+        onclick=${() => setStreak(false)}>in total</button>
+      <button type="button" class="quiet-button ${streak ? "is-selected" : ""}"
+        disabled=${count < 2} aria-pressed=${streak ? "true" : "false"}
+        onclick=${() => setStreak(true)}>in a row</button>
+    </span>
+    ${repeatChanged && html`<button type="button" class="quiet-button"
+      disabled=${busy} onclick=${() => save(current)}>Apply</button>`}
+  </div>
+  <form class="goal-picker-time"
       onsubmit=${(e) => { e.preventDefault(); if (typedCs) save({ kind: "time", cs: typedCs }); }}>
     <input type="text" inputmode="decimal" placeholder="Your own time, e.g. 1'45"
       value=${typed} oninput=${(e) => setTyped(e.target.value)} aria-label="Goal time" />
@@ -165,6 +252,14 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
     onPick=${pick} onClose=${onClose} busy=${busy} error=${error}
     align="right" footer=${footer}
     emptyNote=${options ? "No ranks or players for this one — type a time below." : "Loading…"} />`;
+}
+
+// The PUT body that re-creates a pinned goal's threshold.
+function pinValueOf(goal) {
+  const source = goal.source;
+  if (source.kind === "division") return { kind: "division", tier: source.tier, division: source.division };
+  if (source.kind === "runner") return { kind: "runner", runner: source.runner || source.label };
+  return { kind: "time", cs: goal.goal_cs };
 }
 
 // "1'45", "1:45", "1:45.2", "105", "45.5" -> centiseconds. The picker accepts
@@ -188,7 +283,10 @@ export function GoalPlate({ goalKey, goal, pbTag, attempts, t, onChanged }) {
   const achieved = goal && goal.achieved && !party;
   return html`<div class="goal-plate ${party ? "is-celebrating" : ""}
       ${achieved ? "is-achieved" : ""}" data-goal-key=${goalKey}>
-    <div class="goal-plate-row goal-plate-pb">${pbTag}</div>
+    <div class="goal-plate-row goal-plate-pb">
+      <span class="goal-plate-word is-pb">PB</span>${pbTag}
+      <span class="goal-plate-clock">${goal ? goal.clock.toUpperCase() : ""}</span>
+    </div>
     <div class="goal-plate-row goal-plate-goal">
       <button type="button" class="goal-plate-trigger" aria-expanded=${open}
           title="Pick the goal for this star (pins it on the Scorecard too)"
@@ -196,15 +294,18 @@ export function GoalPlate({ goalKey, goal, pbTag, attempts, t, onChanged }) {
         <span class="goal-plate-word">GOAL</span>
         <span class="goal-plate-time">${goalTimeLabel(goal)}</span>
         ${achieved ? html`<span class="goal-plate-done" aria-label="achieved">✓</span>` : null}
-        <span class="goal-plate-source">${goalSourceLabel(goal)}</span>
+        <span class="goal-plate-source">${[repeatLabel(goal), goalSourceLabel(goal)]
+          .filter(Boolean).join(" · ")}</span>
       </button>
       ${open ? html`<${GoalPicker} goalKey=${goalKey} t=${t} goal=${goal}
           onClose=${() => setOpen(false)} onSaved=${onChanged} />` : null}
     </div>
+    <${GoalProgress} goal=${goal} goalKey=${goalKey} onChanged=${onChanged} />
     ${party ? html`<div class="goal-plate-party" aria-live="polite">
         <span class="goal-plate-party-word">GOAL!</span>
-        <span class="goal-plate-party-time">${fmtCs(party.timeCs)}
-          <s>${fmtCs(party.beatenCs)}</s></span>
+        <span class="goal-plate-party-time">${party.timeCs != null
+          ? html`${fmtCs(party.timeCs)} <s>${fmtCs(party.beatenCs)}</s>`
+          : `${party.count}x${party.streak ? " in a row" : ""} under ${fmtCs(party.beatenCs)}`}</span>
       </div>` : null}
   </div>`;
 }
