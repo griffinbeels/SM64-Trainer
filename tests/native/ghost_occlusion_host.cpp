@@ -5,16 +5,11 @@
 #define main compositor_fixture_main
 #include "ghost_compositor_host.cpp"
 #undef main
+#include "ghost_occlusion_expect.h"
 
 namespace {
 constexpr uint32_t W=64,H=64;
-constexpr float NEAR_PLANE=10,FAR_PLANE=10000;
-// The camera at the origin looking down -z: clip = (x, y, a z + b, -z).
-void perspective(float m[16]) {
-    std::memset(m,0,16*sizeof(float));
-    m[0]=m[5]=1;m[10]=-(FAR_PLANE+NEAR_PLANE)/(FAR_PLANE-NEAR_PLANE);m[11]=-1;
-    m[14]=-2*FAR_PLANE*NEAR_PLANE/(FAR_PLANE-NEAR_PLANE);
-}
+using occlusion_expect::perspective;using occlusion_expect::player;
 // The right half of the screen (the fixture's left half is a nearer wall),
 // flat at eye depth d, so every fragment's clip w is exactly d.
 std::vector<gc::Vertex> plane(float d,float x0=0,float x1=1) {
@@ -28,25 +23,9 @@ gc::Pose ghost(const std::vector<gc::Vertex>& v,float opacity,const ghost_occlus
     gc::Pose p{};p.vertices=v.data();p.count=uint32_t(v.size());p.ambient=1;p.opacity=opacity;
     perspective(p.view_projection);p.occlusion=region;return p;
 }
-// Live Mario's marked region: centred in the ghost's half, 8 px radius.
-ghost_occlusion::Region player(float w) {
-    ghost_occlusion::Region r{};r.enabled=r.has_player=1;
-    r.center[0]=.5f;r.center[1]=0;r.radius[0]=r.radius[1]=.25f;r.player_w=w;return r;
-}
-float smooth(float e0,float e1,float x) {
-    const float t=(std::min)(1.f,(std::max)(0.f,(x-e0)/(e1-e0)));return t*t*(3-2*t);
-}
-// The test's own statement of the documented rule, at a pixel centre.
+// The rule as the witness states it, at a pixel centre of this W x H frame.
 float expected_fade(const ghost_occlusion::Region& r,uint32_t x,uint32_t y,float w) {
-    using namespace ghost_occlusion;
-    if(!r.enabled)return 1;
-    float fade=smooth(NEAR_HIDDEN,NEAR_FULL,w);
-    if(r.has_player) {
-        const float nx=(2*(x+.5f)/W-1-r.center[0])/r.radius[0],ny=(2*(y+.5f)/H-1-r.center[1])/r.radius[1];
-        const float cover=1-smooth(REGION_INNER,REGION_OUTER,std::sqrt(nx*nx+ny*ny));
-        fade*=1-PLAYER_STRENGTH*cover*smooth(0,FRONT_BAND,r.player_w-w);
-    }
-    return fade;
+    return occlusion_expect::fade(r,x,y,w,W,H);
 }
 struct Tally {unsigned faded=0,exact=0,full=0;float worst=0;};
 // Every pixel: the ghost's half blends red at opacity x fade, the wall half

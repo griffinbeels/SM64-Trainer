@@ -1,6 +1,6 @@
 /* Player-first fade: a ghost never blocks live Mario or the camera.
  * Display-only, per fragment, no allocation. The compositor applies the same
- * rule to every ghost body and shadow pixel; playback fills the region once
+ * rule to every ghost body, shadow and particle pixel; playback fills the region once
  * per frame from live Mario and the live view-projection.
  *
  *   fade = near(w) * (1 - PLAYER_STRENGTH * cover(ndc) * front(w))
@@ -40,7 +40,7 @@ struct Region {
     float player_w;      // his body centre's clip w
 };
 
-/* The GLSL rule, shared verbatim by the body and shadow shaders (a middle
+/* The GLSL rule, shared verbatim by the body, shadow and particle shaders (a middle
  * ShaderSource string after #version). Input is the fragment's unflipped clip
  * position; uniforms come from Region and the constants above. */
 constexpr const char* glsl = R"(

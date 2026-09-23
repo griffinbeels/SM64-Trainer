@@ -26,8 +26,10 @@ flat out vec4 cell;
 out vec4 vertexShade;
 flat out float cut;
 flat out float mixed;
+out vec4 occlusionClip;
 void main() {
     gl_Position=viewProjection*vec4(position,1.0);
+    occlusionClip=gl_Position;
     if(flipY!=0)gl_Position.y=-gl_Position.y;
     texCoord=uv;cell=rect;vertexShade=shade;cut=cutout;mixed=mixing;
 })";
@@ -46,6 +48,7 @@ flat in vec4 cell;
 in vec4 vertexShade;
 flat in float cut;
 flat in float mixed;
+in vec4 occlusionClip;
 void main() {
     float depth=clamp((gl_FragCoord.z*2.0-1.0)*depthMapping.x+depthMapping.y,0.0,1.0);
     float scene=texelFetch(terrain,ivec2(gl_FragCoord.xy),0).r;
@@ -60,7 +63,7 @@ void main() {
         vec4 surface=texelFetch(layerColor,ivec2(gl_FragCoord.xy),0);
         rgb=surface.rgb+rgb*surface.a;
     }
-    outputColor=vec4(clamp(rgb,0.0,1.0),color.a*opacity);
+    outputColor=vec4(clamp(rgb,0.0,1.0),color.a*opacity*playerFirst(occlusionClip));
 })";
 
 inline bool valid(const Particles& p) {
@@ -80,6 +83,7 @@ inline bool valid(const Particles& p) {
 struct Storage {
     uint32_t program=0,vao=0,vbo=0,texture=0,width=0,height=0;
     int32_t uniforms[10]={};
+    gl::OcclusionUniforms occlusion; // the player-first fade, as for the body
     bool ready=false;
     bool prepare(const Dispatch& g,uint32_t compiled,const uint8_t* rgba,uint32_t w,uint32_t h) {
         using namespace gl;
@@ -90,6 +94,7 @@ struct Storage {
             constexpr const char* names[]={"viewProjection","flipY","atlas","terrain","layerColor","layerDepth",
                 "layerEnabled","depthMapping","opacity"};
             for(size_t i=0;i<9;++i)if((uniforms[i]=g.GetUniformLocation(program,names[i]))<0)return false;
+            if(!occlusion.find(g,program))return false;
             g.GenVertexArrays(1,&vao);g.GenBuffers(1,&vbo);g.GenTextures(1,&texture);
         }
         if(!vao || !vbo || !texture || !rgba || !w || !h || w>4096 || h>4096)return false;
@@ -130,7 +135,7 @@ struct Storage {
         g.UniformMatrix4fv(uniforms[0],1,0,pose.particles.view_projection);g.Uniform1i(uniforms[1],pose.flip_y);
         g.Uniform1i(uniforms[2],0);g.Uniform1i(uniforms[3],1);g.Uniform1i(uniforms[4],2);g.Uniform1i(uniforms[5],3);
         g.Uniform1i(uniforms[6],layered ? 1 : 0);g.Uniform2f(uniforms[7],t.depth_scale,t.depth_translate);
-        g.Uniform1f(uniforms[8],pose.opacity);
+        g.Uniform1f(uniforms[8],pose.opacity);occlusion.set(g,pose.occlusion);
         g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,texture);g.BindSampler(0,0);
         g.Disable(STENCIL_TEST);g.Enable(DEPTH_TEST);
         g.Enablei(BLEND,0);g.BlendFuncSeparatei(0,SRC_ALPHA,ONE_MINUS_SRC_ALPHA,ZERO,ONE);
