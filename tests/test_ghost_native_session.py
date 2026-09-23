@@ -1,12 +1,14 @@
 """Reach the native renderer through the same ghost switch as video playback."""
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 
 import pytest
 
-from sm64_events.ghost.native_session import NativeGhost
+from sm64_events.ghost.native_session import NATIVE_BUDGET_REASON, NativeGhost, budget_reason
 from tests.test_ghost_session import a_session, mark
+from tests.test_ui_ghost_session import controls, run_node
 
 
 def default_ghosts(ghost, target, store):
@@ -105,6 +107,28 @@ def test_missing_pose_never_opens_whole_picture_as_mario(tmp_path):
         await session.stop()
 
     asyncio.run(check())
+
+
+def test_a_set_that_does_not_fit_says_so_on_the_ghost_card(tmp_path):
+    """The renderer refusing a set for room (GIPC_BUDGET) reaches the ghost card
+    as a sentence he can act on, not the bad-file "could not be played"."""
+    session, source, _, _ = native_session(tmp_path)
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        session._native.note()
+        source.snapshot_status = lambda **_: {
+            "available": True, "state": 5, "reason": NATIVE_BUDGET_REASON,
+            "producer": SimpleNamespace(configuration=2, epoch=3)}
+        body = session.payload()
+        # One ghost alone always fits, so its refusal only waits for room.
+        assert body["window"]["reason"] == budget_reason(1) == "Making room for this ghost..."
+        key = run_node("ghostTargetKey", f"ghostTargetKey({json.dumps(body['target'])})")
+        assert controls(body, key)["reasonText"] == "Making room for this ghost..."
+        await session.stop()
+
+    asyncio.run(check())
+    assert budget_reason(2) == budget_reason(16) == "These ghosts are too long to show together; untick one."
 
 
 def test_pose_ready_is_not_display_evidence(tmp_path):

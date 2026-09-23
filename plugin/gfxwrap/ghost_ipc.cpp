@@ -406,7 +406,9 @@ struct Session {
             } else {
                 state = GIPC_PREPARING;
                 if (model < 0 && model != GP_BUSY) { state = GIPC_REFUSED; reason = GIPC_MODEL; }
-                if (clip < 0 && clip != GP_BUSY) { state = GIPC_REFUSED; reason = GIPC_CLIP; }
+                if (clip < 0 && clip != GP_BUSY) {
+                    state = GIPC_REFUSED; reason = clip == GP_BUDGET ? GIPC_BUDGET : GIPC_CLIP;
+                }
                 if (model == GP_MODEL_ERROR || model == GP_INVALID || clip == GP_INVALID)
                     failed = r.revision;
             }
@@ -432,13 +434,13 @@ struct Session {
             // Retained files are bounded like their resident playback copies.
             total += asset.bytes.size();
             if (total > GP_CLIP_BUDGET + uint64_t(GIPC_GHOSTS) * sizeof(gclip_header)) {
-                failed = loaded.revision; reason = GIPC_CLIP; state = GIPC_REFUSED; return;
+                failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
             }
             // Out of memory in PJ64's 2 GiB is a refusal of this set, never a
             // throw into the worker's last-resort handler (which revokes all).
             try { assets.push_back(std::move(asset)); }
             catch (const std::bad_alloc &) {
-                failed = loaded.revision; reason = GIPC_CLIP; state = GIPC_REFUSED; return;
+                failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
             }
         }
         restore_cache(loaded);
