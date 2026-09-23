@@ -79,7 +79,7 @@ from sm64_events.tracking.segments import (arm_level, arms_ambiently,
 # The frame position comes from the section's clock extractor: star
 # sections pass igt (resets/deaths only have an IGT position), segment
 # sections pass rta (segments have no IGT).
-TIMELINE_OUTCOMES = frozenset({"success", "reset", "death"})
+TIMELINE_OUTCOMES = frozenset({"success", "reset", "loaded", "death"})
 
 
 def _timeline(history, frames_of) -> dict | None:

@@ -374,3 +374,114 @@ def test_a_full_ram_load_restarts_the_star_ghosts_clock(signature, frame, origin
         projector.feed(ev)
     live = projector.native_ghost_origin("star", f"{WF_COURSE}-1")
     assert (live["arm_id"], live["frame"]) == origin
+
+
+# --- round 10 (2026-09-23): loads inside engine-timed runs, and Bowser 3 -------
+
+def hundred_coin_engine(id=71):
+    """WF's 100-coin engine, as seeded: a star timed by a segment engine."""
+    return SegmentDef(id=id, name="WF — 100 Coins → Exit", enabled=True,
+                      start_triggers=[{"type": "level_enter", "to": WF},
+                                      {"type": "attempt_anchor", "level": WF}],
+                      waypoints=[[{"type": "star_grabbed", "course": WF_COURSE, "star": 6}]],
+                      end_triggers=[{"type": "star_grabbed", "course": WF_COURSE, "star": s}
+                                    for s in range(6)],
+                      guards=[])
+
+
+def hundred_coin_run(rules):
+    target = jev(3, "target_set", 0, {"course_id": WF_COURSE, "star_id": 6})
+    return [session(1, rules=rules), jev(2, "level_changed", 1000, {"from": 6, "to": WF}),
+            jev(4, "area_changed", 1000, {"level": WF, "from": 1, "to": 1}), target,
+            reset(5, 1047, mario_acted=False, acted_tracking=True), jev(6, "mario_acted", 1100),
+            load(10, 1400), load(11, 1600), load(12, 1800),
+            grab(20, 2200, star_id=6), grab(21, 2400, star_id=3)]
+
+
+def hundred_coin_rows(attempts):
+    return [a for a in attempts if (a.course_id, a.star_id) == (WF_COURSE, 6)]
+
+
+def test_a_load_runs_through_a_100_coin_run_too():
+    """His WF 100 Coins (round 10): the star is timed by a segment ENGINE,
+    and each load closed the run as a reset and re-armed at the load -- ten
+    reset rows for one run. Under rules 2 the engine runs through the loads
+    like the star path does: one row, counting them, not valid."""
+    attempts, _ = replay(hundred_coin_run(ATTEMPT_RULES), segments=[hundred_coin_engine()])
+    run, = hundred_coin_rows(attempts)
+    assert (run.outcome, run.state_loads, run.first_load_frame) == ("success", 3, 1400)
+    assert (run.valid, run.invalid_reason) == (False, "save_state")
+
+
+def test_a_100_coin_run_journaled_before_the_rules_splits_as_it_always_did():
+    events = hundred_coin_run(None)
+    for index, ev in enumerate(events):          # old journals: no marker, no signature
+        if ev.type in ("practice_reset", "state_loaded"):
+            events[index] = jev(ev.id, ev.type, ev.frame,
+                                {k: v for k, v in ev.payload.items()
+                                 if k not in ("loads_journaled", "load_signature")})
+    attempts, _ = replay(events, segments=[hundred_coin_engine()])
+    assert [a.outcome for a in hundred_coin_rows(attempts)].count("reset") >= 3
+    assert "loaded" not in {a.outcome for a in attempts}
+
+
+def test_a_segment_a_load_restarts_says_it_ended_on_a_load():
+    """A plain segment still restarts at a load (a subsection may start from a
+    save state); the attempt the load ended says so -- "it shouldn't be a
+    *real* reset, it should be a 'LOADED SAVE STATE'" -- and never 'reset'."""
+    events = [session(1), *enter(2, 1000, WF),
+              jev(10, "moment_reached", 1200,
+                  {"kind": "pole_grab", "level": WF, "area": 1, "ordinal": 1}),
+              jev(11, "mario_acted", 1250),
+              load(12, 1500), grab(13, 1900)]
+    attempts, _ = replay(events, segments=[seg(1, FROM_A_MOMENT)])
+    ended = [a for a in segs(attempts, 1) if a.outcome != "success"]
+    assert [a.outcome for a in ended] == ["loaded"]
+
+
+BOWSER_3 = 34
+
+
+def bowser_3(id=10):
+    return SegmentDef(id=id, name="Bowser 3", enabled=True,
+                      start_triggers=[{"type": "level_enter", "to": BOWSER_3},
+                                      {"type": "attempt_anchor", "level": BOWSER_3}],
+                      end_triggers=[{"type": "key_grabbed", "level": BOWSER_3}],
+                      guards=[])
+
+
+def arena_reset(id, frame, acted=True):
+    return jev(id, "practice_reset", frame,
+               {"igt_frames_before": 300, "mario_acted": acted, "acted_tracking": True,
+                "area": 1, "prev_area": 1, "area_load": False, "teleport": False,
+                "loads_journaled": True})
+
+
+def test_his_bowser_3_pb_keeps_the_fight_selected_and_its_resets_recorded():
+    """Round 10, his sequence (journal ids 3903-3928): arriving in the arena
+    auto-selects Bowser 3 (a HOOKED head); he wins, saves the PB, and resets
+    to go again. The completed hook used to empty the hand: the ghost had no
+    target ("Checking whether this has a run...") and every reset of the
+    fight after it was untargeted and went unrecorded -- until his second PB,
+    won with the hand empty, followed onto the fight."""
+    events = [session(1), jev(2, "level_changed", 46575, {"from": 11, "to": BOWSER_3}),
+              jev(3, "area_changed", 46575, {"level": BOWSER_3, "from": 1, "to": 1}),
+              jev(4, "target_set", 0, {"kind": "segment", "segment_id": 10, "auto": True}),
+              arena_reset(5, 46577, acted=False), jev(6, "mario_acted", 46614),
+              jev(7, "key_grabbed", 48326, {"level": BOWSER_3, "which": "grand",
+                                            "igt_frames": 1752}),
+              arena_reset(8, 48689), jev(9, "mario_acted", 48853),
+              arena_reset(10, 49603)]
+    attempts, proj = replay(events, segments=[bowser_3()])
+    assert proj.target == ("segment", 10)
+    assert [a.outcome for a in segs(attempts, 10)] == ["success", "reset"]
+
+
+def test_a_100_coin_run_picked_up_at_the_grab_was_not_started_by_a_reset():
+    """The engine arms on the 100-coin grab itself when nothing armed it (his
+    load loop): that run began at no reset, so it is not valid."""
+    events = [session(1), jev(2, "area_changed", 900, {"level": WF, "from": 1, "to": 1}),
+              grab(3, 1500, star_id=6), grab(4, 1700, star_id=3)]
+    attempts, _ = replay(events, segments=[hundred_coin_engine()])
+    run, = hundred_coin_rows(attempts)
+    assert (run.anchor_type, run.valid, run.invalid_reason) == ("star_collected", False, "no_reset")

@@ -909,3 +909,26 @@ def test_platforms_and_the_absent_rule_agree():
     assert js["resolved"] == [platform_of(value) for value in probes], (
         "platformOf and platform_of resolve a stored stamp differently; the "
         "browser would label a time by a rule the server does not hold")
+
+
+# --- the outcome labels (round 10, 2026-09-23) --------------------------------
+
+def test_every_outcome_the_projector_can_record_has_a_label():
+    """`loaded` arrived with round 10 -- a save state ending a segment's
+    attempt -- and an outcome the log cannot name draws its raw key."""
+    from sm64_events.tracking.projection import OUTCOMES
+
+    js = run_node(
+        f"{declaration(UI / 'components' / 'attemptlog.js', 'OUTCOME_LABEL')}\n"
+        "console.log(JSON.stringify(Object.keys(OUTCOME_LABEL)));")
+    assert set(OUTCOMES) <= set(js), f"unlabelled: {sorted(set(OUTCOMES) - set(js))}"
+
+
+def test_every_outcome_the_timeline_plots_has_a_marker():
+    """An outcome in the graph's list without a marker row draws in grey."""
+    from sm64_events.tracking.views import TIMELINE_OUTCOMES
+
+    js = run_node(
+        f"{declaration(UI / 'components' / 'timeline.js', 'MARKERS')}\n"
+        "console.log(JSON.stringify(Object.keys(MARKERS)));")
+    assert set(TIMELINE_OUTCOMES) <= set(js), f"unstyled: {sorted(set(TIMELINE_OUTCOMES) - set(js))}"

@@ -471,6 +471,21 @@ class MatchContext:
     # name. None = no catalogue in hand (bare test contexts) = key equality
     # only, byte-for-byte the pre-collapse behaviour.
     landmark_names: dict | None = None
+    # The attempt rules the event's session was journaled under
+    # (projection.py caveat 21). Under 2 a save-state load runs THROUGH a
+    # star's attempt -- a 100-coin engine times a star -- and a segment
+    # attempt it does end is said to have ended on a load, not a reset.
+    attempt_rules: int = 1
+
+
+def _anchor_outcome(ev, ctx) -> str:
+    """What an attempt closed by this anchor is called: `loaded` when a
+    save state ended it under attempt rules 2 -- his words, 2026-09-23: "it
+    shouldn't be a *real* reset, it should be a 'LOADED SAVE STATE'" -- and
+    `reset` for everything else, history included."""
+    if ev.type == "state_loaded" and ctx is not None and ctx.attempt_rules >= 2:
+        return "loaded"
+    return "reset"
 
 
 @dataclass(frozen=True)
@@ -3346,6 +3361,16 @@ class SegmentEngine:
 
     def _feed_definition(self, Attempt, d, ev, ctx, notices, anchor_is_echo):
         closed = []
+        if (ev.type == "state_loaded" and ctx is not None and ctx.attempt_rules >= 2
+                and hundred_coin_entity(d.start_triggers, d.waypoints) is not None):
+            # A 100-coin engine times a STAR, and under attempt rules 2 a
+            # load runs through a star's attempt instead of ending it
+            # (projection.py caveat 21). Round 10, his WF 100 Coins: every
+            # load read as a reset and re-armed the engine at the load, ten
+            # "reset" rows for one run he never reset. To this engine the
+            # load is now what an echo is -- invisible; the projector still
+            # counts it and marks the run invalid (`_segment_validity`).
+            anchor_is_echo = True
         arm = self._armed.get(d.id)
         start_clause = self._first_match(d.start_triggers, ev, ctx)
         starts = start_clause is not None
@@ -3781,7 +3806,7 @@ class SegmentEngine:
             unacted = ev.payload.get("acted_tracking", False) \
                 and not ev.payload.get("mario_acted", False)
             if not afk and not unacted:
-                a = self._close(Attempt, d, arm, ev, "reset", None)
+                a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)
             # Re-arm in place at the anchor frame instead of disarming.
@@ -3931,7 +3956,10 @@ class SegmentEngine:
             # (mirrors the star-side discard in projection.py's
             # _close_by_reset) -- a true no-op anchor refire still records
             # nothing.
-            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+            # `anchor_is_echo` is this event's echo verdict for THIS def (a
+            # 100-coin engine also treats a rules-2 load as one); the event-
+            # level reading stays beside it, as before.
+            if (ev.frame == arm.start_frame or anchor_is_echo or self._anchor_echo(ev)
                     or self._arrived_by_a_real_move(ev)):
                 return closed
             afk = ev.payload.get("paused_frames_before", 0) \
@@ -3939,7 +3967,7 @@ class SegmentEngine:
             unacted = ev.payload.get("acted_tracking", False) \
                 and not ev.payload.get("mario_acted", False)
             if not afk and not unacted:
-                a = self._close(Attempt, d, arm, ev, "reset", None)
+                a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
                 if a:
                     closed.append(a)
             self._armed[d.id] = replace(
@@ -4047,7 +4075,10 @@ class SegmentEngine:
             self._disarm(d, ev, notices)
             return closed
         if ev.type in _ANCHOR_TYPES:
-            if (ev.frame == arm.start_frame or self._anchor_echo(ev)
+            # `anchor_is_echo` is this event's echo verdict for THIS def (a
+            # 100-coin engine also treats a rules-2 load as one); the event-
+            # level reading stays beside it, as before.
+            if (ev.frame == arm.start_frame or anchor_is_echo or self._anchor_echo(ev)
                     or self._arrived_by_a_real_move(ev)):
                 return closed          # echo: invisible
             if not _at_arm_position(arm, ctx):
@@ -4062,7 +4093,7 @@ class SegmentEngine:
                 # untouched — position, start_frame, deadline — exactly like
                 # every other mid-route event this matcher already lets pass.
                 return closed
-            a = self._close(Attempt, d, arm, ev, "reset", None)
+            a = self._close(Attempt, d, arm, ev, _anchor_outcome(ev, ctx), None)
             if a:
                 closed.append(a)
             self._armed[d.id] = replace(
