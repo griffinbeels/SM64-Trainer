@@ -1144,7 +1144,10 @@ and playback draws none.
 The sound requests Mario issued on a recorded [[frame]] (up to eight, in
 order), kept with that [[frame]]'s pose so a [[ghost]] plays his jumps,
 landings and voice as it passes that [[frame]], through SM64's own sound
-engine at its set volume. Capture drops other objects' sounds.
+engine at its set volume. Each [[ghost]] sounds from where it stands relative
+to the live camera (panned and distanced as the game does Mario) and fades by
+the inverse square of its distance from live Mario past 400 units. Capture
+drops other objects' sounds.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
   `plugin/gfxwrap/ghost_audio.cpp` plays them

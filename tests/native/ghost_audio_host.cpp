@@ -73,8 +73,12 @@ struct Result {
     std::vector<int16_t> pcm; std::vector<uint64_t> cue_at; ghost_audio::Stats stats;
     uint64_t stop_at = 0, resume_at = 0;
 };
-// Cues at fixed game frames; returns the PCM and where each cue was issued.
-static Result run(const std::vector<uint8_t> &rom, float volume, bool stop_midway = false) {
+struct Place { float position[3]; float gain; };
+// Cues at fixed game frames from one ghost, placed camera-relative; the
+// other ghost of the pair (0/1) is placed at `other` but stays silent.
+// Returns the PCM and where each cue was issued.
+static Result run(const std::vector<uint8_t> &rom, float volume, bool stop_midway = false,
+                  Place place = {{0, 0, 0}, 1}, uint32_t ghost = 0, const Place *other = nullptr) {
     Capture capture;
     const auto before = ghost_audio::stats();
     ghost_audio::control(true, volume);
@@ -84,7 +88,11 @@ static Result run(const std::vector<uint8_t> &rom, float volume, bool stop_midwa
                                     {70, SOUND_MARIO_YAHOO_WAHA_YIPPEE}, {100, SOUND_ACTION_METAL_LANDING}};
     Result out;
     for (uint32_t frame = 0; frame < 150; ++frame) {
-        for (auto &cue : schedule) if (cue[0] == frame) { out.cue_at.push_back(capture.position()); ghost_audio::cue(cue[1]); }
+        for (auto &cue : schedule) if (cue[0] == frame) {
+            out.cue_at.push_back(capture.position());
+            if (other) ghost_audio::place(ghost ^ 1, other->position, other->gain);
+            ghost_audio::place(ghost, place.position, place.gain); ghost_audio::cue(ghost, cue[1]);
+        }
         // Frames 72..90 sit inside the long voice cue of frame 70.
         if (frame == 72) out.stop_at = capture.position();
         if (frame == 90) out.resume_at = capture.position();
@@ -98,6 +106,12 @@ static Result run(const std::vector<uint8_t> &rom, float volume, bool stop_midwa
     check(capture.closed && !ghost_audio::stats().running, "stop closes the device and joins");
     out.pcm = capture.pcm;
     return out;
+}
+// Summed square of one channel (0 left, 1 right) or of both (2).
+static double energy(const std::vector<int16_t> &pcm, unsigned channel = 2) {
+    double sum = 0;
+    for (size_t i = 0; i < pcm.size(); ++i) if (channel == 2 || i % 2 == channel) sum += double(pcm[i]) * pcm[i];
+    return sum;
 }
 static size_t first_sound(const std::vector<int16_t> &pcm, uint64_t from_frame) {
     for (size_t i = size_t(2 * from_frame); i < pcm.size(); ++i) if (pcm[i]) return i / 2;
@@ -124,7 +138,7 @@ int main(int argc, char **argv) {
         {   Capture refusing; refusing.fail_open = true;
             check(ghost_audio::start(rom.data(), rom.size(), refusing.output()) == ghost_audio::Start::device,
                   "no device: sound stays off");
-            check(!ghost_audio::stats().running && sa_play(1) == SA_CLOSED, "no thread or engine left behind"); }
+            check(!ghost_audio::stats().running && sa_play(0, 1) == SA_CLOSED, "no thread or engine left behind"); }
 
         const auto full = run(rom, 1.0f);
         check(full.stats.played == 4, "every scheduled cue played once");
@@ -164,30 +178,71 @@ int main(int argc, char **argv) {
         }
         check(stale_stopped == 0, "no stale sound after resuming");
 
+        // Placement: SM64's own panning and camera-distance falloff, then the
+        // ghost's gain; each ghost is its own source to the engine.
+        const auto right = run(rom, 1.0f, false, {{2000, 0, -500}, 1});
+        const auto left = run(rom, 1.0f, false, {{-2000, 0, -500}, 1});
+        const double right_lr = energy(right.pcm, 1) / energy(right.pcm, 0);
+        const double left_lr = energy(left.pcm, 1) / energy(left.pcm, 0);
+        check(right_lr > 4 && left_lr < 0.25, "a ghost to the right sounds right, to the left left");
+        const auto quarter = run(rom, 1.0f, false, {{0, 0, 0}, .25f});
+        const double quarter_ratio = energy(quarter.pcm) / energy(full.pcm);
+        check(quarter_ratio > 0.055 && quarter_ratio < 0.07, "gain 0.25 is a quarter of the amplitude");
+        const auto distant = run(rom, 1.0f, false, {{0, 0, -5000}, 1});
+        const double far_ratio = energy(distant.pcm) / energy(full.pcm);
+        check(far_ratio < 0.5, "the engine's own camera-distance falloff applies");
+        // Each ghost is its own source: ghost 1 on the right, with ghost 0
+        // placed left and silent, sounds exactly like ghost 0 on the right.
+        const Place left_place{{-2000, 0, -500}, 1};
+        const auto routed = run(rom, 1.0f, false, {{2000, 0, -500}, 1}, 1, &left_place);
+        const bool routed_identical = routed.pcm == right.pcm;
+        check(routed.stats.played == 4 && routed_identical, "each ghost sounds from its own placement");
+        {   const auto before = ghost_audio::stats(); const float nowhere[3] = {0, 0, 0};
+            ghost_audio::cue(ghost_audio::sources, 1); ghost_audio::place(ghost_audio::sources, nowhere, 1);
+            check(ghost_audio::stats().dropped - before.dropped == 1, "a ghost index past the sources drops"); }
+
         // Optional device smoke: silence only, skipped (stated) without a device.
         const bool device = waveOutGetNumDevs() > 0;
-        double smoke_latency = -1;
+        double smoke_latency = -1, fed_rate = 0;
+        uint64_t smoke_underruns = 0;
         if (device) {
             const auto before = ghost_audio::stats();
             ghost_audio::control(true, 0.0f);
+            LARGE_INTEGER frequency{}, begin{}, end{};
+            QueryPerformanceFrequency(&frequency);
             check(ghost_audio::start(rom.data(), rom.size(), ghost_audio::wave_out()) == ghost_audio::Start::ok, "waveOut opens");
-            for (int i = 0; i < 30; ++i) { Sleep(33); ghost_audio::cue(SOUND_ACTION_TERRAIN_LANDING); }
-            Sleep(150);
-            const auto stats = ghost_audio::stats();
+            const auto opened = ghost_audio::stats();
+            QueryPerformanceCounter(&begin);
+            for (int i = 0; i < 90; ++i) { Sleep(33); ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING); }
+            QueryPerformanceCounter(&end);
+            const auto at_end = ghost_audio::stats();
+            Sleep(100); // the last request reaches its tick
+            auto stats = ghost_audio::stats();
+            stats.ticks = at_end.ticks;
             ghost_audio::stop();
-            check(stats.played - before.played >= 30 && stats.silent_ticks - before.silent_ticks > 20,
+            check(stats.played - before.played >= 90 && stats.silent_ticks - before.silent_ticks > 60,
                   "device fed real ticks of silence");
+            // The device never runs dry, and is fed at its own rate (~32000 frames/s).
+            smoke_underruns = stats.underruns - before.underruns;
+            fed_rate = double(stats.ticks - opened.ticks) * 1076.0
+                / (double(end.QuadPart - begin.QuadPart) / double(frequency.QuadPart));
+            check(smoke_underruns == 0, "device never runs dry between ticks");
+            check(fed_rate > 30000 && fed_rate < 34500, "device fed in real time");
             smoke_latency = stats.max_latency_ms;
         }
         // The queue is bounded and never blocks its producer (no audio thread now).
         const auto before = ghost_audio::stats();
-        for (int i = 0; i < 300; ++i) ghost_audio::cue(SOUND_ACTION_TERRAIN_LANDING);
+        for (int i = 0; i < 300; ++i) ghost_audio::cue(0, SOUND_ACTION_TERRAIN_LANDING);
         check(ghost_audio::stats().dropped - before.dropped == 300 - ghost_audio::queue_slots, "full queue drops and counts");
         std::printf("{\"ok\":true,\"checks\":%u,\"cues\":%zu,\"nonzero_samples\":%zu,"
             "\"half_energy_ratio\":%.6f,\"capture_max_latency_ms\":%.3f,\"device\":%s,\"device_max_latency_ms\":%.3f,"
-            "\"stale_samples_when_left_on\":%zu}\n",
+            "\"stale_samples_when_left_on\":%zu,\"device_underruns\":%llu,\"device_fed_frames_per_second\":%.0f,"
+            "\"right_placed_right_left_energy\":%.4f,\"left_placed_right_left_energy\":%.4f,"
+            "\"gain_quarter_energy_ratio\":%.6f,\"camera_5000_energy_ratio\":%.6f,\"second_ghost_routed_identical\":%s}\n",
             checks, full.cue_at.size(), nonzero, half_energy / full_energy, full.stats.max_latency_ms,
-            device ? "true" : "false", smoke_latency, stale_full);
+            device ? "true" : "false", smoke_latency, stale_full,
+            static_cast<unsigned long long>(smoke_underruns), fed_rate,
+            right_lr, left_lr, quarter_ratio, far_ratio, routed_identical ? "true" : "false");
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "audio witness: %s (check %u)\n", error.what(), checks);

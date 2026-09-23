@@ -28,8 +28,18 @@ enum { SA_OK = 0, SA_ARGUMENT = -1, SA_INVALID_ROM = -2, SA_BUSY = -3,
 
 /* Copies the big-endian ROM; owns that copy and every parse until close. */
 int32_t sa_open(const uint8_t *rom, size_t bytes);
-/* Queues one sound request at a fixed centred source (full volume, no pan). */
-int32_t sa_play(uint32_t sound_bits);
+#define SA_SOURCES 16u /* one per displayed ghost (GP_GHOSTS) */
+/* Where a source sounds from, relative to the camera as SM64 places its own
+ * sounds (+x right, +y up, -z ahead), and its gain 0..1 on top of the engine's
+ * own distance falloff. Takes effect at the next tick, also for sounds already
+ * playing. Every source starts centred at gain 1 when the engine opens. */
+int32_t sa_place(uint32_t source, const float position[3], float gain);
+/* Queues one sound request from that source. Sources are separate to the
+ * engine: one ghost's sound never replaces another's, but all share SM64's
+ * per-bank channel limits. */
+int32_t sa_play(uint32_t source, uint32_t sound_bits);
+/* The engine's hook for gains[] (patched into get_sound_volume); 1 otherwise. */
+float sa_source_gain(const float *x);
 /* Drops unprocessed requests and ends every sound this engine started. */
 int32_t sa_stop_all(void);
 /* One tick into out (interleaved stereo int16). queued_frames is what the

@@ -320,10 +320,10 @@ struct Session {
             if (applied) play->withdraw();
             recovery.clear();have_origin=false;
             applied = 0;
-        } else if(r.owner_suspended) {
-            if(applied)play->withdraw();
-            applied=0;state=GIPC_PREPARING;reason=GIPC_ORIGIN;
         } else if (!needs_load(r) && configuration) {
+            // A suspended owner (the tracker's arm ended) keeps the command
+            // applied, marked suspended: the renderer hides it, and a state
+            // load it resolves brings it back on the load frame.
             const int model = play->prepare_model(r.model_id, rom_bytes.data(), static_cast<uint32_t>(rom_bytes.size()));
             int clip = GP_OK;
             for (uint32_t i = 0; i < r.clip_count; ++i) {
@@ -378,6 +378,7 @@ struct Session {
                     command.proximity_enabled = r.proximity_enabled;
                     command.proximity_distance = r.proximity_distance;
                     command.shadow_enabled = r.shadow_enabled; command.volume = r.volume;
+                    command.suspended = r.owner_suspended;
                     if (play->configure(&command) != GP_OK) {
                         withdraw(); state = GIPC_REFUSED; reason = GIPC_CLIP; failed = r.revision;
                     } else { applied = r.revision; applied_request = r; state = GIPC_READY; }

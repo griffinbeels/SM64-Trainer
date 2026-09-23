@@ -56,6 +56,14 @@ bool restore_root(sg_model *model, const gc_sample &sample, sg_pose &pose) {
     return true;
 }
 }
+bool camera_relative(sg_model *model, const gc_camera &live, const float world[3], float out[3]) {
+    float view[16]{};
+    if(sg_model_view(model,live.position,live.focus,live.roll,view)!=SG_OK) return false;
+    // Column-major look-at (translation in 12..14), the same product as drawing.
+    for(unsigned r=0;r<3;++r)
+        out[r]=view[r]*world[0]+view[4+r]*world[1]+view[8+r]*world[2]+view[12+r];
+    return std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2]);
+}
 bool shadow(sg_model *model, const gc_sample &recorded, const float view_projection[16],
             ghost_compositor::ShadowVertex vertices[24], uint8_t texture[256],
             ghost_compositor::Shadow &out) {

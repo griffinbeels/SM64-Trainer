@@ -15,3 +15,8 @@
 0x8033baca	gCurrAreaIndex
 0x8033d488	gObjectPool
 0x80361158	gMarioObject
+# play_sound/sound ring: STROOP MappingUS.map @ 6771197ad0f50718d3d4a13387e01d1e6d9c0d1a (sha256 d942ba9781aafb500c5bd7a599d15a41a191c6e9fe65b95e6c384429bec2d3b1), fetched 2026-09-22; candidates, not live verification
+0x8031eb00	play_sound
+0x80332f40	sNumProcessedSoundRequests
+0x80332f44	sSoundRequestCount
+0x80361498	sSoundRequests

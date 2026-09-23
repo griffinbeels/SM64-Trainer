@@ -59,6 +59,7 @@ struct Run {
             s.area=legs && i>=40?2:1;
             s.igt=uint16_t(legs && i>=40?i-40:i+clip.header.origin_raw);
             s.pose.position[0]=float(i);s.clock.raw_igt=s.igt;s.clock.elapsed_frames=1000+i;
+            s.valid_fields|=GC_VALID_SOUND;s.sound.count=1;s.sound.bits[0]=5000+i; // record i sounds 5000+i
         }
         clock.qpc_frequency=1000;clock.qpc_anchor=1000;clock.utc_anchor=1000;
         opened=rom;++fixture::epoch;
@@ -178,7 +179,8 @@ int main() {
             ++run.demand.revision;run.demand.opacity=.5f;run.step(154,-1);
             run.demand.owner_suspended=1;++run.demand.revision;run.step(155,-1);
             check(run.session->recovery.bound(),"tracker completion hides without deleting restore history");
-            run.step(150,-1); // Checkpoint restores while tracker is between arms.
+            run.step(156,-1); // Suspended between arms: hidden.
+            run.step(150,150); // A restore while the tracker is between arms draws at once.
             run.demand.owner_suspended=0;++run.demand.revision;
             run.step(150,150); // Restoration, unlike tuning, revives the completed run.
             // Tracker's state_loaded event hands the witnessed restore to its new arm.
@@ -221,15 +223,23 @@ int main() {
                 check(!run.session->have_origin,"unrelated state cannot rebind timing");
             }
         }
-        unsigned blink_loads=0,blink_frames=0,blink_ghostless=0,blink_wrong=0;
+        unsigned blink_loads=0,blink_frames=0,blink_ghostless=0,blink_wrong=0,blink_sounded=0,blink_mismatched=0;
         for(bool segment:{false,true}) {
             // State loads with the worker a list behind the renderer, as live.
             Run run(segment);const int start=segment?20:0;
             for(int raw=start;raw<=start+200;++raw)run.step(uint16_t(raw),raw-start);
             run.worker_after_render=true;run.ghostless=run.wrong=run.frames=0;
+            ghost_playback::set_sound_sink(&test_sink);
             const auto load=[&](int raw,int hold) {
                 ++blink_loads;
-                for(int i=0;i<=hold;++i)run.step(uint16_t(raw+i),raw+i-start);
+                run.step(uint16_t(raw),raw-start);
+                // After a load the ghost sounds each record it passes, once:
+                // the worker's confirming command a list later re-bases nothing.
+                sound_count=0;
+                for(int i=1;i<=hold;++i)run.step(uint16_t(raw+i),raw+i-start);
+                bool exact=sound_count==unsigned(hold);
+                for(int i=0;exact && i<hold;++i)exact=sound_log[i]==uint32_t(5000+raw-start+1+i);
+                ++(exact?blink_sounded:blink_mismatched);
             };
             load(start+150,3);  // rewind to an earlier state
             load(start+120,0);  // again, straight away
@@ -238,15 +248,38 @@ int main() {
             if(!segment) {
                 // A star grab ends the run; loading back revives it at once.
                 run.step(uint16_t(start+181),-1,1,0x1302);run.step(uint16_t(start+182),-1);
-                load(start+150,3);
+                // The live grab closes the attempt: the owner suspends (as
+                // NativeGhost.note does) before he loads the state again.
+                run.demand.owner_suspended=1;++run.demand.revision;
+                run.step(uint16_t(start+183),-1);run.step(uint16_t(start+184),-1);
+                ++blink_loads;run.step(uint16_t(start+150),150); // drawn on the load frame, still suspended
+                run.step(uint16_t(start+151),151);
+                // The owner re-arms from the state_loaded anchor of the load
+                // frame (a poll later): the worker hands the restore to the new arm.
+                run.demand.owner_suspended=0;run.demand.origin.arm_id+=100;
+                run.demand.origin.global_timer=run.last.global_timer-1;
+                run.demand.origin.utc=1000+double(run.last.qpc-1-1000)/1000;++run.demand.revision;
+                for(int raw=152;raw<=156;++raw)run.step(uint16_t(start+raw),raw);
             } else {
                 // A forward load to a state never witnessed stays hidden on
                 // the renderer too; a known state afterwards draws at once.
                 run.step(uint16_t(start+300),-1);run.step(uint16_t(start+301),-1);
                 load(start+150,3);
+                // A completed segment suspends the owner: no native star end
+                // hides it, the suspension does, until a load revives it.
+                run.demand.owner_suspended=1;++run.demand.revision;
+                run.step(uint16_t(start+154),154); // the command reaches the next list
+                run.step(uint16_t(start+155),-1);run.step(uint16_t(start+156),-1);
+                ++blink_loads;run.step(uint16_t(start+140),140);run.step(uint16_t(start+141),141);
+                run.demand.owner_suspended=0;run.demand.origin.arm_id+=100;
+                run.demand.origin.global_timer=run.last.global_timer-1;
+                run.demand.origin.utc=1000+double(run.last.qpc-1-1000)/1000;++run.demand.revision;
+                for(int raw=142;raw<=145;++raw)run.step(uint16_t(start+raw),raw);
             }
             blink_frames+=run.frames;blink_ghostless+=run.ghostless;blink_wrong+=run.wrong;
+            ghost_playback::set_sound_sink(nullptr);
         }
+        check(blink_mismatched==0,"after every state load each passed record sounds once");
         std::printf("{\"ok\":true,\"checks\":%u,\"render_allocations\":%u,\"render_frees\":%u,"
             "\"blink\":{\"loads\":%u,\"frames\":%u,\"ghostless_frames\":%u,\"wrong_frames\":%u}}\n",
             checks,allocations.load(),destructions.load(),blink_loads,blink_frames,blink_ghostless,blink_wrong);return 0;

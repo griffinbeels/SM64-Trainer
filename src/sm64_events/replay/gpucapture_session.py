@@ -13,6 +13,7 @@ from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
 from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpuaudio import GpuAudio
 from sm64_events.replay.gpudiagnostics import CaptureTimings, failure_snapshot
+from sm64_events.replay.encoderstage import staged_encoder_dll
 from sm64_events.replay.gpuencoder import Result
 from sm64_events.replay.gpuencoder_abi import CODEC_STREAM_NAMES
 from sm64_events.replay.gpupublication import PublicationError, PublicationWriteError
@@ -109,6 +110,7 @@ class CaptureSession:
         dll = bundled_encoder_dll()
         if dll is None:
             raise RuntimeError("this build carries no SM64GpuEncoderV1.dll; run tools/build_plugin.py")
+        dll = staged_encoder_dll(dll)  # never hold the shipped file open
         self.controller = self.controller_factory(
             executable=Path(sys.executable),
             helper=Path(__file__).resolve().parent / "gpuprocess/helper_bootstrap.py",
