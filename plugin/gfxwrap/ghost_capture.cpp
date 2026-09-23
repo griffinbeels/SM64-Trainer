@@ -172,39 +172,41 @@ void capture_sound(Ram &ram, const gc_layout &layout, gc_reader &reader, gc_samp
     out.sound = sound; out.valid_fields |= GC_VALID_SOUND;
 }
 
-bool unresolved_floor(uint32_t action) {
-    // align_with_floor: crawling and common_slide_action, including their
-    // same-call bonk/stop destinations. These are conservative refusals, not
-    // a guessed discriminator for a persistent sFloorAlignMatrix.
-    switch (action & 0x1ffu) {
-    case 0x20: case 0x3e: case 0x3f: case 0x48:
-    case 0x52: case 0x53: case 0x54: case 0x55: case 0x56:
-    case 0x59: case 0x66: case 0x186: return true;
-    default: return false;
-    }
-}
 
+// Each refusal names its one check in gc_pose.refusal (reason).
 uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
-                      int16_t area_index, uint16_t visual_frame, gc_pose &out, bool deferred) {
+                      int16_t area_index, uint16_t visual_frame, gc_pose &out, bool deferred,
+                      uint8_t &reason) {
     const uint32_t state = layout.mario_state;
     const uint32_t object = ram.u32(layout.mario_object);
+    reason = GC_REFUSED_OBJECT;
     if (!ram.has(state, 0xa0) || !ram.has(object, object_size)
             || object < layout.object_pool || (object - layout.object_pool) % object_size
             || (object - layout.object_pool) / object_size >= object_count) return GC_BAD_POINTER;
     const uint32_t body = ram.u32(state + mario_body);
     if (!ram.has(body, 0x20)) return GC_BAD_POINTER;
+    reason = GC_REFUSED_AREA;
     if (ram.u32(state + mario_object) != object || ram.u32(state + mario_area) != area
             || ram.u8(object + 0x18) != area_index) return GC_BAD_VALUE;
     out.action = ram.u32(state + 0x0c); out.body_action = ram.u32(body);
     out.mario_flags = ram.u32(state + 4);
     out.gfx_flags = ram.u16(object + 2);
-    if (ram.u32(state + 0x7c) || ram.u32(state + 0x84)) return GC_UNSUPPORTED_HELD;
+    // A held object (hands-free holding included) or ridden shell is drawn
+    // by its own lists after Mario's alpha/body pair, so the executed root
+    // proof does not depend on it. Only the TRS path keeps this refusal.
+    reason = GC_REFUSED_HELD;
+    if (!deferred && (ram.u32(state + 0x7c) || ram.u32(state + 0x84))) return GC_UNSUPPORTED_HELD;
+    reason = uint8_t((out.gfx_flags & billboard) ? GC_REFUSED_BILLBOARD
+        : ram.u32(object + 0x50) ? GC_REFUSED_THROW_MATRIX : GC_REFUSED_FLOOR);
     if ((out.gfx_flags & billboard) || ram.u32(object + 0x50)
-            || (!deferred && (unresolved_floor(out.action) || unresolved_floor(out.body_action)
+            || (!deferred && (ghost_floor_aligned(out.action) || ghost_floor_aligned(out.body_action)
                              || (ram.u32(object + 0x8c) & 0xa00)))) return GC_UNSUPPORTED_ROOT;
     const uint32_t camera = ram.u32(area + area_camera);
+    reason = GC_REFUSED_OBJECT;
     if (!ram.has(camera, 1, 1)) return GC_BAD_POINTER;
+    reason = GC_REFUSED_HEAD;
     if (ram.u8(camera) == 6) return GC_UNSUPPORTED_HEAD;
+    reason = GC_REFUSED_TRANSFORM;
     for (unsigned i = 0; i < 3; ++i) {
         out.position[i] = ram.f32(object + 0x20 + 4*i);
         out.scale[i] = ram.f32(object + 0x2c + 4*i);
@@ -219,6 +221,7 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
     out.animation_frame = ram.s16(object + 0x40);
     out.anim_timer = ram.u16(object + 0x42);
     const uint32_t animation = ram.u32(object + 0x3c);
+    reason = GC_REFUSED_ANIMATION;
     if (!ram.has(animation, 0x18)) return GC_BAD_POINTER;
     const int16_t end = ram.s16(animation + 8);
     out.model_state = ram.u16(body + 8);
@@ -226,14 +229,24 @@ uint32_t capture_pose(Ram &ram, const gc_layout &layout, uint32_t area,
     out.hand_state = ram.u8(body + 6); out.wing_flutter = ram.u8(body + 7);
     out.grab_position = ram.u8(body + 0x0a); out.punch_state = ram.u8(body + 0x0b);
     out.hidden = !(out.gfx_flags & active) || (out.gfx_flags & invisible) ? 1 : 0;
+    reason = GC_REFUSED_OBJECT;
     if (!ram.ok) return GC_BAD_POINTER;
-    if (!out.action || !out.body_action || out.animation_id < 0 || out.animation_id > 208
-            || end <= 0 || out.animation_frame < 0 || out.animation_frame >= end
-            || (!out.hidden && out.anim_timer != visual_frame)
+    // The renderer skips an inactive Mario, so his animation never advances
+    // from set_mario_animation's startFrame-1 (act_disappeared leaves -1). A
+    // hidden pose draws nothing; playback never evaluates its animation.
+    reason = GC_REFUSED_ANIMATION_RANGE;
+    if (!out.hidden && (out.animation_id < 0 || out.animation_id > 208
+            || end <= 0 || out.animation_frame < 0 || out.animation_frame >= end))
+        return GC_BAD_VALUE;
+    reason = GC_REFUSED_ANIMATION_STALE;
+    if (!out.hidden && out.anim_timer != visual_frame) return GC_BAD_VALUE;
+    reason = GC_REFUSED_BODY_STATE;
+    if (!out.action || !out.body_action
             || out.cap_state > 3 || out.eye_state > 8 || out.hand_state > 5
             || out.wing_flutter > 1 || out.model_state > 0x3ff || out.grab_position > 3
             || (out.punch_state >> 6) > 2 || (out.punch_state & 0x3f) > 5) return GC_BAD_VALUE;
     out.root_kind = deferred && !out.hidden ? GC_ROOT_UNRESOLVED : GC_ROOT_TRS;
+    reason = GC_REFUSED_NONE;
     return GC_OK;
 }
 } // namespace
@@ -308,9 +321,12 @@ static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
         out->valid_fields |= GC_VALID_WARP;
     } else out->status = GC_BAD_VALUE;
     const uint32_t area = ram.u32(layout->current_area_pointer);
+    // An unloaded or mismatched area (a level/area transition) has no Mario.
+    out->pose.refusal = GC_REFUSED_AREA;
     if (!ram.has(area, 0x28)) return out->status = out->status ? out->status : GC_BAD_POINTER;
     if (ram.u8(area) != out->area || !(ram.u8(area + 1) & active))
         return out->status = out->status ? out->status : GC_BAD_VALUE;
+    out->pose.refusal = GC_REFUSED_NONE;
     const uint32_t action = ram.u32(layout->mario_state + 0x0c);
     if (action && ram.u32(layout->mario_state + mario_area) == area) {
         out->live_action = action; out->valid_fields |= GC_VALID_ACTION;
@@ -321,9 +337,14 @@ static uint32_t capture_read(gc_reader *reader, const gc_layout *layout,
     else if (!out->status) out->status = camera_status;
     ram.ok = true;
     gc_pose pose{};
-    const uint32_t pose_status = capture_pose(ram, *layout, area, out->area, out->area_update_counter, pose, probe != nullptr);
+    uint8_t reason = GC_REFUSED_NONE;
+    const uint32_t pose_status = capture_pose(ram, *layout, area, out->area, out->area_update_counter,
+                                              pose, probe != nullptr, reason);
     if (pose_status == GC_OK) { out->pose = pose; out->valid_fields |= GC_VALID_POSE; }
-    else if (!out->status) out->status = pose_status;
+    else {
+        out->pose.refusal = reason;
+        if (!out->status) out->status = pose_status;
+    }
     if (probe) ghost_root_prepare(*probe, *frame, ram.u32(layout->mario_object), layout->object_pool, *out);
     return out->status;
 }

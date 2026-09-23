@@ -23,6 +23,11 @@ static void check(bool value, const char *message) {
 template<class T> static bool zero(const T &value) {
     const T empty{}; return std::memcmp(&value, &empty, sizeof(value)) == 0;
 }
+// A refused pose keeps exactly one byte: the check that refused it.
+static bool cleared(const gc_pose &pose, uint8_t reason) {
+    gc_pose expected{}; expected.refusal = reason;
+    return reason && std::memcmp(&pose, &expected, sizeof(pose)) == 0;
+}
 
 struct Fixture {
     static constexpr uint32_t base = 0x80000000u;
@@ -108,10 +113,11 @@ struct Fixture {
         ++frame.sequence; ++frame.dlist_serial;
         return result;
     }
-    void pose_refusal(uint32_t expected) {
+    void pose_refusal(uint32_t expected, uint8_t reason = 0) {
         check(run() == expected, "wrong pose refusal");
         check(sample.valid_fields == (GC_VALID_CLOCK | GC_VALID_CAMERA | GC_VALID_ACTION | GC_VALID_WARP), "pose refusal validity");
-        check(zero(sample.pose), "refused pose retained bytes");
+        check(cleared(sample.pose, sample.pose.refusal), "refused pose retained bytes or no reason");
+        check(!reason || sample.pose.refusal == reason, "wrong refusal reason");
     }
     void camera_refusal(uint32_t expected) {
         check(run() == expected, "wrong camera refusal");
@@ -194,19 +200,38 @@ int main(int argc, char **argv) {
         f.put16(object, 0x18); check(f.run() == GC_OK, "object subtree was traversed");
         f.put16(object, 0x12e); check(f.run() == GC_OK, "held-object subtree was traversed");
     } else if (mode == "values") {
-        f.put32(f.config.object_pool+0x20, 0x7fc00000); f.pose_refusal(GC_BAD_VALUE);
-        f.putfloat(f.config.object_pool+0x20, 20); f.putfloat(f.config.object_pool+0x2c, 0); f.pose_refusal(GC_BAD_VALUE);
+        f.put32(f.config.object_pool+0x20, 0x7fc00000); f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_TRANSFORM);
+        f.putfloat(f.config.object_pool+0x20, 20); f.putfloat(f.config.object_pool+0x2c, 0);
+        f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_TRANSFORM);
         f.putfloat(f.config.object_pool+0x2c, 1); f.put32(Fixture::camera+0x1c, 0x7f800000); f.camera_refusal(GC_BAD_VALUE);
-        f.putfloat(Fixture::camera+0x1c, 600); f.put16(f.config.object_pool+0x40, 30); f.pose_refusal(GC_BAD_VALUE);
-        f.put16(f.config.object_pool+0x40, 7); f.put8(Fixture::body+5, 9); f.pose_refusal(GC_BAD_VALUE);
-        f.put8(Fixture::body+5, 3); f.put16(f.config.object_pool+0x42, 1); f.pose_refusal(GC_BAD_VALUE);
+        f.putfloat(Fixture::camera+0x1c, 600); f.put16(f.config.object_pool+0x40, 30);
+        f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
+        f.put16(f.config.object_pool+0x40, 7); f.put8(Fixture::body+5, 9); f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_BODY_STATE);
+        f.put8(Fixture::body+5, 3); f.put16(f.config.object_pool+0x42, 1);
+        f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_STALE);
+        // act_disappeared: an inactive Mario is skipped by the renderer, so
+        // his animation stays at set_mario_animation's startFrame-1 and his
+        // animTimer is stale. Hidden, it is a valid pose that draws nothing.
+        f.put16(f.config.object_pool+0x40, 0xffff); f.put16(f.config.object_pool+2, 0x20);
+        check(f.run() == GC_OK && f.sample.pose.hidden == 1 && f.sample.pose.animation_frame == -1
+              && f.sample.pose.root_kind == GC_ROOT_TRS && !f.sample.pose.refusal, "disappeared Mario refused");
+        f.put16(f.config.object_pool+2, 0x21); f.pose_refusal(GC_BAD_VALUE, GC_REFUSED_ANIMATION_RANGE);
+        f.put16(f.config.object_pool+0x40, 7); f.put16(f.config.object_pool+0x42, 0x8123);
+        f.put32(f.config.object_pool+0x3c, 0); f.pose_refusal(GC_BAD_POINTER, GC_REFUSED_ANIMATION);
     } else if (mode == "unsupported") {
-        f.put32(f.config.mario_state+0x0c, 0x04008448); f.pose_refusal(GC_UNSUPPORTED_ROOT);
-        f.put32(f.config.mario_state+0x0c, 0x00000386); f.pose_refusal(GC_UNSUPPORTED_ROOT);
-        f.put32(f.config.mario_state+0x0c, 0x0c400201); f.put32(f.config.mario_state+0x7c, 123); f.pose_refusal(GC_UNSUPPORTED_HELD);
-        f.put32(f.config.mario_state+0x7c, 0); f.put32(f.config.object_pool+0x8c, 0x800); f.pose_refusal(GC_UNSUPPORTED_ROOT);
-        f.put32(f.config.object_pool+0x8c, 0); f.put32(f.config.object_pool+0x50, 0x1234); f.pose_refusal(GC_UNSUPPORTED_ROOT);
-        f.put32(f.config.object_pool+0x50, 0); f.put8(Fixture::control, 6); f.pose_refusal(GC_UNSUPPORTED_HEAD);
+        f.put32(f.config.mario_state+0x0c, 0x04008448); f.pose_refusal(GC_UNSUPPORTED_ROOT, GC_REFUSED_FLOOR);
+        f.put32(f.config.mario_state+0x0c, 0x00000386); f.pose_refusal(GC_UNSUPPORTED_ROOT, GC_REFUSED_FLOOR);
+        f.put32(f.config.mario_state+0x0c, 0x0c400201); f.put32(f.config.mario_state+0x7c, 123);
+        f.pose_refusal(GC_UNSUPPORTED_HELD, GC_REFUSED_HELD);
+        f.put32(f.config.mario_state+0x7c, 0); f.put32(f.config.mario_state+0x84, 123);
+        f.pose_refusal(GC_UNSUPPORTED_HELD, GC_REFUSED_HELD);
+        f.put32(f.config.mario_state+0x84, 0); f.put32(f.config.object_pool+0x8c, 0x800);
+        f.pose_refusal(GC_UNSUPPORTED_ROOT, GC_REFUSED_FLOOR);
+        f.put32(f.config.object_pool+0x8c, 0); f.put32(f.config.object_pool+0x50, 0x1234);
+        f.pose_refusal(GC_UNSUPPORTED_ROOT, GC_REFUSED_THROW_MATRIX);
+        f.put32(f.config.object_pool+0x50, 0); f.put16(f.config.object_pool+2, 0x25);
+        f.pose_refusal(GC_UNSUPPORTED_ROOT, GC_REFUSED_BILLBOARD);
+        f.put16(f.config.object_pool+2, 0x21); f.put8(Fixture::control, 6); f.pose_refusal(GC_UNSUPPORTED_HEAD, GC_REFUSED_HEAD);
     } else if (mode == "action") {
         // A live grab must hide the ghost even if Mario's graphics root or
         // body is unsupported. Body action is independently post-callback.
@@ -277,12 +302,12 @@ int main(int argc, char **argv) {
     } else if (mode == "transitions") {
         check(f.run() == GC_OK, "initial capture failed");
         f.put32(f.config.current_area_pointer, 0);
-        check(f.run() == GC_BAD_POINTER && zero(f.sample.pose) && zero(f.sample.camera)
+        check(f.run() == GC_BAD_POINTER && cleared(f.sample.pose, GC_REFUSED_AREA) && zero(f.sample.camera)
               && f.sample.live_action == 0 && !(f.sample.valid_fields & GC_VALID_ACTION), "unload retained data");
         f.put32(f.config.current_area_pointer, Fixture::area); f.put8(Fixture::area+1, 0);
         check(f.run() == GC_BAD_VALUE && zero(f.sample.camera), "inactive area retained camera");
         f.put8(Fixture::area+1, 1); f.put16(f.config.current_area, 2);
-        check(f.run() == GC_BAD_VALUE && zero(f.sample.pose), "area mismatch retained data");
+        check(f.run() == GC_BAD_VALUE && cleared(f.sample.pose, GC_REFUSED_AREA), "area mismatch retained data");
         f.put16(f.config.current_area, 1); f.put16(f.config.object_pool+2, 0x31);
         check(f.run() == GC_OK && f.sample.pose.hidden == 1, "hidden flag lost");
     } else if (mode == "sound") {

@@ -300,7 +300,9 @@ bool valid_clip(const gclip_header& h,const gclip_frame *frames,uint32_t& indexe
                 || s.qpc<prior_qpc || (!s.status && (s.valid_fields&GC_VALID_REQUIRED)!=GC_VALID_REQUIRED)
                 || bool(s.valid_fields&GC_VALID_ACTION)!=bool(s.live_action)
                 || f.world_status>static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity)) return false;
-        const gc_pose zero_pose{};const gc_camera zero_camera{};
+        // A refused pose keeps only its refusal reason.
+        gc_pose zero_pose{};zero_pose.refusal=s.pose.refusal;const gc_camera zero_camera{};
+        if(s.pose.refusal>GC_REFUSED_LAST)return false;
         if(!(s.valid_fields&GC_VALID_POSE) && std::memcmp(&s.pose,&zero_pose,sizeof(s.pose)))return false;
         if(!(s.valid_fields&GC_VALID_CAMERA) && std::memcmp(&s.camera,&zero_camera,sizeof(s.camera)))return false;
         if(!(s.valid_fields&GC_VALID_WARP) && (s.pending_warp_op || s.delayed_warp_timer))return false;

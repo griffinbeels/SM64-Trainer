@@ -27,7 +27,7 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308) and sound events (36 at 600) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600) and the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
@@ -87,6 +87,65 @@ float precision. Tests execute the pinned staged `gSPDisplayList` and x86 matrix
 loader, and cover floor tilt, nonuniform scale, camera motion and ownership
 refusals. A new live recording remains the acceptance check for the installed
 practice ROM's complete graph and emitted command sequence.
+
+### Pose refusals and the gaps they closed
+
+Every refused pose names its one failing check in `gc_pose.refusal` (the
+`gc_refusal` enum, append-only; Python `clip.REFUSALS`, `Frame.refusal_name`).
+A refused record keeps only that byte in its pose block; both loaders
+([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `valid_clip`,
+[clip.py](../src/sm64_events/ghost/clip.py)) accept it and refuse unknown
+values. `tools/ghost_extraction_audit.py` prints it per hole. Records written
+before 2026-09-23 have zero there (`unrecorded`).
+
+The first live archive with holes (2026-09-23, about 76k records) showed four
+causes, each fixed at its source:
+
+- **Holding or riding** (status 10: Bob-omb, Li'l Penguin, a heavy object,
+  Bowser's tail, the SSL hands-free-holding glitch that keeps `heldObj` set
+  through ordinary jumps and slides for 300+ frames, a shell). Capture refused
+  any nonzero `heldObj`/`riddenObj`. `geo_process_held_object` draws the held
+  object from Mario's hand node, after his alpha/body pair, so the executed
+  root proof is unaffected; the executed path now accepts these frames. The
+  ghost draws Mario alone (hand pose and `grab_position` included), not the
+  held object or shell. The legacy TRS reader keeps the refusal (`held`).
+- **Culled by the camera** (status 9: red-coin/8-coin star spawns freezing
+  Mario mid side flip or rollout, Bowser's final dialog). `geo_process_object`
+  still updates Mario's animation and `cameraToObject`, then `obj_is_in_view`
+  skips every list, so nothing proved the root. When a completed occurrence
+  shows no Mario alpha list at all (`not_drawn`), [ghost_root.cpp](../plugin/gfxwrap/ghost_root.cpp)
+  publishes the pose if either (1) his root inputs (gfx position, angles,
+  scale, action, body action) are bit-identical to the last executed root in
+  the same epoch and scene: the record carries that matrix and, as
+  `sample.camera`, the camera it executed under, plus its shadow when the
+  animation is identical too; or (2) neither action is floor-aligned and the
+  object's throw-matrix flags are clear: `align_with_floor` is the only writer
+  of Mario's `throwMatrix`, so the game composed TRS(gfx position, angle,
+  scale) and the record says `GC_ROOT_TRS`. A floor-aligned Mario that moved
+  while culled stays refused (`not_drawn_floor`: the tilt is unknown). A
+  Mario whose alpha list executed without his body (`body_mismatch`), a
+  duplicate, an interrupted list, a shared model or a translucent/metal
+  Mario is never carried. The star-spawn freeze starts after Mario's own
+  update that frame, so its first culled frame has already moved off the
+  last drawn one; route (2) covers it. Culled frames carry no shadow unless
+  route (1) applies.
+- **Invisible Mario** (status 4, `act_disappeared` and similar). The
+  renderer skips an inactive Mario, so his animation stays at
+  `set_mario_animation`'s startFrame-1 (-1) with a stale timer. A hidden pose
+  no longer checks animation fields; playback draws nothing for it without
+  evaluating the model ([ghost_pose.cpp](../plugin/gfxwrap/ghost_pose.cpp)).
+- **Still open**: 40 single frames of long-jump land during the BitS-stairs
+  BLJ (status 4). The frame after each is a fresh land animation at frame 0,
+  so the renderer did not process Mario on the refused frame; whether he was
+  inactive (now a hidden pose) or in another area index (`area`) needs a new
+  recording's reason. 16 frames of `ACT_EXIT_AIRBORNE` after a painting exit
+  (status 3) are most likely a NULL animation before the first
+  `set_mario_animation` (`animation`); the model cannot reproduce an
+  unanimated Mario, so they stay hidden until confirmed.
+
+Poles and grabs have no capture rule of their own: their gfx angles carry
+the pole's pitch/roll into the executed (or TRS) root. A future pole gap will
+name its reason.
 
 The native classifier follows the existing `EpochTracker`/`IgtClock` transition
 rules for levels, retries, area warps and teleports. Python encodes configuration
@@ -621,8 +680,10 @@ alone never reports that the ghost reached the game window.
 and never-captured frames (`clip.py::pose_gaps`); a nonzero count is logged when
 the clip is saved and shown on that ghost's picker row, because the ghost blinks
 there. `tools/ghost_extraction_audit.py` audits every committed clip and the live
-pose archives (exit 1 on any hole). 2026-09-22: every post-fix clip was complete;
-the only pose-less archive records were a star-exit level load, outside attempts.
+pose archives (exit 1 on any hole), naming each hole's pose refusal and
+counting frames whose Mario was culled but posed. 2026-09-22: every post-fix
+clip was complete; the only pose-less archive records were a star-exit level
+load, outside attempts. 2026-09-23: see [pose refusals](#pose-refusals-and-the-gaps-they-closed).
 
 Focused hosts exercise the actual capture reader, clock, origin ledger, playback
 loader, compositor and presentation modules. See
