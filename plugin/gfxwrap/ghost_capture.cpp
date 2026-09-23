@@ -262,10 +262,17 @@ void capture_held(Ram &ram, const gc_layout &layout, gc_sample &out) {
     const uint32_t state = layout.mario_state, held = ram.u32(state + 0x7c), body = ram.u32(state + mario_body);
     if (!held || held < layout.object_pool || (held - layout.object_pool) % object_size
             || (held - layout.object_pool) / object_size >= object_count || !ram.has(body, 0x24)) return;
-    // Alive, drawn only through the hand (its own graph node is off), with a
-    // model the hand can draw (Bowser's tail anchor has none).
-    if (!(ram.u16(held + object_active_flags) & 1u) || (ram.u16(held + 2) & active) || !ram.u32(held + 0x14)) return;
-    // Fresh this frame: only geo_process_held_object set its animation globals.
+    // Alive, drawn only through the hand, with a model the hand can draw
+    // (Bowser's tail anchor has none). Its own node never draws while held:
+    // either it is off (cur_obj_disable_rendering, most holdables) or it stays
+    // on but invisible (bobomb_held_loop, bhv_mips_held set only
+    // GRAPH_RENDER_INVISIBLE; obj_is_in_view then culls it after
+    // geo_process_object has already advanced its animation this frame).
+    const uint16_t node_flags = ram.u16(held + 2);
+    if (!(ram.u16(held + object_active_flags) & 1u) || ((node_flags & active) && !(node_flags & invisible))
+            || !ram.u32(held + 0x14)) return;
+    // Fresh this frame: its animation globals were set this frame, by the hand
+    // or (invisible, still active) by its own culled node.
     // Without an animation, ghost_root_finish keeps it only beside a root
     // Mario's executed lists proved.
     const uint32_t animation = ram.u32(held + 0x3c);

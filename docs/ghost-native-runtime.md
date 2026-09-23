@@ -99,13 +99,17 @@ practice ROM's complete graph and emitted command sequence.
 
 What Mario holds (a Bob-omb, a baby penguin, a heavy object, Bowser's tail,
 or the SSL hands-free-holding object) is drawn from his right hand
-(`geo_process_held_object`). The object's own graph node is off while held,
-so its animation advances only there, in the same callback that writes
-`marioBodyState->heldObjLastPosition` (the HOLP). Capture
+(`geo_process_held_object`), whose callback writes
+`marioBodyState->heldObjLastPosition` (the HOLP). The object's own graph node
+never draws while held: most holdables switch it off
+(`cur_obj_disable_rendering`), while the Bob-omb and Mips keep it active but
+set `GRAPH_RENDER_INVISIBLE` (`bobomb_held_loop`, `bhv_mips_held`), so
+`geo_process_object` still advances their animation before `obj_is_in_view`
+culls them. Either way a current `animTimer` is this frame's animation. Capture
 ([ghost_capture.cpp](../plugin/gfxwrap/ghost_capture.cpp) `capture_held`)
 records `gc_held` only when all of these hold: Mario's pose is valid (a root
 refused or carried away later clears it), `heldObj` is an aligned pool slot
-that is active with its own node off, its `animTimer` equals this frame's
+that is alive with its own node off or invisible, its `animTimer` equals this frame's
 `area_update_counter`, and its frame lies inside the loaded animation. The
 block holds the segmented behaviour (`behaviour - behaviour_base + 0x13000000`,
 the identity; `bhvBobomb` is 0x13003174), the animation id, frame and y
