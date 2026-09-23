@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
+from sm64_events.ghost.settings import limits as published_limits
 from tests.test_ui_ghost_switch import (
     FIXTURE_SEGMENT, MEASURE, WIDTHS, get_driver, ghost_session,
     serve_ui_with_ghost, settled,
@@ -10,6 +11,12 @@ from tests.test_ui_ghost_switch import (
 
 ROOT = Path(__file__).resolve().parents[1]
 PICKS = ".ghost-recordings"
+#: The rendered sliders and the published range each one must carry.
+SLIDERS = {".ghost-opacity": "opacity", ".ghost-hue": "tint", ".ghost-volume-range": "volume"}
+READ_SLIDERS = """(() => Object.fromEntries(%s.map((selector) => {
+  const input = document.querySelector(selector);
+  return [selector, input && [input.min, input.max, input.step].map(Number)];
+})))()"""
 PB = {"attempt_id": 1906, "frames": 534, "native_available": True,
       "native_reason_text": None, "whole_available": False,
       "whole_reason_text": "This PB's video is still being saved."}
@@ -98,6 +105,11 @@ def test_ghost_ticks_race_pb_plus_saved_ghosts_and_fit_supported_widths():
                 assert row["rowScroll"] <= row["rowClient"] + 1
                 assert row["cardScroll"] <= row["cardClient"] + 1
                 shoot(page, screenshots / f"ticks-{width}.png")
+                # Every slider's range is the one the server published.
+                ranges = published_limits()
+                shown = page.evaluate(READ_SLIDERS % list(SLIDERS))
+                assert shown == {selector: [ranges[name][key] for key in ("min", "max", "step")]
+                                 for selector, name in SLIDERS.items()}
 
                 # The shadow A/B switch sits beside the colour in Only Mario.
                 assert page.evaluate("document.querySelector('.ghost-shadow .ghost-switch').getAttribute('aria-checked')") == "true"

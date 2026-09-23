@@ -21,7 +21,11 @@ from pathlib import Path
 
 import pytest
 
+from sm64_events.ghost.settings import limits as published_limits
+
 REPO = Path(__file__).resolve().parent.parent
+#: The ranges the server publishes: the card must read these, never its own.
+LIMITS = published_limits()
 GHOST_JS = (REPO / "src" / "sm64_events" / "ui" / "ghostsession.js").as_uri()
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
@@ -58,7 +62,7 @@ def test_native_preparation_is_visible_while_switch_stays_usable():
 
 
 def session(**over):
-    body = {"enabled": False, "opacity": 0.6, "nudge_frames": 0,
+    body = {"enabled": False, "opacity": 0.6, "nudge_frames": 0, "limits": LIMITS,
             "tint": {"enabled": True, "hue_degrees": 120},
             "view": "whole",
             "target": {"kind": "star", "entity_key": "8-1", "strat": None},
@@ -180,10 +184,11 @@ def test_segments_get_the_switch_too():
 # --- values -----------------------------------------------------------------
 
 @pytest.mark.parametrize("given,expected", [
-    (0.6, 0.6), (0, 0.15), (-3, 0.15), (2, 1),
+    (0.6, 0.6), (0, LIMITS["opacity"]["min"]), (-3, LIMITS["opacity"]["min"]),
+    (2, LIMITS["opacity"]["max"]),
 ])
-def test_opacity_is_clamped_into_a_range_that_can_be_seen(given, expected):
-    assert run_node("clampOpacity", f"clampOpacity({json.dumps(given)})") \
+def test_opacity_is_clamped_into_the_published_range(given, expected):
+    assert run_node("clampOpacity", f"clampOpacity({json.dumps(given)}, {json.dumps(LIMITS['opacity'])})") \
         == pytest.approx(expected)
 
 
@@ -209,12 +214,15 @@ def test_the_control_claims_no_visibility_before_the_server_states_one():
     assert controls(unstated)["opacity"] is None
 
 
+NUDGE_LIMIT = LIMITS["nudge_frames"]["limit"]
+
+
 @pytest.mark.parametrize("given,expected", [
-    (0, 0), (4, 4), (-4, -4), (2.4, 2), (9999, 300), (-9999, -300),
+    (0, 0), (4, 4), (-4, -4), (2.4, 2), (9999, NUDGE_LIMIT), (-9999, -NUDGE_LIMIT),
     (None, 0), ("x", 0),
 ])
-def test_a_nudge_is_whole_game_frames_inside_ten_seconds(given, expected):
-    assert run_node("clampNudge", f"clampNudge({json.dumps(given)})") == expected
+def test_a_nudge_is_whole_game_frames_inside_the_published_limit(given, expected):
+    assert run_node("clampNudge", f"clampNudge({json.dumps(given)}, {NUDGE_LIMIT})") == expected
 
 
 @pytest.mark.parametrize("frames,expected", [
@@ -236,11 +244,11 @@ def test_the_opacity_readout_is_a_percentage():
 # --- the colour treatment ---------------------------------------------------
 
 @pytest.mark.parametrize("given,expected", [
-    (120, 120), (0, 0), (359, 359), (400, 359), (-30, 0), (12.6, 13),
-    (None, 0), ("x", 0),
+    (120, 120), (0, 0), (359, 359), (400, LIMITS["tint"]["max"]), (-30, LIMITS["tint"]["min"]),
+    (12.6, 13), (None, 0), ("x", 0),
 ])
 def test_a_colour_is_a_whole_turn_of_the_wheel(given, expected):
-    assert run_node("clampHue", f"clampHue({json.dumps(given)})") == expected
+    assert run_node("clampHue", f"clampHue({json.dumps(given)}, {json.dumps(LIMITS['tint'])})") == expected
 
 
 def test_the_control_claims_no_colour_before_the_server_states_one():
@@ -316,13 +324,16 @@ def test_the_control_claims_no_view_before_the_server_states_one():
 def test_the_on_off_settings_are_unknown_until_stated_never_off():
     """The shadow and the fade-in-front switches: a bool the server stated,
     otherwise null, so an unknown switch is drawn unknown rather than off."""
-    assert controls(None)["occlusionFade"] is None
-    assert controls(session())["occlusionFade"] is None  # a payload that never said
-    assert controls(session(occlusion_fade=True))["occlusionFade"] is True
-    assert controls(session(occlusion_fade=False))["occlusionFade"] is False
+    assert controls(None)["switches"] == {}
+    fade = lambda body: controls(body)["switches"]["occlusion_fade"]  # noqa: E731
+    assert fade(session()) is None  # a payload that never said
+    assert fade(session(occlusion_fade=True)) is True
+    assert fade(session(occlusion_fade=False)) is False
     for garbage in ("yes", 1, None):
-        assert controls(session(occlusion_fade=garbage))["occlusionFade"] is None
-    assert controls(session(shadow=False))["shadow"] is False
+        assert fade(session(occlusion_fade=garbage)) is None
+    assert controls(session(shadow=False))["switches"]["shadow"] is False
+    # A server that publishes no limits lists no switches: none are drawn.
+    assert controls(session(limits=None))["switches"] == {}
 
 
 def test_a_view_this_build_cannot_draw_reads_as_unknown():

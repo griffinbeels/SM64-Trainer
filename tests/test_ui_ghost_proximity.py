@@ -39,6 +39,12 @@ def test_native_overlap_controls_preserve_distance_and_hide_for_video():
                 page.click(".ghost-proximity input[type=checkbox]")
                 assert settled(page, state, 3)[2] == {"proximity": {"enabled": True}}
                 assert page.evaluate("document.querySelector('.ghost-distance').value") == "120"
+                from sm64_events.ghost.settings import limits as published_limits
+                reach = published_limits()["proximity"]
+                assert page.evaluate("""(() => { const d=document.querySelector('.ghost-distance');
+                  return [d.min, d.max, d.step].map(Number); })()""") == [reach["min"], reach["max"], reach["step"]]
+                assert f"keeps {round(reach['floor'] * 100)}% of your Visibility" in page.evaluate(
+                    "document.querySelector('.ghost-proximity-help').textContent")
                 assert page.evaluate("""(() => {
                   const row=document.querySelector('.ghost-row');
                   return row.scrollWidth <= row.clientWidth + 1;

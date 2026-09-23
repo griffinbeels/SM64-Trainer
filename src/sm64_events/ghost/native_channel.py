@@ -9,11 +9,9 @@ from contextlib import contextmanager
 
 from sm64_events.ghost import native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
+from sm64_events.ghost.settings import DEFAULT_OPACITY, DEFAULT_VOLUME, NUDGE_LIMIT_FRAMES, native_switches
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
-
-
-DEFAULT_VOLUME = 0.5
 
 
 class RejectedControl(ValueError):
@@ -61,8 +59,9 @@ class NativeChannel:
                 request.token = secrets.randbelow((1 << 64) - 1) + 1
                 request.revision = request.heartbeat = request.capture_enabled = 1
                 request.rom_generation = status.rom_generation
-                request.opacity, request.shadow_enabled, request.volume = 0.5, 1, DEFAULT_VOLUME
-                request.occlusion_fade = 1
+                request.opacity, request.volume = DEFAULT_OPACITY, DEFAULT_VOLUME
+                for field, default in native_switches().items():
+                    setattr(request, field, int(default))
                 request.layout[:] = layout
                 actions = sorted(STAR_GRAB_ACTIONS)
                 if len(actions) > 8:
@@ -151,8 +150,8 @@ class NativeChannel:
         if retired:
             raise ValueError(f"native ghost clips are a list; retired keys: {retired}")
         enabled = bool(value.get("enabled", False))
-        opacity, nudge = float(value.get("opacity", 0.5)), int(value.get("nudge", 0))
-        if not 0 <= opacity <= 1 or not -600 <= nudge <= 600:
+        opacity, nudge = float(value.get("opacity", DEFAULT_OPACITY)), int(value.get("nudge", 0))
+        if not 0 <= opacity <= 1 or not -NUDGE_LIMIT_FRAMES <= nudge <= NUDGE_LIMIT_FRAMES:
             raise ValueError("invalid native ghost opacity or timing nudge")
         request.play_enabled, request.opacity, request.nudge = enabled, opacity, nudge
         request.stop_at_star = bool(value.get("stop_at_star", True))
@@ -164,8 +163,9 @@ class NativeChannel:
         request.proximity_enabled = proximity["enabled"]
         request.proximity_distance = proximity["extra_distance"]
         request.tint_enabled = bool(value.get("tint_enabled", False))
-        request.shadow_enabled, request.volume = _shadow_and_volume(value)
-        request.occlusion_fade = _switch(value, "occlusion_fade")
+        request.volume = _volume(value)
+        for field, default in native_switches().items():
+            setattr(request, field, _switch(value, field, default))
         mode, seek = value.get("mode", 0), value.get("seek_igt", 0)
         if type(mode) is not int or mode not in (0, 1) or type(seek) is not int or not 0 <= seek < 2**32:
             raise ValueError("invalid native ghost seek")
@@ -215,22 +215,20 @@ class NativeChannel:
 CLIP_KEYS = {"clip_id", "clip_sha256", "clip_path", "hue_degrees"}
 
 
-def _switch(value: dict, key: str) -> bool:
-    """A native A/B switch; absent means on."""
-    setting = value.get(key, True)
+def _switch(value: dict, key: str, default: bool) -> bool:
+    """A native A/B switch (`ghost/settings.py::native_switches`); absent means its default."""
+    setting = value.get(key, default)
     if type(setting) is not bool:
         raise ValueError(f"native ghost {key} must be a bool")
     return setting
 
 
-def _shadow_and_volume(value: dict) -> tuple[bool, float]:
-    """The recorded-shadow A/B switch (absent: on) and ghost sound loudness
-    (absent: half; 0 is exact silence natively)."""
-    shadow = _switch(value, "shadow_enabled")
+def _volume(value: dict) -> float:
+    """Ghost sound loudness (absent: half; 0 is exact silence natively)."""
     volume = value.get("volume", DEFAULT_VOLUME)
     if type(volume) not in (int, float) or not math.isfinite(volume) or not 0 <= volume <= 1:
         raise ValueError("native ghost volume must be a number in 0..1")
-    return shadow, float(volume)
+    return float(volume)
 
 
 def _bytes(value) -> bytes:
