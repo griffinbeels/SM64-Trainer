@@ -225,7 +225,9 @@ causes, each fixed at its source:
   ([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `bridged`). A
   67 ms hold is below what reads as a pause; a blink is not. Longer runs, scene
   changes and the clip's first or last rows still hide the ghost. The clip
-  and the audit keep the rows refused: this is display, not extraction.
+  and the audit keep the rows refused: this is display, not extraction. A
+  bridged row's own sounds still play, placed at the pose it shows (its own
+  pose is empty, the world origin).
 - **Painting exit, kept hidden**: the first 16 frames of `ACT_EXIT_AIRBORNE`
   (status 3) come before the action's first `set_mario_animation`, so the new
   level's Mario object has no animation (`animation`). The game draws him
@@ -300,9 +302,12 @@ compares live Mario's scene with the clip's first row. If they differ and
 the clip restarted in live Mario's level and area, it shifts that ghost's
 coordinate so the latest such restart's raw IGT meets the live raw IGT.
 Otherwise, including segments and fixed seek, nothing changes. The shift is
-fixed per ghost and attempt origin. A restore resolved into that attempt
-(`GO_RECOVERED`) keeps it, because its coordinate continues the attempt's
-timeline. A later live scene change never re-aligns. Touch, dance tail and
+fixed per recording (clip id, not its slot) and attempt. An attempt begins at
+an unrecovered origin, in the scene live Mario is in when it first applies. A
+restore resolved into it (`GO_RECOVERED`) continues its timeline, so the same
+recording keeps its shift, and a recording newly shown during it (a selection
+change, a toggle, a capture restart re-adopting clips into other slots) aligns
+to the attempt's scene. A later live scene change never re-aligns. Touch, dance tail and
 after-end checks use the shifted coordinate.
 
 Real replay (2026-09-23, the actual playback selection over the saved 2814
