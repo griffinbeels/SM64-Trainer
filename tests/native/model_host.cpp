@@ -260,6 +260,32 @@ int main(int argc, char** argv) {
         sg_atlas_view atlas{};
         check(sg_model_get_atlas(model,&atlas)==SG_OK && atlas.animation_count==209 && atlas.rgba,"atlas");
         check(atlas.width==704 && atlas.height==64,"atlas dimensions");
+        {
+            // Mario's particle models read from the same segment: every frame one
+            // textured quad, bubble first, splash frames 32x64.
+            sg_particle_view particles{};
+            check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==53 &&
+                particles.vertex_count==318 && particles.atlas_rgba,"particle frames");
+            for(uint32_t i=0;i<particles.frame_count;++i)
+                check(particles.frames[i].vertex_count==6 && particles.frames[i].first_vertex==6*i,"one quad per particle frame");
+            check(particles.frames[0].display_list==0x0401DD60u && particles.frames[0].layer==SG_PARTICLE_CUTOUT,"bubble frame");
+            // The lava flame (common1) is shaded by its environment colour, not vertices.
+            const auto& flame=particles.vertices[particles.frames[45].first_vertex].rgba;
+            check(particles.frames[45].display_list==0x0301B3B0u && flame[0]==255 && flame[1]==50 && flame[2]==0 && flame[3]==200,
+                "flame frame");
+            unsigned opaque=0;
+            for(uint32_t i=0;i<particles.atlas_width*particles.atlas_height;++i)opaque+=particles.atlas_rgba[4*i+3]>0;
+            std::ofstream ppm("particles.ppm",std::ios::binary);
+            ppm<<"P6\n"<<particles.atlas_width<<' '<<particles.atlas_height<<"\n255\n";
+            for(uint32_t i=0;i<particles.atlas_width*particles.atlas_height;++i) {
+                // Composite over magenta so alpha holes are visible.
+                const uint8_t* p=particles.atlas_rgba+4*i;const unsigned a=p[3];
+                const unsigned char rgb[3]={uint8_t((p[0]*a+255*(255-a))/255),uint8_t((p[1]*a)/255),uint8_t((p[2]*a+255*(255-a))/255)};
+                ppm.write(reinterpret_cast<const char*>(rgb),3);
+            }
+            ppm.close();std::fprintf(stderr,"particle opaque texels %u\n",opaque);
+            check(opaque>15000,"particle textures decoded"); // 17063 on the US ROM
+        }
         sg_pose a=pose(); Mesh mesh;
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK,"base evaluation");
         check(mesh.out.vertex_count>1800 && mesh.out.vertex_count<=3072,"actual Mario geometry");

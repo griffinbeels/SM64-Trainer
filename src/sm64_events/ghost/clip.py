@@ -2,9 +2,10 @@
 
 Capture refusals remain records. A clip never fills a gap from a nearby pose,
 and its captured camera is evidence rather than the playback camera. Each
-record may also carry the shadow the game drew under Mario and the sound
-requests Mario issued since the previous frame (`Frame.sounds`), each with
-its own validity bit.
+record may also carry the shadow the game drew under Mario, the sound
+requests Mario issued since the previous frame (`Frame.sounds`) and the
+particles the game drew for him (bubbles, splashes, water rings, dust), each
+with its own validity bit.
 
 A star run's clip may end with a DANCE TAIL (header flag `DANCE_TAIL`): the
 frames after the attempt closed, through Mario's closing star grab and dance,
@@ -26,14 +27,17 @@ import tempfile
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO4", 4, 5
-HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 652, 636
-MAX_RECORDS, WORLD_READY = 200000, 3
-CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND = 1, 2, 4, 8, 16, 32, 64
-REQUIRED, ALL_VALID = 31, 127
-SHADOW_AT, SOUND_AT = 16 + 308, 16 + 600  # record offsets of gc_shadow / gc_sound
+MAGIC, VERSION, SAMPLE_VERSION = b"SM64GHO5", 5, 6
+HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1232, 1216
+MAX_RECORDS, WORLD_READY = 100000, 3
+CLOCK, POSE, CAMERA, ACTION, WARP, SHADOW, SOUND, PARTICLES = 1, 2, 4, 8, 16, 32, 64, 128
+REQUIRED, ALL_VALID = 31, 255
+SHADOW_AT, SOUND_AT, PARTICLES_AT = 16 + 308, 16 + 600, 16 + 636  # record offsets of the optional blocks
 SHADOW_BYTES, SOUND_BYTES, SOUND_EVENTS, SOUND_OVERFLOW = 292, 36, 8, 1
+PARTICLE_BYTES, PARTICLE_EVENTS, PARTICLE_OVERFLOW = 580, 16, 1
 OLDER_MAGICS = (b"SM64GHO1", b"SM64GHO2", b"SM64GHO3")
+# GCLIP4/GC5, before particles: still read, as the same clip without them.
+V4_MAGIC, V4_VERSION, V4_SAMPLE_VERSION, V4_RECORD_BYTES, V4_SAMPLE_BYTES = b"SM64GHO4", 4, 5, 652, 636
 RAW_VALID, PROGRESS_VALID, ELAPSED_VALID = 1, 2, 4
 STAR_CLOCK, SEGMENT_CLOCK = 1, 2
 DANCE_TAIL = 1  # header flag: rows after the closing frame are the closing star's dance
@@ -127,6 +131,7 @@ class Frame:
     sounds: tuple[int, ...] = ()  # Mario's play_sound bits this frame, in order
     sound_overflow: bool = False  # more than SOUND_EVENTS were issued
     refusal: int = 0  # gc_refusal: why this frame's own lists did not prove the pose
+    particles: int = 0  # Mario's particles the game drew this frame
 
     @property
     def refusal_name(self) -> str:
@@ -152,12 +157,27 @@ class Frame:
         return self.valid_fields & (CLOCK | POSE) == CLOCK | POSE
 
 
+def upgrade_record(data: bytes) -> bytes:
+    """A GCLIP4/GC5 record read as GCLIP5/GC6: the same bytes, its sizes and
+    versions moved on and an empty particle block (native ghost_clip_upgrade.h).
+    Anything else is returned unchanged for the ordinary checks."""
+    if (len(data) != V4_RECORD_BYTES or struct.unpack_from("<2I", data) != (V4_RECORD_BYTES, V4_VERSION)
+            or struct.unpack_from("<2I", data, 16) != (V4_SAMPLE_BYTES, V4_SAMPLE_VERSION)):
+        return data
+    raw = bytearray(RECORD_BYTES)
+    raw[:V4_RECORD_BYTES] = data
+    struct.pack_into("<2I", raw, 0, RECORD_BYTES, VERSION)
+    struct.pack_into("<2I", raw, 16, SAMPLE_BYTES, SAMPLE_VERSION)
+    return bytes(raw)
+
+
 def frame_from_bytes(data: bytes) -> Frame:
     if ((len(data) == 260 and struct.unpack_from("<2I", data) == (260, 2)
             and struct.unpack_from("<2I", data, 16) == (244, 3))
             or (len(data) == 324 and struct.unpack_from("<2I", data) == (324, 3)
                 and struct.unpack_from("<2I", data, 16) == (308, 4))):
         raise OlderPoseFormat()
+    data = upgrade_record(data)
     if len(data) != RECORD_BYTES:
         raise ClipError("native ghost record has the wrong size")
     raw = bytes(data)
@@ -172,7 +192,7 @@ def frame_from_bytes(data: bytes) -> Frame:
     frame = Frame(raw, configuration, world, epoch, valid, *values[4:],
                   *_WARP.unpack_from(raw, 256), Clock(*_CLOCK.unpack_from(raw, 260)),
                   tuple(bits[:count]) if valid & SOUND else (), bool(flags & SOUND_OVERFLOW),
-                  raw[REFUSAL_AT])
+                  raw[REFUSAL_AT], raw[PARTICLES_AT] if valid & PARTICLES else 0)
     if frame.refusal >= len(REFUSALS):
         raise ClipError("native ghost pose refusal is unknown")
     if not frame.sequence or not frame.dlist_serial or frame.qpc < 0 or frame.status > 13:
@@ -198,6 +218,7 @@ def frame_from_bytes(data: bytes) -> Frame:
         raise ClipError("native ghost success is missing a component")
     _validate_shadow(raw, valid)
     _validate_sound(count, flags, bits, raw, valid)
+    _validate_particles(raw, valid)
     _validate_clock(frame)
     return frame
 
@@ -240,6 +261,22 @@ def _validate_sound(count: int, flags: int, bits: list[int], raw: bytes, valid: 
     if (count > SOUND_EVENTS or flags & ~SOUND_OVERFLOW or any(bits[count:])
             or (flags & SOUND_OVERFLOW and count != SOUND_EVENTS)):
         raise ClipError("native ghost sound events are inconsistent")
+
+
+def _validate_particles(raw: bytes, valid: int) -> None:
+    block = raw[PARTICLES_AT:PARTICLES_AT + PARTICLE_BYTES]
+    if not valid & PARTICLES:
+        if any(block):
+            raise ClipError("native ghost particle refusal retains bytes")
+        return
+    count, flags = block[0], block[1]
+    if (count > PARTICLE_EVENTS or flags & ~PARTICLE_OVERFLOW or any(block[2:4])
+            or (flags & PARTICLE_OVERFLOW and count != PARTICLE_EVENTS) or any(block[4 + 36 * count:])):
+        raise ClipError("native ghost particles are inconsistent")
+    for at in range(4, 4 + 36 * count, 36):
+        if any(block[at + 22:at + 24]) or not all(
+                math.isfinite(value) for value in struct.unpack_from("<3f", block, at + 24)):
+            raise ClipError("native ghost particle entry is invalid")
 
 
 def _validate_clock(frame: Frame) -> None:
@@ -300,6 +337,7 @@ class Clip:
     origin_continuity: int
     frames: tuple[Frame, ...]
     flags: int = 0
+    file_version: int = VERSION  # 4: saved before particles, read without them
 
     @property
     def dance_tail(self) -> bool:
@@ -354,9 +392,28 @@ def _checked_frames(frames: tuple[Frame, ...], configuration: int, epoch: int,
     return first.level, first.area
 
 
+def _upgrade_clip(data: bytes) -> bytes:
+    """A structurally sized GCLIP4 file as GCLIP5 (ghost_clip_upgrade.h);
+    anything else unchanged, for the ordinary header checks to judge."""
+    if len(data) < HEADER_BYTES or data[:8] != V4_MAGIC:
+        return data
+    version, size, record_size, count, _rom, sample_version = struct.unpack_from("<6I", data, 8)
+    if ((version, size, record_size, sample_version) != (V4_VERSION, HEADER_BYTES, V4_RECORD_BYTES, V4_SAMPLE_VERSION)
+            or not 1 <= count <= MAX_RECORDS or len(data) != HEADER_BYTES + count * V4_RECORD_BYTES):
+        return data
+    header = bytearray(data[:HEADER_BYTES])
+    header[:8] = MAGIC
+    struct.pack_into("<3I", header, 8, VERSION, HEADER_BYTES, RECORD_BYTES)
+    struct.pack_into("<I", header, 28, SAMPLE_VERSION)
+    return bytes(header) + b"".join(upgrade_record(data[at:at + V4_RECORD_BYTES])
+                                    for at in range(HEADER_BYTES, len(data), V4_RECORD_BYTES))
+
+
 def decode_clip(data: bytes) -> Clip:
     if data[:8] in OLDER_MAGICS:
         raise OlderPoseFormat()
+    file_version = V4_VERSION if data[:8] == V4_MAGIC else VERSION
+    data = _upgrade_clip(data)
     if not HEADER_BYTES <= len(data) <= HEADER_BYTES + MAX_RECORDS * RECORD_BYTES:
         raise ClipError("native ghost file size is outside its bound")
     values = _HEADER.unpack_from(data)
@@ -384,7 +441,7 @@ def decode_clip(data: bytes) -> Clip:
         raise ClipError("native ghost header disagrees with its exact origin")
     return Clip(clip_id.hex(), configuration, epoch, frequency, anchor, utc, level, area,
                 kind, origin_timer, origin_raw, origin_sequence, origin_elapsed, origin_continuity, frames,
-                flags)
+                flags, file_version)
 
 
 def encode_clip(frames, producer, *, clock_kind: int, clip_id: str | None = None,
@@ -448,8 +505,11 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
     if (clip.clock_kind != expected_kind or clip.origin_global_timer != owner["native_clock_frame"]
             or clip.frames[-1 - tail].global_timer != owner["closed_frame"]):
         raise ClipError("native ghost manifest disagrees with the attempt's effective origin")
-    expected = dict(version=VERSION, clip_id=clip.clip_id, bytes=path.stat().st_size,
-                    records=len(clip.frames), record_bytes=RECORD_BYTES, sample_version=SAMPLE_VERSION,
+    saved_before_particles = clip.file_version == V4_VERSION
+    expected = dict(version=clip.file_version, clip_id=clip.clip_id, bytes=path.stat().st_size,
+                    records=len(clip.frames),
+                    record_bytes=V4_RECORD_BYTES if saved_before_particles else RECORD_BYTES,
+                    sample_version=V4_SAMPLE_VERSION if saved_before_particles else SAMPLE_VERSION,
                     configuration=clip.configuration, epoch=clip.epoch, level=clip.level, area=clip.area,
                     first_sequence=first.sequence, last_sequence=last.sequence,
                     first_global_timer=first.global_timer, last_global_timer=last.global_timer,

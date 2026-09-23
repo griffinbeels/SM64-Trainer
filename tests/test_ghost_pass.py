@@ -38,7 +38,7 @@ def _build_host(tmp_path, host, sources, includes=()):
 
 @pytest.mark.parametrize("host,sources", [
     ("ghost_pass", ["ghost_pass.cpp"]),
-    ("ghost_stream", ["ghost_pass.cpp", "ghost_clock.cpp", "ghost_root.cpp", "ghost_stream.cpp"]),
+    ("ghost_stream", ["ghost_pass.cpp", "ghost_clock.cpp", "ghost_root.cpp", "ghost_particle_capture.cpp", "ghost_stream.cpp"]),
     ("ghost_pose", ["ghost_pose.cpp"]),
 ])
 def test_native_world_and_stream_contracts(tmp_path, host, sources):

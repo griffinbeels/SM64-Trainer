@@ -27,20 +27,27 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 
 | Boundary | Current contract | Source |
 |---|---|---|
-| Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600) and the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
+| Capture | GC6: layout 184, sample 1216; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved) and particles (580 at 636) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
-| Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
+| Renderer capture | GS5, still exported as `SM64GhostSourceV3` (the version argument must be 5); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
-| Portable clip | GCLIP4: header 160, record 652, maximum 200000 records; header flag `GCLIP_DANCE_TAIL` | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
+| Ghost IPC | GIPC7: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1232 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Portable clip | GCLIP5: header 160, record 1232, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP4 (record 652) still loads, read as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
-Sizes are bytes. Native ghost versions are checked together; older native clips
-have no compatibility reader. Their files remain on disk; `OlderPoseFormat`
-provides a typed reason (`older_pose_format`) to record a new attempt. An older
-committed file keeps pruning protection and is never overwritten by a later
-export; a playable saved copy of the same attempt still wins. GCLIP3/GC4 files
-and archive rows (no shadow or sound) are older formats in the same sense.
+Sizes are bytes. Native ghost versions are checked together. GCLIP4 (GC5,
+652-byte records, the saved and PB ghosts recorded before particles) is the one
+format read by a compatibility step: the worker, after checking the saved
+file's SHA-256, and `clip.py` both rewrite it as GCLIP5 with every sample byte
+kept and no particle block ([ghost_clip_upgrade.h](../plugin/gfxwrap/ghost_clip_upgrade.h),
+`upgrade_record`), so it binds to its attempt and plays exactly as before
+(tested on a real saved clip, `tests/fixtures/attempt_2549_*`); a GCLIP4 clip
+longer than 100000 records is refused. Older native clips have no
+compatibility reader. Their files remain on disk; `OlderPoseFormat` provides a
+typed reason (`older_pose_format`) to record a new attempt. An older committed
+file keeps pruning protection and is never overwritten by a later export; a
+playable saved copy of the same attempt still wins. GCLIP3/GC4 files and
+archive rows (no shadow or sound) are older formats in the same sense.
 SourceV2 video capture retains its original contract.
 GS advertises pose and world-pass capture, not `GS_CAP_RENDER`: its table is a
 capture interface. Rendering uses the separate playback/draw path and requires
@@ -392,8 +399,9 @@ assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
 full set plus as many retiring copies) share a 128 MiB clip/index budget, and
 the worker's retained files obey the same bound. One maximum-size clip
-(200000 records, about 111 minutes at 30 Hz: 200000 x (652 + 4) bytes) fits;
-two maximum-size clips do not with GC5. All resident slots count, so a replacement
+(100000 records, about 55 minutes at 30 Hz: 100000 x (1232 + 4) bytes) fits;
+two maximum-size clips do not with GC6. The particle block halved the maximum
+from GC5's 200000 records rather than raising the budget. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
 If a reader holds the status page during revocation, the worker retries that
@@ -579,6 +587,67 @@ water plane at his waist: 5535 pixels take the water blend exactly, 4437 above
 it and every pixel outside him are unchanged (2026-09-23, RTX 5090). Live GLideN64
 has not run it; which SM64 draws qualify is known from the decomp render
 modes and the pinned blend code, not from a live frame.
+
+### Recorded particles
+
+Mario's particles are ordinary objects: `bhvBubbleMario` spawns bubbles
+(`bhvSmallWaterWave`, `MODEL_BUBBLE`), `bhvWaterSplash` a splash and its
+droplets, `bhvIdleWaterWave`/`bhvWaveTrail` water rings, and the dust, burn
+smoke and sparkle generators theirs (n64decomp `object_list_processor.c`
+`sParticleTypes`). Their motion uses the game's random numbers, so capture
+records what the game drew instead of simulating it.
+[ghost_particle_capture.cpp](../plugin/gfxwrap/ghost_particle_capture.cpp)
+walks the object pool once per list for active, rendered objects whose
+`parentObj` chain reaches `gMarioObject` within four hops (a droplet is two).
+In the same display-list hook as the root probe, it records each such object's
+first pushed display list whose modelview translation equals that object's
+fresh `cameraToObject` (0.05 units), with the executed 3x3 in 4.12 fixed point
+and the view-space translation. Up to 16 are kept per frame: when more were
+drawn (a shallow splash throws 18 droplets), the 16 nearest Mario, nearest
+first, with `GC_PARTICLES_OVERFLOW` set; the rest are counted in the source's
+`gs_stats.particles_dropped` and the IPC status page's `particles_dropped`.
+Another object's bubble, a coin's sparkle or a particle whose spawner
+slot was already reused is not recorded. No new RAM address is read.
+
+The model library reads the frames' geometry and textures from the same
+decoded ROM segment 4 as Mario's textures
+([particles.c](../renderer/model/particles.c)): 45 US display lists (bubble,
+dust, burn smoke, small splash, water rings, sparkles, water splash, droplet,
+sparkle animation), each followed through a bounded Fast3D subset into one
+textured quad and a 512x256 atlas. Any other command or format leaves the
+model with no particles; Mario still opens. The 8 lava-flame frames
+(`bhvFlameMario`, `MODEL_RED_FLAME`, shaded by their environment colour) come
+from common1 (segment 3, MIO0 at ROM 0x201410 in both the US and Usamune US
+ROMs); if those lists do not read, only the flame is missing. Playback
+([ghost_particle_pose.cpp](../plugin/gfxwrap/ghost_particle_pose.cpp)) removes
+the recorded camera from each matrix. A view-aligned (billboard) matrix is
+re-aligned to the live camera, as the game billboards every frame; a water
+ring keeps its world orientation. Frames the model lacks are skipped. The
+compositor ([ghost_particle_gl.h](../plugin/gfxwrap/ghost_particle_gl.h))
+draws them right after their ghost's body, against copied terrain and that
+body's depth, with the translucent world layer applied: cutout frames (the
+game's texture-edge layer) keep texels at alpha 0.5 or more, blend frames
+multiply texture and vertex alpha, and both take the ghost's opacity.
+Particles never refuse their ghost and have no switch.
+
+Recorded but not drawn: the ground-pound mist and the snow, leaf and sand
+spawners, whose models are in other segments. Environment bubbles (`envfx`)
+are not objects and not Mario's.
+
+The [particle witness](../tests/test_ghost_particles.py)
+(`SM64_TEST_GHOST_COMPOSITOR=1`) checks cutout and blend frames, hiding
+behind the body and behind terrain, the clean frame and GL state; removing the
+draw, the body depth test, the terrain test or the cutout each turns it red.
+The model witness checks all 53 frames decode to one quad each (17063 visible
+segment-4 texels, the flame's environment colour) on both the US and the
+Usamune US ROM. The [probe witness](../tests/test_ghost_particle_capture.py) keeps the 16
+nearest of 21 drawn (5 counted), skips nested calls, another object's bubble and
+inactive objects, and publishes nothing for an interrupted list. The connected
+pipeline records a bubble, a droplet (two hops) and a
+splash frame while ignoring another object's bubble, and draws them from the
+real ROM atlas (19740 pixels, 0 outside); ignoring the parent chain or the
+position match, dropping the stream hook or the playback placement each turns
+it red (2026-09-23).
 
 ### Player-first fade
 

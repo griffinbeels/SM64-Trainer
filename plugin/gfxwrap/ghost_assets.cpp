@@ -1,4 +1,5 @@
 #include "ghost_assets.h"
+#include "ghost_clip_upgrade.h"
 #include <windows.h>
 #include <bcrypt.h>
 #include <cstring>
@@ -48,10 +49,14 @@ bool sha256(const std::vector<uint8_t> &data,uint8_t digest[32]) {
     if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
     return ok;
 }
-bool clip(const std::vector<uint8_t> &data, const uint8_t expected[32],
+bool clip(std::vector<uint8_t> &data, const uint8_t expected[32],
           const uint8_t id[16], gclip_header &out) {
     out = {};
     if (data.size() < sizeof(out)) return false;
+    // The digest names the file as saved; a GCLIP4 file is then read as GCLIP5.
+    uint8_t digest[32]{};
+    if (!sha256(data,digest) || std::memcmp(digest, expected, sizeof(digest))) return false;
+    ghost_clip::upgrade_v4(data);
     gclip_header header{}; std::memcpy(&header, data.data(), sizeof(header));
     if (std::memcmp(header.magic, GCLIP_MAGIC, 8) || header.version != GCLIP_VERSION
             || header.bytes != sizeof(header) || header.record_bytes != sizeof(gclip_frame)
@@ -59,8 +64,6 @@ bool clip(const std::vector<uint8_t> &data, const uint8_t expected[32],
             || header.sample_version != GC_VERSION || header.rom_layout != GC_ROM_US
             || data.size() != sizeof(header) + static_cast<size_t>(header.record_count) * sizeof(gclip_frame)
             || std::memcmp(header.clip_id, id, 16)) return false;
-    uint8_t digest[32]{};
-    if (!sha256(data,digest) || std::memcmp(digest, expected, sizeof(digest))) return false;
     out = header; return true;
 }
 }

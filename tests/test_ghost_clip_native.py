@@ -18,6 +18,8 @@ from test_ghost_clip import BAD_CLOCK_WORDS, BAD_HEADER_WORDS, encoded, matrix_f
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = Path(os.environ.get("SM64_GHOST_PLAYBACK_ROOT", ROOT)).resolve()
 
+REAL_GCLIP4 = Path(__file__).parent / "fixtures/attempt_2549_whomps-fortress_shoot-into-the-wild-blue_0m10s66.ghost"
+
 
 def corpus():
     base = encoded((frame(),))
@@ -47,7 +49,7 @@ def corpus():
         values.append(bytes(changed))
     for offset, value in [(32, 1), (40, 101), (48, 999), (56, 99), (308, 0), (316, 10)]:
         changed = bytearray(encoded((frame(1), frame(2))))
-        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 160 + 652 + offset, value)
+        struct.pack_into("<Q" if offset in (32, 40, 48, 308, 316) else "<I", changed, 160 + 1232 + offset, value)
         values.append(bytes(changed))
     # Pose refusal reasons: kept on refused rows and on carried roots; an
     # unknown reason or any other pose byte on a refusal is refused.
@@ -59,14 +61,17 @@ def corpus():
         changed[offset] = value
         values.append(bytes(changed))
     # Recorded shadow and sound: accepted shapes, then each native refusal.
-    evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,)),
-                        frame(2, sounds=tuple(range(1, 9)), overflow=True)))
+    evidence = encoded((frame(1, shadow=True, sounds=(0x24228080,), particles=((0x0401DD60, (1, 2, -300)),)),
+                        frame(2, sounds=tuple(range(1, 9)), overflow=True, particles=())))
     values.append(evidence)
     for offset, pack, value in [(160 + 128, "<I", 1), (160 + 324 + 60, "<f", 0.5),
                                 (160 + 324, "<I", 0x7fc00000), (160 + 324 + 163, "<B", 1),
-                                (160 + 616, "<B", 9), (160 + 652 + 617, "<B", 2),
+                                (160 + 616, "<B", 9), (160 + 1232 + 617, "<B", 2),
                                 (160 + 616 + 1, "<B", 1), (160 + 620 + 4, "<I", 5),
-                                (160 + 652 + 324 + 8, "<I", 1), (160 + 652 + 620, "<I", 0)]:
+                                (160 + 1232 + 324 + 8, "<I", 1), (160 + 1232 + 620, "<I", 0),
+                                (160 + 652, "<B", 17), (160 + 653, "<B", 2), (160 + 654, "<B", 1),
+                                (160 + 656 + 22, "<h", 1), (160 + 656 + 24, "<I", 0x7fc00000),
+                                (160 + 656 + 36, "<I", 0x0401DD60), (160 + 1232 + 652, "<B", 1)]:
         changed = bytearray(evidence)
         struct.pack_into(pack, changed, offset, value)
         values.append(bytes(changed))
@@ -75,6 +80,13 @@ def corpus():
     segment_tail = bytearray(encoded((frame(),), SEGMENT_CLOCK))
     struct.pack_into("<I", segment_tail, 124, 1)
     values.append(bytes(segment_tail))
+    # A real GCLIP4 recording saved before particles plays; a broken one does not.
+    saved = REAL_GCLIP4.read_bytes()
+    values.append(saved)
+    for offset, value in ((20, 321), (160, 653), (160 + 20, 637), (160 + 28, 128)):
+        broken = bytearray(saved)
+        struct.pack_into("<I", broken, offset, value)
+        values.append(bytes(broken))
     return values
 
 
@@ -91,7 +103,8 @@ def test_python_and_native_acceptance_agree(tmp_path):
     source = native / "ghost_playback.cpp"
     target = tmp_path / "ghost_clip_host.exe"
     inputs = [source, native / "ghost_origin.cpp", host, *(native / name for name in (
-        "ghost_clip.h", "ghost_capture.h", "ghost_playback.h", "ghost_origin.h", "ghost_clock.h", "ghost_pose.h")),
+        "ghost_clip.h", "ghost_clip_upgrade.h", "ghost_capture.h", "ghost_playback.h", "ghost_origin.h",
+        "ghost_clock.h", "ghost_pose.h")),
         COMPONENTS / "renderer/model/model.h", COMPONENTS / "tools/build_plugin.py",
         *(ROOT / name for name in ("src/sm64_events/ghost/clip.py", "tests/ghost_native_fixture.py",
                                    "tests/test_ghost_clip.py", "tests/test_ghost_clip_native.py"))]
@@ -122,5 +135,6 @@ def test_python_and_native_acceptance_agree(tmp_path):
                "executable_sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
     (tmp_path / "codec-parity.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
     assert set(expected) == {0, 1}
+    assert expected[-5:] == actual[-5:] == [1, 0, 0, 0, 0], "a saved GCLIP4 clip plays; broken ones do not"
     assert actual == expected, [(index, want, got) for index, (want, got)
                                 in enumerate(zip(expected, actual, strict=False)) if want != got]
