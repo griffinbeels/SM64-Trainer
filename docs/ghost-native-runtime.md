@@ -384,7 +384,15 @@ from the shared coordinate: before-start clamps, and after-end, gaps, wrong
 scene, refused poses (except a bridged short run) and its own recorded touch
 hide only that ghost. A live
 star grab or star generation change ends every ghost. Overlap fade compares
-live Mario with each ghost separately. The renderer evaluates all ghosts into
+live Mario with each ghost separately
+([ghost_proximity.h](../plugin/gfxwrap/ghost_proximity.h)): touching bodies
+fade the ghost smoothly down to the shared floor, 15% of its opacity
+(`GHOST_FLOOR` in ghost_occlusion.h), never to nothing. On a pole, a ledge or
+Blast Away the Wall's plank both Marios snap to one point, 1 to 4 units
+apart; before the floor the ghost vanished for the whole hold (his report,
+2026-09-23). The [proximity witness](../tests/test_ghost_proximity_native.py)
+checks the floor at distance 0 and 1, the half-overlap midpoint, full
+opacity from touching, and that the curve never drops below the floor. The renderer evaluates all ghosts into
 one borrowed mesh each, sorts them farthest root first and draws them with one
 `begin_batch`: one clean copy and per-body self-depth. A frame with no visible
 ghost behaves like the former hidden ghost; clean output, HUD and presentation
@@ -792,7 +800,8 @@ user's opacity and the overlap fade:
 - **In front of live Mario, over him.** Playback projects his body box (feet at
   his position, 100 wide and 160 tall per unit gfx scale) with the ghosts' own
   live view-projection: a screen ellipse plus his body centre's clip w. A ghost
-  fragment keeps `1 - 0.85 x cover x front` of its opacity. `cover` is 1 inside
+  fragment keeps `1 - 0.85 x cover x front` of its opacity, so over his core
+  it keeps the same 15% floor as the overlap fade. `cover` is 1 inside
   the ellipse inscribed in his box and falls smoothly to 0 at 1.6 times that.
   `front` rises from 0 at his centre's depth to 1 at 60 units nearer the
   camera. Behind him, or away from him on screen, a ghost is byte-exact.

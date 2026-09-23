@@ -27,7 +27,13 @@ constexpr float BODY_HEIGHT = 160.0f;     // bhvMario height, feet at the root
 constexpr float REGION_INNER = 1.0f;      // full fade inside the ellipse inscribed in his box
 constexpr float REGION_OUTER = 1.6f;      // none beyond 1.6x (the box corners sit at 1.41x)
 constexpr float FRONT_BAND = 60.0f;       // world units nearer than his centre for the full fade
-constexpr float PLAYER_STRENGTH = 0.85f;  // a ghost over his core keeps 15% of its opacity
+/* THE FLOOR: the least of its opacity a ghost keeps when it blocks live
+ * Mario, whether it stands in front of him (this rule) or overlaps his body
+ * (ghost_proximity.h). A ghost that fully vanished while he held a pole or a
+ * ledge with it read as a missing ghost (reported on Blast Away the Wall's
+ * plank, 2026-09-23). Only the camera term may still hide a ghost entirely. */
+constexpr float GHOST_FLOOR = 0.15f;
+constexpr float PLAYER_STRENGTH = 1.0f - GHOST_FLOOR; // a ghost over his core keeps GHOST_FLOOR
 constexpr float NEAR_HIDDEN = 150.0f;     // a ghost closer than this to the camera is invisible
 constexpr float NEAR_FULL = 450.0f;       // and fully visible from here (about 43% of a 45-degree screen)
 constexpr float PLAYER_MIN_W = 1.0f;      // any body corner nearer than this: no player region

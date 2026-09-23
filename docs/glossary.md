@@ -1246,13 +1246,26 @@ only 15% of their opacity. Near the camera the whole body fades out, so it
 can never fill the screen. The fade leaves a [[ghost]] behind Mario, or away
 from him, untouched. Its [[recorded shadow]] and [[recorded particles]]
 follow the same rule. It
-multiplies with opacity and the overlap fade; the card's **Fade in front of
-Mario** switch turns it off for comparison.
+multiplies with opacity and the [[overlap fade]], which shares its 15% floor;
+the card's **Fade in front of Mario** switch turns it off for comparison.
 
 - **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
   playback fills live Mario's region each frame
-- **Not** — the overlap fade, which fades a whole [[ghost]] when its body touches
-  live Mario's, wherever the camera is.
+- **Not** — the [[overlap fade]], which fades a whole [[ghost]] when its body
+  touches live Mario's, wherever the camera is.
+
+### Overlap fade
+
+A [[ghost]] whose body touches live Mario's fades as a whole, smoothly down to
+15% of its opacity when the two stand on the same spot, so it never vanishes
+on a pole, a ledge or a plank both Marios hold. It is back to full opacity
+once the bodies stop touching, plus any extra distance set on the practice
+card.
+
+- **Lives** — `plugin/gfxwrap/ghost_proximity.h`; the floor is shared with the
+  [[player-first fade]] in `plugin/gfxwrap/ghost_occlusion.h`
+- **Not** — the [[player-first fade]], which fades only the pixels in front of
+  live Mario and depends on the camera.
 
 ### Held object (ghost)
 

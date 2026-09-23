@@ -2,8 +2,11 @@
  * Uses an ellipsoid proxy sized from bhvMario's radius=37, height=160:
  * https://github.com/n64decomp/sm64/blob/master/data/behavior_data.c
  * This is deliberately not a pixel-overlap test or a Trackmania formula.
+ * Overlapping bodies fade the ghost down to ghost_occlusion::GHOST_FLOOR,
+ * never to nothing: on a pole or a ledge both Marios snap to one point.
  */
 #pragma once
+#include "ghost_occlusion.h"
 #include <cmath>
 
 namespace ghost_proximity {
@@ -27,11 +30,12 @@ inline float factor(const float live_position[3], const float live_scale[3],
         const double normalized = delta[i] / extent[i];
         normalized_distance += normalized * normalized;
     }
-    if (squared_distance == 0) return 0.0f;
+    const double floor = ghost_occlusion::GHOST_FLOOR;
+    if (squared_distance == 0) return float(floor);
     const double distance = std::sqrt(squared_distance);
     const double touching_distance = distance / std::sqrt(normalized_distance);
     const double t = distance / (touching_distance + extra_distance);
     if (t >= 1.0) return 1.0f;
-    return float(t * t * (3.0 - 2.0 * t));
+    return float(floor + (1.0 - floor) * t * t * (3.0 - 2.0 * t));
 }
 }
