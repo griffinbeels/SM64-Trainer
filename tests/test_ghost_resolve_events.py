@@ -35,7 +35,7 @@ def tick(session, clock, seconds=0.5):
 
 def switched(session, on):
     session._load_persisted()
-    session._enabled = on
+    session._values["enabled"] = on
 
 
 @pytest.mark.parametrize("on", [True, False])
@@ -124,9 +124,9 @@ def test_only_mario_asks_the_whole_picture_no_more_than_it_needs(tmp_path):
         asked.append(ghost)
         return {"available": ghost == "b", "reason_text": None}
     session._resolve_video_source = whole
-    session._view = "whole"
+    session._values["view"] = "whole"
     assert session._row_video() is whole       # every row is shown this way
-    session._view = "mario"
+    session._values["view"] = "mario"
     session._source = {"whole_available": True}
     rows = [session._row_video()(None, name) for name in "abc"]
     assert asked == [] and {row["available"] for row in rows} == {None}

@@ -304,7 +304,7 @@ class GhostSession:
 
     def _safety_resolve_due(self) -> bool:
         """The backstop resolve (`SAFETY_RESOLVE_S`), only while drawing."""
-        return (self._enabled and self._resolved_at is not None
+        return (self._values["enabled"] and self._resolved_at is not None
                 and monotonic() - self._resolved_at >= SAFETY_RESOLVE_S)
 
     def _world_now(self):
@@ -496,7 +496,7 @@ class GhostSession:
         sidecar and checks its picture map, so after the first yes (the
         current source's own counts) the rest are left unasked (`None`);
         switching views resolves again and asks them properly."""
-        if self._view != "mario":
+        if self._values["view"] != "mario":
             return self._resolve_video_source
         found = [bool(self._source.get("whole_available"))]
 
@@ -541,7 +541,7 @@ class GhostSession:
         try:
             self._candidates = self._selection.candidates(
                 target, self.library(), video_of, self._native,
-                variant=(self._view, self._world_now()))
+                variant=(self._values["view"], self._world_now()))
             # The chosen ghosts were resolved just now. Do not let the list's
             # short cache hide a deletion or a newly saved file on them.
             fresh = {ghost["attempt_id"]: ghost for ghost in self._native_answer.get("ghosts", [])}
