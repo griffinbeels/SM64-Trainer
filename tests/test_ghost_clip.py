@@ -3,10 +3,12 @@ import json
 from pathlib import Path
 import struct
 from types import SimpleNamespace
+import zlib
 
 import pytest
 
 from ghost_native_fixture import frame, producer
+from sm64_events.ghost.archive import stored_record
 from sm64_events.ghost.native_layout import (
     CLIP_MAGIC, CLIP_VERSION, HEADER_BYTES, HELD_ANGLES_AT, HELD_AT, HELD_RELEASED_AT, PARTICLES_AT,
     PARTICLES_ENTRIES_AT, ROOT_KIND_AT, SAMPLE_VERSION, SHADOW_AT, SHADOW_RESERVED_AT, SOUND_AT, SOUND_BITS_AT,
@@ -309,6 +311,42 @@ def test_a_clip_saved_before_released_objects_still_loads():
     assert clip.frames[0].held_behaviour == 0x13003174
     row = older[HEADER_BYTES:HEADER_BYTES + V5_RECORD_BYTES]
     assert frame_from_bytes(row).raw == decode_clip(current).frames[0].raw
+
+
+REAL_GCLIP5 = Path(__file__).parent / "fixtures/attempt_4015_bob-omb-battlefield_behind-chain-chomps-gate_0m13s63.ghost"
+
+
+def test_his_real_gclip5_bob_omb_clip_still_binds_and_holds_the_bob_omb_in_his_hand():
+    """His Behind Chain Chomp's Gate run from before released objects (GC6
+    records): it binds to its attempt, every byte it recorded is kept, and the
+    Bob-omb stays in his hand (nothing released)."""
+    manifest = json.loads(REAL_GCLIP5.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+    attempt = SimpleNamespace(id=manifest["attempt_id"], session_id=manifest["session_id"],
+                              **{key: manifest[key] for key in ("native_clock_frame", "native_clock_utc",
+                                                                "native_clock_kind", "closed_frame")})
+    clip = check_manifest(REAL_GCLIP5, manifest, attempt=attempt, target=manifest["target"])
+    data = REAL_GCLIP5.read_bytes()
+    assert data[:8] == V5_MAGIC and clip.file_version == V5_VERSION and len(clip.frames) == 510
+    held = [f for f in clip.frames if f.held_behaviour == 0x13003174]
+    assert len(held) == 85
+    assert all(f.raw[HELD_AT + HELD_ANGLES_AT:HELD_AT + HELD_RELEASED_AT + 2] == bytes(8) for f in clip.frames)
+    for index, record in enumerate(clip.frames):
+        saved = data[HEADER_BYTES + index * V5_RECORD_BYTES:HEADER_BYTES + (index + 1) * V5_RECORD_BYTES]
+        assert record.raw[8:16] == saved[8:16] and record.raw[24:V5_RECORD_BYTES] == saved[24:]
+
+
+def test_pose_archive_v2_rows_from_before_released_objects_still_export(tmp_path):
+    """A session archive spanning the upgrade keeps GC6 rows (zlib, schema v2):
+    they read as the current record and export into a current clip."""
+    saved = REAL_GCLIP5.read_bytes()
+    rows = [zlib.compress(saved[HEADER_BYTES + i * V5_RECORD_BYTES:HEADER_BYTES + (i + 1) * V5_RECORD_BYTES], 1)
+            for i in range(3)]
+    frames = [frame_from_bytes(stored_record(row)) for row in rows]
+    assert all(len(frame.raw) == RECORD_BYTES for frame in frames)
+    written = write_clip(tmp_path / "exported.ghost", [stored_record(row) for row in rows], producer(
+        configuration=frames[0].configuration, epoch=frames[0].epoch), clock_kind=STAR_CLOCK)
+    assert written["record_bytes"] == RECORD_BYTES and written["version"] == CLIP_VERSION
+    assert [f.raw for f in decode_clip((tmp_path / "exported.ghost").read_bytes()).frames] == [f.raw for f in frames]
 
 
 def test_truncation_trailing_data_nonfinite_and_invalid_components():
