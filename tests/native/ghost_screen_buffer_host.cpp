@@ -112,6 +112,12 @@ namespace ghost_link {
 #ifndef GL_DRAW_FRAMEBUFFER_BINDING
 #define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
 #endif
+// ghost_link.cpp's file scope around raster_buffer: the dispatch's tracked
+// draw binding (unknown here, so the hook takes its counted driver query,
+// the real GL binding) and that count.
+struct TrackedRaster { uint32_t draw_framebuffer=0; bool draw_known=false; };
+static TrackedRaster tracked(){return {};}
+static uint32_t hook_queries=0;
 #include "raster_target.inc"
 }
 static std::vector<uint8_t> visible;
