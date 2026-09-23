@@ -1829,6 +1829,19 @@ history.
 - **Lives** — the celebration surface
   (`src/sm64_events/ui/components/celebrate.js`)
 
+### Stream overlay
+
+The page a streamer adds to OBS as a Browser Source: the current [[target]]'s
+[[personal best]] over its [[Goal]], a tally of this sitting's successes when
+that [[Goal]] asks for a streak or a count, and a [[Celebration]] drawn inside
+the same box when it falls. Every setting lives in its URL, which the designer
+in Settings → Streaming writes.
+
+- **Lives** — the page (`src/sm64_events/ui/goal-overlay.html`,
+  `src/sm64_events/ui/goaloverlaypage.js`), its settings and progress rules
+  (`src/sm64_events/ui/goaloverlay.js`), the designer
+  (`src/sm64_events/ui/components/streamoverlay.js`)
+
 ### Tuning inspector
 
 A live control panel for anything judged by feel — timings, easing, layout
