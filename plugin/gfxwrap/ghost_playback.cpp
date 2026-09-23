@@ -87,6 +87,9 @@ struct LiveRecovery {
     bool bound=false;
     LiveRecovery() {timing.reserve();} // capacity before any renderer use
     void clear() {timing.clear();owner={};restored=0;bound=false;}
+    // Revoked or withdrawn: nothing follows it now, but its checkpoints stay
+    // for a worker restore of the same run (adopt_recovery decides).
+    void detach() {timing.forget_stream();restored=0;bound=false;}
 } live_recovery;
 // Ghost sound: the last record each ghost displayed, so each record's
 // recorded sounds are handed over exactly once, as the ghost passes it.
@@ -555,7 +558,16 @@ bool adopt_recovery(const gp_request& next) {
     if(same && !std::memcmp(&live.owner.origin,&next.origin,sizeof(next.origin))) {live.owner=next;return false;}
     go_origin local{};
     const bool confirmed=same && live.timing.current(local) && !std::memcmp(&local,&next.origin,sizeof(local));
-    if(!confirmed) {live.timing.bind(next.origin);live.restored=next.origin.sequence;}
+    if(!confirmed) {
+        // The worker's restore of the run the renderer was following keeps the
+        // renderer's checkpoints, also across a revoke (a capture restart), so
+        // its next load still draws on its own frame. Worker revisions never
+        // repeat or reset, so an unbroken chain proves the same run: a new run
+        // always arrives as an unrecovered origin in between.
+        const bool same_run=(next.origin.flags&GO_RECOVERED) && live.owner.revision
+            && next.revision==live.owner.revision+1;
+        live.timing.bind(next.origin,same_run);live.restored=next.origin.sequence;
+    }
     live.owner=next;live.bound=true;
     return !confirmed;
 }
@@ -690,7 +702,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         && published.cancellation==current_cancel
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
-        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.clear();
+        retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.detach();
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
     if(enabled_revision.load()!=next.revision) {
@@ -699,7 +711,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
         sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
     }
-    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.clear();}
+    if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
     if(next.mode==GP_FOLLOW && (!have_timeline || !same_origin(timeline_request,next))) {
         clear_timeline();have_timeline=true;timeline_request=next;
     }

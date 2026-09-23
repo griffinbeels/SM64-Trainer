@@ -195,29 +195,39 @@ struct Session {
         std::memset(cartridge_digest,0,sizeof(cartridge_digest));
     }
 
-    void restore_cache() {
+    // The same trainer process and tracker session, on the same cartridge and
+    // layout, takes back its parked checkpoints; anything else starts fresh.
+    void restore_cache(const gipc_request &with) {
         if(!cartridge_verified || !recovery_cache.timing.bound())return;
         const auto &old=recovery_cache.owner;
-        if(loaded.owner_pid==old.owner_pid && loaded.owner_created_lo==old.owner_created_lo
-                && loaded.owner_created_hi==old.owner_created_hi
-                && loaded.origin.session_id==recovery_cache.marker.session_id
-                && loaded.origin.kind==recovery_cache.marker.kind
+        if(with.owner_pid==old.owner_pid && with.owner_created_lo==old.owner_created_lo
+                && with.owner_created_hi==old.owner_created_hi
+                && with.origin.session_id==recovery_cache.marker.session_id
+                && with.origin.kind==recovery_cache.marker.kind
+                && !std::memcmp(&with.layout,&old.layout,sizeof(with.layout))
                 && !std::memcmp(cartridge_digest,recovery_cache.rom_digest,sizeof(cartridge_digest))) {
-            recovery=std::move(recovery_cache.timing);recovery.suspend();
+            recovery=std::move(recovery_cache.timing); // still suspended as parked
             resolved_marker=recovery_cache.marker;have_origin=false;
         }
         recovery_cache.clear();
     }
 
-    void park_recovery() {
+    void park_recovery(bool rom_closed) {
         if(cartridge_verified && recovery.bound()) {
-            recovery_cache.timing=std::move(recovery);recovery_cache.timing.suspend();
+            recovery_cache.timing=std::move(recovery);recovery_cache.timing.suspend(rom_closed);
             recovery_cache.owner=loaded;recovery_cache.marker=resolved_marker;
             std::memcpy(recovery_cache.rom_digest,cartridge_digest,sizeof(cartridge_digest));
         }
     }
     void revoke(uint32_t why) {
-        if(why==GIPC_NO_ROM)park_recovery();
+        // A closed ROM, a restarted capture channel (the recorder reconnects
+        // after a GPU capture failure: new owner token, same trainer) or a
+        // stalled lease parks the live checkpoints; restore_cache hands them
+        // back only to the same process and tracker session. Before
+        // 2026-09-23 only a ROM close parked them, so a capture restart lost
+        // the run's origin until the next attempt (his "the ghost broke, and
+        // it never showed up again, until I reset").
+        if(why!=GIPC_PROTOCOL)park_recovery(why==GIPC_NO_ROM);
         else if(previous.token) recovery_cache.clear();
         recovery.clear();
         capture->disable();
@@ -277,7 +287,8 @@ struct Session {
             // A fast RomClosed/RomOpen pair can finish before the worker wakes.
             // Its generation change must retain the same proof as the slow
             // path which retires this Session and starts a replacement worker.
-            if(rom && rom!=current_rom)park_recovery();
+            if(rom && rom!=current_rom)park_recovery(true);
+            const bool same_cartridge=rom && rom==current_rom && rom_ready;
             play->revoke(GP_WRONG_IDENTITY);
             forget_prepared();
             origins.clear();
@@ -289,6 +300,9 @@ struct Session {
             }
             awaiting_configuration = true; configuration = 0; applied = 0;
             rom = current_rom; live = true;
+            // Same cartridge: the parked run resumes on this new capture
+            // namespace (its next observation re-establishes the timeline).
+            if(same_cartridge)restore_cache(r);
         }
         const gs_stats stats = capture->stats();
         if (awaiting_configuration && stats.configuration != prior_configuration) {
@@ -416,7 +430,7 @@ struct Session {
             }
             assets.push_back(std::move(asset));
         }
-        restore_cache();
+        restore_cache(loaded);
     }
     void load_rom() {
         bool rom_loaded = false;
