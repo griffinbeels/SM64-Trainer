@@ -204,7 +204,7 @@ def test_session_shaped_command_carries_the_shadow_switch(kernel, tmp_path):
         connection.poll(command)  # a session that predates the key
         assert kernel.request.shadow_enabled == 1 and kernel.request.clip_count == 2
         connection.poll({**command, "shadow_enabled": False})
-        assert kernel.request.shadow_enabled == 0 and kernel.request.reserved2 == 0
+        assert kernel.request.shadow_enabled == 0 and kernel.request.occlusion_fade == 1
         assert kernel.request.opacity == 0.5 and kernel.request.origin.global_timer == 1234
         before = bytes(kernel.request)
         for value in (1, "yes", None):
@@ -213,6 +213,32 @@ def test_session_shaped_command_carries_the_shadow_switch(kernel, tmp_path):
             assert bytes(kernel.request) == before
         connection.poll({**command, "shadow_enabled": True})
         assert kernel.request.shadow_enabled == 1
+    finally:
+        connection.close()
+
+
+def test_session_shaped_command_carries_the_occlusion_switch(kernel, tmp_path):
+    """`occlusion_fade`: absent is on (the player-first fade), False turns it off."""
+    connection = channel.NativeChannel(123, GhostLayout.from_layout(US).to_bytes())
+    assert kernel.request.occlusion_fade == 1
+    command = {"enabled": True, "model_id": 1, "owner_suspended": False,
+               "clips": [clip(tmp_path, b"a", 10)], "rom_path": "", "opacity": 0.5, "nudge": 0,
+               "proximity_enabled": False, "proximity_distance": 0.0, "tint_enabled": False,
+               "stop_at_star": True, "mode": 0, "shadow_enabled": True,
+               "origin": {"kind": 1, "configuration": 4, "epoch": 5, "global_timer": 1234,
+                          "utc": 1000.0, "session_id": 7, "arm_id": 8}}
+    try:
+        connection.poll(command)
+        assert kernel.request.occlusion_fade == 1
+        connection.poll({**command, "occlusion_fade": False})
+        assert kernel.request.occlusion_fade == 0 and kernel.request.shadow_enabled == 1
+        before = bytes(kernel.request)
+        for value in (1, "yes", None):
+            with pytest.raises(channel.RejectedControl):
+                connection.poll({**command, "occlusion_fade": value})
+            assert bytes(kernel.request) == before
+        connection.poll({**command, "occlusion_fade": True})
+        assert kernel.request.occlusion_fade == 1
     finally:
         connection.close()
 

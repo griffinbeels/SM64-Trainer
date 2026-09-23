@@ -194,19 +194,42 @@ function GhostSwitchButton({ on, canToggle, onToggle, labelId, reasonId,
  * does not apply rather than to grey it out.
  */
 /**
+ * One Only-Mario on/off setting: a small switch after its name. Unknown (null
+ * until the server says) is drawn unknown and cannot be pressed, never off.
+ */
+function GhostOnOff({ name, className, group, label, waiting, setting, value, draft, write }) {
+  const on = draft == null ? value : Boolean(draft);
+  const known = on != null;
+  return html`<div class="ghost-field ${className}" role="group" aria-label=${group}>
+    <span class="ghost-field-name">${name}</span>
+    <${GhostSwitchButton} on=${known && on} canToggle=${known} small=${true}
+      label=${known ? label : waiting}
+      onToggle=${() => write({ [setting]: !(known && on) })} />
+  </div>`;
+}
+
+/**
  * THE GHOST'S SHADOW, on or off -- his A/B switch for the game's own shadow
  * under Ghost Mario (2026-09-22). Only Mario draws it; the whole picture
  * already contains the recorded one.
  */
 function GhostShadow({ shadow, draft, write }) {
-  const on = draft == null ? shadow : Boolean(draft);
-  const known = on != null;
-  return html`<div class="ghost-field ghost-shadow" role="group" aria-label="Ghost shadow">
-    <span class="ghost-field-name">Shadow</span>
-    <${GhostSwitchButton} on=${known && on} canToggle=${known} small=${true}
-      label=${known ? "Draw Mario's own shadow under the ghost" : "Waiting for the ghost's shadow setting"}
-      onToggle=${() => write({ shadow: !(known && on) })} />
-  </div>`;
+  return html`<${GhostOnOff} name="Shadow" className="ghost-shadow" group="Ghost shadow"
+    label="Draw Mario's own shadow under the ghost" waiting="Waiting for the ghost's shadow setting"
+    setting="shadow" value=${shadow} draft=${draft} write=${write} />`;
+}
+
+/**
+ * THE GHOST NEVER BLOCKS THE PLAYER -- his A/B switch for the player-first
+ * fade (2026-09-23): where Ghost Mario stands between the camera and you, it
+ * goes faint over your Mario, and it fades out right at the camera.
+ */
+function GhostFrontFade({ fade, draft, write }) {
+  return html`<${GhostOnOff} name="Fade in front of Mario" className="ghost-front-fade"
+    group="Fade the ghost in front of Mario"
+    label="Fade the ghost where it covers your Mario or the camera"
+    waiting="Waiting for the fade-in-front setting"
+    setting="occlusion_fade" value=${fade} draft=${draft} write=${write} />`;
 }
 
 /** HOW LOUD GHOST MARIO IS: his own action sounds, mixed under the game.
@@ -329,7 +352,7 @@ function GhostRecording({ recording, entityKey, target, write }) {
  * nothing for any of them to act on, and the acceptance rule is to omit an
  * action that does not apply rather than to disable it.
  */
-function GhostTuning({ opacity, tint, shadow, volume, view, boxes, nudge, write, queue, showView = true }) {
+function GhostTuning({ opacity, tint, shadow, fade, volume, view, boxes, nudge, write, queue, showView = true }) {
   // Against whatever is already queued, never against this render's value --
   // see `queue` above for the press-and-hold this exists for.
   const stepNudge = (delta) => queue((pending) => ({
@@ -355,6 +378,7 @@ function GhostTuning({ opacity, tint, shadow, volume, view, boxes, nudge, write,
     </label>
     <${GhostColour} tint=${tint} write=${write} queue=${queue} />
     ${view === "mario" && html`<${GhostShadow} shadow=${shadow.value} draft=${shadow.draft} write=${write} />
+      <${GhostFrontFade} fade=${fade.value} draft=${fade.draft} write=${write} />
       <${GhostVolume} volume=${volume.value} draft=${volume.draft} queue=${queue} />`}
     ${showView && html`<${GhostView} view=${view} boxes=${boxes} write=${write} />`}
     <div class="ghost-field ghost-timing" role="group" aria-label="Ghost timing">
@@ -435,6 +459,7 @@ export function GhostSwitch({ t, entityKey, active = true }) {
       target=${session?.target} write=${write} />
     ${on && html`<${GhostTuning} opacity=${opacity} tint=${tint} view=${view}
       shadow=${{ value: controls.shadow, draft: held.shadow }}
+      fade=${{ value: controls.occlusionFade, draft: held.occlusion_fade }}
       volume=${{ value: controls.volume, draft: held.volume }}
       boxes=${controls.marioBoxes} nudge=${nudge}
       write=${write} queue=${queue} showView=${!controls.nativeViews} />`}

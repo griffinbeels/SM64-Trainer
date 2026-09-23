@@ -30,8 +30,8 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308) and sound events (36 at 600) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP4: header 160, record 652, maximum 200000 records; header flag `GCLIP_DANCE_TAIL` | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -448,6 +448,54 @@ water plane at his waist: 5535 pixels take the water blend exactly, 4437 above
 it and every pixel outside him are unchanged (2026-09-23, RTX 5090). Live GLideN64
 has not run it; which SM64 draws qualify is known from the decomp render
 modes and the pinned blend code, not from a live frame.
+
+### Player-first fade
+
+A ghost never blocks live Mario or the camera. [ghost_occlusion.h](../plugin/gfxwrap/ghost_occlusion.h)
+owns the rule and every tuning constant; the body and shadow shaders share its
+GLSL, so a shadow fades exactly like its body. Per fragment, on top of the
+user's opacity and the overlap fade:
+
+- **In front of live Mario, over him.** Playback projects his body box (feet at
+  his position, 100 wide and 160 tall per unit gfx scale) with the ghosts' own
+  live view-projection: a screen ellipse plus his body centre's clip w. A ghost
+  fragment keeps `1 - 0.85 x cover x front` of its opacity. `cover` is 1 inside
+  the ellipse inscribed in his box and falls smoothly to 0 at 1.6 times that.
+  `front` rises from 0 at his centre's depth to 1 at 60 units nearer the
+  camera. Behind him, or away from him on screen, a ghost is byte-exact.
+- **At the camera.** `smoothstep(150, 450, w)`: invisible within 150 units of
+  the camera, whole from 450. Clip w is eye distance because SM64's
+  guPerspective uses scale 1, and GLideN64's screen scale only touches x and y.
+
+Without a live pose, only the camera term applies. `occlusion_fade` (the
+`NativeChannel` key, a bool, absent means on) removes both terms. It lives in
+the checked-zero word after `shadow_enabled` in both the IPC and the playback
+request, so no size or version moved: 0 draws exactly as before, and an older
+DLL refuses 1 with `GIPC_PROTOCOL`. Why per fragment rather than per ghost:
+a per-ghost fade (Trackmania's "ghosts close to you turn transparent") fades
+the whole body when only an arm crosses Mario, and it cannot tell "in front
+of" from "beside". Screen-space cutouts around the player (Unreal's depth and
+camera-distance fades) fade only the pixels that block. The box assumes a
+standing Mario, so during a dive the edges of his body get a softer fade.
+
+The [occlusion witness](../tests/test_ghost_occlusion.py) (hidden WGL, both
+depth routes) checks every pixel against the rule. Over the core, the ghost
+keeps 15% of its opacity (208 fully faded pixels, 524 faded in all), the rim
+is smooth, pixels outside 1.6x and a ghost behind Mario are byte-exact, and
+the camera term hides a ghost at 100 units, halves it at 300 and is exact at
+450. The shadow fades over Mario like its body, the renderer's y flip mirrors
+the ghost and its region together, and the clean game image and both depths
+stay exact. The [playback witness](../tests/test_ghost_playback.py)
+checks that the projected box reaches each pose, that there is no region when
+Mario is behind the camera or has no pose, and that the switch empties it. The
+connected pipeline (2026-09-23, RTX 5090, 640x480, real model) faded 8444 ghost
+pixels over a live Mario 300 units beyond the ghost. It changed 0 pixels
+outside the ghost and 0 with Mario 300 units nearer. It then timed the fade on
+over 180 samples: one ghost p50 0.62 ms, p95 1.11 ms, max 1.35 ms including
+swap; sixteen p50 3.05 ms, p95 4.16 ms, max 4.51 ms. Removing the fade from
+the body, the shadow or the camera term, reversing the front test, ignoring
+the region, taking the region after the y flip, or dropping the switch in
+playback, IPC or the channel each turns a witness red.
 
 ### Sound events
 

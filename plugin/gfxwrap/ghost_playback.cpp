@@ -400,7 +400,7 @@ bool valid_request(const gp_request& r) {
             || r.enabled>1 || r.tint_enabled>1 || r.clip_count>GP_GHOSTS || r.reserved1
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
             || r.proximity_distance<0 || r.proximity_distance>400
-            || r.shadow_enabled>1 || r.reserved2 || r.reserved3
+            || r.shadow_enabled>1 || r.occlusion_fade>1 || r.reserved3
             || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
             || r.suspended>1 || r.reserved4) return false;
     const gp_clip unused{};
@@ -665,6 +665,10 @@ uint32_t select(uint32_t index,const Coordinate& frame,const gc_sample& live,con
         out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
     }
     out.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
+    // Player first: the same live Mario region for every ghost this frame,
+    // under the live view-projection its body and shadow are drawn with.
+    ghost_occlusion::region(out.view_projection,active_request.occlusion_fade!=0,
+        (live.valid_fields&GC_VALID_POSE)!=0,live.pose.position,live.pose.scale,out.occlusion);
     if(active_request.shadow_enabled && (selected.sample.valid_fields&GC_VALID_SHADOW)
             && !ghost_pose::shadow(model.value,selected.sample,out.view_projection,shadows[index].vertices,
                                    shadows[index].texture,out.shadow)) {
