@@ -1146,8 +1146,8 @@ it that stand between the camera and live Mario, over his body on screen, keep
 only 15% of their opacity. Near the camera the whole body fades out, so it
 can never fill the screen. The fade leaves a [[ghost]] behind Mario, or away
 from him, untouched. Its [[recorded shadow]] follows the same rule. It
-multiplies with opacity and the overlap fade, and one switch turns it off for
-comparison.
+multiplies with opacity and the overlap fade; the card's **Fade in front of
+Mario** switch turns it off for comparison.
 
 - **Lives** — `plugin/gfxwrap/ghost_occlusion.h` (the rule and its tuning);
   playback fills live Mario's region each frame

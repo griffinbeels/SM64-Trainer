@@ -306,6 +306,33 @@ def test_the_shadow_switch_is_remembered_and_reaches_the_renderer(tmp_path):
             asyncio.run(session.update({"volume": bad}))
 
 
+def test_the_occlusion_fade_switch_is_remembered_and_reaches_the_renderer(tmp_path):
+    """The player-first fade: on by default, remembered off, and carried to the native command."""
+    session, _replay, row, archive, db, _store, capture = pb_world(tmp_path)
+
+    async def check():
+        await session.update({"enabled": True, "view": "mario"})
+        save_pb(db, row)
+        await session.pb_changed(row, True)
+        session._native.note()
+        assert session.payload()["occlusion_fade"] is True
+        assert capture.commands[-1]["occlusion_fade"] is True
+        body = await session.update({"occlusion_fade": False})
+        session._native.note()
+        assert body["occlusion_fade"] is False and capture.commands[-1]["occlusion_fade"] is False
+        assert capture.commands[-1]["shadow_enabled"] is True
+        assert db.get_state("ghost_occlusion_fade", None) is False
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+    import pytest
+    with pytest.raises(ValueError, match="on or off"):
+        asyncio.run(session.update({"occlusion_fade": 1}))
+
+
 def test_a_recording_with_missing_positions_is_counted_and_said_out_loud(tmp_path, caplog):
     from ghost_native_fixture import frame
     from test_ghost_recording import native_service

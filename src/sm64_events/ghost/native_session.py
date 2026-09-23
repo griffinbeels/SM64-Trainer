@@ -137,7 +137,8 @@ class NativeGhost:
             del self._cached[next(iter(self._cached))]
         return result, asset
 
-    def reconcile(self, *, enabled, opacity, nudge, tint, target, proximity=None, shadow=True, volume=0.5):
+    def reconcile(self, *, enabled, opacity, nudge, tint, target, proximity=None, shadow=True,
+                  occlusion_fade=True, volume=0.5):
         proximity = {**DEFAULT_PROXIMITY, **checked_proximity(proximity or {})}
         source = getattr(getattr(self._replay, "recorder", None), "ghost_capture", None)
         with self._control_lock:
@@ -155,7 +156,8 @@ class NativeGhost:
                               "proximity_enabled": proximity["enabled"],
                               "proximity_distance": proximity["extra_distance"],
                               "tint_enabled": tint["enabled"], "hue_degrees": tint["hue_degrees"],
-                              "shadow_enabled": bool(shadow), "volume": float(volume),
+                              "shadow_enabled": bool(shadow), "occlusion_fade": bool(occlusion_fade),
+                              "volume": float(volume),
                               "stop_at_star": bool(target and target["kind"] == "star"), "mode": 0}
             self._send()
 

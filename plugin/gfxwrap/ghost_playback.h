@@ -62,7 +62,7 @@ typedef struct gp_request {
     gp_clip clips[GP_GHOSTS];
     /* Draw each visible ghost's recorded shadow (GC_VALID_SHADOW rows only).
      * occlusion_fade fills each pose's player-first region (ghost_occlusion.h);
-     * formerly a checked-zero reserved word, so 0 draws as before. */
+     * formerly the checked-zero reserved2, so 0 draws as before. */
     uint32_t shadow_enabled, occlusion_fade;
     /* Ghost sound loudness, 0..1; 0 is exact silence. */
     float volume;
