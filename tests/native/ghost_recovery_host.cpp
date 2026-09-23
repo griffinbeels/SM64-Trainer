@@ -179,7 +179,8 @@ int main() {
             ++run.demand.revision;run.demand.opacity=.5f;run.step(154,-1);
             run.demand.owner_suspended=1;++run.demand.revision;run.step(155,-1);
             check(run.session->recovery.bound(),"tracker completion hides without deleting restore history");
-            run.step(150,-1); // Checkpoint restores while tracker is between arms.
+            run.step(156,-1); // Suspended between arms: hidden.
+            run.step(150,150); // A restore while the tracker is between arms draws at once.
             run.demand.owner_suspended=0;++run.demand.revision;
             run.step(150,150); // Restoration, unlike tuning, revives the completed run.
             // Tracker's state_loaded event hands the witnessed restore to its new arm.
@@ -247,12 +248,33 @@ int main() {
             if(!segment) {
                 // A star grab ends the run; loading back revives it at once.
                 run.step(uint16_t(start+181),-1,1,0x1302);run.step(uint16_t(start+182),-1);
-                load(start+150,3);
+                // The live grab closes the attempt: the owner suspends (as
+                // NativeGhost.note does) before he loads the state again.
+                run.demand.owner_suspended=1;++run.demand.revision;
+                run.step(uint16_t(start+183),-1);run.step(uint16_t(start+184),-1);
+                ++blink_loads;run.step(uint16_t(start+150),150); // drawn on the load frame, still suspended
+                run.step(uint16_t(start+151),151);
+                // The owner re-arms from the state_loaded anchor of the load
+                // frame (a poll later): the worker hands the restore to the new arm.
+                run.demand.owner_suspended=0;run.demand.origin.arm_id+=100;
+                run.demand.origin.global_timer=run.last.global_timer-1;
+                run.demand.origin.utc=1000+double(run.last.qpc-1-1000)/1000;++run.demand.revision;
+                for(int raw=152;raw<=156;++raw)run.step(uint16_t(start+raw),raw);
             } else {
                 // A forward load to a state never witnessed stays hidden on
                 // the renderer too; a known state afterwards draws at once.
                 run.step(uint16_t(start+300),-1);run.step(uint16_t(start+301),-1);
                 load(start+150,3);
+                // A completed segment suspends the owner: no native star end
+                // hides it, the suspension does, until a load revives it.
+                run.demand.owner_suspended=1;++run.demand.revision;
+                run.step(uint16_t(start+154),154); // the command reaches the next list
+                run.step(uint16_t(start+155),-1);run.step(uint16_t(start+156),-1);
+                ++blink_loads;run.step(uint16_t(start+140),140);run.step(uint16_t(start+141),141);
+                run.demand.owner_suspended=0;run.demand.origin.arm_id+=100;
+                run.demand.origin.global_timer=run.last.global_timer-1;
+                run.demand.origin.utc=1000+double(run.last.qpc-1-1000)/1000;++run.demand.revision;
+                for(int raw=142;raw<=145;++raw)run.step(uint16_t(start+raw),raw);
             }
             blink_frames+=run.frames;blink_ghostless+=run.ghostless;blink_wrong+=run.wrong;
             ghost_playback::set_sound_sink(nullptr);

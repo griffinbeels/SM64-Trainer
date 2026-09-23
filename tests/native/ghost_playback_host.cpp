@@ -640,6 +640,9 @@ int main() {
         r.volume=std::numeric_limits<float>::quiet_NaN();check(api->configure(&r)==GP_INVALID,"volume NaN refused");
         r.volume=.5f;r.reserved3=1;check(api->configure(&r)==GP_INVALID,"sound reserved word checked");
         r.reserved3=0;
+        r.suspended=2;check(api->configure(&r)==GP_INVALID,"suspension flag bounded");
+        r.suspended=0;r.reserved4=1;check(api->configure(&r)==GP_INVALID,"suspension reserved word checked");
+        r.reserved4=0;
         r.origin.continuity=0;check(api->configure(&r)==GP_INVALID,"follow requires resolved origin");
         r.origin.continuity=1;r.mode=GP_FIXED;
         check(api->configure(&r)==GP_INVALID,"fixed must not accidentally retain a live origin");

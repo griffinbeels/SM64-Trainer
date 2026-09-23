@@ -95,6 +95,7 @@ std::atomic<const ghost_playback::SoundSink*> sound_sink{nullptr};
 int64_t heard[GP_GHOSTS]{};           // last displayed record index, or unheard
 int64_t loudest[GP_GHOSTS]{};         // highest record whose sounds were handed over
 const Clip *heard_clip[GP_GHOSTS]{};
+uint64_t suspend_mark=0;              // live restore the suspension began at
 bool heard_fresh[GP_GHOSTS]{};        // a new run: its first displayed record is newly passed
 bool loudest_reset[GP_GHOSTS]{};      // re-establish loudest at the next displayed record
 // run: a new attempt. restore: a state load (records ahead are newly passed
@@ -400,7 +401,8 @@ bool valid_request(const gp_request& r) {
             || r.reserved0 || r.proximity_enabled>1 || !std::isfinite(r.proximity_distance)
             || r.proximity_distance<0 || r.proximity_distance>400
             || r.shadow_enabled>1 || r.reserved2 || r.reserved3
-            || !std::isfinite(r.volume) || r.volume<0 || r.volume>1) return false;
+            || !std::isfinite(r.volume) || r.volume<0 || r.volume>1
+            || r.suspended>1 || r.reserved4) return false;
     const gp_clip unused{};
     for(uint32_t i=0;i<GP_GHOSTS;++i) {
         const auto &clip=r.clips[i];
@@ -665,7 +667,6 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     const bool first=!have_request;
     const gp_request previous=active_request;
     active_request=next;have_request=true;acquired_cancel=current_cancel;
-    sound_control(true,next.volume);
     // Every new timeline re-bases what each ghost has heard: a new run sounds
     // its first record; a restore or the worker's re-bind (a reset re-arms
     // the same ghost that way) sounds what it passes from where it stands.
@@ -675,6 +676,10 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         forget_heard(first || !(next.origin.flags&GO_RECOVERED) ? Forget::run : Forget::restore);
     else if(next.nudge_frames!=previous.nudge_frames || next.mode!=previous.mode
             || next.seek_igt!=previous.seek_igt)forget_heard(Forget::move);
+    // Suspension starts at the live restore state of this moment; only a later
+    // restore (a state load) revives the ghost before the owner re-arms.
+    if(next.suspended && (first || !previous.suspended))suspend_mark=live_recovery.restored;
+    sound_control(!(next.suspended && live_recovery.restored==suspend_mark),next.volume);
     report={};report.revision=next.revision;report.owner_token=next.owner_token;report.model_id=next.model_id;
     report.clip_count=next.clip_count;report.rom_generation=rom;report.configuration=configuration;
     if(!have_model) {
@@ -749,6 +754,12 @@ bool evaluate(const gc_sample& live,const ghost::WorldPass& world,
             if(origin.sequence!=live_recovery.restored) {
                 star_ended=false;live_recovery.restored=origin.sequence;forget_heard(Forget::restore);
             }
+        }
+        if(active_request.suspended) {
+            if(!live_recovery.bound || live_recovery.restored==suspend_mark) {
+                sound_control(false,0);decide_all(GP_DISABLED);return false;
+            }
+            sound_control(true,active_request.volume); // a load revived it on this frame
         }
         if(!valid_clock(live) || (live.clock.valid&(GCC_RAW_VALID|GCC_ELAPSED_VALID))
                 !=(GCC_RAW_VALID|GCC_ELAPSED_VALID) || live.epoch!=origin.epoch

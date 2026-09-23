@@ -7,7 +7,7 @@
 #include "model.h"
 #include <stdint.h>
 
-#define GP_VERSION 6u
+#define GP_VERSION 7u
 #define GP_GHOSTS 16u
 /* A full displayed set plus as many retiring/pending clips. */
 #define GP_CLIP_SLOTS (2u * GP_GHOSTS)
@@ -65,6 +65,10 @@ typedef struct gp_request {
     /* Ghost sound loudness, 0..1; 0 is exact silence. */
     float volume;
     uint32_t reserved3;
+    /* The tracker's arm is gone (a completed star or segment): hide and stay
+     * silent, unless a state load the renderer resolves after suspension
+     * brings the ghost back on that frame, ahead of the owner's next command. */
+    uint32_t suspended, reserved4;
 } gp_request;
 
 typedef struct gp_status {

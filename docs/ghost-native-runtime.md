@@ -30,7 +30,7 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC5: layout 184, sample 636; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308) and sound events (36 at 600) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS4, still exported as `SM64GhostSourceV3` (the version argument must be 4); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP6: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch and sound `volume` | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` switch sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
 | Ghost IPC | GIPC6: status 256, request 18952 (16 clip entries of 1096, then `shadow_enabled` and `volume`), ring offset 20480, 512 records of 652 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP4: header 160, record 652, maximum 200000 records | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
@@ -146,6 +146,20 @@ later restore is not delayed a frame. The
 behind the renderer: over 10 loads and 92 frames the previous path showed 8
 frames without a ghost and 1 at a wrong position (a forward load to an
 unwitnessed state); this path shows 0 and 0.
+
+A star or segment completion removes the tracker's arm until the next attempt,
+so the session marks the owner suspended. The worker used to withdraw the
+command then, which dropped the restore checkpoints: a load after a star grab
+hid the ghost until the tracker re-armed (the blink seen live 2026-09-22 on
+every such load, never on a load before the grab). The worker now keeps the
+command and forwards `suspended` (GP7). Playback hides every ghost and its
+sound while suspended, until the renderer's own recovery resolves a restore
+it had not resolved when the pause began; that load draws on its load frame
+and the tracker's next arm confirms it. The recovery witness loads once after
+a star grab and once after a segment completion, each while suspended, and
+counts 0 ghostless frames over 11 loads; forwarding the old withdraw hides the
+load frame, ignoring `suspended` draws the paused frames, and not reviving on
+a restore hides the load frame (each red).
 
 ### Several ghosts
 
@@ -396,7 +410,7 @@ audio about every 50 ms (the crackle heard live 2026-09-22; a tap on the live
 path measured 139 of 140 writes into an empty device, 0 of 206 after). The
 audio thread runs at `THREAD_PRIORITY_HIGHEST` and counts any tick written
 after the device ran dry as an underrun.
-`volume` (GP6/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
+`volume` (GP7/GIPC6, `NativeChannel` key `volume`, float 0..1, absent 0.5)
 scales the engine output exactly; 0 writes zeros. Disabled or withdrawn
 playback, including the owner-suspended pause, stops every ghost sound and
 discards queued requests at the next tick. All ghosts share one engine, one
