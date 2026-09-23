@@ -192,6 +192,9 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &,
  * pose before it instead of blinking (2 = 67 ms, below a noticeable pause).
  * The refused rows stay refused in the clip; this is display only. */
 #define GP_BRIDGE_FRAMES 2u
+/* Raw-IGT restarts a star clip remembers (the latest win; Usamune restarts the
+ * timer at some area entrances, e.g. LLL's volcano). */
+#define GP_RESTARTS 8u
 #define GP_SOUND_NEAR 400.0f /* tuning: full gain within 2.5 Mario heights (160 units each) */
 struct SoundSink {
     void (__cdecl *cue)(uint32_t ghost, uint32_t sound_bits);

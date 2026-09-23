@@ -164,7 +164,7 @@ Tour clip every pole frame (grab, hold, climb) has a pose. The ghost was missing
 on the poles because of alignment: that clip was recorded from the level entrance,
 the later attempts started inside the volcano, and the star coordinate follows
 elapsed time, so the ghost was still outside (another area, hidden) while he
-climbed.
+climbed. [Restart alignment](#restart-alignment) fixes this.
 
 The native classifier follows the existing `EpochTracker`/`IgtClock` transition
 rules for levels, retries, area warps and teleports. Python encodes configuration
@@ -205,7 +205,33 @@ the ghost. Resolution is retained for the immutable command.
 [ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) preloads each clip and
 selects at the renderer boundary using live elapsed minus owner-origin elapsed.
 A star adds its origin raw IGT; a segment starts at zero. The timing nudge applies
-to that coordinate. Paused clocks do not advance from wall time or Python poll
+to that coordinate, after any restart alignment.
+
+### Restart alignment
+
+Usamune restarts raw IGT at some area entrances, for example LLL's volcano.
+A star ghost recorded from the level entrance and raced from a reset to that
+restart would otherwise spend its walk outside while live Mario is already
+inside. `prepare_clip` keeps each clip's last `GP_RESTARTS` (8) raw-IGT restarts:
+rows whose raw IGT is below the row before, with their level and area. When a
+live star origin first applies, the renderer
+([ghost_playback.cpp](../plugin/gfxwrap/ghost_playback.cpp) `restart_shift`)
+compares live Mario's scene with the clip's first row. If they differ and
+the clip restarted in live Mario's level and area, it shifts that ghost's
+coordinate so the latest such restart's raw IGT meets the live raw IGT.
+Otherwise, including segments and fixed seek, nothing changes. The shift is
+fixed per ghost and attempt origin. A restore resolved into that attempt
+(`GO_RECOVERED`) keeps it, because its coordinate continues the attempt's
+timeline. A later live scene change never re-aligns. Touch, dance tail and
+after-end checks use the shifted coordinate.
+
+Real replay (2026-09-23, the actual playback selection over the saved 2814
+Elevator Tour clip and the archived live frames): attempts 2843, 2847, 2854
+and 2857, started inside the volcano, went from 227, 298, 279 and 297
+wrong-scene frames to 0, with the ghost from their first frame. 2847 and 2857
+end 30 and 12 frames before his own grab, at the ghost's recorded touch (its
+366 against his 378 IGT on 2857). 2832, started at the entrance like the
+ghost, is unchanged. Paused clocks do not advance from wall time or Python poll
 cadence. A new star generation or configured star-grab action ends that origin;
 tuning the same origin cannot revive it. Explicit fixed seek is a separate mode.
 
