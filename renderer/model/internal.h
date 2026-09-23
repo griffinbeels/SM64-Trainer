@@ -33,6 +33,7 @@ struct sg_model {
     struct Animation animations[SG_ANIMATION_COUNT];
     uint8_t atlas[SG_MODEL_ATLAS_BYTES];
     struct sg_particles particles;
+    sg_body_lights body_lights;
     uint8_t *permanent, *scratch;
     size_t permanent_used, scratch_used;
     size_t scratch_limit;
@@ -47,6 +48,7 @@ struct sg_model {
     struct GraphNode *held_graph[SG_HELD_KINDS];
     const struct Animation *const *held_animations[SG_HELD_KINDS];
     int held_animation_count[SG_HELD_KINDS];
+    sg_body_lights held_lights[SG_HELD_KINDS];
     unsigned held_available;
     struct Object held_object;
 };

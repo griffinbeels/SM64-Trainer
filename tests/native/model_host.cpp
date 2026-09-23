@@ -38,11 +38,12 @@ template<class T> struct Buffer {
 struct Mesh {
     Buffer<float> p, n, c, uv;
     Buffer<uint32_t> material;
+    Buffer<float> ambient;
     sg_mesh out;
     explicit Mesh(unsigned capacity=SG_MODEL_MAX_VERTICES):
-        p(capacity*3), n(capacity*3), c(capacity*3), uv(capacity*2), material(capacity),
-        out{p.data(), n.data(), c.data(), uv.data(), material.data(), capacity, 0, 0} {}
-    void guard() { p.guard(); n.guard(); c.guard(); uv.guard(); material.guard(); }
+        p(capacity*3), n(capacity*3), c(capacity*3), uv(capacity*2), material(capacity), ambient(capacity*3),
+        out{p.data(), n.data(), c.data(), uv.data(), material.data(), capacity, 0, 0, 0, ambient.data()} {}
+    void guard() { p.guard(); n.guard(); c.guard(); uv.guard(); material.guard(); ambient.guard(); }
     std::vector<float> snapshot() {
         std::vector<float> result;
         for (auto pair : {std::make_pair(out.position,3u), {out.normal,3u}, {out.color,3u}, {out.uv,2u}})
@@ -263,6 +264,17 @@ int main(int argc, char** argv) {
         {
             // Mario's particle models: 58 textured quads (bubble first, splash
             // frames 32x64), then 12 lit meshes (stars, punch dirt, the cap).
+            // Mario's own lights, read from his lists: six materials (overalls,
+            // white, cap red, two browns, skin), each ambient half its diffuse
+            // (0x7f of 0xff) and one eye-space direction (40,40,40).
+            sg_body_lights lights{};
+            check(sg_model_get_body_lights(model,&lights)==SG_OK && lights.count==6,"Mario's body lights");
+            bool halves=true,red=false;
+            for(uint32_t i=0;i<lights.count;++i){const auto& l=lights.lights[i];
+                for(unsigned c=0;c<3;++c)halves&=l.ambient[c]*2u<=l.diffuse[c]+1u && l.ambient[c]*2u+1u>=l.diffuse[c]
+                    && l.direction[c]==40;
+                red|=l.diffuse[0]==255 && !l.diffuse[1] && !l.diffuse[2] && l.ambient[0]==127;}
+            check(halves && red,"each light's ambient is half its diffuse, all from (40,40,40)");
             sg_particle_view particles{};
             check(sg_model_get_particles(model,&particles)==SG_OK && particles.frame_count==70 &&
                 particles.atlas_rgba,"particle frames");
@@ -414,6 +426,27 @@ int main(int argc, char** argv) {
             h.held_scale[0]=h.held_scale[1]=h.held_scale[2]=1;
             check(sg_model_view(model,camera,focus,0,h.view)==SG_OK,"held view");
             check(sg_model_evaluate(model,&h,&mesh.out)==SG_OK && mesh.out.vertex_count>alone+24,"held Bob-omb drawn");
+            // Its vertices follow Mario's, each coloured by a light its own
+            // lists load (ghost_pose shades them with those, not his).
+            const auto lit_by_own=[&](uint32_t kind) {
+                sg_body_lights lights{};
+                if(mesh.out.held_first_vertex!=alone || sg_model_get_held_lights(model,kind,&lights)!=SG_OK || !lights.count)
+                    return false;
+                for(unsigned i=alone;i<mesh.out.vertex_count;++i) {
+                    const uint32_t code=mesh.out.material[i]&SG_MATERIAL_CODE;
+                    if(code==SG_MATERIAL_DECAL_RGBA || code==SG_MATERIAL_DECAL_RGB)continue;
+                    bool named=false;
+                    for(uint32_t l=0;l<lights.count;++l) {
+                        bool same=true;
+                        for(unsigned c=0;c<3;++c)same&=std::fabs(mesh.out.color[3*i+c]*255.0f-lights.lights[l].diffuse[c])<0.5f
+                            && std::fabs(mesh.out.ambient[3*i+c]*255.0f-lights.lights[l].ambient[c])<0.5f;
+                        named|=same;
+                    }
+                    if(!named)return false;
+                }
+                return true;
+            };
+            check(lit_by_own(SG_HELD_BOBOMB),"held Bob-omb lit by its own lights");
             double centre[3]={0,0,0};const unsigned added=mesh.out.vertex_count-alone;
             // Its whole graph: body 4, feet 2x28, key 16 and eyes 4 triangles.
             // (libsm64's master list drops its first opaque entry: one foot.)
@@ -454,6 +487,7 @@ int main(int argc, char** argv) {
                 // A box has no animation: id -1, and its parts' own transforms.
                 sg_pose o=h; o.held_kind=k.kind; o.held_animation_id=k.animations?0:-1; o.held_animation_frame=0;
                 check(sg_model_evaluate(model,&o,&mesh.out)==SG_OK && mesh.out.vertex_count==alone+k.vertices,k.name);
+                check(lit_by_own(k.kind),"held object lit by its own lights");
                 // Its textured triangles name its own cells in their tiles.
                 bool own=false;
                 for(unsigned i=alone;i<mesh.out.vertex_count;++i) {

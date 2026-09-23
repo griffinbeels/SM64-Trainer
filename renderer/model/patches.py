@@ -99,13 +99,24 @@ def _patch_tiles(source: Path) -> None:
          "                ptr += 7;\n                break;\n            }\n\n"
          "            case GFXCMD_EndDisplayList:")
     edit("gfx_adapter.c", "static void process_display_list( void *dl )", TILE_WORD + "static void process_display_list( void *dl )")
+    # gsSPLight(&lights.a, 2) loads the ambient beside the diffuse the vertex
+    # colour already carries; an optional mesh buffer keeps it per vertex.
+    edit("gfx_adapter.c", "                if( n == 1 )\n",
+         "                if (n == 2) {\n"
+         "                    const Light *ambient = (const Light *)l;\n"
+         "                    s_curAmbient[0] = ambient->l.col[0] / 255.0f;\n"
+         "                    s_curAmbient[1] = ambient->l.col[1] / 255.0f;\n"
+         "                    s_curAmbient[2] = ambient->l.col[2] / 255.0f;\n"
+         "                }\n"
+         "                if( n == 1 )\n")
 
 
 # sg_tile (model.h) for the current render tile: its atlas cell, and per axis
 # clamp, mask and size (log2) from gsDPSetTile and gsDPSetTileSize. Mirroring,
 # shifts, a mask or size past 64 texels, or a size that is not a power of two
 # are unsupported rather than approximated.
-TILE_WORD = """static intptr_t s_cms, s_cmt, s_masks, s_maskt, s_shifts, s_shiftt;
+TILE_WORD = """static float s_curAmbient[3], *s_ambientPtr;
+static intptr_t s_cms, s_cmt, s_masks, s_maskt, s_shifts, s_shiftt;
 static uint16_t s_lrs, s_lrt;
 static unsigned sg_log2(unsigned value)
 {
@@ -251,7 +262,10 @@ void sg_traversal_reset(void) {
          "                if (s_texgen && s_textureOn && (s_textureIndex != 0 || s_scaleS != 0x0F80 || s_scaleT != 0x07C0))\n"
          "                    s_errors |= SG_MESH_UNSUPPORTED_MATERIAL;\n"
          "                s_materialPtr[0] = s_materialPtr[1] = s_materialPtr[2] = sg_material_word();\n"
-         "                s_materialPtr += 3;")
+         "                s_materialPtr += 3;\n"
+         "                if (s_ambientPtr) {\n"
+         "                    for (int k = 0; k < 9; ++k) s_ambientPtr[k] = s_curAmbient[k % 3];\n"
+         "                    s_ambientPtr += 9;\n                }")
     edit("gfx_adapter.c", "                s_textureIndex = (int)i;",
          "                s_textureIndex = (int)i;\n"
          "                if (s_textureIndex < 0 || s_textureIndex >= NUM_USED_TEXTURES) {\n"
@@ -290,6 +304,7 @@ void sg_geometry_bind(sg_mesh *mesh) {
     s_materialPtr=mesh->material; s_material=SG_MATERIAL_SOLID; s_texgen=0;
     s_textureOn=0; s_textureIndex=0; s_scaleS=s_scaleT=0; s_uls=s_ult=0;
     s_texWidth=s_texHeight=64; s_curColor[0]=s_curColor[1]=s_curColor[2]=1;
+    s_ambientPtr=mesh->ambient; s_curAmbient[0]=s_curAmbient[1]=s_curAmbient[2]=0;
     gfx_adapter_bind_output_buffers(&s_model_output);
 }
 uint32_t sg_geometry_errors(void) { return s_errors; }
@@ -298,7 +313,7 @@ float *sg_geometry_position(uint32_t vertex) { return s_model_output.position + 
 float *sg_geometry_normal(uint32_t vertex) { return s_model_output.normal + 3u * vertex; }
 void sg_geometry_reset(void) {
     s_outBuffers=NULL; s_trianglePtr=s_colorPtr=s_normalPtr=s_uvPtr=NULL;
-    s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID; s_texgen=0;
+    s_materialPtr=NULL; s_material=SG_MATERIAL_SOLID; s_texgen=0; s_ambientPtr=NULL;
     memset(&s_model_output,0,sizeof(s_model_output)); s_capacity=s_errors=0;
 }
 """
