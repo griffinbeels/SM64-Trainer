@@ -420,6 +420,8 @@ The [[strategy]] you have selected for one [[target]] — the one the
 [[practice log]] shows, the one a [[personal best]] saves under, and the one
 the quick-select medal grades. One resolver answers it for every surface and
 for the PB commands, so the card and the API cannot disagree about it.
+Picking one also claims every [[attempt]] of that [[target]] that has no
+[[strategy]] yet, except a row you set to no [[strategy]] yourself.
 
 - **Lives** — the resolver (`src/sm64_events/tracking/activestrat.py`)
   → the [[strategy picker]]

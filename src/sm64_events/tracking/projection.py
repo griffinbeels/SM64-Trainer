@@ -448,7 +448,11 @@ def strat_overrides(events) -> dict[int, str | None]:
             # malformed journal row would block startup instead of just
             # degrading that one row to "unlabeled" (None is already a valid
             # strat_tag value, so .get()'s default reads the same either way).
-            out[int(ev.payload["attempt_id"])] = ev.payload.get("strat_tag")
+            # `attempt_ids` is the batch form one strategy pick journals when
+            # it adopts the entity's untagged rows (service._adopt_untagged).
+            ids = ev.payload.get("attempt_ids") or [ev.payload["attempt_id"]]
+            for attempt_id in ids:
+                out[int(attempt_id)] = ev.payload.get("strat_tag")
     return out
 
 
@@ -814,6 +818,13 @@ class Projector:
         no memory, no attribution, no clearing depends on it -- which is
         what makes the direct write equivalent to the replay."""
         self._strat_overrides[attempt_id] = strat_tag
+
+    def unlabeled_on_purpose(self, attempt_id: int) -> bool:
+        """True when the journal carries an explicit "no strategy" for this
+        attempt -- the one kind of untagged row a strategy pick must not
+        adopt, because he already said it was none of them."""
+        return (attempt_id in self._strat_overrides
+                and self._strat_overrides[attempt_id] is None)
 
     def settle(self, frame: int) -> list[dict]:
         """Let the CLOCK deliver a topological verdict the journal has no event
