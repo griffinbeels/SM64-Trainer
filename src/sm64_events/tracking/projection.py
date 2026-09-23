@@ -832,7 +832,15 @@ class Projector:
         self._area: int | None = None    # gCurrAreaIndex per area_changed; None = unknown (legacy journals)
         self._open_castle = False        # open attempt was OPENED in a castle hub level; only meaningful while _open is set (the open site re-arms it)
         self._open_carried_igt = 0       # Usamune frames this attempt ran BEFORE its counter last restarted; only meaningful while _open is set (see _with_carried_igt)
-        # Valid runs (caveat 21). Which ATTEMPT_RULES the current session's
+        self._init_valid_attempts()
+        self._rollouts_total = 0
+        self._rollouts_dustless = 0
+        self._jumps_total = 0
+        self._jumps_dustless = 0
+
+    def _init_valid_attempts(self) -> None:
+        """The state caveat 21 keeps (valid attempts, save-state loads)."""
+        # Which ATTEMPT_RULES the current session's
         # `session_started` declared; 1 for every journal written before them.
         self._rules = 1
         self._open_judged = False        # the open attempt was opened under rules 2, so it can be judged
@@ -852,10 +860,6 @@ class Projector:
         # `_open`; under rules 2 a load no longer opens an attempt, but the
         # ghost still restarts its clock at one, exactly as before.
         self._clock_origin = None
-        self._rollouts_total = 0
-        self._rollouts_dustless = 0
-        self._jumps_total = 0
-        self._jumps_dustless = 0
 
     @property
     def strat_tag(self) -> str | None:
@@ -1138,7 +1142,7 @@ class Projector:
         prev_level = self._level  # _dispatch may move it (level_changed)
         self._pending_target_retire = None   # transient, one event only
         self._pending_grab_take = None       # transient, one event only
-        closed = self._dispatch(ev)
+        closed = self._project(ev)
         self._remember_event(ev, closed)
         ctx = self._match_context(prev_level)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
@@ -1658,28 +1662,59 @@ class Projector:
             self.target = None
             self._promote_or_neutral(ev.frame)
 
-    def _dispatch(self, ev) -> list[Attempt]:
+    def _project(self, ev) -> list[Attempt]:
+        """`_dispatch`, with caveat 21 around it: the rules-2 save-state load
+        (which closes nothing), and what every anchor records for judging the
+        attempt it opens. Kept OUTSIDE `_dispatch` so the rules-1 path is the
+        same code it always was."""
         if ev.type in ANCHOR_EVENT_TYPES:
             prev_anchor_utc = self._anchor_utcs[-1] if self._anchor_utcs else None
             self._anchor_ids.append(ev.id)
             self._anchor_utcs.append(ev.wall_time_utc)
             if self._rules >= 2 and ev.type == "state_loaded":
-                # A save-state load is not a retry (caveat 21, his ruling
-                # 2026-09-23): "one practice-log entry per full reset, running
-                # through every load to the finish". It closes nothing; the
-                # open attempt counts it, and with nothing open it opens one
-                # that can never be valid.
-                self._load_ids.append(ev.id)
-                self._load_frames.append(ev.frame)
-                self._anchor_verdicts[ev.id] = "save_state"
-                if self._open is None:
-                    self._open_attempt(ev, "save_state", prev_anchor_utc)
-                if not self._open_loads:
-                    self._open_first_load_frame = ev.frame
-                self._open_loads += 1
-                if ev.payload.get("load_signature") == "frame_counter_rewound":
-                    self._clock_origin = ev
-                return []
+                return self._run_through_load(ev, prev_anchor_utc)
+            involuntary = ev.payload.get("area_load") or ev.payload.get("teleport")
+            # A run an involuntary anchor opens was opened by no reset: he
+            # walked on from the last one's finish (`no_reset`).
+            verdict = "no_reset" if involuntary else self._reset_verdict(ev)
+            self._anchor_verdicts[ev.id] = verdict
+            closed = self._dispatch(ev)
+            if self._open is ev:
+                self._opened(ev, verdict, prev_anchor_utc)
+            return closed
+        closed = self._dispatch(ev)
+        if ev.type == "session_started":
+            # The session declares which attempt rules its events were
+            # journaled under (caveat 21); a session written before them
+            # declares nothing and replays exactly as it always has.
+            self._rules = ev.payload.get("attempt_rules", 1)
+        elif ev.type == "level_changed":
+            self._entry_frame, self._entry_area = ev.frame, None
+        return closed
+
+    def _run_through_load(self, ev, prev_anchor_utc) -> list[Attempt]:
+        """A save-state load is not a retry (caveat 21, his ruling
+        2026-09-23): "one practice-log entry per full reset, running through
+        every load to the finish". It closes nothing; the open attempt counts
+        it, and with nothing open it opens one that can never be valid."""
+        self._load_ids.append(ev.id)
+        self._load_frames.append(ev.frame)
+        self._anchor_verdicts[ev.id] = "save_state"
+        if self._open is None:
+            self._open = ev
+            self._open_acted = False
+            self._open_castle = self._level in CASTLE_LEVELS
+            self._open_carried_igt = 0
+            self._opened(ev, "save_state", prev_anchor_utc)
+        if not self._open_loads:
+            self._open_first_load_frame = ev.frame
+        self._open_loads += 1
+        if ev.payload.get("load_signature") == "frame_counter_rewound":
+            self._clock_origin = ev
+        return []
+
+    def _dispatch(self, ev) -> list[Attempt]:
+        if ev.type in ANCHOR_EVENT_TYPES:
             if ev.payload.get("area_load") or ev.payload.get("teleport"):
                 # Going DEEPER into the level is not a retry: "if we enter a
                 # subarea within a stage, we fundamentally DID NOT RESET…
@@ -1699,10 +1734,10 @@ class Projector:
                 # and straight into its subarea has to start an attempt
                 # somewhere, and this is the last boundary before the grab.
                 if self._open is None:
-                    # No reset opened this run: he walked on from the last
-                    # one's finish (caveat 21's `no_reset`).
-                    self._anchor_verdicts[ev.id] = "no_reset"
-                    self._open_attempt(ev, "no_reset", prev_anchor_utc)
+                    self._open = ev
+                    self._open_acted = False
+                    self._open_castle = self._level in CASTLE_LEVELS
+                    self._open_carried_igt = 0  # the attempt begins HERE
                 else:
                     # Usamune's counter restarted, and this attempt is still
                     # running — bank the leg it just forgot (_with_carried_igt).
@@ -1710,9 +1745,10 @@ class Projector:
                         ev.payload.get("igt_frames_before") or 0
                 return []
             closed = self._close_by_reset(ev)
-            verdict = self._reset_verdict(ev)
-            self._anchor_verdicts[ev.id] = verdict
-            self._open_attempt(ev, verdict, prev_anchor_utc)
+            self._open = ev
+            self._open_acted = False
+            self._open_castle = self._level in CASTLE_LEVELS
+            self._open_carried_igt = 0
             return closed
         if ev.type == "star_collected":
             return self._close_by_grab(ev)
@@ -1747,10 +1783,6 @@ class Projector:
             self._target_queue.clear()  # a session boundary ends every
             # queued detection with the focus they were waiting behind
             self._suspended_star = None
-            # The session declares which attempt rules its events were
-            # journaled under (caveat 21); a session written before them
-            # declares nothing and replays exactly as it always has.
-            self._rules = ev.payload.get("attempt_rules", 1)
             return closed
         if ev.type == "level_changed":
             closed = self._close(ev, outcome="abandoned", igt_frames=None)
@@ -1888,7 +1920,6 @@ class Projector:
                 self.target = ("star", *self._suspended_star)
                 self._suspended_star = None
             self._level = to_level
-            self._entry_frame, self._entry_area = ev.frame, None  # caveat 21
             # _area is deliberately NOT reset here: every level entry is
             # followed by an establishing area_changed (area.py keys its
             # last-EMITTED state on (level, area)), which keeps _area honest;
@@ -1979,13 +2010,9 @@ class Projector:
             return bool(p.get("dustless"))
         return bool(p.get("dustless")) or p.get("frames_late") == 1
 
-    def _open_attempt(self, ev, verdict: str | None,
-                      prev_anchor_utc: str | None) -> None:
-        """The one place an anchor opens an attempt."""
-        self._open = ev
-        self._open_acted = False
-        self._open_castle = self._level in CASTLE_LEVELS
-        self._open_carried_igt = 0  # the attempt begins HERE
+    def _opened(self, ev, verdict: str | None,
+                prev_anchor_utc: str | None) -> None:
+        """What an anchor that just opened an attempt records for judging it."""
         # Judged only when the session says loads are journaled AND the
         # anchor comes from the detector that journals them.
         self._open_judged = (self._rules >= 2
