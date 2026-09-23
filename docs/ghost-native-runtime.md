@@ -438,11 +438,15 @@ ROM failure nor renderer readiness changes saved-recording eligibility.
 Disabling or losing the active origin withdraws drawing while retaining prepared
 assets for later use. Lease/ROM shutdown revokes playback and retires assets;
 worker collection and release establish storage cleanup. Thirty-two slots (a
-full set plus as many retiring copies) share a 128 MiB clip/index budget, and
-the worker's retained files obey the same bound. One maximum-size clip
-(100000 records, about 55 minutes at 30 Hz: 100000 x (1232 + 4) bytes) fits;
-two maximum-size clips do not with GC6. The particle block halved the maximum
-from GC5's 200000 records rather than raising the budget. All resident slots count, so a replacement
+full set plus as many retiring copies) share a 256 MiB clip/index budget, and
+the worker's retained files obey the same bound. It is sized so sixteen
+3.5-minute ghosts can be replaced by sixteen more in flight (32 x 6300 x
+(1232 + 4) bytes; his longest raced segment is 1m51): GC6 records are about
+twice GC5's, and the earlier 128 MiB would have cut that to under two minutes a
+ghost. The budget is a ceiling, not a reservation. One maximum-size clip
+(100000 records, about 55 minutes at 30 Hz) fits. The pose archive keeps its
+own window (288 MiB of rows, two hours at 30 Hz), independent of that clip
+cap, so a late save still reaches an early attempt. All resident slots count, so a replacement
 may defer until the previous owner's storage is retired and collected. Nothing
 displaces a pending clip; the worker releases what it no longer lists.
 If a reader holds the status page during revocation, the worker retries that
@@ -613,6 +617,11 @@ source `ONE` or `SRC_ALPHA`, depth test on and depth writes off. Other blends
 (additive, destination-reading) are counted (`skipped_blend`) and stay out. A
 depth-writing world draw after the layer opened, a failed depth pass or a GL
 error drops the layer for that list (`broken`); the ghost then draws as before.
+The layer has its own GL error scope (`replay_gl::BeginLayer`/`EndLayer`): its
+ordinary errors are drained and never leave the nominal state that replay
+capture and the ghost depend on; out of memory or a lost context still does.
+The layer runs only while playback is drawing (`ghost_playback::drawing`), so
+a retired, withdrawn or disabled playback repeats no draw and blits no depth.
 N64 image depth and multisampling never open it. The layer composes several
 surfaces in draw order but keeps one nearest depth, so a ghost between two
 translucent surfaces takes both. Level fog on the ghost's own body is not

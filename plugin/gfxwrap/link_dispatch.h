@@ -30,6 +30,13 @@ uint32_t SourceFormat(); // observed once on fresh default framebuffer; no drive
 // fence/flush, BEFORE image publication. One raw error read each; no drain.
 bool __cdecl BeginCapture();
 bool __cdecl EndCapture();
+// The translucent world layer's scope: opens like BeginCapture. EndLayer
+// drains the layer's own errors and returns false for them WITHOUT leaving
+// the nominal state: a failing GL command changes no state, and the layer
+// restores what it replaced by query. Out of memory, a lost context or an
+// undrainable flag still invalidate, exactly like EndCapture.
+bool __cdecl BeginLayer();
+bool __cdecl EndLayer();
 // Preserve one consumed diagnostic for the renderer's next original error read.
 // This preserves visibility, not an identical driver error-flag history.
 GLenum APIENTRY GetError();

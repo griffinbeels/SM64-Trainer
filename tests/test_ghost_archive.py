@@ -5,9 +5,13 @@ import pytest
 
 from ghost_native_fixture import attempt, frame, producer
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
-from sm64_events.ghost.archive import DANCE_TAIL_MAX_FRAMES, PoseArchive
+from sm64_events.ghost.archive import (
+    ARCHIVE_MAX_BYTES, ARCHIVE_MAX_RECORDS, ARCHIVE_RETENTION_S, DANCE_TAIL_MAX_FRAMES, PoseArchive,
+)
 from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT
-from sm64_events.ghost.clip import ClipError, attempt_origin, check_manifest, read_clip
+from sm64_events.ghost.clip import (
+    MAX_RECORDS, RECORD_BYTES, ClipError, attempt_origin, check_manifest, read_clip,
+)
 
 
 @pytest.mark.parametrize("world_status", [3, 11])
@@ -59,6 +63,18 @@ def test_stale_or_mixed_batch_commits_nothing(tmp_path):
     with pytest.raises(ClipError, match="producer identity"):
         archive.ingest(producer(), (frame(2), frame(3, epoch=8)))
     assert archive.status()["records"] == 1
+    archive.close()
+
+
+def test_archive_window_is_its_own_not_the_clip_cap(tmp_path):
+    """A late save reaches back the whole retention window: the archive's
+    ceiling is sized by bytes, independent of how many records one clip holds."""
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    assert archive.max_records == ARCHIVE_MAX_RECORDS > MAX_RECORDS
+    assert ARCHIVE_MAX_RECORDS * RECORD_BYTES <= ARCHIVE_MAX_BYTES
+    # Two hours of play at 30 Hz, and never less than before GC6 (200000 rows).
+    assert archive.retention_s == ARCHIVE_RETENTION_S
+    assert ARCHIVE_MAX_RECORDS >= max(ARCHIVE_RETENTION_S * 30, 200000)
     archive.close()
 
 

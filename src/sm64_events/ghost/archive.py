@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.clip import (
-    ELAPSED_VALID, RAW_VALID, STAR_CLOCK, CLOCK_KINDS, MAX_RECORDS,
+    ELAPSED_VALID, RAW_VALID, STAR_CLOCK, CLOCK_KINDS, RECORD_BYTES,
     ClipError, Frame, attempt_origin, frame_from_bytes, producer_values, write_clip,
 )
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
@@ -37,6 +37,15 @@ DANCE_TAIL_MAX_FRAMES = 180
 # the cap's own duration plus a second, whichever comes first.
 DANCE_TAIL_WAIT_S = DANCE_TAIL_MAX_FRAMES / 30 + 1
 DANCE_TAIL_STALL_S = 1.0
+# The archive's own ceiling, by bytes, not the clip format's per-clip cap: a
+# longer record (GC6's particles) must not shorten how far back a late save
+# can reach. Halving the clip cap to 100000 once cut this window to about 55
+# minutes (review, 2026-09-23). 288 MiB holds the default two-hour retention
+# at 30 Hz (216000 rows) with room for the record to grow; the time bound
+# decides what goes, and this only stops a runaway producer.
+ARCHIVE_MAX_BYTES = 288 * 1024 * 1024
+ARCHIVE_MAX_RECORDS = ARCHIVE_MAX_BYTES // RECORD_BYTES
+ARCHIVE_RETENTION_S = 7200
 
 
 def dance_tail(close: Frame, candidates) -> tuple[list[bytes], bool]:
@@ -75,10 +84,10 @@ def _utc(value: str) -> float:
 
 
 class PoseArchive:
-    def __init__(self, path: Path, *, max_records: int = MAX_RECORDS,
-                 retention_s: float | None = 7200, boundary_slack_s: float = 1,
+    def __init__(self, path: Path, *, max_records: int = ARCHIVE_MAX_RECORDS,
+                 retention_s: float | None = ARCHIVE_RETENTION_S, boundary_slack_s: float = 1,
                  dance_wait_s: float = DANCE_TAIL_WAIT_S, dance_stall_s: float = DANCE_TAIL_STALL_S):
-        if type(max_records) is not int or not 1 <= max_records <= MAX_RECORDS:
+        if type(max_records) is not int or not 1 <= max_records <= ARCHIVE_MAX_RECORDS:
             raise ValueError("pose archive record bound is invalid")
         if ((retention_s is not None and (not math.isfinite(retention_s) or retention_s <= 0))
                 or not math.isfinite(boundary_slack_s) or boundary_slack_s < 0):

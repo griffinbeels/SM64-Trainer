@@ -106,7 +106,7 @@ def error_host(tmp_path_factory, source_build):
     return target
 
 
-@pytest.mark.parametrize("mode", ["pre", "post", "renderer", "checked", "inactive", "clean"])
+@pytest.mark.parametrize("mode", ["pre", "post", "renderer", "checked", "inactive", "clean", "layer"])
 def test_source_error_gateway(error_host, mode):
     result = subprocess.run([str(error_host), mode], capture_output=True, text=True, timeout=15,
                             cwd=error_host.parent, **quiet_spawn_kwargs(), check=False)
