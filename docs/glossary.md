@@ -1191,13 +1191,13 @@ and playback draws none.
 
 The one named check that kept Mario's pose off a recorded [[frame]] (for
 example `not_drawn_floor`, `animation_stale`, `body_mismatch`), stored with the
-frame so every hole in a [[ghost]] explains itself in the extraction audit.
-`not_drawn` on a frame that still has a pose means the game culled Mario (a
-star-spawn or dialog camera looked away) and the pose's root came from the
-last frame that drew him or from his own position and angles.
+[[frame]] so every hole in a [[ghost]] explains itself in the extraction audit.
+`not_drawn` on a [[frame]] that still has a pose means the game culled Mario (a
+[[star]]-spawn or dialog camera looked away) and the pose's root came from the
+last [[frame]] that drew him or from his own position and angles.
 
-- **Lives** — `plugin/gfxwrap/ghost_capture.h` (`gc_refusal`); decoded as
-  `Frame.refusal_name` in `src/sm64_events/ghost/clip.py`
+- **Lives** — `plugin/gfxwrap/ghost_capture.h` (the refusal enum); decoded by
+  name in `src/sm64_events/ghost/clip.py`
 
 ### Dance tail
 
