@@ -370,6 +370,16 @@ the clock its [[ladder]] grades — [[in-game time]] for a [[star]],
 
 - **Lives** — the tracker service (`src/sm64_events/tracking/service.py`)
 
+### Time Save
+
+How much a new [[personal best]] beat the one it replaced, printed beside its
+GOLD!! in the [[practice log]] in seconds and in [[frame]]s. It stays until you
+log your next [[attempt]] of any kind, then fades out and leaves GOLD!! alone.
+The first save on a [[strategy]] replaced nothing, so it has none.
+
+- **Lives** — the practice log's PB news (`src/sm64_events/ui/pbcrown.js`)
+  → the PB row (`src/sm64_events/ui/components/attemptlog.js`)
+
 ### Imported time
 
 An [[attempt]] the trainer never watched you make, because you set the time

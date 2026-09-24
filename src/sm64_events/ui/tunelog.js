@@ -294,17 +294,30 @@ function usePbDemo() {
     const best = all.find((attempt) => attempt.id === demo.crowns[demo.crowns.length - 1]);
     const frames = best.igt_frames - PB_STEP_FRAMES;
     const run = mkAttempt({ outcome: "success", igt: fmtIgt(frames), igt_frames: frames });
-    setDemo((prior) => ({ ...prior, extra: [run, ...prior.extra] }));
+    setDemo((prior) => ({ ...prior, extra: [run, ...prior.extra],
+      feed: [{ type: "attempt_completed", payload: { attempt_id: run.id } }, ...prior.feed] }));
     setTimeout(() => setDemo((prior) => ({
       ...prior, crowns: [...prior.crowns, run.id],
-      feed: [{ type: "pb_saved", payload: { attempt_id: run.id } }, ...prior.feed] })),
+      feed: [{ type: "pb_saved", payload: { attempt_id: run.id, frames,
+                                            previous_frames: best.igt_frames } },
+             ...prior.feed] })),
     CROWN_DELAY_MS);
   }
   function undoPb() {
     setDemo((prior) => (prior.crowns.length > 1
-      ? { ...prior, crowns: prior.crowns.slice(0, -1) } : prior));
+      ? { ...prior, crowns: prior.crowns.slice(0, -1),
+          feed: [{ type: "pb_undone", payload: { attempt_id: prior.crowns[prior.crowns.length - 1] } },
+                 ...prior.feed] }
+      : prior));
   }
-  return { demo, newPb, undoPb, canUndo: demo.crowns.length > 1 };
+  // The Time Save stands until the next attempt is logged -- a reset is the
+  // commonest one, so that is what this lands.
+  function nextAttempt() {
+    const run = mkAttempt({ outcome: "reset", igt: "0'04\"20" });
+    setDemo((prior) => ({ ...prior, extra: [run, ...prior.extra],
+      feed: [{ type: "attempt_completed", payload: { attempt_id: run.id } }, ...prior.feed] }));
+  }
+  return { demo, newPb, undoPb, nextAttempt, canUndo: demo.crowns.length > 1 };
 }
 
 // The first section (the OPEN-card / long-name demonstration above) doubles
@@ -473,9 +486,12 @@ function Inspector() {
 
       <p class="tune-note">Personal best: <b>New PB</b>${" "}lands a faster
         run on the first card and crowns it a beat later, the way an automatic
-        save does; <b>Undo PB</b>${" "}hands the crown back.</p>
+        save does, with its Time Save beside GOLD!!; <b>Next attempt</b>${" "}logs
+        a reset, which retires the Time Save; <b>Undo PB</b>${" "}hands the
+        crown back.</p>
       <div class="tune-actions">
         <button class="save" onclick=${pbDemo.newPb}>New PB</button>
+        <button onclick=${pbDemo.nextAttempt}>Next attempt</button>
         <button disabled=${!pbDemo.canUndo} onclick=${pbDemo.undoPb}>Undo PB</button>
       </div>
 

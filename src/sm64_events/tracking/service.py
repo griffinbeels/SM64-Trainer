@@ -2223,6 +2223,13 @@ class TrackerService:
         frames = attempt.igt_frames if timer_mode == "igt" else attempt.rta_frames
         if frames is None:
             raise ValueError(f"attempt {attempt_id} has no {timer_mode} clock")
+        # The PB this save replaces, read before the insert: the practice log
+        # prints the difference as the row's Time Save (task 0147). The browser
+        # cannot recover it from the view -- an automatic save can land in the
+        # same refetch as the run itself, so the old PB is never on screen.
+        replaced = db.current_pb(attempt.course_id, attempt.star_id, timer_mode,
+                                 segment_id=attempt.segment_id,
+                                 strat_tag=attempt.strat_tag)
         db.insert_pb(course_id=attempt.course_id, star_id=attempt.star_id,
                      strat_tag=attempt.strat_tag, timer_mode=timer_mode,
                      frames=frames, attempt_id=attempt_id, saved_utc=_iso(_now()),
@@ -2230,7 +2237,8 @@ class TrackerService:
         payload = {"course_id": attempt.course_id, "star_id": attempt.star_id,
                    "segment_id": attempt.segment_id,
                    "strat_tag": attempt.strat_tag, "timer_mode": timer_mode,
-                   "frames": frames, "attempt_id": attempt_id}
+                   "frames": frames, "attempt_id": attempt_id,
+                   "previous_frames": replaced["frames"] if replaced else None}
         if auto:
             payload["auto"] = True  # the practice log says who saved it
         await self.publish(Event(type="pb_saved", frame=0,
