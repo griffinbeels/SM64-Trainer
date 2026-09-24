@@ -1484,6 +1484,26 @@ both sources so that [[star]] carries its own times and its own [[Ladder]].
 - **Lives** — the card builder (`src/sm64_events/ranks/scorecard.py`)
   → the card (`src/sm64_events/ui/components/scorecard.js`)
 
+### Daily Star
+
+One [[Scorecard]] entry suggested for practice each calendar day, the same on
+every install on the same local date: the date alone picks it, so no server
+decides it. The rotation deals the Overall card's 103 default entries once
+per 103-day cycle in a shuffled order where two days in a row never share a
+course; Day 1 is 2026-09-23, Whomp's Fortress "Shoot into the Wild Blue". The
+app announces it once per day in a modal showing your [[personal best]], the
+time that reaches the next [[division]] above it, and the time left in the
+day, which turns to the next day's [[star]] at midnight; its [[selector]] cell wears a
+holographic foil. The rotation never ends: each cycle reshuffles. Its **today's best** is the fastest finished, uncleared
+[[attempt]] on it that ended inside today, on the entry's [[Scorecard]] clock,
+whatever the [[strategy]]; unlike a [[personal best]] it needs no save.
+
+- **Lives** — the rotation (`src/sm64_events/ranks/dailystar.py`)
+  → today's best and the seen date (`src/sm64_events/server/dailystar_api.py`)
+  → the local date and midnight (`src/sm64_events/ui/dailystar.js`)
+  → the announcement (`src/sm64_events/ui/components/dailystarmodal.js`)
+- **Not** — a [[Goal]]: no [[rank]] or gap reads it.
+
 ### Runner page
 
 One community [[runner]]'s own standing, read-only, reached by clicking

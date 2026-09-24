@@ -56,6 +56,7 @@ import { handIsEmpty, loneOption } from "../loneoption.js";
 import { PracticeCell } from "./practicecell.js";
 import { iconIdentityForKey, useIconPicking } from "./iconpicker.js";
 import { entityIconSrc } from "./entityicons.js";
+import { dailyFor } from "../dailystar.js";
 import { isPiece } from "../subsections.js";
 
 const html = htm.bind(h);
@@ -286,6 +287,7 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
     iconSrc=${entityIconSrc(t, segKey(s))}
     rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
     caveat=${s.caveat}
+    daily=${dailyFor(t, segKey(s))}
     name=${nameOverride || s.name}
     sub=${stratSub(s.strat)}
     onPick=${pick}
@@ -417,6 +419,7 @@ function StarRow({ t, v, stage }) {
         fallbackSlot=${i}
         rank=${rankFor(i)} hasStandards=${hasStandardsFor(v, starKey(stage.course_id, i))}
         caveat=${caveatFor(i)}
+        daily=${dailyFor(t, starKey(stage.course_id, i))}
         name=${name}
         sub=${stratSub(lastStratFor(i))}
         onPick=${() => pick(i)}

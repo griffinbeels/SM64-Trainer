@@ -39,7 +39,7 @@ export function ImportSection({ onDone }) {
     <div class="settings-section-head">
       <div>
         <h3>Bring in times you already have</h3>
-        <p>Practised before you found this? None of it has to be thrown away.</p>
+        <p>Practiced before you found this? None of it has to be thrown away.</p>
       </div>
     </div>
     <div class="importsection-doors" role="group"

@@ -46,6 +46,7 @@ from sm64_events.core.paths import (bundled_defaults_seed,
                                     bundled_sheet_ladders)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
+from sm64_events.server.dailystar_api import SEEN_KEY as DAILY_STAR_SEEN_KEY
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
@@ -1388,6 +1389,11 @@ def serve_ui(*args, **kwargs):
 
 def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse,
                      bundled_library, setup_observer):
+    # Today's Daily Star announcement starts dismissed, so it never covers a
+    # page a test is driving (its backdrop intercepted clicks in the
+    # frame-readout tests, 2026-09-24). tests/test_ui_daily_star.py clears it
+    # to see the announcement.
+    database.set_state(DAILY_STAR_SEEN_KEY, datetime.now().astimezone().date().isoformat())
     broadcaster = Broadcaster()
     # `ranks=` is NOT optional here, whatever the signature says. Omit it and
     # every rank builder short-circuits to empty -- /api/ranks/standards starts

@@ -449,7 +449,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
             tune every dropdown in the app, and save it into the code.
             <br />
             <a href="/ui/sync.html" target="_blank" rel="noopener">Open the
-              version sync dashboard</a> — every US/JP address, behaviour and
+              version sync dashboard</a> — every US/JP address, behavior and
             calibration gate, and how much of each is verified.
           </p>
           <label class="settings-field">
