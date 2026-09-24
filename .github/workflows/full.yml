@@ -85,9 +85,10 @@ jobs:
         run: uv sync --frozen
 
       # Beside the checkout, where tools/find_uilab.py looks on every machine,
-      # and outside it, so pytest never collects uilab's own tests.
+      # and outside it, so pytest never collects uilab's own tests. Every job
+      # gets it: a non-browser test may COLLECT a browser module (the worker
+      # grouping guard does), and without uilab that module skips at import.
       - name: Check out uilab at the pinned commit
-        if: matrix.lane == 'browser'
         run: |
           $path = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) "uilab"
           git clone --quiet $env:UILAB_REPO $path

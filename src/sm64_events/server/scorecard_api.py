@@ -1,6 +1,8 @@
 """REST for the goal-vs-you scorecard. Endpoint contracts are `docs/api.md`'s
 `GET /api/scorecard`, `PUT /api/scorecard/goal` and `GET /api/scorecard/column`
-rows; router behavior is `tests/test_scorecard_api.py`.
+rows, plus the per-entry goal doors (`/entry_goals`, `/entry_goal_options`,
+`PUT /entry_goal`, `tests/test_scorecard_entry_goals.py`); router behavior is
+`tests/test_scorecard_api.py`.
 
 Its own router rather than a block in `ranks_api.py` for the same reason
 `import_api.py` split off: that file is already +170 lines for the
@@ -27,51 +29,33 @@ import csv
 import io
 import logging
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, HTTPException, Response
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool, StrictInt
 
 from sm64_events.library.examples import sheet_best
-from sm64_events.tracking.activestrat import ActiveStrats
 from sm64_events.library.export_column import column_cells, sheet_time
-from sm64_events.library.ratings import runner_times
 from sm64_events.library.sheet import read_rows
 from sm64_events.library.source import fetch
 from sm64_events.library.store import build_and_stamp
+from sm64_events.core.events import Event
 from sm64_events.core.modes import platform_of
 from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.scorecard import (
-    automatic_goal, build_card, card_keys, division_goal_cs, rows_for_course,
-    rows_for_route, template_rows, without_keys)
-from sm64_events.tracking.views import (fastest_current_pbs, latest_pbs_by_strategy,
+    build_card, rows_for_course, rows_for_route, template_rows, without_keys)
+from sm64_events.tracking.views import (latest_pbs_by_strategy,
                                         segment_courses)
 from sm64_events.server.import_api import sheet_row_placer
 from sm64_events.server.jobs import JobBoard
-from sm64_events.server.scorecard_goals import combined, prepare_goal, sources_of
-from sm64_events.server.scorecard_standards import tile_strategies
-from sm64_events.server.ranks_api import _score_scope, absorb_after_regrade
+from sm64_events.server.scorecard_goals import prepare_goal
+from sm64_events.server.scorecard_resolve import (
+    CUSTOM_KEY, GOAL_KEY, REGIONS_KEY, VALID_REGIONS, GoalResolver, entry_goal,
+    pin_of, require_entry_key)
+from sm64_events.server.ranks_api import absorb_after_regrade
 
 _log = logging.getLogger("sm64.scorecard")
-_GOAL_KEY = "scorecard_goal"
-# Named hand-authored goals -- {name: {entity_key: goal_cs}}. A division or
-# runner goal RESOLVES per entity every request; a custom one is typed once
-# (round-tripped through the card's own live edit, never re-derived) and
-# simply looked up here, which is why it needs no resolver of its own below.
-_CUSTOM_KEY = "scorecard_custom_goals"
-# Which ROM regions a RUNNER goal is allowed to offer a time from -- round 24,
-# his mechanism verbatim: "we should define their scorecard based on their
-# detected region (e.g., US in my case). BUT it should be a deliberate choice
-# ... There must be at least one region enabled at all times. This gives 3
-# valid states: US only, JP only, or JP and US combined. When combined for the
-# scorecard, we simply take the faster time across both regions."
-#
-# Server-side beside the goal for the same reason `_GOAL_KEY` is: two clients
-# (browser + desktop GUI) reading one choice. ABSENT means "follow the
-# detected region", which is not the same as `["us"]` -- an untouched
-# scorecard keeps tracking `ranks.grading_version` as a mode flip or a
-# detection moves it, and only a deliberate pick freezes it.
-_REGIONS_KEY = "scorecard_regions"
 # Round 29 item 2: how the pasted column is COLOURED. A time set on the
 # emulator and one set on a console wear different fills in the sheet
 # (Raisn's convention, and his ask: "The user should be able to select a color
@@ -88,7 +72,6 @@ _SHEET_STYLE_KEY = "sheet_style"
 DEFAULT_SHEET_STYLE = {"emu_fill": "#4F7BE0", "n64_fill": "#C45E1C",
                        "font_color": "#F2ECE4", "font_family": "Trebuchet MS"}
 _HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
-_VALID_REGIONS = ("us", "jp")
 
 
 class GoalBody(BaseModel):
@@ -110,6 +93,19 @@ class GoalBody(BaseModel):
     # the same parser written in JS and again in Python, and the one thing
     # this project does not allow is a second door onto one rule.
     sources: list[dict] | None = None
+
+
+class EntryGoalBody(BaseModel):
+    key: str
+    goal: dict | None = None
+    scope: str = "overall"
+
+
+class ForgiveBody(BaseModel):
+    key: str
+    attempt_id: StrictInt
+    undo: StrictBool = False
+    scope: str = "overall"
 
 
 class RegionsBody(BaseModel):
@@ -392,6 +388,7 @@ def create_scorecard_router(service, library=None, adoptions=None,
     # `compare/service.py`'s shape verbatim: {state, progress, message} plus
     # the finished body under `result`.
     _column_jobs = JobBoard()
+    goals = GoalResolver(service, library, adoptions)
 
     def _require_db():
         """`service.db` is `None` on a genuinely BROADCAST-ONLY instance --
@@ -446,206 +443,6 @@ def create_scorecard_router(service, library=None, adoptions=None,
                     fight_segment_ids=_fight_ids())
         raise HTTPException(404, f"unknown scope {scope_id!r}")
 
-    def your_times(keys: list[str], regions: list[str]) -> dict[str, int]:
-        """Your FASTEST current PB per key across every strategy and every
-        ROM in `regions` (the card's own region setting, the same list a
-        runner goal offers times from), on the entity's own clock -- igt for
-        a star, rta for a movement -- as displayed centiseconds. A key with
-        no saved PB is simply absent, which is the "no goal on this tile"
-        case `_tile` already handles.
-
-        Fastest, not latest (round 33, 2026-09-05): the strategy-blind
-        `current_pb` answers the latest SAVE across strategies, and an
-        import lands a star's rows in sheet order, so RONC3NA's own column
-        imported onto an empty log showed 11"50 (Left side TJ, landed
-        second) against a goal of 11"26 (his Standard, landed first) --
-        "I literally am ronc3na in this case. Both should automatically be
-        matching." A runner goal offers the runner's fastest row, so YOU is
-        the same quantity for him.
-
-        And across ROMs (round 34, same day): a merged (JP)/(US) sheet row
-        lands both of a runner's times under ONE strategy, and keyed by
-        strategy alone the later (US) row shadowed the faster JP one -- WDW
-        and TTC's 100-coin tiles read +0.73 and +1.30 against his own
-        column. `regions` is the merge the goal side already runs."""
-        best = fastest_current_pbs(service.db.pbs(), regions=regions)
-        you = {}
-        for key in keys:
-            parts = key.split(":")
-            if parts[0] == "star":
-                row = best.get((int(parts[1]), int(parts[2]), None, "igt"))
-            else:
-                row = best.get((None, None, int(parts[1]), "rta"))
-            if row is not None:
-                you[key] = display_cs(row["frames"])
-        return you
-
-    def division_goal_map(strategies: dict, tier: str, division: str) -> dict[str, int]:
-        goal = {}
-        for key, strategy in strategies.items():
-            ladder_cs = service.ranks.ladder_cs(key, strategy)
-            cs = division_goal_cs(ladder_cs, tier, division)
-            if cs is not None:
-                goal[key] = cs
-        return goal
-
-    # `runner_times` walks EVERY target, approach, subsection and entry on the
-    # sheet and answers for every runner at once, of which a runner goal keeps
-    # one map. Measured 2026-09-01 on a snapshot of his own db through the real
-    # endpoint (TestClient, median of 5): GET /api/scorecard costs 7.6 ms with
-    # no goal, 10.8 ms against a division, 23.8 ms against one runner, 49.6 ms
-    # against his stored goal (a division + three runners) and 68.9 ms against
-    # four runners -- a multi goal walked the sheet once per runner SOURCE.
-    # Since round 20 that fetch runs on every completed attempt, on the same
-    # process as the 30 fps poller, so the walk is memoised: one per (payload,
-    # adoptions, grading version), reused across sources and across fetches.
-    # The memo HOLDS the payload object, so its id cannot be recycled under
-    # the key while it is cached; a sheet refresh replaces the object, an
-    # adoption changes the rows tuple, a version flip changes the string.
-    _runner_times_memo: dict = {}
-
-    def runner_times_for(version: str) -> dict[str, dict[str, int]]:
-        payload = library.payload
-        adopted_rows = adoptions.rows() if adoptions is not None else {}
-        key = (id(payload), payload.get("sheet_revision"), payload.get("fetched_at"),
-               version, tuple(sorted(adopted_rows.items())))
-        cached = _runner_times_memo.get("entry")
-        if cached is None or cached[0] != key:
-            # STRICT: a runner's time counts for a region only when it was
-            # set on that ROM (round 34) -- the same stamp his import lands
-            # it under, so a runner grades himself at zero whichever regions
-            # are on. The Library page and the ratings keep the looser rule.
-            value = runner_times(payload, adopted_rows, version=version, strict=True)
-            # Keep key and value together across concurrent card reads.
-            # Holding payload prevents its identity from being recycled.
-            _runner_times_memo["entry"] = (key, payload, value)
-            return value
-        return cached[2]
-
-    def scorecard_regions(ranks) -> list[str]:
-        """The regions a runner goal may offer times from, in `_VALID_REGIONS`
-        order and never empty. A missing or corrupt KV reads as "follow the
-        detected region" -- `ranks.grading_version`, the same value
-        `core/modes.py::effective_version` feeds `GET /api/mode` as
-        `effective` -- rather than as a hard-coded US, so an untouched
-        scorecard tracks a mode flip the way it always has."""
-        stored = service.db.get_state(_REGIONS_KEY, None)
-        picked = [region for region in (stored or [])
-                  if region in _VALID_REGIONS] if isinstance(stored, list) else []
-        if not picked:
-            detected = ranks.grading_version if ranks is not None else "us"
-            picked = [detected if detected in _VALID_REGIONS else "us"]
-        return [region for region in _VALID_REGIONS if region in picked]
-
-    def runner_goal_map(runner: str, regions: list[str]) -> dict[str, int]:
-        """Every entity key `runner` has a sheet time for -> that time,
-        already centiseconds -- straight off `library.ratings.runner_times`,
-        the exact shape `_tile`'s `goal.get(key)` lookup wants (a key the
-        card never asks about costs nothing to carry). Absent, never zero,
-        the same rule the reader itself follows: a runner with no time on an
-        entity is simply not a key here, which is what keeps `goal_coverage`
-        honest about how much of the card this goal actually reaches.
-
-        With BOTH regions on, the FASTER of the two wins per entity -- his
-        round-24 words, "we simply take the faster time across both regions"
-        -- which is the same minimise-then-merge shape `resolve_multi`
-        already applies across goal SOURCES, one level further in. Read once
-        per region (the memo below is keyed by region, so the second read is
-        free after the first fetch), never by widening `ratings.py`'s own
-        single-region contract: `_visible_entries` answers "what does this
-        row look like on THIS ROM", and a row's JP ladder is a different
-        ladder, not a longer list."""
-        if library is None:
-            return {}
-        best: dict[str, int] = {}
-        for region in regions:
-            for key, time_cs in runner_times_for(region).get(runner, {}).items():
-                if key not in best or time_cs < best[key]:
-                    best[key] = time_cs
-        return best
-
-    def custom_goal_store() -> dict[str, dict[str, int]]:
-        # A corrupt KV (wrong type, from a schema this store never wrote)
-        # reads as absent rather than 500ing every route that touches it --
-        # the same "treat garbage as no goal" rule `current_card()` applies
-        # to `_GOAL_KEY` below.
-        store = service.db.get_state(_CUSTOM_KEY, {})
-        return store if isinstance(store, dict) else {}
-
-    def custom_goal_map(keys: list[str], name: str) -> dict[str, int]:
-        """A saved custom goal's own times, filtered to keys the card still
-        carries -- a stale key (its segment definition since deleted) drops
-        silently, same as every other "no goal on this tile" case, rather
-        than surfacing a key `_tile` would never look up anyway."""
-        saved = custom_goal_store().get(name, {})
-        return {key: cs for key, cs in saved.items() if key in keys}
-
-    def resolve_goal(goal_value, strategies: dict, ranks) -> dict[str, int]:
-        """One goal value -> {entity key: goal centiseconds}.
-
-        A custom goal is typed data with no ladder lookup at all, so it
-        resolves independent of `ranks` -- a broadcast-only instance can
-        still grade against a hand-picked target even though it can never
-        grade against a division or a runner.
-
-        A MULTI goal resolves each source through this same function and
-        keeps the FASTEST offer per entity -- his round-16 correction of
-        round 14's reading ("I meant we should take the FASTEST time from
-        all of the runners / all of the options provided"), verified
-        against the Library: on Scale the Mountain his card showed Toad 1's
-        19"02 while ikori has 16"53, because the merge had been taking the
-        slowest source. Two levels, both his words: WITHIN an option, the
-        fastest that option has on that star across every strategy
-        (`ratings.best_entries` already minimises over every approach and
-        subsection mapping to the entity -- RONC3NA's 17"50 on "Log firsty"
-        beats his own 17"83 on the plain row); ACROSS options, the fastest
-        of those. Coverage is still the UNION, so a runner who never
-        entered a star is covered by whoever did ("if you are tracking
-        multiple different runners, then you should have 100% coverage
-        across all stars")."""
-        if not goal_value:
-            return {}
-        kind = goal_value.get("kind")
-        if kind == "custom":
-            return custom_goal_map(strategies, goal_value["name"])
-        if kind == "multi":
-            merged, _, _ = resolve_multi(goal_value, strategies, ranks)
-            return merged
-        if ranks is None:
-            return {}
-        if kind in ("division", "automatic"):
-            return division_goal_map(strategies, goal_value.get("tier"),
-                                     goal_value.get("division"))
-        if kind == "runner":
-            return runner_goal_map(goal_value["runner"], scorecard_regions(ranks))
-        return {}
-
-    def resolve_multi(goal_value, strategies: dict, ranks):
-        """A multi goal -> final times, source indices, and player-only times.
-
-        WHICH source won is recorded where the comparison happens, not
-        re-derived later: the card's attribution -- his round-15 ask, a
-        coloured dot after each star naming the pick that set it ("that
-        clearly tells us that player two is the reason that the goal is
-        that time") -- has to agree with the number beside it, and the only
-        way two surfaces cannot disagree is for one of them to never
-        compute it. Ties keep the EARLIER source, so the legend order is
-        also the tie-break and the attribution never depends on dict
-        iteration order."""
-        merged: dict[str, int] = {}
-        owner: dict[str, int] = {}
-        players: dict[str, int] = {}
-        for index, source in enumerate(goal_value.get("sources") or []):
-            if not isinstance(source, dict) or source.get("kind") == "multi":
-                continue                     # never nest; a corrupt KV is empty
-            for key, cs in resolve_goal(source, strategies, ranks).items():
-                if source.get("kind") == "runner":
-                    players[key] = min(players.get(key, cs), cs)
-                if key not in merged or cs < merged[key]:
-                    merged[key] = cs
-                    owner[key] = index
-        return merged, owner, players
-
     def current_card(scope_id: str = "overall"):
         """`(card, goal_value)` -- the one door both `GET /api/scorecard`
         and the CSV export build from, so a downloaded row can never
@@ -660,32 +457,42 @@ def create_scorecard_router(service, library=None, adoptions=None,
         # movement its own rank ignores would be scoring a different route
         # than the number printed beside it.
         rows_spec = without_keys(scope_rows(scope_id), service.rank_excluded())
-        keys = card_keys(rows_spec)
-        you = your_times(keys, scorecard_regions(service.ranks))
-        ranks = service.ranks
-        active = ActiveStrats.from_db(service.db, service.strat_by_star,
-                                      service.strat_by_segment)
-        strategies = tile_strategies(rows_spec, ranks, active,
-            library.payload if library is not None else {},
-            adoptions.rows() if adoptions is not None else {})
-        sources = sources_of(service.db.get_state(_GOAL_KEY, None))
-        if sources[0]["kind"] == "automatic":
-            rank = _score_scope(service, scope_id) if ranks is not None else {}
-            sources[0] = automatic_goal(rank.get("tier"), rank.get("division"))
-        goal_value = combined(sources)
-        if len(sources) > 1:
-            goal_map, goal_owner, player_goals = resolve_multi(goal_value, strategies, ranks)
-        else:
-            goal_map, goal_owner = resolve_goal(goal_value, strategies, ranks), {}
-            player_goals = {}
-
-        card = build_card(rows_spec, you=you, goal=goal_map)
+        resolved = goals.resolve_entries(rows_spec, scope_id)
+        card = build_card(rows_spec, you=resolved["you"], goal=resolved["goal"])
         for row in card["rows"]:
             for tile in row["tiles"]:
-                tile["strat"] = strategies.get(tile["key"])
-                tile["goal_source"] = goal_owner.get(tile["key"])
-                tile["player_goal_cs"] = player_goals.get(tile["key"])
-        return card, goal_value
+                key = tile["key"]
+                pinned = key in resolved["pins"]
+                tile["strat"] = resolved["strategies"].get(key)
+                # A pin is not a legend source: it draws no dot (`goal_source`
+                # null) and says what it is through `goal_pinned` instead.
+                tile["goal_source"] = None if pinned else resolved["owner"].get(key)
+                tile["goal_pinned"] = pinned
+                tile["player_goal_cs"] = resolved["players"].get(key)
+        return card, resolved["goal_value"]
+
+    def entry_rows(scope_id: str, keys: list[str]) -> list[dict]:
+        for key in keys:
+            require_entry_key(key)
+        _require_db()
+        return goals.entry_spec(keys, without_keys(scope_rows(scope_id),
+                                                   service.rank_excluded()))
+
+    def entry_goals(scope_id: str, keys: list[str]) -> dict:
+        rows_spec = entry_rows(scope_id, keys)
+        resolved = goals.resolve_entries(rows_spec, scope_id)
+        clocks = {key: clock for key, _label, clock in rows_spec[0]["entries"]}
+        resolved["progress"] = goals.entry_progress(resolved, clocks)
+        return {key: entry_goal(key, clock, resolved) for key, clock in clocks.items()}
+
+    async def goal_changed(key: str, scope_id: str) -> dict:
+        """The key's EntryGoal after a write, and the `goal_changed` broadcast
+        every open Practice card and Scorecard refetches on."""
+        answer = await run_in_threadpool(entry_goals, scope_id, [key])
+        await service.broadcaster.publish(Event(
+            type="goal_changed", frame=0, timestamp_utc=datetime.now(timezone.utc),
+            payload={"key": key}))
+        return answer[key]
 
     @router.get("")
     def get_scorecard(scope: str = "overall"):
@@ -697,11 +504,11 @@ def create_scorecard_router(service, library=None, adoptions=None,
                     "tiles": len(tiles)}
         # Every saved set's name, so Custom Goals needs no second request. The
         # active one, if any, is already carried in `goal` above.
-        custom_names = sorted(custom_goal_store().keys())
+        custom_names = sorted(goals.custom_goal_store().keys())
         ranks = service.ranks
         return {**card, "scope": scope, "goal": goal_value,
                 "goal_coverage": coverage, "custom_goals": custom_names,
-                "regions": scorecard_regions(ranks),
+                "regions": goals.scorecard_regions(ranks),
                 "detected_region": (ranks.grading_version
                                     if ranks is not None else "us")}
 
@@ -714,10 +521,53 @@ def create_scorecard_router(service, library=None, adoptions=None,
         """
         _require_db()
         value, store = prepare_goal(body.model_dump(exclude_none=True)
-                                    if body is not None else None, custom_goal_store())
-        service.db.set_state(_CUSTOM_KEY, store)
-        service.db.set_state(_GOAL_KEY, value)
+                                    if body is not None else None, goals.custom_goal_store())
+        service.db.set_state(CUSTOM_KEY, store)
+        service.db.set_state(GOAL_KEY, value)
         return {"goal": value}
+
+    @router.get("/entry_goals")
+    def get_entry_goals(scope: str = "overall", keys: str | None = None):
+        """Each requested entry's goal exactly as its Scorecard tile resolves
+        it (`resolve_entries`); `keys` omitted means every pinned entry.
+        Plain `def` so the scope rating runs on the threadpool, like the card."""
+        _require_db()
+        wanted = ([key for key in keys.split(",") if key] if keys is not None
+                  else list(goals.entry_pins()))
+        return {"scope": scope,
+                "goals": entry_goals(scope, list(dict.fromkeys(wanted)))}
+
+    @router.get("/entry_goal_options")
+    def get_entry_goal_options(key: str, scope: str = "overall"):
+        """What a Practice card can pin on one entry: every finite division
+        on its strategy ladder and every runner with a time on it in the
+        card's regions, each fastest first."""
+        rows_spec = entry_rows(scope, [key])
+        resolved = goals.resolve_entries(rows_spec, scope)
+        return {"key": key, "clock": rows_spec[0]["entries"][0][2],
+                "you_cs": resolved["you"].get(key),
+                **goals.entry_options(key, resolved["strategies"].get(key))}
+
+    @router.put("/entry_goal")
+    async def set_entry_goal(body: EntryGoalBody):
+        """Pin one entry's goal, or unpin it with `goal: null`, then broadcast
+        `goal_changed` so every open Practice card and Scorecard refetches."""
+        _require_db()
+        require_entry_key(body.key)
+        pin = pin_of(body.goal)
+        scope_rows(body.scope)            # an unknown scope 404s before the write
+        goals.set_pin(body.key, pin)
+        return await goal_changed(body.key, body.scope)
+
+    @router.post("/entry_goal/forgive")
+    async def forgive_attempt(body: ForgiveBody):
+        """Forgive one attempt on a repeat goal (it neither counts nor breaks
+        the streak), or with `undo: true` take the forgiveness back."""
+        _require_db()
+        require_entry_key(body.key)
+        scope_rows(body.scope)
+        goals.forgive(body.key, body.attempt_id, undo=body.undo)
+        return await goal_changed(body.key, body.scope)
 
     @router.put("/regions")
     async def set_regions(body: RegionsBody):
@@ -725,17 +575,17 @@ def create_scorecard_router(service, library=None, adoptions=None,
         an empty list is a 422 rather than a silent fall back to the detected
         region, because "show me nothing" and "follow my ROM" are different
         intentions and the control never sends the first. Stored in
-        `_VALID_REGIONS` order so the KV cannot hold two spellings of the
+        `VALID_REGIONS` order so the KV cannot hold two spellings of the
         same choice."""
         _require_db()
-        picked = [region for region in _VALID_REGIONS if region in body.regions]
+        picked = [region for region in VALID_REGIONS if region in body.regions]
         unknown = [region for region in body.regions
-                   if region not in _VALID_REGIONS]
+                   if region not in VALID_REGIONS]
         if unknown:
             raise HTTPException(422, f"unknown region(s) {unknown!r}")
         if not picked:
             raise HTTPException(422, "at least one region stays on")
-        service.db.set_state(_REGIONS_KEY, picked)
+        service.db.set_state(REGIONS_KEY, picked)
         return {"regions": picked}
 
     @router.get("/sheet_style")

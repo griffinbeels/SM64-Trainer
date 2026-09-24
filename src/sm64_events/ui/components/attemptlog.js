@@ -457,7 +457,7 @@ export function useGraphPick(rows, visible, setVisible) {
 // Derived in tracking/views.py from `timed_by`/`closed_by`/`timed_at`, so this
 // surface and the quick-select cell can never word the same fact two ways.
 export function PbTag({ pb, mode, rows, pick, t, strat = null,
-    showCaveat = true }) {
+    showCaveat = true, bare = false }) {
   // The tag names the ACTIVE STRATEGY's PB, which is what a personal best has
   // always meant (the glossary; tracking/views.py::current_pbs_by_strat) and
   // what this tag never showed -- it quoted the entity's best time whatever
@@ -480,6 +480,13 @@ export function PbTag({ pb, mode, rows, pick, t, strat = null,
     pick(pb.attempt_id);
   }
   const mark = showCaveat ? caveatOf(pb.caveat) : null;
+  // `bare`: the goal plate draws its own "PB" label in a column beside
+  // "GOAL", and states the clock once for both lines, so the tag is the time.
+  const shortDisplay = String(pb.display).replace(/^0'/, "");
+  if (bare) return html`<span class="pbtag">${pick
+    ? html`<a class="pblink" onclick=${jump}
+        title="jump to this PB in the list below">${shortDisplay}</a>`
+    : shortDisplay}${mark ? cardBadge(mark) : null}</span>`;
   return html`<span class="pbtag">PB ${pick
     ? html`<a class="pblink" onclick=${jump}
         title="jump to this PB in the list below">${pb.display}</a>`

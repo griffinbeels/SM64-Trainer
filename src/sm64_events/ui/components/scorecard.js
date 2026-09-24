@@ -208,10 +208,10 @@ function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
   // mark that can wrap onto a line of its own leaves a blank line under
   // the text and drops the icon below it. Titled, so the colour is never
   // the only way to read it.
-  const sourceColor = sourceTitle ? sourceColour(tile.goal_source) : null;
-  const dot = sourceColor
-    ? html`<span class="score-line-source" title=${sourceTitle || ""}
-        style=${`--source-colour:${sourceColor}`} aria-hidden="true"></span>`
+  const mark = lineSourceMark(tile, sourceTitle);
+  const dot = mark
+    ? html`<span class="score-line-source" title=${mark.title}
+        style=${`--source-colour:${mark.color}`} aria-hidden="true"></span>`
     : "";
   const glyph = html`<span class="score-line-lib" aria-hidden="true">
     <${Icon} name="library" size=${11} /></span>`;
@@ -233,6 +233,14 @@ function ScoreLine({ t, tile, onGoalOverride, onOpenLibrary,
     <span class="score-gap ${gapCls}">${tile.delta_cs != null
       ? fmtGapCs(tile.delta_cs) : "—"}</span>
   </div>`;
+}
+
+// The dot after a line's name: which goal source set its time. A goal PINNED
+// from the Practice log (task 0106) replaces the Scorecard's pick outright, so
+// it wears its own gold mark whatever the legend says, like the card's GOAL.
+function lineSourceMark(tile, sourceTitle) {
+  if (tile.goal_pinned) return { title: "Custom goal, set from the Practice log", color: "var(--gold)" };
+  return sourceTitle ? { title: sourceTitle, color: sourceColour(tile.goal_source) } : null;
 }
 
 // The card foot: the Σ restated as You · Goal · gap, "Stage Sum" on a

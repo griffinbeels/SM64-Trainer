@@ -44,6 +44,7 @@ import { effectiveRankDisplayMode, readRankDisplayMode,
 import { caveatOf, cardBadge } from "./marks.js";
 import { AddTime } from "./addtime.js";
 import { GhostSwitch } from "./ghostswitch.js";
+import { GoalPlate, useEntryGoals } from "./goalplate.js";
 
 const html = htm.bind(h);
 
@@ -373,7 +374,7 @@ export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
 export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
                           clearFocus, pick, selected, onSelect, forceOpen,
                           open, onSetOpen, openLibrary = null,
-                          active = false, pieces = null,
+                          active = false, pieces = null, goal,
                           nameOverflow = "ellipsis", rankIconSize = 24,
                           rankPlacement = "head", nextStepMode = "classic" }) {
   const [showHidden, setShowHidden] = useState(false);
@@ -663,8 +664,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
            (above) and the page-turn effect (above) already exist for a
            trend-graph dot; a PB link needs no second implementation of
            "open + turn to the right page + scroll + flash". */""}
-      <${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock} rows=${rows}
-        pick=${pbPick} t=${t} showCaveat=${false} />
+      <${GoalPlate} goalKey=${standards.entity} goal=${goal} t=${t} attempts=${sec.attempts} onChanged=${t.refresh}
+        pbTag=${html`<${PbTag} pb=${stratPb} strat=${sec.last_strat} mode=${clock} rows=${rows} pick=${pbPick} t=${t} showCaveat=${false} bare=${true} />`} />
       ${/* The book mark -- a doorway OUT to the community sheet for whatever
            this card is showing: it opens the Library at this card's target
            and strategy. It is the ONLY such doorway on the card now; the one
@@ -940,6 +941,23 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * page rather than asserting on props). The real app never passes this prop
  * and keeps the enforced behaviour.
  */
+// Whether `.practice-page` (the container every `@container` rule on this card
+// measures) is at or under the Layout matrix's narrow threshold -- see
+// PracticeLog's own comment on why this one fact is read in JS.
+function usePageIsNarrow(pageRef) {
+  const [isNarrow, setIsNarrow] = useState(false);
+  useEffect(() => {
+    if (!pageRef.current || typeof ResizeObserver === "undefined") return undefined;
+    const container = pageRef.current.closest(".practice-page") || pageRef.current;
+    const measure = () => setIsNarrow(container.getBoundingClientRect().width <= NARROW_CONTAINER_PX);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+  return isNarrow;
+}
+
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
                               playedKeys = [], openTargetPicker = null,
@@ -1004,16 +1022,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // physical relocation ever happens unless a cell is actually dialed to
   // "body").
   const pageRef = useRef(null);
-  const [isNarrow, setIsNarrow] = useState(false);
-  useEffect(() => {
-    if (!pageRef.current || typeof ResizeObserver === "undefined") return undefined;
-    const container = pageRef.current.closest(".practice-page") || pageRef.current;
-    const measure = () => setIsNarrow(container.getBoundingClientRect().width <= NARROW_CONTAINER_PX);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
+  const isNarrow = usePageIsNarrow(pageRef);
   const logVars = useMemo(() => logTuningVars(logTuning()), []);
   const logClasses = useMemo(() => logTuningClasses(logTuning()), []);
   const tuning = logTuning();
@@ -1073,6 +1082,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // top-level, not nested, and must not borrow the nested case's leniency.
   const nestedKeys = [...childrenOf.values()].flat().map(entityKey);
   const topKey = autoOpenKey(openCandidates, activeKey, playedKeys, nestedKeys);
+  const goals = useEntryGoals(t, openCandidates.map((sec) => standardsIdentity(sec).entity));
   // ONE renderer, used for a top-level card and for a nested [[subsection]]
   // alike (round 22) -- his "These cards should work exactly the same way as
   // normal" is structural here rather than a promise: a child goes through
@@ -1102,6 +1112,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
       onSetOpen=${(next) => setCardOpen(ek, next)}
       active=${activeKey != null && ek === activeKey}
       pieces=${kids}
+      goal=${goals[standardsIdentity(sec).entity] || null}
       nameOverflow=${nameOverflow} rankIconSize=${rankIconSize}
       rankPlacement=${rankPlacementFor(tuning, { isNarrow, twoLadder })}
       nextStepMode=${nextStepModeFor(tuning, { isNarrow, twoLadder })} />`;

@@ -49,7 +49,7 @@ def test_automatic_and_manual_share_targets_and_unpracticed_100c_uses_its_compan
         service.strat_by_star[(4, 6)] = active
         route = db.insert_route("Race only", [{"need": 1, "candidates": [
             {"type": "star", "course": 4, "star": 6}]}], "2026-09-06T00:00:00Z")
-        monkeypatch.setattr("sm64_events.server.scorecard_api._score_scope",
+        monkeypatch.setattr("sm64_events.server.scorecard_resolve._score_scope",
                             lambda *_: {"tier": "Bronze", "division": "I"})
         automatic = _tiles(client, f"route:{route}")["star:4:6"]
         assert automatic["strat"] == "Big Penguin Race + 100c"

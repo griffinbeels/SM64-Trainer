@@ -18,7 +18,13 @@ wrappers see [local verification](local-verification.md).
 | **Full run** | GitHub Actions, every push to main; `uv run python tools/full_run.py status` | the whole suite, browser tests included, split across parallel jobs | not on this machine |
 
 The merge check gates a merge; the full run gates a release (`tools/release.py`
-waits for a green one on the commit it releases). A failure reruns as a focused
+waits for a green one on the commit it releases). **Wrap runs the merge check
+once; don't run it yourself first.** A direct `run_tests.py` run leaves no
+receipt, so wrap runs the same tests again (5m42s twice, 2026-09-22). To see
+it before wrap, run `python tools/verify.py full`: its receipt is keyed on the
+tree's content, so wrap reuses it from any checkout, unless merging main
+changed the tree. While working, run focused checks; `--why --dry-run` shows
+what the merge check would pick without running it. A failure reruns as a focused
 check: `tools/full_run.py failures` prints the ready-to-paste command for a red
 full run, and the merge check reruns last run's failures by itself.
 
@@ -42,9 +48,22 @@ older than a baseline with a green full run, which supersedes it. The viewport s
 (`tests/test_responsive*.py`) are never picked: every case sweeps every page
 at every width. The full run covers them; name one to run it locally.
 
+**The browser cap.** A change that reaches more than 20 browser files runs the
+startup canary (`tests/test_fixture_reaches_the_real_page.py`, whole) and the
+pages that name it (they import the changed module, or name its file, class,
+export or tab), quickest first up to 20; the rest run on GitHub after the
+push, which blocks a release. Its plain tests, a changed test file and last
+run's failures always run here, and `--why` says how many pages were left and
+names the kept ones. At 20, the measured component, class and page changes
+(at most 20 files) are never capped; what is capped reaches every page: a
+`:root` token, or a core view or rank change (93 browser files, all through
+the first page load, because the app's store fetches the session view and
+MARELO whatever tab a test is about).
+
 `tests/test_blast_radius.py` pins the rules against the real tree (a Rank
 component and a Rank class reach the Rank page and not the Library, a global
-rule reaches every page), each proved by mutation. If the radius missed
+rule reaches every page and leaves them to GitHub, a change past the cap keeps
+its plain tests, the canary and the page naming it), each proved by mutation. If the radius missed
 something, the full run finds it after the push; widen the rule, not the habit.
 
 ## The full run
@@ -59,7 +78,10 @@ over each lane's measured speedup, `LANE_SPEEDUP`). Each job runs
 `tests/test_durations.json`, the runners' own times (`full_run.py durations
 --run <id>` refreshes it). A file is one unit, except that a file over 120 s
 whose tests share no fixture splits into its tests: one long file on one
-worker set the whole run's wall.
+worker set the whole run's wall. Local runs split the same files across
+their workers (`worker_group` in `tools/test_lanes.py`); a file with a
+module-scoped page stays on one worker, and the viewport sweeps keep their
+bounded pool.
 
 | Jobs (browser + rest) | Units | Wall | Suite step per job |
 | --- | --- | ---: | ---: |
@@ -131,7 +153,9 @@ worker or browser; a third waits. Slot 0 is `%TEMP%\SM64Trainer_tests.lock`,
 the lock older runners take, so a runner from a worktree without this change
 still excludes and is excluded. Focused checks never queue; an empty radius
 takes no slot. A killed owner releases its slot. An unregistered outside test
-controller is waited for, never stopped.
+controller is waited for, never stopped; one that starts mid-run is reported
+within 30 s. That scan is kept rare and reads each process once: run every two
+seconds it held the GIL a serial run's tests need for 14-34% of the time.
 
 | Mode | Workers per run | CPUs all runs share |
 | --- | ---: | ---: |
@@ -200,6 +224,17 @@ in jsdom through Vitest. They need Node 24.13+ and
 `npm ci --prefix tests/frontend --ignore-scripts` once per checkout; a missing
 install fails with the setup command rather than skipping. Layout, hit testing
 and paint stay browser tests. [Pilot findings](testing-pilot.md).
+
+## In-process app builds
+
+Every test that builds the real app (`tests/import_fixture.py::make_client`,
+`tests/test_ranks_api.py::make_client`, the parity walk's `open_app`, the UI
+fixture) prepares the same rank calibration in every test of a worker. While
+an app is built, `tests/calibration_reuse.py` answers a repeat from a
+per-process memo keyed by every argument `prepare` receives, and hands each app
+its own deep copy; a test body's own recalibrations, and any test that replaces
+`prepare`, run the real one. `tests/test_calibration_reuse.py` fails if one
+app's changes reach the next or a changed input is served a stale result.
 
 ## What makes a test worth keeping
 

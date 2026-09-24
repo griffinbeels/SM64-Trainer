@@ -263,7 +263,10 @@ def test_one_gold_row_per_card_and_it_is_the_run_the_pb_tag_names(run):
     assert len(rest) == 1, ("expected exactly one gold row on the page", rest)
     row = rest[0]
     assert row["time"] == run["times"]["best"], row
-    assert row["time"] in row["tag"], ("the gold row and the card's PB tag name two runs", row)
+    # The tag prints the bare display time (no empty minutes, the goal plate's
+    # form); the row prints the canonical one. Same run, two spellings.
+    assert row["time"].removeprefix("0'") in row["tag"], (
+        "the gold row and the card's PB tag name two runs", row)
     assert row["word"] == "GOLD!!", row
     assert row["gold"] == 1 and row["num"] == 0, ("the word, not the 0.00s, shows", row)
 

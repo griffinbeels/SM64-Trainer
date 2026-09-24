@@ -2498,3 +2498,95 @@ def test_undo_reaches_a_pb_a_later_strategys_save_used_to_bury(tmp_path):
     asyncio.run(svc.undo_pb(fast, "igt"))
     remaining = [(r["strat_tag"], r["frames"]) for r in db.pbs()]
     assert remaining == [("3x LJ", 350)]        # the other strategy is intact
+
+
+# -- a strategy pick adopts the entity's untagged rows (task 0146) -----------
+
+def _untagged_then_tagged(db, svc):
+    """Two rows with no strategy, then one on "Slide Kick", then the target
+    goes back to no strategy -- the state his report describes."""
+    asyncio.run(svc.set_target(2, 2))
+    for f in (1000, 2000):
+        asyncio.run(svc.publish(ev("practice_reset", f, {"igt_frames_before": 0})))
+        asyncio.run(svc.publish(star(f + 350)))
+    asyncio.run(svc.set_strat(2, 2, "Slide Kick"))
+    asyncio.run(svc.publish(ev("practice_reset", 3000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(3350)))
+    asyncio.run(svc.set_strat(2, 2, None))
+    asyncio.run(svc.publish(ev("practice_reset", 4000, {"igt_frames_before": 0})))
+    asyncio.run(svc.publish(star(4350)))
+    return sorted(a.id for a in db.attempts())
+
+
+def test_picking_a_strategy_adopts_every_untagged_row(tmp_path):
+    """His words: "We should assume that the unassigned entries are the
+    strategy we selected overall." The first two rows were adopted by the
+    Slide Kick pick; the last had no strategy until Cannonless was picked.
+    A row already on a strategy keeps it."""
+    db, svc = make(tmp_path)
+    first, second, tagged, last = _untagged_then_tagged(db, svc)
+    asyncio.run(svc.set_strat(2, 2, "Cannonless"))
+    by_id = {a.id: a.strat_tag for a in db.attempts()}
+    assert by_id == {first: "Slide Kick", second: "Slide Kick",
+                     tagged: "Slide Kick", last: "Cannonless"}
+
+
+def test_a_target_pick_with_a_strategy_adopts_too(tmp_path):
+    db, svc = make(tmp_path)
+    *_, last = _untagged_then_tagged(db, svc)
+    asyncio.run(svc.set_target(2, 2, strat_tag="Cannonless"))
+    assert next(a.strat_tag for a in db.attempts() if a.id == last) == "Cannonless"
+
+
+def test_a_row_set_to_no_strategy_on_purpose_is_not_adopted(tmp_path):
+    db, svc = make(tmp_path)
+    first, *_ , last = _untagged_then_tagged(db, svc)
+    asyncio.run(svc.set_attempt_strat(first, None))
+    asyncio.run(svc.set_strat(2, 2, "Cannonless"))
+    by_id = {a.id: a.strat_tag for a in db.attempts()}
+    assert by_id[first] is None
+    assert by_id[last] == "Cannonless"
+
+
+def test_adoption_leaves_other_stars_alone(tmp_path):
+    db, svc = make(tmp_path)
+    *_, last = _untagged_then_tagged(db, svc)
+    asyncio.run(svc.set_strat(2, 3, "Cannonless"))
+    assert next(a.strat_tag for a in db.attempts() if a.id == last) is None
+
+
+def test_adoption_agrees_with_a_full_replay(tmp_path, monkeypatch):
+    """One batch event in the journal, written directly (no replay), and a
+    restart's replay of that journal builds the same rows."""
+    db, svc = make(tmp_path)
+    _untagged_then_tagged(db, svc)
+
+    async def replayed():
+        raise AssertionError("adoption replayed the whole journal")
+    with monkeypatch.context() as m:
+        m.setattr(svc, "_reproject", replayed)
+        asyncio.run(svc.set_strat(2, 2, "Cannonless"))
+    live = db.attempts()
+    asyncio.run(svc._reproject())
+    assert db.attempts() == live
+
+
+def test_adoption_moves_an_untagged_saved_pb(tmp_path):
+    db, svc = make(tmp_path)
+    *_, last = _untagged_then_tagged(db, svc)
+    db.insert_pb(2, 2, None, "igt", 343, last, "2026-09-23T00:00:00Z")
+    asyncio.run(svc.set_strat(2, 2, "Cannonless"))
+    assert db.current_pb(2, 2, "igt", strat_tag="Cannonless")["frames"] == 343
+
+
+def test_a_segment_strategy_pick_adopts_its_untagged_rows(tmp_path):
+    db, svc = make(tmp_path)
+    lblj = seed_id(db, "LBLJ")
+    asyncio.run(svc.publish(ev("level_changed", 1000, {"from": 16, "to": 6})))
+    asyncio.run(svc.publish(ev("warp_entered", 1085,
+                               {"level": 6, "area": 1, "to": 17})))
+    asyncio.run(svc.publish(ev("level_changed", 1108, {"from": 6, "to": 17})))
+    seg_aid = next(a.id for a in db.attempts() if a.segment_id == lblj)
+    assert next(a.strat_tag for a in db.attempts() if a.id == seg_aid) is None
+    asyncio.run(svc.set_strat_segment(lblj, "no bljs"))
+    assert next(a.strat_tag for a in db.attempts() if a.id == seg_aid) == "no bljs"

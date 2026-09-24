@@ -26,6 +26,7 @@ import functools
 import heapq
 import json
 import os
+import re
 import warnings
 import zlib
 from pathlib import Path
@@ -236,6 +237,49 @@ def shard_unit(nodeid: str, totals: dict[str, float], root: Path = ROOT) -> str:
     path = nodeid.split("::")[0]
     split = totals.get(path, 0.0) > SPLIT_FILE_SECONDS and not shares_a_fixture(root / path)
     return nodeid if split else path
+
+
+# Files that touch ONE REAL file on disk and so may never run beside each
+# other, whatever worker is free. A file's own name is its group otherwise.
+#
+# `test_ui_sync_page.py` is the one test in this project that writes a real
+# PUT into `data/version_sync/jp.json` (it backs the file up and restores it,
+# by design -- the dashboard has to be driven against the real store), and
+# `test_layout_matches_report.py` READS that same path to catch layout drift,
+# skipping when it is absent. Under 24 workers those overlapped: the reader
+# found the writer's throwaway report mid-run and went red on a `failed`
+# verdict for a gate the layout ships, then the file vanished and the failure
+# could not be reproduced alone (2026-09-05). One group, no overlap.
+SHARED_GROUPS = {
+    "tests/test_ui_sync_page.py": "version_sync_report",
+    "tests/test_layout_matches_report.py": "version_sync_report",
+}
+
+
+def own_group(nodeid: str) -> str:
+    """A worker group for one test. xdist appends `@<group>` to the nodeid,
+    and JUnit splits that on `::`, so a group holding `::` read back from a
+    full run's report as a different test; `@`, `[`, `]` break xdist itself."""
+    return re.sub(r"[^A-Za-z0-9_./-]", "_", nodeid)
+
+
+def worker_group(nodeid: str, unit: str, *, sharded: bool, spread: bool) -> str:
+    """The pytest-xdist group a test runs in: one group runs on one worker,
+    in file order. A file keeps its tests together (its module-scoped page is
+    built once). A test of a split file (its shard unit is itself) or one
+    marked `spread` gets its own group, so any free worker takes it: locally
+    as on a full-run job, since one 500 s file on one worker WAS the local
+    merge check's wall (test_ui_scorecard.py, 1a1aa15e, 2026-09-22). Locally
+    the viewport sweeps keep their bounded pool; on a job its two workers
+    are the bound."""
+    path = nodeid.split("::")[0]
+    if path in SHARED_GROUPS:
+        return SHARED_GROUPS[path]
+    if path in BROWSER_SWEEPS and not sharded:
+        return browser_sweep_group(nodeid)
+    if unit == nodeid or spread:
+        return own_group(nodeid)
+    return path
 
 
 def load_durations(path: Path = DURATIONS_PATH) -> dict[str, float]:

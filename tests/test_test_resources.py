@@ -90,6 +90,32 @@ def test_obs_opening_mid_run_tightens_then_latches_and_restores(tmp_path, monkey
     assert process.cpu_affinity() == original
 
 
+def test_an_outside_run_started_mid_run_is_named_and_the_scan_stays_rare(tmp_path, monkeypatch, capsys):
+    """The watcher ticks every POLL_SECONDS; the scan for outside test runs,
+    the expensive part, runs once per SCAN_SECONDS. A run that appears
+    mid-way is still reported, at the next scan."""
+    monkeypatch.setattr(resources, "dedicated_machine", lambda: False)
+    monkeypatch.setattr(resources, "obs_is_open", lambda: False)
+    scans, outside = [], []
+    monkeypatch.setattr(resources, "competing_runs", lambda _: scans.append(1) or list(outside))
+    now = [1000.0]
+    with resources.TestResources(path=tmp_path / "budget.lock", admit=False) as lease:
+        lease._stop.set()                     # drive the ticks here, not on its thread
+        lease.clock = lambda: now[0]
+        for tick in range(3):
+            if tick == 1:   # OBS opens between scans: the very next tick tightens
+                monkeypatch.setattr(resources, "obs_is_open", lambda: True)
+            lease.refresh()
+            now[0] += resources.POLL_SECONDS
+        assert len(scans) == 1, "one scan per SCAN_SECONDS, not one per tick"
+        assert lease.obs, "the OBS check still runs every tick"
+        outside.append({"pid": 4242, "started": 1.0, "checkout": "elsewhere"})
+        now[0] += resources.SCAN_SECONDS
+        lease.refresh()
+        assert len(scans) == 2 and 4242 in lease.competitors
+    assert "outside test PID 4242 in elsewhere" in capsys.readouterr().out
+
+
 def _spawn(script, *args):
     return subprocess.Popen([sys.executable, str(script), *map(str, args)], cwd=ROOT,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
