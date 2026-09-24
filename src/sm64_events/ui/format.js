@@ -45,8 +45,12 @@ export function attainableCs(centiseconds) {
 // `23"00`, not `0'23"00` (user, 2026-08-03). ONE rule, expressed as a
 // transformation OF fmtIgt rather than as a second formatter, so the two can
 // never disagree about the seconds and centiseconds — which is the half that
-// grading depends on (ranks/classify.py::display_cs).
-function dropEmptyMinutes(text) {
+// grading depends on (ranks/classify.py::display_cs). His standing rule,
+// 2026-09-24: EVERY displayed time takes this form; `fmtIgt`'s `0'` is for
+// identifiers only (tests/test_bare_times.py). Exported for the one kind of
+// string the page shows that the server never formats for display: a
+// journaled event's own payload time (the event feed).
+export function dropEmptyMinutes(text) {
   return text.startsWith("0'") ? text.slice(2) : text;
 }
 

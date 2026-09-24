@@ -103,9 +103,9 @@ def test_key_and_reset_labels():
         == "Grabbed the Grand Star in Bowser 3 Arena"
     assert label_event(jev(17, "game_reset", 0, {})) == "Reset the game"
     assert label_event(jev(18, "practice_reset", 0, {"igt_frames_before": 219})) \
-        == 'Reset the level after 0\'07"30'
+        == 'Reset the level after 07"30'
     assert label_event(jev(19, "state_loaded", 0, {"igt_frames_restored": 0})) \
-        == 'Loaded a savestate at 0\'00"00'
+        == 'Loaded a savestate at 00"00'
     # missing igt fields (legacy journal rows) still label -- a reset is
     # itself the recognisable moment even with no duration attached.
     assert label_event(jev(20, "practice_reset", 0, {})) == "Reset the level"
