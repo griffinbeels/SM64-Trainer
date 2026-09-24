@@ -31,6 +31,7 @@ sys.path.insert(0, str(REPO / "tools"))
 
 import scorecard_parity as parity  # noqa: E402
 
+from calibration_reuse import reusing_calibrations  # noqa: E402
 from sm64_events.core.paths import bundled_sheet_library  # noqa: E402
 
 
@@ -44,7 +45,8 @@ def test_every_importable_row_is_covered_and_every_step_grades_at_zero(tmp_path)
     # with nothing failing at the time. `open_app` copies; this proves it.
     seed_before = library_path.read_bytes()
 
-    app, service = parity.open_app(tmp_path, library_path)
+    with reusing_calibrations():
+        app, service = parity.open_app(tmp_path, library_path)
     with TestClient(app) as client:
         keys = {tile["key"] for tile in parity.card_tiles(client, "overall")}
         runners, covered, total, tiles_unreached = parity.greedy_cover(payload, keys, limit=40)
@@ -56,7 +58,7 @@ def test_every_importable_row_is_covered_and_every_step_grades_at_zero(tmp_path)
         assert client.put("/api/scorecard/regions",
                           json={"regions": parity.REGIONS}).status_code == 200
         for step, runner in enumerate(runners, 1):
-            landed = client.post("/api/import/sheet", json={"runner": runner})
+            landed = client.post("/api/import/sheet", json=parity.import_body(runner))
             assert landed.status_code == 200, landed.text
             assert client.put("/api/scorecard/goal",
                               json=parity.goal_for(runners[:step])).status_code == 200
@@ -82,12 +84,14 @@ def test_the_region_toggle_moves_you_and_goal_together(tmp_path, regions):
     grades himself at zero with one region off, not only with both on."""
     library_path = bundled_sheet_library()
     payload = parity.load_payload(library_path)
-    app, _service = parity.open_app(tmp_path, library_path)
+    with reusing_calibrations():
+        app, _service = parity.open_app(tmp_path, library_path)
     with TestClient(app) as client:
         keys = {tile["key"] for tile in parity.card_tiles(client, "overall")}
         runners, _covered, _total, _unreached = parity.greedy_cover(payload, keys, limit=1)
         runner = runners[0]
-        assert client.post("/api/import/sheet", json={"runner": runner}).status_code == 200
+        assert client.post("/api/import/sheet",
+                           json=parity.import_body(runner)).status_code == 200
         assert client.put("/api/scorecard/regions", json={"regions": regions}).status_code == 200
         assert client.put("/api/scorecard/goal",
                           json=parity.goal_for([runner])).status_code == 200

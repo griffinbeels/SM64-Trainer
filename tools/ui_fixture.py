@@ -46,11 +46,16 @@ from sm64_events.core.paths import (bundled_defaults_seed,
                                     bundled_sheet_ladders)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
+from sm64_events.server.dailystar_api import SEEN_KEY as DAILY_STAR_SEEN_KEY
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
 from sm64_events.tracking.defaults import reconcile_defaults
 from sm64_events.tracking.service import TrackerService
+try:  # the test harness's calibration memo; a single CLI boot needs none
+    from calibration_reuse import reusing_calibrations
+except ImportError:
+    reusing_calibrations = contextlib.nullcontext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_lanes import refuse_outside_browser_modules  # noqa: E402
@@ -1394,6 +1399,11 @@ def serve_ui(*args, **kwargs):
 
 def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse,
                      bundled_library, setup_observer, capture_layer_install=None):
+    # Today's Daily Star announcement starts dismissed, so it never covers a
+    # page a test is driving (its backdrop intercepted clicks in the
+    # frame-readout tests, 2026-09-24). tests/test_ui_daily_star.py clears it
+    # to see the announcement.
+    database.set_state(DAILY_STAR_SEEN_KEY, datetime.now().astimezone().date().isoformat())
     broadcaster = Broadcaster()
     # `ranks=` is NOT optional here, whatever the signature says. Omit it and
     # every rank builder short-circuits to empty -- /api/ranks/standards starts
@@ -1476,21 +1486,23 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
                         "warning": None},
                 "checks": {key: layer.state == "active" for key in
                            ("plugin", "pictures", "inputs", "game")}}
-    app = create_app(poller, broadcaster, service=service, compare=compare,
-                     inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
-                     adoptions_path=scratch_path
-                     / "library_adoptions.json",
-                     mode_path=scratch_path / "tracker_mode.json",
-                     # Scratch for the same reason as adoptions_path: the
-                     # default local sheet snapshot is the real dev data dir,
-                     # and a live refresh writes a newer snapshot there, so a
-                     # sweep would measure a page built from whatever the
-                     # sheet said last night rather than the bundled data.
-                     library_path=scratch_path
-                     / "sheet_library.json.gz",
-                     library_bundled_path=(None if bundled_library else
-                                           scratch_path
-                                           / "no-library.json.gz"))
+    # Identical in every boot of a test worker; each app keeps its own copy.
+    with reusing_calibrations():
+        app = create_app(poller, broadcaster, service=service, compare=compare,
+                         inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
+                         adoptions_path=scratch_path
+                         / "library_adoptions.json",
+                         mode_path=scratch_path / "tracker_mode.json",
+                         # Scratch for the same reason as adoptions_path: the
+                         # default local sheet snapshot is the real dev data dir,
+                         # and a live refresh writes a newer snapshot there, so a
+                         # sweep would measure a page built from whatever the
+                         # sheet said last night rather than the bundled data.
+                         library_path=scratch_path
+                         / "sheet_library.json.gz",
+                         library_bundled_path=(None if bundled_library else
+                                               scratch_path
+                                               / "no-library.json.gz"))
 
     return app, service
 

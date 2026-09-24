@@ -7,6 +7,7 @@ from sm64_events.tracking.service import TrackerService
 from sm64_events.server.poller import Poller
 from sm64_events.server.app import create_app
 from sm64_events.ranks.standards import RankStandards
+from calibration_reuse import reusing_calibrations
 
 class OfflineMemory:
     attached = False
@@ -41,13 +42,14 @@ def make_client(tmp_path, bundled_library=False):
     # the bundled library's fitted rows would otherwise join every star's
     # ladders at load (that is the feature, not a leak -- see
     # tests/test_library_refresh.py for the tests that want it on).
-    app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc,
-                     adoptions_path=tmp_path / "library_adoptions.json",
-                     # ...and the LOCAL snapshot too, or the checkout's own
-                     # refreshed data/sheet_library.json.gz answers instead.
-                     library_path=tmp_path / "sheet_library.json.gz",
-                     library_bundled_path=(None if bundled_library
-                                           else tmp_path / "no-library.json.gz"))
+    with reusing_calibrations():
+        app = create_app(Poller(OfflineMemory(), [], svc), b, service=svc,
+                         adoptions_path=tmp_path / "library_adoptions.json",
+                         # ...and the LOCAL snapshot too, or the checkout's own
+                         # refreshed data/sheet_library.json.gz answers instead.
+                         library_path=tmp_path / "sheet_library.json.gz",
+                         library_bundled_path=(None if bundled_library
+                                               else tmp_path / "no-library.json.gz"))
     return TestClient(app), svc
 
 def test_make_client_never_touches_the_checkouts_own_adoption_file(tmp_path):

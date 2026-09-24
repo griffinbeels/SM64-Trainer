@@ -15,6 +15,7 @@ import { ImportSection } from "./importsection.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 import { SetupModal } from "./setupmodal.js";
+import { StreamOverlayDesigner } from "./streamoverlay.js";
 import { EMU, N64 } from "../platform.js";
 
 const html = htm.bind(h);
@@ -120,6 +121,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupManual, setSetupManual] = useState(false);
   const [setupWarning, setSetupWarning] = useState(null);
+  const [overlayOpen, setOverlayOpen] = useState(false);
   useEffect(() => {
     send("GET", "/api/setup").then((setup) => {
       setSetupWarning(setup.emu?.rom?.warning || (setup.onboarding?.limited
@@ -447,7 +449,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
             tune every dropdown in the app, and save it into the code.
             <br />
             <a href="/ui/sync.html" target="_blank" rel="noopener">Open the
-              version sync dashboard</a> — every US/JP address, behaviour and
+              version sync dashboard</a> — every US/JP address, behavior and
             calibration gate, and how much of each is verified.
           </p>
           <label class="settings-field">
@@ -472,6 +474,15 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
           <p class="settings-note">Which clock grades star times. Usamune IGT
             (x-cam timing) is the community standard and the default; Anchor
             to grab times from your anchor instead, for star-grab practice.</p>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-head">
+            <div><h3>Streaming</h3><p>Put your PB and goal on stream with an OBS Browser Source.</p></div>
+            <button type="button" onclick=${() => { closeSettings(); setOverlayOpen(true); }}>
+              <${Icon} name="target" />Stream overlay
+            </button>
+          </div>
         </section>
 
         <section class="settings-section">
@@ -508,6 +519,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab }) {
          the card it is about is what stops a second surface growing its own
          copy of this question. */""}
     <${RunScopeWarning} t=${t} pending=${pendingScope} onDone=${resolveScope} />
+    ${overlayOpen && html`<${StreamOverlayDesigner} onClose=${() => setOverlayOpen(false)} />`}
     ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
   </header>`;
 }

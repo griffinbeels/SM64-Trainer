@@ -1201,6 +1201,23 @@ class Database:
             out = [_attempt_from_row(r) for r in rows]
         return sorted(out, key=lambda a: journal_id(a.id))
 
+    def session_attempts(self, session_id: int) -> list[Attempt]:
+        """One session's attempts, in `attempts()`'s chronological order --
+        filtered in SQL, so a caller that runs after every attempt (the
+        Scorecard's repeat-goal progress) never loads the whole history."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM attempts WHERE session_id = ?",
+                                      (session_id,)).fetchall()
+            out = [Attempt(**{**{k: r[k] for k in _ATTEMPT_COLS},
+                              "cleared": bool(r["cleared"])}) for r in rows]
+        return sorted(out, key=lambda a: journal_id(a.id))
+
+    def session_started_utc(self, session_id: int) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT started_utc FROM sessions WHERE id = ?",
+                                     (session_id,)).fetchone()
+        return row["started_utc"] if row is not None else None
+
     # -- segment definitions -------------------------------------------------
     def segment_defs(self) -> list[dict]:
         with self._lock:
@@ -1821,6 +1838,17 @@ class Database:
         with self._lock, self._conn:
             self._conn.execute("UPDATE attempts SET strat_tag=? WHERE id=?",
                                (strat_tag, attempt_id))
+            self._conn.commit()
+
+    def retag_attempts(self, attempt_ids: list[int],
+                       strat_tag: str | None) -> None:
+        """`retag_attempt` and `retag_pbs_for_attempt` for many rows in one
+        transaction: a strategy pick adopting every untagged row of its
+        entity (service._adopt_untagged)."""
+        rows = [(strat_tag, attempt_id) for attempt_id in attempt_ids]
+        with self._lock, self._conn:
+            self._conn.executemany("UPDATE pbs SET strat_tag=? WHERE attempt_id=?", rows)
+            self._conn.executemany("UPDATE attempts SET strat_tag=? WHERE id=?", rows)
             self._conn.commit()
 
     def retag_pbs_for_attempt(self, attempt_id: int,

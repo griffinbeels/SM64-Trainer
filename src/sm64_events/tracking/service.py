@@ -903,6 +903,9 @@ class TrackerService:
         # set_strat_segment(tag), explicit clear -> set_strat_segment(None)).
         if strat_tag is not None:
             payload["strat_tag"] = strat_tag
+        if strat_tag:
+            await self._adopt_untagged(db, strat_tag, course_id=course_id,
+                                       star_id=star_id)
         await self.publish(Event(type="target_set", frame=0,
                                  timestamp_utc=_now(), payload=payload))
         if strat_tag:
@@ -937,10 +940,43 @@ class TrackerService:
             # legacy tricks and user-created segments, deliberately.
             await self.set_strat_segment(segment_id, None)
 
+    async def _adopt_untagged(self, db: Database, strat_tag: str, *,
+                              course_id: int | None = None,
+                              star_id: int | None = None,
+                              segment_id: int | None = None) -> None:
+        """Picking a strategy claims every row of that star or segment that
+        has none (task 0146, his words: "We should assume that the unassigned
+        entries are the strategy we selected overall"). Rows he explicitly
+        set to no strategy stay unlabeled -- that was a statement, not a gap.
+
+        One journaled `attempt_strat_set` carrying `attempt_ids`, so a replay
+        folds the adoption in exactly like a per-row reclassification, and
+        the same direct write set_attempt_strat uses (no journal replay).
+        Runs BEFORE the caller's strat_set/target_set publish, so every
+        client refreshing on that event already sees the adopted rows."""
+        ids = [a.id for a in db.attempts()
+               if (a.segment_id, a.course_id, a.star_id)
+               == ((segment_id, None, None) if segment_id is not None
+                   else (None, course_id, star_id))
+               and not a.strat_tag
+               and not self._projector.unlabeled_on_purpose(a.id)]
+        if not ids:
+            return
+        await self.publish(Event(type="attempt_strat_set", frame=0,
+                                 timestamp_utc=_now(),
+                                 payload={"attempt_ids": ids,
+                                          "strat_tag": strat_tag}))
+        db.retag_attempts(ids, strat_tag)
+        for attempt_id in ids:
+            self._projector.override_strat(attempt_id, strat_tag)
+
     async def set_strat(self, course_id: int, star_id: int,
                         strat_tag: str | None) -> None:
         """Set a star's active strategy without touching the target."""
         db = self._require_db()
+        if strat_tag:
+            await self._adopt_untagged(db, strat_tag, course_id=course_id,
+                                       star_id=star_id)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"course_id": course_id,
@@ -969,6 +1005,8 @@ class TrackerService:
         # movement's fresh id was importable yet "not found" here).
         if all(d["id"] != segment_id for d in db.segment_defs()):
             raise LookupError(f"segment {segment_id} not found")
+        if strat_tag:
+            await self._adopt_untagged(db, strat_tag, segment_id=segment_id)
         await self.publish(Event(type="strat_set", frame=0,
                                  timestamp_utc=_now(),
                                  payload={"kind": "segment",

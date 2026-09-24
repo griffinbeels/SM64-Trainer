@@ -37,6 +37,13 @@ LOCK_PATH = Path(tempfile.gettempdir()) / "SM64Trainer_tests.lock"
 OWNER_ENV = "SM64_TEST_OWNER"
 WORKERS_ENV = "SM64_TEST_WORKERS"
 POLL_SECONDS = 2.0
+# The watcher runs on the controller, and while it runs the test thread waits
+# for the GIL. Pinning children and the OBS check cost ~15 ms a tick; the scan
+# for outside test runs cost 0.6-1.2 s a tick with 36-61 Python processes up
+# (w1 and here, 2026-09-22), which ran a serial run's tests at 65-89% of their
+# solo speed. So that scan, which only reports, runs every half minute: a run
+# started mid-way is still named, within 30 s.
+SCAN_SECONDS = 30.0
 SLOTS = 2
 MACHINE_WORKERS = {False: 16, True: 8}   # every concurrent run together; key: OBS open
 
@@ -134,6 +141,8 @@ class TestResources:
         self.registry = self.path.with_name(self.path.name + ".runners")
         self.ticket = self.registry / f"{self.process.pid}-{self.process.create_time()}.runner"
         self.competitors: dict[int, dict] = {}
+        self.clock = time.monotonic
+        self._next_scan = 0.0
 
     def __enter__(self):
         started = time.monotonic()
@@ -195,11 +204,13 @@ class TestResources:
 
     def refresh(self):
         """OBS can appear after admission; re-pin existing descendants as well."""
-        for run in competing_runs(self.registry):
-            if run["pid"] not in self.competitors:
-                self.competitors[run["pid"]] = run
-                print(f"tests: PERFORMANCE COMPARISON CONTAMINATED by outside test "
-                      f"PID {run['pid']} in {run['checkout']}; do not tune from this run", flush=True)
+        if self.clock() >= self._next_scan:
+            self._next_scan = self.clock() + SCAN_SECONDS
+            for run in competing_runs(self.registry):
+                if run["pid"] not in self.competitors:
+                    self.competitors[run["pid"]] = run
+                    print(f"tests: PERFORMANCE COMPARISON CONTAMINATED by outside test "
+                          f"PID {run['pid']} in {run['checkout']}; do not tune from this run", flush=True)
         if not self.obs and not self.dedicated and obs_is_open():
             self.obs = True
             _, self.cpus = budget(self.eligible, True, self.requested_workers, self.reserve)

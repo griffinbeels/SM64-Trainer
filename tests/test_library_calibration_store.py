@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from sm64_events.library.build import SCHEMA_VERSION
+from sm64_events.library.ladders import fit_payload
 from sm64_events.library.store import LibraryStore, read_snapshot, write_snapshot
 from sm64_events.ranks.calibration import build_calibration
 from sm64_events.ranks.policy import RankingPolicy
@@ -258,3 +259,67 @@ def test_policy_revision_refits_offline_even_when_model_version_matches(tmp_path
     assert store.payload["ladder_model"]["policy_revision"] == RankingPolicy().revision
     assert store.payload["targets"][0]["approaches"][0]["ladder"]["Mario"] < 999
     assert path.read_bytes() == before
+
+
+def _write_spy(monkeypatch):
+    writes = []
+
+    def spying(path, payload):
+        writes.append(path)
+        write_snapshot(path, payload)
+
+    monkeypatch.setattr("sm64_events.library.store.write_snapshot", spying)
+    return writes
+
+
+def _refit(policy="one"):
+    def prepare(payload):
+        payload["targets"][0]["approaches"][0]["ladder"] = {"Mario": 11.0}
+        return _prepare(payload, policy=policy)
+    return prepare
+
+
+@pytest.mark.parametrize("change", ["nothing", "refit", "replaced"])
+def test_a_restart_rewrites_its_local_copy_only_when_the_start_changed_it(tmp_path, monkeypatch, change):
+    """Every start activates its first calibration; over an unchanged local
+    copy that re-encoded and recompressed identical bytes (~0.15 s). Only that
+    first activation may skip: a later one writes exactly as before."""
+    previous = LibraryStore(tmp_path / "library.json.gz")  # left its local copy
+    previous.prepare_calibration = _prepare
+    assert previous.absorb(fit_payload(_snapshot()))["applied"]
+    writes = _write_spy(monkeypatch)
+    store = LibraryStore(tmp_path / "library.json.gz")
+    store.load()
+    store.prepare_calibration = _refit() if change == "refit" else _prepare
+    if change == "replaced":  # behind the store's back, after it read the file
+        write_snapshot(store.path, _snapshot(1500, "2026-01-01T12:00:00"))
+    before = store.path.read_bytes()
+    assert store.recalibrate()["applied"]
+    assert writes == ([] if change == "nothing" else [store.path])
+    assert read_snapshot(store.path) == store.payload and store.status()["source"] == "local"
+    if change == "nothing":
+        assert store.path.read_bytes() == before
+        store.prepare_calibration = lambda payload: _prepare(payload, policy="two")
+        assert store.recalibrate()["applied"] and writes == [store.path]
+
+
+@pytest.mark.parametrize("local", [None, "older", "unfitted", "refit_by_bound_load"])
+def test_a_local_copy_unlike_the_activated_payload_is_still_written(tmp_path, monkeypatch, local):
+    """A fresh data dir writes its first local copy; a stale copy, or one this
+    load refitted, is replaced. Only an untouched, equal copy is kept."""
+    bundled = tmp_path / "bundled.gz"
+    write_snapshot(bundled, fit_payload(_snapshot()))
+    store = LibraryStore(tmp_path / "local.gz", bundled)
+    if local == "older":
+        write_snapshot(store.path, fit_payload(_snapshot(1500, "2026-01-01T12:00:00")))
+    elif local == "unfitted":
+        write_snapshot(store.path, _snapshot())  # wins the same-date tie, then refits
+    elif local == "refit_by_bound_load":
+        write_snapshot(store.path, fit_payload(_snapshot()))
+        store.prepare_calibration = _refit()
+    writes = _write_spy(monkeypatch)
+    store.load()
+    assert store.status()["source"] == ("bundled" if local in (None, "older") else "local")
+    store.prepare_calibration = lambda payload: _prepare(payload, policy="two")
+    assert store.recalibrate()["applied"] and writes == [store.path]
+    assert read_snapshot(store.path) == store.payload and store.status()["source"] == "local"

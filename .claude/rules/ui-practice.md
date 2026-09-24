@@ -41,461 +41,109 @@ paths:
 
 # Practice surfaces — where to change what
 
-Split out of `.claude/rules/ui.md` on 2026-07-28. **`.claude/rules/ui-core.md`
-loads alongside this** and carries the shell, the shared primitives and the
-verification norms — read both.
+**`.claude/rules/ui-core.md` loads alongside this** and carries the shell, the
+shared primitives and the verification norms — read both.
+
+Full detail, evidence and history: [docs/rules/ui-practice.md](../../docs/rules/ui-practice.md) — read it when changing a practice card, the practice log's membership/ordering/auto-open rules, the recorder, a picker or the strategy controls, or when a live report contradicts one of these rules.
 
 | To change... | Edit |
 |---|---|
 | The SELECTOR — the quick-select row, its cells and their art | Split out 2026-08-08 into `.claude/rules/ui-selector.md`, which loads when you open `stagebanner.js` / `practicecell.js` / `entityicons.js` / `entities.js` or the art under `ui/assets/`. It holds the stage-banner row dispatch and every Bowser rule, and the ONE entity-icon chain, and the shared practice cell. The per-piece cell toggle (`components/celltoggles.js`) it used to also hold is deleted (round 31, task 3, 2026-08-10) — a piece nests inside its parent's practice-log card now, with nothing left on the selector to switch. This file kept everything the CARDS and the LOG do |
-| Authoring a movement's STEPS (the ordered stops between Start and Finish) | **The recorder is the intended path and the builder is the fallback**, which is a deliberate inversion of how this surface used to work. `ui/components/segmenttimeline.js` derives the steps from the walk the journal already recorded (`GET /api/segments/synthesize` → `tracking/synthesize.py::walked_steps`) WHENEVER EXACTLY TWO MOMENTS ARE PICKED, and every stop starts REQUIRED; picking a third moment says the walk is not the answer, and the picked middles become the waypoints instead (the derived-step chips disappear entirely); each chip toggles between a required stop and one you merely passed, and every toggle re-runs the backtest AND the lint through `definitionFor` — ONE builder for the object that backtest, lint and save all send, because a preview run against a different `match_mode` than the save uses reports on a matcher branch the user never gets. **Strict the moment a stop is required, loose when none is** (a declared path only means anything under the strict path cursor; no stops = byte-for-byte the loose definition this tool always produced). The builder's own **Then** section (`segments.js::thenSection`) is the hand-authoring half — numbered stops, move earlier/later/remove, "Add another way to reach this stop" — deliberately NOT shaped like `section()`: Start and Finish are each ONE any-of set where order means nothing, and here order is the entire content. `waypoints` joined `SAVE_FIELDS` at the same time; until then its ABSENCE was load-bearing (`SegmentPatch.waypoints` defaults to None = untouched, so a save from an editor that could not author them left a seeded movement's steps intact), so the editor must now always send the FULL list. **Why it matters that the recorder leads**: `can_run_from` rule (A) refuses to arm a definition whose next step is an `area_enter` while Mario stands outside the castle, so a castle stop reached by a LEVEL edge must be a subarea-pinned `level_enter` — two clause types for the same room, one of which silently never arms, and no author can know which they picked. The journal answers it for free (did a `level_changed` land on that frame?) |
-| Editing a SHIPPED movement, and undoing it | `segments.js`'s `.builder-seeded` panel, at the top of the editor. Editing a seeded row flips `seed_dirty=1`, which blocks reconcile's update branch UNCONDITIONALLY — that is how six rows sat frozen against their own seed until migration v17 went looking for them — and the cost was invisible from inside the editor. Worse, the undo was **unreachable**: `POST /api/segments/{id}/reset` had existed the whole time with no UI calling it, so "put it back" was a capability that, by his own rule, did not exist. Both live at the point of the edit now, not in a library menu nobody opens before typing |
-| Segments builder UI | `ui/components/segments.js` — 100% vocab-driven (labels, sentence templates, level/area/course/star enums): adding a trigger type in tracking/segments.py appears in the UI with zero JS changes. Editing an EXISTING segment offers an Icon row (live preview + the shared `iconpicker.js` modal) writing the same `/api/icon` override the banner's ✎ uses; the preview is `entityIconSrc(t, "segment:<id>")`, so it shows what the app ACTUALLY draws — it hardcoded `star_1.png` for "no override" until 2026-07-26 and so showed a plain star for every segment with real art. `flow`-annotated level/subarea params (level_enter/level_exit) filter each side's dropdown to world-possible moves via vocab `connections` (`allowedIds`: dest = source's successors, source = dest's predecessors); the CURRENT value always stays listed so out-of-topology stored defs never blank; a consistency sweep in setParam clears siblings the topology rules out. **Matching control** (final-review finding 4, 2026-07-29): a `<select class="builder-matchmode">` beside the enabled checkbox, options AND their descriptions read from `vocab().match_modes` — never a JS copy, and its default is `match_modes[0].key` rather than the literal `"loose"` a second time. `match_mode` is in `SAVE_FIELDS`, so an edit persists. It had no control at all until then: `SegmentBody.match_mode` defaults to `"loose"` and `SAVE_FIELDS` omitted the field, so every Builder-created segment silently became loose and no definition's mode could be seen or changed from the app — the branch's central concept, invisible. **Rule 11 asymmetry, written down because "obvious" is exactly what rule 11 asks to be stated:** the authoring tools on this surface — the backtest preview, the lint panel, split/merge, and the "record what I just did" timeline (`segmenttimeline.js`) — are **segment-only by construction, not by omission**. A star is a single atomic grab: it has no trigger clauses to author, so nothing to lint or backtest a definition of; no waypoints, so no seam to split at or merge across; and nothing to record off the timeline, because the star IS the event. Same shape as `default_strat` and origin/category being segment-only. No parity test guards this and none should — there is no parallel star concept for one to distinguish a real gap from (unlike `test_star_sections_carry_no_default_strategy`, where a real field could leak). Spec 2026-07-28-multi-step-segments; flagged by the final whole-branch review as the one asymmetry the branch left unstated |
-| The RECORDER — "what I just did", turned into a definition | `ui/components/segmenttimeline.js`, entered from segments.js's workshop-hero. **Rewritten 2026-08-05** from the three-state modal Task 13 shipped (spec 2026-07-28-multi-step-segments); the file kept its name and nothing else. **Full detail below: [The recorder](#the-recorder).** |
-| Auto-picking the ONE thing a route leaves practicable here | `ui/loneoption.js` (`loneOption`/`handIsEmpty`, import-free so node drives the RULE without a browser) + `stagebanner.js::useLoneRouteOption`, the single wiring used by the star row AND the castle segment row (rule 11 — one implementation, not two that drift). Task 0025: *"When I am in a course where, given the route, there's literally only one star / segment that's able to be selected, we should always select that one star... An example is DDD during 16 star."* THREE conditions, all required: a ROUTE did the narrowing (a filter of null — no active route, or a route that never visits here — is the row's own never-render-empty fallback and must never become a pick, since *"when there are multiple options in the route, then we cannot infer"* is his own bound and no-route is the weaker case still); EXACTLY one option; and an EMPTY HAND. The segment row reads the route-filtered list, NOT the `segs` fallback — pinned, because reading the fallback would auto-pick in every subarea holding one segment. The write is `{quiet: true}` (`target.js`): a write no gesture asked for must not raise the server's refusal sentence at nobody, and must not release the rank-up celebration hold, which is a PLAYER's privilege. Deliberately NOT on the two Bowser rows — `ArenaRow` already auto-selects its single fight by its own rule (arriving in an arena IS the intent), and `BowserCourseRow` is a two-option toggle needing both cells visible whether or not the route uses them. Gated by `tests/test_ui_lone_route_option.py` (the rule + one-door scans) and `tests/test_ui_lone_route_render.py` (live: the row really narrows to one, and the pick does NOT steal a held target — mutation-proved). COVERAGE OWED: the positive write has no gate, because the fixture always seeds a target and `/api/target` cannot clear one |
-| Moving the practice target (every surface) | `ui/target.js` — `requestTarget(t, body)` is the ONLY place `"/api/target"` is named, enforced by `tests/test_single_source.py`. Since 2026-07-27 that endpoint can REFUSE (you may only practice what you are standing in front of — `tracking/practicable.py`), and a bare `await send(...)` inside a click handler rejects into nothing, so the button reads as dead; nine call sites had that shape. The helper writes, raises the server's own sentence through `t.setNotice` (rendered by `app.js` as `.app-notice`, fixed and out of flow so raising one never moves what the pointer is aimed at), and returns whether it landed — `strategystep.js` gates its `onClose()` on that boolean. The banner's NEXT chip (`PendingChip`) and its CSS were deleted with the held-intent feature it displayed |
-| Whether a pinned card still belongs where the player is standing | `ui/stagecontext.js` — `practicedHere(section, t)`. **NARROWED 2026-08-10 by the [[segment reach]]** — it now ANDs the course comparison below with `sec.places.includes(t.stage.node)`, both server-derived so this file owns no domain rule; full detail, the measurement and the still-owed hooked-head half are in `.claude/rules/segment-topology.md`'s "Segment reach" section. The course rule alone could not express "does this segment go THROUGH here", because `origin_course` reads the castle, the hubs and the three Bowser arenas as one course-less bucket. The rest of this row still describes the course half exactly: the SECOND and looser of the two rules: setting a target needs you standing exactly at its node (`tracking/practicable.py`), but STAYING on one only needs you not to have walked into a different course, because every course is entered through the castle. Exactly the projector's retirement rule (caveat 12) asked about a place rather than a transition, and pinned to it by `tests/test_ui_practice_context.py` — all 84 seeded definitions × 22 destination levels, the projector's own retire/keep answer against this one, plus a guard asserting no course spans two levels (the only reason a COURSE comparison can stand in for a NODE comparison). Both kinds carry `course_id` for it (rule 11 — a star's course; a segment's via `origin_course(segment_origin(...))` in views.py, null for the castle interior). It compares a STATIC fact about the entity against `t.stage`, deliberately: a server-computed "is it here" boolean could not be frozen, so a celebration running while the player walked out would drop the card it was celebrating. **The bug it exists for**: `lastPinnedSeg` (store.js) is a sticky client memory set on arm and cleared only by another arm or a success, so a lobby LBLJ still read "ACTIVE SEGMENT" after a Usamune warp into Whomp's Fortress and again in Hazy Maze Cave (live report 2026-07-27). The server had retired the TARGET both times — the tag read "Recent", not "Ready", which is how you tell the pin from the target in a screenshot. ARMED pins are exempt from both rules: a live timer is visible wherever it got to |
-| Whether there is anything to practice where the player is standing | `ui/stagecontext.js` — `hasPracticeContext(t)`, plus `practiceMode(t)` and `armedSegments`. TWO surfaces ask it and answered it separately until 2026-07-27: a new session with the game on its main screen drew the banner's "No course target available" AND, directly below it, the PREVIOUS session's Lethal Lava Land star under an ACTIVE TARGET eyebrow (live report). Now stagebanner.js calls it to choose its placeholder and practice.js calls it to suppress the pinned card, so they cannot disagree by construction; `PRACTICE_MODES` (the modes with a banner row) is pinned to stagebanner.js's `STAGE_ROWS` table both ways, and no other file under `ui/` may name a mode literal or read `stage.mode` (tests/test_ui_practice_context.py + a `tests/test_single_source.py` row). Import-free, node-driven. It asks about the PLACE, never the target: a target legitimately survives a hub — the castle is transit, so exit-and-re-enter keeps it (projection.py caveat 12) — it just is not ACTIVE while you stand somewhere it cannot be run, and walking back in restores the same card. Suppression happens at `activeStar`/`pinnedSegs` in practice.js, NOT inside the cards, which is what puts the target's own section back into the practice log instead of hiding it twice (the log renders every section regardless of pin/active state — `ui/components/practicelog.js`, below). A RUNNING segment is its own context (user rule 2026-07-24), so an armed movement stays pinned on the grounds. Server half of the same rule: `tracking/practicable.py` refuses a pick from such a place |
-| Entity pickers (level / course / star / segment) | `ui/components/entitymodal.js` (`EntityPicker` — a trigger button opening a **two-layer GRID in a dialog**, not a searchable list and not an anchored popup. `depth` is a PROP, never inferred: `depth=1` is one grid with a heading per group (the segment builder's level/course/star params), `depth=2` is a grid of group cells then that group's cells (the practice target, the route step editor). **No search box** — two clicks, no text entry, which also removed the filter + `aria-activedescendant` surface a hand-rolled control otherwise has to earn back. Keyboard is native: the cells are real `<button>`s inside the Modal's focus trap, so Tab/Enter/Space work and the shell restores focus to the trigger; what IS ours is Escape backing OUT of a drilled-in group before it closes, and moving focus to Back on drill-in (the clicked button unmounts, and from `<body>` a Tab escapes the dialog). It deliberately claims **no `role="grid"`** — that pattern promises gridcell/row structure and roving tabindex, and claiming it unimplemented lies to a screen reader. A `placeholder` renders a CLEAR CELL emitting `null`: the native `<select>` it replaced had a placeholder `<option>` doing that, and dropping it silently made eight optional clause params unclearable. Cells are `components/practicecell.js`; the dialog opens `size="grid"` → `.modal-grid` at `min(96vw,1100px)`, which is 9 columns × 3 rows above ~1200px — **below ~950px it scrolls**, which is honest to state rather than claim the redesign removed scrolling everywhere. A caller may pass `nextStep` (a component) for a THIRD layer: picking a cell (never the clear cell) renders `<${nextStep} value option onBack onClose />` inside the SAME dialog instead of calling `onChange` — the step owns the write, the picker never learns what it is (spec 2026-07-25-target-picker-strategy-step). Omit it and a call site is byte-for-byte what it was before the prop existed — true of the segment builder and route step editor, the two `EntityPicker` call sites that still have no third layer. The dialog itself is `PickerDialog`, exported separately from `EntityPicker` for a caller whose OWN element is the trigger: `header.js`'s practice-target card renders `PickerDialog` directly (with `nextStep=${StrategyStep}`, `placeholder=${null}`) instead of going through `EntityPicker`, which would draw a second, unwanted `<button class="entity-trigger">`) + `ui/entities.js` (pure builders `levelOptions`/`courseOptions`/`starOptionsFromVocab`/`starOptionsFromCatalog`/`segmentOptions`/`courseUnionGroups`; `segmentLevel`/`segmentLevelsOf` derive a segment's level from its `origin` key — `/api/segments` carries `origin`, NEVER `start_levels` (that is the session view's `segment_targets`), and assuming otherwise made every segment wear a plain star twice; `parseStarId`/`starId`/`parseSegmentId` — ids are STRINGS, a star's is composite `"8:1"` and a segment's is `"segment:12"`, so ONE control feeds a kind-dispatched `/api/target`; `visibleGroups` DROPS a group the filter emptied and keeps the current value listed when `allow` rejects it (a caller that narrows `groups` itself is still responsible for its own value); `optionIcon` is THE art chain, shared with the banner). **The target picker's layer 2 is a UNION** of a course's stars and the segments that begin in it; segments that start in the castle resolve to no course and — **since round 12 item 2 (2026-08-08)** — get one trailing tile PER CASTLE REGION (grounds/lobby/courtyard/basement/upstairs, each segment grouped by its server-stamped `origin.region` and ordered by `vocab.origins`, never a second hand-written region table; his ask, against ONE "Castle" tile holding 20 movements: *"we should show all of the castle areas"*). A region with no members draws no tile (a tile opening an empty layer 2 is a dead control), and a region-less segment keeps the old trailing **Castle** group — dropping castle segments entirely made the grid read as complete while nothing could target them. `courseUnionGroups`' `origins` param is optional and omitting it reproduces the single Castle group byte-identically; both call sites (target picker, the recorder's parent picker) pass it. **Filtering lives at the CALL SITE**, passed as `allow`; the picker never learns a domain rule. Groups come from the server (`vocab.level_groups`/`course_groups`/`course_by_level`, `catalog.course_groups`, each segment's `origin`), never re-derived in JS. Pinned by `tests/test_ui_picker_parity.py`: a shape scan flags any `.js` under `ui/` rendering `<option>` beside a raw domain-vocabulary reference unless allowlisted — add a call site by USING `EntityPicker`, not by growing the allowlist; a second guard strips comments and asserts no domain word survives in the component. Both were re-probed by hand after each retarget |
-| The badge that says a saved time doesn't mean what the rank implies | `ui/components/marks.js` — `CAVEATS` (glyph / short word / sentence / `suppressFloor` per key) plus `cellBadge`/`cardBadge`. The KEY is server-derived (`tracking/caveats.py`, and `.claude/rules/tracking-storage.md` carries the predicates); this file only draws one, which is why the two languages share a key set and nothing else. THE CORNER BADGE was picked by the user from three candidates on a contact sheet (`tools/mark_sheet.py`, 2026-08-01 — "I like the idea of the corner badge"); the other two (mark in the rank slot, colour-only) were DELETED rather than left behind a flag, because three live code paths is how the card and the cell end up on different ones. `suppressFloor` belongs to the CAVEAT, never to the badge, and getting that backwards would have been a real bug: `unattributed` must stop `PracticeCell` drawing the ladder floor (flooring a PB no strategy can claim asserts a rank contradicting the time beside it), while `grab_timed`/`old_clock` sit next to perfectly real ranks and suppressing there would delete a true rank to explain a different fact. Drawn at three call sites, all through `PracticeCell`'s own `caveat` prop (star row + segment cells + the Bowser row's two plain `StandardSegmentCell`s) — `stagebanner.js`'s hand-drawn `RedsCell` is deleted (round 31, task 3, 2026-08-10: it nested two toggle buttons, which was the standing rule-11 risk on this surface, and retired with the toggle itself; every cell here is an ordinary `PracticeCell` now). **A PRACTICE-LOG ROW wears it too, beside the time** (`practice.js`'s `AttemptRow`, from `_attempt_json`'s own `caveat` key — `tracking/caveats.py::attempt_caveat`, a different question from the `pb_blocked` reason four cells away and deliberately not the same field: the blocked button is absent on a row already saved as a PB and on a cleared row, and both still print a number that measures the grab). Its `.caveat-chip-word` is dropped at EVERY width, not only under 793px: at 1500px, the two-column practice index that existed then gave that card a ~440px pane and "! Grab-timed" wrapped the result cell to a second line, which inside a fixed-height `overflow: hidden` card clips the rows below it rather than showing anything — and the word is already on the row, in the blocked button's own chip. The card's badge adds the WORD in its own `.caveat-chip-word` span, dropped inside `index.html`'s 793px band: at a 706px pane the wide metrics row overflowed `.objective-card` by 23px with "? Unattributed" in it (the responsive sweep's own report, both Bowser stories). The `title` rides the CHIP, not the word, so the sentence still answers a hover at every width. NOT wired yet, and written down rather than left as a silent gap: the target picker's grid (`entitymodal.js`, `rankBadge` cells) and the Rank tab's coverage strip both show entity ranks and have no caveat — the picker grades the BEST strategy from a different endpoint (`/api/target/ranks`) with no PB context in its payload, so wiring it is a payload change rather than a prop |
-| Authoring a movement's steps as CHIPS (the recorder's review row) **— and why no practice surface shows them any more** | `ui/components/steptrack.js` — `StepChip` (the one chip) and `StepPicker` ("Then · ✓ Basement › ✓ BitFS › · Lobby", the recorder's review). **`StepTrack`, the read-only row an armed practice card drew ("Step 3 of 4 · ✓ BitFS › ▸ Upstairs"), was DELETED on 2026-08-06** — Griffin: *"we should just remove the step indicator entirely from the display here. It's too cramped. The PURPOSE of that indicator was to make it clear that the segment logic was working for me during development, but now that it is indeed working, I don't think we really need this anymore… they will know how to do the strat, no need to display the steps."* Read that as a retired NEED, not a layout defeat: it answered a development question ("is the engine following me?") that the engine has since earned trust on. **Do not re-add a compact version** — two rounds tried to seat it on the card's identity line, first centred on the row and then baseline-aligned to the name, and the second is what produced this ruling. Deleted with it: the row's `onEdit` doorway into the definition, and the whole `openSegment`/`segmentIntent` chain (`app.js`, `segments.js`) that served it — its only trigger was that doorway, so it became a route nothing could reach. The Segments tab's library is the way into a definition again. **The SERVER half is untouched**: `views.py::_armed_detail_for` → `segments.py::card_step_labels` still ships `steps`/`progress`/`total` on every section, the projector still advances the cursor, and `tools/what_happened.py` still reads it back — the state is queryable when debugging, just not painted. Guards, all inverted rather than dropped so the deletion cannot silently undo itself: `tests/test_practice_ui.py` (no practice surface names a step row), `tests/test_log_card_heads_match.py` (every card head is the same height, rendered — the failure this row keeps producing has no DOM signature), `tests/test_fixture_reaches_the_real_page.py` (zero drawn rows beside a live `armed_detail`, which is what says "deliberate" rather than "broken"). `tests/test_step_track_fits.py` and `test_step_track_on_the_identity_line.py` are gone with their surface. What the surviving chip still owes: `.step-row` is the shared LAYOUT and `.seg-waiting` was the card's own spacing on top of it — that class now renders NOWHERE, though `index.html` still keys `.objective-card:has((.seg-waiting)` rules off it (dead alongside `.objective-card` itself). Three marker glyphs (✓ / ▸ / ·) stacked in ONE `inline-grid` cell — a grid stack, not an absolute pair in a hand-picked width, because absolute children do not size their parent and the first version's ✓ overprinted the label beside it (caught at 4x, invisible at 1x); the not-yet-reached dot exists because the slot must hold its width in every state, or a chip jumps sideways the moment it goes live. They swap by opacity with the incoming one delayed past the outgoing one's fade — `.claude/rules/ui-core.md`'s sequential text exchange, in CSS rather than through climbcurve.js's `exchangeFade`. The short place names come from `addresses.node_short_label`. **A gate worth not re-misreading**: the deleted `test_every_seeded_route_stays_on_one_line` counted distinct chip `top` values and called a difference a WRAP — `.step-track` never sets `flex-wrap`, so its chips cannot wrap at all, and a cross-axis alignment change turned 34 routes "red" with nothing wrapping. A note in the stylesheet claimed for a round that this blocked a chip fix; it did not. |
-| Route library grouping | `ui/components/routes.js` — feeds `buildTree`/`GroupedList` (above) a two-level POLICY: `category` is a free-text PATH (`"Main Categories/16 Star"`, `"Stage RTA/Wet-Dry World"`) split on `/`, so sub-categories needed no migration, no second column and no API change (a category containing `/` would be ambiguous). Seeded groups lead (Main Categories, Stage RTA), user groups follow, Uncategorized last; sorting is numeric-aware so star counts read 0/1/16/70/120. Category assignment is `CategoryModal` (a select per level listing existing names + "New…") — offering the existing names is what stops free text fragmenting. Clearing one needs `category: null` to survive the PATCH, hence `model_dump(exclude_unset=True)` in api.py. `.library-actions` is TWO columns: three icon+label buttons overflow a 240-300px column |
-| Segment library grouping | `ui/components/segments.js` — nests **castle region → place**, both read off the server's `origin` stamp on `GET /api/segments`; ORDER comes from `vocab().origins` (the JS looks up a position and never re-derives region membership). A non-empty search passes `forceOpen` so hits are never dropped into collapsed groups. The editor's "Library category" select pins an override via `POST /api/segments/{id}/origin`, with "Auto" NAMING the detected place. Saving KEEPS the saved segment open (`onSaved(savedId)` → re-select from the reloaded rows): closing the editor dropped the user to the empty state with no way back to a just-created segment but hunting the library (live audit 2026-07-25). Segments only (rule 11): the star-side equivalent is the picker modal (spec 2026-07-24-segment-origin-categories §B), not a second library grouping — stars are already organised by course everywhere and have no "library" to group |
-| Route builder UI | `ui/components/routes.js` — Routes tab: route picker + CRUD, step editor (reorder / add / remove / `need` for K-of-N groups), candidate chips, import/export panel. Display names + per-step/cumulative % from `GET /api/routes/{id}`; raw steps from `GET /api/routes`; every edit PUTs steps and re-fetches. Also hosts the "Run starts when:" trigger picker (reuses segments.js `ClauseRow`), and — since 2026-08-14 — the seeded-route restore panel in the route-setup card (`.builder-seeded`, the exact shape the segment editor wears): `POST /api/routes/{id}/reset` had existed with no UI caller, the same capability-nobody-can-reach gap the segment editor closed once already. Driven end to end by `tests/test_ui_route_reset.py`, whose seeded em-dash name also caught the reset path reading the bundled seed as cp1252 and restoring mojibake (service.py `_defaults_seed`, fixed same day) |
-| Route Practice focus | **DELETED 2026-08-05** — Griffin: *"we should also just get rid of the 'route focus' display card... this reads as noise. I don't think it's actually useful in any way. Unfortunately it ended up not being a useful feature."* The `RouteFocus` component, its card, the `GET /api/routes/{id}` fetch that fed it and its CSS (`.routefstep`/`.routecur`/`.routerate`/`.routecum`/`.toolbar-note`) are gone from `practice.js` and `index.html`; `.routenum` STAYS (routes.js and runview.js both render it). **Choosing a route is untouched** and still lives on the header's route rank card (`.claude/rules/ui-ranks.md`), still drives the Run tab, the Rank tab's scope and the selector's own route narrowing (`loneOption`). The 404-clears-a-deleted-route handler went with the fetch and is not owed a replacement: it predates `store.js`'s reconcile effect, which adopts the server's active route whenever this client has no pick in flight, so a deleted route is cleared from the authoritative side — and deleting the fetch deletes the failure mode that handler existed for (a 404 on every event, forever). |
-| Run view UI (Run tab) | `ui/components/runview.js` — route picker (selecting a route ARMS it — **no Start button**); **always-on clock** (idle=`0:00`+offset + route preview, active=ticks, finished=frozen only when the LATEST run finished) ticking client-side off `started_utc`+offset **minus paused_ms**; per-step cumulative + ± vs PB + gold ★; **Pause/Resume/Reset**, **Focus** (neutral), **click-to-hide** any timer (localStorage `sm64.runFocus`/`sm64.runHidden`); run-history list + progression graph (0-based, slower=higher, gold=PB) with click-to-expand splits, from `GET /api/run/history`. `store.js` holds `run`, refetched on `run_*`/`game_reset`; `build_run_view` carries per-step `pb_elapsed_ms`/`gold_ms` |
-| Practice-target picker (the dialog + its rank badges) | `ui/components/targetpicker.js` — `useTargetPicker(t)` returns `[open, dialog]`, the same shape as stagebanner.js's `useIconPicking`, so the caller supplies its own trigger and this module never has an opinion about what that trigger looks like. Moved out of header.js 2026-07-26 with the PRACTICE TARGET card; **the trigger is now the Active-target card's own symbol + eyebrow** (`ObjectiveEyebrow` in practice.js, `.objective-pick`, spanning the two grid cells those elements already occupied so the heading's four column tracks are untouched). ONE instance per page, mounted in `Practice` and passed down as `openPicker` to the star card, the segment card and the no-target card — mounting it inside every section would pay for ~30 copies of a fetch effect that never runs. Renders `entitymodal.js`'s `PickerDialog` **directly** (see the entity-picker row above for why it bypasses `EntityPicker`); the inline two-field `TargetEditor` is deleted, task 7, 2026-07-25-target-picker-strategy-step — its star field and strategy `<select>` **are** the picker's layers 2 and 3, the latter via `nextStep=${StrategyStep}` (`components/strategystep.js`). `placeholder=${null}` removes the old clear cell, which was dead by construction (`/api/target` always requires an identity; clicking it 409d and silently did nothing). Rank badges (`courseUnionGroups`' 4th arg) come from `GET /api/target/ranks`, fetched in a `useEffect` keyed on the dialog's own `editing` state — never on the host's other renders, which fire on every WebSocket event. **The trigger stays on the empty card even where nothing can be picked** (the file select, a hub — user's call 2026-07-27, asked explicitly): every pick from there comes back 409 with the server's own sentence, which is the mechanism built for exactly this and beats one entry point that appears and disappears. The card's own copy says why BEFORE the notice does — `EmptyPractice`'s `inContext` swaps "Waiting for a target" for "Nothing to practice here" and points at the remedy |
-| The star/segment kind dispatch (identity, clock, PB, display name) | `ui/entitysection.js` — the ONE place that answers five questions asked of every practice section: `entityKey`/`entityNoun`/`sectionClock`/`sectionPb`/`displayName`. Import-free apart from `redsfamily.js` (itself import-free), so `tests/test_ui_entity_section.py` drives it under node. A STAR section carries no `kind` key (views.py omits it deliberately) — every check here reads `sec.kind === "segment"`, never the inverse. `sectionClock`/`sectionPb` exist because segments are RTA-only (igt is null everywhere on them) while a star follows the view's clock. `displayName` also resolves the Bowser reds/pipe family naming, both directions, through `redsfamily.js`'s `familyLabel` — a Star-mode Reds card borrows its paired pipe segment's family name (`pipe_segment_id`), a Pipe-mode segment borrows its paired star's (`pipe_star_entity`), and the legacy no-reds pipe segment (no paired star to borrow from) gets the literal "No Reds" `stagebanner.js`'s own row already uses. Before this (spec practice-log-entity-cards, 2026-08-03), `StarSection`/`SegmentSection` each answered these five by hand and quietly disagreed (round 2's live reports) — this module is what makes `LogCard`/`EntityAnalysis`/`EntityDrawer` (below) possible as ONE component apiece instead of a pair |
-| Whose history the analysis card and detail drawer draw (browse vs. active) | `ui/focustarget.js` — clicking a practice-log card puts the page-level analysis/drawer into a spring-loaded BROWSE mode for that entity, without moving the active target. `resolveFocus(manual, live)` compares a snapshot taken AT the click (`manual.at`) against the current one (`live`) on three keys — `activeKey` (the target moved), `stageKey` (added to `ui/stagecontext.js` this branch — the selector's own broadcast identity, so "warped/reset into a different place" is one string comparison), `newestAttemptId` (a new row landed anywhere) — and the manual pick wins only while all three still agree; any one changing releases it back to whatever is live. User's rule (2026-08-03): "the second we start playing again in LLL (via a reset / star grab), or through warping / basically anything that would trigger changing the star/segment selector, that new area or star or segment should take ownership of that card." Import-free, so `tests/test_ui_focus_target.py` drives it under node. `Practice()` reads its three signals off the FROZEN (celebration-held) snapshot, never live — a live read let an incidental attempt elsewhere drop a browse pick mid-celebration, exactly what the hold exists to prevent |
-| Attempt rows, sort/filter controls, the graph-pick reveal, rank-banner helpers | `ui/components/attemptlog.js` — `AttemptRow`/`AttemptTable`, `SortControl`/`ResetFilterToggle`/`HideToggle`, the shared `StatMenuTrigger`, the clickable `PbTag`, and the rank-banner helpers (`ranksShareOneLadder`/`ranksAreAtFloor`/`showsEntityBanner`/`rankIdentity`). Since task 0097 the practice card always paints ONE `RankBanner`; `showsEntityBanner` now answers whether that banner has a separate Overall measurement to offer in its Strategy/Overall picker (including the real two-ladder floor, whose entity payload does not exist yet), never whether to paint a second widget. Extracted out of `practice.js` (Task 5 of spec practice-log-entity-cards, 2026-08-03) purely to keep the import graph a DAG: `practicelog.js` needs this machinery and `practice.js` imports `practicelog.js`, so exporting it from `practice.js` would have closed the cycle `entitysection.js` ← `practice.js` ↔ `practicelog.js` — this project has already been burned once by an import cycle that passes `node --check` clean and only fails as an unrelated-looking `ReferenceError` on render. Moved verbatim, no behaviour change. `useGraphPick(rows, visible, setVisible)` is the progress-graph/PB-tag reveal (scroll, flash, auto-open a saved replay) — Task 6 made the CALL page-level (one instance in `Practice`, over whichever entity is FOCUSED) while the pagination it widens is now PER-CARD (`practicelog.js`'s `LogCard` notices a pick land outside its own window and widens itself); the `visible`/`setVisible` args `Practice` passes in are inert (`Infinity`/a no-op) for exactly that reason — read `LogCard` before changing either half, or a pick past the tenth row will silently do nothing again |
-| The analysis card and detail drawer — page-level, one copy each | `ui/components/entitydetail.js` — `EntityAnalysis` (attempt timeline + performance trend) and `EntityDrawer` (stat chips, failure compilation, wipe), plus `wipeSection`. **The standards ladder left this drawer on 2026-08-05 and lives inside every practice-log card** (`practicelog.js`), closed -- Griffin: "for each card, we have the Rank Standards dropdown. It should be closed by default. It should display whatever the rank standards are for that specific star/segment." Which LADDER a card grades against moved with it, into `entitysection.js`'s `standardsIdentity` -- that is a kind question (a Bowser reds pair shares ONE published ladder: the pipe segment grades against its star's entity, the reds star announces `family="Star"`), and that module is where every other kind question already lives. The panel fetches on OPEN rather than on mount, so N closed cards cost no requests; `tests/test_ui_hundred_coin_render.py` therefore has to open the card AND then the panel before it can wait for `.stdtable`. Since Task 6 (spec practice-log-entity-cards, 2026-08-03) these are PAGE-LEVEL surfaces mounted once in `Practice`, following whichever entity `ui/focustarget.js` resolves as focused — `sec=${null}` renders `EntityAnalysis`'s own "nothing selected" empty state and makes `EntityDrawer` render nothing at all (no wipe button, no ladder, no failure list for an entity nobody has picked). They used to be two hand-written copies living inside `StarSection`/`SegmentSection`; a second copy now would not be mere duplication, since there is no longer a call site per kind for one to belong to. |
-| The practice log — page-level, recency-ordered entity cards | `ui/components/practicelog.js` — **membership narrowed 2026-08-10; full detail below: [Being armed stopped earning a card](#being-armed-stopped-earning-a-card)** — `orderedSections(view, activeKey)` (both kinds merged by `last_activity`, newest first, EXCEPT the entity `activeKey` names, which always leads regardless of its own recency — **full detail below: [The active entity leads, and a target-only card can now disappear](#the-active-entity-leads-and-a-target-only-card-can-now-disappear)**), `LogCard` (one card per entity: art, the live strategy picker, ONE switchable rank banner — **full detail below: [Practice-log Strategy / Overall rank view](#practice-log-strategy--overall-rank-view)** — the clickable PB tag, fold, the paginated attempt table, a `.seg-waiting` row for whatever is mid-progress), and `PracticeLog` (the page-level list, `CARDS_PER_PAGE=5`, the unassigned bucket unconditionally last, plus the target-picker trigger in its own heading row). Replaces the practice INDEX entirely (spec practice-log-entity-cards, 2026-08-03, task 0027: "The ONLY way for this segment to finish is by entering into BITFS, but by entering into BITFS, the DDD->BITFS segment disappears from the practice screen… we can never see how we performed"). `focusKey`/`onSelect` are how a card click becomes a browse pick (`ui/focustarget.js`, above); `forceOpen` and the per-card `page` turn exist so a graph-pick or PB-tag jump can reveal a row that is past BOTH the card's own pagination AND the page's own "Show 5 more" — each is a one-shot NUDGE keyed on `focus.nonce`, never a standing override, or the fold/pagination controls keep rendering while no longer responding the moment a pick lands (two extra bugs Task 6's own fix round found and fixed, beyond the findings that opened it). `UnassignedLogCard` is not an entity — no icon, no ladder, nothing for a click to select — and renders unconditionally after every entity card, never folded into the recency pagination (user: "should always appear at the bottom of the list, below any of the classified cards"). **Round 2026-08-04 (amendments A2/A8/A9) deleted the Active Target card** (`StarSection`/`SegmentSection`/`EmptyPractice`, formerly in practice.js) and folded its three jobs into `LogCard`: (1) the card head's strategy NAME is a real `<${StratPicker}>` now (`.log-card-strat-picker`), writing the entity's ACTIVE strategy via `entityIdentity(sec)` (entitysection.js) — unconditional, not gated on rank placement, since a picker has to work with no strategy set yet, not just display one already chosen; a broken segment definition falls back to the old plain-text `.log-card-strat` label ("Definition deleted"), the one case with nowhere left to write a strategy; (2) the card that `activeKey` names wears `.log-card-active` (gold border/tint, matching `.starcell.active-star`'s own accent) plus a `.log-card-state` "Ready"/"Running" word — `running` is `t.armedSegs.has(sec.segment_id)` for a segment, `!!sec.armed_detail` for a star; `StepTrack`'s `onEdit` doorway moved here too, gated on `active` (only the entity actually being practised offers "edit this movement", the same restriction the deleted pinned card enforced); (3) the PB tag's `pick` is the page-level `pick` (threaded `PracticeLog → LogCard`, no longer `null`) — `pbPick = (id) => { onSelect(ek); pick(id); }` reuses the SAME `forceOpen`/page-turn machinery a graph-pick already relies on, so "open the card + turn to the right page + scroll + flash" needed no new mechanism. Real PAGINATION replaced "Show 10 more" inside an open card: `page`/`ROWS_PER_PAGE=10`, First/Prev/Page-X-of-Y/Next/Last, clamped against the current row count so a stale page from a shrunk filter falls back to the last real page rather than rendering nothing — the reveal effect that used to grow `visible` now does `setPage(Math.floor(idx / ROWS_PER_PAGE))` instead, and the two mechanisms were never allowed to coexist. **A [[subsection]] draws INSIDE its parent's card** (round 22, 2026-08-08) — `nestSubsections` (`ui/subsections.js`, import-free, node-driven) groups the ordered sections into `[{sec, children}]`, `PracticeLog` renders both through ONE `cardFor` closure so a piece is a full `LogCard` with its own fold, pagination, PB jump and strategy picker, and `LogCard` puts them in `.log-card-children` INSIDE its own `Disclose` body — which is what buys "if the parent star closes the card, these close with it" with no second mechanism. Four rules, each answering a case his LLL data produces: a disabled piece leaves the log entirely (the display half of the dimmed badge); a piece with several parents draws under EVERY parent that has a card (round 24 — *"every segment enabled should appear as a subentry in the practice log"*, reversing round 22's first-parent-only rule); an AREA-parented piece with no card stays top-level while a STAR-parented one is not shown AT ALL (round 28 — *"it should always be under *that star's* practice log as a subentry... since I didn't select Hot Foot It, it shouldn't appear at all"*; a self-reference is not a parent and stays visible); and a parent with a nesting child EARNS a card even when it earned none itself, or practising only the piece would orphan it on the very run that proves the association. NESTING RUNS BEFORE MEMBERSHIP for that last rule — `hasEarnedACard` is injected, not pre-applied. The target picker's TRIGGER (amendment A9) is a small `.chip.chip-button` in `PracticeLog`'s own heading row, beside `StatMenuTrigger`/`SortControl`/`ResetFilterToggle` — `openTargetPicker` threaded down from `Practice`'s own `useTargetPicker(t)` hook (unchanged; only the trigger's home moved, the dialog still mounts once at the page root) |
-| Stat chips + the menu that chooses them | `ui/components/entitydetail.js` — `StatChipsRow({sec,t})` renders only the value chips (`sec.stats`, filtered by `t.showDust`/`DUST_STAT_KEYS`), inside `EntityDrawer` (moved here from practice.js, Task 4 of spec practice-log-entity-cards, 2026-08-03). The TRIGGER that opens `statmenu.js`'s `StatMenu` popover is `StatMenuTrigger({t})`, now defined in `ui/components/attemptlog.js` and called from exactly ONE place — `practicelog.js`'s `PracticeLog` heading (left of `SortControl`) — since Task 5 replaced the old per-section practice log with a single page-level one. Before that (2026-07-28 onward) it lived in the `.attempts-tools` row of THREE cards (`StarSection`/`SegmentSection`/`EmptyPractice`'s "Unassigned attempts"); none of those three renders an attempts log any more, so the old 1:1-per-card guarantee became a STRICTER one — `tests/test_ui_section_parity.py` now asserts exactly one `.attempts-tools` row and one `StatMenuTrigger` use on the whole page, defined nowhere but `attemptlog.js`. `StatMenuTrigger` is still `position: fixed`, anchored off its own `getBoundingClientRect()` — its original reason (escaping `.attempts-card`, a fixed-height 458px `overflow: hidden` box) no longer applies, since that class is gone and its new host (`.log-list-card`) is variable-height and does not clip; kept as-is rather than revisited, since converting back to a `position: relative` ancestor would need auditing the whole card |
+| Authoring a movement's STEPS (the ordered stops between Start and Finish) | **The recorder is the intended path, the builder the fallback.** `segmenttimeline.js` derives steps from the recorded walk (`GET /api/segments/synthesize` → `tracking/synthesize.py::walked_steps`) whenever exactly TWO moments are picked, every stop starting REQUIRED; a third pick makes the middles waypoints instead. Every chip toggle re-runs backtest AND lint through **ONE `definitionFor` builder — backtest, lint and save send the same object**. Strict once any stop is required, loose when none is. `segments.js::thenSection` is the hand-authoring half, deliberately not shaped like `section()`. `waypoints` is in `SAVE_FIELDS`: **the editor must always send the FULL list**. A castle stop reached by a level edge must be a subarea-pinned `level_enter`, not `area_enter` (which never arms outside the castle) |
+| Editing a SHIPPED movement, and undoing it | `segments.js`'s `.builder-seeded` panel at the top of the editor. Editing a seeded row sets `seed_dirty=1`, which blocks reconcile's update unconditionally — **the cost and the undo (`POST /api/segments/{id}/reset`) must stay visible at the point of the edit** |
+| Segments builder UI | `ui/components/segments.js` — **100% vocab-driven**: a new trigger type in tracking/segments.py needs zero JS. The Icon row writes `/api/icon` and previews `entityIconSrc(t, "segment:<id>")` (what the app actually draws). `flow` level/subarea dropdowns filter via vocab `connections` (`allowedIds`); **the CURRENT value always stays listed**; setParam clears siblings the topology rules out. `.builder-matchmode` options, descriptions and default come from `vocab().match_modes` — never a JS copy or a literal `"loose"`; `match_mode` stays in `SAVE_FIELDS`. Backtest, lint, split/merge and the recorder are segment-only by construction (rule 11 asymmetry, stated on purpose; no parity test should guard it) |
+| The RECORDER — "what I just did", turned into a definition | `ui/components/segmenttimeline.js`, entered from segments.js's workshop-hero. See [The recorder](#the-recorder) |
+| Auto-picking the ONE thing a route leaves practicable here | `ui/loneoption.js` (import-free) + `stagebanner.js::useLoneRouteOption`, the single wiring for the star row AND castle segment row. Picks only when **a ROUTE narrowed the list (a null filter never picks), exactly one option remains, and the hand is empty**. The segment row reads the route-filtered list, never the `segs` fallback. The write is `{quiet: true}` — no refusal notice, no release of the celebration hold. Not on the Bowser rows. Gates: `tests/test_ui_lone_route_option.py`, `tests/test_ui_lone_route_render.py`; the positive write has no gate yet |
+| Moving the practice target (every surface) | `ui/target.js` — **`requestTarget(t, body)` is the ONLY place `"/api/target"` is named** (`tests/test_single_source.py`). The endpoint can refuse; the helper raises the server's sentence via `t.setNotice` (`.app-notice`, fixed, out of flow) and returns whether it landed — never a bare `await send(...)` in a click handler; `strategystep.js` gates `onClose()` on that boolean |
+| Whether a pinned card still belongs where the player is standing | `ui/stagecontext.js` — `practicedHere(section, t)`: the course comparison AND `sec.places.includes(t.stage.node)` ([[segment reach]], detail in `.claude/rules/segment-topology.md`); both inputs server-derived, **this file owns no domain rule**. Setting a target needs the exact node; STAYING only needs not having walked into a different course — the projector's retirement rule (caveat 12), pinned against it by `tests/test_ui_practice_context.py`. **Compare a STATIC entity fact against `t.stage`**, never a server "is it here" boolean (it could not be frozen mid-celebration). ARMED pins are exempt |
+| Whether there is anything to practice where the player is standing | `ui/stagecontext.js` — `hasPracticeContext(t)`, `practiceMode(t)`, `armedSegments`; import-free. **stagebanner.js and practice.js both ask this one function.** `PRACTICE_MODES` is pinned to `STAGE_ROWS` both ways; **no other file under `ui/` may name a mode literal or read `stage.mode`**. It asks about the PLACE, never the target. Suppress at `activeStar`/`pinnedSegs` in practice.js, not inside the cards. A RUNNING segment is its own context. Server half: `tracking/practicable.py` |
+| Entity pickers (level / course / star / segment) | `ui/components/entitymodal.js` — `EntityPicker`: a two-layer GRID in a dialog; **`depth` is a PROP, never inferred**; no search box; cells are real `<button>`s (Escape backs out of a drilled group, focus moves to Back on drill-in); **never claim `role="grid"`**; a `placeholder` renders a clear cell emitting `null`. Optional `nextStep` adds a third layer that owns the write. `PickerDialog` is exported for callers whose own element is the trigger. `ui/entities.js` holds the pure builders: a segment's level derives from `origin`, **never `start_levels`**; ids are strings (`"8:1"`, `"segment:12"`); `visibleGroups` drops emptied groups and keeps the current value listed; `optionIcon` is THE art chain. Target-picker layer 2 is a union of a course's stars and segments starting there, plus one tile per castle region ordered by `vocab.origins` (empty regions draw nothing; region-less segments keep a trailing Castle group). **Filtering lives at the CALL SITE (`allow`); groups come from the server, never re-derived in JS.** Add a call site by USING `EntityPicker`, not by growing `tests/test_ui_picker_parity.py`'s allowlist |
+| The badge that says a saved time doesn't mean what the rank implies | `ui/components/marks.js` — `CAVEATS` + `cellBadge`/`cardBadge`; the KEY is server-derived (`tracking/caveats.py`, predicates in `.claude/rules/tracking-storage.md`), this file only draws. The corner badge is the only style — do not re-add alternatives behind a flag. **`suppressFloor` belongs to the CAVEAT, never the badge.** Drawn through `PracticeCell`'s `caveat` prop at every cell call site; practice-log rows (`AttemptRow`, from `attempt_caveat`) wear it too, with `.caveat-chip-word` dropped at every width; the `title` rides the chip. Target-picker grid and Rank coverage strip are not wired yet (needs a payload change) |
+| Authoring a movement's steps as CHIPS (the recorder's review row) **— and why no practice surface shows them any more** | `ui/components/steptrack.js` — `StepChip` and `StepPicker`. **`StepTrack` on practice cards is deleted by Griffin's ruling — do not re-add a compact version.** The server half (`card_step_labels`, `steps`/`progress`/`total`) stays. Inverted guards: `tests/test_practice_ui.py`, `tests/test_log_card_heads_match.py`, `tests/test_fixture_reaches_the_real_page.py`. Marker glyphs stack in ONE `inline-grid` cell (never absolute children) and swap by opacity, sequential per ui-core.md; short names from `addresses.node_short_label`. `.step-track` never wraps — do not read chip `top` differences as a wrap |
+| Route library grouping | `ui/components/routes.js` — `category` is a free-text `/`-separated PATH fed to `buildTree`/`GroupedList`; seeded groups lead, user groups follow, Uncategorized last; numeric-aware sort. `CategoryModal` offers existing names to stop fragmentation; clearing needs `category: null` to survive the PATCH (`model_dump(exclude_unset=True)`). `.library-actions` is two columns |
+| Segment library grouping | `ui/components/segments.js` — nests castle region → place off the server's `origin`; **ORDER comes from `vocab().origins`, never re-derived membership**. A non-empty search passes `forceOpen`. "Library category" overrides via `POST /api/segments/{id}/origin`, "Auto" names the detected place. Saving keeps the saved segment open. Segments only (rule 11) |
+| Route builder UI | `ui/components/routes.js` — Routes tab: picker + CRUD, step editor (reorder/add/remove/`need`), candidate chips, import/export, "Run starts when:" (reuses `ClauseRow`), and the seeded-route restore panel (`.builder-seeded`, `POST /api/routes/{id}/reset`). Every edit PUTs steps and re-fetches. Gate: `tests/test_ui_route_reset.py` |
+| Route Practice focus | **DELETED** by Griffin's ruling (`RouteFocus`, its fetch and CSS); do not restore it. `.routenum` stays (routes.js, runview.js). Choosing a route lives on the header's route rank card (`.claude/rules/ui-ranks.md`); `store.js`'s reconcile clears a deleted route |
+| Run view UI (Run tab) | `ui/components/runview.js` — route picker (selecting ARMS it — **no Start button**); **always-on clock** (idle=`0:00`+offset + preview, active=ticks, finished=frozen only when the LATEST run finished) off `started_utc`+offset **minus paused_ms**; per-step cumulative + ± vs PB + gold ★; Pause/Resume/Reset, Focus, click-to-hide (localStorage `sm64.runFocus`/`sm64.runHidden`); history + graph from `GET /api/run/history`. `store.js` refetches `run` on `run_*`/`game_reset` |
+| Practice-target picker (the dialog + its rank badges) | `ui/components/targetpicker.js` — `useTargetPicker(t)` returns `[open, dialog]`; the caller owns the trigger. **ONE instance per page**, mounted in `Practice`. Renders `PickerDialog` directly with `nextStep=${StrategyStep}` and `placeholder=${null}`. Rank badges from `GET /api/target/ranks`, **fetched keyed on the dialog's own `editing` state, never on host renders**. The trigger stays even where nothing can be picked (the 409 sentence explains); the empty card's copy says why first |
+| The star/segment kind dispatch (identity, clock, PB, display name) | `ui/entitysection.js` — **the ONE place** for `entityKey`/`entityNoun`/`sectionClock`/`sectionPb`/`displayName`; import-free apart from `redsfamily.js` (`tests/test_ui_entity_section.py`). A star section has no `kind`: **always test `sec.kind === "segment"`, never the inverse**. Segments are RTA-only. Reds/pipe family naming resolves through `redsfamily.js`'s `familyLabel` |
+| Whose history the analysis card and detail drawer draw (browse vs. active) | `ui/focustarget.js` — `resolveFocus(manual, live)`: a card click browses without moving the target, and **any change of `activeKey`, `stageKey` or `newestAttemptId` releases it**. Import-free (`tests/test_ui_focus_target.py`). `Practice()` reads the three signals off the FROZEN (celebration-held) snapshot, never live |
+| Attempt rows, sort/filter controls, the graph-pick reveal, rank-banner helpers | `ui/components/attemptlog.js` — `AttemptRow`/`AttemptTable`, sort/filter/hide controls, `StatMenuTrigger`, `PbTag`, rank-banner helpers. The card paints ONE `RankBanner`; `showsEntityBanner` only says whether it offers a separate Overall view. **It lives here to keep the import graph a DAG — never export this machinery from `practice.js`.** `useGraphPick` is page-level while pagination is per-card (`LogCard` widens itself); read `LogCard` before changing either half |
+| The analysis card and detail drawer — page-level, one copy each | `ui/components/entitydetail.js` — `EntityAnalysis`, `EntityDrawer`, `wipeSection`, **mounted once in `Practice`** following the focused entity; `sec=${null}` → empty analysis, no drawer. **Never add a per-kind copy.** The standards ladder lives in each practice-log card, closed by default, fetching on OPEN; which ladder is `entitysection.js`'s `standardsIdentity` |
+| The practice log — page-level, recency-ordered entity cards | `ui/components/practicelog.js` — `orderedSections(view, activeKey)` (newest first by `last_activity`, active entity hoisted), `LogCard` (art, live `StratPicker`, one switchable rank banner, PB tag, fold, paginated table with `ROWS_PER_PAGE=10`, clamped), `PracticeLog` (`CARDS_PER_PAGE=5`, **unassigned bucket always last and never paginated**, target-picker chip in its heading). Membership: [Being armed stopped earning a card](#being-armed-stopped-earning-a-card); order and open slot: [The active entity leads](#the-active-entity-leads-and-a-target-only-card-can-now-disappear), [Leading the list…](#leading-the-list-and-holding-the-open-slot-are-two-different-rules); banner: [Strategy / Overall](#practice-log-strategy--overall-rank-view). `forceOpen` and page turns are **one-shot nudges keyed on `focus.nonce`, never standing overrides**. The card `activeKey` names wears `.log-card-active` + Ready/Running. The PB tag's jump reuses the graph-pick machinery. Each [[subsection]] renders INSIDE the parent's `Disclose` body via `nestSubsections` (`ui/subsections.js`) through ONE `cardFor`: disabled pieces leave the log; a piece draws under every carded parent; area-parented orphans stay top-level, star-parented orphans are hidden; a parent with a nesting child earns a card — **nesting runs before membership** (`hasEarnedACard` injected) |
+| Stat chips + the menu that chooses them | `ui/components/entitydetail.js` — `StatChipsRow` (value chips only, filtered by `t.showDust`/`DUST_STAT_KEYS`) inside `EntityDrawer`. **`StatMenuTrigger` is defined only in `attemptlog.js` and used exactly once**, in `PracticeLog`'s heading (`tests/test_ui_section_parity.py`: one `.attempts-tools` row per page). It stays `position: fixed` off its own rect |
 | Per-star event graph | `ui/components/timeline.js` (marker styles via `MARKERS` registry) |
 | The PB tag, WHO may save one, a foreign row's delta/button/dim | `ui/components/attemptlog.js`, `practicelog.js` — **full detail in `.claude/rules/pb-strategy.md`** (lifted there 2026-08-23 at this file's size ceiling; that rule loads for these two files too) |
-| Completion-time graph | `ui/components/progress.js` — per-star AND per-segment; gold = saved PBs; node click → `attemptlog.js`'s `useGraphPick` reveals + scrolls to the row (in whichever `LogCard` currently shows that entity, `ui/components/practicelog.js`), auto-opens saved replays — the SAME path the clickable PB tag uses (`PbTag`, so `sec.pb[mode]` carries `attempt_id` from views.py). `progressSessions`/`hasProgressPoints` are exported because the graph answers an empty section by returning `""`: a caller that wants an empty state THERE instead must agree exactly with the graph about which sections are empty, or one of the two renders nothing at all |
-| Active-strategy picker (star + segment) | `ui/components/stratpicker.js` — THE strat dropdown + "new strat…" modal for a practice card; owns the `POST /api/strat` write, the dropped-write alert, and the phantom-pick snap-back. **It HOLDS the pick on screen until the store's refresh carries it** (task 0113, 2026-09-01): drawn from the server's `active` alone, a native `<select>` reverts on the first re-render after the pick — Preact resets `value` whenever the DOM disagrees with the prop, and the first re-render is the write's own WebSocket broadcast, which lands before the write's response. Sampled on his journal: `TJ Owlless → Sideflip (6 ms) → TJ Owlless (22 ms) → Sideflip (1055 ms)`, the second half being the server's full-journal replay on a row retag (also removed that day, `tracking/service.py`). `pending` clears only after `await onChanged()` — the store's coalesced refresh, whose promise settles once a view fetched AFTER the write has landed. Guard: `tests/test_ui_strat_pick_settles.py`, which holds every /api response 400 ms inside the page and asserts the pick shows within 100 ms and nothing else ever shows; mutation-proved (`value=${active}` → 450 ms). ONE component for both kinds (`identity` = kind-dispatched body). Parity pinned by tests/test_ui_section_parity.py. Write target injectable (`submit` prop) — practice cards set the ACTIVE strat, attempt rows reclassify THAT attempt via `POST /api/attempts/{id}/strat` (`blankLabel`/`highlightUnset` tune the row variant). **`groups`** (optional) draws the list as `<optgroup>`s showing each strategy's LEAF under its exit-star variant's heading -- a 100-COIN star only, from the section's own `strategy_groups` (spec 2026-08-03-hundred-coin-exit-variants). Nothing here derives the grouping; the server ships it resolved. The `<option>` VALUE stays the full qualified name, since that is the identity the write posts, and a strategy the groups do not cover (a purged name on a historical attempt) is still listed loose -- same reason `active` always stays listed. `allowBlank=false` drops the "no strategy" option entirely; both call sites pass `!sec.default_strat`, so a seeded castle movement (default `"Standard"`) cannot be unset — the server enforces the same rule (projection caveat 17), and `purge_strategy` 409s on a segment's default so the list can't be emptied from the ranks side either |
-| Strategy-creation modal | `ui/components/stratmodal.js` — **"US and JP timed differently"** (task 0056, 2026-08-15): off by default (one time for both versions); on, the ladder grid gains a JP time column between the US time and the video (`.strategy-ladder.has-jp` widens the grid to four tracks; the 700px container query keeps the video full-width beneath) and save PUTs each filled JP time with `?version=jp` AFTER the US loop, same idempotent order. Also: on a 100-COIN star it also asks which EXIT STAR the run ends on, from the `exit_star_options` it fetches itself (so neither call site has to know which entities have exit stars), and picking an ending the community does not rate MINTS a variant — the whole "define your own 100-coin route" path. `save` then uses the name the create POST RETURNS for every follow-up threshold/video PUT and for `onSaved`: the server qualifies it, and composing it here would be a second implementation of the rule. The duplicate check compares LEAVES within the chosen variant, from the server's own `strategy_groups`, for the same reason. Otherwise: name + full rank ladder (time + optional example video per rank) on the Modal shell; Save rides the existing ranks endpoints (create→PUT thresholds→PUT videos, idempotent re-Save); opened from the practice strat dropdown, the standards table's + Strategy, and the header target picker. Also carries the "Include in ranking" tick (round 7, 2026-07-25): reads `GET /api/marelo/exclusions` on open, writes `POST /api/marelo/exclude` LAST and only if the user actually touched it — an untouched box must never rewrite an exclusion set elsewhere, and a failure there must not strand the ladder this modal exists to create. Do NOT give it `.modal-field`: that class stretches its input to `width:100%` and turns a checkbox into a 36px square |
-| Per-star external links | `links.py` — `ukikipedia_url(entity_key, label)` resolves a star/segment/sheet-target to its Ukikipedia RTA Guide page against the wiki's OWN page list (`ukikipedia_titles.py`, a generated module `tools/scrape_ukikipedia.py` refreshes; a Python module rather than a data seed so the exe ships it with no --add-data row) and answers None where no page exists — the Library's wiki mark and the drawer's "RTA Guide" link (both kinds, rule 11) draw only on a non-null. Until 2026-08-15 the URL was generated from the star name and hoped for: it 404'd on every title the wiki spells differently and on all nine secret-course stars. Adding a movement alias or a Toad rule is one row in `_MOVEMENT_ALIASES`/`_TOAD_BY_COURSE`; the scraper's "no page:" report says which targets still lack one. `tests/test_single_source.py` keeps `ukikipedia.net/wiki` in this file alone. Plus `xcams_url(entity_key)` (the xcams Daily Star page, identity-derived from the live-confirmed `…/home/history?star=<abbrev>_<id>` pattern; secret-star prefix VERIFY) |
+| Completion-time graph | `ui/components/progress.js` — per-star and per-segment; gold = saved PBs; a node click goes through `useGraphPick`, **the same path as `PbTag`**. A caller wanting its own empty state must agree with `progressSessions`/`hasProgressPoints` exactly |
+| Active-strategy picker (star + segment) | `ui/components/stratpicker.js` — THE strat dropdown + "new strat…" modal; owns `POST /api/strat`, the dropped-write alert and phantom-pick snap-back. **It HOLDS the pick until the store's refresh carries it** — `pending` clears only after `await onChanged()` (`tests/test_ui_strat_pick_settles.py`). One component for both kinds; `submit` prop retargets the write (attempt rows use `POST /api/attempts/{id}/strat`). `groups` draws server-shipped `<optgroup>`s for 100-coin stars; **option VALUE stays the qualified name, and the current/`active` value always stays listed**. Both call sites pass `allowBlank=!sec.default_strat`; a caller that narrows `groups` itself owns its own value |
+| Strategy-creation modal | `ui/components/stratmodal.js` — name + full ladder (time + optional video per rank); save = create → PUT thresholds → PUT videos, idempotent. "US and JP timed differently" (off by default) PUTs JP times with `?version=jp` AFTER the US loop. 100-coin stars ask for the exit star from `exit_star_options`; **follow-up PUTs and `onSaved` use the name the create POST RETURNS — never compose it here**; duplicates compare leaves from `strategy_groups`. "Include in ranking" writes `POST /api/marelo/exclude` LAST and **only if touched**. **Do NOT give it `.modal-field`** |
+| Per-star external links | `links.py` — `ukikipedia_url(entity_key, label)` resolves against the generated `ukikipedia_titles.py` (refresh: `tools/scrape_ukikipedia.py`) and returns None where no page exists; **callers draw only on non-null**. Aliases are rows in `_MOVEMENT_ALIASES`/`_TOAD_BY_COURSE`. **`ukikipedia.net/wiki` appears in this file alone** (`tests/test_single_source.py`). `xcams_url(entity_key)` is identity-derived; secret-star prefix VERIFY |
 
 
 ## Practice-log caveats sit before strategy, never inside the PB track
 
-**2026-08-12.** A `? Unattributed` chip appended inside `PbTag` enlarged the
-PB grid track until the identity track became narrower than its strategy
-select; the select kept painting past that boundary and the PB painted over
-it. `LogCard` now resolves the PB caveat once and draws `cardBadge` in a
-reserved `.log-card-caveat-slot` immediately LEFT of the strategy picker,
-while its `PbTag` call passes `showCaveat=false`. The slot exists even when
-empty, so a live caveat change cannot move the picker. Its width responds to
-the identity allocation itself (`container: log-card-identity`), not the page:
-below 430px the word drops and the same glyph-only mark remains. Parent and
-nested entries need no second rule because both are the same `LogCard`;
-`tests/test_log_card_caveat_layout.py` plants the longest marker on a real
-top-level star and the nested Bowser Reds star and checks caveat → strategy →
-PB geometry at 1500/1200/900/850px.
+`LogCard` draws the PB caveat once, as `cardBadge` in a reserved
+`.log-card-caveat-slot` immediately LEFT of the strategy picker; `PbTag` gets
+`showCaveat=false`. The slot exists even when empty; its width follows
+`container: log-card-identity` (glyph-only below 430px). Gate:
+`tests/test_log_card_caveat_layout.py`.
+Detail: [docs/rules/ui-practice.md#practice-log-caveats-sit-before-strategy-never-inside-the-pb-track](../../docs/rules/ui-practice.md#practice-log-caveats-sit-before-strategy-never-inside-the-pb-track).
 
 
 ## Practice-log Strategy / Overall rank view
 
-Task 0097 (2026-08-12) retired the side-by-side Strategy + Star/Segment
-banners. The existing kicker slot now contains real pressed-state `Strategy`
-/ `Overall` buttons and the card always uses the combined, one-banner layout
-matrix branch. Strategy is the fresh default; `ui/rankdisplaymode.js` persists
-the preference by entity key, so changing strategy does not reset it and a
-choice on one star/segment cannot affect another.
-
-A shared ladder, or a state with no separate entity payload to show, renders
-only selected `Overall`; clicking it is inert. A real two-ladder floor still
-offers both views and both honestly draw Capless V. Mode changes pass
-`rankMode` to `RankBanner.swapKey`, which reuses `useRouteSwap` plus
-`mareloTuning()` exactly: pre-paint first frame, cap squash/pop and pivot,
-sequential text fade, bar easing and tier-colour mix. It is an exchange between
-measurements, never a rank-up climb. Stars and segments get the same behavior
-because both render through this one `LogCard`.
+The card always renders ONE banner with pressed-state `Strategy` / `Overall`
+buttons in the kicker slot; Strategy is the default and `ui/rankdisplaymode.js`
+persists the choice per entity key. A shared ladder (or no separate entity
+payload) shows only an inert selected `Overall`. Mode changes pass `rankMode` to
+`RankBanner.swapKey` and reuse `useRouteSwap` + `mareloTuning()` exactly — an
+exchange between measurements, **never a rank-up climb**.
 
 
 ## Being armed stopped earning a card
 
-**2026-08-10.** `hasEarnedACard(sec, activeKey, t)` is now TWO ways in: a real
-recorded attempt, or `activeKey` names it AND `practicedHere(sec, t)` still
-holds. **Being ARMED is no longer one of them**, which retires his own
-2026-07-24 rule ("a RUNNING segment is never invisible") on this surface.
-
-That rule was written when at most one thing armed at a time, so "the armed
-one" and "the one he means" were the same section. Leaving the Bowser 1 arena
-is ONE `level_exit` and all six `Bowser 1 → X` movements arm on it, so his
-Castle Lobby held six empty cards: *"nothing should appear in the practice log
-until I successfully have an attempt, OR it was explicitly selected (or
-autodetected as the only option) -- these are all empty, which means they
-shouldn't appear yet."* A lone option is auto-selected, which writes the
-target, so that clause of his needs no rule of its own.
-
-**The place half had to become `practicedHere`, and that was forced rather
-than chosen.** The `course_id != null` guard it replaced was a stand-in for
-one question — has he walked away from a course-less entity (an arena fight, a
-hub trick) — and it answered by refusing EVERY course-less section, which was
-harmless only while the armed clause carried them. All 56 castle movements
-have `course_id: null`, so without that clause the old guard would hide a
-movement he had deliberately picked. The [[segment reach]]
-(`.claude/rules/segment-topology.md`) is what makes the real test possible: a
-fight's reach is its own arena, a movement's covers the castle it walks
-through.
-
-Third surface to learn the ambiguity lesson, and the other two are named in
-the code: `practice.js`'s `ambiguousPins` for the pinned card (2026-08-02) and
-the target queue's own burst gate (`.claude/rules/tracking-storage.md`).
-Mutation-proved in `tests/test_ui_practice_log.py` — restoring the armed
-clause turns the retired-rule test red, and that test is written as the
-INVERSE of the one it replaces rather than deleted, so his old rule cannot
-look like an oversight worth restoring.
+`hasEarnedACard(sec, activeKey, t)` has exactly TWO ways in: a real recorded
+attempt, or `activeKey` names it AND `practicedHere(sec, t)` holds. **Being
+ARMED is not one of them** — the retired-rule test in
+`tests/test_ui_practice_log.py` is its inverse; do not restore the armed clause.
+Detail: [docs/rules/ui-practice.md#being-armed-stopped-earning-a-card](../../docs/rules/ui-practice.md#being-armed-stopped-earning-a-card).
 
 ## The recorder
 
-`ui/components/segmenttimeline.js`. The file name predates the surface by a
-week and is the one thing about it that did not change on 2026-08-05.
+`ui/components/segmenttimeline.js`. Five properties, none a preference:
+**no live mode** (the `view=all` checkbox is not one); **opens onto history**;
+**newest first as a display choice only** (`shown = [...rows].reverse()`; ids
+sent back keep journal order); **rows land via a tail fetch** keyed on `t.feed`
+(`?after_id=`), serialised, not debounced, labels from
+`tracking/eventlabel.py::label_event` — no browser labeller; **N moments are
+the definition in JOURNAL order**, never click order (client and server both
+sort). `parents` is asked HERE and nowhere else (the only door into a
+[[subsection]]) as a list of picker option ids translated once by
+`entities.js::entityKeyForOption`; keep `parents` and `origin` distinct. Area
+tiles drill and lead with a whole-area cell (`group.pick`). **Save is ABSENT
+below two picks, not disabled.** Recordings save STRICT; ONE `definitionFor`.
+Gates: `tests/test_ui_recorder_latency.py`, `tests/test_fixture_reaches_the_real_page.py`,
+`tests/test_segments_editor_ui.py`. Look: `tools/contact_sheet.py --recorder` / `--recording` / `--waypoints`.
+Detail: [docs/rules/ui-practice.md#the-recorder](../../docs/rules/ui-practice.md#the-recorder).
 
-**What it is for**, and the complaint that produced the rewrite: *"the user
-should not have to waste time on figuring out the vocabulary for what they want
-to do. They should just be able to DO THE THING THEY WANT TO DO IN GAME. Once
-they do it, they should be able to select from the history of what they just
-did, and be able to extract the important bit."*
-
-Five properties. Each names a thing the three-state modal got wrong, so none of
-them is a preference:
-
-1. **NO LIVE MODE.** Arriving after playing and staying while playing are the
-   SAME state. A toggle, a "go live" button or a paused/streaming distinction
-   has misread this. The `view=all` checkbox is NOT one — both views are
-   equally live, and it exists because `view=steps` is ~10% of the journal by
-   design and the rarer reset/spawn-triggered starts are unreachable without it
-   (Task 11's own carried concern).
-2. **OPENS ONTO HISTORY**, never an empty screen waiting for input.
-3. **NEWEST FIRST**, and it is a DISPLAY choice made in one place
-   (`shown = [...rows].reverse()`). `GET /api/segments/timeline` answers
-   oldest-first because `id` is the only chronological key the journal has —
-   `frame` runs backward across every reset — so every id handed back to the
-   server keeps the journal's order.
-4. **ROWS LAND AS THEY HAPPEN**, and the mechanism is a TAIL FETCH keyed on
-   `t.feed` growing (store.js's raw websocket stream), asking
-   `?after_id=<newest held>`. It is not a second websocket and not a poll. The
-   reason it is a fetch at all: a broadcast carries `seq`, never the journal
-   `id` a row is picked by, so the client must come back for the id regardless
-   — and coming back for the LABEL at the same time is what keeps
-   `tracking/eventlabel.py::label_event` server-side with no second labeller in
-   the browser. Two fetches never race: an in-flight one sets a flag and the
-   next runs after it, which is a serialiser and deliberately NOT a debounce.
-5. **N MOMENTS ARE THE DEFINITION** — earliest picked is the start, latest is
-   the end, everything between is a waypoint. **The order is the JOURNAL's, not
-   the click order**, on both sides: the client sorts `pickedIds` numerically
-   and `GET /api/segments/synthesize?ids=` sorts them again. Reading the click
-   order would let a list drawn newest-first author a definition whose steps
-   run backwards through a walk that only ever happened one way.
-
-**`parents` is asked HERE and nowhere else** — "what is this a piece of?", at
-Save time. This is the ONLY door into a [[subsection]] in the whole app:
-the server side has been real since migration v22 (PLURAL since round 20 /
-v26), but `SAVE_FIELDS` in `segments.js`
-omits it and no editor control writes one, which is exactly why he asked *"what
-star has subsections? I don't see a way to define that?"* (2026-08-05). Putting
-it in the library editor instead was rejected: his own spec says *"nothing asks
-'you just recorded this, what is it a piece of?' when you would want to
-answer"*, and a control in the editor answers at the wrong moment AND becomes a
-second door the day the recorder grows its own. Held as a LIST of the PICKER's
-option ids
-(`"8:1"`/`"segment:12"`) so `value=` can highlight the chosen cell, and
-translated once by `entities.js::entityKeyForOption` — the same translation the
-picker's rank-badge lookup uses, because two hand-built copies of a key format
-is how they drift. **One pill per chosen parent, and the + appends another (round 20
-item 1: *"the same subsection might be practicable in multiple stars"*);
-re-picking a pill changes it, the "Nothing" placeholder removes it, and a
-duplicate pick collapses to a no-op (`commitParentPick`).** Keep `parents` (which entities this is a
-piece of — the sheet's
-mapping keys) and `origin` (where the library files it) distinct: they answer
-different questions. **Three parent grains since round 14** (his ruling, asked
-and answered 2026-08-08: *"for the castle areas, those are the high level
-areas, so it shouldn't have a further drill down. For the individual stars, we
-should be able to drill into a specific star… within a course, we're always
-doing something as a subsection of something else. Or, it's a castle movement
-which is high level"*): a castle-AREA answers as `area:<node>`, via
-PickerDialog's `group.pick` capability, marked at the RECORDER's call site
-because the target picker reads the same groups and has no second answer to
-give — a course tile drills to its stars and segments, and there is no third
-screen of any kind here (this dialog never had a `nextStep`). **That marking
-made the area tile TERMINAL until 2026-08-09, and terminal was too strong**:
-every castle movement sits behind an area tile, so a piece of an Upstairs BLJ
-could never name the BLJ (*"I should be able to click into Upstairs, and be
-able to select any segment within Upstairs OR select a general 'Upstairs'
-association… I can't select BLJs because they're in the Upstairs section"*).
-`pick` now means pickable AS ITSELF, not instead-of-drilling: every tile
-drills, and a marked group's layer 2 LEADS with a cell carrying the group's
-own label, art and `sub` ("the whole area"). The round-14 ruling survives
-intact — an area is still as high as the castle goes, it is just no longer
-the only thing behind its own tile.
-`entityKeyForOption` passes `area:` ids through, `_PARENT_KEY` accepts all
-three kinds, and an area-parented row matches no entity in `ui/subsections.js`
-so it renders top-level, which is what "high level" means there. **The
-AUTO-NAME speaks his language (round 14)**: `suggest_name` takes the landmark
-catalogue, so a landmark he named leads with that name and places read in
-`node_short_label`'s route notation — "CCM Door → CCM", his example verbatim —
-and only the two ENDS ever enter the name (the signature takes nothing else,
-which is the proof of his "first and last step" rule).
-
-**Save is ABSENT below two picks, not disabled.** A start with no end can never
-complete, and a control whose reason lives in its own hover is the shape he
-reported as a dead button (2026-08-02). The line above the list says what to do
-instead.
-
-**Unchanged from the old modal, because it was already right**: ONE
-`definitionFor` builder, so the object backtest tests, lint checks and save
-writes is the same object (a preview run against a different `match_mode` than
-the save uses reports on a matcher branch the user never gets); the same
-arms/fires/unclosed `recordingSummary` the hand-authored Builder shows.
-**A recording saves STRICT unconditionally since round 15** (his ruling:
-*"They should also be default Strict"*) — the earlier stops-only rule kept a
-stop-less recording byte-compatible with the pre-waypoint tool, and that
-guarantee is retired on his word; a recorded piece voids when you deviate.
-The Builder's own blank default (vocab.match_modes[0], loose-first) is a
-different control and untouched.
-
-**The gates.** `tests/test_ui_recorder_latency.py` MEASURES the live half —
-publish to painted row, stamped by the page's own rAF loop rather than by a
-Python polling loop that would charge its round trips to the feature — and
-prints the number on every run (24 ms when it landed; the ceiling is 600 ms and
-fails a regression, never certifies a feel). Mutation-proved by keying the tail
-effect back on `[view]`. `tests/test_fixture_reaches_the_real_page.py` covers
-the three states the sweep draws (`recorder-open` / `recorder-review` /
-`recorder-waypoints`, all in `tools/uilab_project.py::STORIES`), including that
-the parent control is reachable and that a time appears on SOME rows and not
-all — an equal count would mean we were inventing one.
-`tests/test_segments_editor_ui.py` holds the comment-immune source scans, both
-directions probed.
-
-**LOOK at it**: `tools/contact_sheet.py --recorder` (arrival), `--recording`
-(two picked), `--waypoints` (three).
 ## The active entity leads, and a target-only card can now disappear
 
-2026-08-05, three live reports on top of the same day's ambient-arm fix.
-`ui/components/practicelog.js` gained two new pure functions and `orderedSections`
-grew a second parameter; `ui/components/practice.js` grew one derived `topKey`.
-
-**Ordering.** *"When I enter Bowser 1… it should be at the top immediately
-(because it's the only star / segment available)… This happens after I grab
-the key, but it should be at the top immediately."* `orderedSections`'s old
-comment was right about a target he merely SET and has not run yet — it just
-did not carve out the one he is standing in front of right now.
-`orderedSections(view, activeKey = null)` sorts by recency exactly as before,
-then hoists whichever section `activeKey` names to the front (a no-op if it
-is already there, or absent from this view). `activeKey` is not a new signal
-— it is `practice.js`'s existing `live.activeKey`, the same value that already
-drives `.log-card-active`'s gold border, threaded through the prop `PracticeLog`
-already received.
-
-**The auto-open slot moved with it.** A1's own design defined "the newest
-card auto-opens" as "whichever card is at the top of the list" — so once the
-list's own top can be the active entity rather than the most recent, the slot
-has to follow or a card he never touched would sit open one row under a
-closed, freshly-active one. `practice.js`: `const topKey = live.activeKey ??
-frozen.topKey;` — `live.activeKey` needs no freezing of its own (it already
-derives from `frozen.stage`/`frozen.target`, so it cannot move mid-celebration
-any more than those can); `frozen.topKey` (the pre-existing, still-frozen
-`topEntityKey(t.view)`) survives as the fallback for when nothing is active at
-all, which is the one branch still exposed to an unrelated attempt landing
-elsewhere during a climb. Pinned by `tests/test_ui_focus_target.py`'s
-`test_the_top_key_is_frozen_alongside_its_siblings`.
-
-**Membership.** *"If we leave without practicing anything, its card should
-disappear from the list (because we didn't even reset / practice anything)."*
-The server's own rule ("the practice target ALWAYS gets a section") is right
-about what IT can see — the target survives a hub on purpose (projection.py
-caveat 12) — and has no notion of "he has since walked away and touched
-nothing," which is a fact about the PLAYER's position and therefore belongs
-where every other "is he still here" question in this app already lives:
-client-side, in `ui/stagecontext.js`'s `practicedHere`/`starPracticableHere`
-(the exact signal `activeKey` is already built from). `hasEarnedACard(sec,
-activeKey)` keeps a section when — in order — it has a real recorded
-`attempt` (unconditional: "a card that recorded even one attempt stays"); OR
-it is still `armed_detail`-truthy (the standing "a RUNNING segment is never
-invisible" rule, 2026-07-24, checked independently of `activeKey` on purpose —
-several defs can arm off one course entry with none of them unambiguously
-"the" pick, `practice.js`'s own `ambiguousPins`, and none may vanish for lack
-of one); OR `activeKey` names it AND it has a real `course_id`.
-
-**That last clause's `course_id` guard is not decoration — it is the one
-finding this round measured rather than assumed.** A synthetic
-`TrackerService` run (no PJ64, a throwaway sqlite file) entered the Bowser 1
-arena, auto-selected its fight (`ArenaRow`'s own rule — "arriving in an arena
-IS the intent"), then left to the lobby with nothing grabbed:
-
-```
-armed after entering arena:        {8}
-armed after leaving to lobby:      set()      <- the topological engine's own doing
-target after leaving to lobby:     ('segment', 8)   <- still names it, unretired
-```
-
-The def disarms correctly on leaving (`_flush_move`'s own topological rules,
-`.claude/rules/tracking-storage.md`) — but `stagecontext.js`'s `practicedHere`
-answers "is he still here" by a COARSE bucket for a course-less-origin entity
-(an arena fight, a hub trick): *"a place with no course keeps only things
-that also have no course"* (its own 2026-08-03 tightening) — which means the
-castle, the lobby, and every OTHER arena all read as "the same course-less
-place" as the Bowser 1 arena itself. Re-published with a real `stage_changed`
-naming the lobby (course-less, `mode: "castle"`) rather than leaving the
-client's stage stale, `activeKey` STILL named the disarmed fight — confirmed
-by rendering the real app both ways (screenshots taken, not just asserted).
-A course-BEARING entity (an ordinary star, most castle movements) has no such
-gap: `practicedHere` requires an EXACT course match, so `activeKey` alone
-already means "he is standing right where this is practiced." `course_id ==
-null` is exactly how the ambiguous, arena-shaped population is stamped
-(views.py: an arena has no course of its own), so gating on it closes
-precisely the gap the measurement found and nothing wider. Pinned by
-`tests/test_ui_practice_log.py`'s `hasEarnedACard` suite, including the exact
-course-less-vs-course-bearing distinction, mutation-proved.
-
-**Two Bowser wrinkles this round did NOT need to solve.** The 2026-08-05
-ambient-arm fix (`.claude/rules/hundred-coin.md`) already stops an entity
-NOBODY chose from getting a card at all (armed alone, zero attempts, not the
-target) — this round is the next rung: an entity he DID choose, that has
-since stopped being chosen in any sense the app can still see. And the
-`.log-card-active` highlight, `EntityAnalysis`, and `EntityDrawer` all
-already read the SAME `activeKey`/`focusKey` machinery — once `activeKey`
-correctly reads `null` for a genuinely-left, course-less target, "nothing
-selected to practice" falls out for free; no second exclusion was needed
-there.
+`orderedSections(view, activeKey)` sorts by recency then hoists the section
+`activeKey` (`practice.js`'s `live.activeKey`) names. Card membership is a
+client-side question about the PLAYER's position (`hasEarnedACard`, rules in
+the section above). Pinned by `tests/test_ui_focus_target.py` and
+`tests/test_ui_practice_log.py`.
+Detail: [docs/rules/ui-practice.md#the-active-entity-leads-and-a-target-only-card-can-now-disappear](../../docs/rules/ui-practice.md#the-active-entity-leads-and-a-target-only-card-can-now-disappear).
 
 ## Leading the list and holding the open slot are two different rules
 
-2026-08-05, later the same day, and both halves are corrections to the
-section above rather than additions to it.
+**Leading is unconditional; the OPEN slot must be earned** by recorded attempts
+(`hasRecordedAttempts`/`playedEntityKeys`, asked by both `topEntityKey` and
+`activeHasPlayed`). The slot is resolved **inside `PracticeLog` against the
+list it renders** by `autoOpenKey(sections, activeKey, playedKeys)`, with
+frozen `playedKeys`; an empty active entity falls back to the most recently
+played card on screen. **The practice log leads the page in the DOM at every
+width — no CSS `order` on the page's cards** (`tests/test_practice_page_order.py`).
+Detail: [docs/rules/ui-practice.md#leading-the-list-and-holding-the-open-slot-are-two-different-rules](../../docs/rules/ui-practice.md#leading-the-list-and-holding-the-open-slot-are-two-different-rules).
 
-**A card only auto-opens once it has recorded something.** `topEntityKey`
-already said this and said it emphatically — and `practice.js` resolved the
-slot as `live.activeKey ?? frozen.topKey`, an unconditional override that
-never consulted it, so the one card the rule is most about (the one he had
-just selected) sailed straight past. Three screenshots, three stages: *"it
-should NOT be autoopening the card yet, because I don't have any entries...
-If there are no attempts yet, it's closed by default. If there are attempts,
-then it's autoopened."* The eligibility question is exported now —
-`hasRecordedAttempts` / `playedEntityKeys` — and **both** callers ask it: the
-recency winner (`topEntityKey`) and the active one (`activeHasPlayed` in
-practice.js). **Leading the list is still unconditional** — an entity he just
-chose leads with nothing in it; it is only the OPEN slot that it has to earn.
-
-**And the slot is resolved inside `PracticeLog`, against the list it actually
-renders.** It was resolved in `practice.js` against the unfiltered view for
-one round, and the two lists genuinely disagree: a Bowser course's reds star
-and its pipe segment TIE on `last_activity` (measured on his live session —
-both 1414), stars sort before segments, and `applyRedsPipeExclusivity`
-(retired 2026-08-10, reds-as-subsection) drew whichever half his star/pipe
-toggle names. So the slot named the star while
-the log drew the segment, `isCardOpen` matched nothing, and every card sat
-closed — with every test of the rule itself green, because a key naming an
-unrendered card is indistinguishable from "nothing qualifies". The page hands
-down the frozen CANDIDATE LIST (`playedKeys`, riding the same
-`useHeldWhileCelebrating` snapshot as `stage`/`target`, since attempt data on
-`v` is live even mid-climb) and `autoOpenKey(sections, activeKey, playedKeys)`
-picks from it.
-
-**Falling back is a feature, not a default.** When the newly-active entity is
-empty the slot does not go dark — it stays on the most recently played card
-still on screen. *"When we're moving between courses / segments of the game, I
-want to still see the thing I just accomplished (until I've now accomplished
-the next star/segment)... we shouldn't close the last thing until we've
-started a new one (with a valid practice log entry)."* Walking into Bowser 1
-selects it and its empty card stays shut, while the reds run he just finished
-stays open until Bowser 1's own first row lands. Pinned by
-`tests/test_ui_practice_log.py` (the rule, node-driven, three mutations) and
-`tests/test_practice_page_order.py` (who decides — mutation-proved by
-resolving it in the page again).
-
-**The practice log leads the page, in the DOM, at every width.** *"When I
-select an actual route, it incorrectly moves the practice log to be BELOW the
-route focus info. The practice log should always stay at the top, under the
-quick select picker."* His hierarchy was already written down — "selector ->
-target -> practice log -> analysis (all the important information is
-hidden!!!!)" — but it lived as a `@container (max-width: 1060px)` `order`
-block, which cost twice: above 1060px the analysis card took the top of the
-page, and `.route-focus-card` was never in that block's list at all, so it
-defaulted to `order: 0` and outranked every card that had been given a number.
-Saying it in the DOM (practice.js: log, then analysis, then route focus, then
-drawer) says it once, for every width and every mode, and a card added later
-cannot silently land above the log. `tests/test_practice_page_order.py`
-forbids CSS `order` on any of the four and renders the route-active page,
-which is the state the report was actually about.
-
-## The Reds/Pipe pair shows exactly one card — retired 2026-08-10, kept for its evidence
-
-**Retired, round reds-as-subsection (2026-08-10, tasks 1-4).** The reds star is
-now a [[subsection]] of its own Reds→Pipe movement — `views.py` stamps
-`parents: ["segment:<reds->pipe id>"]` on it — so its card nests INSIDE the
-movement's card (`nestSubsections`, `ui/subsections.js`) whenever it has
-earned one, instead of a mode choosing which of the two independently-earned
-cards to hide. Griffin's own words approving the design: "Bowser Reds STAR is
-just... a subsection of Bowser Reds Pipe entry" and "showing both is the point
-now." Deleted with the exclusivity rule below: `applyRedsPipeExclusivity`, the
-`levelByCourse` lookup it needed, `bowserModeFor`/`BOWSER_MODE_KEY`/
-`sm64.bowserMode` in stagebanner.js (the star/pipe sub-toggle's own memory
-this section describes), and the `justCompletedStar` half of its
-auto-detection. `bowserFamilyFor`/`writeBowserFamily`/`sm64.bowserFamily`
-survive untouched — they still choose which CELL (Reds vs No Reds) the
-selector highlights, a different question from which card the log shows now
-that both can be on screen at once. Nesting broke the log's auto-open slot in
-turn: `Disclose` never mounts a closed card's body, so a freshly-grabbed reds
-star winning the slot as a nested card was invisible until its parent opened
-too. `PracticeLog`'s `topKey` now resolves against every rendered card,
-nested included, and `isCardOpen` opens a parent whenever one of its own
-children holds the slot (`childKeys`, `practicelog.js`).
-
-What follows is the retired mechanism's own build note, preserved for its
-evidence.
-
-Same round. *"If I have pipe selected, it shouldn't show the card for
-(Star). If I have (Star) selected, and I grab the star, it shouldn't show the
-pipe card… if I enter the pipe, it should show the pipe card (and swap to
-pipe mode)."* A Bowser course's reds run is graded two ways — the grab alone,
-or the whole run to the pipe — and `_close_by_grab`'s own rule (caveat 12,
-`.claude/rules/tracking-storage.md`) means the star's own attempt is ALWAYS
-recorded regardless of which half he is grading, so both halves routinely
-carry real history at once. Before this round both would show simultaneously
-whenever both independently earned a card (one via real attempts, one via
-being the live target) — correct by each entity's own rule, and still two
-cards for one physically single run.
-
-**What already existed and only needed reading, not building**:
-`stagebanner.js`'s `bowserModeFor(level)` (exported already) is the star/pipe
-toggle's own memory, keyed by LEVEL and updated automatically on a fresh
-success (`justCompletedStar`/`justCompletedSegment`, round 2 of the original
-spec) — so "the mode swaps the moment he enters the pipe" needed no new
-detection logic, only a reader.
-
-**The one genuinely new piece**: `bowserModeFor` is keyed by LEVEL (17/19/21
-for BitDW/BitFS/BitS), while a star/segment section's own `course_id` is a
-DIFFERENT number (16/17/18) — the log has no live "stage" to read a level off
-of for a course the player is not currently standing in. `PracticeLog`
-inverts the server-shipped `vocab.course_by_level` (the SAME map
-`entityicons.js`'s `iconContext` already reads for an unrelated reason) into a
-`levelByCourse` lookup, memoised on the vocab's own identity — never a second
-hand-written course↔level table, which is exactly the kind of duplicated
-domain fact this project keeps paying for.
-
-**`applyRedsPipeExclusivity(sections, modeForCourse)`** (practicelog.js, pure,
-node-tested) only ever excludes when BOTH halves of a pair are independently
-present — a course he has only ever practiced one way keeps its one card
-regardless of what `modeForCourse` answers for it (including the untouched
-"pipe" default), since there is nothing to resolve a conflict between. When
-both are present, the one matching `modeForCourse(sec.course_id)` wins.
-Client-side by design, per the coordinator's own caution against a second
-answer to one question: the MODE is genuinely client-only preference state
-(localStorage, per level, no server equivalent and none needed), while card
-MEMBERSHIP is server-published truth the client is merely choosing how to
-DISPLAY — moving the mode itself to the server would require it to learn a
-client preference it has no other use for, at the cost of a write on every
-toggle and a second copy of `BOWSER_MODE_KEY`'s own storage.
-
-**Never touched**: the stage banner's own Reds/Pipe cell and its running-timer
-chip (his own explicit instruction — "the quick-select star row above it is
-NOT touched"), and no server-side attribution/projection changed at all —
-verified live: with the reds star grabbed for real AND the pipe segment
-targeted mid-run, the rendered log shows exactly one card ("8 Red Coins
-(Pipe)", 1 entity shown) while the stage banner's own "Running" chip for the
-pipe segment keeps ticking above it untouched.
+Retired 2026-08-10, the Reds/Pipe one-card rule (reds star now nests in its movement's card): [docs/rules/ui-practice.md#the-redspipe-pair-shows-exactly-one-card--retired-2026-08-10-kept-for-its-evidence](../../docs/rules/ui-practice.md#the-redspipe-pair-shows-exactly-one-card--retired-2026-08-10-kept-for-its-evidence).

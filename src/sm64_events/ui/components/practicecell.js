@@ -4,8 +4,19 @@ import { RankIcon } from "./rankicon.js";
 import { RANK_FLOOR, capName } from "./caps.js";
 import { fallbackToGenericStar, isGenericArt } from "./entityicons.js";
 import { caveatOf, cellBadge } from "./marks.js";
+import { fmtIgtShort } from "../format.js";
 
 const html = htm.bind(h);
+
+// The cell's outer class and hover text. The Daily Star says so on hover,
+// with today's best, over whatever the caller's own title was.
+function cellFace({ active, daily, title, name }) {
+  const className = `starcell ${active ? "active-star" : ""} ${daily ? "daily-star-foil" : ""}`;
+  if (!daily) return { className, hover: title || name };
+  const today = daily.today && daily.today.frames != null
+    ? `today's best ${fmtIgtShort(daily.today.frames)}` : "not finished yet today";
+  return { className, hover: `${name} · Today's Daily Star (${today})` };
+}
 
 // THE practiceable-thing cell — art / rank medal / name / sub-line — extracted
 // from stagebanner.js (2026-07-25) so the entity picker's grid and the practice
@@ -62,6 +73,10 @@ const html = htm.bind(h);
  *            course with two of seven stars practiced still renders five
  *            placeholders. Default false = the banner's byte-for-byte
  *            unchanged look.
+ * daily      the Daily Star payload when this cell IS today's Daily Star
+ *            (ui/dailystar.js::dailyFor), else null. It adds the foil look and
+ *            says so on hover -- his ask: "when hovered it should say that
+ *            it's the daily star" (task 0111)
  * onEdit     optional; omit and the ✎ affordance is not rendered at all (the
  *            picker has no per-cell icon override — that lives on the banner)
  * caveat     optional CAVEAT key (components/marks.js) — "the time behind this
@@ -77,8 +92,9 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
                               rank, hasStandards = false, strat, name, sub,
                               title, dimIdle = false,
                               rankBadge = false, onPick, onEdit,
-                              caveat = null }) {
+                              caveat = null, daily }) {
   const mark = caveatOf(caveat);
+  const face = cellFace({ active, daily, title, name });
   // Unranked but RANKABLE draws the ladder floor rather than a bare "-",
   // so it reads as "bottom of the ladder" instead of "not a thing that
   // ranks" (user, 2026-07-30). Unranked with no standards at all still
@@ -119,8 +135,7 @@ export function PracticeCell({ active, iconSrc, fallbackSlot = 0,
     ? (strat ? `${capName(rank.rank)} · best on ${strat}` : capName(rank.rank))
     : null;
   return html`<button type="button"
-      class="starcell ${active ? "active-star" : ""}"
-      title=${title || name} onclick=${onPick}>
+      class=${face.className} title=${face.hover} onclick=${onPick}>
     <span class="starholder">
       <img class="starimg ${isGenericArt(iconSrc) ? "" : "courseicon"} ${dimIdle && !active ? "dim" : ""}"
            src=${iconSrc}

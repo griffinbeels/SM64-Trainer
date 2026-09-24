@@ -70,6 +70,15 @@ def write_snapshot(path, payload: dict) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def _file_signature(path):
+    """(file id, size, mtime) of a file, or None: enough to see it was replaced."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
 def _usable(snapshot) -> bool:
     return bool(snapshot) and snapshot.get("schema_version") == SCHEMA_VERSION
 
@@ -162,13 +171,19 @@ class LibraryStore:
                 f"the bundled one without ever writing it")
         self._payload = None
         self._source = None   # "local" | "bundled" | None (nothing loaded)
+        # (payload, file signature) of the untouched local copy the last
+        # load() read, until the next activation -- see `_start_rewrites_nothing`.
+        self._loaded_local = None
         self.calibrations = CalibrationRegistry()
         self.prepare_calibration = None  # (detached payload) -> complete Calibration
 
     # ---- load ----
     def load(self) -> None:
         with self.calibrations.update_lock:
+            self._loaded_local = None
             bundled = read_snapshot(self.bundled_path)
+            # Before the read: a file replaced in between then fails to match.
+            local_signature = _file_signature(self.path) if self.path else None
             local = read_snapshot(self.path)
             selected = newer(local, bundled)
             if selected is None:
@@ -186,8 +201,9 @@ class LibraryStore:
                 _log.info("keeping the active library instead of an older disk snapshot")
                 return
             model = payload.get("ladder_model") or {}
-            if (model.get("version") != LADDER_MODEL_VERSION
-                    or model.get("policy_revision") != RankingPolicy().revision):
+            refitted = (model.get("version") != LADDER_MODEL_VERSION
+                        or model.get("policy_revision") != RankingPolicy().revision)
+            if refitted:
                 # Refit selected observations offline without rewriting either
                 # snapshot. A bound callback resolves effective local policy.
                 fit_payload(payload)
@@ -197,6 +213,10 @@ class LibraryStore:
                 payload = candidate.payload
             self._payload = payload
             self._source = "local" if selected is local else "bundled"
+            # Untouched since it was read, the local copy is what the file
+            # holds; a refit or a bound preparation may change it in place.
+            if selected is local and not refitted and candidate is None:
+                self._loaded_local = (payload, local_signature)
             if local is not None and selected is not local:
                 _log.info("bundled sheet library is newer (%s) than the local copy "
                           "(%s); using the bundled one", bundled.get("sheet_revision"),
@@ -433,14 +453,31 @@ class LibraryStore:
 
     def _activate(self, payload, candidate, prepared_snapshot=None):
         if self.path:
-            if prepared_snapshot is None:
-                write_snapshot(self.path, payload)
-            else:
+            if prepared_snapshot is not None:
                 _install_prepared(self.path, prepared_snapshot)
+            elif not self._start_rewrites_nothing(payload):
+                write_snapshot(self.path, payload)
+        self._loaded_local = None
         if candidate is not None:
             self.calibrations.publish(candidate)
         self._payload = payload
         self._source = "local" if self.path else None
+
+    def _start_rewrites_nothing(self, payload) -> bool:
+        """Whether this first activation after load() would rewrite the local
+        copy it read with exactly the same content.
+
+        Every app start activates its first calibration, and on a restart
+        that payload is the local copy it just read: re-encoding and
+        recompressing it cost ~0.15 s per start for identical bytes (measured
+        2026-09-21). Holds only while the file is still the one read (same
+        id, size and mtime) and the content is equal -- deep equality, ~2 ms
+        against a ~30 ms fingerprint. Only this activation is eligible, so a
+        fresh data dir still writes its first copy and every later refresh,
+        adoption or recalibration writes exactly as before."""
+        loaded = self._loaded_local
+        return (loaded is not None and loaded[1] is not None
+                and loaded[1] == _file_signature(self.path) and payload == loaded[0])
 
     def _update_result(self, applied, payload, fresh, reason=None):
         active = self.calibrations.active

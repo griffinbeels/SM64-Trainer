@@ -13,6 +13,8 @@ import { Compare } from "./components/compare.js";
 import { Library } from "./components/library.js";
 import { UpdatePopup } from "./components/update.js";
 import { CloseWarning } from "./components/closewarning.js";
+import { DailyStarModal } from "./components/dailystarmodal.js";
+import { useDailyStar } from "./dailystar.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
@@ -179,7 +181,11 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
 }
 
 function App() {
-  const t = useTracker();
+  const tracker = useTracker();
+  // The Daily Star rides on `t` so every surface reads one copy; it lives
+  // outside the store because only this layer knows the local date.
+  const { daily, markSeen } = useDailyStar(tracker.mareloRev);
+  const t = { ...tracker, dailyStar: daily, markDailyStarSeen: markSeen };
   // There is deliberately NO app-wide background tint here. One existed for
   // part of 2026-07-28 (ui/ranktint.js, worn at rest off the store's tier)
   // and was deleted the same day: "It should NOT be tinted by default. It
@@ -303,6 +309,7 @@ function App() {
     ${/* Root-mounted like the update popup: the desktop shell can ask to close
          from any tab, and a browser tab simply never receives the event. */""}
     <${CloseWarning} />
+    <${DailyStarModal} t=${t} openLibrary=${openLibrary} />
     ${/* Mounted at root, not inside the Rank tab: a rank-up earned while on
          the Practice page must still celebrate, and rule 10 (browser<->GUI
          parity) means the desktop window and the browser tab agree on this

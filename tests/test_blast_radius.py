@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import blast_radius as radius  # noqa: E402
-from test_lanes import BROWSER_SWEEPS  # noqa: E402
+from test_lanes import BROWSER_SWEEPS, lane_of  # noqa: E402
 
 ROOT = radius.ROOT
 UI = radius.UI
@@ -85,11 +85,62 @@ def test_a_rule_for_one_surfaces_class_picks_that_surface_and_no_other():
     assert PLAIN_TEST not in picked
 
 
-def test_a_global_rule_picks_every_browser_test_and_nothing_else():
-    """A shared element: the body rule reaches every page."""
-    picked = chosen({INDEX: "M"}, before=before_editing("\n  body { font-family: Consolas, monospace;"))
-    assert {RANK_TEST, RANK_PAGE_TEST, LIBRARY_TEST} <= set(picked)
+def test_a_global_rule_reaches_every_page_and_the_cap_leaves_them_to_the_full_run():
+    """A shared element: the body rule reaches every page, far past the local
+    cap, and names none of them: the canary runs here, the pages on GitHub."""
+    result = radius.select(ROOT, "HEAD", changed={INDEX: "M"}, last_failed=set(), coverage=NO_MAP,
+                           before=before_editing("\n  body { font-family: Consolas, monospace;"))
+    picked = result.selection()
+    assert {RANK_TEST, RANK_PAGE_TEST, LIBRARY_TEST} <= set(result.deferred)
+    assert set(picked) == set(radius.CANARIES)
+    assert not set(radius.CANARIES) & set(result.deferred), "the canary is kept, not left"
     assert PLAIN_TEST not in picked
+
+
+UILOG = "src/sm64_events/core/uilog.py"
+UILOG_PAGE = "tests/test_ui_log_records_the_real_page.py"   # imports sm64_events.core.uilog
+
+
+def _pages_not_naming(path: str, count: int) -> list[str]:
+    """Real browser files that neither import nor name `path`."""
+    index = radius._test_index(ROOT)
+    naming = radius._importers(index, path) | {
+        name for name, refs in index.items() if Path(path).name in refs.basenames}
+    pages = sorted(name for name in index if lane_of(ROOT / name) == "browser"
+                   and name not in {*naming, *BROWSER_SWEEPS, *radius.CANARIES})
+    assert len(pages) >= count
+    return pages[:count]
+
+
+def _reached(path: str, test_files) -> tuple[dict, str]:
+    """A map in which every one of these files executed a block of `path`
+    that has since changed."""
+    changed_block = (*_blocks_today(path)[:3], 123456789)
+    return {path: [(changed_block, {f"{name}::test_a" for name in test_files})]}, "test map"
+
+
+def test_a_change_past_the_browser_cap_keeps_its_plain_tests_the_canary_and_the_page_naming_it():
+    """A core module every page's first load executes: past the cap, the
+    local run is what names it, what runs in-process and the canary; the
+    pages that only executed it run in the full run after the push."""
+    pages = _pages_not_naming(UILOG, radius.BROWSER_CAP + 5)
+    result = radius.select(ROOT, "HEAD", changed={UILOG: "M"}, last_failed=set(),
+                           coverage=_reached(UILOG, [*pages, UILOG_PAGE, PLAIN_TEST, *radius.CANARIES]))
+    picked = result.selection()
+    assert picked[PLAIN_TEST] == [f"{PLAIN_TEST}::test_a"], "a plain test always runs here"
+    assert picked[UILOG_PAGE] == [f"{UILOG_PAGE}::test_a"], "the page that imports the module"
+    assert all(picked[canary] is None for canary in radius.CANARIES), "the canary runs whole"
+    assert result.deferred == sorted(pages)
+    shown = f"{len(pages)} of {len(pages) + 1 + len(radius.CANARIES)} browser files: over the local cap"
+    assert shown in radius.why(result)
+
+
+def test_a_change_within_the_browser_cap_runs_every_page_it_reaches():
+    pages = _pages_not_naming(UILOG, 3)
+    result = radius.select(ROOT, "HEAD", changed={UILOG: "M"}, last_failed=set(),
+                           coverage=_reached(UILOG, [*pages, PLAIN_TEST]))
+    assert set(result.selection()) == {*pages, PLAIN_TEST}
+    assert result.deferred == []
 
 
 def test_a_changed_test_file_picks_itself():

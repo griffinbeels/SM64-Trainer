@@ -485,6 +485,8 @@ The [[strategy]] you have selected for one [[target]] — the one the
 [[practice log]] shows, the one a [[personal best]] saves under, and the one
 the quick-select medal grades. One resolver answers it for every surface and
 for the PB commands, so the card and the API cannot disagree about it.
+Picking one also claims every [[attempt]] of that [[target]] that has no
+[[strategy]] yet, except a row you set to no [[strategy]] yourself.
 
 - **Lives** — the resolver (`src/sm64_events/tracking/activestrat.py`)
   → the [[strategy picker]]
@@ -669,12 +671,26 @@ adapt alongside those choices, and selecting it only changes **[[Rank]] Goal**.
 [[Rank]] alone needs no legend. With players or custom sets selected, pills and
 colored dots identify the winning source; the [[rank]] pill has no remove button.
 
+Automatic is also floored per entry: an entry's goal is the harder of the
+[[scope]]'s Automatic goal and one subdivision above your own [[rank]] on that
+entry's [[ladder]] (capped at its top), so it never shows a goal you already hold.
+
+A **pinned** goal is one threshold set on a single [[star]] or [[segment]] from its
+Practice card: a [[division]], a [[runner]]'s time, or a typed time. It replaces
+that entry's fastest-offer choice everywhere, including its [[Scorecard]] tile,
+until cleared. A pin may repeat: `10x` asks for ten finishes under it, `10x
+streak` for ten in a row, counted from the current [[session]]'s [[attempt]]s
+since you set the pin, so each sitting starts again. A [[reset]] in the first
+3 s neither counts nor breaks a streak, and you can forgive an [[attempt]]
+that broke one.
+
 Capless 4 through 1 have finite goal times; Capless 5 is the unbounded floor
 and is not a selectable goal.
 
 - **Lives** — `src/sm64_events/server/scorecard_standards.py` resolves the entry identity;
   `src/sm64_events/server/scorecard_goals.py` owns saved selection/set semantics;
-  `src/sm64_events/server/scorecard_api.py` builds targets; `src/sm64_events/ui/components/scorecard.js`
+  `src/sm64_events/server/scorecard_resolve.py` resolves every entry's goal (pins,
+  the Automatic floor); `src/sm64_events/server/scorecard_api.py` serves them; `src/sm64_events/ui/components/scorecard.js`
   presents the controls and inline editor.
 
 ### Scope
@@ -1844,6 +1860,26 @@ both sources so that [[star]] carries its own times and its own [[Ladder]].
 - **Lives** — the card builder (`src/sm64_events/ranks/scorecard.py`)
   → the card (`src/sm64_events/ui/components/scorecard.js`)
 
+### Daily Star
+
+One [[Scorecard]] entry suggested for practice each calendar day, the same on
+every install on the same local date: the date alone picks it, so no server
+decides it. The rotation deals the Overall card's 103 default entries once
+per 103-day cycle in a shuffled order where two days in a row never share a
+course; Day 1 is 2026-09-23, Whomp's Fortress "Shoot into the Wild Blue". The
+app announces it once per day in a modal showing your [[personal best]], the
+time that reaches the next [[division]] above it, and the time left in the
+day, which turns to the next day's [[star]] at midnight; its [[selector]] cell wears a
+holographic foil. The rotation never ends: each cycle reshuffles. Its **today's best** is the fastest finished, uncleared
+[[attempt]] on it that ended inside today, on the entry's [[Scorecard]] clock,
+whatever the [[strategy]]; unlike a [[personal best]] it needs no save.
+
+- **Lives** — the rotation (`src/sm64_events/ranks/dailystar.py`)
+  → today's best and the seen date (`src/sm64_events/server/dailystar_api.py`)
+  → the local date and midnight (`src/sm64_events/ui/dailystar.js`)
+  → the announcement (`src/sm64_events/ui/components/dailystarmodal.js`)
+- **Not** — a [[Goal]]: no [[rank]] or gap reads it.
+
 ### Runner page
 
 One community [[runner]]'s own standing, read-only, reached by clicking
@@ -2203,6 +2239,32 @@ history.
 - **Lives** — the celebration surface
   (`src/sm64_events/ui/components/celebrate.js`)
 
+### Goal plate
+
+The box in a [[practice log]] card's head holding its [[personal best]] over
+its [[Goal]], and under them one dot per success when that [[Goal]] asks for
+a streak or a count. Clicking the lower line picks a [[rank]] or a [[runner]] or a typed
+time, and that pick pins the [[target]] on the [[Scorecard]] too. The plate
+keeps one size whatever it says, so a stream crop of the top card never moves,
+and its [[Celebration]] plays inside it.
+
+- **Lives** — the plate and its picker (`src/sm64_events/ui/components/goalplate.js`)
+  → the pb track of the [[practice log]] card
+- **Not** — the [[Stream overlay]], which draws the same answer as its own page.
+
+### Stream overlay
+
+The page a streamer adds to OBS as a Browser Source: the current [[target]]'s
+[[personal best]] over its [[Goal]], a tally of this sitting's successes when
+that [[Goal]] asks for a streak or a count, and a [[Celebration]] drawn inside
+the same box when it falls. Every setting lives in its URL, which the designer
+in Settings → Streaming writes.
+
+- **Lives** — the page (`src/sm64_events/ui/goal-overlay.html`,
+  `src/sm64_events/ui/goaloverlaypage.js`), its settings and progress rules
+  (`src/sm64_events/ui/goaloverlay.js`), the designer
+  (`src/sm64_events/ui/components/streamoverlay.js`)
+
 ### Tuning inspector
 
 A live control panel for anything judged by feel — timings, easing, layout
@@ -2421,7 +2483,9 @@ The tests one change can affect, chosen from the diff since the newest main
 commit whose [[full run]] passed: the tests that executed a Python code block
 the change altered, the tests naming a changed UI module, its importers, a
 class it renders or its page's tab, and for a stylesheet only the rules that
-changed. It prints the reason for every group it picks.
+changed. It prints the reason for every group it picks. Past 20 browser files
+it keeps the startup canary and the pages that name the change and leaves the
+rest to the [[full run]].
 
 - **Lives** — the radius rules (`tools/blast_radius.py`) → the test door, which
   lists them on request (`tools/run_tests.py`)

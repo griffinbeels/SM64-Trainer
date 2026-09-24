@@ -10,7 +10,10 @@ paths:
 
 This file loads for ANY file under `ui/`. It holds the shell, the shared
 primitives, and the verification norms — the things true of every UI change.
-**The per-feature detail is in three narrower files, which load only when you
+
+Full detail, evidence and history: [docs/rules/ui-core.md](../../docs/rules/ui-core.md) — read it when you change the shell, a shared primitive, the card-set exchange or a responsive layout and need the reason behind a rule; the verification detail is in [docs/ui-verification.md](../../docs/ui-verification.md).
+
+**The per-feature detail is in narrower files, which load only when you
 open a file they own:**
 
 | If you are touching... | Also loaded |
@@ -21,793 +24,163 @@ open a file they own:**
 | celebrations, the level-up climb, the tuning inspector | `.claude/rules/ui-climb.md` |
 | replay player, compare, failure compilation | `.claude/rules/replay-compare.md` (same file as the backend zone) |
 
-Splitting them was not cosmetic: this was ONE file of ~26,000 tokens that
-auto-loaded on every UI edit, with a single table cell of 18,301 characters.
-Every routine tweak paid for the whole rank subsystem's history before reading
-a line of source, and nobody can skim an 18k-character cell. After the split
-(2026-07-28) a practice tweak loads ~12k, a cap-colour change ~14k, a climb
-tuning round ~11k, a replay fix ~7k. **Nothing was deleted** — every sentence
-kept its home, behind a narrower door; `tests/test_rule_files.py` proves the
-budget and that every `paths:` glob still matches a real file.
+Keep the split: `tests/test_rule_files.py` proves the budget and that every
+`paths:` glob still matches a real file.
 
 ## The layer itself
 
-Built-in viewer: `ui/index.html` — served per request: edit + refresh, no
-restart. Components/store/API client: `ui/components/` · `ui/store.js` ·
-`ui/api.js` · `ui/app.js`; vendored Preact in `ui/vendor/`. Shared formatting:
-`ui/format.js` — **`fmtIgt` is the CANONICAL form and is not display-only**: `core/timefmt.py::format_igt` mirrors it byte for byte AND builds saved clip FILENAMES (`replay/service.py`), so it is an identifier too and keeps its `0'`. **`fmtIgtShort`/`fmtSeconds` are the DISPLAY form** — the same notation with an empty minutes field dropped (`23"00`, not `0'23"00`; user, 2026-08-03) — and `fmtSeconds` exists as a second entry point rather than a conversion because a rank standard is stored in SECONDS at centisecond precision: routing 76.66 s through frames would print 76.63 and move a published cutoff. Both are transformations OF `fmtIgt`'s shape, pinned to it in `tests/test_ui_time_format.py` (including every one of the 1,474 seeded cutoffs round-tripping). (fmtIgt mirrors core/timefmt.py — pinned by
-`tests/test_cross_language_parity.py`, which also pins the rank ladder, the
-rank-mode registry and stat-chip identity across the two languages). Design
-system: one big CSS block in
-index.html (cosmic "observatory": navy+gold, card-based, OBS-stable
-fixed-height slots); design contract/anti-slop rules in
-`.claude/skills/sm64-uiux/` (the `.agents/` path this used to name is now a
-pointer to it).
+`ui/index.html` is served per request: edit + refresh, no restart.
+Components/store/API: `ui/components/` · `ui/store.js` · `ui/api.js` ·
+`ui/app.js`; vendored Preact in `ui/vendor/`. Formatting: `ui/format.js` —
+**`fmtIgt` is the canonical form and an identifier** (`core/timefmt.py::format_igt`
+mirrors it byte for byte and builds clip filenames; it keeps its `0'`).
+`fmtIgtShort`/`fmtSeconds` are the display form (empty minutes dropped);
+format a rank standard (stored in seconds) with `fmtSeconds`, never via
+frames. Pinned by `tests/test_ui_time_format.py` and
+`tests/test_cross_language_parity.py`. Design system: the one CSS block in
+index.html; design contract in `.claude/skills/sm64-uiux/`.
+Detail: [docs/rules/ui-core.md#the-layer-itself](../../docs/rules/ui-core.md#the-layer-itself).
 
 ## Shell and shared primitives
 
+Detail for every row: [docs/rules/ui-core.md#shell-and-shared-primitives](../../docs/rules/ui-core.md#shell-and-shared-primitives).
+
 | To change... | Edit |
 |---|---|
-| Library grouping (routes + segments) | `ui/group.js` (`buildTree` — the grouping ENGINE: `{of,label,order}` per level, `/`-joined node paths, numeric-aware and array-composite sort keys) + `ui/components/grouplist.js` (`GroupedList` + `useOpenGroups` — the collapsible chrome, ANY depth; indent is expressed by the DOM nesting itself — ONE `.lib-group` rule (margin + padding + guide line) that COMPOUNDS with depth, NOT a `--depth` custom property, which was dead CSS removed 2026-07-24. The depth-0 exception that cancelled the indent left sub-group HEADERS flush with their parent and was reverted 2026-07-25; the general rule — anything implying parent/child indents the child one level — lives in `.agents/skills/sm64-uiux/`). Consumers supply only their grouping POLICY and row renderer. Open state is an open-SET in localStorage per consumer key (`sm64.routeCatsOpen`, `sm64.segOriginsOpen`) so "nothing stored" = all collapsed; a new consumer MUST use a new key. Rows indent by margin with `width: auto` — `width: 100%` plus a margin overflowed the column and gave the library a horizontal scrollbar (live report 2026-07-24) |
+| Library grouping (routes + segments) | `ui/group.js::buildTree` (the engine) + `ui/components/grouplist.js` (`GroupedList`, `useOpenGroups`); consumers supply only policy + row renderer. Indent via DOM nesting and the ONE compounding `.lib-group` rule, never a `--depth` property; a child always indents one level. **A new consumer MUST use a new localStorage open-set key.** Rows indent by margin with `width: auto`, never `width: 100%` |
 | Live event feed | `ui/components/feed.js` |
-| Refetching the session view — after a WebSocket event OR after a component's own write | `ui/store.js` + `ui/coalesce.js` — ONE door. Every `REFRESH_ON` event and every `t.refresh()` a component calls go through the same coalescer: a burst joins one run, one run is in flight at a time, and a request arriving mid-run settles with the FOLLOW-UP (the in-flight run may have read the world before the caller's write). `t.refresh()` returns that promise, which is how `stratpicker.js` knows when to let go of a held pick. Until 2026-09-01 components held the store's RAW `refresh`, so one strategy pick cost three `/api/session` fetches with two in flight together — a stale one landing last paints over a fresh one (task 0113). The raw `refresh` stays for mount, socket-open and the never-loaded retry only. Guards: `tests/test_ui_coalesce.py` (the promise contract, node) and `tests/test_ui_strat_pick_settles.py::test_a_pick_never_runs_two_view_fetches_at_once` (the wiring, in a real browser; mutation-proved by handing components the raw refresh again) |
-| What the page DREW, recorded for a live report | `ui/uilog.js` — reads the RENDERED page back and POSTs `/api/uilog` whenever the painted snapshot changes. TWO call sites since 2026-08-06, and the second is not a convenience: `components/practice.js`'s `useUiLog(pageRef)` covers the selector, the target cards and the practice log, and `components/segmenttimeline.js` passes its own root and its own reader for the RECORDER, because `app.js` renders one tab at a time — while the recorder is open the practice page is unmounted and the first effect does not run at all. Hence `useUiLog(rootRef, readers)`. A new surface is THREE edits, and the third fails silently: the reader, the call site, and `core/uilog.py::SURFACES`, which drops an unknown surface with no error anywhere (it ate every recorder record until the render gate went red). Store + why this is not a journaled event: `core/uilog.py`. It reads the DOM rather than the store DELIBERATELY — a model-based recorder logs what we believe is on screen, and the belief is what is in question whenever a "it was just there a couple frames ago" report arrives. The cost is that a class rename empties the log SILENTLY, which is indistinguishable from "nothing was on screen" — the one answer it exists to give — so `tests/test_ui_log_selectors.py` pins every class the reader looks for against the components that render it, and `tests/test_ui_log_records_the_real_page.py` renders the real app and fails if nothing lands. Dedupe is on the RENDERED snapshot, not on props: two states that paint identically are not a change the human saw. Posts are serialised through one queue because ORDER is the entire question these reports ask, and nothing is debounced because a state that lasted three frames IS the evidence |
-| Settings → Game → Game version (2026-08-15) | `ui/components/header.js` — one `select` (Auto-detect / JP / US — "JP", never "Japan") over `GET|PUT /api/mode`, fetched on drawer open like the rest; applies LIVE (no restart copy anywhere); the note names the graded version, and an "unsupported" note appears for emulator + explicit JP. Extracted from feature/console-support, whose Console section (Tracking mode + N64 setup) drops its own Game version dropdown when it merges main |
-| Top control bar | `ui/components/header.js` — **three cards, one row**: session / **the route rank card** / **Grading** (the rank MODE), plus the settings drawer. The CLOCK card left the bar 2026-08-08 (user: the default is always Usamune IGT -- x-cam timing -- so a control nobody changes should not spend a column); its select lives in the settings drawer's Display section, still wired to `store.js::pickClock`, and the rank card's column absorbed the clock column's fr at both remaining breakpoints. The `@media (max-width: 775px)` two-column override died with it -- its measured reason was four cards needing 684px, and three need 505. Slot 2 was the MARELO bar (a `<button>` jumping to the Rank tab) until 2026-07-28; it is now `RouteRankCard` and its one gesture is the ROUTE PICKER, because the practice toolbar's route select and this card's scope were already the same thing — see `.claude/rules/ui-ranks.md`. The PRACTICE TARGET card that used to sit in slot 2 was removed 2026-07-26 (user): it named a target the Active-target card and the quick-select row already name, and its own pick was mostly a dead end — you cannot practice Shifting Sand Land while loaded into Lethal Lava Land. Its picker moved to `ui/components/targetpicker.js` (see its own row below) and the MARELO bar took the freed column, which retired the separate `.marelo-row` second header row with NO change to `.context-bar`'s 4-column template at any of its three breakpoints. The card's cell is a `.marelo-slot` wrapper, which carries `container-type: inline-size` so the card's own `@container` rules measure THIS COLUMN and not the viewport (the sidebar's 1180px step makes a column's width non-monotonic in window width — `.claude/rules/ui-core.md`'s responsiveness law). It used to ALSO hold the grid cell open because `MareloBar` rendered `null` until `/api/marelo` landed, and a null grid child is no child at all; `RouteRankCard` never renders null — it hosts the route picker, and a control cannot wait for a rating to arrive — so `.marelo-slot:empty` went with that (2026-07-28). The rank-mode card is labelled **Grading**, not Rank, since it sits directly beside the thing that shows what your rank IS (id/name/endpoint unchanged). The tab-independent "⏱ <segment> running" armed chip rode the deleted card and was DROPPED with it (user's explicit call): armed state shows on the Practice tab via the stage banner's own running chip and the pinned segment card, and nowhere else. + Rank picker + Star icons control. **Every context card is ONE hit target** (user, 2026-07-25: the practice-target card highlighted and opened from anywhere because it IS a `<button>`; the three select cards only reacted on the select itself, and the mismatch read as a bug). All THREE cards now go through `ui/components/contextselect.js`, which is where that mechanism lives since 2026-07-28: `CardSelect` renders the chevron + the absolutely-stretched native `<select>` and nothing else, and `ContextSelect` (icon + copy + `CardSelect`) is what session/grading use. The rank card has its own richer body and calls `CardSelect` directly, so the rank card uses the SAME mechanism rather than a hand-rolled lookalike — which is also why the module exists at all: `marelo.js` needs it and `header.js` imports `marelo.js`, so keeping it in header.js would close an import cycle. `CardSelect` returns a FRAGMENT deliberately — `.context-select > select` is a child combinator, so wrapping the select in a div silently drops the whole rule and with it the hit target. Hidden with **`opacity: 0`, never transparent colours** — Chromium themes a select's popup off its computed background, and a transparent one gets a WHITE popup (see the dropdown row below); at opacity 0 the select keeps the shell's opaque dark background. An opacity-0 element also cannot show its own focus ring, so the CARD wears it via `:has(> select:focus-visible)`. Value and `<option>`s come from ONE `options` list, so the closed state can never disagree with the list; `title` rides the select — it covers the card, so a hover anywhere still answers, and it reaches the combobox as a description. Both halves pinned by `tests/test_header_ui.py` (dropping either silently restores the small hit target). The target picker itself now lives in `ui/components/targetpicker.js` — see its own row below |
-| Dropdown lists (every `<select>` popup) | `ui/index.html` — the popup is drawn by the browser, not the page: Chromium themes it off the SELECT's own computed background, and paints the highlighted row light-blue **choosing dark text for it only when the author has not named an option colour**. So the rule is: set `option { background-color }` (that is what makes the list navy instead of Chromium's grey) and NEVER `option { color }` — the row text colour is the browser's to choose. An author colour there is what made the highlighted row light-on-light, the one unreadable state in the shell (live audit 2026-07-25). Corollary: every select needs an opaque dark background of its own; the two that look transparent do it without going transparent (`.context-select` = opacity 0, `.sort-control select` = the wrapper's own `#101f31`). `html { scrollbar-color }` is named for the same reason — `color-scheme: dark` alone still left Chrome 150 drawing the OS's light scrollbar. Rejected 2026-07-25: `appearance: base-select` (Chrome/WebView2 135+, both at 150 here) styles the list beautifully as real DOM, but without author `<button><selectedcontent>` markup in all 25 call sites the CLOSED control cannot clip or ellipsise its own text — a long value spills across the neighbouring UI, and `overflow: hidden` on the select does not contain it |
-| Empty "nothing here yet" panels | `ui/components/emptystate.js` — the 404-shaped state for the four Practice panels that can legitimately have nothing to draw (attempt timeline, performance trend, practice log, and the whole analysis card with no target). Each was previously an empty box inside a card with a hard 458px height, which reads as a broken render rather than an honest state (live report 2026-07-25, with the reference: "like a 404 message"). Shape is fixed — dimmed cast art, headline naming what is missing, the one action that fills it, a quip — and the CALLER owns the words: `AttemptLogEmpty`/`TrendEmpty` in practice.js keep the copy in one place per surface so the star and segment cards can't drift. "Nothing recorded" and "everything is filtered out" are DIFFERENT states with different remedies (practise vs. the two toggles in the card's own footer), hence `hasAttempts`. `CAST` ↔ `ui/assets/empty/*.png` coverage is pinned both ways by tests/test_ui_empty_states.py; `pickCast` excludes the previous character by NAME, not by stem — two of the six PNGs are Ukiki and two are Toad, and stem-exclusion put ukiki_1 beside ukiki_2, which still reads as the same monkey twice. The pick is per-MOUNT (`useState`'s lazy initializer), never per render: the view refetches on every WebSocket event and re-rolling there flickers a new character through the panel mid-run. The attempt timeline is the one panel with NO art — at 112px it has no room, and a third character on one screen is noise; it gets a one-line `.stable-empty compact` note above the `+ marker` chip, which stays available (markers can be placed before any attempt exists) |
-| Number-animation primitive (plain numbers — a RANK uses the climb, see the row below) | `ui/useTween.js` — `useTween(value, durationMs=700)`: requestAnimationFrame, ease-out-cubic, `prefers-reduced-motion: reduce` snaps instead of animating. THE one tween every numeric surface that can celebrate a rank change routes through — RankBanner's division-fill bars (ranks.js), MareloBar's track+score (marelo.js), and the Rank tab card's rating/Mastery/Coverage (rankpage.js). No component rolls its own requestAnimationFrame loop; `null` passes through with no animation (first-ever value shows immediately, only a later CHANGE tweens) |
+| Refetching the session view — after a WebSocket event OR after a component's own write | `ui/store.js` + `ui/coalesce.js` — ONE door: every `REFRESH_ON` event and `t.refresh()` goes through the coalescer (one run in flight; a mid-run request settles with the follow-up). **Components never hold the raw `refresh`** (mount, socket-open, never-loaded retry only). Guards: `tests/test_ui_coalesce.py`, `tests/test_ui_strat_pick_settles.py::test_a_pick_never_runs_two_view_fetches_at_once` |
+| What the page DREW, recorded for a live report | `ui/uilog.js` — `useUiLog(rootRef, readers)` reads the RENDERED DOM (never the store) and POSTs `/api/uilog`. **A new surface is three edits: reader, call site, and `core/uilog.py::SURFACES`** (an unknown surface is dropped silently). Dedupe on the rendered snapshot; posts serialised, never debounced. Pinned by `tests/test_ui_log_selectors.py`, `tests/test_ui_log_records_the_real_page.py` |
+| Settings → Game → Game version | `ui/components/header.js` — one `select` (Auto-detect / JP / US — "JP", never "Japan") over `GET|PUT /api/mode`; applies live, no restart copy; note names the graded version, "unsupported" for emulator + explicit JP |
+| Top control bar | `ui/components/header.js` — three cards (session / `RouteRankCard` / **Grading**) + settings drawer; the clock select lives in the drawer; armed state shows only on the Practice tab. Slot cell `.marelo-slot` carries `container-type: inline-size`. **Every context card is ONE hit target** via `ui/components/contextselect.js` (`CardSelect`/`ContextSelect`, used by all three cards): `CardSelect` returns a fragment (the `.context-select > select` child combinator); hide the select with **`opacity: 0`, never transparent colours**; the card wears focus via `:has(> select:focus-visible)`; value + options from ONE `options` list; `title` on the select. Pinned by `tests/test_header_ui.py`. Target picker: `ui/components/targetpicker.js` |
+| Dropdown lists (every `<select>` popup) | `ui/index.html` — set `option { background-color }`, **NEVER `option { color }`**; every select needs an opaque dark background of its own; keep `html { scrollbar-color }`. Do not use `appearance: base-select` (the closed control cannot clip its text) |
+| Empty "nothing here yet" panels | `ui/components/emptystate.js` — fixed shape; the CALLER owns the words (`AttemptLogEmpty`/`TrendEmpty` in practice.js); "nothing recorded" ≠ "all filtered out" (`hasAttempts`). `pickCast` excludes the previous character by NAME; **pick per mount, never per render**. Attempt timeline has no art (compact note). `CAST` ↔ `ui/assets/empty/*.png` pinned by `tests/test_ui_empty_states.py` |
+| Number-animation primitive (plain numbers — a RANK uses the climb, see the row below) | `ui/useTween.js` — `useTween(value, durationMs=700)`, ease-out-cubic, reduced-motion snaps; the ONE tween for numeric surfaces (ranks.js, marelo.js, rankpage.js). **No component rolls its own requestAnimationFrame loop**; `null` passes through, only a later change tweens |
 | How a SET of cards changes on screen (the selector's rows) | `ui/exchange.js` (the machine, import-free) + `ui/components/cellrow.js` (`CellRow`, the ONE container every row draws through) + `ui/selectortuning.js` (the numbers) + `/ui/tuneselector.html` (his inspector). **Full detail below: [The card-set exchange](#the-card-set-exchange)** |
-| Refetching live data without blanking the page (2026-09-01) | `ui/refetch.js::useIdentityFetch(identity, staleness, load)` — the one door for the TWO reasons a surface refetches. An IDENTITY change (a scope pick) clears and refetches, so a 404 on the new scope can never leave the old scope's rows under its label; a STALENESS bump (`t.mareloRev`, which `store.js` bumps on every `REFRESH_ON` event — `attempt_completed` lands about once a minute while he plays) refetches IN PLACE and swaps the answer in when it arrives. Round 20, his report: *"the page... is randomly refreshing? It keeps refreshing without me doing anything"* — the scorecard, the Rank page's own fetches and the leaderboard each had their own clear-then-fetch idiom and cleared on BOTH, so the tab dropped to its loading state on every completed attempt with no gesture of his (the 2026-08-01 ruling: a surface that acts without his gesture reads as a bug however correct the trigger). Measured on his own server's socket, not guessed. The pure half `identityChanged` is node-testable; `tests/test_ui_scorecard.py::test_a_completed_attempt_does_not_blank_the_card_he_is_reading` publishes a real `attempt_completed` through the live service and checks EVERY FRAME that the card count never hits zero — per frame, because a 60ms timer stepped over the two-frame blank and reported a false pass. A new surface keyed on `mareloRev` uses this hook, never its own effect |
-| The filterable dropdown popup (every LONG dropdown) | `ui/components/searchselect.js` — `SearchMenu` (titled overlay: filter input past 8 options, grouped options, busy/error/empty slots) + `SearchSelect` (the dropdown-shaped trigger). ROUND 9 ruling (2026-08-08), his words: "any long drop down like this should have a search feature — I like the segment link search popup… we should basically reuse this anywhere we have a dropdown selector." SHORT dropdowns (a handful of options: clock, grading, match mode, subarea) stay native selects — a popup with a filter on four options is worse than what it replaces — and the entity PICKERS (grid dialogs, deliberately search-free) are not dropdowns. Callers: the Library's link door (`librarytarget.js::LinkDoor`, which keeps its own open state so a failed adopt shows its 409 in the still-open panel), the segment builder's Sheet-library + Library-category rows (`segments.js`), and the route rank card's picker (`contextselect.js::CardSearchSelect`, round 10 — see ui-ranks.md's own row). Only this module may render the `.search-menu` class family — `tests/test_single_source.py`, mutation-proved |
+| Refetching live data without blanking the page | `ui/refetch.js::useIdentityFetch(identity, staleness, load)` — identity change clears + refetches; staleness bump (`t.mareloRev`) refetches IN PLACE. **A new surface keyed on `mareloRev` uses this hook, never its own effect.** Guard: `tests/test_ui_scorecard.py::test_a_completed_attempt_does_not_blank_the_card_he_is_reading` (per frame) |
+| The filterable dropdown popup (every LONG dropdown) | `ui/components/searchselect.js` — `SearchMenu` + `SearchSelect`. Every long dropdown uses it; short ones (a handful of options) stay native selects; entity pickers are not dropdowns. **Only this module may render the `.search-menu` class family** (`tests/test_single_source.py`) |
 | Shared modal shell | `ui/components/modal.js` — `Modal({title,onClose,footer,children})`; onClose optional (absent = not dismissable) |
 | Update popup | `ui/components/update.js` — modal: version + patch notes (escaped-then-rendered) + GitHub link + exact `download_bytes` + Update/Skip/Later; polls `/api/update/status`. Backdrop/Esc dismiss as "Later" (offer) or "Close" (failed); inert during an active install. Mounted at app root in `app.js` (browser↔GUI parity) |
 
 ## The card-set exchange
 
-**Live report 2026-08-02**: *"when we invalidate / add / remove cards from the
-[selector] menu here, it feels more like a bug / error than intentional… we need
-a better mechanism in place here / process for updating the displayed stars +
-segments… internally we're doing some shuffling / heartbeats / validations, but
-the user should never see that: they should see their old options fade away, and
-their new options appear, no intermediate."*
+The user never sees an intermediate set: old options fade away, new ones
+appear. Contracts:
 
-One walk through a door changes the set three or four times inside ~100 ms — the
-level edge, the target retiring, several topological cancels arriving on the
-frame heartbeat, then the view refetch. Every one of those was its own repaint,
-and a row reshuffling four times in a tenth of a second is the flicker.
+- `ui/exchange.js` (`nextState`, `rowStyle`, `phaseMs`, `paintsShown`) stays
+  import-free; `tests/test_ui_exchange.py` proves no intermediate set paints.
+- **A row paints children only when `paintsShown(id, state)` says their
+  identity is shown** — anchor to `shownId`, never to a phase test.
+- The fade window is the coalescing window: a further change moves only
+  `pendingId`; absorption re-arms the wait, bounded by `maxHoldMs`.
+- Two granularities, one owner each: `SurfaceExchange` in `StageBanner` (never
+  unmounts) for surface swaps, `CellRow` for cell-set changes;
+  `selectorSurfaceId` lives in `stagecontext.js` and stays coarser than "the
+  cells changed".
+- **The painted subtree is keyed on `shownId`, never on the arriving id.**
+- Guard stale content with "once a set has left it is never seen again"
+  (`tests/test_ui_one_animation_per_change.py`), not a flash counter.
+- `CellRow` is the single door: no row renders `<div class="starrow">` itself;
+  it keeps keyless cells. ONE element carries the opacity — no per-cell
+  wrapper, no stagger.
+- The numbers are his: `ui/selectortuning.js` + `/ui/tuneselector.html`.
+  `tests/test_ui_row_exchange_plays.py` drives a real route pick per frame.
 
-- **`ui/exchange.js`** is the machine: `nextState` (a total reducer), `rowStyle`,
-  `phaseMs`, `paintsShown`. Import-free, so node drives it directly and the "no
-  intermediate set is ever painted" claim is PROVED
-  (`tests/test_ui_exchange.py`) rather than inferred from frames a screenshot
-  happened to catch.
-- **The load-bearing rule is `paintsShown(id, state)`, and it is not a phase
-  test.** A row paints arriving children only when their identity is the one the
-  machine calls shown. Phrased as "during the fade, paint the held snapshot" it
-  left a one-frame hole that was the whole bug back: a reducer cannot be
-  dispatched during render, so the new set renders once while the phase is still
-  idle. Anchored to `shownId`, no unadopted set has a frame to appear in.
-- **The fade window IS the coalescing window.** While the old set leaves, a
-  further change only moves `pendingId`; the row adopts the newest when the fade
-  lands. So a burst is one exchange, and the repaint count stops depending on how
-  the server sequenced its events. A burst that cancels itself (away and back)
-  comes straight back up instead of swapping to an identical set.
-- **TWO granularities, one owner each** (his second round, same day: *"it doesn't
-  fire in ALL situations… if there previously were no options available, but I
-  transition to a stage with options… right now it incorrectly cuts"*). A row
-  component that unmounts takes its exchange state with it, so a swap that
-  replaces the ROW — no context → placeholder, stars → castle movements, a course
-  → a Bowser stage — cuts by construction, and no care inside a row could cover
-  it. `SurfaceExchange` therefore sits in `StageBanner`, the one thing here that
-  never unmounts, wrapping everything it can draw including the placeholder;
-  `CellRow` keeps the cell-set changes inside a surface that stays put. They nest
-  without double-fading: a surface swap remounts the inner row (so it starts idle
-  at full opacity), and a cell change leaves the outer identity untouched.
-  `selectorSurfaceId` lives in `stagecontext.js` beside `practiceMode` — same
-  reason that module exists — and is deliberately COARSER than "the cells
-  changed": the castle's three areas are three sets of movements, a course's own
-  subareas are the same seven stars, so entering SSL's pyramid must not blink.
-- **Adopting an identity REMOUNTS what it paints, and that is correctness.** The
-  painted subtree wears `key=${state.shownId}`, so a child cannot survive an
-  adoption — and a child that cannot survive one cannot animate across it. Live
-  report: *"when swapping between courses, it briefly flashes the previous
-  course's stars and then flashes again."* Two courses use the SAME row
-  component, so Preact patched it rather than unmounting it; the inner `CellRow`
-  lived through the surface swap and ran its own exchange while the outer one
-  faded the surface back in. **Measured: nine frames, peaking at 0.21 opacity, of
-  the previous course's stars, after they had gone.** The claim above it ("a
-  surface swap remounts the inner row") held only when the MODE changed too, and
-  it was a comment rather than a test. Key on `shownId`, never on the arriving id:
-  keying on the arrival tears the outgoing content down mid-fade, the one frame
-  this exists to hide.
-- **Absorption re-arms the wait; the ceiling is `maxHoldMs`.** His rule: *"when
-  the selector DISAPPEARS, we need to figure out how we're coalescing. Figure out
-  the result. Then display the final result."* An answer arriving 250 ms into a
-  210 ms window used to buy a second animation; now each one extends the hidden
-  window, and only the settled answer is painted. The bound is not optional — a
-  window something can hold open indefinitely is a selector that never comes back.
-- **A flash COUNTER cannot see a stale-content flash, and this cost a green gate.**
-  Counting `visible → hidden → visible` read those nine frames as one long dip,
-  because the effective opacity never crossed back above the visible threshold.
-  The property that works is about CONTENT, not the curve: *once a set has left,
-  it may never be seen again* (`tests/test_ui_one_animation_per_change.py`). The
-  discriminator was taken from a printed per-frame trace of a real swap — the
-  first metric was a hypothesis, and it was wrong in the direction that passes.
-- **`CellRow` is the single door**, and `tests/test_ui_exchange.py` fails if any
-  row renders `<div class="starrow">` itself: a second door looks completely
-  correct and reintroduces the flicker in one row while the others stay smooth.
-  It flattens htm's ragged children, keeps a KEYLESS cell (if one arrives) and
-  lets its index speak for it — dropping the unkeyed ones was the first version
-  and it deleted a cell from the row outright. No cell on the shipped row is
-  keyless any more (the Bowser row's Reds cell, this rule's original named
-  example, is deleted with the star/pipe toggle it belonged to, round 31, task
-  3, 2026-08-10), but the flattener still has to tolerate one for whatever
-  arrives next.
-- **ONE element carries the opacity** — never a wrapper per cell (it would break
-  every `.starrow > .starcell` child-combinator rule) and no per-cell stagger
-  (*"ALL of cards fade away"*).
-- **The numbers are HIS**: `ui/selectortuning.js` + `/ui/tuneselector.html`, the
-  third surface on the `tuning-demo` pattern, with a Burst ×3 button because the
-  case worth judging is a burst rather than a single swap.
-- `tests/test_ui_row_exchange_plays.py` is the other half and a different claim:
-  it drives a real route pick in a real browser, samples the row every frame, and
-  fails if the card count ever changes while the row is visible. Mutation-proved
-  by pointing one row back at a plain div.
+Detail: [docs/rules/ui-core.md#the-card-set-exchange](../../docs/rules/ui-core.md#the-card-set-exchange).
 
 ## UI verification norms
 
-- **An instrument is not shipped until you have READ ITS OUTPUT on real data.**
-  Not "its tests pass" — the actual first line, with a value you can check by
-  hand. `tools/star_to_screen.py` shipped 2026-08-04 with every part verified
-  in isolation (node-driven marks, a render test confirming its records land)
-  and the CHAIN verified nowhere, and it had three faults, each visible in its
-  first real output: a reader querying the wrong element (empty row list, every
-  render, forever), marks claimed only when some surface changed (a 17-second
-  "render"), and a join on a `seq` that RESTARTS at 0 every server run while
-  the log it joins to persists — pairing a grab with a paint from another day.
-  His verdict after one run: *"Reads like noise to me, some of those numbers
-  make no sense."* Two of the three were found by reading output, one line
-  each; the method works, and it was applied one step too late.
-- **The three habits that would have caught all of them**, in the order they
-  pay: (1) drive one KNOWN input end to end and assert the number that comes
-  out — a self-test of the instrument, not of its parts; (2) make every guard
-  assert CONTENT, never existence — "a record was posted" passed while its row
-  list was empty, which is a *vacuous guard* written fresh; (3) never assert a
-  guarantee you have not tested — this tool printed "exact — no timestamp
-  matching" in its own output, and the join was never unique. That last one is
-  the mirror of the global rule about untested LIMITS, and it is the more
-  dangerous direction: a false limit stops you doing something, a false
-  guarantee makes everyone downstream believe a wrong number.
-- **A RENDER gate can be masked by a fallback at a different layer, so assert
-  at the layer the bug lives in.** 2026-08-11: a new server rule risked
-  publishing a practice-log section for a course nobody had touched, and its
-  no-phantom guard was a render check — which stayed GREEN under the mutation,
-  because `ui/subsections.js`'s own "an orphaned star only shows if it earned a
-  card" fallback hid the bad payload client-side. The guard asserted real
-  content and got it, through a path that would survive the server rule being
-  wrong in either direction. The fix was a second test asserting directly on
-  `build_session_view`'s `stars`/`segments` lists, where nothing can mask the
-  value; the same mutation turns it red immediately. **Both were kept, and that
-  is the shape**: the unit test proves the payload, the render test proves the
-  card actually draws — neither substitutes for the other. Read it as the
-  layered twin of the vacuous-guard rule above: there, the assertion was too
-  weak; here, the assertion was fine and the LAYER was wrong. When a fix lives
-  on the server, a browser-level guard is one forgiving fallback away from
-  proving nothing.
-- **A reader that can return "nothing" must not be able to look like "nothing
-  happened".** `ui/uilog.js`'s own header names this failure and the new reader
-  reproduced it exactly — the guard for it is the RENDER test asserting a
-  non-empty result, because a class-name scan cannot see whether one element is
-  actually INSIDE another.
-
-- **htm COLLAPSES the whitespace between a text node and an interpolation or
-  an element**, so `into <code>x</code>` renders as `intoy`, `but ${n}ms`
-  renders as `but220ms`, and `each (350ms…)` renders as `each(350ms…)`. Three
-  separate sentences shipped mangled this way in one session (2026-07-27) and
-  every one of them passed `node --check` and every unit test — only a render
-  shows it. Write the space as `${" "}` wherever a run of text meets an
-  interpolation or a tag. There is no lint for this; the tell is a screenshot
-  with two words fused.
-
-- **Never put a backtick inside an `html\`\`` template** — including in an
-  HTML comment. The first one ENDS the template literal and everything after
-  it parses as JS; the page then dies with something unrelated-looking
-  (`ReferenceError: factor is not defined`, `html(...) is not a function`)
-  while `node --check` passes, because the file is still valid syntax. Cost
-  two round trips on 2026-07-25 writing a comment about a CSS class. Same
-  rule for string-concatenating around a template: build the string first,
-  interpolate it once.
-
-- **`node --check` returns 0 on JS that cannot be imported.** Measured twice in
-  one session (2026-07-27): a scripted edit that ate the closing `}` of an
-  exported object literal, and a `const` used above its own declaration (a
-  temporal dead zone). Both printed `exit=0`; the first was caught by 82 red
-  tests and the second only by rendering the page, which reported
-  `Uncaught ReferenceError: Cannot access 'settledText' before initialization`.
-  `node --check` answers "is this parseable", never "does this load or run", so
-  it is a spell-check and not a build. The cheap upgrade for a module with no
-  DOM in it is one line —
-  `node --input-type=module -e "import('./file.js').then(...).catch(...)"` —
-  which does execute it.
-
-- After any UI change, verify with a headless render or the chrome-devtools
-  MCP — unit tests + `node --check` alone shipped an invisible feature once.
-  Fixture-server recipe, harness-page technique + headless-Chrome fallback:
-  see auto-memory `verify-ui-effects-with-harness-page`.
-
-- **`--dump-dom` + `--virtual-time-budget` RENDERS the app but cannot DRIVE
-  it.** Clicks dispatch, DOM listeners fire, and no Preact re-render ever
-  happens — `document.body.innerHTML.length` came back byte-identical after
-  clicking a plain nav tab (2026-07-26). Anything needing interaction
-  (opening a modal, walking a multi-step flow) must go through CDP:
-  launch `chrome --headless=new --remote-debugging-port=N`, take the page's
-  `webSocketDebuggerUrl` from `http://127.0.0.1:N/json`, then
-  `Runtime.evaluate` with `awaitPromise: true`. Collect
-  `Runtime.consoleAPICalled` and `Runtime.exceptionThrown` as they arrive
-  between command replies — dropping those events is how a broken FIXTURE
-  looks like a broken feature.
-- **Anything you read in the SAME `evaluate` that dispatched an event is the
-  PRE-render value, and any second control you set in that tick is handed a
-  stale closure.** Preact commits after the tick, so both look like the app
-  ignoring you. Bit twice in one session (2026-08-01) driving the climb
-  inspector's rank pickers: setting the tier and the division together sent the
-  division straight back (its handler still held the tier from the last
-  render), and reading `.tune-showing` right after the dispatch reported the
-  old rank, so a probe asserted on a destination that had already changed.
-  Dispatch, `wait_ms(~120)`, then read in a SEPARATE call — and set dependent
+- Read an instrument's first output on real data before shipping it: drive one
+  known input end to end and assert the number; guards assert CONTENT, never
+  existence; never print a guarantee you have not tested.
+- Assert at the layer the bug lives in — a server fix gets a payload test as
+  well as the render test. A reader that can return "nothing" must not look
+  like "nothing happened".
+- htm collapses whitespace between text and an interpolation/tag: write
+  `${" "}`. Never put a backtick inside an `html` template, even in a comment.
+- `node --check` only parses; import the module (`node --input-type=module -e
+  "import(...)"`) or render the page.
+- After any UI change, render the changed state (headless render or the MCP);
+  unit tests alone are not evidence.
+- `--dump-dom` renders but cannot drive: interact over CDP and collect console
+  and exception events. Read after a dispatch in a SEPARATE call; set dependent
   controls one per tick.
-- **Start every driven run with a CONTROL interaction on something unrelated
-  and known-good** (a nav tab), and assert it changed the DOM. Without it a
-  harness fault is indistinguishable from the bug you are hunting: a whole
-  session's evidence pointed at "the new picker never opens" when the app was
-  frozen for an unrelated reason and nothing at all responded.
-- **A fixture must answer the query the UI actually sends, not just the
-  path — byte for byte, including its ENCODING.** `standards.js` fetches
-  `/api/ranks/standards?entity=…`, which returns a per-entity
-  `{entity, clock, strategies, …}`; the same route with no param returns the
-  WHOLE store `{version, entities}`. A fixture server that ignores query
-  strings serves the wrong one, `Object.keys(undefined)` throws **inside
-  Preact's render**, and the entire tree stops updating while DOM listeners
-  keep firing — an app that looks alive and is not. The encoding half bit
-  separately (2026-07-26): the Rank tab sends
-  `/api/marelo?scope=route%3A4` (`encodeURIComponent` on the scope id) while
-  the capture ran the plain `scope=route:4` — same request, different bytes,
-  so the lookup missed and `data.entities` was undefined. Compare
-  `urllib.parse.unquote`d paths, and let a captured path with a query answer a
-  bare request but NEVER the reverse (a queried request falling back to the
-  bare path's payload is how the wrong shape gets served).
-- **Print every unmatched path from the fixture server.** A miss returning
-  `{}` is indistinguishable from a component that renders nothing, and the
-  exception it eventually throws names the COMPONENT, not the missing
-  fixture. One `print("MISS", path)` turned "why is CoverageStrip crashing"
-  into a four-line diff (2026-07-26).
-- Generate fixtures for endpoints the RUNNING instance does not have (a new
-  route on your branch, or one whose shape your branch changed) by calling
-  the builders against a SQLite **online-backup** snapshot of the live db
-  (`sqlite3.Connection.backup`, never a file copy — a copy can catch a torn
-  WAL). `TrackerService(db, broadcaster, ranks=…)`: omit `ranks=` and every
-  rank builder short-circuits to empty, which reads as a broken builder.
-- **"Clicking anywhere on it works" is a hit-testing claim, and a screenshot
-  cannot show it.** Sample `document.elementFromPoint` at the corners, the
-  icon lane, the label and the centre, write the results into a `<pre>` on the
-  page, and read them back with `--dump-dom` — the whole-card selects were
-  proved that way at five widths (2026-07-25). Same for a state only a real
-  input produces: a native `<select>` popup opens on a genuine click, so drive
-  it with the MCP `click` and read `expanded` off the a11y snapshot.
-- **Prefer serving the REAL `index.html`/`app.js` against captured API
-  fixtures over hand-building a harness page.** `GET /api/session?clock=&scope=`
-  (plus marelo/segments/vocab/routes/pause/run) off a running instance is a
-  perfectly-shaped fixture; a ~120-line static server that returns those and
-  serves `/ui/*` from disk gives the real shell, CSS, container queries and
-  component tree by construction — which is the entire ancestors problem
-  below, solved rather than re-litigated. Mutating the captured JSON is also
-  how you reach states live data does not currently hold (no target, all
-  attempts filtered, a segment card): the empty-state pass verified five
-  scenarios that way, and caught a real bug (two Ukikis side by side) that no
-  unit test would have. Reads off the live server are GETs and safe while the
-  user plays; never START `python -m sm64_events.main` for this. Working
-  example: `fixture_server.py` in that session's scratchpad, described in the
-  memory above.
-- Kill any `python -m http.server` (or fixture server) you start, in the same
-  session.
-- **Wait for the CONTROL you are about to assert on, not for its container.**
-  A modal's shell mounts a tick before anything it fetches: the 100-coin
-  strategy modal renders `.modal-body` immediately and its exit-star field only
-  after `/api/ranks/standards` answers, so a probe that waited for the shell
-  failed about **one run in six** — in either test order, so it read as
-  order-dependence and was not. What makes this expensive rather than annoying
-  is the message: `no exit-star control on a 100-coin star` is
-  indistinguishable from the feature being absent (2026-08-03).
-- **A ONE-SHOT `if (el) el.click()` cannot undo something that has not happened
-  yet, and it fails silently in exactly the case it was written for.** The
-  Library auto-opens onto the last-practiced target, so two setup helpers
-  backed out to the course grid with a guarded single click. Measured
-  2026-08-11, 12 runs of 12: `.library-page` and its grid cells render at
-  6-16ms and the auto-open lands at 30-49ms, so the back button was **never
-  present** at the moment either helper looked for it. The click was always a
-  no-op; what decided the outcome was whether the following
-  `wait_for('.entity-grid button')` got its first look in before the auto-open
-  replaced the grid. It usually did — hence "flaky" — and when it did not, the
-  buttons never became visible again and the test died on a 15s timeout.
-  Reproduced at **2 runs in 4**, and it took down a different test in each of
-  two release builds. The shape that works: click back until nothing is left
-  to go back from, then require the destination to survive a second look past
-  the late-arrival window. Waiting for the auto-open itself would pin the
-  helper to a fixture that happens to seed a last-practiced target.
-- **A frame-sampled threshold must allow ONE FRAME of travel, or it is a coin
-  flip.** `tests/test_ui_rank_line.py` asserted that the fade's outgoing text
-  was under 0.05 opacity on the last frame before the wording changed. One
-  frame of that fade covers about 0.05 at the exchange pivot, so where the
-  sample lands inside it is sub-frame phase: measured over 15 runs (30
-  exchanges, frame gaps 15.0-18.5ms — no dropped frames, so this was never
-  about machine load), the value landed anywhere in 0.000-0.052 and **2 of 30
-  cleared the threshold**. A bigger constant is not the fix, because at 30fps
-  one frame covers ~0.10 and any fixed number is wrong again; take the step
-  from the recorded frames themselves and allow it. It keeps its teeth for
-  free — a value that changes without animating has a per-frame step of ~0 for
-  the same reason it has an opacity of ~1.
-- **A driven test writes to the REAL store, and `data/` is gitignored, so its
-  edits outlive its fixture.** `serve_ui` leaves `rank_standards_path()`
-  pointing at the worktree's own `data/rank_standards.json`; a test that edits a
-  cutoff through the UI leaves it edited for every later run. It surfaced as a
-  screenshot taken for review showing the TEST's `1'21"32` in two columns
-  instead of the seeded cutoffs (2026-08-03). Restore what you change, through
-  the same control — or the rig measures a page only it has ever seen.
-- **`subprocess.run(text=True)` decodes with the Windows ANSI codepage.** A
-  node-driven probe returning any non-ASCII comes back mojibake'd —
-  `100c + Reds · Half Cycle` arrives as `100c + Reds Â· Half Cycle`, and the
-  KeyError names the data rather than the encoding. Pass `encoding="utf-8"`.
-  Same trap the `concurrent-agents` skill names for `git show`; it bites
-  anything that shells out, not only git (2026-08-03).
-- **A hand-built harness must mount inside the real ancestors, or it measures
-  a layout that does not exist** (rank-banner ellipsis, 2026-07-25 — measured
-  wrong three times, twice by eye and once by a harness). Two clauses, both
-  load-bearing (three, counting the CSS itself):
-  0. Wearing the real **stylesheet**, fetched out of `ui/index.html` — the
-     design system is one `<style>` block in that file, so a harness that
-     imports the components and nothing else measures unstyled blocks. It
-     reported a 1547px panel and 25 rows for a grid that renders 9 across
-     (2026-07-25, picker redesign), i.e. it "found" the scrolling the change
-     had already removed.
-  1. Inside the real **app shell**. `.app-shell` is
-     `grid-template-columns: var(--sidebar-wide) minmax(0,1fr)` — 206px,
-     dropping to `--sidebar-rail` 76px at 1180px and `display:none` under
-     760px. A harness rendering into bare `<body>` hands every card ~206px
-     it never gets, and reported ZERO overflow at 1400px when the real
-     answer was eight.
-  2. Inside the real **`.practice-page`**, which is what declares
-     `container-type: inline-size`. Without it every `@container` rule
-     silently never matches, so the harness cannot show a container-based
-     fix working and reports it as ineffective when it is correct — a worse
-     failure than the width error, because it looks like a verdict.
-  - Sanity check before trusting any number from a harness: compare its
-    rendered card width against a real screenshot of the app.
-- **An element that WRAPS inside a fixed-height card costs nothing visible and
-  clips its sibling.** The pending-target chip wrapping `.shead` to a second
-  line grew the header 30px → 62px while `.stagebanner`'s height and
-  `.starrow`'s computed height stayed byte-identical — so the 32px came out of
-  the star cells' bottoms, under `overflow: hidden`, where a screenshot of
-  either end state looks fine (2026-07-26). Measure it by removing the element
-  from the DOM (`el.remove()` over CDP, no re-render in between) and diffing
-  the geometry with and without: identical card/row heights next to a taller
-  header IS the clip. Do not reason about whether a card "has room".
-- **Sweep the width continuum, not three sample points.** For the rank
-  banners, 1400/900/700 all passed while every window from ~1101px to
-  ~1500px was broken — 900px passes only because the layout stacks there.
-- **Viewport width is often the wrong signal in this app**: the sidebar step
-  at 1180px means the pane a card lives in is NOT monotonic in window width
-  (a 1181px window gives a card a 947px pane; a 1180px window gives it
-  1076px). Gate card-internal layout on `@container` against
-  `.practice-page`, the way the star row's `cqw` sizing already does.
-- **When a style is built from a custom property the COMPONENT supplies, assert
-  the painted value — the markup stays correct through the failure.** This file
-  hands several components a colour that way (`--band-tint` on the rank ladder,
-  `--std-band` on the standards table's exit-star bands, `--icon-size` on every
-  rank-icon slot), and the failure has no DOM signature at all: with a fallback,
-  `color-mix(in srgb, var(--std-band, transparent) 24%, #131b26)` computes to
-  plain `transparent`, a perfectly valid colour; without one the declaration is
-  invalid at computed-value time and the property quietly reverts to what the
-  cascade already had. Either way the class is on the element, the `style`
-  attribute is exactly where you put it, `node --check` is happy, and nothing
-  paints. So a class-name or attribute assertion is green through precisely the
-  bug it was written for — read `getComputedStyle()` and reject
-  `rgba(0, 0, 0, 0)`. Worked case, mutation-proved both ways (one hue for every
-  band; the property dropped):
-  `tests/test_ui_hundred_coin_render.py::test_each_exit_star_band_wears_its_own_colour`.
-- **A test that reads source text asserts on `strip_comments(source)`**
-  (`tests/source_scan.py`) and is probed in both directions. A raw substring
-  cannot tell code from prose: `assert "Escape" in MODAL` stayed green with the
-  handler deleted (the header comment names it), and five `not in` guards were
-  rewritten in one session because a comment explaining the absent code tripped
-  them (`WORLD_EDGES`, `--depth`, `.route-cat`, `start_levels`, `role="grid"`).
-  Express the check as a function of source text so a probe test can feed it a
-  comment-only sample and a real-code sample — `test_the_guards_can_still_fail`
-  in `tests/test_ui_picker_parity.py` is the pattern.
-- **Before debugging a UI report, ask what code the page is actually running.**
-  Two rounds of this branch went into a bug that was already fixed: the server
-  was serving an older worktree. It is one request —
-  `fetch('/ui/<file>.js').then(r => r.text()).then(t => t.includes('<a symbol
-  the fix introduced>'))` — and it is the FIRST thing to run when a report
-  survives a fix you have verified, ahead of any hypothesis about the code.
-  UI files are served `no-cache` with ETags, so a page reload always
-  revalidates; a stale page therefore means a stale SERVER, not a stale
-  browser. `run-test-server.bat` prints the commit it is running for the same
-  reason, but that is on the console and this is queryable.
+- Start every driven run with a known-good CONTROL interaction.
+- Fixtures answer the query and encoding the UI actually sends (compare
+  unquoted paths; a queried request NEVER falls back to the bare path's
+  payload); print every unmatched path. Generate missing fixtures from an online-backup snapshot of
+  the live db (pass `ranks=`). Prefer the real `index.html` over captured API
+  fixtures to a hand-built harness; never start `sm64_events.main` for it.
+- Kill every fixture/http server you start, in the same session.
+- Wait for the control you assert on, not its container. Never undo a
+  late-arriving state with a one-shot click: repeat until settled and look twice.
+- A frame-sampled threshold allows one recorded frame of travel.
+- A driven test restores what it changes in the real store (`data/`).
+- `subprocess.run(text=True)` needs `encoding="utf-8"`.
+- A hand-built harness mounts inside the real stylesheet, `.app-shell` and
+  `.practice-page`; check its card width against a real screenshot.
+- Measure a wrapping element's clip by removing it and diffing geometry.
+  Sweep the width continuum; gate card layout on `@container`, not viewport.
+- For a component-supplied custom property, assert the painted
+  `getComputedStyle()` value and reject `rgba(0, 0, 0, 0)`.
+- Source-scan tests assert on `strip_comments(source)` (`tests/source_scan.py`)
+  and are probed both ways (`test_the_guards_can_still_fail`).
+- Before debugging a UI report, confirm what code the page is running
+  (`fetch('/ui/<file>.js')` for a symbol of the fix).
+- Derive a test's example from the corpus so it exercises the mechanism.
+- Scope every driven query to your surface's container; hidden tabs stay
+  mounted.
+- A uilab limit is a bug to fix in uilab; measure a limit before writing it
+  down. Use `uilab.trace.record()`, not a hand-rolled sampling loop. Always
+  pass `serve_ui()` a `snapshot_db` copy via `db_path=`, never the live path.
+- Swapping text is SEQUENTIAL via `climbcurve.js::exchangeFade`, never a
+  crossfade; share one pivot across the transition
+  (`tests/test_ui_text_exchange.py`).
+- A `display:none`d element's `title` is no fallback; move the text onto an
+  always-rendered element.
 
-- **A hand-picked example can satisfy the assertion through the wrong path.**
-  A search test typed `"lblj"` to prove that an APPROACH's name finds its
-  target — and passed, because "LBLJ" is in several target LABELS too, so the
-  mechanism under test never ran (2026-08-10). Not a vacuous guard: it
-  asserted real content and got it, by a route that would survive the feature
-  being deleted. Where the corpus is the input, DERIVE the example from it at
-  test time — that search now computes a word some approach carries and no
-  label does, and reports "the index is not shipping approach_names" when
-  there is none, which is the mutation proof and the calibration in one.
-
-- **SCOPE every query in a driven test — a bare class selector finds the
-  HIDDEN copy, because two tabs stay mounted while you are not looking at
-  them.** Compare and the Library both render with `display:none` when you
-  leave them (library.js's own docstring names the trick), and both reuse
-  shared components: the Library's course browser is the SAME
-  `entitymodal.js` picker the recorder's "what is this a piece of?" dialog
-  is. So `document.querySelector('.entity-grid')` answers with the Library's
-  invisible grid, which sits earlier in the DOM and legitimately drills where
-  the visible dialog would have closed — a passing app reported as a broken
-  feature. Measured, not guessed: `offsetParent` null, ancestors
-  `.library-courses` → `.library-page`, present BEFORE the dialog opens
-  (2026-08-09, the sheet-library merge). **Twice now** — the same trap ate
-  `.library-search` in `tools/uilab_project.py` a day earlier, where the
-  Library's hidden search box swallowed every keystroke meant for the
-  Segments tab's. The tell is identical both times: no error, plausible
-  elements, a verdict about the wrong surface. Anchor to the container that
-  identifies YOUR surface (`.record-review .entity-grid`,
-  `.segments-page .library-search`), and prove the anchor by mutation —
-  a scope that matches nothing looks exactly like a feature that is absent.
-
-- **uilab is the shared rig; a limit you hit in it is a bug to FIX there, and
-  two of the three "limits" written here were never real (2026-07-29).** Both
-  false ones were written from a symptom without measuring the cause, and both
-  then justified a workaround. What is actually true:
-  1. **`evaluate` DOES await a Promise, and a bare expression DOES return.**
-     This file previously said the opposite of each. The real fault was uilab's
-     `evaluate` wrapper choosing its form by `startswith("(")`, so every plain
-     expression became `() => { expr }` with no `return` and came back `None` —
-     silently, which is indistinguishable from a page that has nothing. Fixed
-     in the driver and pinned by
-     `uilab/tests/test_driver_conformance.py::test_evaluate_returns_a_plain_expression`.
-     Do not hand-roll a Python sampling loop: **`uilab.trace.record()`** records
-     at the page's own frame rate and answers the questions directly
-     (`starts_at_rest`, `comes_to_rest`, `monotone`, `overlaps`, `together`),
-     with correlated screenshots via `film()`.
-  2. **Several simultaneous clients ARE expressible.** `get_driver()` used to
-     mint a fresh driver per call, which made the Playwright driver's
-     reference-counted `sync_playwright()` per-object and produced "Sync API
-     inside the asyncio loop" on the second `launch()` — an error naming asyncio
-     nobody wrote, which read as a hard library limit. `get_driver()` caches one
-     instance per name now, pinned by
-     `test_driver_conformance.py::test_three_clients_can_be_open_at_once`.
-     `tests/test_ui_route_switch.py` was skipped for two days on that
-     misreading; it is live again and mutation-proved (5/10 trials fail against
-     the pre-fix reconcile, with the reported symptom exactly: the select shows
-     the picked route while the card says "Overall" and `active_route` is
-     `None`).
-  3. **`tools/ui_fixture.py::serve_ui()` degrades SILENTLY to an empty
-     database** whenever `data/tracker.db` is absent — which is every worktree,
-     since `data/` is gitignored. An empty fixture renders no target, no
-     practice log and no detail drawer, so a sweep over it reports clean and a
-     render check proves nothing. Always `snapshot_db(LIVE, scratch)` from the
-     primary checkout and pass `db_path=`; never hand it the live path, which
-     it opens read-write.
-
-  The transferable part is not any of the three. It is that **a skip's stated
-  reason is a claim, and an unmeasured one rots into permanent lost coverage
-  while looking like diligence** — a named gap reads as honest bookkeeping, so
-  nobody re-checks it. Measure the limit before writing it down, and prefer a
-  one-line probe against the rig to any reasoning about what the library
-  "cannot" do.
-
-- **Swapping one piece of text for another is SEQUENTIAL, never a crossfade.**
-  The outgoing string reaches 0 before the incoming one leaves it.
-  `climbcurve.js::exchangeFade(progress, at)` returns the `{out, in}` pair and
-  is THE way to do it — import-free, so `tests/test_ui_text_exchange.py` drives
-  it directly at three exchange points and asserts no frame renders both.
-  A simultaneous crossfade (`opacity: 1 - p` beside `opacity: p`) puts BOTH at
-  0.5 across the middle of its run, and two different strings stacked in one
-  grid cell at half opacity do not read as a blend — they read as a rendering
-  fault ("70 Star (Standard)" written across "16 Star — No LBLJ (Standard)",
-  live report 2026-07-28). **No duration fixes it**: the overlap is the shape
-  of the curve, not its speed, which is why the guard samples the whole run
-  rather than one frame. The user's rule is general — "same for all text here,
-  and generally just for how fades should work in general". Pass the SAME
-  pivot the rest of the transition turns on (the route swap hands it its own
-  `swapExchangeAt`, computed once in `routeswap.js`) so the icon, the rank name
-  and the scope name all exchange on one frame instead of each choosing its own.
-- When a `@container`/media rule `display:none`s an element, its own `title`
-  is not a fallback — a hidden element cannot be hovered. Move the text onto
-  an element that is always rendered (the rank banner folds its basis line
-  into the progress track's tooltip).
+Full norms, incidents and recipes: [docs/ui-verification.md](../../docs/ui-verification.md#ui-verification-norms).
 
 ## A `<button>` carries the global rule with it (2026-08-21)
 
-`index.html`'s global `button` rule sets **`min-height: 34px; display:
-inline-flex`**. Every element that becomes a button inherits both, and neither
-is undone by the usual text-reset (`appearance: none; background: none; border:
-none; padding: 0; font: inherit`).
-
-**The measured cost.** The ranked-leaderboard branch turned a runner's name from
-a `<span>` into a `<button>` so the name could open that runner's page — inside
-the Library's *existing* ladder list, which the same branch was forbidden to
-change. `.library-plain-entry` went **24.75px → 41.75px** and
-`.library-example-meta` **40.38px → 48.38px**. A band holds dozens of plain
-rows, so the ladder grew about 70% taller in silence. `min-height: 0; display:
-inline` restored it exactly; the sibling `.library-example-plus` had carried
-`min-height: 0` since it was written.
-
-**Nothing caught it.** The responsive sweep hunts defects, not growth, and the
-ladder's own geometry test measures TOC→band gaps with divisions COLLAPSED. It
-took a whole-branch review measuring a baseline worktree to find.
-
-**It is now guarded**, by `tests/test_ui_button_flex.py::
-test_a_button_reset_to_inline_text_states_its_min_height` — beside the
-`justify-content` guard, because both enforce halves of the same global rule.
-The discriminator is the FULL text reset (background AND border AND all
-padding gone), which is what "this should flow as text" looks like in
-declarations. Deliberately narrow, and the exemptions are the point: a rule
-declaring its own `display` has taken control of its box (`.std-tier-btn`); one
-keeping background, border or padding is a chip-shaped control that wants the
-34px (`.version-switch-seg`, `.library-mode-seg`); and a PARTIAL padding reset
-leaves the element box-shaped (`.candx`, `.vidbtn`).
-
-Those last two sit just outside the guard and have **not** been judged by
-rendering — they strip background and border but keep horizontal padding, so
-they inherit the 34px and may carry the same latent bug. Widening the guard to
-cover them before judging them would trade one that fires reliably for one that
-gets switched off.
+The global `button` rule sets `min-height: 34px; display: inline-flex`; a
+button reset to inline text must also state `min-height: 0; display: inline`.
+Guard: `tests/test_ui_button_flex.py::test_a_button_reset_to_inline_text_states_its_min_height`.
+Detail: [docs/ui-verification.md#a-button-carries-the-global-rule-with-it-2026-08-21](../../docs/ui-verification.md#a-button-carries-the-global-rule-with-it-2026-08-21).
 
 ## "Unchanged" is a measurement, not a claim (2026-08-21)
 
-Twice on one branch a surface that was supposed to stay untouched changed, and
-both times the implementer's report asserted it had not. One wrote
-"pixel-identical to before this task" about a page it had never rendered before
-its own change; the regression was a wrapper element collapsing a grid's gaps,
-15.98px → 6.39px between every band.
-
-**The method that actually settles it**: build a worktree at the pre-change
-commit, render the same selector in both, and diff real
-`getBoundingClientRect()` numbers — not a contact sheet against a memory of
-what the page used to look like.
-
-**The trap that makes the comparison lie**: this repo is installed editable, so
-importing `sm64_events` from a worktree can resolve to the MAIN checkout and
-both runs are then served the SAME code. The first attempt at this comparison
-reported identical numbers for exactly that reason. Give the baseline worktree
-its own venv, run with `PYTHONPATH="$PWD/src" .venv/Scripts/python.exe`, and
-**print `module.__file__` to prove which tree answered** before believing any
-before/after.
+Claim "unchanged" only after diffing `getBoundingClientRect()` against a
+worktree at the pre-change commit with its own venv, printing
+`module.__file__` to prove which tree answered.
+Detail: [docs/ui-verification.md#unchanged-is-a-measurement-not-a-claim-2026-08-21](../../docs/ui-verification.md#unchanged-is-a-measurement-not-a-claim-2026-08-21).
 
 ## Responsiveness — the law, and the three tests that hold it
 
-**Component-internal layout gates on `@container` against its own pane.
-`@media` is for the SHELL only** — `.app-shell`, `.app-sidebar`, `.app-brand`,
-`.app-main`, `.app-notice`, `.nav-*`, `.sidebar-*`, `.mobile-*`, `.workspace`,
-`.context-*`, `.view-pane`, `.sheet-*`, plus the `prefers-*` blocks. That list
-lives in ONE place, `tools/uilab_project.py::SHELL_SELECTORS`; widening it
-widens the law and is a reviewed edit, never a way to make a test pass.
+- **Component-internal layout gates on `@container` against its own pane.
+  `@media` is for the SHELL only**; the shell list lives in ONE place,
+  `tools/uilab_project.py::SHELL_SELECTORS` — widening it is a reviewed edit,
+  never a way to pass a test. `LEGACY_VIEWPORT_RULES` stays empty.
+- Converted `@container` blocks go AFTER the rules they override (the section
+  at the end of the stylesheet, wide→narrow). A shell element cannot be gated
+  on a container it is not inside. Re-derive every threshold by measurement,
+  never rename `@media` to `@container`.
+- The tests (`tests/test_responsive.py`):
+  `test_component_layout_gates_on_the_container`,
+  `test_no_layout_defects_at_each_viewport[<WxH>]`,
+  `test_every_exemption_names_a_viewport_in_the_matrix`. Improve the machinery
+  in **uilab**, then run its `tools/check_consumers.py`; keep
+  `tools/uilab_project.py` project-only (under a screen). Boot via
+  `tools/ui_fixture.py`, never the app's entry point.
+- The fixture must reach the state AND content you measure (active target,
+  `ready_selector`, a multi-strategy star — `ui_fixture.py::FIXTURE_STAR`). Count
+  repeated elements and measure the longest string; when the corpus cannot
+  supply the hard input, plant it.
+- Declare pseudo-element bleed exceptions in `uilab_project.py::may_bleed`,
+  never by widening the rule.
+- **The supported minimum width is 850px**: `desktop/window.py::MIN_WINDOW_WIDTH`
+  and `uilab_project.py::min_viewport_width` must agree (a test compares them).
+- Take a contact sheet WHILE implementing (`tools/contact_sheet.py`); it is a
+  review aid, never a gate.
 
-The reason is measured, and this file's `@container` section already states it
-for the rank banners: the sidebar is 206px wide above 1180px and a **76px rail
-below it**, so the pane a card lives in is **not monotonic in window width** —
-a 1181px window gives a card a 947px pane, a 1180px window gives it 1076px. No
-viewport threshold can express "this card is too narrow"; every one of them is
-wrong on one side of that jump. The insight was written down on 2026-07-25 and
-applied to two rules; 145 component-internal rules were still viewport-keyed
-three days later, and the Active Target card clipped its own "Ready" row at
-900×1180 as the direct result. **All 145 were converted on 2026-07-28 and
-`LEGACY_VIEWPORT_RULES` is empty** — a new one is now a red build with no
-precedent to point at.
-
-Two placement rules the conversion paid for, both of which produced a fix that
-read as correct and did nothing:
-
-1. **A converted block goes AFTER the rules it overrides**, not where its old
-   `@media` block sat. Relocating changes cascade position, and the Compare
-   rules landed 2,200 lines above `.compare-transport .primary-transport` —
-   identical specificity (0,2,0), later wins, so the base rule kept its 92px
-   min-width and the sweep reported the identical overlap through the fix.
-   The converted blocks are therefore one section at the END of the stylesheet,
-   ordered wide→narrow.
-2. **A shell element cannot be gated on a container it is not inside.**
-   `.context-bar` lives in the header, outside `.view-pane`, so when the
-   conversion swept its rule into `@container (max-width: 1060px)` the query
-   could never match and the overflow came back on all seven tabs at once.
-
-Beware the translation trap: `@media (max-width: 760px)` does **not** become
-`@container (max-width: 760px)`. Below 760px the sidebar is gone, so the pane
-is *wider* than the viewport number suggests. Every threshold is re-derived by
-measurement, never renamed. And note that the shipped 760px block does two
-jobs — "the shell went mobile" (genuinely viewport) and "every card is now
-narrow" (container) — which is why it was invisible: at that width the two
-signals nearly coincide.
-
-Three tests, none of which can be satisfied by a comment:
-
-| Test | Fails when |
-|---|---|
-| `test_component_layout_gates_on_the_container` | a `@media` rule styles a component selector |
-| `test_no_layout_defects_at_each_viewport[<WxH>]` | the rendered app overflows, clips inside a fixed-height box, truncates an opted-in element, overlaps a flow sibling, **or paints a `::before`/`::after` onto a box it does not own**, at that viewport -- or a `known_defects` row naming that viewport describes a defect that no longer occurs. One case per viewport, each its own worker group (`spread`), so the sweep spreads across workers instead of being one three-minute test |
-| `test_every_exemption_names_a_viewport_in_the_matrix` | a `known_defects` row names a viewport no case would ever judge (browser-free) |
-
-All three live in `tests/test_responsive.py` and are three lines each, because
-the machinery is **uilab** — a machine-level module at `Desktop/code/uilab`,
-installed editable and shared with every project here. `tools/cdp.py`,
-`tools/css_blocks.py`, `tools/responsive_probe.js` and
-`tools/responsive_sweep.py` were deleted on 2026-07-28 when it was extracted;
-improve the instrumentation THERE, then run its `tools/check_consumers.py`.
-
-What stays local is `tools/uilab_project.py`: how to boot the app, where the
-stylesheet is, the shell list, what must never truncate, the component STATES
-worth measuring, and the defects currently owed. If it grows past a screen,
-something generic has leaked back into it.
-
-Run it while working: `uv run pytest tests/test_responsive.py -q`. It boots the
-REAL app offline via `tools/ui_fixture.py` — never the app's own entry point,
-which would attach to PJ64 and take the recorder lock out from under a live
-recording.
-
-**The fixture must reach the page you think it is measuring.** It seeds
-attempts AND sets an active target, and declares a `ready_selector` so uilab
-waits for the view to render before measuring. Without the target the practice
-page shows "No active objective" and files the populated star into the practice
-index inside a CLOSED `<details>`; without the wait, the sweep measures the
-loading state. Either one reports a clean page nobody is looking at — which is
-how 26 real defects stayed invisible while a feature built on top of them
-rendered zero times without a single error (2026-07-28).
-
-**Reaching the card is not the same as reaching its CONTENT, and that is one
-level deeper.** The seeded star must have MORE THAN ONE strategy in the bundled
-standards, or the strategy ladder is also the star's best ladder, the two ranks
-are one measure, and the card draws a **single** combined banner
-(`views.py::ranks_share_ladder`). The fixture seeded a one-strategy star until
-2026-07-29, so every sweep ever run measured a one-banner card and the whole
-class of "the two banners crowd each other" defects was *unreachable by the
-gate* — the user reported the stacked washes overlapping three times over two
-days and it could only be measured by hand against his own database. The
-constants and the reason are in `ui_fixture.py::FIXTURE_STAR`; the rule is
-general, so check it whenever a card's layout depends on how many of something
-it holds.
-
-**One level deeper again: those two banners both render at the Capless V
-FLOOR.** `seed_practice` publishes its attempts BEFORE `_seed_target` posts
-`/api/strat`, so every attempt is tagged with no strategy, the saved PB is
-keyed with no strategy, and a banner grading under `FIXTURE_STRAT` honestly
-reports `unranked` — which draws the floor default. Every sweep and every
-contact sheet therefore measures a card whose bars are EMPTY and whose
-next-step lines read `→ Capless 4`, so anything that only appears on a GRADED
-rank is invisible to the rig. That is the *third* instance of this one root
-cause, after the missing target and the one-strategy star: on 2026-07-29 the
-whole rank-bar anchoring change rendered byte-identically before and after, and
-had to be measured against a hand-built fixture instead. To reach a graded
-rank the order is stage → attempts → `POST /api/target` (it refuses until
-attempts have landed and the player has a place) → `POST /api/strat` →
-attempts AGAIN → `POST /api/pb` on a strat-TAGGED success. Fixing the shipped
-fixture is OWED, not done: it changes what the entire matrix measures, so it
-belongs in its own change with its own `known_defects` reckoning.
-
-**CORRECTION, 2026-08-04 (checked live, not assumed): the star target and
-`_arm_segment`'s own armed segment stopped being floor cards the day the
-untagged-PB fix landed** (`seed_practice`'s `strat` param, above) — both now
-grade `rank.rank: "Mario"` in a fresh sweep, so the paragraph above no longer
-describes them. What replaced it is a DIFFERENT, narrower gap: the 4 padding
-entities `_pad_log_with_more_entities` adds (BitDW/BitS Pipe Entry, Bowser
-1/2, all `arm_segment=` pulls in) call neither `/api/strat` nor `/api/pb`, and
-none of the ten legacy-migration segments carries a `default_strat`
-(`_arm_segment`'s own docstring), so all four render `rank.reason: "no_strat"`
-— the SENTINEL ("pick a strat to see your rank"), which draws no
-`.rank-progress-track` at all — never `"unranked"`, the ladder-FLOOR state
-(Capless V, an empty bar) a picked-but-unpracticed strategy produces. Verified
-by querying a fresh `serve_ui(arm_segment=FIXTURE_SEGMENT,
-seed_editor_fixtures=True)` instance's own `/api/session` directly (the exact
-config `tools/uilab_project.py::PROJECT` uses): 2 entities graded, 4 sentinel,
-**0 at the floor**, of the 6 the general sweep ever renders. So the SAME class
-of gap survives in a narrower form — the general responsive sweep still
-cannot render (or therefore probe, or even screenshot) the one state a
-strategy-with-a-ladder-but-no-PB-yet produces, which is the ordinary shape of
-a target the player just set. It happened to matter concretely on
-2026-08-04: a wash-bisected-by-a-line defect at exactly that floor state
-(`.claude/rules/ui-practice.md`'s "practice log" row has the report) was
-invisible to this fixture for the same structural reason the paragraph above
-already named — and would have stayed invisible even if the defect had been
-a DOM-shaped one a probe could see, since the state to trigger it never
-renders here at all. Still OWED, not done, for the same reason: seeding one
-padding entity through `/api/strat` with no `/api/pb` follow-up would reach it
-at the cost of a `known_defects` reckoning across the whole matrix.
-
-**A DIFFERENT AXIS, and it is the one a screenshot does not protect you from:
-the fixture can reach exactly the right state and still seed it with data at
-the EASY end of every range.** Everything above is about a state the fixture
-never reaches. This is about a state it reaches with one item where the real
-page has four, and a short string where the real one overflows. The step
-track's alignment was fixed, screenshotted, read as confirmed and shipped
-wrong on 2026-08-06: `_arm_segment` arms a segment whose route is ONE step and
-whose entity is named "No Reds", so the contact sheet showed a single chip
-beside a name short enough never to trigger `ShrinkToFitName`. Griffin's own
-card was a two-chip route beside "8 Red Coins (Pipe)", which shrinks — and it
-looked nothing like the picture. He asked the right question: *"With
-screenshotting during development, you should have been able to see this
-right?"*
-
-So the contact sheet answered honestly and the reading of it was wrong. Before
-trusting a rendered check, name the card you are looking at and ask what makes
-the real one different — **count the repeated elements and measure the longest
-string**, because both are where the fixture sits at the floor:
-
-- the armed route has ONE step (a real one has up to four, and the separator
-  pseudo between chips only exists from the second chip onward);
-- `FIXTURE_STAR`/`FIXTURE_SEGMENT` names are short, so nothing on the swept
-  page ever exercises `ShrinkToFitName`, which changes a name's font size and
-  therefore where its baseline lands;
-- `tests/test_log_card_name_fits.py` is the pattern that covers this properly:
-  it drives the WIDEST value in the corpus through the real column instead of
-  whatever the fixture happens to seed.
-
-**And when the corpus cannot supply the hard input AT ALL, PLANT it.** Deriving
-the extreme from the corpus is the right move only while the corpus contains
-one. Every icon this app ships is a SQUARE PNG, so a portrait art holder never
-renders here in any state — and `test_selector_strat_line_fits.py` was green
-right through a live report about exactly that (2026-08-11: an image's intrinsic
-height beating `aspect-ratio: 1/1`, pushing a cell's strategy line 12px below
-its own border). Its companion injects a 100x220 SVG into one cell and then
-asserts. The tell that you are in this case rather than the widest-value one:
-the property under test is about a SHAPE or a KIND of input, not about a length
-— no amount of picking from what exists reaches it.
-
-**A defect can be entirely in PAINT, and four of the five probes walk the DOM.**
-A pseudo-element is not in the DOM, so nothing that queries the tree can see
-one. The rank banners' colour wash is a `::before`; it bled sideways onto the
-next grid column and vertically onto the banner stacked beneath it, and three
-consecutive sweeps called the page clean while the user reported the overlap
-three times. Probe class 5 (`decoration`) closes that: it derives an absolutely
-positioned pseudo's rect from its host's padding box and fails when the rect
-covers a box that is neither the host nor inside it. Bleeding into an
-*ancestor's* padding or grid gap stays legal — that is what a bleed is for.
-Declare the genuine exceptions (scrims, focus rings, full-bleed washes) in
-`uilab_project.py::may_bleed`, never by widening the rule. Still invisible to
-it: a *statically* positioned pseudo pushed out of its host by a negative
-margin, which has no derivable geometry.
-
-**A measured constant is only as good as the state the fixture reached.**
-`--objective-card-narrow` was measured honestly and was 39px short at every
-width in its band, because at the time the fixture could only render the
-card's "Nothing to practice here" state. `tools/measure_objective_card.py` is
-deleted (amendment A8, spec practice-log-entity-cards) — the real practice
-page never renders `.objective-card` any more, so that tool's whole premise
-(a populated Active Target card reachable via `tools/ui_fixture.py`) is gone.
-The class and its CSS survive only because `ui/tune.js` still builds a
-REPLICA card out of them for the climb inspector; a future re-measure needs a
-tool built against that replica instead.
-
-**The supported minimum width is 850px** (user, 2026-07-29; height is
-unconstrained). One number, in two places that a test compares:
-`desktop/window.py::MIN_WINDOW_WIDTH` — which drives the window's `min_size`,
-its default geometry AND a clamp on restored geometry, because `min_size`
-constrains dragging but not the size a window opens at — and
-`uilab_project.py::min_viewport_width`, which drops narrower widths from the
-matrix. A floor the app does not enforce would not narrow the supported range,
-it would hide defects inside it. What it costs, so nobody rediscovers it: the
-WCAG 320px reflow probe no longer runs, and the mobile shell under `@media
-(max-width: 760px)` is no longer measured while still shipping.
-
-**Take a contact sheet WHILE implementing, not after** — `uv run python
-tools/contact_sheet.py .objective-card` renders one surface at 1500/1200/900/850
-into a single image. Assertions answer "is something broken"; only a picture
-answers "is this the thing you meant". Both of the expensive failures here were
-obvious on sight and invisible to every probe: a fixture drawing ONE rank banner
-where the real card draws two, and two washes overlapping by 15px. "You could
-probably solve a lot of your bugs by simply taking screenshots and going 'oh…
-there's only one rank standard' while you're thinking" (2026-07-29).
-
-**What none of it catches:** anything that measures fine and looks wrong — bad
-hierarchy, ugly wrapping, a control that is reachable but awkward. Assertions
-cannot reach that; the contact sheet is for a human eye, and it is a review
-aid, never a gate.
+Detail: [docs/rules/ui-core.md#responsiveness--the-law-and-the-three-tests-that-hold-it](../../docs/rules/ui-core.md#responsiveness--the-law-and-the-three-tests-that-hold-it).

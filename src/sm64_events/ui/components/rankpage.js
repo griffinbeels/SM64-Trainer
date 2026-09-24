@@ -532,8 +532,8 @@ function nextRankLabel(entity) {
 
 function gainTitle(entity) {
   if (entity.score == null)
-    return `What this scope's rating would gain if you practised this to `
-      + `${capName(entity.next_tier)} — that target is why an unpractised entry shows `
+    return `What this scope's rating would gain if you practiced this to `
+      + `${capName(entity.next_tier)} — that target is why an unpracticed entry shows `
       + `the biggest number in this column.`;
   return `What this scope's rating would gain if you reached the next tier here.`;
 }
@@ -1188,8 +1188,8 @@ export function RankPage({ t, onOpenRunner = () => {}, openLibrary = null }) {
                 caption=${`${data.practiced} of ${data.n} rated `
                   + `${data.n === 1 ? "entry" : "entries"} practiced — dim tiles are `
                   + "the ones you have not run yet. MARELO is mastery × coverage, so "
-                  + "an unpractised entry costs rating even when the ones you do "
-                  + "practise are strong"} /></div>
+                  + "an unpracticed entry costs rating even when the ones you do "
+                  + "practice are strong"} /></div>
             </div>
             ${data.n < 5 && html`<p class="meta">Small scope — ${data.n} rated ${
               data.n === 1 ? "entry" : "entries"}.</p>`}`}

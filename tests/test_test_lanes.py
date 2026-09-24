@@ -152,6 +152,25 @@ def test_a_new_unit_costs_the_median_until_it_has_been_timed():
     assert lanes.default_duration({}) > 0
 
 
+def test_a_split_file_spreads_across_workers_locally_as_on_a_job():
+    """A test whose shard unit is itself (a long file sharing no fixture) is
+    its own worker group on every run, not only on a full-run job; a file
+    kept whole keeps its one group. Locally the sweeps keep their pool, and
+    files sharing one real file share one group, whatever else applies."""
+    split = "tests/test_ui_long.py::test_x[a]"
+    whole = "tests/test_ui_paged.py::test_y"
+    for sharded in (False, True):
+        assert lanes.worker_group(split, split, sharded=sharded, spread=False) == lanes.own_group(split)
+        assert lanes.worker_group(whole, "tests/test_ui_paged.py", sharded=sharded,
+                                  spread=False) == "tests/test_ui_paged.py"
+    sweep = f"{lanes.BROWSER_SWEEPS[0]}::test_no_layout_defects_at_each_viewport[900x1000]"
+    assert lanes.worker_group(sweep, sweep, sharded=False, spread=False) == lanes.browser_sweep_group(sweep)
+    assert lanes.worker_group(sweep, sweep, sharded=True, spread=False) == lanes.own_group(sweep)
+    shared = next(iter(lanes.SHARED_GROUPS))
+    assert lanes.worker_group(f"{shared}::t", f"{shared}::t", sharded=False,
+                              spread=True) == lanes.SHARED_GROUPS[shared]
+
+
 def test_a_long_file_splits_into_its_tests_unless_they_share_a_fixture(tmp_path):
     """A file longer than a job's share cannot be balanced whole; one whose
     tests share a page or server stays whole, since a subset could fail."""

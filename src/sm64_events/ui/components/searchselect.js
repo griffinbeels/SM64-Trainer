@@ -33,10 +33,16 @@ const FILTER_FLOOR = 8;
  * its own face — "we should see its name *in its font*"). The caller owns
  * open/close state so it can keep the panel up through a failed action (the
  * link door shows the server's 409 where the click landed).
+ * `lead` is an optional row between the title and the filter (the goal
+ * picker's Rank / Player switch), and `placeholder` names what the filter
+ * searches. `footer` is an optional extra row under the options for an entry the list
+ * cannot hold (the goal picker's typed time).
  */
 export function SearchMenu({ title, groups, onPick, onClose, busy = false,
                              error = null, emptyNote = "Nothing to pick.",
-                             align = "left", selected = null }) {
+                             align = "left", selected = null,
+                             footer = null, lead = null,
+                             placeholder = "Type to filter…" }) {
   const [filter, setFilter] = useState("");
   const inputRef = useRef(null);
   const menuRef = useRef(null);
@@ -77,9 +83,10 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
       <button type="button" class="quiet-button" aria-label="Close"
           onclick=${onClose}><${Icon} name="close" size=${12} /></button>
     </div>
+    ${lead}
     ${total > FILTER_FLOOR
       ? html`<input ref=${inputRef} class="search-menu-filter" type="search"
-          placeholder="Type to filter…" value=${filter}
+          placeholder=${placeholder} value=${filter}
           oninput=${(inputEvent) => setFilter(inputEvent.target.value)} />` : ""}
     <div class="search-menu-options">
       ${total === 0 ? html`<p class="meta">${emptyNote}</p>`
@@ -107,6 +114,7 @@ export function SearchMenu({ title, groups, onPick, onClose, busy = false,
             })}
           </div>`)}
     </div>
+    ${footer ? html`<div class="search-menu-footer">${footer}</div>` : ""}
     ${error ? html`<p class="search-menu-error">${error}</p>` : ""}
   </div>`;
 }
