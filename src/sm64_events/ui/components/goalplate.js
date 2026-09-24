@@ -182,19 +182,42 @@ export function useGoalCelebration(attempts, goal) {
   return party;
 }
 
-// The picker's list: Automatic, then every rank and every player with a time
-// on this entry, each wearing the time it would set.
-function pickerGroups(options, goal) {
+// The picker's list for one mode. A goal is EITHER a rank OR a player (his
+// words, 2026-09-23), so the two never share a list: Rank shows Automatic and
+// every rank on this entry's ladder, Player every runner with a time on it,
+// each wearing the time it would set.
+function pickerGroups(options, goal, mode) {
+  if (mode === "player") {
+    return [{ label: null, options: ((options && options.runners) || []).map((r) => ({
+      value: `runner:${r.runner}`, label: `${r.runner} · ${fmtCs(r.cs)}` })) }];
+  }
   const groups = [{ label: null, options: [
     { value: "auto", label: goal && goal.pinned
         ? "Automatic (follow the Scorecard)" : "Automatic ✓" }] }];
-  if (!options) return groups;
-  groups.push({ label: "Rank", options: (options.divisions || []).map((d) => ({
+  if (options) groups.push({ label: null, options: (options.divisions || []).map((d) => ({
     value: `division:${d.tier}:${d.division}`,
     label: `${capName(d.tier)} ${divisionDigit(d.division)} · ${fmtCs(d.cs)}` })) });
-  groups.push({ label: "Players", options: (options.runners || []).map((r) => ({
-    value: `runner:${r.runner}`, label: `${r.runner} · ${fmtCs(r.cs)}` })) });
   return groups;
+}
+
+// What the filter searches, and what an empty list says, per mode.
+function pickerCopy(options, mode) {
+  const player = mode === "player";
+  if (!options) return { placeholder: player ? "Search players…" : "Filter ranks…", emptyNote: "Loading…" };
+  return player
+    ? { placeholder: "Search players…", emptyNote: "Nobody on the sheet has a time here — type one below." }
+    : { placeholder: "Filter ranks…", emptyNote: "No ranks here — type a time below." };
+}
+
+// Rank or Player, the picker's first choice. A player goal opens on Player.
+function PickerMode({ mode, setMode, options }) {
+  const runnerCount = options ? (options.runners || []).length : null;
+  const tab = (id, label) => html`<button type="button"
+      class="quiet-button ${mode === id ? "is-selected" : ""}"
+      aria-pressed=${mode === id ? "true" : "false"} onclick=${() => setMode(id)}>${label}</button>`;
+  return html`<div class="goal-picker-mode goal-picker-kind" role="group" aria-label="Goal kind">
+    ${tab("rank", "Rank")}${tab("player", runnerCount == null ? "Player" : `Player (${runnerCount})`)}
+  </div>`;
 }
 
 // A picked option -> the PUT body's goal (null = back to Automatic).
@@ -253,6 +276,7 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
   const held = goal || {};
   const [count, setCount] = useState(held.count > 1 ? held.count : 1);
   const [streak, setStreak] = useState(!!held.streak);
+  const [mode, setMode] = useState(held.source && held.source.kind === "runner" ? "player" : "rank");
   async function save(value) {
     setBusy(true); setError(null);
     try {
@@ -272,10 +296,13 @@ function GoalPicker({ goalKey, t, goal, onClose, onSaved }) {
       streak=${streak} setStreak=${setStreak} busy=${busy}
       onApply=${repeatChanged ? () => save(current) : null} />
     <${TypedTime} busy=${busy} onSet=${save} />`;
-  return html`<${SearchMenu} title="Pick a goal" groups=${pickerGroups(options, goal)}
+  const copy = pickerCopy(options, mode);
+  return html`<${SearchMenu} key=${mode} title="Pick a goal"
+    groups=${pickerGroups(options, goal, mode)}
+    lead=${html`<${PickerMode} mode=${mode} setMode=${setMode} options=${options} />`}
+    placeholder=${copy.placeholder} emptyNote=${copy.emptyNote}
     onPick=${(value) => save(goalOfOption(value))} onClose=${onClose}
-    busy=${busy} error=${error} align="right" footer=${footer}
-    emptyNote=${options ? "No ranks or players for this one — type a time below." : "Loading…"} />`;
+    busy=${busy} error=${error} align="right" footer=${footer} />`;
 }
 
 // The PUT body that re-creates a pinned goal's threshold.
