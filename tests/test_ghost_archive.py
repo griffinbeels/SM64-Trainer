@@ -14,7 +14,7 @@ from sm64_events.ghost.archive import (
 from sm64_events.ghost.recording import PoseRecording
 from sm64_events.memory.addresses import ACT_STAR_DANCE_EXIT, ACT_STAR_DANCE_NO_EXIT
 from sm64_events.ghost.clip import (
-    MAX_RECORDS, RECORD_BYTES, ClipError, attempt_origin, check_manifest, read_clip,
+    CLOSING_TRANSITION_MAX, MAX_RECORDS, RECORD_BYTES, ClipError, attempt_origin, check_manifest, read_clip,
 )
 
 
@@ -410,3 +410,36 @@ def test_a_stalled_or_closed_recording_keeps_the_dance_it_has(tmp_path):
     naps.clear()
     assert archive.export_attempt(attempt(), tmp_path / "closed.ghost")["tail_records"] == 2
     assert naps == []  # a closed recording has nothing more coming
+
+
+def test_an_attempt_closed_by_entering_a_level_ends_its_ghost_at_the_last_clocked_frame(tmp_path):
+    """His MIPS Clip ends entering DDD: the close lands inside the level load,
+    where the capture has no clock (the last 3 frames of all three of his runs,
+    2026-09-24), and every save refused its ghost. The clip now ends on the last
+    clocked frame and its manifest says how far before the close that was."""
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    archive.ingest(producer(), (frame(1), frame(2), frame(3), frame(4, clock_valid=0), frame(5, clock_valid=0)))
+    row, path, target = attempt(end=105, kind="segment"), tmp_path / "entered.ghost", {"kind": "segment"}
+    row.segment_id = 2
+    manifest = archive.export_attempt(row, path, target=target)
+    assert (manifest["records"], manifest["closing_transition"], manifest["last_global_timer"]) == (3, 2, 103)
+    assert check_manifest(path, manifest, attempt=row, target=target).frames[-1].global_timer == 103
+    for wrong in (1, 3, CLOSING_TRANSITION_MAX + 1, "2"):
+        with pytest.raises(ClipError):
+            check_manifest(path, {**manifest, "closing_transition": wrong}, attempt=row, target=target)
+    # Consistent with the bytes and the attempt, but further than a level load.
+    row.closed_frame = 103 + CLOSING_TRANSITION_MAX + 1
+    with pytest.raises(ClipError, match="closing transition"):
+        check_manifest(path, {**manifest, "closed_frame": row.closed_frame,
+                              "closing_transition": CLOSING_TRANSITION_MAX + 1}, attempt=row, target=target)
+    archive.close()
+
+
+def test_a_close_further_than_a_level_load_from_any_clock_still_refuses(tmp_path):
+    archive = PoseArchive(tmp_path / "poses.sqlite")
+    rows = [frame(1), frame(2)] + [frame(n, clock_valid=0, qpc=1000 + n) for n in range(3, 4 + CLOSING_TRANSITION_MAX)]
+    archive.ingest(producer(), tuple(rows))
+    last = 100 + 3 + CLOSING_TRANSITION_MAX
+    with pytest.raises(ClipError, match="elapsed clock"):
+        archive.export_attempt(attempt(end=last, end_utc=1800000002.0, kind="segment"), tmp_path / "far.ghost")
+    archive.close()

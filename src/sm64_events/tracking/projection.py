@@ -741,6 +741,18 @@ class Projector:
         # dropped once a new focus is committed (grab / set_target / segment
         # success). See caveat 13.
         self._suspended_star: tuple[int, int] | None = None
+        # His PICKED segment, set aside because it completed by entering a
+        # star stage (which leaves the hand empty in that stage, caveat 12).
+        # It returns to the hand the next time he is back in the castle, so
+        # it is selected -- and its ghost ready -- before he starts it
+        # again. MIPS Clip, 2026-09-24: "if I select the ghost, it should be
+        # ready for me the next time I start that segment -- that is, I
+        # reset (coming out of HMC), and then enter the HMC door." Dropped
+        # by any other click (`_picked_target` stops matching it).
+        self._suspended_pick: tuple | None = None
+        # The pick that came back, while it is still what the hand holds
+        # (see `_declines_fill`).
+        self._returned_pick: tuple | None = None
         self.strat_by_star: dict[tuple[int, int], str | None] = {}
         # Pre-seeded from the definitions' own default_strat (caveat 17), so
         # every consumer of this dict — attempt stamping below, the strat_tag
@@ -1163,11 +1175,15 @@ class Projector:
         self._pending_target_retire = None   # transient, one event only
         self._pending_grab_take = None       # transient, one event only
         closed = self._project(ev)
+        self._return_the_suspended_pick(ev)
         self._remember_event(ev, closed)
         ctx = self._match_context(prev_level)
         seg_closed, self.segment_notices = self._segments.feed(ev, ctx)
+        held_pick = (self.target if self.target == self._picked_target
+                     and self.target and self.target[0] == "segment" else None)
         self._retire_pending_target()
         head_popped, hidden_exit_ids = self._apply_segment_closures(ev, seg_closed, closed)
+        self._set_aside_a_finished_pick(ev, seg_closed, held_pick)
         self._suspend_star_for_segment()
         self._queue_new_hooks()
         self._settle_segment_target(ev, head_popped)
@@ -1199,6 +1215,7 @@ class Projector:
         self._level = self._area = self._num_stars = None
         self._last_star_grabbed = self._last_star_attempted = None
         self.target = self._picked_target = self._suspended_star = None
+        self._suspended_pick = self._returned_pick = None
         self._target_hooked = False
         self._target_queue.clear()
         self._hook_level = self._hook_area = self._hook_alive_frame = None
@@ -1272,6 +1289,48 @@ class Projector:
                            attempt_rules=self._rules,
                            landmark_names=(self._landmark_names()
                                            if self._landmark_names else None))
+
+    def _set_aside_a_finished_pick(self, ev, seg_closed, held_pick) -> None:
+        """His pick just finished by entering a star stage, which empties the
+        hand there (caveat 12, by the origin retire or the completion's own
+        clear -- whichever ran first). Keep it for his return to the castle
+        (`_suspended_pick`)."""
+        if (held_pick is not None and self.target is None
+                and ev.type == "level_changed"
+                and course_for_level(ev.payload["to"]) is not None
+                and any(a.segment_id == held_pick[1] and a.outcome == "success"
+                        and not a.cleared for a in seg_closed)):
+            self._suspended_pick = held_pick
+
+    def _return_the_suspended_pick(self, ev) -> None:
+        """His pick comes back with him (`_suspended_pick`): on arriving in
+        the castle, over anything he did not choose -- the stage's
+        auto-followed star, a leftover -- but never over another click or a
+        detection holding its turn. After `_dispatch` has settled the star
+        target for this level edge, before the matcher sees it."""
+        if (self._suspended_pick is not None and ev.type == "level_changed"
+                and ev.payload["to"] in CASTLE_LEVELS
+                and self._picked_target == self._suspended_pick
+                and self.target != self._picked_target
+                and not self._target_hooked):
+            self.target = self._returned_pick = self._suspended_pick
+            self._suspended_pick = self._suspended_star = None
+
+    def _declines_fill(self, ev) -> bool:
+        """May this gestureless fill (`auto`) NOT take the hand?
+
+        A hooked head holds its turn (round 19). And a pick that just came
+        back (`_returned_pick`) is not an empty hand, though the page's
+        lone-option fill, deciding on the arrival that returned it, can
+        still see one: a fill for something not even armed is refused. The
+        arena row's fill, the one allowed to replace a held pick
+        (2026-08-05), offers the fight its own arrival armed."""
+        if self.target is not None and self._target_hooked:
+            return True
+        return (self.target is not None and self.target == self._returned_pick
+                and self.target == self._picked_target
+                and ev.payload.get("kind") == "segment"
+                and ev.payload.get("segment_id") not in self._segments.armed_ids())
 
     def _retire_pending_target(self) -> None:
         # The origin rule's verdict, applied now that the matcher has had this
@@ -1992,7 +2051,7 @@ class Projector:
             # armed detections, a fill is an offer, and the client re-offers
             # whenever the hand empties.
             auto = bool(ev.payload.get("auto"))
-            if auto and self.target is not None and self._target_hooked:
+            if auto and self._declines_fill(ev):
                 return []
             self._suspended_star = None  # explicit focus overrides a resume (caveat 13)
             if ev.payload.get("kind") == "segment":
