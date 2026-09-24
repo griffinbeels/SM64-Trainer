@@ -16,12 +16,14 @@ reads attempts rather than the saved-PB table because a PB is a deliberate
 save and "what was your best time achieved TODAY" must exist without one. An
 imported time is excluded: it was typed in today, not played today.
 
-The next goal is the step above your PB on this entry: the ladder of the
-strategy the Scorecard's own tile grades (`tile_strategies`), one division up
-from where your fastest saved PB sits, at the time that division starts (his
-round-1 ask: "the next automatically suggested scorecard goal time for this
-star. This is likely just the rank above your current time"). With no PB it is
-the first step above the ladder's floor; at the top there is none.
+Your rank and the next goal are read off the star's OVERALL curve -- what the
+star itself grades on across every strategy, the number MARELO aggregates and
+the Library's "Overall Rank Standards" prints -- never one strategy's ladder
+(his round-2 note: "the rank that should be shown should be the OVERALL rank
+for the star, not the strategy rank"). The rank is where your fastest saved PB
+sits; the next goal is the time that reaches one division above it (round 1:
+"This is likely just the rank above your current time"). With no PB the goal
+is the first step above the floor; at the top there is none.
 
 `seen` is the date whose announcement the user dismissed, kept server-side so
 the desktop window and a browser tab announce each day once between them.
@@ -31,13 +33,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from sm64_events.ranks import scoring
 from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.dailystar import daily_entry
 from sm64_events.ranks.scorecard import template_rows
 from sm64_events.server.scorecard_standards import tile_strategies
 from sm64_events.tracking.activestrat import ActiveStrats
-from sm64_events.tracking.views import fastest_current_pbs
+from sm64_events.tracking.views import entity_rank, fastest_current_pbs
 
 SEEN_KEY = "daily_star_seen"
 
@@ -136,27 +137,28 @@ def todays_best(attempts, entity_key: str, clock: str, day: date) -> dict | None
     return {**(best or {"frames": None, "strat": None}), "attempts": count}
 
 
-_NO_TIME_CS = 10 ** 9     # slower than any ladder's floor: "no PB yet"
+_NO_PB_FRAMES = 10 ** 7    # slower than any curve's floor: "no PB yet"
 
 
-def next_goal(ladder_cs: dict, pb_frames: int | None) -> dict | None:
-    if not ladder_cs:
-        return None
-    time_cs = display_cs(pb_frames) if pb_frames else _NO_TIME_CS
-    progress = scoring.progress_for_time(ladder_cs, time_cs)
+def standing(progress: dict | None, time_cs: int, has_pb: bool) -> tuple[dict | None, dict | None]:
+    """(your rank, next goal) from one graded position on a curve. `progress`
+    is `curves.progress_for_time`'s shape; `time_cs` the time it graded."""
+    if progress is None:
+        return None, None
+    rank = ({"tier": progress["tier"], "division": progress["division"]}
+            if has_pb else None)
     if progress["next_gap_cs"] is None:
-        return None
-    return {"cs": time_cs - progress["next_gap_cs"],
-            "tier": progress["next_tier"], "division": progress["next_division"]}
+        return rank, None
+    return rank, {"cs": round(time_cs - progress["next_gap_cs"]),
+                  "tier": progress["next_tier"], "division": progress["next_division"]}
 
 
-def pb_rank(ladder_cs: dict, pb_frames: int | None) -> dict | None:
-    """The rank your PB holds on that ladder (round 2: "we should show the
-    current rank you have, just like the goal rank")."""
-    if not ladder_cs or not pb_frames:
-        return None
-    progress = scoring.progress_for_time(ladder_cs, display_cs(pb_frames))
-    return {"tier": progress["tier"], "division": progress["division"]}
+def overall_standing(ranks, entity_key: str, pb_frames: int | None):
+    if ranks is None:
+        return None, None
+    frames = pb_frames or _NO_PB_FRAMES
+    return standing(entity_rank(ranks, entity_key, frames), display_cs(frames),
+                    pb_frames is not None)
 
 
 def create_dailystar_router(service, library=None, adoptions=None) -> APIRouter:
@@ -167,19 +169,18 @@ def create_dailystar_router(service, library=None, adoptions=None) -> APIRouter:
             raise HTTPException(503, "daily star unavailable")
         return service.db
 
-    def _strategy_and_ladder(entity_key: str, label: str, clock: str):
-        """The Scorecard tile's own strategy for this entry and its ladder;
-        the strategy also names the Library page the announcement opens."""
+    def _strategy(entity_key: str, label: str, clock: str) -> str | None:
+        """The Scorecard tile's own strategy for this entry: the Library
+        page the announcement opens."""
         ranks = service.ranks
         if ranks is None:
-            return None, {}
+            return None
         active = ActiveStrats.from_db(service.db, service.strat_by_star,
                                       service.strat_by_segment)
-        strategy = tile_strategies(
+        return tile_strategies(
             [{"entries": [(entity_key, label, clock)]}], ranks, active,
             library.payload if library is not None else {},
             adoptions.rows() if adoptions is not None else {}).get(entity_key)
-        return strategy, (ranks.ladder_cs(entity_key, strategy) if strategy else {})
 
     @router.get("/daily-star")
     def get_daily_star(date: str | None = None):
@@ -194,8 +195,8 @@ def create_dailystar_router(service, library=None, adoptions=None) -> APIRouter:
                 (course_id, star_id, segment_id, clock))
             pb = row["frames"] if row else None
             today = todays_best(db.attempts(), entity_key, clock, day)
-            strategy, ladder = _strategy_and_ladder(entity_key, label, clock)
-            goal, rank = next_goal(ladder, pb), pb_rank(ladder, pb)
+            strategy = _strategy(entity_key, label, clock)
+            rank, goal = overall_standing(service.ranks, entity_key, pb)
         return {"date": day.isoformat(), "day": entry.day, "key": entry.key,
                 "entity_key": entity_key, "label": label,
                 "course_name": entry.course_name, "clock": clock,

@@ -16,8 +16,13 @@ from sm64_events.ranks.classify import display_cs
 from sm64_events.ranks.dailystar import (DECK, EPOCH, FIRST_KEY, course_of,
                                          cycle_order, daily_entry)
 from sm64_events.ranks.scorecard import template_rows
-from sm64_events.server.dailystar_api import (create_dailystar_router, next_goal,
-                                              pb_rank, todays_best)
+from sm64_events.core.paths import bundled_rank_standards, bundled_sheet_ladders
+from sm64_events.ranks import curves
+from sm64_events.ranks.calibration import resolve_curve
+from sm64_events.ranks.standards import RankStandards
+from sm64_events.server.dailystar_api import (create_dailystar_router,
+                                              overall_standing, todays_best)
+from sm64_events.tracking.views import entity_rank
 from sm64_events.storage.db import Database
 
 
@@ -96,36 +101,43 @@ def test_todays_best_is_the_fastest_finish_inside_the_local_day():
     assert best == {"frames": 331, "strat": "Standard", "attempts": 4}
 
 
-_LADDER = {"Silver": 1100, "Bronze": 1200, "Iron": 1400}
+WILD_BLUE = "star:2:2"
 
 
-def _division(ladder, cs):
-    progress = scoring.progress_for_time(ladder, cs)
+def _store(tmp_path):
+    store = RankStandards(tmp_path / "rs.json", bundled_rank_standards(),
+                          bundled_sheet_ladders())
+    store.load()
+    return store
+
+
+def _overall_step(store, cs):
+    """Where a time sits on the star's OVERALL curve, as one comparable number."""
+    progress = curves.progress_for_time(resolve_curve(store, WILD_BLUE, None), cs)
     return scoring.progression_key(progress["tier"], progress["division"])
 
 
-def test_next_goal_is_the_time_that_reaches_one_division_above_the_pb():
-    for pb_frames in (347, 380, 410):
-        pb_cs = display_cs(pb_frames)
-        goal = next_goal(_LADDER, pb_frames)
-        assert goal["cs"] < pb_cs
-        assert _division(_LADDER, goal["cs"]) == _division(_LADDER, pb_cs) + 1
-        named = scoring.progression_key(goal["tier"], goal["division"])
-        assert named == _division(_LADDER, goal["cs"])
-    assert next_goal({}, 347) is None
+def test_rank_and_goal_are_read_off_the_overall_curve(tmp_path):
+    """Round 2: "the rank that should be shown should be the OVERALL rank for
+    the star, not the strategy rank". The rank is what the Overall curve says
+    of the PB; the goal is the time that reaches one division above it."""
+    store = _store(tmp_path)
+    for pb_frames in (337, 360, 400, 480):
+        rank, goal = overall_standing(store, WILD_BLUE, pb_frames)
+        overall = entity_rank(store, WILD_BLUE, pb_frames)
+        assert (rank["tier"], rank["division"]) == (overall["tier"], overall["division"])
+        assert goal["cs"] < display_cs(pb_frames)
+        step = _overall_step(store, goal["cs"])
+        assert step == scoring.progression_key(rank["tier"], rank["division"]) + 1
+        assert step == scoring.progression_key(goal["tier"], goal["division"])
 
 
-def test_your_rank_sits_one_division_below_the_next_goal():
-    for pb_frames in (347, 380, 410):
-        rank, goal = pb_rank(_LADDER, pb_frames), next_goal(_LADDER, pb_frames)
-        below = scoring.progression_key(rank["tier"], rank["division"])
-        assert below + 1 == scoring.progression_key(goal["tier"], goal["division"])
-    assert pb_rank(_LADDER, None) is None and pb_rank({}, 347) is None
-
-
-def test_no_pb_aims_at_the_first_step_above_the_floor():
-    goal = next_goal(_LADDER, None)
-    assert _division(_LADDER, goal["cs"]) == _division(_LADDER, 10 ** 9) + 1
+def test_no_pb_has_no_rank_and_aims_one_step_above_the_floor(tmp_path):
+    store = _store(tmp_path)
+    rank, goal = overall_standing(store, WILD_BLUE, None)
+    assert rank is None
+    assert _overall_step(store, goal["cs"]) == _overall_step(store, 10 ** 7) + 1
+    assert overall_standing(None, WILD_BLUE, 337) == (None, None)
 
 
 def test_no_attempts_today_reads_as_not_played():
