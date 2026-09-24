@@ -98,7 +98,10 @@ here beats a guess about a place you have walked out of.
 A [[target]] you clicked. Nothing detected may steal it, a [[star]] grab may
 not move it, choosing one empties the [[target queue]], and it retires only
 by the standing rules (walking into a course it is not practiced in, with
-its arm gone).
+its arm gone). A picked [[segment]] that finishes by entering a course (MIPS
+Clip into Dire, Dire Docks) leaves the hand empty there, and comes back the
+next time you arrive in the castle, unless you clicked something else
+meanwhile, so the trainer holds it ready before you start it again.
 
 - **Lives** — the projector (`src/sm64_events/tracking/projection.py`)
   → the [[selector]]
