@@ -350,6 +350,23 @@ a segment-owned clock; public target kind does not determine clock kind. Closed
 attempts persist `native_clock_frame`, `native_clock_utc`, `native_clock_kind`
 and the actual `closed_frame`.
 
+A segment's ghost starts where the segment does, which inside the castle is
+often mid-area: his MIPS Clip starts when he opens the HMC door, and its clock
+and its recorded ghost start at the counter zero that door causes about 61
+frames later (session 25, 2026-09-24). The engine publishes no marker for an
+arm that began anywhere else (`SegmentEngine._ghost_starts_here`): a practice
+reset re-arms the segment where Mario respawns, which is its start only when
+the segment starts at a level or area entry or at the reset itself, and a
+"move" arm waits for its zero, or for its 90-frame window to pass without one
+(then the arm frame is the clock, as the attempt's timing does). Before this
+the ghost walked out from the reset, then from the door frame, and snapped back
+61 frames at the zero. Replaying his journal, archive and a MIPS Clip clip
+through the projector, worker and playback: 341 frames with a ghost where none
+belonged and 6 misplaced before; 1 and 0 after, over four runs; the ghost
+appears 3 frames after the zero (the tracker's poll and the worker's list),
+already at the right point, and hides while its own Mario is inside the DDD
+warp.
+
 Python forwards changed markers and controls, not per-frame playback commands.
 [ghost_origin.cpp](../plugin/gfxwrap/ghost_origin.cpp) resolves a marker against a
 bounded source ledger for the current producer/configuration/epoch. UTC narrows
@@ -686,6 +703,13 @@ as `anchor_frame + rta_frames`. Every retained clip row needs valid raw/elapsed
 evidence in one continuity, with monotonic occurrences and elapsed time;
 timing-invalid archive rows cannot form a playable clip. A final closing reset
 can remain as evidence, but a star index stops before the next generation.
+An attempt that ends by entering a level closes on the level change, inside
+the load where the capture has no clock: the last 3 frames of each of his MIPS
+Clip runs (ending at DDD entry, 2026-09-24), which refused every save's ghost.
+Such a clip ends on the last clocked occurrence at most
+`CLOSING_TRANSITION_MAX` (30) frames before the close, and its manifest's
+`closing_transition` says how many frames earlier; `check_manifest` binds the
+clip's last frame to `closed_frame` less that.
 
 A star run closes at x-cam, the dance's first frame of the grab that completes
 it (the exit star for the 100-coin star), so export appends the dance tail for

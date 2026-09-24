@@ -21,7 +21,7 @@ import zlib
 from sm64_events.detectors.anchors import NEAR_ZERO_IGT
 from sm64_events.ghost.clip import (
     ELAPSED_VALID, RAW_VALID, STAR_CLOCK, CLOCK_KINDS, RECORD_BYTES,
-    ClipError, Frame, attempt_origin, frame_from_bytes, producer_values, write_clip,
+    CLOSING_TRANSITION_MAX, ClipError, Frame, attempt_origin, frame_from_bytes, producer_values, write_clip,
 )
 from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
 
@@ -254,10 +254,12 @@ class PoseArchive:
         if hi < lo:
             raise ClipError("attempt UTC interval is reversed")
 
+        def clocked(frame):
+            return frame.clock.valid & (RAW_VALID | ELAPSED_VALID) == RAW_VALID | ELAPSED_VALID
+
         def endpoint(rows):
             frames = [frame_from_bytes(stored_record(row[1])) for row in rows]
-            if any(frame.clock.valid & (RAW_VALID | ELAPSED_VALID) != RAW_VALID | ELAPSED_VALID
-                   for frame in frames):
+            if not all(clocked(frame) for frame in frames):
                 raise ClipError("attempt endpoint has no exact native elapsed clock")
             coordinates = {(frame.epoch, frame.clock.continuity_id, frame.clock.elapsed_frames,
                             frame.igt, frame.clock.origin_id, frame.clock.valid)
@@ -280,13 +282,15 @@ class PoseArchive:
                 starts = db.execute("""SELECT sequence,data FROM poses WHERE producer=? AND timer=?
                     AND captured BETWEEN ? AND ? ORDER BY sequence""",
                     (identity, start, lo - self.boundary_slack_s, lo + self.boundary_slack_s)).fetchall()
-                first, last = endpoint(starts), endpoint(ends)
+                first = endpoint(starts)
+                ends, transition = self._before_transition(db, identity, ends, end_frame, clocked)
+                last = endpoint(ends)
                 if first <= last:
-                    matches.append((identity, first, last))
+                    matches.append((identity, first, last, transition))
             if len(matches) != 1:
                 raise ClipError("attempt has ambiguous native epochs" if matches else
                                 "attempt is missing exact native frame endpoints")
-            identity, first, last = matches[0]
+            identity, first, last, transition = matches[0]
             source = json.loads(db.execute("SELECT data FROM producers WHERE id=?", (identity,)).fetchone()[0])
             rows = [(stored_record(data),) for (data,) in db.execute("""SELECT data FROM poses
                 WHERE producer=? AND sequence BETWEEN ? AND ? ORDER BY sequence""", (identity, first, last))]
@@ -302,9 +306,25 @@ class PoseArchive:
                 if star_run and close.live_action in STAR_GRAB_ACTIONS else [])
         manifest = write_clip(destination, tuple(row[0] for row in rows) + tuple(tail),
                               SimpleNamespace(**source), clock_kind=kind, tail_records=len(tail))
+        if transition:
+            manifest["closing_transition"] = transition
         return {**manifest, "attempt_id": attempt.id, "session_id": attempt.session_id,
                 **origin,
                 "target": dict(target) if target else None}
+
+    @staticmethod
+    def _before_transition(db, identity, ends, end_frame, clocked):
+        """The closing rows, or, when the close fell inside a level load with no
+        clock, the last clocked occurrence at most CLOSING_TRANSITION_MAX frames
+        before it and how far before (see clip.CLOSING_TRANSITION_MAX)."""
+        if all(clocked(frame_from_bytes(stored_record(row[1]))) for row in ends):
+            return ends, 0
+        for sequence, timer, data in db.execute("""SELECT sequence,timer,data FROM poses
+                WHERE producer=? AND sequence<? AND timer BETWEEN ? AND ? ORDER BY sequence DESC""",
+                (identity, ends[0][0], end_frame - CLOSING_TRANSITION_MAX, end_frame)):
+            if clocked(frame_from_bytes(stored_record(data))):
+                return [(sequence, data)], end_frame - timer
+        return ends, 0  # no clock close enough: the endpoint refuses as before
 
     def _dance_tail(self, identity: int, after: int, close: Frame) -> list[bytes]:
         """Wait, bounded, for the recorder to capture the dance; outside the

@@ -361,6 +361,9 @@ _MOMENT_KINDS = frozenset(m.kind for m in MOMENTS)
 _MOMENT_LABELS = {m.kind: m.label for m in MOMENTS}
 
 _ANCHOR_TYPES = ("practice_reset", "state_loaded")  # attempt-anchor events
+# Start clauses a practice reset returns Mario to: Usamune respawns at the
+# level's last entrance. A mid-area start (a door, a pole, a star) is not one.
+_RESET_RETURNS_TO = ("attempt_anchor", "level_enter", "area_enter", "spawned")
 
 _AFK_PAUSE_FRAMES = 150  # mirrors the star-side AFK discard (projection.py)
 
@@ -2954,6 +2957,9 @@ class SegmentEngine:
         self._defs = [d for d in defs if d.enabled]
         self._def_by_id = {d.id: d for d in self._defs}
         self._armed: dict[int, _Arm] = {}
+        # The latest game frame an event or a settle carried: how far a "move"
+        # arm's zero window has run (`native_ghost_origin`).
+        self._now_frame: int | None = None
         # The 100-coin family, resolved ONCE: {def id: (its star, the index
         # of the waypoint that IS grabbing that star, or None when the grab
         # sits in the start triggers instead)}. Read by the two proof rules
@@ -3073,7 +3079,7 @@ class SegmentEngine:
             return {"kind": "segment", "session_id": arm.session_id, "arm_id": arm_id,
                     "start_frame": start_frame, "started_utc": started_utc,
                     "frame": frame, "utc": utc}
-        if not arm.native_origin_known:
+        if not arm.native_origin_known or not self._ghost_starts_here(arm, definition):
             return None
         frame, utc = arm.clock_origin(definition.clock_start)
         if utc is None:
@@ -3083,8 +3089,31 @@ class SegmentEngine:
                 "start_frame": arm.start_frame, "started_utc": arm.started_utc,
                 "frame": frame, "utc": utc}
 
-    @staticmethod
-    def _continued_ghost(arm, d, ev) -> tuple | None:
+    def _ghost_starts_here(self, arm, d) -> bool:
+        """Whether this arm's own clock is where the segment's ghost starts.
+
+        His MIPS Clip (2026-09-24) starts when he opens the HMC door, mid-area
+        in the castle basement, and its clock (and its recorded ghost) from the
+        counter zero the door causes about 61 frames later. Two arms began
+        somewhere else and put the ghost there instead: a practice reset re-arms
+        the segment where Mario respawns (by the HMC exit, not the door), and
+        a "move" arm names its door frame until the zero lands, so the ghost
+        walked out 61 frames early and snapped back. The ghost waits for the
+        segment's own start instead: a reset re-arm starts it only when the
+        segment starts at the place a reset returns to (a level or area entry,
+        or the reset itself), and a "move" arm only once its zero lands or its
+        window runs out without one (then the arm frame is the clock, as the
+        attempt's timing does).
+        """
+        if arm.anchor_type in _ANCHOR_TYPES and not any(
+                clause.get("type") in _RESET_RETURNS_TO for clause in d.start_triggers):
+            return False
+        if d.clock_start == "move" and arm.clock_frame is None:
+            return (self._now_frame is not None
+                    and self._now_frame - arm.start_frame > CLOCK_START_WINDOW_FRAMES)
+        return True
+
+    def _continued_ghost(self, arm, d, ev) -> tuple | None:
         """The ghost's clock owner for an arm a `state_loaded` re-arms.
 
         A load at the arm position ends the attempt and re-arms the segment
@@ -3102,7 +3131,7 @@ class SegmentEngine:
             return None
         if arm.ghost_origin is not None:
             return arm.ghost_origin
-        if not arm.native_origin_known:
+        if not arm.native_origin_known or not self._ghost_starts_here(arm, d):
             return None
         frame, utc = arm.clock_origin(d.clock_start)
         if utc is None:
@@ -3152,6 +3181,7 @@ class SegmentEngine:
         expiry frame, off by however long the wait was.
         """
         notices: list[dict] = []
+        self._now_frame = frame
         self._flush_move(_FrameOnly(frame), notices)
         return notices
 
@@ -3189,6 +3219,8 @@ class SegmentEngine:
         """Returns (closed raw Attempts, notices). Closures before arming."""
         from sm64_events.tracking.projection import Attempt  # cycle-free at call time
         closed, notices = [], []
+        if ev.frame:  # 0 = a journal-only event, no game frame
+            self._now_frame = ev.frame
         if ev.type == "tracking_gap":
             self._capture_gap(ev, notices)
             return closed, notices

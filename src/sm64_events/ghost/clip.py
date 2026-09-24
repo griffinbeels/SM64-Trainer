@@ -527,6 +527,15 @@ def _origin_metadata(clip: Clip) -> dict:
             "origin_generation": clip.frames[0].clock.origin_id}
 
 
+# An attempt that ends by entering another level closes on the level change,
+# inside the load where the game has no clock: his MIPS Clip ends at DDD
+# entry, and the capture refused the clock for the last 3 frames of all three
+# of his runs (2026-09-24), so every save refused its ghost. The clip ends at
+# the last occurrence with a clock, at most this many frames before the close,
+# and its manifest says how many ("closing_transition").
+CLOSING_TRANSITION_MAX = 30
+
+
 def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip:
     """Bind durable bytes to their current attempt, rather than a filename alone."""
     owner = {"attempt_id": attempt.id, "session_id": attempt.session_id, **attempt_origin(attempt)}
@@ -546,8 +555,11 @@ def check_manifest(path: Path, manifest: dict, *, attempt, target: dict) -> Clip
     if type(tail) is not int or not 0 <= tail < len(clip.frames) or bool(tail) != clip.dance_tail:
         raise ClipError("native ghost manifest disagrees with its dance tail")
     expected_kind = CLOCK_KINDS[owner["native_clock_kind"]]
+    transition = manifest.get("closing_transition", 0)  # absent before 2026-09-24: none
+    if type(transition) is not int or not 0 <= transition <= CLOSING_TRANSITION_MAX:
+        raise ClipError("native ghost manifest has an invalid closing transition")
     if (clip.clock_kind != expected_kind or clip.origin_global_timer != owner["native_clock_frame"]
-            or clip.frames[-1 - tail].global_timer != owner["closed_frame"]):
+            or clip.frames[-1 - tail].global_timer != owner["closed_frame"] - transition):
         raise ClipError("native ghost manifest disagrees with the attempt's effective origin")
     saved = next((f for f in OLDER_FORMATS if f[1] == clip.file_version), None)
     expected = dict(version=clip.file_version, clip_id=clip.clip_id, bytes=path.stat().st_size,
