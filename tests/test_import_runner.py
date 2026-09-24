@@ -49,11 +49,11 @@ def test_dentoriousred_maps_to_fourteen_times_over_ten_stars():
     # the row also carries what it takes to HOLD the cell (below).
     assert [{"reason": row["reason"], "text": row["text"]} for row in held] == [
         {"reason": "segments",
-         "text": "Bowser in the Fire Sea Course — No pole glitch — 0'39\"43"},
+         "text": "Bowser in the Fire Sea Course — No pole glitch — 39\"43"},
         {"reason": "segments",
-         "text": "Bowser in the Sky Course — 0'48\"00"},
+         "text": "Bowser in the Sky Course — 48\"00"},
         {"reason": "no_entity",
-         "text": "CCM wooden door - Enter BitDW (LBLJ) — 0'09\"23"},
+         "text": "CCM wooden door - Enter BitDW (LBLJ) — 09\"23"},
     ]
 
 
@@ -146,7 +146,7 @@ def test_a_bowser_row_whose_movement_this_database_lacks_still_drops():
     place = _seeded({"seg:bitfs-pipe": 60})
     candidates, rejected = candidates_for(payload(), "DentoriousRed", place=place)
     assert [row["text"] for row in rejected if row["reason"] == "segments"] == [
-        "Bowser in the Sky Course — 0'48\"00"]
+        "Bowser in the Sky Course — 48\"00"]
     assert sum(1 for c in candidates if c.entity_key.startswith("segment:")) == 1
 
 
@@ -167,7 +167,7 @@ def test_a_linked_subsection_lands_on_its_segment_as_standard():
         ("Standard", 806, "rta")]
     # The UNLINKED piece of the same target still drops, named.
     assert [row["text"] for row in rejected if row["reason"] == "subsections"] == [
-        "Hot-Foot-It into the Volcano — Inside the volcano — 0'08\"53"]
+        "Hot-Foot-It into the Volcano — Inside the volcano — 08\"53"]
 
 
 def test_a_placed_castle_movement_lands_under_the_sheets_own_approach_name():
@@ -206,8 +206,8 @@ def test_a_jp_target_and_a_subsection_piece_are_named_in_their_rows():
     subsection row is only reviewable if it says which PIECE it timed."""
     _candidates, rejected = candidates_for(payload(), "GTM")
     texts = [row["text"] for row in rejected]
-    assert "HMC door - Enter DDD (☆15 MIPS Clip) (JP) — 0'23\"00" in texts
-    assert "Hot-Foot-It into the Volcano — Volcano entry — 0'08\"06" in texts
+    assert "HMC door - Enter DDD (☆15 MIPS Clip) (JP) — 23\"00" in texts
+    assert "Hot-Foot-It into the Volcano — Volcano entry — 08\"06" in texts
 
 
 def test_every_candidate_names_a_star_a_strategy_and_the_igt_clock():

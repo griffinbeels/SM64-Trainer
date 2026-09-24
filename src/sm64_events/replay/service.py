@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sm64_events.core.timefmt import GAME_FPS, format_igt
+from sm64_events.core.timefmt import GAME_FPS, format_igt, format_igt_short
 from sm64_events.core.profiling import measured
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.association import association_problem, valid_picture_times
@@ -1132,7 +1132,7 @@ class ReplayService:
         else:
             label = course_name(a.course_id) if a.course_id is not None else None
         frames = a.igt_frames if a.igt_frames is not None else a.rta_frames
-        return {"label": label, "time_text": format_igt(frames) if frames is not None else None}
+        return {"label": label, "time_text": format_igt_short(frames) if frames is not None else None}
 
     def compression_status(self) -> dict:
         """`GET /api/replay/compression`; empty when compression is off."""

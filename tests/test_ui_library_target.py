@@ -692,7 +692,7 @@ def test_every_band_opens_into_five_subdivisions_wearing_their_own_caps(library_
 
 def assert_compiled_overall(page, data):
     """Compare the painted goals with the backend's full curve, all 45 rows."""
-    from sm64_events.core.timefmt import format_igt, frame_at_or_after
+    from sm64_events.core.timefmt import format_igt_short, frame_at_or_after
     from sm64_events.ranks import scoring
     from sm64_events.ranks.curves import time_for_score
 
@@ -713,7 +713,7 @@ def assert_compiled_overall(page, data):
                 assert (band["tier"], index) == ("Iron", 0)
                 assert division["range"].endswith("+"), division
             else:
-                printed = format_igt(frame_at_or_after(goal)).removeprefix("0'")
+                printed = format_igt_short(frame_at_or_after(goal))
                 assert division["range"].split(" – ")[0] == printed, (band["tier"], index, division, goal)
     note = page.evaluate("document.querySelector('.library-overall-body').textContent")
     assert "community standing" in note and "strategy families" in note, note

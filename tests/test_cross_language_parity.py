@@ -190,6 +190,22 @@ def test_igt_display_format_agrees():
         "is not, which is the drift these two are one careless edit away from.")
 
 
+def test_the_bare_display_form_agrees():
+    """His rule, 2026-09-24: every displayed time drops an empty `0'`. The
+    server formats most of what the page shows, so its twin must print what
+    fmtIgtShort prints."""
+    from sm64_events.core.timefmt import format_igt_short
+
+    js = run_node(
+        f"import {{ fmtIgtShort }} from {FORMAT_JS.as_uri()!r};\n"
+        f"const frames = {json.dumps(IGT_FRAMES)};\n"
+        "console.log(JSON.stringify(frames.map(fmtIgtShort)));")
+    python = [format_igt_short(frames) for frames in IGT_FRAMES]
+    assert python == js
+    assert python[IGT_FRAMES.index(1799)] == '59"96'
+    assert python[IGT_FRAMES.index(1800)] == "1'00\"00"
+
+
 # --- 4. stat-chip identity --------------------------------------------------
 
 STAT_SELECTIONS = [
