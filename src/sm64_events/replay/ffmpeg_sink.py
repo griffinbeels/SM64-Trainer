@@ -44,7 +44,7 @@ import numpy as np
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.replay.config import (
-    AUDIO_RESAMPLE_OPTIONS, RING_MAXRATE, forced_idr_args, fragment_mux_options,
+    AUDIO_RESAMPLE_OPTIONS, PICTURE_RESAMPLE_OPTIONS, RING_MAXRATE, forced_idr_args, fragment_mux_options,
     raw_picture_args, video_quality_args,
 )
 from sm64_events.replay.ring import SegmentInfo
@@ -451,7 +451,7 @@ class FfmpegAvSink:
             *(["-bsf:v", picture_duration_filter()] if self._picture else []),
             # audio: AAC, async-resampled to LOCK to the master (kills drift)
             "-c:a", "aac", "-b:a", "160k", "-ar", str(rate),
-            "-af", f"aresample={AUDIO_RESAMPLE_OPTIONS}",
+            "-af", f"aresample={PICTURE_RESAMPLE_OPTIONS if self._picture else AUDIO_RESAMPLE_OPTIONS}",
             *self._output_args(seg_s, pattern),
         ]
         self._proc = subprocess.Popen(
@@ -901,9 +901,9 @@ class FfmpegAvSink:
         rate = self._cfg.audio_rate
         placement = AudioPlacement(rate, self._mux_audio_chunk)
 
-        def _put_at(buf: bytes, ends_at: float) -> None:
+        def _put_at(buf: bytes, ends_at: float, padding: bool = False) -> None:
             try:
-                placement.put_at(buf, ends_at)
+                (placement.pad_at if padding else placement.put_at)(buf, ends_at)
             except Exception:
                 if not broken[0]:
                     log.warning("audio mux failed: the child is gone -- the "
@@ -911,8 +911,11 @@ class FfmpegAvSink:
                 broken[0] = True
 
         pacer = AudioPacer(rate, _time.perf_counter,
-                           write=lambda buf: _put_at(buf, _time.time()),
-                           write_at=_put_at, idle_grace_s=0.05)
+                           write=lambda buf: _put_at(buf, _time.time(), padding=True),
+                           write_at=_put_at, idle_grace_s=0.05,
+                           # The pacer's clock is perf_counter; the stamps are wall time.
+                           missing=lambda bound: placement.missing(
+                               bound - _time.perf_counter() + _time.time()))
         while not self._stop.is_set():
             drained = False
             while True:

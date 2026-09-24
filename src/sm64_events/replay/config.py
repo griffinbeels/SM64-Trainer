@@ -271,6 +271,16 @@ def apply_settings_file(cfg: ReplayConfig) -> ReplayConfig:
 
 
 AUDIO_RESAMPLE_OPTIONS = "async=1:first_pts=0:min_hard_comp=0.1"
+# The picture feed stamps every audio chunk itself (AudioPlacement), so its
+# stamps are the truth and ffmpeg should follow them: at 0.1 s, aresample laid
+# every hole under 100 ms shut, putting what followed early by the hole. On a
+# loaded machine (2026-09-24, 24 runs of the flash and click cut under 6
+# parallel copies and 24 CPU hogs) that left the click up to 100 ms ahead of
+# the flash, 9 of 24 over the 50 ms bound; at 0.02 s with exact padding
+# (AudioPacer `missing`), 0 of 24 and at most 39 ms. Callback jitter (a few
+# ms) stays below it and is never cut into the audio. The CFR feed's stamps
+# are ffmpeg's own read times, jittery by tens of ms, so it keeps 0.1.
+PICTURE_RESAMPLE_OPTIONS = "async=1:first_pts=0:min_hard_comp=0.02"
 
 
 def fragment_mux_options() -> dict[str, str]:
