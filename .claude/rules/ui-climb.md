@@ -33,6 +33,12 @@ in the other is a CSS-specificity problem described there) and, when you open
 one of their files, `.claude/rules/ui-ranks.md` (the icon registry and the
 banner this climbs on).
 
+**Not here: the PB row's GOLD!! and its one-shot arrival** (task 0147). It is
+a practice-log row effect, not a climb beat, and lives in
+`.claude/rules/pb-strategy.md`'s last row; its numbers are the "Personal best"
+group of `/ui/tunelog.html`, not this inspector. It honours the same
+Celebrations preference (`celebrationsEnabled()`) for the arrival only.
+
 **The standing process rule for anything judged by feel:** build the tuning
 inspector first, let the human tune it live, codify what he saves. Recipe:
 the `tuning-demo` skill. Worked example: `/ui/tune.html`.
