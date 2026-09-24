@@ -18,6 +18,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { Modal } from "./modal.js";
+import { Icon } from "./icons.js";
 import { RankIcon } from "./rankicon.js";
 import { capName, divisionDigit } from "./caps.js";
 import { entityIconSrc, fallbackToGenericStar } from "./entityicons.js";
@@ -66,29 +67,62 @@ export function fmtTimeLeft(ms) {
   return `${Math.floor(total / 3600)}:${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
 }
 
+// A rank as the medal and its name -- the SAME line under both times, so
+// your rank and the goal's read as one scale.
+function RankLine({ rank }) {
+  return html`<small class="daily-rank"><${RankIcon} tier=${rank.tier} division=${rank.division} size=${14} />
+    ${capName(rank.tier)} ${divisionDigit(rank.division)}</small>`;
+}
+
+function YourPb({ daily }) {
+  if (daily.pb_frames == null) {
+    return html`<div><dt>Your PB</dt><dd>—</dd><small>none yet</small></div>`;
+  }
+  return html`<div><dt>Your PB</dt><dd>${fmtIgtShort(daily.pb_frames)}</dd>
+    ${daily.pb_rank ? html`<${RankLine} rank=${daily.pb_rank} />` : html`<small>no ranks yet</small>`}</div>`;
+}
+
 function NextGoal({ goal, hasPb }) {
   if (!goal) {
     return html`<div><dt>Next Goal</dt><dd>${hasPb ? "Top rank" : "—"}</dd>
       <small>${hasPb ? "nothing above you" : "no ranks yet"}</small></div>`;
   }
   return html`<div><dt>Next Goal</dt><dd>${fmtSeconds(goal.cs / 100)}</dd>
-    <small class="daily-goal-rank"><${RankIcon} tier=${goal.tier} division=${goal.division} size=${14} />
-      ${capName(goal.tier)} ${divisionDigit(goal.division)}</small></div>`;
+    <${RankLine} rank=${goal} /></div>`;
 }
 
-export function DailyStarCard({ t, daily }) {
+// The star's name with the Library's book glued to its last word, so the
+// glyph wraps WITH a word and never onto a line of its own (the Scorecard's
+// round-13 rule for the same glyph).
+function NameWithBook({ label }) {
+  const lastSpace = label.lastIndexOf(" ");
+  const head = lastSpace > 0 ? label.slice(0, lastSpace + 1) : "";
+  const tail = lastSpace > 0 ? label.slice(lastSpace + 1) : label;
+  return html`${head}<span class="daily-name-tail">${tail}<span class="daily-name-book" aria-hidden="true"><${Icon} name="library" size=${19} /></span></span>`;
+}
+
+// `onOpenLibrary` opens this entry's Library page; both the art and the
+// name are that door (round 2: "If they click on the icon at all, then it
+// should bring them to the library"). Absent (no entity on this install),
+// both render as plain content.
+export function DailyStarCard({ t, daily, onOpenLibrary }) {
   const hasPb = daily.pb_frames != null;
+  const art = html`<img src=${entityIconSrc(t, daily.entity_key || daily.key)} alt=""
+      onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, 0)} draggable="false" />`;
+  const title = `Open ${daily.label} in the Library`;
   return html`<div class="daily-card">
-    <div class="daily-art daily-star-foil">
-      <img src=${entityIconSrc(t, daily.entity_key || daily.key)} alt=""
-        onerror=${(errorEvent) => fallbackToGenericStar(errorEvent, 0)} draggable="false" />
-    </div>
+    ${onOpenLibrary
+      ? html`<button type="button" class="daily-art daily-star-foil daily-art-link"
+          title=${title} onclick=${onOpenLibrary}>${art}</button>`
+      : html`<div class="daily-art daily-star-foil">${art}</div>`}
     <div class="daily-where">Day ${daily.day} · ${daily.course_name}</div>
-    <div class="daily-name">${daily.label}</div>
+    ${onOpenLibrary
+      ? html`<button type="button" class="daily-name daily-name-link" title=${title}
+          onclick=${onOpenLibrary}><${NameWithBook} label=${daily.label} /></button>`
+      : html`<div class="daily-name">${daily.label}</div>`}
     <p class="daily-blurb">Everyone plays this star today.</p>
     <dl class="daily-times">
-      <div><dt>Your PB</dt><dd>${hasPb ? fmtIgtShort(daily.pb_frames) : "—"}</dd>
-        <small>${hasPb ? "saved" : "none yet"}</small></div>
+      <${YourPb} daily=${daily} />
       <${NextGoal} goal=${daily.next_goal} hasPb=${hasPb} />
     </dl>
   </div>`;
@@ -97,7 +131,7 @@ export function DailyStarCard({ t, daily }) {
 // The open dialog. It owns the page on screen, so the store clearing its
 // payload at midnight never closes it: "TIMES UP!" holds, then the next day's
 // star arrives as the next page.
-function DailyStarDialog({ t, onClose }) {
+function DailyStarDialog({ t, onClose, openLibrary }) {
   const [pages, setPages] = useState(() => ({ current: t.dailyStar, leaving: null }));
   const now = useSecondTick();
   const incoming = t.dailyStar;
@@ -120,6 +154,13 @@ function DailyStarDialog({ t, onClose }) {
   const left = msUntilEndOfDate(pages.current.date, now);
   const timesUp = left <= 0;
   const close = () => onClose(pages.current.date);
+  const current = pages.current;
+  const toLibrary = openLibrary && current.entity_key ? () => {
+    close();
+    openLibrary({ kind: "target", entity: current.entity_key,
+                  strat: current.strategy || null,
+                  goalCs: current.next_goal ? current.next_goal.cs : null });
+  } : null;
   return html`<${Modal} title="Daily Star" icon="target" size="daily" onClose=${close}
       footer=${html`<div class="daily-timer ${timesUp ? "times-up" : ""}" role="timer">
           ${timesUp ? html`<b>TIMES UP!</b>`
@@ -129,17 +170,17 @@ function DailyStarDialog({ t, onClose }) {
       ${pages.leaving ? html`<div class="daily-page turn-out" key=${pages.leaving.date}>
         <${DailyStarCard} t=${t} daily=${pages.leaving} /></div>` : null}
       <div class="daily-page ${pages.leaving ? "turn-in" : ""}" key=${pages.current.date}>
-        <${DailyStarCard} t=${t} daily=${pages.current} /></div>
+        <${DailyStarCard} t=${t} daily=${current} onOpenLibrary=${toLibrary} /></div>
     </div>
   </${Modal}>`;
 }
 
-export function DailyStarModal({ t }) {
+export function DailyStarModal({ t, openLibrary }) {
   const due = !!(t.dailyStar && !t.dailyStar.seen);
   const quiet = useQuietScreen(due);
   const [open, setOpen] = useState(false);
   useEffect(() => { if (due && quiet) setOpen(true); }, [due, quiet]);
   if (!open) return null;
-  return html`<${DailyStarDialog} t=${t}
+  return html`<${DailyStarDialog} t=${t} openLibrary=${openLibrary}
     onClose=${(date) => { setOpen(false); t.markDailyStarSeen(date); }} />`;
 }

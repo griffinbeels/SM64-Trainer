@@ -150,6 +150,15 @@ def next_goal(ladder_cs: dict, pb_frames: int | None) -> dict | None:
             "tier": progress["next_tier"], "division": progress["next_division"]}
 
 
+def pb_rank(ladder_cs: dict, pb_frames: int | None) -> dict | None:
+    """The rank your PB holds on that ladder (round 2: "we should show the
+    current rank you have, just like the goal rank")."""
+    if not ladder_cs or not pb_frames:
+        return None
+    progress = scoring.progress_for_time(ladder_cs, display_cs(pb_frames))
+    return {"tier": progress["tier"], "division": progress["division"]}
+
+
 def create_dailystar_router(service, library=None, adoptions=None) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -158,17 +167,19 @@ def create_dailystar_router(service, library=None, adoptions=None) -> APIRouter:
             raise HTTPException(503, "daily star unavailable")
         return service.db
 
-    def _ladder(entity_key: str, label: str, clock: str) -> dict:
+    def _strategy_and_ladder(entity_key: str, label: str, clock: str):
+        """The Scorecard tile's own strategy for this entry and its ladder;
+        the strategy also names the Library page the announcement opens."""
         ranks = service.ranks
         if ranks is None:
-            return {}
+            return None, {}
         active = ActiveStrats.from_db(service.db, service.strat_by_star,
                                       service.strat_by_segment)
         strategy = tile_strategies(
             [{"entries": [(entity_key, label, clock)]}], ranks, active,
             library.payload if library is not None else {},
             adoptions.rows() if adoptions is not None else {}).get(entity_key)
-        return ranks.ladder_cs(entity_key, strategy) if strategy else {}
+        return strategy, (ranks.ladder_cs(entity_key, strategy) if strategy else {})
 
     @router.get("/daily-star")
     def get_daily_star(date: str | None = None):
@@ -176,18 +187,20 @@ def create_dailystar_router(service, library=None, adoptions=None) -> APIRouter:
         day = _parse_day(date)
         entry = daily_entry(day)
         entity_key, label, clock = _resolve(db, entry.key)
-        pb = today = goal = None
+        pb = today = goal = rank = strategy = None
         if entity_key is not None:
             course_id, star_id, segment_id = _identity(entity_key)
             row = fastest_current_pbs(db.pbs()).get(
                 (course_id, star_id, segment_id, clock))
             pb = row["frames"] if row else None
             today = todays_best(db.attempts(), entity_key, clock, day)
-            goal = next_goal(_ladder(entity_key, label, clock), pb)
+            strategy, ladder = _strategy_and_ladder(entity_key, label, clock)
+            goal, rank = next_goal(ladder, pb), pb_rank(ladder, pb)
         return {"date": day.isoformat(), "day": entry.day, "key": entry.key,
                 "entity_key": entity_key, "label": label,
                 "course_name": entry.course_name, "clock": clock,
-                "pb_frames": pb, "today": today, "next_goal": goal,
+                "pb_frames": pb, "pb_rank": rank, "strategy": strategy,
+                "today": today, "next_goal": goal,
                 "seen": db.get_state(SEEN_KEY, None) == day.isoformat()}
 
     @router.post("/daily-star/seen")

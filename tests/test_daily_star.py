@@ -17,7 +17,7 @@ from sm64_events.ranks.dailystar import (DECK, EPOCH, FIRST_KEY, course_of,
                                          cycle_order, daily_entry)
 from sm64_events.ranks.scorecard import template_rows
 from sm64_events.server.dailystar_api import (create_dailystar_router, next_goal,
-                                              todays_best)
+                                              pb_rank, todays_best)
 from sm64_events.storage.db import Database
 
 
@@ -115,6 +115,14 @@ def test_next_goal_is_the_time_that_reaches_one_division_above_the_pb():
     assert next_goal({}, 347) is None
 
 
+def test_your_rank_sits_one_division_below_the_next_goal():
+    for pb_frames in (347, 380, 410):
+        rank, goal = pb_rank(_LADDER, pb_frames), next_goal(_LADDER, pb_frames)
+        below = scoring.progression_key(rank["tier"], rank["division"])
+        assert below + 1 == scoring.progression_key(goal["tier"], goal["division"])
+    assert pb_rank(_LADDER, None) is None and pb_rank({}, 347) is None
+
+
 def test_no_pb_aims_at_the_first_step_above_the_floor():
     goal = next_goal(_LADDER, None)
     assert _division(_LADDER, goal["cs"]) == _division(_LADDER, 10 ** 9) + 1
@@ -134,7 +142,8 @@ def test_the_endpoint_answers_and_remembers_the_announcement(tmp_path):
         assert body["key"] == body["entity_key"] == "star:2:2"
         assert body["label"] == "Shoot into the Wild Blue"
         assert (body["day"], body["clock"], body["today"], body["seen"]) == (1, "igt", None, False)
-        assert body["next_goal"] is None      # no rank standards on this service
+        # no rank standards on this service
+        assert body["next_goal"] is body["pb_rank"] is body["strategy"] is None
         client.post("/api/daily-star/seen", json={"date": "2026-09-23"})
         assert client.get("/api/daily-star", params={"date": "2026-09-23"}).json()["seen"]
         assert not client.get("/api/daily-star", params={"date": "2026-09-24"}).json()["seen"]

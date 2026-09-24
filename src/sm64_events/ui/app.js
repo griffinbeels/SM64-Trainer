@@ -309,7 +309,7 @@ function App() {
     ${/* Root-mounted like the update popup: the desktop shell can ask to close
          from any tab, and a browser tab simply never receives the event. */""}
     <${CloseWarning} />
-    <${DailyStarModal} t=${t} />
+    <${DailyStarModal} t=${t} openLibrary=${openLibrary} />
     ${/* Mounted at root, not inside the Rank tab: a rank-up earned while on
          the Practice page must still celebrate, and rule 10 (browser<->GUI
          parity) means the desktop window and the browser tab agree on this
