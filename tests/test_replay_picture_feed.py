@@ -353,10 +353,12 @@ def _record_a_flash_and_a_click(sink, ledger) -> None:
         frame = frame.copy()
         elapsed = time.perf_counter() - t0
         flashing = 2.5 <= elapsed < 2.7
-        if flashing and flash_at is None:
-            flash_at = time.time()
-        frame[:, :, :3] = 255 if flashing else (index % 200)
+        # One instant for both: the flash picture's own stamp. Read apart,
+        # a loaded machine put up to 150 ms between them (2026-09-24).
         ts = time.time()
+        if flashing and flash_at is None:
+            flash_at = ts
+        frame[:, :, :3] = 255 if flashing else (index % 200)
         # Like the recorder: only a NEW picture feeds (the flash holds for
         # several grabs and is one picture).
         if ledger.observe(frame, ts, 5000 + index):

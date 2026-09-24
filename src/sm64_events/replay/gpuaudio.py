@@ -115,11 +115,13 @@ class GpuAudio:
             # Padding ends where the pacer bounded it: at the committed video
             # end during a pause, so it is muxable at once, never stamped at a
             # wall clock the video has not reached.
-            lambda buf: self.placement.put_at(buf, self._pad_end_wall()),
+            lambda buf: self.placement.pad_at(buf, self._pad_end_wall()),
             write_at=self.placement.put_at,
             idle_grace_s=0.05,
             max_pad_samples=self.max_pad_samples,
             pad_limit=self._pad_limit,
+            # The pacer's clock is monotonic; the stamps are wall time.
+            missing=lambda bound: self.placement.missing(bound + self._wall_offset),
         )
         self.finished = False
 
