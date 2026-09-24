@@ -1843,6 +1843,19 @@ history.
 - **Lives** — the celebration surface
   (`src/sm64_events/ui/components/celebrate.js`)
 
+### Goal plate
+
+The box in a [[practice log]] card's head holding its [[personal best]] over
+its [[Goal]], and under them one dot per success when that [[Goal]] asks for
+a streak or a count. Clicking the lower line picks a [[rank]] or a [[runner]] or a typed
+time, and that pick pins the [[target]] on the [[Scorecard]] too. The plate
+keeps one size whatever it says, so a stream crop of the top card never moves,
+and its [[Celebration]] plays inside it.
+
+- **Lives** — the plate and its picker (`src/sm64_events/ui/components/goalplate.js`)
+  → the pb track of the [[practice log]] card
+- **Not** — the [[Stream overlay]], which draws the same answer as its own page.
+
 ### Stream overlay
 
 The page a streamer adds to OBS as a Browser Source: the current [[target]]'s
