@@ -46,6 +46,7 @@ from sm64_events.core.paths import (bundled_defaults_seed,
                                     bundled_sheet_ladders)
 from sm64_events.ranks.standards import RankStandards
 from sm64_events.server.app import create_app
+from sm64_events.server.dailystar_api import SEEN_KEY as DAILY_STAR_SEEN_KEY
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.server.poller import Poller
 from sm64_events.storage.db import Database
@@ -1884,6 +1885,13 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
         if seed:
             _seed_fixture_attempt(base, service, database, stage, target, arm_segment, seed_editor_fixtures, seed_subsections, target_segment)
             _seed_fixture_stage(base, service, castle_stage, seed_castle_pieces, castle_piece_arms, bowser_stage, enter_level, seed_reds_run, arm_hundred_coin)
+        if database is not None:
+            # Today's Daily Star announcement is already dismissed, so it never
+            # covers a page a test is driving (it intercepted clicks in the
+            # frame-readout tests, 2026-09-24). tests/test_ui_daily_star.py
+            # clears this to see the announcement.
+            database.set_state(DAILY_STAR_SEEN_KEY,
+                               datetime.now().astimezone().date().isoformat())
         yield base, service
     finally:
         if thread is not None and thread.ident is not None:
