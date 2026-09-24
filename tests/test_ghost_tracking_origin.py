@@ -61,12 +61,15 @@ def test_saved_segment_preserves_actual_origin_and_close_without_retiming(mode, 
 
 def test_latest_move_zero_changes_origin_without_changing_the_arm():
     projector = selected_segment()
+    # The door frame is not where the clock or the recorded ghost starts: no
+    # origin until the zero the door causes lands (MIPS Clip, 2026-09-24).
+    assert projector.native_ghost_origin("segment", "1") is None
+    projector.feed(row(11, "practice_reset", 1051, dict(DOOR_ECHO), utc=LATER))
     before = projector.native_ghost_origin("segment", "1")
     assert before == {"kind": "segment", "session_id": 1,
                       "arm_id": 10 + SEGMENT_ATTEMPT_OFFSET,
                       "start_frame": 1000, "started_utc": UTC,
-                      "frame": 1000, "utc": UTC}
-    projector.feed(row(11, "practice_reset", 1051, dict(DOOR_ECHO), utc=LATER))
+                      "frame": 1051, "utc": LATER}
     projector.feed(row(12, "practice_reset", 1052, dict(DOOR_ECHO), utc=LAST))
     rebased = projector.native_ghost_origin("segment", "1")
     assert rebased == {**before, "frame": 1052, "utc": LAST}
@@ -101,6 +104,8 @@ def test_a_load_keeps_the_ghost_on_the_run_a_reset_restarts_it(start):
     subsegment may start from a save state), but the ghost keeps following
     the run the load continues; the renderer places the loaded state on it."""
     projector = anchor_started_segment() if start == "anchor" else selected_segment(start)
+    if start == "move":
+        projector.feed(row(11, "practice_reset", 1051, dict(DOOR_ECHO), utc=LATER))  # the door's zero
     run = projector.native_ghost_origin("segment", "1")
     assert run["arm_id"] == 10 + SEGMENT_ATTEMPT_OFFSET
     previous = 10
@@ -112,8 +117,76 @@ def test_a_load_keeps_the_ghost_on_the_run_a_reset_restarts_it(start):
     attempts = projector.feed(row(23, "practice_reset", 1500, {"mario_acted": True, "acted_tracking": True},
                                   utc=LAST))
     restarted = projector.native_ghost_origin("segment", "1")
-    assert attempts and restarted["arm_id"] == 23 + SEGMENT_ATTEMPT_OFFSET
+    assert attempts
+    if start != "anchor":
+        # A reset returns Mario to the level entry, not to this door: its
+        # ghost waits for the door (see the MIPS Clip tests below).
+        assert restarted is None
+        return
+    assert restarted["arm_id"] == 23 + SEGMENT_ATTEMPT_OFFSET
     assert (restarted["frame"], restarted["utc"]) == (1500, LAST)
+
+
+def mips_clip():
+    """His MIPS Clip (segment 2, 2026-09-24): starts when he opens the HMC door,
+    mid-area in the basement; its clock and its recorded ghost start at the
+    counter zero the door causes about 61 frames later; ends entering DDD."""
+    definition = replace(ccm_piece("move"), id=2, name="MIPS Clip", start_triggers=[
+        {"type": "moment_reached", "kind": "door_open", "level": 6}],
+        end_triggers=[{"type": "level_enter", "to": 23}])
+    projector = Projector(segments=[definition])
+    projector.feed(row(1, "level_changed", 25167, {"from": 7, "to": 6}))
+    projector.feed(row(2, "target_set", 25167, {"kind": "segment", "segment_id": 2}))
+    projector.feed(row(3, "area_changed", 25168, {"level": 6, "from": 1, "to": 3}))
+    return projector
+
+
+def door(jid, frame, utc=UTC):
+    return row(jid, "moment_reached", frame, {"kind": "door_open", "level": 6, "area": 3}, utc=utc)
+
+
+def test_a_door_started_segment_ghost_starts_at_the_door_zero_not_the_reset_or_the_door():
+    """His journal, session 25: the door at 29662 arms MIPS Clip, the zero at
+    29723 starts its clock (the attempt's native_clock_frame). The ghost used
+    to walk out from the door frame, 61 frames early, and snap back."""
+    projector = mips_clip()
+    projector.feed(row(4, "practice_reset", 25168, {"mario_acted": True, "acted_tracking": True}))
+    assert projector.native_ghost_origin("segment", "2") is None  # coming out of HMC: nothing yet
+    projector.feed(door(5, 29662))
+    projector.feed(row(6, "mario_acted", 29700, {"action": 1}))
+    assert projector.native_ghost_origin("segment", "2") is None  # the door is opening
+    projector.feed(row(7, "practice_reset", 29723, dict(DOOR_ECHO), utc=LATER))
+    origin = projector.native_ghost_origin("segment", "2")
+    assert (origin["arm_id"], origin["frame"], origin["utc"]) == (5 + SEGMENT_ATTEMPT_OFFSET * 2, 29723, LATER)
+    [attempt] = projector.feed(row(8, "level_changed", 31672, {"from": 6, "to": 23}, utc=LAST))
+    assert attempt.native_clock_frame == origin["frame"] and attempt.closed_frame == 31672
+
+
+def test_a_reset_in_the_basement_never_starts_the_door_segments_ghost():
+    """He opened the door (29303), went through (zero 29364), then reset at
+    29439: the reset re-armed MIPS Clip where Mario respawns, and the ghost
+    started walking from there. It now waits for the door."""
+    projector = mips_clip()
+    projector.feed(door(5, 29303))
+    projector.feed(row(6, "practice_reset", 29364, dict(DOOR_ECHO), utc=LATER))
+    assert projector.native_ghost_origin("segment", "2")["frame"] == 29364
+    projector.feed(row(7, "practice_reset", 29439, {"mario_acted": True, "acted_tracking": True,
+                                                    "igt_frames_before": 75}, utc=LAST))
+    assert projector.native_ghost_origin("segment", "2") is None
+    projector.feed(door(8, 29662, utc=LAST))
+    projector.feed(row(9, "practice_reset", 29723, dict(DOOR_ECHO), utc=LAST))
+    assert projector.native_ghost_origin("segment", "2")["frame"] == 29723
+
+
+def test_a_move_arm_with_no_zero_starts_its_ghost_when_the_window_ends():
+    """A start that causes no counter zero times from the arm (the attempt
+    does too); the ghost waits out the zero window, then uses the arm frame."""
+    projector = mips_clip()
+    projector.feed(door(5, 29662))
+    projector.feed(row(6, "mario_acted", 29662 + 90, {"action": 1}))
+    assert projector.native_ghost_origin("segment", "2") is None
+    projector.feed(row(7, "mario_acted", 29662 + 91, {"action": 1}))
+    assert projector.native_ghost_origin("segment", "2")["frame"] == 29662
 
 
 def test_disarmed_but_still_selected_segment_has_no_live_origin():
@@ -127,7 +200,7 @@ def test_disarmed_but_still_selected_segment_has_no_live_origin():
 
 def test_gap_and_session_boundary_revoke_an_existing_origin():
     for event in ("tracking_gap", "session_started"):
-        projector = selected_segment()
+        projector = selected_segment("trigger")
         assert projector.native_ghost_origin("segment", "1") is not None
         projector.feed(row(11, event, 1200, session=2))
         assert projector.native_ghost_origin("segment", "1") is None
