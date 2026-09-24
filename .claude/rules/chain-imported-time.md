@@ -11,6 +11,7 @@ paths:
   - "src/sm64_events/library/export_column.py"
   - "src/sm64_events/server/import_api.py"
   - "src/sm64_events/server/scorecard_api.py"
+  - "src/sm64_events/server/scorecard_resolve.py"
   - "src/sm64_events/server/scorecard_standards.py"
   - "src/sm64_events/tracking/importing.py"
   - "src/sm64_events/tracking/recordings.py"
