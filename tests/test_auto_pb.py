@@ -106,6 +106,8 @@ def test_a_faster_valid_run_replaces_it_and_a_slower_one_does_not(tmp_path):
                      reset(1600), grab(2000, 450),
                      reset(2100), grab(2600, 470))
     assert [frames for _, frames, _, _ in pbs(db)] == [480, 450]
+    # Each save names the PB it replaced -- the practice log's Time Save.
+    assert [e["previous_frames"] for e in pb_events(db)] == [None, 480]
 
 
 def test_no_strategy_selected_never_saves(tmp_path, caplog):

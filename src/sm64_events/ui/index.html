@@ -7119,7 +7119,7 @@
   .pb-swap-num { transition: opacity var(--log-pb-swap, 220ms) ease var(--log-pb-swap, 220ms); }
   .pb-gold {
     display: inline-block; opacity: 0;
-    transition: opacity var(--log-pb-swap, 220ms) ease;
+    transition: opacity var(--log-pb-swap, 220ms) ease, translate var(--log-pb-save-fade, 400ms) ease;
     font-size: 1.12em; font-weight: 800; letter-spacing: .04em; color: var(--gold);
     background-image:
       linear-gradient(100deg, hsl(0 0% 100% / 0) 0%,
@@ -7162,9 +7162,38 @@
     40%  { opacity: var(--log-pb-sparkle, 1); transform: scale(1) rotate(60deg); }
     100% { opacity: 0; transform: scale(.3) rotate(120deg); }
   }
+  /* THE TIME SAVE, just left of GOLD!!: "Time Save: -0.30 (9 frames)" from
+     the save until the next attempt is logged (ui/pbcrown.js decides), then
+     it fades out and leaves the word alone. Out of flow, so it never moves a
+     column: it lives in the result column's empty stretch. It fades in
+     after the word has popped (--log-pb-save-delay), and @starting-style
+     gives a row that MOUNTS already carrying one -- an automatic save that
+     landed in the same refetch as its run -- the same fade in. */
+  .pb-save {
+    position: absolute; right: calc(100% + 12px); top: 50%;
+    white-space: nowrap; font-size: .86em; line-height: 1.1; font-weight: 700; color: #a3e0a3;
+    pointer-events: none; opacity: 0; transform: translate(8px, -50%);
+    transition: opacity var(--log-pb-save-fade, 400ms) ease,
+                transform var(--log-pb-save-fade, 400ms) ease;
+  }
+  .pb-save.is-shown {
+    opacity: 1; transform: translate(0, -50%);
+    transition-delay: var(--log-pb-save-delay, 900ms);
+  }
+  @starting-style { .pb-save.is-shown { opacity: 0; transform: translate(8px, -50%); } }
+  /* Where the row has no room beside the word (attemptlog.js measures it:
+     useTimeSaveFit), the Time Save sits UNDER GOLD!!, right-aligned to it,
+     and the word lifts to make room -- `translate`, not `transform`, so the
+     lift composes with the arrival's scale pop instead of fighting it. The
+     lift waits for the Time Save's own delay and settles as it leaves. */
+  .pb-swap.save-under .pb-save { right: 0; top: calc(50% + 11px); }
+  .pb-swap.save-under.has-save .pb-gold {
+    translate: 0 -6px;
+    transition-delay: var(--log-pb-swap, 220ms), var(--log-pb-save-delay, 900ms);
+  }
   @media (prefers-reduced-motion: reduce) {
     .pb-gold, .attempt-table tr.pb-arrive, tr.pb-arrive .pb-gold { animation: none; }
-    .pb-swap-num, .pb-gold { transition: none; }
+    .pb-swap-num, .pb-gold, .pb-save { transition: none; }
     .pb-spark { display: none; }
   }
   /* A STAR'S PIECES, inside its own card (round 22, 2026-08-08): "the

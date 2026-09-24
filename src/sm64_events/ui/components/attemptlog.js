@@ -12,12 +12,13 @@
 // Moved verbatim, comments included -- the evidence in them is the point.
 // No behaviour change.
 import { createContext, h } from "preact";
-import { useContext, useEffect, useRef, useState } from "preact/hooks";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { AttemptDrawer } from "./attemptdrawer.js";
 import { displayName, sectionPbByStrat } from "../entitysection.js";
 import { celebrationsEnabled } from "../celebrations.js";
+import { timeSaveText } from "../pbcrown.js";
 import { StatMenu } from "./statmenu.js";
 import { RankIcon } from "./rankicon.js";
 import { StratPicker } from "./stratpicker.js";
@@ -79,27 +80,75 @@ export function delta(frames) {
 const PB_WORD = "GOLD!!";
 const PB_TITLE = "Your personal best on this strategy";
 
-// The attempt ids a live pb_saved just crowned (ui/pbcrown.js). PracticeLog
+// What the live feed says about PBs (ui/pbcrown.js): `crowned`, the attempt
+// ids a pb_saved just crowned, and `timeSaves`, attempt id -> frames that save
+// beat the old PB by, standing until the next attempt is logged. PracticeLog
 // provides it once for every card, so no card or table between the page and
 // the row has to carry it.
-export const CrownedIds = createContext(null);
+export const PbNews = createContext(null);
 
 // The delta and the word share one grid cell and swap SEQUENTIALLY (ui-core:
 // never a crossfade). The number that fades out is the one the row showed
 // BEFORE it became the PB -- the -0.43s it won by -- not the 0.00s it becomes,
 // so a live PB reads as "beat it by this much -> GOLD!!". Losing the crown (a
 // faster PB, an Undo) runs the same swap backwards.
-function PbDelta({ frames, isPb, arriving }) {
+//
+// THE TIME SAVE sits just left of the word -- "Time Save: -0.30 (9 frames)",
+// his wording -- from the save until the next attempt is logged, then fades
+// out and leaves GOLD!! alone: "the intention is to inform the user about how
+// much they saved, but not for too long". It is positioned out of flow, so
+// neither its arrival nor its exit moves a column of the table. The element is
+// always there, holding the last margin it showed, so leaving is a fade of
+// text that is still present rather than a removal.
+function PbDelta({ frames, isPb, arriving, timeSave }) {
   const before = useRef(frames);
   if (!isPb) before.current = frames;
-  return html`<span class="pb-swap">
+  const lastSave = useRef(null);
+  if (timeSave) lastSave.current = timeSave;
+  const swapRef = useRef(null);
+  const under = useTimeSaveFit(swapRef, Boolean(timeSave));
+  return html`<span ref=${swapRef}
+      class=${`pb-swap${under ? " save-under" : ""}${timeSave ? " has-save" : ""}`}>
     <span class="pb-swap-num" aria-hidden=${isPb ? "true" : undefined}>${
       delta(isPb ? before.current : frames)}</span>
     <span class="pb-gold" aria-hidden=${isPb ? undefined : "true"}>${PB_WORD}</span>
+    <span class=${`pb-save${timeSave ? " is-shown" : ""}`} aria-hidden=${timeSave ? undefined : "true"}>${
+      lastSave.current ? timeSaveText(lastSave.current) : ""}</span>
     ${arriving ? html`<i class="pb-spark" aria-hidden="true">✦</i><i
       class="pb-spark" aria-hidden="true">✦</i><i
       class="pb-spark" aria-hidden="true">✦</i>` : ""}
   </span>`;
+}
+
+// Beside GOLD!! when the row's own empty stretch holds the Time Save, UNDER it
+// (the word lifts to make room) when it does not. The stretch is whatever the
+// result cell leaves over: a narrow card, a caveat badge or the dust counts
+// all eat it, so no width threshold can answer this -- measured beside at
+// 1500/1100px, it overran the run's own time at 850px. Only the one row
+// showing a Time Save measures, and it re-measures as the row resizes.
+const TIME_SAVE_GAP_PX = 20;
+
+function useTimeSaveFit(swapRef, active) {
+  const [under, setUnder] = useState(false);
+  useLayoutEffect(() => {
+    const swap = swapRef.current;
+    const row = swap && swap.closest("tr");
+    const cell = row && row.querySelector(".attempt-result");
+    const save = swap && swap.querySelector(".pb-save");
+    if (!active || !cell || !save) return undefined;
+    const measure = () => {
+      const content = document.createRange();
+      content.selectNodeContents(cell);
+      const room = swap.getBoundingClientRect().left - content.getBoundingClientRect().right;
+      setUnder(room < save.offsetWidth + TIME_SAVE_GAP_PX);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [active]);
+  return under;
 }
 
 // The holo follows the pointer across the PB row -- the flat-screen version of
@@ -122,10 +171,11 @@ function settleFoil(event) { event.currentTarget.style.removeProperty("--pb-tilt
 // this row as the PB -- hence waiting for both. The Celebrations preference
 // silences the arrival only; the standing gold is information.
 function usePbRow(a, sec, t) {
-  const crownedIds = useContext(CrownedIds);
+  const news = useContext(PbNews);
   const pb = sec ? sectionPbByStrat(sec, t.clock) : null;
   const isPb = Boolean(pb) && pb.attempt_id === a.id && !a.cleared;
-  const crowned = Boolean(crownedIds) && crownedIds.has(a.id);
+  const crowned = Boolean(news) && news.crowned.has(a.id);
+  const timeSave = isPb && news ? news.timeSaves.get(a.id) : undefined;
   const [arriving, setArriving] = useState(false);
   const crownPlayed = useRef(false);
   useEffect(() => {
@@ -157,7 +207,8 @@ function usePbRow(a, sec, t) {
     handlers: isPb
       ? { onpointermove: tiltFoil, onpointerleave: settleFoil, onanimationend: endArrival } : {},
     title: isPb ? PB_TITLE : undefined,
-    delta: html`<${PbDelta} frames=${a.pb_delta_frames} isPb=${isPb} arriving=${arriving} />`,
+    delta: html`<${PbDelta} frames=${a.pb_delta_frames} isPb=${isPb} arriving=${arriving}
+      timeSave=${timeSave} />`,
   };
 }
 

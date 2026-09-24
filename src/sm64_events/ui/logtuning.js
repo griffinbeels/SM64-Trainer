@@ -245,6 +245,16 @@ export const TUNABLES = {
     min: 0, max: 1, step: 0.05, unit: "x",
     why: "Brightness of the three sparks that twinkle around GOLD!! on a new PB. 0 = no sparkles.",
   },
+  pbSaveDelay: {
+    group: "Personal best", label: "Time Save delay", value: 900,
+    min: 0, max: 3000, step: 50, unit: "ms",
+    why: "How long after the save the \"Time Save: -X.XX (Y frames)\" text starts fading in beside GOLD!! -- long enough to let the word pop first.",
+  },
+  pbSaveFade: {
+    group: "Personal best", label: "Time Save fade", value: 400,
+    min: 0, max: 2000, step: 25, unit: "ms",
+    why: "How long the Time Save text takes to fade in, and to fade out once the next attempt is logged.",
+  },
 
   // ---- Density: the log list itself ----------------------------------------
   cardGap: {
