@@ -32,9 +32,11 @@ Keep the split: `tests/test_rule_files.py` proves the budget and that every
 `ui/index.html` is served per request: edit + refresh, no restart.
 Components/store/API: `ui/components/` · `ui/store.js` · `ui/api.js` ·
 `ui/app.js`; vendored Preact in `ui/vendor/`. Formatting: `ui/format.js` —
-**`fmtIgt` is the canonical form and an identifier** (`core/timefmt.py::format_igt`
-mirrors it byte for byte and builds clip filenames; it keeps its `0'`).
-`fmtIgtShort`/`fmtSeconds` are the display form (empty minutes dropped);
+**Every displayed time is bare** (his rule, 2026-09-24: "0'11"43 should be
+11"43, while 1'11"43 is correct"): `fmtIgtShort`/`fmtSeconds`, and
+`core/timefmt.py::format_igt_short` for server text. **`fmtIgt`/`format_igt`
+keep `0'` and are identifiers only** (clip filenames, journaled payloads;
+`tests/test_bare_times.py` holds the list);
 format a rank standard (stored in seconds) with `fmtSeconds`, never via
 frames. Pinned by `tests/test_ui_time_format.py` and
 `tests/test_cross_language_parity.py`. Design system: the one CSS block in

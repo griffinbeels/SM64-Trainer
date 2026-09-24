@@ -179,7 +179,7 @@ function ObjectiveCard({ startLevel, destLevel, destFill, playing, layout }) {
         <div class="objective-live-state" aria-label="Practice state">
           <${Icon} name="clock" size=${17} /><span>Ready</span>
         </div>
-        <span class="pb-tag">PB <b>0'13"46</b> (igt)</span>
+        <span class="pb-tag">PB <b>13"46</b> (igt)</span>
       </div>
     </section>
   </div>`;

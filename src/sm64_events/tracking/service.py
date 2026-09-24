@@ -27,7 +27,7 @@ from sm64_events.core.landmark import landmark_group
 from sm64_events.core.modes import ModeConfig, effective_version
 from sm64_events.core.paths import bundled_defaults_seed
 from sm64_events.core.recording_url import validate_recording_url
-from sm64_events.core.timefmt import format_igt
+from sm64_events.core.timefmt import format_igt_short
 from sm64_events.memory.addresses import course_name, node_label, star_name
 from sm64_events.ranks import scopes
 from sm64_events.ranks.classify import RANK_MODES
@@ -646,9 +646,9 @@ class TrackerService:
                          "anchor_type": a.anchor_type, "outcome": a.outcome,
                          "outcome_detail": a.outcome_detail,
                          "igt_frames": a.igt_frames,
-                         "igt": format_igt(a.igt_frames) if a.igt_frames is not None else None,
+                         "igt": format_igt_short(a.igt_frames) if a.igt_frames is not None else None,
                          "rta_frames": a.rta_frames,
-                         "rta": format_igt(a.rta_frames) if a.rta_frames is not None else None,
+                         "rta": format_igt_short(a.rta_frames) if a.rta_frames is not None else None,
                          "rollouts_total": a.rollouts_total,
                          "rollouts_dustless": a.rollouts_dustless,
                          "jumps_total": a.jumps_total,

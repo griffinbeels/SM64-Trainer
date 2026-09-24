@@ -76,7 +76,7 @@ function Card({ card, open, onToggle }) {
       <div class="log-card-body">
         <table class="attempt-table"><tbody>
           ${[1, 2, 3, 4, 5].map((row) => html`<tr key=${row}>
-            <td>#${row}</td><td class="attempt-result">✓ 0'11"${30 + row}</td>
+            <td>#${row}</td><td class="attempt-result">✓ 11"${30 + row}</td>
             <td>Standard</td></tr>`)}
         </tbody></table>
       </div>

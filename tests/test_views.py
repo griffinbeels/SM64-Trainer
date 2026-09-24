@@ -77,9 +77,9 @@ def test_view_groups_by_star_with_stats_and_pb_delta(tmp_path):
     outcomes = [a["outcome"] for a in sec["attempts"]]
     assert outcomes == ["success", "reset", "success"]
     last = sec["attempts"][-1]
-    assert last["igt"] == "0'11\"66" and last["pb_delta_frames"] == 7
+    assert last["igt"] == "11\"66" and last["pb_delta_frames"] == 7
     stats = {s["key"]: s for s in sec["stats"]}
-    assert stats["best"]["value"] == 343 and stats["best"]["display"] == "0'11\"43"
+    assert stats["best"]["value"] == 343 and stats["best"]["display"] == "11\"43"
     assert abs(stats["success_rate"]["value"] - 2 / 3) < 1e-9
     assert stats["success_rate"]["display"] == "67%"
 
@@ -395,7 +395,7 @@ def test_progress_groups_successes_by_session_with_pb_flags(tmp_path):
     assert [p["is_pb_igt"] for p in s1["points"]] == [True, False]
     assert all(p["is_pb_rta"] is False for p in s1["points"])
     p = s1["points"][0]
-    assert p["igt"] == "0'11\"43" and p["attempt_id"] == aid
+    assert p["igt"] == "11\"43" and p["attempt_id"] == aid
     assert p["t_utc"]            # close timestamp present
     assert s1["started_utc"]     # session metadata present
 
@@ -1616,7 +1616,7 @@ def test_rank_mode_average_grades_the_mean_not_the_pb(tmp_path):
     [sec] = view["stars"]
     assert view["rank_mode"] == "avg10"
     assert sec["rank"]["rank"] == "Diamond" and sec["rank"]["mode"] == "avg10"
-    assert sec["rank"]["basis"] == {"frames": 346, "display": "0'11\"53",
+    assert sec["rank"]["basis"] == {"frames": 346, "display": "11\"53",
                                     "count": 2, "window": 10}
     assert view["rank_by_star"]["2:2"]["rank"] == "Diamond"
     # per-attempt medals stay per-run: the 343f attempt still reads Mario

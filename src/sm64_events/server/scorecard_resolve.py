@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from sm64_events.core.timefmt import attainable_cs, format_igt, frame_at_or_after
+from sm64_events.core.timefmt import attainable_cs, format_igt_short, frame_at_or_after
 from sm64_events.library.ratings import runner_times
 from sm64_events.ranks.classify import RANK_NAMES, display_cs
 from sm64_events.memory.addresses import star_name
@@ -110,8 +110,7 @@ def _time_label(cs: int) -> str:
     """A typed goal's name: the time as the timer shows it (a minute-less
     time drops its `0'`, the UI's own short form), or `sub 1'45"` for a
     whole-second value."""
-    text = format_igt(frame_at_or_after(cs))
-    text = text[2:] if text.startswith("0'") else text
+    text = format_igt_short(frame_at_or_after(cs))
     return f"sub {text[:-2]}" if cs % 100 == 0 else text
 
 

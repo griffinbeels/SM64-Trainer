@@ -1075,7 +1075,7 @@ def test_segment_attempt_completed_carries_segment_fields(tmp_path):
     assert done and done[0].payload["segment_id"] == lblj
     assert done[0].payload["segment_name"] == "LBLJ"
     assert done[0].payload["rta_frames"] == 85
-    assert done[0].payload["rta"] == "0'02\"83"
+    assert done[0].payload["rta"] == "02\"83"
     armed = [e for e in sent if e.type == "segment_armed"]
     assert armed and armed[0].payload["segment_id"] == lblj
     # notices are broadcast-only: they must never reach the journal

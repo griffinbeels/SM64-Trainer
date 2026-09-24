@@ -62,7 +62,7 @@ def test_an_imported_star_is_a_section_with_one_row_in_its_log(tmp_path):
     import_a_star(svc)
     section = star_section(build_session_view(db, svc, "igt", scope="lifetime"))
     assert section["pb"]["igt"]["frames"] == IMPORTED_FRAMES
-    assert section["pb"]["igt"]["display"] == '0\'44"50'
+    assert section["pb"]["igt"]["display"] == '44"50'
     (row,) = section["attempts"]
     assert row["id"] == section["pb"]["igt"]["attempt_id"]
     assert row["outcome"] == "success"
