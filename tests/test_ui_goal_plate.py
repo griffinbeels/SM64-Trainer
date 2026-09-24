@@ -1,0 +1,166 @@
+"""The practice card's goal plate, through the real app on the UI fixture.
+
+Task 0106's approved behaviour (2026-09-23): the card shows the Scorecard's
+own goal under the PB, a goal picked from the card's Player tab pins that
+entry on the Scorecard too, and a repeat goal counts, breaks and celebrates
+inside the plate. The server rules are pinned in test_scorecard_entry_goals.py;
+this file pins that the card draws them.
+"""
+import json
+import sys
+import tempfile
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "tools"))
+
+from ui_fixture import (serve_ui_live, _run_coro,  # noqa: E402
+                        FIXTURE_COURSE, FIXTURE_STAR)
+from find_uilab import find_uilab  # noqa: E402
+
+_MISSING = find_uilab()
+if _MISSING:
+    pytest.skip(_MISSING, allow_module_level=True)
+
+from uilab import driver  # noqa: E402
+from sm64_events.core.events import Event  # noqa: E402
+
+KEY = f"star:{FIXTURE_COURSE}:{FIXTURE_STAR}"
+PLATE = "document.querySelector('.log-card .goal-plate')"
+
+
+def _put(base, path, body):
+    request = urllib.request.Request(base.rstrip("/") + path, method="PUT",
+                                     data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(request).read())
+
+
+def _get(base, path):
+    return json.loads(urllib.request.urlopen(base.rstrip("/") + path).read())
+
+
+def _grab(service, frame, igt_frames):
+    now = datetime.now(timezone.utc)
+
+    async def go():
+        await service.publish(Event(type="practice_reset", frame=frame, timestamp_utc=now,
+                                    payload={"igt_frames_before": 0}))
+        await service.publish(Event(type="star_collected", frame=frame + 400, timestamp_utc=now,
+                                    payload={"course_id": FIXTURE_COURSE, "star_id": FIXTURE_STAR,
+                                             "igt_frames": igt_frames, "igt_timed_at": "xcam"}))
+    _run_coro(go())
+
+
+def _wait(page, ms):
+    page.evaluate(f"new Promise(r => setTimeout(r, {ms}))")
+
+
+def _plate(page):
+    return page.evaluate(f"""(() => {{ const p = {PLATE};
+        return p && {{ text: p.innerText.replace(/\\n/g, ' | '), width: p.offsetWidth,
+          pips: p.querySelectorAll('.goal-pip').length,
+          lit: p.querySelectorAll('.goal-pip.is-on').length,
+          party: !!p.querySelector('.goal-plate-party') }}; }})()""")
+
+
+@pytest.fixture(scope="module")
+def seen():
+    """Drive one card through every approved state, recording what it drew."""
+    out = {}
+    with tempfile.TemporaryDirectory() as scratch:
+        with serve_ui_live(Path(scratch) / "plate.db") as (base, service):
+            with driver.get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
+                page.goto(base)
+                _wait(page, 2500)
+                out["automatic"] = _plate(page)
+                out["automatic_api"] = _get(
+                    base, f"/api/scorecard/entry_goals?scope=overall&keys={KEY}")["goals"][KEY]
+                # The Player tab: search, pick, and the Scorecard follows.
+                runners = _get(base, f"/api/scorecard/entry_goal_options?key={KEY}&scope=overall")["runners"]
+                runner = runners[len(runners) // 2]
+                page.evaluate(f"{PLATE}.querySelector('.goal-plate-trigger').click()")
+                _wait(page, 1200)
+                page.evaluate("[...document.querySelectorAll('.goal-picker-kind button')][1].click()")
+                _wait(page, 500)
+                page.evaluate(f"""(() => {{ const i = {PLATE}.querySelector('.search-menu-filter');
+                    i.value = {json.dumps(runner['runner'])};
+                    i.dispatchEvent(new Event('input', {{bubbles: true}})); }})()""")
+                _wait(page, 400)
+                out["search_hits"] = page.evaluate(f"""[...{PLATE}.querySelectorAll('.search-menu-option')]
+                    .map(e => e.innerText)""")
+                page.evaluate(f"{PLATE}.querySelector('.search-menu-option').click()")
+                _wait(page, 1500)
+                out["runner"] = runner
+                out["runner_plate"] = _plate(page)
+                card = _get(base, "/api/scorecard?scope=overall")
+                out["runner_tile"] = next(tile for row in card["rows"] for tile in row["tiles"]
+                                          if tile["key"] == KEY)
+                # A 3-in-a-row goal on the fastest rank -- the longest words the
+                # plate carries ("3x streak · Mario 1"), which is what could
+                # widen it. The fixture's 11"2x runs beat it; 12"00 does not.
+                top = _get(base, f"/api/scorecard/entry_goal_options?key={KEY}&scope=overall")["divisions"][0]
+                assert 1134 < top["cs"] < 1200, top
+                _put(base, "/api/scorecard/entry_goal",
+                     {"key": KEY, "goal": {"kind": "division", "tier": top["tier"],
+                                           "division": top["division"], "count": 3, "streak": True}})
+                _wait(page, 1500)
+                frames = iter(range(20000, 60000, 2000))
+                for igt in (340, 341):                       # two under 11"50
+                    _grab(service, next(frames), igt)
+                    _wait(page, 1500)
+                out["two"] = _plate(page)
+                _grab(service, next(frames), 360)             # 12"00 breaks it
+                _wait(page, 1500)
+                out["broken"] = _plate(page)
+                for igt in (339, 340):
+                    _grab(service, next(frames), igt)
+                    _wait(page, 1500)
+                _grab(service, next(frames), 338)             # the third in a row
+                party = False
+                for _ in range(20):
+                    _wait(page, 150)
+                    party = party or _plate(page)["party"]
+                out["celebrated"] = party
+                _wait(page, 3200)
+                out["done"] = _plate(page)
+                # The longest source words the sheet can put there.
+                longest = max(runners, key=lambda r: len(r["runner"]))
+                _put(base, "/api/scorecard/entry_goal",
+                     {"key": KEY, "goal": {"kind": "runner", "runner": longest["runner"],
+                                           "count": 3, "streak": True}})
+                _wait(page, 1500)
+                out["long_source"] = _plate(page)
+    return out
+
+
+def test_the_plate_draws_the_scorecards_own_goal(seen):
+    api = seen["automatic_api"]
+    assert api["goal_cs"] is not None, api
+    assert "GOAL" in seen["automatic"]["text"] and "Auto" in seen["automatic"]["text"], seen["automatic"]
+
+
+def test_a_player_found_by_search_becomes_this_stars_pinned_goal(seen):
+    name = seen["runner"]["runner"]
+    assert any(hit.startswith(name) for hit in seen["search_hits"]), seen["search_hits"]
+    assert name in seen["runner_plate"]["text"], seen["runner_plate"]
+    tile = seen["runner_tile"]
+    assert tile["goal_pinned"] is True and tile["goal_cs"] == seen["runner"]["cs"], tile
+
+
+def test_a_streak_goal_counts_breaks_and_celebrates(seen):
+    assert (seen["two"]["pips"], seen["two"]["lit"]) == (3, 2), seen["two"]
+    assert seen["broken"]["lit"] == 0, seen["broken"]
+    assert seen["celebrated"], "the third run in a row never played GOAL! in the plate"
+    assert seen["done"]["lit"] == 3 and "✓" in seen["done"]["text"], seen["done"]
+
+
+def test_the_plate_keeps_one_width_through_every_state(seen):
+    """A stream crop of the top card must not shift when a goal is reached."""
+    states = ("automatic", "runner_plate", "two", "broken", "done", "long_source")
+    widths = {state: seen[state]["width"] for state in states}
+    assert len(set(widths.values())) == 1, widths

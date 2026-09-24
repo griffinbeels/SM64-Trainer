@@ -606,12 +606,26 @@ adapt alongside those choices, and selecting it only changes **[[Rank]] Goal**.
 [[Rank]] alone needs no legend. With players or custom sets selected, pills and
 colored dots identify the winning source; the [[rank]] pill has no remove button.
 
+Automatic is also floored per entry: an entry's goal is the harder of the
+[[scope]]'s Automatic goal and one subdivision above your own [[rank]] on that
+entry's [[ladder]] (capped at its top), so it never shows a goal you already hold.
+
+A **pinned** goal is one threshold set on a single [[star]] or [[segment]] from its
+Practice card: a [[division]], a [[runner]]'s time, or a typed time. It replaces
+that entry's fastest-offer choice everywhere, including its [[Scorecard]] tile,
+until cleared. A pin may repeat: `10x` asks for ten finishes under it, `10x
+streak` for ten in a row, counted from the current [[session]]'s [[attempt]]s
+since you set the pin, so each sitting starts again. A [[reset]] in the first
+3 s neither counts nor breaks a streak, and you can forgive an [[attempt]]
+that broke one.
+
 Capless 4 through 1 have finite goal times; Capless 5 is the unbounded floor
 and is not a selectable goal.
 
 - **Lives** — `src/sm64_events/server/scorecard_standards.py` resolves the entry identity;
   `src/sm64_events/server/scorecard_goals.py` owns saved selection/set semantics;
-  `src/sm64_events/server/scorecard_api.py` builds targets; `src/sm64_events/ui/components/scorecard.js`
+  `src/sm64_events/server/scorecard_resolve.py` resolves every entry's goal (pins,
+  the Automatic floor); `src/sm64_events/server/scorecard_api.py` serves them; `src/sm64_events/ui/components/scorecard.js`
   presents the controls and inline editor.
 
 ### Scope
@@ -1828,6 +1842,32 @@ history.
 
 - **Lives** — the celebration surface
   (`src/sm64_events/ui/components/celebrate.js`)
+
+### Goal plate
+
+The box in a [[practice log]] card's head holding its [[personal best]] over
+its [[Goal]], and under them one dot per success when that [[Goal]] asks for
+a streak or a count. Clicking the lower line picks a [[rank]] or a [[runner]] or a typed
+time, and that pick pins the [[target]] on the [[Scorecard]] too. The plate
+keeps one size whatever it says, so a stream crop of the top card never moves,
+and its [[Celebration]] plays inside it.
+
+- **Lives** — the plate and its picker (`src/sm64_events/ui/components/goalplate.js`)
+  → the pb track of the [[practice log]] card
+- **Not** — the [[Stream overlay]], which draws the same answer as its own page.
+
+### Stream overlay
+
+The page a streamer adds to OBS as a Browser Source: the current [[target]]'s
+[[personal best]] over its [[Goal]], a tally of this sitting's successes when
+that [[Goal]] asks for a streak or a count, and a [[Celebration]] drawn inside
+the same box when it falls. Every setting lives in its URL, which the designer
+in Settings → Streaming writes.
+
+- **Lives** — the page (`src/sm64_events/ui/goal-overlay.html`,
+  `src/sm64_events/ui/goaloverlaypage.js`), its settings and progress rules
+  (`src/sm64_events/ui/goaloverlay.js`), the designer
+  (`src/sm64_events/ui/components/streamoverlay.js`)
 
 ### Tuning inspector
 

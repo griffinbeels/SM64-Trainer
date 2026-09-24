@@ -1171,7 +1171,7 @@ def test_a_runner_goal_walks_the_sheet_once_and_reuses_it_until_something_moves(
     from sm64_events.core.paths import bundled_sheet_library
     from sm64_events.library.store import LibraryStore
     from sm64_events.ranks.standards import RankStandards
-    from sm64_events.server import scorecard_api
+    from sm64_events.server import scorecard_api, scorecard_resolve
     from sm64_events.server.broadcaster import Broadcaster
     from sm64_events.storage.db import Database
     from sm64_events.tracking.service import TrackerService
@@ -1186,11 +1186,11 @@ def test_a_runner_goal_walks_the_sheet_once_and_reuses_it_until_something_moves(
     adoptions = StubAdoptions()
 
     walks = []
-    real_runner_times = scorecard_api.runner_times
+    real_runner_times = scorecard_resolve.runner_times
     def counting_runner_times(*args, **kwargs):
         walks.append(kwargs.get("version"))
         return real_runner_times(*args, **kwargs)
-    monkeypatch.setattr(scorecard_api, "runner_times", counting_runner_times)
+    monkeypatch.setattr(scorecard_resolve, "runner_times", counting_runner_times)
 
     app = FastAPI()
     app.include_router(scorecard_api.create_scorecard_router(

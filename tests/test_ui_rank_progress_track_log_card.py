@@ -253,6 +253,8 @@ def test_the_tuning_fixture_draws_every_pb_tag_state(tunelog_demo):
     which is exactly how the first version of this feature overflowed into the
     strategy picker. All three have to be on the page he tunes it on."""
     tags = tunelog_demo.evaluate(ACTION_CELLS)["pbTags"]
-    assert any(t.startswith("PB ") and '"' in t for t in tags), tags
+    # A saved PB is the bare time since the goal plate (task 0106) draws the
+    # "PB" word in its own label column beside "GOAL".
+    assert any('"' in t and not t.startswith("no ") for t in tags), tags
     assert any(t.startswith("no PB") for t in tags), tags
     assert any("no strategy" in t for t in tags), tags

@@ -192,8 +192,8 @@
     "719a973d672982c98f9dbc2f170b95c090ac6267969c61b5fae2a15a871a63b0",
     "723b69ca8883a7da22a8837cf6cb0e0e424339fe1ff1bcd0a1b9e7bcdcc524f9",
     "e64b391d7351f5e5b64593147e887b5e371bcaccb79f889d919c4ad47d1a8743",
-    "46f6a5decdae37de1c8a4a1cd35822300d72c6f95a8f97ba6c13662c8be40f1f",
-    "5e13a200d39cabffe6fb07971063b8ee7c255578345db24f2d0bafab670706b4",
+    "532a7aa28e799bff4c520356acd19397104725114aa4bd9e64c4d20ce023cf39",
+    "1ffd1702c2d24fdaee284433e17ae978b94ac381b9ded0a18d2b8e9fe945b25e",
     "e7e42dca482897f60a340a5b1a993ff5134f3726f37dc564f97693aaf10174ac",
     "3442859f4a94b6c9cd51ff993ca7c635b5e8f126efc3165d093498fd2225b614",
     "bddf47f11ab25002a54ed6ca14cad2901e2866228813cbdf8989c0a3e21db4b3",
@@ -1596,15 +1596,15 @@
     },
     {
       "path": "src/sm64_events/server/scorecard_api.py",
-      "line": 383,
+      "line": 379,
       "rule": "C901",
-      "message": "`create_scorecard_router` is too complex (73 > 15)"
+      "message": "`create_scorecard_router` is too complex (48 > 15)"
     },
     {
       "path": "src/sm64_events/server/scorecard_api.py",
-      "line": 383,
+      "line": 379,
       "rule": "PLR0915",
-      "message": "Too many statements (198 > 50)"
+      "message": "Too many statements (155 > 50)"
     },
     {
       "path": "src/sm64_events/server/scorecard_api.py",
@@ -3447,6 +3447,54 @@
       "source_commit": "6387622a08ef11430aca450fbe32a2cf99646b70",
       "source_state": "Reviewed working-tree delta from source_commit",
       "reviewer": "r42_startup_workload independent read-only review"
+    },
+    {
+      "findings": [
+        {
+          "message": "`create_scorecard_router` is too complex (52 > 15)",
+          "allowance": "4889cd4743c745705a11ee399f192254cd4b05bcf367c9feaa36d43eb18ec095",
+          "rule": "C901",
+          "replaces_allowance": "46f6a5decdae37de1c8a4a1cd35822300d72c6f95a8f97ba6c13662c8be40f1f",
+          "path": "src/sm64_events/server/scorecard_api.py",
+          "line": 375
+        },
+        {
+          "message": "Too many statements (162 > 50)",
+          "allowance": "8f9d583a5fd40691e6eb15d040a3efe658dd9f905fa83259e8091790c79debc9",
+          "rule": "PLR0915",
+          "replaces_allowance": "5e13a200d39cabffe6fb07971063b8ee7c255578345db24f2d0bafab670706b4",
+          "path": "src/sm64_events/server/scorecard_api.py",
+          "line": 375
+        }
+      ],
+      "reason": "Replace the two create_scorecard_router allowances after moving its goal resolvers into server/scorecard_resolve.py::GoalResolver (per-entry goals landed there). C901 73 -> 52, statements 198 -> 162; the new module adds no findings. Previous allowances removed, so no increase is permitted.",
+      "source_commit": "c343489fe5008941aaffa3092fc95e3e197cc29b",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "practice-goal-server implementer"
+    },
+    {
+      "findings": [
+        {
+          "message": "`create_scorecard_router` is too complex (48 > 15)",
+          "allowance": "532a7aa28e799bff4c520356acd19397104725114aa4bd9e64c4d20ce023cf39",
+          "rule": "C901",
+          "replaces_allowance": "4889cd4743c745705a11ee399f192254cd4b05bcf367c9feaa36d43eb18ec095",
+          "path": "src/sm64_events/server/scorecard_api.py",
+          "line": 379
+        },
+        {
+          "message": "Too many statements (155 > 50)",
+          "allowance": "1ffd1702c2d24fdaee284433e17ae978b94ac381b9ded0a18d2b8e9fe945b25e",
+          "rule": "PLR0915",
+          "replaces_allowance": "8f9d583a5fd40691e6eb15d040a3efe658dd9f905fa83259e8091790c79debc9",
+          "path": "src/sm64_events/server/scorecard_api.py",
+          "line": 379
+        }
+      ],
+      "reason": "Replace the two create_scorecard_router allowances after repeat goals: the entry spec and key check moved into scorecard_resolve.py alongside the new progress/forgive logic. C901 52 -> 48, statements 162 -> 155; no findings added. Previous allowances removed, so no increase is permitted.",
+      "source_commit": "d2900f4e5d6f9bf59f0c19fa08c7c8baf8e1632d",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "practice-goal-server implementer"
     }
   ]
 }
