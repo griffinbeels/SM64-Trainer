@@ -941,6 +941,23 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
  * page rather than asserting on props). The real app never passes this prop
  * and keeps the enforced behaviour.
  */
+// Whether `.practice-page` (the container every `@container` rule on this card
+// measures) is at or under the Layout matrix's narrow threshold -- see
+// PracticeLog's own comment on why this one fact is read in JS.
+function usePageIsNarrow(pageRef) {
+  const [isNarrow, setIsNarrow] = useState(false);
+  useEffect(() => {
+    if (!pageRef.current || typeof ResizeObserver === "undefined") return undefined;
+    const container = pageRef.current.closest(".practice-page") || pageRef.current;
+    const measure = () => setIsNarrow(container.getBoundingClientRect().width <= NARROW_CONTAINER_PX);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+  return isNarrow;
+}
+
 export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
                               clearFocus, focusKey, onSelect, activeKey = null,
                               playedKeys = [], openTargetPicker = null,
@@ -1005,16 +1022,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
   // physical relocation ever happens unless a cell is actually dialed to
   // "body").
   const pageRef = useRef(null);
-  const [isNarrow, setIsNarrow] = useState(false);
-  useEffect(() => {
-    if (!pageRef.current || typeof ResizeObserver === "undefined") return undefined;
-    const container = pageRef.current.closest(".practice-page") || pageRef.current;
-    const measure = () => setIsNarrow(container.getBoundingClientRect().width <= NARROW_CONTAINER_PX);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
+  const isNarrow = usePageIsNarrow(pageRef);
   const logVars = useMemo(() => logTuningVars(logTuning()), []);
   const logClasses = useMemo(() => logTuningClasses(logTuning()), []);
   const tuning = logTuning();
