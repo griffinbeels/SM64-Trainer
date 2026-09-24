@@ -139,6 +139,7 @@ export const COMPONENTS = [
       ["onPick?", "() => void", "Called when the cell is chosen."],
       ["onEdit?", "() => void", "Called when the cell's edit affordance is used."],
       ["caveat?", "string | null", "Names a caveat on the result; renders the caveat mark."],
+      ["daily?", "DailyStar | null", "Today's Daily Star payload when this cell is the Daily Star; adds the foil look and its hover line."],
     ],
   },
   {
