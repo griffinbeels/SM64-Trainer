@@ -14,9 +14,12 @@ Full detail, evidence and history: [docs/rules/library.md](../../docs/rules/libr
 
 Startup refresh is `library/background.py`: read Log column A first, skip
 unchanged revisions, build/fit/stamp/compress newer workbooks in one quiet
-lower-priority child that **never opens app data**; the parent validates,
-installs atomically, rechecks revision under the store's apply lock, then runs
-adoption and regrade notifications. Source runs the base Python with this
+lower-priority child that **never opens app data**; the parent reads and fits
+on a thread, stages and commits on the loop (`LibraryStore.stage_absorb` /
+`commit_absorb`, which restages if an input moved), installs atomically, then
+runs adoption and regrade notifications. The last calibration is saved to
+`data/rank_calibration.bin` and reused only on an identical key
+(`library/calibration.py::SavedCalibration`). Source runs the base Python with this
 checkout on PYTHONPATH; frozen builds dispatch via `gui_entry.py`. Timeout/cancel
 reaps the owned worker. `ranks_api.absorb_after_regrade` prepares scores once
 per sweep, builds no display labels or replay links, and keeps no cache past the

@@ -107,12 +107,14 @@ class Preparation:
 
     Gathering provisions practice entries in the database, so it runs where
     the caller owns that state; `run` is the pure fit and may run on a worker
-    thread. `key` names every input here (`Adoptions._calibration_inputs`)."""
+    thread. `key` names every input here (`Adoptions._calibration_inputs`);
+    `generation` is the gatherer's count of input changes when it was made."""
     key: str
     assignments: dict
     definitions: list
     standards: object
     policy: object
+    generation: int = 0
 
     def run(self, payload):
         return prepare(payload, self.assignments, self.definitions, self.standards, self.policy)
@@ -151,6 +153,13 @@ def source_revision(root: Path) -> str:
             digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
             digest.update(path.read_bytes() + b"\0")
     return digest.hexdigest()
+
+
+def payload_digest(payload: dict) -> str:
+    """The payload's identity for a preparation: all of it but the fetch
+    time, which no preparation reads and every refresh restamps. Like
+    `fingerprint`, it refuses non-finite numbers."""
+    return fingerprint({**payload, "fetched_at": None})
 
 
 def saved_key(payload_digest: str, inputs_key: str) -> str:

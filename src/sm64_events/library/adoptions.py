@@ -279,10 +279,14 @@ class Adoptions:
         self.provision = provision
         self._automatic = {}
         self.policy = policy
+        # Every input change reaches the ranker through `_sync`, which counts
+        # it: a fit gathered before the count moved may be stale.
+        self.generation = 0
         if standards is not None and hasattr(store, "calibrations"):
             standards.calibrations = store.calibrations
             store.prepare_calibration = self._prepare_calibration
             store.plan_calibration = self._preparation
+            store.plan_generation = lambda: self.generation
 
     @atomic_assignment
     def load(self) -> None:
@@ -321,6 +325,7 @@ class Adoptions:
         return library_ladders(self.store.payload, self.rows(), self.qualified)
 
     def _sync(self) -> None:
+        self.generation += 1
         if self.standards is not None and hasattr(self.store, "recalibrate"):
             if not self._calibration_is_current():
                 self.store.recalibrate()
@@ -375,7 +380,8 @@ class Adoptions:
         from sm64_events.library.calibration import Preparation
         automatic, assignments, definitions, policy, key = self._calibration_inputs(payload)
         self._automatic = automatic
-        return Preparation(key, assignments, definitions, self.standards, policy)
+        return Preparation(key, assignments, definitions, self.standards, policy,
+                           self.generation)
 
     def _prepare_calibration(self, payload):
         return self._preparation(payload).run(payload)

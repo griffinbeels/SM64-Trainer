@@ -408,6 +408,22 @@ def test_a_restart_with_the_same_inputs_publishes_the_saved_calibration(tmp_path
     adoptions._sync()   # the service start's second sync: current, so not even a reuse
 
 
+def test_a_refetch_of_the_same_sheet_reuses_the_saved_calibration(tmp_path, monkeypatch):
+    """A startup refresh of an unedited Sheet differs only in its fetch time,
+    which no preparation reads: it reuses the saved fit and publishes nothing,
+    and a reuse carries the fetch time it was asked about."""
+    from sm64_events.library.calibration import SavedCalibration
+    calls, first = _first_start(tmp_path, monkeypatch)
+    store, _adoptions = _restart(tmp_path)
+    refetched = fit_payload(_snapshot())
+    refetched["fetched_at"] = "a later fetch"
+    assert not store.absorb(refetched)["applied"] and len(calls) == 1
+    other = LibraryStore(tmp_path / "other.json.gz")
+    other.saved_calibration = SavedCalibration(tmp_path / "rank_calibration.bin")
+    other.plan_calibration = store.plan_calibration
+    assert other._prepare(refetched).payload == refetched and len(calls) == 1
+
+
 MOVED_INPUTS = {
     "payload": lambda tmp_path, monkeypatch: write_snapshot(
         tmp_path / "library.json.gz", fit_payload(_snapshot(1100))),
@@ -523,6 +539,22 @@ def test_the_code_revision_follows_every_source_it_names(tmp_path, monkeypatch):
         assert calibration.code_revision() != frozen
     finally:
         calibration.code_revision.cache_clear()
+
+
+def test_an_adoption_edit_moves_the_change_count(tmp_path, monkeypatch):
+    """A background apply trusts an unmoved count to mean unmoved inputs, so
+    every door that changes them -- an edit, a definition change (the
+    service calls `_sync`) -- must move it, and the plan must carry it."""
+    write_snapshot(tmp_path / "library.json.gz", fit_payload(_snapshot()))
+    _counting_prepare(monkeypatch)
+    store, adoptions = _restart(tmp_path)
+    counts = [store.plan_generation()]
+    adoptions.unadopt("some row")
+    counts.append(store.plan_generation())
+    adoptions._sync()
+    counts.append(store.plan_generation())
+    assert counts[0] < counts[1] < counts[2]
+    assert store.plan_calibration(store.payload).generation == counts[2]
 
 
 def test_a_preparation_identical_to_the_active_one_still_counts_as_current(tmp_path, monkeypatch):
