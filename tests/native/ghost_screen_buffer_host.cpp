@@ -143,6 +143,9 @@ static bool prepare_extent(u32 w,u32 h) {
     source_width=w;source_height=h;return prepare(current,1,64,64,w,h);
 }
 struct ViRaster {const GraphicsDrawer::CopyRectParams* params;const CachedTexture* source;const GraphicsDrawer::BlitOrCopyRectParams* screen;};
+// ghost_presentation.cpp's record of the renderer's bindings: no tracking
+// dispatch here, so nothing is known and every step asks the driver.
+static bool known_state(Known* out){*out={};return false;}
 }
 namespace replay_gl {static bool BeginCapture(){return begin_gpu();}static bool EndCapture(){return end_gpu();}}
 struct DisplayWindow {

@@ -14,7 +14,6 @@
 #include "gDP.h"
 #include "GBI.h"
 #include "Graphics/Context.h"
-#include "Graphics/Parameters.h"
 #include <chrono>
 #include <cstring>
 
@@ -49,9 +48,10 @@ template <class Query> void ask(Query &&query) {
     query_nanos += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
 }
 bool gateway(bool (__cdecl *call)()) { ++cost.error_reads; return call(); }
-/* What the renderer already knows of its state: the dispatch's tracked draw
- * and read bindings and viewport, and GLideN64's enable cache, the only way it
- * switches these capabilities (the ghost code restores whatever it changes). */
+/* What the renderer already knows of its state, as its dispatch observed it
+ * (link_dispatch): draw and read bindings, viewport and scissor, program,
+ * vertex array, depth and blend state and the capabilities it switches. The
+ * ghost code restores whatever it changes, so these stay the driver's. */
 ghost_compositor::Known known_state() {
     using ghost_compositor::Known;
     Known known{};
@@ -66,14 +66,23 @@ ghost_compositor::Known known_state() {
     if (replay_gl::CandidateBindings(&identity, &bindings)) {
         known.fields |= Known::read_framebuffer; known.read = bindings.read_framebuffer;
     }
+    replay_gl::RenderState render{};
+    if (replay_gl::Render(&render)) {
+        known.fields |= Known::program | Known::vertex_array | Known::depth | Known::blend_factors;
+        known.current_program = render.program; known.bound_vertex_array = render.vertex_array;
+        known.depth_function = render.depth_func; known.depth_write = render.depth_mask ? 1 : 0;
+        std::memcpy(known.blend_factor, render.blend, sizeof(render.blend));
+        if (render.scissor_known) {
+            known.fields |= Known::scissor; std::memcpy(known.scissor_box, render.scissor, sizeof(render.scissor));
+        }
+    }
     // Known::Cap bit order.
-    const graphics::EnableParam caps[] = {graphics::enable::DEPTH_TEST, graphics::enable::CULL_FACE,
-        graphics::enable::POLYGON_OFFSET_FILL, graphics::enable::DEPTH_CLAMP, graphics::enable::CLIP_DISTANCE0,
-        graphics::enable::BLEND, graphics::enable::SCISSOR_TEST};
+    const GLenum caps[] = {GL_DEPTH_TEST, GL_CULL_FACE, GL_POLYGON_OFFSET_FILL, GL_DEPTH_CLAMP, GL_CLIP_DISTANCE0,
+        GL_BLEND, GL_SCISSOR_TEST};
     for (uint32_t i = 0; i < sizeof(caps) / sizeof(caps[0]); ++i) {
-        const u32 value = gfxContext.isEnabled(caps[i]);
-        if (value == INVALID_PARAMETER) continue; // never set yet: asked
-        known.caps |= 1u << i; if (value) known.enabled |= 1u << i;
+        bool on = false;
+        if (!replay_gl::Enabled(caps[i], &on)) continue; // not observed: asked
+        known.caps |= 1u << i; if (on) known.enabled |= 1u << i;
     }
     return known;
 }
@@ -106,7 +115,9 @@ bool image_writes_disabled() {
     // uEnableDepth=0. depth_render is a separate path and must be disabled too.
     if (!config.frameBufferEmulation.N64DepthCompare) return true;
     if (!get_uniform || graphics::Context::FramebufferFetch) return false;
-    GLint program = 0; ask([&] { glGetIntegerv(GL_CURRENT_PROGRAM, &program); });
+    GLint program = 0; replay_gl::RenderState render{};
+    if (replay_gl::Render(&render)) program = GLint(render.program);
+    else ask([&] { glGetIntegerv(GL_CURRENT_PROGRAM, &program); });
     if (!program) return false;
     for (const char *name : {"uEnableDepth", "uRenderTarget"}) {
         GLint location = -1; ask([&] { location = glGetUniformLocation(program, name); });
@@ -117,9 +128,13 @@ bool image_writes_disabled() {
     return true;
 }
 bool no_color_feedback() {
+    // The pinned N64 combiner samples game color only through tex units0/1,
+    // whose bindings the dispatch observes; asked only before it has.
+    GLuint observed[2]{};
+    if (replay_gl::Texture2D(0, &observed[0]) && replay_gl::Texture2D(1, &observed[1]))
+        return observed[0] != clean_texture && observed[1] != clean_texture;
     GLint previous = 0; ask([&] { glGetIntegerv(GL_ACTIVE_TEXTURE, &previous); });
     bool valid = true;
-    // The pinned N64 combiner samples game color only through tex units0/1.
     for (unsigned unit = 0; unit < 2; ++unit) {
         dispatch.ActiveTexture(GL_TEXTURE0 + unit);
         GLint texture = 0; ask([&] { glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture); });
@@ -219,12 +234,16 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
     target.depth_scale = world.target.depth_scale[0]; target.depth_translate = world.target.depth_scale[1];
     std::memcpy(target.viewport, world.target.viewport, sizeof(target.viewport));
     target.attachments = ghost_link::attachments(buffer);
-    // The game's scissor clips the ghost; it doubles as the compositor's
-    // record of the scissor it restores.
+    // The game's scissor clips the ghost and is what the compositor restores:
+    // as the dispatch observed it, asked only before the renderer set one.
     auto known = known_state();
-    ask([&] { glGetIntegerv(GL_SCISSOR_BOX, target.scissor); });
-    known.fields |= ghost_compositor::Known::scissor;
-    std::memcpy(known.scissor_box, target.scissor, sizeof(target.scissor));
+    if (known.fields & ghost_compositor::Known::scissor)
+        std::memcpy(target.scissor, known.scissor_box, sizeof(target.scissor));
+    else {
+        ask([&] { glGetIntegerv(GL_SCISSOR_BOX, target.scissor); });
+        known.fields |= ghost_compositor::Known::scissor;
+        std::memcpy(known.scissor_box, target.scissor, sizeof(target.scissor));
+    }
     auto stage = Clock::now();
     const bool open = gateway(replay_gl::BeginCapture); cost.open_micros += since(stage);
     if (!open) return;

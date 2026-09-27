@@ -814,10 +814,11 @@ glIsEnabled or framebuffer check) waits for the driver's own thread to catch
 up, so a ghost frame asks as little as it can
 ([ghost_compositor.h](../plugin/gfxwrap/ghost_compositor.h)):
 
-- **What the renderer already knows** (`Known`): its draw and read bindings
-  and viewport (tracked by `link_dispatch`), the seven capabilities GLideN64
-  switches, from its own enable cache (`gfxContext.isEnabled`), and the
-  scissor box the glue asks anyway to clip the ghost.
+- **What the renderer already knows** (`Known`), as its dispatch observed
+  every call (`link_dispatch`, [replay-link-state](replay-link-state.md)):
+  draw and read bindings, viewport and scissor box, program, vertex array,
+  depth function and mask, blend factors and the seven capabilities GLideN64
+  switches.
 - **What the renderer never changes**, recorded by query once at `prepare`:
   stencil, color mask, blend equations, polygon mode and offset, depth range,
   every other capability, the compositor's texture units 28-31 (bound with
@@ -835,27 +836,38 @@ up, so a ghost frame asks as little as it can
   D24 depth, its read and draw buffers, the N64 depth texture) is reused while
   the glue's name for its attachments holds (`ghost_link::attachments`: color
   texture and depth object).
-- **The residue**, asked every ghost frame because GLideN64 keeps it only in
-  its private cache: the current program, the vertex array, the depth function
-  and write mask, and draw buffer 0's four blend factors (8), plus the glue's
-  scissor query: 9 per ghost frame, where the base code asked 92. Without
-  multi-bind the active texture unit is one more.
+- So an ordinary ghost frame asks the driver **nothing** (the base code asked
+  92). A HUD draw's feedback check reads units 0 and 1 from the dispatch too,
+  and the presentation's clean save and sRGB check read its record
+  (`ghost_presentation::Known`), so a presented ghost frame asks nothing
+  either.
 
-A HUD mirror asks the compositor nothing; the glue still reads units 0 and 1's
-textures for its feedback check (3 per HUD draw), and the capture gateway
-reads glGetError on each side of every ghost GL scope. Those and the residue
-are what remains. Zero would need the renderer's own tracking: `renderer::State`
-already tracks unit bindings (not exposed), and program, vertex array, depth
-and blend state would need call-site aliases like `glViewport`'s.
+What still asks, and why: the capture gateway reads glGetError on each side of
+every ghost GL scope (the seal, each HUD draw, the presentation's copies),
+because that is how an error is told apart from the renderer's; without GL 4.4
+multi-bind a frame asks the active unit; a record the dispatch lost (after a GL
+error, or before the renderer's first glViewport or glScissor) is asked for;
+with N64 depth compare on, the HUD check reads the combiner's two uniforms; and
+taking a drawn ghost back (a withdrawn or refused image, rare) reads the
+default framebuffer's draw selectors, 8 on NVIDIA, beside its own four state
+queries when nothing is known. GLideN64's own on-screen text mirror
+(`begin_osd`) still asks its safety checks per text draw.
 
 Witnesses: the [compositor host](../tests/native/ghost_compositor_host.cpp)
 wraps every dispatch entry and records each Get, Is and Check call by name. A
-known frame asks exactly the residue (with and without multi-bind), a known
-HUD scope nothing, a known layer pass the game's blend factors and depth mask
-(5), and the compositor's own count equals the witness's. After every call the
-state equals the state before, field for field, the compositor's units and
-copy-write buffer included. The [pipeline](../tests/test_ghost_pipeline.py)
-asks 9 per ghost frame for 1, 4 and 16 ghosts at 640x480 and 1600x1200.
+fully known frame asks nothing (the active unit alone without multi-bind), a
+record without the render state asks exactly those 8 values, a known HUD
+scope and layer pass nothing, and the compositor's own count equals the
+witness's. After every call the state equals the state before, field for
+field, the compositor's units and copy-write buffer included. The
+[presentation host](../tests/native/ghost_presentation_host.cpp) asks nothing
+for a known clean save or replace, restores every touched value after taking a
+ghost back (4 queries plus the draw selectors unknown, the selectors alone
+known) with scissor, sRGB and a foreign framebuffer set. The
+[link witness](../tests/test_link_source_witness.py) drives LINK's own cached
+setters and direct calls and compares each observed value with the driver; it
+goes red without any one observation. The [pipeline](../tests/test_ghost_pipeline.py)
+asks nothing per ghost frame for 1, 4 and 16 ghosts at 640x480 and 1600x1200.
 
 ### What the hook numbers mean
 
@@ -1325,7 +1337,9 @@ frame. The hidden host runs without threaded optimization, so its queries cost
 little: alternating base and changed runs at 640x480 measured one ghost p50
 0.34-0.35 against 0.31-0.34 ms and sixteen unchanged within noise (2.70-2.95
 ms). The query count is what changes under a threaded driver; the live hook
-line measures that.
+line measures that. With the renderer's tracked record (same day, same host):
+no driver query on any timed frame, state 0 us, one ghost batch 145 (207),
+four 372 (459), sixteen 1281 (1335) at 1600x1200.
 
 For the actual staged RSP lifetime guard, stage a fresh pinned renderer with
 `tools/stage_link_witness.py --source <pinned-source> --out <temporary-output>

@@ -98,13 +98,23 @@ struct Bench {
         gc::resync(compositor); // frames run in ordinary_state: the renderer's stable state
         glFinish();
     }
-    // What GLideN64's glue hands over before a timed frame's seal: ordinary
-    // state, then the VI draw to the default framebuffer (scissor asked).
+    // A timed frame's renderer state before the seal (ordinary state, the VI
+    // draw, the world pass's depth, blend and scissor) and GLideN64's glue's
+    // record of it, so the compositor asks the driver nothing.
+    void world_state() const {
+        g.DepthFunc(cgl::LESS);g.DepthMask(1);g.BlendFuncSeparatei(0,cgl::ONE,cgl::ZERO,cgl::ONE,cgl::ZERO);
+        g.ScissorIndexed(0,0,0,int32_t(width),int32_t(height));
+    }
     gc::Known seal_state() const {
         gc::Known known{};
-        known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport;
-        known.draw=0;known.read=scene.fbo;known.viewport_box[2]=int32_t(width);known.viewport_box[3]=int32_t(height);
-        known.caps=0x7f;return known;
+        known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport|gc::Known::scissor|
+            gc::Known::program|gc::Known::vertex_array|gc::Known::depth|gc::Known::blend_factors;
+        known.draw=0;known.read=scene.fbo;known.viewport_box[2]=known.scissor_box[2]=int32_t(width);
+        known.viewport_box[3]=known.scissor_box[3]=int32_t(height);known.caps=0x7f;
+        known.current_program=raster.program;known.bound_vertex_array=raster.vao;
+        known.depth_function=cgl::LESS;known.depth_write=1;
+        known.blend_factor[0]=known.blend_factor[2]=cgl::ONE;known.blend_factor[1]=known.blend_factor[3]=cgl::ZERO;
+        return known;
     }
     ~Bench(){present::destroy(presentation);gc::destroy(compositor);require(sg_model_close(&model)==SG_OK,"model close");}
     std::vector<uint8_t> flip(const std::vector<uint8_t>& source) const {
@@ -147,7 +157,7 @@ struct Bench {
     Times frame(unsigned n,unsigned frame_number,bool overlap,bool evidence=false){
         const auto start=Clock::now();evaluate(n,frame_number,overlap);const auto evaluated=Clock::now();
         pack(n,overlap);const auto packed=Clock::now();
-        ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,width,height});
+        ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,width,height});world_state();
         const auto known=seal_state();(void)gc::take_cost(compositor);
         const auto composite_start=Clock::now();composite(poses,n,&known);const auto composited=Clock::now();
         const auto queries=gc::take_cost(compositor).queries;

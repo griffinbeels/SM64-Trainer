@@ -222,10 +222,9 @@ inline size_t enable_index(uint32_t cap) {
  * nothing more; prepare and other callers use Guard. capture() asks the
  * driver for all of it: prepare's record, and every frame of a caller that
  * knows nothing. Given a Known, assume() starts from that record, takes what
- * the caller knows and asks the driver only for the rest of what the
- * renderer changes per draw: the documented residue (program, vertex array,
- * depth function and mask, blend factors; the active unit without
- * multi-bind). restore() puts every field back. */
+ * the caller knows and asks the driver only for what it does not know of
+ * what the renderer changes per draw (nothing when the renderer tracks it
+ * all; the active unit without multi-bind). restore() puts every field back. */
 struct Frame {
     int32_t program, vao, read_fbo, draw_fbo, copy_buffer, unpack_buffer, active_texture;
     int32_t textures[unit_count], samplers[unit_count], scissor[4], polygon[2];
@@ -262,10 +261,15 @@ struct Frame {
     void assume(const Frame& stable,const Known* known,const Dispatch& g) {
         if(!known) {capture(g);return;}
         *this=stable;
-        g.GetIntegerv(CURRENT_PROGRAM,&program);g.GetIntegerv(VERTEX_ARRAY_BINDING,&vao);
-        g.GetIntegerv(DEPTH_FUNC,&depth_func);g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
-        for(size_t i=0;i<4;++i)g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
         const Known& k=*known;
+        if(k.fields&Known::program)program=int32_t(k.current_program);
+        else g.GetIntegerv(CURRENT_PROGRAM,&program);
+        if(k.fields&Known::vertex_array)vao=int32_t(k.bound_vertex_array);
+        else g.GetIntegerv(VERTEX_ARRAY_BINDING,&vao);
+        if(k.fields&Known::depth) {depth_func=int32_t(k.depth_function);depth_mask=k.depth_write;}
+        else {g.GetIntegerv(DEPTH_FUNC,&depth_func);g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);}
+        if(k.fields&Known::blend_factors)for(size_t i=0;i<4;++i)blend[i]=int32_t(k.blend_factor[i]);
+        else for(size_t i=0;i<4;++i)g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
         if(k.fields&Known::draw_framebuffer)draw_fbo=int32_t(k.draw);
         else g.GetIntegerv(DRAW_FRAMEBUFFER_BINDING,&draw_fbo);
         if(k.fields&Known::read_framebuffer)read_fbo=int32_t(k.read);
