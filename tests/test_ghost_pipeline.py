@@ -38,16 +38,23 @@ def layout_module():
     return module
 
 
-def retain_artifacts(paths):
+# Driver queries per ghost frame on the live path: the compositor's residue
+# (program, vertex array, depth function and mask, four blend factors) plus
+# the scissor box the glue asks itself (here the compositor asks it).
+RESIDUE_QUERIES = 9
+
+
+def retain_artifacts(paths, folder=""):
     evidence = os.environ.get("SM64_GHOST_PIPELINE_EVIDENCE")
     if evidence:
-        destination = Path(evidence)
+        destination = Path(evidence) / folder
         destination.mkdir(parents=True, exist_ok=True)
         for path in paths:
             shutil.copyfile(path, destination / path.name)
 
 
-def test_connected_capture_model_gpu_pipeline(tmp_path):
+@pytest.mark.parametrize("width,height", [(640, 480), (1600, 1200)])
+def test_connected_capture_model_gpu_pipeline(tmp_path, width, height):
     if sys.platform != "win32":
         pytest.skip("Win32 hidden WGL pipeline")
     rom_name, seed_name = os.environ.get("SM64_MODEL_ROM"), os.environ.get("SM64_MODEL_SEED_DIR")
@@ -84,10 +91,12 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
         *compiler.LIBS], tmp_path)
     layout = tmp_path / "layout.bin"
     layout.write_bytes(layout_module().GhostLayout.from_layout(US).to_bytes())
-    result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path), str(SAVED_GCLIP4)], cwd=tmp_path,
-        capture_output=True, text=True, timeout=60, check=False, **quiet_spawn_kwargs())
+    result = subprocess.run([str(target), str(layout), str(rom), str(tmp_path), str(SAVED_GCLIP4),
+                             str(width), str(height)], cwd=tmp_path,
+        capture_output=True, text=True, timeout=240, check=False, **quiet_spawn_kwargs())
     (tmp_path / "pipeline-output.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
-    retain_artifacts([tmp_path / "pipeline-output.txt"])
+    shape = f"{width}x{height}"
+    retain_artifacts([tmp_path / "pipeline-output.txt"], shape)
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest
@@ -101,13 +110,9 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
                   excludes="Live emulator, GLideN64 terrain/VI shader, video encoding, IPC transport.",
                   timing="Capture through presentation clean/display copies and glFinish; swap measured separately.")
     (tmp_path / "pipeline-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    from PIL import Image
-    for path in tmp_path.glob("*.ppm"):
-        with Image.open(path) as image:
-            image.save(path.with_suffix(".png"))
-    retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
-                      *tmp_path.glob("*.png")])
+    keep_evidence(tmp_path, shape)
     assert report["ok"] and report["synthetic"] and not report["live_gliden64"]
+    assert (report["width"], report["height"]) == (width, height)
     assert report["capture_version"] == 7 and report["clip_version"] == 6 and report["playback_version"] == 7
     assert_scene_effects(report)  # the timing below runs with the player-first fade on
     assert_saved_ghost_plays(report["saved_gclip4"])
@@ -115,12 +120,35 @@ def test_connected_capture_model_gpu_pipeline(tmp_path):
     assert report["vertices"] > 1800 and report["silhouette_pixels"] > 1000
     assert report["outside_pixels_changed"] == report["alpha_errors"] == report["occlusion_errors"] == 0
     assert report["pipeline_gpu_completed"]["samples"] == report["including_swap"]["samples"] == 180
-    print(f"Connected synthetic pipeline report: {tmp_path / 'pipeline-report.json'}")
+    print(f"Connected synthetic pipeline report ({shape}): {tmp_path / 'pipeline-report.json'}")
     print(json.dumps({key: report[key] for key in
-                     ("pipeline_gpu_completed", "blocking_swap", "including_swap", "gpu_renderer")}))
+                     ("pipeline_gpu_completed", "four_pipeline_gpu_completed", "blocking_swap",
+                      "including_swap", "gpu_renderer")}))
+    assert_stage_costs(report["stages"])
     # A functional pass cannot disguise exceeding the requested whole-frame budget.
     assert report["including_swap"]["over_budget"] == 0, report["including_swap"]
     assert_full_ghost_set(report)
+
+
+def keep_evidence(tmp_path, shape):
+    """The report, the host's output and every image (as PNG) for the evidence folder."""
+    from PIL import Image
+    for path in tmp_path.glob("*.ppm"):
+        with Image.open(path) as image:
+            image.save(path.with_suffix(".png"))
+    retain_artifacts([tmp_path / "pipeline-report.json", tmp_path / "pipeline-output.txt",
+                      *tmp_path.glob("*.png")], shape)
+
+
+def assert_stage_costs(stages):
+    """Each ghost frame's compositor stages, for 1, 4 and 16 ghosts, and its
+    driver queries: exactly the documented residue on every timed frame."""
+    print(json.dumps({"stages": stages}))
+    for ghosts in ("1", "4", "16"):
+        queries = stages[ghosts]["driver_queries"]
+        assert queries["p50"] == queries["max"] == RESIDUE_QUERIES, (ghosts, queries)
+        batch = stages[ghosts]["batch_us"]["p50"]
+        assert batch >= stages[ghosts]["draw_us"]["p50"] > 0, (ghosts, stages[ghosts])
 
 
 def assert_scene_effects(report):

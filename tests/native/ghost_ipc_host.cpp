@@ -96,7 +96,8 @@ int __cdecl capture_read(gs_record* out,uint32_t bytes) {
 gs_stats __cdecl capture_stats() {
     gs_stats out{};out.bytes=sizeof(out);out.version=GS_VERSION;out.epoch=1;
     out.configuration=configuration.load();out.enabled=capture_enabled.load();
-    out.hook_gl_queries=2;out.hook_micros=345;return out;
+    out.hooks.gl_queries=2;out.hooks.micros=345;out.hooks.list=7;out.hooks.validate_micros=11;
+    out.hooks.error_reads=3;out.hooks.ghosts=1;return out;
 }
 int32_t __cdecl prepare_model(uint64_t id,const uint8_t* bytes,uint32_t size) {
     if(!enter_worker())return GP_WRONG_THREAD;
@@ -225,7 +226,11 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(configuration) X(epoch) X(record_bytes) X(capabilities) X(qpc_frequency) X(qpc_anchor) \
     X(utc_anchor) X(produced) X(consumed) X(dropped) X(ack_revision) X(ack_token) \
     X(playback_state) X(playback_reason) X(displayed) X(clips_requested) X(clips_prepared) \
-    X(clips_visible) X(particles_dropped) X(hook_gl_queries) X(hook_micros) X(reserved)
+    X(clips_visible) X(particles_dropped) X(hook_gl_queries) X(hook_micros) X(hook_list) X(hook_list_micros) \
+    X(hook_flush_micros) X(hook_open_micros) X(hook_batch_micros) X(hook_validate_micros) X(hook_close_micros) X(hook_finalize_micros) \
+    X(hook_state_micros) X(hook_copy_micros) X(hook_draw_micros) X(hook_draw_max_micros) X(hook_restore_micros) \
+    X(hook_hud_micros) X(hook_hud_draws) X(hook_layer_passes) X(hook_query_micros) X(hook_error_reads) \
+    X(hook_ghosts) X(reserved)
 void field(const char* name,size_t offset) {std::printf("\"%s\":%u,",name,unsigned(offset));}
 void print_layout() {
     std::printf("\"layout\":{\"page\":%u,\"ring\":%u,\"request\":{",unsigned(sizeof(gipc_page)),
@@ -352,7 +357,9 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
         r.layout.clock.near_zero=30;
         ready(page,r);auto first=last_command();
-        {const auto hooked=page.status();check(hooked.hook_gl_queries==2 && hooked.hook_micros==345,"render hook cost reaches the status page");}
+        {const auto hooked=page.status();check(hooked.hook_gl_queries==2 && hooked.hook_micros==345 && hooked.hook_list==7
+            && hooked.hook_validate_micros==11 && hooked.hook_error_reads==3 && hooked.hook_ghosts==1,
+            "render hook cost reaches the status page, field for field");}
         check(audio_starts.load()==1 && !audio_stops.load(),"sound engine starts once from the verified ROM");
         page.consume_record();
         check(first.rom_generation==r.rom_generation && first.owner_token==r.token && first.opacity==0.75f

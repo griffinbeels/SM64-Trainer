@@ -32,3 +32,5 @@ def test_real_compositor(tmp_path):
     print(result.stdout.strip())
     assert "compositor passed:" in result.stdout
     assert "shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2" in result.stdout
+    # A frame with the renderer's own record asks the driver the documented residue only.
+    assert "known=residue" in result.stdout

@@ -156,7 +156,7 @@ bool source_format(const Dispatch& g,Depth depth) {
 }
 
 struct Instance {
-    Dispatch g;
+    Dispatch raw, g; // g: raw with every driver query metered (GC_GL_QUERIES)
     uint64_t generation;
     uint32_t width=0,height=0,capacity=0;
     uint32_t textures[5]={}; // display color, copied ordinary depth, atlas, layer color, layer depth
@@ -177,18 +177,79 @@ struct Instance {
     LayerStats layer_stats{};
     Target target{};
     bool ready=false,begun=false,finalized=false,hud=false;
-    int32_t hud_draw_fbo=0;
-    Instance(const Dispatch& dispatch,uint64_t serial):g(dispatch),generation(serial) {}
+    int32_t hud_draw_fbo=0,target_draw_buffer=0;
+    QueryMeter queries{};
+    Cost batch{}; // the last begin_batch's stages
+    Frame stable{}; // prepare's record of what a frame touches and the renderer never changes
+    /* What was verified about one renderer framebuffer, reused while the
+     * caller's name for its attachments holds (Target::attachments). */
+    struct Facts {
+        uint64_t attachments=0;
+        uint32_t framebuffer=0,width=0,height=0,n64_texture=0;
+        Depth depth{};
+        Result result=Result::invalid;
+        int32_t read_buffer=0,draw_buffer=0;
+    } facts[4]{},unnamed{};
+    uint32_t next_facts=0;
+    Instance(const Dispatch& dispatch,uint64_t serial):raw(dispatch),g(metered(dispatch)),generation(serial) {}
 };
+
+namespace {
+using meter::clock;
+uint32_t micros(clock::time_point start,clock::time_point end=clock::now()) {
+    const auto us=std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();
+    return us<0 ? 0u : us>INT32_MAX ? uint32_t(INT32_MAX) : uint32_t(us);
+}
+bool known_cap(const Known* known,uint32_t cap,uint8_t* value) {
+    if(!known || !(known->caps&cap))return false;
+    *value=(known->enabled&cap) ? 1 : 0;return true;
+}
+Result n64_depth(const Dispatch& g,const Target& t) {
+    if(!g.IsTexture(t.n64_depth_texture))return Result::invalid;
+    // Asked through the compositor's own unit; the frame restores its binding.
+    int32_t active=0;g.GetIntegerv(ACTIVE_TEXTURE,&active);
+    g.ActiveTexture(TEXTURE0+unit_base+1);g.BindTexture(TEXTURE_2D,t.n64_depth_texture);
+    int32_t w=0,h=0,format=0;
+    g.GetTexLevelParameteriv(TEXTURE_2D,0,TEXTURE_WIDTH,&w);g.GetTexLevelParameteriv(TEXTURE_2D,0,TEXTURE_HEIGHT,&h);
+    g.GetTexLevelParameteriv(TEXTURE_2D,0,TEXTURE_INTERNAL_FORMAT,&format);
+    g.ActiveTexture(uint32_t(active));
+    return w!=int32_t(t.width) || h!=int32_t(t.height) || format!=R32F ? Result::unsupported : Result::ok;
+}
+/* The framebuffer's facts, asked once per name for its attachments. Asking
+ * leaves t.framebuffer bound for drawing and reading; frames restore both. */
+const Instance::Facts& verify(Instance* p,const Target& t) {
+    const uint32_t n64=t.depth==Depth::n64_image ? t.n64_depth_texture : 0;
+    if(t.attachments)for(const auto& f:p->facts)
+        if(f.attachments==t.attachments && f.framebuffer==t.framebuffer && f.width==t.width &&
+           f.height==t.height && f.depth==t.depth && f.n64_texture==n64)return f;
+    auto& f=t.attachments ? p->facts[p->next_facts++%std::size(p->facts)] : p->unnamed;
+    f={};f.attachments=t.attachments;f.framebuffer=t.framebuffer;f.width=t.width;f.height=t.height;
+    f.depth=t.depth;f.n64_texture=n64;
+    const auto& g=p->g;
+    g.BindFramebuffer(DRAW_FRAMEBUFFER,t.framebuffer);
+    if(g.CheckFramebufferStatus(DRAW_FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)f.result=Result::resources;
+    else if(!source_format(g,t.depth))f.result=Result::unsupported;
+    else f.result=n64 ? n64_depth(g,t) : Result::ok;
+    g.GetIntegerv(DRAW_BUFFER0,&f.draw_buffer);
+    g.BindFramebuffer(READ_FRAMEBUFFER,t.framebuffer);g.GetIntegerv(READ_BUFFER,&f.read_buffer);
+    return f;
+}
+}
 
 Instance* create(const Dispatch& g,uint64_t generation) {
     if(!generation)return nullptr;
 #define GC_CHECK(result,name,args) if(!g.name)return nullptr;
     GC_GL_FUNCTIONS(GC_CHECK)
 #undef GC_CHECK
-    int32_t major=0,minor=0;g.GetIntegerv(MAJOR_VERSION,&major);g.GetIntegerv(MINOR_VERSION,&minor);
-    if(major<4 || (major==4 && minor<3))return nullptr;
-    return new(std::nothrow) Instance(g,generation);
+    auto* p=new(std::nothrow) Instance(g,generation);if(!p)return nullptr;
+    int32_t major=0,minor=0,units=0;
+    {
+        Metering metering(p->raw,p->queries);
+        p->g.GetIntegerv(MAJOR_VERSION,&major);p->g.GetIntegerv(MINOR_VERSION,&minor);
+        p->g.GetIntegerv(MAX_COMBINED_TEXTURE_IMAGE_UNITS,&units);
+    }
+    if(major<4 || (major==4 && minor<3) || units<int32_t(unit_base+unit_count)) {delete p;return nullptr;}
+    return p;
 }
 
 void end_hud(Instance* p) {
@@ -198,13 +259,10 @@ void abort(Instance* p) {
     if(!p)return;end_hud(p);p->begun=false;p->finalized=false;p->target={};
 }
 
-Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
-               const uint8_t* atlas,uint32_t aw,uint32_t ah) {
-    if(!p)return Result::invalid;
-    abort(p);p->ready=false;
-    if(!width || !height || width>8192 || height>8192 || !capacity || capacity>64u*30000u ||
-       !atlas || !aw || !ah || aw>8192 || ah>8192)return Result::invalid;
-    const auto& g=p->g;Guard guard(g);
+namespace {
+Result allocate(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
+                const uint8_t* atlas,uint32_t aw,uint32_t ah) {
+    const auto& g=p->g;
     if(!p->shader_program) {
         p->shader_program=program(g);if(!p->shader_program)return Result::resources;
         constexpr const char* names[] = {"viewProjection","flipY","lightDirection","lighting","depthMapping","opacity","atlas","terrain","hueDegrees",
@@ -254,24 +312,54 @@ Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
     constexpr int32_t counts[]={3,3,3,2,1};
     constexpr size_t offsets[]={offsetof(Vertex,position),offsetof(Vertex,normal),offsetof(Vertex,color),offsetof(Vertex,uv),offsetof(Vertex,material)};
     for(uint32_t i=0;i<5;++i) {g.EnableVertexAttribArray(i);g.VertexAttribPointer(i,counts[i],i==4 ? UNSIGNED_INT : FLOAT,0,sizeof(Vertex),reinterpret_cast<const void*>(offsets[i]));}
-    p->width=width;p->height=height;p->capacity=capacity;p->ready=true;return Result::ok;
+    // The samplers read the compositor's own units, set once.
+    g.UseProgram(p->shader_program);
+    g.Uniform1i(p->uniforms[6],int32_t(unit_base));g.Uniform1i(p->uniforms[7],int32_t(unit_base+1));
+    g.Uniform1i(p->uniforms[9],int32_t(unit_base+2));g.Uniform1i(p->uniforms[10],int32_t(unit_base+3));
+    p->width=width;p->height=height;p->capacity=capacity;return Result::ok;
+}
+}
+
+Result prepare(Instance* p,uint32_t width,uint32_t height,uint32_t capacity,
+               const uint8_t* atlas,uint32_t aw,uint32_t ah) {
+    if(!p)return Result::invalid;
+    abort(p);p->ready=false;
+    if(!width || !height || width>8192 || height>8192 || !capacity || capacity>64u*30000u ||
+       !atlas || !aw || !ah || aw>8192 || ah>8192)return Result::invalid;
+    Metering metering(p->raw,p->queries);
+    Result result=Result::ok;
+    {Guard guard(p->g);result=allocate(p,width,height,capacity,atlas,aw,ah);}
+    if(result!=Result::ok)return result;
+    for(auto& f:p->facts)f={};
+    p->stable.capture(p->g);p->ready=true;return Result::ok;
+}
+void resync(Instance* p) {
+    if(!p)return;
+    Metering metering(p->raw,p->queries);p->stable.capture(p->g);
+}
+Cost take_cost(Instance* p) {
+    if(!p)return {};
+    Cost cost=p->batch;cost.queries=p->queries.count;cost.query_micros=uint32_t(p->queries.nanos/1000);
+    p->queries={};p->batch={};return cost;
 }
 
 Result prepare_particles(Instance* p,const uint8_t* rgba,uint32_t width,uint32_t height) {
     if(!p || !p->ready)return Result::invalid;
     abort(p);
+    Metering metering(p->raw,p->queries);
     const auto& g=p->g;Guard guard(g);
     return p->particles.prepare(g,p->particles.program?p->particles.program:
         program(g,particle::vertex_shader,particle::fragment_shader),rgba,width,height) ? Result::ok : Result::resources;
 }
 
-Result begin(Instance* p,const Target& t,const Pose& pose) {
-    return begin_batch(p,t,&pose,1);
+Result begin(Instance* p,const Target& t,const Pose& pose,const Known* known) {
+    return begin_batch(p,t,&pose,1,known);
 }
 
-Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count) {
+Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count,const Known* known) {
     if(!p)return Result::invalid;
     abort(p);
+    const auto start=clock::now();p->batch={};
     if(!poses || !count || count>max_poses)return Result::invalid;
     if(!p->ready || t.generation!=p->generation || !t.occurrence || !t.framebuffer ||
        t.framebuffer==p->fbos[0] || t.framebuffer==p->fbos[1] || t.framebuffer==p->fbos[2] || t.framebuffer==p->fbos[3] ||
@@ -307,36 +395,49 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         }
       }
     }
-    const auto& g=p->g;uint8_t feedback=0;g.GetBooleanv(TRANSFORM_FEEDBACK_ACTIVE,&feedback);
-    if(feedback)return Result::state;
-    Guard guard(g);
-    g.BindFramebuffer(DRAW_FRAMEBUFFER,t.framebuffer);
-    if(g.CheckFramebufferStatus(DRAW_FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)return Result::resources;
-    if(!source_format(g,t.depth))return Result::unsupported;
-    if(t.depth==Depth::n64_image) {
-        if(!g.IsTexture(t.n64_depth_texture))return Result::invalid;
-        g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,t.n64_depth_texture);
-        int32_t w=0,h=0,format=0;
-        g.GetTexLevelParameteriv(TEXTURE_2D,0,TEXTURE_WIDTH,&w);g.GetTexLevelParameteriv(TEXTURE_2D,0,TEXTURE_HEIGHT,&h);
-        g.GetTexLevelParameteriv(TEXTURE_2D,0,TEXTURE_INTERNAL_FORMAT,&format);
-        if(w!=int32_t(t.width) || h!=int32_t(t.height) || format!=R32F)return Result::unsupported;
-    }
+    const auto& g=p->g;Metering metering(p->raw,p->queries);
+    // The renderer's state, from what it and prepare already know plus the
+    // residue asked of the driver; every return below puts it back.
+    const auto asked=clock::now();p->batch.validate_micros=micros(start,asked);
+    Frame pre{};pre.assume(p->stable,known,g);
+    if(pre.feedback)return Result::state; // nothing changed yet
+    struct Close {
+        Instance* p;const Frame& pre;clock::time_point start;
+        ~Close() {
+            const auto restoring=clock::now();pre.restore(p->g);
+            p->batch.restore_micros=micros(restoring);p->batch.batch_micros=micros(start);
+        }
+    } close{p,pre,start};
+    const auto& facts=verify(p,t);
+    const auto stated=clock::now();p->batch.state_micros=micros(asked,stated);
+    if(facts.result!=Result::ok)return facts.result;
+    p->target_draw_buffer=facts.draw_buffer;
     for(auto cap:enables)g.Disable(cap);
     g.Disablei(SCISSOR_TEST,0);
     g.Disablei(BLEND,0);g.ColorMaski(0,1,1,1,1);g.PolygonMode(FRONT_AND_BACK,FILL);
     const bool layered=p->layer.open && !p->layer.broken && !p->layer.active &&
         p->layer.source==t.framebuffer && t.depth==Depth::ordinary;
     g.BindFramebuffer(READ_FRAMEBUFFER,t.framebuffer);
-    if(g.CheckFramebufferStatus(READ_FRAMEBUFFER)!=FRAMEBUFFER_COMPLETE)return Result::resources;
-    int32_t source_selector=0;g.GetIntegerv(READ_BUFFER,&source_selector);g.ReadBuffer(COLOR_ATTACHMENT0);
+    // The game framebuffer's own read selector, verified once: usually
+    // already COLOR_ATTACHMENT0, and put back when it is not.
+    const bool select=facts.read_buffer!=int32_t(COLOR_ATTACHMENT0);
+    if(select)g.ReadBuffer(COLOR_ATTACHMENT0);
     g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[0]);
     g.BlitFramebuffer(0,0,t.width,t.height,0,0,t.width,t.height,COLOR_BUFFER_BIT,NEAREST);
-    g.ReadBuffer(source_selector); // restore the GAME FBO's selector, even when not previously bound
+    if(select)g.ReadBuffer(uint32_t(facts.read_buffer));
     if(t.depth==Depth::ordinary) {
         g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[1]);
         g.BlitFramebuffer(0,0,t.width,t.height,0,0,t.width,t.height,DEPTH_BUFFER_BIT,NEAREST);
     } else g.MemoryBarrier(SHADER_IMAGE_ACCESS_BARRIER_BIT|TEXTURE_FETCH_BARRIER_BIT);
     g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[0]);
+    const auto copied=clock::now();p->batch.copy_micros=micros(stated,copied);
+    // The compositor's units read no sampler object; prepare's record says
+    // whether one was there to put back.
+    if(pre.samplers[0] || pre.samplers[1] || pre.samplers[2] || pre.samplers[3]) {
+        const uint32_t none[unit_count]={};
+        if(multibind(g))g.BindSamplers(unit_base,unit_count,none);
+        else for(uint32_t i=0;i<unit_count;++i)g.BindSampler(unit_base+i,0);
+    }
     // Original shadow geometry is a decal over THIS frame's clean copy, below
     // every Mario. Attach the just-copied terrain depth so hardware applies the
     // pinned GLideN64 offset and LEQUAL comparison; its depth is never written.
@@ -359,19 +460,20 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.FramebufferRenderbuffer(DRAW_FRAMEBUFFER,DEPTH_STENCIL_ATTACHMENT,RENDERBUFFER,p->self_depth);
     }
     // Upload disjoint ranges before issuing draws: avoid overwriting a range
-    // still being consumed by the GPU for the preceding Mario.
-    g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
+    // still being consumed by the GPU for the preceding Mario. Uploads go
+    // through the copy-write target, leaving the renderer's array buffer alone.
+    g.BindBuffer(COPY_WRITE_BUFFER,p->vbo);
     uint32_t first=0;
     for(uint32_t index=0;index<count;++index) {
         const auto& pose=poses[index];
-        g.BufferSubData(ARRAY_BUFFER,ptrdiff_t(first)*sizeof(Vertex),ptrdiff_t(pose.count)*sizeof(Vertex),pose.vertices);
+        g.BufferSubData(COPY_WRITE_BUFFER,ptrdiff_t(first)*sizeof(Vertex),ptrdiff_t(pose.count)*sizeof(Vertex),pose.vertices);
         first+=pose.count;
     }
     p->particles.upload(g,poses,count);
-    g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
+    g.BindVertexArray(p->vao);
     first=0;
     for(uint32_t index=0;index<count;++index) {
-      const auto& pose=poses[index];
+      const auto& pose=poses[index];const auto drawing=clock::now();
       g.Disablei(SCISSOR_TEST,0);g.Disablei(BLEND,0);g.Disable(STENCIL_TEST);
       g.DepthMask(1);g.StencilMaskSeparate(FRONT_AND_BACK,0xff);
       g.ClearBufferfi(DEPTH_STENCIL,0,1.0f,0);
@@ -383,14 +485,11 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.UniformMatrix4fv(p->uniforms[0],1,0,pose.view_projection);g.Uniform1i(p->uniforms[1],pose.flip_y);
         g.Uniform3fv(p->uniforms[2],1,pose.light_direction);g.Uniform2f(p->uniforms[3],pose.ambient,pose.diffuse);
         g.Uniform2f(p->uniforms[4],t.depth_scale,t.depth_translate);g.Uniform1f(p->uniforms[5],pose.opacity);
-        g.Uniform1i(p->uniforms[6],0);g.Uniform1i(p->uniforms[7],1);
-        g.Uniform1f(p->uniforms[8],pose.hue_degrees);
-        g.Uniform1i(p->uniforms[9],2);g.Uniform1i(p->uniforms[10],3);g.Uniform1i(p->uniforms[11],layered ? 1 : 0);
+        g.Uniform1f(p->uniforms[8],pose.hue_degrees);g.Uniform1i(p->uniforms[11],layered ? 1 : 0);
         p->occlusion.set(g,pose.occlusion);
-        g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,p->textures[2]);g.BindSampler(0,0);
-        g.ActiveTexture(TEXTURE0+1);g.BindTexture(TEXTURE_2D,t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture);g.BindSampler(1,0);
-        g.ActiveTexture(TEXTURE0+2);g.BindTexture(TEXTURE_2D,p->textures[3]);g.BindSampler(2,0);
-        g.ActiveTexture(TEXTURE0+3);g.BindTexture(TEXTURE_2D,p->textures[4]);g.BindSampler(3,0);
+        const uint32_t units[unit_count]={p->textures[2],t.depth==Depth::ordinary ? p->textures[1] : t.n64_depth_texture,
+            p->textures[3],p->textures[4]};
+        bind_units(g,0,unit_count,units);
         // Private nearest-surface prepass, then exactly one color contribution
         // per pixel, including coplanar model seams and overlapping triangles.
         g.ColorMaski(0,0,0,0,0);g.DrawArrays(TRIANGLES,first,pose.count);
@@ -401,15 +500,17 @@ Result begin_batch(Instance* p,const Target& t,const Pose* poses,uint32_t count)
         g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);g.DrawArrays(TRIANGLES,first,pose.count);
         // This ghost's particles, against its body depth still in self-depth.
         p->particles.draw(g,pose,index,t,layered);
-        g.BindVertexArray(p->vao);g.BindBuffer(ARRAY_BUFFER,p->vbo);
+        g.BindVertexArray(p->vao);
     }
       first+=pose.count;
+      p->batch.draw_max_micros=std::max(p->batch.draw_max_micros,micros(drawing));
     }
+    p->batch.draw_micros=micros(copied);p->batch.ghosts=count;
     if(layered)++p->layer_stats.applied;
     p->target=t;p->begun=true;return Result::ok;
 }
 
-Result begin_layer(Instance* p,const Target& t,LayerPass pass) {
+Result begin_layer(Instance* p,const Target& t,LayerPass pass,const Known* known) {
     if(!p || !p->ready || p->layer.active || uint32_t(pass)>uint32_t(LayerPass::depth))return Result::invalid;
     if(p->layer.broken)return Result::state;
     if(t.generation!=p->generation || !t.framebuffer || t.width!=p->width || t.height!=p->height ||
@@ -417,26 +518,36 @@ Result begin_layer(Instance* p,const Target& t,LayerPass pass) {
         return Result::invalid;
     if(t.samples!=1 || t.unsupported || t.depth!=Depth::ordinary)return Result::unsupported;
     if(p->layer.open && p->layer.source!=t.framebuffer)return Result::invalid;
-    const auto& g=p->g;
-    int32_t draw=0;g.GetIntegerv(DRAW_FRAMEBUFFER_BINDING,&draw);
+    const auto& g=p->g;Metering metering(p->raw,p->queries);
+    int32_t draw=0;
+    if(known && (known->fields&Known::draw_framebuffer))draw=int32_t(known->draw);
+    else g.GetIntegerv(DRAW_FRAMEBUFFER_BINDING,&draw);
     if(uint32_t(draw)!=t.framebuffer)return Result::state;
     // Mirror only a draw that composites over what lies behind it and leaves
     // depth alone: the game's own dst = 1 - src alpha with a source factor
     // that never reads the destination. Anything else stays out of the layer.
-    int32_t blend[6]={};uint8_t blending=0,depth_mask=1;
-    g.GetBooleani_v(BLEND,0,&blending);g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
-    for(size_t i=0;i<6;++i)g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
-    if(!blending || depth_mask || !g.IsEnabled(DEPTH_TEST) || blend[4]!=int32_t(FUNC_ADD) ||
+    // A caller that knows its state leaves the blend equations and the color
+    // mask as prepare recorded them; one that does not has them asked.
+    int32_t blend[6]={0,0,0,0,p->stable.blend[4],p->stable.blend[5]};uint8_t blending=0,depth_mask=1,depth_test=0;
+    uint8_t mask[4]={p->stable.color_mask[0],p->stable.color_mask[1],p->stable.color_mask[2],p->stable.color_mask[3]};
+    if(!known_cap(known,Known::blend,&blending))g.GetBooleani_v(BLEND,0,&blending);
+    g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
+    for(size_t i=0;i<(known ? 4u : 6u);++i)g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
+    if(!known)g.GetBooleani_v(COLOR_WRITEMASK,0,mask);
+    if(!known_cap(known,Known::depth_test,&depth_test))depth_test=g.IsEnabled(DEPTH_TEST);
+    if(!blending || depth_mask || !depth_test || blend[4]!=int32_t(FUNC_ADD) ||
        blend[1]!=int32_t(ONE_MINUS_SRC_ALPHA) || (blend[0]!=int32_t(ONE) && blend[0]!=int32_t(SRC_ALPHA))) {
         if(pass==LayerPass::color)++p->layer_stats.skipped_blend;
         return Result::unsupported;
     }
     if(!p->layer.open) {
-        if(!source_format(g,Depth::ordinary))return Result::unsupported;
         // Scissor applies to blits and clears; the game's value is restored below.
-        uint8_t scissor=0;g.GetBooleani_v(SCISSOR_TEST,0,&scissor);
-        int32_t read=0;g.GetIntegerv(READ_FRAMEBUFFER_BINDING,&read);
-        uint8_t mask[4]={};g.GetBooleani_v(COLOR_WRITEMASK,0,mask);
+        uint8_t scissor=0;int32_t read=0;
+        if(!known_cap(known,Known::scissor_test,&scissor))g.GetBooleani_v(SCISSOR_TEST,0,&scissor);
+        if(known && (known->fields&Known::read_framebuffer))read=int32_t(known->read);
+        else g.GetIntegerv(READ_FRAMEBUFFER_BINDING,&read);
+        const auto& facts=verify(p,t);
+        if(facts.result!=Result::ok) {g.BindFramebuffer(READ_FRAMEBUFFER,uint32_t(read));return Result::unsupported;}
         g.Disablei(SCISSOR_TEST,0);
         g.BindFramebuffer(READ_FRAMEBUFFER,t.framebuffer);
         for(uint32_t fbo:{p->fbos[1],p->fbos[3]}) {
@@ -447,13 +558,13 @@ Result begin_layer(Instance* p,const Target& t,LayerPass pass) {
         const float clear[4]={0,0,0,1}; // nothing in front yet: no color, everything let through
         g.ClearBufferfv(COLOR,0,clear);
         g.ColorMaski(0,mask[0],mask[1],mask[2],mask[3]);
-        g.BindFramebuffer(READ_FRAMEBUFFER,read);g.BindFramebuffer(DRAW_FRAMEBUFFER,t.framebuffer);
+        g.BindFramebuffer(READ_FRAMEBUFFER,uint32_t(read));g.BindFramebuffer(DRAW_FRAMEBUFFER,t.framebuffer);
         if(scissor)g.Enablei(SCISSOR_TEST,0);
         p->layer.open=true;p->layer.source=t.framebuffer;++p->layer_stats.opened;
     }
     auto& l=p->layer;
     l.draw_fbo=draw;std::copy(blend,blend+6,l.blend);l.depth_mask=depth_mask;
-    g.GetBooleani_v(COLOR_WRITEMASK,0,l.color_mask);
+    std::copy(mask,mask+4,l.color_mask);
     if(pass==LayerPass::color) {
         g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[2]);g.ColorMaski(0,1,1,1,1);
         g.BlendFuncSeparatei(0,blend[0],blend[1],ZERO,ONE_MINUS_SRC_ALPHA);
@@ -482,13 +593,21 @@ void break_layer(Instance* p) {
 }
 LayerStats layer_stats(const Instance* p) {return p ? p->layer_stats : LayerStats{};}
 
-Result begin_hud(Instance* p,uint64_t occurrence) {
+Result begin_hud(Instance* p,uint64_t occurrence,const Known* known) {
     if(!p || !p->begun || p->finalized || p->hud || p->target.occurrence!=occurrence) {abort(p);return Result::invalid;}
-    const auto& g=p->g;int32_t fbo=0,buffer=0;uint8_t feedback=0;
-    g.GetIntegerv(DRAW_FRAMEBUFFER_BINDING,&fbo);g.GetIntegerv(DRAW_BUFFER0,&buffer);
-    g.GetBooleanv(TRANSFORM_FEEDBACK_ACTIVE,&feedback);
-    if(uint32_t(fbo)!=p->target.framebuffer || uint32_t(buffer)!=COLOR_ATTACHMENT0 || feedback ||
-       g.IsEnabled(DEPTH_TEST) || g.IsEnabled(STENCIL_TEST) || g.IsEnabled(RASTERIZER_DISCARD)) {
+    const auto& g=p->g;Metering metering(p->raw,p->queries);
+    int32_t fbo=0;uint8_t depth=0;
+    if(known && (known->fields&Known::draw_framebuffer))fbo=int32_t(known->draw);
+    else g.GetIntegerv(DRAW_FRAMEBUFFER_BINDING,&fbo);
+    if(!known_cap(known,Known::depth_test,&depth))depth=g.IsEnabled(DEPTH_TEST);
+    // The draw buffer is the target's, verified at begin_batch. Transform
+    // feedback, stencil and rasterizer discard are the renderer's stable
+    // state, asked only of a caller that knows nothing.
+    const auto& s=p->stable;
+    uint8_t feedback=s.feedback,stencil=s.enabled[enable_index(STENCIL_TEST)],discard=s.enabled[enable_index(RASTERIZER_DISCARD)];
+    if(!known) {g.GetBooleanv(TRANSFORM_FEEDBACK_ACTIVE,&feedback);stencil=g.IsEnabled(STENCIL_TEST);discard=g.IsEnabled(RASTERIZER_DISCARD);}
+    if(uint32_t(fbo)!=p->target.framebuffer || uint32_t(p->target_draw_buffer)!=COLOR_ATTACHMENT0 || feedback ||
+       depth || stencil || discard) {
         abort(p);return Result::state;
     }
     p->hud_draw_fbo=fbo;p->hud=true;g.BindFramebuffer(DRAW_FRAMEBUFFER,p->fbos[0]);return Result::ok;

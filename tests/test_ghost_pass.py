@@ -71,3 +71,17 @@ def test_render_hooks_query_the_driver_only_through_the_counted_fallback():
     queries = [line.strip() for line in source.splitlines() if "glGet" in line]
     assert queries, "the fallback queries are still present"
     assert all("++hook_queries" in line for line in queries), queries
+
+
+def test_ghost_draw_counts_every_driver_query():
+    """The ghost glue's own driver queries (the seal's scissor, the HUD's
+    feedback check) each go through ask(), which counts and times them for the
+    hook statistics; the compositor counts its own through its metered
+    dispatch. An uncounted query here is a sync the status page cannot show."""
+    import re
+    source = (ROOT / "plugin/gfxwrap/ghost_draw.cpp").read_text(encoding="utf-8")
+    source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S)
+    queries = [line.strip() for line in source.splitlines()
+               if re.search(r"\bglGet\w*\(|\bget_uniform\(program", line)]
+    assert queries, "the glue still asks the driver something"
+    assert all("ask(" in line for line in queries), queries

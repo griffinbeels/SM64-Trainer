@@ -116,27 +116,29 @@ struct Storage {
             g.EnableVertexAttribArray(i);
             g.VertexAttribPointer(i,sizes[i],FLOAT,0,sizeof(ParticleVertex),reinterpret_cast<const void*>(offsets[i]));
         }
+        // The compositor's own units: atlas, then the body's terrain and layer.
+        g.UseProgram(program);
+        for(uint32_t i=0;i<4;++i)g.Uniform1i(uniforms[2+i],int32_t(unit_base+i));
         width=w;height=h;ready=true;return true;
     }
     void upload(const Dispatch& g,const Pose* poses,uint32_t count) const {
         using namespace gl;
         if(!ready)return;
-        g.BindVertexArray(vao);g.BindBuffer(ARRAY_BUFFER,vbo);
+        g.BindBuffer(COPY_WRITE_BUFFER,vbo);
         for(uint32_t i=0;i<count;++i)if(poses[i].particles.count)
-            g.BufferSubData(ARRAY_BUFFER,i*max_vertices*sizeof(ParticleVertex),
+            g.BufferSubData(COPY_WRITE_BUFFER,i*max_vertices*sizeof(ParticleVertex),
                 poses[i].particles.count*sizeof(ParticleVertex),poses[i].particles.vertices);
     }
-    // Called with the ghost's own self-depth attached and the body's texture
-    // units bound (1 terrain, 2 layer color, 3 layer depth).
+    // Called with the ghost's own self-depth attached and the body's units
+    // bound (unit_base+1 terrain, +2 layer color, +3 layer depth).
     void draw(const Dispatch& g,const Pose& pose,uint32_t index,const Target& t,bool layered) const {
         using namespace gl;
         if(!ready || !pose.particles.count || pose.opacity==0)return;
         g.UseProgram(program);g.BindVertexArray(vao);
         g.UniformMatrix4fv(uniforms[0],1,0,pose.particles.view_projection);g.Uniform1i(uniforms[1],pose.flip_y);
-        g.Uniform1i(uniforms[2],0);g.Uniform1i(uniforms[3],1);g.Uniform1i(uniforms[4],2);g.Uniform1i(uniforms[5],3);
         g.Uniform1i(uniforms[6],layered ? 1 : 0);g.Uniform2f(uniforms[7],t.depth_scale,t.depth_translate);
         g.Uniform1f(uniforms[8],pose.opacity);occlusion.set(g,pose.occlusion);
-        g.ActiveTexture(TEXTURE0);g.BindTexture(TEXTURE_2D,texture);g.BindSampler(0,0);
+        bind_units(g,0,1,&texture);
         g.Disable(STENCIL_TEST);g.Enable(DEPTH_TEST);
         g.Enablei(BLEND,0);g.BlendFuncSeparatei(0,SRC_ALPHA,ONE_MINUS_SRC_ALPHA,ZERO,ONE);
         g.BlendEquationSeparatei(0,FUNC_ADD,FUNC_ADD);

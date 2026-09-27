@@ -6,6 +6,9 @@ struct FrameBuffer;
 namespace ghost_link {
 // The real bound raster target; FBE-off uses GLideN64's screen-size FBO.
 FrameBuffer* raster_buffer();
+// The renderer's name for a buffer's attachments: its color texture and depth
+// object. The compositor reuses what it verified while the name holds.
+uint64_t attachments(const FrameBuffer*);
 void rom(bool opened);
 void context_created();
 void context_lost();

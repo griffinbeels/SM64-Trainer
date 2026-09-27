@@ -142,6 +142,9 @@ def main() -> None:
             case["timings"][f"{key[0]}-{key[1]}"] = {
                 field: stats([float(r[field]) for r in selected])
                 for field in selected[0] if field.endswith("_ms")}
+            # The compositor's driver queries per timed frame (the live path's residue).
+            queries = [int(r["driver_queries"]) for r in selected]
+            case["timings"][f"{key[0]}-{key[1]}"]["driver_queries"] = {"min": min(queries), "max": max(queries)}
         with (dest / "proof.csv").open(newline="") as handle:
             case["proof"] = list(csv.DictReader(handle))
         manifest["cases"][resolution] = case

@@ -16,7 +16,21 @@ std::atomic_flag consumer = ATOMIC_FLAG_INIT;
 std::atomic<uint32_t> config_sequence{0}, configured{0};
 std::atomic<uint32_t> config_words[sizeof(gc_layout) / sizeof(uint32_t)];
 std::atomic<uint32_t> epoch{0}, configuration{0}, offered{0}, dropped{0}, taken{0}, busy{0}, particles_dropped{0};
-std::atomic<uint32_t> hook_queries{0}, hook_micros{0};
+// The last list's hook cost, one writer (the renderer) and one reader (the
+// IPC worker): a sequence count makes a torn read retry rather than mix lists.
+constexpr size_t hook_words = sizeof(gs_hook_cost) / sizeof(uint32_t);
+std::atomic<uint32_t> hook_sequence{0}, hook_cost[hook_words];
+gs_hook_cost read_hooks() {
+    uint32_t words[hook_words]{};
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        const uint32_t before = hook_sequence.load(std::memory_order_acquire);
+        if (before & 1) continue;
+        for (size_t i = 0; i < hook_words; ++i) words[i] = hook_cost[i].load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (hook_sequence.load(std::memory_order_relaxed) == before) break;
+    }
+    gs_hook_cost out{};std::memcpy(&out, words, sizeof(out));return out;
+}
 bool rom_open = false, active = false;
 uint32_t observed_config = 0;
 uint64_t serial = 0;
@@ -105,8 +119,7 @@ int __cdecl read(gs_record *out, uint32_t bytes) {
 gs_stats __cdecl stats() {
     return {sizeof(gs_stats), GS_VERSION, epoch.load(), configuration.load(),
         offered.load(), dropped.load(), taken.load(), busy.load(), configured.load() ? 1u : 0u,
-        particles_dropped.load(), hook_queries.load(std::memory_order_relaxed),
-        hook_micros.load(std::memory_order_relaxed)};
+        particles_dropped.load(), read_hooks()};
 }
 const gs_api capture_api = {sizeof(gs_api), GS_VERSION, GS_CAP_POSE | GS_CAP_WORLD_PASS, 0,
     configure, disable, read, stats};
@@ -159,9 +172,12 @@ bool geometry(bool was_zbuffer, bool is_zbuffer) {
     return active && pass.geometry(was_zbuffer,is_zbuffer);
 }
 void color_target_changed() { if (active) pass.color_target_changed(); }
-void hooks(uint32_t gl_queries, uint32_t micros) {
-    hook_queries.store(gl_queries, std::memory_order_relaxed);
-    hook_micros.store(micros, std::memory_order_relaxed);
+void hooks(const gs_hook_cost &cost) {
+    static_assert(sizeof(gs_hook_cost) % sizeof(uint32_t) == 0, "hook cost is whole words");
+    uint32_t words[hook_words];std::memcpy(words, &cost, sizeof(words));
+    hook_sequence.fetch_add(1, std::memory_order_acq_rel);
+    for (size_t i = 0; i < hook_words; ++i) hook_cost[i].store(words[i], std::memory_order_relaxed);
+    hook_sequence.fetch_add(1, std::memory_order_release);
 }
 void display_list(uint32_t pc, uint32_t dl, uint32_t physical_dl, uint32_t depth, const float *matrix) {
     if (active) ghost_root_display_list(root_probe,pc,dl,physical_dl,depth,matrix);

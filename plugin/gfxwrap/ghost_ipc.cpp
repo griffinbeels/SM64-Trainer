@@ -534,7 +534,9 @@ struct Session {
         s.rom_generation = opened.load(std::memory_order_acquire); s.rom_open = s.rom_generation != 0;
         s.configuration = configuration; s.epoch = stats.epoch;
         s.particles_dropped = stats.particles_dropped;
-        s.hook_gl_queries = stats.hook_gl_queries; s.hook_micros = stats.hook_micros;
+        static_assert(sizeof(gs_hook_cost) == offsetof(gipc_status, reserved) - offsetof(gipc_status, hook_gl_queries),
+                      "the status page carries the whole hook cost, in order");
+        std::memcpy(&s.hook_gl_queries, &stats.hooks, sizeof(stats.hooks));
         s.state = state; s.reason = reason; s.ack_token = r.token; s.ack_revision = r.revision;
         gp_status playback{};
         s.displayed = 0;
