@@ -7,8 +7,8 @@
 
 Griffin, 2026-09-21: "we ALREADY TESTED THE WHOLE SUITE. NO NEED TO RERUN ANY
 TESTS OTHER THAN THE BLAST RADIUS FOR OUR CHANGES." The merge check therefore
-runs only the tests tools/blast_radius.py selects for the diff since the newest
-green full run on main; the full run on GitHub (tools/full_run.py) runs
+runs only the tests tools/blast_radius.py selects for the diff since the nearest
+ancestor with a green full run (any branch); the full run on GitHub (tools/full_run.py) runs
 everything. Resource policy lives in test_resources.py; commands and limits
 in docs/testing.md.
 """
@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="stop the run this long after admission; queue time does not count")
     parser.add_argument("--workers", type=int, default=None,
                         help="worker ceiling (default: serial for focused checks, else half the "
-                             "machine budget: 8, or 4 with OBS open)")
+                             "machine budget: 8, or 4 with OBS or Project64 open)")
     parser.add_argument("--reserve", type=int, default=None,
                         help="additional CPU reserve; cannot weaken the automatic desktop/OBS budget")
     args, extra = parser.parse_known_args(argv)

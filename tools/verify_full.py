@@ -1,7 +1,7 @@
 """The merge check as the harness's `full` lane: this checkout's blast radius.
 
 The merge check runs only the tests tools/blast_radius.py selects for the diff
-since the newest green full run on main; the full run on GitHub covers the
+since the nearest ancestor with a green full run (any branch); the full run on GitHub covers the
 rest. It refuses a missing Vitest bridge up front, because the bridge would
 otherwise fail every component test with the same setup message, which reads
 as a code regression. A radius holding browser tests without uilab is refused
