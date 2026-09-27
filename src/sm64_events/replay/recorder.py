@@ -106,6 +106,9 @@ class ReplayRecorder:
     # Capture gate (set_capture_gate): no gate until main.py installs one.
     _capture_gate: Callable[[], bool] | None = None
     _capture_gated = False
+    # Distinct pictures the desktop route's sink actually wrote: setup's
+    # evidence of pictures when the GPU route cannot run on this adapter.
+    _pictures_fed = 0
 
     def __init__(self, cfg: ReplayConfig,
                  window_finder: Callable[[str], WindowInfo | None],
@@ -566,8 +569,10 @@ class ReplayRecorder:
         self._set_idle(self._session_paused)
         self._capture_window = (win.pid, win.hwnd)
         self._recording = True
-        log.info("capture started — window=%r audio=%s codec=%s",
-                 win.title, self._audio_mode, self._codec)
+        # The GPU route picks its own codec per adapter and logs it on "GPU
+        # recording active"; self._codec is only the desktop route's pick.
+        log.info("capture started — window=%r audio=%s route=%s", win.title, self._audio_mode,
+                 "gpu" if make_sink is not None else f"desktop codec={self._codec}")
 
     def _create_video_source(self, win: WindowInfo):
         video = self._video_factory(win)
@@ -1050,6 +1055,8 @@ class ReplayRecorder:
         row the tag names, or as a heartbeat repeat when there is none."""
         self.ledger.mark_fed(tag[1] if tag is not None else None, wrote_at,
                              media_run=media_run, pts=pts)
+        if tag is not None:
+            self._pictures_fed += 1  # one feeder thread; readers take a snapshot
 
     # -- audio callback (library thread) -------------------------------------
 
@@ -1135,6 +1142,10 @@ class ReplayRecorder:
             # when nothing fell back.
             "frame_source_note": getattr(self._video_source, "frame_source_note",
                                          self._frame_source_note),
+            # Why the capture layer's GPU route can never run for this
+            # Project64 (sourcefactory.DesktopForUnsupportedGpu), else None.
+            "gpu_unsupported": getattr(self._video_source, "gpu_unsupported", None),
+            "pictures_fed": self._pictures_fed,
             "frame_source_health": (self._video_source.status()
                                     if hasattr(self._video_source, "status")
                                     else None),

@@ -1,13 +1,16 @@
 """One GPU request, helper and fragment run, owned by the recorder media worker."""
 
+from functools import lru_cache
+import hashlib
 import logging
 from pathlib import Path
 import sys
 import struct
 import time
 
+from sm64_events.core.childproc import python_child
 from sm64_events.core.paths import bundled_encoder_dll
-from sm64_events.replay.gpucapture import GpuCleanupError
+from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCleanupError
 from sm64_events.replay import gpuchannel
 from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
 from sm64_events.replay.gpumedia import GpuMedia
@@ -18,9 +21,15 @@ from sm64_events.replay.gpuencoder import Result
 from sm64_events.replay.gpuencoder_abi import CODEC_STREAM_NAMES
 from sm64_events.replay.gpupublication import PublicationError, PublicationWriteError
 from sm64_events.replay.gpumediaworker import MediaWorker
-from sm64_events.replay.gpusettings import note_codec_unavailable, recording_codec
+from sm64_events.replay.gpusettings import (
+    backend_unsupported,
+    note_backend_unsupported,
+    note_codec_unavailable,
+    recording_codec,
+)
 from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpuprocess.process_controller import Controller
+from sm64_events.replay.gpuprocess import process_worker
 from sm64_events.replay.media import MediaRun
 from sm64_events.replay.packetmux import NativeFormat
 from sm64_events.replay.ownedclose import CleanupPending
@@ -29,6 +38,22 @@ log = logging.getLogger("sm64.replay")
 
 # Distinct from None (stop) and from a successful open tuple.
 _RETRY_OTHER_CODEC = object()
+
+
+@lru_cache(maxsize=4)
+def _sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def helper_launch():
+    """(command, identity, env) for the encoder helper.
+
+    A direct child either way (core/childproc.py): the installed exe with its
+    helper flag, or the base interpreter running the module, never the venv
+    launcher that would drop the no-busy-cursor flag."""
+    command, env = python_child(process_worker.__name__, process_worker.GPU_HELPER_FLAG)
+    entry = sys.executable if getattr(sys, "frozen", False) else process_worker.__file__
+    return command, {"entry": str(Path(entry).resolve()), "entry_sha256": _sha256(entry)}, env
 
 
 class CaptureSession:
@@ -107,14 +132,19 @@ class CaptureSession:
     def _open_encoder(self):
         header = self.channel.header
         luid = (header.luid_high, header.luid_low)
+        # Before any helper starts: an adapter that can never open NVENC
+        # (not NVIDIA, a software adapter, a driver too old) is a verdict,
+        # not a fault to retry every 10-60 s forever (gpuadapter.py).
+        reason = backend_unsupported(luid)
+        if reason is not None:
+            raise GpuBackendUnsupported(reason)
         dll = bundled_encoder_dll()
         if dll is None:
             raise RuntimeError("this build carries no SM64GpuEncoderV1.dll; run tools/build_plugin.py")
         dll = staged_encoder_dll(dll)  # never hold the shipped file open
+        command, identity, env = helper_launch()
         self.controller = self.controller_factory(
-            executable=Path(sys.executable),
-            helper=Path(__file__).resolve().parent / "gpuprocess/helper_bootstrap.py",
-            limits=self.settings.helper(),
+            command=command, identity=identity, env=env, limits=self.settings.helper(),
         )
         # ONE startup budget across both attempts. An adapter without an AV1
         # encoder refuses by codec before touching pixels, so the fallback
@@ -154,6 +184,16 @@ class CaptureSession:
                     # the hardware, typed apart from every real fault, so the
                     # session asks for the other one instead of failing.
                     return _RETRY_OTHER_CODEC
+                if (
+                    reply.request_id == request_id
+                    and reply.metadata["result"] == Result.CODEC
+                    and not reply.metadata["worker_disposal_required"]
+                ):
+                    # Refused by codec with nothing left to try: this adapter
+                    # has no codec the recorder can write.
+                    reason = "this GPU's video encoder offers neither AV1 nor H.264"
+                    note_backend_unsupported(luid, reason)
+                    raise GpuBackendUnsupported(reason)
                 if (
                     reply.request_id != request_id
                     or reply.metadata["result"] != 0
@@ -245,14 +285,20 @@ class CaptureSession:
             command, request_id, reply, initial_offers=offers, now=time.monotonic()
         )
         self.state = "recording"
+        # The codec actually opened, and what startup cost stage by stage, on
+        # EVERY run: the failure-only record made startup look slower than
+        # it is (audit 2026-09-25).
         log.info(
-            "GPU recording active: run=%s source=%s shape=%dx%d adapter=%s native=%s",
+            "GPU recording active: run=%s source=%s shape=%dx%d adapter=%s codec=%s "
+            "native=%s stages=%s",
             run.id,
             decoder.namespace,
             h.width,
             h.height,
             (h.luid_high, h.luid_low),
+            self.codec,
             reply.metadata.get("identity"),
+            self.timings.summary(),
         )
 
     def run(self):
@@ -269,6 +315,9 @@ class CaptureSession:
             while self._continue():
                 self.timings.measure("tick", self.tick)
                 self.owner.wait(self.settings.poll_s)
+        except GpuBackendUnsupported as exc:
+            self.error = str(exc)[:512]
+            raise  # A verdict about the adapter; GpuCapture routes it, unwrapped.
         except Exception as exc:
             self.error = str(exc)[:512]
             log.info("GPU capture failure before cleanup: %s", failure_snapshot(
@@ -303,8 +352,10 @@ class CaptureSession:
             except Exception as exc:
                 raise GpuCleanupError("GPU capture cleanup unproved") from exc
             finally:
-                if self.error:
-                    log.info("GPU capture stage timings at stop: %s", self.timings.summary())
+                # Every stop, clean ones included: a failure-only record
+                # weights every startup and tick distribution toward failures.
+                log.info("GPU capture stage timings at stop: codec=%s error=%s %s",
+                         self.codec, self.error, self.timings.summary())
 
     def tick(self):
         now = time.monotonic()

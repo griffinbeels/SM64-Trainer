@@ -19,6 +19,7 @@ import subprocess
 
 log = logging.getLogger(__name__)
 from .process_job import OwnedJob
+from ..gpuencoder import Result
 from ..gpuencoder_abi import Status as NativeStatus, Retained as NativeRetained
 from .process_protocol import (
     exact,
@@ -97,7 +98,15 @@ class Entry:
 
 
 class Controller:
-    def __init__(self, *, executable, helper, limits):
+    """One owned helper, started as `command` + nonce + bounds.
+
+    `command` is the argv prefix (the frozen exe and its flag, or the
+    interpreter and `-m module`) and `identity` names what runs, for the
+    status record. The older `executable` + `helper` script form remains for
+    fixture helpers that are plain scripts."""
+
+    def __init__(self, *, limits, command=None, identity=None, cwd=None,
+                 env=None, executable=None, helper=None):
         self.limits = limits
         self.nonce = uuid.uuid4().hex
         self._lock = threading.Lock()
@@ -121,16 +130,29 @@ class Controller:
         self._slot_owners = {}
         self._native_identity = None
         self._started = time.monotonic()
-        self._command = []
-        for p in (Path(executable), Path(helper)):
-            if not p.is_absolute() or not p.is_file():
-                raise ValueError("explicit absolute executable/helper files required")
-            self._command.append(str(p.resolve()))
-        self.identity = {
-            "executable": self._command[0],
-            "helper": self._command[1],
-            "helper_sha256": hashlib.sha256(Path(helper).read_bytes()).hexdigest(),
-        }
+        if helper is not None:
+            self._command = []
+            for p in (Path(executable), Path(helper)):
+                if not p.is_absolute() or not p.is_file():
+                    raise ValueError("explicit absolute executable/helper files required")
+                self._command.append(str(p.resolve()))
+            identity = {
+                "executable": self._command[0],
+                "helper": self._command[1],
+                "helper_sha256": hashlib.sha256(Path(helper).read_bytes()).hexdigest(),
+            }
+            cwd = Path(self._command[1]).parent
+        else:
+            if not command or any(type(part) is not str for part in command):
+                raise ValueError("helper command prefix required")
+            head = Path(command[0])
+            if not head.is_absolute() or not head.is_file():
+                raise ValueError("explicit absolute helper executable required")
+            self._command = [str(head.resolve()), *command[1:]]
+            identity = {"executable": self._command[0], **(identity or {})}
+            cwd = head.parent if cwd is None else cwd
+        self.identity = identity
+        self._cwd, self._env = str(cwd), env
         self._command.extend([self.nonce, str(limits.max_json), str(limits.max_packet)])
         self._io = threading.Thread(target=self._run, name="encoder-pipe", daemon=True)
         self._watcher = threading.Thread(
@@ -431,7 +453,7 @@ class Controller:
         code = metadata["result"]
         if (
             type(code) is not int
-            or not 0 <= code <= 15
+            or not 0 <= code <= max(Result)
             or type(metadata["worker_disposal_required"]) is not bool
         ):
             raise ValueError("reply result shape")
@@ -549,7 +571,7 @@ class Controller:
             if stopped:
                 job.stop()
                 return
-            proc = job.spawn(self._command, str(Path(self._command[1]).parent))
+            proc = job.spawn(self._command, self._cwd, self._env)
             with self._lock:
                 self._proc = proc
                 stopped = self._fault is not None

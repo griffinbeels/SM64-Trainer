@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
 from types import SimpleNamespace as NS
 
@@ -28,6 +27,7 @@ from sm64_events.replay.feedmap import feed_map
 from sm64_events.replay.gpuinput import CapturedOffer, ChannelSelection
 from sm64_events.replay.gpumedia import GpuMedia
 from sm64_events.replay.gpumediaworker import MediaWorker
+from sm64_events.replay.gpucapture_session import helper_launch
 from sm64_events.replay.gpuprocess.process_controller import Controller
 from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpusettings import GpuSettings
@@ -183,9 +183,9 @@ class Pipeline:
     def open(self):
         self.client = self.native.start(1, encoder_ready=False)
         h = self.client.header
-        self.controller = Controller(executable=Path(sys.executable),
-            helper=ROOT / "src/sm64_events/replay/gpuprocess/helper_bootstrap.py",
-            limits=self.settings.helper())
+        command, identity, env = helper_launch()  # the recorder's own launch
+        self.controller = Controller(command=command, identity=identity, env=env,
+                                     limits=self.settings.helper())
         self.command = dict(op="Open", dll_path=str(ENCODER),
             adapter_luid=[h.luid_high, h.luid_low], names=list(self.client.texture_names),
             options=self.settings.encoder(h, ReplayConfig(), nominal_rate=30))

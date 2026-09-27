@@ -943,3 +943,59 @@ def test_the_pbs_table_guard_can_still_fail():
     assert _PBS_SQL.search(real)
     assert not _PBS_SQL.search(prose)
     assert not _PBS_SQL.search('x = "INSERT INTO pbs_v2 (id) VALUES (1)"')
+
+
+# The interpreter a background Python child runs under is chosen in one place:
+# core/childproc.py::python_child. Exempt: relaunch.py (the update relaunch is
+# the user's own gesture restarting the app, not a background child) and
+# library/background.py (it already bypasses the launcher the same way).
+_INTERPRETER_DOORS = frozenset({"src/sm64_events/core/childproc.py",
+                                "src/sm64_events/core/relaunch.py",
+                                "src/sm64_events/library/background.py"})
+
+
+def _interpreter_heads(source: str) -> list[int]:
+    """Lines where `sys.executable` or `_base_executable` heads a command
+    line: element 0 of a list or tuple, or an `executable=` argument."""
+    import ast
+
+    def names_interpreter(node):
+        return any((isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                    and n.value.id == "sys" and n.attr in ("executable", "_base_executable"))
+                   or (isinstance(n, ast.Constant) and n.value == "_base_executable")
+                   for n in ast.walk(node))
+
+    heads = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.List, ast.Tuple)) and node.elts and names_interpreter(node.elts[0]):
+            heads.append(node.lineno)
+        elif isinstance(node, ast.keyword) and node.arg == "executable" and names_interpreter(node.value):
+            heads.append(node.value.lineno)
+    return heads
+
+
+def test_only_childproc_picks_a_background_python_childs_interpreter():
+    """From source, `sys.executable` is the venv's launcher, which starts the
+    real interpreter as ITS child and does not pass STARTF_FORCEOFFFEEDBACK
+    on: the child reads startup flags 0x100 where a direct start reads 0x180,
+    so the pointer shows the busy spinner on every capture start. The hop also
+    costs ~106 ms and hides the helper's memory a generation down (perf audit
+    2026-09-25). Both the encoder helper and the ghost overlay were started
+    that way. `python_child` starts the interpreter itself and keeps the venv's
+    packages for a child that needs them."""
+    offenders = {path.relative_to(REPO).as_posix(): lines
+                 for path in shipped_python()
+                 if path.relative_to(REPO).as_posix() not in _INTERPRETER_DOORS
+                 for lines in [_interpreter_heads(path.read_text(encoding="utf-8"))] if lines}
+    assert not offenders, (
+        f"{offenders} start a Python child from sys.executable. Build its "
+        "command with core/childproc.py::python_child instead.")
+
+
+def test_the_interpreter_guard_can_still_fail():
+    assert _interpreter_heads('cmd = [sys.executable, "-m", MODULE]\n')
+    assert _interpreter_heads("Controller(executable=Path(sys.executable), helper=h)\n")
+    assert _interpreter_heads('argv = (getattr(sys, "_base_executable", None), "-c", code)\n')
+    assert not _interpreter_heads('"""Never start [sys.executable, "-m", x]."""\n'
+                                  "# [sys.executable, '-m', x]\n"
+                                  "identity = {'executable': sys.executable}\n")

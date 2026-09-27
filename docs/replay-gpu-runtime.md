@@ -265,15 +265,29 @@ Helper Open also settles WHICH CODEC this adapter records in. The session asks
 for AV1 first — 32% of H.264's bytes at equal quality and faster to encode
 (measured 2026-09-20) — and the encoder checks `nvEncGetEncodeGUIDs` before it
 configures anything. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
-typed apart from every real fault, and the session opens again asking for
-H.264 inside the SAME startup budget; `gpusettings.py` remembers the refusal
+typed apart from every real fault, and the session asks the SAME helper for
+H.264 inside the same startup budget; `gpusettings.py` remembers the refusal
 per adapter LUID, so only the first capture of a launch pays the extra round
-trip. The codec that actually opened is what `PacketFragmentMux` writes the
+trip. (Until 2026-09-27 the helper controller rejected result 16 as a
+malformed reply and the helper exited on the refusal, so this fallback never
+ran: an adapter without AV1 failed every attempt. A refusal by codec that
+opened nothing now leaves the helper running.) An adapter refusing H.264 too
+is an unsupported adapter, below. The codec that actually opened is what `PacketFragmentMux` writes the
 fragments as, so an `av01` track is never described as `avc1`.
 
 The lease supervisor allows five seconds from admitted request to ACTIVE. Helper
 Open uses its startup budget; ordinary native requests use the shorter call
-deadline. An unavailable backend ends the request explicitly. Transient failures
+deadline. An unavailable backend ends the request explicitly. An adapter that
+can never open the encoder is a verdict, not a failure: `gpuadapter.py` asks
+DXGI and the driver before any helper starts (not NVIDIA, a software adapter,
+an NVENC API older than the encoder's 13.0), and an H.264 refusal by codec
+answers the same way. `gpusettings.py` remembers it per adapter and driver
+version; the retry gate arms no cooldown and discovery declines that producer,
+so the recorder's next attach keeps the desktop grab
+(`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`) and setup
+accepts its written pictures. An NVIDIA GPU without NVENC hardware still
+fails as a driver error at session open, indistinguishable from a transient
+one without a native change, and keeps the retry gate. Transient failures
 retry only after proved cleanup, with 10/20/40/60-second capped delays. A short
 productive prefix or capability refresh does not waive the delay. Discovery,
 storage-maintenance and audio-worker faults have their own bounded retry delays.
@@ -597,9 +611,12 @@ before attribution.
 Never restart the user's applications to collect diagnostics.
 
 The current native encoder is NVIDIA NVENC. No CUDA Toolkit installation is
-required. Other GPU encoders and frozen-app helper dispatch remain unqualified;
-an unsupported GPU path must fail explicitly rather than run blocking capture
-on the emulation thread. The portable extension seam is the encoded packet and
+required. Other GPU encoders remain unqualified; an unsupported GPU keeps the
+desktop grab rather than run blocking capture on the emulation thread. The
+installed app starts its helper as itself with `--gpu-helper` (`gui_entry.py`);
+a source run starts the base interpreter on the helper module
+(`core/childproc.py::python_child`), so the helper is the server's direct
+child and keeps STARTF_FORCEOFFFEEDBACK. The portable extension seam is the encoded packet and
 exact custody contract, not a second timing model.
 
 ## What failed and why

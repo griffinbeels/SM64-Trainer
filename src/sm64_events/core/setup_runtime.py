@@ -62,6 +62,9 @@ class SetupRuntime:
         rom = self._rom(target) if target["state"] == "ready" else identify_rom(None)
         recorder = self.replay.recorder.status() if self.replay else {}
         health = recorder.get("frame_source_health") or {}
+        # This Project64's adapter can never record through the layer, so the
+        # recorder keeps the desktop grab: ITS written pictures are the proof.
+        unsupported = recorder.get("gpu_unsupported")
         sampler = getattr(self.poller, "input_sampler", None)
         inputs = sampler.health() if sampler else {}
         latest = getattr(self.poller, "latest", None)
@@ -69,14 +72,25 @@ class SetupRuntime:
         counters = self._window.observe(
             (target.get("pid"), rom["name"], rom["region"], layer.plugin_pid,
              gpu.identity if gpu else None),
-            delivered=health.get("delivered"), inputs=inputs.get("frames"),
+            delivered=recorder.get("pictures_fed") if unsupported else health.get("delivered"),
+            inputs=inputs.get("frames"),
             game=latest.global_timer if latest else None)
         same_process = target.get("pid") is not None and target["pid"] == layer.plugin_pid
         plugin = same_process and layer.layer_alive
         captured = (recorder.get("recording") and recorder.get("frame_source") == "plugin"
                     and counters["delivered"])
         pictures = captured
-        if gpu is not None:
+        if unsupported:
+            # No GPU lease means the control page's heartbeat never moves, so
+            # the layer is proved the way the passive exception below proves
+            # it: its page names this Project64 and the game and inputs move.
+            plugin = bool(same_process and counters["inputs"] and counters["game"]
+                          and not self.poller.paused
+                          and not getattr(self.poller, "hold_reason", None))
+            pictures = bool(recorder.get("recording")
+                            and recorder.get("frame_source") == "desktop"
+                            and counters["delivered"])
+        elif gpu is not None:
             # The GPU observer validates native control identity and counts only
             # accepted captured pictures. Encoder repeats cannot refresh it.
             captured = gpu.matches(recorder)

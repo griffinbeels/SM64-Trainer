@@ -1075,7 +1075,9 @@ GPU copy of the picture with that immutable stamp to a dedicated worker and the
 isolated [[encoder helper]]. The [[recorder]] retains exact source identity
 through shared media fragments without transferring full images through
 Python. A known GPU producer that cannot capture reports the failure; it does
-not silently switch to desktop timing. See [the current
+not silently switch to desktop timing. The one exception is an [[unsupported
+adapter]], which can never record this way: the [[recorder]] keeps the desktop
+grab for it and says why. See [the current
 runtime](replay-gpu-runtime.md) for ownership and limits.
 
 The [[frame map]] reads captured identity rather than guessing it from cadence.
@@ -1141,13 +1143,36 @@ the rule holds with no trainer open.
 ### Encoder helper
 
 The 64-bit NVENC DLL (`SM64GpuEncoderV1.dll`) the server's isolated encoder
-process loads to turn the [[renderer]]'s GPU pictures into H.264 packets
-without copying pixels through Python. Built by `tools/build_plugin.py`
+process loads to turn the [[renderer]]'s GPU pictures into AV1 or H.264
+packets without copying pixels through Python. Built by `tools/build_plugin.py`
 beside the wrapper; it carries the same native build id with its own suffix.
+The process is a direct child of the server: the installed app starts itself
+with `--gpu-helper`, and from source the server starts the base interpreter
+on the module, never the venv launcher (which drops the no-busy-pointer flag). The
+installed app had no such entry until 2026-09-27, so v1.9.1 never recorded.
 
 - **Lives** -- `plugin/gfxwrap/gpu_encoder_dll.cpp`,
   `plugin/gfxwrap/gpu_bridge_encoder.cpp`; loaded by
-  `src/sm64_events/replay/gpucapture_session.py`
+  `src/sm64_events/replay/gpuprocess/process_worker.py`, started by
+  `src/sm64_events/replay/gpucapture_session.py` through
+  `src/sm64_events/core/childproc.py`
+
+### Unsupported adapter
+
+A graphics adapter the [[capture layer]]'s GPU capture can never record on: not
+NVIDIA, a software adapter, an NVIDIA driver older than the [[encoder
+helper]]'s NVENC API, or an encoder offering neither AV1 nor H.264. Decided
+once per adapter and driver version, before any [[encoder helper]] starts
+where the facts allow. The [[recorder]] then keeps the desktop grab for that
+Project64, its status says why, and the [[setup screen]] accepts the desktop's
+written pictures. Until 2026-09-27 such a machine retried GPU capture every
+10-60 s forever and recorded nothing.
+
+- **Lives** -- `src/sm64_events/replay/gpuadapter.py` (the facts),
+  `src/sm64_events/replay/gpusettings.py` (the per-process memo),
+  `src/sm64_events/replay/sourcefactory.py` (the desktop grab it keeps)
+- **Not** -- a transient GPU failure: an encoder that fails for any other
+  reason keeps retrying on the bounded backoff (`src/sm64_events/replay/gpuretry.py`).
 
 ### Driver warm-up
 
