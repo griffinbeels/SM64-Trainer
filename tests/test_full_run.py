@@ -260,7 +260,9 @@ def test_a_refresh_keeps_units_this_run_did_not_time(tmp_path):
     assert "7" in written["source"]
 
 
-def test_the_baseline_candidates_are_green_runs_on_main_newest_first():
+def test_the_baseline_candidates_are_green_runs_on_any_branch_newest_first():
+    """A dispatched branch run proves the suite at its commit as well as a
+    push to main does; the blast radius keeps only ancestors of HEAD."""
     listing = [{"headSha": "old", "databaseId": 1, "createdAt": "2026-09-20T10:00:00Z"},
                {"headSha": "new", "databaseId": 2, "createdAt": "2026-09-21T10:00:00Z"}]
     calls = []
@@ -269,9 +271,9 @@ def test_the_baseline_candidates_are_green_runs_on_main_newest_first():
         calls.append(args)
         return json.dumps(listing)
 
-    assert full_run.green_runs_on_main(run=gh) == [("new", 2), ("old", 1)]
+    assert full_run.green_runs(run=gh) == [("new", 2), ("old", 1)]
     query = calls[0]
-    assert query[query.index("--branch") + 1] == "main"
+    assert "--branch" not in query
     assert query[query.index("--status") + 1] == "success"
 
 
