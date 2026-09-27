@@ -6,6 +6,7 @@ it must never be able to break the page it observes, it must survive its own
 crash, and it must stay bounded.
 """
 import json
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -89,6 +90,64 @@ def test_the_file_stays_bounded(log, monkeypatch):
     assert len(kept) <= uilog.MAX_RECORDS
     # It keeps the NEWEST, which is the half a live report is about.
     assert kept[-1]["title"] == "row 59"
+
+
+def fill_past_the_cap(log, count, width=500):
+    """A file already over the threshold, the state his log reaches after a
+    few play days: `count` records of about `width` bytes."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps({"surface": "selector", "title": "x" * width}) + "\n"
+    log.write_bytes(line.encode("utf-8") * count)
+
+
+def test_after_one_trim_the_next_records_only_append(log, monkeypatch):
+    """2026-09-25: 4000 records outgrew the 2 MB threshold, so the trim kept
+    the file at the threshold and EVERY post rewrote all of it (14.4 ms
+    against 0.29 ms). Now a trim cuts to half, and the records after it are
+    plain appends until the file refills."""
+    monkeypatch.setattr(uilog, "TRIM_ABOVE_BYTES", 100_000)
+    monkeypatch.setattr(uilog, "MAX_RECORDS", 400)  # 400 x ~520 B > 100 kB
+    fill_past_the_cap(log, 400)
+    uilog.record(SELECTOR)
+    trimmed = log.stat().st_size
+    assert trimmed <= 50_000
+    for index in range(80):
+        before = log.stat().st_size
+        uilog.record({**SELECTOR, "title": f"row {index}"})
+        line = len(log.read_bytes().splitlines(keepends=True)[-1])
+        assert log.stat().st_size == before + line, f"record {index} rewrote the file"
+    assert log.stat().st_size <= uilog.TRIM_ABOVE_BYTES
+    assert uilog.read(log)[-1]["title"] == "row 79"
+
+
+def test_concurrent_posts_lose_no_record(log, monkeypatch):
+    """Two clients post through the server's threadpool. A record appended
+    between another post's trim read and its rewrite used to vanish.
+    Whatever a trim drops is the OLDEST of the file, so each writer's
+    surviving records must be an unbroken run ending at its last one."""
+    monkeypatch.setattr(uilog, "TRIM_ABOVE_BYTES", 20_000)
+    writers, each = 8, 300
+    start = threading.Barrier(writers)
+
+    def post(writer):
+        start.wait()
+        for index in range(each):
+            uilog.record({"surface": "selector", "title": f"{writer}:{index}",
+                          "note": "n" * 60})
+
+    threads = [threading.Thread(target=post, args=(w,)) for w in range(writers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    lines = log.read_bytes().splitlines()
+    assert all(json.loads(line) for line in lines), "a torn or interleaved line"
+    seen = {}
+    for entry in uilog.read(log):
+        writer, index = map(int, entry["title"].split(":"))
+        seen.setdefault(writer, []).append(index)
+    for writer, indexes in seen.items():
+        assert indexes == list(range(indexes[0], each)), (writer, indexes[:5])
 
 
 def test_the_stored_line_is_not_crlf_on_windows(log):

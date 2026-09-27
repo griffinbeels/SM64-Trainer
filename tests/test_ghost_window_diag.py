@@ -64,6 +64,25 @@ def test_the_file_stays_bounded(log_file, monkeypatch):
     assert entries[-1]["index"] == 39, "the newest line is the one kept"
 
 
+def test_after_one_trim_the_next_rows_only_append(log_file, monkeypatch):
+    """3000 rows of ~529 B outgrow the 1 MB cap, so trimming back to 3000
+    rewrote the whole file on every placement once it got there. A trim now
+    cuts to half, and the rows after it only append."""
+    monkeypatch.setattr(diag, "TRIM_ABOVE_BYTES", 60_000)
+    monkeypatch.setattr(diag, "MAX_RECORDS", 300)  # 300 x ~530 B > 60 kB
+    log_file.parent.mkdir(parents=True)
+    row = json.dumps({"event": "decision", "note": "x" * 480}) + "\n"
+    log_file.write_bytes(row.encode("utf-8") * 300)
+    diag.record("decision", index=-1)
+    assert log_file.stat().st_size <= 30_000
+    for index in range(60):
+        before = log_file.stat().st_size
+        diag.record("decision", index=index, note="x" * 40)
+        line = len(log_file.read_bytes().splitlines(keepends=True)[-1])
+        assert log_file.stat().st_size == before + line, f"row {index} rewrote the file"
+    assert diag.read()[-1]["index"] == 59
+
+
 def test_a_log_that_cannot_be_written_never_stops_the_overlay(monkeypatch,
                                                               tmp_path):
     # A directory where the file should be: opening it for append raises.
