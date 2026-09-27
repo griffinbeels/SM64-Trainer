@@ -511,6 +511,10 @@ def _mount_library_routes(app, service, library_path, library_bundled_path,
     library = LibraryStore(library_path or sheet_library_path(),
                            library_bundled_path if library_bundled_path is not None
                            else bundled_sheet_library())
+    # Beside the library it was prepared from, so a test's scratch library
+    # keeps its own; a restart with identical inputs reuses the fit.
+    from sm64_events.library.calibration import SavedCalibration
+    library.saved_calibration = SavedCalibration(library.path.with_name("rank_calibration.bin"))
     library.load()
     app.state.library = library
     app.state.library_overrides = None

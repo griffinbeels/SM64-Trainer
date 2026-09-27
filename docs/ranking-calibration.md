@@ -147,11 +147,23 @@ refresh activation or preserves old standards over new evidence. Exact equality
 and invalidation are covered by
 [test_overall_model_cache.py](../tests/test_overall_model_cache.py).
 
+Across restarts, the last validated calibration is saved as
+`data/rank_calibration.bin` beside the local library
+([library/calibration.py](../src/sm64_events/library/calibration.py)
+`SavedCalibration`). A start reuses it only when its key matches: the payload's
+full fingerprint, the other preparation inputs, `OVERALL_MODEL_VERSION`, the
+interpreter, and a hash of the preparation's sources (a frozen build's version
+and executable instead). Any moved input, a damaged file or one naming anything
+but a `Calibration` prepares afresh and replaces it. Reuse replaced ~1.8 s of
+refitting per launch (2026-09-27); the reuse skips re-deriving the observation
+fingerprint because the file was validated before saving and is checksummed.
+
 GET readers pin one generation and standards state; the API exposes
 `X-Rank-Calibration`, while rank payloads carry `calibration_revision`. The board
 cache includes source content and the effective calibration revision. A Sheet
 timestamp or seed version alone is insufficient. On restart, the store rebuilds
-from the saved/bundled observations and current saved configuration. Relevant
+from the saved/bundled observations and current saved configuration, reusing the
+saved calibration when its key matches. Relevant
 failure and reader tests are in
 [test_library_calibration_store.py](../tests/test_library_calibration_store.py).
 

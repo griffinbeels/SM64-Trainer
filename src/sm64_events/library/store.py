@@ -176,6 +176,14 @@ class LibraryStore:
         self._loaded_local = None
         self.calibrations = CalibrationRegistry()
         self.prepare_calibration = None  # (detached payload) -> complete Calibration
+        # (payload) -> library.calibration.Preparation. Preferred when bound:
+        # it gathers the other inputs apart from the fit, which is what lets
+        # the fit run off the event loop and a saved result be reused.
+        self.plan_calibration = None
+        self.saved_calibration = None    # library.calibration.SavedCalibration
+        # (revision, Preparation.key) of the last calibration prepared or
+        # reused here; `Adoptions._calibration_is_current` compares it.
+        self.prepared_from = None
 
     # ---- load ----
     def load(self) -> None:
@@ -416,9 +424,10 @@ class LibraryStore:
         """Apply policy/assignment changes to the current unpinned observations."""
         with self.calibrations.update_lock:
             current = self._current_payload()
-            if current is None or self.prepare_calibration is None:
+            if current is None or (self.prepare_calibration is None
+                                   and self.plan_calibration is None):
                 return self._update_result(False, current, current, "no calibration preparation is available")
-            candidate = self._prepare(deepcopy(current))
+            candidate = self._prepare(current, detach=True)
             if self._unchanged(candidate.payload, candidate):
                 return self._update_result(False, current, current, "observations and calibration are unchanged")
             self._activate(candidate.payload, candidate)
@@ -428,19 +437,49 @@ class LibraryStore:
         active = self.calibrations.active
         return active.payload if active is not None else self._payload
 
-    def _prepare(self, payload):
+    def _prepare(self, payload, *, detach=False):
         # Validate all JSON numbers before invoking a callback with side effects.
-        fingerprint(payload)
-        if self.prepare_calibration is None:
+        digest = fingerprint(payload)
+        plan = self._plan(payload)
+        candidate = self._compute(payload, digest, plan, detach=detach)
+        self._record(candidate, plan)
+        return candidate
+
+    def _plan(self, payload):
+        return self.plan_calibration(payload) if self.plan_calibration is not None else None
+
+    def _record(self, candidate, plan):
+        if candidate is not None and plan is not None:
+            self.prepared_from = (candidate.revision, plan.key)
+
+    def _compute(self, payload, digest, plan, *, detach=False):
+        """The calibration for `payload`, reused from disk when every input
+        matches its saved key, else prepared and saved. Changes no store
+        state. `detach` copies the payload only for a fit, which may
+        refit it in place."""
+        from sm64_events.library.calibration import saved_key
+        if plan is None and self.prepare_calibration is None:
             if self.calibrations.active is not None:
                 raise ValueError("an active calibration requires its preparation callback")
             return None
-        candidate = self.prepare_calibration(payload)
+        key = None
+        if plan is not None and self.saved_calibration is not None:
+            key = saved_key(digest, plan.key)
+            saved = self.saved_calibration.load(key)
+            if saved is not None:
+                # Validated below before it was saved, and checksummed since:
+                # re-deriving its observation fingerprint would cost ~0.13 s.
+                _validated_revision(saved.payload)
+                return saved
+        owned = deepcopy(payload) if detach else payload
+        candidate = plan.run(owned) if plan is not None else self.prepare_calibration(owned)
         if not isinstance(candidate, Calibration):
             raise TypeError("prepare_calibration must return a complete Calibration")
         _validated_revision(candidate.payload)
         if candidate.data_revision != observation_fingerprint(candidate.payload):
             raise ValueError("prepared calibration does not match its observations")
+        if key is not None:
+            self.saved_calibration.save(key, candidate)
         return candidate
 
     def _unchanged(self, payload, candidate):
