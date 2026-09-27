@@ -58,7 +58,9 @@ struct Geometry {
     void pack(){for(unsigned i=0;i<mesh.vertex_count;++i){
         auto& v=vertices[i];std::memcpy(v.position,&positions[3*i],sizeof(v.position));
         std::memcpy(v.normal,&normals[3*i],sizeof(v.normal));std::memcpy(v.color,&colors[3*i],sizeof(v.color));
-        std::memcpy(v.uv,&uv[2*i],sizeof(v.uv));v.material=static_cast<gc::Material>(materials[i]);}}
+        std::memcpy(v.uv,&uv[2*i],sizeof(v.uv));
+        // The model's word (code, texgen bit, tile above it) repacked as playback does.
+        v.material=gc::with_tile(static_cast<gc::Material>(materials[i]&SG_MATERIAL_CODE),materials[i]>>SG_MATERIAL_TILE_SHIFT);}}
     uint64_t hash() const {
         uint64_t h=1469598103934665603ull;const auto* p=reinterpret_cast<const uint8_t*>(positions.data());
         for(size_t i=0;i<mesh.vertex_count*3*sizeof(float);++i){h^=p[i];h*=1099511628211ull;}return h;
