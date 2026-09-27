@@ -569,8 +569,10 @@ class ReplayRecorder:
         self._set_idle(self._session_paused)
         self._capture_window = (win.pid, win.hwnd)
         self._recording = True
-        log.info("capture started — window=%r audio=%s codec=%s",
-                 win.title, self._audio_mode, self._codec)
+        # The GPU route picks its own codec per adapter and logs it on "GPU
+        # recording active"; self._codec is only the desktop route's pick.
+        log.info("capture started — window=%r audio=%s route=%s", win.title, self._audio_mode,
+                 "gpu" if make_sink is not None else f"desktop codec={self._codec}")
 
     def _create_video_source(self, win: WindowInfo):
         video = self._video_factory(win)

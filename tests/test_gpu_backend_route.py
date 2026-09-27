@@ -14,6 +14,7 @@ developer's machine:
 """
 
 from dataclasses import replace
+import logging
 import os
 from functools import partial
 from pathlib import Path
@@ -30,6 +31,7 @@ from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
 from sm64_events.ghost.window.controller import parent_map
 from sm64_events.memory.layout import US as US_LAYOUT
 from sm64_events.replay import gpuadapter, gpusettings, sourcefactory
+from sm64_events.replay import gpucapture_session as session_module
 from sm64_events.replay.capturecontrol import CAP_GPU, PASSIVE
 from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCapture, discover
 from sm64_events.replay.gpucapture_session import CaptureSession, helper_launch
@@ -353,3 +355,38 @@ def test_a_transient_failure_still_retries_the_gpu_route(monkeypatch):
     gate = factory.retry_gate
     assert gpu.error and gate._failures == 1 and gate.blocked(gate.identity_for(42))
     assert isinstance(factory.create(win), GpuCapture) and desktops == []
+
+
+# --- logs ------------------------------------------------------------------------
+
+def test_stage_timings_are_logged_on_a_clean_stop_too(caplog):
+    owner = NS(settings=GpuSettings(), want_capture=lambda: True, end_audio=lambda h: None)
+    demand = NS(snapshot=DemandSnapshot("stopped"), request_stop=lambda reason: None)
+    with caplog.at_level(logging.INFO, "sm64.replay"):
+        CaptureSession(owner, demand).run()
+    lines = [r.getMessage() for r in caplog.records if "stage timings at stop" in r.getMessage()]
+    assert len(lines) == 1 and "error=None" in lines[0] and "'channel'" in lines[0]
+
+
+def test_the_active_line_names_the_codec_and_what_startup_cost(monkeypatch, caplog):
+    import sm64_events.replay.channelencoder as channelencoder
+
+    monkeypatch.setattr(session_module, "OfferDecoder",
+                        lambda *a: NS(timestamp=lambda qpc: 0.0, namespace="fixture"))
+    monkeypatch.setattr(session_module, "MediaRun", NS(starting_at=lambda t: NS(id="run-1")))
+    monkeypatch.setattr(session_module, "GpuMedia", lambda *a, **k: None)
+    monkeypatch.setattr(session_module, "GpuAudio", lambda *a, **k: None)
+    monkeypatch.setattr(session_module, "ChannelSelection", lambda *a: None)
+    monkeypatch.setattr(channelencoder, "ChannelEncoder",
+                        lambda *a, **k: NS(attach_open=lambda *a, **k: None))
+    owner = NS(settings=GpuSettings(), layout=None, clock=None, nominal_rate=30,
+               ledger=NS(selection_only=lambda add_row: None))
+    session = CaptureSession(owner, NS())
+    session.codec = "av1"
+    session.channel = NS(header=NS(width=320, height=240, luid_high=0, luid_low=5))
+    session.output = NS(bind=lambda run: None, add_row=None, publish_picture=None)
+    session.timings.measure("encoder", lambda: None)
+    with caplog.at_level(logging.INFO, "sm64.replay"):
+        session._create_media(("Open", 1, NS(metadata={"identity": None})), [NS(boundary_qpc=0)])
+    line = next(r.getMessage() for r in caplog.records if "GPU recording active" in r.getMessage())
+    assert "codec=av1" in line and "'encoder'" in line and "max_started_unix_s" in line

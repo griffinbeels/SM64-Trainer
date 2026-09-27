@@ -285,14 +285,20 @@ class CaptureSession:
             command, request_id, reply, initial_offers=offers, now=time.monotonic()
         )
         self.state = "recording"
+        # The codec actually opened, and what startup cost stage by stage, on
+        # EVERY run: the failure-only record made startup look slower than
+        # it is (audit 2026-09-25).
         log.info(
-            "GPU recording active: run=%s source=%s shape=%dx%d adapter=%s native=%s",
+            "GPU recording active: run=%s source=%s shape=%dx%d adapter=%s codec=%s "
+            "native=%s stages=%s",
             run.id,
             decoder.namespace,
             h.width,
             h.height,
             (h.luid_high, h.luid_low),
+            self.codec,
             reply.metadata.get("identity"),
+            self.timings.summary(),
         )
 
     def run(self):
@@ -346,8 +352,10 @@ class CaptureSession:
             except Exception as exc:
                 raise GpuCleanupError("GPU capture cleanup unproved") from exc
             finally:
-                if self.error:
-                    log.info("GPU capture stage timings at stop: %s", self.timings.summary())
+                # Every stop, clean ones included: a failure-only record
+                # weights every startup and tick distribution toward failures.
+                log.info("GPU capture stage timings at stop: codec=%s error=%s %s",
+                         self.codec, self.error, self.timings.summary())
 
     def tick(self):
         now = time.monotonic()
