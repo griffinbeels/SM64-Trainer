@@ -11,6 +11,11 @@ from sm64_events.replay.gpuprocess.process_protocol import canonical_command
 import threading
 import time
 
+# A tick with no channel news reuses the helper's health sample this long, so
+# a helper fault with no command in flight surfaces within it. A fault with a
+# command in flight arrives at once as that command's failed reply.
+HELPER_SAMPLE_S = 0.020
+
 
 @dataclass
 class Pending:
@@ -41,12 +46,17 @@ class ChannelEncoder:
         self._retained = None
         self._last_serial = 0
         self._last_now = None
-        self._helper_status = None
+        self._helper_status = self._helper_at = None
+        self._words = None
+        self.pump_paths = dict(quiet=0, status=0, scan=0)
         self.started = False
         self.opened = False
         self.fault = None
         self.failure_custody = None
         self.frontier = None
+        # From here on the channel is read by the tick, where a torn status is
+        # no news; only a status torn longer than an age deadline ends the run.
+        self.channel.tolerate_torn_status(max_age)
 
     def _check(self):
         if threading.current_thread() is not self.owner:
@@ -135,6 +145,7 @@ class ChannelEncoder:
         try:
             self._validate_open(open_command)
             state = self._helper_status = self.control.status()
+            self._helper_at = now
             metadata = reply.metadata
             native = metadata.get("status") or {}
             retained = metadata.get("retained") or {}
@@ -305,7 +316,7 @@ class ChannelEncoder:
     def _reply(self):
         reply = self.control.take_result()
         if reply is None:
-            return
+            return False
         if self._inflight is None or reply.request_id != self._inflight[0]:
             raise RuntimeError("helper reply does not match owned command")
         _, op, item = self._inflight
@@ -340,6 +351,7 @@ class ChannelEncoder:
         elif op in ("Submit", "Repeat") and code == 0:
             self._packet(item, metadata, reply.payload)
         self._custody(metadata["key_returns"])
+        return True
 
     def _dispatch(self):
         if self._inflight or not self.opened:
@@ -390,37 +402,72 @@ class ChannelEncoder:
             ):
                 raise ValueError("monotone worker age clock required")
             self._last_now = now
-            state = self._helper_status = self.control.status()
-            if state["fault"]:
-                raise RuntimeError(state["fault"])
+            # Most 4 ms ticks find nothing new: a static screen publishes only
+            # a 60 Hz status. Unchanged seqlock words skip the slot scans
+            # (about 20 ctypes copies) but never the deadlines below.
+            words = self.channel.change_words() if self.opened else None
+            last = self._words
+            if words is None or last is None:
+                scan = news = True
+            else:
+                scan = bool(
+                    self._offers
+                    or words[1:] != last[1:]
+                    or (words[1] | words[2] | words[3]) & 1
+                )
+                news = words[0] != last[0] or words[0] & 1
+            if (
+                scan
+                or self._helper_at is None
+                or now - self._helper_at >= HELPER_SAMPLE_S
+            ):
+                state = self._helper_status = self.control.status()
+                self._helper_at = now
+                if state["fault"]:
+                    raise RuntimeError(state["fault"])
             # Expired records cannot be erased by a late packet/key receipt.
             for item in self._pending.values():
                 if now - item.created > self.max_age:
                     raise RuntimeError("selected bridge/packet age deadline")
             if self._offers and now - self._offers[0][1] > self.max_age:
                 raise RuntimeError("unresolved source offer age deadline")
-            self._reply()
+            if self._reply():
+                scan = True
             if self.opened:
-                if not self._offers:
-                    offers = self.channel.offers()
-                    if len(offers) > 8:
-                        raise RuntimeError("native offer count bound exceeded")
-                    self._offers.extend((offer, now) for offer in offers)
-                while (
-                    self._offers
-                    and len(self._pending) < self.max_pending
-                    and self.media.can_offer
-                ):
-                    offer, created = self._offers.popleft()
-                    self._remember(self.selection.handle(offer, now=now), created)
-                self._scan_bridges()
-                if not self._offers:
+                if scan:
+                    self.pump_paths["scan"] += 1
+                    self._scan(now)
+                    self._words = words
+                elif news:
+                    # Only the status moved: its frontier, or a terminal state
+                    # that advance_frontier's status read raises.
+                    self.pump_paths["status"] += 1
                     self.frontier = self.selection.advance_frontier()
+                    self._words = (words[0], *last[1:])
+                else:
+                    self.pump_paths["quiet"] += 1
             self._dispatch()
             return self.status(refresh=False)
         except Exception as exc:
             self.abort(str(exc))
             raise
+
+    def _scan(self, now):
+        if not self._offers:
+            offers = self.channel.offers()
+            if len(offers) > 8:
+                raise RuntimeError("native offer count bound exceeded")
+            self._offers.extend((offer, now) for offer in offers)
+        while (
+            self._offers
+            and len(self._pending) < self.max_pending
+            and self.media.can_offer
+        ):
+            offer, created = self._offers.popleft()
+            self._remember(self.selection.handle(offer, now=now), created)
+        self._scan_bridges()
+        if not self._offers:
+            self.frontier = self.selection.advance_frontier()
 
     def heartbeat(self, capture_ts, *, now):
         self._check()
@@ -479,4 +526,6 @@ class ChannelEncoder:
             failure_custody=None if self.failure_custody is None else dict(self.failure_custody),
             fault=self.fault,
             helper_disposed=disposed,
+            pump_paths=dict(self.pump_paths),
+            torn_status_reads=self.channel.torn_status_reads,
         )

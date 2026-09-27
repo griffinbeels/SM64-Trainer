@@ -175,6 +175,28 @@ producer's own event (`tickwait.py`): a `threading.Event.wait(0.004)` sleeps
 pool on any short stall. Packet reservations shrink to the encoded size when
 the packet returns, and the pending budget admits every native slot at once.
 
+Most 4 ms ticks find nothing new: on a static screen the producer writes only
+its status, at up to 60 Hz. Each tick first loads the seqlock words it consumes
+(status, publication, both bridges; `Client.change_words`). Every native write
+holds its word odd and leaves it two higher, and every offer or bridge
+publish/retire also moves the publication word, so unchanged even words skip
+the offer and bridge scans; a status-only change reads just the status and its
+frontier. Age deadlines, helper replies and dispatch still run every tick, and a
+quiet tick reuses the encoder helper's health sample for at most 20 ms (a fault
+with a command in flight still arrives at once as its failed reply). On the real
+channel an idle tick fell from 50 to 3.4 µs and a status-only tick costs 13 µs
+(`test_idle_tick_costs_a_fraction_of_a_full_scan`); live, before this,
+`adapter_pump` was 42.7-49 ms/s at about 270 ticks/s (2026-09-25).
+
+A torn status is no news to the tick. Native holds the status word odd across
+its copy, so a writer preempted by a machine-wide stall tears every read until
+it runs again; three back-to-back reads used to end the run, which ended runs
+of 5.3 h, 30 min and 61 min on 2026-09-22, 09-23 and 09-25. Reads now yield
+between attempts, and the tick reuses the last good status until the status
+stays torn past the 2 s age deadline, which still ends a run whose writer died
+mid-copy. Setup still refuses a torn status at once. A survived episode logs
+one "status was torn" line.
+
 A true pause (F2, AFK) freezes the committed video end. Silence is padded only
 up to that end and stamped there, so it muxes at once instead of piling PCM
 against the frozen frontier; PCM ahead of the frontier waits, bounded by
@@ -483,6 +505,9 @@ source epoch to actual non-repeat pictures acknowledged by the mux and ledger.
 Encoder heartbeats cannot inflate this receipt.
 `automatic_idle` and `sessions_started` distinguish inactive retention from
 capture teardown and expose unexpected activation churn.
+`pump_paths` counts media ticks that skipped the channel (`quiet`), read only
+its status (`status`) or scanned offers and bridges (`scan`);
+`torn_status_reads` counts torn status reads the tick survived.
 Top-level `recording` is false when the GPU worker is preparing, unavailable or
 failed, even if the recorder still owns a waiting worker. `publication_error`
 retains the unavailable reason. `frame_source_health.publication` reports pending

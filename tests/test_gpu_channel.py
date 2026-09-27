@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes as C
 import importlib.util
 import json
+import math
 import mmap
 import os
 from pathlib import Path
@@ -11,8 +12,10 @@ import queue
 import secrets
 import struct
 import subprocess
+import statistics
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -706,6 +709,122 @@ def test_bridge_publication_race_and_order_refusal(native, monkeypatch):
             client.acknowledge_metadata(b)
             ok(host, "receipt")
         assert host.ask("bridge 0 3 0")["result"] == "busy"
+
+
+def encoder_over(client, *, max_age=2.0):
+    """The media tick's ChannelEncoder reading this real x86 producer."""
+    from sm64_events.replay.channelencoder import ChannelEncoder
+    from sm64_events.replay.gpuinput import ChannelSelection
+    from test_channelencoder import Controller
+    from test_gpumedia import media
+
+    q, h, control = media(), client.header, Controller()
+    decoder = SimpleNamespace(
+        namespace=q.namespace, header=h, timestamp=lambda qpc: qpc / h.qpc_frequency
+    )
+    a = ChannelEncoder(
+        ChannelSelection(client, decoder, q), control, max_pending=8, max_age=max_age
+    )
+    assert a.start(dict(
+        op="Open", adapter_luid=[h.luid_high, h.luid_low],
+        names=list(client.texture_names),
+        options=dict(width=h.even_width, height=h.even_height, input_format=h.format,
+                     max_packet_bytes=q.packet_limit),
+    ))
+    control.deliver()
+    a.pump(now=time.monotonic())
+    a.pump(now=time.monotonic())
+    return a, q
+
+
+def test_torn_status_is_no_news_to_the_tick_until_the_age_deadline(native):
+    # 2026-09-22/23/25: three runs of 30 min to 5.3 h ended on one torn read.
+    with Host(native) as host, host.client() as client:
+        ok(host, "status 2")
+        offset = client.header.status_offset
+        seq = client._word(offset)
+        poke(client, offset, seq + 1)  # the native writer is preempted mid-copy
+        with pytest.raises(BlockingIOError, match="torn producer status"):
+            client.status()  # setup still refuses a torn status at once
+        poke(client, offset, seq)
+        a, q = encoder_over(client, max_age=0.25)
+        try:
+            poke(client, offset, seq + 1)
+            until = time.monotonic() + 0.02
+            while time.monotonic() < until:
+                a.pump(now=time.monotonic())
+                time.sleep(0.004)
+            torn = a.status()["torn_status_reads"]
+            assert torn > 0 and not a.fault and not q.closed
+            poke(client, offset, seq + 2)  # the copy finishes
+            a.pump(now=time.monotonic())
+            a.pump(now=time.monotonic())
+            assert a.status()["torn_status_reads"] == torn and not a.fault
+            poke(client, offset, seq + 3)  # a writer that never finishes
+            with pytest.raises(BlockingIOError, match="torn producer status for"):
+                for _ in range(500):
+                    a.pump(now=time.monotonic())
+                    time.sleep(0.004)
+            assert a.fault and q.closed
+        finally:
+            poke(client, offset, seq + 4)
+            if not q.closed:
+                q.abort("fixture complete")
+
+
+def test_quiet_tick_reads_no_record_until_a_word_moves(native, monkeypatch):
+    with Host(native) as host, host.client() as client:
+        ok(host, "status 2")
+        a, q = encoder_over(client)
+        try:
+            reads = []
+            stable = client._stable
+
+            def counted(offset, kind):
+                reads.append(kind.__name__)
+                return stable(offset, kind)
+
+            monkeypatch.setattr(client, "_stable", counted)
+            for _ in range(20):
+                a.pump(now=time.monotonic())
+            assert reads == [] and a.status()["pump_paths"]["quiet"] >= 20
+            ok(host, "frontier 30000 20000 1 0")  # the 60 Hz status write
+            a.pump(now=time.monotonic())
+            assert reads == ["Status"] and a.frontier == math.nextafter(0.002, 0)
+            reads.clear()
+            publication = client.header.publication_offset
+            poke(client, publication, client._word(publication) + 2)
+            a.pump(now=time.monotonic())
+            assert reads.count("Publication") == 2 and reads.count("BridgeWire") == 2
+            reads.clear()
+            a.pump(now=time.monotonic())
+            assert reads == []
+        finally:
+            q.abort("fixture complete")
+
+
+def test_idle_tick_costs_a_fraction_of_a_full_scan(native):
+    """Microbenchmark on the real channel; live it was 0.22 ms a tick."""
+    with Host(native) as host, host.client() as client:
+        ok(host, "status 2")
+        a, q = encoder_over(client)
+        publication = client.header.publication_offset
+        try:
+            quiet, scan = [], []
+            for _ in range(300):
+                start = time.perf_counter()
+                a.pump(now=time.monotonic())
+                quiet.append(time.perf_counter() - start)
+                poke(client, publication, client._word(publication) + 2)
+                start = time.perf_counter()
+                a.pump(now=time.monotonic())
+                scan.append(time.perf_counter() - start)
+            idle, full = statistics.median(quiet), statistics.median(scan)
+            print(f"idle tick {idle * 1e6:.1f} us, full scan {full * 1e6:.1f} us")
+            assert a.status()["pump_paths"]["quiet"] >= 300
+            assert idle * 4 < full, (idle, full)
+        finally:
+            q.abort("fixture complete")
 
 
 def test_fresh_request_can_adopt_native_epoch_without_weakening_identity(native):
