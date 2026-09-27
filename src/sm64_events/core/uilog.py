@@ -35,6 +35,7 @@ the same timeline as the journal's own events.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,6 +46,10 @@ from sm64_events.core.paths import data_root
 # (which is the whole point: a change that lasted three frames must show up).
 MAX_RECORDS = 4000
 TRIM_ABOVE_BYTES = 2_000_000
+
+# One lock for every bounded log in this process: append and trim are one
+# step, or a record appended between the trim's read and its rewrite is lost.
+_lock = threading.Lock()
 
 # Fields a client may set. Anything else is dropped rather than stored: this
 # endpoint takes a free-shaped body from the browser, and an unbounded key set
@@ -104,21 +109,44 @@ def record(body: dict, frame: int | None = None,
     stamped = datetime.now(timezone.utc) if now is None else now
     entry["server_utc"] = stamped.isoformat()
     entry["frame"] = frame
-    path = log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # newline="" so Python does not translate to CRLF on Windows — this file is
-    # read back line-by-line and diffed by eye.
-    with path.open("a", encoding="utf-8", newline="") as handle:
-        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    if path.stat().st_size > TRIM_ABOVE_BYTES:
-        _trim(path)
+    append_bounded(log_path(), entry, MAX_RECORDS, TRIM_ABOVE_BYTES)
     return entry
 
 
-def _trim(path: Path) -> None:
-    kept = path.read_text(encoding="utf-8").splitlines()[-MAX_RECORDS:]
-    path.write_text("".join(line + "\n" for line in kept),
-                    encoding="utf-8", newline="")
+def append_bounded(path: Path, entry: dict, max_records: int,
+                   trim_above_bytes: int) -> None:
+    """Append one JSON line; past `trim_above_bytes`, cut back to HALF of
+    both bounds. Shared by every bounded debugging log (`ghost/window/diag.py`).
+
+    The half is the point. Trimming back to exactly the bound left the file
+    at the bound, so once 4000 records outgrew 2 MB (they average 518-609 B)
+    every later record rewrote the whole file: 14.4 ms per UI post against
+    0.29 ms below the cap, measured 2026-09-25. Cutting to half buys a full
+    half-file of plain appends before the next rewrite.
+
+    Written as bytes so the size is the handle's own position and no CRLF
+    ever lands -- this file is read back line by line and diffed by eye.
+    """
+    line = (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _lock:
+        with path.open("ab") as handle:
+            handle.write(line)
+            size = handle.tell()
+        if size > trim_above_bytes:
+            _trim(path, trim_above_bytes // 2, max(1, max_records // 2))
+
+
+def _trim(path: Path, keep_bytes: int, keep_records: int) -> None:
+    """Keep the newest lines within both budgets, and always the newest one."""
+    lines = [line for line in path.read_bytes().split(b"\n") if line]
+    kept, size = [], 0
+    for line in reversed(lines):
+        size += len(line) + 1
+        if kept and (len(kept) >= keep_records or size > keep_bytes):
+            break
+        kept.append(line)
+    path.write_bytes(b"".join(line + b"\n" for line in reversed(kept)))
 
 
 def read(path: Path | None = None) -> list[dict]:

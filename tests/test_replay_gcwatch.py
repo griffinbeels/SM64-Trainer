@@ -34,11 +34,54 @@ def test_should_collect_forces_after_interval_even_when_active():
     assert should_collect(False, 300.0, 300.0)         # active, stale -> force
 
 
-def test_plan_collects_everything_when_idle_or_hourly_and_survivors_otherwise():
-    assert plan(True, 0.0, 0.0, 300.0, 3600.0) == "full"            # capture idle: free moment
-    assert plan(False, 10.0, 10.0, 300.0, 3600.0) is None           # active, recent
-    assert plan(False, 300.0, 600.0, 300.0, 3600.0) == "survivors"  # 5-minute backstop
-    assert plan(False, 300.0, 3600.0, 300.0, 3600.0) == "full"      # never idle: hourly full
+def test_plan_collects_everything_hourly_and_survivors_every_five_minutes():
+    assert plan(False, 10.0, 10.0, 300.0, 3600.0, 600.0) is None           # active, recent
+    assert plan(False, 300.0, 600.0, 300.0, 3600.0, 600.0) == "survivors"  # 5-minute backstop
+    assert plan(False, 300.0, 3600.0, 300.0, 3600.0, 600.0) == "full"      # never idle: hourly full
+
+
+def test_idle_shortens_the_full_backstop_instead_of_collecting_every_poll():
+    """2026-09-24: a full collection every 30 s poll while capture was
+    retired, 153-188 ms each for a few hundred objects. Retired includes
+    GPU reconnect gaps during play, so idle only brings the full one forward
+    to every 10 minutes."""
+    assert plan(True, 30.0, 30.0, 300.0, 3600.0, 600.0) is None          # idle, full was recent
+    assert plan(True, 599.0, 599.0, 300.0, 3600.0, 600.0) == "survivors"  # still only the backstop
+    assert plan(True, 30.0, 600.0, 300.0, 3600.0, 600.0) == "full"        # idle and 10 min since full
+    assert plan(False, 30.0, 600.0, 300.0, 3600.0, 600.0) is None         # the same moment, not idle
+
+
+def test_an_idle_hour_runs_at_most_six_full_collections():
+    """The real loop over an hour of Project64-closed polling (the acceptance
+    was about 120 an hour before, 6 or fewer after). Every clock read is one
+    30 s poll later, so the hour passes in milliseconds."""
+    now = [0.0]
+    hour_over = threading.Event()
+
+    def clock():
+        now[0] += 30.0
+        if now[0] > 3600.0:
+            hour_over.set()
+        return now[0]
+
+    fulls = []
+    col = _Gen2Collector(is_idle=lambda: True, poll_s=0.001, collect_fn=lambda: 0,
+                         clock=clock, gc_ops=SimpleNamespace(
+                             get_objects=lambda: [], get_freeze_count=lambda: 0,
+                             freeze=lambda: None,
+                             unfreeze=lambda: fulls.append(now[0])))  # only a full unfreezes
+    col.start()
+    try:
+        assert hour_over.wait(timeout=5.0)
+    finally:
+        col.stop()
+    within_hour = [at for at in fulls if at <= 3600.0]
+    assert 1 <= len(within_hour) <= 6, within_hour
+
+
+def test_the_shipped_backstops_are_ordered():
+    col = _Gen2Collector(is_idle=lambda: True, gc_ops=fake_gc())
+    assert col._poll_s < col._force_after_s <= col._idle_full_after_s < col._full_after_s
 
 
 def test_every_manual_collection_logs_its_kind_walk_and_pause(caplog):
@@ -65,8 +108,8 @@ def test_collector_runs_collection_while_idle():
         fired.set()
         return 7  # pretend it reclaimed something
 
-    col = _Gen2Collector(is_idle=lambda: True, poll_s=0.01,
-                         force_after_s=999, collect_fn=fake_collect, gc_ops=fake_gc())
+    col = _Gen2Collector(is_idle=lambda: True, poll_s=0.01, force_after_s=999,
+                         idle_full_after_s=0.0, collect_fn=fake_collect, gc_ops=fake_gc())
     col.start()
     try:
         assert fired.wait(timeout=2.0)                 # collected while idle

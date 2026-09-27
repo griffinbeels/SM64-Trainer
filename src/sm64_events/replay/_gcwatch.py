@@ -34,10 +34,20 @@ So every manual collection now FREEZES its survivors, and the next
 "survivors" backstop walks only what was allocated since (measured: about
 1 ms, flat as the heap grows, against 27-65 ms for 340k-674k containers).
 Cycles that die among frozen objects wait for a FULL collection: unfreeze,
-collect everything, freeze again. That runs whenever capture is idle (the
-free moment) and at least every _FULL_COLLECT_S in a session that never
-goes idle, so the leak stays bounded at one predictable full pause an hour
-instead of twelve. Rejected: gen-1 only (frees nothing that reached gen 2,
+collect everything, freeze again. That runs at least every _FULL_COLLECT_S
+in a session that never goes idle, so the leak stays bounded at one
+predictable full pause an hour instead of twelve, and every
+_IDLE_FULL_COLLECT_S while capture is retired (the free moment).
+
+IDLE IS NOT FREE ENOUGH TO COLLECT EVERY POLL (2026-09-25). A full
+collection used to run on every 30 s poll while capture was retired: 10 in
+a row 30 s apart on 09-24, 153-188 ms each, reclaiming 52-521 objects, and
+4.8 s and 3.3 s ones on 09-25 while Project64 was open. Retired is not
+"nobody is watching": it covers Project64 closed AND every GPU-failure
+reconnect gap in the middle of play. So idle only shortens the full
+backstop to 10 minutes; the survivors backstop is unchanged.
+
+Rejected: gen-1 only (frees nothing that reached gen 2,
 the 2026-06-13 leak again) and skipping while capturing (the cost is heap
 size; skipping only defers it). Every manual collection logs its kind,
 the containers it walked and its pause, so a live session measures the
@@ -52,9 +62,10 @@ log = logging.getLogger("sm64.replay")
 
 _starts: dict[int, float] = {}
 
-_COLLECT_POLL_S = 30.0     # idle check cadence (also the idle collect rate)
-_FORCE_COLLECT_S = 300.0   # never-idle backstop: bound gen-2 garbage to ~5 min
+_COLLECT_POLL_S = 30.0     # idle check cadence
+_FORCE_COLLECT_S = 300.0   # survivors backstop: bound gen-2 garbage to ~5 min
 _FULL_COLLECT_S = 3600.0   # never-idle full backstop: bound frozen-cycle garbage to ~1 h
+_IDLE_FULL_COLLECT_S = 600.0  # full collection while capture is retired: at most 6 an hour
 
 _collector: "_Gen2Collector | None" = None  # process singleton (start once)
 
@@ -82,12 +93,13 @@ def should_collect(idle: bool, secs_since_collect: float,
 
 
 def plan(idle: bool, secs_since_collect: float, secs_since_full: float,
-         force_after_s: float, full_after_s: float) -> str | None:
+         force_after_s: float, full_after_s: float,
+         idle_full_after_s: float = _IDLE_FULL_COLLECT_S) -> str | None:
     """Which manual collection to run now: "full" (unfreeze everything and
-    collect it: capture is idle, or the full backstop is due), "survivors"
-    (walk only what was allocated since the last freeze: the 5-minute
-    backstop) or None. Pure — unit-tested."""
-    if idle or secs_since_full >= full_after_s:
+    collect it: the full backstop is due, sooner while capture is idle),
+    "survivors" (walk only what was allocated since the last freeze: the
+    5-minute backstop) or None. Pure — unit-tested."""
+    if secs_since_full >= (idle_full_after_s if idle else full_after_s):
         return "full"
     if should_collect(False, secs_since_collect, force_after_s):
         return "survivors"
@@ -101,12 +113,14 @@ class _Gen2Collector:
 
     def __init__(self, is_idle, *, poll_s: float = _COLLECT_POLL_S,
                  force_after_s: float = _FORCE_COLLECT_S,
-                 full_after_s: float = _FULL_COLLECT_S, collect_fn=None, gc_ops=gc,
-                 clock=time.monotonic):
+                 full_after_s: float = _FULL_COLLECT_S,
+                 idle_full_after_s: float = _IDLE_FULL_COLLECT_S, collect_fn=None,
+                 gc_ops=gc, clock=time.monotonic):
         self._is_idle = is_idle
         self._poll_s = poll_s
         self._force_after_s = force_after_s
         self._full_after_s = full_after_s
+        self._idle_full_after_s = idle_full_after_s
         self._collect = collect_fn or (lambda: gc.collect(2))
         self._gc = gc_ops
         self._clock = clock
@@ -145,7 +159,8 @@ class _Gen2Collector:
             now = self._clock()
             try:
                 kind = plan(self._is_idle(), now - last, now - last_full,
-                            self._force_after_s, self._full_after_s)
+                            self._force_after_s, self._full_after_s,
+                            self._idle_full_after_s)
                 if kind is not None:
                     self.run(kind)
                     last = self._clock()

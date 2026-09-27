@@ -17,19 +17,20 @@ the child's own event stream into the same file, so a child that dies before
 it can write -- a WebView2 that will not start -- still leaves its last words
 in one place.
 
-Same shape and same trim policy as `core/uilog.py`, for the same reason: this
-is a debugging instrument for the LAST run, never an archive, and a bounded
-file is what keeps it cheap enough to write on every placement.
+Same shape as `core/uilog.py`, and the same appender (`append_bounded`), for
+the same reason: this is a debugging instrument for the LAST run, never an
+archive, and a bounded file is what keeps it cheap enough to write on every
+placement.
 """
 from __future__ import annotations
 
 import json
 import os
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.core.paths import data_root
+from sm64_events.core.uilog import append_bounded
 
 #: Set by a test that wants the child's log somewhere of its own. The child is
 #: a separate process, so an env var is the only handle a test has on it.
@@ -37,8 +38,6 @@ PATH_ENV = "SM64_GHOST_WINDOW_LOG"
 
 MAX_RECORDS = 3000
 TRIM_ABOVE_BYTES = 1_000_000
-
-_lock = threading.Lock()
 
 
 def log_path() -> Path:
@@ -60,15 +59,7 @@ def record(event: str, **fields) -> dict | None:
     for key, value in fields.items():
         entry[key] = _plain(value)
     try:
-        path = log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with _lock:
-            # newline="" so Python does not translate to CRLF on Windows --
-            # this file is read back line by line and diffed by eye.
-            with path.open("a", encoding="utf-8", newline="") as handle:
-                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            if path.stat().st_size > TRIM_ABOVE_BYTES:
-                _trim(path)
+        append_bounded(log_path(), entry, MAX_RECORDS, TRIM_ABOVE_BYTES)
     except OSError:
         return None
     return entry
@@ -129,12 +120,6 @@ class Collapsing:
             event, fields = self._pending
             self._record(event, **{**fields, "repeated": self._repeats})
         self._repeats = 0
-
-
-def _trim(path: Path) -> None:
-    kept = path.read_text(encoding="utf-8").splitlines()[-MAX_RECORDS:]
-    path.write_text("".join(line + "\n" for line in kept),
-                    encoding="utf-8", newline="")
 
 
 def read(path: Path | None = None) -> list[dict]:
