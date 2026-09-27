@@ -24,6 +24,18 @@ export const REFRESH_ON = new Set(["attempt_completed", "attempts_invalidated",
   // stop the selector narrowing to a subarea; with the narrowing gone the
   // field is gone, and a view refetch on every spawn buys nothing.
 ]);
+// The REFRESH_ON events that can move a PB, a rank or a goal -- what the
+// Daily Star (server/dailystar_api.py: PBs, today's attempts, the overall
+// curve, the tile strategy) and the entry goals (server/scorecard_api.py:
+// the scope's MARELO, PBs, standards, goals) are computed from. Read off
+// those two endpoints' inputs, not guessed: target_changed, segment_progress,
+// route_selected, session_started, icons_changed and a bare star_collected
+// feed neither, and until 2026-09-27 each still refetched both (perf audit
+// 2026-09-25, UI-2). A route pick moves the goals' scope, which their fetch
+// already keys on.
+export const STANDING_ON = new Set(["attempt_completed", "attempts_invalidated",
+  "pb_saved", "pb_undone", "strat_set", "rank_standards_changed",
+  "rank_mode_changed", "game_version_changed", "marelo_changed", "goal_changed"]);
 const RUN_REFRESH_ON = new Set(["run_started", "run_progress",
   "run_finished", "run_aborted", "game_reset"]);
 // Sentinel for "this client has no pending route pick of its own" -- distinct
@@ -173,6 +185,11 @@ export function useTracker() {
   // effect's dependency list, and every REFRESH_ON tick must be a distinct
   // dependency value even if two land back-to-back.
   const [mareloRev, setMareloRev] = useState(0);
+  // standingRev: bumped only when a refresh round carries a STANDING_ON
+  // event, a component's own write, or a reconnect (which may have missed
+  // one). The Daily Star and the entry goals key on it instead of mareloRev.
+  const [standingRev, setStandingRev] = useState(0);
+  const standingStale = useRef(false);
   // Ladders change less often than attempts. Their mounted readers refresh
   // together on configuration changes, including after a disconnected edit.
   const [standardsRev, setStandardsRev] = useState(0);
@@ -398,12 +415,15 @@ export function useTracker() {
   // with two in flight together (task 0113). The raw one stays for the paths
   // that own freshness outright: mount, socket open, the never-loaded retry.
   const requestRefresh = useRef(null);
+  const refreshAfterWrite = useRef(null);
   if (requestRefresh.current === null) {
     requestRefresh.current = coalesce(async () => {
       // Bumped at the START of the run rather than per event: the Rank tab
       // keys its own fetches off this counter, so it should reload alongside
       // this one instead of a round trip behind it.
       setMareloRev((prevRev) => prevRev + 1);
+      if (standingStale.current) setStandingRev((prevRev) => prevRev + 1);
+      standingStale.current = false;
       // Stamped around the WHOLE round, not around refresh() alone: both
       // fetches are awaited together, so what the page waits for is the slower
       // of the two and measuring one of them would understate it (latency.js).
@@ -411,6 +431,13 @@ export function useTracker() {
       await Promise.all([refresh(), refreshMarelo()]);
       noteFetchDone(new Date().toISOString());
     });
+    // A component's own write can move a PB or a goal through a door whose
+    // broadcast is not in STANDING_ON (clearing or restoring an attempt), so
+    // its refresh always counts as one. Writes are gestures: rare.
+    refreshAfterWrite.current = () => {
+      standingStale.current = true;
+      return requestRefresh.current();
+    };
   }
 
   useEffect(() => {
@@ -419,7 +446,8 @@ export function useTracker() {
       ws = new WebSocket(`ws://${location.host}/ws/events`);
       ws.onopen = () => {
         if (everConnected.current) {
-          setStandardsRev((revision) => revision + 1);
+          // A reconnect may have missed a STANDING_ON event too.
+          setStandardsRev((rev) => rev + 1); setStandingRev((rev) => rev + 1);
           setFeed((f) => [{ type: "ws_reconnected", seq: "", frame: "",
                             payload: {} }, ...f].slice(0, 200));
         }
@@ -444,6 +472,7 @@ export function useTracker() {
           // rather than the moment we got round to acting on it — the
           // coalescer's own window is one of the four stages being measured.
           noteEvent(ev.type, ev.seq, ev.frame, new Date().toISOString());
+          if (STANDING_ON.has(ev.type)) standingStale.current = true;
           requestRefresh.current();
         }
         if (RUN_REFRESH_ON.has(ev.type)) refreshRun();
@@ -579,11 +608,11 @@ export function useTracker() {
            starIcons, pickStarIcons, rankIcons, pickRankIcons,
            showDust, pickShowDust, courseIcons,
            segments, vocab, loadSegments,
-           refresh: requestRefresh.current, paused: pauseState.paused,
+           refresh: refreshAfterWrite.current, paused: pauseState.paused,
            pauseReason: pauseState.reason, togglePause,
            armedSegs, armedOrder, armedNames, lastPinnedSeg, stage,
            run, refreshRun, endRun,
-           marelo, mareloRev, standardsRev, clearMareloCelebration,
+           marelo, mareloRev, standingRev, standardsRev, clearMareloCelebration,
            routes, activeRouteId, pickRoute,
            update, updateForced, setUpdateForced, updateApplying,
            setUpdateApplying, updateMsg, checkUpdates, applyUpdate, skipUpdate,

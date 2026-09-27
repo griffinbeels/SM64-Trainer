@@ -603,7 +603,7 @@ export function Library({ t, active, intent, clearIntent, enterCompare, openRunn
               focusYou=${entry ? entry.focusYou : false}
               focusRow=${entry ? entry.focusRow : null}
               fallbackLabel=${entry ? entry.fallbackLabel : null}
-              onRelink=${reloadRows}
+              onRelink=${reloadRows} active=${active}
               resolveEntityLabel=${(key) => entityLabel(t, key)} />
         </div>`
       : indexError

@@ -38,15 +38,15 @@ export const fmtCs = (cs) => (cs == null ? "—" : fmtSeconds(cs / 100));
 export const goalScopeOf = (t) => (t.marelo && t.marelo.scope_id) || "overall";
 
 /** Every card's goal in ONE request, refetched whenever anything that can move
- *  a goal lands (`mareloRev` bumps on every refresh event, goal_changed
- *  included). Returns {key: EntryGoal}. */
+ *  a goal lands (`standingRev`: the store's STANDING_ON events, goal_changed
+ *  included, and a card's own write). Returns {key: EntryGoal}. */
 export function useEntryGoals(t, keys) {
   const [goals, setGoals] = useState({});
   const scope = goalScopeOf(t);
   const keyList = [...new Set(keys)].sort().join(",");
   // A card joining the list changes the identity too; keeping the goals
   // already on screen (rather than clearing) stops every plate blinking.
-  useIdentityFetch(`${scope}|${keyList}`, t.mareloRev, () => {
+  useIdentityFetch(`${scope}|${keyList}`, t.standingRev, () => {
     if (!keyList) { setGoals({}); return undefined; }
     let live = true;
     getJSON(`/api/scorecard/entry_goals?scope=${encodeURIComponent(scope)}`
