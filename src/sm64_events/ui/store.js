@@ -47,6 +47,30 @@ export function runBlocksScopeChange(run, currentRouteId, nextRouteId) {
   return nextRouteId !== currentRouteId;
 }
 
+// Server-owned pause truth: {paused, reason: "manual"|"afk"|null}. Polled
+// (5 s) because "afk" flips server-side without any UI action; the POST
+// response updates it instantly on manual toggles.
+function usePauseState() {
+  const [pauseState, setPauseState] = useState({ paused: false, reason: null });
+  const reasonRef = useRef(null);
+  useEffect(() => { reasonRef.current = pauseState.reason; }, [pauseState]);
+  // Each poll answers a NEW object; handing it straight over re-rendered the
+  // whole app every 5 s with nothing changed (perf audit 2026-09-25, UI-3).
+  // Keeping the previous object is what lets Preact skip the render.
+  useEffect(() => pollJSON("/api/pause", (next) => setPauseState((prev) =>
+    prev.paused === next.paused && prev.reason === next.reason ? prev : next)), []);
+  // The button drives only the MANUAL layer: pausing while afk escalates
+  // to manual (movement no longer resumes); resume exists only for manual.
+  const togglePause = useCallback(async () => {
+    try {
+      const r = await send("POST", "/api/pause",
+                           { paused: reasonRef.current !== "manual" });
+      setPauseState(r);
+    } catch (e) { console.error(e); }
+  }, []);
+  return { pauseState, togglePause };
+}
+
 export function useTracker() {
   const [view, setView] = useState(null);
   const [clock, setClock] = useState(localStorage.getItem("clock") || "igt");
@@ -318,22 +342,7 @@ export function useTracker() {
     refreshMarelo();
   }, [marelo, activeRouteId, refreshMarelo]);
 
-  // server-owned pause truth: {paused, reason: "manual"|"afk"|null}.
-  // Polled (5 s) because "afk" flips server-side without any UI action;
-  // the POST response updates it instantly on manual toggles.
-  const [pauseState, setPauseState] = useState({ paused: false, reason: null });
-  const reasonRef = useRef(null);
-  useEffect(() => { reasonRef.current = pauseState.reason; }, [pauseState]);
-  useEffect(() => pollJSON("/api/pause", setPauseState), []);
-  // The button drives only the MANUAL layer: pausing while afk escalates
-  // to manual (movement no longer resumes); resume exists only for manual.
-  const togglePause = useCallback(async () => {
-    try {
-      const r = await send("POST", "/api/pause",
-                           { paused: reasonRef.current !== "manual" });
-      setPauseState(r);
-    } catch (e) { console.error(e); }
-  }, []);
+  const { pauseState, togglePause } = usePauseState();
 
   // clockRef / scopeRef keep refresh's identity stable so the WS effect never restarts
   const clockRef = useRef(clock);
