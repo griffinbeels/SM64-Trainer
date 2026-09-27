@@ -83,6 +83,21 @@ int __cdecl gd_completed(const rb_image*);
 HANDLE __cdecl gd_signal(void);
 int __cdecl gd_read_status(gd_status*);
 
+/* The driver warm-up (docs/replay-gpu-runtime.md, "First capture freeze").
+ * Asks the idle worker, once per process, to create and delete a hidden
+ * unshared GL context (and D3D11 device) so the renderer is not frozen by the
+ * driver's one-time setup at the first capture. Returns 1 when accepted; the
+ * state reads DONE, FAILED or SKIPPED (a request already owned the worker). */
+enum gd_warm_part { GD_WARM_GL=1, GD_WARM_CORE=2, GD_WARM_D3D=4 };
+enum gd_warm_state { GD_WARM_NONE=0, GD_WARM_REQUESTED, GD_WARM_RUNNING,
+    GD_WARM_DONE, GD_WARM_FAILED, GD_WARM_SKIPPED };
+int __cdecl gd_prewarm(uint32_t parts);
+uint32_t __cdecl gd_prewarm_state(void);
+/* The renderer's anchor publication time (SM64ReplayAnchorTimingV1), read
+ * once by the worker for the anchor_published log line. Optional. */
+typedef int (__cdecl *gd_anchor_timing)(uint64_t *begin_qpc, uint64_t *end_qpc);
+void __cdecl gd_set_anchor_timing(gd_anchor_timing);
+
 #ifdef __cplusplus
 }
 static_assert(sizeof(gd_limits)==48 && sizeof(gd_status)==128, "delivery facade layout");

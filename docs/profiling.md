@@ -250,13 +250,20 @@ This protects external replacements, not release-version ordering or copies made
 by older applications still running the old installer implementation.
 
 The native wrapper logs lifecycle events and callbacks taking at least 20 ms,
-or callback gaps of at least 50 ms, at most once per five seconds per callback.
-Each stall names its total CPU wall time (`total_ms`), the gap since the previous
-call and their cumulative maxima; quiet summaries appear once per minute. These
-records run on the practice ROM only; any other cartridge forwards untimed. Gaps include pauses,
-and these measurements cannot time asynchronous rendering on the GPU.
-`dropped_records` reports lost diagnostics. A bounded, event-driven writer keeps
-file I/O off emulator callbacks and rotates the log at 1 MiB to `.log.1`.
+or callback gaps of at least 50 ms, at most once per five seconds per callback,
+except in the 15 s after a capture request, when every one is logged. Each stall
+names its total CPU wall time (`total_ms`), the gap since the previous call and
+its `begin_qpc`/`end_qpc`. Quiet summaries appear once per minute with that
+window's `window_calls`, `mean_ms`, `p99_ms` (0.1 ms steps), `max_ms` and
+`max_gap_ms`. These records run on the practice ROM only; any other cartridge
+forwards untimed. Gaps include pauses, and these measurements cannot time
+asynchronous rendering on the GPU. `dropped_records` reports lost diagnostics.
+A bounded, event-driven writer keeps file I/O off emulator callbacks and
+rotates the log at 4 MiB through `.log.1` and `.log.2`. Startup lines (ROM
+open, the [driver warm-up](replay-gpu-runtime.md#first-capture-freeze), each
+capture's request and preparation steps, and the watched stalls) are also
+copied to `sm64_trainer_gfx.activation.log`, which holds only the current
+Project64 process (the previous one moves to `.1`) and stops at 256 KB.
 Logging works with the trainer closed and does not request capture. Abrupt
 process exit can lose queued records; absent records are not proof of fast work.
 
@@ -269,8 +276,12 @@ regular UpdateScreen calls do not certify smooth physical presentation.
 ## Capture coordinator versus media sink
 
 The GPU runtime wrapper also emits `gpu_summary`, `gpu_summary_phase` and
-`gpu_summary_cadence` records every five seconds while capture is healthy. These
-are recent windows, separate from the cumulative `gpu_failure` diagnostics.
+`gpu_summary_cadence` records once a minute while capture is healthy, or at the
+next five-second boundary when the window needs attention: a refused picture,
+a busy client page, a source interval of 75 ms or more, or every snapshot slot
+held (`peak_pending` of `slots`; `peak_bridges` is the same for the two bridge
+slots). These are recent windows, separate from the cumulative `gpu_failure`
+diagnostics.
 Read a copied native log with `python tools/native_capture_report.py
 PATH_TO_LOG --output report.json`; this reader never contacts PJ64 or opens GPU
 objects. It retains at most 120 windows from the last 4 MiB. PID, epoch and QPC

@@ -6,7 +6,7 @@
 #include <stdio.h>
 namespace {
 const rs_api *source=nullptr; HANDLE signal=nullptr;
-std::atomic<uint32_t> gate{0}, requests{0}, state{GD_OFF};
+std::atomic<uint32_t> gate{0}, requests{0}, state{GD_OFF}, warms{0};
 unsigned configured=0; uint64_t image_serial=0;
 gd_diagnostic_callback diagnostic=nullptr;
 }
@@ -44,6 +44,10 @@ extern "C" int __cdecl gd_capture(const rb_record*r,rb_image*i){
 extern "C" int __cdecl gd_completed(const rb_image*){return 1;}
 extern "C" HANDLE __cdecl gd_signal(){return signal;}
 extern "C" int __cdecl gd_read_status(gd_status*s){*s={};s->state=state.load();s->epoch=gate.load();return 1;}
+extern "C" int __cdecl gd_prewarm(uint32_t parts){return parts && warms.fetch_add(1)==0;}
+extern "C" uint32_t __cdecl gd_prewarm_state(){return warms.load()?GD_WARM_DONE:GD_WARM_NONE;}
+extern "C" void __cdecl gd_set_anchor_timing(gd_anchor_timing){}
+extern "C" unsigned __cdecl TestWarm(){return warms.load();}
 extern "C" unsigned __cdecl TestGate(){return gate.load();}
 extern "C" unsigned __cdecl TestConfigured(){return configured;}
 extern "C" unsigned __cdecl TestRequests(){return requests.load();}
@@ -54,3 +58,4 @@ extern "C" int __cdecl TestTake(rb_record*out){if(!source)return 0;const auto r=
 #pragma comment(linker,"/EXPORT:TestRequests=_TestRequests")
 #pragma comment(linker,"/EXPORT:TestTake=_TestTake")
 #pragma comment(linker,"/EXPORT:TestDiagnostic=_TestDiagnostic")
+#pragma comment(linker,"/EXPORT:TestWarm=_TestWarm")

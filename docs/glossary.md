@@ -1149,6 +1149,37 @@ beside the wrapper; it carries the same native build id with its own suffix.
   `plugin/gfxwrap/gpu_bridge_encoder.cpp`; loaded by
   `src/sm64_events/replay/gpucapture_session.py`
 
+### Driver warm-up
+
+The [[capture layer]]'s one-time move of the first-capture freeze into the boot
+intro. The NVIDIA driver freezes the [[renderer]] for roughly 150 ms the first
+time any other thread in Project64 uses the GPU while the [[renderer]] is
+drawing: the "very brief visual stutter" he saw once, as recording started.
+Two seconds after a [[practice ROM]] starts drawing, the delivery worker makes
+and deletes a hidden, unshared GL context, so the freeze lands in the intro and
+the first recording later starts clean. The worker shares nothing with the
+[[renderer]] and keeps nothing, so with the server off the [[renderer]] still
+draws alone afterwards; the freeze in the intro is the one cost it adds there.
+
+- **Lives** -- the trigger in `plugin/gfxwrap/wrapper_runtime.cpp`; the work
+  in gd_prewarm (`plugin/gfxwrap/gpu_delivery.cpp`,
+  `plugin/gfxwrap/gpu_delivery_context.cpp`); evidence and readout rule in
+  [the runtime doc](replay-gpu-runtime.md#first-capture-freeze)
+- **Not** -- keeping the worker's shared context from boot until Project64
+  closes (the rejected variant that would have reversed round 48)
+
+### Activation log
+
+`sm64_trainer_gfx.activation.log`, beside the wrapper: this Project64
+process's startup lines only -- ROM open, the [[driver warm-up]], each
+capture's request and preparation steps with their QPCs, and every slow
+callback in the 15 s after a capture request. The main log rotates, so these
+used to be gone within half an hour. The previous process's copy is `.1`.
+
+- **Lives** -- `plugin/gfxwrap/diagnostics.h` (activation_event picks the lines)
+- **Not** -- `sm64_trainer_gfx.log`, which keeps everything, rotating at 4 MiB
+  through `.1` and `.2`
+
 ### Oracle reader
 
 The developer's check that reads the [[frame]] number the game prints into its own

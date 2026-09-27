@@ -12,6 +12,8 @@ constexpr unsigned slots = 2;
 // width/height describe TOP-DOWN even-sized RGBA output, alpha255.
 struct Config { LUID adapter; unsigned width, height; wchar_t names[slots][128]; };
 enum class Result { copied, full, fault, invalid };
+// QPC after each step of prepare, for the gpu_prepare log line; zero = not reached.
+struct PrepareSteps { uint64_t begin, device, opened, transfer, registered; };
 enum class KeyReturn { ready, pending, fault, invalid };
 using GenObjects = void(APIENTRY *)(GLsizei,GLuint*);
 using BindObject = void(APIENTRY *)(GLuint);
@@ -47,11 +49,13 @@ public:
     bool quarantined() const { return poisoned_; }
     bool shutdown(); // worker, only after consumer has returned both keys
     const Config& config() const { return config_; }
+    const PrepareSteps& steps() const { return steps_; }
     unsigned locks() const { return locks_; }
     uint64_t logical_bytes() const { return bytes_; }
     DWORD error() const { return error_; }
 private:
     Config config_{};
+    PrepareSteps steps_{};
     struct Slot {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> interop, shared;
         Microsoft::WRL::ComPtr<IDXGIKeyedMutex> mutex;

@@ -38,6 +38,18 @@ HANDLE iteration_entered=nullptr,iteration_continue=nullptr,retired_entered=null
 void __cdecl prepare_probe(){SetEvent(prepare_entered);CHECK(WaitForSingleObject(prepare_continue,4000)==WAIT_OBJECT_0);}
 void __cdecl iteration_probe(){SetEvent(iteration_entered);CHECK(WaitForSingleObject(iteration_continue,4000)==WAIT_OBJECT_0);}
 void __cdecl retired_probe(){SetEvent(retired_entered);CHECK(WaitForSingleObject(retired_continue,4000)==WAIT_OBJECT_0);}
+// The worker's latest preparation note, for the gpu_prepare stamp witness.
+std::atomic<bool> prepared_note{false};gd_prepare_diagnostic prepare_note{};
+void __cdecl note(const gd_diagnostic*d){
+    if(d->kind==GD_KIND_PREPARE && !prepared_note.load()){prepare_note=d->prepare;prepared_note.store(true);}
+}
+unsigned delivery_windows(){ // this process's hidden worker windows still alive
+    unsigned n=0;HWND w=nullptr;
+    while((w=FindWindowExW(nullptr,w,L"SM64GpuDeliveryHiddenV1",nullptr))!=nullptr){
+        DWORD pid=0;GetWindowThreadProcessId(w,&pid);n+=pid==GetCurrentProcessId();
+    }
+    return n;
+}
 int64_t ticks(){LARGE_INTEGER v{};QueryPerformanceCounter(&v);return v.QuadPart;}
 int __cdecl source_surface(rb_surface*s){
     *s={};s->width=width;s->height=height;s->context=reinterpret_cast<uintptr_t>(producer->rc);
@@ -201,8 +213,8 @@ int main(int argc,char**argv){
         gd_diagnostic windows[3]{};CHECK(gd_test_healthy_snapshot(windows));
         const auto&a=windows[0];const auto&b=windows[1];const auto&failure=windows[2];
         CHECK(a.healthy && b.healthy && !failure.healthy && a.epoch==17 && a.qpc_frequency==1000);
-        CHECK(a.window_started_qpc==1000 && a.observed_qpc==6000);
-        CHECK(b.window_started_qpc==6000 && b.observed_qpc==16000);
+        CHECK(a.window_started_qpc==1000 && a.observed_qpc==61000);
+        CHECK(b.window_started_qpc==61000 && b.observed_qpc==66000 && b.refused_pictures==1);
         CHECK(a.phases[GD_PHASE_SAMPLE].max_ticks==50 && b.phases[GD_PHASE_SAMPLE].max_ticks==3);
         CHECK(failure.phases[GD_PHASE_SAMPLE].max_ticks==50 && failure.phases[GD_PHASE_SAMPLE].total_ticks==53);
         CHECK(a.cadence.records==3 && a.cadence.pictures==1 && a.cadence.same_origin==2);
@@ -281,6 +293,7 @@ int main(int argc,char**argv){
     gd_limits limits{sizeof(gd_limits),GD_VERSION,4,2000,4u*1024*1024,4u*1024*1024,1024*1024,1024*1024,2,0};
     CHECK(gd_configure(&source,&contexts,&limits)==GD_ACCEPTED);
     CHECK(gd_configure(&source,&contexts,&limits)==GD_BUSY);CHECK(!gd_epoch());
+    gd_set_diagnostic(note);
     rb_rom_open();
     gc_header request{};request.owner_pid=owner;request.owner_birth=birth;request.generation=1;
     request.offer_count=4;request.table_count=2;request.table[0]={0,4};request.table[1]={8,8};
@@ -288,6 +301,19 @@ int main(int argc,char**argv){
     Consumer consumer;printf("ready\n");fflush(stdout);std::string line;
     while(std::getline(std::cin,line)){std::istringstream in(line);std::string op;in>>op;
         if(op=="startuprace"){startup_race(request,limits);printf("startup race 2\n");
+        }else if(op=="warm"){
+            // The driver warm-up runs on the worker, deletes everything it made,
+            // and is accepted once per process.
+            unsigned parts=0;in>>parts;const int accepted=gd_prewarm(parts);uint32_t state=GD_WARM_NONE;
+            for(unsigned n=0;n<5000;++n){state=gd_prewarm_state();if(state>=GD_WARM_DONE)break;Sleep(1);}
+            printf("warm %d %u %u %d\n",accepted,state,delivery_windows(),gd_prewarm(parts));
+        }else if(op=="prepnote"){
+            for(unsigned n=0;n<2000 && !prepared_note.load();++n)Sleep(1);CHECK(prepared_note.load());
+            const auto&p=prepare_note;
+            printf("prepnote %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n",
+                p.request_qpc,p.surface_qpc,p.context_begin,p.context_window,p.context_temporary,p.context_shared,
+                p.context_temporary_deleted,p.context_current,p.snapshots,p.sampler,p.bridge_begin,p.bridge_device,
+                p.bridge_opened,p.bridge_transfer,p.bridge_registered,p.end_qpc);
         }else if(op=="start"){
             unsigned nonce=0;in>>nonce;request.nonce_lo=nonce;request.nonce_hi=GetCurrentProcessId();
             const auto prior=stage_count.load();CHECK(gd_request(&request,4u*1024*1024)==GD_ACCEPTED);
