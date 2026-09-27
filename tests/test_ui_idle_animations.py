@@ -142,3 +142,24 @@ def test_reduced_motion_runs_no_endless_loop(browser, base):
     running = page.evaluate("document.getAnimations().filter((a) => a.playState === 'running'"
                             " && a.effect.getComputedTiming().iterations === Infinity).length")
     assert running == 0, f"{running} endless animations run under reduced motion"
+
+
+PAINT = "((el) => { const s = getComputedStyle(el); return [s.boxShadow, s.backgroundColor, s.borderTopColor]; })"
+
+
+def test_reduced_motion_keeps_the_nudge_red(browser, base):
+    """With the pulse gone, the strategy nudge still wears its resting frame.
+    The picker sets `border: 0`, so the red a person sees is the pulse's glow
+    and tint: all three painted values must match, not the border colour alone."""
+    moving = _open(browser, base)
+    rest = moving.evaluate(f"""(() => {{
+      const el = document.querySelector('.needs-strat');
+      const pulse = el.getAnimations().find((a) => a.animationName === 'needstrat');
+      pulse.pause(); pulse.currentTime = 0;
+      return {PAINT}(el); }})()""")
+    assert rest[0] != "none", f"fixture drift: the pulse rests with no glow ({rest})"
+    still = _open(browser, base, reduced="reduce")
+    paints = still.evaluate(f"[...document.querySelectorAll('.needs-strat')].map({PAINT})")
+    assert paints, "fixture drift: no strategy nudge on the page"
+    assert all(paint == rest for paint in paints), (
+        f"the nudge under reduced motion paints {paints}; its resting frame paints {rest}")
