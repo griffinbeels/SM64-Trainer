@@ -166,10 +166,12 @@ worker. With no demand the native worker is passive and the renderer runs as
 the original single-context renderer: the never-current shared GL anchor the
 worker leases is published on the renderer thread at the first admitted
 capture surface (`EnsureAnchor`), once per context, never at ROM open. A
-direct or server-off session therefore creates no extra driver context
-(round 48). The cost moves to the first captured frame after a server
-attaches. Whether this or the same day's driver update ended the passive
-stutter is not isolated (see [what failed](#what-failed-and-why)).
+direct or server-off session therefore creates no shared or lingering driver
+context (round 48); the [driver warm-up](#first-capture-freeze) makes one
+unshared context during the boot intro and deletes it at once. The anchor's
+own cost moves to the first captured frame after a server attaches. Whether
+this or the same day's driver update ended the passive stutter is not
+isolated (see [what failed](#what-failed-and-why)).
 
 The media worker's tick is a high-resolution waitable timer plus the native
 producer's own event (`tickwait.py`): a `threading.Event.wait(0.004)` sleeps
@@ -384,6 +386,63 @@ and no pending failed cleanup; automatic idle is not a safe collection window.
 The existing five-minute backstop remains, so this is not a promise of zero
 Python scheduling pauses.
 
+## First capture freeze
+
+His report (2026-09-25): "a very brief visual stutter in the gameplay. It
+never happens again, just once towards the beginning of the session." Live,
+one UpdateScreen ran 153 ms inside the first capture's native preparation.
+
+**Cause (host-measured, 2026-09-27).** The stutter host (a scratch copy of
+the audit's: the real stamp adapter, delivery worker, WGL/D3D11 bridge and
+encoder helper against a hidden 60 Hz renderer, one fresh process per run)
+shows the NVIDIA driver blocking the renderer's own GL calls for 100-260 ms
+the first time ANY other thread in the process uses the GPU while the
+renderer is drawing, once per process. It is not the cost of our steps: the
+worker's steps keep running during the block, and the block lands on
+whichever step is first (the temporary context in some runs, the D3D11 device
+in others). Work done before the renderer draws, or in its first 50 ms, does
+not count and the first capture still freezes; work 0.25 s or more after
+drawing starts does count, and the effect held through 90 s of idle before
+the first capture.
+
+**Fix: the [driver warm-up](glossary.md#driver-warm-up).** After a practice
+ROM has drawn 120 passive UpdateScreens (two seconds of the boot intro), the
+wrapper calls `gd_prewarm(GD_WARM_GL)` once per process. The delivery worker
+makes a hidden window and an unshared legacy GL context current, then deletes
+both; the driver's freeze happens there, in the intro. A capture that starts
+earlier skips the warm-up and pays the freeze itself, still inside the boot.
+Nothing is shared with the renderer and nothing survives the warm-up, so
+round 48 holds. The trade-off: every practice-ROM process now pays the freeze
+once in the intro, including a session in which the server never starts.
+Host acceptance (2026-09-27, 8 fresh processes each, worst renderer VI):
+without the warm-up the first capture froze 148-176 ms in 7 of 8 (one ran
+8.5 ms); with it the first capture ran 5.1-8.9 ms in 8 of 8, the warm-up
+itself froze 147-186 ms two seconds into drawing, and second captures stayed
+at 8.6 ms or less.
+
+Rejected in the same host: warming at RomOpen
+before the renderer draws (3 of 3 still froze at the first capture), after
+the renderer's context exists but before it draws (2 of 2), 50 ms after
+drawing starts (1 of 1), holding an unshared context from RomOpen (1 of 1),
+and a D3D11 device made in advance (the audit's W/K rows). Removing the
+temporary context (plan variant b) cannot help, since any first GPU use pays;
+keeping the worker's shared context from boot (variant a) would pay the same
+freeze at boot and keep a share group in server-off sessions.
+
+**Readout (his next session, no action from him).** The
+[activation log](glossary.md#activation-log) holds `rom_open_*`, `gpu_warm`,
+`gpu_request`, `anchor_published`, `gpu_prepare` and every `callback_stall`
+in the 15 s after a request, each with QPCs (`gpu_prepare` gives
+`ctx_begin_qpc` and `bridge_begin_qpc` plus per-step milliseconds in order).
+A stall whose `[begin_qpc,end_qpc]` overlaps `gpu_warm` is the warm-up paying
+the freeze in the intro, as intended. One overlapping the `ctx_*` steps means
+the worker context still paid it (did `gpu_warm` run, and after drawing
+began?). One overlapping `anchor_published` points to the renderer's anchor.
+No stall near the first capture means the fix held; if none appears even
+without `gpu_warm`, the live 153 ms was inflated by a concurrent host run.
+A stall overlapping none of our steps names something else in the process
+(an overlay's DLL load or driver threads); these logs do not attribute it.
+
 ## Accuracy and bounds
 
 The unchanged picture selector uses the same stride sample and source stamps.
@@ -531,8 +590,10 @@ tag0x20000000. These tags change no wire layout or capture operation.
 
 Use `tools/graphics_diagnostics.py --seconds 0 --output <new-folder>` to preserve
 read-only loaded paths and ControlV1 build identity. The wrapper writes
-`sm64_trainer_gfx.log` beside itself; an existing log can belong to an earlier
-build, so verify its PID/build/time before attribution.
+`sm64_trainer_gfx.log` (4 MiB, then `.1` and `.2`) and the startup-only
+`sm64_trainer_gfx.activation.log` beside itself ([profiling](profiling.md));
+an existing log can belong to an earlier build, so verify its PID/build/time
+before attribution.
 Never restart the user's applications to collect diagnostics.
 
 The current native encoder is NVIDIA NVENC. No CUDA Toolkit installation is

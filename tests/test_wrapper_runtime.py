@@ -222,6 +222,31 @@ def test_close_without_romclose_revokes_before_original_and_clears_capability(st
         assert command(child, "stats").split()[1] == "0"
 
 
+def test_driver_warm_up_waits_for_the_practice_rom_to_draw_then_asks_once(start):
+    """The NVIDIA driver freezes the renderer once per process, ~150 ms, the
+    first time another thread uses the GPU while the renderer draws; done
+    before the renderer draws, the warm-up does not count (host runs,
+    docs/replay-gpu-runtime.md). So the wrapper asks during the boot intro:
+    never at RomOpen or the first frame, once within ten seconds of frames,
+    and never again in that process, whatever ROM opens next."""
+    child, _, _, _ = start()
+    assert command(child, "screens 0") == "0"
+    assert command(child, "screens 1") == "0"
+    assert command(child, "screens 599") == "1"
+    assert command(child, "screens 600") == "1"
+    assert command(child, "romclose") == "ok"
+    assert command(child, "romopen") == "ok"
+    assert command(child, "screens 600") == "1"
+
+
+def test_driver_warm_up_never_runs_for_vanilla_sm64(start):
+    child, _, _, _ = start()
+    assert command(child, "romclose") == "ok"
+    assert command(child, "cart vanilla") == "ok"
+    assert command(child, "romopen") == "ok"
+    assert command(child, "screens 600") == "0"
+
+
 def test_gpu_build_refuses_incomplete_runtime(tmp_path):
     build = load_build()
     build.SOURCE = tmp_path
