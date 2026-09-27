@@ -38,10 +38,10 @@ def layout_module():
     return module
 
 
-# Driver queries per ghost frame on the live path: the compositor's residue
-# (program, vertex array, depth function and mask, four blend factors) plus
-# the scissor box the glue asks itself (here the compositor asks it).
-RESIDUE_QUERIES = 9
+# Driver queries per ghost frame on the live path: none. The renderer's
+# dispatch records every value a frame restores (docs: What a drawn ghost
+# asks the driver).
+RESIDUE_QUERIES = 0
 
 
 def retain_artifacts(paths, folder=""):

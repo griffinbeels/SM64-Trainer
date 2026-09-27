@@ -35,11 +35,25 @@ def source_build():
     return source, gl, build, vcvars, flags
 
 
-@pytest.mark.parametrize("mutation", [None, "miss_cached_bind", "miss_core_read", "miss_error_gateway"])
+# Each drops one observation of the render state a ghost frame restores.
+RENDER_MUTATIONS = {
+    "miss_program_observer": b"if (raw_use_program) g_glUseProgram = &UseProgram;",
+    "miss_depth_alias": b"if (nominal) render.depth_func = function;",
+    "miss_indexed_enable": b"if (nominal && index == 0) set_capability(capability, true);",
+    "miss_array_delete": b"if (names[n] && names[n] == render.vertex_array) render.vertex_array = 0;",
+}
+
+
+@pytest.mark.parametrize("mutation", [None, "miss_cached_bind", "miss_core_read", "miss_error_gateway",
+                                      *RENDER_MUTATIONS])
 def test_real_link_dispatch(tmp_path, source_build, mutation):
     source, gl, build, vcvars, flags = source_build
     dispatch = (ROOT / "plugin/gfxwrap/link_dispatch.cpp").read_bytes()
-    if mutation == "miss_cached_bind":
+    if mutation in RENDER_MUTATIONS:
+        marker = RENDER_MUTATIONS[mutation]
+        assert dispatch.count(marker) == 1, mutation
+        dispatch = dispatch.replace(marker, b"; // deliberately missing render-state observation")
+    elif mutation == "miss_cached_bind":
         marker = b"if (raw_bind_framebuffer) g_glBindFramebuffer = &BindFramebuffer;"
         assert dispatch.count(marker) == 1
         dispatch = dispatch.replace(marker, b"// deliberately missing captured-pointer observation")

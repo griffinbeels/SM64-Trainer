@@ -42,28 +42,57 @@ bool allocate(Instance* p,uint32_t index,uint32_t width,uint32_t height) {
     g.ReadBuffer(gl::COLOR_ATTACHMENT0);g.DrawBuffer(gl::COLOR_ATTACHMENT0);
     return g.CheckFramebufferStatus(gl::FRAMEBUFFER)==gl::FRAMEBUFFER_COMPLETE;
 }
+Known known(const Raster& raster) {
+    Known out{};
+    if(!raster.known || !raster.known(&out))out={};
+    return out;
+}
 // save_back changes exactly these: the read framebuffer, unit 0's 2D texture
 // and the active unit (the default framebuffer's read selector it restores
 // inline). The full gl::Guard queried and restored ~77 values every frame for
-// them (~25 of its ~30 us); this saves three and restores three.
+// them (~25 of its ~30 us); this restores three, asking only what the
+// renderer's record does not hold.
 struct CopyGuard {
     const ghost_compositor::Dispatch& g; int32_t read_fbo=0,unit=0,texture=0;
-    explicit CopyGuard(const ghost_compositor::Dispatch& d):g(d) {
-        g.GetIntegerv(gl::READ_FRAMEBUFFER_BINDING,&read_fbo);g.GetIntegerv(gl::ACTIVE_TEXTURE,&unit);
-        g.ActiveTexture(gl::TEXTURE0);g.GetIntegerv(gl::TEXTURE_BINDING_2D,&texture);
+    CopyGuard(const ghost_compositor::Dispatch& d,const Known& k):g(d) {
+        if(k.fields&Known::read_framebuffer)read_fbo=int32_t(k.read);
+        else g.GetIntegerv(gl::READ_FRAMEBUFFER_BINDING,&read_fbo);
+        if(k.fields&Known::texture_unit) {unit=int32_t(gl::TEXTURE0+k.active_unit);texture=int32_t(k.unit0_texture);}
+        else {g.GetIntegerv(gl::ACTIVE_TEXTURE,&unit);g.ActiveTexture(gl::TEXTURE0);g.GetIntegerv(gl::TEXTURE_BINDING_2D,&texture);}
     }
     ~CopyGuard() {
         g.ActiveTexture(gl::TEXTURE0);g.BindTexture(gl::TEXTURE_2D,uint32_t(texture));
         g.ActiveTexture(uint32_t(unit));g.BindFramebuffer(gl::READ_FRAMEBUFFER,uint32_t(read_fbo));
     }
 };
+// restore_back changes exactly these: the read and draw framebuffers, scissor
+// at viewport 0 and sRGB writes (the default framebuffer's draw selectors it
+// restores inline; the read selector it sets is its own framebuffer's).
+struct BlitGuard {
+    const ghost_compositor::Dispatch& g; int32_t read_fbo=0,draw_fbo=0; uint8_t scissor=0,srgb=0;
+    BlitGuard(const ghost_compositor::Dispatch& d,const Known& k):g(d) {
+        if(k.fields&Known::read_framebuffer)read_fbo=int32_t(k.read);
+        else g.GetIntegerv(gl::READ_FRAMEBUFFER_BINDING,&read_fbo);
+        if(k.fields&Known::draw_framebuffer)draw_fbo=int32_t(k.draw);
+        else g.GetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING,&draw_fbo);
+        if(k.fields&Known::scissor_test)scissor=k.scissor_enabled;
+        else g.GetBooleani_v(gl::SCISSOR_TEST,0,&scissor);
+        if(k.fields&Known::srgb)srgb=k.srgb_enabled;else srgb=g.IsEnabled(gl::FRAMEBUFFER_SRGB);
+    }
+    ~BlitGuard() {
+        (scissor ? g.Enablei : g.Disablei)(gl::SCISSOR_TEST,0);(srgb ? g.Enable : g.Disable)(gl::FRAMEBUFFER_SRGB);
+        g.BindFramebuffer(gl::READ_FRAMEBUFFER,uint32_t(read_fbo));g.BindFramebuffer(gl::DRAW_FRAMEBUFFER,uint32_t(draw_fbo));
+    }
+};
 bool save_back(Instance* p) {
     p->published={};p->qualified=false;
     if(!p->raster.begin_gpu())return false;
     {
-        const auto& g=p->dispatch.gl;CopyGuard guard(g);
+        const auto& g=p->dispatch.gl;const auto k=known(p->raster);CopyGuard guard(g,k);
         g.BindFramebuffer(gl::READ_FRAMEBUFFER,0);
-        int32_t selector=0;g.GetIntegerv(gl::READ_BUFFER,&selector);g.ReadBuffer(gl::BACK);
+        int32_t selector=int32_t(k.default_read);
+        if(!(k.fields&Known::default_read_buffer))g.GetIntegerv(gl::READ_BUFFER,&selector);
+        g.ReadBuffer(gl::BACK);
         g.ActiveTexture(gl::TEXTURE0);g.BindTexture(gl::TEXTURE_2D,p->textures[0]);
         // CopyTexSubImage transfers the stored RGB values without sRGB conversion.
         p->dispatch.CopyTexSubImage2D(gl::TEXTURE_2D,0,0,0,0,0,p->width,p->height);
@@ -73,7 +102,7 @@ bool save_back(Instance* p) {
 }
 void restore_back(Instance* p) {
     if(!p->saved)return;
-    const auto& g=p->dispatch.gl;gl::Guard guard(g);
+    const auto& g=p->dispatch.gl;BlitGuard guard(g,known(p->raster));
     g.Disablei(gl::SCISSOR_TEST,0);g.Disable(gl::FRAMEBUFFER_SRGB);
     g.BindFramebuffer(gl::READ_FRAMEBUFFER,p->fbos[0]);g.ReadBuffer(gl::COLOR_ATTACHMENT0);
     g.BindFramebuffer(gl::DRAW_FRAMEBUFFER,0);
@@ -127,8 +156,9 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
     if(!p || !p->ready || p->saved || !raster_valid(raster) || !image.texture || !image.occurrence ||
        !image.configuration || !p->update || image.context_generation!=p->context_generation ||
        !image.width || !image.height || image.width!=p->source_width || image.height!=p->source_height ||
-       image.texture==p->textures[0] || image.texture==p->textures[1] ||
-       p->dispatch.gl.IsEnabled(gl::FRAMEBUFFER_SRGB))return false;
+       image.texture==p->textures[0] || image.texture==p->textures[1])return false;
+    const auto k=known(raster);
+    if((k.fields&Known::srgb) ? k.srgb_enabled!=0 : p->dispatch.gl.IsEnabled(gl::FRAMEBUFFER_SRGB)!=0)return false;
     p->raster=raster;p->vi_origin=origin;
     if(!save_back(p))return false;
     if(!raster.begin_gpu())return false;
@@ -249,7 +279,26 @@ void raster_draw(void* user,const Draw& draw) {
     gfxContext.bindFramebuffer(graphics::bufferTarget::DRAW_FRAMEBUFFER,graphics::ObjectHandle(draw.framebuffer));
     drawer.copyTexturedRect(params);
 }
-Raster fallback_raster(){return {nullptr,raster_draw,replay_gl::BeginCapture,replay_gl::EndCapture};}
+// What the dispatch observed of the bindings a presentation step changes.
+bool known_state(Known* out) {
+    *out={};
+    replay_gl::RasterState raster{};
+    if(replay_gl::Raster(&raster) && raster.draw_known) {out->fields|=Known::draw_framebuffer;out->draw=raster.draw_framebuffer;}
+    renderer::Identity identity{};snapshot::RestoreBindings bindings{};
+    if(replay_gl::CandidateBindings(&identity,&bindings)) {
+        out->fields|=Known::read_framebuffer|Known::default_read_buffer;
+        out->read=bindings.read_framebuffer;out->default_read=bindings.source_read_buffer;
+    }
+    unsigned unit=0;GLuint texture=0;
+    if(replay_gl::ActiveUnit(&unit) && replay_gl::Texture2D(0,&texture)) {
+        out->fields|=Known::texture_unit;out->active_unit=unit;out->unit0_texture=texture;
+    }
+    bool on=false;
+    if(replay_gl::Enabled(GL_FRAMEBUFFER_SRGB,&on)){out->fields|=Known::srgb;out->srgb_enabled=on;}
+    if(replay_gl::Enabled(GL_SCISSOR_TEST,&on)){out->fields|=Known::scissor_test;out->scissor_enabled=on;}
+    return true;
+}
+Raster fallback_raster(){return {nullptr,raster_draw,replay_gl::BeginCapture,replay_gl::EndCapture,known_state};}
 void revalidate_image() {
     const auto image=pending_image(current);
     if(image.occurrence && (!validity || !validity(image))) {
@@ -318,7 +367,8 @@ static void draw_vi_image(const FrameBuffer& source,const GraphicsDrawer::CopyRe
     GhostViImage image{};
     if(!provider(input,&image) || !clean_consumer() || (screen && !image.framebuffer))return;
     if((source_width!=input.width || source_height!=input.height) && !prepare_extent(input.width,input.height))return;
-    ViRaster vi{&params,source.m_pTexture,screen};Raster raster{&vi,raster_draw,replay_gl::BeginCapture,replay_gl::EndCapture};
+    ViRaster vi{&params,source.m_pTexture,screen};
+    Raster raster{&vi,raster_draw,replay_gl::BeginCapture,replay_gl::EndCapture,known_state};
     const bool gamma=((*REG.VI_STATUS & 8) | config.gammaCorrection.force)!=0;
     if(!replace_vi(current,image,origin,gamma,raster) && notice)notice(image,0,false);
 }

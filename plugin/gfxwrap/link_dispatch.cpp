@@ -24,11 +24,36 @@ PFNGLBINDFRAMEBUFFERPROC raw_bind_framebuffer = nullptr;
 PFNGLDELETEFRAMEBUFFERSPROC raw_delete_framebuffers = nullptr;
 PFNGLACTIVETEXTUREPROC raw_active_texture = nullptr;
 PFNGLDEPTHRANGEFPROC raw_depth_range = nullptr;
+PFNGLUSEPROGRAMPROC raw_use_program = nullptr;
+PFNGLBINDVERTEXARRAYPROC raw_bind_vertex_array = nullptr;
+PFNGLDELETEVERTEXARRAYSPROC raw_delete_vertex_arrays = nullptr;
+PFNGLENABLEIPROC raw_enablei = nullptr;
+PFNGLDISABLEIPROC raw_disablei = nullptr;
 // Raster state the ghost hooks read per draw instead of querying the driver.
 GLuint draw_framebuffer = 0;
 GLint viewport[4]{};
 GLfloat depth_range[2]{0, 1};
 bool draw_known = false, viewport_known = false, depth_known = false;
+// The render state a ghost frame restores (RenderState), from a fresh
+// context's defaults on; known once the dispatch observes every entry of it.
+RenderState render{};
+bool render_known = false;
+constexpr GLenum capabilities[] = {GL_DEPTH_TEST, GL_CULL_FACE, GL_POLYGON_OFFSET_FILL, GL_DEPTH_CLAMP,
+    GL_CLIP_DISTANCE0, GL_BLEND, GL_SCISSOR_TEST, GL_STENCIL_TEST, GL_RASTERIZER_DISCARD,
+    GL_FRAMEBUFFER_SRGB, GL_DITHER};
+uint32_t enabled = 0; // bit i: capabilities[i] is on (BLEND and SCISSOR_TEST at index 0)
+void fresh_render_state() {
+    render = {};
+    render.depth_func = GL_LESS; render.depth_mask = true;
+    render.blend[0] = render.blend[2] = GL_ONE; render.blend[1] = render.blend[3] = GL_ZERO;
+    enabled = 1u << 10; // only DITHER starts enabled
+}
+void set_capability(GLenum capability, bool on) {
+    for (unsigned i = 0; i < sizeof(capabilities) / sizeof(capabilities[0]); ++i) {
+        if (capabilities[i] != capability) continue;
+        enabled = on ? enabled | (1u << i) : enabled & ~(1u << i); return;
+    }
+}
 uint32_t generation = 0, dispatch_generation = 0;
 unsigned unit_limit = 0;
 unsigned drawable_width = 0, drawable_height = 0;
@@ -65,7 +90,10 @@ void observe_source_format() {
     if (encoding==GL_LINEAR) source_format=RB_SOURCE_RGB8_LINEAR;
     else if (encoding==GL_SRGB) source_format=RB_SOURCE_RGB8_SRGB;
 }
-void invalidate() { nominal = false; state.unknown(); draw_known = viewport_known = depth_known = false; }
+void invalidate() {
+    nominal = false; state.unknown(); draw_known = viewport_known = depth_known = false;
+    render_known = false; render.scissor_known = false;
+}
 void APIENTRY BindFramebuffer(GLenum target, GLuint name) {
     raw_bind_framebuffer(target, name);
     if (!nominal) return;
@@ -102,6 +130,29 @@ void APIENTRY ActiveTexture(GLenum unit) {
     if (unit < GL_TEXTURE0 || unit - GL_TEXTURE0 >= unit_limit) { invalidate(); return; }
     state.active_texture(unit);
 }
+void APIENTRY UseProgram(GLuint program) {
+    raw_use_program(program);
+    if (nominal) render.program = program;
+}
+void APIENTRY BindVertexArray(GLuint name) {
+    raw_bind_vertex_array(name);
+    if (nominal) render.vertex_array = name;
+}
+void APIENTRY DeleteVertexArrays(GLsizei count, const GLuint *names) {
+    raw_delete_vertex_arrays(count, names);
+    if (!nominal) return;
+    if (count < 0 || (count && !names)) { invalidate(); return; }
+    for (GLsizei n = 0; n < count; ++n)
+        if (names[n] && names[n] == render.vertex_array) render.vertex_array = 0; // deleting the bound array binds 0
+}
+void APIENTRY Enablei(GLenum capability, GLuint index) {
+    raw_enablei(capability, index);
+    if (nominal && index == 0) set_capability(capability, true);
+}
+void APIENTRY Disablei(GLenum capability, GLuint index) {
+    raw_disablei(capability, index);
+    if (nominal && index == 0) set_capability(capability, false);
+}
 }
 void ContextLost() {
 #ifdef SM64_REPLAY_CONTEXT_LIFETIME
@@ -115,7 +166,7 @@ void ContextLost() {
     anchor_attempted = anchor_published = false;
 #endif
     nominal = false; practice = false; identity = {}; dispatch_generation = 0; state.lost();
-    draw_known = viewport_known = depth_known = false;
+    draw_known = viewport_known = depth_known = false; render_known = false; render.scissor_known = false;
     drawable_width = drawable_height = 0;
     capture_open = false; saved_error = GL_NO_ERROR;
     source_format = RB_SOURCE_UNKNOWN;
@@ -163,6 +214,7 @@ void ContextCreated(HGLRC context, HDC drawable, bool buffered) {
     // viewport is the window's until the renderer sets one, so it is unknown.
     draw_framebuffer = 0; draw_known = true; depth_range[0] = 0; depth_range[1] = 1; depth_known = true;
     viewport_known = false;
+    fresh_render_state(); // known once InstallDispatch observes the pointer-called entries too
     state.created(identity, buffered); nominal = true;
     observe_source_format();
     // No anchor here. R31 published the shared context at every ROM open,
@@ -188,21 +240,39 @@ void InstallDispatch() {
     // Upstream must have resolved fresh raw addresses. Reject accidental repeated
     // installation rather than capturing ourselves and recursively dispatching.
     if (g_glBindFramebuffer == &BindFramebuffer || g_glDeleteFramebuffers == &DeleteFramebuffers
-            || g_glActiveTexture == &ActiveTexture || g_glDepthRangef == &DepthRangef) { invalidate(); return; }
+            || g_glActiveTexture == &ActiveTexture || g_glDepthRangef == &DepthRangef
+            || g_glUseProgram == &UseProgram || g_glBindVertexArray == &BindVertexArray
+            || g_glDeleteVertexArrays == &DeleteVertexArrays || g_glEnablei == &Enablei
+            || g_glDisablei == &Disablei) { invalidate(); return; }
     raw_bind_framebuffer = g_glBindFramebuffer;
     raw_delete_framebuffers = g_glDeleteFramebuffers;
     raw_active_texture = g_glActiveTexture;
     raw_depth_range = g_glDepthRangef;
+    raw_use_program = g_glUseProgram;
+    raw_bind_vertex_array = g_glBindVertexArray;
+    raw_delete_vertex_arrays = g_glDeleteVertexArrays;
+    raw_enablei = g_glEnablei;
+    raw_disablei = g_glDisablei;
     if (raw_bind_framebuffer) g_glBindFramebuffer = &BindFramebuffer;
     if (raw_delete_framebuffers) g_glDeleteFramebuffers = &DeleteFramebuffers;
     if (raw_active_texture) g_glActiveTexture = &ActiveTexture;
     if (raw_depth_range) g_glDepthRangef = &DepthRangef;
+    if (raw_use_program) g_glUseProgram = &UseProgram;
+    if (raw_bind_vertex_array) g_glBindVertexArray = &BindVertexArray;
+    if (raw_delete_vertex_arrays) g_glDeleteVertexArrays = &DeleteVertexArrays;
+    if (raw_enablei) g_glEnablei = &Enablei;
+    if (raw_disablei) g_glDisablei = &Disablei;
     if (!raw_bind_framebuffer || !raw_delete_framebuffers || !raw_active_texture
             || !nominal || reinterpret_cast<HGLRC>(identity.context) != wglGetCurrentContext()
             || reinterpret_cast<HDC>(identity.read_drawable) != wglGetCurrentDC()) {
         invalidate(); return;
     }
     dispatch_generation = identity.context_generation;
+    // Every entry that changes the render state is now observed: the
+    // pointer-called ones above, the GL 1.1 exports aliased at the call.
+    // Without glEnablei the renderer switches BLEND through glEnable.
+    render_known = raw_use_program && raw_bind_vertex_array && raw_delete_vertex_arrays
+        && !raw_enablei == !raw_disablei;
 }
 void APIENTRY Viewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     ::glViewport(x, y, width, height);
@@ -244,6 +314,55 @@ bool Raster(RasterState *out) {
     out->viewport_known = viewport_known;
     out->depth_range[0] = depth_range[0]; out->depth_range[1] = depth_range[1]; out->depth_known = depth_known;
     return true;
+}
+bool Render(RenderState *out) {
+    if (!out) return false;
+    *out = {};
+    if (!render_known || !nominal || !dispatch_generation || dispatch_generation != identity.context_generation
+            || GetCurrentThreadId() != identity.owner_thread) return false;
+    *out = render; return true;
+}
+bool Enabled(GLenum capability, bool *on) {
+    RenderState ignored{};
+    if (!on || !Render(&ignored)) return false;
+    for (unsigned i = 0; i < sizeof(capabilities) / sizeof(capabilities[0]); ++i)
+        if (capabilities[i] == capability) { *on = (enabled >> i) & 1u; return true; }
+    return false;
+}
+bool Texture2D(unsigned unit, GLuint *name) {
+    RasterState ignored{};
+    return name && Raster(&ignored) && state.texture(unit, name);
+}
+bool ActiveUnit(unsigned *unit) {
+    RasterState ignored{};
+    return unit && Raster(&ignored) && state.active_unit(unit);
+}
+void APIENTRY DepthFunc(GLenum function) {
+    ::glDepthFunc(function);
+    if (nominal) render.depth_func = function;
+}
+void APIENTRY DepthMask(GLboolean flag) {
+    ::glDepthMask(flag);
+    if (nominal) render.depth_mask = flag != GL_FALSE;
+}
+void APIENTRY BlendFunc(GLenum source, GLenum destination) {
+    ::glBlendFunc(source, destination);
+    if (!nominal) return;
+    render.blend[0] = render.blend[2] = source; render.blend[1] = render.blend[3] = destination;
+}
+void APIENTRY Scissor(GLint x, GLint y, GLsizei width, GLsizei height) {
+    ::glScissor(x, y, width, height);
+    if (!nominal) return;
+    render.scissor[0] = x; render.scissor[1] = y; render.scissor[2] = width; render.scissor[3] = height;
+    render.scissor_known = width >= 0 && height >= 0;
+}
+void APIENTRY Enable(GLenum capability) {
+    ::glEnable(capability);
+    if (nominal) set_capability(capability, true);
+}
+void APIENTRY Disable(GLenum capability) {
+    ::glDisable(capability);
+    if (nominal) set_capability(capability, false);
 }
 bool CandidateBindings(renderer::Identity *out, snapshot::RestoreBindings *bindings) {
     if (!out || !nominal || !dispatch_generation || dispatch_generation != identity.context_generation

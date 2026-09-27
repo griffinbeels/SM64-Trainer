@@ -64,6 +64,26 @@ static gp::Dispatch dispatch() {
     d.CopyTexSubImage2D=glCopyTexSubImage2D;
     d.DrawBuffers=reinterpret_cast<decltype(d.DrawBuffers)>(load("glDrawBuffers"));return d;
 }
+// The renderer's record, as a renderer that tracks its own calls holds it:
+// asked here of the raw driver, outside the presentation's count.
+static bool host_known(gp::Known* out) {
+    using Active=void(GC_GL_CALL*)(uint32_t);using Bind=void(GC_GL_CALL*)(uint32_t,uint32_t);
+    using Indexed=void(GC_GL_CALL*)(uint32_t,uint32_t,uint8_t*);
+    static const auto active=reinterpret_cast<Active>(load("glActiveTexture"));
+    static const auto bind=reinterpret_cast<Bind>(load("glBindFramebuffer"));
+    static const auto indexed=reinterpret_cast<Indexed>(load("glGetBooleani_v"));
+    *out={};GLint value=0,unit=0;
+    glGetIntegerv(gl::READ_FRAMEBUFFER_BINDING,&value);out->read=uint32_t(value);
+    glGetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING,&value);out->draw=uint32_t(value);
+    glGetIntegerv(gl::ACTIVE_TEXTURE,&unit);out->active_unit=uint32_t(unit)-gl::TEXTURE0;
+    active(gl::TEXTURE0);glGetIntegerv(gl::TEXTURE_BINDING_2D,&value);out->unit0_texture=uint32_t(value);active(uint32_t(unit));
+    bind(gl::READ_FRAMEBUFFER,0);glGetIntegerv(gl::READ_BUFFER,&value);out->default_read=uint32_t(value);
+    bind(gl::READ_FRAMEBUFFER,out->read);
+    out->srgb_enabled=glIsEnabled(gl::FRAMEBUFFER_SRGB);indexed(gl::SCISSOR_TEST,0,&out->scissor_enabled);
+    out->fields=gp::Known::read_framebuffer|gp::Known::draw_framebuffer|gp::Known::texture_unit|
+        gp::Known::default_read_buffer|gp::Known::srgb|gp::Known::scissor_test;
+    return true;
+}
 static bool gpu_open=false,fail_begin=false,fail_end=false;
 static bool begin_gpu(){require(!gpu_open,"gateway not nested");if(fail_begin)return false;require(glGetError()==0,"clean before gateway");gpu_open=true;return true;}
 static bool end_gpu(){require(gpu_open,"gateway balanced");gpu_open=false;require(glGetError()==0,"clean after gateway");return !fail_end;}
@@ -113,6 +133,7 @@ struct Raster {
         g.DrawArrays(gl::TRIANGLES,0,6);
     }
     gp::Raster api(){return {this,draw,begin_gpu,end_gpu};}
+    gp::Raster known_api(){return {this,draw,begin_gpu,end_gpu,host_known};}
     void osd(float alpha) {
         setup();g.Viewport(16,20,24,8);g.Enablei(gl::BLEND,0);
         g.BlendFuncSeparatei(0,gl::SRC_ALPHA,gl::ONE_MINUS_SRC_ALPHA,gl::SRC_ALPHA,gl::ONE_MINUS_SRC_ALPHA);
@@ -153,7 +174,18 @@ static void run(uint32_t generation) {
     gp::after_osd(p);gp::swap_completed(p,false);require(!gp::surface(p).presentation_serial,"failed swap no descriptor");
 
     background(g);gp::begin_update(p,201);require(gp::replace_vi(p,image,0x2000,false,raster.api()),"cancel candidate");
-    g.DrawBuffer(gl::FRONT);gp::cancel_overlay(p);int32_t selector=0;g.GetIntegerv(gl::DRAW_BUFFER0,&selector);
+    // Taking the ghost back touches the read and draw framebuffers, scissor and
+    // sRGB, and puts back the default draw selectors: those are all it asks.
+    int32_t draw_buffers=0;glGetIntegerv(0x8824,&draw_buffers); // GL_MAX_DRAW_BUFFERS
+    uint32_t foreign=0;g.GenFramebuffers(1,&foreign); // the renderer's read framebuffer, not ours
+    g.DrawBuffer(gl::FRONT);g.Enablei(gl::SCISSOR_TEST,0);g.Enable(gl::FRAMEBUFFER_SRGB);
+    g.BindFramebuffer(gl::FRAMEBUFFER,foreign); // read and draw both elsewhere
+    {gl::State taken{};taken.capture(g);queries=0;gp::cancel_overlay(p);
+     std::printf("take-back state queries: %u (%d draw selectors)\n",queries,draw_buffers);
+     require(queries<=4u+unsigned(draw_buffers),"taking the ghost back asks only what it changes");
+     gl::State after{};after.capture(g);require(std::memcmp(&taken,&after,sizeof taken)==0,"taking the ghost back restores touched GL state");}
+    g.Disablei(gl::SCISSOR_TEST,0);g.Disable(gl::FRAMEBUFFER_SRGB);g.BindFramebuffer(gl::FRAMEBUFFER,0);
+    int32_t selector=0;g.GetIntegerv(gl::DRAW_BUFFER0,&selector);
     require(selector==gl::FRONT,"restore preserves default draw selector");g.DrawBuffer(gl::BACK);
     rgb(pixels(g,0),20,30,20,40,60,"revocation restores clean BACK");gp::swap_completed(p,true);
     require(!gp::surface(p).presentation_serial,"revocation invalidates descriptor");
@@ -192,7 +224,24 @@ static void run(uint32_t generation) {
     require(queries<=4,"the clean save queries only what it changes");
     gl::State after{};after.capture(g);require(std::memcmp(&before,&after,sizeof before)==0,"save restores touched GL state");
     g.BindFramebuffer(gl::READ_FRAMEBUFFER,0);g.GetIntegerv(gl::READ_BUFFER,&selector);require(selector==gl::FRONT,"default read selector restored");
-    completed(p,window);const auto resource=gp::surface(p).resource_generation;
+    completed(p,window);
+    // With the renderer's record the clean save and the sRGB check ask
+    // nothing, and taking the ghost back asks only the default draw selectors.
+    background(g);gp::begin_update(p,209);g.BindFramebuffer(gl::READ_FRAMEBUFFER,foreign);
+    {gl::State saved{};saved.capture(g);queries=0;
+     require(gp::before_swap(p,0x3000,raster.known_api()) && queries==0,"a known clean save asks nothing");
+     gl::State after{};after.capture(g);require(std::memcmp(&saved,&after,sizeof saved)==0,"a known clean save restores state");}
+    g.BindFramebuffer(gl::READ_FRAMEBUFFER,0);completed(p,window);
+    background(g);gp::begin_update(p,210);queries=0;
+    require(gp::replace_vi(p,image,0x2000,false,raster.known_api()) && queries==0,"a known ghost replace asks nothing");
+    g.Enablei(gl::SCISSOR_TEST,0);g.Enable(gl::FRAMEBUFFER_SRGB);g.BindFramebuffer(gl::FRAMEBUFFER,foreign);
+    {gl::State taken{};taken.capture(g);queries=0;gp::cancel_overlay(p);
+     require(queries==unsigned(draw_buffers),"a known take-back asks only the default draw selectors");
+     gl::State after{};after.capture(g);require(std::memcmp(&taken,&after,sizeof taken)==0,"a known take-back restores state");}
+    g.Disablei(gl::SCISSOR_TEST,0);g.Disable(gl::FRAMEBUFFER_SRGB);g.BindFramebuffer(gl::FRAMEBUFFER,0);
+    rgb(pixels(g,0),20,30,20,40,60,"a known take-back restores clean BACK");gp::swap_completed(p,true);
+    g.DeleteFramebuffers(1,&foreign);
+    const auto resource=gp::surface(p).resource_generation;
     require(gp::prepare(p,2,32,32,8,8),"resize prepare");require(!gp::surface(p).presentation_serial,"resize invalidates descriptor");
     gp::begin_update(p,205);background(g);require(gp::before_swap(p,0x4000,raster.api()),"resized clean save");completed(p,window);
     require(gp::surface(p).resource_generation>resource && gp::surface(p).width==32 && gp::surface(p).drawable_generation==2,"resource identity");
@@ -202,5 +251,5 @@ int main() {
     const auto foreground=GetForegroundWindow();require(!gp::clean_consumer(),"inactive by default");
     gp::clean_consumer(true);require(gp::clean_consumer(),"negotiated");gp::clean_consumer(false);
     run(1);run(2);require(GetForegroundWindow()==foreground,"focus unchanged");
-    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored");return 0;
+    std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing");return 0;
 }

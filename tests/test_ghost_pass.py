@@ -85,3 +85,16 @@ def test_ghost_draw_counts_every_driver_query():
                if re.search(r"\bglGet\w*\(|\bget_uniform\(program", line)]
     assert queries, "the glue still asks the driver something"
     assert all("ask(" in line for line in queries), queries
+
+
+def test_glue_hands_capabilities_in_the_compositors_order():
+    """Known::Cap is a bit order: the glue's list of tracked capabilities must
+    name the same capabilities in the same order as the compositor's, or a
+    known 'on' lands on the wrong capability and is restored there."""
+    import re
+    glue = (ROOT / "plugin/gfxwrap/ghost_draw.cpp").read_text(encoding="utf-8")
+    compositor = (ROOT / "plugin/gfxwrap/ghost_compositor_gl.h").read_text(encoding="utf-8")
+    handed = re.search(r"const GLenum caps\[\] = \{([^}]*)\}", glue).group(1)
+    known = re.search(r"volatile_caps\[\]=\{([^}]*)\}", compositor).group(1)
+    names = [name.strip().removeprefix("GL_") for name in handed.split(",")]
+    assert names == [name.strip() for name in known.split(",")], (names, known)

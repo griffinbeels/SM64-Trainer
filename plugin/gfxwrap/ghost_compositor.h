@@ -119,13 +119,17 @@ struct Target {
  * is clear is queried. `caps` says which of the capabilities the renderer
  * switches per draw are known, `enabled` their values, bit for bit. */
 struct Known {
-    enum : uint32_t { draw_framebuffer = 1, read_framebuffer = 2, viewport = 4, scissor = 8 };
+    enum : uint32_t { draw_framebuffer = 1, read_framebuffer = 2, viewport = 4, scissor = 8,
+        program = 16, vertex_array = 32, depth = 64 /* function and write mask */,
+        blend_factors = 128 /* draw buffer 0: source/destination RGB, then alpha */ };
     enum Cap : uint32_t { depth_test = 1, cull_face = 2, polygon_offset_fill = 4, depth_clamp = 8,
         clip_distance0 = 16, blend = 32 /* draw buffer 0 */, scissor_test = 64 /* viewport 0 */ };
     uint32_t fields;
     uint32_t draw, read;
     int32_t viewport_box[4], scissor_box[4];
     uint32_t caps, enabled;
+    uint32_t current_program, bound_vertex_array, depth_function, blend_factor[4];
+    uint8_t depth_write;
 };
 /* What the compositor cost its caller, renderer thread, microseconds.
  * queries/query_micros: every driver query since the last take_cost, setup

@@ -169,16 +169,26 @@ static void json_string(const std::string& value){
         if(c<32)std::printf("\\u%04x",unsigned(c));else std::putchar(c);}std::putchar('"');
 }
 struct Times {double pipeline=0,swap=0;};
-/* The state frame() leaves before the seal, as GLideN64's glue hands it
- * over (tracked bindings and viewport, its enable cache): ordinary_state,
- * then the VI draw to the default framebuffer. The scissor box is left for
- * the compositor to ask, as the live glue asks it itself. */
-static gc::Known known_before_seal(const Scene& scene) {
+/* The renderer state frame() leaves before the seal: ordinary_state, the VI
+ * draw to the default framebuffer, then the depth, blend and scissor the
+ * world pass ended with. */
+static void world_state(const gc::Dispatch& g) {
+    g.DepthFunc(cgl::LESS);g.DepthMask(1);g.BlendFuncSeparatei(0,cgl::ONE,cgl::ZERO,cgl::ONE,cgl::ZERO);
+    g.ScissorIndexed(0,0,0,int32_t(W),int32_t(H));
+}
+/* ...and that state as GLideN64's glue hands it over: its dispatch's record
+ * of every call, so the compositor asks the driver nothing. */
+static gc::Known known_before_seal(const Scene& scene,uint32_t program,uint32_t vao) {
     gc::Known known{};
-    known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport;
+    known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport|gc::Known::scissor|
+        gc::Known::program|gc::Known::vertex_array|gc::Known::depth|gc::Known::blend_factors;
     known.draw=0;known.read=scene.fbo;
-    const int32_t viewport[4]={0,0,int32_t(W),int32_t(H)};std::memcpy(known.viewport_box,viewport,sizeof(viewport));
-    known.caps=0x7f;known.enabled=0;return known;
+    const int32_t box[4]={0,0,int32_t(W),int32_t(H)};
+    std::memcpy(known.viewport_box,box,sizeof(box));std::memcpy(known.scissor_box,box,sizeof(box));
+    known.caps=0x7f;known.enabled=0;known.current_program=program;known.bound_vertex_array=vao;
+    known.depth_function=cgl::LESS;known.depth_write=1;
+    known.blend_factor[0]=known.blend_factor[2]=cgl::ONE;known.blend_factor[1]=known.blend_factor[3]=cgl::ZERO;
+    return known;
 }
 struct Pipeline {
     Window window;gc::Dispatch g;Scene scene;ViRaster raster;gc::Instance* compositor=nullptr;
@@ -307,21 +317,28 @@ struct Pipeline {
         require(live.global_timer==100+frames && live.igt==10 && live.clock.elapsed_frames==origin_clock.elapsed_frames
             && live.clock.continuity_id==origin_clock.continuity_id,"paused IGT stays at origin while global timer advances");
         ghost_playback::safe_boundary(7,configuration);
-        ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});
+        ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});world_state(g);
         present::begin_update(presentation,live.sequence);
         gc::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
         if(draw){require(ghost_playback::evaluate(live,world,poses,count,token) && poses[0].count>1800,"actual playback/model geometry");
             vertices=0;for(uint32_t i=0;i<count;++i)vertices+=poses[i].count;visible=count;
             auto destination=target(scene,gc::Depth::ordinary);destination.occurrence=live.sequence;
-            const auto known=known_before_seal(scene);
+            const auto known=known_before_seal(scene,raster.program,raster.vao);
             if(evidence){ // the witness's model of the state is the driver's
-                int32_t draw_fbo=-1,read_fbo=-1;float viewport[4]{};bool on=false;
+                int32_t draw_fbo=-1,read_fbo=-1,program=-1,vao=-1,depth=-1,blend[4]{},scissor[4]{};float viewport[4]{};
+                bool on=false;uint8_t mask=0;
                 g.GetIntegerv(cgl::DRAW_FRAMEBUFFER_BINDING,&draw_fbo);g.GetIntegerv(cgl::READ_FRAMEBUFFER_BINDING,&read_fbo);
-                g.GetFloati_v(cgl::VIEWPORT,0,viewport);
+                g.GetFloati_v(cgl::VIEWPORT,0,viewport);g.GetIntegeri_v(cgl::SCISSOR_BOX,0,scissor);
+                g.GetIntegerv(cgl::CURRENT_PROGRAM,&program);g.GetIntegerv(cgl::VERTEX_ARRAY_BINDING,&vao);
+                g.GetIntegerv(cgl::DEPTH_FUNC,&depth);g.GetBooleanv(cgl::DEPTH_WRITEMASK,&mask);
+                for(unsigned i=0;i<4;++i)g.GetIntegeri_v(cgl::blend_queries[i],0,&blend[i]);
                 for(auto cap:cgl::volatile_caps)if(cap!=cgl::BLEND && cap!=cgl::SCISSOR_TEST)on=on || g.IsEnabled(cap)!=0;
                 uint8_t indexed[2]{};g.GetBooleani_v(cgl::BLEND,0,&indexed[0]);g.GetBooleani_v(cgl::SCISSOR_TEST,0,&indexed[1]);
-                require(uint32_t(draw_fbo)==known.draw && uint32_t(read_fbo)==known.read && viewport[2]==float(W) &&
-                    viewport[3]==float(H) && !on && !indexed[0] && !indexed[1],"the known state is the driver's");
+                bool same=uint32_t(draw_fbo)==known.draw && uint32_t(read_fbo)==known.read && viewport[2]==float(W) &&
+                    viewport[3]==float(H) && !on && !indexed[0] && !indexed[1] && uint32_t(program)==known.current_program &&
+                    uint32_t(vao)==known.bound_vertex_array && uint32_t(depth)==known.depth_function && mask==known.depth_write;
+                for(unsigned i=0;i<4;++i)same=same && uint32_t(blend[i])==known.blend_factor[i] && scissor[i]==known.scissor_box[i];
+                require(same,"the known state is the driver's");
             }
             (void)gc::take_cost(compositor);
             require(gc::begin_batch(compositor,destination,poses,count,&known)==gc::Result::ok,"real compositor batch");

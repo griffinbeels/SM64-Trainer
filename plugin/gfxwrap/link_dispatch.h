@@ -22,6 +22,23 @@ bool DrawableExtent(unsigned *width, unsigned *height); // source-owned values; 
 struct RasterState { uint32_t draw_framebuffer; int32_t viewport[4]; float depth_range[2];
                      bool draw_known, viewport_known, depth_known; };
 bool Raster(RasterState *);
+// The rest of the state a ghost frame restores, as the renderer's dispatched
+// calls last set it, from a fresh context's defaults on: program, vertex
+// array, depth function and write mask, blend factors (glBlendFunc sets every
+// draw buffer; these are buffer 0's: source/destination RGB, then alpha) and
+// the scissor box (known after the renderer's first glScissor). No driver
+// query; false unless nominal on the owner thread with the dispatch installed.
+struct RenderState { uint32_t program, vertex_array, depth_func, blend[4]; int32_t scissor[4];
+                     bool depth_mask, scissor_known; };
+bool Render(RenderState *);
+// Whether a tracked capability is on (BLEND and SCISSOR_TEST at index 0):
+// DEPTH_TEST, CULL_FACE, POLYGON_OFFSET_FILL, DEPTH_CLAMP, CLIP_DISTANCE0,
+// BLEND, SCISSOR_TEST, STENCIL_TEST, RASTERIZER_DISCARD, FRAMEBUFFER_SRGB,
+// DITHER. False for any other capability or when not known.
+bool Enabled(GLenum capability, bool *enabled);
+// A unit's 2D texture and the active unit (0-based), as the dispatch saw them.
+bool Texture2D(unsigned unit, GLuint *name);
+bool ActiveUnit(unsigned *unit);
 // Nominal state only: copy validity/device-loss/source qualification are separate
 // prerequisites. Never promote this alone to a verified replay picture.
 bool CandidateBindings(renderer::Identity *, snapshot::RestoreBindings *);
@@ -51,6 +68,13 @@ void APIENTRY ReadBuffer(GLenum);
 void APIENTRY Viewport(GLint, GLint, GLsizei, GLsizei); // a Windows GL 1.1 export: aliased at the call
 void APIENTRY BindTexture(GLenum, GLuint);
 void APIENTRY DeleteTextures(GLsizei, const GLuint *);
+// Windows GL 1.1 exports the ghost's frame restores, aliased at the call.
+void APIENTRY DepthFunc(GLenum);
+void APIENTRY DepthMask(GLboolean);
+void APIENTRY BlendFunc(GLenum, GLenum);
+void APIENTRY Scissor(GLint, GLint, GLsizei, GLsizei);
+void APIENTRY Enable(GLenum);
+void APIENTRY Disable(GLenum);
 }
 #ifndef REPLAY_GL_DISPATCH_IMPLEMENTATION
 #define glReadBuffer replay_gl::ReadBuffer
@@ -58,4 +82,10 @@ void APIENTRY DeleteTextures(GLsizei, const GLuint *);
 #define glBindTexture replay_gl::BindTexture
 #define glDeleteTextures replay_gl::DeleteTextures
 #define glGetError replay_gl::GetError
+#define glDepthFunc replay_gl::DepthFunc
+#define glDepthMask replay_gl::DepthMask
+#define glBlendFunc replay_gl::BlendFunc
+#define glScissor replay_gl::Scissor
+#define glEnable replay_gl::Enable
+#define glDisable replay_gl::Disable
 #endif

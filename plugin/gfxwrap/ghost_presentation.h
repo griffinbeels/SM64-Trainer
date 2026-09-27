@@ -32,11 +32,23 @@ struct Draw {
     uint32_t texture, framebuffer, width, height;
     uint32_t source_framebuffer; // image FBO, or private gamma result for the VI draw
 };
+/* The renderer's own record of what a presentation step changes, so the
+ * step asks the driver nothing for it (each query waits for the driver's
+ * thread). A field whose bit is clear is asked. */
+struct Known {
+    enum : uint32_t { read_framebuffer = 1, draw_framebuffer = 2,
+        texture_unit = 4 /* the active unit and unit 0's 2D texture */, default_read_buffer = 8,
+        srgb = 16, scissor_test = 32 /* viewport 0 */ };
+    uint32_t fields;
+    uint32_t read, draw, active_unit /* 0-based */, unit0_texture, default_read;
+    uint8_t srgb_enabled, scissor_enabled;
+};
 struct Raster {
     void* user;
     void (*draw)(void*,const Draw&); // same pinned renderer shader/VI rectangle
     bool (*begin_gpu)(); // diagnostic-preserving gateway; no nesting
     bool (*end_gpu)();
+    bool (*known)(Known*) = nullptr; // optional renderer record; nothing known without it
 };
 struct Instance;
 Instance* create(const Dispatch&, uint32_t context_generation);

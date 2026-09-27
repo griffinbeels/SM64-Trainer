@@ -531,8 +531,10 @@ Result begin_layer(Instance* p,const Target& t,LayerPass pass,const Known* known
     int32_t blend[6]={0,0,0,0,p->stable.blend[4],p->stable.blend[5]};uint8_t blending=0,depth_mask=1,depth_test=0;
     uint8_t mask[4]={p->stable.color_mask[0],p->stable.color_mask[1],p->stable.color_mask[2],p->stable.color_mask[3]};
     if(!known_cap(known,Known::blend,&blending))g.GetBooleani_v(BLEND,0,&blending);
-    g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
-    for(size_t i=0;i<(known ? 4u : 6u);++i)g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
+    if(known && (known->fields&Known::depth))depth_mask=known->depth_write;
+    else g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
+    if(known && (known->fields&Known::blend_factors))for(size_t i=0;i<4;++i)blend[i]=int32_t(known->blend_factor[i]);
+    else for(size_t i=0;i<(known ? 4u : 6u);++i)g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
     if(!known)g.GetBooleani_v(COLOR_WRITEMASK,0,mask);
     if(!known_cap(known,Known::depth_test,&depth_test))depth_test=g.IsEnabled(DEPTH_TEST);
     if(!blending || depth_mask || !depth_test || blend[4]!=int32_t(FUNC_ADD) ||

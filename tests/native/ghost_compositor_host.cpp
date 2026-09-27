@@ -515,14 +515,16 @@ int main() {
         require(gc::finalize(compositor,77)==gc::Result::ok,"resize finalize");
         check_image(pixels(g,gc::display(compositor).framebuffer,64,32),64,32,.5f);
     }
-    // The renderer's own record (Known): a frame asks the driver only the
-    // documented residue, counted alike by the compositor and this witness,
+    // The renderer's own record (Known): a frame asks the driver only what the
+    // record lacks (nothing, once it holds the program, vertex array, depth
+    // and blend state too), counted alike by the compositor and this witness,
     // and still puts every field back. With multi-bind, then without.
     const std::vector<Asked> residue={{q_GetIntegerv,cgl::CURRENT_PROGRAM},{q_GetIntegerv,cgl::VERTEX_ARRAY_BINDING},
         {q_GetIntegerv,cgl::DEPTH_FUNC},{q_GetBooleanv,cgl::DEPTH_WRITEMASK},{q_GetIntegeri_v,cgl::BLEND_SRC_RGB},
         {q_GetIntegeri_v,cgl::BLEND_DST_RGB},{q_GetIntegeri_v,cgl::BLEND_SRC_ALPHA},{q_GetIntegeri_v,cgl::BLEND_DST_ALPHA}};
     const std::vector<Asked> layer_residue={{q_GetBooleanv,cgl::DEPTH_WRITEMASK},{q_GetIntegeri_v,cgl::BLEND_SRC_RGB},
         {q_GetIntegeri_v,cgl::BLEND_DST_RGB},{q_GetIntegeri_v,cgl::BLEND_SRC_ALPHA},{q_GetIntegeri_v,cgl::BLEND_DST_ALPHA}};
+    constexpr uint32_t render_fields=gc::Known::program|gc::Known::vertex_array|gc::Known::depth|gc::Known::blend_factors;
     unsigned known_frames=0;
     for(bool multi:{true,false}) {
         auto raw=g;if(!multi)raw.BindTextures=nullptr,raw.BindSamplers=nullptr;
@@ -531,21 +533,29 @@ int main() {
         renderer_state();
         require(gc::prepare(known_compositor,32,32,60,atlas,1,1)==gc::Result::ok,"known prepare");
         gc::Known known{};
-        known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport|gc::Known::scissor;
+        known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport|gc::Known::scissor|render_fields;
         known.draw=known.read=scene.fbo;
         const int32_t viewport[4]={1,2,7,9},scissor[4]={3,4,2,3};
         std::memcpy(known.viewport_box,viewport,sizeof(viewport));std::memcpy(known.scissor_box,scissor,sizeof(scissor));
         known.caps=known.enabled=0x7f; // hostile() switched every capability on
-        auto expected=residue;if(!multi)expected.push_back({q_GetIntegerv,cgl::ACTIVE_TEXTURE});
-        for(unsigned round=0;round<2;++round) {
+        // ...and left these, as a renderer tracking its calls would hold them.
+        known.current_program=bindings.program;known.bound_vertex_array=bindings.vao;
+        known.depth_function=GL_GREATER;known.depth_write=0;
+        const uint32_t hostile_blend[4]={GL_ONE,GL_ZERO,GL_DST_ALPHA,GL_ONE_MINUS_DST_ALPHA};
+        std::memcpy(known.blend_factor,hostile_blend,sizeof(hostile_blend));
+        std::vector<Asked> nothing,unit;if(!multi)unit.push_back({q_GetIntegerv,cgl::ACTIVE_TEXTURE});
+        auto partial=residue;partial.insert(partial.end(),unit.begin(),unit.end());
+        for(unsigned round=0;round<3;++round) {
+            auto told=known;if(round==2)told.fields&=~render_fields; // a record without the render state
             cgl::State before{};before.capture(g);const auto frame_before=frame_state(g);
             asked.clear();(void)gc::take_cost(known_compositor);
-            require(gc::begin(known_compositor,target(scene,gc::Depth::ordinary),pose(vertices,.5f),&known)==gc::Result::ok,"known begin");
+            require(gc::begin(known_compositor,target(scene,gc::Depth::ordinary),pose(vertices,.5f),&told)==gc::Result::ok,"known begin");
             const auto cost=gc::take_cost(known_compositor);
             require(cost.queries==asked.size(),"the compositor counts every query it makes");
             // The first frame on a framebuffer verifies it; later ones reuse that.
-            if(round)require(asked==expected,"a known frame asks the driver the residue only");
-            else require(asked.size()>expected.size(),"a new framebuffer is verified once");
+            if(round==1)require(asked==unit,"a fully known frame asks the driver nothing");
+            else if(round==2)require(asked==partial,"a frame asks what the record lacks, and only that");
+            else require(asked.size()>unit.size(),"a new framebuffer is verified once");
             require(cost.ghosts==1 && cost.batch_micros>=cost.draw_micros,"stage times cover the batch");
             equal_state(g,before,bindings);equal_frame(g,frame_before);++known_frames;
             require(gc::finalize(known_compositor,77)==gc::Result::ok,"known finalize");
@@ -562,21 +572,25 @@ int main() {
         hud_rect(g,bindings,.5f);gc::end_hud(known_compositor);
         require(gc::finalize(known_compositor,77)==gc::Result::ok,"known HUD finalize");
         check_image(pixels(g,gc::display(known_compositor).framebuffer,32,32),32,32,.5f);
-        // A layer pass asks for the game's blend factors and depth mask only.
+        // A layer pass asks the game's blend factors and depth mask only when
+        // the record lacks them.
         ordinary_state(g,scene);gc::clear_layer(known_compositor);
         g.Enable(GL_DEPTH_TEST);g.DepthMask(0);g.Enablei(GL_BLEND,0);
         g.BlendFuncSeparatei(0,GL_ONE,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
-        known.enabled=gc::Known::depth_test|gc::Known::blend;
+        known.enabled=gc::Known::depth_test|gc::Known::blend;known.depth_write=0;
+        const uint32_t water_blend[4]={GL_ONE,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA};
+        std::memcpy(known.blend_factor,water_blend,sizeof(water_blend));
         for(uint32_t pass=0;pass<2;++pass) {
+            auto told=known;if(!pass)told.fields&=~render_fields;
             cgl::State before{};before.capture(g);const auto frame_before=frame_state(g);asked.clear();
-            require(gc::begin_layer(known_compositor,target(scene,gc::Depth::ordinary),gc::LayerPass(pass),&known)==gc::Result::ok
-                && asked==layer_residue,"a known layer pass asks the game's blend and depth mask only");
+            require(gc::begin_layer(known_compositor,target(scene,gc::Depth::ordinary),gc::LayerPass(pass),&told)==gc::Result::ok
+                && asked==(pass ? nothing : layer_residue),"a known layer pass asks what the record lacks, and only that");
             gc::end_layer(known_compositor);equal_frame(g,frame_before);
             cgl::State after{};after.capture(g);require(std::memcmp(&before,&after,sizeof(after))==0,"a layer pass restores the game's state");
         }
         ordinary_state(g,scene);gc::destroy(known_compositor);no_error(multi ? "known multi-bind" : "known without multi-bind");
     }
-    require(known_frames==4,"known frames ran");
+    require(known_frames==6,"known frames ran");
     gc::destroy(compositor);no_error("destroy");
     // A genuinely separate context receives a fresh generation and resources.
     {
@@ -589,6 +603,6 @@ int main() {
     }
     require(wglMakeCurrent(window.dc,window.context)!=0,"restore test context");
     require(GetForegroundWindow()==foreground,"foreground preserved");
-    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2 known=residue");
+    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2 known=nothing_asked");
     return 0;
 }

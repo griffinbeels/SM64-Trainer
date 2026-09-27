@@ -54,11 +54,22 @@ unbinds; deletion bookkeeping is bounded. Unknown state refuses a witness.
 Identity includes context/read drawable, their generations, and owning thread.
 
 `link_dispatch.cpp` observes actual driver dispatch, including the framebuffer
-function pointer captured by LINK's cache. It replaces three extension slots
-only after upstream resolves them; three Windows core aliases cover direct
-ReadBuffer/BindTexture/DeleteTextures calls. Cache behavior is unchanged. The
-pinned Windows source has no relevant named-selector, multibind or alternate
-proc-loader bypass; adding such a route requires extending this coverage.
+function pointer captured by LINK's cache. It replaces extension slots only
+after upstream resolves them (framebuffer bind/delete, active texture, depth
+range, program, vertex array bind/delete, indexed enable/disable); Windows core
+aliases cover direct ReadBuffer/BindTexture/DeleteTextures, Viewport, Scissor,
+DepthFunc, DepthMask, BlendFunc and Enable/Disable calls. Cache behavior is
+unchanged. The pinned Windows source has no relevant named-selector, multibind,
+separate-blend, program-pipeline or alternate proc-loader bypass; adding such a
+route requires extending this coverage.
+
+What the ghost's frames read without asking the driver: `Raster` (draw
+framebuffer, viewport, depth range), `Render` (program, vertex array, depth
+function and mask, blend factors, scissor box), `Enabled` (the capabilities
+the ghost restores) and `Texture2D`/`ActiveUnit` (per-unit 2D bindings). Each
+starts from a fresh context's defaults, or is unknown until the renderer's
+first call where no default is certain (viewport, scissor box); any GL error
+the gateway sees invalidates them with the rest of the observation.
 
 Context creation uses actual current handles and pixel-format double buffering,
 only for a freshly created context. Hot activation cannot manufacture defaults.

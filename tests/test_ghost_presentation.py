@@ -36,6 +36,8 @@ def test_real_presentation(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     print(result.stdout.strip())
     assert "clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored" in result.stdout
+    # With the renderer's record the clean save and the sRGB check ask nothing.
+    assert "known=asks_nothing" in result.stdout
 
 
 def test_staging_refuses_unqualified_source(tmp_path):
