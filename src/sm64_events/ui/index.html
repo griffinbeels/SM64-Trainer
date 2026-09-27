@@ -1140,6 +1140,10 @@
   }
   .needs-strat { border-color: #e0473e; color: #ff8880;
                  animation: needstrat 0.85s ease-in-out infinite; }
+  /* An endless loop scrolled out of sight, marked by ui/offscreenloops.js:
+     frozen on its current frame until it comes back. */
+  [data-offscreen], [data-offscreen]::before, [data-offscreen]::after {
+    animation-play-state: paused !important; }
   /* progress-graph pick: one fading gold pulse lands the eye on the row */
   @keyframes rowflash { from { background: #3a321d; } to { background: transparent; } }
   .row-flash td { animation: rowflash 1.6s ease-out; }
@@ -7341,6 +7345,16 @@
     animation: pbdrift var(--log-pb-shimmer, 7000ms) linear infinite;
   }
   @keyframes pbdrift { from { --pb-drift: 0%; } to { --pb-drift: 200%; } }
+  /* Every row carries a .pb-gold at opacity 0; only a lit row's is seen, so
+     only it drifts. Each running drift recalculates style and repaints every
+     display frame (perf audit 2026-09-25, UI-4). The query waits for the
+     row's own glow, --pb-lit, to finish fading, so a word leaving never
+     freezes mid-fade, and a word crowned carries on from the same frame. */
+  @container style(--pb-lit: 0) { .pb-gold { animation-play-state: paused; } }
+  /* The seen word on a compositor layer of its own, so its drift repaints
+     the word's box rather than the row's tiles. Pixel-identical at 850 and
+     1500 at three drift phases; 23% -> 18% of a renderer core (2026-09-27). */
+  .attempt-table tr.is-pb .pb-gold { will-change: transform; }
   tr.is-pb .pb-swap-num { opacity: 0; transition-delay: 0ms; }
   tr.is-pb .pb-gold { opacity: 1; transition-delay: var(--log-pb-swap, 220ms); }
   tr.pb-arrive .pb-gold {

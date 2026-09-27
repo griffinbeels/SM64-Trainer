@@ -15,6 +15,7 @@ import { UpdatePopup } from "./components/update.js";
 import { CloseWarning } from "./components/closewarning.js";
 import { DailyStarModal } from "./components/dailystarmodal.js";
 import { useDailyStar } from "./dailystar.js";
+import { watchOffscreenLoops } from "./offscreenloops.js";
 import { RecordingDot } from "./components/replay.js";
 import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
@@ -322,3 +323,4 @@ function App() {
 }
 
 render(html`<${App} />`, document.getElementById("app"));
+watchOffscreenLoops(document.body);
