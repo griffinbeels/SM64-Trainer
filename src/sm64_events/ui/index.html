@@ -1140,6 +1140,11 @@
   }
   .needs-strat { border-color: #e0473e; color: #ff8880;
                  animation: needstrat 0.85s ease-in-out infinite; }
+  /* Reduced motion ends the pulse at once, and the pulse is what paints the
+     nudge: the picker's own rule (.log-card-strat-picker select) sets
+     `border: 0` and its own background, so the red glow and tint vanished.
+     Hold the pulse still on its resting frame instead. */
+  @media (prefers-reduced-motion: reduce) { .needs-strat { animation-play-state: paused; } }
   /* An endless loop scrolled out of sight, marked by ui/offscreenloops.js:
      frozen on its current frame until it comes back. */
   [data-offscreen], [data-offscreen]::before, [data-offscreen]::after {
