@@ -17,10 +17,9 @@ import ctypes.wintypes as wt
 import json
 import logging
 import subprocess
-import sys
 import threading
 
-from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
 from sm64_events.ghost.window import diag
 from sm64_events.ghost.window.protocol import encode_control_line, is_allowed_url
 
@@ -102,26 +101,30 @@ def terminate(pid: int) -> bool:
 MODULE = "sm64_events.ghost.window"
 
 #: How the SHIPPED exe re-enters as the overlay child. A PyInstaller build has
-#: no `-m`: sys.executable is the trainer itself, so its entry point has to
-#: recognise this flag and hand argv to `child.main`. The flag lives here so
-#: the entry point and the controller cannot drift apart.
+#: no `-m`: the exe is the trainer itself, so its entry point has to recognise
+#: this flag and hand argv to `child.main`. The flag lives here so the entry
+#: point and the controller cannot drift apart.
 GHOST_WINDOW_FLAG = "--ghost-window"
 
 DEFAULT_STOP_TIMEOUT_S = 5.0
 
 
-def ghost_window_command(*, url: str, opacity: float, visible: bool,
-                         backend: str = "webview", title: str = "Project64",
-                         follow_period: float | None = None) -> list[str]:
-    head = ([sys.executable, GHOST_WINDOW_FLAG] if getattr(sys, "frozen", False)
-            else [sys.executable, "-m", MODULE])
-    command = [*head, "--url", url, "--opacity", f"{opacity:g}",
-               "--backend", backend, "--title", title]
+def ghost_window_child(*, url: str, opacity: float, visible: bool,
+                       backend: str = "webview", title: str = "Project64",
+                       follow_period: float | None = None) -> tuple[list[str], dict | None]:
+    """(argv, env) for the overlay: a direct child interpreter that still
+    sees the venv's pywebview (core/childproc.py::python_child)."""
+    args = ["--url", url, "--opacity", f"{opacity:g}",
+            "--backend", backend, "--title", title]
     if visible:
-        command.append("--visible")
+        args.append("--visible")
     if follow_period is not None:
-        command += ["--follow-period", f"{follow_period:g}"]
-    return command
+        args += ["--follow-period", f"{follow_period:g}"]
+    return python_child(MODULE, GHOST_WINDOW_FLAG, args, site_packages=True)
+
+
+def ghost_window_command(**settings) -> list[str]:
+    return ghost_window_child(**settings)[0]
 
 
 class GhostWindowController:
@@ -164,7 +167,7 @@ class GhostWindowController:
     def tree(self) -> list[int]:
         """The pids this controller is responsible for, recorded at spawn.
 
-        The shim first, then whatever it started. Read live rather than
+        The overlay first, then whatever it started. Read live rather than
         cached, because WebView2 starts its own helpers after we let go.
         """
         process = self._process
@@ -175,14 +178,14 @@ class GhostWindowController:
     def start(self) -> None:
         if self.is_running():
             return
-        command = self._command or ghost_window_command(
+        command, env = (self._command, None) if self._command else ghost_window_child(
             url=self._url, opacity=self._opacity, visible=self._visible,
             backend=self._backend, title=self._title)
         try:
             self._process = subprocess.Popen(
                 # stderr joins stdout so a WebView2 failure arrives as an
                 # event instead of vanishing: this child has no console.
-                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                 bufsize=1, **quiet_spawn_kwargs())
         except OSError:
@@ -197,18 +200,18 @@ class GhostWindowController:
     def stop(self) -> None:
         """Ask, then terminate, then kill the whole TREE. Returns once gone.
 
-        **The recorded pid is not the overlay.** This venv starts Python
-        through a shim, so `Popen.pid` names the shim and the process holding
-        the WebView2 window is its child. `terminate()` and `kill()` reach
-        only the shim, which leaves a window on his screen in exactly the case
-        this escalation exists for. Every survivor is found by PARENT PID from
-        the pid we recorded at spawn -- never by name or command line.
+        **The recorded pid is not the whole overlay.** WebView2 starts its own
+        helper processes, and until 2026-09-27 a source run started Python
+        through the venv's launcher, so the window lived one generation below
+        `Popen.pid`. `terminate()` and `kill()` reach only that one process.
+        Every survivor is found by PARENT PID from the pid we recorded at
+        spawn -- never by name or command line.
         """
         process, self._process = self._process, None
         reader, self._reader = self._reader, None
         if process is None:
             return
-        # Taken BEFORE anything ends: once the shim exits its children are
+        # Taken BEFORE anything ends: once a parent exits its children are
         # reparented and the chain back to our pid is gone.
         owned = [process.pid, *descendants(process.pid)]
         if process.poll() is None:

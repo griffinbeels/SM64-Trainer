@@ -1,11 +1,14 @@
 """One GPU request, helper and fragment run, owned by the recorder media worker."""
 
+from functools import lru_cache
+import hashlib
 import logging
 from pathlib import Path
 import sys
 import struct
 import time
 
+from sm64_events.core.childproc import python_child
 from sm64_events.core.paths import bundled_encoder_dll
 from sm64_events.replay.gpucapture import GpuCleanupError
 from sm64_events.replay import gpuchannel
@@ -21,6 +24,7 @@ from sm64_events.replay.gpumediaworker import MediaWorker
 from sm64_events.replay.gpusettings import note_codec_unavailable, recording_codec
 from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpuprocess.process_controller import Controller
+from sm64_events.replay.gpuprocess import process_worker
 from sm64_events.replay.media import MediaRun
 from sm64_events.replay.packetmux import NativeFormat
 from sm64_events.replay.ownedclose import CleanupPending
@@ -29,6 +33,22 @@ log = logging.getLogger("sm64.replay")
 
 # Distinct from None (stop) and from a successful open tuple.
 _RETRY_OTHER_CODEC = object()
+
+
+@lru_cache(maxsize=4)
+def _sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def helper_launch():
+    """(command, identity, env) for the encoder helper.
+
+    A direct child either way (core/childproc.py): the installed exe with its
+    helper flag, or the base interpreter running the module, never the venv
+    launcher that would drop the no-busy-cursor flag."""
+    command, env = python_child(process_worker.__name__, process_worker.GPU_HELPER_FLAG)
+    entry = sys.executable if getattr(sys, "frozen", False) else process_worker.__file__
+    return command, {"entry": str(Path(entry).resolve()), "entry_sha256": _sha256(entry)}, env
 
 
 class CaptureSession:
@@ -111,10 +131,9 @@ class CaptureSession:
         if dll is None:
             raise RuntimeError("this build carries no SM64GpuEncoderV1.dll; run tools/build_plugin.py")
         dll = staged_encoder_dll(dll)  # never hold the shipped file open
+        command, identity, env = helper_launch()
         self.controller = self.controller_factory(
-            executable=Path(sys.executable),
-            helper=Path(__file__).resolve().parent / "gpuprocess/helper_bootstrap.py",
-            limits=self.settings.helper(),
+            command=command, identity=identity, env=env, limits=self.settings.helper(),
         )
         # ONE startup budget across both attempts. An adapter without an AV1
         # encoder refuses by codec before touching pixels, so the fallback

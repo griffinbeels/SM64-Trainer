@@ -21,6 +21,7 @@ from sm64_events.ghost.window import diag
 from sm64_events.ghost.window.controller import (
     GHOST_WINDOW_FLAG,
     GhostWindowController,
+    ghost_window_child,
     ghost_window_command,
 )
 
@@ -86,7 +87,8 @@ def lines_in(log: Path) -> list[dict]:
 def test_the_command_starts_the_overlay_module_with_its_settings():
     command = ghost_window_command(url=GHOST_URL, opacity=0.35, visible=True,
                                    backend="webview", title="Project64")
-    assert command[0] == sys.executable
+    # The interpreter itself, never the venv launcher (core/childproc.py).
+    assert command[0] == getattr(sys, "_base_executable", sys.executable)
     assert command[1:3] == ["-m", "sm64_events.ghost.window"]
     assert "--url" in command and GHOST_URL in command
     assert "--visible" in command
@@ -98,7 +100,7 @@ def test_the_frozen_build_needs_its_own_entry_flag(monkeypatch):
     """A PyInstaller build has no `-m`: sys.executable is the app itself, so
     the shipped exe re-enters through this flag. The flag is named here so the
     entry point and the controller cannot drift apart."""
-    monkeypatch.setattr(controller_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
     command = ghost_window_command(url=GHOST_URL, opacity=0.5, visible=False,
                                    backend="webview", title="Project64")
     assert command[0] == sys.executable
@@ -232,9 +234,9 @@ def test_the_controller_never_inherits_the_parents_console(recording):
 
 def test_the_real_module_is_what_the_default_command_names():
     """If the module ever moves, this fails before a player sees nothing."""
-    command = ghost_window_command(url=GHOST_URL, opacity=0.5, visible=False,
-                                   backend="none", title="Project64")
-    probe = subprocess.run([*command[:3], "--help"], capture_output=True,
+    command, env = ghost_window_child(url=GHOST_URL, opacity=0.5, visible=False,
+                                      backend="none", title="Project64")
+    probe = subprocess.run([*command[:3], "--help"], capture_output=True, env=env,
                            text=True, check=False, **quiet_spawn_kwargs())
     assert probe.returncode == 0, probe.stderr
     assert "--fixed-rect" in probe.stdout

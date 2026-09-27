@@ -1,4 +1,10 @@
-"""Sequential x64 helper. No GPU operation occurs before explicit Open."""
+"""Sequential x64 helper. No GPU operation occurs before explicit Open.
+
+The recorder starts it through core/childproc.py::python_child: from source as
+`python -m` this module, and in the installed app as the app's own exe with
+GPU_HELPER_FLAG, which gui_entry.py hands to `main`. The installed app had no
+such entry until 2026-09-27, so v1.9.1 refused to record at all.
+"""
 
 from pathlib import Path
 import ctypes as C
@@ -9,6 +15,10 @@ import logging
 log = logging.getLogger(__name__)
 from ..gpuencoder import EncoderClient, EncoderFailure, Result
 from .process_protocol import exact, uint, read_frame, frame, write_all, REQUEST, REPLY
+
+#: How the installed exe re-enters as this helper instead of as the app.
+#: Imported by gui_entry.py so the two cannot drift apart.
+GPU_HELPER_FLAG = "--gpu-helper"
 
 
 class Worker:
@@ -202,3 +212,14 @@ def run(nonce, max_json, max_packet):
             or (request["command"]["op"] == "Close" and reply["result"] == 0)
         ):
             return
+
+
+def main(argv):
+    """argv after the module name or flag: nonce, max_json, max_packet."""
+    if len(argv) != 3:
+        raise SystemExit("nonce/max_json/max_packet required")
+    run(argv[0], int(argv[1]), int(argv[2]))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -1141,9 +1141,13 @@ the rule holds with no trainer open.
 ### Encoder helper
 
 The 64-bit NVENC DLL (`SM64GpuEncoderV1.dll`) the server's isolated encoder
-process loads to turn the [[renderer]]'s GPU pictures into H.264 packets
-without copying pixels through Python. Built by `tools/build_plugin.py`
+process loads to turn the [[renderer]]'s GPU pictures into AV1 or H.264
+packets without copying pixels through Python. Built by `tools/build_plugin.py`
 beside the wrapper; it carries the same native build id with its own suffix.
+The process is a direct child of the server: the installed app starts itself
+with `--gpu-helper`, and from source the server starts the base interpreter
+on the module, never the venv launcher (which drops the no-busy-pointer flag). The
+installed app had no such entry until 2026-09-27, so v1.9.1 never recorded.
 
 - **Lives** -- `plugin/gfxwrap/gpu_encoder_dll.cpp`,
   `plugin/gfxwrap/gpu_bridge_encoder.cpp`; loaded by

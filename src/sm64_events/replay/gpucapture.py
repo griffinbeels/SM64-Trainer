@@ -2,7 +2,6 @@
 
 import logging
 from functools import partial
-import sys
 import threading
 import time
 
@@ -120,8 +119,6 @@ class GpuCapture:
         # deliberately unused. It cannot create a second ledger/encoder stream.
         if self._worker is not None or self.cfg is None:
             raise RuntimeError("GPU capture needs one prepared source/sink pair")
-        if getattr(sys, "frozen", False):
-            raise RuntimeError("GPU helper executable is not bundled in this build")
         self._on_stopped = on_stopped
         self._worker = threading.Thread(
             target=self._run, name="replay-gpu-media", daemon=True
