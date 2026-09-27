@@ -19,6 +19,7 @@ import subprocess
 
 log = logging.getLogger(__name__)
 from .process_job import OwnedJob
+from ..gpuencoder import Result
 from ..gpuencoder_abi import Status as NativeStatus, Retained as NativeRetained
 from .process_protocol import (
     exact,
@@ -452,7 +453,7 @@ class Controller:
         code = metadata["result"]
         if (
             type(code) is not int
-            or not 0 <= code <= 15
+            or not 0 <= code <= max(Result)
             or type(metadata["worker_disposal_required"]) is not bool
         ):
             raise ValueError("reply result shape")

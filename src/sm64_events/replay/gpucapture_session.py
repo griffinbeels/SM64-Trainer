@@ -10,7 +10,7 @@ import time
 
 from sm64_events.core.childproc import python_child
 from sm64_events.core.paths import bundled_encoder_dll
-from sm64_events.replay.gpucapture import GpuCleanupError
+from sm64_events.replay.gpucapture import GpuBackendUnsupported, GpuCleanupError
 from sm64_events.replay import gpuchannel
 from sm64_events.replay.gpuinput import OfferDecoder, ChannelSelection
 from sm64_events.replay.gpumedia import GpuMedia
@@ -21,7 +21,12 @@ from sm64_events.replay.gpuencoder import Result
 from sm64_events.replay.gpuencoder_abi import CODEC_STREAM_NAMES
 from sm64_events.replay.gpupublication import PublicationError, PublicationWriteError
 from sm64_events.replay.gpumediaworker import MediaWorker
-from sm64_events.replay.gpusettings import note_codec_unavailable, recording_codec
+from sm64_events.replay.gpusettings import (
+    backend_unsupported,
+    note_backend_unsupported,
+    note_codec_unavailable,
+    recording_codec,
+)
 from sm64_events.replay.gpuprocess.retirement import close_encoder
 from sm64_events.replay.gpuprocess.process_controller import Controller
 from sm64_events.replay.gpuprocess import process_worker
@@ -127,6 +132,12 @@ class CaptureSession:
     def _open_encoder(self):
         header = self.channel.header
         luid = (header.luid_high, header.luid_low)
+        # Before any helper starts: an adapter that can never open NVENC
+        # (not NVIDIA, a software adapter, a driver too old) is a verdict,
+        # not a fault to retry every 10-60 s forever (gpuadapter.py).
+        reason = backend_unsupported(luid)
+        if reason is not None:
+            raise GpuBackendUnsupported(reason)
         dll = bundled_encoder_dll()
         if dll is None:
             raise RuntimeError("this build carries no SM64GpuEncoderV1.dll; run tools/build_plugin.py")
@@ -173,6 +184,16 @@ class CaptureSession:
                     # the hardware, typed apart from every real fault, so the
                     # session asks for the other one instead of failing.
                     return _RETRY_OTHER_CODEC
+                if (
+                    reply.request_id == request_id
+                    and reply.metadata["result"] == Result.CODEC
+                    and not reply.metadata["worker_disposal_required"]
+                ):
+                    # Refused by codec with nothing left to try: this adapter
+                    # has no codec the recorder can write.
+                    reason = "this GPU's video encoder offers neither AV1 nor H.264"
+                    note_backend_unsupported(luid, reason)
+                    raise GpuBackendUnsupported(reason)
                 if (
                     reply.request_id != request_id
                     or reply.metadata["result"] != 0
@@ -288,6 +309,9 @@ class CaptureSession:
             while self._continue():
                 self.timings.measure("tick", self.tick)
                 self.owner.wait(self.settings.poll_s)
+        except GpuBackendUnsupported as exc:
+            self.error = str(exc)[:512]
+            raise  # A verdict about the adapter; GpuCapture routes it, unwrapped.
         except Exception as exc:
             self.error = str(exc)[:512]
             log.info("GPU capture failure before cleanup: %s", failure_snapshot(

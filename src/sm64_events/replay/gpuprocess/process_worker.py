@@ -150,6 +150,13 @@ class Worker:
             result = exc.result if exc.result is not None else Result.STATE
             error = str(exc)[:512]
             disposal = exc.worker_disposal_required
+            if (command.get("op") == "Open" and result == Result.CODEC
+                    and not disposal and self.client is None):
+                # Refused by codec, and nothing was opened: an answer about
+                # the adapter, not a fault. The recorder asks THIS helper for
+                # the other codec, so it must not end here (until 2026-09-27
+                # it did, and no adapter without AV1 could ever record).
+                error = None
         except BaseException as exc:
             log.exception("GPU helper command or status failed")
             result = Result.STATE

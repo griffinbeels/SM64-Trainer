@@ -5,6 +5,7 @@ import logging
 
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.memory.addresses import RDRAM_FULL_SIZE
+from sm64_events.replay import gpuadapter
 from sm64_events.replay.gpuencoder_abi import CODEC_AV1, CODEC_H264
 from sm64_events.replay.gpurequest import RequestLimits
 from sm64_events.replay.gpuencoder_options import from_replay_config
@@ -42,9 +43,41 @@ def note_codec_unavailable(luid: tuple[int, int], codec: int) -> bool:
     return True
 
 
+# WHETHER THE ADAPTER CAN RECORD THROUGH THE CAPTURE LAYER AT ALL, per
+# adapter and driver version: a verdict reason, or None when it may. Same
+# per-process memo as the codec: an unsupported adapter (not NVIDIA, a
+# software adapter, a driver older than the encoder's NVENC API, or no codec
+# the encoder can open) is asked once, and the recorder keeps the desktop grab
+# for it (gpuadapter.py). A driver update is a new key, so it is asked again.
+_ADAPTER_VERDICTS: dict[tuple, str | None] = {}
+
+
+def _adapter_key(luid):
+    facts = gpuadapter.adapter_facts(tuple(luid))
+    return (tuple(luid), facts.driver if facts is not None else None), facts
+
+
+def backend_unsupported(luid: tuple[int, int]) -> str | None:
+    """Why this adapter can never record through the capture layer, or None."""
+    key, facts = _adapter_key(luid)
+    if key not in _ADAPTER_VERDICTS:
+        _ADAPTER_VERDICTS[key] = gpuadapter.unsupported_reason(facts)
+        if _ADAPTER_VERDICTS[key] is not None:
+            log.warning("replay: %s; recording the desktop instead", _ADAPTER_VERDICTS[key])
+    return _ADAPTER_VERDICTS[key]
+
+
+def note_backend_unsupported(luid: tuple[int, int], reason: str) -> None:
+    """Remember an encoder answer that is a fact about this adapter."""
+    key, _facts = _adapter_key(luid)
+    _ADAPTER_VERDICTS[key] = reason
+    log.warning("replay: %s; recording the desktop instead", reason)
+
+
 def forget_adapter_codecs() -> None:
-    """Tests only: the memo is a per-process cache, never persisted state."""
+    """Tests only: the memos are per-process caches, never persisted state."""
     _ADAPTER_CODECS.clear()
+    _ADAPTER_VERDICTS.clear()
 
 
 @dataclass(frozen=True)
