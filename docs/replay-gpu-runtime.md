@@ -99,9 +99,11 @@ cannot see a swap in game memory: the poller reads the header before the
 detectors whenever the timer goes back and at least every
 `PRACTICE_ROM_CHECK_S`, and re-offers a refused cartridge every
 `PRACTICE_ROM_RETRY_S`. `Pj64Memory.rom_header` remembers where it found the
-image, because Allocate_ROM releases the old image before allocating the next:
-a steady check is one 0x40-byte read (`tests/test_pj64_rom_header.py` drives
-that against a real process; `tests/test_poller.py` drives the whole swap cycle).
+image, for every reader of that process, because Allocate_ROM releases the old
+image before allocating the next, and looks first where Project64 1.6 keeps it
+(0x10000000 past RDRAM): a steady check, or a fresh reader, is one 0x40-byte
+read (`tests/test_pj64_rom_header.py` drives that against a real process;
+`tests/test_poller.py` drives the whole swap cycle).
 
 Updates: when the user clicks Update in the app, the new build restarts and
 `CaptureLayer.refresh_if_stale` (at boot and every two seconds) copies the

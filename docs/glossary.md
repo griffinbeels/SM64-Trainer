@@ -2279,8 +2279,9 @@ what ships.
 
 ### Poller
 
-The loop reading the emulator sixty times a second: take a [[snapshot]], hand
-consecutive pairs to every [[detector]], publish whatever they emit. It
+The loop reading the emulator: it looks at the pad 250 times a second, on its
+own high-resolution timer, and once per game [[frame]] takes a [[snapshot]],
+hands consecutive pairs to every [[detector]] and publishes whatever they emit. It
 serves only a [[practice ROM]]: it reads the cartridge header when it attaches,
 whenever the game timer goes back and at least once a second, so swapping ROMs
 in Project64 needs no restart.
