@@ -11,14 +11,18 @@ from __future__ import annotations
 
 import ctypes as C
 from dataclasses import dataclass
+import logging
 import os
 import platform
 import sys
 import threading
+import time
 
 from sm64_events.replay.gpudiagnostics import native_reason
 from sm64_events.replay.capturecontrol import _process_creation
 from sm64_events.replay.ownedclose import close_after_error, release, release_many
+
+log = logging.getLogger(__name__)
 
 U8, U16, U32, U64, I32, I64 = (
     C.c_uint8,
@@ -453,6 +457,10 @@ class Client:
         ) = 0
         self._last_pts = None
         self._last_bridge_token = self._last_bridge_serial = 0
+        # Setup refuses a torn status at once; the media tick opts into a grace.
+        self._status = self._torn_since = None
+        self._torn_grace = 0.0
+        self._torn_streak = self.torn_status_reads = 0
         lo, hi = nonce
         _require(
             type(lo) is int
@@ -580,7 +588,9 @@ class Client:
         return U32.from_address(self._view + offset).value
 
     def _stable(self, offset, kind):
-        for _ in range(3):
+        for attempt in range(3):
+            if attempt:
+                time.sleep(0)  # let a preempted writer finish its copy
             seq = self._word(offset)
             if seq & 1:
                 continue
@@ -611,11 +621,47 @@ class Client:
             "immutable header changed",
         )
 
+    def tolerate_torn_status(self, grace):
+        """The media tick's policy: a torn status is no news for up to grace s.
+
+        Native rewrites the status at up to 60 Hz and holds its word odd across
+        the copy, so a writer preempted mid-copy (a machine-wide stall) tears
+        every read until it runs again. Three such reads used to end hours-long
+        runs. offers() and bridges() already defer a torn publication; status
+        now matches them. A writer that stays odd past grace still fails.
+        """
+        if not 0 < grace < 60:
+            raise ValueError("bounded torn-status grace required")
+        self._torn_grace = grace
+
+    def _torn(self):
+        now = time.monotonic()
+        if self._status is None or not self._torn_grace:
+            raise BlockingIOError("torn producer status")
+        if self._torn_since is None:
+            self._torn_since, self._torn_streak = now, 0
+        held = now - self._torn_since
+        if held > self._torn_grace:
+            raise BlockingIOError(
+                f"torn producer status for {held:.3f} s ({self._torn_streak} reads)"
+            )
+        self._torn_streak += 1
+        self.torn_status_reads += 1
+        return self._status
+
     def status(self):
         self._check()
         s = self._stable(self._header.status_offset, Status)
         if s is None:
-            raise BlockingIOError("torn producer status")
+            return self._torn()
+        if self._torn_since is not None:
+            log.info(
+                "GPU channel status was torn for %d reads over %.1f ms; "
+                "reused the last good status",
+                self._torn_streak,
+                (time.monotonic() - self._torn_since) * 1000,
+            )
+            self._torn_since = None
         self._identity(s)
         _require(
             not s.reserved0
@@ -625,7 +671,27 @@ class Client:
         )
         if s.state in {CLOSED, FAULT}:
             raise ChannelStopped(s.state, s.reason)
+        self._status = s
         return s
+
+    def change_words(self):
+        """One aligned U32 load per record the media tick reads: status,
+        publication, bridge 0, bridge 1.
+
+        Every producer write holds its word odd and leaves it two higher, and
+        each offer or bridge publish/retire also moves the publication word
+        (gpu_channel.cpp). An unchanged EVEN word therefore proves its record
+        unchanged, so the tick can skip the slot scans. Liveness and the
+        immutable header are still checked on every call.
+        """
+        self._check()
+        h, view = self._header, self._view
+        return (
+            U32.from_address(view + h.status_offset).value,
+            U32.from_address(view + h.publication_offset).value,
+            U32.from_address(view + h.bridge_offset).value,
+            U32.from_address(view + h.bridge_offset + 128).value,
+        )
 
     def _scan_offers(self):
         h = self._header

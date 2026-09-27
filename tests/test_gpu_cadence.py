@@ -268,6 +268,10 @@ class Pipeline:
             assert evidence["terminal"] is None, evidence
             return None
         assert fields[3:5] == ["0", "0"] and evidence["terminal"] is None, evidence
+        # Ticks with no channel news skipped the slot scans, and the recording
+        # below is still exact: the quiet path is live, not just unit-tested.
+        paths = evidence["pump_paths"] = self.adapter.status(refresh=False)["pump_paths"]
+        assert paths["quiet"] > 0 and paths["status"] > 0 and paths["scan"] > 0, paths
         assert self.media.seal(self.adapter.frontier) and self.media.finish(audio_drained=True)
         if self.sink is not None:
             self.sink.finish(timeout=3)
