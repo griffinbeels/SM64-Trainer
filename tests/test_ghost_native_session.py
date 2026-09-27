@@ -211,6 +211,63 @@ def test_rom_reopen_keeps_binding_until_new_producer_identity_arrives(tmp_path):
     asyncio.run(check())
 
 
+def test_a_capture_reconnect_says_reconnecting_not_start_the_game(tmp_path):
+    """The ghost card's sentence while the renderer is out of reach. Live
+    2026-09-25: 9 of 1,293 ghost_changed told him to start the game he was
+    playing, each right after a GPU capture reconnect replaced the recorder's
+    pose source. Poses served earlier by a game that still runs mean the
+    renderer is reconnecting; a game that never served, or has exited, is
+    still one to start."""
+    from sm64_events.ghost.native_session import RECONNECTING_REASON, START_GAME_REASON
+    session, source, _, _ = native_session(tmp_path)
+    game = SimpleNamespace(pid=4242, created=77, configuration=2, epoch=3)
+    alive = {game.pid: game.created}
+    session._native._running = lambda pid, created: alive.get(pid) == created
+    recorder = session._native._replay.recorder
+    served = source.snapshot_status
+
+    async def card():
+        await session.refresh(resolve=False)
+        return session.payload()["window"]["reason"]
+
+    async def check():
+        source.snapshot_status = lambda **_: {"available": False, "reason": "not_started"}
+        await session.update({"enabled": True, "view": "mario"})
+        assert await card() == START_GAME_REASON          # never served
+        source.snapshot_status = lambda **_: {**served(), "producer": game}
+        session._native.note()
+        assert await card() is None                        # drawing
+        recorder.ghost_capture = None                      # capture torn down...
+        assert await card() == RECONNECTING_REASON
+        fresh = Capture()                                  # ...and a new source not yet through
+        fresh.snapshot_status = lambda **_: {"available": False, "reason": "not_started"}
+        recorder.ghost_capture = fresh
+        assert await card() == RECONNECTING_REASON
+        fresh.snapshot_status = lambda **_: {**served(), "producer": game}
+        session._native.note()
+        assert await card() is None
+        fresh.snapshot_status = lambda **_: {"available": False, "reason": "no Project64"}
+        del alive[game.pid]                                # the game exited
+        assert await card() == START_GAME_REASON
+        alive[game.pid] = game.created                     # and nothing it served is remembered
+        assert await card() == START_GAME_REASON
+        await session.stop()
+
+    asyncio.run(check())
+
+
+def test_the_game_is_running_only_while_its_own_process_is():
+    """A reused pid is a new game: identity is the pid AND its birth stamp."""
+    import os
+    from sm64_events.ghost.native_session import emulator_running
+    from sm64_events.replay.capturecontrol import _kernel, _process_creation
+    low, high = _process_creation(_kernel(), os.getpid())
+    birth = low | (high << 32)
+    assert emulator_running(os.getpid(), birth)
+    assert not emulator_running(os.getpid(), birth + 1)
+    assert not emulator_running(0, birth)
+
+
 def test_target_change_revokes_old_pose_and_resets_nudge(tmp_path):
     session, source, windows, tracker = native_session(tmp_path)
 

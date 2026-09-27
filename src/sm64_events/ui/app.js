@@ -184,7 +184,7 @@ function App() {
   const tracker = useTracker();
   // The Daily Star rides on `t` so every surface reads one copy; it lives
   // outside the store because only this layer knows the local date.
-  const { daily, markSeen } = useDailyStar(tracker.mareloRev);
+  const { daily, markSeen } = useDailyStar(tracker.standingRev);
   const t = { ...tracker, dailyStar: daily, markDailyStarSeen: markSeen };
   // There is deliberately NO app-wide background tint here. One existed for
   // part of 2026-07-28 (ui/ranktint.js, worn at rest off the store's tier)
