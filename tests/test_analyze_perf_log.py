@@ -92,6 +92,35 @@ def test_pj64_growth_is_named_when_it_leaks():
     assert "pj64_rss" in out["verdict"]
 
 
+def test_stall_lines_are_listed_not_ranked():
+    growers = [{"type": "dict", "baseline": 1, "current": 9, "delta": 8}]
+    stall = {"kind": "stall", "t_utc": "2026-09-25T09:21:00+00:00",
+             "uptime_s": 1850.0, "late_ms": 4800,
+             "before": {"busy_pct": 97.0,
+                        "top_cpu": [{"exe": "MsMpEng.exe", "pid": 5,
+                                     "cpu_pct": 1450.0}],
+                        "top_hard_faults": [{"exe": "Project64.exe", "pid": 9,
+                                             "hard_faults": 52000}]}}
+    out = analyze([_rec(0), _rec(1800, growers=growers), stall])
+    assert out["duration_min"] == 30.0           # the stall is not a sample
+    assert out["top_type_growers"] == growers    # nor the "last record"
+    assert out["stalls"] == [{
+        "t_utc": "2026-09-25T09:21:00+00:00", "late_ms": 4800, "busy_pct": 97.0,
+        "top_cpu": ["MsMpEng.exe 1450.0%"],
+        "top_hard_faults": ["Project64.exe 52000"]}]
+    assert "MsMpEng.exe 1450.0%" in _mod._fmt(out)
+
+
+def test_pj64_address_space_climb_is_named():
+    r0, r1 = _rec(0), _rec(3600)
+    r0["processes"] = {"Project64.exe": {"rss_bytes": 400 * _MiB,
+                                         "vm_used_mib": 1400.0}}
+    r1["processes"] = {"Project64.exe": {"rss_bytes": 420 * _MiB,
+                                         "vm_used_mib": 1900.0}}
+    out = analyze([r0, r1])
+    assert "pj64_vm_used" in out["verdict"]
+
+
 def test_top_type_growers_passed_through_from_last_record():
     growers = [{"type": "numpy.ndarray", "baseline": 10, "current": 9000,
                 "delta": 8990}]

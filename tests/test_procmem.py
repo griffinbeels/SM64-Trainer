@@ -9,11 +9,18 @@ import weakref
 
 import pytest
 
-from sm64_events.core.procmem import (assess_growth, child_memory,
+from sm64_events.core.procmem import (MachineSnapshot, ProcInfo,
+                                      address_space, assess_growth,
+                                      child_memory, descendants,
                                       dir_size_bytes, gc_summary, gpu_memory,
-                                      handle_counts, named_process_memory,
-                                      process_table, resource_alarms, sample,
-                                      system_memory, top_type_growth,
+                                      handle_counts,
+                                      image_is_large_address_aware,
+                                      machine_snapshot, machine_summary,
+                                      named_process_memory, named_processes,
+                                      private_bytes, process_table,
+                                      resource_alarms, sample, system_memory,
+                                      thread_cpu, thread_group,
+                                      top_type_growth, tree_summary,
                                       type_histogram)
 
 _GiB = 1024 ** 3
@@ -219,8 +226,8 @@ def test_named_process_memory_matches_self():
     assert isinstance(out, dict)
     if out:  # Windows: at least this process matched
         slot = next(iter(out.values()))
-        assert set(slot) == {"count", "rss_bytes", "private_bytes"}
-        assert slot["count"] >= 1 and slot["rss_bytes"] > 0
+        assert set(slot) == {"count", "rss_bytes", "private_bytes", "threads"}
+        assert slot["count"] >= 1 and slot["rss_bytes"] > 0 and slot["threads"] >= 1
 
 
 def test_named_process_memory_empty_for_unknown_name():
@@ -246,3 +253,208 @@ def test_sample_gpu_and_processes_opt_in():
     assert "gpu" not in bare and "processes" not in bare
     s = sample(gpu=True, processes={"python.exe"})
     assert isinstance(s["gpu"], dict) and isinstance(s["processes"], dict)
+
+
+# -- the machine snapshot: fake tables for the arithmetic, this process for the
+# probes. Times are the kernel's 100 ns ticks.
+_S = 10_000_000
+_MiB = 1024 ** 2
+
+
+def _proc(pid, ppid, exe="x.exe", *, created=100, cpu=0, private=0, rss=0,
+          threads=1, hard_faults=0, io=0):
+    return ProcInfo(pid, ppid, exe, created, cpu, private, rss, 0, threads, 0,
+                    hard_faults, io)
+
+
+def _snap(t, procs, threads=None, cpus=(0, 0, 0, 0)):
+    return MachineSnapshot(t, {p.pid: p for p in procs}, threads or {}, cpus)
+
+
+def test_thread_cpu_names_each_thread_and_reports_what_exited():
+    prev = _snap(0.0, [_proc(7, 1, cpu=10 * _S)], {7: {
+        1: (5, 2 * _S), 2: (5, 1 * _S), 3: (5, 1 * _S), 4: (5, 3 * _S),
+        9: (5, 1 * _S)}})
+    curr = _snap(10.0, [_proc(7, 1, cpu=16 * _S)], {7: {
+        1: (5, 4 * _S),            # MainThread: +2 s
+        2: (5, 2 * _S),            # asyncio_0: +1 s
+        3: (5, 2 * _S),            # asyncio_1: +1 s, grouped with asyncio_0
+        4: (8, _S // 2),           # a NEW thread reusing tid 4: 0.5 s, not -2.5 s
+        # tid 9 exited inside the window and took its CPU with it
+    }})
+    names = {1: "MainThread", 2: "asyncio_0", 3: "asyncio_1", 4: "replay-gpu-media"}
+    out = thread_cpu(prev, curr, 7, lambda tid, created: names[tid])
+    assert out["window_s"] == 10.0
+    assert out["process_pct"] == 60.0                   # 6 s over 10 s
+    assert out["threads"] == {"MainThread": 20.0, "asyncio": 20.0,
+                              "replay-gpu-media": 5.0}
+    assert out["unattributed_pct"] == 15.0              # 6 - 4.5 s named
+
+
+def test_thread_cpu_needs_both_thread_tables():
+    curr = _snap(1.0, [_proc(7, 1, cpu=_S)], {7: {1: (5, _S)}})
+    assert thread_cpu(_snap(0.0, [_proc(7, 1)]), curr, 7, lambda *_: "x") == {}
+
+
+def test_thread_group_collapses_pool_indices_only():
+    assert thread_group("asyncio_3") == "asyncio"
+    assert thread_group("ThreadPoolExecutor-0_2") == "ThreadPoolExecutor-0"
+    assert thread_group("Thread-12 (run)") == "Thread-N (run)"
+    assert thread_group("replay-gpu-media") == "replay-gpu-media"
+
+
+def test_descendants_follow_grandchildren_and_skip_reused_pids():
+    snap = _snap(0.0, [
+        _proc(10, 1, "python.exe", created=100),                     # the server
+        _proc(20, 10, "python.exe", created=200, private=_MiB),      # venv launcher
+        _proc(30, 20, "python.exe", created=300, private=189 * _MiB,
+              threads=39),                                           # encoder helper
+        _proc(31, 30, "conhost.exe", created=310, private=2 * _MiB),
+        _proc(40, 10, "stale.exe", created=50),   # older than pid 10: a reused ppid
+        _proc(50, 1, "other.exe", created=120),
+    ])
+    members = descendants(snap, 10)
+    assert {p.pid for p in members} == {20, 30, 31}
+    tree = tree_summary(members)
+    assert tree["count"] == 3 and tree["private_bytes"] == 192 * _MiB
+    assert tree["threads"] == 41
+    assert tree["members"][0] == {"exe": "python.exe", "pid": 30, "ppid": 20,
+                                  "private_mib": 189.0, "rss_mib": 0.0,
+                                  "threads": 39}
+
+
+def test_descendants_keep_an_orphaned_helper_seen_before():
+    # the launcher (pid 20) exited; its helper and the helper's child live on
+    snap = _snap(0.0, [_proc(10, 1, created=100),
+                       _proc(30, 20, "helper.exe", created=300),
+                       _proc(31, 30, "conhost.exe", created=310)])
+    assert descendants(snap, 10) == []
+    assert {p.pid for p in descendants(snap, 10, {(30, 300)})} == {30, 31}
+    assert descendants(snap, 10, {(30, 299)}) == []   # same pid, another process
+
+
+def test_tree_rows_carry_cpu_over_the_window():
+    prev = _snap(0.0, [_proc(10, 1), _proc(30, 10, cpu=_S)])
+    curr = _snap(2.0, [_proc(10, 1), _proc(30, 10, cpu=2 * _S),
+                       _proc(32, 10, "new.exe", created=150, cpu=_S // 2)])
+    rows = {m["pid"]: m for m in tree_summary(descendants(curr, 10), prev,
+                                              curr)["members"]}
+    assert rows[30]["cpu_pct"] == 50.0      # 1 s over 2 s
+    assert rows[32]["cpu_pct"] == 25.0      # born in the window: counts from 0
+
+
+def test_machine_summary_ranks_the_window_not_the_lifetime():
+    prev = _snap(0.0, [
+        _proc(0, 0, "Idle", cpu=0),
+        _proc(100, 4, "old.exe", cpu=500 * _S, private=900 * _MiB),
+        _proc(200, 4, "busy.exe", cpu=10 * _S, hard_faults=10, io=0),
+        _proc(300, 4, "reused.exe", created=100, cpu=50 * _S),
+    ], cpus=(0, 0, 0, 0))
+    curr = _snap(4.0, [
+        _proc(0, 0, "Idle", cpu=12 * _S),
+        _proc(100, 4, "old.exe", cpu=500 * _S + _S // 10, private=900 * _MiB),
+        _proc(200, 4, "busy.exe", cpu=22 * _S, hard_faults=5010,
+              io=64 * _MiB, private=50 * _MiB),
+        _proc(300, 4, "reused.exe", created=999, cpu=2 * _S),  # a new process
+        _proc(400, 4, "born.exe", created=500, cpu=_S),
+    ], cpus=(12 * _S, 32 * _S, _S, _S // 2))  # 8 CPUs x 4 s; 12 s idle
+    out = machine_summary(prev, curr, n=3)
+    assert out["window_s"] == 4.0
+    assert out["busy_pct"] == 62.5 and out["dpc_pct"] == 3.1
+    assert out["interrupt_pct"] == 1.6
+    assert [(r["exe"], r["cpu_pct"]) for r in out["top_cpu"]] == [
+        ("busy.exe", 300.0), ("reused.exe", 50.0), ("born.exe", 25.0)]
+    assert out["top_private"][0] == {"exe": "old.exe", "pid": 100,
+                                      "private_mib": 900}
+    assert out["top_hard_faults"] == [{"exe": "busy.exe", "pid": 200,
+                                       "hard_faults": 5000}]
+    assert out["top_io"] == [{"exe": "busy.exe", "pid": 200, "io_mib": 64.0}]
+    assert all(r["exe"] != "Idle" for r in out["top_cpu"])
+
+
+def test_named_processes_carry_threads_and_window_cpu():
+    prev = _snap(0.0, [_proc(9, 1, "Project64.exe", cpu=_S)])
+    curr = _snap(2.0, [_proc(9, 1, "Project64.exe", cpu=3 * _S, threads=31,
+                             private=700 * _MiB)])
+    out = named_processes(curr, {"project64.exe"}, prev)
+    assert out == {"Project64.exe": {"count": 1, "rss_bytes": 0,
+                                     "private_bytes": 700 * _MiB,
+                                     "threads": 31, "cpu_pct": 100.0}}
+
+
+def test_live_snapshot_sees_this_process_and_its_threads():
+    snap = machine_snapshot(thread_pids=(os.getpid(),))
+    if snap is None:
+        pytest.skip("the process snapshot is Windows-only")
+    me = snap.procs[os.getpid()]
+    assert me.exe.lower().startswith("python")
+    assert me.threads == len(snap.threads[os.getpid()]) >= 1
+    import threading
+    assert threading.get_native_id() in snap.threads[os.getpid()]
+    assert abs(me.private_bytes - private_bytes()) < 64 * _MiB
+    assert snap.cpus[1] > snap.cpus[0] > 0     # total time exceeds idle time
+
+
+def test_live_tree_includes_a_grandchild(tmp_path):
+    import subprocess
+    import sys
+    import time
+    if machine_snapshot() is None:
+        pytest.skip("the process snapshot is Windows-only")
+    ready = tmp_path / "grandchild.pid"
+    code = ("import subprocess, sys, time\n"
+            "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            f"open({str(ready)!r}, 'w').write(str(g.pid))\n"
+            "g.wait()\n")
+    child = subprocess.Popen([sys.executable, "-c", code],
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+    grandchild = None
+    try:
+        for _ in range(200):
+            if ready.exists() and ready.read_text():
+                grandchild = int(ready.read_text())
+                break
+            time.sleep(0.02)
+        assert grandchild is not None
+        members = child_memory(os.getpid())["members"]
+        assert grandchild in {m["pid"] for m in members}
+        assert child.pid in {m["pid"] for m in members}
+    finally:
+        # /T ends the tree this test started (a venv launcher may sit between
+        # each python and its interpreter); nothing else is below child.pid.
+        subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"],
+                       capture_output=True, check=False,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        child.wait(5)
+
+
+def test_address_space_walk_of_this_process_matches_its_virtual_size():
+    snap = machine_snapshot()
+    if snap is None:
+        pytest.skip("the address-space walk is Windows-only")
+    space = address_space(os.getpid())
+    virtual = snap.procs[os.getpid()].virtual_bytes / _MiB
+    assert space["vm_free_mib"] > 0
+    assert 0 < space["vm_largest_free_mib"] <= space["vm_free_mib"]
+    assert abs(space["vm_used_mib"] - virtual) <= 0.01 * virtual
+    assert space["vm_regions"] > 10
+    # a 64-bit process has no headroom question to answer
+    assert address_space(os.getpid(), only_32bit=True) == {}
+
+
+def _pe(tmp_path, characteristics):
+    head = bytearray(512)
+    head[:2] = b"MZ"
+    head[0x3C:0x40] = (0x80).to_bytes(4, "little")          # e_lfanew
+    head[0x80:0x84] = b"PE\0\0"
+    head[0x96:0x98] = characteristics.to_bytes(2, "little")  # Characteristics
+    path = tmp_path / f"img{characteristics:x}.exe"
+    path.write_bytes(bytes(head))
+    return str(path)
+
+
+def test_large_address_aware_bit_decides_a_32bit_limit(tmp_path):
+    # 0x0102 = EXECUTABLE_IMAGE | 32BIT_MACHINE, as Project64 1.6 ships
+    assert image_is_large_address_aware(_pe(tmp_path, 0x0102)) is False
+    assert image_is_large_address_aware(_pe(tmp_path, 0x0122)) is True
+    assert image_is_large_address_aware(str(tmp_path / "missing.exe")) is False

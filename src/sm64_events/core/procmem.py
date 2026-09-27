@@ -20,6 +20,15 @@ suspect (each maps to a hypothesis the old surface could not test):
 - WHICH Python type is growing: a total count says "the heap grew" but not
   what. type_histogram() + top_type_growth() name the accumulating type.
 
+The 2026-09-27 widening answers who burns CPU, not only who holds memory: a
+machine-wide stall on 09-25 (Project64 frames up to 3.5 s, a 4.8 s server GC,
+three failed recordings) could not be pinned on any process, because nothing
+here looked past this server, its direct children and Project64. One
+machine_snapshot() now reads every process and this server's threads, so the
+sampler can name the busiest thread here, the whole helper tree, the machine's
+top CPU/memory/disk consumers, and how much address space the 32-bit
+Project64 has left (address_space()).
+
 All probes are pure-ctypes (no third-party deps, the codebase's Windows idiom)
 and degrade to 0 / {} off-Windows or on probe failure — the monitor never
 crashes the server. The periodic sampler that consumes these lives in
@@ -28,15 +37,22 @@ import ctypes
 import gc
 import logging
 import os
+import re
+import struct
+import threading
+import time
 from collections import Counter
 from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 from sm64_events.core.heap_observation import heap_snapshot
 
 log = logging.getLogger("sm64.procmem")
 
 _GiB = 1024 ** 3
+_MiB = 1024 ** 2
 
 
 class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
@@ -63,18 +79,6 @@ class _MEMORYSTATUSEX(ctypes.Structure):
                 ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
 
 
-class _PROCESSENTRY32W(ctypes.Structure):
-    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
-                ("th32ProcessID", wintypes.DWORD),
-                ("th32DefaultHeapID", ctypes.c_size_t),  # ULONG_PTR
-                ("th32ModuleID", wintypes.DWORD),
-                ("cntThreads", wintypes.DWORD),
-                ("th32ParentProcessID", wintypes.DWORD),
-                ("pcPriClassBase", wintypes.LONG),
-                ("dwFlags", wintypes.DWORD),
-                ("szExeFile", ctypes.c_wchar * 260)]
-
-
 def _bind():
     """Bind every Win32 entry point ONCE with explicit argtypes/restypes.
     WITHOUT argtypes, ctypes defaults pointer args to c_int and truncates
@@ -83,8 +87,7 @@ def _bind():
     Returns a flat namespace, or an all-None one off-Windows."""
     ns = type("WinAPI", (), {})()
     names = ("gpmi", "getcur", "getpid_handle", "handlecount", "guiresources",
-             "memstatus", "snapshot", "proc_first", "proc_next", "openproc",
-             "closehandle")
+             "memstatus", "openproc", "closehandle")
     try:
         k32 = ctypes.windll.kernel32
         psapi = ctypes.windll.psapi
@@ -111,18 +114,6 @@ def _bind():
         ns.memstatus.argtypes = [ctypes.POINTER(_MEMORYSTATUSEX)]
         ns.memstatus.restype = wintypes.BOOL
 
-        ns.snapshot = k32.CreateToolhelp32Snapshot
-        ns.snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-        ns.snapshot.restype = wintypes.HANDLE
-
-        ns.proc_first = k32.Process32FirstW
-        ns.proc_first.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
-        ns.proc_first.restype = wintypes.BOOL
-
-        ns.proc_next = k32.Process32NextW
-        ns.proc_next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
-        ns.proc_next.restype = wintypes.BOOL
-
         ns.openproc = k32.OpenProcess
         ns.openproc.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         ns.openproc.restype = wintypes.HANDLE
@@ -141,9 +132,6 @@ _API = _bind()
 
 _GR_GDIOBJECTS = 0
 _GR_USEROBJECTS = 1
-_TH32CS_SNAPPROCESS = 0x2
-_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
 def _mem_counters(handle) -> _PROCESS_MEMORY_COUNTERS | None:
@@ -215,80 +203,505 @@ def system_memory() -> dict:
             "commit_limit_bytes": int(m.ullTotalPageFile)}
 
 
-def process_table(parent_pid: int | None = None, names=None) -> dict:
-    """ONE Toolhelp32 pass collecting BOTH the direct children of parent_pid AND
-    any processes whose exe matches `names` (case-insensitive). One pass, not
-    two: each enumeration is ~13 ms of mostly-kernel time, and the 60 s monitor
-    wants both — doing them separately doubled its GIL footprint (a periodic
-    capture/audio hitch suspect). Returns {'children': {count, rss_bytes,
-    private_bytes, by_name}, 'processes': {exe: {count, rss_bytes,
-    private_bytes}}} with only the requested keys present; {} off Windows or
-    when nothing was requested. Best-effort — an unopenable process is skipped."""
-    if _API.snapshot is None or (parent_pid is None and not names):
-        return {}
-    wanted = {n.lower() for n in (names or ())}
-    snap = _API.snapshot(_TH32CS_SNAPPROCESS, 0)
-    if not snap or snap == _INVALID_HANDLE:
-        return {}
-    c_count = 0
-    c_rss = c_priv = 0
-    c_by_name: Counter = Counter()
-    procs: dict = {}
+# -- one machine-wide process snapshot ---------------------------------------
+# NtQuerySystemInformation(SystemProcessInformation) returns every process's
+# CPU time, commit, working set, thread/handle counts, hard faults and I/O, and
+# every thread's CPU time, in ONE call that opens no process. Measured on his
+# machine (2026-09-27, 426 processes, 12,247 threads): 8.5 ms, against 12-13 ms
+# for the Toolhelp32 pass it replaced, which walks the same kernel table and
+# then opens each matched process. The layouts below are the 64-bit ones.
+_SPI_PROCESS = struct.Struct(  # SYSTEM_PROCESS_INFORMATION, 0x100 bytes
+    "<IIqII Qqqq HH4xQ i4x QQ II Q QQ I4x QQ QQQQ QQQ QQQ QQQ")
+_SPI_THREAD = struct.Struct("<qqqI4xQQQiiIII4x")  # SYSTEM_THREAD_INFORMATION
+_SPPI = struct.Struct("<qqqqqI4x")  # SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION
+_SYSTEM_PROCESS_INFORMATION = 5
+_SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION = 8
+_STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
+_TICKS_PER_S = 10_000_000  # the kernel's 100 ns time unit
+
+
+def _bind_nt():
+    """ntdll/kernel32 entry points for the snapshot, the thread labels and the
+    address-space walk, with explicit argtypes for the reason _bind() gives."""
+    ns = type("NtAPI", (), {})()
     try:
-        entry = _PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(entry)
-        ok = _API.proc_first(snap, ctypes.byref(entry))
-        while ok:
-            exe = entry.szExeFile
-            is_child = (parent_pid is not None
-                        and entry.th32ParentProcessID == parent_pid)
-            is_named = exe.lower() in wanted
-            if is_child or is_named:
-                h = _API.openproc(_PROCESS_QUERY_LIMITED_INFORMATION, False,
-                                  entry.th32ProcessID)
-                if h:
-                    try:
-                        c = _mem_counters(h)
-                        if c:
-                            rss, priv = int(c.WorkingSetSize), int(c.PagefileUsage)
-                            if is_child:
-                                c_count += 1
-                                c_rss += rss
-                                c_priv += priv
-                                c_by_name[exe] += rss
-                            if is_named:
-                                slot = procs.setdefault(
-                                    exe, {"count": 0, "rss_bytes": 0,
-                                          "private_bytes": 0})
-                                slot["count"] += 1
-                                slot["rss_bytes"] += rss
-                                slot["private_bytes"] += priv
-                    finally:
-                        _API.closehandle(h)
-            ok = _API.proc_next(snap, ctypes.byref(entry))
+        nt = ctypes.WinDLL("ntdll")
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        for name, lib, fn, args, res in (
+            ("query", nt, "NtQuerySystemInformation",
+             [wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG,
+              ctypes.POINTER(wintypes.ULONG)], ctypes.c_long),
+            ("thread_info", nt, "NtQueryInformationThread",
+             [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG,
+              ctypes.c_void_p], ctypes.c_long),
+            ("open_thread", k32, "OpenThread",
+             [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+            ("thread_desc", k32, "GetThreadDescription",
+             [wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p)], ctypes.c_long),
+            ("local_free", k32, "LocalFree", [ctypes.c_void_p], ctypes.c_void_p),
+            ("module_from", k32, "GetModuleHandleExW",
+             [wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(wintypes.HMODULE)],
+             wintypes.BOOL),
+            ("module_name", k32, "GetModuleFileNameW",
+             [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD], wintypes.DWORD),
+            ("vquery", k32, "VirtualQueryEx",
+             [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t],
+             ctypes.c_size_t),
+            ("is_wow64", k32, "IsWow64Process",
+             [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)], wintypes.BOOL),
+            ("image_name", k32, "QueryFullProcessImageNameW",
+             [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+              ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL),
+        ):
+            f = getattr(lib, fn)
+            f.argtypes, f.restype = args, res
+            setattr(ns, name, f)
+        ns.ok = ctypes.sizeof(ctypes.c_void_p) == 8  # the parser reads x64 layouts
+    except (AttributeError, OSError):  # not Windows
+        ns.ok = False
+    return ns
+
+
+_NT = _bind_nt()
+
+
+class ProcInfo(NamedTuple):
+    """One process in a MachineSnapshot. Times are the kernel's 100 ns units."""
+    pid: int
+    ppid: int
+    exe: str
+    created: int          # distinguishes a reused pid from the original
+    cpu: int              # user + kernel time since the process started
+    private_bytes: int    # commit charge: the figure private_bytes() reports
+    rss_bytes: int        # working set
+    virtual_bytes: int
+    threads: int
+    handles: int
+    hard_faults: int      # page faults that had to wait for the disk
+    io_bytes: int         # read + write transfer bytes
+
+
+@dataclass(frozen=True)
+class MachineSnapshot:
+    """Every process on the machine at one instant. `threads` holds per-thread
+    {tid: (created, cpu)} only for the pids the caller asked for; `cpus` is
+    (idle, total, dpc, interrupt) time summed over the logical CPUs."""
+    t: float
+    procs: dict
+    threads: dict
+    cpus: tuple
+
+
+_snapshot_lock = threading.Lock()  # one reused buffer (~1.3 MB on his machine)
+_snapshot_buf = None
+
+
+def _parse_processes(view, base: int, thread_pids) -> tuple[dict, dict]:
+    procs: dict = {}
+    threads: dict = {}
+    off = 0
+    while True:
+        f = _SPI_PROCESS.unpack_from(view, off)
+        pid, name_len, name_ptr = f[13], f[9], f[11]
+        start = name_ptr - base
+        exe = (bytes(view[start:start + name_len]).decode("utf-16-le", "replace")
+               if name_ptr and 0 <= start < len(view) else
+               ("Idle" if pid == 0 else "?"))
+        procs[pid] = ProcInfo(pid, f[14], exe, f[6], f[7] + f[8], f[27], f[22],
+                              f[19], f[1], f[15], f[3], f[33] + f[34])
+        if pid in thread_pids:
+            first = off + _SPI_PROCESS.size
+            rows = (_SPI_THREAD.unpack_from(view, first + i * _SPI_THREAD.size)
+                    for i in range(f[1]))
+            threads[pid] = {r[6]: (r[2], r[0] + r[1]) for r in rows}
+        if not f[0]:
+            return procs, threads
+        off += f[0]
+
+
+def _cpu_times() -> tuple:
+    """(idle, total, dpc, interrupt) summed over this processor group's CPUs.
+    DPC and interrupt time belong to no process: a driver storm shows here."""
+    buf = ctypes.create_string_buffer(_SPPI.size * 64)
+    got = wintypes.ULONG(0)
+    if _NT.query(_SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, buf, len(buf),
+                 ctypes.byref(got)) != 0:
+        return (0, 0, 0, 0)
+    idle = total = dpc = interrupt = 0
+    for i in range(got.value // _SPPI.size):
+        f = _SPPI.unpack_from(buf, i * _SPPI.size)
+        idle, total = idle + f[0], total + f[1] + f[2]  # kernel time includes idle
+        dpc, interrupt = dpc + f[3], interrupt + f[4]
+    return (idle, total, dpc, interrupt)
+
+
+def machine_snapshot(thread_pids=()) -> MachineSnapshot | None:
+    """Every process on the machine, plus the per-thread CPU of `thread_pids`,
+    from one query-only syscall. None off Windows or if the query fails."""
+    global _snapshot_buf
+    if not _NT.ok:
+        return None
+    with _snapshot_lock:
+        got = wintypes.ULONG(0)
+        for _ in range(4):  # the table can grow between the size probe and the read
+            if _snapshot_buf is None:
+                _snapshot_buf = ctypes.create_string_buffer(
+                    max(got.value * 5 // 4, 1 << 20))
+            status = _NT.query(_SYSTEM_PROCESS_INFORMATION, _snapshot_buf,
+                               len(_snapshot_buf), ctypes.byref(got)) & 0xFFFFFFFF
+            if status == 0:
+                break
+            if status != _STATUS_INFO_LENGTH_MISMATCH:
+                log.warning("process snapshot failed: NTSTATUS 0x%08X", status)
+                return None
+            _snapshot_buf = None
+        else:
+            return None
+        taken = time.perf_counter()
+        try:
+            procs, threads = _parse_processes(
+                memoryview(_snapshot_buf)[:got.value],
+                ctypes.addressof(_snapshot_buf), set(thread_pids))
+        except struct.error:
+            log.exception("process snapshot unreadable")
+            return None
+    return MachineSnapshot(taken, procs, threads, _cpu_times())
+
+
+def _since(prev: MachineSnapshot | None, p: ProcInfo, field: str) -> int:
+    """How much a cumulative counter of `p` grew since `prev`. A process born
+    after `prev` (or a reused pid) counts from zero."""
+    q = prev.procs.get(p.pid) if prev is not None else None
+    now = getattr(p, field)
+    return now - getattr(q, field) if q is not None and q.created == p.created else now
+
+
+def _core_pct(ticks: int, window_s: float) -> float:
+    """100 ns ticks over a window, as percent of ONE core (a process busy on
+    four cores reads 400)."""
+    return round(ticks * 100 / _TICKS_PER_S / window_s, 1)
+
+
+def descendants(snap: MachineSnapshot, root_pid: int, sticky=()) -> list:
+    """Every process below root_pid, however deep: the encoder helper is a
+    grandchild (the venv launcher sits between), and a direct-children count
+    reported that launcher's 0.8 MiB instead of the helper's ~189 MiB. A child
+    created before its supposed parent holds a reused pid and is someone
+    else's. `sticky` is (pid, created) pairs seen in the tree earlier: a helper
+    whose launcher exited is still ours while it lives."""
+    kids: dict = {}
+    for p in snap.procs.values():
+        kids.setdefault(p.ppid, []).append(p)
+    root = snap.procs.get(root_pid)
+    out: list = []
+    seen = {root_pid}
+    stack = [(root_pid, root.created if root else 0)]
+    for pid, created in sticky:
+        p = snap.procs.get(pid)
+        if p is not None and p.created == created and pid not in seen:
+            seen.add(pid)
+            out.append(p)
+            stack.append((pid, created))
+    while stack:
+        parent, born = stack.pop()
+        for c in kids.get(parent, ()):
+            if c.pid not in seen and c.created >= born:
+                seen.add(c.pid)
+                out.append(c)
+                stack.append((c.pid, c.created))
+    return out
+
+
+def tree_summary(members: list, prev: MachineSnapshot | None = None,
+                 curr: MachineSnapshot | None = None, *, rows: int = 12) -> dict:
+    """Totals over a process tree plus one row per member naming its image
+    (largest commit first). With two snapshots each row carries its CPU share
+    of the window between them."""
+    by_name: Counter = Counter()
+    for p in members:
+        by_name[p.exe] += p.rss_bytes
+    window = curr.t - prev.t if prev is not None and curr is not None else 0
+    listed = []
+    for p in sorted(members, key=lambda m: m.private_bytes, reverse=True)[:rows]:
+        row = {"exe": p.exe, "pid": p.pid, "ppid": p.ppid,
+               "private_mib": round(p.private_bytes / _MiB, 1),
+               "rss_mib": round(p.rss_bytes / _MiB, 1), "threads": p.threads}
+        if window > 0:
+            row["cpu_pct"] = _core_pct(_since(prev, p, "cpu"), window)
+        listed.append(row)
+    return {"count": len(members),
+            "rss_bytes": sum(p.rss_bytes for p in members),
+            "private_bytes": sum(p.private_bytes for p in members),
+            "threads": sum(p.threads for p in members),
+            "by_name": dict(by_name), "members": listed}
+
+
+def named_processes(snap: MachineSnapshot, names,
+                    prev: MachineSnapshot | None = None) -> dict:
+    """{exe: {count, rss_bytes, private_bytes, threads[, cpu_pct]}} for the
+    processes whose image matches `names` (case-insensitive)."""
+    wanted = {n.lower() for n in names}
+    window = snap.t - prev.t if prev is not None else 0
+    out: dict = {}
+    for p in snap.procs.values():
+        if p.exe.lower() not in wanted:
+            continue
+        slot = out.setdefault(p.exe, {"count": 0, "rss_bytes": 0,
+                                      "private_bytes": 0, "threads": 0})
+        slot["count"] += 1
+        slot["rss_bytes"] += p.rss_bytes
+        slot["private_bytes"] += p.private_bytes
+        slot["threads"] += p.threads
+        if window > 0:
+            slot["cpu_pct"] = round(slot.get("cpu_pct", 0)
+                                    + _core_pct(_since(prev, p, "cpu"), window), 1)
+    return out
+
+
+def machine_summary(prev: MachineSnapshot, curr: MachineSnapshot,
+                    n: int = 5) -> dict:
+    """Who used the machine between two snapshots: CPU busy/DPC/interrupt share
+    of all logical CPUs, and the top `n` processes by CPU (percent of one
+    core), commit, hard faults and disk bytes. The attribution a stall report
+    needs and the monitor itself could not give on 2026-09-25."""
+    window = curr.t - prev.t
+    if window <= 0:
+        return {}
+    out: dict = {"window_s": round(window, 1)}
+    idle, total, dpc, interrupt = (c - b for c, b in zip(curr.cpus, prev.cpus,
+                                                         strict=True))
+    if total > 0:
+        out.update(busy_pct=round(100 * (total - idle) / total, 1),
+                   dpc_pct=round(100 * dpc / total, 1),
+                   interrupt_pct=round(100 * interrupt / total, 1))
+    procs = [p for p in curr.procs.values() if p.pid != 0]  # 0 = idle time
+
+    def top(field: str, key: str, scale):
+        grown = [(p, _since(prev, p, field)) for p in procs]
+        grown.sort(key=lambda r: r[1], reverse=True)
+        return [{"exe": p.exe, "pid": p.pid, key: scale(v)}
+                for p, v in grown[:n] if v > 0]
+
+    out["top_cpu"] = top("cpu", "cpu_pct", lambda v: _core_pct(v, window))
+    out["top_private"] = [
+        {"exe": p.exe, "pid": p.pid, "private_mib": round(p.private_bytes / _MiB)}
+        for p in sorted(procs, key=lambda p: p.private_bytes, reverse=True)[:n]]
+    out["top_hard_faults"] = top("hard_faults", "hard_faults", int)
+    out["top_io"] = top("io_bytes", "io_mib", lambda v: round(v / _MiB, 1))
+    return out
+
+
+# Python pool/anonymous thread names carry an index that changes with every
+# worker; grouping them keeps one row per role across samples.
+_ANON_THREAD = re.compile(r"^(Thread|Dummy)-\d+")
+_POOL_INDEX = re.compile(r"(?:_\d+)+$")
+
+
+def thread_group(name: str) -> str:
+    """'asyncio_3' -> 'asyncio', 'Thread-12 (run)' -> 'Thread-N (run)'."""
+    return _POOL_INDEX.sub("", _ANON_THREAD.sub(r"\1-N", name))
+
+
+def thread_cpu(prev: MachineSnapshot, curr: MachineSnapshot, pid: int,
+               label: Callable[[int, int], str], *, top: int = 15) -> dict:
+    """One process's CPU between two snapshots, per thread NAME, in percent of
+    one core. label(tid, created) names each live thread; names are grouped by
+    thread_group. A thread that exited inside the window took its CPU with it,
+    so the gap to the process total is reported as unattributed_pct rather
+    than spread over the survivors. {} when either snapshot lacks the
+    process's threads."""
+    window = curr.t - prev.t
+    proc = curr.procs.get(pid)
+    if window <= 0 or proc is None or pid not in prev.threads \
+            or pid not in curr.threads:
+        return {}
+    before = prev.threads[pid]
+    groups: Counter = Counter()
+    for tid, (created, cpu) in curr.threads[pid].items():
+        was = before.get(tid)
+        grew = cpu - was[1] if was is not None and was[0] == created else cpu
+        groups[thread_group(label(tid, created))] += grew
+    ranked = groups.most_common()
+    named = {name: _core_pct(v, window) for name, v in ranked[:top] if v > 0}
+    rest = sum(v for _, v in ranked[top:])
+    if rest > 0:
+        named["(other)"] = _core_pct(rest, window)
+    total = _since(prev, proc, "cpu")
+    return {"window_s": round(window, 1), "process_pct": _core_pct(total, window),
+            "threads": named,
+            "unattributed_pct": _core_pct(max(total - sum(groups.values()), 0),
+                                          window)}
+
+
+def native_thread_label(tid: int) -> str:
+    """Name a thread of THIS process that Python did not create: the
+    description a library gave it, else the module its start address lies in
+    ('native:nvcuda64.dll'). Only meaningful for this process's own threads —
+    the module lookup resolves addresses in our address space."""
+    if not _NT.ok:
+        return "native"
+    h = _NT.open_thread(0x0840, False, tid)  # QUERY_INFORMATION | QUERY_LIMITED
+    if not h:
+        return "native"
+    try:
+        text = ctypes.c_void_p()
+        if _NT.thread_desc(h, ctypes.byref(text)) >= 0 and text.value:
+            try:
+                desc = ctypes.wstring_at(text.value)
+            finally:
+                _NT.local_free(text)
+            if desc:
+                return desc
+        start = ctypes.c_void_p()
+        module = wintypes.HMODULE()
+        if _NT.thread_info(h, 9, ctypes.byref(start), ctypes.sizeof(start),
+                           None) != 0 or not start.value \
+                or not _NT.module_from(0x6, start.value, ctypes.byref(module)):
+            return "native"   # 9 = ThreadQuerySetWin32StartAddress
+        path = ctypes.create_unicode_buffer(260)
+        if not _NT.module_name(module, path, 260):
+            return "native"
+        return "native:" + os.path.basename(path.value)
     finally:
-        _API.closehandle(snap)
+        _API.closehandle(h)
+
+
+# -- address space headroom (VirtualQueryEx, query-only) ---------------------
+# Project64 1.6 is 32-bit and not large-address-aware: 2 GiB of address space
+# however much RAM the machine has. On 09-25 with capture and one ghost it had
+# 306 MiB free and a largest free block of 145.5 MiB while the ghost clip
+# budget is 192 MiB; its working set (495 MiB) hid all of that.
+class _MBI(ctypes.Structure):  # MEMORY_BASIC_INFORMATION (64-bit caller)
+    _fields_ = [("BaseAddress", ctypes.c_uint64),
+                ("AllocationBase", ctypes.c_uint64),
+                ("AllocationProtect", wintypes.DWORD),
+                ("PartitionId", wintypes.WORD),
+                ("RegionSize", ctypes.c_uint64),
+                ("State", wintypes.DWORD), ("Protect", wintypes.DWORD),
+                ("Type", wintypes.DWORD)]
+
+
+_MEM_FREE = 0x10000
+_PROCESS_QUERY_INFORMATION = 0x400
+_laa_cache: dict = {}  # (image path, mtime) -> large-address-aware flag
+
+
+def image_is_large_address_aware(path: str) -> bool:
+    """The IMAGE_FILE_LARGE_ADDRESS_AWARE bit (0x20) of an exe's PE file
+    header, read from disk and cached until the file changes. False when
+    unreadable."""
+    try:
+        key = (path, os.stat(path).st_mtime_ns)
+        if key not in _laa_cache:
+            with open(path, "rb") as f:
+                head = f.read(4096)
+            pe = struct.unpack_from("<I", head, 0x3C)[0]  # e_lfanew
+            if head[pe:pe + 4] != b"PE\0\0":
+                return False
+            # "PE\0\0", then Machine, NumberOfSections, TimeDateStamp,
+            # PointerToSymbolTable, NumberOfSymbols, SizeOfOptionalHeader.
+            flags = struct.unpack_from("<H", head, pe + 22)[0]
+            _laa_cache.clear()
+            _laa_cache[key] = bool(flags & 0x20)
+        return _laa_cache[key]
+    except (OSError, struct.error):
+        return False
+
+
+def _large_address_aware(handle) -> bool:
+    path = ctypes.create_unicode_buffer(1024)
+    size = wintypes.DWORD(1024)
+    if not _NT.image_name(handle, 0, path, ctypes.byref(size)):
+        return False
+    return image_is_large_address_aware(path.value)
+
+
+def _address_limit(handle) -> int | None:
+    """Top of the user address space: 2 GiB for a 32-bit process (4 GiB if
+    large-address-aware), the system maximum for a 64-bit one."""
+    wow = wintypes.BOOL(False)
+    if not _NT.is_wow64(handle, ctypes.byref(wow)):
+        return None
+    if wow.value:
+        return 4 * _GiB if _large_address_aware(handle) else 2 * _GiB
+    return 1 << 47  # x64 user space; the walk stops where VirtualQueryEx does
+
+
+def address_space(pid: int, *, only_32bit: bool = False) -> dict:
+    """How much address space a process has used and has left: {vm_limit_mib,
+    vm_used_mib (reserved + committed), vm_free_mib, vm_largest_free_mib,
+    vm_regions, vm_walk_ms}. The largest free block is what a new big mapping
+    (a ghost clip, a capture slot) needs. Walks every region with
+    VirtualQueryEx under PROCESS_QUERY_INFORMATION: nothing is read or
+    written. Measured 1.9-2.5 us per region on busy 32-bit apps and 6-11 us
+    on idle services (2026-09-27); Project64 has ~1,100 regions, and
+    vm_walk_ms records what its walk really cost. {} off Windows, without
+    access, or for a 64-bit process when only_32bit (its headroom is not a
+    constraint)."""
+    if not _NT.ok:
+        return {}
+    started = time.perf_counter()
+    h = _API.openproc(_PROCESS_QUERY_INFORMATION, False, pid)
+    if not h:
+        return {}
+    try:
+        limit = _address_limit(h)
+        if limit is None or (only_32bit and limit > 4 * _GiB):
+            return {}
+        mbi = _MBI()
+        ref, size, query = ctypes.byref(mbi), ctypes.sizeof(mbi), _NT.vquery
+        addr = free = largest = regions = 0
+        while addr < limit and query(h, addr, ref, size):
+            end = min(mbi.BaseAddress + mbi.RegionSize, limit)
+            if mbi.State == _MEM_FREE:
+                free += end - mbi.BaseAddress
+                largest = max(largest, end - mbi.BaseAddress)
+            regions += 1
+            addr = end
+    finally:
+        _API.closehandle(h)
+    if not regions:
+        return {}
+    return {"vm_limit_mib": round(limit / _MiB, 1),
+            "vm_used_mib": round((addr - free) / _MiB, 1),
+            "vm_free_mib": round(free / _MiB, 1),
+            "vm_largest_free_mib": round(largest / _MiB, 1),
+            "vm_regions": regions,
+            "vm_walk_ms": round((time.perf_counter() - started) * 1000, 2)}
+
+
+def process_table(parent_pid: int | None = None, names=None, *,
+                  snapshot: MachineSnapshot | None = None) -> dict:
+    """ONE machine snapshot answering BOTH the whole process tree below
+    parent_pid AND the processes whose exe matches `names` (case-insensitive).
+    Returns {'children': tree_summary(...), 'processes': named_processes(...)}
+    with only the requested keys present; {} off Windows or when nothing was
+    requested. Pass `snapshot` to reuse one already taken."""
+    if parent_pid is None and not names:
+        return {}
+    snap = snapshot or machine_snapshot()
+    if snap is None:
+        return {}
     out: dict = {}
     if parent_pid is not None:
-        out["children"] = {"count": c_count, "rss_bytes": c_rss,
-                           "private_bytes": c_priv, "by_name": dict(c_by_name)}
+        out["children"] = tree_summary(descendants(snap, parent_pid))
     if names:
-        out["processes"] = procs
+        out["processes"] = named_processes(snap, names)
     return out
 
 
 def child_memory(parent_pid: int) -> dict:
-    """Summed working-set + private bytes of the DIRECT child processes of
-    parent_pid (ffmpeg.exe). {count, rss_bytes, private_bytes, by_name}; {} off
-    Windows. Thin wrapper over process_table (one snapshot)."""
+    """Summed working-set + private bytes of every process below parent_pid
+    (the encoder helper tree). {count, rss_bytes, private_bytes, threads,
+    by_name, members}; {} off Windows. Thin wrapper over process_table."""
     return process_table(parent_pid=parent_pid).get("children", {})
 
 
 def named_process_memory(names) -> dict:
     """Working-set + private bytes of processes whose exe matches `names`
     (case-insensitive), keyed by exe. THE probe for 'is the growth PJ64's OWN,
-    not ours?' (PJ64 is not our child). {exe: {count, rss_bytes, private_bytes}};
-    {} off Windows. Thin wrapper over process_table (one snapshot)."""
+    not ours?' (PJ64 is not our child). {exe: {count, rss_bytes, private_bytes,
+    threads}}; {} off Windows. Thin wrapper over process_table (one snapshot)."""
     return process_table(names=names).get("processes", {})
 
 
@@ -387,8 +800,8 @@ def thread_count() -> int:
     """Python-level live thread count (threading.active_count). Captures the
     threads WE create — the capture/feeder/reader/gc-gen2 daemons — so a
     thread leak (e.g. ffmpeg reader threads never reaped across restarts)
-    shows up. Cheap; no syscall."""
-    import threading
+    shows up. Cheap; no syscall. Native threads (19 Python of 52 OS threads
+    live on 09-25) are only in a MachineSnapshot's thread count."""
     return threading.active_count()
 
 
