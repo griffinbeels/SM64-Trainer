@@ -7,11 +7,14 @@ the snapshot must be taken LATE in a frame, not on the first tick of it, or
 the loop trades one arbitrary sampling phase for the earliest possible one.
 """
 import asyncio
+import statistics
+import time
 from datetime import datetime, timezone
+from itertools import pairwise
 
 from sm64_events.core.snapshot import GameSnapshot
 from sm64_events.memory import addresses as A
-from sm64_events.server.poller import Poller
+from sm64_events.server.poller import PollClock, Poller
 
 TICKS_PER_FRAME = 250 // 30                      # 8 at the shipped rate
 SETTLE_TICK = round(A.CONTROLLER_SETTLE_PHASE * TICKS_PER_FRAME)
@@ -107,6 +110,82 @@ def test_a_frame_that_ends_before_settling_still_forces_a_read():
 def test_a_short_frame_does_not_cause_its_successor_to_be_read_twice():
     reader, _detector = drive([100, 100] + [101] * 10)
     assert reader.frames_read == [101]
+
+
+class StampingSampler:
+    """A pad that never changes frame, stamping when each tick looked at it."""
+
+    def __init__(self):
+        self.stamps: list[float] = []
+        self.last = 7
+
+    def sample(self):
+        self.stamps.append(time.perf_counter())
+        return self.last
+
+    def flush(self):
+        return None
+
+
+class AttachedMemory:
+    attached = True
+
+    def detach(self):
+        raise AssertionError("the loop must stay attached")
+
+
+def test_the_loop_keeps_its_rate_with_nothing_raising_the_timer_resolution():
+    """The loop's rate is its own, not borrowed. On Windows `asyncio.sleep`
+    of 4 ms lands every 15.6 ms unless something else in the process raised
+    the timer resolution -- the audio tap did -- so before audio started the
+    pad was looked at twice a frame instead of eight times (64.5/s measured,
+    PollClock). This process raises nothing. The median gap, not a count,
+    so a loaded machine stretching a few ticks cannot turn it red."""
+    sampler = StampingSampler()
+    poller = Poller(memory=AttachedMemory(), detectors=[], broadcaster=NullBroadcaster(),
+                    reader=CountingReader(sampler), input_sampler=sampler)
+
+    async def run_for(seconds):
+        poller.perf_stats()                     # opens the rate window here
+        task = asyncio.create_task(poller.run())
+        await asyncio.sleep(seconds)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return poller.perf_stats()["poll_hz"]
+
+    poll_hz = asyncio.run(run_for(1.0))
+    gaps = [b - a for a, b in pairwise(sampler.stamps)]
+    assert poller.interval == 1 / Poller.SAMPLING_HZ
+    assert statistics.median(gaps) <= 2 * poller.interval, (
+        f"median gap {statistics.median(gaps) * 1000:.1f} ms against a "
+        f"{poller.interval * 1000:.0f} ms interval")
+    assert poll_hz >= Poller.SAMPLING_HZ / 2, "perf_stats reports the achieved rate"
+
+
+def test_a_stalled_tick_restarts_the_schedule_instead_of_bursting():
+    """Fixed-rate, but never a catch-up burst: a tick that overran by many
+    intervals (a GC pause, a slow detector) gets ONE immediate tick, then the
+    interval again -- not a dozen back-to-back looks at the same pad."""
+    interval = 0.004
+
+    async def stall_then_tick():
+        clock = PollClock()
+        await clock.wait(interval)
+        time.sleep(12 * interval)  # noqa: ASYNC251 -- the loop itself stalling is the case
+        started = time.perf_counter()
+        await clock.wait(interval)
+        immediate = time.perf_counter() - started
+        started = time.perf_counter()
+        for _ in range(5):
+            await clock.wait(interval)
+        return immediate, time.perf_counter() - started
+
+    immediate, five = asyncio.run(stall_then_tick())
+    assert immediate < interval
+    assert five >= 5 * interval * 0.75, f"five ticks took {five * 1000:.1f} ms"
 
 # The frame clock and the present watch used to be pinned here: the poller
 # marked every counter edge's wall time and read PJ64's host-side present
