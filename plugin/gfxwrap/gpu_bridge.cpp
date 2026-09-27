@@ -9,6 +9,7 @@ extern "C" void gpu_bridge_test_abandon_once(){test_abandoned.store(true);}
 
 namespace gpu_bridge {
 namespace {
+uint64_t now(){LARGE_INTEGER v{};QueryPerformanceCounter(&v);return uint64_t(v.QuadPart);}
 template<class T> T proc(const char *name) {
     auto p=wglGetProcAddress(name);
     return p && uintptr_t(p)>3 && uintptr_t(p)!=UINTPTR_MAX ? reinterpret_cast<T>(p) : nullptr;
@@ -40,6 +41,7 @@ bool Pool::worker() const {return GetCurrentThreadId()==worker_thread_ && wglGet
 Result Pool::fault(DWORD error) {error_=error; enabled_=false; poisoned_=true;return Result::fault;}
 bool Pool::prepare(unsigned width,unsigned height,const wchar_t*prefix,uint64_t budget) {
     if(device_ || enabled_ || poisoned_ || !width || !height || width>8192 || height>8192 || !prefix || wcslen(prefix)>100) return false;
+    steps_={};steps_.begin=now();
     const unsigned output_width=width&~1u,output_height=height&~1u;
     if(!output_width||!output_height)return false;
     bytes_=uint64_t(output_width)*output_height*4*slots*2;
@@ -77,11 +79,14 @@ bool Pool::prepare(unsigned width,unsigned height,const wchar_t*prefix,uint64_t 
     luid_query(0x9599,reinterpret_cast<GLubyte*>(&config_.adapter));
     if(glGetError()!=GL_NO_ERROR) return false;
     if(!device_for_luid(config_.adapter,&device_,&context_)) {error_=ERROR_NOT_SUPPORTED;return false;}
+    steps_.device=now();
     interop_device_=open(device_.Get());
     if(!interop_device_) {fault(GetLastError());return false;}
+    steps_.opened=now();
     source_width_=width;source_height_=height;
     config_.width=output_width;config_.height=output_height;
     if(!prepare_transfer()){fault(ERROR_INVALID_DATA);return false;}
+    steps_.transfer=now();
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width=output_width;desc.Height=output_height;desc.MipLevels=1;desc.ArraySize=1;
     desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;
@@ -106,6 +111,7 @@ bool Pool::prepare(unsigned width,unsigned height,const wchar_t*prefix,uint64_t 
         if(FAILED(hr)) {fault(DWORD(hr));return false;}
     }
     if(glGetError()!=GL_NO_ERROR) {fault(ERROR_INVALID_DATA);return false;}
+    steps_.registered=now();
     enabled_=true;return true;
 }
 bool Pool::prepare_transfer() {

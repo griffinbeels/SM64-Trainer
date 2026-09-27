@@ -25,6 +25,7 @@ using ChannelResult=gpu_channel::Result;
 constexpr uint32_t bootstrap_omission=SA_BOOTSTRAP_OMISSION;
 constexpr uint32_t setup_deadline_ms=5000u; // separate from admitted-picture max_age_ms
 std::atomic<gd_diagnostic_callback> diagnostic_callback{nullptr};
+std::atomic<gd_anchor_timing> anchor_timing{nullptr};
 #ifdef GD_TEST_HOST
 std::atomic<bool> test_hold_poll{false};
 void (__cdecl *test_preparation_probe)()=nullptr;
@@ -71,8 +72,17 @@ struct Runtime {
     std::atomic<uint32_t> request_state{0},surface_state{0}; // 0 free,1 writing,2 ready,3 owned
     std::atomic<uint32_t> status_seq{0},status_words[sizeof(gd_status)/4]{};
     std::atomic<bool> exhausted{false};
+    // The driver warm-up (gd_prewarm): requested once, run by the idle worker.
+    std::atomic<uint32_t> warm_parts{0},warm_state{GD_WARM_NONE};
     gc_header request{};uint64_t budget=0;uint32_t epoch=0;
     rb_surface mailbox{},surface{};uint32_t mailbox_epoch=0;
+    uint64_t mailbox_qpc=0; // the renderer's surface handoff (gd_surface)
+    gd_prepare_diagnostic prepare_steps{};
+    gd_warm_diagnostic warm_steps{};
+    bool anchor_logged=false;
+    // This worker has made a context beside the drawing renderer, so the
+    // driver's one-time freeze is already paid in this process.
+    bool driver_paid=false;
     source_capture::Snapshots snapshots;
     gpu_delivery::Context context;
     gpu_selection::Sampler sampler;
@@ -92,6 +102,10 @@ struct Runtime {
     gd_cadence_diagnostic cadence_total{},cadence_recent{};
     uint64_t summary_started=0,last_source_qpc=0,previous_emit_ticks=0;
     uint64_t sample_calls=0,sample_reuses=0,publish_busy=0;
+    // Per healthy window: the most snapshot-pool records/offers and bridge
+    // slots held at once, and the pressure counters at the last summary.
+    uint32_t peak_pending=0,peak_bridges=0;
+    uint64_t summary_refused=0,summary_busy=0;
     // Pictures the source or the snapshot pool could not admit while ACTIVE,
     // plus records dropped for a missing stamp. Counted, logged in the summary,
     // never fatal: the replay shows the previous picture held and the input
@@ -102,6 +116,7 @@ struct Runtime {
         memset(phase_totals,0,sizeof phase_totals);memset(phase_recent,0,sizeof phase_recent);
         cadence_total={};cadence_recent={};summary_started=last_source_qpc=previous_emit_ticks=0;
         sample_calls=sample_reuses=publish_busy=0;
+        peak_pending=peak_bridges=0;summary_refused=summary_busy=0;
     }
     void phase_done(uint32_t current,uint64_t start,uint64_t end){
         delivery_metrics::record(phase_totals[current],start,end);
@@ -119,13 +134,24 @@ struct Runtime {
         }
         if(at && at>=last_source_qpc)last_source_qpc=at;
     }
+    // Worth a line within five seconds: pictures refused, a busy client page,
+    // a source interval of 75 ms or more, or a snapshot pool with every slot held.
+    bool summary_attention() const {
+        return refused_pictures!=summary_refused || publish_busy!=summary_busy
+            || cadence_recent.buckets[4] || cadence_recent.buckets[5]
+            || (request.offer_count && peak_pending>=request.offer_count);
+    }
     bool maybe_summary(uint64_t now){
+        // Healthy play logs once a minute (about 0.15 MB/h); a window that needs
+        // attention closes at the next five-second boundary instead.
         if(!live() || state.load()!=GD_ACTIVE || !summary_started || now<summary_started
                 || now-summary_started<frequency*5)return false;
+        if(now-summary_started<frequency*60 && !summary_attention())return false;
         emit_diagnostic(GD_NONE,0,true,now);
         // No catch-up burst after a stall. Failure totals and the source interval
         // predecessor survive; only this recent observation window starts anew.
         summary_started=now;memset(phase_recent,0,sizeof phase_recent);cadence_recent={};
+        peak_pending=peak_bridges=0;summary_refused=refused_pictures;summary_busy=publish_busy;
         return true;
     }
     struct Phase {
@@ -134,10 +160,12 @@ struct Runtime {
             start(qpc()),previous_start(r.phase_started){r.phase=next;r.phase_started=start;}
         ~Phase(){r.phase_done(current,start,qpc());r.phase=previous;r.phase_started=previous_start;}
     };
-    void emit_diagnostic(uint32_t why,uint32_t detail,bool healthy=false,uint64_t observed=0){
+    void emit_diagnostic(uint32_t why,uint32_t detail,bool healthy=false,uint64_t observed=0,uint32_t kind=GD_KIND_WINDOW){
         const auto callback=diagnostic_callback.load();
         if(!callback || worker_thread!=GetCurrentThreadId())return;
-        gd_diagnostic d{};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;
+        gd_diagnostic d{};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;d.kind=kind;
+        d.prepare=prepare_steps;d.warm=warm_steps;d.offer_count=request.offer_count;
+        if(kind==GD_KIND_ANCHOR){const auto timing=anchor_timing.load();if(timing)timing(&d.anchor_begin_qpc,&d.anchor_end_qpc);}
         d.epoch=epoch;d.reason=why;d.detail=detail;d.current_phase=phase;
         d.qpc_frequency=frequency;d.observed_qpc=observed?observed:qpc();d.phase_started_qpc=phase_started;
         d.healthy=healthy;d.window_started_qpc=healthy?summary_started:started;
@@ -156,7 +184,7 @@ struct Runtime {
         d.cadence=healthy?cadence_recent:cadence_total;
         d.snapshot_bytes=snapshots.images().counters().texture_bytes;d.bridge_bytes=bridge.logical_bytes();
         d.sample_calls=sample_calls;d.sample_reuses=sample_reuses;d.publish_busy=publish_busy;
-        d.refused_pictures=refused_pictures;
+        d.refused_pictures=refused_pictures;d.peak_pending=peak_pending;d.peak_bridges=peak_bridges;
         const auto began=qpc();
         try{callback(&d);}catch(...){/* Diagnostics cannot replace the capture failure. */}
         previous_emit_ticks=qpc()-began;
@@ -300,7 +328,7 @@ struct Runtime {
     }
     bool bootstrap_ready(){
         unsigned ready=2;if(!surface_state.compare_exchange_strong(ready,3))return false;
-        surface=mailbox;const auto e=mailbox_epoch;surface_state.store(0);
+        surface=mailbox;const auto e=mailbox_epoch;prepare_steps.surface_qpc=mailbox_qpc;surface_state.store(0);
         if(e!=epoch || !live())return false;
         if(!surface.context || !surface.read_drawable || !surface.context_generation || !surface.drawable_generation
             || surface.width<2 || surface.height<2 || surface.width>3840 || surface.height>2160){fail(GD_BAD_SOURCE);return false;}
@@ -317,7 +345,14 @@ struct Runtime {
         if(!gpu_channel::layout(config)){fail(GD_BAD_REQUEST,ERROR_NOT_ENOUGH_MEMORY);return false;}
         set_state(GD_PREPARING);publish_status();
         TRACE("create context");
-        if(!context.create(surface,contexts)){fail(GD_CONTEXT_UNAVAILABLE,context.error(),context.quarantined());return false;}
+        const bool created=context.create(surface,contexts);
+        {const auto&c=context.steps();auto&p=prepare_steps;p.context_begin=c.begin;p.context_window=c.window;
+            p.context_temporary=c.temporary;p.context_shared=c.shared;
+            p.context_temporary_deleted=c.temporary_deleted;p.context_current=c.current;}
+        if(!created){fail(GD_CONTEXT_UNAVAILABLE,context.error(),context.quarantined());return false;}
+        driver_paid=true;
+        // The renderer published its anchor before this lease could succeed.
+        if(!anchor_logged){anchor_logged=true;emit_diagnostic(GD_NONE,0,false,0,GD_KIND_ANCHOR);}
 #ifdef GD_TEST_HOST
         if(test_preparation_probe)test_preparation_probe();
 #endif
@@ -325,17 +360,22 @@ struct Runtime {
         snapshot::Gl gl;if(!gl.load(false)){fail(GD_GL_UNSUPPORTED);return false;}
         TRACE("prepare snapshots");
         if(!snapshots.prepare(gl,source,surface,request.offer_count,budget,source3.query?&source3:nullptr)){fail(GD_SNAPSHOT_FAILED,ERROR_INVALID_DATA,true);return false;}
+        prepare_steps.snapshots=qpc();
         prepared=true;if(!live()){snapshots.stop();return false;}
         sampler_attempted=true;
         TRACE("prepare sampler");
         if(!sampler.prepare(surface.width,surface.height,limits.sample_bytes)){fail(GD_SAMPLE_FAILED,sampler.error(),true);return false;}
+        prepare_steps.sampler=qpc();
         sample.reset(new(std::nothrow)uint8_t[size_t(sample_size)]);
         if(!sample){fail(GD_SAMPLE_FAILED,ERROR_NOT_ENOUGH_MEMORY);return false;}
         if(!live())return false;
         wchar_t prefix[101];swprintf_s(prefix,L"Local\\SM64GpuImage-%016llx%016llx-%u",request.nonce_hi,request.nonce_lo,epoch);
         bridge_attempted=true;
         TRACE("prepare bridge");
-        if(!bridge.prepare(surface.width,surface.height,prefix,limits.bridge_bytes)){fail(GD_BRIDGE_FAILED,bridge.error(),bridge.quarantined());return false;}
+        const bool bridged=bridge.prepare(surface.width,surface.height,prefix,limits.bridge_bytes);
+        {const auto&b=bridge.steps();auto&p=prepare_steps;p.bridge_begin=b.begin;p.bridge_device=b.device;
+            p.bridge_opened=b.opened;p.bridge_transfer=b.transfer;p.bridge_registered=b.registered;}
+        if(!bridged){fail(GD_BRIDGE_FAILED,bridge.error(),bridge.quarantined());return false;}
         if(!live())return false;
         const auto& actual=bridge.config();config.luid_low=actual.adapter.LowPart;config.luid_high=actual.adapter.HighPart;
         memcpy(config.texture_names,actual.names,sizeof config.texture_names);
@@ -346,6 +386,7 @@ struct Runtime {
         channel_started=qpc();
         if(!live() || !context.revalidate(surface,contexts)){fail(GD_CONTEXT_CHANGED,contexts.error());return false;}
         TRACE("prepared");
+        prepare_steps.end_qpc=qpc();emit_diagnostic(GD_NONE,0,false,0,GD_KIND_PREPARE);
         publish_status(); SetEvent(changed); // names/mapping ready; capture still metadata-only
         return true;
     }
@@ -469,8 +510,10 @@ struct Runtime {
     void active_tick(){
         if(last_active_end)phase_done(GD_PHASE_WAIT,last_active_end,qpc());
         {Phase timing(*this,GD_PHASE_TAKE);take_records(false);}if(!live())return;
+        {const auto held=occupied();if(held>peak_pending)peak_pending=held;}
         {Phase timing(*this,GD_PHASE_SAMPLE);sample_head();}if(!live())return;
         {Phase timing(*this,GD_PHASE_DECISIONS);decisions();}if(!live())return;
+        {const auto held=bridge_count();if(held>peak_bridges)peak_bridges=held;}
         {Phase timing(*this,GD_PHASE_BRIDGE_RETURNS);bridge_returns(false);}if(!live())return;
         {Phase timing(*this,GD_PHASE_REAP);reap_records(false);}if(!live())return;
         Phase timing(*this,GD_PHASE_FRONTIER);
@@ -529,17 +572,31 @@ struct Runtime {
         }
         publish_status();return false;
     }
+    void prewarm(){
+        // A capture that already made its context paid the same one-time cost
+        // (and may hold that context current now), so a late warm-up skips.
+        if(driver_paid){warm_state.store(GD_WARM_SKIPPED);SetEvent(changed);return;}
+        warm_state.store(GD_WARM_RUNNING);
+        gpu_delivery::WarmSteps w{};
+        const bool ok=gpu_delivery::warm_driver(warm_parts.load(),&w);
+        warm_steps={w.begin,w.legacy,w.core,w.d3d,w.end,w.parts,w.error};
+        warm_state.store(ok?GD_WARM_DONE:GD_WARM_FAILED);SetEvent(changed);
+        emit_diagnostic(GD_NONE,0,false,0,GD_KIND_WARM);
+    }
     void run(){
         worker_thread=GetCurrentThreadId();
         for(;;){
 #ifdef GD_TEST_HOST
             if(auto probe=test_iteration_probe.load())probe();
 #endif
+            if(warm_state.load()==GD_WARM_REQUESTED)prewarm();
             unsigned waiting=2;
             request_state.compare_exchange_strong(waiting,3);
             if(request_state.load()==3 && !exhausted.load()){
                 if(diagnostic_epoch!=epoch){
                     diagnostic_epoch=epoch;reset_metrics();
+                    prepare_steps={};prepare_steps.request_qpc=started;
+                    emit_diagnostic(GD_NONE,0,false,0,GD_KIND_REQUEST);
                 }
                 if(!live()){if(drain_tick())continue;}
                 else if(state.load()==GD_BOOTSTRAP){take_records(false);bootstrap_ready();}
@@ -591,6 +648,14 @@ extern "C" int __cdecl gd_configure3(const rs_api_v3*s,const rcl_api*c,const gd_
     return rs_valid_v3(s)?configure_delivery(&s->boundary,s,c,l):GD_INVALID;
 }
 extern "C" void __cdecl gd_set_diagnostic(gd_diagnostic_callback callback){diagnostic_callback.store(callback);}
+extern "C" void __cdecl gd_set_anchor_timing(gd_anchor_timing timing){anchor_timing.store(timing);}
+extern "C" int __cdecl gd_prewarm(uint32_t parts){
+    auto*r=runtime.load();if(!r || !parts)return 0;
+    uint32_t none=GD_WARM_NONE;r->warm_parts.store(parts);
+    if(!r->warm_state.compare_exchange_strong(none,GD_WARM_REQUESTED))return 0;
+    SetEvent(r->wake);return 1;
+}
+extern "C" uint32_t __cdecl gd_prewarm_state(){const auto*r=runtime.load();return r?r->warm_state.load():GD_WARM_NONE;}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     auto*r=runtime.load();if(!r || !h || !r->request_valid(*h,budget))return GD_INVALID;
     if(r->exhausted.load())return GD_EXHAUSTED;
@@ -627,7 +692,7 @@ extern "C" uint32_t __cdecl gd_epoch(){const auto*r=runtime.load();return r?r->c
 extern "C" void __cdecl gd_surface(const rb_record*r){
     auto*self=runtime.load();if(!self || !r || r->epoch!=self->current_epoch() || self->state.load()!=GD_BOOTSTRAP)return;
     unsigned free=0;if(!self->surface_state.compare_exchange_strong(free,1))return;
-    self->mailbox=r->surface;self->mailbox_epoch=r->epoch;self->surface_state.store(2);
+    self->mailbox=r->surface;self->mailbox_epoch=r->epoch;self->mailbox_qpc=qpc();self->surface_state.store(2);
 }
 extern "C" int __cdecl gd_capture(const rb_record*r,rb_image*out){
     auto*self=runtime.load();if(out)*out={};
@@ -672,12 +737,17 @@ extern "C" int gd_test_healthy_snapshot(gd_diagnostic*out){
     r.source.release=[](rb_ticket t){records[t.slot].surface.boundary_qpc=999999;return 1;};
     r.take_records(false);r.phase_done(GD_PHASE_SAMPLE,100,150);
     gd_set_diagnostic([](const gd_diagnostic*d){if(calls<3)destination[calls]=*d;++calls;throw 1;});
-    bool valid=!r.maybe_summary(5999) && r.maybe_summary(6000) && calls==1 && r.live();
+    // A quiet window waits the full minute; five seconds is not enough.
+    bool valid=!r.maybe_summary(5999) && !r.maybe_summary(6000) && !r.maybe_summary(60999)
+        && r.maybe_summary(61000) && calls==1 && r.live();
     rb_record next=records[2];next.surface.boundary_qpc=1080;r.observe_source(next);
     r.phase_done(GD_PHASE_SAMPLE,7000,7003);
-    valid=valid && r.maybe_summary(16000) && !r.maybe_summary(16001) && calls==2 && r.live();
+    // A refused picture closes the window at the next five-second boundary.
+    ++r.refused_pictures;
+    valid=valid && !r.maybe_summary(65999) && r.maybe_summary(66000) && !r.maybe_summary(66001)
+        && calls==2 && r.live();
     r.fail(GD_SOURCE_REFUSED,7);
-    valid=valid && calls==3 && !r.maybe_summary(21000);
+    valid=valid && calls==3 && !r.maybe_summary(71000);
     r.reset_metrics();
     valid=valid && r.phase_totals[GD_PHASE_SAMPLE].calls==0 && !r.cadence_total.records
         && !r.last_source_qpc && !r.summary_started;

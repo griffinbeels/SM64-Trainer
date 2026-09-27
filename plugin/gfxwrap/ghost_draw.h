@@ -2,6 +2,7 @@
 #pragma once
 #include "ghost_pass.h"
 #include "ghost_capture.h"
+struct gs_hook_cost;
 namespace ghost_draw {
 void begin(uint32_t rom_generation, uint32_t configuration);
 void observe(const ghost::RasterTarget&);
@@ -10,10 +11,13 @@ void finish(const ghost::WorldPass*);
 void cancel();
 bool begin_hud();
 void end_hud();
-bool begin_layer(uint32_t pass, uint32_t framebuffer);
+bool begin_layer(uint32_t pass, uint32_t framebuffer, uint64_t attachments);
 void end_layer();
 void break_layer();
 void context_lost();
 // This list can draw a ghost (playback drawing on the prepared model).
 bool drawing();
+// Renderer thread, once per list: adds what drawing the ghost cost this list
+// (stages, driver queries, gateway error reads) and starts the next count.
+void take_cost(gs_hook_cost &);
 }

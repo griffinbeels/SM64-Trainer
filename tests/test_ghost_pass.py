@@ -71,3 +71,30 @@ def test_render_hooks_query_the_driver_only_through_the_counted_fallback():
     queries = [line.strip() for line in source.splitlines() if "glGet" in line]
     assert queries, "the fallback queries are still present"
     assert all("++hook_queries" in line for line in queries), queries
+
+
+def test_ghost_draw_counts_every_driver_query():
+    """The ghost glue's own driver queries (the seal's scissor, the HUD's
+    feedback check) each go through ask(), which counts and times them for the
+    hook statistics; the compositor counts its own through its metered
+    dispatch. An uncounted query here is a sync the status page cannot show."""
+    import re
+    source = (ROOT / "plugin/gfxwrap/ghost_draw.cpp").read_text(encoding="utf-8")
+    source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S)
+    queries = [line.strip() for line in source.splitlines()
+               if re.search(r"\bglGet\w*\(|\bget_uniform\(program", line)]
+    assert queries, "the glue still asks the driver something"
+    assert all("ask(" in line for line in queries), queries
+
+
+def test_glue_hands_capabilities_in_the_compositors_order():
+    """Known::Cap is a bit order: the glue's list of tracked capabilities must
+    name the same capabilities in the same order as the compositor's, or a
+    known 'on' lands on the wrong capability and is restored there."""
+    import re
+    glue = (ROOT / "plugin/gfxwrap/ghost_draw.cpp").read_text(encoding="utf-8")
+    compositor = (ROOT / "plugin/gfxwrap/ghost_compositor_gl.h").read_text(encoding="utf-8")
+    handed = re.search(r"const GLenum caps\[\] = \{([^}]*)\}", glue).group(1)
+    known = re.search(r"volatile_caps\[\]=\{([^}]*)\}", compositor).group(1)
+    names = [name.strip().removeprefix("GL_") for name in handed.split(",")]
+    assert names == [name.strip() for name in known.split(",")], (names, known)

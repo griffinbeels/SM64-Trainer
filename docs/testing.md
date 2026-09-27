@@ -31,8 +31,14 @@ full run, and the merge check reruns last run's failures by itself.
 ## The blast radius
 
 `tools/blast_radius.py` diffs the working tree (uncommitted and untracked files
-included) against the **baseline**: the newest ancestor of HEAD whose full run
-on main passed, else the merge-base with main (the output says which). Then:
+included) against the **baseline**: the ancestor of HEAD nearest to it (fewest
+commits behind) whose full run passed, on any branch, else the merge-base with
+main (the output says which, and how far back). A green run proves the whole
+suite at its commit wherever it ran, and being an ancestor is what makes the
+diff complete, so a long-lived branch gets a small radius by dispatching its
+own full run (`gh workflow run full.yml --ref <branch>`). Against main's last
+green run, 440 commits back, feature/ghost-integrate selected 566 of 654 test
+files; against a green run one commit back, 1 (2026-09-27). Then:
 
 | Changed | Selects |
 | --- | --- |
@@ -42,6 +48,8 @@ on main passed, else the merge-base with main (the output says which). Then:
 | Test file | itself |
 | Anything else | tests and modules whose code (not comments) names the file |
 | Runner, lock file, `conftest.py` | every test that starts no browser; GitHub covers the rest (the selector itself is not one: it changes which tests run, not how they behave) |
+| `pyproject.toml` | as a runner file only when its parsed settings changed; a comment, spacing or line-ending edit selects the tests that name the file (546 files -> 4) |
+| `tests/skip_inventory.py` | the tests importing it: only a whole-suite run reads it, and a merge check never is one (546 files -> 1) |
 
 Plus every test that failed in this checkout's last run, unless that record is
 older than a baseline with a green full run, which supersedes it. The viewport sweeps
@@ -63,7 +71,8 @@ MARELO whatever tab a test is about).
 `tests/test_blast_radius.py` pins the rules against the real tree (a Rank
 component and a Rank class reach the Rank page and not the Library, a global
 rule reaches every page and leaves them to GitHub, a change past the cap keeps
-its plain tests, the canary and the page naming it), each proved by mutation. If the radius missed
+its plain tests, the canary and the page naming it, the nearest green ancestor
+beats a newer farther one), each proved by mutation. If the radius missed
 something, the full run finds it after the push; widen the rule, not the habit.
 
 ## The full run
@@ -160,12 +169,17 @@ seconds it held the GIL a serial run's tests need for 14-34% of the time.
 | Mode | Workers per run | CPUs all runs share |
 | --- | ---: | ---: |
 | Normal (32-CPU desktop) | 8 | 20 |
-| OBS process open | 4 | 8 |
+| Reduced: OBS or Project64 open | 4 | 8 |
 | GitHub runner (4 CPUs, one job each) | the job's: 2 browser, 4 other | 4 |
 
 Explicit `--workers`/`--reserve` may tighten these, never loosen them. Affinity
-is set before spawning; OBS opening mid-run tightens the whole tree within two
-seconds. The runner contains pytest and every descendant in a Windows job.
+is set before spawning; OBS or Project64 opening mid-run tightens the whole
+tree within two seconds, and admission names the app (`Project64 open, reduced
+budget`). Project64 joined OBS after a normal-budget run with the game open
+froze it on 2026-09-25 (09:20:45-09:24Z: display-list calls over the slow mark
+went from 61 to 488, the longest 908 ms). The browser wait is 60 s on the
+reduced budget, whichever app caused it (30 s otherwise): a page that paints
+in under a second alone took over 20 s on a quarter of the CPUs. The runner contains pytest and every descendant in a Windows job.
 `--limit-minutes` stops a run that long after admission, so queued time never
 cancels it (`tools/verify_full.py` uses 30).
 

@@ -681,9 +681,8 @@ dispatched calls (`replay_gl::Raster`; `glViewport` is aliased at the call,
 like `glReadBuffer`). A query is only the fallback before the dispatch has
 seen a value, and each is counted. The translucent layer's hook leaves before
 any framebuffer lookup when no ghost will draw the list. The last list's
-hook cost, driver queries and microseconds inside the hooks, rides
-`gs_stats` to the status page (`hook_gl_queries`, `hook_micros`); the
-trainer logs its mean and max once a minute (`ghost/capture.py::HookCost`).
+hook cost rides `gs_stats` (`gs_hook_cost`) to the status page (`hook_*`);
+the trainer logs it once a minute ([what the numbers mean](#what-the-hook-numbers-mean)).
 
 If a reader holds the status page during revocation, the worker retries that
 publication before sleeping indefinitely. An expired owner cannot leave the
@@ -806,6 +805,91 @@ IA8 texture and its own matrix). The compositor draws it as a decal over the
 frame's clean copy, before any Mario, against copied terrain depth with the
 renderer's decal offset (-3,-3) and LEQUAL; N64 image depth omits it rather
 than guessing delta-Z.
+
+### What a drawn ghost asks the driver
+
+The ghost draws on GLideN64's own thread, which Project64's emulation thread
+waits on. Under NVIDIA's threaded optimization every driver query (a glGet,
+glIsEnabled or framebuffer check) waits for the driver's own thread to catch
+up, so a ghost frame asks as little as it can
+([ghost_compositor.h](../plugin/gfxwrap/ghost_compositor.h)):
+
+- **What the renderer already knows** (`Known`), as its dispatch observed
+  every call (`link_dispatch`, [replay-link-state](replay-link-state.md)):
+  draw and read bindings, viewport and scissor box, program, vertex array,
+  depth function and mask, blend factors and the seven capabilities GLideN64
+  switches.
+- **What the renderer never changes**, recorded by query once at `prepare`:
+  stencil, color mask, blend equations, polygon mode and offset, depth range,
+  every other capability, the compositor's texture units 28-31 (bound with
+  GL 4.4 multi-bind), the copy-write buffer it uploads through, the unpack
+  layout and transform feedback. The census behind it, of the pinned
+  GLideN64 d0d1010: every capability it uses goes through `CachedEnable`
+  (BLEND, CLIP_DISTANCE0, CULL_FACE, DEPTH_CLAMP, DEPTH_TEST,
+  POLYGON_OFFSET_FILL, SCISSOR_TEST); it never calls glStencil*,
+  glColorMask, glBlendEquation*, glBlendFuncSeparate, glPolygonMode,
+  glBindSampler or glDepthRange, binds no copy-write or unpack buffer, and
+  sets the polygon offset only in `_initStates`. A renderer that changes any
+  of it calls `resync`. A caller that passes no `Known` promises nothing and
+  has everything asked, every frame.
+- **What was verified about a framebuffer** (complete, 8-bit linear color and
+  D24 depth, its read and draw buffers, the N64 depth texture) is reused while
+  the glue's name for its attachments holds (`ghost_link::attachments`: color
+  texture and depth object).
+- So an ordinary ghost frame asks the driver **nothing** (the base code asked
+  92). A HUD draw's feedback check reads units 0 and 1 from the dispatch too,
+  and the presentation's clean save and sRGB check read its record
+  (`ghost_presentation::Known`), so a presented ghost frame asks nothing
+  either.
+
+What still asks, and why: the capture gateway reads glGetError on each side of
+every ghost GL scope (the seal, each HUD draw, the presentation's copies),
+because that is how an error is told apart from the renderer's; without GL 4.4
+multi-bind a frame asks the active unit; a record the dispatch lost (after a GL
+error, or before the renderer's first glViewport or glScissor) is asked for;
+with N64 depth compare on, the HUD check reads the combiner's two uniforms; and
+taking a drawn ghost back (a withdrawn or refused image, rare) reads the
+default framebuffer's draw selectors, 8 on NVIDIA, beside its own four state
+queries when nothing is known. GLideN64's own on-screen text mirror
+(`begin_osd`) still asks its safety checks per text draw.
+
+Witnesses: the [compositor host](../tests/native/ghost_compositor_host.cpp)
+wraps every dispatch entry and records each Get, Is and Check call by name. A
+fully known frame asks nothing (the active unit alone without multi-bind), a
+record without the render state asks exactly those 8 values, a known HUD
+scope and layer pass nothing, and the compositor's own count equals the
+witness's. After every call the state equals the state before, field for
+field, the compositor's units and copy-write buffer included. The
+[presentation host](../tests/native/ghost_presentation_host.cpp) asks nothing
+for a known clean save or replace, restores every touched value after taking a
+ghost back (4 queries plus the draw selectors unknown, the selectors alone
+known) with scissor, sRGB and a foreign framebuffer set. The
+[link witness](../tests/test_link_source_witness.py) drives LINK's own cached
+setters and direct calls and compares each observed value with the driver; it
+goes red without any one observation. The [pipeline](../tests/test_ghost_pipeline.py)
+asks nothing per ghost frame for 1, 4 and 16 ghosts at 640x480 and 1600x1200.
+
+### What the hook numbers mean
+
+Once a minute the trainer logs `native render hooks`
+([capture.py](../src/sm64_events/ghost/capture.py) `HookCost`), one line for
+the lists that drew a ghost and one for the rest: their difference is the
+ghost's cost. Each list counts once, by its serial (the pump polls twice per
+list). Per list, from `gs_hook_cost` in
+[ghost_stream.h](../plugin/gfxwrap/ghost_stream.h):
+
+| Number | What it covers |
+|---|---|
+| hooks | Time inside the timed hooks: list begin, the per-draw hooks, the seal, list end. Its definition predates the stages, so older lines compare. It includes the renderer flush. |
+| renderer flush | GLideN64's deferred triangles and rectangles, flushed at the seal: the renderer's own work, moved earlier, not the ghost's. |
+| gateway open, close | The capture gateway's glGetError before and after the ghost's GL. Under threaded optimization the first read waits for everything the renderer queued this list. |
+| batch | The compositor's begin_batch: validate (every pose and vertex), state (the renderer state it will restore: known values plus the residue), copy (clean color and depth), draw (shadows, uploads, bodies, particles; also the slowest single ghost), restore. |
+| finalize | Closing the ghost branch at list end. |
+| whole list | ProcessDList, begin to end, the renderer's own work included. |
+| HUD mirror | Each HUD draw mirrored into the ghost's display, its gateway and the duplicate draw included. Not part of hooks. |
+| layer passes | Translucent-layer (water) mirrors. |
+| driver queries | Every query the ghost code made in the list, and the time inside them. |
+| gateway error reads | glGetError calls around ghost GL, about one per gateway call. |
 
 ### Recorded shadow
 
@@ -1241,6 +1325,21 @@ toggles, 50% opacity is one midpoint blend, and a nearer wall hides the decal.
 The fixture's texture is a synthetic quarter-circle ramp, not ROM texels.
 With every ghost's shadow drawn, one ghost measured p50 0.49 ms, p95 0.84 ms,
 max 2.07 ms and sixteen p50 2.13 ms, p95 3.28 ms, max 3.93 ms.
+
+2026-09-27 (RTX 5090, 180 samples each, fade and shadows on, other test
+processes on the machine), the compositor's own stages per ghost frame at
+1600x1200, p50 (p95) in microseconds: one ghost batch 151 (203): validate 63
+(93), state 2 (3), copy 38 (49), draw 41 (57), restore 5 (8); four ghosts
+batch 389 (497), validate 251 (318), draw 86 (120); sixteen batch 1432 (2092),
+validate 1028 (1593), draw 300 (419). Checking every vertex is most of a
+multi-ghost batch (about 63 us per ghost). Nine driver queries on every timed
+frame. The hidden host runs without threaded optimization, so its queries cost
+little: alternating base and changed runs at 640x480 measured one ghost p50
+0.34-0.35 against 0.31-0.34 ms and sixteen unchanged within noise (2.70-2.95
+ms). The query count is what changes under a threaded driver; the live hook
+line measures that. With the renderer's tracked record (same day, same host):
+no driver query on any timed frame, state 0 us, one ghost batch 145 (207),
+four 372 (459), sixteen 1281 (1335) at 1600x1200.
 
 For the actual staged RSP lifetime guard, stage a fresh pinned renderer with
 `tools/stage_link_witness.py --source <pinned-source> --out <temporary-output>

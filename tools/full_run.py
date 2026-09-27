@@ -9,9 +9,9 @@
 The full run is the whole test suite, browser tests included, on GitHub
 Actions for every push to main and on demand (`gh workflow run full.yml --ref
 <branch>`), split into parallel jobs. It gates a release (tools/release.py),
-and its newest green run on main is the baseline the local merge check diffs
-against (tools/blast_radius.py). With no target these read the newest run for
-this checkout's HEAD commit.
+and the green run nearest HEAD, on any branch, is the baseline the local merge
+check diffs against (tools/blast_radius.py). With no target these read the
+newest run for this checkout's HEAD commit.
 
 `failures` downloads the run's artifacts (JUnit XML per job, the flaky list,
 failure screenshots) to a temp folder and prints each failing test with its
@@ -77,11 +77,14 @@ def find_run(*, sha: str | None = None, ref: str | None = None, run_id: str | No
     return max(runs, key=lambda item: item["createdAt"]) if runs else None
 
 
-def green_runs_on_main(run=gh) -> list[tuple[str, int]]:
-    """(commit, run id) of every passed full run on main, newest first."""
-    runs = json.loads(run("run", "list", "--workflow", WORKFLOW, "--branch", "main",
+def green_runs(run=gh) -> list[tuple[str, int]]:
+    """(commit, run id) of every passed full run on ANY branch, newest first.
+    A green run proves the whole suite at its commit wherever it ran, so a
+    dispatched branch run counts; only an ancestor of HEAD can be a baseline,
+    which tools/blast_radius.py checks."""
+    runs = json.loads(run("run", "list", "--workflow", WORKFLOW,
                           "--status", "success", "--json", "headSha,databaseId,createdAt",
-                          "--limit", "50") or "[]")
+                          "--limit", "100") or "[]")
     return [(item["headSha"], item["databaseId"])
             for item in sorted(runs, key=lambda item: item["createdAt"], reverse=True)]
 

@@ -44,7 +44,7 @@ _CLIP_NAME = "clip_attempt_{id}.mp4"
 _CLIP_RE = re.compile(r"clip_attempt_\d+\.mp4")
 
 
-def saved_attempt_ids(root: Path, *, include_native: bool = True) -> set[int]:
+def saved_attempt_ids(root: Path, *, include_native: bool = True, among=None) -> set[int]:
     """Attempt ids protected by saved video or validated standalone native poses.
 
     The FILENAME is the index (`attempt_<id>_...`, see ReplayService's class
@@ -53,16 +53,22 @@ def saved_attempt_ids(root: Path, *, include_native: bool = True) -> set[int]:
     attempt — and module-level so `main.py` can hand it to the tracker's
     startup prune, which must protect a saved clip's attempt from deletion
     (tracking/prune.py) whether or not replay is enabled this run.
+
+    `among` limits the answer to those attempt ids. The prune asks only about
+    its candidates, because validating a native clip parses and hashes all of
+    it (~31 ms/MiB): every clip on every start took 1.66 s on 09-25, and the
+    clips are never pruned, so that grew without bound.
     """
     if not root.exists():
         return set()
+    wanted = None if among is None else set(among)
     ids: set[int] = set()
     for path in root.rglob("attempt_*.mp4"):
         match = re.match(r"attempt_(\d+)_", path.name)
-        if match:
+        if match and (wanted is None or int(match.group(1)) in wanted):
             ids.add(int(match.group(1)))
     if include_native:
-        ids.update(_native_attempt_ids(root))
+        ids.update(_native_attempt_ids(root, wanted))
     return ids
 
 
@@ -74,13 +80,19 @@ def _native_manifest(path: Path) -> dict:
     return json.loads(data)
 
 
-def _native_attempt_ids(root: Path) -> set[int]:
-    """Pruning evidence must contain a committed, hashed clip, not just a name."""
+def _native_attempt_ids(root: Path, among=None) -> set[int]:
+    """Pruning evidence must contain a committed, hashed clip, not just a name.
+
+    With `among`, only those attempts' manifests are opened and validated."""
     from sm64_events.ghost.clip import OlderPoseFormat, check_manifest
     from types import SimpleNamespace
     root = root.resolve()
     identities = set()
-    for meta in (root / "native").glob("attempt_*.json"):
+    native = root / "native"
+    metas = (native.glob("attempt_*.json") if among is None else
+             (path for path in (native / f"attempt_{int(attempt_id)}.json"
+                                for attempt_id in sorted(among)) if path.is_file()))
+    for meta in metas:
         match = re.fullmatch(r"attempt_([1-9][0-9]{0,18})\.json", meta.name)
         path = meta.with_suffix(".ghost")
         if not match or not all(item.resolve().is_relative_to(root) for item in (path, meta)):

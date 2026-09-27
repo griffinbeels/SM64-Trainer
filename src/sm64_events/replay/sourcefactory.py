@@ -7,6 +7,11 @@ the bounded retry gate and never activates a raw pixel path. Without a
 discoverable backend the recorder photographs the desktop with a watcher that
 ends itself when the backend appears, so the order he opens things in does
 not matter.
+
+One exception keeps the desktop for good: a producer whose adapter can never
+record through the layer (gpuadapter.py: not NVIDIA, a software adapter, a
+driver older than the encoder). Discovery declines it, and the desktop source
+says why (`gpu_unsupported`) so setup can accept its pictures instead.
 """
 
 import logging
@@ -14,8 +19,17 @@ import logging
 from sm64_events.core.timefmt import GAME_FPS
 from sm64_events.replay.gpucapture import discover
 from sm64_events.replay.gpuretry import RetryGate
+from sm64_events.replay.pluginsource import DesktopUntilLayerPresents
 
 log = logging.getLogger("sm64.replay")
+
+
+class DesktopForUnsupportedGpu(DesktopUntilLayerPresents):
+    """The desktop grab, kept while this Project64's adapter cannot record."""
+
+    def __init__(self, desktop, reason: str):
+        super().__init__(desktop, note=f"recording the desktop: {reason}")
+        self.gpu_unsupported = reason
 
 
 class SourceFactory:
@@ -33,6 +47,9 @@ class SourceFactory:
         gpu = self._gpu(win)
         if gpu is not None:
             return gpu
+        reason = self.retry_gate.unsupported_for(self.retry_gate.identity_for(win.pid))
+        if reason is not None:
+            return DesktopForUnsupportedGpu(self._desktop(win), reason)
         return self._waiting_desktop(win)
 
     def _gpu(self, win):
@@ -41,8 +58,6 @@ class SourceFactory:
         )
 
     def _waiting_desktop(self, win):
-        from sm64_events.replay.pluginsource import DesktopUntilLayerPresents
-
         return DesktopUntilLayerPresents(
             self._desktop(win),
             note="the capture layer is not delivering; recording the desktop by time",

@@ -171,12 +171,13 @@ class TrackerService:
         self._tracking_retry_delay = 0.25
         self._pending_gap = None
         self._gap_seq = None
-        # Zero-arg callable -> attempt ids with a saved replay clip, which the
-        # startup prune must never delete (tracking/prune.py). Injected by
-        # main.py because the clips live on the REPLAY side and the dependency
-        # only runs that way; left None here so the prune still protects saved
-        # PBs when nothing wired it (tests, a db-only harness).
-        self.saved_clip_ids: Callable[[], set[int]] | None = None
+        # (candidate attempt ids) -> those of them with a saved replay clip,
+        # which the startup prune must never delete (tracking/prune.py).
+        # Injected by main.py because the clips live on the REPLAY side and
+        # the dependency only runs that way; left None here so the prune
+        # still protects saved PBs when nothing wired it (tests, a db-only
+        # harness).
+        self.saved_clip_ids: Callable[[list[int]], set[int]] | None = None
 
     def _load_segment_defs(self) -> list[SegmentDef]:
         # inclusion list (the dataclass's own fields), NOT exclusion of
@@ -2095,20 +2096,28 @@ class TrackerService:
         """
         db = self._require_db()
         protected = db.pb_attempt_ids()
+        stale = [a for a in db.attempts() if a.session_id != self.session_id]
+        # A clip can only spare an attempt the saved PBs alone would drop
+        # (`prunable_ids` never drops more for a larger protected set), so
+        # only those candidates' clips are validated -- each costs a full
+        # parse and hash, and all of them took 1.66 s of every start (09-25).
+        candidates = prunable_ids(stale, protected)
+        if not candidates:
+            return 0
+        clipped = set()
         if self.saved_clip_ids is not None:
             try:
-                protected |= self.saved_clip_ids()
+                clipped = self.saved_clip_ids(candidates)
             except OSError:
                 log.exception("saved-clip scan failed; skipping the attempt "
                               "prune rather than risk orphaning a clip")
                 return 0
-        stale = [a for a in db.attempts() if a.session_id != self.session_id]
-        doomed = prunable_ids(stale, protected)
+        doomed = prunable_ids(stale, protected | clipped)
         if not doomed:
             return 0
         log.info("pruning %d unlabelled attempt(s) left by previous sessions "
-                 "(%d attempt(s) protected by a saved PB or clip)",
-                 len(doomed), len(protected))
+                 "(%d kept by a saved PB, %d more by a saved clip)",
+                 len(doomed), len(protected), len(clipped - protected))
         await self.publish(Event(type=PRUNE_EVENT, frame=0,
                                  timestamp_utc=_now(),
                                  payload={"attempt_ids": doomed}))

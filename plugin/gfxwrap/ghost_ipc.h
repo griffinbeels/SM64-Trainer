@@ -73,10 +73,16 @@ typedef struct gipc_status {
     uint32_t clips_requested, clips_prepared, clips_visible;
     /* Mario's particles captured this lease but not kept (beyond 16 a frame). */
     uint32_t particles_dropped;
-    /* The last list's render hooks: driver state queries and microseconds on
-     * the emulation thread (gs_stats). Measured live, never asked of him. */
+    /* The last list's render hooks (gs_hook_cost, in its order): driver
+     * queries and microseconds on the emulation thread, then the list and its
+     * stages. Measured live, never asked of him. */
     uint32_t hook_gl_queries, hook_micros;
-    uint8_t reserved[92];
+    uint32_t hook_list, hook_list_micros, hook_flush_micros;
+    uint32_t hook_open_micros, hook_batch_micros, hook_validate_micros, hook_close_micros, hook_finalize_micros;
+    uint32_t hook_state_micros, hook_copy_micros, hook_draw_micros, hook_draw_max_micros, hook_restore_micros;
+    uint32_t hook_hud_micros, hook_hud_draws, hook_layer_passes;
+    uint32_t hook_query_micros, hook_error_reads, hook_ghosts;
+    uint8_t reserved[16];
 } gipc_status;
 typedef struct gipc_page {
     gipc_status status;

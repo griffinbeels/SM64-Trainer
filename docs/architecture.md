@@ -768,8 +768,10 @@ keep producers running. The resume
 signal must include the ANCHOR — igt reset / level entry — not just
 movement: Mario stands passive through post-load fade-ins, so
 movement-only resume opened 0-pre-pad clips ~2 s late on a frozen frame
-(`replay/activity.py`). Manual pause (POST /api/pause) outranks the idle
-gate and stops the poller too; AFK pause CANNOT stop the poller, because
+(`replay/activity.py`). A non-passive action counts only while the game
+visibly moves (IGT, action or action state changed): an AFK Mario parked
+in a star-dance exit read as active for 1.5 h on 2026-09-25. Manual pause
+(POST /api/pause) outranks the idle gate and stops the poller too; AFK pause CANNOT stop the poller, because
 the activity tap that detects the player's return rides it — the watchdog
 may sleep the system, never itself. Precedence and the reason wire format
 live in `server/app.py pause_state`; resume self-heals detectors through
@@ -800,7 +802,8 @@ instantly. Three compounding causes, each fixed:
    manual collection freezes its survivors, so the 5-minute backstop walks
    only what was allocated since (about 1 ms, flat) instead of everything
    since startup (54-177 ms live); cycles among frozen objects are reclaimed
-   by a full collection when capture is idle and at least hourly. Reasons and
+   by a full collection every 10 minutes while capture is retired and at
+   least hourly otherwise. Reasons and
    measurements: `replay/_gcwatch.py`'s docstring.
 3. *Disk could fill, and a near-full volume thrashes everything.* The historical 20 GiB
    scratch cap with `retention_s=None` can be approached over long ACTIVE play

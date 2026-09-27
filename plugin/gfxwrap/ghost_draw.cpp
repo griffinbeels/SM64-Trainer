@@ -14,6 +14,7 @@
 #include "gDP.h"
 #include "GBI.h"
 #include "Graphics/Context.h"
+#include <chrono>
 #include <cstring>
 
 namespace ghost_draw {
@@ -32,6 +33,59 @@ bool provisional = false, hud = false, ready = false, layer = false;
 bool will_draw = false;
 using GetUniform = void (APIENTRY *)(GLuint, GLint, GLint*);
 GetUniform get_uniform = nullptr;
+// This list's drawing cost (take_cost): stage times, the glue's own driver
+// queries (the compositor counts its own), and the gateway's error reads.
+using Clock = std::chrono::steady_clock;
+gs_hook_cost cost{};
+uint64_t query_nanos = 0;
+Clock::time_point hud_start{};
+uint32_t since(Clock::time_point start) {
+    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count();
+    return us < 0 ? 0u : us > INT32_MAX ? uint32_t(INT32_MAX) : uint32_t(us);
+}
+template <class Query> void ask(Query &&query) {
+    const auto start = Clock::now(); query(); ++cost.gl_queries;
+    query_nanos += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
+}
+bool gateway(bool (__cdecl *call)()) { ++cost.error_reads; return call(); }
+/* What the renderer already knows of its state, as its dispatch observed it
+ * (link_dispatch): draw and read bindings, viewport and scissor, program,
+ * vertex array, depth and blend state and the capabilities it switches. The
+ * ghost code restores whatever it changes, so these stay the driver's. */
+ghost_compositor::Known known_state() {
+    using ghost_compositor::Known;
+    Known known{};
+    replay_gl::RasterState raster{};
+    if (replay_gl::Raster(&raster)) {
+        if (raster.draw_known) { known.fields |= Known::draw_framebuffer; known.draw = raster.draw_framebuffer; }
+        if (raster.viewport_known) {
+            known.fields |= Known::viewport; std::memcpy(known.viewport_box, raster.viewport, sizeof(raster.viewport));
+        }
+    }
+    renderer::Identity identity{}; snapshot::RestoreBindings bindings{};
+    if (replay_gl::CandidateBindings(&identity, &bindings)) {
+        known.fields |= Known::read_framebuffer; known.read = bindings.read_framebuffer;
+    }
+    replay_gl::RenderState render{};
+    if (replay_gl::Render(&render)) {
+        known.fields |= Known::program | Known::vertex_array | Known::depth | Known::blend_factors;
+        known.current_program = render.program; known.bound_vertex_array = render.vertex_array;
+        known.depth_function = render.depth_func; known.depth_write = render.depth_mask ? 1 : 0;
+        std::memcpy(known.blend_factor, render.blend, sizeof(render.blend));
+        if (render.scissor_known) {
+            known.fields |= Known::scissor; std::memcpy(known.scissor_box, render.scissor, sizeof(render.scissor));
+        }
+    }
+    // Known::Cap bit order.
+    const GLenum caps[] = {GL_DEPTH_TEST, GL_CULL_FACE, GL_POLYGON_OFFSET_FILL, GL_DEPTH_CLAMP, GL_CLIP_DISTANCE0,
+        GL_BLEND, GL_SCISSOR_TEST};
+    for (uint32_t i = 0; i < sizeof(caps) / sizeof(caps[0]); ++i) {
+        bool on = false;
+        if (!replay_gl::Enabled(caps[i], &on)) continue; // not observed: asked
+        known.caps |= 1u << i; if (on) known.enabled |= 1u << i;
+    }
+    return known;
+}
 
 bool same(const renderer::Identity &a, const renderer::Identity &b) {
     return a.context && a.context == b.context && a.context_generation == b.context_generation
@@ -61,23 +115,29 @@ bool image_writes_disabled() {
     // uEnableDepth=0. depth_render is a separate path and must be disabled too.
     if (!config.frameBufferEmulation.N64DepthCompare) return true;
     if (!get_uniform || graphics::Context::FramebufferFetch) return false;
-    GLint program = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+    GLint program = 0; replay_gl::RenderState render{};
+    if (replay_gl::Render(&render)) program = GLint(render.program);
+    else ask([&] { glGetIntegerv(GL_CURRENT_PROGRAM, &program); });
     if (!program) return false;
     for (const char *name : {"uEnableDepth", "uRenderTarget"}) {
-        const GLint location = glGetUniformLocation(program, name);
+        GLint location = -1; ask([&] { location = glGetUniformLocation(program, name); });
         if (location < 0) return false;
-        GLint value = -1; get_uniform(program, location, &value);
+        GLint value = -1; ask([&] { get_uniform(program, location, &value); });
         if (value != 0) return false;
     }
     return true;
 }
 bool no_color_feedback() {
-    GLint previous = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &previous);
+    // The pinned N64 combiner samples game color only through tex units0/1,
+    // whose bindings the dispatch observes; asked only before it has.
+    GLuint observed[2]{};
+    if (replay_gl::Texture2D(0, &observed[0]) && replay_gl::Texture2D(1, &observed[1]))
+        return observed[0] != clean_texture && observed[1] != clean_texture;
+    GLint previous = 0; ask([&] { glGetIntegerv(GL_ACTIVE_TEXTURE, &previous); });
     bool valid = true;
-    // The pinned N64 combiner samples game color only through tex units0/1.
     for (unsigned unit = 0; unit < 2; ++unit) {
         dispatch.ActiveTexture(GL_TEXTURE0 + unit);
-        GLint texture = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+        GLint texture = 0; ask([&] { glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture); });
         if (static_cast<uint32_t>(texture) == clean_texture) valid = false;
     }
     dispatch.ActiveTexture(previous); return valid;
@@ -173,11 +233,26 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world) {
     target.samples = world.target.samples;
     target.depth_scale = world.target.depth_scale[0]; target.depth_translate = world.target.depth_scale[1];
     std::memcpy(target.viewport, world.target.viewport, sizeof(target.viewport));
-    glGetIntegerv(GL_SCISSOR_BOX, target.scissor);
-    if (!replay_gl::BeginCapture()) return;
-    const auto result = ghost_compositor::begin_batch(compositor, target, poses, count);
-    const bool clean = replay_gl::EndCapture();
+    target.attachments = ghost_link::attachments(buffer);
+    // The game's scissor clips the ghost and is what the compositor restores:
+    // as the dispatch observed it, asked only before the renderer set one.
+    auto known = known_state();
+    if (known.fields & ghost_compositor::Known::scissor)
+        std::memcpy(target.scissor, known.scissor_box, sizeof(target.scissor));
+    else {
+        ask([&] { glGetIntegerv(GL_SCISSOR_BOX, target.scissor); });
+        known.fields |= ghost_compositor::Known::scissor;
+        std::memcpy(known.scissor_box, target.scissor, sizeof(target.scissor));
+    }
+    auto stage = Clock::now();
+    const bool open = gateway(replay_gl::BeginCapture); cost.open_micros += since(stage);
+    if (!open) return;
+    stage = Clock::now();
+    const auto result = ghost_compositor::begin_batch(compositor, target, poses, count, &known);
+    cost.batch_micros += since(stage); stage = Clock::now();
+    const bool clean = gateway(replay_gl::EndCapture); cost.close_micros += since(stage);
     provisional = result == ghost_compositor::Result::ok && clean;
+    if (provisional) cost.ghosts = count;
     if (provisional) {
         occurrence = world.list_serial; clean_fbo = world.target.color;
         clean_texture = uint32_t(buffer->m_pTexture->name);
@@ -187,48 +262,71 @@ void finish(const ghost::WorldPass *world) {
     if (!provisional || !world || world->list_serial != occurrence || !ghost_playback::current(draw_token)) {
         cancel(); return;
     }
+    const auto stage = Clock::now();
     ready = ghost_compositor::finalize(compositor, occurrence) == ghost_compositor::Result::ok;
+    cost.finalize_micros += since(stage);
     if (!ready) cancel();
 }
-bool begin_layer(uint32_t pass, uint32_t framebuffer) {
+bool begin_layer(uint32_t pass, uint32_t framebuffer, uint64_t attachments) {
     if (layer || !will_draw || !compositor || !model_id || pass > 1 || !ghost_presentation::clean_consumer()
             || width != prepared_width || height != prepared_height) return false;
     ghost_compositor::Target target{};
     target.generation = owner.context_generation; target.framebuffer = framebuffer;
     target.width = width; target.height = height; target.samples = 1;
     target.unsupported = config.video.multisampling > 0;
-    target.depth = ghost_compositor::Depth::ordinary;
-    if (!replay_gl::BeginLayer()) return false;
-    layer = ghost_compositor::begin_layer(compositor, target, ghost_compositor::LayerPass(pass))
+    target.depth = ghost_compositor::Depth::ordinary; target.attachments = attachments;
+    if (!gateway(replay_gl::BeginLayer)) return false;
+    const auto known = known_state();
+    layer = ghost_compositor::begin_layer(compositor, target, ghost_compositor::LayerPass(pass), &known)
         == ghost_compositor::Result::ok;
+    if (layer) ++cost.layer_passes;
     // A surface whose color entered the layer without its depth would tint
     // nothing behind it consistently: drop the layer for this list instead.
-    if (!layer && (!replay_gl::EndLayer() || pass == 1)) ghost_compositor::break_layer(compositor);
+    if (!layer && (!gateway(replay_gl::EndLayer) || pass == 1)) ghost_compositor::break_layer(compositor);
     return layer;
 }
 void end_layer() {
     if (!layer) return;
     ghost_compositor::end_layer(compositor); layer = false;
     // The layer's own GL error drops the layer for this list, never the source.
-    if (!replay_gl::EndLayer()) ghost_compositor::break_layer(compositor);
+    if (!gateway(replay_gl::EndLayer)) ghost_compositor::break_layer(compositor);
 }
 void break_layer() { ghost_compositor::break_layer(compositor); }
 bool drawing() { return will_draw; }
 bool begin_hud() {
     if (!provisional || hud) return false;
+    hud_start = Clock::now();
     auto *buffer = ghost_link::raster_buffer();
     if ((gSP.geometryMode & G_ZBUFFER) || !buffer || buffer->m_isDepthBuffer
             || uint32_t(buffer->m_FBO) != clean_fbo || !image_writes_disabled() || !no_color_feedback()) {
-        cancel(); return false;
+        cancel(); cost.hud_micros += since(hud_start); return false;
     }
-    if (!replay_gl::BeginCapture()) { cancel(); return false; }
-    hud = ghost_compositor::begin_hud(compositor, occurrence) == ghost_compositor::Result::ok;
-    if (!hud) { replay_gl::EndCapture(); cancel(); }
+    if (!gateway(replay_gl::BeginCapture)) { cancel(); cost.hud_micros += since(hud_start); return false; }
+    const auto known = known_state();
+    hud = ghost_compositor::begin_hud(compositor, occurrence, &known) == ghost_compositor::Result::ok;
+    if (!hud) { gateway(replay_gl::EndCapture); cancel(); cost.hud_micros += since(hud_start); }
+    else ++cost.hud_draws;
     return hud;
 }
 void end_hud() {
     if (!hud) return;
     ghost_compositor::end_hud(compositor); hud = false;
-    if (!replay_gl::EndCapture()) cancel();
+    if (!gateway(replay_gl::EndCapture)) cancel();
+    cost.hud_micros += since(hud_start); // the mirrored draw between the two included
+}
+void take_cost(gs_hook_cost &into) {
+    const auto drawn = ghost_compositor::take_cost(compositor);
+    into.gl_queries += cost.gl_queries + drawn.queries;
+    into.query_micros += uint32_t(query_nanos / 1000) + drawn.query_micros;
+    into.error_reads += cost.error_reads;
+    into.open_micros = cost.open_micros; into.batch_micros = cost.batch_micros;
+    into.close_micros = cost.close_micros; into.finalize_micros = cost.finalize_micros;
+    into.validate_micros = drawn.validate_micros;
+    into.state_micros = drawn.state_micros; into.copy_micros = drawn.copy_micros;
+    into.draw_micros = drawn.draw_micros; into.draw_max_micros = drawn.draw_max_micros;
+    into.restore_micros = drawn.restore_micros;
+    into.hud_micros = cost.hud_micros; into.hud_draws = cost.hud_draws; into.layer_passes = cost.layer_passes;
+    into.ghosts = cost.ghosts;
+    cost = {}; query_nanos = 0;
 }
 }

@@ -2,7 +2,6 @@
 
 import logging
 from functools import partial
-import sys
 import threading
 import time
 
@@ -18,6 +17,14 @@ log = logging.getLogger("sm64.replay")
 
 class GpuCleanupError(RuntimeError):
     """An owned worker/resource may survive; recorder must retain scratch."""
+
+
+class GpuBackendUnsupported(RuntimeError):
+    """This producer's adapter can never open the encoder (gpuadapter.py).
+
+    A fact about the hardware, not a fault: no retry cooldown is armed, the
+    retry gate remembers it for the producer, and the recorder keeps the
+    desktop grab (sourcefactory.py)."""
 
 
 class GpuSink:
@@ -76,6 +83,7 @@ class GpuCapture:
         self._pause_check = lambda: False
         self._sessions_started = 0
         self._status = {"kind": "gpu", "state": "ready", "pending": 0}
+        self.unsupported = None
         self.error = None
         self.cleanup_error = None
         self.cfg = self.clock = self.ledger = self.publish = None
@@ -120,8 +128,6 @@ class GpuCapture:
         # deliberately unused. It cannot create a second ledger/encoder stream.
         if self._worker is not None or self.cfg is None:
             raise RuntimeError("GPU capture needs one prepared source/sink pair")
-        if getattr(sys, "frozen", False):
-            raise RuntimeError("GPU helper executable is not bundled in this build")
         self._on_stopped = on_stopped
         self._worker = threading.Thread(
             target=self._run, name="replay-gpu-media", daemon=True
@@ -166,21 +172,33 @@ class GpuCapture:
                     raise RuntimeError(terminal.reason)
                 if self.want_capture():
                     break  # Source/ROM stopped: normal recorder discovery reattaches.
-        except Exception as exc:
-            if isinstance(exc, CleanupPending):
-                self._retry_cleanup(exc.owner.close, "control", exc)
-            if isinstance(exc, GpuCleanupError):
-                self.cleanup_error = exc
-            self.error = str(exc)[:512]
+        except GpuBackendUnsupported as exc:
+            # Ends this source without an error: discovery now declines this
+            # producer, so the recorder's next attach is the desktop grab.
+            self.unsupported = str(exc)[:512]
             if self.retry_gate is not None:
-                self.retry_gate.failed(self.producer_identity, self.error)
+                self.retry_gate.unsupported(self.producer_identity, self.unsupported)
+            log.warning("GPU recording unavailable on this adapter: %s", self.unsupported)
+        except Exception as exc:
+            self._failed(exc)
             log.exception("GPU recording stopped")
         finally:
             self.end_audio(self._pcm)
-            self._status = {"kind": "gpu", "state": "stopped", "error": self.error}
+            self._status = ({"kind": "gpu", "state": "unsupported", "error": None,
+                             "reason": self.unsupported} if self.unsupported else
+                            {"kind": "gpu", "state": "stopped", "error": self.error})
             self._done.set()
             if self._on_stopped is not None:
                 self._on_stopped()
+
+    def _failed(self, exc):
+        if isinstance(exc, CleanupPending):
+            self._retry_cleanup(exc.owner.close, "control", exc)
+        if isinstance(exc, GpuCleanupError):
+            self.cleanup_error = exc
+        self.error = str(exc)[:512]
+        if self.retry_gate is not None:
+            self.retry_gate.failed(self.producer_identity, self.error)
 
     def _run_session(self, demand, session_factory):
         """Keep one session and lease owned through startup, failure and close."""
@@ -423,6 +441,8 @@ def discover(
     except (FileNotFoundError, OSError, BlockingIOError):
         if identity is None:
             return None
+    if retry_gate is not None and retry_gate.unsupported_for(identity):
+        return None  # Its adapter cannot record: the desktop grab stays.
     return GpuCapture(
         expected_pid,
         layout,

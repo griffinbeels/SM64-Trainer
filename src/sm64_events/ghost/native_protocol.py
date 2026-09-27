@@ -54,6 +54,14 @@ class Request(C.LittleEndianStructure):
     ]
 
 
+# The last list's hook cost after its query count and time (gs_hook_cost order).
+HOOK_STAGES = tuple((f"hook_{name}", U32) for name in (
+    "list", "list_micros", "flush_micros", "open_micros", "batch_micros", "validate_micros", "close_micros",
+    "finalize_micros", "state_micros", "copy_micros", "draw_micros", "draw_max_micros",
+    "restore_micros", "hud_micros", "hud_draws", "layer_passes", "query_micros", "error_reads",
+    "ghosts"))
+
+
 class Status(C.LittleEndianStructure):
     _pack_ = 4
     _fields_ = [
@@ -68,7 +76,7 @@ class Status(C.LittleEndianStructure):
         ("playback_state", U32), ("playback_reason", U32),
         ("displayed", U32), ("clips_requested", U32), ("clips_prepared", U32),
         ("clips_visible", U32), ("particles_dropped", U32),
-        ("hook_gl_queries", U32), ("hook_micros", U32), ("reserved", C.c_ubyte * 92),
+        ("hook_gl_queries", U32), ("hook_micros", U32), *HOOK_STAGES, ("reserved", C.c_ubyte * 16),
     ]
 
 

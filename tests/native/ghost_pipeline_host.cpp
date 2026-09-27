@@ -26,7 +26,7 @@
 
 namespace present=ghost_presentation;
 using Clock=std::chrono::steady_clock;
-static constexpr uint32_t W=640,H=480;
+static uint32_t W=640,H=480; // the drawable; main's optional width and height
 static double ms(Clock::time_point a,Clock::time_point b){return std::chrono::duration<double,std::milli>(b-a).count();}
 
 class RenderOwner {
@@ -169,6 +169,27 @@ static void json_string(const std::string& value){
         if(c<32)std::printf("\\u%04x",unsigned(c));else std::putchar(c);}std::putchar('"');
 }
 struct Times {double pipeline=0,swap=0;};
+/* The renderer state frame() leaves before the seal: ordinary_state, the VI
+ * draw to the default framebuffer, then the depth, blend and scissor the
+ * world pass ended with. */
+static void world_state(const gc::Dispatch& g) {
+    g.DepthFunc(cgl::LESS);g.DepthMask(1);g.BlendFuncSeparatei(0,cgl::ONE,cgl::ZERO,cgl::ONE,cgl::ZERO);
+    g.ScissorIndexed(0,0,0,int32_t(W),int32_t(H));
+}
+/* ...and that state as GLideN64's glue hands it over: its dispatch's record
+ * of every call, so the compositor asks the driver nothing. */
+static gc::Known known_before_seal(const Scene& scene,uint32_t program,uint32_t vao) {
+    gc::Known known{};
+    known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport|gc::Known::scissor|
+        gc::Known::program|gc::Known::vertex_array|gc::Known::depth|gc::Known::blend_factors;
+    known.draw=0;known.read=scene.fbo;
+    const int32_t box[4]={0,0,int32_t(W),int32_t(H)};
+    std::memcpy(known.viewport_box,box,sizeof(box));std::memcpy(known.scissor_box,box,sizeof(box));
+    known.caps=0x7f;known.enabled=0;known.current_program=program;known.bound_vertex_array=vao;
+    known.depth_function=cgl::LESS;known.depth_write=1;
+    known.blend_factor[0]=known.blend_factor[2]=cgl::ONE;known.blend_factor[1]=known.blend_factor[3]=cgl::ZERO;
+    return known;
+}
 struct Pipeline {
     Window window;gc::Dispatch g;Scene scene;ViRaster raster;gc::Instance* compositor=nullptr;
     present::Instance* presentation=nullptr;Fixture& fixture;unsigned frames=0,vertices=0,visible=0;
@@ -199,7 +220,9 @@ struct Pipeline {
         d.DrawBuffers=reinterpret_cast<decltype(d.DrawBuffers)>(load("glDrawBuffers"));
         presentation=present::create(d,1);require(presentation && present::prepare(presentation,1,W,H,W,H),"pipeline clean presentation");
         world.context_generation=1;world.target={scene.color,scene.depth,W,H,1,0,{0,0,int32_t(W),int32_t(H)},{.5f,.5f},{1,1}};
-        projection(world.projection);background(false);glFinish();
+        projection(world.projection);background(false);
+        // Frames run in ordinary_state from here on: that is the renderer's stable state.
+        gc::resync(compositor);glFinish();
     }
     ~Pipeline(){if(water_program){g.DeleteProgram(water_program);g.DeleteVertexArrays(1,&water_vao);}
         present::destroy(presentation);gc::destroy(compositor);ghost_playback::retire_on_context_loss();ghost_stream::rom(false);}
@@ -284,6 +307,7 @@ struct Pipeline {
                     pos=pos && cross>=-tolerance;neg=neg && cross<=tolerance;}
                 if(pos||neg)mask[y*W+x]=1;}}
     }
+    gc::Cost cost{}; // the last ghost frame's compositor cost
     Times frame(bool draw,bool evidence=false){
         const auto start=Clock::now();++frames;
         clock_word(fixture,fixture.config.global_timer,100+frames,4);
@@ -293,13 +317,32 @@ struct Pipeline {
         require(live.global_timer==100+frames && live.igt==10 && live.clock.elapsed_frames==origin_clock.elapsed_frames
             && live.clock.continuity_id==origin_clock.continuity_id,"paused IGT stays at origin while global timer advances");
         ghost_playback::safe_boundary(7,configuration);
-        ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});
+        ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,W,H});world_state(g);
         present::begin_update(presentation,live.sequence);
         gc::Pose poses[GP_GHOSTS]{};uint32_t count=0;gp_draw_token token{};
         if(draw){require(ghost_playback::evaluate(live,world,poses,count,token) && poses[0].count>1800,"actual playback/model geometry");
             vertices=0;for(uint32_t i=0;i<count;++i)vertices+=poses[i].count;visible=count;
             auto destination=target(scene,gc::Depth::ordinary);destination.occurrence=live.sequence;
-            require(gc::begin_batch(compositor,destination,poses,count)==gc::Result::ok,"real compositor batch");
+            const auto known=known_before_seal(scene,raster.program,raster.vao);
+            if(evidence){ // the witness's model of the state is the driver's
+                int32_t draw_fbo=-1,read_fbo=-1,program=-1,vao=-1,depth=-1,blend[4]{},scissor[4]{};float viewport[4]{};
+                bool on=false;uint8_t mask=0;
+                g.GetIntegerv(cgl::DRAW_FRAMEBUFFER_BINDING,&draw_fbo);g.GetIntegerv(cgl::READ_FRAMEBUFFER_BINDING,&read_fbo);
+                g.GetFloati_v(cgl::VIEWPORT,0,viewport);g.GetIntegeri_v(cgl::SCISSOR_BOX,0,scissor);
+                g.GetIntegerv(cgl::CURRENT_PROGRAM,&program);g.GetIntegerv(cgl::VERTEX_ARRAY_BINDING,&vao);
+                g.GetIntegerv(cgl::DEPTH_FUNC,&depth);g.GetBooleanv(cgl::DEPTH_WRITEMASK,&mask);
+                for(unsigned i=0;i<4;++i)g.GetIntegeri_v(cgl::blend_queries[i],0,&blend[i]);
+                for(auto cap:cgl::volatile_caps)if(cap!=cgl::BLEND && cap!=cgl::SCISSOR_TEST)on=on || g.IsEnabled(cap)!=0;
+                uint8_t indexed[2]{};g.GetBooleani_v(cgl::BLEND,0,&indexed[0]);g.GetBooleani_v(cgl::SCISSOR_TEST,0,&indexed[1]);
+                bool same=uint32_t(draw_fbo)==known.draw && uint32_t(read_fbo)==known.read && viewport[2]==float(W) &&
+                    viewport[3]==float(H) && !on && !indexed[0] && !indexed[1] && uint32_t(program)==known.current_program &&
+                    uint32_t(vao)==known.bound_vertex_array && uint32_t(depth)==known.depth_function && mask==known.depth_write;
+                for(unsigned i=0;i<4;++i)same=same && uint32_t(blend[i])==known.blend_factor[i] && scissor[i]==known.scissor_box[i];
+                require(same,"the known state is the driver's");
+            }
+            (void)gc::take_cost(compositor);
+            require(gc::begin_batch(compositor,destination,poses,count,&known)==gc::Result::ok,"real compositor batch");
+            cost=gc::take_cost(compositor);
             require(gc::finalize(compositor,live.sequence)==gc::Result::ok && ghost_playback::current(token),"finalized current ghost");
             const auto image=gc::display(compositor);
             const present::GhostViImage vi{image.texture,W,H,configuration,1,live.sequence};
@@ -318,13 +361,33 @@ struct Pipeline {
     }
 };
 
+struct Stages {std::vector<double> batch,validate,state,copy,draw,draw_max,restore,queries;
+    void add(const gc::Cost& c){batch.push_back(c.batch_micros);validate.push_back(c.validate_micros);
+        state.push_back(c.state_micros);copy.push_back(c.copy_micros);
+        draw.push_back(c.draw_micros);draw_max.push_back(c.draw_max_micros);restore.push_back(c.restore_micros);
+        queries.push_back(c.queries);}
+};
+static void percentiles(const char* name,std::vector<double> values){
+    std::sort(values.begin(),values.end());
+    std::printf("\"%s\":{\"p50\":%.1f,\"p95\":%.1f,\"max\":%.1f}",name,values[values.size()/2],
+        values[size_t(std::ceil(values.size()*.95))-1],values.back());
+}
+static void stages(const char* name,const Stages& s){
+    std::printf("\"%s\":{",name);percentiles("batch_us",s.batch);std::printf(",");percentiles("validate_us",s.validate);
+    std::printf(",");percentiles("state_us",s.state);
+    std::printf(",");percentiles("copy_us",s.copy);std::printf(",");percentiles("draw_us",s.draw);std::printf(",");
+    percentiles("slowest_ghost_us",s.draw_max);std::printf(",");percentiles("restore_us",s.restore);std::printf(",");
+    percentiles("driver_queries",s.queries);std::printf("}");
+}
 static void statistics(const char* name,std::vector<double> values){
     std::sort(values.begin(),values.end());unsigned exceeded=0;for(auto value:values)if(value>1000.0/30)++exceeded;
     std::printf("\"%s\":{\"samples\":%zu,\"p50_ms\":%.6f,\"p95_ms\":%.6f,\"max_ms\":%.6f,\"over_budget\":%u}",
         name,values.size(),values[values.size()/2],values[size_t(std::ceil(values.size()*.95))-1],values.back(),exceeded);
 }
 int main(int argc,char** argv){
-    require(argc==5,"usage: ghost_pipeline_host layout ROM output saved-GCLIP4-clip");const auto foreground=GetForegroundWindow();
+    require(argc==5 || argc==7,"usage: ghost_pipeline_host layout ROM output saved-GCLIP4-clip [width height]");
+    if(argc==7){W=uint32_t(std::stoul(argv[5]));H=uint32_t(std::stoul(argv[6]));}
+    require(W>=320 && H>=240 && W<=4096 && H<=4096,"drawable size");const auto foreground=GetForegroundWindow();
     Fixture fixture(argv[1]);configure_fixture(fixture);
     std::ifstream file(argv[2],std::ios::binary);std::vector<uint8_t> rom((std::istreambuf_iterator<char>(file)),{});
     require(rom.size()==(8u<<20),"read-only supplied ROM");const auto* api=ghost_playback::api();
@@ -359,7 +422,7 @@ int main(int argc,char** argv){
     renderer.run([&]{pipeline=std::make_unique<Pipeline>(fixture,captured);});const auto setup_ms=ms(prepare_start,Clock::now());
     const std::filesystem::path out(argv[3]);std::filesystem::create_directories(out);
     std::vector<uint8_t> baseline,opaque,half,wall;std::vector<double> baseline_times,ghost_times,swap_times,total_times;
-    std::vector<double> multi_times,multi_swap_times,multi_total_times;
+    std::vector<double> multi_times,multi_swap_times,multi_total_times,four_times;Stages one_stages,four_stages,multi_stages;
     unsigned particle_pixels=0,star_pixels=0,star_rgb[3]={},silhouette=0,outside=0,alpha_errors=0,occlusion_errors=0,multi_silhouette=0,multi_outside=0,multi_visible=0,multi_vertices=0;
     renderer.run([&]{pipeline->frame(false,true);baseline=pipeline->last_visible;ppm(out/"baseline.ppm",baseline);
         pipeline->frame(true,true);opaque=pipeline->last_visible;ppm(out/"opacity100.ppm",opaque);
@@ -466,8 +529,18 @@ int main(int argc,char** argv){
         for(unsigned i=0;i<20;++i){pipeline->frame(false);pipeline->frame(true);}
         for(unsigned i=0;i<180;++i){Times base{},ghost{};if(i&1){ghost=pipeline->frame(true);base=pipeline->frame(false);}
             else{base=pipeline->frame(false);ghost=pipeline->frame(true);}
+            one_stages.add(pipeline->cost);
             baseline_times.push_back(base.pipeline);ghost_times.push_back(ghost.pipeline);swap_times.push_back(ghost.swap);total_times.push_back(ghost.pipeline+ghost.swap);}
         require(!IsWindowVisible(pipeline->window.window),"no visible native window");});
+    // Four ghosts, then every ghost in one batch.
+    request.clip_count=4;request.tint_enabled=1;
+    for(uint32_t i=0;i<4;++i){request.clips[i].clip_id[0]=uint8_t(1+i);request.clips[i].hue_degrees=(i*22)%360;}
+    ++request.revision;require(api->configure(&request)==GP_OK,"configure four ghosts");
+    renderer.run([&]{
+        for(unsigned i=0;i<20;++i){pipeline->frame(false);pipeline->frame(true);}
+        for(unsigned i=0;i<180;++i){if(i&1){four_times.push_back(pipeline->frame(true).pipeline);four_stages.add(pipeline->cost);pipeline->frame(false);}
+            else{pipeline->frame(false);four_times.push_back(pipeline->frame(true).pipeline);four_stages.add(pipeline->cost);}}
+        require(pipeline->visible==4,"four ghosts stay visible");});
     // Every ghost in one batch: one clean copy, per-body depth, one presentation.
     request.clip_count=GP_GHOSTS;request.tint_enabled=1;
     for(uint32_t i=0;i<GP_GHOSTS;++i){request.clips[i].clip_id[0]=uint8_t(1+i);request.clips[i].hue_degrees=(i*22)%360;}
@@ -480,6 +553,7 @@ int main(int argc,char** argv){
         for(unsigned i=0;i<20;++i){pipeline->frame(false);pipeline->frame(true);}
         for(unsigned i=0;i<180;++i){Times base{},ghost{};if(i&1){ghost=pipeline->frame(true);base=pipeline->frame(false);}
             else{base=pipeline->frame(false);ghost=pipeline->frame(true);}
+            multi_stages.add(pipeline->cost);
             multi_times.push_back(ghost.pipeline);multi_swap_times.push_back(ghost.swap);multi_total_times.push_back(ghost.pipeline+ghost.swap);}
         require(pipeline->visible==GP_GHOSTS,"full set stays visible");});
     const auto vertex_count=pipeline->vertices;const auto swap_disabled=pipeline->swap_interval_disabled;
@@ -511,14 +585,17 @@ int main(int argc,char** argv){
     }
     renderer.run([&]{pipeline.reset();});ghost_stream::api()->disable();api->revoke(GP_DISABLED);require(api->collect()==GP_OK,"worker collects real retired model");
     require(api->release_worker()==GP_OK,"worker releases real storage");require(GetForegroundWindow()==foreground,"foreground unchanged");
-    std::printf("{\"ok\":true,\"synthetic\":true,\"live_gliden64\":false,\"width\":640,\"height\":480,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"setup_ms\":%.6f,\"swap_interval_disabled\":%s,",
-        vertex_count,silhouette,outside,alpha_errors,occlusion_errors,setup_ms,swap_disabled?"true":"false");
+    std::printf("{\"ok\":true,\"synthetic\":true,\"live_gliden64\":false,\"width\":%u,\"height\":%u,\"vertices\":%u,\"silhouette_pixels\":%u,\"outside_pixels_changed\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"setup_ms\":%.6f,\"swap_interval_disabled\":%s,",
+        W,H,vertex_count,silhouette,outside,alpha_errors,occlusion_errors,setup_ms,swap_disabled?"true":"false");
     std::printf("\"capture_version\":%u,\"clip_version\":%u,\"playback_version\":%u,\"follow_segment_origin\":true,\"paused_igt_ignores_global_timer\":true,",
         GC_VERSION,GCLIP_VERSION,GP_VERSION);
     std::printf("\"gamma\":false,\"gpu_vendor\":");json_string(gpu_vendor);
     std::printf(",\"gpu_renderer\":");json_string(gpu_renderer);std::printf(",\"gl_version\":");json_string(gl_version);std::printf(",");
     statistics("baseline",baseline_times);std::printf(",");statistics("pipeline_gpu_completed",ghost_times);std::printf(",");
     statistics("blocking_swap",swap_times);std::printf(",");statistics("including_swap",total_times);
+    // The compositor's own stages per ghost frame (microseconds) and its driver queries.
+    std::printf(",\"stages\":{");stages("1",one_stages);std::printf(",");stages("4",four_stages);std::printf(",");
+    stages("16",multi_stages);std::printf("},");statistics("four_pipeline_gpu_completed",four_times);
     std::printf(",\"shadow\":{\"captured\":true,\"pixels\":%u,\"outside_pixels_changed\":%u,\"switch_errors\":%u,"
         "\"darkening_errors\":%u,\"alpha_errors\":%u,\"occlusion_errors\":%u,\"would_occlude\":%u}",
         shadow_pixels,shadow_outside,shadow_switch_errors,shadow_darkening_errors,shadow_alpha_errors,

@@ -10,7 +10,23 @@
 #endif
 #define LOG_CAPACITY 64u
 #define LOG_LINE_BYTES 1024u
-#define LOG_MAX_BYTES (1024u * 1024u)
+/* The live file plus .1 and .2. Healthy capture writes about 0.15 MB/h
+ * (gpu_summary once a minute), so 12 MiB keeps days; a noisy session keeps
+ * hours. Tests shrink the sizes to exercise rotation. */
+#ifndef LOG_MAX_BYTES
+#define LOG_MAX_BYTES (4u * 1024u * 1024u)
+#endif
+#define LOG_ROTATED 2u
+/* sm64_trainer_gfx.activation.log holds only this process's startup and
+ * capture-start lines (activation_event), so the main log's rotation cannot
+ * take them. The previous Project64 process keeps .1; past the cap, sidecar
+ * copies are dropped (the main log still has them). */
+#ifndef ACTIVATION_MAX_BYTES
+#define ACTIVATION_MAX_BYTES (256u * 1024u)
+#endif
+/* After a capture request every slow callback is logged, unthrottled, for
+ * this long: the first capture's preparation is where a freeze would be. */
+#define STALL_WATCH_SECONDS 15
 typedef struct {
     SRWLOCK lock;
     HANDLE thread, event;
@@ -18,14 +34,30 @@ typedef struct {
     LONG stopping;
     unsigned read, count;
     char lines[LOG_CAPACITY][LOG_LINE_BYTES];
-    wchar_t path[MAX_PATH], previous[MAX_PATH];
+    unsigned char sidecar[LOG_CAPACITY];
+    wchar_t path[MAX_PATH], rotated[LOG_ROTATED][MAX_PATH];
+    wchar_t activation[MAX_PATH], activation_previous[MAX_PATH];
 } log_session_t;
 static SRWLOCK g_log_lifetime = SRWLOCK_INIT;
 static log_session_t *g_log;
 static volatile LONG g_log_dropped;
+static volatile LONG g_activation_rotated; /* once per process, by the writer */
+static volatile LONG64 g_stall_watch_qpc;  /* capture request; 0 = none yet */
 static int64_t g_diagnostic_frequency;
 
-static void plugin_logf(const char *event, const char *format, ...) {
+/* The events copied to the activation sidecar. callback_stall joins them
+ * only inside the stall watch window. */
+static int activation_event(const char *event) {
+    static const char *const names[] = {
+        "init_result", "rom_open_begin", "rom_open_end", "rom_closed_begin",
+        "gpu_request", "gpu_warm", "gpu_prepare", "anchor_published", "gpu_failure",
+    };
+    for (unsigned n = 0; n < sizeof names / sizeof *names; ++n)
+        if (!strcmp(event, names[n])) return 1;
+    return 0;
+}
+
+static void plugin_log_line(int sidecar, const char *event, const char *format, va_list args) {
     DWORD saved_error = GetLastError();
     /* A shutdown removes the pointer under this lock before the worker frees
      * its session. Try-only acquisition also covers simultaneous lifecycle. */
@@ -35,10 +67,7 @@ static void plugin_logf(const char *event, const char *format, ...) {
     log_session_t *session = g_log;
     if (!session) { ReleaseSRWLockShared(&g_log_lifetime); SetLastError(saved_error); return; }
     char details[720], line[LOG_LINE_BYTES];
-    va_list args;
-    va_start(args, format);
     vsnprintf(details, sizeof details, format, args);
-    va_end(args);
     SYSTEMTIME now;
     GetSystemTime(&now);
     snprintf(line, sizeof line,
@@ -48,7 +77,9 @@ static void plugin_logf(const char *event, const char *format, ...) {
         (unsigned long)GetCurrentThreadId(), GFXWRAP_BUILD_ID, event, details);
     if (TryAcquireSRWLockExclusive(&session->lock)) {
         if (session->count < LOG_CAPACITY) {
-            memcpy(session->lines[(session->read + session->count) % LOG_CAPACITY], line, sizeof line);
+            const unsigned slot = (session->read + session->count) % LOG_CAPACITY;
+            memcpy(session->lines[slot], line, sizeof line);
+            session->sidecar[slot] = (unsigned char)(sidecar != 0);
             session->count++;
             SetEvent(session->event);
         } else InterlockedIncrement(&g_log_dropped);
@@ -58,29 +89,68 @@ static void plugin_logf(const char *event, const char *format, ...) {
     SetLastError(saved_error);
 }
 
+static void plugin_logf(const char *event, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    plugin_log_line(activation_event(event), event, format, args);
+    va_end(args);
+}
+
+static void plugin_log_activation(const char *event, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    plugin_log_line(1, event, format, args);
+    va_end(args);
+}
+
 static void plugin_log(const char *message) { plugin_logf("message", "%s", message); }
 
-static void log_write_line(log_session_t *session, const char *line) {
-    /* File sharing plus one append WriteFile keeps records from separate PJ64
-     * processes intact. Rotation may lose a race; retry on the next record. */
-    HANDLE file = CreateFileW(session->path, FILE_APPEND_DATA | GENERIC_READ,
+/* A capture request opens the stall watch window (callback_diagnostic_end). */
+static void diagnostics_watch_stalls(int64_t request_qpc) {
+    InterlockedExchange64(&g_stall_watch_qpc, (LONG64)request_qpc);
+}
+
+static HANDLE log_open_append(const wchar_t *path) {
+    return CreateFileW(path, FILE_APPEND_DATA | GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file == INVALID_HANDLE_VALUE) { InterlockedIncrement(&g_log_dropped); return; }
-    LARGE_INTEGER size;
-    if (GetFileSizeEx(file, &size) && size.QuadPart >= LOG_MAX_BYTES) {
-        CloseHandle(file);
-        MoveFileExW(session->path, session->previous, MOVEFILE_REPLACE_EXISTING);
-        file = CreateFileW(session->path, FILE_APPEND_DATA,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL, NULL);
-        if (file == INVALID_HANDLE_VALUE) { InterlockedIncrement(&g_log_dropped); return; }
-    }
+}
+
+static void log_append(HANDLE file, const char *line) {
     DWORD written;
     DWORD bytes = (DWORD)strlen(line);
     if (!WriteFile(file, line, bytes, &written, NULL) || written != bytes)
         InterlockedIncrement(&g_log_dropped);
     CloseHandle(file);
+}
+
+static void log_write_line(log_session_t *session, const char *line, int sidecar) {
+    /* File sharing plus one append WriteFile keeps records from separate PJ64
+     * processes intact. Rotation may lose a race; retry on the next record. */
+    HANDLE file = log_open_append(session->path);
+    if (file == INVALID_HANDLE_VALUE) InterlockedIncrement(&g_log_dropped);
+    else {
+        LARGE_INTEGER size;
+        if (GetFileSizeEx(file, &size) && size.QuadPart >= LOG_MAX_BYTES) {
+            CloseHandle(file);
+            for (unsigned n = LOG_ROTATED - 1; n > 0; --n)
+                MoveFileExW(session->rotated[n - 1], session->rotated[n], MOVEFILE_REPLACE_EXISTING);
+            MoveFileExW(session->path, session->rotated[0], MOVEFILE_REPLACE_EXISTING);
+            file = log_open_append(session->path);
+        }
+        if (file == INVALID_HANDLE_VALUE) InterlockedIncrement(&g_log_dropped);
+        else log_append(file, line);
+    }
+    if (!sidecar) return;
+    if (!InterlockedExchange(&g_activation_rotated, 1))
+        MoveFileExW(session->activation, session->activation_previous, MOVEFILE_REPLACE_EXISTING);
+    file = log_open_append(session->activation);
+    if (file == INVALID_HANDLE_VALUE) { InterlockedIncrement(&g_log_dropped); return; }
+    LARGE_INTEGER size;
+    if (GetFileSizeEx(file, &size) && size.QuadPart >= ACTIVATION_MAX_BYTES) {
+        CloseHandle(file); InterlockedIncrement(&g_log_dropped); return;
+    }
+    log_append(file, line);
 }
 
 static DWORD WINAPI log_worker(LPVOID parameter) {
@@ -89,18 +159,20 @@ static DWORD WINAPI log_worker(LPVOID parameter) {
         WaitForSingleObject(session->event, INFINITE);
         for (;;) {
             char line[LOG_LINE_BYTES];
+            int sidecar = 0;
             AcquireSRWLockExclusive(&session->lock);
             BOOL have_line = session->count != 0;
             BOOL stopping = session->stopping != 0;
             if (have_line) {
                 memcpy(line, session->lines[session->read], sizeof line);
+                sidecar = session->sidecar[session->read];
                 session->read = (session->read + 1) % LOG_CAPACITY;
                 session->count--;
             }
             ReleaseSRWLockExclusive(&session->lock);
             if (!have_line && stopping) goto finished;
             if (!have_line) break;
-            log_write_line(session, line);
+            log_write_line(session, line, sidecar);
         }
     }
 finished:;
@@ -118,9 +190,12 @@ static void diagnostics_start(void) {
     if (!session) { ReleaseSRWLockExclusive(&g_log_lifetime); return; }
     InitializeSRWLock(&session->lock);
     self_dir(session->path, MAX_PATH);
+    wcsncpy_s(session->activation, MAX_PATH, session->path, _TRUNCATE);
     wcsncat_s(session->path, MAX_PATH, L"sm64_trainer_gfx.log", _TRUNCATE);
-    wcsncpy_s(session->previous, MAX_PATH, session->path, _TRUNCATE);
-    wcsncat_s(session->previous, MAX_PATH, L".1", _TRUNCATE);
+    for (unsigned n = 0; n < LOG_ROTATED; ++n)
+        swprintf_s(session->rotated[n], MAX_PATH, L"%s.%u", session->path, n + 1);
+    wcsncat_s(session->activation, MAX_PATH, L"sm64_trainer_gfx.activation.log", _TRUNCATE);
+    swprintf_s(session->activation_previous, MAX_PATH, L"%s.1", session->activation);
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     g_diagnostic_frequency = frequency.QuadPart;
@@ -169,10 +244,17 @@ static void log_module_path(const char *event, HMODULE module) {
     plugin_logf(event, "path=\"%s\"", path);
 }
 
+/* Per-call durations of one summary window in 0.1 ms steps; the last
+ * bucket holds everything slower (its p99 then reports the window max). */
+#define CALLBACK_BUCKETS 256u
 typedef struct {
     const char *name;
     uint64_t calls, slow_calls;
-    int64_t previous, last_report, last_stall_report, max_total, max_gap;
+    int64_t previous, last_report, last_stall_report;
+    /* The current summary window only. */
+    uint64_t window_calls;
+    int64_t window_total, window_max_total, window_max_gap;
+    uint32_t histogram[CALLBACK_BUCKETS];
 } callback_diagnostic_t;
 static callback_diagnostic_t g_diagnostic_list = {"ProcessDList"};
 static callback_diagnostic_t g_diagnostic_update = {"UpdateScreen"};
@@ -184,6 +266,18 @@ static void callback_diagnostic_reset(callback_diagnostic_t *note) {
     note->name = name;
 }
 
+static double callback_ms(int64_t ticks) { return 1000.0 * ticks / g_diagnostic_frequency; }
+
+static double callback_p99_ms(const callback_diagnostic_t *note) {
+    const uint64_t rank = note->window_calls - note->window_calls / 100; /* ceil(0.99 n) for n >= 1 */
+    uint64_t seen = 0;
+    for (unsigned n = 0; n + 1 < CALLBACK_BUCKETS; ++n) {
+        seen += note->histogram[n];
+        if (seen >= rank) return 0.1 * (n + 1);
+    }
+    return callback_ms(note->window_max_total);
+}
+
 /* total spans the whole forwarded callback, including any stamp adapter work. */
 static void callback_diagnostic_end(callback_diagnostic_t *note, int64_t begin, int64_t end) {
     if (!g_diagnostic_frequency) return;
@@ -191,23 +285,44 @@ static void callback_diagnostic_end(callback_diagnostic_t *note, int64_t begin, 
     note->previous = begin;
     int64_t total = end - begin;
     note->calls++;
-    if (total > note->max_total) note->max_total = total;
-    if (gap > note->max_gap) note->max_gap = gap;
+    note->window_calls++;
+    note->window_total += total;
+    if (total > note->window_max_total) note->window_max_total = total;
+    if (gap > note->window_max_gap) note->window_max_gap = gap;
+    const int64_t bucket = total * 10000 / g_diagnostic_frequency;
+    note->histogram[bucket < CALLBACK_BUCKETS - 1 ? bucket : CALLBACK_BUCKETS - 1]++;
     BOOL slow = total >= g_diagnostic_frequency / 50 || gap >= g_diagnostic_frequency / 20;
     if (slow) note->slow_calls++;
-    /* First stall immediately, then at most once per five seconds per callback;
-     * once a minute even if quiet. Gaps also include legitimate emulator pauses. */
+    const int64_t watch = InterlockedCompareExchange64(&g_stall_watch_qpc, 0, 0);
+    const BOOL watched = slow && watch && end >= watch
+        && end - watch < g_diagnostic_frequency * STALL_WATCH_SECONDS;
+    /* First stall immediately, then at most once per five seconds per callback,
+     * except inside the stall watch window; a summary once a minute. Gaps also
+     * include legitimate emulator pauses. */
     int64_t since_report = end - (slow ? note->last_stall_report : note->last_report);
-    if (slow && note->last_stall_report && since_report < g_diagnostic_frequency * 5) return;
+    if (slow && !watched && note->last_stall_report && since_report < g_diagnostic_frequency * 5) return;
     if (!slow && !note->last_report) { note->last_report = end; return; }
     if (!slow && since_report < g_diagnostic_frequency * 60) return;
-    plugin_logf(slow ? "callback_stall" : "callback_summary",
-        "callback=%s calls=%llu slow_calls=%llu total_ms=%.3f gap_ms=%.3f "
-        "max_total_ms=%.3f max_gap_ms=%.3f dropped_records=%ld",
+    if (slow) {
+        (watched ? plugin_log_activation : plugin_logf)("callback_stall",
+            "callback=%s calls=%llu slow_calls=%llu total_ms=%.3f gap_ms=%.3f "
+            "begin_qpc=%lld end_qpc=%lld watched=%d dropped_records=%ld",
+            note->name, (unsigned long long)note->calls, (unsigned long long)note->slow_calls,
+            callback_ms(total), callback_ms(gap), (long long)begin, (long long)end, watched,
+            (long)g_log_dropped);
+        note->last_stall_report = end;
+        return;
+    }
+    plugin_logf("callback_summary",
+        "callback=%s calls=%llu slow_calls=%llu window_calls=%llu mean_ms=%.3f p99_ms=%.3f "
+        "max_ms=%.3f max_gap_ms=%.3f window_s=%.1f dropped_records=%ld",
         note->name, (unsigned long long)note->calls, (unsigned long long)note->slow_calls,
-        1000.0 * total / g_diagnostic_frequency, 1000.0 * gap / g_diagnostic_frequency,
-        1000.0 * note->max_total / g_diagnostic_frequency,
-        1000.0 * note->max_gap / g_diagnostic_frequency, (long)g_log_dropped);
+        (unsigned long long)note->window_calls,
+        note->window_calls ? callback_ms(note->window_total) / note->window_calls : 0.0,
+        callback_p99_ms(note), callback_ms(note->window_max_total), callback_ms(note->window_max_gap),
+        (double)(end - note->last_report) / g_diagnostic_frequency, (long)g_log_dropped);
     note->last_report = end;
-    if (slow) note->last_stall_report = end;
+    note->window_calls = 0;
+    note->window_total = note->window_max_total = note->window_max_gap = 0;
+    memset(note->histogram, 0, sizeof note->histogram);
 }

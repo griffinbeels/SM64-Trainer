@@ -77,6 +77,15 @@ public:
         *out = {read_, textures_[unit_], default_read_};
         return true;
     }
+    // One unit's 2D texture and the active unit, as observed; false until known.
+    bool texture(unsigned unit, GLuint *out) const {
+        if (!out || unit >= texture_units || !(known_textures_ & (1u << unit))) return false;
+        *out = textures_[unit]; return true;
+    }
+    bool active_unit(unsigned *out) const {
+        if (!out || !unit_known_) return false;
+        *out = unit_; return true;
+    }
     // Any unobserved mutation/error invalidates the witness until reconstructed.
     void unknown() { read_known_ = unit_known_ = default_known_ = false;
                      known_textures_ = 0; }

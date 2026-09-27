@@ -22,15 +22,16 @@ def isolated_activity(monkeypatch):
     monkeypatch.setattr(resources, "competing_runs", lambda _: [])
 
 
-@pytest.mark.parametrize("obs,workers,cpus", [(False, 8, 20), (True, 4, 8)])
-def test_each_run_gets_half_the_machine_budget_and_obs_has_a_lower_ceiling(obs, workers, cpus):
+@pytest.mark.parametrize("reduced,workers,cpus", [(False, 8, 20), (True, 4, 8)])
+def test_each_run_gets_half_the_machine_budget_and_the_reduced_one_is_lower(reduced, workers, cpus):
     """Two merge checks may run at once; together they fill the old
-    single-run budget (16 workers normal, 8 with OBS) and never exceed it."""
-    actual, mask = resources.budget(list(range(32)), obs)
+    single-run budget (16 workers normal, 8 with OBS or Project64 open) and
+    never exceed it."""
+    actual, mask = resources.budget(list(range(32)), reduced)
     assert (actual, len(mask)) == (workers, cpus)
-    assert actual * resources.SLOTS == resources.MACHINE_WORKERS[obs]
-    assert resources.budget(list(range(32)), obs, 100)[0] == workers
-    assert resources.budget(list(range(32)), obs, 0)[0] == 0
+    assert actual * resources.SLOTS == resources.MACHINE_WORKERS[reduced]
+    assert resources.budget(list(range(32)), reduced, 100)[0] == workers
+    assert resources.budget(list(range(32)), reduced, 0)[0] == 0
 
 
 def test_a_dedicated_ci_machine_keeps_every_cpu_for_the_job_to_divide():
@@ -77,16 +78,16 @@ def test_obs_opening_mid_run_tightens_then_latches_and_restores(tmp_path, monkey
     original = process.cpu_affinity()
     # The desktop's rule; a CI runner (GITHUB_ACTIONS) has no OBS to yield to.
     monkeypatch.setattr(resources, "dedicated_machine", lambda: False)
-    monkeypatch.setattr(resources, "obs_is_open", lambda: False)
+    monkeypatch.setattr(resources, "protected_apps_open", lambda: [])
     with resources.TestResources(path=tmp_path / "budget.lock") as lease:
         before = process.cpu_affinity()
-        monkeypatch.setattr(resources, "obs_is_open", lambda: True)
+        monkeypatch.setattr(resources, "protected_apps_open", lambda: ["OBS"])
         lease.refresh()
         assert process.cpu_affinity() == resources.budget(original, True)[1]
         assert set(process.cpu_affinity()) <= set(before)
-        monkeypatch.setattr(resources, "obs_is_open", lambda: False)
+        monkeypatch.setattr(resources, "protected_apps_open", lambda: [])
         lease.refresh()
-        assert lease.obs is True
+        assert lease.protecting == ["OBS"]
     assert process.cpu_affinity() == original
 
 
@@ -95,7 +96,7 @@ def test_an_outside_run_started_mid_run_is_named_and_the_scan_stays_rare(tmp_pat
     the expensive part, runs once per SCAN_SECONDS. A run that appears
     mid-way is still reported, at the next scan."""
     monkeypatch.setattr(resources, "dedicated_machine", lambda: False)
-    monkeypatch.setattr(resources, "obs_is_open", lambda: False)
+    monkeypatch.setattr(resources, "protected_apps_open", lambda: [])
     scans, outside = [], []
     monkeypatch.setattr(resources, "competing_runs", lambda _: scans.append(1) or list(outside))
     now = [1000.0]
@@ -104,16 +105,35 @@ def test_an_outside_run_started_mid_run_is_named_and_the_scan_stays_rare(tmp_pat
         lease.clock = lambda: now[0]
         for tick in range(3):
             if tick == 1:   # OBS opens between scans: the very next tick tightens
-                monkeypatch.setattr(resources, "obs_is_open", lambda: True)
+                monkeypatch.setattr(resources, "protected_apps_open", lambda: ["OBS"])
             lease.refresh()
             now[0] += resources.POLL_SECONDS
         assert len(scans) == 1, "one scan per SCAN_SECONDS, not one per tick"
-        assert lease.obs, "the OBS check still runs every tick"
+        assert lease.protecting, "the OBS check still runs every tick"
         outside.append({"pid": 4242, "started": 1.0, "checkout": "elsewhere"})
         now[0] += resources.SCAN_SECONDS
         lease.refresh()
         assert len(scans) == 2 and 4242 in lease.competitors
     assert "outside test PID 4242 in elsewhere" in capsys.readouterr().out
+
+
+class _Named:
+    def __init__(self, name):
+        self.info = {"name": name}
+
+
+def test_project64_open_takes_the_reduced_budget_and_says_why(tmp_path, monkeypatch, capsys):
+    """He is playing. On 2026-09-25 a run on the normal budget (8 workers on
+    20 CPUs), Project64 open and OBS closed, froze his game; Project64 now
+    reduces the budget as OBS does, and admission names the app."""
+    monkeypatch.setattr(resources, "dedicated_machine", lambda: False)
+    monkeypatch.setattr(resources.psutil, "process_iter",
+                        lambda attrs=None: iter([_Named("explorer.exe"), _Named("Project64.exe")]))
+    assert resources.protected_apps_open() == ["Project64"]
+    assert resources.obs_is_open(), "the browser wait (tests/conftest.py) lengthens on the reduced budget"
+    with resources.TestResources(path=tmp_path / "budget.lock", admit=False) as lease:
+        assert (lease.workers, lease.cpus) == resources.budget(lease.eligible, True)
+    assert "Project64 open, reduced budget" in capsys.readouterr().out
 
 
 def _spawn(script, *args):

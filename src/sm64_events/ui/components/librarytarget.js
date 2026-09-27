@@ -124,6 +124,18 @@ function activeStratFor(view, entityKey) {
   return (hit && hit.last_strat) || null;
 }
 
+// The staleness revision as this page last saw it ON SCREEN. The Library
+// stays mounted behind display:none, and every refresh event used to refetch
+// its strategies there, one request per associated entity, for a page nobody
+// was looking at (perf audit 2026-09-25, UI-2). A bump while hidden is only
+// remembered: the page catches up with one refetch the moment it is shown.
+// A page not told it is hidden (`active` undefined) counts as shown.
+function useRevisionWhileActive(revision, active) {
+  const seen = useRef(revision);
+  if (active !== false) seen.current = revision;
+  return seen.current;
+}
+
 // Every strategy this entity knows, each carrying its own rank + PB —
 // GET /api/target/strategies?entity=, the picker's step-3 payload
 // (views.py::build_entity_strategies) and the only source for "your rank on
@@ -132,9 +144,9 @@ function activeStratFor(view, entityKey) {
 // different question). One fetch per entity, not per approach — several
 // approaches can share one matched_strategy name across sibling 100-coin
 // targets (caveat 4) and must read the identical standing.
-function useEntityStrategies(entityKey, revision) {
+function useEntityStrategies(entityKey, revision, active) {
   const [data, setData] = useState(null);
-  useIdentityFetch(entityKey, revision, (cleared) => {
+  useIdentityFetch(entityKey, useRevisionWhileActive(revision, active), (cleared) => {
     if (!entityKey) { setData(null); return undefined; }
     let cancelled = false;
     if (cleared) setData(null);
@@ -151,9 +163,9 @@ function useEntityStrategies(entityKey, revision) {
 // segment, reduced to the entity's best saved PB across its strategies.
 // Name-agnostic on purpose: "it reads whatever the data was for that
 // segment", and his practice may sit under any strategy name.
-function useAssocStandings(entityKeys, revision) {
+function useAssocStandings(entityKeys, revision, active) {
   const [standings, setStandings] = useState({});
-  useIdentityFetch(entityKeys.join(","), revision, (cleared) => {
+  useIdentityFetch(entityKeys.join(","), useRevisionWhileActive(revision, active), (cleared) => {
     let cancelled = false;
     if (cleared) setStandings({});
     entityKeys.forEach((key) => {
@@ -1077,7 +1089,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
                                focusGoalCs = null,
                                focusYou = false, focusRow = null,
                                fallbackLabel = null, onRelink = () => {},
-                               resolveEntityLabel = null, onOpenRunner = null }) {
+                               resolveEntityLabel = null, onOpenRunner = null, active }) {
   const [query, setQuery] = useState("");
   // The OPEN approach's `approachIdentity` — target-scoped, not just its
   // name, so two sibling targets whose approaches share a name (fix round 1)
@@ -1185,7 +1197,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
     pieces.forEach((piece) => { if (piece.adopted) keys.add(piece.adopted); });
     return [...keys].sort();
   }, [approaches, pieces]);
-  const assocStandings = useAssocStandings(assocEntities, t && t.mareloRev);
+  const assocStandings = useAssocStandings(assocEntities, t && t.mareloRev, active);
 
   // Task 0096: the record door's intent — `{key, name, parents, link}`.
   // Held here (not in the door) because the recorder is ONE page-level
@@ -1197,7 +1209,7 @@ export function LibraryTarget({ t, targets, version = "us", versions, gradingVer
                     assocStandings, openRecorder: setRecording };
 
   const activeStrat = activeStratFor(t && t.view, entityKey);
-  const stratsData = useEntityStrategies(entityKey, t && t.mareloRev);
+  const stratsData = useEntityStrategies(entityKey, t && t.mareloRev, active);
   const stratByName = useMemo(() => {
     const map = {};
     ((stratsData && stratsData.strategies) || []).forEach((entry) => { map[entry.name] = entry; });

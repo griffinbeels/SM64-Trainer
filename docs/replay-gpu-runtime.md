@@ -99,9 +99,11 @@ cannot see a swap in game memory: the poller reads the header before the
 detectors whenever the timer goes back and at least every
 `PRACTICE_ROM_CHECK_S`, and re-offers a refused cartridge every
 `PRACTICE_ROM_RETRY_S`. `Pj64Memory.rom_header` remembers where it found the
-image, because Allocate_ROM releases the old image before allocating the next:
-a steady check is one 0x40-byte read (`tests/test_pj64_rom_header.py` drives
-that against a real process; `tests/test_poller.py` drives the whole swap cycle).
+image, for every reader of that process, because Allocate_ROM releases the old
+image before allocating the next, and looks first where Project64 1.6 keeps it
+(0x10000000 past RDRAM): a steady check, or a fresh reader, is one 0x40-byte
+read (`tests/test_pj64_rom_header.py` drives that against a real process;
+`tests/test_poller.py` drives the whole swap cycle).
 
 Updates: when the user clicks Update in the app, the new build restarts and
 `CaptureLayer.refresh_if_stale` (at boot and every two seconds) copies the
@@ -164,16 +166,40 @@ worker. With no demand the native worker is passive and the renderer runs as
 the original single-context renderer: the never-current shared GL anchor the
 worker leases is published on the renderer thread at the first admitted
 capture surface (`EnsureAnchor`), once per context, never at ROM open. A
-direct or server-off session therefore creates no extra driver context
-(round 48). The cost moves to the first captured frame after a server
-attaches. Whether this or the same day's driver update ended the passive
-stutter is not isolated (see [what failed](#what-failed-and-why)).
+direct or server-off session therefore creates no shared or lingering driver
+context (round 48); the [driver warm-up](#first-capture-freeze) makes one
+unshared context during the boot intro and deletes it at once. The anchor's
+own cost moves to the first captured frame after a server attaches. Whether
+this or the same day's driver update ended the passive stutter is not
+isolated (see [what failed](#what-failed-and-why)).
 
 The media worker's tick is a high-resolution waitable timer plus the native
 producer's own event (`tickwait.py`): a `threading.Event.wait(0.004)` sleeps
 15.5 ms on Windows, three of which per picture drained the eight-slot source
 pool on any short stall. Packet reservations shrink to the encoded size when
 the packet returns, and the pending budget admits every native slot at once.
+
+Most 4 ms ticks find nothing new: on a static screen the producer writes only
+its status, at up to 60 Hz. Each tick first loads the seqlock words it consumes
+(status, publication, both bridges; `Client.change_words`). Every native write
+holds its word odd and leaves it two higher, and every offer or bridge
+publish/retire also moves the publication word, so unchanged even words skip
+the offer and bridge scans; a status-only change reads just the status and its
+frontier. Age deadlines, helper replies and dispatch still run every tick, and a
+quiet tick reuses the encoder helper's health sample for at most 20 ms (a fault
+with a command in flight still arrives at once as its failed reply). On the real
+channel an idle tick fell from 50 to 3.4 µs and a status-only tick costs 13 µs
+(`test_idle_tick_costs_a_fraction_of_a_full_scan`); live, before this,
+`adapter_pump` was 42.7-49 ms/s at about 270 ticks/s (2026-09-25).
+
+A torn status is no news to the tick. Native holds the status word odd across
+its copy, so a writer preempted by a machine-wide stall tears every read until
+it runs again; three back-to-back reads used to end the run, which ended runs
+of 5.3 h, 30 min and 61 min on 2026-09-22, 09-23 and 09-25. Reads now yield
+between attempts, and the tick reuses the last good status until the status
+stays torn past the 2 s age deadline, which still ends a run whose writer died
+mid-copy. Setup still refuses a torn status at once. A survived episode logs
+one "status was torn" line.
 
 A true pause (F2, AFK) freezes the committed video end. Silence is padded only
 up to that end and stamped there, so it muxes at once instead of piling PCM
@@ -239,15 +265,29 @@ Helper Open also settles WHICH CODEC this adapter records in. The session asks
 for AV1 first — 32% of H.264's bytes at equal quality and faster to encode
 (measured 2026-09-20) — and the encoder checks `nvEncGetEncodeGUIDs` before it
 configures anything. An adapter without an AV1 encoder answers `GBDLL_CODEC`,
-typed apart from every real fault, and the session opens again asking for
-H.264 inside the SAME startup budget; `gpusettings.py` remembers the refusal
+typed apart from every real fault, and the session asks the SAME helper for
+H.264 inside the same startup budget; `gpusettings.py` remembers the refusal
 per adapter LUID, so only the first capture of a launch pays the extra round
-trip. The codec that actually opened is what `PacketFragmentMux` writes the
+trip. (Until 2026-09-27 the helper controller rejected result 16 as a
+malformed reply and the helper exited on the refusal, so this fallback never
+ran: an adapter without AV1 failed every attempt. A refusal by codec that
+opened nothing now leaves the helper running.) An adapter refusing H.264 too
+is an unsupported adapter, below. The codec that actually opened is what `PacketFragmentMux` writes the
 fragments as, so an `av01` track is never described as `avc1`.
 
 The lease supervisor allows five seconds from admitted request to ACTIVE. Helper
 Open uses its startup budget; ordinary native requests use the shorter call
-deadline. An unavailable backend ends the request explicitly. Transient failures
+deadline. An unavailable backend ends the request explicitly. An adapter that
+can never open the encoder is a verdict, not a failure: `gpuadapter.py` asks
+DXGI and the driver before any helper starts (not NVIDIA, a software adapter,
+an NVENC API older than the encoder's 13.0), and an H.264 refusal by codec
+answers the same way. `gpusettings.py` remembers it per adapter and driver
+version; the retry gate arms no cooldown and discovery declines that producer,
+so the recorder's next attach keeps the desktop grab
+(`sourcefactory.DesktopForUnsupportedGpu`, status `gpu_unsupported`) and setup
+accepts its written pictures. An NVIDIA GPU without NVENC hardware still
+fails as a driver error at session open, indistinguishable from a transient
+one without a native change, and keeps the retry gate. Transient failures
 retry only after proved cleanup, with 10/20/40/60-second capped delays. A short
 productive prefix or capability refresh does not waive the delay. Discovery,
 storage-maintenance and audio-worker faults have their own bounded retry delays.
@@ -359,6 +399,63 @@ gen-2 collection uses `recorder.can_collect`, which requires retired GPU ownersh
 and no pending failed cleanup; automatic idle is not a safe collection window.
 The existing five-minute backstop remains, so this is not a promise of zero
 Python scheduling pauses.
+
+## First capture freeze
+
+His report (2026-09-25): "a very brief visual stutter in the gameplay. It
+never happens again, just once towards the beginning of the session." Live,
+one UpdateScreen ran 153 ms inside the first capture's native preparation.
+
+**Cause (host-measured, 2026-09-27).** The stutter host (a scratch copy of
+the audit's: the real stamp adapter, delivery worker, WGL/D3D11 bridge and
+encoder helper against a hidden 60 Hz renderer, one fresh process per run)
+shows the NVIDIA driver blocking the renderer's own GL calls for 100-260 ms
+the first time ANY other thread in the process uses the GPU while the
+renderer is drawing, once per process. It is not the cost of our steps: the
+worker's steps keep running during the block, and the block lands on
+whichever step is first (the temporary context in some runs, the D3D11 device
+in others). Work done before the renderer draws, or in its first 50 ms, does
+not count and the first capture still freezes; work 0.25 s or more after
+drawing starts does count, and the effect held through 90 s of idle before
+the first capture.
+
+**Fix: the [driver warm-up](glossary.md#driver-warm-up).** After a practice
+ROM has drawn 120 passive UpdateScreens (two seconds of the boot intro), the
+wrapper calls `gd_prewarm(GD_WARM_GL)` once per process. The delivery worker
+makes a hidden window and an unshared legacy GL context current, then deletes
+both; the driver's freeze happens there, in the intro. A capture that starts
+earlier skips the warm-up and pays the freeze itself, still inside the boot.
+Nothing is shared with the renderer and nothing survives the warm-up, so
+round 48 holds. The trade-off: every practice-ROM process now pays the freeze
+once in the intro, including a session in which the server never starts.
+Host acceptance (2026-09-27, 8 fresh processes each, worst renderer VI):
+without the warm-up the first capture froze 148-176 ms in 7 of 8 (one ran
+8.5 ms); with it the first capture ran 5.1-8.9 ms in 8 of 8, the warm-up
+itself froze 147-186 ms two seconds into drawing, and second captures stayed
+at 8.6 ms or less.
+
+Rejected in the same host: warming at RomOpen
+before the renderer draws (3 of 3 still froze at the first capture), after
+the renderer's context exists but before it draws (2 of 2), 50 ms after
+drawing starts (1 of 1), holding an unshared context from RomOpen (1 of 1),
+and a D3D11 device made in advance (the audit's W/K rows). Removing the
+temporary context (plan variant b) cannot help, since any first GPU use pays;
+keeping the worker's shared context from boot (variant a) would pay the same
+freeze at boot and keep a share group in server-off sessions.
+
+**Readout (his next session, no action from him).** The
+[activation log](glossary.md#activation-log) holds `rom_open_*`, `gpu_warm`,
+`gpu_request`, `anchor_published`, `gpu_prepare` and every `callback_stall`
+in the 15 s after a request, each with QPCs (`gpu_prepare` gives
+`ctx_begin_qpc` and `bridge_begin_qpc` plus per-step milliseconds in order).
+A stall whose `[begin_qpc,end_qpc]` overlaps `gpu_warm` is the warm-up paying
+the freeze in the intro, as intended. One overlapping the `ctx_*` steps means
+the worker context still paid it (did `gpu_warm` run, and after drawing
+began?). One overlapping `anchor_published` points to the renderer's anchor.
+No stall near the first capture means the fix held; if none appears even
+without `gpu_warm`, the live 153 ms was inflated by a concurrent host run.
+A stall overlapping none of our steps names something else in the process
+(an overlay's DLL load or driver threads); these logs do not attribute it.
 
 ## Accuracy and bounds
 
@@ -483,6 +580,9 @@ source epoch to actual non-repeat pictures acknowledged by the mux and ledger.
 Encoder heartbeats cannot inflate this receipt.
 `automatic_idle` and `sessions_started` distinguish inactive retention from
 capture teardown and expose unexpected activation churn.
+`pump_paths` counts media ticks that skipped the channel (`quiet`), read only
+its status (`status`) or scanned offers and bridges (`scan`);
+`torn_status_reads` counts torn status reads the tick survived.
 Top-level `recording` is false when the GPU worker is preparing, unavailable or
 failed, even if the recorder still owns a waiting worker. `publication_error`
 retains the unavailable reason. `frame_source_health.publication` reports pending
@@ -504,14 +604,19 @@ tag0x20000000. These tags change no wire layout or capture operation.
 
 Use `tools/graphics_diagnostics.py --seconds 0 --output <new-folder>` to preserve
 read-only loaded paths and ControlV1 build identity. The wrapper writes
-`sm64_trainer_gfx.log` beside itself; an existing log can belong to an earlier
-build, so verify its PID/build/time before attribution.
+`sm64_trainer_gfx.log` (4 MiB, then `.1` and `.2`) and the startup-only
+`sm64_trainer_gfx.activation.log` beside itself ([profiling](profiling.md));
+an existing log can belong to an earlier build, so verify its PID/build/time
+before attribution.
 Never restart the user's applications to collect diagnostics.
 
 The current native encoder is NVIDIA NVENC. No CUDA Toolkit installation is
-required. Other GPU encoders and frozen-app helper dispatch remain unqualified;
-an unsupported GPU path must fail explicitly rather than run blocking capture
-on the emulation thread. The portable extension seam is the encoded packet and
+required. Other GPU encoders remain unqualified; an unsupported GPU keeps the
+desktop grab rather than run blocking capture on the emulation thread. The
+installed app starts its helper as itself with `--gpu-helper` (`gui_entry.py`);
+a source run starts the base interpreter on the helper module
+(`core/childproc.py::python_child`), so the helper is the server's direct
+child and keeps STARTF_FORCEOFFFEEDBACK. The portable extension seam is the encoded packet and
 exact custody contract, not a second timing model.
 
 ## What failed and why

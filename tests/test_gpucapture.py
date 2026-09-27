@@ -1,6 +1,7 @@
 """Recorder entry/lifetime contracts; no live capture, audio device or GPU."""
 
 from dataclasses import replace
+import logging
 from types import SimpleNamespace as NS
 import threading
 import time
@@ -120,6 +121,28 @@ def test_unproved_helper_disposal_blocks_scratch_cleanup_and_reuse(tmp_path):
             video.finish()
     finally:
         rec.stop(cleanup=False)
+
+
+def test_the_capture_line_leaves_the_codec_to_the_gpu_route(tmp_path, caplog):
+    """The GPU route picks AV1 or H.264 per adapter and names it on "GPU
+    recording active". The recorder's own codec is the desktop route's pick,
+    and printing it here claimed h264_nvenc for runs that recorded AV1."""
+    class Video(FakeVideoSource):
+        frame_source = "plugin"
+
+        def create_sink(self, cfg, clock, ledger, publish):
+            return FakeAvSink()
+
+    rec = make_recorder(tmp_path, Video(), FakeAudioSource())
+    rec._codec = "h264_nvenc"
+    try:
+        with caplog.at_level(logging.INFO, "sm64.replay"):
+            rec._begin_capture(WIN)
+        line = next(r.getMessage() for r in caplog.records
+                    if "capture started" in r.getMessage())
+        assert "route=gpu" in line and "codec" not in line
+    finally:
+        rec.stop()
 
 
 class FakeDemand:

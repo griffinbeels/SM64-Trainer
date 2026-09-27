@@ -136,6 +136,38 @@ export function VideoStage({ src, inFrame, controller, id, onEl, caption }) {
   </div>`;
 }
 
+// The live playhead (0..1): follows the video's currentTime every frame
+// (smooth left->right) while it PLAYS, and moves once per seek while paused.
+// Until 2026-09-27 the frame loop ran from mount to unmount, so a paused clip
+// in the always-mounted Compare pane asked for every display frame on every
+// tab (240 a second on his screen; perf audit 2026-09-25, UI-5).
+function usePlayhead(videoEl) {
+  const [playFrac, setPlayFrac] = useState(0);
+  useEffect(() => {
+    if (!videoEl) return undefined;
+    let raf = 0, last = -1;
+    const place = () => {
+      const d = videoEl.duration || 0;
+      const frac = d > 0 ? Math.min(1, videoEl.currentTime / d) : 0;
+      if (Math.abs(frac - last) > 0.0004) { last = frac; setPlayFrac(frac); }
+    };
+    const tick = () => { place(); raf = requestAnimationFrame(tick); };
+    const start = () => { if (!raf) raf = requestAnimationFrame(tick); };
+    const stop = () => { cancelAnimationFrame(raf); raf = 0; place(); };
+    // `seeking` moves the playhead the instant a scrub sets currentTime;
+    // `seeked` and `loadedmetadata` settle it where the video landed.
+    const events = { play: start, pause: stop, ended: stop,
+                     seeking: place, seeked: place, loadedmetadata: place };
+    for (const [name, fn] of Object.entries(events)) videoEl.addEventListener(name, fn);
+    if (videoEl.paused) place(); else start();
+    return () => {
+      cancelAnimationFrame(raf);
+      for (const [name, fn] of Object.entries(events)) videoEl.removeEventListener(name, fn);
+    };
+  }, [videoEl]);
+  return playFrac;
+}
+
 // Premiere-style single-bar "work area": the whole track IS the clip
 // (far-left = 0:00, far-right = duration); a highlighted region between two
 // draggable handles is the in/out. Dragging a handle scrub-seeks the video and,
@@ -145,7 +177,7 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit, extra, controll
   const [dur, setDur] = useState(0);
   const [inF, setInF] = useState(inFrame || 0);
   const [outF, setOutF] = useState(outFrame == null ? null : outFrame);
-  const [playFrac, setPlayFrac] = useState(0);   // live playhead position (0..1)
+  const playFrac = usePlayhead(videoEl);   // live playhead position (0..1)
   const trackRef = useRef(null);
   useEffect(() => { setInF(inFrame || 0); setOutF(outFrame == null ? null : outFrame); },
     [inFrame, outFrame]);
@@ -155,21 +187,6 @@ export function WorkArea({ videoEl, inFrame, outFrame, onCommit, extra, controll
     videoEl.addEventListener("loadedmetadata", on);
     if (videoEl.duration) setDur(videoEl.duration);
     return () => videoEl.removeEventListener("loadedmetadata", on);
-  }, [videoEl]);
-  // live playhead: follow the video's currentTime via requestAnimationFrame
-  // (smooth left->right). Only re-render when it actually moves, so a paused
-  // video costs nothing.
-  useEffect(() => {
-    if (!videoEl) return;
-    let raf, last = -1;
-    const tick = () => {
-      const d = videoEl.duration || 0;
-      const frac = d > 0 ? Math.min(1, videoEl.currentTime / d) : 0;
-      if (Math.abs(frac - last) > 0.0004) { last = frac; setPlayFrac(frac); }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
   }, [videoEl]);
 
   const maxF = Math.max(1, Math.round(dur * 30));

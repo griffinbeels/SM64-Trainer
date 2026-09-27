@@ -463,7 +463,7 @@ def build():
     # Wired off the CONFIG, not off the ReplayService below: the clips he saved
     # are on disk whatever the recorder does, and their filenames are the only
     # index to them.
-    service.saved_clip_ids = lambda: saved_attempt_ids(replay_cfg.save_root)
+    service.saved_clip_ids = lambda among=None: saved_attempt_ids(replay_cfg.save_root, among=among)
     replay, codec = _build_replay(replay_cfg, layout, service)
     compare, compilation = _comparison_services(replay, service, broadcaster, codec, replay_cfg)
     # NO target gate. This passed `target_active=lambda: service.target is not

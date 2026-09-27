@@ -84,7 +84,7 @@ Node up front; `run_tests.py` refuses a radius holding browser tests when uilab
 is missing. It removes inherited `PYTEST_ADDOPTS`,
 `PYTEST_PLUGINS` and `PYTEST_DISABLE_PLUGIN_AUTOLOAD` so shell settings cannot
 select a partial suite, accepts only a worker ceiling and its identity probe,
-and leaves the worker count to the runner's budget (8, or 4 with OBS open).
+and leaves the worker count to the runner's budget (8, or 4 with OBS or Project64 open).
 It stops the run 30 minutes after admission; the lane's 7200-second timeout is
 only an outer net, so time queued behind two other merge checks never cancels
 a run. An empty radius passes without running anything.

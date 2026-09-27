@@ -63,11 +63,16 @@
  X(void, StencilMaskSeparate, (uint32_t,uint32_t)) X(void, ClearBufferfi, (uint32_t,int32_t,float,int32_t)) \
  X(void, ClearBufferfv, (uint32_t,int32_t,const float*)) \
  X(void, DrawArrays, (uint32_t,int32_t,int32_t)) X(void, MemoryBarrier, (uint32_t))
+/* GL 4.4 multi-bind, optional: with it a frame binds the compositor's texture
+ * units without moving the renderer's active texture unit (one query less). */
+#define GC_GL_OPTIONAL(X) \
+ X(void, BindTextures, (uint32_t,int32_t,const uint32_t*)) X(void, BindSamplers, (uint32_t,int32_t,const uint32_t*))
 
 namespace ghost_compositor {
 struct Dispatch {
 #define GC_DECLARE(result,name,args) result (GC_GL_CALL *name) args = nullptr;
     GC_GL_FUNCTIONS(GC_DECLARE)
+    GC_GL_OPTIONAL(GC_DECLARE)
 #undef GC_DECLARE
 };
 /* Matches the model's explicit N64 combiner semantics. All three vertices of
@@ -101,6 +106,41 @@ struct Target {
     uint32_t unsupported; // nonzero refuses; caller's unsupported presentation modes
     int32_t viewport[4], scissor[4];
     float depth_scale, depth_translate; // N64 viewport Z mapping (usually .5,.5)
+    /* The caller's name for this framebuffer's attachments (its color texture
+     * and depth object). Nonzero lets the compositor reuse what it verified
+     * about the framebuffer (completeness, formats, read and draw buffers, the
+     * N64 depth texture) instead of asking the driver every frame; zero checks
+     * every call. A renderer that reattaches must change it. */
+    uint64_t attachments;
+};
+/* The renderer's own record of its state at a call, so the compositor
+ * restores these values instead of asking the driver for them (each driver
+ * query is a pipeline sync under threaded optimization). A field whose bit
+ * is clear is queried. `caps` says which of the capabilities the renderer
+ * switches per draw are known, `enabled` their values, bit for bit. */
+struct Known {
+    enum : uint32_t { draw_framebuffer = 1, read_framebuffer = 2, viewport = 4, scissor = 8,
+        program = 16, vertex_array = 32, depth = 64 /* function and write mask */,
+        blend_factors = 128 /* draw buffer 0: source/destination RGB, then alpha */ };
+    enum Cap : uint32_t { depth_test = 1, cull_face = 2, polygon_offset_fill = 4, depth_clamp = 8,
+        clip_distance0 = 16, blend = 32 /* draw buffer 0 */, scissor_test = 64 /* viewport 0 */ };
+    uint32_t fields;
+    uint32_t draw, read;
+    int32_t viewport_box[4], scissor_box[4];
+    uint32_t caps, enabled;
+    uint32_t current_program, bound_vertex_array, depth_function, blend_factor[4];
+    uint8_t depth_write;
+};
+/* What the compositor cost its caller, renderer thread, microseconds.
+ * queries/query_micros: every driver query since the last take_cost, setup
+ * included, and the time spent inside them. The rest: the last begin_batch,
+ * whole (batch) and by stage: checking every pose and vertex (validate),
+ * taking the renderer's state (state), copying the clean color and depth
+ * (copy), drawing shadows and bodies (draw, and the slowest single ghost),
+ * putting the renderer's state back (restore). */
+struct Cost {
+    uint32_t queries, query_micros;
+    uint32_t batch_micros, validate_micros, state_micros, copy_micros, draw_micros, draw_max_micros, restore_micros, ghosts;
 };
 struct ShadowVertex { float position[3], uv[2], alpha; };
 struct Shadow {
@@ -147,22 +187,30 @@ struct Instance;
  * A generation change must use destroy (old context current) or abandon (lost
  * context) followed by a fresh create. prepare may resize within a generation. */
 Instance* create(const Dispatch&, uint64_t generation);
+/* prepare also records, by query, the renderer state a frame touches but the
+ * renderer itself never changes: stencil, color write mask, blend equations,
+ * polygon mode and offset, depth range, every capability outside Known::Cap,
+ * the compositor's texture units (28-31) and the copy-write buffer, unpack
+ * layout and transform feedback. Frames restore those from that record
+ * without asking; a renderer that changed any of them calls resync first. */
 Result prepare(Instance*, uint32_t width, uint32_t height, uint32_t max_vertices,
                const uint8_t* atlas_rgba, uint32_t atlas_width, uint32_t atlas_height);
+void resync(Instance*);
+Cost take_cost(Instance*); // returns the cost so far and starts a new count
 /* The ROM particle atlas (model sg_particle_view). Without it particles are
  * skipped; setup-time only, like prepare. */
 Result prepare_particles(Instance*, const uint8_t* atlas_rgba, uint32_t width, uint32_t height);
-Result begin(Instance*, const Target&, const Pose&); // copies clean color, draws once
+Result begin(Instance*, const Target&, const Pose&, const Known* = nullptr); // copies clean color, draws once
 /* Bounded multi-ghost experiment: copy the clean surface once and draw each
  * body with its own self-depth/stencil pass. Caller supplies back-to-front
  * order and live borrowed vertices; prepare capacity is the TOTAL vertices.
  * Body sorting is approximate for interpenetrating translucent ghosts.
  * No allocations; invalid input refuses the entire candidate before drawing. */
-Result begin_batch(Instance*, const Target&, const Pose*, uint32_t count);
+Result begin_batch(Instance*, const Target&, const Pose*, uint32_t count, const Known* = nullptr);
 /* Root establishes semantic HUD safety (no image writes / framebuffer feedback).
  * This scope additionally refuses depth/stencil/raster side effects. Mirror the
  * SAME raster call, then end_hud. No emulation command or state update is replayed. */
-Result begin_hud(Instance*, uint64_t occurrence);
+Result begin_hud(Instance*, uint64_t occurrence, const Known* = nullptr);
 void end_hud(Instance*);
 /* Translucent world layer: the game's water surfaces (and any other world
  * geometry that blends over what is behind it without writing depth) seen
@@ -174,7 +222,7 @@ void end_hud(Instance*);
  * a depth-writing world draw after the layer opened breaks it for the list.
  * Only ordinary D24 depth is supported (N64 image depth never opens it). */
 enum class LayerPass : uint32_t { color = 0, depth = 1 };
-Result begin_layer(Instance*, const Target&, LayerPass);
+Result begin_layer(Instance*, const Target&, LayerPass, const Known* = nullptr);
 void end_layer(Instance*);
 void clear_layer(Instance*);
 void break_layer(Instance*);

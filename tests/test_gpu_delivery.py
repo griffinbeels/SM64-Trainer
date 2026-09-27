@@ -186,6 +186,7 @@ def test_healthy_diagnostic_production_log_fields_cpu(tmp_path):
     assert "event=gpu_summary " in lines[0]
     assert "frequency=1000 window_started_qpc=1000 previous_emit_ticks=1" in lines[0]
     assert "snapshot_bytes=12345678 bridge_bytes=8765432 sample_calls=151 sample_reuses=9 publish_busy=9" in lines[0]
+    assert "peak_pending=5 slots=8 peak_bridges=2" in lines[0]
     assert sum("event=gpu_summary_phase " in line for line in lines) == 8
     assert all("observed_qpc=6000" in line for line in lines)
     assert "event=gpu_summary_cadence epoch=17 records=3 pictures=1 same_origin=2" in lines[-1]
@@ -200,6 +201,35 @@ def test_healthy_diagnostic_production_log_fields_cpu(tmp_path):
     assert windows[0]["cadence"]["max_ms"] == 50
     assert windows[0]["previous_logging_ms"] == 1
     print(result.stdout, end="")  # JUnit stdout is the exact parser-integration fixture.
+
+
+def test_startup_note_lines_place_each_preparation_step_cpu(tmp_path):
+    """The first capture's freeze is attributed by QPC overlap: a callback_stall
+    whose begin/end overlaps a step names that step. Each note must carry
+    absolute QPCs plus per-step durations computed from the worker's stamps,
+    and the request note opens the stall watch window at the request QPC."""
+    spec = importlib.util.spec_from_file_location("diagnostic_build", ROOT / "tools/build_plugin.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    exe = tmp_path / "diagnostic_notes.exe"
+    build._cl(build.find_vcvars32(), build.COMMON_FLAGS + [
+        str(SOURCE / "gpu_diagnostic_log_host.c"), f"/I{SOURCE}", f"/Fe:{exe}",
+        f"/Fo{tmp_path}\\", "/link", "kernel32.lib"], tmp_path)
+    result = subprocess.run([str(exe), "--notes"], capture_output=True, text=True,
+                            timeout=5, check=True, **quiet_spawn_kwargs())
+    lines = result.stdout.splitlines()
+    assert lines[0] == "watch 1000000"
+    events = {line.split(" event=")[1].split()[0]: line for line in lines[1:]}
+    assert set(events) == {"gpu_request", "gpu_prepare", "gpu_warm", "anchor_published"}
+    assert "epoch=3 request_qpc=1000000 frequency=10000000" in events["gpu_request"]
+    prepare = events["gpu_prepare"]
+    assert "request_qpc=1000000 surface_qpc=1160000 ctx_begin_qpc=1200000" in prepare
+    assert ("ctx_window_ms=1.000 ctx_temp_ms=1.000 ctx_shared_ms=1.000 ctx_temp_delete_ms=150.000 "
+            "ctx_current_ms=1.000 snapshots_ms=1.000 sampler_ms=1.000 bridge_begin_qpc=2770000 "
+            "d3d_ms=100.000 dxopen_ms=1.000 transfer_ms=1.000 register_ms=1.000 end_qpc=3810000") in prepare
+    assert "parts=1 begin_qpc=500000 legacy_ms=30.000 core_ms=0.000 d3d_ms=0.000" in events["gpu_warm"]
+    assert "total_ms=31.000 error=0" in events["gpu_warm"]
+    assert "begin_qpc=1170000 end_qpc=1180000 ms=1.000" in events["anchor_published"]
 
 
 class Running:
@@ -332,6 +362,61 @@ def test_real_delivery_selection_actual_key_custody_and_restart(host, modern_gl)
         client = None
         assert run.command("exit") == "exit"
         assert run.process.wait(timeout=3) == 0
+    finally:
+        if client:
+            client.close()
+        run.close()
+
+
+WARM_DONE, WARM_SKIPPED = 3, 5  # gd_warm_state
+
+
+def test_driver_warm_up_leaves_nothing_behind_and_capture_still_prepares(host, modern_gl):
+    """The warm-up (GL, core and D3D11 parts) runs on the delivery worker,
+    deletes its context, device and hidden window, and is accepted once per
+    process. The capture after it prepares normally, and its gpu_prepare stamps
+    run in order from the request to the end of preparation."""
+    run = Running(host)
+    client = None
+    try:
+        assert run.command("warm 7") == f"warm 1 {WARM_DONE} 0 0"
+        client = run.start(701)
+        offer = offer_for(run, client, 4)
+        client.reply(offer, gpuchannel.SUPPRESSED, reason=1)
+        stamps = list(map(int, run.command("prepnote").split()[1:]))
+        assert len(stamps) == 16 and all(stamps)
+        assert stamps == sorted(stamps), stamps
+        assert run.command("stop") == "stopped"
+        assert run.command("settled") == "settled"
+        client.close()
+        client = None
+        assert run.command("exit") == "exit"
+    finally:
+        if client:
+            client.close()
+        run.close()
+
+
+@pytest.mark.parametrize("while_capturing", [True, False])
+def test_driver_warm_up_skips_once_a_capture_made_its_context(host, modern_gl, while_capturing):
+    """A capture that started first already paid the driver's one-time cost;
+    the worker never runs the warm-up beside it or after it."""
+    run = Running(host)
+    client = None
+    try:
+        client = run.start(702)
+        offer = offer_for(run, client, 6)
+        client.reply(offer, gpuchannel.SUPPRESSED, reason=1)
+        if while_capturing:
+            # The one hidden window is the capture's own worker context.
+            assert run.command("warm 1") == f"warm 1 {WARM_SKIPPED} 1 0"
+        assert run.command("stop") == "stopped"
+        assert run.command("settled") == "settled"
+        if not while_capturing:
+            assert run.command("warm 1") == f"warm 1 {WARM_SKIPPED} 0 0"
+        client.close()
+        client = None
+        assert run.command("exit") == "exit"
     finally:
         if client:
             client.close()

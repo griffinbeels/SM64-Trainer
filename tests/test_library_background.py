@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import threading
 
 import pytest
 
@@ -152,3 +153,155 @@ def test_frozen_runtime_hook_only_initializes_com_for_the_app(tmp_path, monkeypa
     runpy.run_path(str(hook))
     assert bool(created) is not worker
     assert client.gen_dir == (None if worker else str(tmp_path))
+
+
+# ---- the parent's apply: the fit off the loop, staging and publishing on it ----
+
+class _FinishedWorker:
+    returncode = 0
+
+    def poll(self):
+        return 0
+
+    def wait(self):
+        return 0
+
+    def kill(self):
+        pass
+
+
+def _worker_building(monkeypatch, payload):
+    """A worker that has already written this payload as its snapshot."""
+    from sm64_events.library.store import write_snapshot
+    monkeypatch.setattr(bg, "log_revision", lambda _data: payload["sheet_revision"])
+
+    def spawn(directory):
+        write_snapshot(directory / "snapshot.json.gz", payload)
+        (directory / "result.json").write_text(json.dumps({
+            "version": 1, "sheet_revision": payload["sheet_revision"],
+            "cpu_s": 0.0, "wall_s": 0.0}))
+        return _FinishedWorker()
+
+    monkeypatch.setattr(bg, "_spawn", spawn)
+
+
+def _sheet(time=1200):
+    from sm64_events.library.ladders import fit_payload
+    return fit_payload({"schema_version": bg.SCHEMA_VERSION, "sheet_revision": "2026-09-08T12:00:00",
+                        "runners": ["runner"], "targets": [
+                            {"entity_key": "star:2:4", "group": "WF", "section": "Whomp's Fortress",
+                             "label": "Caged Island", "subsections": [], "approaches": [
+                                 {"name": "Standard", "ids": ["one"], "entries": [
+                                     {"runner": "runner", "time_cs": time, "version": "us"}]}]}]})
+
+
+def _planned_store(tmp_path, monkeypatch, fit, generation=None):
+    """A store whose preparation is split the way adoptions split it, with
+    adoptions' change count when `generation` ({"value": n}) is given."""
+    from types import SimpleNamespace
+    from sm64_events.library import calibration
+    store = LibraryStore(tmp_path / "library.json.gz")
+    inputs = {"key": "one", "plan_threads": []}
+
+    def plan(payload):
+        inputs["plan_threads"].append(threading.get_ident())
+        return calibration.Preparation(inputs["key"], {}, [], None,
+                                       SimpleNamespace(revision=inputs["key"]),
+                                       generation["value"] if generation else 0)
+
+    monkeypatch.setattr(calibration, "prepare", fit)
+    store.plan_calibration = plan
+    if generation is not None:
+        store.plan_generation = lambda: generation["value"]
+    return store, inputs
+
+
+def _calibrated(payload, policy):
+    from sm64_events.ranks.calibration import build_calibration
+    return build_calibration(payload, {}, {}, {}, {}, policy.revision)
+
+
+def test_the_startup_apply_fits_off_the_loop_and_publishes_on_it(tmp_path, monkeypatch):
+    """The loop also runs the 250 Hz poller. Provisioning (the plan) and the
+    publication stay on it; the fit -- up to ~2 s -- must not."""
+    fit_threads, commit_threads = [], []
+
+    def fit(payload, _assignments, _definitions, _standards, policy):
+        fit_threads.append(threading.get_ident())
+        return _calibrated(payload, policy)
+
+    store, inputs = _planned_store(tmp_path, monkeypatch, fit)
+    commit = store.commit_absorb
+    monkeypatch.setattr(store, "commit_absorb", lambda *args: (
+        commit_threads.append(threading.get_ident()), commit(*args))[1])
+    _worker_building(monkeypatch, _sheet())
+
+    async def run():
+        return threading.get_ident(), await bg.refresh_at_startup(store, lambda: b"workbook")
+
+    loop_thread, result = asyncio.run(run())
+    assert result["applied"] and store.calibrations.active.policy_revision == "one"
+    assert fit_threads and loop_thread not in fit_threads
+    # Planned when staged, and again when the commit rechecks its inputs.
+    assert set(inputs["plan_threads"]) == set(commit_threads) == {loop_thread}
+
+
+@pytest.mark.parametrize("counted", [False, True])
+def test_an_input_that_moves_during_the_fit_is_staged_again(tmp_path, monkeypatch, counted):
+    """Nothing holds the update lock while the fit runs, so an assignment
+    edit can land meanwhile; the commit must not publish a calibration of
+    the inputs it replaced -- whether it learns so from the gatherer's
+    change count (adoptions) or, without one, by gathering again."""
+    fitted, generation = [], {"value": 0}
+
+    def fit(payload, _assignments, _definitions, _standards, policy):
+        fitted.append(policy.revision)
+        if len(fitted) == 1:
+            inputs["key"] = "two"        # e.g. a row linked while this fit ran
+            generation["value"] += 1
+        return _calibrated(payload, policy)
+
+    store, inputs = _planned_store(tmp_path, monkeypatch, fit, generation if counted else None)
+    _worker_building(monkeypatch, _sheet())
+    result = asyncio.run(bg.refresh_at_startup(store, lambda: b"workbook"))
+    assert result["applied"] and fitted == ["one", "two"]
+    assert store.calibrations.active.policy_revision == "two"
+    assert store.prepared_from == (store.calibrations.active.revision, "two")
+
+
+def test_an_unmoved_change_count_commits_without_gathering_again(tmp_path, monkeypatch):
+    """Gathering provisions and costs ~30 ms of the loop; with the change
+    count unmoved, the commit confirms the staged inputs without it."""
+    store, inputs = _planned_store(tmp_path, monkeypatch,
+                                   lambda payload, *args: _calibrated(payload, args[-1]),
+                                   {"value": 0})
+    _worker_building(monkeypatch, _sheet())
+    assert asyncio.run(bg.refresh_at_startup(store, lambda: b"workbook"))["applied"]
+    assert len(inputs["plan_threads"]) == 1
+
+
+@pytest.mark.parametrize("refits", [False, True])
+def test_the_installed_local_copy_is_the_payload_the_apply_activated(tmp_path, monkeypatch, refits):
+    """The worker's file is installed as is when the fit left the payload as
+    built; a fit that refits ladders gets a file of its own result, encoded
+    off the loop."""
+    def fit(payload, _assignments, _definitions, _standards, policy):
+        if refits:
+            payload["targets"][0]["approaches"][0]["ladder"] = {"Mario": 11.0}
+        return _calibrated(payload, policy)
+
+    store, _inputs = _planned_store(tmp_path, monkeypatch, fit)
+    built = _sheet()
+    _worker_building(monkeypatch, built)
+    assert asyncio.run(bg.refresh_at_startup(store, lambda: b"workbook"))["applied"]
+    assert read_snapshot(store.path) == store.payload
+    assert (store.payload == built) is not refits
+
+
+def test_the_apply_logs_its_fit_and_loop_time_apart(tmp_path, monkeypatch, caplog):
+    store, _inputs = _planned_store(tmp_path, monkeypatch, lambda payload, *args: _calibrated(payload, args[-1]))
+    _worker_building(monkeypatch, _sheet())
+    with caplog.at_level("INFO", logger="sm64.library"):
+        asyncio.run(bg.refresh_at_startup(store, lambda: b"workbook"))
+    line = next(r.getMessage() for r in caplog.records if "library startup worker" in r.getMessage())
+    assert "compute_ms=" in line and "loop_apply_ms=" in line and "applied=True" in line

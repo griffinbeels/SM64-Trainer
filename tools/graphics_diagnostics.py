@@ -73,7 +73,7 @@ def log_paths(folders: set[Path]) -> list[Path]:
         for directory in (folder, folder / "Plugin", folder / "Logs"):
             if directory.is_dir():
                 for path in sorted(directory.glob("*.log*")):
-                    if path.name.endswith((".log", ".log.1")) and path.is_file():
+                    if path.name.endswith((".log", ".log.1", ".log.2")) and path.is_file():
                         result.add(path)
                     if len(result) >= MAX_LOGS:
                         return sorted(result)

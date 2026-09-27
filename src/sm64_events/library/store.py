@@ -23,11 +23,12 @@ import os
 import shutil
 import tempfile
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sm64_events.library.build import SCHEMA_VERSION
-from sm64_events.ranks.calibration import Calibration, CalibrationRegistry, fingerprint, observation_fingerprint
+from sm64_events.ranks.calibration import Calibration, CalibrationRegistry, observation_fingerprint
 
 _log = logging.getLogger("sm64.library")
 
@@ -150,6 +151,15 @@ def newer(first, second):
     return max(candidates, key=lambda s: s.get("sheet_revision") or "")
 
 
+@dataclass(frozen=True)
+class _StagedAbsorb:
+    """What `stage_absorb` gathered on the loop for the fit that follows."""
+    payload: dict
+    digest: str
+    plan: object            # library.calibration.Preparation, or None
+    current: object         # the payload being replaced, by identity
+
+
 class LibraryStore:
     """Read side of the library, plus the refresh that replaces it."""
 
@@ -176,6 +186,17 @@ class LibraryStore:
         self._loaded_local = None
         self.calibrations = CalibrationRegistry()
         self.prepare_calibration = None  # (detached payload) -> complete Calibration
+        # (payload) -> library.calibration.Preparation. Preferred when bound:
+        # it gathers the other inputs apart from the fit, which is what lets
+        # the fit run off the event loop and a saved result be reused.
+        self.plan_calibration = None
+        # () -> count that moves whenever a preparation input may have: lets
+        # a commit confirm its staged inputs without gathering them again.
+        self.plan_generation = None
+        self.saved_calibration = None    # library.calibration.SavedCalibration
+        # (revision, Preparation.key) of the last calibration prepared or
+        # reused here; `Adoptions._calibration_is_current` compares it.
+        self.prepared_from = None
 
     # ---- load ----
     def load(self) -> None:
@@ -412,13 +433,64 @@ class LibraryStore:
                            prepared_snapshot if candidate is None else None)
             return self._update_result(True, payload, payload)
 
+    # ---- the startup worker's apply, split so the fit runs off the loop ----
+    # `absorb`, in three calls. The event loop also runs the 250 Hz poller, and
+    # a whole apply there stalled it 0.8-1.5 s on every refreshed start
+    # (measured 2026-09-19..25). Staging and committing touch the database,
+    # the service and the published generation, so they stay on the loop;
+    # the fit between them reads only what staging gathered.
+
+    def stage_absorb(self, fresh: dict, digest: str):
+        """First, on the loop: refuse an older Sheet, then gather the
+        preparation's other inputs (provisioning practice entries in the
+        database). `fresh` must be the caller's own copy and `digest` its
+        `fingerprint`. Returns an update result when there is nothing to do."""
+        with self.calibrations.update_lock:
+            current = self._current_payload()
+            if current is not None and _validated_revision(fresh) < _validated_revision(current):
+                return self._update_result(False, current, fresh, "the live sheet is older than what we have")
+            return _StagedAbsorb(fresh, digest, self._plan(fresh), current)
+
+    def compute_absorb(self, staged: "_StagedAbsorb"):
+        """Second, on any thread: reuse or fit the calibration staging named."""
+        return self._compute(staged.payload, staged.digest, staged.plan)
+
+    def commit_absorb(self, staged: "_StagedAbsorb", candidate, prepared_snapshot=None):
+        """Last, on the loop: validate and publish exactly as `absorb` does.
+
+        Returns None, publishing nothing, when an input moved while the fit
+        ran -- another generation was published, or the other inputs no
+        longer name the same key -- and the caller stages again.
+        `prepared_snapshot` must hold exactly the payload being activated."""
+        with self.calibrations.update_lock:
+            if self._current_payload() is not staged.current:
+                return None
+            if staged.plan is not None and not self._inputs_hold(staged):
+                return None
+            self._record(candidate, staged.plan)
+            payload = candidate.payload if candidate is not None else staged.payload
+            if self._unchanged(payload, candidate):
+                return self._update_result(False, staged.current, payload,
+                                           "observations and calibration are unchanged")
+            self._activate(payload, candidate, prepared_snapshot)
+            return self._update_result(True, payload, payload)
+
+    def _inputs_hold(self, staged) -> bool:
+        """Whether the staged preparation's inputs still hold: by an unmoved
+        generation (~0 ms), else by gathering them again (~30 ms)."""
+        if (self.plan_generation is not None
+                and self.plan_generation() == staged.plan.generation):
+            return True
+        return self._plan(staged.payload).key == staged.plan.key
+
     def recalibrate(self) -> dict:
         """Apply policy/assignment changes to the current unpinned observations."""
         with self.calibrations.update_lock:
             current = self._current_payload()
-            if current is None or self.prepare_calibration is None:
+            if current is None or (self.prepare_calibration is None
+                                   and self.plan_calibration is None):
                 return self._update_result(False, current, current, "no calibration preparation is available")
-            candidate = self._prepare(deepcopy(current))
+            candidate = self._prepare(current, detach=True)
             if self._unchanged(candidate.payload, candidate):
                 return self._update_result(False, current, current, "observations and calibration are unchanged")
             self._activate(candidate.payload, candidate)
@@ -428,19 +500,56 @@ class LibraryStore:
         active = self.calibrations.active
         return active.payload if active is not None else self._payload
 
-    def _prepare(self, payload):
+    def _prepare(self, payload, *, detach=False):
+        from sm64_events.library.calibration import payload_digest
         # Validate all JSON numbers before invoking a callback with side effects.
-        fingerprint(payload)
-        if self.prepare_calibration is None:
+        digest = payload_digest(payload)
+        plan = self._plan(payload)
+        candidate = self._compute(payload, digest, plan, detach=detach)
+        self._record(candidate, plan)
+        return candidate
+
+    def _plan(self, payload):
+        return self.plan_calibration(payload) if self.plan_calibration is not None else None
+
+    def _record(self, candidate, plan):
+        if candidate is not None and plan is not None:
+            self.prepared_from = (candidate.revision, plan.key)
+
+    def _compute(self, payload, digest, plan, *, detach=False):
+        """The calibration for `payload`, reused from disk when every input
+        matches its saved key, else prepared and saved. Changes no store
+        state, so `compute_absorb` may run it off the loop. `detach` copies
+        the payload only for a fit, which may refit it in place."""
+        from sm64_events.library.calibration import saved_key
+        if plan is None and self.prepare_calibration is None:
             if self.calibrations.active is not None:
                 raise ValueError("an active calibration requires its preparation callback")
             return None
-        candidate = self.prepare_calibration(payload)
+        key = None
+        if plan is not None and self.saved_calibration is not None:
+            key = saved_key(digest, plan.key)
+            saved = self.saved_calibration.load(key)
+            if saved is not None:
+                # Validated below before it was saved, and checksummed since:
+                # re-deriving its observation fingerprint would cost ~0.13 s.
+                _validated_revision(saved.payload)
+                # The key leaves out the fetch time; carry this fetch's, so
+                # the payload is exactly the one a fresh preparation keeps.
+                if "fetched_at" in payload:
+                    saved.payload["fetched_at"] = payload["fetched_at"]
+                else:
+                    saved.payload.pop("fetched_at", None)
+                return saved
+        owned = deepcopy(payload) if detach else payload
+        candidate = plan.run(owned) if plan is not None else self.prepare_calibration(owned)
         if not isinstance(candidate, Calibration):
             raise TypeError("prepare_calibration must return a complete Calibration")
         _validated_revision(candidate.payload)
         if candidate.data_revision != observation_fingerprint(candidate.payload):
             raise ValueError("prepared calibration does not match its observations")
+        if key is not None:
+            self.saved_calibration.save(key, candidate)
         return candidate
 
     def _unchanged(self, payload, candidate):

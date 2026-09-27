@@ -43,40 +43,90 @@ class RateLimitedWarning:
 
 class HookCost:
     """What the renderer's ghost hooks cost the emulation thread, logged once
-    a minute while capture runs: the plugin publishes the last list's time
-    inside its hooks and the driver state queries they made (zero once the
-    dispatch has seen the raster state), and each poll samples one list. A
-    live session measures it without anyone asking him."""
+    a minute while capture runs. The plugin publishes the last completed
+    list's numbers (gs_hook_cost: time inside the hooks and by stage, the
+    whole list, driver queries); the pump polls at 60 Hz over the game's 30
+    lists a second, so each list counts once, by its serial. Lists that drew a
+    ghost and lists that did not are summed apart: the ghost's cost is their
+    difference. What each number covers: docs/ghost-native-runtime.md, "What
+    the hook numbers mean". A live session measures it without anyone asking him."""
+
+    # Status fields summed per list (hook_<name>), in the order the line prints them.
+    STAGES = ("flush_micros", "open_micros", "batch_micros", "validate_micros", "state_micros", "copy_micros",
+              "draw_micros", "draw_max_micros", "restore_micros", "close_micros", "finalize_micros",
+              "hud_micros", "hud_draws", "layer_passes", "query_micros", "error_reads")
 
     def __init__(self, logger, clock=time.monotonic, every_s=WARN_EVERY_S):
         self._log, self._clock, self._every = logger, clock, every_s
         self._since = None
+        self._last_list = None
         self._reset()
 
     def _reset(self):
-        self.samples = self.micros = self.queries = self.max_micros = self.max_queries = 0
+        self.polls = 0
+        self._groups = {True: self._group(), False: self._group()}
 
-    def observe(self, queries: int, micros: int) -> dict | None:
-        """Add one sampled list; returns the window's summary when it logs one."""
+    @staticmethod
+    def _group():
+        return {"lists": 0, "micros": 0, "max_us": 0, "queries": 0, "max_queries": 0,
+                "list_micros": 0, "max_list_us": 0, **{stage: 0 for stage in HookCost.STAGES}}
+
+    def observe(self, status) -> dict | None:
+        """Add one poll of the status page; returns the window's summary when it logs one."""
         now = self._clock()
         if self._since is None:
             self._since = now
-        self.samples += 1
-        self.micros += micros
-        self.queries += queries
-        self.max_micros = max(self.max_micros, micros)
-        self.max_queries = max(self.max_queries, queries)
+        self.polls += 1
+        serial = status.hook_list
+        if serial and serial != self._last_list:
+            self._last_list = serial
+            group = self._groups[status.hook_ghosts > 0]
+            group["lists"] += 1
+            group["micros"] += status.hook_micros
+            group["max_us"] = max(group["max_us"], status.hook_micros)
+            group["queries"] += status.hook_gl_queries
+            group["max_queries"] = max(group["max_queries"], status.hook_gl_queries)
+            group["list_micros"] += status.hook_list_micros
+            group["max_list_us"] = max(group["max_list_us"], status.hook_list_micros)
+            for stage in self.STAGES:
+                value = getattr(status, f"hook_{stage}")
+                group[stage] = max(group[stage], value) if stage == "draw_max_micros" else group[stage] + value
         if now - self._since < self._every:
             return None
-        summary = {"lists": self.samples, "mean_us": self.micros / self.samples,
-                   "max_us": self.max_micros, "mean_queries": self.queries / self.samples,
-                   "max_queries": self.max_queries}
-        self._log.info("native render hooks, last %.0f s (%d lists sampled): %.1f us mean, %d us max; "
-                       "%.2f driver queries mean, %d max", now - self._since, summary["lists"],
-                       summary["mean_us"], summary["max_us"], summary["mean_queries"], summary["max_queries"])
+        seconds = now - self._since
+        summary = {"seconds": seconds, "polls": self.polls,
+                   "ghost": self._summary(self._groups[True]), "plain": self._summary(self._groups[False])}
+        for ghost, words in ((True, "with a ghost"), (False, "without a ghost")):
+            part = summary["ghost" if ghost else "plain"]
+            if part["lists"]:
+                self._log.info("%s", self._line(seconds, self.polls, words, part))
         self._since = now
         self._reset()
         return summary
+
+    @staticmethod
+    def _summary(group):
+        lists = group["lists"]
+        mean = (lambda key: group[key] / lists) if lists else (lambda key: 0.0)
+        return {"lists": lists, "mean_us": mean("micros"), "max_us": group["max_us"],
+                "mean_queries": mean("queries"), "max_queries": group["max_queries"],
+                "list_mean_us": mean("list_micros"), "list_max_us": group["max_list_us"],
+                **{stage: group[stage] if stage == "draw_max_micros" else mean(stage)
+                   for stage in HookCost.STAGES}}
+
+    @staticmethod
+    def _line(seconds, polls, words, s):
+        return (f"native render hooks, last {seconds:.0f} s, {s['lists']} lists {words} ({polls} polls): "
+                f"hooks {s['mean_us']:.1f} us mean, {s['max_us']} us max, of which renderer flush "
+                f"{s['flush_micros']:.1f}, gateway open {s['open_micros']:.1f}, batch {s['batch_micros']:.1f} "
+                f"(validate {s['validate_micros']:.1f}, state {s['state_micros']:.1f}, copy {s['copy_micros']:.1f}, "
+                f"draw {s['draw_micros']:.1f}, "
+                f"slowest ghost {s['draw_max_micros']} max, restore {s['restore_micros']:.1f}), gateway close "
+                f"{s['close_micros']:.1f}, finalize {s['finalize_micros']:.1f}; whole list "
+                f"{s['list_mean_us']:.1f} us mean, {s['list_max_us']} us max; HUD mirror {s['hud_micros']:.1f} us "
+                f"over {s['hud_draws']:.1f} draws; {s['layer_passes']:.1f} layer passes; "
+                f"{s['mean_queries']:.2f} driver queries mean, {s['max_queries']} max, "
+                f"{s['query_micros']:.1f} us inside them; {s['error_reads']:.2f} gateway error reads")
 
 
 def grouped(producer: Producer, frames: tuple[bytes, ...]):
@@ -217,8 +267,7 @@ class NativeCapture:
                         self._refused += 1
                         self._refused_reason = str(error)
                         self._warn("Mario poses refused by the archive; batch dropped", str(error))
-                self._hook_summary = (self._hooks.observe(status.hook_gl_queries, status.hook_micros)
-                                      or self._hook_summary)
+                self._hook_summary = self._hooks.observe(status) or self._hook_summary
                 self._report(available=True, reason=status.reason, state=status.state,
                              dropped=status.dropped, producer=producer,
                              playback_state=status.playback_state,

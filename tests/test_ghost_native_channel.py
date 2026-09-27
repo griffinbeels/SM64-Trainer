@@ -495,9 +495,11 @@ def test_a_rejected_command_never_stops_pose_recording(monkeypatch):
         assert source.stop(3)
 
 
-def test_render_hook_cost_is_logged_once_a_minute_with_mean_and_max():
-    """The live session's own measurement of the render hooks: one line a
-    minute, mean and max over the lists the pump sampled."""
+def test_render_hook_cost_is_logged_once_a_minute_per_list_with_and_without_a_ghost():
+    """The live session's own measurement of the render hooks: once a minute,
+    each list counted once although the pump polls it twice, lists that drew a
+    ghost summed apart from the rest, stage by stage."""
+    from types import SimpleNamespace
     from sm64_events.ghost.capture import HookCost
     lines, now = [], [100.0]
 
@@ -505,14 +507,31 @@ def test_render_hook_cost_is_logged_once_a_minute_with_mean_and_max():
         def info(self, message, *args):
             lines.append(message % args)
 
+    def status(serial, ghosts, micros, queries=0, **stages):
+        fields = {f"hook_{stage}": 0 for stage in HookCost.STAGES}
+        fields.update({f"hook_{stage}": value for stage, value in stages.items()})
+        return SimpleNamespace(hook_list=serial, hook_ghosts=ghosts, hook_micros=micros,
+                               hook_gl_queries=queries, hook_list_micros=2 * micros, **fields)
+
     cost = HookCost(Log(), clock=lambda: now[0], every_s=60)
-    assert cost.observe(0, 40) is None
+    drawn = status(1, 1, 400, 9, batch_micros=100, draw_max_micros=30)
+    assert cost.observe(drawn) is None and cost.observe(drawn) is None  # one list, polled twice
     now[0] = 130.0
-    assert cost.observe(3, 120) is None and not lines
+    assert cost.observe(status(2, 1, 600, 11, batch_micros=300, draw_max_micros=50)) is None
+    assert cost.observe(status(3, 0, 50)) is None and not lines
     now[0] = 161.0
-    summary = cost.observe(0, 50)
-    assert summary == {"lists": 3, "mean_us": 70.0, "max_us": 120, "mean_queries": 1.0, "max_queries": 3}
-    assert lines == ["native render hooks, last 61 s (3 lists sampled): 70.0 us mean, 120 us max; "
-                     "1.00 driver queries mean, 3 max"]
+    summary = cost.observe(status(0, 0, 0))  # nothing published yet: a poll, no list
+    assert summary["polls"] == 5
+    ghost, plain = summary["ghost"], summary["plain"]
+    assert (ghost["lists"], ghost["mean_us"], ghost["max_us"]) == (2, 500.0, 600)
+    assert (ghost["mean_queries"], ghost["max_queries"]) == (10.0, 11)
+    assert (ghost["batch_micros"], ghost["draw_max_micros"], ghost["list_mean_us"]) == (200.0, 50, 1000.0)
+    assert (plain["lists"], plain["mean_us"], plain["mean_queries"]) == (1, 50.0, 0.0)
+    assert len(lines) == 2
+    assert lines[0].startswith("native render hooks, last 61 s, 2 lists with a ghost (5 polls): "
+                               "hooks 500.0 us mean, 600 us max, of which renderer flush 0.0")
+    assert "batch 200.0 (validate 0.0, state 0.0" in lines[0] and "slowest ghost 50 max" in lines[0]
+    assert "10.00 driver queries mean, 11 max" in lines[0]
+    assert lines[1].startswith("native render hooks, last 61 s, 1 lists without a ghost (5 polls): hooks 50.0")
     now[0] = 170.0
-    assert cost.observe(0, 10) is None and len(lines) == 1  # a fresh window
+    assert cost.observe(status(4, 0, 10)) is None and len(lines) == 2  # a fresh window
