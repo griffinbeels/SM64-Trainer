@@ -11,11 +11,12 @@ worktree still excludes -- and is excluded by -- the first merge check. A
 crashed owner releases its slot automatically (an OS lock, not a lockfile).
 
 The machine budget is 16 workers on 20 of 32 CPUs, or 8 workers on a quarter
-of the CPUs while OBS is open; each run gets half of it, so two concurrent
-merge checks together fill it and never exceed it. OBS opening mid-run
-tightens the whole tree within two seconds and stays latched until that run
-ends. On a dedicated CI machine there is no desktop to protect: every CPU,
-a worker per CPU at most, and the job names its lane's count. See docs/testing.md for the measurements and limits.
+of the CPUs while OBS or Project64 is open (he is recording or playing); each
+run gets half of it, so two concurrent merge checks together fill it and never
+exceed it. Either opening mid-run tightens the whole tree within two seconds
+and stays latched until that run ends. On a dedicated CI machine there is no
+desktop to protect: every CPU, a worker per CPU at most, and the job names its
+lane's count. See docs/testing.md for the measurements and limits.
 """
 from __future__ import annotations
 
@@ -45,7 +46,13 @@ POLL_SECONDS = 2.0
 # started mid-way is still named, within 30 s.
 SCAN_SECONDS = 30.0
 SLOTS = 2
-MACHINE_WORKERS = {False: 16, True: 8}   # every concurrent run together; key: OBS open
+MACHINE_WORKERS = {False: 16, True: 8}   # every concurrent run together; key: reduced
+# The apps whose presence reduces the budget, by process name. OBS drops frames
+# of his recording; Project64 is the game itself: on 2026-09-25 (09:20:45 to
+# 09:24Z) a run on the normal budget, Project64 open and OBS closed, froze his
+# game, ProcessDList calls over the slow mark going from 61 to 488 (max 908 ms).
+PROTECTED_APPS = {"obs64.exe": "OBS", "obs32.exe": "OBS", "obs.exe": "OBS", "obs": "OBS",
+                  "project64.exe": "Project64"}
 
 
 def slot_paths(path: Path = LOCK_PATH) -> list[Path]:
@@ -55,8 +62,16 @@ def slot_paths(path: Path = LOCK_PATH) -> list[Path]:
 
 
 def obs_is_open() -> bool:
-    return any((proc.info["name"] or "").lower() in {"obs64.exe", "obs32.exe", "obs.exe", "obs"}
-               for proc in psutil.process_iter(["name"]))
+    """True while the reduced budget applies: OBS or Project64 open. Named for
+    the first protected app; tests/conftest.py reads it to give a browser page
+    60 s on that budget's quarter of the CPUs, where a page took over 20 s."""
+    return bool(protected_apps_open())
+
+
+def protected_apps_open() -> list[str]:
+    """The protected apps running now ("OBS", "Project64"), sorted; empty when none."""
+    return sorted({PROTECTED_APPS[name] for proc in psutil.process_iter(["name"])
+                   if (name := (proc.info["name"] or "").lower()) in PROTECTED_APPS})
 
 
 def dedicated_machine() -> bool:
@@ -64,7 +79,7 @@ def dedicated_machine() -> bool:
     return os.environ.get("GITHUB_ACTIONS") == "true"
 
 
-def budget(eligible: list[int], obs: bool, workers: int | None = None,
+def budget(eligible: list[int], reduced: bool, workers: int | None = None,
            reserve: int | None = None, *, dedicated: bool = False) -> tuple[int, list[int]]:
     """Return one run's worker ceiling and a subset of CPUs the caller owns.
 
@@ -78,8 +93,8 @@ def budget(eligible: list[int], obs: bool, workers: int | None = None,
         count = available
         ceiling = available
     else:
-        count = max(1, available // 4 if obs else available - min(12, available // 2))
-        ceiling = max(1, min(MACHINE_WORKERS[obs], count) // SLOTS)
+        count = max(1, available // 4 if reduced else available - min(12, available // 2))
+        ceiling = max(1, min(MACHINE_WORKERS[reduced], count) // SLOTS)
     if reserve is not None:
         count = min(count, max(1, available - reserve))
         ceiling = min(ceiling, count)
@@ -132,7 +147,7 @@ class TestResources:
         self.process = psutil.Process()
         self.eligible = self.process.cpu_affinity()
         self.cpus = self.eligible
-        self.obs = False
+        self.protecting: list[str] = []      # the protected apps that reduced this run
         self.dedicated = dedicated_machine()
         self._stop = threading.Event()
         self._thread = None
@@ -154,14 +169,16 @@ class TestResources:
             if self.admit:
                 self._take_a_slot()
                 self._wait_for_older_runners()
-            self.obs = obs_is_open()
-            self.workers, self.cpus = budget(self.eligible, self.obs, self.requested_workers,
-                                             self.reserve, dedicated=self.dedicated)
+            self.protecting = [] if self.dedicated else protected_apps_open()
+            self.workers, self.cpus = budget(self.eligible, bool(self.protecting),
+                                             self.requested_workers, self.reserve,
+                                             dedicated=self.dedicated)
             # Before Popen/xdist, not a sweep two seconds after the spawn storm.
             self.process.cpu_affinity(self.cpus)
             os.environ[OWNER_ENV] = f"{self.process.pid}:{self.process.create_time()}"
             os.environ[WORKERS_ENV] = str(self.workers)
-            kind = "dedicated" if self.dedicated else "OBS open" if self.obs else "normal"
+            kind = ("dedicated" if self.dedicated else
+                    f"{' and '.join(self.protecting)} open, reduced" if self.protecting else "normal")
             entry = (f"admitted after {time.monotonic() - started:.1f}s to slot {self.slot + 1}/{SLOTS}"
                      if self.admit else "focused run, no queue")
             print(f"tests: {entry}; {kind} budget: "
@@ -203,7 +220,7 @@ class TestResources:
             self.refresh()
 
     def refresh(self):
-        """OBS can appear after admission; re-pin existing descendants as well."""
+        """OBS or Project64 can open after admission; re-pin existing descendants as well."""
         if self.clock() >= self._next_scan:
             self._next_scan = self.clock() + SCAN_SECONDS
             for run in competing_runs(self.registry):
@@ -211,10 +228,10 @@ class TestResources:
                     self.competitors[run["pid"]] = run
                     print(f"tests: PERFORMANCE COMPARISON CONTAMINATED by outside test "
                           f"PID {run['pid']} in {run['checkout']}; do not tune from this run", flush=True)
-        if not self.obs and not self.dedicated and obs_is_open():
-            self.obs = True
+        if not self.protecting and not self.dedicated and (opened := protected_apps_open()):
+            self.protecting = opened
             _, self.cpus = budget(self.eligible, True, self.requested_workers, self.reserve)
-            print(f"tests: OBS opened; limiting this run to {len(self.cpus)} CPUs "
+            print(f"tests: {' and '.join(opened)} opened; limiting this run to {len(self.cpus)} CPUs "
                   "(worker count stays fixed until the next run)", flush=True)
         try:
             family = [self.process, *self.process.children(recursive=True)]

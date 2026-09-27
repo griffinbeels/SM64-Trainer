@@ -7,6 +7,7 @@ Griffin, 2026-09-21: "A change on the rank page CANNOT affect a change on the
 practice page (unless there are shared elements)." The Rank page is the
 changed surface throughout; the Library search page is the unrelated one.
 """
+import subprocess
 import sys
 from pathlib import Path
 
@@ -209,3 +210,48 @@ def test_a_failure_recorded_before_the_green_baseline_is_not_picked(tmp_path):
     assert radius._last_failed(tmp_path, since=recorded + 60) == set()
     assert radius._last_failed(tmp_path, since=recorded - 60) == {f"{PLAIN_TEST}::test_x"}
     assert radius._last_failed(tmp_path) == {f"{PLAIN_TEST}::test_x"}
+
+
+def _commit(repo: Path, message: str) -> str:
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit",
+                    "-q", "--allow-empty", "-m", message], check=True, capture_output=True)
+    return radius.git("rev-parse", "HEAD", root=repo).strip()
+
+
+def test_the_baseline_is_the_nearest_green_ancestor_from_any_branch(tmp_path):
+    """Creation order is not distance: a branch run dispatched before main's
+    newest run can sit nearer HEAD, and it wins. A green run on a commit HEAD
+    does not contain says nothing about this tree."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True, capture_output=True)
+    far = _commit(tmp_path, "main's green run: the newest run, two commits back")
+    near = _commit(tmp_path, "a dispatched branch run, one commit back")
+    subprocess.run(["git", "-C", str(tmp_path), "checkout", "-q", "-b", "side", far], check=True)
+    elsewhere = _commit(tmp_path, "green, but not an ancestor of HEAD")
+    subprocess.run(["git", "-C", str(tmp_path), "checkout", "-q", "main"], check=True)
+    _commit(tmp_path, "HEAD")
+    base, why, run_id = radius.baseline(tmp_path, [(elsewhere, 3), (far, 2), (near, 1)])
+    assert (base, run_id) == (near, 1), why
+    assert "1 commit back" in why
+    base, why, run_id = radius.baseline(tmp_path, [(elsewhere, 3)])
+    assert run_id is None and base != elsewhere and why.startswith("merge-base with main")
+
+
+def test_the_skip_inventory_reaches_only_the_tests_importing_it():
+    """Only a whole-suite run reads it (conftest's session finish), and a
+    merge check never is one; as a global input it picked 546 files."""
+    assert chosen({"tests/skip_inventory.py": "M"}) == {"tests/test_skip_inventory.py": None}
+
+
+@pytest.mark.parametrize("old,new,global_", [
+    ("# sit here without anyone declaring bankruptcy.", "# sit here.", False),
+    ('"fastapi>=0.115"', '"fastapi>=0.110"', True),
+])
+def test_pyproject_is_a_global_input_only_when_its_settings_change(old, new, global_):
+    """A comment, spacing or line endings change no test's behavior (a
+    comment-only edit picked 546 files); a dependency or pytest option does."""
+    today = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert today.count(old) == 1
+    result = radius.select(ROOT, "HEAD", changed={"pyproject.toml": "M"}, coverage=NO_MAP,
+                           last_failed=set(), before=lambda path: today.replace(old, new, 1))
+    assert ("global" in {kind for kind, *_ in result.reasons}) is global_
+    assert (PLAIN_TEST in result.selection()) is global_
