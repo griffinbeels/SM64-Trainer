@@ -7,6 +7,7 @@ import threading
 from sm64_events.ghost.clip import OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.source import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
+from sm64_events.replay.capturecontrol import _kernel, _process_creation
 
 #: Hue step between simultaneous ghosts: the golden angle, so any number of
 #: them stay as far apart on the colour wheel as the count allows.
@@ -27,14 +28,40 @@ def budget_reason(ghosts: int) -> str:
     return "Making room for this ghost..."
 
 
+#: The ghost card while no renderer has served poses in this game.
+START_GAME_REASON = "Start the game with the trainer's GLideN64 renderer."
+#: The ghost card while the renderer that served poses is out of reach but its
+#: game is still running: a GPU capture restart replaces the recorder's pose
+#: source, and the new one takes a moment to reach the renderer. Until
+#: 2026-09-27 that moment told him to start a game he was playing (9 of 1,293
+#: ghost_changed on 2026-09-25, each right after a capture reconnect).
+RECONNECTING_REASON = "Reconnecting to the game's renderer..."
+
+
+def emulator_running(pid: int, created: int) -> bool:
+    """Whether the process that served poses still runs: the same pid AND the
+    same birth stamp (the renderer's `producer_created`, a FILETIME), so a pid
+    reused by a later game counts as a new game. Unknown counts as not."""
+    try:
+        birth = _process_creation(_kernel(), pid)
+    except (OSError, AttributeError):   # AttributeError: no kernel32 off Windows
+        return False
+    return birth is not None and (birth[0] | (birth[1] << 32)) == created
+
+
 def ghost_hue(base: int, index: int) -> int:
     """The first ghost (his PB) keeps his chosen colour; the rest step away."""
     return (base + index * HUE_STEP_DEGREES) % 360
 
 
 class NativeGhost:
-    def __init__(self, replay, *, supported=True, origin_of=None):
+    def __init__(self, replay, *, supported=True, origin_of=None, running=emulator_running):
         self._replay, self._supported = replay, supported
+        # (pid, birth) of the game whose renderer last served poses. It
+        # outlives a replaced pose source on purpose: the game connection
+        # ends when that process does, not when the recorder reconnects.
+        self._served_by = None
+        self._running = running
         self._asset = None
         self._source = None
         self._sent = None
@@ -198,6 +225,7 @@ class NativeGhost:
         status = source.snapshot_status(blocking=blocking) if source is not None else {}
         if status is None:
             return
+        self._remember_renderer(status)
         producer = status.get("producer")
         origin = self._origin
         if (self._requested and self._selected_asset is not None and origin is not None
@@ -238,8 +266,22 @@ class NativeGhost:
             self._sent = command
         self._enabled = command["enabled"]
 
+    def _remember_renderer(self, status):
+        producer = status.get("producer") if status.get("available") else None
+        if getattr(producer, "pid", None):
+            self._served_by = (producer.pid, producer.created)
+
+    def _reconnecting(self) -> bool:
+        """Poses were served earlier in this game and it still runs, so the
+        renderer is out of reach only while capture reconnects."""
+        served = self._served_by
+        if served is not None and not self._running(*served):
+            self._served_by = served = None
+        return served is not None
+
     def state(self):
         status = (self._source.snapshot_status() or {}) if self._source is not None else {}
+        self._remember_renderer(status)
         ready = bool(self._enabled and not self._owner_suspended
                      and status.get("available") and status.get("state") == 4)
         # A generated pose is not display evidence. Only the renderer's last
@@ -265,7 +307,7 @@ class NativeGhost:
                           11: "The game ROM could not be read for Mario. Reopen the game with the Trainer graphics plugin."}.get(
                               status.get("reason"), "Mario playback is unavailable; try switching it off and on.")
             else:
-                reason = "Start the game with the trainer's GLideN64 renderer."
+                reason = RECONNECTING_REASON if self._reconnecting() else START_GAME_REASON
         return {"running": ready, "visible": visible, "backend": "native", "reason": reason}
 
     def stop(self):
