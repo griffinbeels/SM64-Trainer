@@ -19,6 +19,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.library.store import build_and_stamp, write_snapshot
 from sm64_events.library.build import SCHEMA_VERSION
 from sm64_events.library.workbook import log_revision
+from sm64_events.library.calibration import payload_digest
 
 WORKER_FLAG = "--library-refresh-worker"
 TIMEOUT_S = 120.0
@@ -110,14 +111,70 @@ async def refresh_at_startup(library, fetch_fn, overrides=None, *, timeout_s=TIM
         if receipt.get("sheet_revision") != revision:
             raise ValueError("library worker revision differs from requested workbook")
         cpu_s, wall_s = float(receipt["cpu_s"]), float(receipt["wall_s"])
-        apply_start = time.perf_counter()
-        snapshot = directory / "snapshot.json.gz"
-        payload = _read_prepared(snapshot, receipt)
-        result = library.absorb(payload, prepared_snapshot=snapshot)
+        timing = {"compute": 0.0, "loop": 0.0}
+        result = await _apply(library, directory, receipt, timing)
         log.info("library startup worker: build_cpu_s=%.3f build_wall_s=%.3f "
-                 "parent_apply_ms=%.3f applied=%s", cpu_s, wall_s,
-                 (time.perf_counter() - apply_start) * 1000, result["applied"])
+                 "compute_ms=%.3f loop_apply_ms=%.3f applied=%s", cpu_s, wall_s,
+                 timing["compute"] * 1000, timing["loop"] * 1000, result["applied"])
         return result
+
+
+APPLY_ATTEMPTS = 3
+
+
+async def _apply(library, directory: Path, receipt: dict, timing: dict) -> dict:
+    """Absorb the worker's snapshot with only staging and publishing on the loop.
+
+    Reading, fingerprinting, the calibration fit and any re-encoding run on a
+    thread; `LibraryStore.stage_absorb`/`commit_absorb` hold the loop for the
+    database, service and publication steps alone. A commit that finds an
+    input moved during the fit starts over from the file; after
+    APPLY_ATTEMPTS it applies in one piece, as it did before the split."""
+    snapshot = directory / "snapshot.json.gz"
+
+    async def off_loop(function, *args):
+        started = time.perf_counter()
+        try:
+            return await asyncio.to_thread(function, *args)
+        finally:
+            timing["compute"] += time.perf_counter() - started
+
+    def on_loop(function, *args):
+        started = time.perf_counter()
+        try:
+            return function(*args)
+        finally:
+            timing["loop"] += time.perf_counter() - started
+
+    for _attempt in range(APPLY_ATTEMPTS):
+        payload, digest = await off_loop(_read_owned, snapshot, receipt)
+        staged = on_loop(library.stage_absorb, payload, digest)
+        if isinstance(staged, dict):
+            return staged
+        candidate, installable = await off_loop(_fit, library, staged, snapshot, directory)
+        result = on_loop(library.commit_absorb, staged, candidate, installable)
+        if result is not None:
+            return result
+    payload = await off_loop(_read_prepared, snapshot, receipt)
+    return on_loop(lambda: library.absorb(payload, prepared_snapshot=snapshot))
+
+
+def _read_owned(path: Path, receipt: dict):
+    payload = _read_prepared(path, receipt)
+    return payload, payload_digest(payload)   # also refuses non-finite numbers
+
+
+def _fit(library, staged, snapshot: Path, directory: Path):
+    """The calibration, and a compressed file of exactly the payload it
+    activates: the worker's own when the fit left the payload as built,
+    else a new one encoded here rather than on the loop."""
+    candidate = library.compute_absorb(staged)
+    payload = candidate.payload if candidate is not None else staged.payload
+    if payload_digest(payload) == staged.digest:
+        return candidate, snapshot
+    calibrated = directory / "calibrated.json.gz"
+    write_snapshot(calibrated, payload)
+    return candidate, calibrated
 
 
 def _watch_parent(parent_pid: int) -> None:

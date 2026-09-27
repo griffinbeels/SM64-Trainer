@@ -766,3 +766,30 @@ def test_the_lead_in_never_reaches_back_past_the_previous_reset(
     start, end, _ = svc.extractor.calls[0]
     assert start == T0 - timedelta(seconds=expected_lead_s)
     assert end == T0 + timedelta(seconds=12 + 2)
+
+
+def test_the_prune_scan_validates_only_its_candidates_native_clips(tmp_path, monkeypatch):
+    """The startup prune names its candidates, and only their clips are
+    opened: each check parses and hashes the whole clip, and every clip on
+    every start cost 1.66 s (09-25). A candidate is still protected only by
+    a committed, hashed clip."""
+    import shutil
+    from sm64_events.ghost import clip
+    from sm64_events.replay.service import saved_attempt_ids
+    from test_ghost_recording import native_service
+    service, row, archive = native_service(tmp_path)
+    service.preserve_native(row.id)
+    archive.close()
+    root = service.cfg.save_root
+    path, _manifest = service.find_native(row.id)
+    for other in (7, 8, 9):          # other attempts' clips, never candidates here
+        shutil.copyfile(path, path.with_name(f"attempt_{other}.ghost"))
+        shutil.copyfile(path.with_suffix(".json"), path.with_name(f"attempt_{other}.json"))
+    checked = []
+    genuine = clip.check_manifest
+    monkeypatch.setattr(clip, "check_manifest",
+                        lambda ghost, *args, **kw: checked.append(ghost.name) or genuine(ghost, *args, **kw))
+    assert saved_attempt_ids(root, among=[row.id, 5]) == {row.id}
+    assert checked == [path.name]
+    path.write_bytes(b"corrupt native recording")
+    assert saved_attempt_ids(root, among=[row.id]) == set()

@@ -191,15 +191,58 @@ def test_an_attempt_with_a_saved_pb_survives(tmp_path):
 def test_an_attempt_with_a_saved_clip_survives(tmp_path):
     db = unlabelled_history(tmp_path)
     spared = db.attempts()[1].id
-    restart(db, saved_clip_ids=lambda: {spared})
+    restart(db, saved_clip_ids=lambda among: {spared} & set(among))
     assert [a.id for a in db.attempts()] == [spared]
+
+
+def test_the_prune_asks_only_about_attempts_the_pbs_would_not_keep(tmp_path):
+    """Validating a saved clip parses and hashes all of it; every clip on
+    every start took 1.66 s (09-25). Only an attempt the prune would
+    otherwise drop needs its clip checked."""
+    db = unlabelled_history(tmp_path)
+    kept_by_pb = db.attempts()[0].id
+    db.insert_pb(course_id=2, star_id=2, strat_tag=None, timer_mode="igt",
+                 frames=343, attempt_id=kept_by_pb, saved_utc="2026-06-10T12:00:00Z")
+    asked = []
+    restart(db, saved_clip_ids=lambda among: asked.append(sorted(among)) or set())
+    pruned = next(e.payload["attempt_ids"] for e in db.events() if e.type == PRUNE_EVENT)
+    # Every candidate is asked about exactly once; the PB's attempt never is.
+    assert asked == [sorted(pruned)] and kept_by_pb not in asked[0]
+    assert [a.id for a in db.attempts()] == [kept_by_pb]
+
+
+def test_the_app_wires_the_candidates_through_to_the_clip_scan(tmp_path):
+    """The prune calls its hook with the candidates. Evaluates the very
+    expression main.py assigns: a hook that dropped them would fail every
+    start with a candidate, or quietly validate every clip again."""
+    import ast
+    import inspect
+    from types import SimpleNamespace
+    import sm64_events.main as main
+    tree = ast.parse(inspect.getsource(main))
+    hooks = [node.value for node in ast.walk(tree) if isinstance(node, ast.Assign)
+             and any(isinstance(t, ast.Attribute) and t.attr == "saved_clip_ids"
+                     for t in node.targets)]
+    assert len(hooks) == 1, "main.py should wire the prune's clip hook exactly once"
+    seen = []
+    scope = {"saved_attempt_ids": lambda root, **kw: seen.append((root, kw)) or {7},
+             "replay_cfg": SimpleNamespace(save_root=tmp_path)}
+    hook = eval(compile(ast.Expression(hooks[0]), "main.py", "eval"), scope)
+    assert hook([7, 8]) == {7}
+    assert seen == [(tmp_path, {"among": [7, 8]})]
+
+
+def test_with_nothing_to_prune_no_clip_is_read(tmp_path):
+    db = unlabelled_history(tmp_path)
+    restart(db)
+    restart(db, saved_clip_ids=lambda among: pytest.fail("clips read with nothing to prune"))
 
 
 def test_an_unreadable_clip_directory_prunes_nothing(tmp_path):
     """Fail closed: an unknown protected set must never authorize a delete."""
     db = unlabelled_history(tmp_path)
     kept = {a.id for a in db.attempts()}
-    def boom():
+    def boom(_among):
         raise OSError("save_root went away")
     restart(db, saved_clip_ids=boom)
     assert kept <= {a.id for a in db.attempts()}

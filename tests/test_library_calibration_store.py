@@ -323,3 +323,247 @@ def test_a_local_copy_unlike_the_activated_payload_is_still_written(tmp_path, mo
     store.prepare_calibration = lambda payload: _prepare(payload, policy="two")
     assert store.recalibrate()["applied"] and writes == [store.path]
     assert read_snapshot(store.path) == store.payload and store.status()["source"] == "local"
+
+
+# ---- a saved calibration: reused across restarts only for identical inputs ----
+
+def _counting_prepare(monkeypatch):
+    """Stand in for the fit behind `Preparation.run`, counting each call."""
+    from sm64_events.library import calibration
+    calls = []
+
+    def fit(payload, assignments, definitions, standards, policy):
+        calls.append(policy.revision)
+        return _prepare(payload, policy=policy.revision)
+
+    monkeypatch.setattr(calibration, "prepare", fit)
+    return calls
+
+
+def _restart(tmp_path, *, clocks="igt", policy="one"):
+    """One app start: load the local library, then let adoptions calibrate it."""
+    from types import SimpleNamespace
+    from sm64_events.library.adoptions import Adoptions
+    from sm64_events.library.calibration import SavedCalibration
+    store = LibraryStore(tmp_path / "library.json.gz")
+    store.saved_calibration = SavedCalibration(tmp_path / "rank_calibration.bin")
+    store.load()
+    standards = SimpleNamespace(calibration_inputs=lambda: {"clocks": {"star:2:4": clocks}})
+    adoptions = Adoptions(tmp_path / "adoptions.json", store, standards,
+                          policy=SimpleNamespace(revision=policy))
+    adoptions.load()
+    return store, adoptions
+
+
+def _first_start(tmp_path, monkeypatch):
+    write_snapshot(tmp_path / "library.json.gz", fit_payload(_snapshot()))
+    calls = _counting_prepare(monkeypatch)
+    store, _adoptions = _restart(tmp_path)
+    assert calls and (tmp_path / "rank_calibration.bin").exists()
+    return calls, store.calibrations.active
+
+
+def _rank_reads(client):
+    """What the ranks the app serves look like: a spread of Library targets
+    (Strategy ladders and Overall curves) and the standards they resolve to."""
+    library = client.app.state.library
+    targets = library.payload["targets"]
+    reads = []
+    for index in range(0, len(targets), max(1, len(targets) // 12)):
+        target = client.get(f"/api/library/target/{index}").json()
+        reads.append(target)
+        if targets[index].get("entity_key"):
+            reads.append(client.get("/api/ranks/standards", params={
+                "entity": targets[index]["entity_key"], "version": "us"}).json())
+    return library.calibrations.active.revision, reads
+
+
+def test_a_restarted_app_grades_exactly_as_a_fresh_preparation_would(tmp_path, monkeypatch):
+    """Through the real app on the bundled Library: the second start serves
+    the saved calibration without fitting, and every rank it serves matches
+    the first start's freshly prepared one."""
+    from sm64_events.library import calibration
+    from import_fixture import make_client
+    genuine, fitted = calibration.prepare, []
+    monkeypatch.setattr(calibration, "prepare", lambda *args: fitted.append(1) or genuine(*args))
+    with make_client(tmp_path) as (client, _db, _service):
+        fresh = _rank_reads(client)
+    assert fitted and (tmp_path / "rank_calibration.bin").exists()
+    prepared = len(fitted)
+    with make_client(tmp_path) as (client, _db, _service):
+        restarted = _rank_reads(client)
+    assert len(fitted) == prepared, "the restart fitted its calibration again"
+    assert restarted == fresh
+
+
+def test_a_restart_with_the_same_inputs_publishes_the_saved_calibration(tmp_path, monkeypatch):
+    calls, first = _first_start(tmp_path, monkeypatch)
+    prepared = len(calls)
+    store, adoptions = _restart(tmp_path)
+    active = store.calibrations.active
+    assert len(calls) == prepared, "a restart with identical inputs fitted again"
+    assert (active.revision, active.overall, active.layers, active.rows, active.payload) == (
+        first.revision, first.overall, first.layers, first.rows, first.payload)
+    monkeypatch.setattr(store, "recalibrate", lambda: pytest.fail("the second sync recalibrated"))
+    adoptions._sync()   # the service start's second sync: current, so not even a reuse
+
+
+def test_a_refetch_of_the_same_sheet_reuses_the_saved_calibration(tmp_path, monkeypatch):
+    """A startup refresh of an unedited Sheet differs only in its fetch time,
+    which no preparation reads: it reuses the saved fit and publishes nothing,
+    and a reuse carries the fetch time it was asked about."""
+    from sm64_events.library.calibration import SavedCalibration
+    calls, first = _first_start(tmp_path, monkeypatch)
+    store, _adoptions = _restart(tmp_path)
+    refetched = fit_payload(_snapshot())
+    refetched["fetched_at"] = "a later fetch"
+    assert not store.absorb(refetched)["applied"] and len(calls) == 1
+    other = LibraryStore(tmp_path / "other.json.gz")
+    other.saved_calibration = SavedCalibration(tmp_path / "rank_calibration.bin")
+    other.plan_calibration = store.plan_calibration
+    assert other._prepare(refetched).payload == refetched and len(calls) == 1
+
+
+MOVED_INPUTS = {
+    "payload": lambda tmp_path, monkeypatch: write_snapshot(
+        tmp_path / "library.json.gz", fit_payload(_snapshot(1100))),
+    "other inputs": lambda tmp_path, monkeypatch: {"clocks": "rta"},
+    "policy": lambda tmp_path, monkeypatch: {"policy": "two"},
+    "overall model": lambda tmp_path, monkeypatch: monkeypatch.setattr(
+        "sm64_events.ranks.overall.OVERALL_MODEL_VERSION", 999),
+    "code": lambda tmp_path, monkeypatch: monkeypatch.setattr(
+        "sm64_events.library.calibration.code_revision", lambda: "edited source"),
+    "interpreter": lambda tmp_path, monkeypatch: monkeypatch.setattr(
+        "sm64_events.library.calibration.sys.version_info", (3, 99, 0)),
+}
+
+
+@pytest.mark.parametrize("moved", MOVED_INPUTS)
+def test_a_saved_calibration_is_never_reused_once_an_input_moved(tmp_path, monkeypatch, moved):
+    """The key names the payload by content, every other input `prepare`
+    receives, the Overall model, and the code and interpreter that fit it;
+    moving any one of them prepares afresh, and saves the fresh result."""
+    calls, _first = _first_start(tmp_path, monkeypatch)
+    prepared = len(calls)
+    inputs = MOVED_INPUTS[moved](tmp_path, monkeypatch) or {}
+    store, _adoptions = _restart(tmp_path, **inputs)
+    assert len(calls) == prepared + 1, f"a moved {moved} reused the saved calibration"
+    again, _adoptions = _restart(tmp_path, **inputs)
+    assert len(calls) == prepared + 1
+    assert again.calibrations.active.revision == store.calibrations.active.revision
+
+
+DAMAGE = {
+    "flipped body byte": lambda data: data[:-10] + bytes([data[-10] ^ 1]) + data[-9:],
+    "truncated": lambda data: data[:len(data) // 2],
+    "other format": lambda data: data.replace(b'"format": 1', b'"format": 9', 1),
+    "not a saved calibration": lambda data: b"PK" + data,
+    "empty": lambda data: b"",
+}
+
+
+@pytest.mark.parametrize("damage", DAMAGE)
+def test_a_damaged_saved_calibration_is_prepared_afresh_and_replaced(tmp_path, monkeypatch, damage):
+    calls, first = _first_start(tmp_path, monkeypatch)
+    saved = tmp_path / "rank_calibration.bin"
+    saved.write_bytes(DAMAGE[damage](saved.read_bytes()))
+    store, _adoptions = _restart(tmp_path)
+    assert len(calls) == 2 and store.calibrations.active.revision == first.revision
+    _restart(tmp_path)
+    assert len(calls) == 2, "the fresh preparation did not replace the damaged file"
+
+
+BUILT = []
+
+
+def _built(value):
+    BUILT.append(value)
+    return value
+
+
+class _Named:
+    """Unpickles by calling `_built`: loading it is observable."""
+
+    def __reduce__(self):
+        return _built, ("built",)
+
+
+def test_a_saved_file_naming_another_callable_is_refused_uncalled(tmp_path):
+    """Only a `Calibration` of plain data loads: a checksummed file naming
+    any other callable is a miss, and that callable never runs."""
+    import hashlib
+    import json
+    import pickle
+    from sm64_events.library import calibration
+    saved = calibration.SavedCalibration(tmp_path / "rank_calibration.bin")
+    body = pickle.dumps(_Named())
+    saved.path.write_bytes(calibration._MAGIC + json.dumps({
+        "format": calibration.SAVED_FORMAT, "key": "k", "size": len(body),
+        "sha256": hashlib.sha256(body).hexdigest()}).encode() + b"\n" + body)
+    BUILT.clear()
+    assert saved.load("k") is None and BUILT == []
+    good = _prepare(_snapshot())
+    saved.save("k", good)
+    assert saved.load("k") == good and saved.load("another key") is None
+
+
+def test_the_code_revision_follows_every_source_it_names(tmp_path, monkeypatch):
+    import sys
+    from sm64_events.library import calibration
+
+    def source(name):
+        return tmp_path / name if name.endswith(".py") else tmp_path / name / "module.py"
+
+    for name in calibration._CODE_SOURCES:
+        source(name).parent.mkdir(parents=True, exist_ok=True)
+        source(name).write_text("VALUE = 1\n")
+    before = calibration.source_revision(tmp_path)
+    (tmp_path / "library" / "__pycache__").mkdir()
+    (tmp_path / "library" / "__pycache__" / "module.pyc").write_bytes(b"cache")
+    (tmp_path / "unrelated.py").write_text("VALUE = 2\n")
+    assert calibration.source_revision(tmp_path) == before
+    for name in calibration._CODE_SOURCES:
+        source(name).write_text("VALUE = 2\n")
+        after = calibration.source_revision(tmp_path)
+        assert after != before, f"an edit under {name} kept the code revision"
+        before = after
+    executable = tmp_path / "trainer.exe"
+    executable.write_bytes(b"one build")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+    calibration.code_revision.cache_clear()
+    try:
+        frozen = calibration.code_revision()
+        executable.write_bytes(b"the next build")
+        calibration.code_revision.cache_clear()
+        assert calibration.code_revision() != frozen
+    finally:
+        calibration.code_revision.cache_clear()
+
+
+def test_an_adoption_edit_moves_the_change_count(tmp_path, monkeypatch):
+    """A background apply trusts an unmoved count to mean unmoved inputs, so
+    every door that changes them -- an edit, a definition change (the
+    service calls `_sync`) -- must move it, and the plan must carry it."""
+    write_snapshot(tmp_path / "library.json.gz", fit_payload(_snapshot()))
+    _counting_prepare(monkeypatch)
+    store, adoptions = _restart(tmp_path)
+    counts = [store.plan_generation()]
+    adoptions.unadopt("some row")
+    counts.append(store.plan_generation())
+    adoptions._sync()
+    counts.append(store.plan_generation())
+    assert counts[0] < counts[1] < counts[2]
+    assert store.plan_calibration(store.payload).generation == counts[2]
+
+
+def test_a_preparation_identical_to_the_active_one_still_counts_as_current(tmp_path, monkeypatch):
+    """A recalibration that comes out identical publishes nothing; the next
+    sync must still see its inputs as current rather than fit a third time."""
+    write_snapshot(tmp_path / "library.json.gz", fit_payload(_snapshot()))
+    calls = _counting_prepare(monkeypatch)
+    store, adoptions = _restart(tmp_path)
+    store.saved_calibration = None          # count real preparations only
+    assert not store.recalibrate()["applied"] and len(calls) == 2
+    adoptions._sync()
+    assert len(calls) == 2
