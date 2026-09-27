@@ -137,6 +137,10 @@ class PacketFragmentMux:
 
     def _prepare_audio(self):
         self.graph = av.filter.Graph()
+        # One stereo resample needs no pool. Left at libav's default, configure()
+        # starts a worker per core that idles for the whole run: 15 extra OS
+        # threads per recording on a 32-thread CPU (measured 2026-09-25).
+        self.graph.threads = 1
         self.buffer = self.graph.add_abuffer(
             sample_rate=self.rate,
             format="s16",
