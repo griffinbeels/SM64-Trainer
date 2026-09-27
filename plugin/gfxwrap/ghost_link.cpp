@@ -37,14 +37,20 @@ bool context_current = false, observing = false;
 // dispatch has not observed the value yet) and time inside the hooks. The
 // per-draw hooks used to query the draw FBO, viewport and depth range on
 // every z-buffered draw, ghost or not: a pipeline sync each when the driver
-// threads its GL. Published per list for the status page.
-uint32_t hook_queries = 0;
-int64_t hook_ticks = 0, qpc_frequency = 0;
+// threads its GL. Published per list for the status page, with the whole
+// list's time, the renderer's own flush at the seal and ghost_draw's stages.
+uint32_t hook_queries = 0, list_serial = 0;
+int64_t hook_ticks = 0, flush_ticks = 0, list_start = 0, qpc_frequency = 0;
 struct HookTime {
-    LARGE_INTEGER start{};
-    HookTime() { QueryPerformanceCounter(&start); }
-    ~HookTime() { LARGE_INTEGER end{}; QueryPerformanceCounter(&end); hook_ticks += end.QuadPart - start.QuadPart; }
+    int64_t &into; LARGE_INTEGER start{};
+    explicit HookTime(int64_t &ticks = hook_ticks) : into(ticks) { QueryPerformanceCounter(&start); }
+    ~HookTime() { LARGE_INTEGER end{}; QueryPerformanceCounter(&end); into += end.QuadPart - start.QuadPart; }
 };
+uint32_t micros(int64_t ticks) {
+    if (!qpc_frequency) { LARGE_INTEGER f{}; QueryPerformanceFrequency(&f); qpc_frequency = f.QuadPart; }
+    const int64_t value = qpc_frequency > 0 ? ticks * 1000000 / qpc_frequency : 0;
+    return value < 0 ? 0u : value > UINT32_MAX ? UINT32_MAX : uint32_t(value);
+}
 replay_gl::RasterState tracked() {
     replay_gl::RasterState state{};
     replay_gl::Raster(&state);
@@ -71,6 +77,13 @@ FrameBuffer* raster_buffer() {
     }
     return draw == uint32_t(buffer->m_FBO) ? buffer : nullptr;
 }
+uint64_t attachments(const FrameBuffer *buffer) {
+    if (!buffer || !buffer->m_pTexture) return 0;
+    const auto *depth = buffer->m_pDepthBuffer;
+    const uint32_t depth_name = !depth ? 0u : depth->m_pDepthBufferTexture
+        ? uint32_t(depth->m_pDepthBufferTexture->name) : uint32_t(depth->m_depthRenderbuffer);
+    return (uint64_t(uint32_t(buffer->m_pTexture->name)) << 32) | depth_name;
+}
 void rom(bool opened) {
     const bool practice = opened && supported_rom();
     observing = false; ghost_stream::rom(practice); ghost_ipc::rom(practice, practice ? HEADER : nullptr);
@@ -85,7 +98,8 @@ void context_lost() {
     context_current = false; observing = false;
 }
 bool begin_list() {
-    hook_queries = 0; hook_ticks = 0;
+    hook_queries = 0; hook_ticks = 0; flush_ticks = 0;
+    { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); list_start = now.QuadPart; }
     HookTime timed;
     if (!context_current || !ghost_stream::requested()) {
         ghost_draw::begin(ghost_ipc::rom_generation(), 0);
@@ -110,9 +124,12 @@ void end_list(bool completed) {
         ghost_draw::finish(completed && context_current ? ghost_stream::candidate() : nullptr);
         observing = false;
     }
-    if (!qpc_frequency) { LARGE_INTEGER f{}; QueryPerformanceFrequency(&f); qpc_frequency = f.QuadPart; }
-    const int64_t micros = qpc_frequency > 0 ? hook_ticks * 1000000 / qpc_frequency : 0;
-    ghost_stream::hooks(hook_queries, micros < 0 ? 0u : micros > UINT32_MAX ? UINT32_MAX : uint32_t(micros));
+    gs_hook_cost cost{};
+    ghost_draw::take_cost(cost);
+    cost.gl_queries += hook_queries; cost.micros = micros(hook_ticks); cost.list = ++list_serial;
+    cost.flush_micros = micros(flush_ticks);
+    LARGE_INTEGER now{}; QueryPerformanceCounter(&now); cost.list_micros = micros(now.QuadPart - list_start);
+    ghost_stream::hooks(cost);
 }
 void projection() {
     if (observing) ghost_stream::projection(&gSP.matrix.projection[0][0]);
@@ -132,6 +149,7 @@ void geometry(uint32_t before, uint32_t after) {
         // PipeSync is a no-op upstream. Flush BOTH triangles and deferred rects
         // while the world state is still current, before sealing its branch.
         auto &drawer = dwnd().getDrawer();
+        HookTime flushed(flush_ticks); // inside the hook's time too, and apart
         drawer.drawTriangles(); drawer.flush();
     }
     if (ghost_stream::geometry((before & G_ZBUFFER) != 0,(after & G_ZBUFFER) != 0)) {
@@ -165,7 +183,7 @@ bool begin_layer(uint32_t pass) {
     if (!gDP.otherMode.depthCompare) return false;
     auto *buffer = raster_buffer();
     return buffer && !buffer->m_isDepthBuffer && buffer->m_pDepthBuffer
-        && ghost_draw::begin_layer(pass, uint32_t(buffer->m_FBO));
+        && ghost_draw::begin_layer(pass, uint32_t(buffer->m_FBO), attachments(buffer));
 }
 void end_layer() { HookTime timed; ghost_draw::end_layer(); }
 void triangles(uint32_t count) {

@@ -99,6 +99,9 @@ bool load(ghost_compositor::Dispatch& out) {
     d.ClearBufferfv=reinterpret_cast<decltype(d.ClearBufferfv)>(extension("glClearBufferfv"));
     d.DrawArrays=reinterpret_cast<decltype(d.DrawArrays)>(::glDrawArrays);
     d.MemoryBarrier=reinterpret_cast<decltype(d.MemoryBarrier)>(g_glMemoryBarrier);
+    // Optional (GL 4.4 multi-bind): without them a frame asks the active unit.
+    d.BindTextures=reinterpret_cast<decltype(d.BindTextures)>(extension("glBindTextures"));
+    d.BindSamplers=reinterpret_cast<decltype(d.BindSamplers)>(extension("glBindSamplers"));
 #define GD_REQUIRE(result,name,args) if(!d.name)return false;
     GC_GL_FUNCTIONS(GD_REQUIRE)
 #undef GD_REQUIRE

@@ -29,14 +29,27 @@ typedef struct gs_record {
     gc_sample sample;
     gs_world world;
 } gs_record;
+/* One completed list's cost on the renderer thread, which the emulation
+ * thread waits on (microseconds unless named otherwise). What each number
+ * covers: docs/ghost-native-runtime.md, "What the hook numbers mean". */
+typedef struct gs_hook_cost {
+    uint32_t gl_queries;  /* every driver query of the ghost code in the list */
+    uint32_t micros;      /* inside the timed hooks, the renderer's flush and the seal included */
+    uint32_t list;        /* the list's serial: a reader counts each list once */
+    uint32_t list_micros; /* the whole list, begin to end, the renderer's own work included */
+    uint32_t flush_micros; /* the renderer's deferred draws flushed at the seal */
+    uint32_t open_micros, batch_micros, validate_micros, close_micros, finalize_micros;
+    uint32_t state_micros, copy_micros, draw_micros, draw_max_micros, restore_micros;
+    uint32_t hud_micros, hud_draws, layer_passes;
+    uint32_t query_micros; /* inside the counted driver queries */
+    uint32_t error_reads;  /* the capture gateway's glGetError around ghost GL */
+    uint32_t ghosts;       /* ghosts drawn in the list */
+} gs_hook_cost;
 typedef struct gs_stats {
     uint32_t bytes, version, epoch, configuration;
     uint32_t offered, dropped, taken, busy, enabled;
     uint32_t particles_dropped; /* Mario's particles drawn beyond the 16 kept */
-    /* The last completed list's render hooks: driver state queries they made
-     * (zero once the dispatch has observed the raster state) and the
-     * microseconds spent inside them on the emulation thread. */
-    uint32_t hook_gl_queries, hook_micros;
+    gs_hook_cost hooks; /* the last completed list's */
 } gs_stats;
 #pragma pack(pop)
 
@@ -72,7 +85,7 @@ void color_target_changed();
 void display_list(uint32_t pc, uint32_t dl, uint32_t physical_dl, uint32_t depth, const float *matrix);
 void end(bool completed);
 // Renderer thread, once per list: the hooks' own cost for that list.
-void hooks(uint32_t gl_queries, uint32_t micros);
+void hooks(const gs_hook_cost &);
 const gc_sample *sample();
 const ghost::WorldPass *candidate();
 }

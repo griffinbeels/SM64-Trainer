@@ -58,13 +58,15 @@ struct Geometry {
     void pack(){for(unsigned i=0;i<mesh.vertex_count;++i){
         auto& v=vertices[i];std::memcpy(v.position,&positions[3*i],sizeof(v.position));
         std::memcpy(v.normal,&normals[3*i],sizeof(v.normal));std::memcpy(v.color,&colors[3*i],sizeof(v.color));
-        std::memcpy(v.uv,&uv[2*i],sizeof(v.uv));v.material=static_cast<gc::Material>(materials[i]);}}
+        std::memcpy(v.uv,&uv[2*i],sizeof(v.uv));
+        // The model's word (code, texgen bit, tile above it) repacked as playback does.
+        v.material=gc::with_tile(static_cast<gc::Material>(materials[i]&SG_MATERIAL_CODE),materials[i]>>SG_MATERIAL_TILE_SHIFT);}}
     uint64_t hash() const {
         uint64_t h=1469598103934665603ull;const auto* p=reinterpret_cast<const uint8_t*>(positions.data());
         for(size_t i=0;i<mesh.vertex_count*3*sizeof(float);++i){h^=p[i];h*=1099511628211ull;}return h;
     }
 };
-struct Times {double model,pack,compositor,presentation,submit,wait,completed,swap,total;};
+struct Times {double model,pack,compositor,presentation,submit,wait,completed,swap,total;uint32_t queries;};
 struct Bench {
     Window window;gc::Dispatch g;Scene scene;Raster raster;
     sg_model* model=nullptr;gc::Instance* compositor=nullptr;present::Instance* presentation=nullptr;
@@ -92,7 +94,17 @@ struct Bench {
         g.BindTexture(GL_TEXTURE_2D,scene.color);g.TexImage2D(GL_TEXTURE_2D,0,cgl::RGBA8,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,color.data());
         g.TexParameteri(GL_TEXTURE_2D,cgl::TEXTURE_MIN_FILTER,GL_NEAREST);g.TexParameteri(GL_TEXTURE_2D,cgl::TEXTURE_MAG_FILTER,GL_NEAREST);
         g.BindTexture(GL_TEXTURE_2D,scene.depth);g.TexImage2D(GL_TEXTURE_2D,0,cgl::DEPTH_COMPONENT24,w,h,0,GL_DEPTH_COMPONENT,GL_FLOAT,z.data());
-        clean=pixels(g,scene.fbo,w,h);clean_depth=depth(g,scene);display_clean=flip(clean);glFinish();
+        clean=pixels(g,scene.fbo,w,h);clean_depth=depth(g,scene);display_clean=flip(clean);
+        gc::resync(compositor); // frames run in ordinary_state: the renderer's stable state
+        glFinish();
+    }
+    // What GLideN64's glue hands over before a timed frame's seal: ordinary
+    // state, then the VI draw to the default framebuffer (scissor asked).
+    gc::Known seal_state() const {
+        gc::Known known{};
+        known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport;
+        known.draw=0;known.read=scene.fbo;known.viewport_box[2]=int32_t(width);known.viewport_box[3]=int32_t(height);
+        known.caps=0x7f;return known;
     }
     ~Bench(){present::destroy(presentation);gc::destroy(compositor);require(sg_model_close(&model)==SG_OK,"model close");}
     std::vector<uint8_t> flip(const std::vector<uint8_t>& source) const {
@@ -123,9 +135,9 @@ struct Bench {
             p.ambient=.45f;p.diffuse=.55f;p.opacity=opacity;p.flip_y=1;p.hue_degrees=float((i*47)%360);
         }return total;
     }
-    void composite(const gc::Pose* p,unsigned n){
+    void composite(const gc::Pose* p,unsigned n,const gc::Known* known=nullptr){
         auto t=target(scene,gc::Depth::ordinary);t.occurrence=++occurrence;
-        require(gc::begin_batch(compositor,t,p,n)==gc::Result::ok,"batch begin");
+        require(gc::begin_batch(compositor,t,p,n,known)==gc::Result::ok,"batch begin");
         require(gc::finalize(compositor,occurrence)==gc::Result::ok,"batch finalize");
     }
     void source_color(const std::vector<uint8_t>& color){
@@ -136,7 +148,9 @@ struct Bench {
         const auto start=Clock::now();evaluate(n,frame_number,overlap);const auto evaluated=Clock::now();
         pack(n,overlap);const auto packed=Clock::now();
         ordinary_state(g,scene);raster.draw(&raster,{present::DrawKind::vi,scene.color,0,width,height});
-        const auto composite_start=Clock::now();composite(poses,n);const auto composited=Clock::now();
+        const auto known=seal_state();(void)gc::take_cost(compositor);
+        const auto composite_start=Clock::now();composite(poses,n,&known);const auto composited=Clock::now();
+        const auto queries=gc::take_cost(compositor).queries;
         present::begin_update(presentation,occurrence);const auto image=gc::display(compositor);
         const present::GhostViImage vi{image.texture,width,height,1,1,occurrence,image.framebuffer};
         require(present::replace_vi(presentation,vi,0x1000,false,raster.api()),"replace visible VI");
@@ -156,7 +170,7 @@ struct Bench {
         return {milliseconds(start,evaluated),milliseconds(evaluated,packed),milliseconds(composite_start,composited),
             milliseconds(packed,composite_start)+milliseconds(composited,submitted),milliseconds(start,submitted),
             milliseconds(submitted,completed),milliseconds(start,completed),milliseconds(swap_start,swapped_at),
-            milliseconds(start,completed)+milliseconds(swap_start,swapped_at)};
+            milliseconds(start,completed)+milliseconds(swap_start,swapped_at),queries};
     }
     void image_file(const std::filesystem::path& path,const std::vector<uint8_t>& rgba){
         std::ofstream file(path,std::ios::binary);file<<"P6\n"<<width<<' '<<height<<"\n255\n";
@@ -211,13 +225,13 @@ int main(int argc,char** argv){
     const unsigned width=std::stoul(argv[3]),height=std::stoul(argv[4]),samples=std::stoul(argv[5]),warmup=std::stoul(argv[6]),max_count=std::stoul(argv[7]);
     require(width<=1280 && height<=960 && samples>=1 && samples<=2000 && warmup<=100 && max_count<=64,"bounded benchmark");
     Bench b(rom,width,height);std::ofstream raw(out/"frames.csv"),proof(out/"proof.csv");
-    raw<<"layout,count,frame,model_ms,pack_ms,compositor_ms,presentation_ms,submit_ms,gpu_wait_ms,completed_ms,swap_ms,total_ms\n";
+    raw<<"layout,count,frame,model_ms,pack_ms,compositor_ms,presentation_ms,submit_ms,gpu_wait_ms,completed_ms,swap_ms,total_ms,driver_queries\n";
     proof<<"case,vertices,distinct_geometry,min_covered_pixels,max_rgb_error,mismatch_pixels,last_only_mismatch_pixels,source_unchanged,clean_unchanged,visible_matches\n";
     for(bool overlap:{false,true})for(unsigned n:{1u,4u,16u,32u,64u}){if(n>max_count)continue;
         b.proof(n,overlap,out,proof);
         for(unsigned f=0;f<warmup+samples;++f){const auto t=b.frame(n,f,overlap);if(f<warmup)continue;
             raw<<(overlap?"overlap":"separated")<<','<<n<<','<<f<<','<<t.model<<','<<t.pack<<','<<t.compositor<<','
-               <<t.presentation<<','<<t.submit<<','<<t.wait<<','<<t.completed<<','<<t.swap<<','<<t.total<<'\n';}
+               <<t.presentation<<','<<t.submit<<','<<t.wait<<','<<t.completed<<','<<t.swap<<','<<t.total<<','<<t.queries<<'\n';}
     }
     require(bool(raw) && bool(proof),"write private results");
     std::printf("{\"gpu_vendor\":\"%s\",\"gpu_renderer\":\"%s\",\"gl_version\":\"%s\",\"swap_interval\":0,\"hidden\":true,\"shadow\":false}\n",

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <vector>
 #include <cmath>
+#include <type_traits>
 
 namespace gc=ghost_compositor;
 namespace cgl=ghost_compositor::gl;
@@ -54,6 +55,9 @@ static gc::Dispatch dispatch() {
 #define GC_LOAD(result,name,args) g.name=reinterpret_cast<decltype(g.name)>(load("gl" #name));require(g.name!=nullptr,"dispatch " #name);
     GC_GL_FUNCTIONS(GC_LOAD)
 #undef GC_LOAD
+#define GC_LOAD_OPTIONAL(result,name,args) g.name=reinterpret_cast<decltype(g.name)>(load("gl" #name));
+    GC_GL_OPTIONAL(GC_LOAD_OPTIONAL)
+#undef GC_LOAD_OPTIONAL
     using DebugCallback=void (GC_GL_CALL*)(decltype(&debug_message),const void*);
     auto callback=reinterpret_cast<DebugCallback>(load("glDebugMessageCallback"));
     require(callback!=nullptr,"debug dispatch");callback(debug_message,nullptr);
@@ -139,7 +143,8 @@ static std::vector<gc::Vertex> mesh() {
 static gc::Target target(const Scene& s,gc::Depth depth,uint64_t generation=1) {
     gc::Target t{};t.occurrence=77;t.generation=generation;t.framebuffer=s.fbo;t.width=s.width;t.height=s.height;
     t.depth=depth;t.n64_depth_texture=s.image;t.samples=1;
-    t.viewport[2]=t.scissor[2]=s.width;t.viewport[3]=t.scissor[3]=s.height;t.depth_scale=t.depth_translate=.5f;return t;
+    t.viewport[2]=t.scissor[2]=s.width;t.viewport[3]=t.scissor[3]=s.height;t.depth_scale=t.depth_translate=.5f;
+    t.attachments=(uint64_t(s.color)<<32)|s.depth;return t;
 }
 static gc::Pose pose(const std::vector<gc::Vertex>& vertices,float opacity) {
     gc::Pose p{};p.vertices=vertices.data();p.count=uint32_t(vertices.size());p.ambient=1;p.opacity=opacity;
@@ -150,7 +155,11 @@ static void hostile(const gc::Dispatch& g,const Scene& scene,const Bindings& bin
     g.BindBuffer(cgl::PIXEL_UNPACK_BUFFER,bindings.buffers[2]);g.BindSampler(0,bindings.samplers[0]);g.BindSampler(1,bindings.samplers[1]);
     g.BindFramebuffer(cgl::FRAMEBUFFER,scene.fbo);g.ReadBuffer(GL_NONE);
     g.ActiveTexture(cgl::TEXTURE0);g.BindTexture(cgl::TEXTURE_2D,scene.color);
-    g.ActiveTexture(cgl::TEXTURE0+1);g.BindTexture(cgl::TEXTURE_2D,scene.image);g.ActiveTexture(cgl::TEXTURE0+3);
+    g.ActiveTexture(cgl::TEXTURE0+1);g.BindTexture(cgl::TEXTURE_2D,scene.image);
+    // The compositor's own units and upload target hold something of the renderer's too.
+    g.ActiveTexture(cgl::TEXTURE0+cgl::unit_base+1);g.BindTexture(cgl::TEXTURE_2D,scene.color);
+    g.BindSampler(cgl::unit_base+2,bindings.samplers[0]);g.BindBuffer(cgl::COPY_WRITE_BUFFER,bindings.buffers[0]);
+    g.ActiveTexture(cgl::TEXTURE0+3);
     g.Viewport(1,2,7,9);g.Scissor(3,4,2,3);g.DepthRange(.123456789,.876543219);
     g.ViewportIndexedf(0,1.5f,2.5f,7.5f,9.5f);
     g.ViewportIndexedf(1,11.f,12.f,13.f,14.f);g.ScissorIndexed(1,15,16,17,18);
@@ -181,6 +190,45 @@ static void equal_state(const gc::Dispatch& g,const cgl::State& before,const Bin
     int32_t element=0;g.GetIntegerv(0x8895,&element);require(uint32_t(element)==bindings.buffers[1],"renderer VAO element buffer unchanged");
     no_error("restored state");
 }
+// Frame-scoped fields (the compositor's units, copy-write, unpack layout), zeroed padding first.
+static cgl::Frame frame_state(const gc::Dispatch& g) {cgl::Frame f;std::memset(&f,0,sizeof(f));f.capture(g);return f;}
+static void equal_frame(const gc::Dispatch& g,const cgl::Frame& before) {
+    const auto after=frame_state(g);require(std::memcmp(&before,&after,sizeof(after))==0,"every frame field restored");
+}
+// An independent witness of every driver query: every entry of the dispatch
+// the compositor is given is wrapped, and those named Get*, Is* or Check*
+// record their name and first argument (not the compositor's own list).
+#define GC_ID(result,name,args) q_##name,
+enum Query { GC_GL_FUNCTIONS(GC_ID) q_count };
+#undef GC_ID
+#define GC_NAME(result,name,args) #name,
+static const char* const query_names[]={GC_GL_FUNCTIONS(GC_NAME)};
+#undef GC_NAME
+static bool is_query(int id) {
+    const char* n=query_names[id];
+    return !std::strncmp(n,"Get",3) || !std::strncmp(n,"Is",2) || !std::strncmp(n,"Check",5);
+}
+struct Asked { int query; uint32_t first; bool operator==(const Asked& o) const {return query==o.query && first==o.first;} };
+static std::vector<Asked> asked;
+static gc::Dispatch spied_raw;
+static uint32_t first_argument() {return 0;}
+template<class T,class... Rest> static uint32_t first_argument(T first,Rest...) {
+    if constexpr(std::is_pointer_v<T>)return 0;else return uint32_t(first);
+}
+template<int Id,auto Member,class F> struct Spy;
+template<int Id,auto Member,class R,class... A> struct Spy<Id,Member,R (GC_GL_CALL*)(A...)> {
+    static R GC_GL_CALL call(A... a) {
+        if(is_query(Id))asked.push_back({Id,first_argument(a...)});
+        return (spied_raw.*Member)(a...);
+    }
+};
+static gc::Dispatch spy(const gc::Dispatch& raw) {
+    spied_raw=raw;gc::Dispatch d=raw;
+#define GC_SPY(result,name,args) d.name=Spy<q_##name,&gc::Dispatch::name,decltype(gc::Dispatch::name)>::call;
+    GC_GL_FUNCTIONS(GC_SPY)
+#undef GC_SPY
+    return d;
+}
 static void ordinary_state(const gc::Dispatch& g,const Scene& s) {
     for(auto cap:cgl::enables)g.Disable(cap);
     g.Disable(GL_SCISSOR_TEST);
@@ -190,7 +238,9 @@ static void ordinary_state(const gc::Dispatch& g,const Scene& s) {
     g.ReadBuffer(cgl::COLOR_ATTACHMENT0);g.PixelStorei(GL_UNPACK_ALIGNMENT,4);g.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
     g.PixelStorei(GL_UNPACK_SKIP_ROWS,0);g.PixelStorei(GL_UNPACK_SKIP_PIXELS,0);
     g.ActiveTexture(cgl::TEXTURE0);g.BindTexture(GL_TEXTURE_2D,0);
-    g.ActiveTexture(cgl::TEXTURE0+1);g.BindTexture(GL_TEXTURE_2D,0);g.ActiveTexture(cgl::TEXTURE0);
+    g.ActiveTexture(cgl::TEXTURE0+1);g.BindTexture(GL_TEXTURE_2D,0);
+    g.ActiveTexture(cgl::TEXTURE0+cgl::unit_base+1);g.BindTexture(GL_TEXTURE_2D,0);g.ActiveTexture(cgl::TEXTURE0);
+    g.BindSampler(cgl::unit_base+2,0);g.BindBuffer(cgl::COPY_WRITE_BUFFER,0);
 }
 static void check_image(const std::vector<uint8_t>& image,uint32_t w,uint32_t h,float opacity) {
     size_t changed=0;
@@ -226,8 +276,8 @@ int main() {
     const auto original_image_depth=image_depth(g,scene);
     for(auto mode:{gc::Depth::ordinary,gc::Depth::n64_image})for(float alpha:{0.f,.5f,1.f}) {
         auto t=target(scene,mode);auto p=pose(vertices,alpha);
-        hostile(g,scene,bindings);cgl::State before{};before.capture(g);
-        require(gc::begin(compositor,t,p)==gc::Result::ok,"begin");equal_state(g,before,bindings);
+        hostile(g,scene,bindings);cgl::State before{};before.capture(g);const auto frame_before=frame_state(g);
+        require(gc::begin(compositor,t,p)==gc::Result::ok,"begin");equal_state(g,before,bindings);equal_frame(g,frame_before);
         require(gc::display(compositor).texture==0,"no unfinalized handle");
         require(gc::finalize(compositor,77)==gc::Result::ok,"finalize");
         ordinary_state(g,scene);
@@ -240,9 +290,9 @@ int main() {
     auto blue=vertices;
     for(auto& vertex:blue){vertex.color[0]=vertex.color[1]=0;vertex.color[2]=1;}
     gc::Pose batch[2]={pose(blue,.5f),pose(vertices,.5f)};
-    hostile(g,scene,bindings);cgl::State batch_before{};batch_before.capture(g);
+    hostile(g,scene,bindings);cgl::State batch_before{};batch_before.capture(g);const auto batch_frame=frame_state(g);
     require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),batch,2)==gc::Result::ok,"batch begin");
-    equal_state(g,batch_before,bindings);
+    equal_state(g,batch_before,bindings);equal_frame(g,batch_frame);
     require(gc::finalize(compositor,77)==gc::Result::ok,"batch finalize");
     ordinary_state(g,scene);
     const auto layered=pixels(g,gc::display(compositor).framebuffer,32,32);
@@ -285,9 +335,9 @@ int main() {
             p.shadow.view_projection[0]=p.shadow.view_projection[5]=p.shadow.view_projection[10]=p.shadow.view_projection[15]=1;return p;
         };
         gc::Pose shadows[2]={shaded(behind),shaded(coplanar)};
-        hostile(g,scene,bindings);cgl::State shadow_before{};shadow_before.capture(g);
+        hostile(g,scene,bindings);cgl::State shadow_before{};shadow_before.capture(g);const auto shadow_frame=frame_state(g);
         require(gc::begin_batch(compositor,target(scene,gc::Depth::ordinary),shadows,2)==gc::Result::ok,"shadow begin");
-        equal_state(g,shadow_before,bindings);require(gc::finalize(compositor,77)==gc::Result::ok,"shadow finalize");
+        equal_state(g,shadow_before,bindings);equal_frame(g,shadow_frame);require(gc::finalize(compositor,77)==gc::Result::ok,"shadow finalize");
         ordinary_state(g,scene);
         const auto shadowed=pixels(g,gc::display(compositor).framebuffer,32,32);
         for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
@@ -329,7 +379,11 @@ int main() {
     require(gc::begin(compositor,target(scene,gc::Depth::ordinary),invalid_pose)==gc::Result::invalid && !gc::display(compositor).texture,"capacity refuses");
     g.BindFramebuffer(cgl::FRAMEBUFFER,scene.fbo);
     g.FramebufferTexture2D(cgl::FRAMEBUFFER,cgl::DEPTH_ATTACHMENT,cgl::TEXTURE_2D,0,0);
-    require(gc::begin(compositor,target(scene,gc::Depth::ordinary),pose(vertices,1))==gc::Result::unsupported && !gc::display(compositor).texture,"missing scene depth refuses");
+    // Detached depth is a different set of attachments: named anew, or unnamed.
+    auto detached=target(scene,gc::Depth::ordinary);detached.attachments=uint64_t(scene.color)<<32;
+    require(gc::begin(compositor,detached,pose(vertices,1))==gc::Result::unsupported && !gc::display(compositor).texture,"missing scene depth refuses");
+    detached.attachments=0;
+    require(gc::begin(compositor,detached,pose(vertices,1))==gc::Result::unsupported,"an unnamed framebuffer is checked every frame");
     g.FramebufferTexture2D(cgl::FRAMEBUFFER,cgl::DEPTH_ATTACHMENT,cgl::TEXTURE_2D,scene.depth,0);
     auto transformed=pose(vertices,1);transformed.view_projection[0]=transformed.view_projection[5]=.5f;
     transformed.view_projection[13]=.25f;transformed.flip_y=1;
@@ -461,6 +515,68 @@ int main() {
         require(gc::finalize(compositor,77)==gc::Result::ok,"resize finalize");
         check_image(pixels(g,gc::display(compositor).framebuffer,64,32),64,32,.5f);
     }
+    // The renderer's own record (Known): a frame asks the driver only the
+    // documented residue, counted alike by the compositor and this witness,
+    // and still puts every field back. With multi-bind, then without.
+    const std::vector<Asked> residue={{q_GetIntegerv,cgl::CURRENT_PROGRAM},{q_GetIntegerv,cgl::VERTEX_ARRAY_BINDING},
+        {q_GetIntegerv,cgl::DEPTH_FUNC},{q_GetBooleanv,cgl::DEPTH_WRITEMASK},{q_GetIntegeri_v,cgl::BLEND_SRC_RGB},
+        {q_GetIntegeri_v,cgl::BLEND_DST_RGB},{q_GetIntegeri_v,cgl::BLEND_SRC_ALPHA},{q_GetIntegeri_v,cgl::BLEND_DST_ALPHA}};
+    const std::vector<Asked> layer_residue={{q_GetBooleanv,cgl::DEPTH_WRITEMASK},{q_GetIntegeri_v,cgl::BLEND_SRC_RGB},
+        {q_GetIntegeri_v,cgl::BLEND_DST_RGB},{q_GetIntegeri_v,cgl::BLEND_SRC_ALPHA},{q_GetIntegeri_v,cgl::BLEND_DST_ALPHA}};
+    unsigned known_frames=0;
+    for(bool multi:{true,false}) {
+        auto raw=g;if(!multi)raw.BindTextures=nullptr,raw.BindSamplers=nullptr;
+        auto* known_compositor=gc::create(spy(raw),1);require(known_compositor!=nullptr,"known create");
+        const auto renderer_state=[&]{hostile(g,scene,bindings);g.ViewportIndexedf(0,1,2,7,9);}; // its glViewport is whole pixels
+        renderer_state();
+        require(gc::prepare(known_compositor,32,32,60,atlas,1,1)==gc::Result::ok,"known prepare");
+        gc::Known known{};
+        known.fields=gc::Known::draw_framebuffer|gc::Known::read_framebuffer|gc::Known::viewport|gc::Known::scissor;
+        known.draw=known.read=scene.fbo;
+        const int32_t viewport[4]={1,2,7,9},scissor[4]={3,4,2,3};
+        std::memcpy(known.viewport_box,viewport,sizeof(viewport));std::memcpy(known.scissor_box,scissor,sizeof(scissor));
+        known.caps=known.enabled=0x7f; // hostile() switched every capability on
+        auto expected=residue;if(!multi)expected.push_back({q_GetIntegerv,cgl::ACTIVE_TEXTURE});
+        for(unsigned round=0;round<2;++round) {
+            cgl::State before{};before.capture(g);const auto frame_before=frame_state(g);
+            asked.clear();(void)gc::take_cost(known_compositor);
+            require(gc::begin(known_compositor,target(scene,gc::Depth::ordinary),pose(vertices,.5f),&known)==gc::Result::ok,"known begin");
+            const auto cost=gc::take_cost(known_compositor);
+            require(cost.queries==asked.size(),"the compositor counts every query it makes");
+            // The first frame on a framebuffer verifies it; later ones reuse that.
+            if(round)require(asked==expected,"a known frame asks the driver the residue only");
+            else require(asked.size()>expected.size(),"a new framebuffer is verified once");
+            require(cost.ghosts==1 && cost.batch_micros>=cost.draw_micros,"stage times cover the batch");
+            equal_state(g,before,bindings);equal_frame(g,frame_before);++known_frames;
+            require(gc::finalize(known_compositor,77)==gc::Result::ok,"known finalize");
+            ordinary_state(g,scene);check_image(pixels(g,gc::display(known_compositor).framebuffer,32,32),32,32,.5f);
+            renderer_state();
+        }
+        // The renderer changes state it promised to leave alone: it says so.
+        ordinary_state(g,scene);g.BlendEquationSeparatei(0,cgl::FUNC_ADD,cgl::FUNC_ADD);gc::resync(known_compositor);
+        const int32_t whole[4]={0,0,32,32};std::memcpy(known.viewport_box,whole,sizeof(whole));
+        known.enabled=0;
+        require(gc::begin(known_compositor,target(scene,gc::Depth::ordinary),pose(vertices,1),&known)==gc::Result::ok,"known HUD frame");
+        hud_rect(g,bindings,.5f);asked.clear();
+        require(gc::begin_hud(known_compositor,77,&known)==gc::Result::ok && asked.empty(),"a known HUD scope asks nothing");
+        hud_rect(g,bindings,.5f);gc::end_hud(known_compositor);
+        require(gc::finalize(known_compositor,77)==gc::Result::ok,"known HUD finalize");
+        check_image(pixels(g,gc::display(known_compositor).framebuffer,32,32),32,32,.5f);
+        // A layer pass asks for the game's blend factors and depth mask only.
+        ordinary_state(g,scene);gc::clear_layer(known_compositor);
+        g.Enable(GL_DEPTH_TEST);g.DepthMask(0);g.Enablei(GL_BLEND,0);
+        g.BlendFuncSeparatei(0,GL_ONE,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
+        known.enabled=gc::Known::depth_test|gc::Known::blend;
+        for(uint32_t pass=0;pass<2;++pass) {
+            cgl::State before{};before.capture(g);const auto frame_before=frame_state(g);asked.clear();
+            require(gc::begin_layer(known_compositor,target(scene,gc::Depth::ordinary),gc::LayerPass(pass),&known)==gc::Result::ok
+                && asked==layer_residue,"a known layer pass asks the game's blend and depth mask only");
+            gc::end_layer(known_compositor);equal_frame(g,frame_before);
+            cgl::State after{};after.capture(g);require(std::memcmp(&before,&after,sizeof(after))==0,"a layer pass restores the game's state");
+        }
+        ordinary_state(g,scene);gc::destroy(known_compositor);no_error(multi ? "known multi-bind" : "known without multi-bind");
+    }
+    require(known_frames==4,"known frames ran");
     gc::destroy(compositor);no_error("destroy");
     // A genuinely separate context receives a fresh generation and resources.
     {
@@ -473,6 +589,6 @@ int main() {
     }
     require(wglMakeCurrent(window.dc,window.context)!=0,"restore test context");
     require(GetForegroundWindow()==foreground,"foreground preserved");
-    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2");
+    std::puts("compositor passed: hidden=yes profile=core depth=ordinary,n64_image opacity=0,0.5,1 materials=6 shadow=decal coplanar=once clean=unchanged hud=exact state=restored resize=yes contexts=2 known=residue");
     return 0;
 }
