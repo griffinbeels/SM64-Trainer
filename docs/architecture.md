@@ -800,7 +800,8 @@ instantly. Three compounding causes, each fixed:
    manual collection freezes its survivors, so the 5-minute backstop walks
    only what was allocated since (about 1 ms, flat) instead of everything
    since startup (54-177 ms live); cycles among frozen objects are reclaimed
-   by a full collection when capture is idle and at least hourly. Reasons and
+   by a full collection every 10 minutes while capture is retired and at
+   least hourly otherwise. Reasons and
    measurements: `replay/_gcwatch.py`'s docstring.
 3. *Disk could fill, and a near-full volume thrashes everything.* The historical 20 GiB
    scratch cap with `retention_s=None` can be approached over long ACTIVE play
