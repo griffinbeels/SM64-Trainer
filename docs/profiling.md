@@ -2,8 +2,8 @@
 
 Profiling is opt-in and expires after at most five minutes. It does not restart
 the trainer, change the renderer, alter capture rates, or replace an active
-profile. Existing `perf_log.jsonl` remains a memory/resource monitor, not a CPU or
-GPU profiler. Capture tools run from the development environment.
+profile. Existing `perf_log.jsonl` is a resource and attribution monitor, not a
+sampling CPU or GPU profiler. Capture tools run from the development environment.
 
 Routine resource monitoring runs every minute using OS memory/process/handle
 probes. It does not walk the Python heap, enumerate DXGI adapters or scan replay
@@ -13,6 +13,33 @@ before launch; missing measurements stay null/unmeasured. `sampling.mode` and
 (excluding the final file write). Application gauges read cached recorder
 scalars; slow probes and persistence run outside the polling event loop, with
 one owned sample at a time and completion awaited on shutdown.
+
+Each minute's record also answers who used the CPU, from one query-only process
+snapshot (2026-09-27; it replaced a Toolhelp pass and costs less, 10.3 ms
+against 14.5-16.6 ms on a machine with 445 processes and 12,000 threads):
+
+- `cpu`: this server's CPU over the minute per thread name, in percent of one
+  core (`MainThread` is the event loop). `unattributed_pct` is CPU of threads
+  that exited during the minute. `os_threads` counts native threads too.
+- `children`: the whole process tree below the server, so the encoder helper
+  (a grandchild behind the venv launcher) is counted, one `members` row each.
+- `processes["Project64.exe"]`: its threads and CPU, and its address space.
+  Project64 1.6 is 32-bit, so `vm_largest_free_mib` (the biggest mapping it can
+  still make) and `vm_free_mib` below `vm_limit_mib` matter more than its RAM.
+  `vm_walk_ms` is the walk's own cost (about 2.5 us per region measured on
+  busy 32-bit apps; the audit counted ~1,100 regions in Project64).
+- `machine`: the top five processes by CPU, commit, hard faults and disk bytes
+  over the minute, plus CPU busy, DPC and interrupt shares of all CPUs.
+
+Between samples a heartbeat thread wakes once a second (2.7 ms of CPU per
+minute). When it wakes 0.5 s or more late, nothing in this server could run:
+the machine was starved or one of our threads held the interpreter. It then
+appends a `"kind": "stall"` line naming the busiest processes and this
+server's threads across the stall (`before`) and for 2 s after (`after`), at
+most once per 30 s; the minute record's `stalls` counts every one. A freeze
+inside Project64 alone does not delay this server, so it gets no stall line.
+`uv run python tools/analyze_perf_log.py` lists the stalls under the growth
+table.
 
 GPU capture status includes `frame_source_health.stage_timings`: fixed-size
 cold-start, tick, scheduling-gap and nested audio/adapter/media/report aggregates.
