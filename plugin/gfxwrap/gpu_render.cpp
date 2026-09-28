@@ -99,7 +99,11 @@ bool adapter_luid(const Gl &gl, LUID *out) {
 bool Sampler::prepare(const Gl &gl, unsigned width, unsigned height, unsigned slots, uint64_t budget) {
     if (gl_ || !width || !height || width > 8192 || height > 8192 || !slots || slots > max_slots)
         return fault(ERROR_INVALID_PARAMETER);
+#ifdef RENDER_SAMPLE_CROP_FIRST // witness negative control: samples the even crop
+    columns_ = ((width & ~1u) + 7) / 8; rows_ = ((height & ~1u) + 7) / 8;
+#else
     columns_ = (width + 7) / 8; rows_ = (height + 7) / 8;
+#endif
     bytes_ = uint64_t(columns_) * rows_ * 4;
     if (bytes_ > budget) { bytes_ = 0; return fault(ERROR_NOT_ENOUGH_MEMORY); }
     gl_ = &gl; width_ = width; height_ = height; slots_ = slots;
@@ -125,12 +129,21 @@ bool Sampler::issue(unsigned slot, GLuint source) {
     // shifted so every sample point lies strictly inside pixel (8x, H-1-8y):
     // x = 8x + 1 - (x+0.5)/columns, y = H-1-8y + (y+0.5)/rows. Rows run top first.
     const GLint src_x0 = -3, src_x1 = GLint(8 * columns_) - 4;
+#ifdef RENDER_SAMPLE_WRONG_Y // witness negative control: rows bottom first
+    const GLint src_y0 = -3, src_y1 = GLint(8 * rows_) - 4;
+#else
     const GLint src_y0 = GLint(height_) + 3, src_y1 = GLint(height_) + 4 - GLint(8 * rows_);
+#endif
     gl.blit(read_, draw_, src_x0, src_y0, src_x1, src_y1, 0, 0, GLint(columns_), GLint(rows_),
             GL_COLOR_BUFFER_BIT, GL_NEAREST);
     gl.bind_buffer(pack_buffer, buffer_[slot]);
+#ifdef RENDER_SAMPLE_RGBA_BYTES // witness negative control: red and blue swapped
+    const GLenum order = GL_RGBA;
+#else
+    const GLenum order = bgra;
+#endif
     gl.get_texture_image(texture_[slot], 0, 0, 0, 0, GLsizei(columns_), GLsizei(rows_), 1,
-                         bgra, GL_UNSIGNED_BYTE, GLsizei(bytes_), nullptr);
+                         order, GL_UNSIGNED_BYTE, GLsizei(bytes_), nullptr);
     gl.bind_buffer(pack_buffer, 0);
     fence_[slot] = gl.fence(sync_complete, 0);
     return fence_[slot] != nullptr || fault(ERROR_INVALID_DATA);
@@ -143,8 +156,8 @@ Sampler::Poll Sampler::take(unsigned slot, unsigned char *bytes, size_t capacity
     if (state != already_signaled && state != condition_satisfied) return Poll::pending;
     gl.delete_sync(fence_[slot]); fence_[slot] = nullptr;
     gl.get_buffer(buffer_[slot], 0, ptrdiff_t(bytes_), bytes);
-    // The worker shader wrote alpha 1.0; a copied RGBA8 snapshot carries the
-    // source's alpha, which a clean-VI source need not set.
+    // The selector compares opaque samples; a copied RGBA8 snapshot carries
+    // the source's alpha, which a clean-VI source need not set.
     for (uint64_t i = 3; i < bytes_; i += 4) bytes[i] = 255;
     return Poll::ready;
 }
@@ -192,9 +205,20 @@ Bridge::Result Bridge::copy(unsigned index, GLuint source) {
     gl.framebuffer_texture(draw_, color0, texture_[index], 0);
     // Odd height drops native row 0, odd width the rightmost column; the
     // destination is written top row first (the encoder's orientation).
+#ifdef RENDER_FIDELITY_WRONG_ODD_ROW // witness negative control: keeps native row 0
+    const GLint y0 = 0;
+#else
     const GLint y0 = GLint(source_height_ & 1u);
-    gl.blit(read_, draw_, 0, y0, GLint(width_), y0 + GLint(height_), 0, GLint(height_), GLint(width_), 0,
+#endif
+#ifdef RENDER_FIDELITY_OMIT_FLIP // witness negative control: bottom row first
+    const GLint top = 0, bottom = GLint(height_);
+#else
+    const GLint top = GLint(height_), bottom = 0;
+#endif
+#ifndef RENDER_BRIDGE_OMIT_COPY // witness negative control: the key moves, the pixels do not
+    gl.blit(read_, draw_, 0, y0, GLint(width_), y0 + GLint(height_), 0, top, GLint(width_), bottom,
             GL_COLOR_BUFFER_BIT, GL_NEAREST);
+#endif
     // The release is judged by GL errors: the call returns FALSE on NVIDIA even
     // for a release the consumer then acquires as key 1 (test_gpu_delivery's
     // consumer takes key 1 and verifies the pixels).

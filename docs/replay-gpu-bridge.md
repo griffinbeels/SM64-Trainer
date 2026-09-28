@@ -1,84 +1,61 @@
 # GPU delivery bridge
 
-**Since 2026-09-27 the shipped bridge is `render_capture::Bridge` in
-`plugin/gfxwrap/gpu_render.cpp`**, run on the renderer's own thread
-([renderer-thread capture](replay-gpu-runtime.md#first-capture-freeze)). The
-helper creates the two keyed-mutex D3D11 textures under the channel's names;
-the renderer imports them with `GL_EXT_memory_object_win32` and
-`GL_EXT_win32_keyed_mutex` and writes each selected picture with one flipped,
-even-cropped nearest blit. Project64 makes no D3D11 device and no second GL
-context. On NVIDIA a zero-timeout `glAcquireKeyedMutexWin32EXT` returns TRUE
-even when it timed out (another process holds the key); the following release
-then raises `GL_INVALID_OPERATION`, which the key-return poll reads as "not
-yet" (11-30 us per poll). The delivery's credit ledger, not the acquire,
-decides which texture may be written. `test_gpu_delivery.py` checks the
-pixels, the flip and odd-size crop, and key custody across stop and restart.
+The bridge carries a selected picture from the renderer's GL context into the
+encoder helper's D3D11 texture. Since 2026-09-27 it is `render_capture::Bridge`
+in `plugin/gfxwrap/gpu_render.cpp`, run on the renderer's own thread
+([renderer-thread capture](replay-gpu-runtime.md#first-capture-freeze)).
 
-The rest of this page describes the retired worker-thread producer, which the
-hardware witnesses below still build. The fixed two-slot
-`plugin/gfxwrap/gpu_bridge.cpp` component accepted an owned GL snapshot on a dedicated
-worker, transfers pixels on the GPU into an ordinary WGL-interoperable D3D11
-texture, then into a separate keyed shared texture. The separate x64 witness
-consumer opens it on the same adapter, established from the GL and DXGI LUID.
-No adapter-index assumption or full-image CPU transfer belongs to the bridge.
+The helper creates two keyed-mutex D3D11 textures under the channel's names
+(`gpu_encoder_dll.cpp`, open-else-create). The renderer imports them with
+`GL_EXT_memory_object_win32` and `GL_EXT_win32_keyed_mutex` and writes each
+selected picture with one nearest blit that flips it top row first and takes
+the floor-even top-left crop: an odd height drops native row 0, an odd width
+the rightmost column. Alpha passes through; the encoder does not read it.
+Project64 makes no D3D11 device and no second GL context; the adapter is the
+GL context's own (`GL_DEVICE_LUID_EXT`), which the helper's device must match.
 
-Only the worker enters WGL interop locks; a full transport slot refuses before
-that lock. WGL may block the worker. The renderer has no explicit dependency
-on its completion, but shared-driver/GPU contention still requires live proof.
-Failed or abandoned ownership quarantines a fixed process-lifetime pool. Do
-not destroy that pool or reconnect on unproved completion. Crash/recovery and
-portable readback fallback are not implemented in this component.
+Custody is the delivery's credit ledger: a texture is written only after its
+key 0 came back. On NVIDIA a zero-timeout `glAcquireKeyedMutexWin32EXT`
+returns TRUE even when it timed out (another process holds the key); the
+following release then raises `GL_INVALID_OPERATION`, which the key-return
+poll reads as "not yet" (11-30 us per poll; a scratch probe of 48,000 polls
+against a key another process held never read one as returned). A faulted or
+abandoned key quarantines the process's capture instead of reallocating.
 
-`gpu_bridge_encoder` is a synchronous NVENC consumer with one ordinary
-registered input texture. It tests real H.264 output, explicit IDR requests,
-input/output timestamp metadata and EOS drain. Production calls run inside the
-isolated GPU helper; the Python packet mux owns media publication. Failure cannot
-reuse unproved GPU custody. The NVIDIA header in `vendor/` retains its license and
-pinned provenance. No CUDA Toolkit installation is required.
+## Hardware witnesses
 
-The test-only raw-pixel oracle checks six distinct images after source overwrite.
-A source GPU fence completes while both transport slots remain held and 2000
-full-pool capture requests refuse. That establishes progress in this fixture,
-not PJ64 pacing under concurrent encoding, OBS or other workloads. Independent
-H.264 decoding identifies all six markers; opaque NVENC timestamp metadata is
-not a muxed VFR/audio/fragment synchronization proof. Logical texture bytes are
-not measured driver/NVENC VRAM usage.
+Each builds the shipped code: `gpu_render_witness_host.cpp` is an x86
+renderer with every capture step in its one GL context (the snapshot pool in
+its one-context mode, then the sampler or the bridge), and
+`gpu_render_witness_consumer.cpp` is the x64 helper, which creates the
+textures, takes key 1, checks or dumps the pixels and returns key 0
+(`tests/gpu_render_witness.py` builds and runs the pair). The host leaves the
+renderer's scissor, sRGB writes, blending, depth/stencil/cull, colour mask and
+pack state hostile around every capture call and checks they come back.
 
-The original raw bridge witness preserved GL row order. The connected worker
-now applies the exact transfer convention below, including odd-height cropping:
-retain rows 1..H-1 before flipping an odd-height source, not rows 0..H-2.
-Source state, leases, media and input identity are separate runtime
-responsibilities; this component alone cannot certify them. Live pacing was
-accepted on 2026-09-16 on an RTX 5090; there is no AMD or Intel GPU route.
+- `test_gpu_bridge.py` (`SM64_TEST_GPU_BRIDGE=1`): six pictures through
+  cross-process custody, every pixel checked against the fixture formula at an
+  odd 9x7 snapshot cropped from (1,2); an omitted-copy negative control; and
+  320x240 through the shipped NVENC encoder in H.264 and AV1, muxed by
+  `PacketFragmentMux` before any decode, with the sample entry, PTS, IDR
+  pattern and decoded markers checked.
+- `test_gpu_fidelity.py` (`SM64_TEST_GPU_BRIDGE=1`): exact RGB at 640x480 and
+  641x481 against an independent bottom-up reference, with the flip and
+  odd-row negative controls (`RENDER_FIDELITY_*`).
+- `test_gpu_selection.py` (`SM64_TEST_GPU_SELECTION=1`): the stride-8 sample
+  equals the full-frame selector's own sample byte for byte at 640x480 and
+  641x481, and the selector makes the same decisions from either; wrong-row,
+  crop-first and byte-order negative controls (`RENDER_SAMPLE_*`).
+- `test_gpu_delivery.py` and `test_gpu_cadence.py` cover the bridge inside the
+  delivery: 17x11 pixels and key custody through stop and restart, and the real
+  helper at 60 VI / 30 pictures.
 
-Run the actual hardware witness explicitly in the worktree:
+No live server, Project64 process, installed plugin or graphics setting is
+touched. The retired worker-thread producer (`gpu_bridge.cpp`, a WGL/D3D11
+interop pool, and its `gpu_selection.cpp` shader) was deleted on 2026-09-28
+with the witnesses that only built it.
 
-```powershell
-$env:SM64_TEST_GPU_BRIDGE='1'
-.venv/Scripts/python.exe tools/run_tests.py tests/test_gpu_bridge.py
-```
-
-`tests/test_gpu_cadence.py` and `tests/test_gpu_fidelity.py` use the same flag;
-`tests/test_gpu_selection.py` (the selection sample in `gpu_selection.cpp`) uses
-`SM64_TEST_GPU_SELECTION=1`. Without its flag each test explicitly skips. Positive small/full-size paths and an
-omitted-copy negative control use hidden x86/x64 child processes only. No live
-server, PJ64 process, installed plugin or graphics setting is modified.
-
-API references: [WGL interop2](https://registry.khronos.org/OpenGL/extensions/NV/WGL_NV_DX_interop2.txt),
+API references: [external memory objects](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_external_objects_win32.txt),
+[GL keyed mutex](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_win32_keyed_mutex.txt),
 [DXGI keyed ownership](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgikeyedmutex-acquiresync),
 [NVENC guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvenc-video-encoder-api-prog-guide/index.html).
-
-## Exact worker transfer convention
-
-The worker now uses one prepared shader draw to combine top-down orientation,
-floor-even top-left cropping and opaque alpha, the same orientation and even
-crop the recorder's selection and encoder have always used. Odd source height drops native GL row0; odd width drops the
-rightmost column. No CPU image conversion is used. The dedicated worker owns
-its GL state and initializes shader/VAO/sampler/FBO resources once. Its normal
-shutdown unbinds/deletes them; a fault retains the bounded quarantined pool.
-
-The 640x480 and 641x481 independent raw pixel fixtures match every RGBA byte.
-Removing flip, changing the odd row or swapping red/blue fails those oracles.
-Existing cross-process and NVENC marker witnesses now expect top-down output.
-Color signaling, encoder settings, live driver contention and emulation pacing
-remain separate gates; raw transfer fidelity alone does not establish them.

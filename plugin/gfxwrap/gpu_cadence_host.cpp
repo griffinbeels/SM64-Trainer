@@ -110,10 +110,6 @@ int main(int argc,char **argv) {
     CHECK(SetWindowPos(window.hwnd,nullptr,0,0,width,height,SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOZORDER));
     CHECK(!IsWindowVisible(window.hwnd)&&wglMakeCurrent(window.dc,window.rc));
     glDisable(GL_DITHER);glDisable(0x8DB9);glReadBuffer(GL_BACK);
-    using Create=HGLRC(WINAPI*)(HDC,HGLRC,const int*);
-    const auto create=proc<Create>("wglCreateContextAttribsARB");
-    const int attributes[]={0x2091,4,0x2092,5,0x9126,2,0};
-    CHECK(registry.publish(window.rc,1,GetPixelFormat(window.dc),create,window.dc,attributes));
     render_request=CreateEventW(nullptr,FALSE,FALSE,nullptr);
     render_done=CreateEventW(nullptr,FALSE,FALSE,nullptr);
     CHECK(render_request&&render_done&&wglMakeCurrent(nullptr,nullptr));

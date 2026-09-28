@@ -83,10 +83,6 @@ int __cdecl gd_completed(const rb_image*);
 HANDLE __cdecl gd_signal(void);
 int __cdecl gd_read_status(gd_status*);
 
-/* The renderer's anchor publication time (SM64ReplayAnchorTimingV1), read
- * once by the worker for the anchor_published log line. Optional. */
-typedef int (__cdecl *gd_anchor_timing)(uint64_t *begin_qpc, uint64_t *end_qpc);
-void __cdecl gd_set_anchor_timing(gd_anchor_timing);
 
 #ifdef __cplusplus
 }

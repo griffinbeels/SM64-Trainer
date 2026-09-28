@@ -42,13 +42,6 @@ bool ActiveUnit(unsigned *unit);
 // Nominal state only: copy validity/device-loss/source qualification are separate
 // prerequisites. Never promote this alone to a verified replay picture.
 bool CandidateBindings(renderer::Identity *, snapshot::RestoreBindings *);
-#ifdef SM64_REPLAY_CONTEXT_LIFETIME
-// Renderer thread, current context, under capture demand only: publish the
-// never-current shared anchor the worker leases, once per context. A direct
-// (no wrapper) or idle (no request) session never creates it, so the driver
-// sees the original single-context renderer. One attempt per context.
-bool EnsureAnchor();
-#endif
 uint32_t SourceFormat(); // observed once on fresh default framebuffer; no driver query
 // Called only for an admitted snapshot, before mutation and after restoration/
 // fence/flush, BEFORE image publication. One raw error read each; no drain.

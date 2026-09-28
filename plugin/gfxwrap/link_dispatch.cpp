@@ -61,7 +61,6 @@ GLuint read_framebuffer = 0;
 bool nominal = false, double_buffer = false;
 bool practice = false; // the context belongs to a practice ROM
 bool capture_open = false;
-bool anchor_attempted = false, anchor_published = false; // renderer thread only
 GLenum saved_error = GL_NO_ERROR;
 uint32_t source_format = RB_SOURCE_UNKNOWN;
 void observe_source_format() {
@@ -155,16 +154,6 @@ void APIENTRY Disablei(GLenum capability, GLuint index) {
 }
 }
 void ContextLost() {
-#ifdef SM64_REPLAY_CONTEXT_LIFETIME
-    // Revoke AND retire here: a context abandoned without _stop (resize
-    // restart) must not leave its anchor alive in the driver. _stop's own
-    // later Retire finds the freed slot and reports stale, which is fine.
-    if (identity.context) {
-        const auto retirement = source_context::Revoke(reinterpret_cast<HGLRC>(identity.context));
-        if (retirement.value) source_context::Retire(retirement);
-    }
-    anchor_attempted = anchor_published = false;
-#endif
     nominal = false; practice = false; identity = {}; dispatch_generation = 0; state.lost();
     draw_known = viewport_known = depth_known = false; render_known = false; render.scissor_known = false;
     drawable_width = drawable_height = 0;
@@ -217,24 +206,10 @@ void ContextCreated(HGLRC context, HDC drawable, bool buffered) {
     fresh_render_state(); // known once InstallDispatch observes the pointer-called entries too
     state.created(identity, buffered); nominal = true;
     observe_source_format();
-    // No anchor here. R31 published the shared context at every ROM open,
-    // consumer or not, so a server-off session ran in a two-context share
-    // group the original renderer never has. EnsureAnchor publishes it on
-    // the first admitted capture surface instead.
+    // No shared context, ever: capture runs on this thread in this context
+    // (renderer-thread capture), so the driver only sees the original
+    // single-context renderer, with or without a recording.
 }
-#ifdef SM64_REPLAY_CONTEXT_LIFETIME
-bool EnsureAnchor() {
-    if (!nominal || source_format == RB_SOURCE_UNKNOWN || !dispatch_generation
-            || dispatch_generation != identity.context_generation
-            || GetCurrentThreadId() != identity.owner_thread) return false;
-    if (anchor_attempted) return anchor_published;
-    anchor_attempted = true;
-    const auto drawable = reinterpret_cast<HDC>(identity.read_drawable);
-    anchor_published = source_context::Publish(reinterpret_cast<HGLRC>(identity.context), drawable,
-                                              identity.context_generation, GetPixelFormat(drawable));
-    return anchor_published;
-}
-#endif
 void InstallDispatch() {
     if (!practice) return; // baseline ROM: GLideN64's own raw dispatch, untouched
     // Upstream must have resolved fresh raw addresses. Reject accidental repeated

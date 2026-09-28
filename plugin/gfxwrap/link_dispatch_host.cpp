@@ -10,7 +10,6 @@ unsigned char cartridge[0x40];
 u8 *HEADER = cartridge;
 unsigned logged=0;
 #ifdef SM64_REPLAY_CONTEXT_LIFETIME
-extern "C" int __cdecl SM64ReplayAnchorTimingV1(uint64_t*,uint64_t*);
 #endif
 void LOG(unsigned short, const char*, ...) { ++logged; } // fixture sink; upstream checked() stays intact
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"link witness line %d: %s\n",__LINE__,#x); ExitProcess(1); } } while(0)
@@ -75,10 +74,6 @@ int main(int argc, char **argv) {
         renderer::Identity none{}; snapshot::RestoreBindings unused{};
         CHECK(!replay_gl::CandidateBindings(&none,&unused));
         CHECK(replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN && !replay_gl::BeginCapture());
-#ifdef SM64_REPLAY_CONTEXT_LIFETIME
-        CHECK(!replay_gl::EnsureAnchor());
-        uint64_t begin=0,end=0; CHECK(!SM64ReplayAnchorTimingV1(&begin,&end)); // nothing published
-#endif
         glBindTexture(GL_TEXTURE_2D,0); CHECK(glGetError()==GL_NO_ERROR);
         replay_gl::ContextLost(); CHECK(wglMakeCurrent(nullptr,nullptr)); CHECK(wglDeleteContext(context));
         CHECK(ReleaseDC(window,dc) && DestroyWindow(window));
@@ -93,27 +88,15 @@ int main(int argc, char **argv) {
     initGLFunctions(); check_bindings(0,0,GL_BACK);
 #ifdef SM64_REPLAY_CONTEXT_LIFETIME
     if (!unsupported) {
-        // The anchor is demand-gated: absent after context creation and
-        // dispatch qualification, present after EnsureAnchor, gone after loss.
+        // No shared anchor, ever (renderer-thread capture): ContextV1 stays
+        // exported for the wrapper's ABI check, and a qualified source still
+        // has nothing to lease.
         const rcl_api *contexts=SM64ReplayContextV1(RCL_ABI_V1,sizeof(rcl_api)); CHECK(contexts);
         renderer::Identity created{}; snapshot::RestoreBindings ignored{};
         CHECK(replay_gl::CandidateBindings(&created,&ignored));
         rcl_lease lease{};
         CHECK(contexts->acquire(created.context,created.context_generation,&lease)==RCL_UNAVAILABLE);
-        uint64_t begin=0,end=0; CHECK(!SM64ReplayAnchorTimingV1(&begin,&end));
-        const bool anchored=replay_gl::EnsureAnchor();
-        if (!anchored) {
-            GLint mj=0,mn=0,pf=0; glGetIntegerv(0x821B,&mj); glGetIntegerv(0x821C,&mn); glGetIntegerv(0x9126,&pf);
-            fprintf(stderr,"anchor refused: error=%lu health=%u gl=%d.%d profile=%d pixel_format=%d current=%d\n",
-                contexts->error(),contexts->health(),mj,mn,pf,GetPixelFormat(dc),int(wglGetCurrentContext()==context));
-        }
-        CHECK(anchored && replay_gl::EnsureAnchor());
-        // The publication is timed for the worker's anchor_published line.
-        CHECK(SM64ReplayAnchorTimingV1(&begin,&end) && begin && end>=begin);
-        CHECK(contexts->acquire(created.context,created.context_generation,&lease)==RCL_ACQUIRED);
-        CHECK(lease.context && lease.context!=created.context && lease.context_generation==created.context_generation);
-        CHECK(contexts->release(lease.token)==RCL_RELEASED);
-        CHECK(glGetError()==GL_NO_ERROR);
+        CHECK(!contexts->health() && glGetError()==GL_NO_ERROR);
     }
 #endif
     if (unsupported) {

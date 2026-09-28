@@ -31,11 +31,10 @@ const rcl_api *__cdecl SM64ReplayContextV1(uint32_t version, uint32_t bytes);
 }
 #include <atomic>
 namespace source_context {
-// Lifecycle calls belong to the original serialized renderer thread. Revoke
-// BEFORE unbind; Unbound AFTER it. Unbound never releases a DC or waits.
-bool Publish(HGLRC, HDC, uint32_t generation, int pixel_format);
-rcl_token Revoke(HGLRC);
-int Retire(rcl_token); // anchor is never current; original deletion/DC ownership unchanged
+// The overlay publishes nothing since renderer-thread capture (2026-09-28):
+// ContextV1 stays exported, and every acquire answers RCL_UNAVAILABLE, so a
+// wrapper of either age finds the ABI it checks for. The Registry is the
+// lease machinery a shared-context capture would need, kept with its witness.
 class Registry {
 public:
     using Delete = BOOL (WINAPI *)(HGLRC);

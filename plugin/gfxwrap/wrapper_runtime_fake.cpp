@@ -44,7 +44,6 @@ extern "C" int __cdecl gd_capture(const rb_record*r,rb_image*i){
 extern "C" int __cdecl gd_completed(const rb_image*){return 1;}
 extern "C" HANDLE __cdecl gd_signal(){return signal;}
 extern "C" int __cdecl gd_read_status(gd_status*s){*s={};s->state=state.load();s->epoch=gate.load();return 1;}
-extern "C" void __cdecl gd_set_anchor_timing(gd_anchor_timing){}
 extern "C" unsigned __cdecl TestGate(){return gate.load();}
 extern "C" unsigned __cdecl TestConfigured(){return configured;}
 extern "C" unsigned __cdecl TestRequests(){return requests.load();}
