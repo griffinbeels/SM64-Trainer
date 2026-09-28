@@ -1,7 +1,22 @@
 # GPU delivery bridge
 
-The fixed two-slot `plugin/gfxwrap/gpu_bridge.cpp` component ships in
-the [GPU runtime](replay-gpu-runtime.md). It accepts an owned GL snapshot on a dedicated
+**Since 2026-09-27 the shipped bridge is `render_capture::Bridge` in
+`plugin/gfxwrap/gpu_render.cpp`**, run on the renderer's own thread
+([renderer-thread capture](replay-gpu-runtime.md#first-capture-freeze)). The
+helper creates the two keyed-mutex D3D11 textures under the channel's names;
+the renderer imports them with `GL_EXT_memory_object_win32` and
+`GL_EXT_win32_keyed_mutex` and writes each selected picture with one flipped,
+even-cropped nearest blit. Project64 makes no D3D11 device and no second GL
+context. On NVIDIA a zero-timeout `glAcquireKeyedMutexWin32EXT` returns TRUE
+even when it timed out (another process holds the key); the following release
+then raises `GL_INVALID_OPERATION`, which the key-return poll reads as "not
+yet" (11-30 us per poll). The delivery's credit ledger, not the acquire,
+decides which texture may be written. `test_gpu_delivery.py` checks the
+pixels, the flip and odd-size crop, and key custody across stop and restart.
+
+The rest of this page describes the retired worker-thread producer, which the
+hardware witnesses below still build. The fixed two-slot
+`plugin/gfxwrap/gpu_bridge.cpp` component accepted an owned GL snapshot on a dedicated
 worker, transfers pixels on the GPU into an ordinary WGL-interoperable D3D11
 texture, then into a separate keyed shared texture. The separate x64 witness
 consumer opens it on the same adapter, established from the GL and DXGI LUID.

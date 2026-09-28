@@ -17,6 +17,7 @@ bool matches(const rb_surface &a,const rb_surface &b) {
 struct Entered { std::atomic<unsigned>&calls; explicit Entered(std::atomic<unsigned>&c):calls(c){calls.fetch_add(1);}
     ~Entered(){calls.fetch_sub(1);} };
 }
+void Snapshots::abandon() { enabled_.store(0); pool_.exchange(new snapshot::Pool)->stop(); }
 bool Snapshots::prepare(snapshot::Gl gl,const rs_api &source,const rb_surface &surface,
                         unsigned slots,uint64_t budget,const rs_api_v3* clean_source) {
     if((source.capabilities & (RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT))!=(RS_CAP_BOUNDARY|RS_CAP_SOURCE_FORMAT)
@@ -29,12 +30,13 @@ bool Snapshots::prepare(snapshot::Gl gl,const rs_api &source,const rb_surface &s
     if(calls_.load()) { enabled_.store(0); return false; }
     gl.begin_capture=source.begin_capture; gl.end_capture=source.end_capture;
     prepared_=surface;query_=clean_source ? clean_source->query : nullptr;
-    if(!pool_.prepare(gl,reinterpret_cast<HGLRC>(surface.context),surface.width,surface.height,slots,budget)) {
+    // Prepared on the renderer's thread, the pool shares its one context.
+    if(!pool_.load()->prepare(gl,reinterpret_cast<HGLRC>(surface.context),surface.width,surface.height,slots,budget)) {
         enabled_.store(0); return false;
     }
     unsigned pending=preparing;
-    if(!enabled_.compare_exchange_strong(pending,pool_.generation())) {
-        pool_.stop(); pool_.destroy(); return false;
+    if(!enabled_.compare_exchange_strong(pending,pool_.load()->generation())) {
+        pool_.load()->stop(); pool_.load()->destroy(); return false;
     }
     return true;
 }
@@ -73,7 +75,7 @@ int Snapshots::submit(const rb_record *r,rb_image *out) {
         if(clean)restore.source_read_buffer=0x8CE0;
     }
     snapshot::Ticket ticket{};
-    const auto result=pool_.submit(epoch,image,restore,r->occurrence,s.boundary_qpc,&ticket);
+    const auto result=pool_.load()->submit(epoch,image,restore,r->occurrence,s.boundary_qpc,&ticket);
     out->status=uint32_t(result);
     if(result==snapshot::Result::fault) out->ownership=RB_IMAGE_QUARANTINED;
     if(result!=snapshot::Result::submitted) return 0;
@@ -81,10 +83,10 @@ int Snapshots::submit(const rb_record *r,rb_image *out) {
     return 1;
 }
 bool Snapshots::completed(const rb_image &image) const {
-    return image.ownership==RB_IMAGE_SUBMITTED && pool_.completed({image.serial,image.slot});
+    return image.ownership==RB_IMAGE_SUBMITTED && pool_.load()->completed({image.serial,image.slot});
 }
-void Snapshots::stop() { enabled_.store(0); pool_.stop(); }
+void Snapshots::stop() { enabled_.store(0); pool_.load()->stop(); }
 bool Snapshots::destroy() {
-    return !enabled_.load() && !calls_.load() && pool_.destroy();
+    return !enabled_.load() && !calls_.load() && pool_.load()->destroy();
 }
 } // namespace source_capture

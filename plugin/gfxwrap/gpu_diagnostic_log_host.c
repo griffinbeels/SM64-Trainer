@@ -23,18 +23,13 @@ static int notes(void) {
     d.epoch=3;d.qpc_frequency=10000000;
     gd_prepare_diagnostic *p=&d.prepare;
     p->request_qpc=1000000;p->surface_qpc=1160000;
-    p->context_begin=1200000;p->context_window=1210000;p->context_temporary=1220000;
-    p->context_shared=1230000;p->context_temporary_deleted=2730000;p->context_current=2740000;
-    p->snapshots=2750000;p->sampler=2760000;
-    p->bridge_begin=2770000;p->bridge_device=3770000;p->bridge_opened=3780000;
-    p->bridge_transfer=3790000;p->bridge_registered=3800000;p->end_qpc=3810000;
+    p->prepare_begin=1200000;p->snapshots=1210000;p->sampler=1230000;p->luid=1240000;p->channel=1290000;
+    p->reader_qpc=2500000;p->import_begin=2510000;p->imported=2530000;p->end_qpc=2540000;
     d.kind=GD_KIND_REQUEST;runtime_diagnostic(&d);
     d.kind=GD_KIND_PREPARE;runtime_diagnostic(&d);
-    d.warm.begin_qpc=500000;d.warm.legacy_qpc=800000;d.warm.end_qpc=810000;d.warm.parts=1;
-    d.kind=GD_KIND_WARM;runtime_diagnostic(&d);
     d.anchor_begin_qpc=1170000;d.anchor_end_qpc=1180000;
     d.kind=GD_KIND_ANCHOR;runtime_diagnostic(&d);
-    return lines==4?0:3;
+    return lines==3?0:3;
 }
 int main(int argc,char**argv) {
     if(argc==2 && !strcmp(argv[1],"--notes"))return notes();

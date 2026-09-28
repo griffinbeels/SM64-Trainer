@@ -27,8 +27,6 @@ int main(int argc,char**argv){if(argc!=2)return 2;
    printf("%d %llu %u %u %u %u %u %u\n",result,r.occurrence,r.stamp.lists_since,
      unsigned(r.stamp.bytes[0]),r.stamp.lengths[0],r.stamp.lengths[1],r.image.ownership,r.image.status);
   }else if(!strncmp(line,"stats",5))printf("%u %u\n",requests(),gate());
-  else if(sscanf_s(line,"screens %u",&n)==1){for(unsigned i=0;i<n;i++)api.UpdateScreen();
-   auto warms=reinterpret_cast<unsigned(__cdecl*)()>(GetProcAddress(module,"TestWarm"));printf("%u\n",warms());}
   else if(!strncmp(line,"diagnostic",10)){
    auto diagnostic=reinterpret_cast<int(__cdecl*)()>(GetProcAddress(module,"TestDiagnostic"));
    printf("%d\n",diagnostic?diagnostic():0);

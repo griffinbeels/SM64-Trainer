@@ -2,26 +2,11 @@
 #include "stamp_adapter.h"
 #include "runtime_delivery.h"
 #include "runtime_control.h"
-#ifndef WR_WARM_FRAMES
-#define WR_WARM_FRAMES 120u /* two seconds of the boot intro at 60 VI/s */
-#endif
 namespace {
 HMODULE renderer=nullptr;bool attempted=false,ready=false;
 const rs_api_v3* clean_source=nullptr;
 fn_void original_list=nullptr,original_update=nullptr;
-// The driver warm-up (docs/replay-gpu-runtime.md, "First capture freeze").
-// The NVIDIA driver freezes the renderer ~150 ms the first time another thread
-// uses the GPU while the renderer is drawing; before the renderer draws, the
-// same work is free and does not count. So the warm-up waits until the
-// practice ROM has drawn this many passive UpdateScreens (the boot intro),
-// once per process. A capture that starts earlier pays it itself.
-constexpr unsigned warm_frames=WR_WARM_FRAMES;
-unsigned passive_frames=0;bool warm_requested=false;
 uint32_t __cdecl epoch(void*){return gd_epoch();}
-void __cdecl passive_update(){
- original_update();
- if(!warm_requested && ++passive_frames>=warm_frames){warm_requested=true;gd_prewarm(GD_WARM_GL);}
-}
 void __cdecl surface(void*,const rb_record*r){gd_surface(r);}
 int __cdecl capture(void*,const rb_record*r,rb_image*i){return gd_capture(r,i);}
 int __cdecl completed(void*,const rb_image*i){return gd_completed(i);}
@@ -57,7 +42,7 @@ extern "C" int __cdecl wr_configure(HMODULE module,const gfx_api_t *original,wr_
     ||!pin(reinterpret_cast<const void*>(&wr_configure)))return 0;
  const gd_limits limits{sizeof(gd_limits),GD_VERSION,8,2000,
     256ull<<20,256ull<<20,64u<<20,1u<<20,2,0};
- const sa_ops ops{sizeof(sa_ops),SA_VERSION,nullptr,original_list,passive_update,epoch,vi,ram,surface,capture,completed};
+ const sa_ops ops{sizeof(sa_ops),SA_VERSION,nullptr,original_list,original_update,epoch,vi,ram,surface,capture,completed};
  if(anchor_timing)gd_set_anchor_timing(anchor_timing); // optional: older renderers lack it
  if((extended?gd_configure3(extended,context,&limits):gd_configure(source,context,&limits))!=GD_ACCEPTED)return 0;
  if(!sa_configure(module,&ops)||!rc_bind_delivery(&limits)){gd_disarm(GD_BAD_SOURCE);return 0;}
