@@ -3,7 +3,10 @@
 list on the real machine is ever touched. `FakeRegistry` and `FakeProcesses`
 stand in for the injected `Registry`/`Processes` protocols; the plugin
 folder and the DLL source are real files under `tmp_path`."""
+from contextlib import contextmanager
+import ctypes
 import json
+import logging
 import struct
 from pathlib import Path
 
@@ -805,3 +808,94 @@ def test_a_checkout_install_is_invisible_to_older_trainers_refresh(pj64_dir, dll
     frozen.install(True)
     overlay = json.loads(settings_path.read_text())
     assert overlay["installed_by"] == FROZEN_APP and overlay["installed_sha256"] == wrapper_sha
+
+
+# -- a DLL Project64 holds -------------------------------------------------------
+
+@contextmanager
+def held_like_a_loaded_plugin(*paths):
+    """Open each file the way a process that loaded it does: read access,
+    sharing only reads, so anyone asking to write is refused by the kernel
+    exactly as Project64's mapped plugin refuses the trainer's copy."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                                   ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    handles = []
+    try:
+        for path in paths:
+            handle = kernel.CreateFileW(str(path), 0x80000000, 0x1, None, 3, 0, None)  # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING
+            assert handle not in (None, ctypes.c_void_p(-1).value), ctypes.get_last_error()
+            handles.append(handle)
+        yield
+    finally:
+        for handle in handles:
+            kernel.CloseHandle(handle)
+
+
+def _stale_install(pj64_dir, dll_source, settings_path):
+    """An install this build would refresh: both shipped DLLs are newer."""
+    layer, _, processes = make_layer(pj64_dir, dll_source, settings_path)
+    layer.install(True)
+    dll_source.write_bytes(build(b"a newer capture layer"))
+    renderer_for(dll_source).write_bytes(build(b"a newer renderer"))
+    plugin = pj64_dir / "Plugin"
+    files = [plugin / RENDERER_DLL, plugin / WRAPPER_DLL, plugin / WRAPPER_INI, settings_path]
+    return layer, processes, files, {path: path.read_bytes() for path in files}
+
+
+def test_a_refresh_waits_quietly_while_project64_holds_the_dlls(
+        pj64_dir, dll_source, settings_path, caplog, monkeypatch):
+    """His server start on 2026-09-28: Project64 started with it and loaded
+    its plugins just after the check that found it not running; the copy was
+    refused, and a rollback of files never written added two ERROR
+    tracebacks to his console. A held DLL is the normal "not now": one INFO
+    line, nothing written, and the refresh loop installs the build once
+    Project64 lets go."""
+    import sm64_events.core.capturelayer as capturelayer
+    layer, processes, files, before = _stale_install(pj64_dir, dll_source, settings_path)
+    plugin = pj64_dir / "Plugin"
+    copies, real_copy = [], capturelayer.verified_copy
+    monkeypatch.setattr(capturelayer, "verified_copy",
+                        lambda *args, **kwargs: copies.append(args[1]) or real_copy(*args, **kwargs))
+    assert processes.pj64_image_path() is None     # the process list saw nothing
+    with caplog.at_level(logging.INFO), held_like_a_loaded_plugin(plugin / RENDERER_DLL, plugin / WRAPPER_DLL):
+        assert layer.refresh_if_stale() is False
+        assert layer.refresh_if_stale() is False   # the loop's next turn
+    assert copies == []                            # a held file is "running": no copy is tried
+    assert {path: path.read_bytes() for path in files} == before
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING or r.exc_info]
+    assert len([r for r in caplog.records if "refresh waits" in r.getMessage()]) == 1
+    assert layer.refresh_if_stale() is True        # Project64 closed
+    assert (plugin / WRAPPER_DLL).read_bytes() == dll_source.read_bytes()
+    assert (plugin / RENDERER_DLL).read_bytes() == renderer_for(dll_source).read_bytes()
+
+
+def test_a_project64_that_loads_the_plugins_mid_copy_changes_nothing(
+        pj64_dir, dll_source, settings_path, caplog, monkeypatch):
+    """The same race one step later, past the held-file check: the copy's
+    own open is refused. Nothing was written, so nothing is rolled back."""
+    import sm64_events.core.capturelayer as capturelayer
+    layer, _, files, before = _stale_install(pj64_dir, dll_source, settings_path)
+    plugin = pj64_dir / "Plugin"
+    monkeypatch.setattr(capturelayer, "in_use", lambda path: False)
+    with caplog.at_level(logging.INFO), held_like_a_loaded_plugin(plugin / RENDERER_DLL, plugin / WRAPPER_DLL):
+        assert layer.refresh_if_stale() is False
+    assert {path: path.read_bytes() for path in files} == before
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING or r.exc_info]
+    assert any("refresh waits" in r.getMessage() and RENDERER_DLL in r.getMessage()
+               for r in caplog.records)
+
+
+def test_an_install_racing_a_starting_project64_asks_to_close_it(
+        pj64_dir, dll_source, settings_path, monkeypatch):
+    layer, registry, _processes = make_layer(pj64_dir, dll_source, settings_path)
+    layer.install(True)
+    dll_source.write_bytes(build(b"a newer capture layer"))
+    plugin = pj64_dir / "Plugin"
+    before = (plugin / WRAPPER_DLL).read_bytes()
+    with held_like_a_loaded_plugin(plugin / WRAPPER_DLL), pytest.raises(LayerRefused, match="close Project64"):
+        layer.install(True)
+    assert (plugin / WRAPPER_DLL).read_bytes() == before
+    assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == WRAPPER_DLL
