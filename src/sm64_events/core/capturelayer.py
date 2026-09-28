@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from sm64_events.core.setup_gpu import GpuSetupEvidence
-from sm64_events.core.plugin_installation import sha256 as _sha256, verified_copy
+from sm64_events.core.plugin_installation import DestinationInUse, in_use, sha256 as _sha256, verified_copy
 from sm64_events.core.plugin_ownership import FROZEN, build_stamp, not_older, owns
 
 log = logging.getLogger("sm64.capturelayer")
@@ -277,6 +277,7 @@ class CaptureLayer:
         # files and rewrite the same overlay; one at a time, or one side's
         # rollback snapshot can undo the other's finished copy.
         self._install_lock = threading.RLock()
+        self._deferred = False  # a refresh is waiting on a held DLL (logged once)
         self._refresh_stop = threading.Event()
         self._refresh_thread = None
 
@@ -497,6 +498,13 @@ class CaptureLayer:
             raise LayerRefused("start Project64 once so the trainer can find it")
         if self._processes.pj64_image_path() is not None:
             raise LayerRefused("close Project64, then install")
+        try:
+            return self._install_files(pj64_dir)
+        except DestinationInUse as exc:
+            # Project64 started after the check above and loaded the plugin.
+            raise LayerRefused("close Project64, then install") from exc
+
+    def _install_files(self, pj64_dir: Path) -> LayerStatus:
         source, renderer = self._source_dll(), self._renderer_dll()
         if source is None or renderer is None:
             raise LayerRefused("this build carries no capture layer")
@@ -645,7 +653,16 @@ class CaptureLayer:
         wrapper_stale = not _files_match(dll_path, source)
         renderer_stale = not renderer_path.exists() or not _files_match(renderer_path, renderer)
         if not (wrapper_stale or renderer_stale or not wraps_ours):
+            self._deferred = False
             return False
+        # A running Project64 maps both DLLs, and the process list can miss it
+        # for an instant: at his server start on 2026-09-28 Project64 loaded
+        # its plugins in the moment after the check above found none. A held
+        # file is the same "not now" as a running Project64.
+        held = [path for path, stale in ((renderer_path, renderer_stale), (dll_path, wrapper_stale))
+                if stale and in_use(path)]
+        if held:
+            return self._defer(held[0])
         overlay = self._load_overlay()
         if not wraps_ours:
             # An older install wrapped the user's own plugin: that name is
@@ -654,6 +671,25 @@ class CaptureLayer:
             overlay["wrapped"] = RENDERER_DLL
         # Only the file that differs is copied; each copy is verified and
         # rolls the whole install back on failure.
+        try:
+            self._copy_stale(overlay, source, renderer, (dll_path, renderer_path, ini_path),
+                             wrapper_stale, renderer_stale)
+        except DestinationInUse as exc:
+            return self._defer(Path(exc.filename))
+        self._deferred = False
+        return True
+
+    def _defer(self, path: Path) -> bool:
+        """The refresh waits for Project64 to let go: one INFO line per wait,
+        not one per loop turn, and no rollback of files never written."""
+        if not self._deferred:
+            log.info("capture layer refresh waits: %s is in use (Project64 is running); "
+                     "it retries once Project64 closes", path.name)
+        self._deferred = True
+        return False
+
+    def _copy_stale(self, overlay, source, renderer, paths, wrapper_stale, renderer_stale):
+        dll_path, renderer_path, ini_path = paths
         with ExitStack() as copies:
             if renderer_stale:
                 renderer_receipt = copies.enter_context(verified_copy(
@@ -668,7 +704,6 @@ class CaptureLayer:
             self._record_wrapper(overlay, _sha256(dll_path), dll_path, renderer_path)
             self._write_wrapped_name(ini_path, RENDERER_DLL)
             self._save_overlay(overlay)
-        return True
 
     def refresh_loop(self, stop, interval_s: float = 2.0, log=None) -> None:
         """`refresh_if_stale` every `interval_s` until `stop` is set -- so a

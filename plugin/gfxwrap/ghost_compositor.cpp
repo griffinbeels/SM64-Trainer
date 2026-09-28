@@ -70,7 +70,10 @@ void main() {
     if (depth>=scene && scene<1.0) discard;
     gl_FragDepth=depth;
     vec4 material=vec4(clamp(vertexColor*illumination,0.0,1.0),1.0);
-    uint word=uint(mode+0.5),kind=word&7u,tile=word>>3;
+    // The word is an exact integer below 2^24 (flat, never interpolated). Not
+    // +0.5: from 2^23, where every tiled word lies, floats step by 1 and the
+    // sum rounds an odd word up, turning alpha-mix into a cut-out decal.
+    uint word=uint(mode),kind=word&7u,tile=word>>3;
     if (kind!=0u) {
         vec4 textureColor=tile!=0u ? tiledTexel(tile) : texture(atlas,texCoord);
         if (kind==1u) material.rgb=mix(material.rgb,textureColor.rgb,textureColor.a);

@@ -30,8 +30,8 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 | Capture | GC7: layout 188 (`behaviour_base` at 184), sample 1260; executed root matrix, warp fields, derived clock, recorded shadow (292 at 308), sound events (36 at 600), the pose refusal byte (`gc_pose.refusal`, record offset 153, formerly reserved), particles (580 at 636) and the [held object](#held-objects) (44 at 1216, its released angle at 36) | [ghost_capture.h](../plugin/gfxwrap/ghost_capture.h) |
 | Source clock | GCC1: config 104, output 64; raw, progress and elapsed validity | [ghost_clock.h](../plugin/gfxwrap/ghost_clock.h) |
 | Renderer capture | GS6, still exported as `SM64GhostSourceV3` (the version argument must be 6); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
-| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled` and `occlusion_fade` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
-| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade` and `volume`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Playback | GP7: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue, overlap fade, the `shadow_enabled`, `occlusion_fade` and `overlap_sound` switches, sound `volume` and the owner-`suspended` pause | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
+| Ghost IPC | GIPC8: status 256, request 18956 (layout 188; 16 clip entries of 1096, then `shadow_enabled`, `occlusion_fade`, `volume` and `overlap_sound`), ring offset 20480, 512 records of 1276 | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
 | Portable clip | GCLIP6: header 160, record 1276, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP5 (record 1268) still loads, read as having nothing released; GCLIP4 (record 652) also as having no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
 
@@ -554,28 +554,63 @@ not use this cutoff. Drawing neither scans the clip nor allocates an index.
 
 A FOLLOW clip flagged `GCLIP_DANCE_TAIL` (his ask, 2026-09-23, reversing the
 2026-09-19 end-at-touch ruling for the ghost's own star) ends on its own
-closing grab, not its first touch: it draws through any earlier star and the
+closing dance, not its first touch: it draws through any earlier star and the
 recorded closing grab and dance, then holds the last recorded pose and fades
 it out over `GP_STAR_FADE_FRAMES` (a tuning constant, 15 frames = 0.5 s), one
 equal opacity step a frame (body and shadow), and hides exactly that many
 frames after the last record, with or without `star_ends`. Its sound fades with it (the
 placement gain carries the fade) and is set silent as it hides. Unflagged
 clips, every recording saved before the tail existed, still end at the touch.
-A ghost that grabs first dances and fades on its own timeline while he is
-still playing, and his own grab later does not cut that short.
+A ghost that dances first dances and fades on its own timeline while he is
+still playing, and his own dance later does not cut that short.
 
-**Defeat** (his ask, 2026-09-23: "because you won, you get to trigger the
-death animation for all of the remaining ghosts that were slower than you").
-When his grab completes the attempt, on the star latch (his grab action, or a
-new star generation while he is in one) or, where no latch applies (the
-100-coin star's exit star), on the tracker's suspension arriving while he is
-in a grab action, playback decides from what each ghost drew the frame before:
+**A dance the recording cut short plays on** (his ask, 2026-09-28: "we
+literally know exactly how long it should last / how it works"). He often
+pauses, resets or loads a state a second or two into the dance: on
+2026-09-28, 19 of his 20 recorded dances stopped before the game's own end.
+Past a tail's last record, playback keeps that last recorded dance pose (the
+game holds Mario's place and facing through the dance) and plays the rest by
+animation, the way `act_star_dance` / `act_star_dance_water` do in the
+[n64decomp source](https://github.com/n64decomp/sm64/blob/master/src/game/mario_actions_cutscene.c):
+the dance starts on the first row showing the dance animation (actionTimer 1;
+after a midair grab that is the row after the landing), the animation frame
+is actionTimer - 1 until the animation's last frame (62 on the ground, 82 in
+water), the hand shows the peace sign from actionTimer 40 (62 in water), "here
+we go" sounds at 42, and the dance ends at actionTimer 111, where the exit
+warp's 32-frame delay after actionTimer 80 runs out (a no-exit dance ends at
+80, where the game stops time for its save dialog). Then it fades as above.
+Its eyes blink on the area clock; particles, anything held and recorded sounds
+stay with the recording. The constants and their source lines are in
+`ghost_tuning.h` (`GP_DANCE_*`). The rule matched all 1,373 dance rows of his
+2026-09-28 archive (animation, frame, hand and place, 1,058 ground and 315
+water rows, no mismatch) and the one dance he let finish ended at actionTimer
+111. Facing settles on the second dance frame (the camera's yaw), so a
+recording cut on the dance's first frame would hold a slightly turned pose; his
+shortest recorded dance ran 13 frames. A recording cut before the landing (a
+reset during the fall) keeps its fall and fades: where Mario lands is
+physics, not animation. The [playback witness](../tests/native/ghost_playback_host.cpp)
+drives a cut ground dance, a water dance, a midair grab's landing into the
+dance and a no-exit dance, and restoring any one rule turns it red.
 
-- a ghost already past its own completing grab (a dance tail's closing grab,
-  found by walking the clip's final run of grab actions back from its end;
-  else its first recorded touch) keeps its dance and fade, moving on from
-  the frame after the one it last drew;
-- a ghost still short of it falls where it stood: Mario's standing death
+**Defeat** (his asks, 2026-09-23: "because you won, you get to trigger the
+death animation for all of the remaining ghosts that were slower than you";
+2026-09-28: "the ghost death / real mario comparison should be based on the
+XCAM DANCE start"). The request's star actions are the dances
+(`STAR_DANCE_ACTIONS`), not the midair fall before one, so his grab in the
+air does not end the race: his dance does. When his dance completes the
+attempt, on the star latch (his dance, or a new star generation while he is
+in one) or, where no latch applies (the 100-coin star's exit star), on the
+tracker's suspension arriving while he dances, playback decides from what
+each ghost drew the frame before and where it stood at his x-cam: the live
+elapsed clock his latest dance began at (`dance_entry`), so a suspension that
+arrives a poll late is still judged at his dance, not where it arrives:
+
+- a ghost whose own dance began at or before his (a dance tail's final run
+  of dance actions, walked back from its end; else its first recorded
+  dance) keeps its dance and fade, moving on from where it stands now. A
+  ghost that grabbed later but danced first wins; a tie is not slower;
+- a ghost whose dance began later, including one that grabbed first but is
+  still falling, falls where it stood: Mario's standing death
   (`act_standing_death`: `MARIO_ANIM_DYING_FALL_OVER`, 0x32, 96 frames in
   the ROM), dead eyes, torso and head straight, without what it held or its
   particles, crying `SOUND_MARIO_DYING` once from where it falls. The model
@@ -585,16 +620,20 @@ in a grab action, playback decides from what each ghost drew the frame before:
   warps) and fades over `GP_DEFEAT_FADE_FRAMES`, sound included;
 - a ghost not drawn then stays hidden.
 
-The defeat runs on the live `gGlobalTimer` (the game clock stops at his
-grab), through tuning and the suspension, and happens once per run: a state
+Targets without a star dance keep what they had: a segment (MIPS Clip, a
+castle route leg) ends at its close with no defeat, and a suspension with no
+dance (a reset) only hides. The Bowser 3 grand star (`ACT_JUMBO_STAR_CUTSCENE`)
+is not a dance and ends no race. The defeat runs on the live `gGlobalTimer`,
+through tuning and the suspension, and happens once per run: a state
 load that restores the run ends it and draws the ghosts at the loaded state,
-and a scene change or the counter running back ends it. A suspension with no
-grab (a reset) only hides, as before. Tuning lives in `ghost_tuning.h`. The
-playback witness drives him first (both fall, cry once, frame by frame,
-held, faded, hidden), the ghost first (it dances on through his grab and the
-suspension), the 100-coin exit star through the suspension, and a reset's
-suspension; breaking the winner rule, the animation, the eyes, the cry or the
-trigger each turns it red. The fade values for a dance stay (1, 14/15 ...
+and a scene change or the counter running back ends it. Tuning lives in
+`ghost_tuning.h`. The playback witness drives him first (both fall, cry once,
+frame by frame, held, faded, hidden), the ghost first (it dances on through
+his dance and the suspension), a tie, his midair grab while a ground ghost
+dances first, a ghost still falling from an earlier grab, the 100-coin exit
+star through the suspension (judged at his x-cam) and a reset's suspension;
+breaking the winner rule, the x-cam judge, the animation, the eyes, the cry or
+the trigger each turns it red. The fade values for a dance stay (1, 14/15 ...
 1/15, then hidden at 15 frames), with an older clip beside the dancer ending
 at its touch.
 
@@ -715,9 +754,24 @@ it (the exit star for the 100-coin star), so export appends the dance tail for
 any attempt that is not a segment: the rows after the closing frame while Mario stays in a star
 grab/dance action (`STAR_GRAB_ACTIONS`), the game clock advances, and timing
 continuity, star generation and scene hold, at most `DANCE_TAIL_MAX_FRAMES`
-(180, 6 s) past the close. Measured on his 2026-09-22 archive, dances run
+(180, 6 s) past the close. A grab straight into the dance (on the ground, or
+swimming) can close one frame before the first recorded dance frame: the
+star-grab detector back-computes the x-cam from Mario's action timer, which
+the dance counts from 1 on its own first frame, and a snapshot may read a
+frame stale. So when the tracker timed the attempt at the x-cam (`timed_at`),
+the dance may begin up to `DANCE_ENTRY_FRAMES` (2) rows after the close.
+Before this, export required the closing row itself to dance and dropped the
+whole dance of every such grab: his SSL "Shining Atop the Pyramid" PB 07"00
+(attempt 5386, closed on walking frame 821, dancing from 822), two more SSL
+saves, two WF "Blast Away the Wall" saves (grabbed from a ledge) and his DDD
+"The Manta Ray's Reward" PB (attempt 5551, swimming). Midair grabs kept their
+dance because their close is the landing. Re-exported from
+his 2026-09-28 archive with the fix, 5386 keeps a 100-row dance and 5551 a
+54-row water dance, the attempt rows byte-identical, and two midair saves are
+unchanged. Measured on his 2026-09-22 archive, dances run
 about 100 to 125 frames past x-cam; the exit dance ends by freezing the clock
-for the exit warp, the no-exit dance by returning to idle. Export often runs
+for the exit warp, the no-exit dance by returning to idle. A pause also
+freezes the clock and so ends the tail; playback finishes the dance (above). Export often runs
 the moment the attempt closes, so it waits for the dance to end, the recording
 to stall for a second or close, or the cap's duration plus a second. A reset
 or state load ends the tail at once. The manifest's `tail_records` counts the
@@ -760,6 +814,32 @@ body action stays separate from Mario action, and raw head angles map to graph
 XYZ as `[1], [2], [0]`. Explicit per-vertex material codes come from actual N64
 combiner commands, not a UV heuristic. [Cap effects](#cap-effects-vanish-and-metal)
 describes the vanish and metal material routes.
+
+**His face showed the inside of his head** (his Round 13 report, 2026-09-28:
+"the wrong side of the face / body is being rendered"). The fragment shader
+decoded each vertex's material word as `uint(mode+0.5)`. Every tiled word
+(the face, cap, sideburns, mustache and buttons) lies at or above 2^23, where
+floats step by 1, so the sum rounded an odd word up: alpha-mix (1) read as a
+cut-out decal (2). Where the texture is clear the face was discarded and the
+inside of the far side of his head showed through, hair and cap across his
+cheek. The word is exact (flat, below 2^24), so the shader now takes
+`uint(mode)`. The [compositor witness](../tests/native/ghost_compositor_host.cpp)
+draws a tiled alpha-mix over a clear texture and needs its vertex colour on
+every pixel; with the old decode it is transparent.
+
+The game never draws the back of a triangle its list leaves `G_CULL_BACK` on:
+all of Mario, only his cap's wings two-sided (the model marks each triangle,
+`SG_MATERIAL_CULL_BACK`; the game's RSP init sets it for every object). The
+pose moves those facing away from the live camera's eye after the drawn ones
+(`Pose::culled`), judged in world space: his winding agrees with his vertex
+normals on every triangle. From outside this hides nothing the self-depth
+pass would show; the [pipeline](../tests/test_ghost_pipeline.py) draws the
+culled back faces too and requires an identical picture, then puts the
+camera's near plane through his body, where two-sided drawing would show the
+inside of his far side. The [pose witness](../tests/native/ghost_pose_host.cpp)
+culls a wall seen from behind and keeps a two-sided one; the
+[model witness](../tests/native/model_host.cpp) finds every triangle culled but
+the wings'.
 
 The camera comes from bounded lookup of the active graph camera matching the
 area camera, including persistent position/focus/roll. It is not the final
@@ -842,10 +922,42 @@ up, so a ghost frame asks as little as it can
   (`ghost_presentation::Known`), so a presented ghost frame asks nothing
   either.
 
-What still asks, and why: the capture gateway reads glGetError on each side of
-every ghost GL scope (the seal, each HUD draw, the presentation's copies),
-because that is how an error is told apart from the renderer's; without GL 4.4
-multi-bind a frame asks the active unit; a record the dispatch lost (after a GL
+What still asks, and why. The capture gateway reads glGetError, which waits for
+the driver thread like any query, only where the answer changes what happens
+([ghost_draw.cpp](../plugin/gfxwrap/ghost_draw.cpp)):
+
+- **Before the seal, once.** The batch saves and restores the state the
+  dispatch recorded, so the renderer's world pass must not have failed.
+- **When the list's ghost GL ends, once** (at list end, or when the ghost is
+  cancelled). The batch and every HUD mirror share this scope. A capture read
+  handles an error the same whoever raised it: kept for the renderer's next
+  read, the nominal state left, the image cancelled before it is ready. So
+  an error anywhere in the scope, the renderer's between HUD draws included,
+  ends exactly as a read around each HUD draw would have ended it, and a HUD
+  mirror, whose own GL is two binds between the ghost display and the target
+  the seal verified, reads nothing.
+- **Twice per mirrored translucent surface**, before its color pass and after
+  its depth pass. The layer drains its own errors without leaving the nominal
+  state, so its scope may hold no renderer GL but the mirrored draw; the depth
+  pass follows the color pass with nothing between. The seam's scope closes
+  the surface however its passes end (`ghost_link::close_layer`).
+- Around the presentation's copies at VI.
+
+A list whose plan chose no ghost reads nothing. His LLL list, about 12 water
+surfaces and 27 HUD draws: 104 reads before (2, plus 2 per HUD draw, plus 4
+per surface), 26 now; with his run finished, 48 before and none now. The
+[glue witness](../tests/test_ghost_draw.py) compiles the glue whole against
+renderer shells and counts them (`SM64_GHOST_DRAW_BASELINE=<revision>`
+prints an older glue's numbers beside), and shows where each error goes: the
+renderer's is never drained, the layer's is, and any error in the display
+scope cancels the image. GL_KHR_debug output cannot replace the reads: an
+error still sets its flag ("the GL will also generate a debug output
+message"), a context created without the debug bit may generate no messages
+at all, and messages arrive asynchronously unless synchronous output is on,
+which the spec warns "may potentially result in drastically reduced driver
+performance" ([KHR_debug](https://registry.khronos.org/OpenGL/extensions/KHR/KHR_debug.txt)).
+
+Other queries: without GL 4.4 multi-bind a frame asks the active unit; a record the dispatch lost (after a GL
 error, or before the renderer's first glViewport or glScissor) is asked for;
 with N64 depth compare on, the HUD check reads the combiner's two uniforms; and
 taking a drawn ghost back (a withdrawn or refused image, rare) reads the
@@ -882,14 +994,14 @@ list). Per list, from `gs_hook_cost` in
 |---|---|
 | hooks | Time inside the timed hooks: list begin, the per-draw hooks, the seal, list end. Its definition predates the stages, so older lines compare. It includes the renderer flush. |
 | renderer flush | GLideN64's deferred triangles and rectangles, flushed at the seal: the renderer's own work, moved earlier, not the ghost's. |
-| gateway open, close | The capture gateway's glGetError before and after the ghost's GL. Under threaded optimization the first read waits for everything the renderer queued this list. |
+| gateway open, close | The capture gateway's glGetError before the seal, and once when the list's ghost GL ends (the batch and every HUD mirror; at list end, inside hooks, or at a cancel). Under threaded optimization each waits for everything queued before it: the open for the renderer's world pass, the close for the batch and the HUD. |
 | batch | The compositor's begin_batch: validate (every pose and vertex), state (the renderer state it will restore: known values plus the residue), copy (clean color and depth), draw (shadows, uploads, bodies, particles; also the slowest single ghost), restore. |
 | finalize | Closing the ghost branch at list end. |
 | whole list | ProcessDList, begin to end, the renderer's own work included. |
-| HUD mirror | Each HUD draw mirrored into the ghost's display, its gateway and the duplicate draw included. Not part of hooks. |
-| layer passes | Translucent-layer (water) mirrors. |
+| HUD mirror | Each HUD draw mirrored into the ghost's display, the duplicate draw included; it reads no error of its own. Not part of hooks. |
+| layer passes | Translucent-layer (water) mirrors, two per surface; none on a list whose plan chose no ghost. |
 | driver queries | Every query the ghost code made in the list, and the time inside them. |
-| gateway error reads | glGetError calls around ghost GL, about one per gateway call. |
+| gateway error reads | glGetError calls around ghost GL: 2 per drawn list plus 2 per mirrored surface (was 2, plus 2 per HUD draw, plus 4 per surface). |
 
 ### Recorded shadow
 
@@ -958,8 +1070,17 @@ error drops the layer for that list (`broken`); the ghost then draws as before.
 The layer has its own GL error scope (`replay_gl::BeginLayer`/`EndLayer`): its
 ordinary errors are drained and never leave the nominal state that replay
 capture and the ghost depend on; out of memory or a lost context still does.
-The layer runs only while playback is drawing (`ghost_playback::drawing`), so
-a retired, withdrawn or disabled playback repeats no draw and blits no depth.
+The layer runs only on a list whose plan chose a ghost (`ghost_playback::plan`,
+from the list's own sample at its start, before the world pass): a finished,
+faded, suspended, out-of-area, withdrawn or disabled ghost repeats no draw and
+copies no depth. It used to run whenever a request held its clips
+(`ghost_playback::drawing`), which a finished ghost still does: live on
+2026-09-28, his LLL and SSL lists after his 7-2 run mirrored 20 to 24 layer
+passes each, with 40 to 48 error reads, at about 880 us of hooks against
+42-90 us. The plan makes the same choice evaluate made at the seal (the
+[playback witness](../tests/test_ghost_playback.py) plans before every
+evaluation and checks the two agree); only a chosen ghost whose pose then
+refuses costs a wasted layer. After the seal the layer is spent and refused.
 N64 image depth and multisampling never open it. The layer composes several
 surfaces in draw order but keeps one nearest depth, so a ghost between two
 translucent surfaces takes both. Level fog on the ghost's own body is not
@@ -1226,6 +1347,26 @@ channel (`sMaxChannelsForSoundBank`, all 1). Mario's sounds carry
 equal priority in the same bank takes the channel: two ghosts, or a far ghost
 and a near one, can still cut each other off, as Mario's own sounds do.
 
+Every class of ghost sound follows that one rule. Mario's recordings carry
+requests in the action, moving, voice, general, object, object-2 and menu
+banks (76 clips, 2026-09-28). Upstream `update_game_sound` plays the menu bank
+(Mario's star and cap grab `SOUND_MENU_STAR_SOUND`, falling into a pit,
+entering a pipe) and a moving sound at a constant frequency at volume 1,
+centred, without `get_sound_volume`. So a far ghost's star chime kept full
+level, and only the ghost volume reached it (his report, 2026-09-28). The
+staged engine ([patches.py](../renderer/model/patches.py)) gives those the
+voice bank's volume and pan from the ghost's own position and keeps their
+constant pitch. `SOUND_NO_VOLUME_LOSS` (falling into a pit) still skips the
+engine's camera falloff, as in the game, and the ghost's gain still applies.
+`SOUND_MENU_ENTER_PIPE`'s own script mixes its pan, so it sounds centred
+wherever its ghost is. No ghost sound is music: capture keeps only requests
+from Mario's object, so the cap and star music (sequences) never reach a
+ghost. The audio witness plays one sound of each class. Gain 0.25 must leave
+3 to 10% of its energy, volume 0.5 a quarter, 2000 units right at least 4x more
+in the right channel (the pipe aside) and 5000 units ahead under half (the pit
+aside). On the unpatched engine the three menu sounds and the
+constant-frequency moving sound kept 100% at gain 0.25.
+
 The IPC worker starts the engine from its verified ROM bytes and stops it
 (joining the thread) when the ROM closes. Before the engine parses anything,
 the CTL, TBL and SEQ regions must match the SHA-256 of SM64 US audio data (the
@@ -1269,6 +1410,66 @@ generations and successful presentation serial. SourceV2's front-buffer contract
 is not relabeled. No negotiated clean consumer means no native ghost display.
 Clean/failed swaps and context loss clear visible telemetry; a generated mesh
 alone never reports that the ghost reached the game window.
+
+### Ghost sound under the overlap fade
+
+His report (2026-09-28): fully overlapping a ghost for the first seconds of most
+WF stars "sounds like all of my audio is duplicated", and "If the ghost is more
+invisible, the audio should be quieter, too. However, I also don't want to lose
+the benefits of the ghost audio (that is, to clearly inform us about timing
+differences between our movements and the ghost)."
+
+The `overlap_sound` switch (the card's "Quiet its sound the same way", under
+Overlap fading; default on) applies
+[ghost_sound_fade.h](../plugin/gfxwrap/ghost_sound_fade.h) in playback. It is
+the word after `volume` in both the IPC and the playback request, formerly the
+checked-zero `reserved3`, so no size or version moved and an older DLL refuses
+1 with `GIPC_PROTOCOL`.
+
+- **Quieter.** Each ghost's placed gain is also multiplied by its overlap fade,
+  the factor its picture uses (15% floor, extra distance and the fade's own
+  switch included). It moves at most (1 - 0.15) / `GP_SOUND_FADE_FRAMES` (3) a
+  drawn frame. A ghost that appears (a new run, a restore, back from hidden)
+  takes its fade as it is, so a run that starts on him is quiet from its first
+  sound. The engine ramps each note's volume across its own mix as well
+  (`process_envelope`), so no step reaches the output.
+- **Timing kept.** While that factor is below 1, a request of the displayed
+  record that live Mario issued on the same game frame (the live sample's own
+  sound list) is not cued: it is his sound twice with no timing difference.
+  Mario's two random voice families (`SOUND_MARIO_YAH_WAH_HOO`,
+  `SOUND_MARIO_YAHOO_WAHA_YIPPEE`) count as one line each. A request one frame
+  earlier or later still plays, and records caught up after an undrawn frame
+  are not compared.
+- **Not the player-first fade.** Its in-front and camera terms fade a ghost
+  because it hides the view, and a sound hides nothing. A ghost trailing him
+  in line with the camera is faint on screen, so its sound is the timing cue
+  left, and it keeps full gain.
+
+Measured 2026-09-28 on his recordings: 16 stars with two or more native
+recordings (64 clips), each against every other as ghost and live (250 pairs),
+aligned on the star clock as playback aligns them, extra distance 0. For each
+ghost sound, the nearest same sound live Mario made:
+
+| Bodies | Ghost sounds | Same frame | Within 1 frame | Within 6 frames |
+|---|---|---|---|---|
+| Overlapping (fade below 0.5) | 3580 | 56% | 80% | 96% |
+| Half overlapping (0.5 to 1) | 3383 | 22% | 55% | 91% |
+| Apart (fade 1) | 15859 | 8% | 19% | 49% |
+
+Overlapping means in step (WF alone: 61% on the same frame), so the fade
+quiets the doubling where it happens and leaves every sound offset in place at
+full level. Dropping same-frame twins removes 56% of the overlapping sounds and
+22% of the half-overlapping ones, which still play at 50 to 100% of the gain.
+Not measured: the delay between Project64's own audio output and the ghost's
+waveOut device, which shifts every ghost sound against his by one amount (up
+to about 65 ms on the ghost side, above).
+
+The playback witness walks ghost 0 on live Mario and ghost 1 beside him:
+ghost 0 sounds at exactly the floor from a run's first frame; his same-frame
+request, and the same jump in another voice line, play once while ghost 1's
+twin still plays; one frame early or late plays; walking apart lifts the gain
+one step a frame to full; switched off it is full on him and the twin plays;
+switched back on it moves one step; with the overlap fade off it is full.
 
 ## Verification boundaries
 

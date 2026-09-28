@@ -32,8 +32,23 @@ extern "C" int32_t sg_model_get_held_lights(sg_model *,uint32_t,sg_body_lights *
     out->lights[0]={{0,0,255},{0,0,100},{40,40,40}};
     return SG_OK;
 }
+// A shell's two walls, each counter-clockwise seen from its front (the
+// model's winding): A at z=a_z facing +z, B at z=b_z facing -z.
+// cull[t]: its list left G_CULL_BACK on.
+static bool two_faced=false;static bool cull[2]={true,true};static float a_z=-5,b_z=-6;
 extern "C" int32_t sg_model_evaluate(sg_model *,const sg_pose *pose,sg_mesh *mesh) {
-    applied=*pose; assert(mesh->vertex_capacity>=3);
+    applied=*pose; assert(mesh->vertex_capacity>=6);
+    if(two_faced) {
+        const float at[6][3]={{0,0,a_z},{1,0,a_z},{0,1,a_z},{0,0,b_z},{0,1,b_z},{1,0,b_z}};
+        for(unsigned i=0;i<6;++i) {
+            for(unsigned k=0;k<3;++k){mesh->position[3*i+k]=at[i][k];mesh->normal[3*i+k]=fake_normal[k];}
+            mesh->color[3*i]=1; mesh->color[3*i+1]=0; mesh->color[3*i+2]=0;
+            mesh->uv[2*i]=0.25f; mesh->uv[2*i+1]=0.5f;
+            mesh->material[i]=SG_MATERIAL_ALPHA_MIX|(cull[i/3]?uint32_t(SG_MATERIAL_CULL_BACK):0u);
+        }
+        mesh->vertex_count=6; mesh->error_flags=0; mesh->held_first_vertex=6;
+        return SG_OK;
+    }
     if(refuse_held && (pose->fields&SG_POSE_HELD)) return SG_INVALID_ANIMATION;
     for(unsigned i=0;i<3;++i) {
         mesh->position[3*i]=float(i+1); mesh->position[3*i+1]=2; mesh->position[3*i+2]=3;
@@ -132,6 +147,22 @@ int main() {
     fake_flags=0;
     assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
     assert(pose.vertices[0].uv[0]==0.25f); // untextured-generation vertices keep their uv
+    // Back faces the game culls are never drawn. With the live camera at the
+    // origin: a shell in front of it shows its near wall, not the far wall's
+    // inside; a wall its list left two-sided (his cap's wings) stays; a camera
+    // inside the shell sees neither wall. The culled go after the drawn,
+    // counted apart.
+    live.camera.position[0]=0;two_faced=true;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.count==3 && pose.culled==3 && pose.vertices[0].position[2]==-5 && pose.vertices[2].position[1]==1);
+    assert(pose.vertices[3].position[2]==-6 && scratch.evaluated==6);
+    cull[1]=false;
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.count==6 && !pose.culled && pose.vertices[3].position[2]==-6);
+    cull[1]=true;a_z=1;b_z=-1; // the camera between the walls, inside the shell
+    assert(ghost_pose::evaluate(nullptr,record,live,world,0.5f,scratch,pose)==Result::ok);
+    assert(pose.count==0 && pose.culled==6);
+    two_faced=false;a_z=-5;b_z=-6;live.camera.position[0]=42;
     // A held Bob-omb (bhvBobomb) reaches the model with its animation, HOLP,
     // scale and blink, and the live view and roll its billboard faces.
     saved.valid_fields|=GC_VALID_HELD; saved.held.behavior=0x13003174u;

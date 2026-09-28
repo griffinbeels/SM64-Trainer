@@ -219,7 +219,7 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(nudge) X(opacity) X(stop_at_star) X(rom_generation) X(owner_suspended) X(model_id) \
     X(layout) X(rom_path) X(star_action_count) X(star_actions) X(tint_enabled) \
     X(proximity_enabled) X(proximity_distance) X(origin) X(clip_count) X(reserved1) X(clips) \
-    X(shadow_enabled) X(occlusion_fade) X(volume) X(reserved3)
+    X(shadow_enabled) X(occlusion_fade) X(volume) X(overlap_sound)
 #define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path)
 #define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
     X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
@@ -351,7 +351,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         r.owner_created_lo=birth.dwLowDateTime;r.owner_created_hi=birth.dwHighDateTime;r.generation=initial.generation;
         r.token=123;r.revision=1;r.capture_enabled=r.play_enabled=1;r.rom_generation=ghost_ipc::rom_generation();
         r.model_id=1;r.clip_count=1;set_clip(r.clips[0],1,argv[1],argv[2],217);r.opacity=0.75f;r.tint_enabled=1;
-        r.proximity_enabled=1;r.proximity_distance=120;r.shadow_enabled=1;r.occlusion_fade=1;r.volume=0.625f;
+        r.proximity_enabled=1;r.proximity_distance=120;r.shadow_enabled=1;r.occlusion_fade=1;r.volume=0.625f;r.overlap_sound=1;
         r.mode=GP_FIXED;
         r.star_action_count=1;r.star_actions[0]=0x1302;r.stop_at_star=1;
         r.layout.bytes=sizeof(gc_layout);r.layout.version=GC_VERSION;
@@ -388,10 +388,12 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         burst_records=GO_HISTORY+10;
         page.wait([](const gipc_status&){return burst_records.load()==0;},"origin ages out of bounded ledger");
         check(last_command().occlusion_fade==1,"occlusion fade on crosses actual IPC worker");
-        r.revision=3;r.opacity=0.6f;r.shadow_enabled=0;r.occlusion_fade=0;ready(page,r);
+        check(last_command().overlap_sound==1,"overlap sound on crosses actual IPC worker");
+        r.revision=3;r.opacity=0.6f;r.shadow_enabled=0;r.occlusion_fade=0;r.overlap_sound=0;ready(page,r);
         check(last_command().shadow_enabled==0,"shadow A/B off crosses actual IPC worker");
         check(last_command().occlusion_fade==0,"occlusion A/B off crosses actual IPC worker");
-        r.shadow_enabled=1;r.occlusion_fade=1;
+        check(last_command().overlap_sound==0,"overlap sound off crosses actual IPC worker");
+        r.shadow_enabled=1;r.occlusion_fade=1;r.overlap_sound=1;
         check(last_command().origin.sequence==bound_origin,"tuning reuses resolved origin after history eviction");
         r.revision=4;r.mode=GP_FIXED;r.origin={};ready(page,r);
         const auto before=commands.load();ready(page,r);check(commands.load()==before,"heartbeat is not semantic mutation");
@@ -446,7 +448,7 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         bad=r;bad.revision=19;bad.shadow_enabled=2;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=20;bad.occlusion_fade=2;refused(page,bad,GIPC_PROTOCOL);
         bad=r;bad.revision=21;bad.volume=1.25f;refused(page,bad,GIPC_PROTOCOL);
-        bad=r;bad.revision=22;bad.reserved3=1;refused(page,bad,GIPC_PROTOCOL);
+        bad=r;bad.revision=22;bad.overlap_sound=2;refused(page,bad,GIPC_PROTOCOL);
         // The protocol refusals retired the model, and the worker holds no
         // cartridge once a model is built: rebuilding reads the cartridge again.
         rom[0]=0x40;const auto before_rebuild=rom_validations.load();

@@ -84,7 +84,8 @@ enum class Material : uint32_t {
  * triangle, the model's render tile above them (sg_tile: atlas cell, per axis
  * clamp, mask and size). The fragment shader then clamps and wraps the texel
  * inside the cell as the RDP does; a word without a tile samples its uv as
- * given. The word stays below 2^24, exact through the float attribute. */
+ * given. The word stays below 2^24, exact through the float attribute; a
+ * tiled word is at or above 2^23, where the shader must not add 0.5. */
 namespace tile {
 constexpr uint32_t shift=3, cell=0x3fu, s_clamp=1u<<6, s_mask=7, s_size=10,
     t_clamp=1u<<13, t_mask=14, t_size=17, field=7u, present=1u<<20;
@@ -178,6 +179,8 @@ struct Pose {
     Particles particles{}; // optional, at most particle_vertices; needs prepare_particles
     // Player-first fade for this body, its shadow and its particles; zero draws as before.
     ghost_occlusion::Region occlusion{};
+    // The back faces the game culls (ghost_pose), kept after count and never drawn.
+    uint32_t culled = 0;
 };
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;

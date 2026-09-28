@@ -1297,20 +1297,28 @@ and dance of the [[star]] that completed it, kept on the end of its [[ghost]]
 recording so the [[ghost]] celebrates instead of vanishing at its touch; it
 then fades out over half a second. For the [[100-coin star]] that is the
 [[exit star]] after it, so the [[ghost]] plays on through its 100-coin grab.
+A grab straight into the dance may close its [[attempt]] a [[frame]] before
+the dance's first, and still keeps it. When the recording stops before the
+game's dance ends (a pause, [[reset]] or state load right after the grab), the
+[[ghost]] plays the rest of the dance by animation from its last recorded
+dance pose, to the [[frame]] the game's own dance ends on, then fades.
 Display only: export keeps the [[attempt]]'s origin, closing [[frame]] and
 time as they were. Recordings saved before it have none and still end at the
 touch; [[segment]]s never carry one.
 
 - **Lives** — `src/sm64_events/ghost/archive.py` keeps it on export;
-  `plugin/gfxwrap/ghost_playback.cpp` draws and fades it
+  `plugin/gfxwrap/ghost_playback.cpp` draws, finishes and fades it;
+  `plugin/gfxwrap/ghost_tuning.h` holds the game's dance timings
 
 ### Ghost defeat
 
-What a [[ghost]] still racing does when live Mario's grab completes the
-[[attempt]] first: it plays Mario's own dying fall where it stood, with
-dead eyes and his dying cry, then fades out. A [[ghost]] that already made
-its own completing grab keeps its [[dance tail]] instead. Once per [[attempt]]; a
-state load back into the [[attempt]] brings the [[ghost]]s back.
+What a [[ghost]] still racing does when live Mario's [[x-cam]] dance, the dance of
+the grab that completes the [[attempt]], begins before the [[ghost]]'s own: it
+plays Mario's own dying fall where it stood, with dead eyes and his dying cry,
+then fades out. A [[ghost]] whose own dance began first, or on the same
+[[frame]], keeps its [[dance tail]] instead, even when it grabbed later. Once
+per [[attempt]]; a state load back into the [[attempt]] brings the [[ghost]]s
+back.
 
 - **Lives** — `plugin/gfxwrap/ghost_playback.cpp` decides and draws it;
   `plugin/gfxwrap/ghost_tuning.h` holds its animation, timing and sound
@@ -1324,10 +1332,14 @@ would fall over a [[ghost]] standing behind them. The [[renderer]] repeats each
 such game draw into the layer, keeping its color, how much it lets through and
 its nearest depth; the compositor then gives every [[ghost]] pixel behind that
 depth the same blend the game gave the scene there, so a submerged [[ghost]]
-takes the water's color. The game's own picture stays untouched.
+takes the water's color. The game's own picture stays untouched. The [[renderer]]
+builds the layer only on a [[frame]] where playback has already chosen a
+[[ghost]] to draw, so a finished or hidden [[ghost]] costs nothing.
 
 - **Lives** — `plugin/gfxwrap/ghost_compositor.cpp`; the [[renderer]]'s
-  repeat is staged by `tools/stage_ghost_renderer.py`
+  repeat is staged by `tools/stage_ghost_renderer.py`; which [[ghost]]s draw
+  on a [[frame]] is decided by the plan step in
+  `plugin/gfxwrap/ghost_playback.cpp`
 
 ### Recorded particles
 
@@ -1366,7 +1378,7 @@ A [[ghost]] whose body touches live Mario's fades as a whole, smoothly down to
 15% of its opacity when the two stand on the same spot, so it never vanishes
 on a pole, a ledge or a plank both Marios hold. It is back to full opacity
 once the bodies stop touching, plus any extra distance set on the practice
-card.
+card. Its [[ghost sound events]] can follow it too.
 
 - **Lives** — `plugin/gfxwrap/ghost_proximity.h`; the floor is shared with the
   [[player-first fade]] in `plugin/gfxwrap/ghost_occlusion.h`
@@ -1394,11 +1406,16 @@ order), kept with that [[frame]]'s pose so a [[ghost]] plays his jumps,
 landings and voice as it passes that [[frame]], through SM64's own sound
 engine at its set volume. Each [[ghost]] sounds from where it stands relative
 to the live camera (panned and distanced as the game does Mario) and fades by
-the inverse square of its distance from live Mario past 400 units. Capture
-drops other objects' sounds.
+the inverse square of its distance from live Mario past 400 units, the chime
+of a [[star]] or cap grab included. Capture drops other objects' sounds, so a
+[[ghost]] plays no music. With the card's **Quiet its sound the same way**
+(under Overlap fading, on by default), a [[ghost]]'s sound also follows its
+[[overlap fade]], and while it fades, a sound live Mario made on the same
+[[frame]] plays only once.
 
 - **Lives** — `plugin/gfxwrap/ghost_capture.cpp` captures them;
-  `plugin/gfxwrap/ghost_audio.cpp` plays them
+  `plugin/gfxwrap/ghost_audio.cpp` plays them; `plugin/gfxwrap/ghost_sound_fade.h`
+  owns the overlap rule
 
 ### Ghost source
 
@@ -2299,10 +2316,13 @@ history.
 
 The box in a [[practice log]] card's head holding its [[personal best]] over
 its [[Goal]], and under them one dot per success when that [[Goal]] asks for
-a streak or a count. Clicking the lower line picks a [[rank]] or a [[runner]] or a typed
+a streak or a count. Clicking anywhere on it but the PB time (which jumps to
+that [[personal best]]'s row in the log) picks a [[rank]] or a [[runner]] or a typed
 time, and that pick pins the [[target]] on the [[Scorecard]] too. The plate
 keeps one size whatever it says, so a stream crop of the top card never moves,
-and its [[Celebration]] plays inside it.
+and its [[Celebration]] plays inside it. A finished [[attempt]] celebrates only
+against the [[Goal]] the plate showed when it ended; a [[Goal]] it has replaced
+never fires again.
 
 - **Lives** — the plate and its picker (`src/sm64_events/ui/components/goalplate.js`)
   → the pb track of the [[practice log]] card

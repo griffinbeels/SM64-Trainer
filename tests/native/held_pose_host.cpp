@@ -40,8 +40,11 @@ int main(int argc, char **argv) {
     ghost_compositor::Pose pose{};
     saved.valid_fields = GC_VALID_CLOCK | GC_VALID_POSE;
     check(ghost_pose::evaluate(model, record, live, world, 1.0f, scratch, pose) == ghost_pose::Result::ok, "Mario alone");
-    const uint32_t alone = pose.count;
+    // scratch.evaluated: the model's whole mesh; pose.count: what is drawn,
+    // the back faces the game culls left out under this camera.
+    const uint32_t alone = scratch.evaluated, drawn_alone = pose.count;
     check(alone > 1800, "Mario's own vertices");
+    check(drawn_alone > 0 && drawn_alone < alone, "his back faces are culled");
     // Held vertices per kind: the triangles its geo reaches (model_host).
     const struct { uint32_t behavior; int16_t animation; uint32_t vertices; const char *name; } kinds[] = {
         {0x13003174u, 1, 240, "Bob-omb"}, {0x130020E8u, 0, 402, "penguin"}, {0x130001F4u, 0, 348, "King Bob-omb"},
@@ -53,11 +56,13 @@ int main(int argc, char **argv) {
         saved.held.holp[0] = 45; saved.held.holp[1] = 75; saved.held.holp[2] = 45;
         saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
         const auto result = ghost_pose::evaluate(model, record, live, world, 1.0f, scratch, pose);
-        std::fprintf(stderr, "%s: result %u vertices %u (Mario %u)\n", k.name, unsigned(result), pose.count, alone);
+        std::fprintf(stderr, "%s: result %u vertices %u (Mario %u), drawn %u (Mario %u)\n", k.name, unsigned(result),
+                     scratch.evaluated, alone, pose.count, drawn_alone);
         check(result == ghost_pose::Result::ok, k.name);
-        check(pose.count == alone + k.vertices, "held object shaded by its own lights and drawn beside Mario");
+        check(scratch.evaluated == alone + k.vertices && pose.count > drawn_alone,
+              "held object shaded by its own lights and drawn beside Mario");
         bool shaded = true;
-        for (uint32_t i = alone; i < pose.count; ++i)
+        for (uint32_t i = drawn_alone; i < pose.count; ++i)
             for (int c = 0; c < 3; ++c)
                 shaded &= std::isfinite(pose.vertices[i].color[c]) && pose.vertices[i].color[c] >= 0
                     && pose.vertices[i].color[c] <= 1;
@@ -72,12 +77,13 @@ int main(int argc, char **argv) {
         saved.held.holp[0] = 600; saved.held.holp[1] = 20; saved.held.holp[2] = -400; saved.held.angles[1] = yaw;
         saved.held.scale[0] = saved.held.scale[1] = saved.held.scale[2] = 1;
         const auto result = ghost_pose::evaluate(model, record, live, world, 1.0f, scratch, pose);
-        check(result == ghost_pose::Result::ok && pose.count == alone + vertices, "released object drawn beside Mario");
+        check(result == ghost_pose::Result::ok && scratch.evaluated == alone + vertices && pose.count > drawn_alone,
+              "released object drawn beside Mario");
         float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
-        for (uint32_t i = alone; i < pose.count; ++i)
+        for (uint32_t i = alone; i < scratch.evaluated; ++i)
             for (int c = 0; c < 3; ++c) {
-                lo[c] = std::fmin(lo[c], pose.vertices[i].position[c]);
-                hi[c] = std::fmax(hi[c], pose.vertices[i].position[c]);
+                lo[c] = std::fmin(lo[c], scratch.position[3 * i + c]);
+                hi[c] = std::fmax(hi[c], scratch.position[3 * i + c]);
             }
         cx = (lo[0] + hi[0]) / 2; cz = (lo[2] + hi[2]) / 2; width_x = hi[0] - lo[0]; width_z = hi[2] - lo[2];
     };

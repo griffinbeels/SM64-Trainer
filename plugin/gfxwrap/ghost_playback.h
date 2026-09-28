@@ -77,9 +77,11 @@ typedef struct gp_request {
      * occlusion_fade fills each pose's player-first region (ghost_occlusion.h);
      * formerly the checked-zero reserved2, so 0 draws as before. */
     uint32_t shadow_enabled, occlusion_fade;
-    /* Ghost sound loudness, 0..1; 0 is exact silence. */
+    /* Ghost sound loudness, 0..1; 0 is exact silence. overlap_sound lets each
+     * ghost's sound follow its overlap fade (ghost_sound_fade.h); formerly the
+     * checked-zero reserved3, so 0 sounds as before. */
     float volume;
-    uint32_t reserved3;
+    uint32_t overlap_sound;
     /* The tracker's arm is gone (a completed star or segment): hide and stay
      * silent, unless a state load the renderer resolves after suspension
      * brings the ghost back on that frame, ahead of the owner's next command. */
@@ -193,9 +195,20 @@ bool particles(sg_particle_view *out, uint64_t *model_id);
  * it. Drawing never subtracts elapsed values across that gap.
  * Writes visible poses into out[GP_GHOSTS] back to front (farthest root first)
  * and returns true when count > 0; clears outputs otherwise. Geometry stays
- * borrowed until the next evaluate/safe_boundary/retire call. */
+ * borrowed until the next evaluate/safe_boundary/retire call.
+ * evaluate poses the choice plan() made for this list's sample (the same
+ * epoch, sequence and list serial), once; without one it plans first. */
 bool evaluate(const gc_sample &, const ghost::WorldPass &,
               ghost_compositor::Pose *out, uint32_t &count, gp_draw_token &token);
+/* Renderer thread, at list start, from the list's own sample (its clock,
+ * scene and action; the world pass has not run): chooses what every ghost
+ * shows this list exactly as evaluate would, and returns whether any ghost
+ * is chosen. Work done for a ghost before the seal (the translucent world
+ * layer) runs only then, so a finished, faded, suspended, out-of-area or
+ * withdrawn ghost costs what no ghost costs. A chosen ghost's pose can
+ * still refuse at the seal. The list's once-a-list effects (live timing,
+ * star and defeat latches) happen here rather than at its seal. */
+bool plan(const gc_sample &);
 /* Ghost sound: the renderer hands each visible ghost's recorded sound
  * requests to the sink once, as its displayed record passes them (every
  * record since the last drawn frame, at most GP_SOUND_CATCHUP), and the
@@ -204,8 +217,11 @@ bool evaluate(const gc_sample &, const ghost::WorldPass &,
  * Each drawn frame also places every visible ghost: its displayed root
  * relative to the live camera (SM64 pans and distances that itself) and a
  * gain of min(1, GP_SOUND_NEAR / d) -- inverse-square INTENSITY -- d its world distance from live
- * Mario (1 while live Mario's pose is unknown). The tuning (GP_SOUND_NEAR,
- * GP_SOUND_CATCHUP, GP_STAR_FADE_FRAMES, GP_BRIDGE_FRAMES) is ghost_tuning.h. */
+ * Mario (1 while live Mario's pose is unknown). With overlap_sound, that gain
+ * also follows the ghost's overlap fade and a request live Mario issued on the
+ * same frame is not handed over while it fades (ghost_sound_fade.h). The
+ * tuning (GP_SOUND_NEAR, GP_SOUND_CATCHUP, GP_SOUND_FADE_FRAMES,
+ * GP_STAR_FADE_FRAMES, GP_BRIDGE_FRAMES) is ghost_tuning.h. */
 /* Raw-IGT restarts a star clip remembers (the latest win; Usamune restarts the
  * timer at some area entrances, e.g. LLL's volcano). */
 #define GP_RESTARTS 8u
@@ -219,9 +235,9 @@ void set_sound_sink(const SoundSink *);
  * during a list must not present an older provisional candidate. */
 bool current(const gp_draw_token &);
 /* A displayed request holds clips for the prepared model on this renderer:
- * the only state in which a frame can draw a ghost. current() is this plus
- * the token; work done for a ghost before evaluate (the translucent world
- * layer) runs only while this holds. */
+ * the only state in which a frame can draw a ghost, though a finished or
+ * hidden ghost holds it too (plan() says whether this list draws one).
+ * current() is this plus the token. */
 bool drawing();
 /* Actual renderer owner before its context/thread goes away. Detaches and
  * retires storage for worker reclamation; no GL or resource destruction. */

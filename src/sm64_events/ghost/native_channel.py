@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from sm64_events.ghost import native_protocol as P
 from sm64_events.ghost.proximity import DEFAULT_PROXIMITY, checked_proximity
 from sm64_events.ghost.settings import DEFAULT_OPACITY, DEFAULT_VOLUME, NUDGE_LIMIT_FRAMES, native_switches
-from sm64_events.memory.addresses import STAR_GRAB_ACTIONS
+from sm64_events.memory.addresses import STAR_DANCE_ACTIONS
 from sm64_events.replay.capturecontrol import _kernel, _process_creation
 
 
@@ -63,7 +63,11 @@ class NativeChannel:
                 for field, default in native_switches().items():
                     setattr(request, field, int(default))
                 request.layout[:] = layout
-                actions = sorted(STAR_GRAB_ACTIONS)
+                # The race ends at the x-cam, the dance, never the midair fall
+                # before one (his ruling, 2026-09-28: "the ghost death / real
+                # mario comparison should be based on the XCAM DANCE start"):
+                # his latch and each ghost's end are its dance.
+                actions = sorted(STAR_DANCE_ACTIONS)
                 if len(actions) > 8:
                     raise ValueError("native ghost star action registry exceeds channel capacity")
                 request.star_action_count = len(actions)

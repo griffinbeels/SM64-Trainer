@@ -33,11 +33,23 @@ def test_native_overlap_controls_preserve_distance_and_hide_for_video():
                   }
                 })()""")
                 assert settled(page, state, 1) == [{"proximity": {"extra_distance": 120}}]
-                page.click(".ghost-proximity input[type=checkbox]")
-                assert settled(page, state, 2)[1] == {"proximity": {"enabled": False}}
+                # The ghost's sound follows this fade: its switch sits here, on
+                # by default and not in the tuning row, and one flip is one write.
+                help_text = "document.querySelector('.ghost-proximity-help').textContent"
+                assert page.evaluate("document.querySelector('.ghost-overlap-sound input').checked") is True
+                assert not page.evaluate("!!document.querySelector('.ghost-tune .ghost-overlap-sound')")
+                assert "Its sound fades the same way" in page.evaluate(help_text)
+                (screenshots / f"overlap-sound-{width}.png").write_bytes(page.screenshot())
+                page.click(".ghost-overlap-sound input")
+                assert settled(page, state, 2)[1] == {"overlap_sound": False}
+                assert page.evaluate("document.querySelector('.ghost-overlap-sound input').checked") is False
+                assert "Its sound" not in page.evaluate(help_text)
+                page.click(".ghost-overlap-fade input")
+                assert settled(page, state, 3)[2] == {"proximity": {"enabled": False}}
                 assert not page.evaluate("!!document.querySelector('.ghost-distance')")
-                page.click(".ghost-proximity input[type=checkbox]")
-                assert settled(page, state, 3)[2] == {"proximity": {"enabled": True}}
+                assert not page.evaluate("!!document.querySelector('.ghost-overlap-sound')")
+                page.click(".ghost-overlap-fade input")
+                assert settled(page, state, 4)[3] == {"proximity": {"enabled": True}}
                 assert page.evaluate("document.querySelector('.ghost-distance').value") == "120"
                 from sm64_events.ghost.settings import limits as published_limits
                 reach = published_limits()["proximity"]
@@ -54,6 +66,6 @@ def test_native_overlap_controls_preserve_distance_and_hide_for_video():
                   const select=document.querySelector('.ghost-view-select');
                   select.value='whole';select.dispatchEvent(new Event('change',{bubbles:true}));
                 })()""")
-                assert settled(page, state, 4)[3] == {"view": "whole"}
+                assert settled(page, state, 5)[4] == {"view": "whole"}
                 assert not page.evaluate("!!document.querySelector('.ghost-proximity')")
                 assert page.problems() == []

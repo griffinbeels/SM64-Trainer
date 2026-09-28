@@ -233,6 +233,13 @@ ROWS = (
     Setting("proximity", dict(DEFAULT_PROXIMITY), checked_proximity, key=PROXIMITY_KEY,
             restore=saved_proximity, merge=True, native=_native_proximity,
             limits={"min": 0.0, "max": MAX_EXTRA_DISTANCE, "step": 10, "floor": OVERLAP_FLOOR}),
+    # THE GHOST'S SOUND FADES WITH IT. His words, 2026-09-28: *"If the ghost is
+    # more invisible, the audio should be quieter, too. However, I also don't
+    # want to lose the benefits of the ghost audio."* On: its sound follows the
+    # overlap fade, and while it fades a sound Mario makes on the same frame
+    # plays once (plugin/gfxwrap/ghost_sound_fade.h). Shown inside Overlap fading.
+    switch("overlap_sound", "ghost_overlap_sound", True,
+           "Quieting the ghost's sound as it fades is either on or off.", "overlap_sound"),
     # A stored value from a build that knew another view name is not a view:
     # it falls back rather than leaving the page asking for what nothing draws.
     Setting("view", DEFAULT_VIEW, checked_view, key="ghost_view", resolves=True,

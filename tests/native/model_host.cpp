@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
             // as his lists set them; solid triangles carry none.
             unsigned tiled=0,outside=0;
             for(unsigned i=0;i<mesh.out.vertex_count;++i) {
-                const uint32_t m=mesh.out.material[i],tile=m>>SG_MATERIAL_TILE_SHIFT;
+                const uint32_t m=mesh.out.material[i],tile=sg_material_tile(m);
                 if((m&SG_MATERIAL_CODE)==SG_MATERIAL_SOLID) {check(!tile,"solid triangle without a tile");continue;}
                 check(tile&SG_TILE_PRESENT,"textured triangle carries its tile");
                 check((tile&SG_TILE_S_CLAMP) && (tile&SG_TILE_T_CLAMP),"Mario's tiles clamp");
@@ -381,9 +381,24 @@ int main(int argc, char** argv) {
         sg_pose b=a; b.animation_id=1;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && mesh.snapshot()!=first_mesh,"animation changes mesh");
         check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && mesh.snapshot()==first_mesh,"A/B/A independence");
+        // The game culls the back of every triangle its list leaves
+        // G_CULL_BACK on: all of Mario; only his cap's wings are two-sided.
+        const auto double_sided=[&]{
+            unsigned count=0;
+            for(unsigned i=0;i<mesh.out.vertex_count;++i)count+=!(mesh.out.material[i]&SG_MATERIAL_CULL_BACK);
+            return count;
+        };
+        check(sg_model_evaluate(model,&a,&mesh.out)==SG_OK && double_sided()==0,"ordinary Mario culls every back face");
         b=a; b.cap_state=2;
         check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK,"wing geometry");
         check(has_code(SG_MATERIAL_DECAL_RGBA),"wing decal-alpha combiner");
+        {
+            unsigned wing=0;
+            for(unsigned i=0;i<mesh.out.vertex_count;++i)
+                wing+=(mesh.out.material[i]&SG_MATERIAL_CODE)==SG_MATERIAL_DECAL_RGBA;
+            std::fprintf(stderr,"wing cap: %u two-sided vertices, %u wing decal vertices\n",double_sided(),wing);
+            check(double_sided()>=12 && double_sided()<=wing,"only the cap's wings are two-sided");
+        }
         for(unsigned i=0;i<mesh.out.vertex_count;i+=3)
             check(mesh.out.material[i]==mesh.out.material[i+1] && mesh.out.material[i]==mesh.out.material[i+2],
                 "triangle material agreement");
@@ -406,7 +421,8 @@ int main(int argc, char** argv) {
             const unsigned metal=texgen();
             check(metal==mesh.out.vertex_count,"every metal triangle is environment mapped");
             for(unsigned i=0;i<mesh.out.vertex_count;++i)
-                check((mesh.out.material[i]&~uint32_t(SG_MATERIAL_TEXGEN))<=SG_MATERIAL_MODULATE_RGBA,"metal material code");
+                check((mesh.out.material[i]&~uint32_t(SG_MATERIAL_TEXGEN|SG_MATERIAL_CULL_BACK))<=SG_MATERIAL_MODULATE_RGBA,
+                      "metal material code");
             b=a; b.model_state=0x340;
             check(sg_model_evaluate(model,&b,&mesh.out)==SG_OK && texgen()>1000,"metal vanish-cap body");
             b=a; b.model_state=0x200; b.cap_state=2;
@@ -499,7 +515,7 @@ int main(int argc, char** argv) {
                 // Its textured triangles name its own cells in their tiles.
                 bool own=false;
                 for(unsigned i=alone;i<mesh.out.vertex_count;++i) {
-                    const uint32_t tile=mesh.out.material[i]>>SG_MATERIAL_TILE_SHIFT;
+                    const uint32_t tile=sg_material_tile(mesh.out.material[i]);
                     const unsigned cell=tile&SG_TILE_CELL;
                     check(!tile || (cell>=k.first && cell<k.first+k.cells),"held tile names another object's cell");
                     own|=tile!=0;
@@ -507,7 +523,7 @@ int main(int argc, char** argv) {
                 check(own,"held object samples its own cells");
                 const auto tiles=[&](uint32_t want) {
                     unsigned count=0;
-                    for(unsigned i=alone;i<mesh.out.vertex_count;++i)count+=(mesh.out.material[i]>>SG_MATERIAL_TILE_SHIFT)==want;
+                    for(unsigned i=alone;i<mesh.out.vertex_count;++i)count+=(sg_material_tile(mesh.out.material[i]))==want;
                     return count;
                 };
                 const auto tile=[](unsigned cell,bool s_clamp,unsigned s_mask,unsigned s_size,bool t_clamp,unsigned t_mask,unsigned t_size) {

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 namespace ghost_pose {
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::solid) == SG_MATERIAL_SOLID);
 static_assert(static_cast<uint32_t>(ghost_compositor::Material::alpha_mix) == SG_MATERIAL_ALPHA_MIX);
@@ -109,6 +110,20 @@ const sg_body_light *named_held(const sg_body_lights &lights, const float color[
     }
     return nullptr;
 }
+// The live camera sees this triangle's front: the eye lies on the side its
+// winding faces (counter-clockwise seen from outside, the side his vertex
+// normals point to: every Mario triangle agrees). Exact in world space, a
+// triangle crossing the camera plane included, whatever the projection and
+// the triangle path's y flip do to its window orientation. Edge-on is back.
+bool faces_eye(const float eye[3], const ghost_compositor::Vertex *v) {
+    double a[3], b[3], to_eye[3];
+    for (unsigned k = 0; k < 3; ++k) {
+        a[k] = double(v[1].position[k]) - v[0].position[k]; b[k] = double(v[2].position[k]) - v[0].position[k];
+        to_eye[k] = double(eye[k]) - v[0].position[k];
+    }
+    return (a[1]*b[2] - a[2]*b[1]) * to_eye[0] + (a[2]*b[0] - a[0]*b[2]) * to_eye[1]
+        + (a[0]*b[1] - a[1]*b[0]) * to_eye[2] > 0;
+}
 bool shade(const float view[16], const sg_body_light *light, float color[3], const float normal[3]);
 bool shade(const float view[16], const sg_body_lights &lights, float color[3], const float normal[3]) {
     return shade(view, named(lights, color), color, normal);
@@ -194,7 +209,7 @@ bool shadow(sg_model *model, const gc_sample &recorded, const float view_project
 Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
                 const ghost::WorldPass &world, float opacity, Scratch &scratch,
                 ghost_compositor::Pose &out) {
-    out = {};
+    out = {}; scratch.evaluated = 0;
     // Historical framebuffer qualification does not invalidate captured Mario
     // state. The caller supplies the separately qualified LIVE world pass.
     if (record.bytes != sizeof(record) || record.version != GS_VERSION || !record.configuration)
@@ -291,7 +306,7 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
     ghost_compositor::Pose built{};
     for (uint32_t i = 0; i < mesh.vertex_count; ++i) {
         const uint32_t material = scratch.material[i] & SG_MATERIAL_CODE;
-        const uint32_t tile = scratch.material[i] >> SG_MATERIAL_TILE_SHIFT;
+        const uint32_t tile = sg_material_tile(scratch.material[i]);
         if (material > SG_MATERIAL_MODULATE_RGBA || tile >= (SG_TILE_PRESENT << 1)) return Result::model_failed;
         auto &v = scratch.vertices[i];
         std::memcpy(v.position,scratch.position+3*i,sizeof(v.position));
@@ -315,11 +330,26 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         built.view_projection[4*c] *= world.target.screen_scale[0];
         built.view_projection[4*c+1] *= world.target.screen_scale[1];
     }
-    built.vertices = scratch.vertices; built.count = mesh.vertex_count;
+    built.flip_y = 1;
+    // The game never draws the back of a triangle its list left G_CULL_BACK
+    // on (all of Mario but his cap's wings). From outside that hides nothing
+    // the self-depth pass would show; with the live camera's near plane
+    // through the ghost, two-sided drawing showed the inside of its far side.
+    // Culled triangles move after the drawn ones, whose order is kept.
+    uint32_t kept = 0;
+    scratch.evaluated = mesh.vertex_count;
+    for (uint32_t i = 0; i + 2 < mesh.vertex_count; i += 3) {
+        if ((scratch.material[i] & SG_MATERIAL_CULL_BACK)
+                && !faces_eye(live.camera.position,&scratch.vertices[i])) continue;
+        if (kept != i)
+            for (unsigned n = 0; n < 3; ++n) std::swap(scratch.vertices[kept + n],scratch.vertices[i + n]);
+        kept += 3;
+    }
+    built.vertices = scratch.vertices; built.count = kept; built.culled = mesh.vertex_count - kept;
     // Every vertex already carries its F3D shade (shade above): the
     // compositor's own light is switched to a flat 1.
     built.light_direction[2] = 1;
-    built.ambient = 1; built.diffuse = 0; built.opacity = opacity; built.flip_y = 1;
+    built.ambient = 1; built.diffuse = 0; built.opacity = opacity;
     out = built;
     return Result::ok;
 }
