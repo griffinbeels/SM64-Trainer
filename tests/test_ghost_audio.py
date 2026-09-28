@@ -59,5 +59,13 @@ def test_ghost_sound_engine_queue_and_volume(tmp_path):
     assert report["right_placed_right_left_energy"] > 4 and report["left_placed_right_left_energy"] < 0.25
     assert 0.055 < report["gain_quarter_energy_ratio"] < 0.07
     assert report["camera_5000_energy_ratio"] < 0.5 and report["second_ghost_routed_identical"]
+    # Every class of sound Mario's recordings carry obeys one rule: the ghost
+    # volume and the ghost's gain (distance x overlap). The menu bank (the star
+    # and cap grab) and a constant-frequency moving sound once skipped the gain.
+    classes = report["classes"]
+    assert {"action", "moving", "voice", "general", "object", "object2",
+            "menu_star", "menu_hole", "menu_pipe", "moving_constant_frequency"} <= set(classes)
+    for name, measured in classes.items():
+        assert 0.03 < measured["gain"] < 0.1 and 0.24 < measured["volume"] < 0.26, (name, measured)
     if report["device"]:
         assert report["device_underruns"] == 0 and report["device_max_latency_ms"] < 80, report

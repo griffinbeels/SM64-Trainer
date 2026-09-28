@@ -22,6 +22,7 @@
 #include <iterator>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 static unsigned checks = 0;
@@ -134,6 +135,77 @@ static double energy(const std::vector<int16_t> &pcm, unsigned channel = 2) {
     double sum = 0;
     for (size_t i = 0; i < pcm.size(); ++i) if (channel == 2 || i % 2 == channel) sum += double(pcm[i]) * pcm[i];
     return sum;
+}
+// One sound of one class from ghost 0, placed, at a volume: everything it
+// sounds. A moving sound is requested every frame for a second, as the game
+// does while Mario slides; every other class once.
+static std::vector<int16_t> run_one(const std::vector<uint8_t> &rom, uint32_t bits, float volume, Place place) {
+    Capture capture;
+    ghost_audio::control(true, volume);
+    check(ghost_audio::start(rom.data(), rom.size(), capture.output()) == ghost_audio::Start::ok, "engine and capture start");
+    capture.settle();
+    const uint32_t requests = (bits >> SOUNDARGS_SHIFT_BANK) == SOUND_BANK_MOVING ? 30 : 1;
+    for (uint32_t frame = 0; frame < 120; ++frame) {
+        if (frame >= 5 && frame < 5 + requests) { ghost_audio::place(0, place.position, place.gain); ghost_audio::cue(0, bits); }
+        capture.frame();
+    }
+    ghost_audio::stop();
+    check(capture.closed && !ghost_audio::stats().running, "stop closes the device and joins");
+    return capture.pcm;
+}
+// EVERY CLASS OF SOUND A GHOST PLAYS obeys one rule: the ghost volume x the
+// ghost's gain (distance from live Mario x its overlap fade, from playback) x
+// SM64's own panning and camera-distance falloff. Mario's recordings issue
+// sounds in the action, moving, voice, general, object, object-2 and menu
+// banks (measured 2026-09-28 over 76 clips); the menu bank (the star and cap
+// grab's SOUND_MENU_STAR_SOUND, falling into a pit, entering a pipe) and a
+// moving sound at a constant frequency took a fixed, centred volume that
+// skipped all but the ghost volume (his report, 2026-09-28).
+// `placed` is false for a sound whose own script mixes its pan
+// (chan_setpanmix): SOUND_MENU_ENTER_PIPE sounds the same wherever its
+// channel is panned, before the fix (1.185 right/left) and after (1.184).
+struct SoundClass { const char *name; uint32_t bits; bool placed; };
+static const SoundClass sound_classes[] = {
+    {"action", SOUND_ACTION_TERRAIN_JUMP, true}, {"moving", SOUND_MOVING_TERRAIN_SLIDE, true},
+    {"moving_constant_frequency", SOUND_MOVING_TERRAIN_SLIDE | SOUND_CONSTANT_FREQUENCY, true},
+    {"voice", SOUND_MARIO_YAH_WAH_HOO, true}, {"general", SOUND_GENERAL_COIN, true},
+    {"object", SOUND_OBJ_BOWSER_SPINNING, true}, {"object2", SOUND_OBJ2_BABY_PENGUIN_YELL, true},
+    {"menu_star", SOUND_MENU_STAR_SOUND, true}, {"menu_hole", SOUND_MENU_ENTER_HOLE, true},
+    {"menu_pipe", SOUND_MENU_ENTER_PIPE, false},
+};
+struct ClassResult { double whole, gain, volume, pan, camera; };
+static ClassResult measure_class(const std::vector<uint8_t> &rom, const SoundClass &sound) {
+    const Place ahead{{0, 0, -300}, 1}, quiet{{0, 0, -300}, .25f}, right{{2000, 0, -500}, 1},
+        distant{{0, 0, -5000}, 1};
+    const double whole = energy(run_one(rom, sound.bits, 1.0f, ahead));
+    const auto panned = run_one(rom, sound.bits, 1.0f, right);
+    return {whole, energy(run_one(rom, sound.bits, 1.0f, quiet)) / whole,
+            energy(run_one(rom, sound.bits, 0.5f, ahead)) / whole,
+            energy(panned, 1) / energy(panned, 0), energy(run_one(rom, sound.bits, 1.0f, distant)) / whole};
+}
+// Each class against the rule; every class is measured before any refuses,
+// so a bypass names each class it reaches.
+static std::string check_classes(const std::vector<uint8_t> &rom) {
+    std::string json, failed;
+    for (const auto &sound : sound_classes) {
+        const auto r = measure_class(rom, sound);
+        char row[200];
+        std::snprintf(row, sizeof(row), "%s\"%s\":{\"gain\":%.4f,\"volume\":%.4f,\"pan\":%.3f,\"camera\":%.4f}",
+                      json.empty() ? "" : ",", sound.name, r.gain, r.volume, r.pan, r.camera);
+        json += row;
+        const bool heard_from_anywhere = (sound.bits & SOUND_NO_VOLUME_LOSS) != 0;
+        const char *broken = !(r.whole > 1e9) ? "is silent"
+            : !(r.gain > 0.03 && r.gain < 0.1) ? "skips the ghost's gain (distance x overlap)"
+            : !(r.volume > 0.24 && r.volume < 0.26) ? "skips the ghost volume"
+            : !(!sound.placed || r.pan > 4) ? "does not pan to where the ghost is"
+            // SOUND_NO_VOLUME_LOSS is the game's own "heard from anywhere";
+            // the ghost's distance from live Mario still reaches it in its gain.
+            : !(heard_from_anywhere || r.camera < 0.5) ? "skips the camera-distance falloff" : nullptr;
+        if (broken) failed += std::string(failed.empty() ? "" : "; ") + sound.name + " " + broken;
+    }
+    std::fprintf(stderr, "classes: {%s}\n", json.c_str());
+    check(failed.empty(), failed.empty() ? "every sound class obeys the ghost's gain rule" : failed.c_str());
+    return json;
 }
 static size_t first_sound(const std::vector<int16_t> &pcm, uint64_t from_frame) {
     for (size_t i = size_t(2 * from_frame); i < pcm.size(); ++i) if (pcm[i]) return i / 2;
@@ -281,6 +353,7 @@ int main(int argc, char **argv) {
         {   const auto before = ghost_audio::stats(); const float nowhere[3] = {0, 0, 0};
             ghost_audio::cue(ghost_audio::sources, 1); ghost_audio::place(ghost_audio::sources, nowhere, 1);
             check(ghost_audio::stats().dropped - before.dropped == 1, "a ghost index past the sources drops"); }
+        const std::string classes = check_classes(rom);
 
         // Optional device smoke: silence only, skipped (stated) without a device.
         // A volume too small to reach one int16 step is silent output that still
@@ -338,13 +411,14 @@ int main(int argc, char **argv) {
             "\"right_placed_right_left_energy\":%.4f,\"left_placed_right_left_energy\":%.4f,"
             "\"gain_quarter_energy_ratio\":%.6f,\"camera_5000_energy_ratio\":%.6f,\"second_ghost_routed_identical\":%s,"
             "\"engine_private_bytes\":%zu,\"capture_reopen_latency_ms\":%.3f,\"capture_reopen_onset_frames\":%zu,"
-            "\"capture_frames_to_close\":%zu,\"device_close_after_s\":%.3f,\"device_reopen_latency_ms\":%.3f}\n",
+            "\"capture_frames_to_close\":%zu,\"device_close_after_s\":%.3f,\"device_reopen_latency_ms\":%.3f,"
+            "\"classes\":{%s}}\n",
             checks, full.cue_at.size(), nonzero, half_energy / full_energy, full.stats.max_latency_ms,
             device ? "true" : "false", smoke_latency, stale_full,
             static_cast<unsigned long long>(smoke_underruns), fed_rate,
             right_lr, left_lr, quarter_ratio, far_ratio, routed_identical ? "true" : "false",
             engine_bytes, reopen_latency, reopen_onset_frames, reopen_frames_to_close,
-            device_close_after_s, device_reopen_latency);
+            device_close_after_s, device_reopen_latency, classes.c_str());
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "audio witness: %s (check %u)\n", error.what(), checks);

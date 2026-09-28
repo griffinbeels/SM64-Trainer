@@ -1394,8 +1394,9 @@ order), kept with that [[frame]]'s pose so a [[ghost]] plays his jumps,
 landings and voice as it passes that [[frame]], through SM64's own sound
 engine at its set volume. Each [[ghost]] sounds from where it stands relative
 to the live camera (panned and distanced as the game does Mario) and fades by
-the inverse square of its distance from live Mario past 400 units. Capture
-drops other objects' sounds. With the card's **Quiet its sound the same way**
+the inverse square of its distance from live Mario past 400 units, the chime
+of a [[star]] or cap grab included. Capture drops other objects' sounds, so a
+[[ghost]] plays no music. With the card's **Quiet its sound the same way**
 (under Overlap fading, on by default), a [[ghost]]'s sound also follows its
 [[overlap fade]], and while it fades, a sound live Mario made on the same
 [[frame]] plays only once.

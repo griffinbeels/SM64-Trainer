@@ -1226,6 +1226,26 @@ channel (`sMaxChannelsForSoundBank`, all 1). Mario's sounds carry
 equal priority in the same bank takes the channel: two ghosts, or a far ghost
 and a near one, can still cut each other off, as Mario's own sounds do.
 
+Every class of ghost sound follows that one rule. Mario's recordings carry
+requests in the action, moving, voice, general, object, object-2 and menu
+banks (76 clips, 2026-09-28). Upstream `update_game_sound` plays the menu bank
+(Mario's star and cap grab `SOUND_MENU_STAR_SOUND`, falling into a pit,
+entering a pipe) and a moving sound at a constant frequency at volume 1,
+centred, without `get_sound_volume`. So a far ghost's star chime kept full
+level, and only the ghost volume reached it (his report, 2026-09-28). The
+staged engine ([patches.py](../renderer/model/patches.py)) gives those the
+voice bank's volume and pan from the ghost's own position and keeps their
+constant pitch. `SOUND_NO_VOLUME_LOSS` (falling into a pit) still skips the
+engine's camera falloff, as in the game, and the ghost's gain still applies.
+`SOUND_MENU_ENTER_PIPE`'s own script mixes its pan, so it sounds centred
+wherever its ghost is. No ghost sound is music: capture keeps only requests
+from Mario's object, so the cap and star music (sequences) never reach a
+ghost. The audio witness plays one sound of each class. Gain 0.25 must leave
+3 to 10% of its energy, volume 0.5 a quarter, 2000 units right at least 4x more
+in the right channel (the pipe aside) and 5000 units ahead under half (the pit
+aside). On the unpatched engine the three menu sounds and the
+constant-frequency moving sound kept 100% at gain 0.25.
+
 The IPC worker starts the engine from its verified ROM bytes and stops it
 (joining the thread) when the ROM closes. Before the engine parses anything,
 the CTL, TBL and SEQ regions must match the SHA-256 of SM64 US audio data (the
