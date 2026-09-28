@@ -70,7 +70,8 @@ private:
 bool adapter_luid(const Gl &gl, LUID *out);
 
 // The selection sample: every 8th pixel of every 8th row, top row first, BGRA
-// with alpha 255, byte-identical to gpu_selection's worker shader. One nearest
+// with alpha 255, byte-identical to the full-frame selector's own sample
+// (test_gpu_selection compares them). One nearest
 // blit per picture into a small texture, then an asynchronous readback.
 class Sampler {
 public:

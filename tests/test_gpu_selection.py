@@ -1,18 +1,19 @@
-"""Bounded real-GPU sample witness against original full-frame selector input."""
+"""The shipped renderer-thread sample (render_capture::Sampler) against the
+original full-frame selector input: exact bytes, and the same selection
+decisions, with the renderer's scissor and pack state left hostile."""
 from __future__ import annotations
-import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay.ledger import PictureLedger, SAMPLE_STRIDE
 from sm64_events.replay.pixels import SampledPicture
+
+import gpu_render_witness as witness
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / "tools/build_plugin.py").is_file())
 SOURCE = ROOT / "plugin/gfxwrap"
@@ -57,20 +58,6 @@ def fixtures(tmp_path_factory):
     return directory, values
 
 
-@pytest.fixture(scope="module")
-def build():
-    spec = importlib.util.spec_from_file_location("selection_build", ROOT / "tools/build_plugin.py")
-    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    vc = module.find_vcvars32()   # vswhere first: any edition, any year
-    assert vc is not None, "explicit native witness needs the existing x86 MSVC compiler"
-    # Reuse the build command owner while also suppressing background cursor feedback.
-    def run(*args, **kwargs):
-        kwargs.update(quiet_spawn_kwargs())
-        return subprocess.run(*args, **kwargs)
-    module.subprocess = SimpleNamespace(run=run)
-    return module, vc
-
-
 def full_frame_oracle(frame):
     # Independent oracle: full original image is flipped BEFORE the existing
     # selector samples it. No shader coordinates or GPU sample bytes are reused.
@@ -109,23 +96,18 @@ def selector_proof(width, height, frames, chunks):
 
 
 @pytest.mark.parametrize("mode", ["exact", "wrong-y", "crop-first", "rgba-bytes"])
-def test_real_gpu_selection(tmp_path, fixtures, build, mode):
+def test_real_gpu_selection(tmp_path, fixtures, mode):
     input_dir, values = fixtures
-    builder, vc = build
-    defines = {"exact": [], "wrong-y": ["/DGPU_SELECTION_WRONG_Y"],
-               "crop-first": ["/DGPU_SELECTION_CROP_FIRST"], "rgba-bytes": ["/DGPU_SELECTION_RGBA_BYTES"]}[mode]
-    flags = [f for f in builder.COMMON_FLAGS if not f.startswith("/std:")]
-    flags += ["/std:c++17", "/EHsc", f"/I{SOURCE}", f"/I{ROOT / 'plugin/gfxwrap'}"]
-    target = tmp_path / "gpu_selection_host.exe"
-    builder._cl(vc, flags + defines + [str(SOURCE / "gpu_selection.cpp"),
-        str(SOURCE / "gpu_selection_host.cpp"), str(ROOT / "plugin/gfxwrap/gl_snapshot.cpp"),
-        f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *builder.LIBS], tmp_path)
-    result = subprocess.run([str(target), str(input_dir), str(tmp_path)], cwd=tmp_path,
-                            capture_output=True, text=True, timeout=30, **quiet_spawn_kwargs())
+    builder, vc = witness.toolchain()
+    defines = {"exact": [], "wrong-y": ["RENDER_SAMPLE_WRONG_Y"],
+               "crop-first": ["RENDER_SAMPLE_CROP_FIRST"], "rgba-bytes": ["RENDER_SAMPLE_RGBA_BYTES"]}[mode]
+    target = witness.build_producer(builder, vc, tmp_path, defines)
+    result = subprocess.run([str(target), "selection", str(input_dir), str(tmp_path)], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=60, **quiet_spawn_kwargs())
     (tmp_path / "host.log").write_bytes((result.stdout + result.stderr).encode())
     assert result.returncode == 0, result.stdout + result.stderr
     assert "selection witness completed" in result.stdout
-    assert result.stdout.count("custody=yes guard_bytes=yes worker_only=yes") == 2
+    assert result.stdout.count("state_restored=yes guard_bytes=yes renderer_thread=yes") == 2
     receipt = {"mode": mode, "host": result.stdout, "dimensions": []}
     for (width, height), frames in values.items():
         actual = (tmp_path / f"samples_{width}x{height}.bgra").read_bytes()

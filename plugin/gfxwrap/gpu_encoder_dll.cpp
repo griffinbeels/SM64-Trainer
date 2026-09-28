@@ -61,7 +61,7 @@ void status(Session&s,gbdll_status_v1*out) {
  for(unsigned i=0;i<GBDLL_SLOTS;++i){const auto&l=s.slots[i].lease;if(l.held)out->held_mask|=1u<<i;if(l.pending)out->pending_mask|=1u<<i;out->acquired+=l.acquired;out->released+=l.released;}
 }
 bool device_for_luid(LUID luid,ID3D11Device**device,ID3D11DeviceContext**context) {
- // Same exact-LUID import pattern as gpu_bridge::device_for_luid; no GL/WGL linkage.
+ // The producer's exact adapter LUID; no GL/WGL linkage.
  Microsoft::WRL::ComPtr<IDXGIFactory1> factory;if(FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))return false;
  for(unsigned i=0;i<32;++i){Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;if(factory->EnumAdapters1(i,&adapter)!=S_OK)break;
   DXGI_ADAPTER_DESC1 desc{};if(FAILED(adapter->GetDesc1(&desc))||(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE)||memcmp(&desc.AdapterLuid,&luid,sizeof(luid)))continue;

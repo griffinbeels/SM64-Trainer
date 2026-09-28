@@ -1,80 +1,49 @@
-"""Real x86 GL producer -> x64 D3D11 consumer; test-only raw-pixel oracle."""
-import importlib.util
+"""The shipped renderer-thread bridge, x86 renderer -> x64 encoder helper.
+
+One GL context plays the renderer and copies each picture (snapshot pool,
+then render_capture::Bridge) into the two keyed-mutex textures the consumer
+created, as the helper now does. The consumer checks every pixel against the
+independent fixture and, in the NVENC modes, encodes with the shipped encoder;
+the packets go through the recorder's own fragment mux before any decode.
+"""
 import os
-import subprocess
-import uuid
-from pathlib import Path
 
 import pytest
-from sm64_events.core.childproc import quiet_spawn_kwargs
 
-ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "plugin/gfxwrap"
+import gpu_render_witness as witness
+
 pytestmark = pytest.mark.skipif(os.environ.get("SM64_TEST_GPU_BRIDGE") != "1",
     reason="explicit same-adapter NVIDIA hardware witness: set SM64_TEST_GPU_BRIDGE=1")
 
-@pytest.fixture(scope="module")
-def native_build():
-    spec = importlib.util.spec_from_file_location("bridge_build", ROOT / "tools/build_plugin.py")
-    build = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(build)
-    vc32 = build.find_vcvars32()
-    if vc32 is None or not vc32.with_name("vcvars64.bat").exists():
-        pytest.skip("x86/x64 MSVC unavailable for real GPU bridge witness")
-    return build, vc32
+# source_w, source_h, crop_x, crop_y, snapshot_w, snapshot_h, pictures. The
+# small snapshot is odd both ways: the bridge drops native row 0 and the right
+# column, and the crop offset proves the snapshot's source rectangle.
+SMALL = (12, 10, 1, 2, 9, 7, 6)
+LARGE = (324, 244, 1, 2, 320, 240, 6)
+
 
 @pytest.mark.parametrize("mode", ["pixels", "omit-copy", "nvenc", "nvenc-av1"])
-def test_gpu_bridge(tmp_path, native_build, mode):
-    omit_copy = mode == "omit-copy"
+def test_gpu_bridge(tmp_path, mode):
+    build, vc32 = witness.toolchain()
     nvenc = mode.startswith("nvenc")
-    build, vc32 = native_build
-    flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
-    flags += ["/std:c++17", "/EHsc", f"/I{SOURCE}", f"/I{ROOT / 'plugin/gfxwrap'}"]
-    producer = tmp_path / "gpu_bridge_producer.exe"
-    consumer = tmp_path / "gpu_bridge_consumer.exe"
-    for target, host, vc, extra in [
-        (producer, "gpu_bridge_host.cpp", vc32, [str(ROOT / "plugin/gfxwrap/gl_snapshot.cpp")]),
-        (consumer, "gpu_bridge_consumer.cpp", vc32.with_name("vcvars64.bat"), []),
-    ]:
-        defines = ["/DGPU_BRIDGE_OMIT_COPY"] if omit_copy else []
-        if nvenc:
-            defines += ["/DGPU_BRIDGE_LARGE"]
-        if nvenc and target == consumer:
-            defines += ["/DGPU_BRIDGE_NVENC", f"/I{SOURCE / 'vendor'}"]
-            if mode == "nvenc-av1":
-                defines += ["/DGPU_BRIDGE_AV1"]
-            extra += [str(SOURCE / "gpu_bridge_encoder.cpp")]
-        build._cl(vc, flags + defines + [str(SOURCE / "gpu_bridge.cpp"), str(SOURCE / host), *extra,
-            f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", *build.LIBS, "d3d11.lib", "dxgi.lib"], tmp_path)
-    name = "Local\\sm64-gpu-bridge-" + uuid.uuid4().hex
-    with (tmp_path / "producer.log").open("w") as producer_log:
-        proc = subprocess.Popen([str(producer), name], stdout=producer_log, stderr=subprocess.STDOUT,
-                                cwd=tmp_path, **quiet_spawn_kwargs())
-        try:
-            result = subprocess.run([str(consumer), name], capture_output=True, text=True,
-                                    cwd=tmp_path, timeout=30, **quiet_spawn_kwargs(), check=False)
-            (tmp_path / "consumer.log").write_text(result.stdout + result.stderr, encoding="utf-8")
-            if omit_copy:
-                assert result.returncode == 1 and "pixel mismatch" in result.stderr, result.stdout + result.stderr
-            else:
-                assert result.returncode == 0, result.stdout + result.stderr
-                assert proc.wait(timeout=15) == 0
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-                proc.wait(timeout=5)
-    output = (tmp_path / "producer.log").read_text(encoding="utf-8")
-    assert "render_progress=2000 full_refusals=2000" in output, output
-    assert "worker_profile=core" in output
-    assert "source_gpu_progress=completed consumer_still_stalled=yes" in output
-    if not omit_copy:
-        assert "producer passed: pictures=6" in output
-        expected_bytes = 1843200 if nvenc else 1152
-        assert f"bits=64 pictures=6 bytes_checked={expected_bytes}" in result.stdout
-
+    producer = witness.build_producer(build, vc32, tmp_path,
+                                      ["RENDER_BRIDGE_OMIT_COPY"] if mode == "omit-copy" else [])
+    consumer = witness.build_consumer(build, vc32, tmp_path,
+                                      codec={"nvenc": "h264", "nvenc-av1": "av1"}.get(mode))
+    geometry = LARGE if nvenc else SMALL
+    result, producer_code, output = witness.run_pair(producer, consumer, tmp_path, geometry)
+    if mode == "omit-copy":
+        # The key moved and the pixels did not: the oracle must see it.
+        assert result.returncode == 1 and "pixel mismatch" in result.stderr, result.stdout + result.stderr
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert producer_code == 0, output
+    width, height = geometry[4] & ~1, geometry[5] & ~1
+    assert "producer passed: pictures=6 state_restored=yes" in output, output
+    assert (f"consumer passed: bits=64 pictures=6 bytes_checked={width * height * 4 * 6} "
+            f"output={width}x{height} created_textures=yes") in result.stdout
     if nvenc:
-        assert_nvenc_output(tmp_path, result.stdout,
-                            "av1" if mode == "nvenc-av1" else "h264")
+        assert_nvenc_output(tmp_path, result.stdout, "av1" if mode == "nvenc-av1" else "h264")
 
 
 def video_sample_entry(data: bytes) -> bytes:
