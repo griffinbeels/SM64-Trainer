@@ -32,7 +32,10 @@ U8, U16, U32, U64, I32, I64 = (
     C.c_int32,
     C.c_int64,
 )
-VERSION, HEADER_BYTES, MAX_OFFERS, STAMP_BYTES = 1, 2048, 8, 2048
+# VERSION is gpu_channel.h's GC_CHANNEL_VERSION. 2: the encoder helper creates
+# the bridge textures (renderer-thread capture), so a version-1 wrapper and
+# this trainer cannot share a channel.
+VERSION, HEADER_BYTES, MAX_OFFERS, STAMP_BYTES = 2, 2048, 8, 2048
 MAX_MAP, MAX_PACKET, MAX_DIMENSION = 64 * 1024 * 1024, 4 * 1024 * 1024, 8192
 MAGIC = b"SM64GPC1"
 NAMESPACE = "Local\\SM64Trainer.GpuChannel.v1."
@@ -268,6 +271,17 @@ def _require(test, message):
         raise ProtocolError(message)
 
 
+class LayerVersionMismatch(ProtocolError):
+    """The installed capture layer and this trainer come from different builds."""
+
+    def __init__(self, found):
+        self.found = found
+        super().__init__(
+            f"the capture layer in Project64 speaks GPU channel version {found} and this "
+            f"trainer speaks version {VERSION}: they come from different builds. Close "
+            "Project64 so the trainer can update the capture layer")
+
+
 def _text(value):
     raw = bytes(value)
     units = list(value)
@@ -281,14 +295,10 @@ def _text(value):
 
 
 def validate_header(h: Header, mapped_bytes: int):
-    _require(
-        h.seq
-        and not h.seq & 1
-        and bytes(h.magic) == MAGIC
-        and h.version == VERSION
-        and h.header_bytes == HEADER_BYTES,
-        "unsupported or incomplete header",
-    )
+    _require(h.seq and not h.seq & 1 and bytes(h.magic) == MAGIC, "unsupported or incomplete header")
+    if h.version != VERSION:
+        raise LayerVersionMismatch(h.version)
+    _require(h.header_bytes == HEADER_BYTES, "unsupported or incomplete header")
     _require(
         h.producer_pid
         and h.owner_pid

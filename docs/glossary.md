@@ -1070,9 +1070,10 @@ his ask: "redo our recording system so that the recording [[frame]]s ARE game
 [[frame]]s"): the wrapper Project64 selects (`SM64 Trainer v1.0`,
 `sm64_trainer_gfx.dll`) and the [[renderer]] it wraps. When the [[renderer]]
 finishes a picture the wrapper copies the game's own memory -- the [[frame]]
-counter, the pad, Mario, the running IGT -- and the [[renderer]] passes an owned
-GPU copy of the picture with that immutable stamp to a dedicated worker and the
-isolated [[encoder helper]]. The [[recorder]] retains exact source identity
+counter, the pad, Mario, the running IGT -- and the [[renderer]] takes an owned
+GPU copy of the picture with that immutable stamp, then samples it and hands the
+selected ones to the isolated [[encoder helper]], all on its own thread
+([[renderer-thread capture]]). The [[recorder]] retains exact source identity
 through shared media fragments without transferring full images through
 Python. A known GPU producer that cannot capture reports the failure; it does
 not silently switch to desktop timing. The one exception is an [[unsupported
@@ -1174,30 +1175,29 @@ written pictures. Until 2026-09-27 such a machine retried GPU capture every
 - **Not** -- a transient GPU failure: an encoder that fails for any other
   reason keeps retrying on the bounded backoff (`src/sm64_events/replay/gpuretry.py`).
 
-### Driver warm-up
+### Renderer-thread capture
 
-The [[capture layer]]'s one-time move of the first-capture freeze into the boot
-intro. The NVIDIA driver freezes the [[renderer]] for roughly 150 ms the first
-time any other thread in Project64 uses the GPU while the [[renderer]] is
-drawing: the "very brief visual stutter" he saw once, as recording started.
-Two seconds after a [[practice ROM]] starts drawing, the delivery worker makes
-and deletes a hidden, unshared GL context, so the freeze lands in the intro and
-the first recording later starts clean. The worker shares nothing with the
-[[renderer]] and keeps nothing, so with the server off the [[renderer]] still
-draws alone afterwards; the freeze in the intro is the one cost it adds there.
+How the [[capture layer]] keeps every GPU call in Project64 on the
+[[renderer]]'s own thread (2026-09-27). NVIDIA's threaded optimization froze
+the [[renderer]] for 150-270 ms the first time any other thread in Project64
+used the GPU: the "very brief visual stutter" he saw once, as recording
+started. Now the [[renderer]] itself copies the picture, samples it and copies
+a selected picture into the [[encoder helper]]'s texture, inside the callback
+it already makes on every VI, and the helper creates those textures. The
+delivery worker only keeps time and books, without the GPU.
 
-- **Lives** -- the trigger in `plugin/gfxwrap/wrapper_runtime.cpp`; the work
-  in gd_prewarm (`plugin/gfxwrap/gpu_delivery.cpp`,
-  `plugin/gfxwrap/gpu_delivery_context.cpp`); evidence and readout rule in
+- **Lives** -- `plugin/gfxwrap/gpu_render.cpp` (the sample, the copy into the
+  helper's texture, the GL state guard); `plugin/gfxwrap/gpu_delivery.cpp`
+  (render_tick, and which step runs on which thread); evidence in
   [the runtime doc](replay-gpu-runtime.md#first-capture-freeze)
-- **Not** -- keeping the worker's shared context from boot until Project64
-  closes (the rejected variant that would have reversed round 48)
+- **Not** -- the driver warm-up it replaced (2026-09-26 to 09-27), which kept
+  the worker's context and paid the same freeze once in the boot intro
 
 ### Activation log
 
 `sm64_trainer_gfx.activation.log`, beside the wrapper: this Project64
-process's startup lines only -- ROM open, the [[driver warm-up]], each
-capture's request and preparation steps with their QPCs, and every slow
+process's startup lines only -- ROM open, each capture's request and
+preparation steps with their QPCs, and every slow
 callback in the 15 s after a capture request. The main log rotates, so these
 used to be gone within half an hour. The previous process's copy is `.1`.
 

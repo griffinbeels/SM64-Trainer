@@ -40,7 +40,7 @@ struct Fixture {
         return r.channel->create(h)==gpu_channel::Result::ok;
     }
     bool no_graphics(){return !wglGetCurrentContext() && !r.prepared && !r.bridge_attempted
-        && !r.sampler_attempted && !r.snapshots.images().counters().texture_bytes && !r.bridge.logical_bytes();}
+        && !r.sampler_attempted && !r.snapshots.images().counters().texture_bytes && !r.bridge_bytes();}
 };
 struct ControlRequest {
     control_page_t page{};control_request_t ctl{};gr_page config{};HANDLE mapping=nullptr;
@@ -143,14 +143,14 @@ bool gap(const std::string&mode){
         // Refused stages are counted missing pictures, never a run failure
         // (round 48): the run stays live and the summary carries the count.
         REQUIRE(f.channel());frontier_enabled=true;frontier_epoch=f.r.epoch;frontier_refusals=1;
-        f.r.active_tick();
+        f.r.frontier_tick();
         REQUIRE(f.r.live() && f.r.diagnostic_reason()==GD_NONE && f.r.refused_pictures==1 && f.r.refusal_generation==1);
-        frontier_refusals=3;f.r.active_tick();
+        frontier_refusals=3;f.r.frontier_tick();
         REQUIRE(f.r.live() && f.r.refused_pictures==3 && f.r.diagnostic_reason()==GD_NONE);
         gd_disarm(GD_CANCELLED);REQUIRE(f.r.drain_tick() && f.no_graphics());return true;
     }else{
         REQUIRE(f.channel());frontier_enabled=true;frontier_epoch=f.r.epoch;++frontier_epoch;
-        f.r.active_tick();REQUIRE(f.r.diagnostic_reason()==10021u);
+        f.r.frontier_tick();REQUIRE(f.r.diagnostic_reason()==10021u);
     }
     const auto first=f.r.diagnostic_reason();gd_disarm(GD_CANCELLED);f.r.publish_status();
     gd_status retained{};REQUIRE(gd_read_status(&retained));

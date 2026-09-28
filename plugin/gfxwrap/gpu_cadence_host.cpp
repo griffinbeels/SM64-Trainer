@@ -3,7 +3,9 @@
 #include "gpu_delivery.h"
 #include "stamp_adapter.h"
 #include "gl_fixture.h"
+#include <atomic>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 
 namespace {
@@ -18,6 +20,12 @@ unsigned marker=0, origin=0, swaps=0;
 bool fresh_picture=true, swap_presentation=false;
 HANDLE render_request=nullptr, render_done=nullptr;
 rs_request render_command{};
+// Project64 calls UpdateScreen on every VI whether or not the game drew, and
+// renderer-thread capture does its GPU work inside those calls. Between stream
+// commands a 60Hz clock supplies same-origin VIs; one emulation thread means
+// VIs never overlap.
+std::mutex vi_lock;
+std::atomic<bool> vi_clock{true};
 
 int source_surface(rb_surface *s) {
     *s={};s->width=width;s->height=height;s->drawable_width=width;s->drawable_height=height;
@@ -66,7 +74,7 @@ int acquire(uintptr_t c,uint32_t g,rcl_lease *lease){return registry.acquire(c,g
 int release(rcl_token token){return registry.release(token);}
 uint32_t health(){return registry.health();}
 uint32_t error(){return registry.error();}
-void frame(unsigned value){marker=value;sa_process_dlist();sa_update_screen();}
+void frame(unsigned value){std::lock_guard<std::mutex> hold(vi_lock);marker=value;sa_process_dlist();sa_update_screen();}
 gd_status status() {
     gd_status result{};
     for(unsigned n=0;n<1000;++n){if(gd_read_status(&result))return result;Sleep(1);}
@@ -78,10 +86,11 @@ bool wait_state(unsigned target,bool mapping=false) {
         if(s.quarantined)return false;Sleep(1);}
     return false;
 }
+// The ended request's GPU names stay until the renderer's next armed VI
+// deletes them (renderer-thread capture): settled means no work, not no bytes.
 bool settled() {
     for(unsigned n=0;n<4000;++n){const auto s=status();
-        if(!gd_epoch()&&!s.epoch&&!s.quarantined&&!s.snapshot_bytes&&!s.bridge_bytes
-            &&!s.pending_records&&!s.pending_bridges)return true;
+        if(!gd_epoch()&&!s.epoch&&!s.quarantined&&!s.pending_records&&!s.pending_bridges)return true;
         if(s.quarantined)return false;Sleep(1);}
     return false;
 }
@@ -130,6 +139,12 @@ int main(int argc,char **argv) {
     gc_header request{};request.owner_pid=owner;request.owner_birth=birth;request.generation=1;
     request.offer_count=8;request.table_count=2;request.table[0]={0,4};request.table[1]={8,8};
     request.packet_count=8;request.packet_bytes=1u<<20;request.pending_bytes=4u<<20;request.ram_budget=4u<<20;
+    std::thread([]{for(;;){Sleep(16);
+        if(!vi_clock.load() || !gd_epoch())continue;
+        std::lock_guard<std::mutex> hold(vi_lock);
+        if(!vi_clock.load())continue;
+        fresh_picture=false;sa_update_screen();fresh_picture=true;
+    }}).detach();
     puts("ready");fflush(stdout);std::string line;
     while(std::getline(std::cin,line)) {
         std::istringstream input(line);std::string command;input>>command;
@@ -148,25 +163,28 @@ int main(int argc,char **argv) {
         } else if(command=="stream") {
             unsigned frames=0,period=0;input>>frames>>period;
             CHECK(frames>0&&frames<=200&&period>0&&period<=50);
-            const auto before=updates,started=GetTickCount64();puts("stream started");fflush(stdout);
+            // The VI clock keeps running: Project64 calls UpdateScreen on every
+            // VI, so same-origin VIs fall between these pictures as in play.
+            const auto started=GetTickCount64();unsigned pictures=0;puts("stream started");fflush(stdout);
             // Python can consume meanwhile; it cannot pace this producer by
             // waiting for each offer, encode result, or metadata acknowledgment.
             for(unsigned i=0;i<frames;++i){
                 const auto due=started+uint64_t(i)*period;
                 while(GetTickCount64()<due)Sleep(1);
-                frame(30+i);
+                frame(30+i);++pictures;
             }
             const auto counters=rb_get_stats();
-            printf("stream done %llu %u %u %llu\n",updates-before,counters.refused_full,counters.refused_busy,GetTickCount64()-started);
+            printf("stream done %u %u %u %llu pool_full=%u\n",pictures,counters.refused_full,counters.refused_busy,GetTickCount64()-started,counters.surface_failed);
         } else if(command=="stream_vi") {
             unsigned count=0,hz=0,divisor=0;input>>count>>hz>>divisor;
             CHECK(count>0&&count<=1200&&hz>0&&hz<=120&&divisor>0&&divisor<=4);
             const auto before=updates,started=GetTickCount64();
             uint64_t first_refusal=0;gd_status first{};uint32_t max_records=0,max_bridges=0;
-            puts("stream started");fflush(stdout);
+            vi_clock.store(false);puts("stream started");fflush(stdout);
             for(unsigned i=0;i<count;++i){
                 const auto due=started+uint64_t(i)*1000/hz;
                 while(GetTickCount64()<due)Sleep(1);
+                std::lock_guard<std::mutex> hold(vi_lock);
                 fresh_picture=i%divisor==0;
                 if(fresh_picture){marker=30+i/divisor;sa_process_dlist();}
                 sa_update_screen();
@@ -179,10 +197,10 @@ int main(int argc,char **argv) {
                     first_refusal=GetTickCount64()-started;first=current;
                 }
             }
-            fresh_picture=true;const auto counters=rb_get_stats();
-            printf("stream done %llu %u %u %llu first_ms=%llu records=%u bridges=%u reason=%u peak_records=%u peak_bridges=%u\n",
-                updates-before,counters.refused_full,counters.refused_busy,GetTickCount64()-started,
-                first_refusal,first.pending_records,first.pending_bridges,first.reason,max_records,max_bridges);
+            fresh_picture=true;const auto counters=rb_get_stats();const auto streamed=updates-before;vi_clock.store(true);
+            printf("stream done %llu %u %u %llu first_ms=%llu records=%u bridges=%u reason=%u peak_records=%u peak_bridges=%u pool_full=%u\n",
+                streamed,counters.refused_full,counters.refused_busy,GetTickCount64()-started,
+                first_refusal,first.pending_records,first.pending_bridges,first.reason,max_records,max_bridges,counters.surface_failed);
         } else if(command=="status") {
             const auto s=status();printf("status %u %u %u %u %u %u\n",s.state,s.reason,s.error,s.pending_records,s.pending_bridges,s.quarantined);
         } else if(command=="stop") {gd_disarm(GD_CANCELLED);puts("stopped");

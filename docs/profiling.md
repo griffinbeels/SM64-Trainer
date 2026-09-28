@@ -287,8 +287,8 @@ forwards untimed. Gaps include pauses, and these measurements cannot time
 asynchronous rendering on the GPU. `dropped_records` reports lost diagnostics.
 A bounded, event-driven writer keeps file I/O off emulator callbacks and
 rotates the log at 4 MiB through `.log.1` and `.log.2`. Startup lines (ROM
-open, the [driver warm-up](replay-gpu-runtime.md#first-capture-freeze), each
-capture's request and preparation steps, and the watched stalls) are also
+open, each capture's request and
+[preparation steps](replay-gpu-runtime.md#first-capture-freeze), and the watched stalls) are also
 copied to `sm64_trainer_gfx.activation.log`, which holds only the current
 Project64 process (the previous one moves to `.1`) and stops at 256 KB.
 Logging works with the trainer closed and does not request capture. Abrupt

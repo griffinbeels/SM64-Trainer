@@ -15,7 +15,22 @@ struct Slot {
  Microsoft::WRL::ComPtr<IDXGIKeyedMutex> mutex;
  Microsoft::WRL::ComPtr<ID3D11Query> completion;
  GpuEncoderLease lease;
+ HANDLE share=nullptr; // the name this helper published (renderer-thread producers)
+ ~Slot(){if(share)CloseHandle(share);}
 };
+// The capture layer's renderer-thread producer has no D3D device (a D3D device
+// in Project64 freezes its renderer once; docs/replay-gpu-runtime.md), so it
+// imports textures this helper creates under the channel's names. An older
+// layer created them itself: open first, create only when nothing has the name.
+HRESULT create_named(ID3D11Device*device,const gbdll_config_v1&config,DXGI_FORMAT format,const wchar_t*name,Slot&slot){
+ D3D11_TEXTURE2D_DESC desc{};desc.Width=config.encoder.width;desc.Height=config.encoder.height;desc.MipLevels=1;desc.ArraySize=1;
+ desc.Format=format;desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;
+ desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+ desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+ HRESULT hr=device->CreateTexture2D(&desc,nullptr,&slot.texture);if(FAILED(hr))return hr;
+ Microsoft::WRL::ComPtr<IDXGIResource1> resource;hr=slot.texture.As(&resource);if(FAILED(hr))return hr;
+ return resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,name,&slot.share);
+}
 struct Session {
  uint64_t token=0;DWORD owner=0;LUID adapter{};gbdll_state state=GBDLL_OPEN;
  uint32_t failure=GBDLL_OK;HRESULT hr=S_OK;uint64_t timeouts=0,last_pts=0;bool have_pts=false;
@@ -98,7 +113,9 @@ extern "C" uint32_t GBENC_CALL SM64GpuEncoderOpenV1(const gbdll_config_v1*config
   const DXGI_FORMAT format=config->encoder.input_format==GBENC_INPUT_RGBA8?DXGI_FORMAT_R8G8B8A8_UNORM:config->encoder.input_format==GBENC_INPUT_BGRA8?DXGI_FORMAT_B8G8R8A8_UNORM:DXGI_FORMAT_UNKNOWN;
   if(format==DXGI_FORMAT_UNKNOWN)return abandon_open(s,GBDLL_FORMAT);
   for(unsigned i=0;i<GBDLL_SLOTS;++i){auto&slot=s->slots[i];
-   if(FAILED(device1->OpenSharedResourceByName(reinterpret_cast<const wchar_t*>(config->names[i]),DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,IID_PPV_ARGS(&slot.texture))))return abandon_open(s,GBDLL_IMPORT);
+   const auto*name=reinterpret_cast<const wchar_t*>(config->names[i]);
+   if(FAILED(device1->OpenSharedResourceByName(name,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,IID_PPV_ARGS(&slot.texture)))
+      &&FAILED(create_named(s->device.Get(),*config,format,name,slot)))return abandon_open(s,GBDLL_IMPORT);
    D3D11_TEXTURE2D_DESC desc{};slot.texture->GetDesc(&desc);
    const UINT sharing=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
    if(desc.Width!=config->encoder.width||desc.Height!=config->encoder.height||desc.Format!=format||desc.MipLevels!=1||desc.ArraySize!=1||desc.SampleDesc.Count!=1||desc.SampleDesc.Quality!=0||desc.Usage!=D3D11_USAGE_DEFAULT||desc.CPUAccessFlags||(desc.MiscFlags&sharing)!=sharing)return abandon_open(s,GBDLL_FORMAT);

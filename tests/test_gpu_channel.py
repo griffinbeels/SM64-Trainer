@@ -32,6 +32,26 @@ from sm64_events.replay import gpuchannel as G
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows x86/x64 IPC witness")
 
 
+def test_channel_version_matches_the_native_wire():
+    """The wrapper (gpu_channel.h) and this trainer name one channel version."""
+    text = (SOURCE / "gpu_channel.h").read_text(encoding="utf-8")
+    line = next(row for row in text.splitlines() if row.startswith("#define GC_CHANNEL_VERSION "))
+    assert int(line.split()[2].rstrip("u")) == G.VERSION
+
+
+def test_a_capture_layer_from_another_build_is_named_not_garbled():
+    """A wrapper and trainer from different builds fail readably, before any
+    other header field is trusted (version 1 made its own bridge textures)."""
+    h = G.Header()
+    h.seq, h.version, h.header_bytes = 2, G.VERSION - 1, G.HEADER_BYTES
+    C.memmove(h.magic, G.MAGIC, len(G.MAGIC))
+    with pytest.raises(G.LayerVersionMismatch) as caught:
+        G.validate_header(h, G.MAX_MAP)
+    message = str(caught.value)
+    assert f"version {G.VERSION - 1}" in message and f"version {G.VERSION}" in message
+    assert "different builds" in message and "Close Project64" in message
+
+
 @pytest.fixture(scope="module")
 def native(tmp_path_factory):
     spec = importlib.util.spec_from_file_location(
@@ -265,6 +285,19 @@ def test_real_x86_offer_decision_bridge_and_capacity(
         assert next_offer.occurrence == 9
         assert host.ask("retire 6 1")["result"] == "stale"
         assert host.ask("publish 0 10 8 4")["result"] == "stale"
+
+
+def test_decisions_found_together_are_taken_in_offer_order(native):
+    """Renderer-thread capture takes decisions once per VI, so one pass can
+    find the client's replies to two offers. A later offer in a lower slot is
+    not out of order: the head's decision is taken first, then the next."""
+    with Host(native) as host, host.client() as client:
+        ok(host, "publish 3 1 1 100")
+        ok(host, "publish 0 2 2 100")
+        first, second = client.offers()
+        client.reply(first, G.SUPPRESSED, reason=5)
+        client.reply(second, G.SUPPRESSED, reason=5)
+        assert (ok(host, "take")["slot"], ok(host, "take")["slot"]) == (3, 0)
 
 
 def test_torn_invalid_stale_repeated_commands(native):

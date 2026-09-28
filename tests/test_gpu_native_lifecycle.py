@@ -26,8 +26,8 @@ def hosts(tmp_path_factory):
 
     build.subprocess = SimpleNamespace(run=quiet_run)
     flags = [f for f in build.COMMON_FLAGS if not f.startswith("/std:")]
-    dependencies = ["gpu_channel.cpp", "gpu_delivery_context.cpp", "gpu_bridge.cpp",
-                    "source_snapshot.cpp", "gl_snapshot.cpp", "gpu_selection.cpp", "renderer_boundary.cpp",
+    dependencies = ["gpu_channel.cpp", "gpu_render.cpp",
+                    "source_snapshot.cpp", "gl_snapshot.cpp", "renderer_boundary.cpp",
                     "context_lifetime.cpp", "gpu_request.cpp"]
     out = tmp_path_factory.mktemp("native-lifecycle")
     target = out / "native-lifecycle.exe"
