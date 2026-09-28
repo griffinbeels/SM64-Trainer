@@ -32,11 +32,6 @@ static void gd_log_note(const gd_diagnostic *s) {
             "import_begin_qpc=%llu import_ms=%.3f end_qpc=%llu frequency=%llu",
             s->epoch, p->request_qpc, p->surface_qpc, p->prepare_begin, snapshots, sampler, luid,
             channel, p->reader_qpc, p->import_begin, import, p->end_qpc, f);
-    } else if (s->kind == GD_KIND_ANCHOR) {
-        plugin_logf("anchor_published", "begin_qpc=%llu end_qpc=%llu ms=%.3f frequency=%llu",
-            s->anchor_begin_qpc, s->anchor_end_qpc,
-            f && s->anchor_end_qpc >= s->anchor_begin_qpc && s->anchor_begin_qpc
-                ? 1000.0 * (double)(s->anchor_end_qpc - s->anchor_begin_qpc) / (double)f : 0.0, f);
     }
 }
 static void __cdecl runtime_diagnostic(const gd_diagnostic *s) {

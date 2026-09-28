@@ -112,35 +112,7 @@ int __cdecl release(rcl_token t){return registry.release(t);}
 uint32_t __cdecl health(){return registry.health();}
 uint32_t __cdecl error(){return registry.error();}
 const rcl_api api{sizeof(rcl_api),RCL_ABI_V1,RCL_CAP_NEVER_CURRENT_ANCHOR,0,acquire,release,health,error};
-// The latest successful Publish, renderer thread, QPC; read by the delivery
-// worker for its anchor_published line (SM64ReplayAnchorTimingV1).
-std::atomic<uint64_t> published_begin{0},published_end{0};
-uint64_t qpc(){LARGE_INTEGER v{};QueryPerformanceCounter(&v);return uint64_t(v.QuadPart);}
-bool publish_anchor(HGLRC c,HDC dc,uint32_t g,int p);
 }
-bool Publish(HGLRC c,HDC dc,uint32_t g,int p){
-    const auto begin=qpc();
-    if(!publish_anchor(c,dc,g,p))return false;
-    published_end.store(0);published_begin.store(begin);published_end.store(qpc());
-    return true;
-}
-namespace {
-bool publish_anchor(HGLRC c,HDC dc,uint32_t g,int p){
-    if(c!=wglGetCurrentContext() || dc!=wglGetCurrentDC())return false;
-    auto create=reinterpret_cast<Registry::Create>(wglGetProcAddress("wglCreateContextAttribsARB"));
-    const auto address=reinterpret_cast<uintptr_t>(create);
-    if(address<=3 || address==UINTPTR_MAX)return false;
-    GLint major=0,minor=0,profile=0;
-    glGetIntegerv(0x821B,&major);glGetIntegerv(0x821C,&minor); // source startup only
-    if(major<3 || (major==3 && minor<2))return false;
-    glGetIntegerv(0x9126,&profile);
-    if(profile!=1 && profile!=2)return false;
-    const int attributes[]={0x2091,major,0x2092,minor,0x9126,profile,0};
-    return registry.publish(c,g,p,create,dc,attributes);
-}
-}
-rcl_token Revoke(HGLRC c){return registry.revoke(c);}
-int Retire(rcl_token t){return registry.unbound(t,TRUE);}
 }
 extern "C" const rcl_api *__cdecl SM64ReplayContextV1(uint32_t version,uint32_t bytes) {
     if (version!=RCL_ABI_V1 || bytes!=sizeof(rcl_api)) return nullptr;
@@ -150,10 +122,3 @@ extern "C" const rcl_api *__cdecl SM64ReplayContextV1(uint32_t version,uint32_t 
     return &source_context::api;
 }
 #pragma comment(linker,"/EXPORT:SM64ReplayContextV1=_SM64ReplayContextV1")
-// Not part of RCL_ABI_V1: an optional export the wrapper looks up by name.
-extern "C" int __cdecl SM64ReplayAnchorTimingV1(uint64_t *begin_qpc,uint64_t *end_qpc) {
-    if (!begin_qpc || !end_qpc) return 0;
-    *end_qpc=source_context::published_end.load();*begin_qpc=source_context::published_begin.load();
-    return *end_qpc!=0 && *begin_qpc!=0 && *end_qpc>=*begin_qpc;
-}
-#pragma comment(linker,"/EXPORT:SM64ReplayAnchorTimingV1=_SM64ReplayAnchorTimingV1")

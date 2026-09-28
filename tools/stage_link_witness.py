@@ -171,13 +171,6 @@ def overlay(source: Path, output: Path, *, boundary: bool = False, label: str | 
         # The original resize executes once, with identical arguments/result.
         observed = original.replace("return (", "return replay_gl::DrawableCommitted(hWnd, (")[:-1] + ");"
         data = replace_once(data, original, GUARD + observed + "\n#else\n" + original + "\n#endif")
-    if context_lifetime:
-        lifetime_guard = "#if defined(OS_WINDOWS) && defined(SM64_REPLAY_CONTEXT_LIFETIME)\n"
-        data = replace_once(data, "void DisplayWindowWindows::_stop()\n{",
-            "void DisplayWindowWindows::_stop()\n{\n" + lifetime_guard +
-            "\tconst auto retirement = source_context::Revoke(hRC);\n#endif")
-        data = replace_once(data, "\tif (hDC != NULL) {", lifetime_guard +
-            "\tif (retirement.value) source_context::Retire(retirement);\n#endif\n\tif (hDC != NULL) {")
     edited[key] = data
     if boundary:
         edited.update(boundary_overlay(source))
@@ -203,7 +196,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--context-lifetime", action="store_true", help="also stage protected context retirement; compile with SM64_REPLAY_CONTEXT_LIFETIME")
+    parser.add_argument("--context-lifetime", action="store_true", help="also stage ContextV1 (exported for the wrapper; the overlay shares no context since 2026-09-28); compile with SM64_REPLAY_CONTEXT_LIFETIME")
     parser.add_argument("--boundary", action="store_true", help="also stage the explicit command boundary API")
     parser.add_argument("--ghost", action="store_true", help="stage GhostV2 per-DList pose/camera/world capture")
     parser.add_argument("--label", help="distinct test-only selector name; settings identity stays unchanged")

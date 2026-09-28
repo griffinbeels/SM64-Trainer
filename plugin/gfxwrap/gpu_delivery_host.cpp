@@ -166,9 +166,6 @@ struct RenderThread {
         thread=std::thread([this]{
             CHECK(wglMakeCurrent(producer->dc,producer->rc));
             glDisable(GL_DITHER);glDisable(0x8DB9);glReadBuffer(GL_BACK);
-            using Create=HGLRC(WINAPI*)(HDC,HGLRC,const int*);const auto create=proc<Create>("wglCreateContextAttribsARB");
-            const int attrib[]={0x2091,4,0x2092,5,0x9126,2,0};
-            CHECK(registry.publish(producer->rc,1,GetPixelFormat(producer->dc),create,producer->dc,attrib));
             for(;;){
                 std::unique_lock<std::mutex> lock(m);
                 cv.wait_for(lock,std::chrono::milliseconds(2),[this]{return has_job;});

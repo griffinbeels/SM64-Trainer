@@ -27,9 +27,8 @@ static int notes(void) {
     p->reader_qpc=2500000;p->import_begin=2510000;p->imported=2530000;p->end_qpc=2540000;
     d.kind=GD_KIND_REQUEST;runtime_diagnostic(&d);
     d.kind=GD_KIND_PREPARE;runtime_diagnostic(&d);
-    d.anchor_begin_qpc=1170000;d.anchor_end_qpc=1180000;
-    d.kind=GD_KIND_ANCHOR;runtime_diagnostic(&d);
-    return lines==3?0:3;
+    d.kind=GD_KIND_ANCHOR;runtime_diagnostic(&d); /* retired kind: no line */
+    return lines==2?0:3;
 }
 int main(int argc,char**argv) {
     if(argc==2 && !strcmp(argv[1],"--notes"))return notes();

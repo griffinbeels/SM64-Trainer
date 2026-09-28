@@ -50,7 +50,7 @@ static int64_t g_diagnostic_frequency;
 static int activation_event(const char *event) {
     static const char *const names[] = {
         "init_result", "rom_open_begin", "rom_open_end", "rom_closed_begin",
-        "gpu_request", "gpu_warm", "gpu_prepare", "anchor_published", "gpu_failure",
+        "gpu_request", "gpu_prepare", "gpu_failure",
     };
     for (unsigned n = 0; n < sizeof names / sizeof *names; ++n)
         if (!strcmp(event, names[n])) return 1;
