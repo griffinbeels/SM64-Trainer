@@ -993,11 +993,11 @@ int main() {
             auto fading=[&](uint32_t k) {
                 return poses[0].opacity==float(GP_STAR_FADE_FRAMES-k)/float(GP_STAR_FADE_FRAMES);
             };
-            Clip ground=recorded_dance(50,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
-            star_run(ground,20000);
+            Clip ground=recorded_dance(60,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(ground,40000);
             check(step(49,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_frame==29
-                  && selected_x==5049,"the recorded dance, to where the recording stops");
-            check(step(50,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && selected_x==5049 && selected_frame==30
+                  && selected_x==6049,"the recorded dance, to where the recording stops");
+            check(step(50,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && selected_x==6049 && selected_frame==30
                   && selected_animation==GP_DANCE_ANIMATION && selected_hand==0 && selected_clock==750,
                   "past it: the same place, the game's next animation frame, the area clock running on");
             check(step(58,GP_READY,{GP_READY},{}) && selected_hand==0,"fists until actionTimer 40");
@@ -1009,8 +1009,8 @@ int main() {
                   && selected_hand==GP_HAND_PEACE_SIGN,"held there through actionTimer 111, the exit warp");
             check(step(131,GP_READY,{GP_READY},{}) && fading(1) && selected_frame==62,"then fades on that pose");
             check(!step(130+GP_STAR_FADE_FRAMES,GP_STAR_ENDED,{GP_STAR_ENDED},{}),"and hides");
-            Clip water=recorded_dance(51,49,0x1303,GP_WATER_DANCE_ANIMATION,20,20,UINT32_MAX);
-            star_run(water,21000);
+            Clip water=recorded_dance(61,49,0x1303,GP_WATER_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(water,41000);
             check(step(49,GP_READY,{GP_READY},{}) && step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND}),
                   "the water dance's voice on the same timer");
             check(step(80,GP_READY,{GP_READY},{}) && selected_animation==GP_WATER_DANCE_ANIMATION && selected_frame==60
@@ -1019,54 +1019,54 @@ int main() {
             check(step(102,GP_READY,{GP_READY},{}) && selected_frame==82,"to its own last frame");
             check(step(130,GP_READY,{GP_READY},{}) && selected_frame==82 && poses[0].opacity==1,"to the same end");
             check(step(131,GP_READY,{GP_READY},{}) && fading(1),"then fades");
-            Clip landing=recorded_dance(52,40,0x1302,GP_DANCE_ANIMATION,20,21,15); // grabbed at 15, landed at 20
-            star_run(landing,22000);
+            Clip landing=recorded_dance(62,40,0x1302,GP_DANCE_ANIMATION,20,21,15); // grabbed at 15, landed at 20
+            star_run(landing,42000);
             check(step(40,GP_READY,{GP_READY},{}) && selected_frame==19,"a midair grab's dance, recorded from its landing");
-            check(step(41,GP_READY,{GP_READY},{}) && selected_frame==20 && selected_x==5240,"plays on from its last row");
+            check(step(41,GP_READY,{GP_READY},{}) && selected_frame==20 && selected_x==6240,"plays on from its last row");
             check(step(59,GP_READY,{GP_READY},{}) && selected_hand==0 && step(60,GP_READY,{GP_READY},{})
                   && selected_hand==GP_HAND_PEACE_SIGN,"the dance proper starts a row after the landing");
             check(step(62,GP_READY,{GP_READY},{GP_DANCE_SOUND}),"so does its voice");
             check(step(131,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && step(132,GP_READY,{GP_READY},{})
                   && fading(1),"and its end");
-            Clip stay=recorded_dance(53,49,0x1307,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
-            star_run(stay,23000);
+            Clip stay=recorded_dance(63,49,0x1307,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(stay,43000);
             check(step(49,GP_READY,{GP_READY},{}) && step(61,GP_READY,{GP_READY},{GP_DANCE_SOUND})
                   && step(99,GP_READY,{GP_READY},{}) && poses[0].opacity==1 && step(100,GP_READY,{GP_READY},{})
                   && fading(1),"a no-exit dance ends at actionTimer 80, where the game stops time for its dialog");
-            Clip whole=recorded_dance(54,130,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
-            star_run(whole,24000);
-            check(step(130,GP_READY,{GP_READY},{}) && selected_x==5530 && step(131,GP_READY,{GP_READY},{})
+            Clip whole=recorded_dance(64,130,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(whole,44000);
+            check(step(130,GP_READY,{GP_READY},{}) && selected_x==6530 && step(131,GP_READY,{GP_READY},{})
                   && fading(1),"a whole recorded dance ends where it did");
             // His ruling (Round 13): the defeat is decided at his x-cam, his
             // dance, against each ghost's own dance, never at a grab.
-            Clip rival=recorded_dance(55,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
-            star_run(rival,25000);
+            Clip rival=recorded_dance(65,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            star_run(rival,45000);
             check(step(19,GP_READY,{GP_READY},{}),"racing");
             live.live_action=0x1302;
-            check(step(20,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_x==5520,
+            check(step(20,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_x==6520,
                   "a ghost dancing on the same frame as him is not slower: it dances on");
-            run(26000);
+            run(46000);
             live.live_action=0x1904;
             check(step(12,GP_READY,{GP_READY},{}),"his midair grab does not end the race");
             check(step(25,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION,
                   "the ghost grabs later, on the ground, and dances first");
             live.live_action=0x1302;
-            check(step(30,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_x==5530,
+            check(step(30,GP_READY,{GP_READY},{}) && selected_animation==GP_DANCE_ANIMATION && selected_x==6530,
                   "his dance after the ghost's: it dances on, undefeated");
-            Clip faller=recorded_dance(56,49,0x1302,GP_DANCE_ANIMATION,20,21,10); // grabbed at 10, lands at 20
-            star_run(faller,27000);
+            Clip faller=recorded_dance(66,49,0x1302,GP_DANCE_ANIMATION,20,21,10); // grabbed at 10, lands at 20
+            star_run(faller,47000);
             check(step(17,GP_READY,{GP_READY},{}),"the ghost grabbed first and is still falling");
             live.live_action=0x1302;
             check(step(18,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
-                  && selected_x==5617,"his dance before its landing: it falls where it stood");
+                  && selected_x==6617,"his dance before its landing: it falls where it stood");
             // The tracker's suspension (the 100-coin star's exit star) arrives
             // after his x-cam; it is judged there, not where it arrives.
-            Clip exit=recorded_dance(57,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
+            Clip exit=recorded_dance(67,49,0x1302,GP_DANCE_ANIMATION,20,20,UINT32_MAX);
             exit.header.clock_kind=GCLIP_SEGMENT_CLOCK;
             check(api->prepare_clip(&exit.header,exit.frames.data())==GP_OK,"prepare an exit-segment dance");
             revision=r.revision+1;r=request(exit,revision);r.model_id=4;r.star_ends=0;r.volume=1;dances(r);
-            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,28000,source_generation,0,0};
-            elapsed_base=28000;timer_base+=1000;live.live_action=1;
+            r.origin={GO_SEGMENT,7,live.sequence+1,source_continuity,48000,source_generation,0,0};
+            elapsed_base=48000;timer_base+=1000;live.live_action=1;
             check(api->configure(&r)==GP_OK,"a run on the exit segment's clock");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(step(17,GP_READY,{GP_READY},{}),"racing on the exit segment's clock");
@@ -1077,7 +1077,7 @@ int main() {
             ++r.revision;r.suspended=1;check(api->configure(&r)==GP_OK,"his exit star suspends the run");
             renderer.run([&]{ghost_playback::safe_boundary(7,4);});
             check(step(22,GP_READY,{GP_READY},{GP_DEFEAT_SOUND}) && selected_animation==GP_DEFEAT_ANIMATION
-                  && selected_x==5721,"judged at his x-cam, not the suspension: the later dancer falls");
+                  && selected_x==6721,"judged at his x-cam, not the suspension: the later dancer falls");
             live.live_action=1;
             ghost_playback::set_sound_sink(nullptr);
         }
