@@ -110,11 +110,18 @@ def test_completion_record_is_durable_and_bad_data_recovers(tmp_path):
 
 
 class Memory:
+    """A reader of one Project64: which pids it was attached to, and whether
+    the process it holds is still running."""
     def __init__(self, raw):
-        self.raw, self.closed = raw, False
+        self.raw, self.closed, self.attaches, self.running = raw, False, [], True
 
-    def attach(self):
-        return True
+    def attach(self, pid=None):
+        self.attaches.append(pid)
+        self.closed = False
+        return self.raw is not False
+
+    def alive(self):
+        return not self.closed and self.running
 
     def rom_header(self):
         return self.raw
@@ -146,7 +153,7 @@ def test_runtime_requires_fresh_counters_from_same_process_and_recorder():
     recorder["frame_source_health"]["delivered"] += 1
     poller.latest.global_timer += 1
     assert readiness(installed(), probe(installed()))["ready"]
-    assert memory.closed
+    assert memory.attaches == [123] and not memory.closed  # kept for the process
     assert readiness(installed(), probe(installed()))["ready"]  # second tab
     now[0] = 2
     recorder["frame_source"] = "desktop"
@@ -155,6 +162,7 @@ def test_runtime_requires_fresh_counters_from_same_process_and_recorder():
     recorder["frame_source"] = "plugin"
     target["pid"] = 124
     assert not probe(installed())["checks"]["plugin"]
+    assert memory.attaches == [123, 124]
     now[0] = 10
     assert not any(probe(installed())["checks"].values())
 
@@ -165,6 +173,42 @@ def test_closed_emulator_clears_rom_identity_even_if_poller_has_old_data():
     now[0] = 0.1  # source changes invalidate the cache before its normal timeout
     target.update(state="missing", pid=None)
     assert probe(replace(installed(), pj64_running=False))["rom"]["state"] == "missing"
+
+
+def test_one_reader_serves_every_observation_of_a_process():
+    """Live 2026-09-28: the setup screen polls once a second and each
+    observation attached a fresh reader -- a process-list snapshot, a
+    debug-privileged open and a walk of Project64's memory -- 38 times in a
+    minute of play. One reader per process now, attached by pid."""
+    probe, now, target, *_, memory, _ = runtime()
+    for second in range(6):
+        now[0] = second
+        assert probe(installed())["rom"]["region"] == "us"
+    assert memory.attaches == [123] and not memory.closed
+
+    memory.running = False                  # that Project64 exited; its pid came back
+    now[0] = 6
+    probe(installed())
+    assert memory.attaches == [123, 123]
+
+    target.update(state="missing", pid=None)
+    now[0] = 7
+    probe(replace(installed(), pj64_running=False))
+    assert memory.closed, "no Project64: no reader left open"
+
+
+def test_a_project64_with_no_game_booted_is_walked_at_most_every_retry():
+    """Without RDRAM there is nothing to attach to, and the attempt walks the
+    process's memory: retried every ATTACH_RETRY_S, not every observation."""
+    probe, now, target, *_, memory, _ = runtime()
+    memory.raw = False                      # attach finds no RDRAM
+    for tenth in range(15):
+        now[0] = tenth * 0.1
+        probe(replace(installed(), plugin_pid=tenth))   # a fresh observation each time
+    assert memory.attaches == [123]
+    now[0] = SetupRuntime.ATTACH_RETRY_S
+    probe(replace(installed(), plugin_pid=99))
+    assert memory.attaches == [123, 123]
 
 
 def test_idle_without_a_gpu_observation_needs_fresh_pictures():

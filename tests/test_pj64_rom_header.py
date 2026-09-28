@@ -141,8 +141,10 @@ def walks(monkeypatch):
 def no_sightings():
     """Every reader shares what each process has shown; tests must not."""
     pj64.Pj64Memory._roms.clear()
+    pj64.Pj64Memory._announced.clear()
     yield
     pj64.Pj64Memory._roms.clear()
+    pj64.Pj64Memory._announced.clear()
 
 
 def attached_to(emulator, rdram_base: int | None = None) -> pj64.Pj64Memory:
@@ -231,6 +233,39 @@ def test_the_image_where_project64_keeps_it_is_one_read_and_no_walk(emulator, wa
         assert len(reads) == 2 and walks[0] == 0
     finally:
         memory._close()
+
+
+def test_a_known_pid_attaches_without_listing_processes_and_says_so_once(
+        emulator, monkeypatch, caplog):
+    """The setup screen knows Project64's pid from its own process check, so
+    its reader opens that pid instead of snapshotting every process by name;
+    "attached" is said once per process however many readers attach; and a
+    reader notices its process exit."""
+    import logging
+
+    import pymem.process
+    base = emulator.machine(USAMUNE)
+    for at, value in ((A.OS_TV_TYPE, 1), (A.OS_ROM_BASE, 0xB0000000), (A.OS_MEM_SIZE, 0x800000)):
+        offset = base + at - A.KSEG0_BASE
+        assert emulator.send(f"write {offset:x} {value.to_bytes(4, 'little').hex()}") == "ok"
+
+    def listed(*_args, **_kwargs):
+        raise AssertionError("a known pid needs no process list")
+
+    monkeypatch.setattr(pymem.process, "process_from_name", listed)
+    caplog.set_level(logging.DEBUG, logger="sm64.pj64")
+    first, second = pj64.Pj64Memory(), pj64.Pj64Memory()
+    try:
+        assert first.attach(pid=emulator.process.pid) and first._rdram_base == base
+        assert second.attach(pid=emulator.process.pid) and first.alive()
+        said = [r for r in caplog.records
+                if r.name == "sm64.pj64" and r.getMessage().startswith("attached")]
+        assert [r.levelno for r in said] == [logging.INFO, logging.DEBUG]
+        emulator.close()
+        assert not first.alive()
+    finally:
+        first._close()
+        second._close()
 
 
 def test_a_fresh_reader_for_the_same_process_does_not_search_again(emulator, walks):
