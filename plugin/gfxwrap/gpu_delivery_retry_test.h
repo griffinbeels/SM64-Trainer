@@ -70,7 +70,7 @@ extern "C" int gd_test_sample_retry(unsigned busy_count,uint32_t*out){
     // channel publication/readback run unchanged, with a held-odd client page.
     test_sample=[](const snapshot::Image&image,uint8_t*bytes){
         ++samples;bytes[0]=uint8_t(samples);bytes[1]=uint8_t(image.texture);
-        bytes[2]=0x5a;bytes[3]=0xa5;return gpu_selection::Result::sampled;
+        bytes[2]=0x5a;bytes[3]=0xa5;return true;
     };
     struct ResetSample{~ResetSample(){test_sample=nullptr;}}reset;
     t.busy(true);

@@ -5,27 +5,23 @@
  * The pointed-to snapshot is borrowed only for the callback's duration. */
 #pragma once
 #include <stdint.h>
-#define GD_DIAGNOSTIC_VERSION 5u
+#define GD_DIAGNOSTIC_VERSION 6u
 enum gd_diagnostic_kind {
     GD_KIND_WINDOW=0, /* healthy summary or failure, as before */
-    GD_KIND_REQUEST,  /* the worker took a capture request: prepare.request_qpc */
-    GD_KIND_PREPARE,  /* the epoch's GPU preparation finished: prepare.* */
-    GD_KIND_WARM,     /* the driver warm-up at practice ROM open: warm.* */
+    GD_KIND_REQUEST,  /* a capture request was taken: prepare.request_qpc */
+    GD_KIND_PREPARE,  /* the epoch reached ACTIVE: prepare.* */
     GD_KIND_ANCHOR    /* the renderer's shared anchor, timed once per process */
 };
-/* QPC stamps; zero means the step did not run. Sequential, so each step's
- * duration is its stamp minus the previous nonzero one. */
+/* QPC stamps; zero means the step did not run. Every step from prepare_begin
+ * on runs on the RENDERER thread (renderer-thread capture), so a step's
+ * duration is renderer time. Bootstrap: prepare_begin, snapshots, sampler,
+ * luid, channel. PREPARING -> ACTIVE: reader_qpc (the helper created the
+ * textures), import_begin, imported, end_qpc (ACTIVE). */
 typedef struct {
     uint64_t request_qpc,surface_qpc;
-    uint64_t context_begin,context_window,context_temporary,context_shared,
-        context_temporary_deleted,context_current;
-    uint64_t snapshots,sampler,bridge_begin,bridge_device,bridge_opened,
-        bridge_transfer,bridge_registered,end_qpc;
+    uint64_t prepare_begin,snapshots,sampler,luid,channel;
+    uint64_t reader_qpc,import_begin,imported,end_qpc;
 } gd_prepare_diagnostic;
-typedef struct {
-    uint64_t begin_qpc,legacy_qpc,core_qpc,d3d_qpc,end_qpc;
-    uint32_t parts,error;
-} gd_warm_diagnostic;
 enum gd_diagnostic_phase {
     GD_PHASE_WAIT=0, GD_PHASE_TAKE, GD_PHASE_SAMPLE, GD_PHASE_DECISIONS,
     GD_PHASE_COPY, GD_PHASE_BRIDGE_RETURNS, GD_PHASE_REAP, GD_PHASE_FRONTIER,
@@ -56,7 +52,6 @@ typedef struct {
     /* Version 5. Peaks are per healthy window; offer_count is the pool's size. */
     uint32_t kind,peak_pending,peak_bridges,offer_count;
     gd_prepare_diagnostic prepare;
-    gd_warm_diagnostic warm;
     uint64_t anchor_begin_qpc,anchor_end_qpc;
 } gd_diagnostic;
 typedef void (__cdecl *gd_diagnostic_callback)(const gd_diagnostic*);

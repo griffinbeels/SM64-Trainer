@@ -1,10 +1,8 @@
 #include "gpu_delivery.h"
 #include "gpu_delivery_diagnostics.h"
 #include "gpu_delivery_metrics.h"
-#include "gpu_delivery_context.h"
 #include "source_snapshot.h"
-#include "gpu_selection.h"
-#include "gpu_bridge.h"
+#include "gpu_render.h"
 #include "stamp_adapter.h"
 #include <atomic>
 #include <cstring>
@@ -31,7 +29,8 @@ std::atomic<bool> test_hold_poll{false};
 void (__cdecl *test_preparation_probe)()=nullptr;
 std::atomic<void (__cdecl *)()> test_iteration_probe{nullptr},test_retired_probe{nullptr};
 std::atomic<uint32_t> test_deadline_visits{0};
-gpu_selection::Result (*test_sample)(const snapshot::Image&,uint8_t*)=nullptr;
+std::atomic<uint32_t> test_bridge_fault{0}; // the next bridge copy faults with this error
+bool (*test_sample)(const snapshot::Image&,uint8_t*)=nullptr; // replaces the GPU sample: true = bytes ready
 #endif
 uint64_t qpc(){LARGE_INTEGER v{};QueryPerformanceCounter(&v);return uint64_t(v.QuadPart);}
 bool source_valid(const rs_api* s,const rcl_api* c){
@@ -72,29 +71,38 @@ struct Runtime {
     std::atomic<uint32_t> request_state{0},surface_state{0}; // 0 free,1 writing,2 ready,3 owned
     std::atomic<uint32_t> status_seq{0},status_words[sizeof(gd_status)/4]{};
     std::atomic<bool> exhausted{false};
-    // The driver warm-up (gd_prewarm): requested once, run by the idle worker.
-    std::atomic<uint32_t> warm_parts{0},warm_state{GD_WARM_NONE};
     gc_header request{};uint64_t budget=0;uint32_t epoch=0;
     rb_surface mailbox{},surface{};uint32_t mailbox_epoch=0;
     uint64_t mailbox_qpc=0; // the renderer's surface handoff (gd_surface)
     gd_prepare_diagnostic prepare_steps{};
-    gd_warm_diagnostic warm_steps{};
     bool anchor_logged=false;
-    // This worker has made a context beside the drawing renderer, so the
-    // driver's one-time freeze is already paid in this process.
-    bool driver_paid=false;
+    // RENDERER-THREAD CAPTURE (docs/replay-gpu-runtime.md). Every GPU call runs
+    // on the renderer's own thread in its own context, from its capture
+    // callbacks; the delivery thread never touches GL or D3D. A second thread
+    // using the GPU made the NVIDIA driver freeze the renderer once per process.
+    // The renderer thread takes this lock only if it is free (it never waits);
+    // the delivery thread takes it to drain and to check deadlines.
+    SRWLOCK tick_lock=SRWLOCK_INIT;
+    render_capture::Gl gl;
     source_capture::Snapshots snapshots;
-    gpu_delivery::Context context;
-    gpu_selection::Sampler sampler;
-    gpu_bridge::Pool bridge;
+    render_capture::Sampler sampler;
+    render_capture::Bridge bridge;
+    std::atomic<uint32_t> sample_fault{0}; // set by gd_capture, reported by the next tick
+    wchar_t texture_names[GC_BRIDGES][128]{};
+    // GL names from an ended epoch, deleted by the renderer before it prepares
+    // again, or forgotten if their context has since been replaced.
+    bool gpu_retired=false;uintptr_t gpu_context=0;uint32_t gpu_context_generation=0;
+    bool in_render=false,gateway_open=false; // render_tick only
+    uint64_t last_render_tick=0;
     std::unique_ptr<gpu_channel::Producer> channel;
     std::unique_ptr<uint8_t[]> sample;
     Pending pending[RB_SLOTS]{};BridgeCredit credits[GC_BRIDGES]{};
-    uint64_t frequency=0,started=0,channel_started=0,drain_started=0,accounted=0,offer_token=0,bridge_token=0;
+    uint64_t frequency=0,started=0,channel_started=0,drain_started=0,accounted=0,taken_through=0,offer_token=0,bridge_token=0;
     uint64_t status_time=0,frontier_qpc=0,frontier_occurrence=0;
+    uint32_t status_records=0,status_bridges=0; // the counts the status last carried
     uint32_t refusal_generation=0,error=0;
     bool prepared=false,bridge_attempted=false,sampler_attempted=false,quarantine=false;
-    DWORD worker_thread=0;
+    DWORD worker_thread=0; // the delivery thread (drain, deadlines); ticks also run on the renderer's
     uint32_t diagnostic_epoch=0,phase=GD_PHASE_WAIT;
     uint64_t phase_started=0,last_active_end=0;
     gd_phase_diagnostic phase_totals[GD_PHASE_COUNT]{};
@@ -162,9 +170,9 @@ struct Runtime {
     };
     void emit_diagnostic(uint32_t why,uint32_t detail,bool healthy=false,uint64_t observed=0,uint32_t kind=GD_KIND_WINDOW){
         const auto callback=diagnostic_callback.load();
-        if(!callback || worker_thread!=GetCurrentThreadId())return;
+        if(!callback)return; // callers hold tick_lock: one emitter at a time
         gd_diagnostic d{};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;d.kind=kind;
-        d.prepare=prepare_steps;d.warm=warm_steps;d.offer_count=request.offer_count;
+        d.prepare=prepare_steps;d.offer_count=request.offer_count;
         if(kind==GD_KIND_ANCHOR){const auto timing=anchor_timing.load();if(timing)timing(&d.anchor_begin_qpc,&d.anchor_end_qpc);}
         d.epoch=epoch;d.reason=why;d.detail=detail;d.current_phase=phase;
         d.qpc_frequency=frequency;d.observed_qpc=observed?observed:qpc();d.phase_started_qpc=phase_started;
@@ -182,12 +190,16 @@ struct Runtime {
         for(const auto&c:credits){d.bridge_credits+=c.token!=0;d.unpublished_bridges+=c.token && !c.published;}
         memcpy(d.phases,healthy?phase_recent:phase_totals,sizeof phase_totals);
         d.cadence=healthy?cadence_recent:cadence_total;
-        d.snapshot_bytes=snapshots.images().counters().texture_bytes;d.bridge_bytes=bridge.logical_bytes();
+        d.snapshot_bytes=snapshots.images().counters().texture_bytes;d.bridge_bytes=bridge_bytes();
         d.sample_calls=sample_calls;d.sample_reuses=sample_reuses;d.publish_busy=publish_busy;
         d.refused_pictures=refused_pictures;d.peak_pending=peak_pending;d.peak_bridges=peak_bridges;
         const auto began=qpc();
         try{callback(&d);}catch(...){/* Diagnostics cannot replace the capture failure. */}
         previous_emit_ticks=qpc()-began;
+    }
+    // The helper owns the two textures; these are the bytes the import maps.
+    uint64_t bridge_bytes() const {
+        return bridge.prepared()?uint64_t(surface.width&~1u)*(surface.height&~1u)*4*GC_BRIDGES:0;
     }
     uint32_t current_epoch() const {
         if(exhausted.load())return 0;
@@ -207,10 +219,11 @@ struct Runtime {
         s.generation=request.generation;s.producer_pid=GetCurrentProcessId();s.owner_pid=request.owner_pid;
         s.nonce_lo=request.nonce_lo;s.nonce_hi=request.nonce_hi;
         s.snapshot_bytes=snapshots.images().counters().texture_bytes;
-        s.bridge_bytes=bridge.logical_bytes();s.sample_bytes=sample?sampler.sample_bytes():0;
+        s.bridge_bytes=bridge_bytes();s.sample_bytes=sample?sampler.sample_bytes():0;
         s.mapping_bytes=channel?channel->header().total_bytes:0;
         s.published_occurrence=accounted;s.published_token=offer_token;
         s.pending_records=count();s.pending_bridges=bridge_count();s.quarantined=quarantine;
+        status_records=s.pending_records;status_bridges=s.pending_bridges;
         auto before=status_seq.load();if(before>=UINT32_MAX-1){
             quarantine=true;exhausted.store(true);revoke(GD_COUNTER_EXHAUSTED);set_state(GD_FAULT);return;
         }
@@ -251,9 +264,18 @@ struct Runtime {
         }
         return true;
     }
+    // Everything at or below this occurrence is published, omitted or released:
+    // the lowest unpublished picture caps what was taken behind it.
+    uint64_t resolved_through() const {
+        uint64_t through=taken_through;
+        for(const auto&p:pending)if(p.record && !p.published && !p.omitted && p.record->occurrence<=through)through=p.record->occurrence-1;
+        return through>accounted?through:accounted;
+    }
     void take_records(bool stopping){
         // Count bounded by source's eight immutable record slots, never a heap queue.
-        if(!stopping)for(const auto&p:pending)if(p.record && !p.published && !p.omitted)return;
+        // Omissions behind an unpublished head are released at once: the
+        // renderer calls back only on a VI whose record it could stage, and
+        // renderer-thread capture needs that call to sample the head.
         for(unsigned n=0;n<RB_SLOTS && occupied()<request.offer_count;++n){
             const auto*r=source.take();if(!r)break;
             unsigned free=RB_SLOTS;
@@ -281,9 +303,10 @@ struct Runtime {
                 // before the renderer can overwrite the borrowed storage.
                 const auto id=r->occurrence;const auto slot=r->slot;
                 if(!source.release({id,slot})){fail(GD_BAD_SOURCE,ERROR_INVALID_DATA,true);return;}
-                accounted=id;p={};
-            }else if(!stopping)break; // later omissions cannot advance past this unsampled head
+                p={};if(id>taken_through)taken_through=id;
+            }else if(r->occurrence>taken_through)taken_through=r->occurrence;
         }
+        accounted=resolved_through();
     }
     bool release_image(Pending&p){
         if(p.returning)return true;
@@ -326,7 +349,16 @@ struct Runtime {
             if(!retire_record(p,stopping))return;
         }
     }
+    // Opens the renderer's capture gateway at a tick's first GL step: under
+    // threaded optimization each error query waits for the driver's queue, so
+    // a VI with no GPU work never makes one.
+    bool gpu(){
+        if(gateway_open)return true;
+        if(!in_render || !source.begin_capture())return false;
+        gateway_open=true;return true;
+    }
     bool bootstrap_ready(){
+        if(surface_state.load()!=2 || !gpu())return false;
         unsigned ready=2;if(!surface_state.compare_exchange_strong(ready,3))return false;
         surface=mailbox;const auto e=mailbox_epoch;prepare_steps.surface_qpc=mailbox_qpc;surface_state.store(0);
         if(e!=epoch || !live())return false;
@@ -344,51 +376,73 @@ struct Runtime {
         config.texture_names[0][0]='A';config.texture_names[1][0]='B';
         if(!gpu_channel::layout(config)){fail(GD_BAD_REQUEST,ERROR_NOT_ENOUGH_MEMORY);return false;}
         set_state(GD_PREPARING);publish_status();
-        TRACE("create context");
-        const bool created=context.create(surface,contexts);
-        {const auto&c=context.steps();auto&p=prepare_steps;p.context_begin=c.begin;p.context_window=c.window;
-            p.context_temporary=c.temporary;p.context_shared=c.shared;
-            p.context_temporary_deleted=c.temporary_deleted;p.context_current=c.current;}
-        if(!created){fail(GD_CONTEXT_UNAVAILABLE,context.error(),context.quarantined());return false;}
-        driver_paid=true;
-        // The renderer published its anchor before this lease could succeed.
+        // The renderer published its (unused) anchor at the first capture surface.
         if(!anchor_logged){anchor_logged=true;emit_diagnostic(GD_NONE,0,false,0,GD_KIND_ANCHOR);}
 #ifdef GD_TEST_HOST
         if(test_preparation_probe)test_preparation_probe();
 #endif
         if(!live())return false;
-        snapshot::Gl gl;if(!gl.load(false)){fail(GD_GL_UNSUPPORTED);return false;}
+        // The renderer's own context is current: this is its thread (render_tick).
+        prepare_steps.prepare_begin=qpc();
+        if(!gl.load()){fail(GD_GL_UNSUPPORTED);return false;}
+        snapshot::Gl copy_gl;if(!copy_gl.load(true)){fail(GD_GL_UNSUPPORTED);return false;}
         TRACE("prepare snapshots");
-        if(!snapshots.prepare(gl,source,surface,request.offer_count,budget,source3.query?&source3:nullptr)){fail(GD_SNAPSHOT_FAILED,ERROR_INVALID_DATA,true);return false;}
+        gpu_context=surface.context;gpu_context_generation=surface.context_generation;
+        // At most RB_SLOTS-1 pictures are held, so one record slot always
+        // cycles and every VI still reaches this callback (renderer-thread
+        // capture does its GPU work there).
+        const unsigned images=request.offer_count<RB_SLOTS?request.offer_count:RB_SLOTS-1;
+        if(!snapshots.prepare(copy_gl,source,surface,images,budget,source3.query?&source3:nullptr)){fail(GD_SNAPSHOT_FAILED,ERROR_INVALID_DATA,true);return false;}
         prepare_steps.snapshots=qpc();
         prepared=true;if(!live()){snapshots.stop();return false;}
         sampler_attempted=true;
         TRACE("prepare sampler");
-        if(!sampler.prepare(surface.width,surface.height,limits.sample_bytes)){fail(GD_SAMPLE_FAILED,sampler.error(),true);return false;}
+        if(!sampler.prepare(gl,surface.width,surface.height,request.offer_count,limits.sample_bytes)){fail(GD_SAMPLE_FAILED,sampler.error(),true);return false;}
         prepare_steps.sampler=qpc();
         sample.reset(new(std::nothrow)uint8_t[size_t(sample_size)]);
         if(!sample){fail(GD_SAMPLE_FAILED,ERROR_NOT_ENOUGH_MEMORY);return false;}
         if(!live())return false;
-        wchar_t prefix[101];swprintf_s(prefix,L"Local\\SM64GpuImage-%016llx%016llx-%u",request.nonce_hi,request.nonce_lo,epoch);
-        bridge_attempted=true;
-        TRACE("prepare bridge");
-        const bool bridged=bridge.prepare(surface.width,surface.height,prefix,limits.bridge_bytes);
-        {const auto&b=bridge.steps();auto&p=prepare_steps;p.bridge_begin=b.begin;p.bridge_device=b.device;
-            p.bridge_opened=b.opened;p.bridge_transfer=b.transfer;p.bridge_registered=b.registered;}
-        if(!bridged){fail(GD_BRIDGE_FAILED,bridge.error(),bridge.quarantined());return false;}
-        if(!live())return false;
-        const auto& actual=bridge.config();config.luid_low=actual.adapter.LowPart;config.luid_high=actual.adapter.HighPart;
-        memcpy(config.texture_names,actual.names,sizeof config.texture_names);
+        LUID adapter{};
+        if(!render_capture::adapter_luid(gl,&adapter)){fail(GD_BRIDGE_FAILED,ERROR_NOT_SUPPORTED);return false;}
+        prepare_steps.luid=qpc();
+        config.luid_low=adapter.LowPart;config.luid_high=adapter.HighPart;
+        // The helper creates these two keyed-mutex textures; PREPARING imports them.
+        for(unsigned i=0;i<GC_BRIDGES;++i){
+            swprintf_s(texture_names[i],L"Local\\SM64GpuImage-%016llx%016llx-%u-texture-%u",request.nonce_hi,request.nonce_lo,epoch,i);
+            for(unsigned c=0;c<128;++c)config.texture_names[i][c]=uint16_t(texture_names[i][c]);
+        }
         channel.reset(new(std::nothrow)gpu_channel::Producer);
         TRACE("create channel");
         if(!channel){fail(GD_CHANNEL_FAILED,ERROR_NOT_ENOUGH_MEMORY);return false;}
         if(!channel_ok(channel->create(config)))return false;
-        channel_started=qpc();
-        if(!live() || !context.revalidate(surface,contexts)){fail(GD_CONTEXT_CHANGED,contexts.error());return false;}
+        channel_started=qpc();prepare_steps.channel=channel_started;
         TRACE("prepared");
-        prepare_steps.end_qpc=qpc();emit_diagnostic(GD_NONE,0,false,0,GD_KIND_PREPARE);
         publish_status(); SetEvent(changed); // names/mapping ready; capture still metadata-only
         return true;
+    }
+    // Renderer: import the helper's textures once its reader is ready (the
+    // helper created them when it opened).
+    void preparing_tick(){
+        if(bridge_attempted)return;
+        const auto ready_reader=channel?channel->reader_ready():ChannelResult::empty;
+        if(!channel_ok(ready_reader) || ready_reader!=ChannelResult::ok || !gpu())return;
+        bridge_attempted=true;prepare_steps.reader_qpc=qpc();prepare_steps.import_begin=qpc();
+        if(!bridge.prepare(gl,surface.width,surface.height,texture_names)){fail(GD_BRIDGE_FAILED,bridge.error(),false);return;}
+        prepare_steps.imported=qpc();
+        SetEvent(wake);
+    }
+    // Delivery thread: ACTIVE at the first frontier read after the import.
+    void activate_when_imported(){
+        if(!bridge.prepared())return;
+        sa_frontier ready{};
+        if(sa_probe_frontier(accounted,&ready) && live()){
+            refusal_generation=ready.refusal_generation;
+            sa_arm_refusal(epoch);
+            summary_started=qpc();
+            set_state(GD_ACTIVE);publish_status();
+            prepare_steps.end_qpc=qpc();emit_diagnostic(GD_NONE,0,false,0,GD_KIND_PREPARE);
+            TRACE("active");
+        }
     }
     void sample_head(){
 #ifdef GD_TEST_HOST
@@ -402,7 +456,7 @@ struct Runtime {
             // A VI arrived before any display list of this epoch (activation
             // while paused, then resume): there is no stamp to pair. Drop the
             // picture, return its image, keep recording.
-            p.omitted=true;++refused_pictures;accounted=r.occurrence;release_image(p);return;
+            p.omitted=true;++refused_pictures;accounted=resolved_through();release_image(p);return;
         }
         if(!p.ready){const auto result=snapshots.images().poll({r.image.serial,r.image.slot},&p.image);
             if(result==snapshot::Poll::pending)return;
@@ -413,14 +467,19 @@ struct Runtime {
         // buffer remains owned here until publication succeeds; a busy client
         // page must not repeat GPU draw/readback for this immutable picture.
         if(!p.sampled){
-            ++sample_calls;
-            const auto result=
+            // gd_capture issued this picture's sample with its snapshot copy;
+            // its readback completes asynchronously. Never wait for it here.
 #ifdef GD_TEST_HOST
-                test_sample?test_sample(p.image,sample.get()):
+            if(test_sample){if(!test_sample(p.image,sample.get()))return;}
+            else
 #endif
-                sampler.sample(p.image.texture,surface.width,surface.height,sample.get(),size_t(sampler.sample_bytes()));
-            if(result!=gpu_selection::Result::sampled){fail(GD_SAMPLE_FAILED,sampler.error(),true);return;}
-            p.sampled=true;
+            {
+                if(!gpu())return;
+                const auto taken=sampler.take(p.image.ticket.slot,sample.get(),size_t(sampler.sample_bytes()));
+                if(taken==render_capture::Sampler::Poll::pending)return;
+                if(taken!=render_capture::Sampler::Poll::ready){fail(GD_SAMPLE_FAILED,sampler.error(),true);return;}
+            }
+            ++sample_calls;p.sampled=true;
         }else ++sample_reuses;
         if(!live())return;
         gc_offer offer{};offer.token=offer_token+1;offer.occurrence=r.occurrence;
@@ -436,7 +495,7 @@ struct Runtime {
         const auto result=channel->publish(unsigned(&p-pending),offer,compact,sample.get());
         if(result==ChannelResult::busy){++publish_busy;return;}
         if(!channel_ok(result))return;
-        p.token=++offer_token;p.published=true;accounted=r.occurrence;
+        p.token=++offer_token;p.published=true;accounted=resolved_through();
     }
     bool publish_bridges(){
         for(unsigned n=0;n<GC_BRIDGES;++n){
@@ -468,12 +527,15 @@ struct Runtime {
         Pending*head=nullptr;
         for(auto&p:pending)if(p.record && p.decided && p.decision.kind==GC_SELECTED && !p.copied
                 && (!head || p.decision.encode_serial<head->decision.encode_serial))head=&p;
-        if(!head || !live())return;
+        if(!head || !live() || !gpu())return;
         for(unsigned index=0;index<GC_BRIDGES;++index)if(!credits[index].token){
-            gpu_bridge::Result result;
-            {Phase timing(*this,GD_PHASE_COPY);result=bridge.copy(index,head->image.texture,surface.width,surface.height);}
-            if(result==gpu_bridge::Result::full)continue;
-            if(result!=gpu_bridge::Result::copied){fail(GD_BRIDGE_FAILED,bridge.error(),true);return;}
+#ifdef GD_TEST_HOST
+            if(const auto injected=test_bridge_fault.exchange(0)){fail(GD_BRIDGE_FAILED,injected,true);return;}
+#endif
+            render_capture::Bridge::Result result;
+            {Phase timing(*this,GD_PHASE_COPY);render_capture::StateGuard guard(gl);result=bridge.copy(index,head->image.texture);}
+            if(result==render_capture::Bridge::Result::full)continue;
+            if(result!=render_capture::Bridge::Result::copied){fail(GD_BRIDGE_FAILED,bridge.error(),true);return;}
             // Actual key1 exists even if cancellation beats metadata publication.
             credits[index].token=++bridge_token;credits[index].decision=head->decision;
             head->copied=true;
@@ -501,9 +563,14 @@ struct Runtime {
             credits[slot].receipt=true;
         }}
         for(unsigned n=0;n<GC_BRIDGES;++n){auto& c=credits[n];if(!c.token || (!stopping && !c.receipt))continue;
-            const auto key=bridge.key0_returned(n,stopping);
-            if(key==gpu_bridge::KeyReturn::pending)continue;
-            if(key!=gpu_bridge::KeyReturn::ready){fail(GD_BRIDGE_FAILED,bridge.error(),true);return;}
+            // A stopping epoch abandons its keys: the helper's textures end with
+            // its session, and this side's imports are deleted by the renderer.
+            if(!stopping){
+                if(!gpu())return;
+                const auto key=bridge.key0_returned(n);
+                if(key==render_capture::Bridge::KeyReturn::pending)continue;
+                if(key!=render_capture::Bridge::KeyReturn::ready){fail(GD_BRIDGE_FAILED,bridge.error(),true);return;}
+            }
             if(!retire_bridge(n,stopping))return;
         }
     }
@@ -516,9 +583,21 @@ struct Runtime {
         {const auto held=bridge_count();if(held>peak_bridges)peak_bridges=held;}
         {Phase timing(*this,GD_PHASE_BRIDGE_RETURNS);bridge_returns(false);}if(!live())return;
         {Phase timing(*this,GD_PHASE_REAP);reap_records(false);}if(!live())return;
+        const auto now=qpc();
+        for(const auto&p:pending)if((p.record || p.token) && now>p.admitted && now-p.admitted>frequency*limits.max_age_ms/1000){fail(GD_DEADLINE);return;}
+        // The frontier's status is published between VIs; the counts go out
+        // the VI they change.
+        if(count()!=status_records || bridge_count()!=status_bridges)publish_status();
+        last_active_end=qpc();
+    }
+    // The source's update transaction is open for the whole renderer callback,
+    // so the frontier is read between VIs, here on the delivery thread (CPU
+    // only). A paused emulator's frontier advances unless a picture from just
+    // before the pause still waits for the renderer's next callback.
+    void frontier_tick(){
+        {Phase timing(*this,GD_PHASE_TAKE);take_records(false);}if(!live())return;
         Phase timing(*this,GD_PHASE_FRONTIER);
         const auto now=qpc();
-        for(const auto&p:pending)if((p.record || p.token) && now-p.admitted>frequency*limits.max_age_ms/1000){fail(GD_DEADLINE);return;}
         sa_frontier frontier{};
         if(sa_probe_frontier(accounted,&frontier)){
             if(frontier.epoch!=epoch){fail(GD_SOURCE_EPOCH_CHANGED,frontier.epoch);return;}
@@ -536,26 +615,22 @@ struct Runtime {
             status_time=now;
             if(channel_ok(channel->status(GC_ACTIVE,0,now,frontier_qpc,frontier_occurrence,offer_token)))publish_status();
         }
-        last_active_end=qpc();
     }
     bool drain_tick(){
         if(!drain_started){drain_started=qpc();set_state(GD_DRAINING);
             const auto cause=diagnostic_reason();
-            if(channel)channel->close(cause ? GC_REASON_RUNTIME|cause : 0); // permanently revoke this unique channel BEFORE key1 reclaim
+            if(channel)channel->close(cause ? GC_REASON_RUNTIME|cause : 0); // permanently revoke this unique channel
         }
-        if(quarantine || bridge.quarantined() || context.quarantined()){
-            quarantine=true;exhausted.store(true);set_state(GD_FAULT);publish_status();return false;
+        if(quarantine){
+            exhausted.store(true);set_state(GD_FAULT);publish_status();return false;
         }
         take_records(true);reap_records(true);if(bridge_attempted)bridge_returns(true);
         if(quarantine){exhausted.store(true);set_state(GD_FAULT);publish_status();return false;}
         sa_frontier quiet{};
         if(!count() && !bridge_count() && sa_probe_quiescent(accounted,&quiet)){
-            bool safe=true;
-            if(sampler_attempted)safe=sampler.shutdown();
-            if(safe && bridge_attempted)safe=bridge.shutdown();
-            if(safe && prepared)safe=snapshots.destroy();
-            if(safe)safe=context.destroy();
-            if(!safe){quarantine=true;exhausted.store(true);reason.store(GD_QUARANTINED);set_state(GD_FAULT);publish_status();return false;}
+            // No GL here: a drain runs when the renderer no longer calls back.
+            // It deletes this epoch's names before it prepares again.
+            if(prepared || sampler_attempted || bridge_attempted)gpu_retired=true;
             channel.reset();sample.reset();prepared=bridge_attempted=sampler_attempted=false;
             surface_state.store(0);epoch=0;drain_started=0;
             set_state(reason.load()==GD_CANCELLED || reason.load()==GD_NONE?GD_OFF:GD_FAULT);
@@ -572,16 +647,78 @@ struct Runtime {
         }
         publish_status();return false;
     }
-    void prewarm(){
-        // A capture that already made its context paid the same one-time cost
-        // (and may hold that context current now), so a late warm-up skips.
-        if(driver_paid){warm_state.store(GD_WARM_SKIPPED);SetEvent(changed);return;}
-        warm_state.store(GD_WARM_RUNNING);
-        gpu_delivery::WarmSteps w{};
-        const bool ok=gpu_delivery::warm_driver(warm_parts.load(),&w);
-        warm_steps={w.begin,w.legacy,w.core,w.d3d,w.end,w.parts,w.error};
-        warm_state.store(ok?GD_WARM_DONE:GD_WARM_FAILED);SetEvent(changed);
-        emit_diagnostic(GD_NONE,0,false,0,GD_KIND_WARM);
+    // One pass of the state machine. The renderer thread runs every GPU step
+    // (renderer=true, its context current, inside its capture gateway); the
+    // delivery thread picks up requests, reads the frontier, drains and checks
+    // deadlines, all without GL.
+    // Returns true when a drain released ownership (fields may be reused).
+    bool iterate(bool renderer){
+        unsigned waiting=2;
+        request_state.compare_exchange_strong(waiting,3);
+        if(request_state.load()!=3 || exhausted.load())return false;
+        if(diagnostic_epoch!=epoch){
+            diagnostic_epoch=epoch;reset_metrics();
+            prepare_steps={};prepare_steps.request_qpc=started;
+            emit_diagnostic(GD_NONE,0,false,0,GD_KIND_REQUEST);
+        }
+        if(!live())return drain_tick();
+        const auto now_state=state.load();
+        if(now_state==GD_BOOTSTRAP){take_records(false);if(renderer)bootstrap_ready();}
+        else if(now_state==GD_PREPARING){take_records(false);if(renderer)preparing_tick();else activate_when_imported();}
+        else if(now_state==GD_ACTIVE){if(renderer)active_tick();else {frontier_tick();maybe_summary(qpc());}}
+#ifdef GD_TEST_HOST
+        test_deadline_visits.fetch_add(1);
+#endif
+        if(live() && state.load()!=GD_ACTIVE && qpc()-(channel_started?channel_started:started)>frequency*setup_deadline_ms/1000)fail(GD_DEADLINE);
+        return false;
+    }
+    // A paused emulator stops calling back; the pause is not the pictures' age.
+    // A record the delivery thread took during the pause ages from now.
+    void resume_after_pause(uint64_t gap,uint64_t now){
+        for(auto&p:pending)if(p.record || p.token)p.admitted=p.admitted+gap<now?p.admitted+gap:now;
+        if(last_active_end)last_active_end+=gap;
+    }
+    // Delete (same context) or forget (context replaced) an ended epoch's names.
+    void release_retired(const rb_surface&s){
+        if(!gpu_retired || !gpu())return;
+        const bool same=s.context==gpu_context && s.context_generation==gpu_context_generation;
+        if(same){sampler.destroy();bridge.destroy();if(!snapshots.destroy())snapshots.abandon();}
+        else {sampler=render_capture::Sampler{};bridge=render_capture::Bridge{};snapshots.abandon();}
+        gpu_retired=false;
+    }
+    // The renderer's capture callback (gd_surface), every VI while an epoch is
+    // armed. Never waits: a tick the delivery thread holds is skipped.
+    void render_tick(const rb_surface&s){
+        if(!TryAcquireSRWLockExclusive(&tick_lock))return;
+        if(channel)channel->adopt();
+        const uint64_t now=qpc();
+        if(last_render_tick && now-last_render_tick>frequency/10)resume_after_pause(now-last_render_tick,now);
+        last_render_tick=now;
+        if(request_state.load()==3 && live() && state.load()!=GD_BOOTSTRAP
+                && (s.context!=surface.context || s.context_generation!=surface.context_generation)){
+            fail(GD_CONTEXT_CHANGED); // the renderer replaced the context our names live in
+        }
+        const auto fault=sample_fault.exchange(0);
+        if(fault && live()){fail(GD_SAMPLE_FAILED,fault,true);}
+        in_render=true;gateway_open=false;
+        release_retired(s);
+        iterate(true);
+        if(gateway_open && !source.end_capture() && live())fail(GD_GL_UNSUPPORTED,ERROR_INVALID_DATA);
+        in_render=gateway_open=false;
+        ReleaseSRWLockExclusive(&tick_lock);
+    }
+    // The capture gateway is open around a picture's snapshot copy; issue its
+    // selection sample right behind it, in the same context.
+    void issue_sample(const rb_image&image){
+#ifdef GD_TEST_HOST
+        if(test_sample)return;
+#endif
+        snapshot::Image copied{};
+        if(snapshots.images().poll({image.serial,image.slot},&copied)!=snapshot::Poll::ready || !copied.texture
+                || !source.begin_capture()){sample_fault.store(ERROR_INVALID_DATA);return;}
+        bool issued;
+        {render_capture::StateGuard guard(gl);issued=sampler.issue(image.slot,copied.texture);}
+        if(!source.end_capture() || !issued)sample_fault.store(sampler.error()?sampler.error():ERROR_INVALID_DATA);
     }
     void run(){
         worker_thread=GetCurrentThreadId();
@@ -589,39 +726,16 @@ struct Runtime {
 #ifdef GD_TEST_HOST
             if(auto probe=test_iteration_probe.load())probe();
 #endif
-            if(warm_state.load()==GD_WARM_REQUESTED)prewarm();
-            unsigned waiting=2;
-            request_state.compare_exchange_strong(waiting,3);
-            if(request_state.load()==3 && !exhausted.load()){
-                if(diagnostic_epoch!=epoch){
-                    diagnostic_epoch=epoch;reset_metrics();
-                    prepare_steps={};prepare_steps.request_qpc=started;
-                    emit_diagnostic(GD_NONE,0,false,0,GD_KIND_REQUEST);
-                }
-                if(!live()){if(drain_tick())continue;}
-                else if(state.load()==GD_BOOTSTRAP){take_records(false);bootstrap_ready();}
-                else if(state.load()==GD_PREPARING){
-                    take_records(false);
-                    const auto ready_reader=channel?channel->reader_ready():ChannelResult::empty;
-                    if(!channel_ok(ready_reader))continue;
-                    sa_frontier ready{};
-                    if(ready_reader==ChannelResult::ok && sa_probe_frontier(accounted,&ready) && context.revalidate(surface,contexts) && live()){
-                        refusal_generation=ready.refusal_generation;
-                        sa_arm_refusal(epoch);
-                        summary_started=qpc();
-                        set_state(GD_ACTIVE);publish_status();
-                        TRACE("active");
-                    }
-                }else if(state.load()==GD_ACTIVE){active_tick();maybe_summary(qpc());}
-#ifdef GD_TEST_HOST
-                test_deadline_visits.fetch_add(1);
-#endif
-                if(live() && state.load()!=GD_ACTIVE && qpc()-(channel_started?channel_started:started)>frequency*setup_deadline_ms/1000)fail(GD_DEADLINE);
-            }
+            AcquireSRWLockExclusive(&tick_lock);
+            if(channel)channel->adopt();
+            const bool released=iterate(false);
+            ReleaseSRWLockExclusive(&tick_lock);
+            if(released)continue;
             HANDLE events[2]={wake,channel?channel->wake_event():nullptr};
-            const DWORD idle_poll=limits.poll_ms*4<16?limits.poll_ms*4:16;
+            // While ACTIVE the renderer does the GPU work; this thread reads
+            // the frontier, which the status publishes at most at 60Hz.
             const DWORD timeout=request_state.load()==3 && !exhausted.load()
-                ? (state.load()==GD_ACTIVE && !occupied() && !bridge_count()?idle_poll:limits.poll_ms):INFINITE;
+                ? (state.load()==GD_ACTIVE?16u:limits.poll_ms):INFINITE;
             WaitForMultipleObjects(events[1]?2:1,events,FALSE,timeout);
         }
     }
@@ -649,13 +763,6 @@ extern "C" int __cdecl gd_configure3(const rs_api_v3*s,const rcl_api*c,const gd_
 }
 extern "C" void __cdecl gd_set_diagnostic(gd_diagnostic_callback callback){diagnostic_callback.store(callback);}
 extern "C" void __cdecl gd_set_anchor_timing(gd_anchor_timing timing){anchor_timing.store(timing);}
-extern "C" int __cdecl gd_prewarm(uint32_t parts){
-    auto*r=runtime.load();if(!r || !parts)return 0;
-    uint32_t none=GD_WARM_NONE;r->warm_parts.store(parts);
-    if(!r->warm_state.compare_exchange_strong(none,GD_WARM_REQUESTED))return 0;
-    SetEvent(r->wake);return 1;
-}
-extern "C" uint32_t __cdecl gd_prewarm_state(){const auto*r=runtime.load();return r?r->warm_state.load():GD_WARM_NONE;}
 extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     auto*r=runtime.load();if(!r || !h || !r->request_valid(*h,budget))return GD_INVALID;
     if(r->exhausted.load())return GD_EXHAUSTED;
@@ -690,9 +797,14 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
 extern "C" void __cdecl gd_disarm(uint32_t why){auto*r=runtime.load();if(r)r->revoke(why?why:GD_CANCELLED);}
 extern "C" uint32_t __cdecl gd_epoch(){const auto*r=runtime.load();return r?r->current_epoch():0;}
 extern "C" void __cdecl gd_surface(const rb_record*r){
-    auto*self=runtime.load();if(!self || !r || r->epoch!=self->current_epoch() || self->state.load()!=GD_BOOTSTRAP)return;
-    unsigned free=0;if(!self->surface_state.compare_exchange_strong(free,1))return;
-    self->mailbox=r->surface;self->mailbox_epoch=r->epoch;self->mailbox_qpc=qpc();self->surface_state.store(2);
+    auto*self=runtime.load();if(!self || !r || r->epoch!=self->current_epoch())return;
+    if(self->state.load()==GD_BOOTSTRAP){
+        unsigned free=0;
+        if(self->surface_state.compare_exchange_strong(free,1)){
+            self->mailbox=r->surface;self->mailbox_epoch=r->epoch;self->mailbox_qpc=qpc();self->surface_state.store(2);
+        }
+    }
+    self->render_tick(r->surface); // the renderer's thread, its context current
 }
 extern "C" int __cdecl gd_capture(const rb_record*r,rb_image*out){
     auto*self=runtime.load();if(out)*out={};
@@ -704,7 +816,9 @@ extern "C" int __cdecl gd_capture(const rb_record*r,rb_image*out){
         if(state==GD_BOOTSTRAP || state==GD_PREPARING){out->status=bootstrap_omission;return 1;}
         return 0;
     }
-    return self->snapshots.submit(r,out);
+    const int submitted=self->snapshots.submit(r,out);
+    if(submitted && out->ownership==RB_IMAGE_SUBMITTED)self->issue_sample(*out);
+    return submitted;
 }
 extern "C" int __cdecl gd_completed(const rb_image*i){const auto*r=runtime.load();return r && i && r->snapshots.completed(*i);}
 extern "C" HANDLE __cdecl gd_signal(){const auto*r=runtime.load();return r?r->changed:nullptr;}
@@ -808,5 +922,6 @@ extern "C" void gd_test_set_iteration_probe(void (__cdecl *probe)()){
     test_iteration_probe.store(probe);auto*r=runtime.load();if(r)SetEvent(r->wake);
 }
 extern "C" void gd_test_set_retired_probe(void (__cdecl *probe)()){test_retired_probe.store(probe);}
+extern "C" void gd_test_bridge_fault_once(uint32_t error){test_bridge_fault.store(error);}
 extern "C" uint32_t gd_test_deadline_visits(){return test_deadline_visits.load();}
 #endif
