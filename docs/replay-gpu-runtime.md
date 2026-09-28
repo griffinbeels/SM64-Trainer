@@ -170,12 +170,14 @@ worker. With no demand the native worker is passive and the renderer runs as
 the original single-context renderer. With demand it still does: since
 2026-09-27 every capture GPU call runs on the renderer's own thread in its
 own context ([renderer-thread capture](#first-capture-freeze)), so no other
-thread in Project64 ever touches the GPU. The overlay still publishes its
-never-current shared anchor at the first admitted capture surface
-(`EnsureAnchor`); nothing leases it any more, and removing it is an overlay
-change left for later. Whether round 48's anchor move or the same day's
-driver update ended the passive stutter is not isolated (see
-[what failed](#what-failed-and-why)).
+thread in Project64 ever touches the GPU. Since 2026-09-28 the overlay
+publishes no shared context at all: round 48's never-current anchor
+(`EnsureAnchor`, and its `anchor_published` timing line) is gone, ContextV1
+stays exported for the wrapper's ABI check, and every lease is refused
+(`test_link_source_witness`, `test_context_lifetime`'s `abi` mode). Whether
+round 48's anchor move or the same day's driver update ended the passive
+stutter is not isolated (see [what failed](#what-failed-and-why)); with no
+anchor left, that question is moot for this design.
 
 The media worker's tick is a high-resolution waitable timer plus the native
 producer's own event (`tickwait.py`): a `threading.Event.wait(0.004)` sleeps
@@ -452,7 +454,12 @@ trainer speaks version 2: they come from different builds. Close Project64 so
 the trainer can update the capture layer", and the setup screen's build-id
 check reports the same installed layer as differing from this build. The
 channel takes the client's decisions head first: once per VI it can find two,
-and a later offer in a lower slot is not out of order.
+and a later offer in a lower slot is not out of order. Without that, the media-stall
+witness beside other GPU witnesses (ghost pipeline and compositor hosts, a second
+cadence run) ended 6 of 6 runs with "channel failed" (reason `0x20002719`,
+`GD_CHANNEL_FAILED`, detail `out_of_order`); with it, 8 of 8 passed under the same
+load. Contention on his machine (OBS, clip recorders) makes the same two-replies
+case, so this was a real way to end a recording, not a test artefact.
 
 The delivery thread keeps requests, drain and deadlines, and reads the
 frontier: the source's update transaction is open for the whole renderer
@@ -503,7 +510,7 @@ the renderer thread (25-84 ms, and 5-9 ms p99 per picture).
 
 **Readout (his next session, no action from him).** The
 [activation log](glossary.md#activation-log) keeps `rom_open_*`,
-`gpu_request`, `anchor_published`, `gpu_prepare` and every `callback_stall`
+`gpu_request`, `gpu_prepare` and every `callback_stall`
 in the 15 s after a request. `gpu_prepare` now reads `prepare_begin_qpc`,
 `snapshots_ms`, `sampler_ms`, `luid_ms`, `channel_ms`, `reader_qpc`,
 `import_begin_qpc`, `import_ms` and `end_qpc`, all renderer-thread steps, so a
@@ -520,8 +527,9 @@ times. The encoder receives monotonic 90kHz PTS; actual VFR held durations remai
 separate from nominal 30fps encoding metadata. Retained heartbeats encode a fresh
 packet from the retained input without another source GPU copy or shared acquire.
 
-The GPU shader combines the existing top-down orientation, floor-even top-left
-crop and opaque alpha. Existing quality choices and time-forced IDRs feed the
+The bridge blit applies the existing top-down orientation and floor-even
+top-left crop; alpha passes through, and the encoder does not read it. The
+selection sample forces alpha opaque. Existing quality choices and time-forced IDRs feed the
 encoder. `PacketFragmentMux` uses PyAV's `add_mux_stream` (PyAV17.1 or newer), so it
 does not decode or re-encode compressed video. The existing audio placement and
 pacing operate on real timed stereo PCM before AAC encoding and shared fragments.
